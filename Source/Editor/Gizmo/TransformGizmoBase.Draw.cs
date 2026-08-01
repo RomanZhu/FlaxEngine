@@ -42,7 +42,7 @@ namespace FlaxEditor.Gizmo
         private const float _rotationTrackballOpacity = 0.35f;
         private const float _rotationTrackballTriangleOpacity = 0.45f;
         private const float _rotationTrackballPointRadiusRaw = 0.12f;
-        private const float _rotationScreenRingRadiusRaw = _rotationSphereRadiusRaw + 0.12f;
+        private const float _rotationScreenRingRadiusRaw = _rotationSphereRadiusRaw + 0.20f;
         private const float _rotationScreenRingThicknessRaw = 0.045f;
 
         /// <summary>
