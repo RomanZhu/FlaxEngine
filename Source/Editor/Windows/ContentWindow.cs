@@ -61,6 +61,7 @@ namespace FlaxEditor.Windows
         private bool _renameInTree;
 
         private RootContentFolderTreeNode _root;
+        private readonly List<ContentItem> _treeSelectionCache = new List<ContentItem>();
 
         private bool _navigationUnlocked;
         private readonly Stack<ContentFolderTreeNode> _navigationUndo = new Stack<ContentFolderTreeNode>(32);
@@ -79,6 +80,33 @@ namespace FlaxEditor.Windows
         /// Gets the assets view.
         /// </summary>
         public ContentView View => _view;
+
+        /// <summary>
+        /// Occurs when selected content items collection gets changed.
+        /// </summary>
+        public event Action SelectionChanged;
+
+        /// <summary>
+        /// Gets the selected content items.
+        /// </summary>
+        public IReadOnlyList<ContentItem> Selection
+        {
+            get
+            {
+                if (!_showAllContentInTree)
+                    return _view.Selection;
+
+                _treeSelectionCache.Clear();
+                for (int i = 0; i < _tree.Selection.Count; i++)
+                {
+                    if (_tree.Selection[i] is ContentItemTreeNode itemNode)
+                        _treeSelectionCache.Add(itemNode.Item);
+                    else if (_tree.Selection[i] is ContentFolderTreeNode folderNode)
+                        _treeSelectionCache.Add(folderNode.Folder);
+                }
+                return _treeSelectionCache;
+            }
+        }
 
         internal bool ShowEngineFiles
         {
@@ -315,6 +343,7 @@ namespace FlaxEditor.Windows
             _view.OnDuplicate += Duplicate;
             _view.OnPaste += Paste;
             _view.ViewScaleChanged += ApplyTreeViewScale;
+            _view.SelectionChanged += OnContentViewSelectionChanged;
 
             _view.InputActions.Add(options => options.Search, () => _itemsSearchBox.Focus());
             InputActions.Add(options => options.Search, () => _itemsSearchBox.Focus());
@@ -322,6 +351,11 @@ namespace FlaxEditor.Windows
             LoadExpandedFolders();
             UpdateViewDropdownBounds();
             ApplyTreeViewScale();
+        }
+
+        private void OnContentViewSelectionChanged()
+        {
+            SelectionChanged?.Invoke();
         }
 
         private void OnCreateNewItemButtonClicked()
@@ -1886,6 +1920,9 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override void OnDestroy()
         {
+            if (_view != null)
+                _view.SelectionChanged -= OnContentViewSelectionChanged;
+
             _foldersSearchBox = null;
             _itemsSearchBox = null;
             _viewDropdown = null;

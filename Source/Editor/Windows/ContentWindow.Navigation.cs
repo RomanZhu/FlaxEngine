@@ -31,6 +31,7 @@ namespace FlaxEditor.Windows
                         SaveLastViewedFolder(activeNode as ContentFolderTreeNode);
                 }
                 UpdateUI();
+                SelectionChanged?.Invoke();
                 return;
             }
 
@@ -43,6 +44,7 @@ namespace FlaxEditor.Windows
                     SaveLastViewedFolder(itemNode2.Item?.ParentFolder?.Node);
                 UpdateUI();
                 itemNode2.Focus();
+                SelectionChanged?.Invoke();
                 return;
             }
 
@@ -52,6 +54,8 @@ namespace FlaxEditor.Windows
             if (setLastViewFolder)
                 SaveLastViewedFolder(target);
             target?.Focus();
+            if (_showAllContentInTree)
+                SelectionChanged?.Invoke();
         }
 
         /// <summary>

@@ -109,6 +109,11 @@ namespace FlaxEditor.Content.GUI
         /// </summary>
         public event Action ViewTypeChanged;
 
+        /// <summary>
+        /// Occurs when selected content items collection gets changed.
+        /// </summary>
+        public event Action SelectionChanged;
+
         #endregion
 
         /// <summary>
@@ -273,6 +278,7 @@ namespace FlaxEditor.Content.GUI
             var wasLayoutLocked = IsLayoutLocked;
             IsLayoutLocked = true;
             var selection = !additive && keepSelection ? _selection.ToArray() : null;
+            var selectionRestored = false;
 
             // Deselect items if need to
             if (!additive)
@@ -293,6 +299,7 @@ namespace FlaxEditor.Content.GUI
             {
                 _selection.Clear();
                 _selection.AddRange(selection);
+                selectionRestored = true;
             }
 
             // Sort items depending on sortMethod parameter
@@ -314,6 +321,8 @@ namespace FlaxEditor.Content.GUI
             // Unload and perform UI layout
             IsLayoutLocked = wasLayoutLocked;
             PerformLayout();
+            if (selectionRestored && selection.Length != 0)
+                SelectionChanged?.Invoke();
         }
 
         /// <summary>
@@ -335,6 +344,7 @@ namespace FlaxEditor.Content.GUI
                 return;
 
             _selection.Clear();
+            SelectionChanged?.Invoke();
         }
 
         /// <summary>
@@ -359,18 +369,24 @@ namespace FlaxEditor.Content.GUI
             // Lock layout
             var wasLayoutLocked = IsLayoutLocked;
             IsLayoutLocked = true;
+            bool selectionChanged;
 
             // Select items
             if (additive)
             {
+                selectionChanged = false;
                 for (int i = 0; i < items.Count; i++)
                 {
                     if (!_selection.Contains(items[i]))
+                    {
                         _selection.Add(items[i]);
+                        selectionChanged = true;
+                    }
                 }
             }
             else
             {
+                selectionChanged = _selection.Count != items.Count || !_selection.SequenceEqual(items);
                 _selection.Clear();
                 _selection.AddRange(items);
             }
@@ -378,6 +394,8 @@ namespace FlaxEditor.Content.GUI
             // Unload and perform UI layout
             IsLayoutLocked = wasLayoutLocked;
             PerformLayout();
+            if (selectionChanged)
+                SelectionChanged?.Invoke();
         }
 
         /// <summary>
@@ -393,15 +411,18 @@ namespace FlaxEditor.Content.GUI
             // Lock layout
             var wasLayoutLocked = IsLayoutLocked;
             IsLayoutLocked = true;
+            bool selectionChanged;
 
             // Select item
             if (additive)
             {
+                selectionChanged = !_selection.Contains(item);
                 if (!_selection.Contains(item))
                     _selection.Add(item);
             }
             else
             {
+                selectionChanged = _selection.Count != 1 || _selection[0] != item;
                 _selection.Clear();
                 _selection.Add(item);
             }
@@ -409,6 +430,8 @@ namespace FlaxEditor.Content.GUI
             // Unload and perform UI layout
             IsLayoutLocked = wasLayoutLocked;
             PerformLayout();
+            if (selectionChanged)
+                SelectionChanged?.Invoke();
         }
 
         private void BulkSelectUpdate(bool select = true)
@@ -416,6 +439,9 @@ namespace FlaxEditor.Content.GUI
             // Lock layout
             var wasLayoutLocked = IsLayoutLocked;
             IsLayoutLocked = true;
+            var selectionChanged = select
+                ? _selection.Count != _items.Count || !_selection.SequenceEqual(_items)
+                : _selection.Count != 0;
 
             // Select items
             _selection.Clear();
@@ -425,6 +451,8 @@ namespace FlaxEditor.Content.GUI
             // Unload and perform UI layout
             IsLayoutLocked = wasLayoutLocked;
             PerformLayout();
+            if (selectionChanged)
+                SelectionChanged?.Invoke();
         }
 
         /// <summary>
@@ -457,12 +485,15 @@ namespace FlaxEditor.Content.GUI
             IsLayoutLocked = true;
 
             // Deselect item
-            if (_selection.Contains(item))
+            var selectionChanged = _selection.Contains(item);
+            if (selectionChanged)
                 _selection.Remove(item);
 
             // Unload and perform UI layout
             IsLayoutLocked = wasLayoutLocked;
             PerformLayout();
+            if (selectionChanged)
+                SelectionChanged?.Invoke();
         }
 
         /// <summary>
@@ -621,8 +652,10 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         void IContentItemOwner.OnItemDeleted(ContentItem item)
         {
-            _selection.Remove(item);
+            var selectionChanged = _selection.Remove(item);
             _items.Remove(item);
+            if (selectionChanged)
+                SelectionChanged?.Invoke();
         }
 
         /// <inheritdoc />
@@ -638,8 +671,10 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         void IContentItemOwner.OnItemDispose(ContentItem item)
         {
-            _selection.Remove(item);
+            var selectionChanged = _selection.Remove(item);
             _items.Remove(item);
+            if (selectionChanged)
+                SelectionChanged?.Invoke();
         }
 
         #endregion
