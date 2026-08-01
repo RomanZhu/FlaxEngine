@@ -47,6 +47,7 @@ namespace FlaxEditor.SceneGraph.GUI
         private const float SceneIconTextPadding = 6.0f;
         private const float ActiveCheckboxSize = 12.0f;
         private const float ActiveCheckboxSpacing = 4.0f;
+        private const float ActiveCheckboxColumnWidth = ActiveCheckboxSize + ActiveCheckboxSpacing;
 
         private static bool _sceneTypeIconsLoaded;
         private static Texture _iconPointLight;
@@ -86,10 +87,7 @@ namespace FlaxEditor.SceneGraph.GUI
         public ActorNode ActorNode => _actorNode;
 
         /// <inheritdoc />
-        protected override float HeaderTextLeftOffset
-        {
-            get => ShouldDrawActiveCheckbox ? ActiveCheckboxSize + ActiveCheckboxSpacing : 0.0f;
-        }
+        public override float MinimumWidth => base.MinimumWidth + ActiveCheckboxColumnWidth;
 
         private bool ShouldDrawActiveCheckbox
         {
@@ -107,6 +105,7 @@ namespace FlaxEditor.SceneGraph.GUI
         : base(true)
         {
             ChildrenIndent = 16.0f;
+            TextMargin = new Margin(ActiveCheckboxColumnWidth + 2.0f, 2.0f, 2.0f, 2.0f);
         }
 
         internal virtual void LinkNode(ActorNode node)
@@ -787,8 +786,7 @@ namespace FlaxEditor.SceneGraph.GUI
 
         private Rectangle GetActiveCheckboxRect()
         {
-            var textRect = TextRect;
-            return new Rectangle(textRect.X - HeaderTextLeftOffset, (HeaderHeight - ActiveCheckboxSize) * 0.5f, ActiveCheckboxSize, ActiveCheckboxSize);
+            return new Rectangle(2.0f, (HeaderHeight - ActiveCheckboxSize) * 0.5f, ActiveCheckboxSize, ActiveCheckboxSize);
         }
 
         private bool TestActiveCheckboxHit(ref Float2 location)
