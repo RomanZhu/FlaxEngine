@@ -180,7 +180,8 @@ namespace FlaxEditor.Modules
         /// <summary>
         /// Clears selected objects collection.
         /// </summary>
-        public void Deselect()
+        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        public void Deselect(bool recordUndo = true)
         {
             // Check if won't change
             if (Selection.Count == 0)
@@ -189,7 +190,7 @@ namespace FlaxEditor.Modules
             var before = Selection.ToArray();
             Selection.Clear();
 
-            SelectionChange(before);
+            SelectionChange(before, recordUndo);
         }
 
         private void SelectionChange(SceneGraphNode[] before, bool recordUndo = true)

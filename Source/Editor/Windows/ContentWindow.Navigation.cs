@@ -14,6 +14,16 @@ namespace FlaxEditor.Windows
 
         private void OnTreeSelectionChanged(List<TreeNode> from, List<TreeNode> to)
         {
+            if (_isClearingSelection)
+            {
+                UpdateUI();
+                SelectionChanged?.Invoke();
+                return;
+            }
+
+            if (_showAllContentInTree)
+                ClearSceneSelection();
+
             bool setLastViewFolder = !IsLayoutLocked;
             if (!_showAllContentInTree && to.Count > 1)
             {

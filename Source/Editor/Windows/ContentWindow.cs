@@ -57,6 +57,7 @@ namespace FlaxEditor.Windows
         private bool _showEngineFiles = true, _showPluginsFiles = true, _showAllFiles = true, _showGeneratedFiles = false;
         private bool _showAllContentInTree;
         private bool _suppressExpandedStateSave;
+        private bool _isClearingSelection;
         private readonly HashSet<string> _expandedFolderPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private bool _renameInTree;
 
@@ -106,6 +107,29 @@ namespace FlaxEditor.Windows
                 }
                 return _treeSelectionCache;
             }
+        }
+
+        /// <summary>
+        /// Clears the selected content items.
+        /// </summary>
+        public void ClearSelection()
+        {
+            if (_showAllContentInTree)
+            {
+                _isClearingSelection = true;
+                try
+                {
+                    _tree.Deselect();
+                    _view.ClearSelection();
+                }
+                finally
+                {
+                    _isClearingSelection = false;
+                }
+                return;
+            }
+
+            _view.ClearSelection();
         }
 
         internal bool ShowEngineFiles
@@ -347,15 +371,29 @@ namespace FlaxEditor.Windows
 
             _view.InputActions.Add(options => options.Search, () => _itemsSearchBox.Focus());
             InputActions.Add(options => options.Search, () => _itemsSearchBox.Focus());
+            Editor.SceneEditing.SelectionChanged += OnSceneSelectionChanged;
 
             LoadExpandedFolders();
             UpdateViewDropdownBounds();
             ApplyTreeViewScale();
         }
 
+        private void OnSceneSelectionChanged()
+        {
+            if (Editor.SceneEditing.SelectionCount != 0)
+                ClearSelection();
+        }
+
         private void OnContentViewSelectionChanged()
         {
+            ClearSceneSelection();
             SelectionChanged?.Invoke();
+        }
+
+        private void ClearSceneSelection()
+        {
+            if (!_isClearingSelection && Selection.Count != 0 && Editor.SceneEditing.SelectionCount != 0)
+                Editor.SceneEditing.Deselect(false);
         }
 
         private void OnCreateNewItemButtonClicked()
@@ -539,6 +577,8 @@ namespace FlaxEditor.Windows
                 _itemsSearchBox.Visible = false;
                 _contentViewPanel.Visible = false;
                 RefreshTreeItems();
+                if (Editor.SceneEditing.SelectionCount != 0)
+                    ClearSelection();
             }
             else
             {
@@ -1922,6 +1962,8 @@ namespace FlaxEditor.Windows
         {
             if (_view != null)
                 _view.SelectionChanged -= OnContentViewSelectionChanged;
+            if (Editor?.SceneEditing != null)
+                Editor.SceneEditing.SelectionChanged -= OnSceneSelectionChanged;
 
             _foldersSearchBox = null;
             _itemsSearchBox = null;
