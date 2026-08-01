@@ -21,11 +21,15 @@ namespace FlaxEditor.Viewport.Cameras
         private const float FlyMoveInertiaResponse = 24.0f;
         private const float FlyLookInertiaResponse = 55.0f;
         private const float FlyInertiaStopThresholdSq = 0.000001f;
+        private const float AltRightMouseZoomSpeed = 12.5f;
+        private const float AltRightMouseZoomMinDistance = 500.0f;
 
         private Transform _startMove;
         private Transform _endMove;
         private Vector3 _flyMoveDelta;
         private Float2 _flyMouseDelta;
+        private Vector3 _altRightMouseZoomDirection;
+        private bool _hasAltRightMouseZoomDirection;
         private float _moveStartTime = -1;
         private float _additionalFOV;
 
@@ -205,6 +209,18 @@ namespace FlaxEditor.Viewport.Cameras
         }
 
         /// <inheritdoc />
+        public override void EndAltRightMouseZoom()
+        {
+            if (_hasAltRightMouseZoomDirection)
+            {
+                var distance = Vector3.Dot(TargetPoint - Viewport.ViewPosition, _altRightMouseZoomDirection);
+                if (distance < AltRightMouseZoomMinDistance)
+                    TargetPoint += _altRightMouseZoomDirection * (AltRightMouseZoomMinDistance - distance);
+                _hasAltRightMouseZoomDirection = false;
+            }
+        }
+
+        /// <inheritdoc />
         public override void UpdateView(float dt, ref Vector3 moveDelta, ref Float2 mouseDelta, out bool centerMouse)
         {
             centerMouse = true;
@@ -296,14 +312,24 @@ namespace FlaxEditor.Viewport.Cameras
                 pitch += mouseDelta.Y;
             }
 
-            // Zoom in/out with mouse wheel
-            if (input.IsZooming && !input.IsRotating)
+            // Zoom in/out with mouse wheel or Alt+RMB horizontal drag
+            if (input.IsAltRightMouseZooming)
+            {
+                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * EditorViewport.GetAltRightMouseZoomDelta(ref mouseDelta) * AltRightMouseZoomSpeed;
+                if (Mathf.Abs(zoomDelta) > Mathf.Epsilon)
+                {
+                    if (!_hasAltRightMouseZoomDirection)
+                    {
+                        var toTarget = TargetPoint - position;
+                        _altRightMouseZoomDirection = toTarget.LengthSquared > Mathf.Epsilon ? Vector3.Normalize(toTarget) : forward;
+                        _hasAltRightMouseZoomDirection = true;
+                    }
+                    position += _altRightMouseZoomDirection * zoomDelta;
+                }
+            }
+            else if (input.IsZooming && !input.IsRotating)
             {
                 position += forward * (Viewport.MouseWheelZoomSpeedFactor * input.MouseWheelDelta * 25.0f);
-                if (input.IsAltDown)
-                {
-                    position += forward * (Viewport.MouseSpeed * 40 * Viewport.MousePositionDelta.ValuesSum);
-                }
             }
 
             // Zoom in and out by changing FOV
@@ -336,7 +362,8 @@ namespace FlaxEditor.Viewport.Cameras
             }
             else
             {
-                TargetPoint += position - Viewport.ViewPosition;
+                if (!input.IsAltRightMouseZooming)
+                    TargetPoint += position - Viewport.ViewPosition;
                 Viewport.ViewPosition = position;
             }
         }

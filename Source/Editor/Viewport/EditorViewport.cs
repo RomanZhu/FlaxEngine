@@ -47,6 +47,11 @@ namespace FlaxEditor.Viewport
             public bool IsZooming;
 
             /// <summary>
+            /// The Alt+right mouse button zooming state.
+            /// </summary>
+            public bool IsAltRightMouseZooming;
+
+            /// <summary>
             /// The is orbiting state.
             /// </summary>
             public bool IsOrbiting;
@@ -126,6 +131,7 @@ namespace FlaxEditor.Viewport
                 IsMouseRightDown = useMouse && window.GetMouseButton(MouseButton.Right);
                 IsMouseMiddleDown = useMouse && window.GetMouseButton(MouseButton.Middle);
                 IsMouseLeftDown = useMouse && window.GetMouseButton(MouseButton.Left);
+                IsAltRightMouseZooming = false;
 
                 if (WasAltDownBefore && !IsMouseLeftDown && !IsAltDown)
                     WasAltDownBefore = false;
@@ -141,10 +147,19 @@ namespace FlaxEditor.Viewport
                 IsAltDown = false;
                 WasAltDownBefore = false;
 
+                IsAltRightMouseZooming = false;
+
                 IsMouseRightDown = false;
                 IsMouseMiddleDown = false;
                 IsMouseLeftDown = false;
             }
+        }
+
+        internal static float GetAltRightMouseZoomDelta(ref Float2 mouseDelta)
+        {
+            if (Mathf.Abs(mouseDelta.X) <= Mathf.Epsilon)
+                return 0.0f;
+            return mouseDelta.Length * (mouseDelta.X > 0.0f ? 1.0f : -1.0f);
         }
 
         /// <summary>
@@ -182,6 +197,7 @@ namespace FlaxEditor.Viewport
         // Input
         internal bool _disableInputUpdate;
         private bool _isControllingMouse, _isViewportControllingMouse, _wasVirtualMouseRightDown, _isVirtualMouseRightDown;
+        private bool _hasAltRightMouseZoomGesture;
         private Float2 _startPos;
 #if !PLATFORM_SDL
         private Float2 _mouseDeltaLast;
@@ -1611,6 +1627,11 @@ namespace FlaxEditor.Viewport
         /// </summary>
         protected virtual void OnRightMouseButtonUp()
         {
+            if (_hasAltRightMouseZoomGesture && !_input.IsMouseRightDown && !_isVirtualMouseRightDown)
+            {
+                _camera?.EndAltRightMouseZoom();
+                _hasAltRightMouseZoomGesture = false;
+            }
         }
 
         /// <summary>
@@ -1758,15 +1779,20 @@ namespace FlaxEditor.Viewport
                     bool mbDown = _input.IsMouseMiddleDown;
                     bool rbDown = _input.IsMouseRightDown || _isVirtualMouseRightDown;
                     bool wheelInUse = Math.Abs(_input.MouseWheelDelta) > Mathf.Epsilon;
+                    bool wheelZooming = wheelInUse && !(_input.IsShiftDown || (!ContainsFocus && FlaxEngine.Input.GetKey(KeyboardKeys.Shift)));
 
-                    _input.IsPanning = !isAltDown && mbDown && !rbDown;
-                    _input.IsRotating = !isAltDown && !mbDown && rbDown;
-                    _input.IsMoving = !isAltDown && mbDown && rbDown;
-                    _input.IsZooming = wheelInUse && !(_input.IsShiftDown || (!ContainsFocus && FlaxEngine.Input.GetKey(KeyboardKeys.Shift)));
+                    _input.IsAltRightMouseZooming = rbDown && !lbDown && !mbDown && (isAltDown || _prevInput.IsAltRightMouseZooming);
+                    if (_input.IsAltRightMouseZooming)
+                        _hasAltRightMouseZoomGesture = true;
+                    bool isAltNavigation = isAltDown || _input.IsAltRightMouseZooming;
+                    _input.IsPanning = !isAltNavigation && mbDown && !rbDown;
+                    _input.IsRotating = !isAltNavigation && !mbDown && rbDown;
+                    _input.IsMoving = !isAltNavigation && mbDown && rbDown;
+                    _input.IsZooming = wheelZooming || _input.IsAltRightMouseZooming;
                     _input.IsOrbiting = isAltDown && lbDown && !mbDown && !rbDown;
 
                     // Control move speed with RMB+Wheel
-                    rmbWheel = useMovementSpeed && (_input.IsMouseRightDown || _isVirtualMouseRightDown) && wheelInUse;
+                    rmbWheel = useMovementSpeed && !isAltNavigation && (_input.IsMouseRightDown || _isVirtualMouseRightDown) && wheelInUse;
                     if (rmbWheel)
                     {
                         var step = _input.MouseWheelDelta * options.Viewport.MouseWheelSensitivity;
@@ -1870,12 +1896,19 @@ namespace FlaxEditor.Viewport
                 }
 #endif
 
-                // Change Ortho size on mouse scroll
+                // Change Ortho size on mouse scroll or Alt+RMB horizontal drag
                 if (_isOrtho && !rmbWheel)
                 {
-                    var scroll = _input.MouseWheelDelta;
-                    if (scroll > Mathf.Epsilon || scroll < -Mathf.Epsilon)
-                        _orthoSize -= scroll * options.Viewport.MouseWheelSensitivity * 0.2f * _orthoSize;
+                    if (_input.IsAltRightMouseZooming)
+                    {
+                        _orthoSize = Mathf.Max(0.001f, _orthoSize - GetAltRightMouseZoomDelta(ref mouseDelta) * options.Viewport.MouseWheelSensitivity * 0.01f * _orthoSize);
+                    }
+                    else
+                    {
+                        var scroll = _input.MouseWheelDelta;
+                        if (scroll > Mathf.Epsilon || scroll < -Mathf.Epsilon)
+                            _orthoSize -= scroll * options.Viewport.MouseWheelSensitivity * 0.2f * _orthoSize;
+                    }
                 }
             }
             else
@@ -1939,6 +1972,12 @@ namespace FlaxEditor.Viewport
                     moveDelta *= dt * (60.0f * 4.0f);
                     UpdateView(dt, ref moveDelta, ref mouseDelta, out _);
                 }
+            }
+
+            if (_hasAltRightMouseZoomGesture && !_input.IsMouseRightDown && !_isVirtualMouseRightDown)
+            {
+                _camera?.EndAltRightMouseZoom();
+                _hasAltRightMouseZoomGesture = false;
             }
 
             _input.MouseWheelDelta = 0;
