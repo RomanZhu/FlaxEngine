@@ -46,6 +46,12 @@ Build the editor target:
 .\Development\Scripts\Windows\CallBuildTool.bat -build -log -dotnet=8 -arch=x64 -platform=Windows -configuration=Development -buildtargets=FlaxEditor
 ```
 
+Direct editor validation build:
+
+```powershell
+.\Binaries\Tools\Flax.Build.exe -log -mutex -workspace=C:\CodingProjects\FlaxEngine -arch=x64 -configuration=Development -platform=Windows -buildTargets=FlaxEditor -dotnet=8 -build
+```
+
 Run the editor:
 
 ```powershell
