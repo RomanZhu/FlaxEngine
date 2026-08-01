@@ -229,6 +229,7 @@ namespace FlaxEditor.Modules
                 Editor.Log("[PlayMode] Pause");
 
                 Editor.StateMachine.PlayingState.IsPaused = true;
+                RestoreEditWindowIfEnteredPlayFromIt();
                 Editor.UI.UpdateToolstrip();
             }
         }
@@ -270,6 +271,8 @@ namespace FlaxEditor.Modules
         public override void OnPlayBeginning()
         {
             Editor.Windows.FlashMainWindow();
+            _enterPlayFocusedWindow = null;
+            _previousWindow = null;
 
             // Pick focused window to restore it
             var gameWin = Editor.Windows.GameWin;
@@ -291,7 +294,7 @@ namespace FlaxEditor.Modules
                     break;
 
                 case Options.InterfaceOptions.PlayModeFocus.GameWindowThenRestore:
-                    _previousWindow = gameWin.ParentDockPanel.SelectedTab;
+                    _previousWindow = gameWin.ParentDockPanel?.SelectedTab;
                     gameWin.FocusGameViewport();
                     break;
                 }
@@ -306,19 +309,14 @@ namespace FlaxEditor.Modules
         public override void OnPlayEnd()
         {
             var gameWin = Editor.Windows.GameWin;
-            if (gameWin != null)
+            if (!RestoreEditWindowIfEnteredPlayFromIt() && gameWin != null)
             {
                 switch (gameWin.FocusOnPlayOption)
                 {
                 case Options.InterfaceOptions.PlayModeFocus.None: break;
                 case Options.InterfaceOptions.PlayModeFocus.GameWindow: break;
                 case Options.InterfaceOptions.PlayModeFocus.GameWindowThenRestore:
-                    if (_previousWindow != null && !_previousWindow.IsDisposing)
-                    {
-                        if (!Editor.Windows.GameWin.ParentDockPanel.ContainsTab(_previousWindow))
-                            break;
-                        _previousWindow.Focus();
-                    }
+                    FocusDockWindow(_previousWindow);
                     break;
                 }
             }
@@ -326,6 +324,25 @@ namespace FlaxEditor.Modules
             Editor.UI.UncheckPauseButton();
 
             Editor.Log("[PlayMode] Exit");
+        }
+
+        private bool RestoreEditWindowIfEnteredPlayFromIt()
+        {
+            var editWin = Editor.Windows.EditWin;
+            if (_enterPlayFocusedWindow != editWin)
+                return false;
+            return FocusDockWindow(editWin);
+        }
+
+        private static bool FocusDockWindow(DockWindow window)
+        {
+            if (window == null || window.IsDisposing || !window.Visible || !window.IsDocked)
+                return false;
+            window.SelectTab(false);
+            window.BringToFront();
+            window.RootWindow?.Focus();
+            window.Focus();
+            return true;
         }
 
         /// <inheritdoc />
