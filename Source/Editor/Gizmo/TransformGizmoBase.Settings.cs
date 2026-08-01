@@ -54,6 +54,7 @@ namespace FlaxEditor.Gizmo
         private BoundingBox CenterBoxRaw = new BoundingBox(new Vector3(-0.5f * CenterBoxScale), new Vector3(0.5f * CenterBoxScale));
         private OrientedBoundingBox CenterBox => new OrientedBoundingBox(CenterBoxRaw) * _gizmoWorld;
         private const float RotateRadiusRaw = 4.0f;
+        private const float RotateTrackballSensitivity = 1.0f / 60.0f;
 
         private Mode _activeMode = Mode.Translate;
         private Axis _activeAxis = Axis.None;

@@ -412,7 +412,7 @@ namespace FlaxEditor.Gizmo
             _rotationDragCurrentPointWorld = Position + offset;
         }
 
-        private void UpdateRotateTrackball(float dt)
+        private void UpdateRotateTrackball()
         {
             if (!_isDrawingRotationDrag)
             {
@@ -425,7 +425,7 @@ namespace FlaxEditor.Gizmo
             Float3 viewRight = Float3.Right * Owner.ViewOrientation;
             Float3 viewUp = Float3.Up * Owner.ViewOrientation;
             Float3 axis = -viewUp * mouseDelta.X - viewRight * mouseDelta.Y;
-            float delta = axis.Length * dt;
+            float delta = axis.Length * RotateTrackballSensitivity;
             if (delta <= Mathf.Epsilon)
             {
                 _rotationDelta = Quaternion.Identity;
@@ -638,11 +638,11 @@ namespace FlaxEditor.Gizmo
                 _rotationGizmoDelta *= _rotationDelta;
         }
 
-        private void UpdateRotate(float dt)
+        private void UpdateRotate()
         {
             if (_activeAxis == Axis.Center)
             {
-                UpdateRotateTrackball(dt);
+                UpdateRotateTrackball();
                 return;
             }
             if (_activeAxis == Axis.Screen)
@@ -738,7 +738,7 @@ namespace FlaxEditor.Gizmo
                         UpdateTranslateScale();
                         break;
                     case Mode.Rotate:
-                        UpdateRotate(dt);
+                        UpdateRotate();
                         break;
                     }
                     if (Owner.SnapToVertex)

@@ -1823,8 +1823,6 @@ namespace FlaxEditor.Viewport
                 var mouseDelta = Float2.Zero;
                 if (_useMouseFiltering)
                 {
-                    offset.X = offset.X > 0 ? Mathf.Floor(offset.X) : Mathf.Ceil(offset.X);
-                    offset.Y = offset.Y > 0 ? Mathf.Floor(offset.Y) : Mathf.Ceil(offset.Y);
                     _mouseDelta = offset;
 
                     // Update delta filtering buffer
@@ -1888,8 +1886,6 @@ namespace FlaxEditor.Viewport
                 {
                     // Calculate smooth mouse delta not dependant on viewport size
                     var offset = _viewMousePos - _startPos;
-                    offset.X = offset.X > 0 ? Mathf.Floor(offset.X) : Mathf.Ceil(offset.X);
-                    offset.Y = offset.Y > 0 ? Mathf.Floor(offset.Y) : Mathf.Ceil(offset.Y);
                     _mouseDelta = offset;
                     _startPos = _viewMousePos;
                 }
