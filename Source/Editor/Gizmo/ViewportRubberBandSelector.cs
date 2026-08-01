@@ -39,7 +39,7 @@ public sealed class ViewportRubberBandSelector
     /// <returns>True if selection started, otherwise false.</returns>
     public bool TryStartingRubberBandSelection(Float2 mousePosition)
     {
-        if (!_isRubberBandSpanning && _owner.Gizmos.Active != null && !_owner.Gizmos.Active.IsControllingMouse && !_owner.IsRightMouseButtonDown)
+        if (!_isRubberBandSpanning && CanStartRubberBand())
         {
             _tryStartRubberBand = true;
             _cachedStartingMousePosition = mousePosition;
@@ -64,6 +64,14 @@ public sealed class ViewportRubberBandSelector
     /// <param name="mousePosition">The current mouse position.</param>
     public void TryCreateRubberBand(bool canStart, Float2 mousePosition)
     {
+        canStart &= CanStartRubberBand();
+
+        if (_tryStartRubberBand && !canStart)
+        {
+            _tryStartRubberBand = false;
+            return;
+        }
+
         if (_isRubberBandSpanning && !canStart)
         {
             EndRubberBandSelection();
@@ -96,6 +104,16 @@ public sealed class ViewportRubberBandSelector
                 UpdateRubberBand();
             }
         }
+    }
+
+    private bool CanStartRubberBand()
+    {
+        var activeGizmo = _owner.Gizmos.Active;
+        if (activeGizmo == null || activeGizmo.IsControllingMouse || _owner.IsRightMouseButtonDown)
+            return false;
+        if (activeGizmo is TransformGizmoBase transformGizmo && transformGizmo.ActiveAxis != TransformGizmoBase.Axis.None)
+            return false;
+        return true;
     }
 
     private struct ViewportProjection

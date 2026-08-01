@@ -706,7 +706,7 @@ namespace FlaxEditor.Viewport
         {
             base.OnLeftMouseButtonDown();
 
-            if (!IsAltKeyDown && !_directionGizmo.IsMouseOver)
+            if (Root.GetMouseButtonDown(MouseButton.Left) && !IsAltKeyDown && !_directionGizmo.IsMouseOver)
                 _rubberBandSelector.TryStartingRubberBandSelection(_viewMousePos);
         }
 

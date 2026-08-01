@@ -1480,7 +1480,7 @@ namespace FlaxEditor.Viewport
         {
             get
             {
-                if (IsMouseOver)
+                if (IsMouseOver || IsControllingMouse || _isViewportControllingMouse)
                     return ConvertMouseToRay(ref _viewMousePos);
                 return new Ray(Vector3.Maximum, Vector3.Up);
             }
@@ -1673,6 +1673,7 @@ namespace FlaxEditor.Viewport
             var canUseInput = window != null && window.IsFocused && window.IsForegroundWindow && !WindowDragHelper.IsDragActive;
             {
                 // Get input buttons and keys (skip if viewport has no focus or mouse is over a child control)
+                var wasViewportControllingMouse = _isViewportControllingMouse;
                 var isViewportControllingMouse = canUseInput && IsControllingMouse;
                 if (isViewportControllingMouse != _isViewportControllingMouse)
                 {
@@ -1682,18 +1683,21 @@ namespace FlaxEditor.Viewport
                     else
                         EndMouseCapture();
                 }
+                var useViewportMouseInput = isViewportControllingMouse || wasViewportControllingMouse;
                 
                 _prevInput = _input;
 #if PLATFORM_SDL
-                bool useMouse = IsControllingMouse || ContainsPoint(ref _viewMousePos) || _prevInput.IsControllingMouse;
+                bool useMouse = useViewportMouseInput || IsControllingMouse || ContainsPoint(ref _viewMousePos) || _prevInput.IsControllingMouse;
                 var hit = GetChildAt(_viewMousePos, c => c.Visible && !(c is CanvasRootControl) && !(c is UIEditorRoot));
-                if (_prevInput.IsControllingMouse)
+                if (useViewportMouseInput || _prevInput.IsControllingMouse)
                     hit = null;
 #else
-                bool useMouse = IsControllingMouse || ContainsPoint(ref _viewMousePos);
+                bool useMouse = useViewportMouseInput || IsControllingMouse || ContainsPoint(ref _viewMousePos);
                 var hit = GetChildAt(_viewMousePos, c => c.Visible && !(c is CanvasRootControl) && !(c is UIEditorRoot));
+                if (useViewportMouseInput)
+                    hit = null;
 #endif
-                if (canUseInput && ContainsFocus && hit == null)
+                if (canUseInput && (ContainsFocus || useViewportMouseInput) && hit == null)
                     _input.Gather(win.Window, useMouse, ref _prevInput);
                 else
                     _input.Clear();
