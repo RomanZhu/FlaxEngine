@@ -40,7 +40,15 @@ namespace FlaxEditor.Gizmo
                 return false;
             Vector3 hitPoint = ray.Position + ray.Direction * distance;
             Real distanceNormalized = hitPoint.Length / RotateRadiusRaw;
-            return Mathf.IsInRange(distanceNormalized, 0.9f, 1.1f);
+            if (!Mathf.IsInRange(distanceNormalized, 0.9f, 1.1f))
+                return false;
+            return Vector3.Dot(hitPoint, GetRotateFrontDirectionLocal(normal)) >= 0.0f;
+        }
+
+        private bool IntersectsRotateTrackball(ref Ray ray, out Real distance)
+        {
+            var sphere = new BoundingSphere(Vector3.Zero, _rotationTrackballRadiusRaw);
+            return sphere.Intersects(ref ray, out distance);
         }
 
         private void SelectAxis()
@@ -52,6 +60,7 @@ namespace FlaxEditor.Gizmo
             Ray localRay;
             _gizmoWorld.WorldToLocalVector(ref ray.Direction, out localRay.Direction);
             _gizmoWorld.WorldToLocal(ref ray.Position, out localRay.Position);
+            localRay.Direction.Normalize();
 
             // Find gizmo collisions with mouse
             Real closestIntersection = Real.MaxValue;
@@ -100,12 +109,12 @@ namespace FlaxEditor.Gizmo
                     closestIntersection = intersection;
                 }
 
-                /*// Center
+                // Center
                 if (CenterBoxRaw.Intersects(ref localRay, out intersection) && intersection > closestIntersection)
                 {
                     _activeAxis = Axis.Center;
                     closestIntersection = intersection;
-                }*/
+                }
 
                 break;
             }
@@ -125,6 +134,11 @@ namespace FlaxEditor.Gizmo
                 if (IntersectsRotateCircle(Vector3.UnitZ, ref localRay, out intersection) && intersection < closestIntersection)
                 {
                     _activeAxis = Axis.Z;
+                    closestIntersection = intersection;
+                }
+                if (_activeAxis == Axis.None && IntersectsRotateTrackball(ref localRay, out intersection))
+                {
+                    _activeAxis = Axis.Center;
                     closestIntersection = intersection;
                 }
 

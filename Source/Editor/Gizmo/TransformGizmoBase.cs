@@ -211,6 +211,7 @@ namespace FlaxEditor.Gizmo
             bool isScaling = _activeMode == Mode.Scale;
             Vector3 delta = Vector3.Zero;
             Ray ray = Owner.MouseRay;
+            Ray worldRay = ray;
 
             Matrix.RotationQuaternion(ref _gizmoWorld.Orientation, out var rotationMatrix);
             Matrix.Invert(ref rotationMatrix, out var invRotationMatrix);
@@ -330,31 +331,22 @@ namespace FlaxEditor.Gizmo
             }
             case Axis.Center:
             {
-                var gizmoToView = Position - Owner.ViewPosition;
-                var plane = new Plane(-Vector3.Normalize(gizmoToView), gizmoToView.Length);
-                if (ray.Intersects(ref plane, out intersection))
-                {
-                    _intersectPosition = ray.GetPoint(intersection);
-                    if (!_lastIntersectionPosition.IsZero)
-                        _tDelta = _intersectPosition - _lastIntersectionPosition;
-                }
                 if (isScaling)
                 {
-                    var tDeltaAbs = Vector3.Abs(_tDelta);
-                    var maxDelta = Math.Max(tDeltaAbs.X, tDeltaAbs.Y);
-                    maxDelta = Math.Max(maxDelta, tDeltaAbs.Z);
-                    Real sign = 0;
-                    if (Mathf.NearEqual(maxDelta, tDeltaAbs.X))
-                        sign = Math.Sign(_tDelta.X);
-                    else if (Mathf.NearEqual(maxDelta, tDeltaAbs.Y))
-                        sign = Math.Sign(_tDelta.Y);
-                    else if (Mathf.NearEqual(maxDelta, tDeltaAbs.Z))
-                        sign = Math.Sign(_tDelta.Z);
-                    delta = new Vector3(maxDelta * sign);
+                    float amount = Owner.MouseDelta.X - Owner.MouseDelta.Y;
+                    delta = new Vector3(amount);
                 }
                 else
                 {
-                    delta = _tDelta;
+                    var viewDirection = (Vector3)Owner.ViewDirection;
+                    var plane = new Plane(position, -viewDirection);
+                    if (worldRay.Intersects(ref plane, out intersection))
+                    {
+                        _intersectPosition = worldRay.GetPoint(intersection);
+                        if (!_lastIntersectionPosition.IsZero)
+                            _tDelta = _intersectPosition - _lastIntersectionPosition;
+                        Vector3.TransformNormal(ref _tDelta, ref invRotationMatrix, out delta);
+                    }
                 }
                 break;
             }
@@ -425,8 +417,46 @@ namespace FlaxEditor.Gizmo
             _translationScaleSnapDelta.Normalize();
         }
 
+        private void UpdateRotateTrackball(float dt)
+        {
+            Float2 mouseDelta = Owner.MouseDelta;
+            Float3 viewRight = Float3.Right * Owner.ViewOrientation;
+            Float3 viewUp = Float3.Up * Owner.ViewOrientation;
+            Float3 axis = -viewUp * mouseDelta.X - viewRight * mouseDelta.Y;
+            float delta = axis.Length * dt;
+            if (delta <= Mathf.Epsilon)
+            {
+                _rotationDelta = Quaternion.Identity;
+                return;
+            }
+            axis.Normalize();
+
+            if (RotationSnapEnabled || Owner.UseSnapping)
+            {
+                float snapValue = RotationSnapValue * Mathf.DegreesToRadians;
+                _rotationSnapDelta += delta;
+
+                float snapped = Mathf.Round(_rotationSnapDelta / snapValue) * snapValue;
+                _rotationSnapDelta -= snapped;
+                delta = snapped;
+                if (Mathf.IsZero(delta))
+                {
+                    _rotationDelta = Quaternion.Identity;
+                    return;
+                }
+            }
+
+            Quaternion.RotationAxis(ref axis, delta, out _rotationDelta);
+        }
+
         private void UpdateRotate(float dt)
         {
+            if (_activeAxis == Axis.Center)
+            {
+                UpdateRotateTrackball(dt);
+                return;
+            }
+
             float mouseDelta = _activeAxis == Axis.Y ? -Owner.MouseDelta.X : Owner.MouseDelta.X;
 
             float delta = mouseDelta * dt;
@@ -583,7 +613,7 @@ namespace FlaxEditor.Gizmo
                         _scaleDelta = Vector3.Zero;
 
                         if (ActiveAxis == Axis.Center)
-                            scaleDelta = new Vector3(scaleDelta.ValuesSum);
+                            scaleDelta = new Vector3(scaleDelta.X);
                     }
 
                     // Apply transformation (but to the parents, not whole selection pool)
