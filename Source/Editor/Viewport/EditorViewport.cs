@@ -1784,7 +1784,8 @@ namespace FlaxEditor.Viewport
                     _input.IsAltRightMouseZooming = rbDown && !lbDown && !mbDown && (isAltDown || _prevInput.IsAltRightMouseZooming);
                     if (_input.IsAltRightMouseZooming)
                         _hasAltRightMouseZoomGesture = true;
-                    bool isAltNavigation = isAltDown || _input.IsAltRightMouseZooming;
+                    bool isAltMiddleMousePanning = isAltDown && mbDown && !lbDown && !rbDown;
+                    bool isAltNavigation = (isAltDown && !isAltMiddleMousePanning) || _input.IsAltRightMouseZooming;
                     _input.IsPanning = !isAltNavigation && mbDown && !rbDown;
                     _input.IsRotating = !isAltNavigation && !mbDown && rbDown;
                     _input.IsMoving = !isAltNavigation && mbDown && rbDown;
