@@ -34,7 +34,9 @@ namespace FlaxEditor.SceneGraph.GUI
         private DragScriptItems _dragScriptItems;
         private DragHandlers _dragHandlers;
         private List<Rectangle> _highlights;
+        private float _highlightsTextLeftOffset;
         private bool _hasSearchFilter;
+        private bool _activeCheckboxPressed;
         private string _sceneIconTooltip;
         private string _shownSceneIconTooltip;
         private Rectangle _sceneIconTooltipArea;
@@ -43,6 +45,8 @@ namespace FlaxEditor.SceneGraph.GUI
         private const float SceneIconSpacing = 3.0f;
         private const float SceneIconRightMargin = 4.0f;
         private const float SceneIconTextPadding = 6.0f;
+        private const float ActiveCheckboxSize = 12.0f;
+        private const float ActiveCheckboxSpacing = 4.0f;
 
         private static bool _sceneTypeIconsLoaded;
         private static Texture _iconPointLight;
@@ -80,6 +84,21 @@ namespace FlaxEditor.SceneGraph.GUI
         /// Gets the actor node.
         /// </summary>
         public ActorNode ActorNode => _actorNode;
+
+        /// <inheritdoc />
+        protected override float HeaderTextLeftOffset
+        {
+            get => ShouldDrawActiveCheckbox ? ActiveCheckboxSize + ActiveCheckboxSpacing : 0.0f;
+        }
+
+        private bool ShouldDrawActiveCheckbox
+        {
+            get
+            {
+                var actor = _actorNode?.Actor;
+                return actor && (IsMouseOverHeader || _activeCheckboxPressed);
+            }
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ActorTreeNode"/> class.
@@ -314,6 +333,7 @@ namespace FlaxEditor.SceneGraph.GUI
                                 var end = font.GetCharPosition(text, range.EndIndex);
                                 _highlights.Add(new Rectangle(start.X + textRect.X, textRect.Y, end.X - start.X, textRect.Height));
                             }
+                            _highlightsTextLeftOffset = HeaderTextLeftOffset;
                             hasFilter = true;
                         }
                     }
@@ -346,6 +366,7 @@ namespace FlaxEditor.SceneGraph.GUI
                     var end = font.GetCharPosition(text, range.EndIndex);
                     _highlights.Add(new Rectangle(start.X + textRect.X, textRect.Y, end.X - start.X, textRect.Height));
                 }
+                _highlightsTextLeftOffset = HeaderTextLeftOffset;
                 isThisVisible = true;
             }
             else
@@ -764,6 +785,64 @@ namespace FlaxEditor.SceneGraph.GUI
             }
         }
 
+        private Rectangle GetActiveCheckboxRect()
+        {
+            var textRect = TextRect;
+            return new Rectangle(textRect.X - HeaderTextLeftOffset, (HeaderHeight - ActiveCheckboxSize) * 0.5f, ActiveCheckboxSize, ActiveCheckboxSize);
+        }
+
+        private bool TestActiveCheckboxHit(ref Float2 location)
+        {
+            var actor = Actor;
+            if (!actor || !HeaderRect.Contains(ref location))
+                return false;
+
+            var rect = GetActiveCheckboxRect();
+            return rect.Contains(ref location);
+        }
+
+        private bool CanToggleActorActive()
+        {
+            var actor = Actor;
+            if (!actor)
+                return false;
+
+            var state = Editor.Instance.StateMachine.CurrentState;
+            return actor.HasScene ? state.CanEditScene && Level.IsAnySceneLoaded : state.CanEditContent;
+        }
+
+        private void ToggleActorActive()
+        {
+            var actor = Actor;
+            if (!actor || !CanToggleActorActive())
+                return;
+
+            using (new UndoBlock(ActorNode.Root.Undo, actor, actor.IsActive ? "Deactivate Actor" : "Activate Actor"))
+                actor.IsActive = !actor.IsActive;
+        }
+
+        private void DrawActiveCheckbox()
+        {
+            var actor = Actor;
+            if (!actor || !ShouldDrawActiveCheckbox)
+                return;
+
+            var style = Style.Current;
+            var rect = GetActiveCheckboxRect();
+            var mouseLocation = PointFromScreen(Input.MouseScreenPosition);
+            var enabled = CanToggleActorActive();
+            var isMouseOverCheckbox = rect.Contains(ref mouseLocation);
+            var borderColor = enabled && (_activeCheckboxPressed || isMouseOverCheckbox) ? style.BorderSelected : style.BorderNormal;
+            var imageColor = enabled ? style.BorderSelected * 1.2f : style.ForegroundDisabled;
+
+            if (!enabled)
+                borderColor *= 0.5f;
+            Render2D.DrawRectangle(rect.MakeExpanded(-1.0f), borderColor);
+
+            if (actor.IsActive && style.CheckBoxTick.IsValid)
+                Render2D.DrawSprite(style.CheckBoxTick, rect, imageColor);
+        }
+
         private bool TryGetSceneIconTooltip(ref Float2 location, out string tooltip, out Rectangle area)
         {
             tooltip = null;
@@ -865,11 +944,61 @@ namespace FlaxEditor.SceneGraph.GUI
             {
                 var style = Style.Current;
                 var color = style.ProgressNormal * 0.6f;
+                var textOffset = HeaderTextLeftOffset - _highlightsTextLeftOffset;
                 for (int i = 0; i < _highlights.Count; i++)
-                    Render2D.FillRectangle(_highlights[i], color);
+                {
+                    var rect = _highlights[i];
+                    rect.X += textOffset;
+                    Render2D.FillRectangle(rect, color);
+                }
             }
 
+            DrawActiveCheckbox();
             DrawSceneRowIcons();
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseDown(Float2 location, MouseButton button)
+        {
+            if (button == MouseButton.Left && TestActiveCheckboxHit(ref location))
+            {
+                _activeCheckboxPressed = true;
+                Focus();
+                return true;
+            }
+
+            return base.OnMouseDown(location, button);
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            if (button == MouseButton.Left && _activeCheckboxPressed)
+            {
+                _activeCheckboxPressed = false;
+                if (TestActiveCheckboxHit(ref location))
+                    ToggleActorActive();
+                Focus();
+                return true;
+            }
+
+            return base.OnMouseUp(location, button);
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
+        {
+            if (button == MouseButton.Left && TestActiveCheckboxHit(ref location))
+                return true;
+
+            return base.OnMouseDoubleClick(location, button);
+        }
+
+        /// <inheritdoc />
+        public override void OnMouseLeave()
+        {
+            _activeCheckboxPressed = false;
+            base.OnMouseLeave();
         }
 
         /// <inheritdoc />

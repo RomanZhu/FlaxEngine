@@ -180,7 +180,7 @@ namespace FlaxEditor.GUI.Tree
             {
                 UpdateTextWidth();
 
-                float minWidth = _xOffset + _textWidth + 6 + 16;
+                float minWidth = _xOffset + _textWidth + 6 + 16 + HeaderTextLeftOffset;
                 if (_iconCollaped.IsValid)
                     minWidth += 16;
 
@@ -258,8 +258,28 @@ namespace FlaxEditor.GUI.Tree
                     textRect.Width -= 18.0f;
                 }
 
+                ApplyHeaderTextLeftOffset(ref textRect);
                 return textRect;
             }
+        }
+
+        /// <summary>
+        /// Gets the extra space reserved to the left of the header text.
+        /// </summary>
+        protected virtual float HeaderTextLeftOffset => 0.0f;
+
+        /// <summary>
+        /// Gets a value indicating whether the mouse is over the node header.
+        /// </summary>
+        protected bool IsMouseOverHeader => _mouseOverHeader;
+
+        private void ApplyHeaderTextLeftOffset(ref Rectangle textRect)
+        {
+            var offset = HeaderTextLeftOffset;
+            if (offset <= 0.0f)
+                return;
+            textRect.X += offset;
+            textRect.Width = Mathf.Max(0.0f, textRect.Width - offset);
         }
 
         /// <summary>
@@ -724,6 +744,7 @@ namespace FlaxEditor.GUI.Tree
                 textRect.X += 18.0f;
                 textRect.Width -= 18.0f;
             }
+            ApplyHeaderTextLeftOffset(ref textRect);
 
             float textWidth = TextFont.GetFont().MeasureText(_text).X;
             Rectangle trueTextRect = textRect;
@@ -786,6 +807,7 @@ namespace FlaxEditor.GUI.Tree
                     // Adjust offset for icon image
                     if (_iconCollaped.IsValid)
                         leftOffset += 18;
+                    leftOffset += parentNode.HeaderTextLeftOffset;
                     var lineRect1 = new Rectangle(parentNode.TextRect.Left - leftOffset, parentNode.HeaderRect.Top + topOffset, 1, parentNode.HeaderRect.Height - bottomOffset);
                     if (HasAnyVisibleChild && CustomArrowRect.HasValue && CustomArrowRect.Value.Intersects(lineRect1))
                         lineRect1 = Rectangle.Empty; // Skip drawing line if it's overlapping the arrow rectangle
