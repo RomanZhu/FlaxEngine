@@ -35,6 +35,36 @@ namespace FlaxEditor.SceneGraph.GUI
         private DragHandlers _dragHandlers;
         private List<Rectangle> _highlights;
         private bool _hasSearchFilter;
+        private string _sceneIconTooltip;
+        private string _shownSceneIconTooltip;
+        private Rectangle _sceneIconTooltipArea;
+
+        private const float SceneIconSize = 12.0f;
+        private const float SceneIconSpacing = 3.0f;
+        private const float SceneIconRightMargin = 4.0f;
+        private const float SceneIconTextPadding = 6.0f;
+
+        private static bool _sceneTypeIconsLoaded;
+        private static Texture _iconPointLight;
+        private static Texture _iconDirectionalLight;
+        private static Texture _iconEnvironmentProbe;
+        private static Texture _iconSkybox;
+        private static Texture _iconSkyLight;
+        private static Texture _iconAudioListener;
+        private static Texture _iconAudioSource;
+        private static Texture _iconDecal;
+        private static Texture _iconParticleEffect;
+        private static Texture _iconSceneAnimationPlayer;
+
+        private struct SceneRowIcon
+        {
+            public SpriteHandle Sprite;
+            public Texture Texture;
+            public Color Color;
+            public string Tooltip;
+
+            public bool IsValid => Sprite.IsValid || Texture != null;
+        }
 
         /// <summary>
         /// The actor node that owns this node.
@@ -374,9 +404,62 @@ namespace FlaxEditor.SceneGraph.GUI
         /// <inheritdoc />
         protected override bool ShowTooltip => true;
 
+        private void RestartTooltip()
+        {
+            var tooltip = Tooltip;
+            tooltip?.OnMouseLeaveControl(this);
+            tooltip?.OnMouseEnterControl(this);
+        }
+
+        /// <inheritdoc />
+        public override bool OnTestTooltipOverControl(ref Float2 location)
+        {
+            if (TryGetSceneIconTooltip(ref location, out var tooltip, out var area))
+            {
+                if (Tooltip?.Visible == true && !string.Equals(_shownSceneIconTooltip, tooltip, StringComparison.Ordinal))
+                {
+                    _sceneIconTooltip = tooltip;
+                    _sceneIconTooltipArea = area;
+                    RestartTooltip();
+                }
+
+                _sceneIconTooltip = tooltip;
+                _sceneIconTooltipArea = area;
+                return true;
+            }
+
+            if (Tooltip?.Visible == true && !string.IsNullOrEmpty(_shownSceneIconTooltip))
+            {
+                _sceneIconTooltip = null;
+                _sceneIconTooltipArea = Rectangle.Empty;
+                _shownSceneIconTooltip = null;
+                if (base.OnTestTooltipOverControl(ref location))
+                {
+                    RestartTooltip();
+                    return true;
+                }
+            }
+
+            _sceneIconTooltip = null;
+            return base.OnTestTooltipOverControl(ref location);
+        }
+
         /// <inheritdoc />
         public override bool OnShowTooltip(out string text, out Float2 location, out Rectangle area)
         {
+            var mouseLocation = PointFromScreen(Input.MouseScreenPosition);
+            if (TryGetSceneIconTooltip(ref mouseLocation, out text, out area))
+            {
+                _shownSceneIconTooltip = text;
+                _sceneIconTooltip = text;
+                _sceneIconTooltipArea = area;
+                location = _sceneIconTooltipArea.Location + _sceneIconTooltipArea.Size * new Float2(0.5f, 1.0f);
+                return true;
+            }
+
+            _shownSceneIconTooltip = null;
+            _sceneIconTooltip = null;
+
             // Evaluate tooltip text once it's actually needed
             var actor = _actorNode.Actor;
             if (string.IsNullOrEmpty(TooltipText) && actor)
@@ -419,6 +502,291 @@ namespace FlaxEditor.SceneGraph.GUI
             }
 
             return base.CacheTextColor();
+        }
+
+        private static void LoadSceneTypeIcons()
+        {
+            if (_sceneTypeIconsLoaded)
+                return;
+
+            _sceneTypeIconsLoaded = true;
+            _iconPointLight = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/PointLight");
+            _iconDirectionalLight = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/DirectionalLight");
+            _iconEnvironmentProbe = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/EnvironmentProbe");
+            _iconSkybox = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/Skybox");
+            _iconSkyLight = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/SkyLight");
+            _iconAudioListener = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/AudioListner");
+            _iconAudioSource = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/AudioSource");
+            _iconDecal = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/Decal");
+            _iconParticleEffect = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/ParticleEffect");
+            _iconSceneAnimationPlayer = FlaxEngine.Content.LoadAsyncInternal<Texture>("Editor/Icons/Textures/SceneAnimationPlayer");
+        }
+
+        private static string GetSceneObjectTypeName(object obj)
+        {
+            if (obj == null)
+                return "Null";
+
+            var type = TypeUtils.GetObjectType(obj);
+            if (type)
+                return type.Name;
+            return obj.GetType().GetTypeDisplayName();
+        }
+
+        private static bool IsSimpleActor(Actor actor)
+        {
+            if (!actor)
+                return true;
+
+            var type = TypeUtils.GetObjectType(actor);
+            if (type)
+                return type.TypeName == typeof(Actor).FullName || type.TypeName == typeof(EmptyActor).FullName;
+            var managedType = actor.GetType();
+            return managedType == typeof(Actor) || managedType == typeof(EmptyActor);
+        }
+
+        private static Color GetHashedTypeColor(string typeName)
+        {
+            typeName ??= "Actor";
+            unchecked
+            {
+                int hash = 23;
+                for (int i = 0; i < typeName.Length; i++)
+                    hash = hash * 31 + typeName[i];
+                var hue = Math.Abs(hash % 360);
+                return Color.FromHSV(hue, 0.58f, 0.95f);
+            }
+        }
+
+        private static Color GetActorTypeColor(Actor actor)
+        {
+            if (actor is Scene)
+                return new Color(0.28f, 0.64f, 1.0f, 1.0f);
+            if (actor is Light)
+                return new Color(1.0f, 0.82f, 0.24f, 1.0f);
+            if (actor is AudioSource || actor is AudioListener)
+                return new Color(0.73f, 0.54f, 1.0f, 1.0f);
+            if (actor is Collider || actor is RigidBody || actor is Joint || actor is Cloth)
+                return new Color(0.48f, 0.84f, 0.45f, 1.0f);
+            if (actor is UICanvas || actor is UIControl)
+                return new Color(1.0f, 0.50f, 0.77f, 1.0f);
+            if (actor is NavMesh || actor is NavLink || actor is NavMeshBoundsVolume || actor is NavModifierVolume)
+                return new Color(0.20f, 0.86f, 0.72f, 1.0f);
+            if (actor is AnimatedModel || actor is BoneSocket || actor is SceneAnimationPlayer)
+                return new Color(0.96f, 0.58f, 0.27f, 1.0f);
+            if (actor is StaticModel || actor is Terrain || actor is Foliage || actor is Decal || actor is ParticleEffect || actor is SpriteRender || actor is TextRender)
+                return new Color(0.32f, 0.75f, 1.0f, 1.0f);
+
+            var type = TypeUtils.GetObjectType(actor);
+            return GetHashedTypeColor(type ? type.TypeName : actor.GetType().FullName);
+        }
+
+        private static bool TryGetActorTypeTexture(Actor actor, out Texture texture)
+        {
+            LoadSceneTypeIcons();
+
+            if (actor is PointLight || actor is SpotLight)
+                texture = _iconPointLight;
+            else if (actor is DirectionalLight)
+                texture = _iconDirectionalLight;
+            else if (actor is EnvironmentProbe)
+                texture = _iconEnvironmentProbe;
+            else if (actor is SkyLight)
+                texture = _iconSkyLight;
+            else if (actor is Skybox || actor is Sky || actor is ExponentialHeightFog)
+                texture = _iconSkybox;
+            else if (actor is AudioListener)
+                texture = _iconAudioListener;
+            else if (actor is AudioSource)
+                texture = _iconAudioSource;
+            else if (actor is Decal)
+                texture = _iconDecal;
+            else if (actor is ParticleEffect)
+                texture = _iconParticleEffect;
+            else if (actor is SceneAnimationPlayer || actor is VideoPlayer)
+                texture = _iconSceneAnimationPlayer;
+            else
+                texture = null;
+
+            return texture != null;
+        }
+
+        private static bool TryGetActorTypeSprite(Actor actor, out SpriteHandle sprite)
+        {
+            var icons = Editor.Instance.Icons;
+            if (actor is Scene)
+                sprite = icons.Globe32;
+            else if (actor is Camera)
+                sprite = icons.CameraFill32;
+            else if (actor is BoneSocket)
+                sprite = icons.Bone32;
+            else
+                sprite = icons.VisjectBoxClosed32;
+
+            return sprite.IsValid;
+        }
+
+        private static bool TryGetActorTypeIcon(Actor actor, out SceneRowIcon icon)
+        {
+            icon = new SceneRowIcon();
+            if (IsSimpleActor(actor))
+                return false;
+
+            icon.Color = GetActorTypeColor(actor);
+            icon.Tooltip = "Type: " + GetSceneObjectTypeName(actor);
+            if (!TryGetActorTypeTexture(actor, out icon.Texture))
+                TryGetActorTypeSprite(actor, out icon.Sprite);
+            return icon.IsValid;
+        }
+
+        private static SceneRowIcon GetScriptIcon(Script script)
+        {
+            return new SceneRowIcon
+            {
+                Sprite = Editor.Instance.Icons.CSharpScript128,
+                Color = Color.White,
+                Tooltip = "Script: " + GetSceneObjectTypeName(script),
+            };
+        }
+
+        private static void DrawSceneRowIcon(ref SceneRowIcon icon, Rectangle rect, bool active)
+        {
+            var color = active ? icon.Color : icon.Color.AlphaMultiplied(0.45f);
+            if (icon.Texture != null)
+            {
+                Render2D.DrawTexture(icon.Texture, rect, active ? Color.White : Color.White.AlphaMultiplied(0.45f));
+                Render2D.FillRectangle(new Rectangle(rect.X, rect.Bottom - 2.0f, rect.Width, 2.0f), color);
+            }
+            else if (icon.Sprite.IsValid)
+            {
+                Render2D.DrawSprite(icon.Sprite, rect, color);
+            }
+            else
+            {
+                Render2D.FillRectangle(rect, color);
+            }
+        }
+
+        private bool TryGetSceneRowIcon(Actor actor, int iconIndex, out SceneRowIcon icon)
+        {
+            if (TryGetActorTypeIcon(actor, out icon))
+            {
+                if (iconIndex == 0)
+                    return true;
+                iconIndex--;
+            }
+
+            for (int i = 0; i < actor.ScriptsCount; i++)
+            {
+                var script = actor.GetScript(i);
+                if (!script)
+                    continue;
+                if (iconIndex == 0)
+                {
+                    icon = GetScriptIcon(script);
+                    return icon.IsValid;
+                }
+                iconIndex--;
+            }
+
+            icon = new SceneRowIcon();
+            return false;
+        }
+
+        private int GetSceneRowIconsCount(Actor actor)
+        {
+            if (!actor)
+                return 0;
+
+            int result = TryGetActorTypeIcon(actor, out _) ? 1 : 0;
+            for (int i = 0; i < actor.ScriptsCount; i++)
+            {
+                if (actor.GetScript(i))
+                    result++;
+            }
+            return result;
+        }
+
+        private Rectangle GetSceneIconRect(float startX, int iconIndex)
+        {
+            return new Rectangle(startX + iconIndex * (SceneIconSize + SceneIconSpacing), (HeaderHeight - SceneIconSize) * 0.5f, SceneIconSize, SceneIconSize);
+        }
+
+        private float GetSceneIconsRightEdge()
+        {
+            var rightEdge = Width;
+            var originInParent = Float2.Zero;
+            for (Control control = this; control.Parent != null; control = control.Parent)
+            {
+                originInParent = control.PointToParent(ref originInParent);
+                if (control.IsScrollable && control.Parent is ScrollableControl scrollableParent)
+                    originInParent += scrollableParent.ViewOffset;
+
+                if (control.Parent is Panel panel)
+                {
+                    panel.GetDesireClientArea(out var clientArea);
+                    rightEdge = Mathf.Min(rightEdge, clientArea.Right - originInParent.X);
+                    break;
+                }
+            }
+            return Mathf.Max(0.0f, rightEdge);
+        }
+
+        private bool TryGetSceneIconsStart(out float startX, out int iconsCount)
+        {
+            startX = 0.0f;
+            iconsCount = GetSceneRowIconsCount(Actor);
+            if (iconsCount == 0)
+                return false;
+
+            var font = TextFont.GetFont();
+            if (!font)
+                return false;
+
+            var textRect = TextRect;
+            var textWidth = font.MeasureText(Text ?? string.Empty).X;
+            var iconsWidth = iconsCount * SceneIconSize + (iconsCount - 1) * SceneIconSpacing;
+            startX = GetSceneIconsRightEdge() - SceneIconRightMargin - iconsWidth;
+            return startX > textRect.Left && textRect.Left + textWidth + SceneIconTextPadding <= startX;
+        }
+
+        private void DrawSceneRowIcons()
+        {
+            var actor = Actor;
+            if (!actor || !TryGetSceneIconsStart(out var startX, out var iconsCount))
+                return;
+
+            bool active = actor.IsActiveInHierarchy;
+            for (int i = 0; i < iconsCount; i++)
+            {
+                if (TryGetSceneRowIcon(actor, i, out var icon))
+                    DrawSceneRowIcon(ref icon, GetSceneIconRect(startX, i), active);
+            }
+        }
+
+        private bool TryGetSceneIconTooltip(ref Float2 location, out string tooltip, out Rectangle area)
+        {
+            tooltip = null;
+            area = Rectangle.Empty;
+
+            var actor = Actor;
+            if (!actor || !TryGetSceneIconsStart(out var startX, out var iconsCount))
+                return false;
+
+            for (int i = 0; i < iconsCount; i++)
+            {
+                var rect = GetSceneIconRect(startX, i);
+                if (!rect.Contains(ref location))
+                    continue;
+                if (!TryGetSceneRowIcon(actor, i, out var icon))
+                    return false;
+
+                tooltip = icon.Tooltip;
+                area = rect;
+                return !string.IsNullOrEmpty(tooltip);
+            }
+
+            return false;
         }
 
         /// <inheritdoc />
@@ -500,6 +868,8 @@ namespace FlaxEditor.SceneGraph.GUI
                 for (int i = 0; i < _highlights.Count; i++)
                     Render2D.FillRectangle(_highlights[i], color);
             }
+
+            DrawSceneRowIcons();
         }
 
         /// <inheritdoc />
