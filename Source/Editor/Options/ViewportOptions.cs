@@ -71,7 +71,7 @@ namespace FlaxEditor.Options
         /// Gets or sets the default camera easing mode.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Defaults"), EditorOrder(130), Tooltip("The default camera easing mode.")]
+        [EditorDisplay("Defaults"), EditorOrder(130), Tooltip("Enables eased camera speed steps and RMB fly input inertia.")]
         public bool UseCameraEasing { get; set; } = true;
 
         /// <summary>

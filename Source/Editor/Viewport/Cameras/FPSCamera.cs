@@ -18,8 +18,14 @@ namespace FlaxEditor.Viewport.Cameras
     [HideInEditor]
     public class FPSCamera : ViewportCamera
     {
+        private const float FlyMoveInertiaResponse = 24.0f;
+        private const float FlyLookInertiaResponse = 55.0f;
+        private const float FlyInertiaStopThresholdSq = 0.000001f;
+
         private Transform _startMove;
         private Transform _endMove;
+        private Vector3 _flyMoveDelta;
+        private Float2 _flyMouseDelta;
         private float _moveStartTime = -1;
         private float _additionalFOV;
 
@@ -52,6 +58,8 @@ namespace FlaxEditor.Viewport.Cameras
             if (IsAnimatingMove)
                 return;
 
+            ResetFlyInertia();
+
             // Rotate and move
             Viewport.ViewPosition = position;
             Viewport.ViewDirection = direction;
@@ -66,6 +74,8 @@ namespace FlaxEditor.Viewport.Cameras
         {
             if (IsAnimatingMove)
                 return;
+
+            ResetFlyInertia();
 
             // Rotate and move
             Viewport.ViewPosition = position;
@@ -88,9 +98,43 @@ namespace FlaxEditor.Viewport.Cameras
         /// <param name="target">The target transform.</param>
         public void MoveViewport(Transform target)
         {
+            ResetFlyInertia();
+
             _startMove = Viewport.ViewTransform;
             _endMove = target;
             _moveStartTime = Time.UnscaledGameTime;
+        }
+
+        private static float GetInertiaAmount(float dt, float response)
+        {
+            return 1.0f - Mathf.Exp(-Mathf.Max(dt, 0.0f) * response);
+        }
+
+        private void ResetFlyInertia()
+        {
+            _flyMoveDelta = Vector3.Zero;
+            _flyMouseDelta = Float2.Zero;
+        }
+
+        private bool HasFlyInertia()
+        {
+            return _flyMoveDelta.LengthSquared >= FlyInertiaStopThresholdSq || _flyMouseDelta.LengthSquared >= FlyInertiaStopThresholdSq;
+        }
+
+        private void ApplyFlyInertia(float dt, ref Vector3 moveDelta, ref Float2 mouseDelta)
+        {
+            var moveAmount = GetInertiaAmount(dt, FlyMoveInertiaResponse);
+            var lookAmount = GetInertiaAmount(dt, FlyLookInertiaResponse);
+            _flyMoveDelta = Vector3.Lerp(_flyMoveDelta, moveDelta, moveAmount);
+            _flyMouseDelta = Float2.Lerp(_flyMouseDelta, mouseDelta, lookAmount);
+
+            if (moveDelta.IsZero && _flyMoveDelta.LengthSquared < FlyInertiaStopThresholdSq)
+                _flyMoveDelta = Vector3.Zero;
+            if (mouseDelta.IsZero && _flyMouseDelta.LengthSquared < FlyInertiaStopThresholdSq)
+                _flyMouseDelta = Float2.Zero;
+
+            moveDelta = _flyMoveDelta;
+            mouseDelta = _flyMouseDelta;
         }
 
         /// <inheritdoc />
@@ -184,10 +228,31 @@ namespace FlaxEditor.Viewport.Cameras
             var up = Vector3.Up * rotation;
             var right = Vector3.Cross(forward, up);
 
+            var flyMoveDelta = moveDelta;
+            var flyMouseDelta = mouseDelta;
+            var useFlyInertia = Viewport.UseCameraEasing && (input.IsRotating || HasFlyInertia());
+            if (useFlyInertia)
+            {
+                ApplyFlyInertia(dt, ref flyMoveDelta, ref flyMouseDelta);
+                useFlyInertia = HasFlyInertia();
+            }
+            else
+            {
+                ResetFlyInertia();
+            }
+
+            var useFlyMove = input.IsRotating || (useFlyInertia && !_flyMoveDelta.IsZero);
+            var useFlyLook = input.IsRotating || (useFlyInertia && !_flyMouseDelta.IsZero);
+
             // Dolly
-            if (input.IsPanning || input.IsMoving || input.IsRotating)
+            if (input.IsPanning || input.IsMoving)
             {
                 Vector3.Transform(ref moveDelta, ref rotation, out Vector3 move);
+                position += move;
+            }
+            if (useFlyMove)
+            {
+                Vector3.Transform(ref flyMoveDelta, ref rotation, out Vector3 move);
                 position += move;
             }
 
@@ -220,7 +285,12 @@ namespace FlaxEditor.Viewport.Cameras
             }
 
             // Rotate or orbit
-            if (input.IsRotating || (input.IsOrbiting && !isUsingGizmo && prevInput.IsOrbiting))
+            if (useFlyLook)
+            {
+                yaw += flyMouseDelta.X;
+                pitch += flyMouseDelta.Y;
+            }
+            else if (input.IsOrbiting && !isUsingGizmo && prevInput.IsOrbiting)
             {
                 yaw += mouseDelta.X;
                 pitch += mouseDelta.Y;
