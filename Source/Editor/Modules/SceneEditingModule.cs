@@ -101,7 +101,8 @@ namespace FlaxEditor.Modules
         /// </summary>
         /// <param name="selection">The selection.</param>
         /// <param name="additive">if set to <c>true</c> will use additive mode, otherwise will clear previous selection.</param>
-        public void Select(List<SceneGraphNode> selection, bool additive = false)
+        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        public void Select(List<SceneGraphNode> selection, bool additive = false, bool recordUndo = true)
         {
             if (selection == null)
             {
@@ -121,7 +122,7 @@ namespace FlaxEditor.Modules
                 Selection.Clear();
             Selection.AddRange(selection);
 
-            SelectionChange(before);
+            SelectionChange(before, recordUndo);
         }
 
         /// <summary>
@@ -129,12 +130,13 @@ namespace FlaxEditor.Modules
         /// </summary>
         /// <param name="selection">The selection.</param>
         /// <param name="additive">if set to <c>true</c> will use additive mode, otherwise will clear previous selection.</param>
-        public void Select(SceneGraphNode[] selection, bool additive = false)
+        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        public void Select(SceneGraphNode[] selection, bool additive = false, bool recordUndo = true)
         {
             if (selection == null)
                 throw new ArgumentNullException();
 
-            Select(selection.ToList(), additive);
+            Select(selection.ToList(), additive, recordUndo);
         }
 
         /// <summary>
@@ -190,9 +192,10 @@ namespace FlaxEditor.Modules
             SelectionChange(before);
         }
 
-        private void SelectionChange(SceneGraphNode[] before)
+        private void SelectionChange(SceneGraphNode[] before, bool recordUndo = true)
         {
-            Undo.AddAction(new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
+            if (recordUndo)
+                Undo.AddAction(new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
 
             OnSelectionChanged();
 

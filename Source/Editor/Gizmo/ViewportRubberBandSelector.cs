@@ -19,6 +19,7 @@ public sealed class ViewportRubberBandSelector
     private Float2 _cachedStartingMousePosition;
     private Rectangle _rubberBandRect;
     private Rectangle _lastRubberBandRect;
+    private SceneGraphNode[] _rubberBandSelectionBefore;
     private List<ActorNode> _nodesCache;
     private List<SceneGraphNode> _hitsCache;
     private IGizmoOwner _owner;
@@ -53,21 +54,7 @@ public sealed class ViewportRubberBandSelector
     /// <returns>Returns true if rubber band is currently spanning</returns>
     public bool ReleaseRubberBandSelection()
     {
-        if (_isMosueCaptured)
-        {
-            _isMosueCaptured = false;
-            _owner.Viewport.EndMouseCapture();
-        }
-        if (_tryStartRubberBand)
-        {
-            _tryStartRubberBand = false;
-        }
-        if (_isRubberBandSpanning)
-        {
-            _isRubberBandSpanning = false;
-            return true;
-        }
-        return false;
+        return EndRubberBandSelection();
     }
 
     /// <summary>
@@ -79,7 +66,7 @@ public sealed class ViewportRubberBandSelector
     {
         if (_isRubberBandSpanning && !canStart)
         {
-            _isRubberBandSpanning = false;
+            EndRubberBandSelection();
             return;
         }
 
@@ -89,7 +76,9 @@ public sealed class ViewportRubberBandSelector
             if (Mathf.Abs(delta.X) > 0.1f || Mathf.Abs(delta.Y) > 0.1f)
             {
                 _isRubberBandSpanning = true;
+                _rubberBandSelectionBefore = _owner.SceneGraphRoot.SceneContext.Selection.ToArray();
                 _rubberBandRect = new Rectangle(_cachedStartingMousePosition, Float2.Zero);
+                _lastRubberBandRect = Rectangle.Empty;
                 _tryStartRubberBand = false;
             }
         }
@@ -200,32 +189,102 @@ public sealed class ViewportRubberBandSelector
         // Process selection
         if (_owner.IsControlDown)
         {
-            var newSelection = new List<SceneGraphNode>();
-            var currentSelection = new List<SceneGraphNode>(_owner.SceneGraphRoot.SceneContext.Selection);
-            newSelection.AddRange(currentSelection);
+            var newSelection = GetRubberBandSelectionBefore();
             foreach (var hit in hits)
             {
-                if (currentSelection.Contains(hit))
+                if (newSelection.Contains(hit))
                     newSelection.Remove(hit);
                 else
                     newSelection.Add(hit);
             }
-            _owner.Select(newSelection);
+            _owner.Select(newSelection, false);
         }
         else if (Input.GetKey(KeyboardKeys.Shift))
         {
-            var newSelection = new List<SceneGraphNode>();
-            var currentSelection = new List<SceneGraphNode>(_owner.SceneGraphRoot.SceneContext.Selection);
-            newSelection.AddRange(hits);
-            newSelection.AddRange(currentSelection);
-            _owner.Select(newSelection);
+            var newSelection = GetRubberBandSelectionBefore();
+            foreach (var hit in hits)
+            {
+                if (!newSelection.Contains(hit))
+                    newSelection.Add(hit);
+            }
+            _owner.Select(newSelection, false);
         }
         else
         {
-            _owner.Select(hits);
+            _owner.Select(hits, false);
         }
 
         Profiler.EndEvent();
+    }
+
+    private bool EndRubberBandSelection()
+    {
+        if (_isMosueCaptured)
+        {
+            _isMosueCaptured = false;
+            _owner.Viewport.EndMouseCapture();
+        }
+
+        var wasSpanning = _isRubberBandSpanning;
+        _tryStartRubberBand = false;
+        _isRubberBandSpanning = false;
+
+        if (wasSpanning)
+            CommitRubberBandSelectionChange();
+        _rubberBandSelectionBefore = null;
+        return wasSpanning;
+    }
+
+    private void CommitRubberBandSelectionChange()
+    {
+        var before = _rubberBandSelectionBefore;
+        if (before == null)
+            return;
+
+        var after = _owner.SceneGraphRoot.SceneContext.Selection.ToArray();
+        if (AreSelectionsEqual(before, after))
+            return;
+
+        Select(before, false);
+        Select(after, true);
+    }
+
+    private List<SceneGraphNode> GetRubberBandSelectionBefore()
+    {
+        return GetValidSelection(_rubberBandSelectionBefore);
+    }
+
+    private void Select(SceneGraphNode[] nodes, bool recordUndo)
+    {
+        _owner.Select(GetValidSelection(nodes), recordUndo);
+    }
+
+    private static List<SceneGraphNode> GetValidSelection(SceneGraphNode[] nodes)
+    {
+        var result = new List<SceneGraphNode>(nodes?.Length ?? 0);
+        if (nodes != null)
+        {
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                if (nodes[i] != null)
+                    result.Add(nodes[i]);
+            }
+        }
+        return result;
+    }
+
+    private static bool AreSelectionsEqual(SceneGraphNode[] a, SceneGraphNode[] b)
+    {
+        if (a == b)
+            return true;
+        if (a == null || b == null || a.Length != b.Length)
+            return false;
+        for (int i = 0; i < a.Length; i++)
+        {
+            if (a[i] != b[i])
+                return false;
+        }
+        return true;
     }
 
     private bool LoopOverPoints(Vector3[] points, ref Rectangle adjustedRect, ref ViewportProjection projection)
@@ -263,14 +322,8 @@ public sealed class ViewportRubberBandSelector
     /// <returns>True if rubber band was active before stopping.</returns>
     public bool StopRubberBand()
     {
-        if (_isMosueCaptured)
-        {
-            _isMosueCaptured = false;
-            _owner.Viewport.EndMouseCapture();
-        }
-        var result = _tryStartRubberBand;
-        _isRubberBandSpanning = false;
-        _tryStartRubberBand = false;
-        return result;
+        var wasActive = _tryStartRubberBand || _isRubberBandSpanning;
+        EndRubberBandSelection();
+        return wasActive;
     }
 }

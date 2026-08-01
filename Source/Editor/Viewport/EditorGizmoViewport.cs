@@ -97,7 +97,7 @@ namespace FlaxEditor.Viewport
         public SceneGraph.RootNode SceneGraphRoot { get; }
 
         /// <inheritdoc />
-        public abstract void Select(List<SceneGraphNode> nodes);
+        public abstract void Select(List<SceneGraphNode> nodes, bool recordUndo = true);
 
         /// <inheritdoc />
         public abstract void Spawn(Actor actor);

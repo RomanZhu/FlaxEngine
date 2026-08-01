@@ -813,9 +813,9 @@ namespace FlaxEditor.Viewport
         }
 
         /// <inheritdoc />
-        public override void Select(List<SceneGraphNode> nodes)
+        public override void Select(List<SceneGraphNode> nodes, bool recordUndo = true)
         {
-            _editor.SceneEditing.Select(nodes);
+            _editor.SceneEditing.Select(nodes, recordUndo: recordUndo);
         }
 
         /// <inheritdoc />

@@ -444,9 +444,9 @@ namespace FlaxEditor.Viewport
         public RootNode SceneGraphRoot => _window.Graph.Root;
 
         /// <inheritdoc />
-        public void Select(List<SceneGraphNode> nodes)
+        public void Select(List<SceneGraphNode> nodes, bool recordUndo = true)
         {
-            _window.Select(nodes);
+            _window.Select(nodes, recordUndo);
         }
 
         /// <inheritdoc />

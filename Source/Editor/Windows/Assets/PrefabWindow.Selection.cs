@@ -49,12 +49,14 @@ namespace FlaxEditor.Windows.Assets
         /// Called when selection gets changed.
         /// </summary>
         /// <param name="before">The selection before the change.</param>
-        public void OnSelectionChanged(SceneGraphNode[] before)
+        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        public void OnSelectionChanged(SceneGraphNode[] before, bool recordUndo = true)
         {
             if (LockSelection)
                 return;
 
-            Undo.AddAction(new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
+            if (recordUndo)
+                Undo.AddAction(new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
 
             OnSelectionChanges();
         }
@@ -116,6 +118,16 @@ namespace FlaxEditor.Windows.Assets
         /// <param name="nodes">The nodes.</param>
         public void Select(List<SceneGraphNode> nodes)
         {
+            Select(nodes, true);
+        }
+
+        /// <summary>
+        /// Selects the specified nodes collection.
+        /// </summary>
+        /// <param name="nodes">The nodes.</param>
+        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        public void Select(List<SceneGraphNode> nodes, bool recordUndo)
+        {
             nodes?.RemoveAll(x => x == null);
             if (nodes == null || nodes.Count == 0)
             {
@@ -130,7 +142,7 @@ namespace FlaxEditor.Windows.Assets
             Selection.Clear();
             Selection.AddRange(nodes);
 
-            OnSelectionChanged(before);
+            OnSelectionChanged(before, recordUndo);
         }
 
         /// <summary>

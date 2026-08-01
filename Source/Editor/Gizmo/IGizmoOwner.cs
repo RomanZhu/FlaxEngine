@@ -109,8 +109,9 @@ namespace FlaxEditor.Gizmo
         /// <summary>
         /// Selects the scene objects.
         /// </summary>
-        /// <param name="nodes">The nodes to select</param>
-        void Select(List<SceneGraph.SceneGraphNode> nodes);
+        /// <param name="nodes">The nodes to select.</param>
+        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        void Select(List<SceneGraph.SceneGraphNode> nodes, bool recordUndo = true);
 
         /// <summary>
         /// Spawns the actor in the viewport hierarchy.
