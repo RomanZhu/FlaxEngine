@@ -244,6 +244,7 @@ namespace FlaxEditor.Modules
                 Editor.Log("[PlayMode] Resume");
 
                 Editor.StateMachine.PlayingState.IsPaused = false;
+                FocusGameWindowIfEnteredPlayFromEditWindow();
                 Editor.UI.UpdateToolstrip();
             }
         }
@@ -332,6 +333,12 @@ namespace FlaxEditor.Modules
             if (_enterPlayFocusedWindow != editWin)
                 return false;
             return FocusDockWindow(editWin);
+        }
+
+        private void FocusGameWindowIfEnteredPlayFromEditWindow()
+        {
+            if (_enterPlayFocusedWindow == Editor.Windows.EditWin && Editor.Windows.GameWin != null && !Editor.Windows.GameWin.IsDisposing)
+                Editor.Windows.GameWin.FocusGameViewport();
         }
 
         private static bool FocusDockWindow(DockWindow window)
