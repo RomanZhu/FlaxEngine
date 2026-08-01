@@ -129,17 +129,50 @@ namespace FlaxEditor.Gizmo
             Ray localRay = GetLocalMouseRay();
             var plane = new Plane(Vector3.Zero, normal);
             if (!plane.Intersects(ref localRay, out Real distance))
-            {
-                point = GetRotateFrontDirectionLocal(normal) * RotateRadiusRaw;
-                return true;
-            }
+                return GetRotateRingPointFromScreenLocal(normal, out point);
 
             point = localRay.GetPoint(distance);
             point = Vector3.ProjectOnPlane(point, normal);
             if (point.LengthSquared < 0.0001f)
-                point = GetRotateFrontDirectionLocal(normal) * RotateRadiusRaw;
+                return GetRotateRingPointFromScreenLocal(normal, out point);
+
+            point = Vector3.Normalize(point) * RotateRadiusRaw;
+            return true;
+        }
+
+        private bool GetRotateRingPointFromScreenLocal(Vector3 normal, out Vector3 point)
+        {
+            Vector3 tangentU = GetRotateFrontDirectionLocal(normal);
+            Vector3 tangentV = Vector3.Cross(normal, tangentU);
+            if (tangentV.LengthSquared < 0.0001f)
+            {
+                point = tangentU * RotateRadiusRaw;
+                return true;
+            }
+            tangentV.Normalize();
+
+            Owner.Viewport.ProjectPoint(Position, out var centerScreen);
+            Owner.Viewport.ProjectPoint(_gizmoWorld.LocalToWorld(tangentU * RotateRadiusRaw), out var tangentUScreenPoint);
+            Owner.Viewport.ProjectPoint(_gizmoWorld.LocalToWorld(tangentV * RotateRadiusRaw), out var tangentVScreenPoint);
+
+            Float2 tangentUScreen = tangentUScreenPoint - centerScreen;
+            Float2 tangentVScreen = tangentVScreenPoint - centerScreen;
+            Float2 mouseScreen = Owner.Viewport.ViewMousePosition - centerScreen;
+            float determinant = tangentUScreen.X * tangentVScreen.Y - tangentUScreen.Y * tangentVScreen.X;
+            if (Mathf.Abs(determinant) < 0.0001f || mouseScreen.LengthSquared < 0.0001f)
+            {
+                point = tangentU * RotateRadiusRaw;
+                return true;
+            }
+
+            float u = (mouseScreen.X * tangentVScreen.Y - mouseScreen.Y * tangentVScreen.X) / determinant;
+            float v = (tangentUScreen.X * mouseScreen.Y - tangentUScreen.Y * mouseScreen.X) / determinant;
+            point = tangentU * u + tangentV * v;
+            if (point.LengthSquared < 0.0001f)
+                point = tangentU;
             else
-                point = Vector3.Normalize(point) * RotateRadiusRaw;
+                point.Normalize();
+            point *= RotateRadiusRaw;
             return true;
         }
 

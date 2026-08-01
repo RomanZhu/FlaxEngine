@@ -298,6 +298,11 @@ namespace FlaxEditor.Viewport
         }
 
         /// <summary>
+        /// Gets the current mouse position in the viewport UI space.
+        /// </summary>
+        public Float2 ViewMousePosition => _viewMousePos;
+
+        /// <summary>
         /// Gets the mouse movement position delta (user press and move).
         /// </summary>
         public Float2 MousePositionDelta => _mouseDelta;
