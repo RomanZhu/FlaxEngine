@@ -278,17 +278,7 @@ namespace FlaxEditor.Gizmo
                     _intersectPosition = ray.GetPoint(intersection);
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
-                    if (isScaling)
-                    {
-                        var tDeltaAbs = Vector3.Abs(_tDelta);
-                        var maxDelta = Math.Max(tDeltaAbs.Y, tDeltaAbs.Z);
-                        var sign = Math.Sign(tDeltaAbs.Y > tDeltaAbs.Z ? _tDelta.Y : _tDelta.Z);
-                        delta = new Vector3(0, maxDelta * sign, maxDelta * sign);
-                    }
-                    else
-                    {
-                        delta = new Vector3(0, _tDelta.Y, _tDelta.Z);
-                    }
+                    delta = new Vector3(0, _tDelta.Y, _tDelta.Z);
                 }
                 break;
             }
@@ -299,17 +289,7 @@ namespace FlaxEditor.Gizmo
                     _intersectPosition = ray.GetPoint(intersection);
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
-                    if (isScaling)
-                    {
-                        var tDeltaAbs = Vector3.Abs(_tDelta);
-                        var maxDelta = Math.Max(tDeltaAbs.X, tDeltaAbs.Y);
-                        var sign = Math.Sign(tDeltaAbs.X > tDeltaAbs.Y ? _tDelta.X : _tDelta.Y);
-                        delta = new Vector3(maxDelta * sign, maxDelta * sign, 0);
-                    }
-                    else
-                    {
-                        delta = new Vector3(_tDelta.X, _tDelta.Y, 0);
-                    }
+                    delta = new Vector3(_tDelta.X, _tDelta.Y, 0);
                 }
                 break;
             }
@@ -320,17 +300,7 @@ namespace FlaxEditor.Gizmo
                     _intersectPosition = ray.GetPoint(intersection);
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
-                    if (isScaling)
-                    {
-                        var tDeltaAbs = Vector3.Abs(_tDelta);
-                        var maxDelta = Math.Max(tDeltaAbs.X, tDeltaAbs.Z);
-                        var sign = Math.Sign(tDeltaAbs.X > tDeltaAbs.Z ? _tDelta.X : _tDelta.Z);
-                        delta = new Vector3(maxDelta * sign, 0, maxDelta * sign);
-                    }
-                    else
-                    {
-                        delta = new Vector3(_tDelta.X, 0, _tDelta.Z);
-                    }
+                    delta = new Vector3(_tDelta.X, 0, _tDelta.Z);
                 }
                 break;
             }
@@ -515,15 +485,6 @@ namespace FlaxEditor.Gizmo
             case Axis.Z:
                 directionLocal = Vector3.UnitZ;
                 return true;
-            case Axis.XY:
-                directionLocal = Vector3.Normalize(Vector3.UnitX + Vector3.UnitY);
-                return true;
-            case Axis.ZX:
-                directionLocal = Vector3.Normalize(Vector3.UnitZ + Vector3.UnitX);
-                return true;
-            case Axis.YZ:
-                directionLocal = Vector3.Normalize(Vector3.UnitY + Vector3.UnitZ);
-                return true;
             default:
                 directionLocal = Vector3.Zero;
                 return false;
@@ -576,24 +537,6 @@ namespace FlaxEditor.Gizmo
             case Axis.Z:
                 delta.Z = Mathf.Abs(delta.Z) * sign;
                 break;
-            case Axis.XY:
-            {
-                var amount = Math.Max(Mathf.Abs(delta.X), Mathf.Abs(delta.Y)) * sign;
-                delta = new Vector3(amount, amount, 0);
-                break;
-            }
-            case Axis.ZX:
-            {
-                var amount = Math.Max(Mathf.Abs(delta.X), Mathf.Abs(delta.Z)) * sign;
-                delta = new Vector3(amount, 0, amount);
-                break;
-            }
-            case Axis.YZ:
-            {
-                var amount = Math.Max(Mathf.Abs(delta.Y), Mathf.Abs(delta.Z)) * sign;
-                delta = new Vector3(0, amount, amount);
-                break;
-            }
             }
         }
 
