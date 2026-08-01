@@ -19,6 +19,8 @@ namespace FlaxEditor.Viewport.Cameras
     {
         private Vector3 _orbitCenter;
         private Real _orbitRadius;
+        private const float AltRightMouseZoomSpeed = 12.5f;
+        private const float AltRightMouseZoomMinDistance = 500.0f;
 
         /// <summary>
         /// Gets or sets the orbit center.
@@ -110,6 +112,17 @@ namespace FlaxEditor.Viewport.Cameras
         }
 
         /// <inheritdoc />
+        public override void EndAltRightMouseZoom()
+        {
+            if (_orbitRadius < AltRightMouseZoomMinDistance)
+            {
+                _orbitCenter += Viewport.ViewDirection * (AltRightMouseZoomMinDistance - _orbitRadius);
+                _orbitRadius = AltRightMouseZoomMinDistance;
+                UpdatePosition();
+            }
+        }
+
+        /// <inheritdoc />
         public override void UpdateView(float dt, ref Vector3 moveDelta, ref Float2 mouseDelta, out bool centerMouse)
         {
             centerMouse = true;
@@ -117,10 +130,20 @@ namespace FlaxEditor.Viewport.Cameras
             Viewport.GetInput(out EditorViewport.Input input);
 
             // Rotate
-            Viewport.YawPitch += mouseDelta;
+            if (!input.IsAltRightMouseZooming)
+                Viewport.YawPitch += mouseDelta;
 
             // Zoom
-            if (input.IsZooming)
+            if (input.IsAltRightMouseZooming)
+            {
+                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * EditorViewport.GetAltRightMouseZoomDelta(ref mouseDelta) * AltRightMouseZoomSpeed;
+                if (Mathf.Abs(zoomDelta) > Mathf.Epsilon)
+                {
+                    var orbitRadius = _orbitRadius - zoomDelta;
+                    _orbitRadius = orbitRadius > 10000.0f ? 10000.0f : orbitRadius;
+                }
+            }
+            else if (input.IsZooming)
             {
                 _orbitRadius = Mathf.Clamp(_orbitRadius - (Viewport.MouseWheelZoomSpeedFactor * input.MouseWheelDelta * 25.0f), 0.001f, 10000.0f);
             }

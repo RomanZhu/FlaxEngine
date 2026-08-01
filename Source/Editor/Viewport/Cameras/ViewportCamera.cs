@@ -170,6 +170,13 @@ namespace FlaxEditor.Viewport.Cameras
         {
         }
 
+        /// <summary>
+        /// Called when Alt+right mouse button zooming ends.
+        /// </summary>
+        public virtual void EndAltRightMouseZoom()
+        {
+        }
+
         /// <inheritdoc />
         public abstract void UpdateView(float dt, ref Vector3 moveDelta, ref Float2 mouseDelta, out bool centerMouse);
     }
