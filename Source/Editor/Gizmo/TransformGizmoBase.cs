@@ -359,6 +359,8 @@ namespace FlaxEditor.Gizmo
 
             // Modifiers
             if (isScaling)
+                ApplyScaleScreenDirection(ref delta);
+            if (isScaling)
                 delta *= 0.01f;
             if (Owner.IsAltKeyDown)
                 delta *= 0.5f;
@@ -481,14 +483,148 @@ namespace FlaxEditor.Gizmo
             AccumulateRotationGizmoDelta();
         }
 
-        private void UpdateRotateRingDrag()
+        private static bool TryGetRotationAxisLocal(Axis axis, out Vector3 axisLocal)
         {
+            switch (axis)
+            {
+            case Axis.X:
+                axisLocal = Vector3.UnitX;
+                return true;
+            case Axis.Y:
+                axisLocal = Vector3.UnitY;
+                return true;
+            case Axis.Z:
+                axisLocal = Vector3.UnitZ;
+                return true;
+            default:
+                axisLocal = Vector3.Zero;
+                return false;
+            }
+        }
+
+        private static bool TryGetScaleDirectionLocal(Axis axis, out Vector3 directionLocal)
+        {
+            switch (axis)
+            {
+            case Axis.X:
+                directionLocal = Vector3.UnitX;
+                return true;
+            case Axis.Y:
+                directionLocal = Vector3.UnitY;
+                return true;
+            case Axis.Z:
+                directionLocal = Vector3.UnitZ;
+                return true;
+            case Axis.XY:
+                directionLocal = Vector3.Normalize(Vector3.UnitX + Vector3.UnitY);
+                return true;
+            case Axis.ZX:
+                directionLocal = Vector3.Normalize(Vector3.UnitZ + Vector3.UnitX);
+                return true;
+            case Axis.YZ:
+                directionLocal = Vector3.Normalize(Vector3.UnitY + Vector3.UnitZ);
+                return true;
+            default:
+                directionLocal = Vector3.Zero;
+                return false;
+            }
+        }
+
+        private bool TryGetScreenDirectionSign(Vector3 directionLocal, out float sign)
+        {
+            sign = 0.0f;
+
+            Vector3 directionWorld = directionLocal * _gizmoWorld.Orientation;
+            if (directionWorld.LengthSquared < 0.0001f)
+                return false;
+            directionWorld.Normalize();
+
+            Owner.Viewport.ProjectPoint(Position, out var startScreen);
+            Owner.Viewport.ProjectPoint(Position + directionWorld * _screenScale, out var endScreen);
+            Float2 screenDirection = endScreen - startScreen;
+            if (screenDirection.LengthSquared < 0.0001f)
+                return false;
+
+            Float2 mouseDelta = Owner.MouseDelta;
+            if (mouseDelta.LengthSquared < 0.0001f)
+                return false;
+
+            float dot = Float2.Dot(mouseDelta, screenDirection);
+            if (Mathf.IsZero(dot))
+                return false;
+
+            sign = Mathf.Sign(dot);
+            return true;
+        }
+
+        private void ApplyScaleScreenDirection(ref Vector3 delta)
+        {
+            if (!TryGetScaleDirectionLocal(_activeAxis, out var directionLocal) ||
+                !TryGetScreenDirectionSign(directionLocal, out var sign))
+            {
+                return;
+            }
+
+            switch (_activeAxis)
+            {
+            case Axis.X:
+                delta.X = Mathf.Abs(delta.X) * sign;
+                break;
+            case Axis.Y:
+                delta.Y = Mathf.Abs(delta.Y) * sign;
+                break;
+            case Axis.Z:
+                delta.Z = Mathf.Abs(delta.Z) * sign;
+                break;
+            case Axis.XY:
+            {
+                var amount = Math.Max(Mathf.Abs(delta.X), Mathf.Abs(delta.Y)) * sign;
+                delta = new Vector3(amount, amount, 0);
+                break;
+            }
+            case Axis.ZX:
+            {
+                var amount = Math.Max(Mathf.Abs(delta.X), Mathf.Abs(delta.Z)) * sign;
+                delta = new Vector3(amount, 0, amount);
+                break;
+            }
+            case Axis.YZ:
+            {
+                var amount = Math.Max(Mathf.Abs(delta.Y), Mathf.Abs(delta.Z)) * sign;
+                delta = new Vector3(0, amount, amount);
+                break;
+            }
+            }
+        }
+
+        private bool UpdateRotateRing(out Float3 axisWorld, out float delta)
+        {
+            axisWorld = Float3.Zero;
+            delta = 0.0f;
+
+            if (!TryGetRotationAxisLocal(_activeAxis, out var axisLocal))
+                return false;
+
             if (!_isDrawingRotationDrag)
             {
                 if (!GetRotateRingPointLocal(_activeAxis, out var startPoint))
                     startPoint = Vector3.Zero;
                 StartRotationDrag(startPoint);
+                return false;
             }
+
+            Vector3 previousPointWorld = _rotationDragMousePointWorld;
+            if (!GetRotateRingPointLocal(_activeAxis, out var currentPointLocal))
+                return false;
+
+            _rotationDragMousePointWorld = _gizmoWorld.LocalToWorld(currentPointLocal);
+            _gizmoWorld.WorldToLocal(ref previousPointWorld, out var previousPointLocal);
+            delta = (float)GetSignedAngle(previousPointLocal, currentPointLocal, axisLocal);
+            if (Mathf.IsZero(delta))
+                return false;
+
+            axisWorld = axisLocal * _gizmoWorld.Orientation;
+            return true;
         }
 
         private static Real GetSignedAngle(Vector3 from, Vector3 to, Vector3 axis)
@@ -572,9 +708,11 @@ namespace FlaxEditor.Gizmo
                 return;
             }
 
-            float mouseDelta = _activeAxis == Axis.Y ? -Owner.MouseDelta.X : Owner.MouseDelta.X;
-
-            float delta = mouseDelta * dt;
+            if (!UpdateRotateRing(out var dir, out var delta))
+            {
+                _rotationDelta = Quaternion.Identity;
+                return;
+            }
 
             if (RotationSnapEnabled || Owner.UseSnapping)
             {
@@ -609,21 +747,6 @@ namespace FlaxEditor.Gizmo
             case Axis.Y:
             case Axis.Z:
             {
-                UpdateRotateRingDrag();
-
-                Float3 dir;
-                if (_activeAxis == Axis.X)
-                    dir = Float3.Right * _gizmoWorld.Orientation;
-                else if (_activeAxis == Axis.Y)
-                    dir = Float3.Up * _gizmoWorld.Orientation;
-                else
-                    dir = Float3.Forward * _gizmoWorld.Orientation;
-
-                Float3 viewDir = Owner.ViewPosition - Position;
-                Float3.Dot(ref viewDir, ref dir, out float dot);
-                if (dot < 0.0f)
-                    delta *= -1;
-
                 Quaternion.RotationAxis(ref dir, delta, out _rotationDelta);
                 UpdateRotationDragPoint();
                 AccumulateRotationGizmoDelta();
