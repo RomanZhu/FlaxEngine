@@ -48,6 +48,11 @@ namespace FlaxEditor.Gizmo
             /// The center point.
             /// </summary>
             Center = 8,
+
+            /// <summary>
+            /// Screen-space rotation.
+            /// </summary>
+            Screen = 16,
         };
 
         /// <summary>

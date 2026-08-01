@@ -48,7 +48,12 @@ namespace FlaxEditor.Gizmo
         private Vector3 _lastIntersectionPosition;
 
         private Quaternion _rotationDelta = Quaternion.Identity;
+        private Quaternion _rotationGizmoDelta = Quaternion.Identity;
         private float _rotationSnapDelta;
+        private bool _isDrawingRotationDrag;
+        private Vector3 _rotationDragStartPointWorld;
+        private Vector3 _rotationDragCurrentPointWorld;
+        private Vector3 _rotationDragMousePointWorld;
         private Vector3 _scaleDelta;
         private float _screenScale;
 
@@ -417,8 +422,33 @@ namespace FlaxEditor.Gizmo
             _translationScaleSnapDelta.Normalize();
         }
 
+        private void StartRotationDrag(Vector3 startPoint)
+        {
+            _isDrawingRotationDrag = true;
+            _rotationDragStartPointWorld = _gizmoWorld.LocalToWorld(startPoint);
+            _rotationDragCurrentPointWorld = _rotationDragStartPointWorld;
+            _rotationDragMousePointWorld = _rotationDragStartPointWorld;
+        }
+
+        private void UpdateRotationDragPoint()
+        {
+            if (!_isDrawingRotationDrag || _rotationDelta.IsIdentity)
+                return;
+
+            Vector3 offset = _rotationDragCurrentPointWorld - Position;
+            Vector3.Transform(ref offset, ref _rotationDelta, out offset);
+            _rotationDragCurrentPointWorld = Position + offset;
+        }
+
         private void UpdateRotateTrackball(float dt)
         {
+            if (!_isDrawingRotationDrag)
+            {
+                if (!GetRotateTrackballPointLocal(out var startPoint))
+                    startPoint = GetRotateToViewLocal() * _rotationTrackballRadiusRaw;
+                StartRotationDrag(startPoint);
+            }
+
             Float2 mouseDelta = Owner.MouseDelta;
             Float3 viewRight = Float3.Right * Owner.ViewOrientation;
             Float3 viewUp = Float3.Up * Owner.ViewOrientation;
@@ -447,6 +477,86 @@ namespace FlaxEditor.Gizmo
             }
 
             Quaternion.RotationAxis(ref axis, delta, out _rotationDelta);
+            UpdateRotationDragPoint();
+            AccumulateRotationGizmoDelta();
+        }
+
+        private void UpdateRotateRingDrag()
+        {
+            if (!_isDrawingRotationDrag)
+            {
+                if (!GetRotateRingPointLocal(_activeAxis, out var startPoint))
+                    startPoint = Vector3.Zero;
+                StartRotationDrag(startPoint);
+            }
+        }
+
+        private static Real GetSignedAngle(Vector3 from, Vector3 to, Vector3 axis)
+        {
+            if (from.LengthSquared < 0.0001f || to.LengthSquared < 0.0001f)
+                return 0.0f;
+            from.Normalize();
+            to.Normalize();
+            axis.Normalize();
+            var cross = Vector3.Cross(from, to);
+            Real sin = Vector3.Dot(axis, cross);
+            Real cos = Mathf.Clamp((float)Vector3.Dot(from, to), -1.0f, 1.0f);
+            return (Real)System.Math.Atan2(sin, cos);
+        }
+
+        private void UpdateRotateScreen()
+        {
+            if (!_isDrawingRotationDrag)
+            {
+                if (!GetRotateScreenRingPointLocal(out var startPoint))
+                    startPoint = GetRotateToViewLocal() * _rotationScreenRingRadiusRaw;
+                StartRotationDrag(startPoint);
+                _rotationDelta = Quaternion.Identity;
+                return;
+            }
+
+            Vector3 previousPointWorld = _rotationDragMousePointWorld;
+            if (!GetRotateScreenRingPointLocal(out var currentPointLocal))
+            {
+                _rotationDelta = Quaternion.Identity;
+                return;
+            }
+
+            _rotationDragMousePointWorld = _gizmoWorld.LocalToWorld(currentPointLocal);
+            Vector3 previous = previousPointWorld - Position;
+            Vector3 current = _rotationDragMousePointWorld - Position;
+            Vector3 axisVector = Owner.ViewDirection;
+            Real delta = GetSignedAngle(previous, current, axisVector);
+            if (Mathf.IsZero((float)delta))
+            {
+                _rotationDelta = Quaternion.Identity;
+                return;
+            }
+
+            if (RotationSnapEnabled || Owner.UseSnapping)
+            {
+                float snapValue = RotationSnapValue * Mathf.DegreesToRadians;
+                _rotationSnapDelta += (float)delta;
+                float snapped = Mathf.Round(_rotationSnapDelta / snapValue) * snapValue;
+                _rotationSnapDelta -= snapped;
+                delta = snapped;
+                if (Mathf.IsZero((float)delta))
+                {
+                    _rotationDelta = Quaternion.Identity;
+                    return;
+                }
+            }
+
+            Float3 axis = Owner.ViewDirection;
+            Quaternion.RotationAxis(ref axis, (float)delta, out _rotationDelta);
+            UpdateRotationDragPoint();
+            AccumulateRotationGizmoDelta();
+        }
+
+        private void AccumulateRotationGizmoDelta()
+        {
+            if (_activeTransformSpace == TransformSpace.World && _activeMode == Mode.Rotate && !_rotationDelta.IsIdentity)
+                _rotationGizmoDelta *= _rotationDelta;
         }
 
         private void UpdateRotate(float dt)
@@ -454,6 +564,11 @@ namespace FlaxEditor.Gizmo
             if (_activeAxis == Axis.Center)
             {
                 UpdateRotateTrackball(dt);
+                return;
+            }
+            if (_activeAxis == Axis.Screen)
+            {
+                UpdateRotateScreen();
                 return;
             }
 
@@ -494,6 +609,8 @@ namespace FlaxEditor.Gizmo
             case Axis.Y:
             case Axis.Z:
             {
+                UpdateRotateRingDrag();
+
                 Float3 dir;
                 if (_activeAxis == Axis.X)
                     dir = Float3.Right * _gizmoWorld.Orientation;
@@ -508,6 +625,8 @@ namespace FlaxEditor.Gizmo
                     delta *= -1;
 
                 Quaternion.RotationAxis(ref dir, delta, out _rotationDelta);
+                UpdateRotationDragPoint();
+                AccumulateRotationGizmoDelta();
                 break;
             }
 
@@ -629,6 +748,8 @@ namespace FlaxEditor.Gizmo
                     // Clear cache
                     _accMoveDelta = Vector3.Zero;
                     _lastIntersectionPosition = _intersectPosition = Vector3.Zero;
+                    _isDrawingRotationDrag = false;
+                    _rotationGizmoDelta = Quaternion.Identity;
                     _isSelected = false;
                     EndTransforming();
                 }
@@ -640,6 +761,8 @@ namespace FlaxEditor.Gizmo
                 // Deactivate
                 _isActive = false;
                 _activeAxis = Axis.None;
+                _isDrawingRotationDrag = false;
+                _rotationGizmoDelta = Quaternion.Identity;
                 EndVertexSnapping();
                 return;
             }

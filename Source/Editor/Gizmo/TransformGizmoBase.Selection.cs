@@ -51,16 +51,130 @@ namespace FlaxEditor.Gizmo
             return sphere.Intersects(ref ray, out distance);
         }
 
-        private void SelectAxis()
+        private bool IntersectsRotateScreenRing(ref Ray ray, out Real distance)
         {
-            // Get mouse ray
-            Ray ray = Owner.MouseRay;
+            Vector3 normal = GetRotateToViewLocal();
+            var plane = new Plane(Vector3.Zero, normal);
+            if (!plane.Intersects(ref ray, out distance))
+                return false;
 
-            // Transform ray into local space of the gizmo
+            Vector3 hitPoint = ray.Position + ray.Direction * distance;
+            Real ringDistance = hitPoint.Length;
+            return Mathf.IsInRange((float)ringDistance, _rotationScreenRingRadiusRaw - _rotationScreenRingThicknessRaw * 3.0f, _rotationScreenRingRadiusRaw + _rotationScreenRingThicknessRaw * 3.0f);
+        }
+
+        private Ray GetLocalMouseRay()
+        {
+            Ray ray = Owner.MouseRay;
             Ray localRay;
             _gizmoWorld.WorldToLocalVector(ref ray.Direction, out localRay.Direction);
             _gizmoWorld.WorldToLocal(ref ray.Position, out localRay.Position);
             localRay.Direction.Normalize();
+            return localRay;
+        }
+
+        private bool GetRotateTrackballPointLocal(out Vector3 point)
+        {
+            Ray localRay = GetLocalMouseRay();
+            var sphere = new BoundingSphere(Vector3.Zero, _rotationTrackballRadiusRaw);
+            if (sphere.Intersects(ref localRay, out Real distance))
+            {
+                point = localRay.GetPoint(distance);
+                if (point.LengthSquared > 0.0001f)
+                    point = Vector3.Normalize(point) * _rotationTrackballRadiusRaw;
+                return true;
+            }
+
+            Vector3 viewNormal = GetRotateToViewLocal();
+            var plane = new Plane(Vector3.Zero, viewNormal);
+            if (!plane.Intersects(ref localRay, out distance))
+            {
+                point = Vector3.Zero;
+                return false;
+            }
+
+            Vector3 planePoint = localRay.GetPoint(distance);
+            Vector3 planeOffset = planePoint - viewNormal * Vector3.Dot(planePoint, viewNormal);
+            Real radiusSquared = _rotationTrackballRadiusRaw * _rotationTrackballRadiusRaw;
+            Real planeLengthSquared = planeOffset.LengthSquared;
+            if (planeLengthSquared >= radiusSquared)
+            {
+                point = Vector3.Normalize(planeOffset) * _rotationTrackballRadiusRaw;
+                return true;
+            }
+
+            point = planeOffset + viewNormal * (Real)System.Math.Sqrt(radiusSquared - planeLengthSquared);
+            return true;
+        }
+
+        private bool GetRotateRingPointLocal(Axis axis, out Vector3 point)
+        {
+            Vector3 normal;
+            switch (axis)
+            {
+            case Axis.X:
+                normal = Vector3.UnitX;
+                break;
+            case Axis.Y:
+                normal = Vector3.UnitY;
+                break;
+            case Axis.Z:
+                normal = Vector3.UnitZ;
+                break;
+            default:
+                point = Vector3.Zero;
+                return false;
+            }
+
+            Ray localRay = GetLocalMouseRay();
+            var plane = new Plane(Vector3.Zero, normal);
+            if (!plane.Intersects(ref localRay, out Real distance))
+            {
+                point = GetRotateFrontDirectionLocal(normal) * RotateRadiusRaw;
+                return true;
+            }
+
+            point = localRay.GetPoint(distance);
+            point = Vector3.ProjectOnPlane(point, normal);
+            if (point.LengthSquared < 0.0001f)
+                point = GetRotateFrontDirectionLocal(normal) * RotateRadiusRaw;
+            else
+                point = Vector3.Normalize(point) * RotateRadiusRaw;
+            return true;
+        }
+
+        private bool GetRotateScreenRingPointLocal(out Vector3 point)
+        {
+            Ray localRay = GetLocalMouseRay();
+            Vector3 normal = GetRotateToViewLocal();
+            var plane = new Plane(Vector3.Zero, normal);
+            if (!plane.Intersects(ref localRay, out Real distance))
+            {
+                point = Vector3.ProjectOnPlane(GetRotateFrontDirectionLocal(Vector3.UnitY), normal);
+                if (point.LengthSquared < 0.0001f)
+                    point = Vector3.ProjectOnPlane(Vector3.UnitX, normal);
+                point.Normalize();
+                point *= _rotationScreenRingRadiusRaw;
+                return true;
+            }
+
+            point = localRay.GetPoint(distance);
+            point = Vector3.ProjectOnPlane(point, normal);
+            if (point.LengthSquared < 0.0001f)
+            {
+                point = Vector3.ProjectOnPlane(Vector3.UnitX, normal);
+                if (point.LengthSquared < 0.0001f)
+                    point = Vector3.ProjectOnPlane(Vector3.UnitY, normal);
+            }
+            point.Normalize();
+            point *= _rotationScreenRingRadiusRaw;
+            return true;
+        }
+
+        private void SelectAxis()
+        {
+            // Get mouse ray
+            Ray localRay = GetLocalMouseRay();
 
             // Find gizmo collisions with mouse
             Real closestIntersection = Real.MaxValue;
@@ -134,6 +248,11 @@ namespace FlaxEditor.Gizmo
                 if (IntersectsRotateCircle(Vector3.UnitZ, ref localRay, out intersection) && intersection < closestIntersection)
                 {
                     _activeAxis = Axis.Z;
+                    closestIntersection = intersection;
+                }
+                if (IntersectsRotateScreenRing(ref localRay, out intersection) && intersection < closestIntersection)
+                {
+                    _activeAxis = Axis.Screen;
                     closestIntersection = intersection;
                 }
                 if (_activeAxis == Axis.None && IntersectsRotateTrackball(ref localRay, out intersection))

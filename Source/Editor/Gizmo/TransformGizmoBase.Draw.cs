@@ -12,6 +12,9 @@ namespace FlaxEditor.Gizmo
         private Model _modelScaleAxis;
         private Model _modelRotationArc;
         private Model _modelRotationSphere;
+        private Model _modelRotationScreenRing;
+        private Model _modelRotationTrackballTriangle;
+        private Model _modelRotationTrackballPoint;
         private Model _modelSphere;
         private Model _modelCube;
 
@@ -22,6 +25,8 @@ namespace FlaxEditor.Gizmo
         private MaterialInstance _materialAxisFocus;
         private MaterialInstance _materialAxisBack;
         private MaterialInstance _materialTrackballFocus;
+        private MaterialInstance _materialTrackballTriangle;
+        private MaterialInstance _materialTrackballPoint;
         private MaterialBase _materialSphere;
 
         // Material Parameter Names
@@ -35,6 +40,10 @@ namespace FlaxEditor.Gizmo
         private const float _rotationSphereOpacity = 0.16f;
         private const float _rotationTrackballRadiusRaw = _rotationSphereRadiusRaw;
         private const float _rotationTrackballOpacity = 0.35f;
+        private const float _rotationTrackballTriangleOpacity = 0.45f;
+        private const float _rotationTrackballPointRadiusRaw = 0.12f;
+        private const float _rotationScreenRingRadiusRaw = _rotationSphereRadiusRaw + 0.12f;
+        private const float _rotationScreenRingThicknessRaw = 0.045f;
 
         /// <summary>
         /// Used for example when the selection can't be moved because one actor is static.
@@ -72,10 +81,18 @@ namespace FlaxEditor.Gizmo
 
             _modelRotationArc = CreateTorusSegmentModel(RotateRadiusRaw, _rotationHandleThicknessRaw, -Mathf.PiOverTwo, Mathf.Pi, _rotationArcSegments, _rotationTubeSegments);
             _modelRotationSphere = CreateSphereModel(_rotationSphereRadiusRaw, _rotationArcSegments, _rotationArcSegments / 2);
+            _modelRotationScreenRing = CreateTorusSegmentModel(_rotationScreenRingRadiusRaw, _rotationScreenRingThicknessRaw, 0.0f, Mathf.TwoPi, _rotationArcSegments, _rotationTubeSegments);
+            _modelRotationTrackballTriangle = CreateTriangleModel();
+            _modelRotationTrackballPoint = CreateSphereModel(_rotationTrackballPointRadiusRaw, 12, 6);
             _materialAxisBack = _materialAxisX.CreateVirtualInstance();
             _materialAxisBack.SetParameterValue(_colorParamName, new Color(0.42f, 0.42f, 0.42f, 1.0f));
             _materialTrackballFocus = _materialAxisFocus.CreateVirtualInstance();
             _materialTrackballFocus.SetParameterValue(_opacityParamName, _rotationTrackballOpacity);
+            _materialTrackballTriangle = _materialAxisX.CreateVirtualInstance();
+            _materialTrackballTriangle.SetParameterValue(_colorParamName, new Color(0.22f, 0.22f, 0.22f, 1.0f));
+            _materialTrackballTriangle.SetParameterValue(_opacityParamName, _rotationTrackballTriangleOpacity);
+            _materialTrackballPoint = _materialAxisX.CreateVirtualInstance();
+            _materialTrackballPoint.SetParameterValue(_colorParamName, Color.White);
 
             // Setup editor options
             OnEditorOptionsChanged(Editor.Instance.Options.Options);
@@ -180,6 +197,28 @@ namespace FlaxEditor.Gizmo
             return model;
         }
 
+        private static Model CreateTriangleModel()
+        {
+            var model = FlaxEngine.Content.CreateVirtualAsset<Model>();
+            model.SetupLODs(new[] { 1 });
+            UpdateTriangleModel(model, Vector3.Zero, Vector3.UnitX, Vector3.UnitY);
+            return model;
+        }
+
+        private static void UpdateTriangleModel(Model model, Vector3 center, Vector3 start, Vector3 current)
+        {
+            var normal = Vector3.Cross(start - center, current - center);
+            if (normal.LengthSquared < 0.0001f)
+                normal = Vector3.Up;
+            else
+                normal.Normalize();
+
+            var vertices = new Float3[] { center, start, current };
+            var normals = new Float3[] { normal, normal, normal };
+            var indices = new[] { 0, 1, 2, 0, 2, 1 };
+            model.LODs[0].Meshes[0].UpdateMesh(vertices, indices, normals);
+        }
+
         private void OnEditorOptionsChanged(EditorOptions options)
         {
             UpdateGizmoBrightness(options);
@@ -188,8 +227,10 @@ namespace FlaxEditor.Gizmo
             _materialAxisX.SetParameterValue(_opacityParamName, opacity);
             _materialAxisY.SetParameterValue(_opacityParamName, opacity);
             _materialAxisZ.SetParameterValue(_opacityParamName, opacity);
-            _materialAxisBack.SetParameterValue(_opacityParamName, opacity * _rotationSphereOpacity);
+            _materialAxisBack.SetParameterValue(_opacityParamName, opacity);
             _materialTrackballFocus.SetParameterValue(_opacityParamName, opacity * _rotationTrackballOpacity);
+            _materialTrackballTriangle.SetParameterValue(_opacityParamName, opacity * _rotationTrackballTriangleOpacity);
+            _materialTrackballPoint.SetParameterValue(_opacityParamName, opacity);
         }
 
         private void UpdateGizmoBrightness(EditorOptions options)
@@ -204,6 +245,8 @@ namespace FlaxEditor.Gizmo
             _materialAxisY.SetParameterValue(_brightnessParamName, brightness);
             _materialAxisZ.SetParameterValue(_brightnessParamName, brightness);
             _materialAxisBack.SetParameterValue(_brightnessParamName, brightness);
+            _materialTrackballTriangle.SetParameterValue(_brightnessParamName, brightness);
+            _materialTrackballPoint.SetParameterValue(_brightnessParamName, brightness);
         }
 
         private bool ShouldGizmoBeLocked()
@@ -224,19 +267,19 @@ namespace FlaxEditor.Gizmo
             return gizmoLocked;
         }
 
-        private Vector3 GetRotateToViewLocal()
+        private Vector3 GetRotateToViewLocal(ref Transform transform)
         {
             Vector3 toView;
             if (Owner.Viewport.UseOrthographicProjection)
             {
                 var viewDirection = (Vector3)Owner.ViewDirection;
-                _gizmoWorld.WorldToLocalVector(ref viewDirection, out toView);
+                transform.WorldToLocalVector(ref viewDirection, out toView);
                 toView = -toView;
             }
             else
             {
                 var viewPosition = Owner.ViewPosition;
-                _gizmoWorld.WorldToLocal(ref viewPosition, out toView);
+                transform.WorldToLocal(ref viewPosition, out toView);
             }
 
             if (toView.LengthSquared < 0.0001f)
@@ -246,9 +289,15 @@ namespace FlaxEditor.Gizmo
             return toView;
         }
 
-        private Vector3 GetRotateFrontDirectionLocal(Vector3 normal)
+        private Vector3 GetRotateToViewLocal()
         {
-            Vector3 toView = GetRotateToViewLocal();
+            var transform = _gizmoWorld;
+            return GetRotateToViewLocal(ref transform);
+        }
+
+        private Vector3 GetRotateFrontDirectionLocal(ref Transform transform, Vector3 normal)
+        {
+            Vector3 toView = GetRotateToViewLocal(ref transform);
             toView = Vector3.ProjectOnPlane(toView, normal);
             if (toView.LengthSquared < 0.0001f)
             {
@@ -260,9 +309,15 @@ namespace FlaxEditor.Gizmo
             return toView;
         }
 
-        private void DrawRotationAxis(ref RenderContext renderContext, Mesh arcMesh, ref Matrix world, Vector3 normal, MaterialBase frontMaterial, sbyte sortOrder)
+        private Vector3 GetRotateFrontDirectionLocal(Vector3 normal)
         {
-            Vector3 frontDirection = GetRotateFrontDirectionLocal(normal);
+            var transform = _gizmoWorld;
+            return GetRotateFrontDirectionLocal(ref transform, normal);
+        }
+
+        private void DrawRotationAxis(ref RenderContext renderContext, Mesh arcMesh, ref Transform transform, ref Matrix world, Vector3 normal, MaterialBase frontMaterial, sbyte sortOrder)
+        {
+            Vector3 frontDirection = GetRotateFrontDirectionLocal(ref transform, normal);
             Float3 up = normal;
             Float3 forward = frontDirection;
             Quaternion.LookRotation(ref forward, ref up, out var rotation);
@@ -274,6 +329,52 @@ namespace FlaxEditor.Gizmo
         private void DrawRotationSphere(ref RenderContext renderContext, Mesh mesh, ref Matrix world, MaterialBase material, sbyte sortOrder)
         {
             mesh.Draw(ref renderContext, material, ref world, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+        }
+
+        private void DrawRotationScreenRing(ref RenderContext renderContext, Mesh mesh, MaterialBase material, sbyte sortOrder)
+        {
+            var viewDirection = Owner.ViewDirection;
+            var up = Float3.Up * Owner.ViewOrientation;
+            Quaternion.LookRotation(ref up, ref viewDirection, out var rotation);
+            var transform = new Transform(Position, rotation, new Float3(_screenScale));
+            renderContext.View.GetWorldMatrix(ref transform, out var world);
+            mesh.Draw(ref renderContext, material, ref world, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+        }
+
+        private void DrawRotationTrackballPoint(ref RenderContext renderContext, Mesh pointMesh, Vector3 point, ref Matrix world, sbyte sortOrder)
+        {
+            Float3 pointLocal = point;
+            Matrix.Translation(ref pointLocal, out var m2);
+            Matrix.Multiply(ref m2, ref world, out var m3);
+            pointMesh.Draw(ref renderContext, _materialTrackballPoint, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+        }
+
+        private Vector3 GetRotationDragPointLocal(Transform drawTransform, Vector3 point)
+        {
+            drawTransform.WorldToLocal(ref point, out var result);
+            return result;
+        }
+
+        private void DrawRotationTrackballTriangle(ref RenderContext renderContext, Mesh triangleMesh, ref Transform drawTransform, ref Matrix world, sbyte sortOrder)
+        {
+            if (!_isDrawingRotationDrag)
+                return;
+
+            Vector3 center = GetRotationDragPointLocal(drawTransform, Position);
+            Vector3 start = GetRotationDragPointLocal(drawTransform, _rotationDragStartPointWorld);
+            Vector3 current = GetRotationDragPointLocal(drawTransform, _rotationDragCurrentPointWorld);
+            UpdateTriangleModel(_modelRotationTrackballTriangle, center, start, current);
+            triangleMesh.Draw(ref renderContext, _materialTrackballTriangle, ref world, StaticFlags.None, true, DrawPass.Default, 0.0f, (sbyte)(sortOrder - 1));
+        }
+
+        private void DrawRotationTrackballPoints(ref RenderContext renderContext, Mesh pointMesh, ref Transform drawTransform, ref Matrix world, sbyte sortOrder)
+        {
+            if (!_isDrawingRotationDrag)
+                return;
+
+            DrawRotationTrackballPoint(ref renderContext, pointMesh, GetRotationDragPointLocal(drawTransform, Position), ref world, (sbyte)(sortOrder + 1));
+            DrawRotationTrackballPoint(ref renderContext, pointMesh, GetRotationDragPointLocal(drawTransform, _rotationDragStartPointWorld), ref world, (sbyte)(sortOrder + 1));
+            DrawRotationTrackballPoint(ref renderContext, pointMesh, GetRotationDragPointLocal(drawTransform, _rotationDragCurrentPointWorld), ref world, (sbyte)(sortOrder + 1));
         }
 
         /// <inheritdoc />
@@ -363,27 +464,40 @@ namespace FlaxEditor.Gizmo
 
             case Mode.Rotate:
             {
-                if (!_modelRotationArc || !_modelRotationArc.IsLoaded || !_modelRotationSphere || !_modelRotationSphere.IsLoaded)
+                if (!_modelRotationArc || !_modelRotationArc.IsLoaded ||
+                    !_modelRotationSphere || !_modelRotationSphere.IsLoaded ||
+                    !_modelRotationScreenRing || !_modelRotationScreenRing.IsLoaded ||
+                    !_modelRotationTrackballTriangle || !_modelRotationTrackballTriangle.IsLoaded ||
+                    !_modelRotationTrackballPoint || !_modelRotationTrackballPoint.IsLoaded)
                     break;
                 var rotationArcMesh = _modelRotationArc.LODs[0].Meshes[0];
                 var rotationSphereMesh = _modelRotationSphere.LODs[0].Meshes[0];
+                var rotationScreenRingMesh = _modelRotationScreenRing.LODs[0].Meshes[0];
+                var rotationTrackballTriangleMesh = _modelRotationTrackballTriangle.LODs[0].Meshes[0];
+                var rotationTrackballPointMesh = _modelRotationTrackballPoint.LODs[0].Meshes[0];
+                var rotationDrawTransform = _gizmoWorld;
+                if (_activeTransformSpace == TransformSpace.World && !_rotationGizmoDelta.IsIdentity)
+                    rotationDrawTransform.Orientation = _rotationGizmoDelta * rotationDrawTransform.Orientation;
+                renderContext.View.GetWorldMatrix(ref rotationDrawTransform, out var rotationWorld);
 
                 // Trackball and background
-                DrawRotationSphere(ref renderContext, rotationSphereMesh, ref world, _materialAxisBack, (sbyte)(sortOrder - 2));
                 if (isCenter && !_isDisabled)
-                    DrawRotationSphere(ref renderContext, rotationSphereMesh, ref world, _materialTrackballFocus, (sbyte)(sortOrder - 1));
+                    DrawRotationSphere(ref renderContext, rotationSphereMesh, ref rotationWorld, _materialTrackballFocus, (sbyte)(sortOrder - 2));
+                DrawRotationScreenRing(ref renderContext, rotationScreenRingMesh, _activeAxis == Axis.Screen && !_isDisabled ? _materialAxisFocus : _materialAxisBack, (sbyte)(sortOrder - 1));
+                DrawRotationTrackballTriangle(ref renderContext, rotationTrackballTriangleMesh, ref rotationDrawTransform, ref rotationWorld, sortOrder);
 
                 // X axis
                 MaterialInstance xAxisMaterialRotate = (isXAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
-                DrawRotationAxis(ref renderContext, rotationArcMesh, ref world, Vector3.UnitX, xAxisMaterialRotate, sortOrder);
+                DrawRotationAxis(ref renderContext, rotationArcMesh, ref rotationDrawTransform, ref rotationWorld, Vector3.UnitX, xAxisMaterialRotate, sortOrder);
 
                 // Y axis
                 MaterialInstance yAxisMaterialRotate = (isYAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
-                DrawRotationAxis(ref renderContext, rotationArcMesh, ref world, Vector3.UnitY, yAxisMaterialRotate, sortOrder);
+                DrawRotationAxis(ref renderContext, rotationArcMesh, ref rotationDrawTransform, ref rotationWorld, Vector3.UnitY, yAxisMaterialRotate, sortOrder);
 
                 // Z axis
                 MaterialInstance zAxisMaterialRotate = (isZAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
-                DrawRotationAxis(ref renderContext, rotationArcMesh, ref world, Vector3.UnitZ, zAxisMaterialRotate, sortOrder);
+                DrawRotationAxis(ref renderContext, rotationArcMesh, ref rotationDrawTransform, ref rotationWorld, Vector3.UnitZ, zAxisMaterialRotate, sortOrder);
+                DrawRotationTrackballPoints(ref renderContext, rotationTrackballPointMesh, ref rotationDrawTransform, ref rotationWorld, sortOrder);
 
                 break;
             }
