@@ -158,7 +158,7 @@ bool CollisionData::GetModelTriangle(uint32 faceIndex, MeshBase*& mesh, uint32& 
             // Follow code-path similar to CollisionCooking.cpp to pick a mesh that contains this triangle (collision is cooked from merged all source meshes from the model)
             if (model->WaitForLoaded())
                 return false;
-            const int32 lodIndex = Math::Clamp(_options.ModelLodIndex, 0, model->GetLODsCount());
+            const int32 lodIndex = Math::Clamp(_options.ModelLodIndex, 0, model->GetLODsCount() - 1);
             Array<MeshBase*> meshes;
             model->GetMeshes(meshes, lodIndex);
             uint32 triangleCounter = 0;

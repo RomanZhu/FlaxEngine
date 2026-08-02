@@ -529,9 +529,12 @@ bool MeshBase::Init(uint32 vertices, uint32 triangles, const Array<const void*, 
     _triangles = triangles;
     _vertices = vertices;
     _use16BitIndexBuffer = use16BitIndexBuffer;
+    _cachedIndexBuffer.Release();
     _cachedVertexBuffers[0].Release();
     _cachedVertexBuffers[1].Release();
     _cachedVertexBuffers[2].Release();
+    _cachedIndexBufferCount = 0;
+    _cachedVertexBufferCount = 0;
     Platform::MemoryClear(_cachedVertexLayouts, sizeof(_cachedVertexLayouts));
 
     return false;
@@ -562,6 +565,8 @@ void MeshBase::Release()
     _cachedVertexBuffers[0].Release();
     _cachedVertexBuffers[1].Release();
     _cachedVertexBuffers[2].Release();
+    _cachedIndexBufferCount = 0;
+    _cachedVertexBufferCount = 0;
     Platform::MemoryClear(_cachedVertexLayouts, sizeof(_cachedVertexLayouts));
 }
 

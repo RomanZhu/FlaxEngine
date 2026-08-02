@@ -6,6 +6,7 @@
 #include "Engine/Threading/Task.h"
 #include "Engine/Graphics/GPUBuffer.h"
 #include "Engine/Graphics/Async/GPUTask.h"
+#include "Engine/Graphics/Shaders/GPUVertexLayout.h"
 #include "Engine/Graphics/Models/MeshBase.h"
 #include "Engine/Graphics/Models/MeshAccessor.h"
 #include "Engine/Threading/Threading.h"
@@ -24,6 +25,8 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
     DataContainer<Float3> finalVertexData;
     DataContainer<uint32> finalIndexData;
     const bool needIndexBuffer = arg.Type == CollisionDataType::TriangleMesh;
+    int32 selectedLodIndex = -1;
+    int32 selectedMeshesCount = -1;
 
     // Check if use custom model (specified in the argument, used for fast internal collision cooking by e.g. CSGBuilder)
     if (arg.OverrideModelData)
@@ -36,9 +39,11 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
         }
 
         // Pick a proper model LOD
-        const int32 lodIndex = Math::Clamp(arg.ModelLodIndex, 0, arg.OverrideModelData->LODs.Count());
+        const int32 lodIndex = Math::Clamp(arg.ModelLodIndex, 0, arg.OverrideModelData->LODs.Count() - 1);
+        selectedLodIndex = lodIndex;
         auto lod = &arg.OverrideModelData->LODs[lodIndex];
         const int32 meshesCount = lod->Meshes.Count();
+        selectedMeshesCount = meshesCount;
 
         // Count vertex/index buffer sizes
         int32 vCount = 0;
@@ -50,7 +55,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
                 continue;
             vCount += mesh->Positions.Count();
             if (needIndexBuffer)
-                iCount += mesh->Indices.Count() * 3;
+                iCount += mesh->Indices.Count();
         }
 
         if (meshesCount == 1 && vCount != 0)
@@ -108,20 +113,25 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
         }
 
         // Pick a proper model LOD
-        const int32 lodIndex = Math::Clamp(arg.ModelLodIndex, 0, arg.Model->GetLODsCount());
+        const int32 lodIndex = Math::Clamp(arg.ModelLodIndex, 0, arg.Model->GetLODsCount() - 1);
+        selectedLodIndex = lodIndex;
         Array<MeshBase*> meshes;
         arg.Model->GetMeshes(meshes, lodIndex);
 
         // Get mesh data
         const int32 meshesCount = meshes.Count();
+        selectedMeshesCount = meshesCount;
         Array<BytesContainer> vertexBuffers;
         Array<BytesContainer> indexBuffers;
+        Array<GPUVertexLayout*> vertexLayouts;
         Array<int32> vertexCounts;
         Array<int32> indexCounts;
         vertexBuffers.Resize(meshesCount);
+        vertexLayouts.Resize(meshesCount);
         vertexCounts.Resize(meshesCount);
         indexBuffers.Resize(needIndexBuffer ? meshesCount : 0);
         indexCounts.Resize(needIndexBuffer ? meshesCount : 0);
+        vertexLayouts.SetAll(nullptr);
         vertexCounts.SetAll(0);
         indexCounts.SetAll(0);
         bool useCpuData = IsInMainThread() || !arg.Model->IsVirtual();
@@ -133,15 +143,16 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
                 const auto& mesh = *meshes[i];
                 if ((arg.MaterialSlotsMask & (1 << mesh.GetMaterialSlotIndex())) == 0)
                     continue;
-                if (mesh.GetVertexCount() == 0)
-                    continue;
-
                 int32 count;
-                if (mesh.DownloadDataCPU(MeshBufferType::Vertex0, vertexBuffers[i], count))
+                GPUVertexLayout* vertexLayout = nullptr;
+                if (mesh.DownloadDataCPU(MeshBufferType::Vertex0, vertexBuffers[i], count, &vertexLayout))
                 {
                     LOG(Error, "Failed to download mesh {0} data from model {1} LOD{2}", i, arg.Model.ToString(), lodIndex);
                     return true;
                 }
+                if (count == 0 && vertexLayout && vertexBuffers[i].Length() != 0)
+                    count = vertexBuffers[i].Length() / vertexLayout->GetStride();
+                vertexLayouts[i] = vertexLayout;
                 vertexCounts[i] = count;
 
                 if (needIndexBuffer)
@@ -221,7 +232,8 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
             if (vertexCount == 0)
                 continue;
             MeshAccessor accessor;
-            if (accessor.LoadBuffer(MeshBufferType::Vertex0, Span<byte>(vData), mesh.GetVertexBuffer(0)->GetVertexLayout()))
+            GPUVertexLayout* vertexLayout = useCpuData ? vertexLayouts[i] : mesh.GetVertexBuffer(0)->GetVertexLayout();
+            if (!vertexLayout || accessor.LoadBuffer(MeshBufferType::Vertex0, Span<byte>(vData), vertexLayout))
                 continue;
             auto positionStream = accessor.Position();
             positionStream.CopyTo(Span<Float3>(finalVertexData.Get() + firstVertexIndex, vertexCount));
@@ -252,6 +264,11 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
     }
 
     // Prepare cooking options
+    if (finalVertexData.Length() == 0 || (needIndexBuffer && finalIndexData.Length() == 0))
+    {
+        LOG(Warning, "Missing collision geometry (LOD: {0}, meshes: {1}, vertices: {2}, indices: {3}).", selectedLodIndex, selectedMeshesCount, finalVertexData.Length(), finalIndexData.Length());
+        return true;
+    }
     CookingInput cookingInput;
     cookingInput.VertexCount = finalVertexData.Length();
     cookingInput.VertexData = finalVertexData.Get();
