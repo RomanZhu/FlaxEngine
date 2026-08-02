@@ -13,6 +13,7 @@ CreateAssetResult CreateCollisionData::Create(CreateAssetContext& context)
     IMPORT_SETUP(CollisionData, 1);
 
     CollisionData::SerializedOptions options;
+    Platform::MemoryClear(&options, sizeof(options));
 
     // Check if has cooking module and input argument has been specified
 #if COMPILE_WITH_PHYSICS_COOKING
@@ -43,6 +44,7 @@ CreateAssetResult CreateCollisionData::Create(CreateAssetContext& context)
         options.ModelLodIndex = 0;
         options.ConvexFlags = ConvexMeshGenerationFlags::None;
         options.ConvexVertexLimit = 0;
+        options.MaterialSlotsMask = MAX_uint32;
         if (context.AllocateChunk(0))
             return CreateAssetResult::CannotAllocateChunk;
         context.Data.Header.Chunks[0]->Data.Copy(&options);

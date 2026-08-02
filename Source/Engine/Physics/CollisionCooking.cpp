@@ -14,6 +14,21 @@
 #include "Engine/Profiler/ProfilerMemory.h"
 #include "Engine/Core/Log.h"
 
+namespace
+{
+    uint32 NormalizeMaterialSlotsMask(uint32 mask, int32 materialSlotsCount)
+    {
+        if (mask == 0)
+            return MAX_uint32;
+        if (mask == MAX_uint32 || materialSlotsCount <= 0)
+            return mask;
+
+        const uint32 validMask = materialSlotsCount >= 32 ? MAX_uint32 : (1u << materialSlotsCount) - 1u;
+        const uint32 normalizedMask = mask & validMask;
+        return normalizedMask != 0 ? normalizedMask : MAX_uint32;
+    }
+}
+
 bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::SerializedOptions& outputOptions, BytesContainer& outputData)
 {
     PROFILE_CPU();
@@ -27,10 +42,13 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
     const bool needIndexBuffer = arg.Type == CollisionDataType::TriangleMesh;
     int32 selectedLodIndex = -1;
     int32 selectedMeshesCount = -1;
+    uint32 materialSlotsMask = arg.MaterialSlotsMask == 0 ? MAX_uint32 : arg.MaterialSlotsMask;
 
     // Check if use custom model (specified in the argument, used for fast internal collision cooking by e.g. CSGBuilder)
     if (arg.OverrideModelData)
     {
+        materialSlotsMask = NormalizeMaterialSlotsMask(materialSlotsMask, arg.OverrideModelData->Materials.Count());
+
         // Validate model data
         if (arg.OverrideModelData->LODs.IsEmpty())
         {
@@ -51,7 +69,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
         for (int32 i = 0; i < meshesCount; i++)
         {
             const auto mesh = lod->Meshes[i];
-            if ((arg.MaterialSlotsMask & (1 << mesh->MaterialSlotIndex)) == 0)
+            if ((materialSlotsMask & (1 << mesh->MaterialSlotIndex)) == 0)
                 continue;
             vCount += mesh->Positions.Count();
             if (needIndexBuffer)
@@ -77,7 +95,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
             for (int32 i = 0; i < meshesCount; i++)
             {
                 const auto mesh = lod->Meshes[i];
-                if ((arg.MaterialSlotsMask & (1 << mesh->MaterialSlotIndex)) == 0)
+                if ((materialSlotsMask & (1 << mesh->MaterialSlotIndex)) == 0)
                     continue;
 
                 const int32 firstVertexIndex = vertexCounter;
@@ -111,6 +129,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
             LOG(Warning, "Model loading failed.");
             return true;
         }
+        materialSlotsMask = NormalizeMaterialSlotsMask(materialSlotsMask, arg.Model->GetMaterialSlotsCount());
 
         // Pick a proper model LOD
         const int32 lodIndex = Math::Clamp(arg.ModelLodIndex, 0, arg.Model->GetLODsCount() - 1);
@@ -141,7 +160,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
             for (int32 i = 0; i < meshesCount; i++)
             {
                 const auto& mesh = *meshes[i];
-                if ((arg.MaterialSlotsMask & (1 << mesh.GetMaterialSlotIndex())) == 0)
+                if ((materialSlotsMask & (1 << mesh.GetMaterialSlotIndex())) == 0)
                     continue;
                 int32 count;
                 GPUVertexLayout* vertexLayout = nullptr;
@@ -176,7 +195,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
             for (int32 i = 0; i < meshesCount; i++)
             {
                 const auto& mesh = *meshes[i];
-                if ((arg.MaterialSlotsMask & (1 << mesh.GetMaterialSlotIndex())) == 0)
+                if ((materialSlotsMask & (1 << mesh.GetMaterialSlotIndex())) == 0)
                     continue;
                 if (mesh.GetVertexCount() == 0)
                     continue;
@@ -223,7 +242,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
         for (int32 i = 0; i < meshesCount; i++)
         {
             const auto& mesh = *meshes[i];
-            if ((arg.MaterialSlotsMask & (1 << mesh.GetMaterialSlotIndex())) == 0)
+            if ((materialSlotsMask & (1 << mesh.GetMaterialSlotIndex())) == 0)
                 continue;
             const auto& vData = vertexBuffers[i];
 
@@ -302,7 +321,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
     outputOptions.ModelLodIndex = arg.ModelLodIndex;
     outputOptions.ConvexFlags = arg.ConvexFlags;
     outputOptions.ConvexVertexLimit = arg.ConvexVertexLimit;
-    outputOptions.MaterialSlotsMask = arg.MaterialSlotsMask;
+    outputOptions.MaterialSlotsMask = materialSlotsMask;
 
     return false;
 }

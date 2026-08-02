@@ -10,6 +10,7 @@
 #include "Engine/Physics/PhysicsBackend.h"
 #include "Engine/Physics/PhysicsSettings.h"
 #include "Engine/Physics/Types.h"
+#include "Engine/Graphics/Models/ModelData.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include <ThirdParty/catch2/catch.hpp>
 
@@ -397,6 +398,47 @@ TEST_CASE("PhysicsBackendConvexMesh")
     Quaternion endOrientation;
     PhysicsBackend::GetRigidActorPose(projectileActor, endPosition, endOrientation);
     CHECK(endPosition.Z < -25.0);
+#endif
+}
+
+TEST_CASE("CollisionCookingMaterialSlotsMask")
+{
+#if !COMPILE_WITH_EMPTY_PHYSICS && COMPILE_WITH_PHYSICS_COOKING
+    ModelData modelData;
+    modelData.Materials.Resize(1);
+    modelData.LODs.Resize(1);
+
+    auto mesh = New<MeshData>();
+    mesh->MaterialSlotIndex = 0;
+    mesh->Positions.Add(Float3(0.0f, 0.0f, 0.0f));
+    mesh->Positions.Add(Float3(100.0f, 0.0f, 0.0f));
+    mesh->Positions.Add(Float3(0.0f, 100.0f, 0.0f));
+    mesh->Positions.Add(Float3(0.0f, 0.0f, 100.0f));
+    mesh->Indices.Add(0);
+    mesh->Indices.Add(1);
+    mesh->Indices.Add(2);
+    mesh->Indices.Add(0);
+    mesh->Indices.Add(3);
+    mesh->Indices.Add(1);
+    mesh->Indices.Add(0);
+    mesh->Indices.Add(2);
+    mesh->Indices.Add(3);
+    mesh->Indices.Add(1);
+    mesh->Indices.Add(3);
+    mesh->Indices.Add(2);
+    modelData.LODs[0].Meshes.Add(mesh);
+
+    CollisionCooking::Argument arg;
+    arg.Type = CollisionDataType::ConvexMesh;
+    arg.OverrideModelData = &modelData;
+    arg.MaterialSlotsMask = 0xd6faa230;
+    arg.ConvexVertexLimit = 8;
+
+    CollisionData::SerializedOptions options;
+    BytesContainer outputData;
+    REQUIRE_FALSE(CollisionCooking::CookCollision(arg, options, outputData));
+    CHECK(options.MaterialSlotsMask == MAX_uint32);
+    CHECK(outputData.HasItems());
 #endif
 }
 
