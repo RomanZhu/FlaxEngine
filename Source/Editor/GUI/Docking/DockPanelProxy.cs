@@ -19,7 +19,6 @@ namespace FlaxEditor.GUI.Docking
         private double _dragEnterTime = -1;
         private float _tabHeight, _minimumTabWidth;
         private bool _useMinimumTabWidth;
-        private readonly bool _hideTabForSingleTab = Utilities.Utils.HideSingleTabWindowTabBars();
         private DockPanel _tabInsertionFeedbackPanel;
         private int _tabInsertionFeedbackIndex = -1;
 
@@ -70,7 +69,6 @@ namespace FlaxEditor.GUI.Docking
 
         internal bool IsUsingDockPanel => MouseOverWindow != null || StartDragAsyncWindow != null || (_panel is FloatWindowDockPanel floatPanel && floatPanel.IsDragging);
         private Rectangle HeaderRectangle => new Rectangle(0, 0, Width, _tabHeight);
-        private bool IsSingleFloatingWindow => _hideTabForSingleTab && _panel.TabsCount == 1 && _panel.IsFloating && _panel.ChildPanelsCount == 0;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DockPanelProxy"/> class.
@@ -140,7 +138,7 @@ namespace FlaxEditor.GUI.Docking
         internal bool TryGetTabInsertionIndex(Float2 position, out int tabIndex)
         {
             tabIndex = -1;
-            if (IsSingleFloatingWindow || !HeaderRectangle.Contains(position))
+            if (!HeaderRectangle.Contains(position))
                 return false;
 
             var tabsCount = _panel.TabsCount;
@@ -305,10 +303,6 @@ namespace FlaxEditor.GUI.Docking
             bool containsFocus = ContainsFocus && ((WindowRootControl)window).Window.IsFocused;
             var headerRect = HeaderRectangle;
             var tabsCount = _panel.TabsCount;
-
-            // Return and don't draw tab if only 1 window and it is floating
-            if (IsSingleFloatingWindow)
-                return;
 
             var sourcePanel = _tabInsertionFeedbackPanel;
             var feedbackIndex = _tabInsertionFeedbackIndex;
@@ -537,8 +531,6 @@ namespace FlaxEditor.GUI.Docking
         /// <inheritdoc />
         public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
-            if (IsSingleFloatingWindow)
-                return base.OnMouseDoubleClick(location, button);
 
             // Maximize/restore on double click
             var tab = GetTabAtPos(location, out _);
@@ -558,8 +550,6 @@ namespace FlaxEditor.GUI.Docking
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
-            if (IsSingleFloatingWindow)
-                return base.OnMouseDown(location, button);
             MouseOverWindow = GetTabAtPos(location, out IsMouseDownOverCross);
             MouseDownWindow = MouseOverWindow;
             MouseStartPosition = location;
@@ -591,8 +581,6 @@ namespace FlaxEditor.GUI.Docking
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
-            if (IsSingleFloatingWindow)
-                return base.OnMouseUp(location, button);
 
             // Check tabs under mouse position at the beginning and at the end
             MouseOverWindow = GetTabAtPos(location, out var overCross);
@@ -633,7 +621,7 @@ namespace FlaxEditor.GUI.Docking
         {
             MousePosition = location;
             MouseOverWindow = GetTabAtPos(location, out _);
-            if (IsMouseLeftButtonDown && !IsSingleFloatingWindow)
+            if (IsMouseLeftButtonDown)
             {
                 // Check if mouse is outside the header
                 if (!HeaderRectangle.Contains(location))
@@ -739,10 +727,7 @@ namespace FlaxEditor.GUI.Docking
         /// <inheritdoc />
         public override void GetDesireClientArea(out Rectangle rect)
         {
-            if (IsSingleFloatingWindow)
-                rect = new Rectangle(0, 0, Width, Height);
-            else
-                rect = new Rectangle(0, HeaderRectangle.Height, Width, Height - HeaderRectangle.Height);
+            rect = new Rectangle(0, HeaderRectangle.Height, Width, Height - HeaderRectangle.Height);
         }
 
         private DragDropEffect TrySelectTabUnderLocation(ref Float2 location)

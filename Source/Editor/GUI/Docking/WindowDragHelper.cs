@@ -18,6 +18,11 @@ namespace FlaxEditor.GUI.Docking
         private Float2 _mouse;
         private DockState _toSet;
         private DockPanel _toDock;
+        private DockPanel _aggregateDock;
+        private bool _aggregateCandidate;
+        private Rectangle _rAggregateLeft, _rAggregateRight, _rAggregateBottom, _rAggregateUpper;
+        private Control _aggregateDockHintDown, _aggregateDockHintUp, _aggregateDockHintLeft, _aggregateDockHintRight;
+
         private int _tabInsertionIndex = -1;
         private Window _dragSourceWindow;
 
@@ -125,10 +130,12 @@ namespace FlaxEditor.GUI.Docking
             if (_dragSourceWindow != null)
                 _dragSourceWindow.MouseUp -= OnMouseUp;
 
+            var aggregateDock = _aggregateDock;
+            var aggregateCandidate = _aggregateCandidate;
             RemoveDockHints();
-
             var tabInsertionIndex = _tabInsertionIndex;
             _tabInsertionIndex = -1;
+
             if (_toMove == null)
                 return;
             if (window != null)
@@ -151,7 +158,6 @@ namespace FlaxEditor.GUI.Docking
             {
                 bool hasNoChildPanels = _toMove.ChildPanelsCount == 0;
 
-                // Check if docking as tabs at a specific insertion index
                 if (hasNoChildPanels && _toSet == DockState.DockFill && tabInsertionIndex >= 0)
                 {
                     var insertionIndex = tabInsertionIndex;
@@ -164,7 +170,11 @@ namespace FlaxEditor.GUI.Docking
                 else if (hasNoChildPanels && _toMove.TabsCount == 1)
                 {
                     // Dock window
-                    _toMove.GetTab(0).Show(_toSet, _toDock);
+                    var tab = _toMove.GetTab(0);
+                    if (aggregateCandidate && aggregateDock != null)
+                        tab.ShowAggregate(_toSet, aggregateDock);
+                    else
+                        tab.Show(_toSet, _toDock);
                 }
                 // Check if dock as tab and has no child panels
                 else if (hasNoChildPanels && _toSet == DockState.DockFill)
@@ -183,7 +193,10 @@ namespace FlaxEditor.GUI.Docking
                     if (_toMove.TabsCount > 0)
                     {
                         var firstTab = _toMove.GetTab(0);
-                        firstTab.Show(_toSet, _toDock);
+                        if (aggregateCandidate && aggregateDock != null)
+                            firstTab.ShowAggregate(_toSet, aggregateDock);
+                        else
+                            firstTab.Show(_toSet, _toDock);
 
                         // Dock rest of the tabs
                         while (_toMove.TabsCount > 0)
@@ -195,11 +208,12 @@ namespace FlaxEditor.GUI.Docking
                     // Keep selected tab being selected
                     selectedTab?.SelectTab();
                 }
-
                 // Focus target window
                 _toDock.Root.Focus();
             }
 
+            _aggregateDock = null;
+            _aggregateCandidate = false;
             _toMove = null;
         }
 
@@ -253,6 +267,41 @@ namespace FlaxEditor.GUI.Docking
             }
         }
 
+        private static DockPanel GetAggregateDockPanel(DockPanel dockPanel)
+        {
+            var rootWindow = dockPanel?.RootWindow;
+            var floatingPanel = rootWindow?.GetChild<FloatWindowDockPanel>();
+            return floatingPanel != null ? (DockPanel)floatingPanel : Editor.Instance.UI.MasterPanel;
+        }
+
+        private static bool AreDockBoundsEquivalent(Rectangle a, Rectangle b)
+        {
+            const float epsilon = 1.0f;
+            return Mathf.Abs(a.X - b.X) <= epsilon
+                && Mathf.Abs(a.Y - b.Y) <= epsilon
+                && Mathf.Abs(a.Width - b.Width) <= epsilon
+                && Mathf.Abs(a.Height - b.Height) <= epsilon;
+        }
+
+        private static ContainerControl GetAggregateHintParent(DockPanel dockPanel)
+        {
+            return dockPanel is FloatWindowDockPanel ? (ContainerControl)dockPanel.RootWindow : dockPanel;
+        }
+
+        private Control AddHintControl(ContainerControl panel, Float2 pivot)
+        {
+            if (panel == null)
+                return null;
+
+            var hintControl = panel.AddChild<DragVisuals>();
+            hintControl.Size = new Float2(HintControlSize);
+            hintControl.BackgroundColor = Style.Current.Selection.AlphaMultiplied(0.6f);
+            hintControl.Pivot = pivot;
+            hintControl.PivotRelative = true;
+            hintControl.Visible = false;
+            return hintControl;
+        }
+
         private void AddDockHints()
         {
             if (_toDock == null)
@@ -261,38 +310,54 @@ namespace FlaxEditor.GUI.Docking
             if (_toDock.RootWindow.Window != _dragSourceWindow)
                 _toDock.RootWindow.Window.MouseUp += OnMouseUp;
 
-            _dockHintDown = AddHintControl(new Float2(0.5f, 1));
-            _dockHintUp = AddHintControl(new Float2(0.5f, 0));
-            _dockHintLeft = AddHintControl(new Float2(0, 0.5f));
-            _dockHintRight = AddHintControl(new Float2(1, 0.5f));
+            _dockHintDown = AddHintControl(_toDock, new Float2(0.5f, 1));
+            _dockHintUp = AddHintControl(_toDock, new Float2(0.5f, 0));
+            _dockHintLeft = AddHintControl(_toDock, new Float2(0, 0.5f));
+            _dockHintRight = AddHintControl(_toDock, new Float2(1, 0.5f));
 
-            Control AddHintControl(Float2 pivot)
+            _aggregateDock = GetAggregateDockPanel(_toDock);
+            if (_aggregateDock == null || _aggregateDock == _toDock || AreDockBoundsEquivalent(_toDock.DockAreaBounds, _aggregateDock.RootDockAreaBounds))
             {
-                DragVisuals hintControl = _toDock.AddChild<DragVisuals>();
-                hintControl.Size = new Float2(HintControlSize);
-                hintControl.BackgroundColor = Style.Current.Selection.AlphaMultiplied(0.6f);
-                hintControl.Pivot = pivot;
-                hintControl.PivotRelative = true;
-                hintControl.Visible = false;
-                return hintControl;
+                _aggregateDock = null;
+            }
+            else
+            {
+                var aggregateHintParent = GetAggregateHintParent(_aggregateDock);
+                _aggregateDockHintDown = AddHintControl(aggregateHintParent, new Float2(0.5f, 1));
+                _aggregateDockHintUp = AddHintControl(aggregateHintParent, new Float2(0.5f, 0));
+                _aggregateDockHintLeft = AddHintControl(aggregateHintParent, new Float2(0, 0.5f));
+                _aggregateDockHintRight = AddHintControl(aggregateHintParent, new Float2(1, 0.5f));
             }
         }
-        
+
+        private static void RemoveHintControl(Control hintControl)
+        {
+            if (hintControl?.Parent != null)
+                hintControl.Parent.RemoveChild(hintControl);
+        }
+
         private void RemoveDockHints()
         {
-            if (_toDock == null)
-                return;
+            if (_toDock != null)
+                _toDock.TabsProxy?.ClearTabInsertionFeedback();
 
-            _toDock.TabsProxy?.ClearTabInsertionFeedback();
-            var window = _toDock.RootWindow?.Window;
+            var window = _toDock?.RootWindow?.Window;
             if (window != null && window != _dragSourceWindow)
                 window.MouseUp -= OnMouseUp;
 
-            _dockHintDown?.Parent.RemoveChild(_dockHintDown);
-            _dockHintUp?.Parent.RemoveChild(_dockHintUp);
-            _dockHintLeft?.Parent.RemoveChild(_dockHintLeft);
-            _dockHintRight?.Parent.RemoveChild(_dockHintRight);
+            RemoveHintControl(_dockHintDown);
+            RemoveHintControl(_dockHintUp);
+            RemoveHintControl(_dockHintLeft);
+            RemoveHintControl(_dockHintRight);
             _dockHintDown = _dockHintUp = _dockHintLeft = _dockHintRight = null;
+
+            RemoveHintControl(_aggregateDockHintDown);
+            RemoveHintControl(_aggregateDockHintUp);
+            RemoveHintControl(_aggregateDockHintLeft);
+            RemoveHintControl(_aggregateDockHintRight);
+            _aggregateDockHintDown = _aggregateDockHintUp = _aggregateDockHintLeft = _aggregateDockHintRight = null;
+            _aggregateDock = null;
+            _aggregateCandidate = false;
         }
 
         private void UpdateRects(Float2 mousePos)
@@ -384,9 +449,228 @@ namespace FlaxEditor.GUI.Docking
 
                 // Hit test, and calculate the approximation for filled area when hovered over the edge socket
                 var toSet = DockState.Float;
-                var hintTestPoint = _toDock.PointFromScreen(_mouse);
-                if (showBorderHints)
+                _aggregateCandidate = false;
+
+                // Aggregate hints target the internal junctions where the hovered leaf meets the root edge.
+                if (showBorderHints && _aggregateDock != null)
                 {
+                    var aggregateRect = _aggregateDock.RootDockAreaBounds;
+                    var leafRect = _toDock.DockAreaBounds;
+                    var aggregateSize = aggregateRect.Size / Platform.DpiScale;
+                    var leafSize = leafRect.Size / Platform.DpiScale;
+#if PLATFORM_MAC && !PLATFORM_SDL
+                    var dpiScale = (float)Platform.Dpi / 96.0f;
+                    aggregateSize *= dpiScale;
+                    leafSize *= dpiScale;
+#endif
+                    var aggregateHintParent = GetAggregateHintParent(_aggregateDock);
+                    var aggregateOffset = aggregateHintParent.PointFromScreen(aggregateRect.Location);
+                    var leafOffset = aggregateHintParent.PointFromScreen(leafRect.Location);
+                    var aggregateBounds = new Rectangle(aggregateOffset, aggregateSize);
+                    var leafBounds = new Rectangle(leafOffset, leafSize);
+                    var aggregatePoint = aggregateHintParent.PointFromScreen(_mouse);
+
+                    _rAggregateUpper = Rectangle.Empty;
+                    _rAggregateBottom = Rectangle.Empty;
+                    _rAggregateLeft = Rectangle.Empty;
+                    _rAggregateRight = Rectangle.Empty;
+
+                    var aggregateTopBoundaryDistance = float.MaxValue;
+                    var aggregateBottomBoundaryDistance = float.MaxValue;
+                    var aggregateLeftBoundaryDistance = float.MaxValue;
+                    var aggregateRightBoundaryDistance = float.MaxValue;
+                    var nearestEdge = DockState.Unknown;
+                    var nearestEdgeDistance = float.MaxValue;
+                    var nearestBoundaryDistance = float.MaxValue;
+
+                    if (leafBounds.Top > aggregateBounds.Top && leafBounds.Top < aggregateBounds.Bottom)
+                    {
+                        var boundaryDistance = Mathf.Abs(aggregatePoint.Y - leafBounds.Top);
+                        var candidate = new Rectangle(aggregateBounds.Left, leafBounds.Top - HintControlSize, HintControlSize, HintControlSize * 2.0f);
+                        if (candidate.Contains(ref aggregatePoint))
+                        {
+                            if (boundaryDistance < aggregateLeftBoundaryDistance)
+                            {
+                                aggregateLeftBoundaryDistance = boundaryDistance;
+                                _rAggregateLeft = candidate;
+                            }
+                            var distance = aggregatePoint.X - aggregateBounds.Left;
+                            if (distance < nearestEdgeDistance || (distance == nearestEdgeDistance && boundaryDistance < nearestBoundaryDistance))
+                            {
+                                nearestEdge = DockState.DockLeft;
+                                nearestEdgeDistance = distance;
+                                nearestBoundaryDistance = boundaryDistance;
+                            }
+                        }
+
+                        candidate = new Rectangle(aggregateBounds.Right - HintControlSize, leafBounds.Top - HintControlSize, HintControlSize, HintControlSize * 2.0f);
+                        if (candidate.Contains(ref aggregatePoint))
+                        {
+                            if (boundaryDistance < aggregateRightBoundaryDistance)
+                            {
+                                aggregateRightBoundaryDistance = boundaryDistance;
+                                _rAggregateRight = candidate;
+                            }
+                            var distance = aggregateBounds.Right - aggregatePoint.X;
+                            if (distance < nearestEdgeDistance || (distance == nearestEdgeDistance && boundaryDistance < nearestBoundaryDistance))
+                            {
+                                nearestEdge = DockState.DockRight;
+                                nearestEdgeDistance = distance;
+                                nearestBoundaryDistance = boundaryDistance;
+                            }
+                        }
+                    }
+
+                    if (leafBounds.Bottom > aggregateBounds.Top && leafBounds.Bottom < aggregateBounds.Bottom)
+                    {
+                        var boundaryDistance = Mathf.Abs(aggregatePoint.Y - leafBounds.Bottom);
+                        var candidate = new Rectangle(aggregateBounds.Left, leafBounds.Bottom - HintControlSize, HintControlSize, HintControlSize * 2.0f);
+                        if (candidate.Contains(ref aggregatePoint))
+                        {
+                            if (boundaryDistance < aggregateLeftBoundaryDistance)
+                            {
+                                aggregateLeftBoundaryDistance = boundaryDistance;
+                                _rAggregateLeft = candidate;
+                            }
+                            var distance = aggregatePoint.X - aggregateBounds.Left;
+                            if (distance < nearestEdgeDistance || (distance == nearestEdgeDistance && boundaryDistance < nearestBoundaryDistance))
+                            {
+                                nearestEdge = DockState.DockLeft;
+                                nearestEdgeDistance = distance;
+                                nearestBoundaryDistance = boundaryDistance;
+                            }
+                        }
+
+                        candidate = new Rectangle(aggregateBounds.Right - HintControlSize, leafBounds.Bottom - HintControlSize, HintControlSize, HintControlSize * 2.0f);
+                        if (candidate.Contains(ref aggregatePoint))
+                        {
+                            if (boundaryDistance < aggregateRightBoundaryDistance)
+                            {
+                                aggregateRightBoundaryDistance = boundaryDistance;
+                                _rAggregateRight = candidate;
+                            }
+                            var distance = aggregateBounds.Right - aggregatePoint.X;
+                            if (distance < nearestEdgeDistance || (distance == nearestEdgeDistance && boundaryDistance < nearestBoundaryDistance))
+                            {
+                                nearestEdge = DockState.DockRight;
+                                nearestEdgeDistance = distance;
+                                nearestBoundaryDistance = boundaryDistance;
+                            }
+                        }
+                    }
+
+                    if (leafBounds.Left > aggregateBounds.Left && leafBounds.Left < aggregateBounds.Right)
+                    {
+                        var boundaryDistance = Mathf.Abs(aggregatePoint.X - leafBounds.Left);
+                        var candidate = new Rectangle(leafBounds.Left - HintControlSize, aggregateBounds.Top, HintControlSize * 2.0f, HintControlSize);
+                        if (candidate.Contains(ref aggregatePoint))
+                        {
+                            if (boundaryDistance < aggregateTopBoundaryDistance)
+                            {
+                                aggregateTopBoundaryDistance = boundaryDistance;
+                                _rAggregateUpper = candidate;
+                            }
+                            var distance = aggregatePoint.Y - aggregateBounds.Top;
+                            if (distance < nearestEdgeDistance || (distance == nearestEdgeDistance && boundaryDistance < nearestBoundaryDistance))
+                            {
+                                nearestEdge = DockState.DockTop;
+                                nearestEdgeDistance = distance;
+                                nearestBoundaryDistance = boundaryDistance;
+                            }
+                        }
+
+                        candidate = new Rectangle(leafBounds.Left - HintControlSize, aggregateBounds.Bottom - HintControlSize, HintControlSize * 2.0f, HintControlSize);
+                        if (candidate.Contains(ref aggregatePoint))
+                        {
+                            if (boundaryDistance < aggregateBottomBoundaryDistance)
+                            {
+                                aggregateBottomBoundaryDistance = boundaryDistance;
+                                _rAggregateBottom = candidate;
+                            }
+                            var distance = aggregateBounds.Bottom - aggregatePoint.Y;
+                            if (distance < nearestEdgeDistance || (distance == nearestEdgeDistance && boundaryDistance < nearestBoundaryDistance))
+                            {
+                                nearestEdge = DockState.DockBottom;
+                                nearestEdgeDistance = distance;
+                                nearestBoundaryDistance = boundaryDistance;
+                            }
+                        }
+                    }
+
+                    if (leafBounds.Right > aggregateBounds.Left && leafBounds.Right < aggregateBounds.Right)
+                    {
+                        var boundaryDistance = Mathf.Abs(aggregatePoint.X - leafBounds.Right);
+                        var candidate = new Rectangle(leafBounds.Right - HintControlSize, aggregateBounds.Top, HintControlSize * 2.0f, HintControlSize);
+                        if (candidate.Contains(ref aggregatePoint))
+                        {
+                            if (boundaryDistance < aggregateTopBoundaryDistance)
+                            {
+                                aggregateTopBoundaryDistance = boundaryDistance;
+                                _rAggregateUpper = candidate;
+                            }
+                            var distance = aggregatePoint.Y - aggregateBounds.Top;
+                            if (distance < nearestEdgeDistance || (distance == nearestEdgeDistance && boundaryDistance < nearestBoundaryDistance))
+                            {
+                                nearestEdge = DockState.DockTop;
+                                nearestEdgeDistance = distance;
+                                nearestBoundaryDistance = boundaryDistance;
+                            }
+                        }
+
+                        candidate = new Rectangle(leafBounds.Right - HintControlSize, aggregateBounds.Bottom - HintControlSize, HintControlSize * 2.0f, HintControlSize);
+                        if (candidate.Contains(ref aggregatePoint))
+                        {
+                            if (boundaryDistance < aggregateBottomBoundaryDistance)
+                            {
+                                aggregateBottomBoundaryDistance = boundaryDistance;
+                                _rAggregateBottom = candidate;
+                            }
+                            var distance = aggregateBounds.Bottom - aggregatePoint.Y;
+                            if (distance < nearestEdgeDistance || (distance == nearestEdgeDistance && boundaryDistance < nearestBoundaryDistance))
+                            {
+                                nearestEdge = DockState.DockBottom;
+                                nearestEdgeDistance = distance;
+                                nearestBoundaryDistance = boundaryDistance;
+                            }
+                        }
+                    }
+
+                    switch (nearestEdge)
+                    {
+                    case DockState.DockTop:
+                        _aggregateCandidate = true;
+                        toSet = DockState.DockTop;
+                        hoveredHintControl = _aggregateDockHintUp;
+                        hoveredSizeOverride = new Float2(aggregateSize.X, aggregateSize.Y * DockPanel.DefaultSplitterValue);
+                        hoveredPreviewLocation = new Float2(aggregateOffset.X, aggregateOffset.Y);
+                        break;
+                    case DockState.DockBottom:
+                        _aggregateCandidate = true;
+                        toSet = DockState.DockBottom;
+                        hoveredHintControl = _aggregateDockHintDown;
+                        hoveredSizeOverride = new Float2(aggregateSize.X, aggregateSize.Y * DockPanel.DefaultSplitterValue);
+                        hoveredPreviewLocation = new Float2(aggregateOffset.X, aggregateOffset.Y + aggregateSize.Y - hoveredSizeOverride.Y);
+                        break;
+                    case DockState.DockLeft:
+                        _aggregateCandidate = true;
+                        toSet = DockState.DockLeft;
+                        hoveredHintControl = _aggregateDockHintLeft;
+                        hoveredSizeOverride = new Float2(aggregateSize.X * DockPanel.DefaultSplitterValue, aggregateSize.Y);
+                        hoveredPreviewLocation = new Float2(aggregateOffset.X, aggregateOffset.Y);
+                        break;
+                    case DockState.DockRight:
+                        _aggregateCandidate = true;
+                        toSet = DockState.DockRight;
+                        hoveredHintControl = _aggregateDockHintRight;
+                        hoveredSizeOverride = new Float2(aggregateSize.X * DockPanel.DefaultSplitterValue, aggregateSize.Y);
+                        hoveredPreviewLocation = new Float2(aggregateOffset.X + aggregateSize.X - hoveredSizeOverride.X, aggregateOffset.Y);
+                        break;
+                    }
+                }
+
+                if (!_aggregateCandidate && showBorderHints)
+                {
+                    var hintTestPoint = _toDock.PointFromScreen(_mouse);
                     var nearestEdge = DockState.Unknown;
                     var nearestEdgeDistance = float.MaxValue;
                     if (_rUpper.Contains(ref hintTestPoint))
@@ -465,6 +749,7 @@ namespace FlaxEditor.GUI.Docking
                         toSet = DockState.DockFill;
                         hoveredHintControl = null;
                         hoveredSizeOverride = Float2.Zero;
+                        _aggregateCandidate = false;
                         tabsProxy.SetTabInsertionFeedback(_toMove, tabInsertionIndex);
                     }
                 }
@@ -476,41 +761,59 @@ namespace FlaxEditor.GUI.Docking
             {
                 _toSet = DockState.Float;
                 _tabInsertionIndex = -1;
+                _aggregateCandidate = false;
             }
 
             // Update sizes and opacity of hint controls
             if (_toDock != null)
             {
                 var mainColor = Style.Current.Selection;
-                if (hoveredHintControl != _dockHintDown)
+                if (_dockHintDown != null && hoveredHintControl != _dockHintDown)
                 {
                     _dockHintDown.Size = new Float2(HintControlSize);
                     _dockHintDown.BackgroundColor = mainColor.AlphaMultiplied(0.6f);
                 }
-                if (hoveredHintControl != _dockHintLeft)
+                if (_dockHintLeft != null && hoveredHintControl != _dockHintLeft)
                 {
                     _dockHintLeft.Size = new Float2(HintControlSize);
                     _dockHintLeft.BackgroundColor = mainColor.AlphaMultiplied(0.6f);
                 }
-                if (hoveredHintControl != _dockHintRight)
+                if (_dockHintRight != null && hoveredHintControl != _dockHintRight)
                 {
                     _dockHintRight.Size = new Float2(HintControlSize);
                     _dockHintRight.BackgroundColor = mainColor.AlphaMultiplied(0.6f);
                 }
-                if (hoveredHintControl != _dockHintUp)
+                if (_dockHintUp != null && hoveredHintControl != _dockHintUp)
                 {
                     _dockHintUp.Size = new Float2(HintControlSize);
                     _dockHintUp.BackgroundColor = mainColor.AlphaMultiplied(0.6f);
                 }
-
-                if (_toSet != DockState.Float)
+                if (_aggregateDockHintDown != null && hoveredHintControl != _aggregateDockHintDown)
                 {
-                    if (hoveredHintControl != null)
-                    {
-                        hoveredHintControl.BackgroundColor = mainColor;
-                        hoveredHintControl.Size = hoveredSizeOverride - hoveredMargin;
-                        hoveredHintControl.Location = hoveredPreviewLocation;
-                    }
+                    _aggregateDockHintDown.Size = new Float2(HintControlSize);
+                    _aggregateDockHintDown.BackgroundColor = mainColor.AlphaMultiplied(0.6f);
+                }
+                if (_aggregateDockHintLeft != null && hoveredHintControl != _aggregateDockHintLeft)
+                {
+                    _aggregateDockHintLeft.Size = new Float2(HintControlSize);
+                    _aggregateDockHintLeft.BackgroundColor = mainColor.AlphaMultiplied(0.6f);
+                }
+                if (_aggregateDockHintRight != null && hoveredHintControl != _aggregateDockHintRight)
+                {
+                    _aggregateDockHintRight.Size = new Float2(HintControlSize);
+                    _aggregateDockHintRight.BackgroundColor = mainColor.AlphaMultiplied(0.6f);
+                }
+                if (_aggregateDockHintUp != null && hoveredHintControl != _aggregateDockHintUp)
+                {
+                    _aggregateDockHintUp.Size = new Float2(HintControlSize);
+                    _aggregateDockHintUp.BackgroundColor = mainColor.AlphaMultiplied(0.6f);
+                }
+
+                if (_toSet != DockState.Float && hoveredHintControl != null)
+                {
+                    hoveredHintControl.BackgroundColor = mainColor;
+                    hoveredHintControl.Size = hoveredSizeOverride - hoveredMargin;
+                    hoveredHintControl.Location = hoveredPreviewLocation;
                 }
             }
 
@@ -530,6 +833,23 @@ namespace FlaxEditor.GUI.Docking
                 _dockHintLeft.Visible = hoveredHintControl == _dockHintLeft;
                 _dockHintRight.Visible = hoveredHintControl == _dockHintRight;
                 _dockHintUp.Visible = hoveredHintControl == _dockHintUp;
+
+                if (_aggregateDock != null)
+                {
+                    if (hoveredHintControl != _aggregateDockHintDown)
+                        _aggregateDockHintDown.Location = _rAggregateBottom.Location;
+                    if (hoveredHintControl != _aggregateDockHintLeft)
+                        _aggregateDockHintLeft.Location = _rAggregateLeft.Location;
+                    if (hoveredHintControl != _aggregateDockHintRight)
+                        _aggregateDockHintRight.Location = _rAggregateRight.Location;
+                    if (hoveredHintControl != _aggregateDockHintUp)
+                        _aggregateDockHintUp.Location = _rAggregateUpper.Location;
+
+                    _aggregateDockHintDown.Visible = hoveredHintControl == _aggregateDockHintDown;
+                    _aggregateDockHintLeft.Visible = hoveredHintControl == _aggregateDockHintLeft;
+                    _aggregateDockHintRight.Visible = hoveredHintControl == _aggregateDockHintRight;
+                    _aggregateDockHintUp.Visible = hoveredHintControl == _aggregateDockHintUp;
+                }
             }
         }
 

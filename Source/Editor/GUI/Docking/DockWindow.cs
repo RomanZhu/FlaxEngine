@@ -263,6 +263,19 @@ namespace FlaxEditor.GUI.Docking
             }
         }
 
+        internal void ShowAggregate(DockState state, DockPanel toDock, bool autoSelect = true, float? splitterValue = null)
+        {
+            Visible = true;
+
+            // Undock first
+            Undock();
+
+            // Then dock as a new aggregate panel
+            toDock.DockWindowAggregateInternal(state, this, autoSelect, splitterValue);
+            OnShow();
+            PerformLayout();
+        }
+
         /// <summary>
         /// Shows the window.
         /// </summary>

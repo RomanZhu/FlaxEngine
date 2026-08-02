@@ -96,6 +96,11 @@ namespace FlaxEditor.GUI.Docking
         /// </summary>
         public const float DefaultSplitterValue = 0.25f;
 
+        /// <summary>
+        /// The minimum size of a docked panel along the splitter axis.
+        /// </summary>
+        public const float DefaultMinimumPanelSize = 100.0f;
+
         private readonly DockPanel _parentPanel;
         private readonly List<DockPanel> _childPanels = new List<DockPanel>();
         private readonly List<DockWindow> _tabs = new List<DockWindow>();
@@ -124,6 +129,27 @@ namespace FlaxEditor.GUI.Docking
                 if (parentWin == null)
                     throw new InvalidOperationException("Missing parent window.");
                 var control = _tabsProxy != null ? (Control)_tabsProxy : this;
+                var clientPos = control.PointToWindow(Float2.Zero);
+                return new Rectangle(parentWin.PointToScreen(clientPos), control.Size * DpiScale);
+            }
+        }
+
+        /// <summary>
+        /// Gets docking area bounds for the root visual content (the whole dock group) in a screen space.
+        /// </summary>
+        internal Rectangle RootDockAreaBounds
+        {
+            get
+            {
+                var parentWin = Root;
+                if (parentWin == null)
+                    throw new InvalidOperationException("Missing parent window.");
+                var control = _tabsProxy != null
+                    ? (Control)_tabsProxy
+                    : (ChildrenCount > 0 ? GetChild(0) : this);
+                while (control.Parent != null && control.Parent != this)
+                    control = control.Parent;
+
                 var clientPos = control.PointToWindow(Float2.Zero);
                 return new Rectangle(parentWin.PointToScreen(clientPos), control.Size * DpiScale);
             }
@@ -439,12 +465,99 @@ namespace FlaxEditor.GUI.Docking
                 AnchorPreset = AnchorPresets.StretchAll,
                 Offsets = Margin.Zero,
                 SplitterValue = splitterValue,
+                MinimumPanelSize = DefaultMinimumPanelSize,
             };
             splitter.Panel1.AddChild(c1);
             splitter.Panel2.AddChild(c2);
             parent.AddChild(splitter);
 
             // Update
+            splitter.UnlockChildrenRecursive();
+            splitter.PerformLayout();
+
+            return dockPanel;
+        }
+
+        /// <summary>
+        /// Creates an aggregate child dock panel by wrapping this panel's current direct visual content.
+        /// </summary>
+        /// <param name="state">Dock panel state.</param>
+        /// <param name="splitterValue">Initial splitter value.</param>
+        /// <returns>The aggregate child panel.</returns>
+        public DockPanel CreateAggregatePanel(DockState state, float splitterValue)
+        {
+            Control currentContent;
+            if (_tabsProxy != null)
+            {
+                currentContent = _tabsProxy;
+                while (currentContent.Parent != null && currentContent.Parent != this)
+                    currentContent = currentContent.Parent;
+            }
+            else if (ChildrenCount > 0)
+            {
+                currentContent = GetChild(0);
+            }
+            else
+            {
+                CreateTabsProxy();
+                currentContent = _tabsProxy;
+            }
+
+            // Create and serialize the new aggregate panel before all existing
+            // children so layout restore rebuilds this outer split first.
+            var dockPanel = new DockPanel(this);
+            _childPanels.Remove(dockPanel);
+            _childPanels.Insert(0, dockPanel);
+
+            Control c1;
+            Control c2;
+            Orientation o;
+            switch (state)
+            {
+            case DockState.DockTop:
+            {
+                o = Orientation.Vertical;
+                c1 = dockPanel;
+                c2 = currentContent;
+                break;
+            }
+            case DockState.DockBottom:
+            {
+                splitterValue = 1 - splitterValue;
+                o = Orientation.Vertical;
+                c1 = currentContent;
+                c2 = dockPanel;
+                break;
+            }
+            case DockState.DockLeft:
+            {
+                o = Orientation.Horizontal;
+                c1 = dockPanel;
+                c2 = currentContent;
+                break;
+            }
+            case DockState.DockRight:
+            {
+                splitterValue = 1 - splitterValue;
+                o = Orientation.Horizontal;
+                c1 = currentContent;
+                c2 = dockPanel;
+                break;
+            }
+            default: throw new ArgumentOutOfRangeException();
+            }
+
+            var splitter = new SplitPanel(o, ScrollBars.None, ScrollBars.None)
+            {
+                AnchorPreset = AnchorPresets.StretchAll,
+                Offsets = Margin.Zero,
+                SplitterValue = splitterValue,
+                MinimumPanelSize = DefaultMinimumPanelSize,
+            };
+            splitter.Panel1.AddChild(c1);
+            splitter.Panel2.AddChild(c2);
+            AddChild(splitter);
+
             splitter.UnlockChildrenRecursive();
             splitter.PerformLayout();
 
@@ -558,6 +671,75 @@ namespace FlaxEditor.GUI.Docking
             return true;
         }
 
+        private static bool ContainsDockWindow(Control control, string title)
+        {
+            if (control is DockWindow window && window.Title == title)
+                return true;
+            if (control is DockPanel dockPanel)
+            {
+                for (int i = 0; i < dockPanel._tabs.Count; i++)
+                {
+                    if (dockPanel._tabs[i].Title == title)
+                        return true;
+                }
+            }
+            if (!(control is ContainerControl container))
+                return false;
+
+            for (int i = 0; i < container.Children.Count; i++)
+            {
+                if (ContainsDockWindow(container.Children[i], title))
+                    return true;
+            }
+            return false;
+        }
+
+        private static void ClearEditorGameSplitMarkers(Control control)
+        {
+            if (control is SplitPanel splitter)
+                splitter.PreserveRatioWhenResizedFromLeadingEdge = false;
+            if (!(control is ContainerControl container))
+                return;
+
+            for (int i = 0; i < container.Children.Count; i++)
+                ClearEditorGameSplitMarkers(container.Children[i]);
+        }
+
+        private static bool MarkEditorGameSplit(Control control)
+        {
+            if (!(control is ContainerControl container))
+                return false;
+
+            for (int i = 0; i < container.Children.Count; i++)
+            {
+                if (container.Children[i] is SplitPanel splitter)
+                {
+                    var panel1HasEditor = ContainsDockWindow(splitter.Panel1, "Editor");
+                    var panel1HasGame = ContainsDockWindow(splitter.Panel1, "Game");
+                    var panel2HasEditor = ContainsDockWindow(splitter.Panel2, "Editor");
+                    var panel2HasGame = ContainsDockWindow(splitter.Panel2, "Game");
+                    if ((panel1HasEditor && panel2HasGame) || (panel1HasGame && panel2HasEditor))
+                    {
+                        splitter.PreserveRatioWhenResizedFromLeadingEdge = true;
+                        return true;
+                    }
+                }
+
+                if (MarkEditorGameSplit(container.Children[i]))
+                    return true;
+            }
+            return false;
+        }
+
+        private void MarkEditorGameSplit()
+        {
+            var root = this;
+            while (root._parentPanel != null)
+                root = root._parentPanel;
+            ClearEditorGameSplitMarkers(root);
+            MarkEditorGameSplit(root);
+        }
+
         internal virtual void DockWindowInternal(DockState state, DockWindow window, bool autoSelect = true, float? splitterValue = null)
         {
             var tabInsertionIndex = _pendingTabInsertionIndex;
@@ -571,6 +753,14 @@ namespace FlaxEditor.GUI.Docking
             {
                 DockWindow(state, window, autoSelect, splitterValue);
             }
+            MarkEditorGameSplit();
+        }
+
+        internal void DockWindowAggregateInternal(DockState state, DockWindow window, bool autoSelect = true, float? splitterValue = null)
+        {
+            var dockPanel = CreateAggregatePanel(state, splitterValue ?? DefaultSplitterValue);
+            dockPanel.DockWindow(DockState.DockFill, window, autoSelect);
+            MarkEditorGameSplit();
         }
 
         internal void DockWindowAt(DockWindow window, int tabIndex, bool autoSelect = true)
