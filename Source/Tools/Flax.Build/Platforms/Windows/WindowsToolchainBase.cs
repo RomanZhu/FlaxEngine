@@ -740,17 +740,27 @@ namespace Flax.Build.Platforms
             foreach (var sourceFile in sourceFiles)
             {
                 var sourceFilename = Path.GetFileNameWithoutExtension(sourceFile);
+                var isCFile = sourceFile.EndsWith(".c", StringComparison.OrdinalIgnoreCase);
                 var task = graph.Add<CompileCppTask>();
 
                 // Use shared arguments
                 args.Clear();
                 args.AddRange(commonArgs);
+                if (isCFile)
+                {
+                    args.RemoveAll(x => x.StartsWith("/std:c++", StringComparison.OrdinalIgnoreCase) ||
+                                        x.Equals("/Zc:__cplusplus", StringComparison.OrdinalIgnoreCase) ||
+                                        x.StartsWith("/FI\"", StringComparison.OrdinalIgnoreCase) ||
+                                        x.StartsWith("/Yu\"", StringComparison.OrdinalIgnoreCase) ||
+                                        x.StartsWith("/Fp\"", StringComparison.OrdinalIgnoreCase));
+                    args.Add("/std:c11");
+                }
 
                 if (compileEnvironment.DebugInformation)
                 {
                     // Program Database File Name
                     string pdbFile = null;
-                    if (pchFile != null)
+                    if (pchFile != null && !isCFile)
                     {
                         // When using PCH we need to share the same PDB file that was used when building PCH
                         pdbFile = pchFile + ".pdb";
@@ -790,7 +800,7 @@ namespace Flax.Build.Platforms
                 // Request included files to exist
                 var includes = IncludesCache.FindAllIncludedFiles(sourceFile);
                 task.PrerequisiteFiles.AddRange(includes);
-                if (pchFile != null)
+                if (pchFile != null && !isCFile)
                 {
                     task.PrerequisiteFiles.Add(pchFile);
                 }
