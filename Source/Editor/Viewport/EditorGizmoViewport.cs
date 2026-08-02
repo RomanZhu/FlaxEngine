@@ -7,6 +7,7 @@ using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Input;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Viewport.Cameras;
+using FlaxEditor.Viewport.Modes;
 using FlaxEditor.Viewport.Widgets;
 using FlaxEngine;
 using FlaxEngine.GUI;

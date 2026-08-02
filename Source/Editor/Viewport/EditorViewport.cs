@@ -2014,6 +2014,22 @@ namespace FlaxEditor.Viewport
             PerformLayout();
         }
 
+        private bool IsMouseRightNavigationActive()
+        {
+            return Root.GetMouseButton(MouseButton.Right) || _input.IsMouseRightDown || _isVirtualMouseRightDown;
+        }
+
+        private bool IsCameraMovementKey(KeyboardKeys key)
+        {
+            var input = _editor.Options.Options.Input;
+            return key == input.Forward.Key
+                || key == input.Backward.Key
+                || key == input.Left.Key
+                || key == input.Right.Key
+                || key == input.Up.Key
+                || key == input.Down.Key;
+        }
+
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
@@ -2021,7 +2037,9 @@ namespace FlaxEditor.Viewport
             if (base.OnKeyDown(key))
                 return true;
 
-            // Custom input events
+            if (IsMouseRightNavigationActive() && IsCameraMovementKey(key))
+                return true;
+
             return InputActions.Process(_editor, this, key);
         }
 

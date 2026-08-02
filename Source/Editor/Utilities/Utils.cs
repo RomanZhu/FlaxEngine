@@ -22,6 +22,7 @@ using FlaxEngine;
 using FlaxEngine.Json;
 using FlaxEngine.GUI;
 using FlaxEngine.Utilities;
+using FlaxEditor.Options;
 using FlaxEditor.Windows;
 
 namespace FlaxEngine
@@ -1206,6 +1207,8 @@ namespace FlaxEditor.Utilities
             inputActions.Add(options => options.AlignActorWithViewport, Editor.Instance.UI.AlignActorWithViewport);
             inputActions.Add(options => options.AlignViewportWithActor, Editor.Instance.UI.AlignViewportWithActor);
             inputActions.Add(options => options.PilotActor, Editor.Instance.UI.PilotActor);
+            inputActions.Add(options => Editor.Instance.StateMachine.IsPlayMode ? options.DebuggerUnlockMouse : new InputBinding(KeyboardKeys.None), () => Editor.Instance.Windows.GameWin?.UnlockMouseInPlay());
+            inputActions.Add(options => Editor.Instance.StateMachine.IsPlayMode ? options.DebuggerUnlockMouseSecondary : new InputBinding(KeyboardKeys.None), () => Editor.Instance.Windows.GameWin?.UnlockMouseInPlay());
             inputActions.Add(options => options.Play, Editor.Instance.Simulation.DelegatePlayOrStopPlayInEditor);
             inputActions.Add(options => options.PlayCurrentScenes, Editor.Instance.Simulation.RequestPlayScenesOrStopPlay);
             inputActions.Add(options => options.Pause, Editor.Instance.Simulation.RequestResumeOrPause);

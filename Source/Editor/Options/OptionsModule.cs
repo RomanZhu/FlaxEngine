@@ -127,9 +127,13 @@ namespace FlaxEditor.Options
                             options.CustomSettings.Add(e.Key, JsonSerializer.Serialize(e.Value()));
                     }
 
+                    bool inputBindingsMigrated = MigrateInputBindings(options.Input);
+
                     float prevInterfaceScale = Options.Interface.InterfaceScale;
                     Options = options;
                     OnOptionsChanged();
+                    if (inputBindingsMigrated)
+                        Save();
 
                     // Scale interface relative to the current value (eg. when using system-provided Dpi Scale)
                     Platform.CustomDpiScale *= Options.Interface.InterfaceScale / prevInterfaceScale;
@@ -144,6 +148,43 @@ namespace FlaxEditor.Options
                 Editor.LogError("Failed to load editor options.");
                 Editor.LogWarning(ex);
             }
+        }
+
+        private static bool MigrateInputBindings(InputOptions input)
+        {
+            bool migrated = false;
+            if (input.TranslateMode == new InputBinding(KeyboardKeys.W) &&
+                input.RotateMode == new InputBinding(KeyboardKeys.None) &&
+                input.ScaleMode == new InputBinding(KeyboardKeys.E) &&
+                input.RotateSelection == new InputBinding(KeyboardKeys.None))
+            {
+                input.TranslateMode = new InputBinding(KeyboardKeys.Q);
+                input.RotateMode = new InputBinding(KeyboardKeys.W);
+                migrated = true;
+            }
+
+            if (input.TranslateMode == new InputBinding(KeyboardKeys.Alpha1))
+            {
+                input.TranslateMode = new InputBinding(KeyboardKeys.Q);
+                migrated = true;
+            }
+            if (input.RotateMode == new InputBinding(KeyboardKeys.Alpha2))
+            {
+                input.RotateMode = new InputBinding(KeyboardKeys.W);
+                migrated = true;
+            }
+            if (input.ScaleMode == new InputBinding(KeyboardKeys.Alpha3))
+            {
+                input.ScaleMode = new InputBinding(KeyboardKeys.E);
+                migrated = true;
+            }
+            if (input.RotateSelection == new InputBinding(KeyboardKeys.R))
+            {
+                input.RotateSelection = new InputBinding(KeyboardKeys.None);
+                migrated = true;
+            }
+
+            return migrated;
         }
 
         /// <summary>

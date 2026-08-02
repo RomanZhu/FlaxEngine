@@ -1527,6 +1527,8 @@ namespace FlaxEditor
             var gameWin = Windows.GameWin;
             if (gameWin != null && gameWin.ContainsFocus)
             {
+                if (StateMachine.IsPlayMode && gameWin.IsMouseLockBlocked)
+                    return false;
                 var win = gameWin.Root;
                 if (win?.RootWindow is WindowRootControl root && root.Window && root.Window.IsFocused)
                 {
@@ -1608,11 +1610,36 @@ namespace FlaxEditor
             }
         }
 
+        private bool IsMouseUnlockShortcutPressed(Window window)
+        {
+            if (window == null)
+                return false;
+
+            var input = Options.Options.Input;
+            return (input.DebuggerUnlockMouse.Key != KeyboardKeys.None && input.DebuggerUnlockMouse.Process(window))
+                || (input.DebuggerUnlockMouseSecondary.Key != KeyboardKeys.None && input.DebuggerUnlockMouseSecondary.Process(window));
+        }
+
+        private bool IsMouseUnlockShortcutPressed()
+        {
+            var gameWindow = Windows.GameWin;
+            if (gameWindow != null && gameWindow.ContainsFocus && gameWindow.Root?.RootWindow is WindowRootControl root && root.Window && root.Window.IsFocused)
+                return IsMouseUnlockShortcutPressed(root.Window);
+
+            return IsMouseUnlockShortcutPressed(Screen.MainWindow);
+        }
+
         internal bool Internal_OnAppExit()
         {
             // In editor play mode (when main window is not closed) just skip engine exit and leave the play mode
             if (StateMachine.IsPlayMode && Windows.MainWindow != null)
             {
+                if (IsMouseUnlockShortcutPressed())
+                {
+                    Windows.GameWin?.UnlockMouseInPlay();
+                    return false;
+                }
+
                 Simulation.RequestStopPlay();
                 return false;
             }

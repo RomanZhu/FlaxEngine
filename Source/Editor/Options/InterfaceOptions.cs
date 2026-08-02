@@ -161,7 +161,7 @@ namespace FlaxEditor.Options
         }
 
         /// <summary>
-        /// Options for focus Game Window behaviour when play mode is entered.
+        /// Options for showing or focusing the Game Window when play mode is entered.
         /// </summary>
         public enum PlayModeFocus
         {
@@ -179,6 +179,11 @@ namespace FlaxEditor.Options
             /// Focus the Game Window. On play mode end restore focus to the previous window.
             /// </summary>
             GameWindowThenRestore,
+
+            /// <summary>
+            /// Show the Game Window without focusing the game viewport.
+            /// </summary>
+            GameWindowNoFocus,
         }
 
         /// <summary>
@@ -518,11 +523,11 @@ namespace FlaxEditor.Options
         public bool OutputLogScrollToBottom { get; set; } = true;
 
         /// <summary>
-        /// Gets or sets a value indicating what panel should be focused when play mode start.
+        /// Gets or sets a value indicating what panel should be shown and/or focused when play mode starts.
         /// </summary>
-        [DefaultValue(PlayModeFocus.GameWindow)]
-        [EditorDisplay("Play In-Editor", "Focus On Play"), EditorOrder(500), Tooltip("Set what panel to focus on play mode start.")]
-        public PlayModeFocus FocusOnPlayMode { get; set; } = PlayModeFocus.GameWindow;
+        [DefaultValue(PlayModeFocus.GameWindowNoFocus)]
+        [EditorDisplay("Play In-Editor", "Focus On Play"), EditorOrder(500), Tooltip("Set what panel to show or focus on play mode start.")]
+        public PlayModeFocus FocusOnPlayMode { get; set; } = PlayModeFocus.GameWindowNoFocus;
 
         /// <summary>
         /// Gets or sets a value indicating what action should be taken upon pressing the play button.

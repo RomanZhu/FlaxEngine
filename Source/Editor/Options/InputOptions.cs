@@ -131,9 +131,9 @@ namespace FlaxEditor.Options
         [EditorDisplay("Common"), EditorOrder(220)]
         public InputBinding ContentFinder = new InputBinding(KeyboardKeys.O, KeyboardKeys.Control);
 
-        [DefaultValue(typeof(InputBinding), "R")]
+        [DefaultValue(typeof(InputBinding), "None")]
         [EditorDisplay("Common"), EditorOrder(230)]
-        public InputBinding RotateSelection = new InputBinding(KeyboardKeys.R);
+        public InputBinding RotateSelection = new InputBinding(KeyboardKeys.None);
 
         [DefaultValue(typeof(InputBinding), "F11")]
         [EditorDisplay("Common"), EditorOrder(240)]
@@ -283,9 +283,13 @@ namespace FlaxEditor.Options
         [EditorDisplay("Debugger", "Continue"), EditorOrder(810)]
         public InputBinding DebuggerContinue = new InputBinding(KeyboardKeys.F5);
 
-        [DefaultValue(typeof(InputBinding), "Shift+F11")]
+        [DefaultValue(typeof(InputBinding), "BackQuote")]
         [EditorDisplay("Debugger", "Unlock mouse in Play Mode"), EditorOrder(820)]
-        public InputBinding DebuggerUnlockMouse = new InputBinding(KeyboardKeys.F11, KeyboardKeys.Shift);
+        public InputBinding DebuggerUnlockMouse = new InputBinding(KeyboardKeys.BackQuote);
+
+        [DefaultValue(typeof(InputBinding), "Escape")]
+        [EditorDisplay("Debugger", "Unlock mouse in Play Mode (Secondary)"), EditorOrder(821)]
+        public InputBinding DebuggerUnlockMouseSecondary = new InputBinding(KeyboardKeys.Escape);
 
         [DefaultValue(typeof(InputBinding), "F10")]
         [EditorDisplay("Debugger", "Step Over"), EditorOrder(830)]
@@ -303,17 +307,17 @@ namespace FlaxEditor.Options
 
         #region Gizmo
 
-        [DefaultValue(typeof(InputBinding), "Alpha1")]
+        [DefaultValue(typeof(InputBinding), "Q")]
         [EditorDisplay("Gizmo"), EditorOrder(1000)]
-        public InputBinding TranslateMode = new InputBinding(KeyboardKeys.Alpha1);
+        public InputBinding TranslateMode = new InputBinding(KeyboardKeys.Q);
 
-        [DefaultValue(typeof(InputBinding), "Alpha2")]
+        [DefaultValue(typeof(InputBinding), "W")]
         [EditorDisplay("Gizmo"), EditorOrder(1010)]
-        public InputBinding RotateMode = new InputBinding(KeyboardKeys.Alpha2);
+        public InputBinding RotateMode = new InputBinding(KeyboardKeys.W);
 
-        [DefaultValue(typeof(InputBinding), "Alpha3")]
+        [DefaultValue(typeof(InputBinding), "E")]
         [EditorDisplay("Gizmo"), EditorOrder(1020)]
-        public InputBinding ScaleMode = new InputBinding(KeyboardKeys.Alpha3);
+        public InputBinding ScaleMode = new InputBinding(KeyboardKeys.E);
 
         [DefaultValue(typeof(InputBinding), "Alpha4")]
         [EditorDisplay("Gizmo"), EditorOrder(1030)]

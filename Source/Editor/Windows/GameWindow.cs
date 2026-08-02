@@ -128,6 +128,7 @@ namespace FlaxEditor.Windows
         private float _audioVolume = 1;
         private bool _isMaximized = false, _isUnlockingMouse = false;
         private bool _isFloating = false, _isBorderless = false;
+        private bool _isMouseLockBlocked = false;
         private bool _cursorVisible = true;
         private float _gameStartTime;
         private GUI.Docking.DockState _maximizeRestoreDockState;
@@ -149,6 +150,12 @@ namespace FlaxEditor.Windows
                 Name = "None",
                 Tooltip = "Don't change focus.",
                 FocusOption = InterfaceOptions.PlayModeFocus.None,
+            },
+            new PlayModeFocusOptions
+            {
+                Name = "Game Window (Click to Focus)",
+                Tooltip = "Show and select the Game Window. Click the Game view to focus it for gameplay input.",
+                FocusOption = InterfaceOptions.PlayModeFocus.GameWindowNoFocus,
             },
             new PlayModeFocusOptions
             {
@@ -178,6 +185,11 @@ namespace FlaxEditor.Windows
         /// Gets the viewport.
         /// </summary>
         public ScaledRenderOutputControl Viewport => _viewport;
+
+        /// <summary>
+        /// Gets a value indicating whether mouse locking is blocked until the Game view is clicked.
+        /// </summary>
+        internal bool IsMouseLockBlocked => _isMouseLockBlocked;
 
         /// <summary>
         /// Gets or sets a value indicating whether show game GUI in the view or keep it hidden.
@@ -343,7 +355,7 @@ namespace FlaxEditor.Windows
         public bool CenterMouseOnFocus { get; set; }
 
         /// <summary>
-        /// Gets or sets a value indicating what panel should be focused when play mode start.
+        /// Gets or sets a value indicating what panel should be shown and/or focused when play mode starts.
         /// </summary>
         public InterfaceOptions.PlayModeFocus FocusOnPlayOption { get; set; }
 
@@ -422,6 +434,7 @@ namespace FlaxEditor.Windows
 
             InputActions.Add(options => options.TakeScreenshot, () => Screenshot.Capture(string.Empty));
             InputActions.Add(options => options.DebuggerUnlockMouse, UnlockMouseInPlay);
+            InputActions.Add(options => Editor.StateMachine.IsPlayMode ? options.DebuggerUnlockMouseSecondary : new InputBinding(KeyboardKeys.None), UnlockMouseInPlay);
             InputActions.Add(options => options.ToggleFullscreen, () => { if (Editor.IsPlayMode) IsMaximized = !IsMaximized; });
             InputActions.Add(options => options.Play, Editor.Instance.Simulation.DelegatePlayOrStopPlayInEditor);
             InputActions.Add(options => options.Pause, Editor.Instance.Simulation.RequestResumeOrPause);
@@ -639,6 +652,17 @@ namespace FlaxEditor.Windows
         protected override bool CanUseNavigation => false;
 
         /// <inheritdoc />
+        public override void OnPlayBeginning()
+        {
+            base.OnPlayBeginning();
+            _isMouseLockBlocked = true;
+            _cursorVisible = true;
+            _cursorLockMode = CursorLockMode.None;
+            Screen.CursorVisible = true;
+            Screen.CursorLock = CursorLockMode.None;
+        }
+
+        /// <inheritdoc />
         public override void OnPlayBegin()
         {
             _gameStartTime = Time.UnscaledGameTime;
@@ -648,6 +672,7 @@ namespace FlaxEditor.Windows
         public override void OnPlayEnd()
         {
             IsFloating = false;
+            _isMouseLockBlocked = false;
             IsMaximized = false;
             IsBorderless = false;
             Cursor = CursorType.Default;
@@ -840,7 +865,11 @@ namespace FlaxEditor.Windows
                 {
                     var alpha = Mathf.Saturate(-animTime / fadeOutTime);
                     var rect = new Rectangle(new Float2(6), Size - 12);
-                    var text = $"Press {Editor.Options.Options.Input.DebuggerUnlockMouse} to unlock the mouse";
+                    var input = Editor.Options.Options.Input;
+                    var text = $"Press {input.DebuggerUnlockMouse}";
+                    if (input.DebuggerUnlockMouseSecondary.Key != KeyboardKeys.None)
+                        text += $" or {input.DebuggerUnlockMouseSecondary}";
+                    text += " to unlock the mouse";
                     Render2D.DrawText(style.FontSmall, text, rect + new Float2(1.0f), style.Background * alpha, TextAlignment.Near, TextAlignment.Far);
                     Render2D.DrawText(style.FontSmall, text, rect, style.Foreground * alpha, TextAlignment.Near, TextAlignment.Far);
                 }
@@ -877,6 +906,7 @@ namespace FlaxEditor.Windows
                 Screen.CursorVisible = true;
                 if (_cursorLockMode != CursorLockMode.None)
                     Screen.CursorLock = CursorLockMode.None;
+                _isMouseLockBlocked = true;
 
                 // Defocus
                 _isUnlockingMouse = true;
@@ -886,6 +916,32 @@ namespace FlaxEditor.Windows
                 if (Editor.Windows.PropertiesWin.IsDocked)
                     Editor.Windows.PropertiesWin.Focus();
             }
+        }
+
+        private void RestoreCursorState()
+        {
+            if (!Editor.StateMachine.IsPlayMode || Editor.StateMachine.PlayingState.IsPaused)
+                return;
+            if (_cursorLockMode != CursorLockMode.None)
+                Screen.CursorLock = _cursorLockMode;
+            if (!_cursorVisible)
+                Screen.CursorVisible = false;
+        }
+
+        /// <summary>
+        /// Shows the game window without focusing the game viewport.
+        /// </summary>
+        public void ShowGameWindow()
+        {
+            if (!IsDocked)
+            {
+                ShowFloating();
+            }
+            else if (!IsSelected)
+            {
+                SelectTab(false);
+            }
+            Focus(null);
         }
 
         /// <summary>
@@ -954,6 +1010,12 @@ namespace FlaxEditor.Windows
                 return true;
             }
 
+            if (Editor.StateMachine.IsPlayMode && Editor.Options.Options.Input.DebuggerUnlockMouseSecondary.Process(this, key))
+            {
+                UnlockMouseInPlay();
+                return true;
+            }
+
             return base.OnKeyDown(key);
         }
 
@@ -964,6 +1026,8 @@ namespace FlaxEditor.Windows
 
             if (Editor.StateMachine.IsPlayMode && !Editor.StateMachine.PlayingState.IsPaused)
             {
+                if (_isMouseLockBlocked)
+                    return;
                 // Make sure the cursor is always in the viewport when cursor is locked
                 bool forceCenter = _cursorLockMode != CursorLockMode.None && !IsMouseOver;
 
@@ -974,11 +1038,7 @@ namespace FlaxEditor.Windows
                     Root.MousePosition = center;
                 }
 
-                // Restore cursor
-                if (_cursorLockMode != CursorLockMode.None)
-                    Screen.CursorLock = _cursorLockMode;
-                if (!_cursorVisible)
-                    Screen.CursorVisible = false;
+                RestoreCursorState();
             }
         }
 
@@ -987,7 +1047,7 @@ namespace FlaxEditor.Windows
         {
             base.OnEndContainsFocus();
 
-            if (!_isUnlockingMouse)
+            if (!_isUnlockingMouse && !_isMouseLockBlocked)
             {
                 // Cache cursor
                 _cursorVisible = Screen.CursorVisible;
@@ -1026,6 +1086,12 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
+            if (_isMouseLockBlocked)
+            {
+                _isMouseLockBlocked = false;
+                if (ContainsFocus)
+                    RestoreCursorState();
+            }
             var result = base.OnMouseDown(location, button);
 
             // Catch user focus
