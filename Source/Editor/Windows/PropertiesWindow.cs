@@ -577,8 +577,7 @@ namespace FlaxEditor.Windows
                 }
                 else if (asset is JsonAsset jsonAsset && jsonAsset.IsLoaded)
                 {
-                    var instance = jsonAsset.Instance;
-                    objects.Add(instance ?? asset);
+                    objects.Add(GetJsonAssetObject(jsonAsset));
                 }
                 else
                 {
@@ -592,6 +591,14 @@ namespace FlaxEditor.Windows
             UpdateSelectionTabTitle();
             if (forceRebuild)
                 Presenter.BuildLayout();
+        }
+
+        private static object GetJsonAssetObject(JsonAsset jsonAsset)
+        {
+            if (jsonAsset is SceneAsset || string.Equals(jsonAsset.DataTypeName, Scene.AssetTypename, StringComparison.Ordinal))
+                return jsonAsset;
+
+            return jsonAsset.Instance ?? jsonAsset;
         }
 
         private object GetContentAssetObject(Asset asset, out IDisposable state)
@@ -628,8 +635,7 @@ namespace FlaxEditor.Windows
                 }
                 if (asset is JsonAsset jsonAsset)
                 {
-                    var instance = jsonAsset.Instance;
-                    return instance ?? asset;
+                    return GetJsonAssetObject(jsonAsset);
                 }
             }
 
