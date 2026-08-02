@@ -2634,6 +2634,7 @@ namespace
         Vector3 Up = Vector3::Up;
         Array<b3CollisionPlane, InlinedAllocation<8>> Planes;
         int32 Flags = 0;
+        bool CollectFlags = false;
     };
 
     bool ControllerShouldCollide(b3ShapeId shapeId, ControllerMoveContext* context)
@@ -2669,7 +2670,8 @@ namespace
 
         for (int32 i = 0; i < planeCount; i++)
         {
-            ControllerAddFlags(planeResults[i].plane, context);
+            if (context->CollectFlags)
+                ControllerAddFlags(planeResults[i].plane, context);
             auto& plane = context->Planes.AddOne();
             plane.plane = planeResults[i].plane;
             plane.pushLimit = MAX_float;
@@ -2859,6 +2861,7 @@ int32 PhysicsBackend::MoveController(void* controller, void* shape, const Vector
     }
 
     context.Planes.Clear();
+    context.CollectFlags = true;
     b3World_CollideMover(controllerBox3D->Scene->World, position, &mover, filter, ControllerPlaneResult, &context);
     SetControllerPosition(controller, B2C(position));
     return context.Flags;

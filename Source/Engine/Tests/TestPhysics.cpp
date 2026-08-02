@@ -162,6 +162,11 @@ TEST_CASE("PhysicsBackend")
     const Vector3 movedPosition = PhysicsBackend::GetControllerPosition(controller);
     CHECK(movedPosition.X > groundedPosition.X + 25.0);
     CHECK(movedPosition.Y == Approx(groundedPosition.Y).margin(1.0));
+
+    const int32 jumpFlags = PhysicsBackend::MoveController(controller, controllerShape, Vector3(0.0, 20.0, 0.0), 0.0f, 1.0f / 60.0f);
+    CHECK((jumpFlags & (int32)CharacterController::CollisionFlags::Below) == 0);
+    const Vector3 jumpedPosition = PhysicsBackend::GetControllerPosition(controller);
+    CHECK(jumpedPosition.Y > movedPosition.Y + 15.0f);
 #endif
 
     TestPhysicsOwner jointAnchorOwner;
