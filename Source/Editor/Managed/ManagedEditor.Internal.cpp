@@ -18,6 +18,7 @@
 #include "Engine/ShadowsOfMordor/Builder.h"
 #include "Engine/Physics/CollisionData.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/ContentImporters/ImportTexture.h"
@@ -303,6 +304,45 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CookMeshCollision(MString* pathObj, Co
 	LOG(Warning, "Collision cooking is disabled.");
 	return true;
 #endif
+}
+
+DEFINE_INTERNAL_CALL(bool) EditorInternal_GetCollisionDataOptions(MString* pathObj, CollisionDataType* type, Guid* model, int32* modelLodIndex, uint32* materialSlotsMask, ConvexMeshGenerationFlags* convexFlags, int32* convexVertexLimit)
+{
+    *type = CollisionDataType::None;
+    *model = Guid::Empty;
+    *modelLodIndex = 0;
+    *materialSlotsMask = MAX_uint32;
+    *convexFlags = ConvexMeshGenerationFlags::None;
+    *convexVertexLimit = 0;
+
+    String path;
+    MUtils::ToString(pathObj, path);
+    FileSystem::NormalizePath(path);
+
+    AssetInfo info;
+    if (!Content::GetAssetInfo(path, info) || info.TypeName != TEXT("FlaxEngine.CollisionData"))
+        return false;
+
+    auto storage = ContentStorageManager::GetStorage(path);
+    if (!storage || storage->GetEntriesCount() != 1)
+        return false;
+
+    AssetInitData data;
+    if (storage->LoadAssetHeader(0, data))
+        return false;
+
+    auto chunk0 = data.Header.Chunks[0];
+    if (!chunk0 || storage->LoadAssetChunk(chunk0) || chunk0->Size() < sizeof(CollisionData::SerializedOptions))
+        return false;
+
+    const auto options = (CollisionData::SerializedOptions*)chunk0->Get();
+    *type = options->Type;
+    *model = options->Model;
+    *modelLodIndex = options->ModelLodIndex;
+    *materialSlotsMask = options->MaterialSlotsMask == 0 ? MAX_uint32 : options->MaterialSlotsMask;
+    *convexFlags = options->ConvexFlags;
+    *convexVertexLimit = options->ConvexVertexLimit < 4 ? 255 : options->ConvexVertexLimit;
+    return true;
 }
 
 DEFINE_INTERNAL_CALL(void) EditorInternal_GetCollisionWires(CollisionData* collisionData, MArray** triangles, MArray** indices, int* trianglesCount, int* indicesCount)

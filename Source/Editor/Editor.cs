@@ -1006,6 +1006,14 @@ namespace FlaxEditor
             return Internal_CookMeshCollision(path, type, FlaxEngine.Object.GetUnmanagedPtr(model), modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit);
         }
 
+        internal static bool GetCollisionDataOptions(string path, out CollisionDataType type, out Guid model, out int modelLodIndex, out uint materialSlotsMask, out ConvexMeshGenerationFlags convexFlags, out int convexVertexLimit)
+        {
+            if (string.IsNullOrEmpty(path))
+                throw new ArgumentNullException(nameof(path));
+
+            return Internal_GetCollisionDataOptions(path, out type, out model, out modelLodIndex, out materialSlotsMask, out convexFlags, out convexVertexLimit);
+        }
+
         /// <summary>
         /// Gets the shader source code (HLSL shader code).
         /// </summary>
@@ -1708,6 +1716,10 @@ namespace FlaxEditor
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_CookMeshCollision", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static partial bool Internal_CookMeshCollision(string path, CollisionDataType type, IntPtr model, int modelLodIndex, uint materialSlotsMask, ConvexMeshGenerationFlags convexFlags, int convexVertexLimit);
+
+        [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_GetCollisionDataOptions", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static partial bool Internal_GetCollisionDataOptions(string path, out CollisionDataType type, out Guid model, out int modelLodIndex, out uint materialSlotsMask, out ConvexMeshGenerationFlags convexFlags, out int convexVertexLimit);
 
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_GetCollisionWires", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         internal static partial void Internal_GetCollisionWires(IntPtr collisionData, [MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "trianglesCount")] out Float3[] triangles, [MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "indicesCount")] out int[] indices, out int trianglesCount, out int indicesCount);

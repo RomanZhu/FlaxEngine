@@ -1,8 +1,11 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using FlaxEditor.Content.Create;
+using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEngine;
@@ -69,10 +72,116 @@ namespace FlaxEditor.Content
         }
 
         /// <inheritdoc />
+        public override void OnContentWindowContextMenu(ContextMenu menu, ContentItem item)
+        {
+            base.OnContentWindowContextMenu(menu, item);
+
+            menu.AddButton("Recook all collision data", RecookAllCollisionData);
+        }
+
+        /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
             if (Editor.CreateAsset("CollisionData", outputPath))
                 throw new Exception("Failed to create new asset.");
+        }
+
+        private sealed class RecookCollisionDataEntry : CreateFileEntry
+        {
+            public CollisionDataType Type;
+            public ModelBase Model;
+            public int ModelLodIndex;
+            public uint MaterialSlotsMask;
+            public ConvexMeshGenerationFlags ConvexFlags;
+            public int ConvexVertexLimit;
+
+            public RecookCollisionDataEntry(string resultUrl)
+            : base("CollisionData", resultUrl)
+            {
+            }
+
+            public override bool CanBeCreated => Type != CollisionDataType.None && Model;
+
+            public override bool Create()
+            {
+                if (!CanBeCreated)
+                    return true;
+                return Editor.CookMeshCollision(ResultUrl, Type, Model, ModelLodIndex, MaterialSlotsMask, ConvexFlags, ConvexVertexLimit);
+            }
+        }
+
+        private static void CollectCollisionData(ContentFolder folder, List<BinaryAssetItem> result)
+        {
+            if (folder == null)
+                return;
+
+            foreach (var child in folder.Children)
+            {
+                if (child is BinaryAssetItem asset && asset.IsOfType<CollisionData>())
+                    result.Add(asset);
+                else if (child is ContentFolder childFolder)
+                    CollectCollisionData(childFolder, result);
+            }
+        }
+
+        private static ModelBase ResolveCollisionModel(BinaryAssetItem item, Guid modelId)
+        {
+            if (modelId != Guid.Empty)
+                return FlaxEngine.Content.LoadAsync<ModelBase>(modelId);
+
+            const string suffix = " Collision.flax";
+            if (!item.Path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var modelPath = item.Path.Substring(0, item.Path.Length - suffix.Length) + ".flax";
+            return FlaxEngine.Content.LoadAsync<ModelBase>(modelPath);
+        }
+
+        internal static void RecookAllCollisionData()
+        {
+            var items = new List<BinaryAssetItem>();
+            foreach (var project in Editor.Instance.ContentDatabase.Projects)
+                CollectCollisionData(project.Content?.Folder, items);
+
+            int queued = 0;
+            int skipped = 0;
+            foreach (var item in items)
+            {
+                if (!Editor.GetCollisionDataOptions(item.Path, out var type, out var modelId, out var modelLodIndex, out var materialSlotsMask, out var convexFlags, out var convexVertexLimit))
+                {
+                    skipped++;
+                    Editor.LogWarning("Failed to read collision data options for " + item.Path);
+                    continue;
+                }
+                if (type == CollisionDataType.None)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                var model = ResolveCollisionModel(item, modelId);
+                if (!model)
+                {
+                    skipped++;
+                    Editor.LogWarning("Missing source model for collision data " + item.Path);
+                    continue;
+                }
+
+                Editor.Instance.ContentImporting.Create(new RecookCollisionDataEntry(item.Path)
+                {
+                    Type = type,
+                    Model = model,
+                    ModelLodIndex = modelLodIndex,
+                    MaterialSlotsMask = materialSlotsMask,
+                    ConvexFlags = convexFlags,
+                    ConvexVertexLimit = convexVertexLimit,
+                });
+                queued++;
+            }
+
+            Editor.Instance.UI.AddStatusMessage(queued != 0 ? string.Format("Queued recook for {0} collision data asset{1}.", queued, queued == 1 ? string.Empty : "s") : "No collision data assets queued for recook.");
+            if (skipped != 0)
+                Editor.LogWarning(string.Format("Skipped {0} collision data asset{1} during recook.", skipped, skipped == 1 ? string.Empty : "s"));
         }
 
         private bool TryUseCollisionData(Model model, BinaryAssetItem assetItem, Action<CollisionData> created, bool alwaysDeferCallback, CollisionDataType type)

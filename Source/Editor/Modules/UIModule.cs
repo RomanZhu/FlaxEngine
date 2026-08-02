@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using FlaxEditor.Content;
 using FlaxEditor.Gizmo;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
@@ -756,6 +757,7 @@ namespace FlaxEditor.Modules
             _menuToolsBuildNavMesh = cm.AddButton("Build Nav Mesh", inputOptions.BuildNav, Editor.BuildNavMesh);
             _menuToolsBuildAllMeshesSDF = cm.AddButton("Build all meshes SDF", inputOptions.BuildSDF, Editor.BuildAllMeshesSDF);
             _menuToolsBuildAllMeshesSDF.LinkTooltip("Generates Sign Distance Field texture for all meshes used in loaded scenes. Use with 'F' key pressed to force rebuild SDF for meshes with existing one.");
+            cm.AddButton("Recook all collision data", CollisionDataProxy.RecookAllCollisionData);
             cm.AddSeparator();
             cm.AddButton("Game Cooker", Editor.Windows.GameCookerWin.FocusOrShow);
             _menuToolsCancelBuilding = cm.AddButton("Cancel building game", () => GameCooker.Cancel());
