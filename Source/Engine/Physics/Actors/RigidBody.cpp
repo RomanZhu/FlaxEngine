@@ -65,13 +65,7 @@ void RigidBody::SetEnableSimulation(bool value)
     if (value == GetEnableSimulation())
         return;
     _enableSimulation = value;
-    if (_actor)
-    {
-        const bool isActive = _enableSimulation && IsActiveInHierarchy();
-        PhysicsBackend::SetActorFlag(_actor, PhysicsBackend::ActorFlags::NoSimulation, !isActive);
-        if (isActive && GetStartAwake())
-            WakeUp();
-    }
+    UpdateSimulationState();
 }
 
 void RigidBody::SetUseCCD(bool value)
@@ -388,10 +382,34 @@ void RigidBody::OnTriggerExit(PhysicsColliderActor* c)
 void RigidBody::OnColliderChanged(Collider* c)
 {
     UpdateMass();
+    UpdateSimulationState();
 
     // TODO: maybe wake up only if one ore more shapes attached is active?
     //if (GetStartAwake())
     //	WakeUp();
+}
+
+void RigidBody::UpdateSimulationState()
+{
+    if (!_actor)
+        return;
+    const bool isActive = _enableSimulation && IsActiveInHierarchy() && !HasPendingPhysicsColliders();
+    PhysicsBackend::SetActorFlag(_actor, PhysicsBackend::ActorFlags::NoSimulation, !isActive);
+    if (isActive && GetStartAwake())
+        WakeUp();
+    else if (!IsActiveInHierarchy())
+        Sleep();
+}
+
+bool RigidBody::HasPendingPhysicsColliders() const
+{
+    for (int32 i = 0; i < Children.Count(); i++)
+    {
+        const auto collider = dynamic_cast<Collider*>(Children[i]);
+        if (collider && !collider->IsReadyForPhysics())
+            return true;
+    }
+    return false;
 }
 
 void RigidBody::UpdateBounds()
@@ -510,7 +528,7 @@ void RigidBody::BeginPlay(SceneBeginData* data)
 
     // Apply properties
     auto actorFlags = PhysicsBackend::ActorFlags::None;
-    if (!_enableSimulation || !IsActiveInHierarchy())
+    if (!_enableSimulation || !IsActiveInHierarchy() || HasPendingPhysicsColliders())
         actorFlags |= PhysicsBackend::ActorFlags::NoSimulation;
     if (!_enableGravity)
         actorFlags |= PhysicsBackend::ActorFlags::NoGravity;
@@ -578,15 +596,7 @@ void RigidBody::OnActiveInTreeChanged()
 
     if (_actor)
     {
-        const bool isActive = _enableSimulation && IsActiveInHierarchy();
-        PhysicsBackend::SetActorFlag(_actor, PhysicsBackend::ActorFlags::NoSimulation, !isActive);
-
-        // Auto wake up
-        if (isActive && GetStartAwake())
-            WakeUp();
-            // Clear velocities and the forces on disabled
-        else if (!IsActiveInHierarchy())
-            Sleep();
+        UpdateSimulationState();
     }
 }
 
@@ -611,6 +621,7 @@ void RigidBody::OnPhysicsSceneChanged(PhysicsScene* previous)
     PhysicsBackend::RemoveSceneActor(previous->GetPhysicsScene(), _actor, true);
     void* scene = GetPhysicsScene()->GetPhysicsScene();
     PhysicsBackend::AddSceneActor(scene, _actor);
+    UpdateSimulationState();
     const bool putToSleep = !_startAwake && GetEnableSimulation() && !GetIsKinematic() && IsActiveInHierarchy();
     if (putToSleep)
         PhysicsBackend::AddSceneActorAction(scene, _actor, PhysicsBackend::ActionType::Sleep);

@@ -462,6 +462,11 @@ public:
     virtual void OnColliderChanged(Collider* c);
 
     /// <summary>
+    /// Updates the backend simulation flag using actor state and pending collider data.
+    /// </summary>
+    void UpdateSimulationState();
+
+    /// <summary>
     /// Updates the bounding box.
     /// </summary>
     void UpdateBounds();
@@ -470,6 +475,8 @@ public:
     /// Updates the rigidbody scale dependent properties like mass (may be modified when actor transformation changes).
     /// </summary>
     void UpdateScale();
+
+    bool HasPendingPhysicsColliders() const;
 
     template<typename ColliderType = Collider, typename AllocationType = HeapAllocation>
     void GetColliders(Array<ColliderType*, AllocationType>& result) const

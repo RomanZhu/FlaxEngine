@@ -53,9 +53,13 @@ private:
     void OnCollisionDataChanged();
     void OnCollisionDataLoaded();
     void OnSplineUpdated();
+    bool HasCollisionGeometry() const;
+    void DestroyShape();
+    void TryUpdateLoadedShape();
 
 public:
     // [Collider]
+    bool IsReadyForPhysics() const override;
     bool CanAttach(RigidBody* rigidBody) const override;
     bool CanBeTrigger() const override;
 #if USE_EDITOR
@@ -68,6 +72,7 @@ public:
 protected:
     // [Collider]
     ImplementPhysicsDebug;
+    void CreateShape() override;
     void UpdateBounds() override;
     void GetGeometry(CollisionShape& collision) override;
 };

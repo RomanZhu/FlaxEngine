@@ -4,7 +4,9 @@
 #include "Engine/Core/Math/Matrix.h"
 #include "Engine/Core/Math/Ray.h"
 #include "Engine/Physics/Physics.h"
+#include "Engine/Physics/PhysicsBackend.h"
 #include "Engine/Physics/PhysicsScene.h"
+#include "Engine/Physics/Actors/RigidBody.h"
 #if USE_EDITOR || !BUILD_RELEASE
 #include "Engine/Debug/DebugLog.h"
 #endif
@@ -15,26 +17,77 @@ MeshCollider::MeshCollider(const SpawnParams& params)
 {
 }
 
+bool MeshCollider::HasCollisionGeometry() const
+{
+    return CollisionData && CollisionData->IsLoaded() && CollisionData->GetOptions().Type != CollisionDataType::None;
+}
+
+void MeshCollider::DestroyShape()
+{
+    if (_shape == nullptr)
+        return;
+    void* actor = PhysicsBackend::GetShapeActor(_shape);
+    RigidBody* rigidBody = GetAttachedRigidBody();
+    if (actor)
+        PhysicsBackend::DetachShape(_shape, actor);
+    if (rigidBody)
+        rigidBody->OnColliderChanged(this);
+    else if (_staticActor)
+        RemoveStaticActor();
+    PhysicsBackend::RemoveCollider(this);
+    PhysicsBackend::DestroyShape(_shape);
+    _shape = nullptr;
+}
+
+void MeshCollider::TryUpdateLoadedShape()
+{
+    if (!HasCollisionGeometry())
+        return;
+    if (_shape)
+    {
+        UpdateGeometry();
+        return;
+    }
+
+    RigidBody* rigidBody = dynamic_cast<RigidBody*>(GetParent());
+    if (rigidBody && rigidBody->GetPhysicsActor() && CanAttach(rigidBody))
+    {
+        Attach(rigidBody);
+        rigidBody->UpdateSimulationState();
+    }
+    else if (IsDuringPlay())
+    {
+        CreateShape();
+        if (_shape)
+            CreateStaticActor();
+    }
+}
+
 void MeshCollider::OnCollisionDataChanged()
 {
     // This should not be called during physics simulation, if it happened use write lock on physx scene
     ASSERT(!GetScene() || !GetPhysicsScene()->IsDuringSimulation());
 
-    if (CollisionData)
-    {
-        // Ensure that collision asset is loaded (otherwise objects might fall though collider that is not yet loaded on play begin)
-        CollisionData->WaitForLoaded();
-    }
-
-    UpdateGeometry();
+    if (!HasCollisionGeometry())
+        DestroyShape();
+    else
+        TryUpdateLoadedShape();
     UpdateBounds();
+    if (auto rigidBody = dynamic_cast<RigidBody*>(GetParent()))
+        rigidBody->UpdateSimulationState();
 }
 
 void MeshCollider::OnCollisionDataLoaded()
 {
-    // Not needed as OnCollisionDataChanged waits for it to be loaded
-    //UpdateGeometry();
-    //UpdateBounds();
+    TryUpdateLoadedShape();
+    UpdateBounds();
+    if (auto rigidBody = dynamic_cast<RigidBody*>(GetParent()))
+        rigidBody->UpdateSimulationState();
+}
+
+bool MeshCollider::IsReadyForPhysics() const
+{
+    return !CollisionData || CollisionData->IsLoaded();
 }
 
 bool MeshCollider::CanAttach(RigidBody* rigidBody) const
@@ -48,7 +101,7 @@ bool MeshCollider::CanAttach(RigidBody* rigidBody) const
         LOG(Warning, "Cannot attach '{0}' using Triangle Mesh collider '{1}' to Rigid Body (not supported)", GetNamePath(), CollisionData->ToString());
     }
 #endif
-    return type != CollisionDataType::TriangleMesh;
+    return type == CollisionDataType::ConvexMesh;
 }
 
 bool MeshCollider::CanBeTrigger() const
@@ -56,6 +109,8 @@ bool MeshCollider::CanBeTrigger() const
     CollisionDataType type = CollisionDataType::None;
     if (CollisionData && CollisionData->IsLoaded())
         type = CollisionData->GetOptions().Type;
+    if (type == CollisionDataType::None)
+        return !CollisionData || !CollisionData->IsLoaded();
     return type != CollisionDataType::TriangleMesh;
 }
 
@@ -131,6 +186,14 @@ void MeshCollider::UpdateBounds()
         box = BoundingBox::Zero;
     BoundingBox::Transform(box, _transform.GetWorld(), _box);
     BoundingSphere::FromBox(_box, _sphere);
+}
+
+void MeshCollider::CreateShape()
+{
+    if (!HasCollisionGeometry())
+        return;
+
+    Collider::CreateShape();
 }
 
 void MeshCollider::GetGeometry(CollisionShape& collision)

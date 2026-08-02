@@ -121,6 +121,11 @@ bool Collider::ComputePenetration(const Collider* colliderA, const Collider* col
     return PhysicsBackend::ComputeShapesPenetration(shapeA, shapeB, colliderA->GetPosition(), colliderA->GetOrientation(), colliderB->GetPosition(), colliderB->GetOrientation(), direction, distance);
 }
 
+bool Collider::IsReadyForPhysics() const
+{
+    return true;
+}
+
 bool Collider::CanAttach(RigidBody* rigidBody) const
 {
     return true;
@@ -173,12 +178,15 @@ void Collider::Attach(RigidBody* rigidBody)
     // Create shape if missing
     if (_shape == nullptr)
         CreateShape();
+    if (_shape == nullptr)
+        return;
 
-    // Attach
-    PhysicsBackend::AttachShape(_shape, rigidBody->GetPhysicsActor());
     _cachedLocalPosePos = (_localTransform.Translation + _localTransform.Orientation * _center) * rigidBody->GetScale();
     _cachedLocalPoseRot = _localTransform.Orientation;
     PhysicsBackend::SetShapeLocalPose(_shape, _cachedLocalPosePos, _cachedLocalPoseRot);
+
+    // Attach
+    PhysicsBackend::AttachShape(_shape, rigidBody->GetPhysicsActor());
     if (rigidBody->IsDuringPlay())
     {
         rigidBody->UpdateBounds();

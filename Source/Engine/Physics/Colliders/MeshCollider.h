@@ -23,11 +23,15 @@ public:
     AssetReference<CollisionData> CollisionData;
 
 private:
+    bool HasCollisionGeometry() const;
+    void DestroyShape();
+    void TryUpdateLoadedShape();
     void OnCollisionDataChanged();
     void OnCollisionDataLoaded();
 
 public:
     // [Collider]
+    bool IsReadyForPhysics() const override;
     bool CanAttach(RigidBody* rigidBody) const override;
     bool CanBeTrigger() const override;
 #if USE_EDITOR
@@ -39,6 +43,7 @@ public:
 protected:
     // [Collider]
     ImplementPhysicsDebug;
+    void CreateShape() override;
     void UpdateBounds() override;
     void GetGeometry(CollisionShape& collision) override;
     void OnAssetChanged(Asset* asset, void* caller) override;

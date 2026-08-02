@@ -39,23 +39,67 @@ void SplineCollider::ExtractGeometry(Array<Float3>& vertexBuffer, Array<int32>& 
     indexBuffer.Add(_indexBuffer);
 }
 
+bool SplineCollider::HasCollisionGeometry() const
+{
+    return CollisionData && CollisionData->IsLoaded() && CollisionData->GetOptions().Type != CollisionDataType::None;
+}
+
+void SplineCollider::DestroyShape()
+{
+    if (_shape)
+    {
+        void* actor = PhysicsBackend::GetShapeActor(_shape);
+        if (actor)
+            PhysicsBackend::DetachShape(_shape, actor);
+        if (_staticActor)
+            RemoveStaticActor();
+        PhysicsBackend::RemoveCollider(this);
+        PhysicsBackend::DestroyShape(_shape);
+        _shape = nullptr;
+    }
+    if (_triangleMesh)
+    {
+        PhysicsBackend::DestroyObject(_triangleMesh);
+        _triangleMesh = nullptr;
+    }
+    _vertexBuffer.Clear();
+    _indexBuffer.Clear();
+    _box = BoundingBox(_transform.Translation);
+    BoundingSphere::FromBox(_box, _sphere);
+}
+
+void SplineCollider::TryUpdateLoadedShape()
+{
+    if (!HasCollisionGeometry())
+        return;
+    if (_shape)
+    {
+        UpdateGeometry();
+        return;
+    }
+
+    if (IsDuringPlay())
+    {
+        CreateShape();
+        if (_shape)
+            CreateStaticActor();
+    }
+}
+
 void SplineCollider::OnCollisionDataChanged()
 {
     // This should not be called during physics simulation, if it happened use write lock on physx scene
     ASSERT(!GetScene() || !GetPhysicsScene()->IsDuringSimulation());
 
-    if (CollisionData)
-    {
-        // Ensure that collision asset is loaded (otherwise objects might fall though collider that is not yet loaded on play begin)
-        CollisionData->WaitForLoaded();
-    }
-
-    UpdateGeometry();
+    if (!HasCollisionGeometry())
+        DestroyShape();
+    else
+        TryUpdateLoadedShape();
 }
 
 void SplineCollider::OnCollisionDataLoaded()
 {
-    UpdateGeometry();
+    TryUpdateLoadedShape();
 }
 
 void SplineCollider::OnSplineUpdated()
@@ -68,6 +112,11 @@ void SplineCollider::OnSplineUpdated()
     }
 
     UpdateGeometry();
+}
+
+bool SplineCollider::IsReadyForPhysics() const
+{
+    return !CollisionData || CollisionData->IsLoaded();
 }
 
 bool SplineCollider::CanAttach(RigidBody* rigidBody) const
@@ -158,6 +207,14 @@ void SplineCollider::EndPlay()
 void SplineCollider::UpdateBounds()
 {
     // Unused as bounds are updated during collision building
+}
+
+void SplineCollider::CreateShape()
+{
+    if (!HasCollisionGeometry())
+        return;
+
+    Collider::CreateShape();
 }
 
 void SplineCollider::GetGeometry(CollisionShape& collision)

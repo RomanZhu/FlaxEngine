@@ -103,6 +103,11 @@ public:
 
 public:
     /// <summary>
+    /// Determines whether this collider has all data needed to create a physics shape without blocking.
+    /// </summary>
+    virtual bool IsReadyForPhysics() const;
+
+    /// <summary>
     /// Determines whether this collider can be attached the specified rigid body.
     /// </summary>
     /// <param name="rigidBody">The rigid body.</param>
