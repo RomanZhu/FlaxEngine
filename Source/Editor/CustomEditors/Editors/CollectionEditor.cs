@@ -12,8 +12,6 @@ using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Scripting;
-using FlaxEditor.Windows;
-using FlaxEditor.Windows.Assets;
 using FlaxEngine;
 using FlaxEngine.GUI;
 using FlaxEngine.Utilities;
@@ -232,6 +230,23 @@ namespace FlaxEditor.CustomEditors.Editors
             private Rectangle _arrangeButtonRect;
             private bool _arrangeButtonInUse;
 
+            private static string GetSelectionCachePrefix(CollectionEditor editor)
+            {
+                var ownerSelection = editor.Presenter?.Owner?.Selection;
+                if (ownerSelection != null && ownerSelection.Count != 0)
+                {
+                    var selection = ownerSelection[0];
+                    if (selection != null)
+                        return $"{selection.ID},";
+                }
+
+                var presenterSelection = editor.Presenter?.Selection;
+                if (presenterSelection != null && presenterSelection.Count != 0 && presenterSelection[0] is FlaxEngine.Object selectedObject)
+                    return $"{selectedObject.ID},";
+
+                return string.Empty;
+            }
+
             public void Setup(CollectionEditor editor, int index, bool canReorder = true)
             {
                 Pivot = Float2.Zero;
@@ -243,23 +258,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 ArrowImageOpened = new SpriteBrush(icons.ArrowDown12);
                 HeaderText = $"Element {index}";
                 
-                string saveName = string.Empty;
-                if (editor.Presenter?.Owner is PropertiesWindow propertiesWindow)
-                {
-                    var selection = FlaxEditor.Editor.Instance.SceneEditing.Selection[0];
-                    if (selection != null)
-                    {
-                        saveName += $"{selection.ID},";
-                    }
-                }
-                else if (editor.Presenter?.Owner is PrefabWindow prefabWindow)
-                {
-                    var selection = prefabWindow.Selection[0];
-                    if (selection != null)
-                    {
-                        saveName += $"{selection.ID},";
-                    }
-                }
+                string saveName = GetSelectionCachePrefix(editor);
                 if (editor.ParentEditor?.Layout.ContainerControl is DropPanel pdp)
                 {
                     saveName += $"{pdp.HeaderText},";
@@ -289,23 +288,7 @@ namespace FlaxEditor.CustomEditors.Editors
 
             private void OnIsClosedChanged(DropPanel panel)
             {
-                string saveName = string.Empty;
-                if (Editor.Presenter?.Owner is PropertiesWindow pw)
-                {
-                    var selection = FlaxEditor.Editor.Instance.SceneEditing.Selection[0];
-                    if (selection != null)
-                    {
-                        saveName += $"{selection.ID},";
-                    }
-                }
-                else if (Editor.Presenter?.Owner is PrefabWindow prefabWindow)
-                {
-                    var selection = prefabWindow.Selection[0];
-                    if (selection != null)
-                    {
-                        saveName += $"{selection.ID},";
-                    }
-                }
+                string saveName = GetSelectionCachePrefix(Editor);
                 if (Editor.ParentEditor?.Layout.ContainerControl is DropPanel pdp)
                 {
                     saveName += $"{pdp.HeaderText},";
