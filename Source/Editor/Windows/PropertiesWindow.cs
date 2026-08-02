@@ -11,6 +11,7 @@ using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.Elements;
 using FlaxEditor.CustomEditors.GUI;
 using FlaxEditor.GUI.Input;
+using FlaxEditor.GUI.Tabs;
 using FlaxEditor.GUI.Timeline;
 using FlaxEditor.GUI.Timeline.Tracks;
 using FlaxEditor.SceneGraph;
@@ -33,6 +34,7 @@ namespace FlaxEditor.Windows
 
         private readonly Dictionary<Guid, float> _actorScrollValues = new Dictionary<Guid, float>();
         private readonly List<Asset> _waitingForContentAssets = new List<Asset>();
+        private readonly List<PinnedTab> _pinnedTabs = new List<PinnedTab>();
         private readonly ScriptingObjectEditor _contentAssetEditor = new ScriptingObjectEditor();
         private IDisposable _contentAssetState;
         private bool _lockObjects = false;
@@ -40,6 +42,165 @@ namespace FlaxEditor.Windows
         private bool _isApplyingContentAssetChanges;
         private SearchBox _searchBox;
         private Panel _scrollingPanel;
+        private Tabs _tabs;
+        private Tab _selectionTab;
+        private float _tabsBarHeight;
+
+        private const int MaxTabTitleLength = 24;
+        private const float TabCloseButtonSize = 14.0f;
+        private sealed class PropertiesTab : Tab
+        {
+            private readonly PropertiesWindow _owner;
+            public readonly bool Closeable;
+
+            public PropertiesTab(PropertiesWindow owner, string text, bool closeable)
+            : base(text)
+            {
+                _owner = owner;
+                Closeable = closeable;
+            }
+
+            public override Tabs.TabHeader CreateHeader()
+            {
+                return new PropertiesTabHeader((Tabs)Parent, this, _owner);
+            }
+        }
+
+        private sealed class PropertiesTabHeader : Tabs.TabHeader
+        {
+            private readonly PropertiesWindow _owner;
+            private readonly bool _closeable;
+            private bool _mouseDown;
+            private bool _closeMouseDown;
+            private bool _dragging;
+            private Float2 _mouseDownLocation;
+
+            private PropertiesTab PropertiesTab => (PropertiesTab)Tab;
+
+            public PropertiesTabHeader(Tabs tabs, PropertiesTab tab, PropertiesWindow owner)
+            : base(tabs, tab)
+            {
+                _owner = owner;
+                _closeable = tab.Closeable;
+            }
+
+            private Rectangle CloseButtonBounds => new Rectangle(Size.X - TabCloseButtonSize, 0.0f, TabCloseButtonSize, Size.Y);
+
+            public override bool OnMouseDown(Float2 location, MouseButton button)
+            {
+                if (button != MouseButton.Left || !EnabledInHierarchy || !Tab.Enabled)
+                    return true;
+
+                Focus();
+                StartMouseCapture();
+                _closeMouseDown = _closeable && CloseButtonBounds.Contains(ref location);
+                _mouseDown = !_closeMouseDown;
+                _dragging = false;
+                _mouseDownLocation = location;
+                return true;
+            }
+
+            public override void OnMouseMove(Float2 location)
+            {
+                if (_mouseDown && !_closeMouseDown && Tab != _owner._selectionTab)
+                {
+                    if (!_dragging && Mathf.Abs(location.X - _mouseDownLocation.X) > 4.0f)
+                        _dragging = true;
+                    if (_dragging)
+                        ReorderTab(location);
+                }
+
+                base.OnMouseMove(location);
+            }
+
+            public override bool OnMouseUp(Float2 location, MouseButton button)
+            {
+                if (button != MouseButton.Left)
+                    return true;
+
+                bool close = _closeMouseDown && CloseButtonBounds.Contains(ref location);
+                bool select = _mouseDown && !_dragging;
+                _mouseDown = false;
+                _closeMouseDown = false;
+                EndMouseCapture();
+
+                if (close)
+                {
+                    _owner.ClosePinnedTab(PropertiesTab);
+                }
+                else if (select && EnabledInHierarchy && Tab.Enabled)
+                {
+                    _owner._tabs.SelectedTab = Tab;
+                    Tab.PerformLayout(true);
+                    _owner._tabs.Focus();
+                }
+
+                return true;
+            }
+
+            public override void OnEndMouseCapture()
+            {
+                _mouseDown = false;
+                _closeMouseDown = false;
+                _dragging = false;
+                base.OnEndMouseCapture();
+            }
+
+            private void ReorderTab(Float2 location)
+            {
+                int headerIndex = _owner._tabs.TabsPanel.Children.IndexOf(this);
+                if (headerIndex <= 0)
+                    return;
+
+                float pointerX = Location.X + location.X;
+                int direction = pointerX < Location.X ? -1 : pointerX > Location.X + Width ? 1 : 0;
+                if (direction == 0)
+                    return;
+
+                int targetIndex = headerIndex + direction;
+                if (targetIndex < 1 || targetIndex >= _owner._tabs.TabsPanel.Children.Count)
+                    return;
+
+                var selectedTab = _owner._tabs.SelectedTab;
+                var tab = _owner._tabs.Children[headerIndex + 1];
+                var headerControl = _owner._tabs.TabsPanel.Children[headerIndex];
+                _owner._tabs.Children.RemoveAt(headerIndex + 1);
+                _owner._tabs.Children.Insert(targetIndex + 1, tab);
+                _owner._tabs.TabsPanel.Children.RemoveAt(headerIndex);
+                _owner._tabs.TabsPanel.Children.Insert(targetIndex, headerControl);
+                _owner._tabs.PerformLayout();
+                _owner._tabs.TabsPanel.PerformLayout();
+                _owner._tabs.SelectedTab = selectedTab;
+            }
+
+            public override void Draw()
+            {
+                base.Draw();
+
+                if (_closeable)
+                {
+                    var style = Style.Current;
+                    var bounds = CloseButtonBounds;
+                    Render2D.DrawSprite(style.Cross, bounds.MakeExpanded(-2.0f), IsMouseOver ? style.Foreground : style.ForegroundGrey);
+                }
+            }
+        }
+
+        private sealed class PinnedTab
+        {
+            public readonly Tab Tab;
+            public readonly Panel Panel;
+            public readonly CustomEditorPresenter Presenter;
+            public readonly object[] Selection;
+
+            public PinnedTab(Tab tab, Panel panel, CustomEditorPresenter presenter, object[] selection)
+            {
+                Tab = tab;
+                Panel = panel;
+                Presenter = presenter;
+                Selection = selection;
+            }
+        }
 
         /// <inheritdoc />
         public override bool UseLayoutData => true;
@@ -89,27 +250,30 @@ namespace FlaxEditor.Windows
             Icon = editor.Icons.Build64;
             AutoFocus = true;
 
-            var headerPanel = new ContainerControl
+            _tabs = new Tabs
             {
-                AnchorPreset = AnchorPresets.HorizontalStretchTop,
-                BackgroundColor = Style.Current.Background,
-                IsScrollable = false,
-                Offsets = new Margin(0, 0, 0, 18 + 6),
+                AnchorPreset = AnchorPresets.StretchAll,
+                Offsets = Margin.Zero,
+                AutoTabsSize = true,
                 Parent = this,
             };
+            _tabsBarHeight = _tabs.TabsSize.Y;
+            _selectionTab = _tabs.AddTab(new PropertiesTab(this, "Selection", false));
+
             _searchBox = new SearchBox
             {
-                AnchorPreset = AnchorPresets.HorizontalStretchMiddle,
-                Parent = headerPanel,
-                Bounds = new Rectangle(4, 4, headerPanel.Width - 8, 18),
+                AnchorPreset = AnchorPresets.HorizontalStretchTop,
+                Parent = _selectionTab,
+                Bounds = new Rectangle(4, 2, Width - 8, 18),
+                Visible = false,
             };
             _searchBox.TextChanged += ApplySearchFilter;
 
             _scrollingPanel = new Panel(ScrollBars.Vertical)
             {
                 AnchorPreset = AnchorPresets.StretchAll,
-                Offsets = new Margin(0, 0, headerPanel.Bottom, 0),
-                Parent = this,
+                Offsets = Margin.Zero,
+                Parent = _selectionTab,
             };
 
             Presenter = new CustomEditorPresenter(editor.Undo, null, this);
@@ -122,6 +286,7 @@ namespace FlaxEditor.Windows
             _scrollingPanel.VScrollBar.ValueChanged += OnScrollValueChanged;
             Editor.SceneEditing.SelectionChanged += OnSceneSelectionChanged;
             Editor.Windows.ContentWin.SelectionChanged += OnContentSelectionChanged;
+            UpdateTabsBarVisibility();
         }
 
         /// <inheritdoc />
@@ -167,6 +332,154 @@ namespace FlaxEditor.Windows
             return undoRecordObjects;
         }
 
+        private static string TruncateTabTitle(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= MaxTabTitleLength)
+                return text;
+            return text.Substring(0, MaxTabTitleLength - 1) + "…";
+        }
+
+        private string GetSelectionTabTitle()
+        {
+            int selectionCount = Presenter.Selection.Count;
+            if (selectionCount == 0)
+                return "Selection";
+            if (selectionCount > 1)
+                return TruncateTabTitle($"{selectionCount} Objects");
+
+            var selected = Presenter.Selection[0];
+            var actor = selected as Actor;
+            if (actor != null && !string.IsNullOrEmpty(actor.Name))
+                return TruncateTabTitle(actor.Name);
+            var asset = selected as Asset;
+            if (asset != null && !string.IsNullOrEmpty(asset.Path))
+                return TruncateTabTitle(System.IO.Path.GetFileNameWithoutExtension(asset.Path));
+            return TruncateTabTitle(selected?.GetType().Name ?? "Selection");
+        }
+
+        private void UpdateSelectionTabTitle()
+        {
+            _selectionTab.Text = GetSelectionTabTitle();
+        }
+
+        private void UpdateTabsBarVisibility()
+        {
+            UpdateSelectionTabTitle();
+            bool visible = _pinnedTabs.Count != 0;
+            _tabs.TabsPanel.Visible = visible;
+            _tabs.TabsSize = new Float2(_tabs.TabsSize.X, visible ? _tabsBarHeight : 0.0f);
+        }
+
+        /// <summary>
+        /// Gets whether the current selection can be pinned safely.
+        /// </summary>
+        public bool CanPinSelection()
+        {
+            return Presenter.Selection.Count != 0 && _contentAssetState == null;
+        }
+
+        /// <summary>
+        /// Pins the current selection in a separate properties tab.
+        /// </summary>
+        public void PinSelection()
+        {
+            if (!CanPinSelection())
+                return;
+
+            var selection = Presenter.Selection.ToArray();
+            var pinnedUndoObjects = Presenter.GetUndoObjects?.Invoke(Presenter)?.ToArray() ?? Array.Empty<object>();
+            var tab = new PropertiesTab(this, TruncateTabTitle(GetSelectionTabTitle()), true);
+            var presenter = new CustomEditorPresenter(Editor.Undo)
+            {
+                GetUndoObjects = _ => pinnedUndoObjects,
+            };
+            var panel = new Panel(ScrollBars.Vertical)
+            {
+                AnchorPreset = AnchorPresets.StretchAll,
+                Offsets = Margin.Zero,
+                Parent = tab,
+            };
+            presenter.Panel.AnchorPreset = AnchorPresets.StretchAll;
+            presenter.Panel.Offsets = Margin.Zero;
+            presenter.Panel.Parent = panel;
+            presenter.Select(selection);
+            presenter.BuildLayout();
+
+            _pinnedTabs.Add(new PinnedTab(tab, panel, presenter, selection));
+            _tabs.AddTab(tab);
+            UpdateTabsBarVisibility();
+            _tabs.SelectedTab = tab;
+        }
+
+        private static bool SelectionsMatch(IReadOnlyList<object> first, IReadOnlyList<object> second)
+        {
+            if (first.Count != second.Count)
+                return false;
+
+            var matched = new bool[second.Count];
+            for (int i = 0; i < first.Count; i++)
+            {
+                bool found = false;
+                for (int j = 0; j < second.Count; j++)
+                {
+                    if (!matched[j] && ReferenceEquals(first[i], second[j]))
+                    {
+                        matched[j] = true;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Gets whether the current selection has a pinned properties tab.
+        /// </summary>
+        public bool IsSelectionPinned()
+        {
+            return _pinnedTabs.Any(x => SelectionsMatch(x.Selection, Presenter.Selection));
+        }
+
+        /// <summary>
+        /// Unpins the current selection properties tab.
+        /// </summary>
+        public void UnpinSelection()
+        {
+            var pinned = _pinnedTabs.FirstOrDefault(x => SelectionsMatch(x.Selection, Presenter.Selection));
+            if (pinned != null)
+                ClosePinnedTab((PropertiesTab)pinned.Tab);
+        }
+
+        private void ClosePinnedTab(PropertiesTab tab)
+        {
+            var pinned = _pinnedTabs.FirstOrDefault(x => x.Tab == tab);
+            if (pinned == null)
+                return;
+
+            var selected = _tabs.SelectedTab;
+            Tab fallback = null;
+            if (selected == tab)
+            {
+                int index = _tabs.Children.IndexOf(tab);
+                if (index > 1)
+                    fallback = _tabs.Children[index - 1] as Tab;
+                if (fallback == null && index + 1 < _tabs.Children.Count)
+                    fallback = _tabs.Children[index + 1] as Tab;
+                fallback ??= _selectionTab;
+            }
+
+            _pinnedTabs.Remove(pinned);
+            _tabs.RemoveChild(tab);
+            tab.Dispose();
+            UpdateTabsBarVisibility();
+
+            _tabs.SelectedTab = selected == tab ? fallback ?? _selectionTab : selected;
+        }
+
+
         private void RefreshSelection()
         {
             if (_showContentSelection)
@@ -195,6 +508,7 @@ namespace FlaxEditor.Windows
             undoRecordObjects = Editor.SceneEditing.Selection.ConvertAll(x => x.UndoRecordObject).Distinct();
             var objects = Editor.SceneEditing.Selection.ConvertAll(x => x.EditableObject).Distinct();
             Presenter.Select(objects);
+            UpdateSelectionTabTitle();
 
             // Set scroll value of window if it exists
             if (Editor.SceneEditing.SelectionCount == 1 && _scrollingPanel.VScrollBar != null)
@@ -275,6 +589,7 @@ namespace FlaxEditor.Windows
             undoRecordObjects = objects;
             Presenter.OverrideEditor = objects.Count != 0 && objects.All(x => x is Asset) ? _contentAssetEditor : null;
             Presenter.Select(objects);
+            UpdateSelectionTabTitle();
             if (forceRebuild)
                 Presenter.BuildLayout();
         }

@@ -149,6 +149,19 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     }
                 };
             }
+            if (Presenter.Owner is FlaxEditor.Windows.PropertiesWindow propertiesWindow)
+            {
+                bool isPinned = propertiesWindow.IsSelectionPinned();
+                var pinButton = cm.AddButton(isPinned ? "Unpin" : "Pin");
+                pinButton.Enabled = isPinned || propertiesWindow.CanPinSelection();
+                pinButton.ButtonClicked += button =>
+                {
+                    if (isPinned)
+                        propertiesWindow.UnpinSelection();
+                    else
+                        propertiesWindow.PinSelection();
+                };
+            }
             cm.AddButton("Copy ID", OnClickCopyId);
             cm.AddButton("Edit actor type", OnClickEditActorType).Enabled = item != null;
             var showButton = cm.AddButton("Show in content window", OnClickShowActorType);
