@@ -362,7 +362,12 @@ void WheeledVehicle::Setup()
     PhysicsBackend::AddVehicle(scene, this);
     PhysicsBackend::SetRigidDynamicActorSolverIterationCounts(_actor, 12, 4);
 #else
+#if COMPILE_WITH_BOX3D
+    // Box3D builds intentionally compile vehicles as no-ops.
+    return;
+#else
     LOG(Fatal, "Vehicles are not supported.");
+#endif
 #endif
 }
 

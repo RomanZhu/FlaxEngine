@@ -12,7 +12,7 @@
   "EditorTarget": "FlaxEditor",
   "Configuration": {
     "UseCSharp": true,
-    "UseLargeWorlds": false,
+    "UseLargeWorlds": true,
     "UseDotNet": true,
     "Windows": {
       "UseSDL": false,
