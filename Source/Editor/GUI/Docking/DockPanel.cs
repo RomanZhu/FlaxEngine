@@ -101,6 +101,7 @@ namespace FlaxEditor.GUI.Docking
         private readonly List<DockWindow> _tabs = new List<DockWindow>();
         private DockWindow _selectedTab;
         private DockPanelProxy _tabsProxy;
+        private int _pendingTabInsertionIndex = -1;
 
         /// <summary>
         /// Returns true if this panel is a master panel.
@@ -559,7 +560,30 @@ namespace FlaxEditor.GUI.Docking
 
         internal virtual void DockWindowInternal(DockState state, DockWindow window, bool autoSelect = true, float? splitterValue = null)
         {
-            DockWindow(state, window, autoSelect, splitterValue);
+            var tabInsertionIndex = _pendingTabInsertionIndex;
+            _pendingTabInsertionIndex = -1;
+            if (state == DockState.DockFill && tabInsertionIndex >= 0)
+            {
+                CreateTabsProxy();
+                AddTabAt(window, tabInsertionIndex, autoSelect);
+            }
+            else
+            {
+                DockWindow(state, window, autoSelect, splitterValue);
+            }
+        }
+
+        internal void DockWindowAt(DockWindow window, int tabIndex, bool autoSelect = true)
+        {
+            _pendingTabInsertionIndex = Math.Max(0, tabIndex);
+            try
+            {
+                window.Show(DockState.DockFill, this, autoSelect);
+            }
+            finally
+            {
+                _pendingTabInsertionIndex = -1;
+            }
         }
 
         /// <summary>
@@ -637,7 +661,13 @@ namespace FlaxEditor.GUI.Docking
         /// <param name="autoSelect">True if auto-select newly added tab.</param>
         protected virtual void AddTab(DockWindow window, bool autoSelect = true)
         {
-            _tabs.Add(window);
+            AddTabAt(window, _tabs.Count, autoSelect);
+        }
+
+        internal void AddTabAt(DockWindow window, int tabIndex, bool autoSelect = true)
+        {
+            tabIndex = Math.Max(0, Math.Min(tabIndex, _tabs.Count));
+            _tabs.Insert(tabIndex, window);
             window.ParentDockPanel = this;
             if (autoSelect)
                 SelectTab(window);
