@@ -426,7 +426,7 @@ namespace FlaxEditor.GUI.Timeline.GUI
                     Render2D.FillRectangle(new Rectangle(prevStop.Frame * scale, 0, width - prevStop.Frame * scale, height), prevStop.Value);
                 }
             }
-            Render2D.DrawRectangle(bounds, IsMouseOver ? style.BackgroundHighlighted : style.Background);
+            StyleRendering.DrawRoundedRectangleBorder(bounds, IsMouseOver ? style.BackgroundHighlighted : style.Background, 1.0f, style.CornerRadius);
 
             DrawChildren();
 

@@ -343,7 +343,6 @@ namespace FlaxEditor.GUI.Timeline
             var bounds = new Rectangle(Float2.Zero, Size);
 
             var fillColor = BackgroundColor.A > 0.0f ? BackgroundColor : style.Background * 1.5f;
-            Render2D.FillRectangle(bounds, fillColor);
 
             var isMovingWholeMedia = _isMoving && !_startMoveRightEdge && !_startMoveLeftEdge;
             var borderHighlightColor = style.BorderHighlighted;
@@ -351,7 +350,7 @@ namespace FlaxEditor.GUI.Timeline
             var selectedColor = style.BackgroundSelected;
             var moveThickness = 2.0f;
             var borderColor = isMovingWholeMedia ? moveColor : (Timeline.SelectedMedia.Contains(this) ? selectedColor : (IsMouseOver ? borderHighlightColor : style.BorderNormal));
-            Render2D.DrawRectangle(bounds, borderColor, isMovingWholeMedia ? moveThickness : 1.0f);
+            StyleRendering.DrawRoundedRectangle(bounds, fillColor, borderColor, isMovingWholeMedia ? moveThickness : 1.0f, style.CornerRadius);
             if (_startMoveLeftEdge)
             {
                 Render2D.DrawLine(bounds.UpperLeft, bounds.BottomLeft, moveColor, moveThickness);
