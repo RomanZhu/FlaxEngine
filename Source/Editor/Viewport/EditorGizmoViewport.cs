@@ -72,6 +72,9 @@ namespace FlaxEditor.Viewport
         public bool IsControlDown => _input.IsControlDown;
 
         /// <inheritdoc />
+        public bool IsShiftDown => _input.IsShiftDown;
+
+        /// <inheritdoc />
         public bool SnapToGround => ContainsFocus && Editor.Instance.Options.Options.Input.SnapToGround.Process(Root);
 
         /// <inheritdoc />

@@ -422,6 +422,9 @@ namespace FlaxEditor.Viewport
         public bool IsControlDown => _input.IsControlDown;
 
         /// <inheritdoc />
+        public bool IsShiftDown => _input.IsShiftDown;
+
+        /// <inheritdoc />
         public bool SnapToGround => false;
 
         /// <inheritdoc />
@@ -585,7 +588,7 @@ namespace FlaxEditor.Viewport
                     }
                 }
 
-                bool addRemove = Root.GetKey(KeyboardKeys.Control);
+                bool addRemove = Root.GetKey(KeyboardKeys.Shift);
                 bool isSelected = _window.Selection.Contains(hit);
 
                 if (addRemove)

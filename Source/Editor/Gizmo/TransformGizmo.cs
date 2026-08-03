@@ -161,7 +161,14 @@ namespace FlaxEditor.Gizmo
             var ray = Owner.MouseRay;
             var view = new Ray(Owner.ViewPosition, Owner.ViewDirection);
             var renderView = Owner.RenderTask.View;
-            bool selectColliders = (renderView.Flags & ViewFlags.PhysicsDebug) == ViewFlags.PhysicsDebug || renderView.Mode == ViewMode.PhysicsColliders;
+            Pick(ref ray, ref view, renderView.Flags, renderView.Mode, Owner.IsShiftDown);
+
+            Profiler.EndEvent();
+        }
+
+        internal void Pick(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode, bool addRemove)
+        {
+            bool selectColliders = (viewFlags & ViewFlags.PhysicsDebug) == ViewFlags.PhysicsDebug || viewMode == ViewMode.PhysicsColliders;
             SceneGraphNode.RayCastData.FlagTypes rayCastFlags = SceneGraphNode.RayCastData.FlagTypes.None;
             if (!selectColliders)
                 rayCastFlags |= SceneGraphNode.RayCastData.FlagTypes.SkipColliders;
@@ -225,7 +232,6 @@ namespace FlaxEditor.Gizmo
                     }
                 }
 
-                bool addRemove = Owner.IsControlDown;
                 bool isSelected = sceneEditing.Selection.Contains(hit);
 
                 if (addRemove)
@@ -244,8 +250,6 @@ namespace FlaxEditor.Gizmo
             {
                 sceneEditing.Deselect();
             }
-
-            Profiler.EndEvent();
         }
 
         /// <inheritdoc />

@@ -274,7 +274,7 @@ namespace FlaxEditor
                         {
                             // Move whole selection
                         }
-                        else if (Root.GetKey(KeyboardKeys.Control))
+                        else if (Root.GetKey(KeyboardKeys.Shift))
                         {
                             // Add/remove from selection
                             selection.AddRange(transformGizmo.Selection);

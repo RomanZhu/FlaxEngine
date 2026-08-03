@@ -143,9 +143,11 @@ namespace FlaxEditor.Windows
         private bool _isMaximized = false, _isFullscreen = false, _isUnlockingMouse = false;
         private bool _isFloating = false, _isBorderless = false;
         private bool _isMouseLockBlocked = false;
+        private bool _gameViewActorPickMouseDown = false;
         private bool _forceHideToolStrip = false;
         private bool _cursorVisible = true;
         private float _gameStartTime;
+        private Float2 _gameViewActorPickMouseDownLocation;
         private GUI.Docking.DockState _maximizeRestoreDockState;
         private GUI.Docking.DockPanel _maximizeRestoreDockTo;
         private int _maximizeRestoreTabIndex = -1;
@@ -1565,6 +1567,16 @@ namespace FlaxEditor.Windows
                 if (ContainsFocus)
                     RestoreCursorState();
             }
+
+            if (CanStartGameViewActorPick(ref location, button))
+            {
+                _gameViewActorPickMouseDown = true;
+                _gameViewActorPickMouseDownLocation = location;
+                StartMouseCapture();
+                Focus();
+                return true;
+            }
+
             var result = base.OnMouseDown(location, button);
 
             // Catch user focus
@@ -1572,6 +1584,77 @@ namespace FlaxEditor.Windows
                 Focus();
 
             return result;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            if (_gameViewActorPickMouseDown && button == MouseButton.Left)
+            {
+                _gameViewActorPickMouseDown = false;
+                EndMouseCapture();
+
+                if (Editor.StateMachine.IsPlayMode &&
+                    Editor.StateMachine.PlayingState.IsPaused &&
+                    (location - _gameViewActorPickMouseDownLocation).LengthSquared <= 16.0f &&
+                    TryGetGameViewportLocation(ref location, out var viewportLocation))
+                {
+                    PickGameViewActor(viewportLocation);
+                }
+                return true;
+            }
+
+            return base.OnMouseUp(location, button);
+        }
+
+        /// <inheritdoc />
+        public override void OnEndMouseCapture()
+        {
+            _gameViewActorPickMouseDown = false;
+            base.OnEndMouseCapture();
+        }
+
+        private bool CanStartGameViewActorPick(ref Float2 location, MouseButton button)
+        {
+            if (button != MouseButton.Left ||
+                !Editor.StateMachine.IsPlayMode ||
+                !Editor.StateMachine.PlayingState.IsPaused ||
+                !Root.GetKey(KeyboardKeys.Control))
+                return false;
+
+            if (_toolStrip != null && _toolStrip.Visible && _toolStrip.Enabled && IntersectsChildContent(_toolStrip, location, out _))
+                return false;
+
+            return TryGetGameViewportLocation(ref location, out _);
+        }
+
+        private bool TryGetGameViewportLocation(ref Float2 location, out Float2 viewportLocation)
+        {
+            if (!IntersectsChildContent(_viewport, location, out viewportLocation))
+                return false;
+
+            var viewportBounds = new Rectangle(Float2.Zero, _viewport.Size);
+            return viewportBounds.Contains(ref viewportLocation);
+        }
+
+        private void PickGameViewActor(Float2 viewportLocation)
+        {
+            if (_viewport.Width < Mathf.Epsilon || _viewport.Height < Mathf.Epsilon)
+                return;
+
+            FlaxEngine.Profiler.BeginEvent("GameView.Pick");
+
+            var renderView = _viewport.Task.View;
+            var viewport = new FlaxEngine.Viewport(0, 0, _viewport.Width, _viewport.Height);
+            var projection = renderView.NonJitteredProjection;
+            Matrix.Multiply(ref renderView.View, ref projection, out var viewProjection);
+            var ray = Ray.GetPickRay(viewportLocation.X, viewportLocation.Y, ref viewport, ref viewProjection);
+            ray.Position += renderView.Origin;
+
+            var view = new Ray(renderView.Origin + renderView.Position, renderView.Direction);
+            Editor.MainTransformGizmo.Pick(ref ray, ref view, renderView.Flags, renderView.Mode, Root.GetKey(KeyboardKeys.Shift));
+
+            FlaxEngine.Profiler.EndEvent();
         }
 
         /// <inheritdoc />

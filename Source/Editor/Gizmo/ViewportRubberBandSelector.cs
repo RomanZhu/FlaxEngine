@@ -208,21 +208,21 @@ public sealed class ViewportRubberBandSelector
         if (_owner.IsControlDown)
         {
             var newSelection = GetRubberBandSelectionBefore();
+            for (int i = newSelection.Count - 1; i >= 0; i--)
+            {
+                if (!hits.Contains(newSelection[i]))
+                    newSelection.RemoveAt(i);
+            }
+            _owner.Select(newSelection, false);
+        }
+        else if (_owner.IsShiftDown)
+        {
+            var newSelection = GetRubberBandSelectionBefore();
             foreach (var hit in hits)
             {
                 if (newSelection.Contains(hit))
                     newSelection.Remove(hit);
                 else
-                    newSelection.Add(hit);
-            }
-            _owner.Select(newSelection, false);
-        }
-        else if (Input.GetKey(KeyboardKeys.Shift))
-        {
-            var newSelection = GetRubberBandSelectionBefore();
-            foreach (var hit in hits)
-            {
-                if (!newSelection.Contains(hit))
                     newSelection.Add(hit);
             }
             _owner.Select(newSelection, false);

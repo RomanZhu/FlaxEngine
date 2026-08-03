@@ -47,6 +47,11 @@ namespace FlaxEditor.Gizmo
         bool IsControlDown { get; }
 
         /// <summary>
+        /// Gets a value indicating whether Shift key is pressed down.
+        /// </summary>
+        bool IsShiftDown { get; }
+
+        /// <summary>
         /// Gets a value indicating whether snap selected objects to ground (check if user pressed the given input key to call action).
         /// </summary>
         bool SnapToGround { get; }
