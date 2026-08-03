@@ -16,6 +16,9 @@ namespace FlaxEditor.GUI.ContextMenu
     [HideInEditor]
     public class ContextMenu : ContextMenuBase
     {
+        private ContextMenuItem _pendingAimItem;
+        private float _pendingAimUntil;
+
         /// <summary>
         /// The items container.
         /// </summary>
@@ -154,6 +157,44 @@ namespace FlaxEditor.GUI.ContextMenu
                 ClipChildren = false,
                 Parent = this,
             };
+        }
+
+        internal bool OnItemMouseEnter(ContextMenuItem item, Float2 screenLocation)
+        {
+            if (HasChildCMOpened && IsPointerInsideSubmenuAim(screenLocation))
+            {
+                _pendingAimItem = item;
+                _pendingAimUntil = Time.UnscaledGameTime + 0.22f;
+                return true;
+            }
+
+            _pendingAimItem = null;
+            HideChild();
+            return false;
+        }
+
+        /// <inheritdoc />
+        public override void Update(float deltaTime)
+        {
+            base.Update(deltaTime);
+
+            if (_pendingAimItem == null)
+                return;
+
+            // If the pointer reached the already open submenu, preserve it. Otherwise
+            // switch after the short geometry guard expires or the pointer leaves its aim.
+            if (!_pendingAimItem.IsMouseOver)
+            {
+                _pendingAimItem = null;
+                return;
+            }
+            if (Time.UnscaledGameTime < _pendingAimUntil && IsPointerInsideSubmenuAim(FlaxEngine.Input.MouseScreenPosition))
+                return;
+
+            var item = _pendingAimItem;
+            _pendingAimItem = null;
+            HideChild();
+            item.OnMenuAimReleased();
         }
 
         /// <summary>

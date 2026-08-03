@@ -13,6 +13,11 @@ namespace FlaxEditor.GUI.ContextMenu
     public abstract class ContextMenuItem : ContainerControl
     {
         /// <summary>
+        /// True while the shared submenu-aim corridor postpones this item's hover action.
+        /// </summary>
+        protected bool IsMenuAimDelayed { get; private set; }
+
+        /// <summary>
         /// Gets the parent context menu.
         /// </summary>
         public ContextMenu ParentContextMenu { get; }
@@ -55,9 +60,13 @@ namespace FlaxEditor.GUI.ContextMenu
         /// <inheritdoc />
         public override void OnMouseEnter(Float2 location)
         {
-            ParentContextMenu?.HideChild();
+            IsMenuAimDelayed = ParentContextMenu?.OnItemMouseEnter(this, PointToScreen(location)) ?? false;
 
             base.OnMouseEnter(location);
+        }
+
+        internal virtual void OnMenuAimReleased()
+        {
         }
     }
 }

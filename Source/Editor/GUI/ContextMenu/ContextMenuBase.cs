@@ -54,6 +54,7 @@ namespace FlaxEditor.GUI.ContextMenu
         private ContextMenuBase _childCM;
         private Window _window;
         private Control _previouslyFocused;
+        private Float2 _submenuAimOriginScreen;
 
         /// <summary>
         /// Gets a value indicating whether use automatic popup direction fix based on the screen dimensions.
@@ -260,7 +261,7 @@ namespace FlaxEditor.GUI.ContextMenu
                 desc.Size = dpiSize;
                 desc.Fullscreen = false;
                 desc.HasBorder = false;
-                desc.SupportsTransparency = false;
+                desc.SupportsTransparency = true;
                 desc.ShowInTaskbar = false;
                 desc.ActivateWhenFirstShown = UseInput;
                 desc.AllowInput = UseInput;
@@ -382,6 +383,34 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Show child
             _childCM.Show(this, location);
+            _submenuAimOriginScreen = FlaxEngine.Input.MouseScreenPosition;
+        }
+
+        internal bool IsPointerInsideSubmenuAim(Float2 pointerScreen)
+        {
+            if (_childCM == null || _childCM._window == null)
+                return false;
+
+            var bounds = _childCM._window.ClientBounds;
+            var edgeX = _submenuAimOriginScreen.X <= bounds.Center.X ? bounds.Left : bounds.Right;
+            var top = new Float2(edgeX, bounds.Top - 10.0f);
+            var bottom = new Float2(edgeX, bounds.Bottom + 10.0f);
+            return IsPointInTriangle(pointerScreen, _submenuAimOriginScreen, top, bottom);
+        }
+
+        private static bool IsPointInTriangle(Float2 point, Float2 a, Float2 b, Float2 c)
+        {
+            static float Sign(Float2 p1, Float2 p2, Float2 p3)
+            {
+                return (p1.X - p3.X) * (p2.Y - p3.Y) - (p2.X - p3.X) * (p1.Y - p3.Y);
+            }
+
+            var d1 = Sign(point, a, b);
+            var d2 = Sign(point, b, c);
+            var d3 = Sign(point, c, a);
+            bool hasNegative = d1 < 0.0f || d2 < 0.0f || d3 < 0.0f;
+            bool hasPositive = d1 > 0.0f || d2 > 0.0f || d3 > 0.0f;
+            return !(hasNegative && hasPositive);
         }
 
         /// <summary>
@@ -599,8 +628,9 @@ namespace FlaxEditor.GUI.ContextMenu
             // Draw background
             var style = Style.Current;
             var bounds = new Rectangle(Float2.Zero, Size);
-            Render2D.FillRectangle(bounds, style.Background);
-            Render2D.DrawRectangle(bounds, Color.Lerp(style.BackgroundSelected, style.Background, 0.6f));
+            var popup = Color.Lerp(style.Background, Color.Black, 0.08f).AlphaMultiplied(0.97f);
+            Render2D.FillRectangle(bounds, popup);
+            Render2D.DrawRectangle(bounds, style.BorderNormal.AlphaMultiplied(0.8f));
 
             base.Draw();
         }

@@ -47,7 +47,7 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Draw background
             if (isCMopened)
-                Render2D.FillRectangle(backgroundRect, style.LightBackground);
+                Render2D.FillRectangle(backgroundRect, Color.Lerp(style.Background, style.Foreground, 0.08f));
 
             base.Draw();
 
@@ -72,7 +72,16 @@ namespace FlaxEditor.GUI.ContextMenu
 
             base.OnMouseEnter(location);
 
+            if (IsMenuAimDelayed)
+                return;
+
             ShowChild(parentContextMenu);
+        }
+
+        internal override void OnMenuAimReleased()
+        {
+            if (IsMouseOver && !ContextMenu.IsOpened && ContextMenu.HasChildren)
+                ShowChild(ParentContextMenu);
         }
 
         /// <inheritdoc />
