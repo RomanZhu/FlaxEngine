@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using FlaxEditor.Gizmo;
 using FlaxEditor.Content;
+using FlaxEditor.GUI;
+using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Tree;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.GUI.Input;
@@ -23,6 +25,8 @@ namespace FlaxEditor.Windows
     public partial class SceneTreeWindow : SceneEditorWindow
     {
         private TextBox _searchBox;
+        private Button _newButton;
+        private Button _viewButton;
         private Tree _tree;
         private Panel _sceneTreePanel;
         private bool _isUpdatingSelection;
@@ -50,24 +54,42 @@ namespace FlaxEditor.Windows
         {
             Title = "Scene";
             Icon = editor.Icons.Globe32;
+            var controlHeight = Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 18.0f;
 
-            // Scene searching query input box
+            // Compact creation, search, and view toolbar shared with content-oriented panels.
             var headerPanel = new ContainerControl
             {
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 BackgroundColor = Style.Current.Background,
                 IsScrollable = false,
-                Offsets = new Margin(0, 0, 0, 18 + 6),
+                Offsets = new Margin(0, 0, 0, controlHeight + 10.0f),
             };
+            _newButton = new Button
+            {
+                Parent = headerPanel,
+                Bounds = new Rectangle(6, 5, 26, controlHeight),
+                Text = "+",
+                TooltipText = "New actor or control",
+            };
+            _newButton.Clicked += ShowNewMenu;
             _searchBox = new SearchBox
             {
                 AnchorPreset = AnchorPresets.HorizontalStretchMiddle,
                 Parent = headerPanel,
-                Bounds = new Rectangle(4, 4, headerPanel.Width - 8, 18),
-                TooltipText = "Search the scene tree.\n\nYou can prefix your search with different search operators:\ns: -> Actor with script of type\na: -> Actor type\nc: -> Control type",
+                Bounds = new Rectangle(36, 5, headerPanel.Width - 72, controlHeight),
+                TooltipText = "Search the scene tree.\n\nt: or a: Actor type\ns: Script type\nc: Control type",
             };
             _searchBox.TextChanged += OnSearchBoxTextChanged;
             ScriptsBuilder.ScriptsReloadEnd += OnSearchBoxTextChanged;
+            _viewButton = new Button
+            {
+                Parent = headerPanel,
+                AnchorPreset = AnchorPresets.MiddleRight,
+                Bounds = new Rectangle(headerPanel.Width - 32, 5, 26, controlHeight),
+                Text = "•••",
+                TooltipText = "Scene view options",
+            };
+            _viewButton.Clicked += ShowViewMenu;
 
             // Scene tree panel
             _sceneTreePanel = new Panel
@@ -85,9 +107,8 @@ namespace FlaxEditor.Windows
             root.TreeNode.Expand();
             _tree = new Tree(true)
             {
-                Margin = new Margin(0.0f, 0.0f, -16.0f, _sceneTreePanel.ScrollBarsSize), // Hide root node
+                Margin = new Margin(0.0f, 0.0f, 0.0f, _sceneTreePanel.ScrollBarsSize),
                 IsScrollable = true,
-                DrawRootTreeLine = false,
             };
             _tree.AddChild(root.TreeNode);
             _tree.SelectedChanged += Tree_OnSelectedChanged;
@@ -198,10 +219,64 @@ namespace FlaxEditor.Windows
             PerformLayout();
         }
 
+        private void ShowNewMenu()
+        {
+            var menu = new ActorCreationContextMenu(Editor, Spawn);
+            menu.Show(_newButton.Parent, _newButton.BottomLeft);
+        }
+
+        private void ShowViewMenu()
+        {
+            var menu = new ContextMenu();
+            var alternating = menu.AddButton("Alternating rows", () =>
+            {
+                Editor.Options.Options.Interface.AlternatingTreeRows = !Editor.Options.Options.Interface.AlternatingTreeRows;
+                Editor.Options.Apply(Editor.Options.Options);
+            });
+            alternating.Checked = Editor.Options.Options.Interface.AlternatingTreeRows;
+            menu.Show(_viewButton.Parent, _viewButton.BottomLeft);
+        }
+
+        private void Spawn(ActorCreationContextMenu.Entry entry)
+        {
+            Actor actor;
+            switch (entry.Kind)
+            {
+            case ActorCreationContextMenu.EntryKind.Control:
+                var control = entry.ScriptType.CreateInstance() as Control;
+                if (control == null)
+                {
+                    Editor.LogWarning("Failed to create UI control of type " + entry.ScriptType.TypeName);
+                    return;
+                }
+                actor = new UIControl { Control = control };
+                break;
+            case ActorCreationContextMenu.EntryKind.Primitive:
+                actor = new StaticModel
+                {
+                    Model = FlaxEngine.Content.LoadAsync<Model>(StringUtils.CombinePaths(Globals.EngineContentFolder, "Editor/" + entry.AssetPath)),
+                };
+                break;
+            default:
+                actor = entry.ScriptType.CreateInstance() as Actor;
+                break;
+            }
+            if (actor == null)
+                return;
+
+            Spawn(actor, entry.Name);
+        }
+
         private void Spawn(Type type)
         {
-            // Create actor
-            Actor actor = (Actor)FlaxEngine.Object.New(type);
+            Spawn((Actor)FlaxEngine.Object.New(type), type.Name);
+        }
+
+        private void Spawn(Actor actor, string displayName)
+        {
+            if (actor == null)
+                return;
+
             Actor parentActor = null;
             if (Editor.SceneEditing.HasSthSelected && Editor.SceneEditing.Selection[0] is ActorNode actorNode)
             {
@@ -220,7 +295,7 @@ namespace FlaxEditor.Windows
                 actor.Transform = parentActor.Transform;
 
                 // Rename actor to identify it easily
-                actor.Name = Utilities.Utils.IncrementNameNumber(type.Name, x => parentActor.GetChild(x) == null);
+                actor.Name = Utilities.Utils.IncrementNameNumber(displayName, x => parentActor.GetChild(x) == null);
             }
 
             // Spawn it
