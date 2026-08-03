@@ -1,10 +1,13 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using System;
 using System.Collections.Generic;
 using Object = FlaxEngine.Object;
 using FlaxEditor.Content;
 using FlaxEditor.Gizmo;
+using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
+using FlaxEditor.GUI.Input;
 using FlaxEditor.Options;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Scripting;
@@ -28,6 +31,21 @@ namespace FlaxEditor.Viewport
         private readonly ContextMenuButton _showNavigationButton;
         private readonly ContextMenuButton _toggleGameViewButton;
         private readonly ContextMenuButton _showDirectionGizmoButton;
+        private ToolStripButton _overlayGridButton;
+        private ToolStripButton _overlayNavigationButton;
+        private ToolStripButton _overlayGameViewButton;
+        private ToolStripButton _overlayModeButton;
+        private ToolStripButton _overlayTranslateModeButton;
+        private ToolStripButton _overlayRotateModeButton;
+        private ToolStripButton _overlayScaleModeButton;
+        private ToolStripButton _overlayTransformSpaceButton;
+        private ToolStripButton _overlayAbsoluteSnapButton;
+        private ToolStripButton _overlayTranslateSnapButton;
+        private ToolStripButton _overlayRotateSnapButton;
+        private ToolStripButton _overlayScaleSnapButton;
+        private ToolStripButton _overlayTranslateSnapValueButton;
+        private ToolStripButton _overlayRotateSnapValueButton;
+        private ToolStripButton _overlayScaleSnapValueButton;
         private SelectionOutline _customSelectionOutline;
 
         /// <summary>
@@ -160,7 +178,12 @@ namespace FlaxEditor.Viewport
         public bool ShowNavigation
         {
             get => _showNavigationButton.Checked;
-            set => _showNavigationButton.Checked = value;
+            set
+            {
+                _showNavigationButton.Checked = value;
+                if (_overlayNavigationButton != null)
+                    _overlayNavigationButton.Checked = value;
+            }
         }
 
         /// <summary>
@@ -238,12 +261,17 @@ namespace FlaxEditor.Viewport
 
             // Add grid
             Grid = new GridGizmo(this);
-            Grid.EnabledChanged += gizmo => _showGridButton.Icon = gizmo.Enabled ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+            Grid.EnabledChanged += gizmo =>
+            {
+                _showGridButton.Icon = gizmo.Enabled ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                if (_overlayGridButton != null)
+                    _overlayGridButton.Checked = gizmo.Enabled;
+            };
 
             editor.SceneEditing.SelectionChanged += OnSelectionChanged;
 
             // Gizmo widgets
-            AddGizmoViewportWidgets(this, TransformGizmo, true);
+            AddGizmoViewportWidgets(this, TransformGizmo, true, true);
 
             // Show grid widget
             _showGridButton = ViewWidgetShowMenu.AddButton("Grid", () => Grid.Enabled = !Grid.Enabled);
@@ -254,8 +282,8 @@ namespace FlaxEditor.Viewport
             _showNavigationButton = ViewWidgetShowMenu.AddButton("Navigation", inputOptions.ToggleNavMeshVisibility, () => ShowNavigation = !ShowNavigation);
             _showNavigationButton.CloseMenuOnClick = false;
 
-            // Show direction gizmo widget
-            _showDirectionGizmoButton = ViewWidgetShowMenu.AddButton("Direction Gizmo", () => _directionGizmo.Visible = !_directionGizmo.Visible);
+            // Direction gizmo
+            _showDirectionGizmoButton = ViewWidgetButtonMenu.AddButton("Direction Gizmo", () => _directionGizmo.Visible = !_directionGizmo.Visible);
             _showDirectionGizmoButton.AutoCheck = true;
             _showDirectionGizmoButton.CloseMenuOnClick = false;
             
@@ -282,6 +310,10 @@ namespace FlaxEditor.Viewport
                 // Activate transform mode first
                 Gizmos.SetActiveMode<TransformGizmoMode>();
             }
+            Gizmos.ActiveModeChanged += _ => UpdateViewportToolStrip();
+            TransformGizmo.ModeChanged += UpdateViewportToolStrip;
+            TransformGizmo.TransformSpaceChanged += UpdateViewportToolStrip;
+            AddMainViewportToolStripButtons();
 
             // Setup input actions
             InputActions.Add(options => options.LockFocusSelection, LockFocusSelection);
@@ -306,10 +338,185 @@ namespace FlaxEditor.Viewport
             _directionGizmo.LocalY = _directionGizmo.Size.Y * 0.5f + ViewportWidgetsContainer.WidgetsHeight;
         }
 
+        private void AddMainViewportToolStripButtons()
+        {
+            _overlayModeButton = AddViewportToolStripMenuButton(GetGizmoModeLabel(), SpriteHandle.Invalid, CreateGizmoModeMenu(), ToolStripAnchor.Left, "Flax.Scene.Gizmo.Mode");
+            _viewportToolStrip.SetItemPlacement(_overlayModeButton, ToolStripAnchor.Left, 0, "Flax.Scene.Gizmo.Mode");
+            _overlayModeButton.DrawMenuChevron = true;
+            _overlayModeButton.PerformLayout();
+            _overlayModeButton.LinkTooltip("Scene editing mode.");
+
+            var inputOptions = _editor.Options.Options.Input;
+            _overlayTranslateModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Translate32, ToolStripAnchor.Left, "Flax.Scene.Transform.Translate.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate);
+            _overlayTranslateModeButton.LinkTooltip("Translate gizmo mode.", ref inputOptions.TranslateMode);
+            _overlayRotateModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Rotate32, ToolStripAnchor.Left, "Flax.Scene.Transform.Rotate.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate);
+            _overlayRotateModeButton.LinkTooltip("Rotate gizmo mode.", ref inputOptions.RotateMode);
+            _overlayScaleModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Scale32, ToolStripAnchor.Left, "Flax.Scene.Transform.Scale.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale);
+            _overlayScaleModeButton.LinkTooltip("Scale gizmo mode.", ref inputOptions.ScaleMode);
+            _overlayTransformSpaceButton = AddViewportToolStripButton("World", _editor.Icons.Globe32, ToolStripAnchor.Left, "Flax.Scene.Transform.Space.Left", () =>
+            {
+                TransformGizmo.ToggleTransformSpace();
+                _editor.ProjectCache.SetCustomData("TransformSpaceState", TransformGizmo.ActiveTransformSpace.ToString());
+            });
+            _overlayTransformSpaceButton.LinkTooltip("Toggle gizmo transform space.", ref inputOptions.ToggleTransformSpace);
+            _overlayAbsoluteSnapButton = AddViewportToolStripButton("Abs", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.Transform.AbsoluteSnap.Left", () =>
+            {
+                TransformGizmo.AbsoluteSnapEnabled = !TransformGizmo.AbsoluteSnapEnabled;
+                _editor.ProjectCache.SetCustomData("AbsoluteSnapState", TransformGizmo.AbsoluteSnapEnabled);
+            });
+            _overlayAbsoluteSnapButton.LinkTooltip("Toggle absolute world-space snapping.");
+            _overlayTranslateSnapButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Grid32, ToolStripAnchor.Left, "Flax.Scene.Transform.TranslateSnap.Left", () =>
+            {
+                TransformGizmo.TranslationSnapEnable = !TransformGizmo.TranslationSnapEnable;
+                _editor.ProjectCache.SetCustomData("TranslateSnapState", TransformGizmo.TranslationSnapEnable);
+            });
+            _overlayTranslateSnapButton.LinkTooltip("Toggle position snapping.");
+            _overlayTranslateSnapValueButton = AddViewportToolStripMenuButton(GetTranslateSnapLabel(), SpriteHandle.Invalid, CreateTranslateSnapMenu(), ToolStripAnchor.Left, "Flax.Scene.Transform.TranslateSnapValue.Left");
+            _overlayTranslateSnapValueButton.LinkTooltip("Position snapping values.");
+            _overlayRotateSnapButton = AddViewportToolStripButton(string.Empty, _editor.Icons.RotateSnap32, ToolStripAnchor.Left, "Flax.Scene.Transform.RotateSnap.Left", () =>
+            {
+                TransformGizmo.RotationSnapEnabled = !TransformGizmo.RotationSnapEnabled;
+                _editor.ProjectCache.SetCustomData("RotationSnapState", TransformGizmo.RotationSnapEnabled);
+            });
+            _overlayRotateSnapButton.LinkTooltip("Toggle rotation snapping.");
+            _overlayRotateSnapValueButton = AddViewportToolStripMenuButton(GetRotateSnapLabel(), SpriteHandle.Invalid, CreateSnapValueMenu(RotateSnapValues, () => TransformGizmo.RotationSnapValue, value =>
+            {
+                TransformGizmo.RotationSnapValue = value;
+                _editor.ProjectCache.SetCustomData("RotationSnapValue", TransformGizmo.RotationSnapValue);
+            }), ToolStripAnchor.Left, "Flax.Scene.Transform.RotateSnapValue.Left");
+            _overlayRotateSnapValueButton.LinkTooltip("Rotation snapping values.");
+            _overlayScaleSnapButton = AddViewportToolStripButton(string.Empty, _editor.Icons.ScaleSnap32, ToolStripAnchor.Left, "Flax.Scene.Transform.ScaleSnap.Left", () =>
+            {
+                TransformGizmo.ScaleSnapEnabled = !TransformGizmo.ScaleSnapEnabled;
+                _editor.ProjectCache.SetCustomData("ScaleSnapState", TransformGizmo.ScaleSnapEnabled);
+            });
+            _overlayScaleSnapButton.LinkTooltip("Toggle scale snapping.");
+            _overlayScaleSnapValueButton = AddViewportToolStripMenuButton(GetScaleSnapLabel(), SpriteHandle.Invalid, CreateSnapValueMenu(ScaleSnapValues, () => TransformGizmo.ScaleSnapValue, value =>
+            {
+                TransformGizmo.ScaleSnapValue = value;
+                _editor.ProjectCache.SetCustomData("ScaleSnapValue", TransformGizmo.ScaleSnapValue);
+            }), ToolStripAnchor.Left, "Flax.Scene.Transform.ScaleSnapValue.Left");
+            _overlayScaleSnapValueButton.LinkTooltip("Scale snapping values.");
+
+            _overlayGridButton = AddViewportToolStripButton("Grid", Editor.Instance.Icons.Grid32, ToolStripAnchor.Right, "Flax.Scene.Grid", () => Grid.Enabled = !Grid.Enabled);
+            _overlayGridButton.LinkTooltip("Toggle grid.");
+            _overlayNavigationButton = AddViewportToolStripButton("Nav", SpriteHandle.Invalid, ToolStripAnchor.Right, "Flax.Scene.Navigation", () => ShowNavigation = !ShowNavigation);
+            _overlayNavigationButton.LinkTooltip("Toggle navigation mesh.");
+            _overlayGameViewButton = AddViewportToolStripGlyphButton(ToolStripGlyph.Eye, ToolStripAnchor.Right, "Flax.Scene.GameView", ToggleGameView);
+            _overlayGameViewButton.LinkTooltip("Toggle game view preview.");
+            AddViewportToolStripButton("Cam+", Editor.Instance.Icons.CameraFill32, ToolStripAnchor.Right, "Flax.Scene.CreateCamera", CreateCameraAtView).LinkTooltip("Create camera here.");
+            UpdateViewportToolStrip();
+        }
+
+        private ContextMenu CreateGizmoModeMenu()
+        {
+            var menu = new ContextMenu();
+            var objectMode = menu.AddButton("Object Mode", () => Gizmos.SetActiveMode<TransformGizmoMode>());
+            objectMode.Icon = _editor.Icons.Toolbox96;
+            var noGizmoMode = menu.AddButton("No Gizmo", () => Gizmos.SetActiveMode<NoGizmoMode>());
+            noGizmoMode.Icon = _editor.Icons.Cross12;
+            menu.AddSeparator();
+            var sculptTerrainMode = menu.AddButton("Sculpt Terrain", () => Gizmos.SetActiveMode<Tools.Terrain.SculptTerrainGizmoMode>());
+            sculptTerrainMode.Icon = _editor.Icons.Terrain96;
+            var paintTerrainMode = menu.AddButton("Paint Terrain", () => Gizmos.SetActiveMode<Tools.Terrain.PaintTerrainGizmoMode>());
+            paintTerrainMode.Icon = _editor.Icons.Paint96;
+            var editTerrainMode = menu.AddButton("Edit Terrain", () => Gizmos.SetActiveMode<Tools.Terrain.EditTerrainGizmoMode>());
+            editTerrainMode.Icon = _editor.Icons.Terrain96;
+            menu.AddSeparator();
+            var paintFoliageMode = menu.AddButton("Paint Foliage", () => Gizmos.SetActiveMode<Tools.Foliage.PaintFoliageGizmoMode>());
+            paintFoliageMode.Icon = _editor.Icons.Foliage96;
+            var editFoliageMode = menu.AddButton("Edit Foliage", () => Gizmos.SetActiveMode<Tools.Foliage.EditFoliageGizmoMode>());
+            editFoliageMode.Icon = _editor.Icons.Foliage96;
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                objectMode.Checked = Gizmos.ActiveMode is TransformGizmoMode;
+                noGizmoMode.Checked = Gizmos.ActiveMode is NoGizmoMode;
+                sculptTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.SculptTerrainGizmoMode;
+                paintTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.PaintTerrainGizmoMode;
+                editTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.EditTerrainGizmoMode;
+                paintFoliageMode.Checked = Gizmos.ActiveMode is Tools.Foliage.PaintFoliageGizmoMode;
+                editFoliageMode.Checked = Gizmos.ActiveMode is Tools.Foliage.EditFoliageGizmoMode;
+            };
+            return menu;
+        }
+
+        private ContextMenu CreateTranslateSnapMenu()
+        {
+            var menu = CreateSnapValueMenu(TranslateSnapValues, () => TransformGizmo.TranslationSnapValue, value =>
+            {
+                TransformGizmo.TranslationSnapValue = value;
+                _editor.ProjectCache.SetCustomData("TranslateSnapValue", TransformGizmo.TranslationSnapValue);
+            });
+            var buttonBB = menu.AddButton("Bounding Box");
+            buttonBB.LinkTooltip("Snaps the selection based on its bounding volume.");
+            buttonBB.Tag = -1.0f;
+            var buttonCustom = menu.AddButton("Custom");
+            buttonCustom.LinkTooltip("Custom grid size.");
+            const float defaultCustomTranslateSnappingValue = 250.0f;
+            float customTranslateSnappingValue = TransformGizmo.TranslationSnapValue;
+            if (customTranslateSnappingValue < 0.0f)
+                customTranslateSnappingValue = defaultCustomTranslateSnappingValue;
+            foreach (var v in TranslateSnapValues)
+            {
+                if (Mathf.Abs(TransformGizmo.TranslationSnapValue - v) < 0.001f)
+                {
+                    customTranslateSnappingValue = defaultCustomTranslateSnappingValue;
+                    break;
+                }
+            }
+            buttonCustom.Tag = customTranslateSnappingValue;
+            var customValue = new FloatValueBox(customTranslateSnappingValue, Style.Current.FontMedium.MeasureText(buttonCustom.Text).X + 5, 2, 70.0f, 0.001f, float.MaxValue, 0.1f)
+            {
+                Parent = buttonCustom
+            };
+            customValue.ValueChanged += () =>
+            {
+                buttonCustom.Tag = customValue.Value;
+                buttonCustom.Click();
+            };
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                customValue.Value = (float)buttonCustom.Tag;
+            };
+            return menu;
+        }
+
+        private ContextMenu CreateSnapValueMenu(float[] values, Func<float> getter, Action<float> setter)
+        {
+            var menu = new ContextMenu();
+            for (int i = 0; i < values.Length; i++)
+            {
+                var v = values[i];
+                var button = menu.AddButton(v.ToString());
+                button.Tag = v;
+            }
+            menu.ButtonClicked += button =>
+            {
+                setter((float)button.Tag);
+                UpdateViewportToolStrip();
+            };
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                foreach (var e in menu.Items)
+                {
+                    if (e is ContextMenuButton b && b.Tag is float value)
+                        b.Icon = Mathf.Abs(getter() - value) < 0.001f ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                }
+            };
+            return menu;
+        }
+
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
             base.Update(deltaTime);
+            UpdateViewportToolStrip();
 
             var selection = TransformGizmo.SelectedParents;
             var requestUnlockFocus = FlaxEngine.Input.Mouse.GetButtonDown(MouseButton.Right) || FlaxEngine.Input.Mouse.GetButtonDown(MouseButton.Left);
@@ -557,6 +764,86 @@ namespace FlaxEditor.Viewport
             SelectionOutline.ShowSelectionOutline = !_gameViewActive;
 
             _toggleGameViewButton.Icon = _gameViewActive ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+            UpdateViewportToolStrip();
+        }
+
+        /// <inheritdoc />
+        protected override void UpdateViewportToolStrip()
+        {
+            base.UpdateViewportToolStrip();
+            SetViewportToolStripButtonText(_overlayModeButton, GetGizmoModeLabel());
+            if (_overlayTranslateModeButton != null)
+                _overlayTranslateModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Translate;
+            if (_overlayRotateModeButton != null)
+                _overlayRotateModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Rotate;
+            if (_overlayScaleModeButton != null)
+                _overlayScaleModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Scale;
+            if (_overlayTransformSpaceButton != null)
+            {
+                var isWorld = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
+                _overlayTransformSpaceButton.Checked = isWorld;
+                SetViewportToolStripButtonText(_overlayTransformSpaceButton, isWorld ? "World" : "Local");
+            }
+            if (_overlayAbsoluteSnapButton != null)
+            {
+                _overlayAbsoluteSnapButton.Visible = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
+                _overlayAbsoluteSnapButton.Checked = TransformGizmo.AbsoluteSnapEnabled;
+            }
+            if (_overlayTranslateSnapButton != null)
+                _overlayTranslateSnapButton.Checked = TransformGizmo.TranslationSnapEnable;
+            if (_overlayRotateSnapButton != null)
+                _overlayRotateSnapButton.Checked = TransformGizmo.RotationSnapEnabled;
+            if (_overlayScaleSnapButton != null)
+                _overlayScaleSnapButton.Checked = TransformGizmo.ScaleSnapEnabled;
+            SetViewportToolStripButtonText(_overlayTranslateSnapValueButton, GetTranslateSnapLabel());
+            SetViewportToolStripButtonText(_overlayRotateSnapValueButton, GetRotateSnapLabel());
+            SetViewportToolStripButtonText(_overlayScaleSnapValueButton, GetScaleSnapLabel());
+            if (_overlayGridButton != null)
+                _overlayGridButton.Checked = Grid.Enabled;
+            if (_overlayNavigationButton != null)
+                _overlayNavigationButton.Checked = ShowNavigation;
+            if (_overlayGameViewButton != null)
+                _overlayGameViewButton.Checked = _gameViewActive;
+        }
+
+        private static void SetViewportToolStripButtonText(ToolStripButton button, string text)
+        {
+            if (button != null && button.Text != text)
+                button.Text = text;
+        }
+
+        private string GetTranslateSnapLabel()
+        {
+            return TransformGizmo.TranslationSnapValue < 0.0f ? "Bounds" : TransformGizmo.TranslationSnapValue.ToString();
+        }
+
+        private string GetRotateSnapLabel()
+        {
+            return TransformGizmo.RotationSnapValue.ToString();
+        }
+
+        private string GetScaleSnapLabel()
+        {
+            return TransformGizmo.ScaleSnapValue.ToString();
+        }
+
+        private string GetGizmoModeLabel()
+        {
+            if (Gizmos.ActiveMode is TransformGizmoMode)
+                return "Object Mode";
+            if (Gizmos.ActiveMode is NoGizmoMode)
+                return "No Gizmo";
+            if (Gizmos.ActiveMode is Tools.Terrain.SculptTerrainGizmoMode)
+                return "Sculpt Terrain";
+            if (Gizmos.ActiveMode is Tools.Terrain.PaintTerrainGizmoMode)
+                return "Paint Terrain";
+            if (Gizmos.ActiveMode is Tools.Terrain.EditTerrainGizmoMode)
+                return "Edit Terrain";
+            if (Gizmos.ActiveMode is Tools.Foliage.PaintFoliageGizmoMode)
+                return "Paint Foliage";
+            if (Gizmos.ActiveMode is Tools.Foliage.EditFoliageGizmoMode)
+                return "Edit Foliage";
+            return "Mode";
         }
 
         /// <inheritdoc />

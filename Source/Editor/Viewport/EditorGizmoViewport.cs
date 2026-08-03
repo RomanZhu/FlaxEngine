@@ -136,7 +136,7 @@ namespace FlaxEditor.Viewport
             base.OnDestroy();
         }
 
-        internal static void AddGizmoViewportWidgets(EditorViewport viewport, TransformGizmo transformGizmo, bool useProjectCache = false)
+        internal static void AddGizmoViewportWidgets(EditorViewport viewport, TransformGizmo transformGizmo, bool useProjectCache = false, bool hideWidgets = false)
         {
             var editor = Editor.Instance;
             var inputOptions = editor.Options.Options.Input;
@@ -160,6 +160,12 @@ namespace FlaxEditor.Viewport
                     transformGizmo.ScaleSnapValue = cachedFloat;
                 if (editor.ProjectCache.TryGetCustomData("TransformSpaceState", out string cachedText) && Enum.TryParse(cachedText, out TransformGizmoBase.TransformSpace space))
                     transformGizmo.ActiveTransformSpace = space;
+            }
+
+            if (hideWidgets)
+            {
+                AddGizmoInputActions(viewport, transformGizmo, useProjectCache);
+                return;
             }
 
             // Transform space widget
@@ -410,7 +416,13 @@ namespace FlaxEditor.Viewport
                 gizmoModeScale.Checked = mode == TransformGizmoBase.Mode.Scale;
             };
 
-            // Setup input actions
+            AddGizmoInputActions(viewport, transformGizmo, useProjectCache, () => transformSpaceToggle.Checked = !transformSpaceToggle.Checked, () => absoluteSnappingWidget.Visible = transformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World);
+        }
+
+        private static void AddGizmoInputActions(EditorViewport viewport, TransformGizmo transformGizmo, bool useProjectCache, Action onTransformSpaceToggled = null, Action onTransformSpaceVisibilityUpdated = null)
+        {
+            var editor = Editor.Instance;
+
             viewport.InputActions.Add(options => options.TranslateMode, () =>
             {
                 viewport.GetInput(out var input);
@@ -444,7 +456,8 @@ namespace FlaxEditor.Viewport
                 transformGizmo.ToggleTransformSpace();
                 if (useProjectCache)
                     editor.ProjectCache.SetCustomData("TransformSpaceState", transformGizmo.ActiveTransformSpace.ToString());
-                transformSpaceToggle.Checked = !transformSpaceToggle.Checked;
+                onTransformSpaceToggled?.Invoke();
+                onTransformSpaceVisibilityUpdated?.Invoke();
             });
         }
 

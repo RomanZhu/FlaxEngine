@@ -3,6 +3,7 @@
 using System;
 using System.Linq;
 using FlaxEditor.Content.Settings;
+using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Docking;
 using FlaxEditor.GUI.Input;
@@ -178,11 +179,19 @@ namespace FlaxEditor.Viewport
         protected ViewportWidgetButton _cameraButton;
 
         /// <summary>
+        /// The editable top overlay toolstrip.
+        /// </summary>
+        protected ToolStrip _viewportToolStrip;
+
+        /// <summary>
         /// The orthographic mode widget button.
         /// </summary>
         protected ViewportWidgetButton _orthographicModeButton;
 
         private readonly Editor _editor;
+        private static int _fullscreenRenderingDisableRequests;
+        private static Control _fullscreenRenderingTarget;
+        private static bool _fullscreenRenderingTemporarilyEnabled;
 
         private float _mouseSensitivity;
         private float _movementSpeed;
@@ -240,9 +249,23 @@ namespace FlaxEditor.Viewport
         private float _panningSpeed;
         private bool _relativePanning;
         private bool _invertPanning;
+        private ContextMenu _cameraWidgetMenu;
+        private ContextMenu _viewLayersMenu;
+        private ContextMenu _viewFlagsMenu;
+        private ContextMenu _debugViewMenu;
+        private ToolStripButton _overlayCameraButton;
+        private ToolStripButton _overlayFpsButton;
+        private ToolStripButton _overlayOrthographicButton;
+        private Button _fullscreenRenderingTemporaryButton;
+        private Button _fullscreenRenderingPermanentButton;
 
         private int _speedStep;
         private int _maxSpeedSteps;
+
+        /// <summary>
+        /// The viewport overlay toolstrip height.
+        /// </summary>
+        protected const float ViewportToolStripHeight = 22.0f;
 
         /// <summary>
         /// Speed of the mouse.
@@ -552,6 +575,30 @@ namespace FlaxEditor.Viewport
         public InputActionsContainer InputActions = new InputActionsContainer();
 
         /// <summary>
+        /// Updates the editor viewport rendering suppression used by fullscreen viewports.
+        /// </summary>
+        /// <param name="fullscreenTarget">The fullscreen viewport, if any.</param>
+        /// <param name="enabled">True if fullscreen viewport rendering suppression is active.</param>
+        internal static void SetFullscreenRenderingSuppression(Control fullscreenTarget, bool enabled)
+        {
+            if (enabled)
+            {
+                _fullscreenRenderingDisableRequests++;
+                _fullscreenRenderingTarget = fullscreenTarget;
+                _fullscreenRenderingTemporarilyEnabled = false;
+            }
+            else
+            {
+                _fullscreenRenderingDisableRequests = Mathf.Max(0, _fullscreenRenderingDisableRequests - 1);
+                if (_fullscreenRenderingDisableRequests == 0)
+                {
+                    _fullscreenRenderingTarget = null;
+                    _fullscreenRenderingTemporarilyEnabled = false;
+                }
+            }
+        }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="EditorViewport"/> class.
         /// </summary>
         /// <param name="task">The task.</param>
@@ -578,6 +625,21 @@ namespace FlaxEditor.Viewport
                 _editor.Options.OptionsChanged += OnEditorOptionsChanged;
                 SetupViewportOptions();
             }
+
+            _fullscreenRenderingTemporaryButton = new Button
+            {
+                Parent = this,
+                Text = "Enable Temporarily",
+                Visible = false,
+            };
+            _fullscreenRenderingTemporaryButton.Clicked += EnableFullscreenRenderingTemporarily;
+            _fullscreenRenderingPermanentButton = new Button
+            {
+                Parent = this,
+                Text = "Enable Permanently",
+                Visible = false,
+            };
+            _fullscreenRenderingPermanentButton.Clicked += EnableFullscreenRenderingPermanently;
 
             // Initialize camera values from cache
             if (_editor.ProjectCache.TryGetCustomData("CameraMovementSpeedValue", out float cachedFloat))
@@ -614,29 +676,9 @@ namespace FlaxEditor.Viewport
                 var largestText = "Relative Panning";
                 var textSize = Style.Current.FontMedium.MeasureText(largestText);
                 var xLocationForExtras = textSize.X + 5;
-                var cameraSpeedTextWidth = Style.Current.FontMedium.MeasureText("0.00").X;
-
-                // Camera Settings Widget
-                _cameraWidget = new ViewportWidgetsContainer(ViewportWidgetLocation.UpperRight);
-
                 // Camera Settings Menu
                 var cameraCM = new ContextMenu();
-                _cameraButton = new ViewportWidgetButton("", _editor.Icons.Camera64, cameraCM)
-                {
-                    Tag = this,
-                    TooltipText = "Camera Settings.",
-                    Parent = _cameraWidget
-                };
-                _cameraWidget.Parent = this;
-
-                // Orthographic/Perspective Mode Widget
-                _orthographicModeButton = new OrthoCamToggleViewportWidgetButton(cameraSpeedTextWidth)
-                {
-                    Checked = !_isOrtho,
-                    TooltipText = "Toggle Orthographic/Perspective Mode.",
-                    Parent = _cameraWidget
-                };
-                _orthographicModeButton.Toggled += OnOrthographicModeToggled;
+                _cameraWidgetMenu = cameraCM;
 
                 // Camera Speed
                 var camSpeedButton = cameraCM.AddButton("Camera Speed");
@@ -868,18 +910,11 @@ namespace FlaxEditor.Viewport
                 textSize = Style.Current.FontMedium.MeasureText(largestText);
                 xLocationForExtras = textSize.X + 5;
 
-                var viewMode = new ViewportWidgetsContainer(ViewportWidgetLocation.UpperLeft);
                 ViewWidgetButtonMenu = new ContextMenu();
-                var viewModeButton = new ViewportWidgetButton("View", SpriteHandle.Invalid, ViewWidgetButtonMenu)
-                {
-                    TooltipText = "View properties.",
-                    Parent = viewMode
-                };
-                viewMode.Parent = this;
 
                 // Show
                 {
-                    ViewWidgetShowMenu = ViewWidgetButtonMenu.AddChildMenu("Show").ContextMenu;
+                    ViewWidgetShowMenu = new ContextMenu();
 
                     // Show FPS
                     {
@@ -892,6 +927,7 @@ namespace FlaxEditor.Viewport
                 // View Layers
                 {
                     var viewLayers = ViewWidgetButtonMenu.AddChildMenu("View Layers").ContextMenu;
+                    _viewLayersMenu = viewLayers;
                     viewLayers.AddButton("Copy layers", () => Clipboard.Text = JsonSerializer.Serialize(Task.View.RenderLayersMask));
                     viewLayers.AddButton("Paste layers", () =>
                     {
@@ -935,6 +971,7 @@ namespace FlaxEditor.Viewport
                 // View Flags
                 {
                     var viewFlags = ViewWidgetButtonMenu.AddChildMenu("View Flags").ContextMenu;
+                    _viewFlagsMenu = viewFlags;
                     viewFlags.AddButton("Copy flags", () => Clipboard.Text = JsonSerializer.Serialize(Task.ViewFlags));
                     viewFlags.AddButton("Paste flags", () =>
                     {
@@ -973,6 +1010,7 @@ namespace FlaxEditor.Viewport
                 // Debug View
                 {
                     var debugView = ViewWidgetButtonMenu.AddChildMenu("Debug View").ContextMenu;
+                    _debugViewMenu = debugView;
                     debugView.AddButton("Copy view", () => Clipboard.Text = JsonSerializer.Serialize(Task.ViewMode));
                     debugView.AddButton("Paste view", () =>
                     {
@@ -1058,6 +1096,8 @@ namespace FlaxEditor.Viewport
                     ViewWidgetButtonMenu.VisibleChanged += control => iconsValue.Value = ViewportIconsRenderer.Scale;
                 }
 
+                InitViewportToolStrip();
+
                 #endregion View mode widget
             }
 
@@ -1123,6 +1163,316 @@ namespace FlaxEditor.Viewport
 
             // Link for task event
             task.Begin += OnRenderBegin;
+        }
+
+        private void InitViewportToolStrip()
+        {
+            var interfaceOptions = _editor.Options.Options.Interface;
+            _viewportToolStrip = new ToolStrip(ViewportToolStripHeight)
+            {
+                Parent = this,
+                ItemsMargin = new Margin(2, 2, 1, 1),
+                UseMenuSelection = true,
+                UseItemContextMenu = true,
+                UseOverlayStyle = true,
+                BackgroundColor = Color.Transparent,
+            };
+            _viewportToolStrip.ApplyLayout(interfaceOptions.SceneViewToolStripLayout);
+            _viewportToolStrip.LayoutChanged += () =>
+            {
+                _editor.Options.Options.Interface.SceneViewToolStripLayout = _viewportToolStrip.CaptureLayout();
+                _editor.Options.SaveOptions();
+            };
+
+            AddViewportToolStripMenuButton("View", SpriteHandle.Invalid, ViewWidgetButtonMenu, ToolStripAnchor.Left, "Flax.Scene.View").LinkTooltip("View options.");
+            var debugButton = AddViewportToolStripMenuButton("Debug", SpriteHandle.Invalid, _debugViewMenu, ToolStripAnchor.Left, "Flax.Scene.Debug.Optional");
+            debugButton.LinkTooltip("Debug view.");
+            if (!_viewportToolStrip.HasSavedState("Flax.Scene.Debug.Optional"))
+                _viewportToolStrip.SetItemVisible(debugButton, false, false);
+            var flagsButton = AddViewportToolStripMenuButton("Flags", SpriteHandle.Invalid, _viewFlagsMenu, ToolStripAnchor.Left, "Flax.Scene.Flags.Optional");
+            flagsButton.LinkTooltip("View flags.");
+            if (!_viewportToolStrip.HasSavedState("Flax.Scene.Flags.Optional"))
+                _viewportToolStrip.SetItemVisible(flagsButton, false, false);
+            var layersButton = AddViewportToolStripMenuButton("Layers", SpriteHandle.Invalid, _viewLayersMenu, ToolStripAnchor.Left, "Flax.Scene.Layers.Optional");
+            layersButton.LinkTooltip("View layer visibility.");
+            if (!_viewportToolStrip.HasSavedState("Flax.Scene.Layers.Optional"))
+                _viewportToolStrip.SetItemVisible(layersButton, false, false);
+            _overlayCameraButton = AddViewportToolStripMenuButton("Camera", _editor.Icons.CameraFill32, _cameraWidgetMenu, ToolStripAnchor.Center, "Flax.Scene.Camera");
+            _overlayCameraButton.LinkTooltip("Camera settings.");
+            _overlayFpsButton = AddViewportToolStripButton("FPS", SpriteHandle.Invalid, ToolStripAnchor.Right, "Flax.Scene.Fps", () => ShowFpsCounter = !ShowFpsCounter);
+            _overlayFpsButton.LinkTooltip("Toggle FPS counter.");
+            _overlayOrthographicButton = AddViewportToolStripButton("Persp", SpriteHandle.Invalid, ToolStripAnchor.Right, "Flax.Scene.Projection", () => OnOrthographicModeToggled(null));
+            _overlayOrthographicButton.LinkTooltip("Toggle perspective or orthographic projection.");
+            AddViewportToolStripButton("Shot", _editor.Icons.CameraFill32, ToolStripAnchor.Right, "Flax.Scene.Screenshot", () => TakeScreenshot()).LinkTooltip("Take viewport screenshot.");
+
+            AddViewportToolStripVisibilityItem(ViewWidgetButtonMenu, "Scene View Toolstrip");
+            UpdateBaseViewportToolStrip();
+        }
+
+        /// <summary>
+        /// Adds a button to the viewport overlay toolstrip.
+        /// </summary>
+        protected ToolStripButton AddViewportToolStripButton(string text, SpriteHandle icon, ToolStripAnchor anchor, string id, Action onClick = null)
+        {
+            if (_viewportToolStrip == null)
+                return null;
+            var button = new ToolStripButton(_viewportToolStrip.ItemsHeight, ref icon)
+            {
+                Text = text,
+                Parent = _viewportToolStrip,
+                UseBlueCheckedStyle = true,
+                ContentMargin = 4,
+                MaxIconSize = 14.0f,
+            };
+            _viewportToolStrip.SetItemPlacement(button, anchor, -1, id);
+            button.CustomizationLabel = GetViewportToolStripItemLabel(text, id);
+            button.PerformLayout();
+            if (onClick != null)
+                button.Clicked += onClick;
+            return button;
+        }
+
+        /// <summary>
+        /// Adds a glyph button to the viewport overlay toolstrip.
+        /// </summary>
+        protected ToolStripButton AddViewportToolStripGlyphButton(ToolStripGlyph glyph, ToolStripAnchor anchor, string id, Action onClick = null)
+        {
+            if (_viewportToolStrip == null)
+                return null;
+            var button = _viewportToolStrip.AddGlyphButton(glyph, anchor, id, onClick);
+            button.UseBlueCheckedStyle = true;
+            button.ContentMargin = 4;
+            button.MaxIconSize = 14.0f;
+            button.CustomizationLabel = GetViewportToolStripItemLabel(string.Empty, id);
+            button.PerformLayout();
+            return button;
+        }
+
+        /// <summary>
+        /// Adds a menu button to the viewport overlay toolstrip.
+        /// </summary>
+        protected ToolStripButton AddViewportToolStripMenuButton(string text, SpriteHandle icon, ContextMenu menu, ToolStripAnchor anchor, string id)
+        {
+            var button = AddViewportToolStripButton(text, icon, anchor, id);
+            if (button == null)
+                return null;
+            if (!_viewportToolStrip.UseOverlayStyle || icon.IsValid)
+            {
+                button.DrawAsTextLabel = false;
+                button.DrawTextShadow = false;
+            }
+            else
+            {
+                button.DrawAsTextLabel = true;
+                button.DrawTextShadow = true;
+                button.UseBlueCheckedStyle = false;
+            }
+            button.ContextMenu = menu;
+            button.Clicked += () => ShowToolStripMenu(button, menu);
+            return button;
+        }
+
+        private static string GetViewportToolStripItemLabel(string text, string id)
+        {
+            if (!string.IsNullOrEmpty(text))
+                return text;
+            int lastDot = id.LastIndexOf('.');
+            return lastDot != -1 && lastDot + 1 < id.Length ? id.Substring(lastDot + 1) : id;
+        }
+
+        private static void ShowToolStripMenu(ToolStripButton button, ContextMenu menu)
+        {
+            if (button?.Parent is ToolStrip toolStrip && toolStrip.UseMenuSelection)
+                toolStrip.SelectedMenuButton = button;
+            else
+                menu?.Show(button, new Float2(0, button.Height));
+        }
+
+        private ContextMenu CreateViewportToolStripSettingsMenu()
+        {
+            var menu = new ContextMenu
+            {
+                MinimumWidth = 220,
+            };
+            AddViewportToolStripVisibilityItem(menu, "Scene View Toolstrip");
+            return menu;
+        }
+
+        private void AddViewportToolStripVisibilityItem(ContextMenu menu, string text)
+        {
+            var button = menu.AddButton(text);
+            button.CloseMenuOnClick = false;
+            var checkbox = new CheckBox(170, 2, _editor.Options.Options.Interface.ShowSceneViewToolStrip)
+            {
+                Parent = button
+            };
+            checkbox.StateChanged += x => SetViewportToolStripVisible(x.Checked);
+            menu.VisibleChanged += control => checkbox.Checked = _editor.Options.Options.Interface.ShowSceneViewToolStrip;
+        }
+
+        private void SetViewportToolStripVisible(bool visible)
+        {
+            var interfaceOptions = _editor.Options.Options.Interface;
+            if (interfaceOptions.ShowSceneViewToolStrip == visible)
+                return;
+            interfaceOptions.ShowSceneViewToolStrip = visible;
+            _editor.Options.SaveOptions();
+            UpdateViewportToolStrip();
+            PerformLayout();
+        }
+
+        /// <summary>
+        /// Updates overlay toolstrip state.
+        /// </summary>
+        private void UpdateBaseViewportToolStrip()
+        {
+            if (_viewportToolStrip == null)
+                return;
+            var visible = _editor.Options.Options.Interface.ShowSceneViewToolStrip;
+            _viewportToolStrip.Visible = visible;
+            _viewportToolStrip.Enabled = visible;
+            if (_overlayFpsButton != null && _fpsCounter != null)
+                _overlayFpsButton.Checked = ShowFpsCounter;
+            if (_overlayOrthographicButton != null)
+            {
+                _overlayOrthographicButton.Checked = _isOrtho;
+                if (_overlayOrthographicButton.Text != (_isOrtho ? "Ortho" : "Persp"))
+                    _overlayOrthographicButton.Text = _isOrtho ? "Ortho" : "Persp";
+            }
+        }
+
+        /// <summary>
+        /// Sets visibility for viewport camera controls.
+        /// </summary>
+        /// <param name="visible">True if the controls should be visible.</param>
+        protected void SetViewportCameraControlsVisible(bool visible)
+        {
+            if (_cameraWidget != null)
+                _cameraWidget.Visible = visible;
+            if (_cameraButton != null)
+                _cameraButton.Visible = visible;
+            if (_orthographicModeButton != null)
+                _orthographicModeButton.Visible = visible;
+            if (_overlayCameraButton != null)
+            {
+                _overlayCameraButton.Visible = visible;
+                _overlayCameraButton.Enabled = visible;
+            }
+            if (_overlayOrthographicButton != null)
+            {
+                _overlayOrthographicButton.Visible = visible;
+                _overlayOrthographicButton.Enabled = visible;
+            }
+            _viewportToolStrip?.PerformLayout();
+        }
+
+        /// <summary>
+        /// Updates overlay toolstrip state.
+        /// </summary>
+        protected virtual void UpdateViewportToolStrip()
+        {
+            UpdateBaseViewportToolStrip();
+        }
+
+        private bool IsRenderingDisabledByFullscreen()
+        {
+            return _fullscreenRenderingDisableRequests > 0 &&
+                   !_fullscreenRenderingTemporarilyEnabled &&
+                   _editor.Options.Options.Interface.DisableEditorRenderingInFullscreen &&
+                   !ReferenceEquals(_fullscreenRenderingTarget, this);
+        }
+
+        private void EnableFullscreenRenderingTemporarily()
+        {
+            _fullscreenRenderingTemporarilyEnabled = true;
+            _task.Enabled = true;
+            SyncBackbufferSize();
+            UpdateFullscreenRenderingOverlay();
+        }
+
+        private void EnableFullscreenRenderingPermanently()
+        {
+            _editor.Options.Options.Interface.DisableEditorRenderingInFullscreen = false;
+            _editor.Options.SaveOptions();
+            _task.Enabled = true;
+            SyncBackbufferSize();
+            UpdateFullscreenRenderingOverlay();
+        }
+
+        private void UpdateFullscreenRenderingOverlay()
+        {
+            var visible = IsRenderingDisabledByFullscreen();
+            if (_fullscreenRenderingTemporaryButton != null)
+            {
+                _fullscreenRenderingTemporaryButton.Visible = visible;
+                _fullscreenRenderingTemporaryButton.Enabled = visible;
+            }
+            if (_fullscreenRenderingPermanentButton != null)
+            {
+                _fullscreenRenderingPermanentButton.Visible = visible;
+                _fullscreenRenderingPermanentButton.Enabled = visible;
+            }
+            if (visible)
+                LayoutFullscreenRenderingOverlay();
+        }
+
+        private void LayoutFullscreenRenderingOverlay()
+        {
+            if (_fullscreenRenderingTemporaryButton == null || _fullscreenRenderingPermanentButton == null)
+                return;
+
+            const float buttonHeight = 22.0f;
+            const float buttonSpacing = 6.0f;
+            const float temporaryButtonWidth = 128.0f;
+            const float permanentButtonWidth = 132.0f;
+            var totalWidth = temporaryButtonWidth + buttonSpacing + permanentButtonWidth;
+            var x = (Width - totalWidth) * 0.5f;
+            var y = Height * 0.5f + 28.0f;
+            y = Mathf.Min(y, Height - buttonHeight - 8.0f);
+            y = Mathf.Max(8.0f, y);
+
+            _fullscreenRenderingTemporaryButton.Bounds = new Rectangle(x, y, temporaryButtonWidth, buttonHeight);
+            _fullscreenRenderingPermanentButton.Bounds = new Rectangle(x + temporaryButtonWidth + buttonSpacing, y, permanentButtonWidth, buttonHeight);
+        }
+
+        private void DrawFullscreenRenderingOverlay()
+        {
+            var style = Style.Current;
+            var bounds = new Rectangle(Float2.Zero, Size);
+            Render2D.FillRectangle(bounds, new Color(0.0f, 0.0f, 0.0f, 0.62f));
+
+            var messageRect = new Rectangle(0.0f, Height * 0.5f - 44.0f, Width, 44.0f);
+            Render2D.DrawText(
+                style.FontMedium,
+                "Editor viewport rendering has been disabled\nto improve fullscreen performance",
+                messageRect,
+                style.ForegroundGrey,
+                TextAlignment.Center,
+                TextAlignment.Center);
+
+            var noteRect = new Rectangle(0.0f, Height * 0.5f + 56.0f, Width, 18.0f);
+            Render2D.DrawText(
+                style.FontSmall,
+                "* This can be changed later in the preferences",
+                noteRect,
+                style.ForegroundDisabled,
+                TextAlignment.Center,
+                TextAlignment.Center);
+        }
+
+        /// <inheritdoc />
+        protected override bool CanSkipRendering()
+        {
+            return IsRenderingDisabledByFullscreen() || base.CanSkipRendering();
+        }
+
+        /// <inheritdoc />
+        public override void DrawSelf()
+        {
+            base.DrawSelf();
+            UpdateFullscreenRenderingOverlay();
+            if (IsRenderingDisabledByFullscreen())
+                DrawFullscreenRenderingOverlay();
         }
 
         /// <summary>
@@ -1234,6 +1584,7 @@ namespace FlaxEditor.Viewport
             }
 
             _editor.ProjectCache.SetCustomData("CameraOrthographicState", _isOrtho);
+            UpdateViewportToolStrip();
         }
 
         private void OnOrthographicSizeChanged(FloatValueBox control)
@@ -1343,6 +1694,7 @@ namespace FlaxEditor.Viewport
             ViewportIconsRenderer.MaxSizeDistance = options.Viewport.MaxSizeDistance;
 
             OnCameraMovementProgressChanged();
+            UpdateBaseViewportToolStrip();
         }
 
         private void OnRenderBegin(RenderTask task, GPUContext context)
@@ -1394,6 +1746,7 @@ namespace FlaxEditor.Viewport
                 _fpsCounter.Visible = value;
                 _fpsCounter.Enabled = value;
                 _showFpsButton.Icon = value ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                UpdateViewportToolStrip();
             }
         }
 
@@ -1666,6 +2019,7 @@ namespace FlaxEditor.Viewport
         public override void Update(float deltaTime)
         {
             base.Update(deltaTime);
+            UpdateViewportToolStrip();
 
             if (_disableInputUpdate)
                 return;
@@ -2049,6 +2403,15 @@ namespace FlaxEditor.Viewport
             base.PerformLayoutBeforeChildren();
 
             ViewportWidgetsContainer.ArrangeWidgets(this);
+            if (_viewportToolStrip != null && _viewportToolStrip.Visible)
+            {
+                for (int i = 0; i < ChildrenCount; i++)
+                {
+                    if (Children[i] is ViewportWidgetsContainer widget)
+                        widget.LocalY += _viewportToolStrip.Height + 2.0f;
+                }
+            }
+            LayoutFullscreenRenderingOverlay();
         }
 
         /// <inheritdoc />
@@ -2172,6 +2535,247 @@ namespace FlaxEditor.Viewport
             new ViewModeOptions(ViewMode.GlobalSurfaceAtlas, "Global Surface Atlas", Editor.Instance.Options.Options.Input.GlobalSurfaceAtlas),
             new ViewModeOptions(ViewMode.GlobalIllumination, "Global Illumination", Editor.Instance.Options.Options.Input.GlobalIllumination),
         };
+
+        /// <summary>
+        /// Creates a context menu for selecting render debug view modes.
+        /// </summary>
+        /// <param name="task">The render task to edit.</param>
+        /// <returns>The context menu.</returns>
+        internal static ContextMenu CreateViewModeContextMenu(SceneRenderTask task)
+        {
+            var debugView = new ContextMenu();
+            debugView.AddButton("Copy view", () => Clipboard.Text = JsonSerializer.Serialize(task.ViewMode));
+            debugView.AddButton("Paste view", () =>
+            {
+                try
+                {
+                    task.ViewMode = JsonSerializer.Deserialize<ViewMode>(Clipboard.Text);
+                }
+                catch
+                {
+                }
+            });
+            debugView.AddSeparator();
+            for (int i = 0; i < ViewModeValues.Length; i++)
+            {
+                ref var v = ref ViewModeValues[i];
+                if (v.Options != null)
+                {
+                    var childMenu = debugView.AddChildMenu(v.Name).ContextMenu;
+                    childMenu.ButtonClicked += button => OnViewModeMenuButtonClicked(button, task);
+                    childMenu.VisibleChanged += control => UpdateViewModeContextMenu(control, task);
+                    for (int j = 0; j < v.Options.Length; j++)
+                    {
+                        ref var vv = ref v.Options[j];
+                        var button = childMenu.AddButton(vv.Name);
+                        button.CloseMenuOnClick = false;
+                        button.Tag = vv.Mode;
+                    }
+                }
+                else
+                {
+                    var button = debugView.AddButton(v.Name, v.InputBinding.ToString());
+                    button.CloseMenuOnClick = false;
+                    button.Tag = v.Mode;
+                }
+            }
+            debugView.ButtonClicked += button => OnViewModeMenuButtonClicked(button, task);
+            debugView.VisibleChanged += control => UpdateViewModeContextMenu(control, task);
+            return debugView;
+        }
+
+        /// <summary>
+        /// Creates a context menu for selecting render view flags.
+        /// </summary>
+        /// <param name="task">The render task to edit.</param>
+        /// <param name="defaultFlags">The flags used by the reset action.</param>
+        /// <returns>The context menu.</returns>
+        internal static ContextMenu CreateViewFlagsContextMenu(SceneRenderTask task, ViewFlags defaultFlags)
+        {
+            var viewFlags = new ContextMenu();
+            PopulateViewFlagsContextMenu(viewFlags, task, defaultFlags);
+            return viewFlags;
+        }
+
+        /// <summary>
+        /// Populates a context menu for selecting render view flags.
+        /// </summary>
+        internal static void PopulateViewFlagsContextMenu(ContextMenu viewFlags, SceneRenderTask task, ViewFlags defaultFlags)
+        {
+            viewFlags.AddButton("Copy flags", () => Clipboard.Text = JsonSerializer.Serialize(task.ViewFlags));
+            viewFlags.AddButton("Paste flags", () =>
+            {
+                try
+                {
+                    task.ViewFlags = JsonSerializer.Deserialize<ViewFlags>(Clipboard.Text);
+                }
+                catch
+                {
+                }
+            });
+            viewFlags.AddButton("Reset flags", () => task.ViewFlags = defaultFlags).Icon = Editor.Instance.Icons.Rotate32;
+            viewFlags.AddSeparator();
+            viewFlags.AddButton("Enable all", () => task.ViewFlags = ViewFlags.All).Icon = Editor.Instance.Icons.CheckBoxTick12;
+            viewFlags.AddButton("Disable all", () => task.ViewFlags = ViewFlags.None).Icon = Editor.Instance.Icons.Cross12;
+            viewFlags.AddSeparator();
+            for (int i = 0; i < ViewFlagsValues.Length; i++)
+            {
+                var v = ViewFlagsValues[i];
+                var button = viewFlags.AddButton(v.Name, v.InputBinding.ToString());
+                button.CloseMenuOnClick = false;
+                button.Tag = v.Mode;
+            }
+            viewFlags.ButtonClicked += button =>
+            {
+                if (button.Tag != null)
+                {
+                    var v = (ViewFlags)button.Tag;
+                    task.ViewFlags ^= v;
+                    button.Icon = (task.ViewFlags & v) != 0 ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                }
+            };
+            viewFlags.VisibleChanged += control => UpdateViewFlagsContextMenu(control, task);
+        }
+
+        /// <summary>
+        /// Creates a context menu for render layer visibility.
+        /// </summary>
+        /// <param name="task">The render task to edit.</param>
+        /// <returns>The context menu.</returns>
+        internal static ContextMenu CreateViewLayersContextMenu(SceneRenderTask task)
+        {
+            var viewLayers = new ContextMenu();
+            PopulateViewLayersContextMenu(viewLayers, task);
+            return viewLayers;
+        }
+
+        /// <summary>
+        /// Populates a context menu for render layer visibility.
+        /// </summary>
+        internal static void PopulateViewLayersContextMenu(ContextMenu viewLayers, SceneRenderTask task)
+        {
+            viewLayers.AddButton("Copy layers", () => Clipboard.Text = JsonSerializer.Serialize(task.View.RenderLayersMask));
+            viewLayers.AddButton("Paste layers", () =>
+            {
+                try
+                {
+                    task.ViewLayersMask = JsonSerializer.Deserialize<LayersMask>(Clipboard.Text);
+                }
+                catch
+                {
+                }
+            });
+            viewLayers.AddButton("Reset layers", () => task.ViewLayersMask = LayersMask.Default).Icon = Editor.Instance.Icons.Rotate32;
+            viewLayers.AddSeparator();
+            viewLayers.AddButton("Enable all", () => task.ViewLayersMask = new LayersMask(-1)).Icon = Editor.Instance.Icons.CheckBoxTick12;
+            viewLayers.AddButton("Disable all", () => task.ViewLayersMask = new LayersMask(0)).Icon = Editor.Instance.Icons.Cross12;
+            viewLayers.AddSeparator();
+            var layers = LayersAndTagsSettings.GetCurrentLayers();
+            if (layers != null && layers.Length > 0)
+            {
+                for (int i = 0; i < layers.Length; i++)
+                {
+                    var button = viewLayers.AddButton(layers[i]);
+                    button.CloseMenuOnClick = false;
+                    button.Tag = 1 << i;
+                }
+            }
+            viewLayers.ButtonClicked += button =>
+            {
+                if (button.Tag != null)
+                {
+                    int layerIndex = (int)button.Tag;
+                    LayersMask mask = new LayersMask(layerIndex);
+                    task.ViewLayersMask ^= mask;
+                    button.Icon = (task.ViewLayersMask & mask) != 0 ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                }
+            };
+            viewLayers.VisibleChanged += control => UpdateViewLayersContextMenu(control, task);
+        }
+
+        /// <summary>
+        /// Gets a display name for a debug view mode.
+        /// </summary>
+        internal static string GetViewModeDisplayName(ViewMode mode)
+        {
+            for (int i = 0; i < ViewModeValues.Length; i++)
+            {
+                var name = GetViewModeDisplayName(mode, ViewModeValues[i]);
+                if (name != null)
+                    return name;
+            }
+            return mode.ToString();
+        }
+
+        private static string GetViewModeDisplayName(ViewMode mode, ViewModeOptions option)
+        {
+            if (option.Options != null)
+            {
+                for (int i = 0; i < option.Options.Length; i++)
+                {
+                    var name = GetViewModeDisplayName(mode, option.Options[i]);
+                    if (name != null)
+                        return name;
+                }
+                return null;
+            }
+            return option.Mode == mode ? option.Name : null;
+        }
+
+        private static void OnViewModeMenuButtonClicked(ContextMenuButton button, SceneRenderTask task)
+        {
+            if (button.Tag is ViewMode v)
+            {
+                task.ViewMode = v;
+                UpdateViewModeContextMenu(button.ParentContextMenu, task);
+            }
+        }
+
+        private static void UpdateViewModeContextMenu(Control cm, SceneRenderTask task)
+        {
+            if (cm == null || cm.Visible == false)
+                return;
+
+            var ccm = (ContextMenu)cm;
+            foreach (var e in ccm.Items)
+            {
+                if (e is ContextMenuButton b && b.Tag is ViewMode v)
+                    b.Icon = task.ViewMode == v ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+            }
+        }
+
+        private static void UpdateViewFlagsContextMenu(Control cm, SceneRenderTask task)
+        {
+            if (cm == null || cm.Visible == false)
+                return;
+            var ccm = (ContextMenu)cm;
+            var flags = task.View.Flags;
+            foreach (var e in ccm.Items)
+            {
+                if (e is ContextMenuButton b && b.Tag != null)
+                {
+                    var v = (ViewFlags)b.Tag;
+                    b.Icon = (flags & v) != 0 ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                }
+            }
+        }
+
+        private static void UpdateViewLayersContextMenu(Control cm, SceneRenderTask task)
+        {
+            if (cm == null || cm.Visible == false)
+                return;
+            var ccm = (ContextMenu)cm;
+            var layersMask = task.ViewLayersMask;
+            foreach (var e in ccm.Items)
+            {
+                if (e is ContextMenuButton b && b != null && b.Tag != null)
+                {
+                    int layerIndex = (int)b.Tag;
+                    LayersMask mask = new LayersMask(layerIndex);
+                    b.Icon = (layersMask & mask) != 0 ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                }
+            }
+        }
 
         private void WidgetViewModeShowHideClicked(ContextMenuButton button)
         {
