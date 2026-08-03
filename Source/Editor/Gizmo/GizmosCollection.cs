@@ -102,11 +102,17 @@ namespace FlaxEditor.Gizmo
         {
             Active = null;
             ActiveMode = null;
+            while (Count != 0)
+            {
+                var gizmo = this[Count - 1];
+                if (gizmo.Owner != null)
+                    gizmo.Destroy();
+                else
+                    RemoveAt(Count - 1);
+            }
             foreach (var mode in _modes)
                 mode.Dispose();
             _modes.Clear();
-
-            base.Clear();
         }
 
         /// <summary>

@@ -54,6 +54,8 @@ namespace FlaxEditor.Gizmo
         private Vector3 _rotationDragStartPointWorld;
         private Vector3 _rotationDragCurrentPointWorld;
         private Vector3 _rotationDragMousePointWorld;
+        private bool _isDrawingTranslationDistance;
+        private Vector3 _translationDragStartPosition;
         private Vector3 _scaleDelta;
         private float _screenScale;
 
@@ -93,6 +95,19 @@ namespace FlaxEditor.Gizmo
         {
             InitDrawing();
             ModeChanged += ResetTranslationScale;
+            owner.Undo.UndoDone += OnUndoRedoDone;
+            owner.Undo.RedoDone += OnUndoRedoDone;
+        }
+
+        /// <inheritdoc />
+        public override void Destroy()
+        {
+            if (Owner != null)
+            {
+                Owner.Undo.UndoDone -= OnUndoRedoDone;
+                Owner.Undo.RedoDone -= OnUndoRedoDone;
+            }
+            base.Destroy();
         }
 
         /// <summary>
@@ -125,6 +140,9 @@ namespace FlaxEditor.Gizmo
 
             // Start
             _isTransforming = true;
+            _isDrawingTranslationDistance = _activeMode == Mode.Translate && IsTranslateAxis(_activeAxis);
+            if (_isDrawingTranslationDistance)
+                _translationDragStartPosition = Position - _translationDelta;
             OnStartTransforming();
         }
 
@@ -140,6 +158,7 @@ namespace FlaxEditor.Gizmo
             // End action
             _isTransforming = false;
             _isDuplicating = false;
+            _isDrawingTranslationDistance = false;
             OnEndTransforming();
             _startTransforms.Clear();
         }
@@ -391,7 +410,38 @@ namespace FlaxEditor.Gizmo
 
         private void ResetTranslationScale()
         {
-            _translationScaleSnapDelta.Normalize();
+            ClearTransformInteraction();
+        }
+
+        private static bool IsTranslateAxis(Axis axis)
+        {
+            return axis == Axis.X || axis == Axis.Y || axis == Axis.Z;
+        }
+
+        private void ClearTransformInteraction()
+        {
+            _accMoveDelta = Vector3.Zero;
+            _lastIntersectionPosition = _intersectPosition = Vector3.Zero;
+            _tDelta = Vector3.Zero;
+            _translationDelta = Vector3.Zero;
+            _scaleDelta = Vector3.Zero;
+            _translationScaleSnapDelta = Vector3.Zero;
+            _rotationDelta = Quaternion.Identity;
+            _rotationGizmoDelta = Quaternion.Identity;
+            _rotationSnapDelta = 0.0f;
+            _isDrawingRotationDrag = false;
+            _isDrawingTranslationDistance = false;
+            _isSelected = false;
+            EndVertexSnapping();
+        }
+
+        private void OnUndoRedoDone(IUndoAction action)
+        {
+            _isTransforming = false;
+            _isDuplicating = false;
+            _startTransforms.Clear();
+            _activeAxis = Axis.None;
+            ClearTransformInteraction();
         }
 
         private void StartRotationDrag(Vector3 startPoint)
@@ -703,7 +753,7 @@ namespace FlaxEditor.Gizmo
         }
 
         /// <inheritdoc />
-        public override bool IsControllingMouse => _isTransforming || _isSelected;
+        public override bool IsControllingMouse => (_isTransforming || _isSelected) && Owner.IsLeftMouseButtonDown;
 
         /// <inheritdoc />
         public override void Update(float dt)
@@ -775,7 +825,7 @@ namespace FlaxEditor.Gizmo
 
                         // Prevent from moving objects too far away, like to a different galaxy or sth
                         Vector3 prevMoveDelta = _accMoveDelta;
-                        _accMoveDelta += _translationDelta;
+                        _accMoveDelta += translationDelta;
                         if (_accMoveDelta.Length > Owner.ViewFarPlane * 0.7f)
                             _accMoveDelta = prevMoveDelta;
                     }
@@ -812,11 +862,7 @@ namespace FlaxEditor.Gizmo
                 else
                 {
                     // Clear cache
-                    _accMoveDelta = Vector3.Zero;
-                    _lastIntersectionPosition = _intersectPosition = Vector3.Zero;
-                    _isDrawingRotationDrag = false;
-                    _rotationGizmoDelta = Quaternion.Identity;
-                    _isSelected = false;
+                    ClearTransformInteraction();
                     EndTransforming();
                 }
             }
@@ -827,9 +873,7 @@ namespace FlaxEditor.Gizmo
                 // Deactivate
                 _isActive = false;
                 _activeAxis = Axis.None;
-                _isDrawingRotationDrag = false;
-                _rotationGizmoDelta = Quaternion.Identity;
-                EndVertexSnapping();
+                ClearTransformInteraction();
                 return;
             }
 

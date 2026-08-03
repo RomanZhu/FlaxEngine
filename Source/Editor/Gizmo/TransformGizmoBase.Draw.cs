@@ -1,7 +1,9 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using System.Globalization;
 using FlaxEditor.Options;
 using FlaxEngine;
+using FlaxEngine.GUI;
 
 namespace FlaxEditor.Gizmo
 {
@@ -44,6 +46,8 @@ namespace FlaxEditor.Gizmo
         private const float _rotationTrackballPointRadiusRaw = 0.12f;
         private const float _rotationScreenRingRadiusRaw = _rotationSphereRadiusRaw + 0.20f;
         private const float _rotationScreenRingThicknessRaw = 0.045f;
+        private static readonly Color _translationDistanceColor = new Color(1.0f, 0.8980392f, 0.039215688f, 1.0f);
+        private static readonly Color _translationDistancePillColor = new Color(0.0f, 0.0f, 0.0f, 0.68f);
 
         /// <summary>
         /// Used for example when the selection can't be moved because one actor is static.
@@ -377,6 +381,143 @@ namespace FlaxEditor.Gizmo
             DrawRotationTrackballPoint(ref renderContext, pointMesh, GetRotationDragPointLocal(drawTransform, _rotationDragCurrentPointWorld), ref world, (sbyte)(sortOrder + 1));
         }
 
+        private bool ShouldDrawTranslationDistance()
+        {
+            return _isDrawingTranslationDistance &&
+                   _activeMode == Mode.Translate &&
+                   IsTranslateAxis(_activeAxis) &&
+                   Owner.IsLeftMouseButtonDown &&
+                   SelectionCount != 0 &&
+                   !_isDisabled;
+        }
+
+        private bool TryGetTranslateAxisDirectionLocal(out Vector3 direction)
+        {
+            switch (_activeAxis)
+            {
+            case Axis.X:
+                direction = Vector3.UnitX;
+                return true;
+            case Axis.Y:
+                direction = Vector3.UnitY;
+                return true;
+            case Axis.Z:
+                direction = Vector3.UnitZ;
+                return true;
+            default:
+                direction = Vector3.Zero;
+                return false;
+            }
+        }
+
+        private bool IsTranslationDistanceReversed()
+        {
+            if (!ShouldDrawTranslationDistance() || !TryGetTranslateAxisDirectionLocal(out var axisDirectionLocal))
+                return false;
+
+            Vector3 moveDelta = Position - _translationDragStartPosition;
+            if (moveDelta.LengthSquared < 0.0001f)
+                return false;
+
+            Vector3 worldAxis = _gizmoWorld.LocalToWorldVector(axisDirectionLocal);
+            if (worldAxis.LengthSquared < 0.0001f)
+                return false;
+            worldAxis.Normalize();
+            return Vector3.Dot(moveDelta, worldAxis) < 0.0f;
+        }
+
+        private bool TryProjectTranslationMeasurePoint(Vector3 worldPosition, out Float2 screenPosition)
+        {
+            screenPosition = Float2.Zero;
+            var viewport = Owner.Viewport;
+            if (viewport.Width < Mathf.Epsilon || viewport.Height < Mathf.Epsilon)
+                return false;
+
+            if (!viewport.UseOrthographicProjection)
+            {
+                var toPoint = worldPosition - Owner.ViewPosition;
+                if (Vector3.Dot(toPoint, (Vector3)Owner.ViewDirection) <= 0.0f)
+                    return false;
+            }
+
+            viewport.ProjectPoint(worldPosition, out screenPosition);
+            return true;
+        }
+
+        private static void DrawTranslationDistanceDashLine(Float2 start, Float2 end, Color color)
+        {
+            Float2 line = end - start;
+            float length = line.Length;
+            if (length < 1.0f)
+                return;
+
+            Float2 direction = line / length;
+            const float dashLength = 5.0f;
+            const float gapLength = 4.0f;
+            for (float distance = 0.0f; distance < length; distance += dashLength + gapLength)
+            {
+                Float2 dashStart = start + direction * distance;
+                Float2 dashEnd = start + direction * Mathf.Min(distance + dashLength, length);
+                Render2D.DrawLine(dashStart, dashEnd, color, 1.5f);
+            }
+        }
+
+        private static string FormatTranslationDistanceLabel(float distance)
+        {
+            float rounded = Mathf.Round(distance);
+            if (Mathf.Abs(distance - rounded) < 0.05f)
+                return string.Format(CultureInfo.InvariantCulture, "{0:0}cm", rounded);
+            return string.Format(CultureInfo.InvariantCulture, "{0:0.#}cm", distance);
+        }
+
+        private void DrawTranslationDistance()
+        {
+            if (!ShouldDrawTranslationDistance() || !TryGetTranslateAxisDirectionLocal(out var axisDirectionLocal))
+                return;
+            if (IsTranslationDistanceReversed())
+                axisDirectionLocal = -axisDirectionLocal;
+
+            Vector3 currentPosition = Position;
+            Vector3 arrowTip = _gizmoWorld.LocalToWorld(axisDirectionLocal * AxisLength);
+            if (!TryProjectTranslationMeasurePoint(_translationDragStartPosition, out var startScreen) ||
+                !TryProjectTranslationMeasurePoint(currentPosition, out var currentScreen) ||
+                !TryProjectTranslationMeasurePoint(arrowTip, out var arrowTipScreen))
+                return;
+
+            var features = Render2D.Features;
+            Render2D.Features = features & ~Render2D.RenderingFeatures.VertexSnapping;
+
+            DrawTranslationDistanceDashLine(startScreen, currentScreen, _translationDistanceColor);
+
+            const float pointRadius = 3.0f;
+            var pointRect = new Rectangle(startScreen - new Float2(pointRadius), new Float2(pointRadius * 2.0f));
+            StyleRendering.FillRoundedRectangle(pointRect, _translationDistanceColor, pointRadius);
+
+            Float2 labelDirection = arrowTipScreen - currentScreen;
+            if (labelDirection.LengthSquared < 0.0001f)
+                labelDirection = new Float2(1.0f, 0.0f);
+            else
+                labelDirection /= labelDirection.Length;
+
+            string label = FormatTranslationDistanceLabel((float)Vector3.Distance(_translationDragStartPosition, currentPosition));
+            var font = Style.Current.FontSmall;
+            Float2 textSize = font.MeasureText(label);
+            Float2 pillSize = textSize + new Float2(18.0f, 8.0f);
+            Float2 pillCenter = arrowTipScreen + labelDirection * (pillSize.X * 0.5f + 8.0f);
+            var pillRect = new Rectangle(pillCenter - pillSize * 0.5f, pillSize);
+            StyleRendering.FillRoundedRectangle(pillRect, _translationDistancePillColor, pillRect.Height * 0.5f);
+            Render2D.DrawText(font, label, pillRect, Color.White, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap);
+
+            Render2D.Features = features;
+        }
+
+        /// <inheritdoc />
+        public override void Draw()
+        {
+            base.Draw();
+            DrawTranslationDistance();
+        }
+
         /// <inheritdoc />
         public override void Draw(ref RenderContext renderContext)
         {
@@ -398,6 +539,8 @@ namespace FlaxEditor.Gizmo
             bool isYAxis = _activeAxis == Axis.Y || _activeAxis == Axis.XY || _activeAxis == Axis.YZ;
             bool isZAxis = _activeAxis == Axis.Z || _activeAxis == Axis.YZ || _activeAxis == Axis.ZX;
             bool isCenter = _activeAxis == Axis.Center;
+            bool isShowingTranslationDistance = ShouldDrawTranslationDistance();
+            bool isTranslationDistanceReversed = IsTranslationDistanceReversed();
             renderContext.View.GetWorldMatrix(ref _gizmoWorld, out Matrix world);
 
             const sbyte sortOrder = 100; // Draw after any other editor shapes
@@ -419,45 +562,51 @@ namespace FlaxEditor.Gizmo
                 var transAxisMesh = _modelTranslationAxis.LODs[0].Meshes[0];
 
                 // X axis
-                Matrix.RotationY(-Mathf.PiOverTwo, out m2);
+                Matrix.RotationY(isShowingTranslationDistance && _activeAxis == Axis.X && isTranslationDistanceReversed ? Mathf.PiOverTwo : -Mathf.PiOverTwo, out m2);
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance xAxisMaterialTransform = (isXAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
-                transAxisMesh.Draw(ref renderContext, xAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                if (!isShowingTranslationDistance || _activeAxis == Axis.X)
+                    transAxisMesh.Draw(ref renderContext, xAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
                 // Y axis
-                Matrix.RotationX(Mathf.PiOverTwo, out m2);
+                Matrix.RotationX(isShowingTranslationDistance && _activeAxis == Axis.Y && isTranslationDistanceReversed ? -Mathf.PiOverTwo : Mathf.PiOverTwo, out m2);
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance yAxisMaterialTransform = (isYAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
-                transAxisMesh.Draw(ref renderContext, yAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                if (!isShowingTranslationDistance || _activeAxis == Axis.Y)
+                    transAxisMesh.Draw(ref renderContext, yAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
                 // Z axis
-                Matrix.RotationX(Mathf.Pi, out m2);
+                Matrix.RotationX(isShowingTranslationDistance && _activeAxis == Axis.Z && isTranslationDistanceReversed ? 0.0f : Mathf.Pi, out m2);
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance zAxisMaterialTransform = (isZAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
-                transAxisMesh.Draw(ref renderContext, zAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                if (!isShowingTranslationDistance || _activeAxis == Axis.Z)
+                    transAxisMesh.Draw(ref renderContext, zAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
-                // XY plane
-                m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationX(Mathf.PiOverTwo), new Vector3(boxSize * boxScale, boxSize * boxScale, 0.0f));
-                Matrix.Multiply(ref m2, ref m1, out m3);
-                MaterialInstance xyPlaneMaterialTransform = (_activeAxis == Axis.XY && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
-                cubeMesh.Draw(ref renderContext, xyPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                if (!isShowingTranslationDistance)
+                {
+                    // XY plane
+                    m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationX(Mathf.PiOverTwo), new Vector3(boxSize * boxScale, boxSize * boxScale, 0.0f));
+                    Matrix.Multiply(ref m2, ref m1, out m3);
+                    MaterialInstance xyPlaneMaterialTransform = (_activeAxis == Axis.XY && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
+                    cubeMesh.Draw(ref renderContext, xyPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
-                // ZX plane
-                m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.Identity, new Vector3(boxSize * boxScale, 0.0f, boxSize * boxScale));
-                Matrix.Multiply(ref m2, ref m1, out m3);
-                MaterialInstance zxPlaneMaterialTransform = (_activeAxis == Axis.ZX && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
-                cubeMesh.Draw(ref renderContext, zxPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    // ZX plane
+                    m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.Identity, new Vector3(boxSize * boxScale, 0.0f, boxSize * boxScale));
+                    Matrix.Multiply(ref m2, ref m1, out m3);
+                    MaterialInstance zxPlaneMaterialTransform = (_activeAxis == Axis.ZX && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
+                    cubeMesh.Draw(ref renderContext, zxPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
-                // YZ plane
-                m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationZ(Mathf.PiOverTwo), new Vector3(0.0f, boxSize * boxScale, boxSize * boxScale));
-                Matrix.Multiply(ref m2, ref m1, out m3);
-                MaterialInstance yzPlaneMaterialTransform = (_activeAxis == Axis.YZ && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
-                cubeMesh.Draw(ref renderContext, yzPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    // YZ plane
+                    m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationZ(Mathf.PiOverTwo), new Vector3(0.0f, boxSize * boxScale, boxSize * boxScale));
+                    Matrix.Multiply(ref m2, ref m1, out m3);
+                    MaterialInstance yzPlaneMaterialTransform = (_activeAxis == Axis.YZ && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
+                    cubeMesh.Draw(ref renderContext, yzPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
-                // Center sphere
-                Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
-                Matrix.Multiply(ref m2, ref m1, out m3);
-                sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    // Center sphere
+                    Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
+                    Matrix.Multiply(ref m2, ref m1, out m3);
+                    sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                }
 
                 break;
             }

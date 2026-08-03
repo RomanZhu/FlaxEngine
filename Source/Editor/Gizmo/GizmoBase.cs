@@ -104,6 +104,13 @@ namespace FlaxEditor.Gizmo
         }
 
         /// <summary>
+        /// Draws the screen-space gizmo overlay.
+        /// </summary>
+        public virtual void Draw()
+        {
+        }
+
+        /// <summary>
         /// Activates thi gizmo mode.
         /// </summary>
         public void Activate()
@@ -114,12 +121,13 @@ namespace FlaxEditor.Gizmo
         /// <summary>
         /// Removes the gizmo from the owner.
         /// </summary>
-        public void Destroy()
+        public virtual void Destroy()
         {
             if (_owner != null)
             {
-                _owner.Gizmos.Remove(this);
+                var owner = _owner;
                 _owner = null;
+                owner.Gizmos.Remove(this);
             }
         }
     }

@@ -116,6 +116,10 @@ namespace FlaxEditor.Gizmo
             {
                 if (_activeMode != value)
                 {
+                    _isTransforming = false;
+                    _isDuplicating = false;
+                    _startTransforms.Clear();
+                    ClearTransformInteraction();
                     _activeMode = value;
                     ModeChanged?.Invoke();
                 }
