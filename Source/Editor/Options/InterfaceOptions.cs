@@ -15,6 +15,28 @@ namespace FlaxEditor.Options
     public class InterfaceOptions
     {
         /// <summary>
+        /// Statistics that can be displayed in the editor title bar.
+        /// </summary>
+        [Flags]
+        public enum EditorPerformanceStats
+        {
+            /// <summary>No statistics.</summary>
+            None = 0,
+            /// <summary>Frames per second.</summary>
+            FPS = 1,
+            /// <summary>Process physical memory.</summary>
+            RAM = 2,
+            /// <summary>Estimated graphics memory.</summary>
+            VRAM = 4,
+            /// <summary>CPU frame time.</summary>
+            CPUTime = 8,
+            /// <summary>GPU draw time.</summary>
+            GPUTime = 16,
+            /// <summary>All available statistics.</summary>
+            All = FPS | RAM | VRAM | CPUTime | GPUTime,
+        }
+
+        /// <summary>
         /// The log timestamp modes.
         /// </summary>
         public enum TimestampsFormats
@@ -310,6 +332,21 @@ namespace FlaxEditor.Options
         }
 
         private TextAlignment _tooltipTextAlignment = TextAlignment.Center;
+
+
+        /// <summary>
+        /// Gets or sets whether compact performance statistics are visible beside the window controls.
+        /// </summary>
+        [DefaultValue(true)]
+        [EditorDisplay("Interface", "Title Bar Performance Stats"), EditorOrder(323)]
+        public bool ShowTitleBarPerformanceStats { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets the statistics shown in the editor title bar.
+        /// </summary>
+        [DefaultValue(EditorPerformanceStats.All)]
+        [EditorDisplay("Interface", "Displayed Performance Stats"), EditorOrder(324), VisibleIf(nameof(ShowTitleBarPerformanceStats))]
+        public EditorPerformanceStats TitleBarPerformanceStats { get; set; } = EditorPerformanceStats.All;
 
         /// <summary>
         /// Whether to scroll to the script when a script is added to an actor.

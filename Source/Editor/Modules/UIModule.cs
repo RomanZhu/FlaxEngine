@@ -29,11 +29,182 @@ namespace FlaxEditor.Modules
     /// <seealso cref="FlaxEditor.Modules.EditorModule" />
     public sealed class UIModule : EditorModule
     {
+        internal sealed class TitleBarPerformanceStats : Control
+        {
+            private const float OuterPadding = 6.0f;
+            private const float MetricGap = 4.0f;
+            private const float FpsWidth = 54.0f;
+            private const float RamWidth = 86.0f;
+            private const float VramWidth = 94.0f;
+            private const float CpuWidth = 84.0f;
+            private const float GpuWidth = 84.0f;
+
+            private float _refreshTimer;
+            private int _fps;
+            private string _ram = string.Empty;
+            private string _vram = string.Empty;
+            private string _cpu = string.Empty;
+            private string _gpu = string.Empty;
+            private InterfaceOptions.EditorPerformanceStats _requestedValues;
+            private InterfaceOptions.EditorPerformanceStats _visibleValues;
+            private bool _enabledByOptions;
+
+            public TitleBarPerformanceStats()
+            : base(0, 0, 0, 28)
+            {
+                AutoFocus = false;
+                TooltipText = "Live editor performance. Right-click to configure.";
+            }
+
+            public override void Update(float deltaTime)
+            {
+                base.Update(deltaTime);
+                _refreshTimer -= deltaTime;
+                if (_refreshTimer > 0.0f)
+                    return;
+                _refreshTimer = 0.4f;
+
+                var options = Editor.Instance.Options.Options.Interface;
+                _enabledByOptions = options.ShowTitleBarPerformanceStats && options.TitleBarPerformanceStats != InterfaceOptions.EditorPerformanceStats.None;
+                Visible = _enabledByOptions;
+                if (!_enabledByOptions)
+                    return;
+
+                _requestedValues = options.TitleBarPerformanceStats;
+                var stats = ProfilingTools.Stats;
+                _fps = stats.FPS;
+                _ram = FormatBytes(stats.ProcessMemory.UsedPhysicalMemory);
+                _vram = FormatBytes(stats.MemoryGPU.Used);
+                _cpu = $"{stats.UpdateTimeMs + stats.DrawCPUTimeMs:0.0} ms";
+                _gpu = $"{stats.DrawGPUTimeMs:0.0} ms";
+                Parent?.PerformLayout();
+            }
+
+            public void FitToWidth(float availableWidth)
+            {
+                if (!_enabledByOptions)
+                {
+                    Visible = false;
+                    return;
+                }
+
+                _visibleValues = InterfaceOptions.EditorPerformanceStats.None;
+                float width = OuterPadding * 2.0f;
+                TryInclude(InterfaceOptions.EditorPerformanceStats.FPS, FpsWidth, availableWidth, ref width);
+                TryInclude(InterfaceOptions.EditorPerformanceStats.RAM, RamWidth, availableWidth, ref width);
+                TryInclude(InterfaceOptions.EditorPerformanceStats.VRAM, VramWidth, availableWidth, ref width);
+                TryInclude(InterfaceOptions.EditorPerformanceStats.CPUTime, CpuWidth, availableWidth, ref width);
+                TryInclude(InterfaceOptions.EditorPerformanceStats.GPUTime, GpuWidth, availableWidth, ref width);
+                Visible = _visibleValues != InterfaceOptions.EditorPerformanceStats.None;
+                Width = Visible ? width : 0.0f;
+            }
+
+            private void TryInclude(InterfaceOptions.EditorPerformanceStats flag, float fieldWidth, float availableWidth, ref float width)
+            {
+                if ((_requestedValues & flag) == 0)
+                    return;
+                var candidate = width + (_visibleValues == InterfaceOptions.EditorPerformanceStats.None ? 0.0f : MetricGap) + fieldWidth;
+                if (candidate > availableWidth)
+                    return;
+                width = candidate;
+                _visibleValues |= flag;
+            }
+
+            private static string FormatBytes(ulong value)
+            {
+                const double mb = 1024.0 * 1024.0;
+                const double gb = mb * 1024.0;
+                return value >= gb ? $"{value / gb:0.0} GB" : $"{value / mb:0} MB";
+            }
+
+            public override void Draw()
+            {
+                var style = Style.Current;
+                float x = OuterPadding;
+                DrawMetric(style, InterfaceOptions.EditorPerformanceStats.FPS, "FPS:", _fps.ToString(), FpsWidth, _fps >= 60 ? style.Statusbar.PlayMode : style.Statusbar.Failed, ref x);
+                DrawMetric(style, InterfaceOptions.EditorPerformanceStats.RAM, "RAM:", _ram, RamWidth, style.Foreground, ref x);
+                DrawMetric(style, InterfaceOptions.EditorPerformanceStats.VRAM, "VRAM:", _vram, VramWidth, style.Foreground, ref x);
+                DrawMetric(style, InterfaceOptions.EditorPerformanceStats.CPUTime, "CPU:", _cpu, CpuWidth, style.Foreground, ref x);
+                DrawMetric(style, InterfaceOptions.EditorPerformanceStats.GPUTime, "GPU:", _gpu, GpuWidth, style.Foreground, ref x);
+            }
+
+            private void DrawMetric(Style style, InterfaceOptions.EditorPerformanceStats flag, string label, string value, float fieldWidth, Color valueColor, ref float x)
+            {
+                if ((_visibleValues & flag) == 0)
+                    return;
+                if (x > OuterPadding)
+                    x += MetricGap;
+
+                var labelWidth = style.FontSmall.MeasureText(label).X + 4.0f;
+                var labelRect = new Rectangle(x, 0.0f, labelWidth, Height);
+                var valueRect = new Rectangle(labelRect.Right, 0.0f, fieldWidth - labelWidth, Height);
+                Render2D.DrawText(style.FontSmall, label, labelRect, style.ForegroundGrey, TextAlignment.Near, TextAlignment.Center, TextWrapping.NoWrap);
+                Render2D.DrawText(style.FontSmall, value, valueRect, valueColor, TextAlignment.Near, TextAlignment.Center, TextWrapping.NoWrap);
+                x += fieldWidth;
+            }
+
+            public override bool OnMouseUp(Float2 location, MouseButton button)
+            {
+                if (button != MouseButton.Right)
+                    return base.OnMouseUp(location, button);
+
+                var menu = new ContextMenu();
+                AddStatToggle(menu, "FPS", InterfaceOptions.EditorPerformanceStats.FPS);
+                AddStatToggle(menu, "RAM", InterfaceOptions.EditorPerformanceStats.RAM);
+                AddStatToggle(menu, "VRAM", InterfaceOptions.EditorPerformanceStats.VRAM);
+                AddStatToggle(menu, "CPU time", InterfaceOptions.EditorPerformanceStats.CPUTime);
+                AddStatToggle(menu, "GPU time", InterfaceOptions.EditorPerformanceStats.GPUTime);
+                menu.AddSeparator();
+                menu.AddButton("Hide performance stats", () =>
+                {
+                    Editor.Instance.Options.Options.Interface.ShowTitleBarPerformanceStats = false;
+                    Editor.Instance.Options.Apply(Editor.Instance.Options.Options);
+                });
+                menu.Show(this, location);
+                return true;
+            }
+
+            private static void AddStatToggle(ContextMenu menu, string label, InterfaceOptions.EditorPerformanceStats flag)
+            {
+                var options = Editor.Instance.Options.Options.Interface;
+                var button = menu.AddButton(label, () =>
+                {
+                    options.TitleBarPerformanceStats ^= flag;
+                    Editor.Instance.Options.Apply(Editor.Instance.Options.Options);
+                });
+                button.Checked = (options.TitleBarPerformanceStats & flag) != 0;
+            }
+        }
+
         private class MainWindowDecorations : WindowDecorations
         {
+            private readonly TitleBarPerformanceStats _performanceStats;
+
             public MainWindowDecorations(RootControl window, bool iconOnly)
             : base(window, iconOnly)
             {
+                if (!iconOnly)
+                {
+                    _performanceStats = new TitleBarPerformanceStats
+                    {
+                        Parent = this,
+                    };
+                }
+            }
+
+            protected override void PerformLayoutAfterChildren()
+            {
+                base.PerformLayoutAfterChildren();
+                if (_performanceStats == null)
+                    return;
+
+                var right = ContentRight - 8.0f;
+                var available = Mathf.Max(0.0f, right - Title.X - 20.0f);
+                _performanceStats.FitToWidth(available);
+                if (!_performanceStats.Visible)
+                    return;
+                _performanceStats.Bounds = new Rectangle(Mathf.Max(Title.X, right - _performanceStats.Width), 0, _performanceStats.Width, Height);
+                Title.Width = Mathf.Max(0.0f, _performanceStats.X - Title.X);
             }
 
             /// <inheritdoc />
