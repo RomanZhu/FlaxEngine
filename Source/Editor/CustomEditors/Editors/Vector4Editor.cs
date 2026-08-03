@@ -67,21 +67,25 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.FloatValue();
+            XElement.ValueBox.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.ValueBox.ValueChanged += OnValueChanged;
             XElement.ValueBox.SlidingEnd += ClearToken;
 
             YElement = grid.FloatValue();
+            YElement.ValueBox.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.ValueBox.ValueChanged += OnValueChanged;
             YElement.ValueBox.SlidingEnd += ClearToken;
 
             ZElement = grid.FloatValue();
+            ZElement.ValueBox.SetPrefix("Z");
             ZElement.SetLimits(limit);
             ZElement.ValueBox.ValueChanged += OnValueChanged;
             ZElement.ValueBox.SlidingEnd += ClearToken;
 
             WElement = grid.FloatValue();
+            WElement.ValueBox.SetPrefix("W");
             WElement.SetLimits(limit);
             WElement.ValueBox.ValueChanged += OnValueChanged;
             WElement.ValueBox.SlidingEnd += ClearToken;
@@ -178,21 +182,25 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.DoubleValue();
+            XElement.ValueBox.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.ValueBox.ValueChanged += OnValueChanged;
             XElement.ValueBox.SlidingEnd += ClearToken;
 
             YElement = grid.DoubleValue();
+            YElement.ValueBox.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.ValueBox.ValueChanged += OnValueChanged;
             YElement.ValueBox.SlidingEnd += ClearToken;
 
             ZElement = grid.DoubleValue();
+            ZElement.ValueBox.SetPrefix("Z");
             ZElement.SetLimits(limit);
             ZElement.ValueBox.ValueChanged += OnValueChanged;
             ZElement.ValueBox.SlidingEnd += ClearToken;
 
             WElement = grid.DoubleValue();
+            WElement.ValueBox.SetPrefix("W");
             WElement.SetLimits(limit);
             WElement.ValueBox.ValueChanged += OnValueChanged;
             WElement.ValueBox.SlidingEnd += ClearToken;
@@ -289,21 +297,25 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.IntegerValue();
+            XElement.IntValue.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.IntValue.ValueChanged += OnValueChanged;
             XElement.IntValue.SlidingEnd += ClearToken;
 
             YElement = grid.IntegerValue();
+            YElement.IntValue.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.IntValue.ValueChanged += OnValueChanged;
             YElement.IntValue.SlidingEnd += ClearToken;
 
             ZElement = grid.IntegerValue();
+            ZElement.IntValue.SetPrefix("Z");
             ZElement.SetLimits(limit);
             ZElement.IntValue.ValueChanged += OnValueChanged;
             ZElement.IntValue.SlidingEnd += ClearToken;
 
             WElement = grid.IntegerValue();
+            WElement.IntValue.SetPrefix("W");
             WElement.SetLimits(limit);
             WElement.IntValue.ValueChanged += OnValueChanged;
             WElement.IntValue.SlidingEnd += ClearToken;

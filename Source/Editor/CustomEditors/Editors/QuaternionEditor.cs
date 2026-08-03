@@ -54,6 +54,7 @@ namespace FlaxEditor.CustomEditors.Editors
             gridControl.SlotsVertically = 1;
 
             XElement = grid.FloatValue();
+            XElement.ValueBox.SetPrefix("X");
             XElement.ValueBox.Category = Utils.ValueCategory.Angle;
             XElement.ValueBox.ValueChanged += OnXValueChanged;
             XElement.ValueBox.SlidingEnd += () =>
@@ -64,6 +65,7 @@ namespace FlaxEditor.CustomEditors.Editors
             _defaultSlidingSpeed = XElement.ValueBox.SlideSpeed;
 
             YElement = grid.FloatValue();
+            YElement.ValueBox.SetPrefix("Y");
             YElement.ValueBox.Category = Utils.ValueCategory.Angle;
             YElement.ValueBox.ValueChanged += OnYValueChanged;
             YElement.ValueBox.SlidingEnd += () =>
@@ -73,6 +75,7 @@ namespace FlaxEditor.CustomEditors.Editors
             };
 
             ZElement = grid.FloatValue();
+            ZElement.ValueBox.SetPrefix("Z");
             ZElement.ValueBox.Category = Utils.ValueCategory.Angle;
             ZElement.ValueBox.ValueChanged += OnZValueChanged;
             ZElement.ValueBox.SlidingEnd += () =>

@@ -101,6 +101,7 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.FloatValue();
+            XElement.ValueBox.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.SetCategory(category);
             XElement.ValueBox.ValueChanged += OnXValueChanged;
@@ -112,6 +113,7 @@ namespace FlaxEditor.CustomEditors.Editors
             _defaultSlidingSpeed = XElement.ValueBox.SlideSpeed;
 
             YElement = grid.FloatValue();
+            YElement.ValueBox.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.SetCategory(category);
             YElement.ValueBox.ValueChanged += OnYValueChanged;
@@ -122,6 +124,7 @@ namespace FlaxEditor.CustomEditors.Editors
             };
 
             ZElement = grid.FloatValue();
+            ZElement.ValueBox.SetPrefix("Z");
             ZElement.SetLimits(limit);
             ZElement.SetCategory(category);
             ZElement.ValueBox.ValueChanged += OnZValueChanged;
@@ -488,6 +491,7 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.DoubleValue();
+            XElement.ValueBox.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.SetCategory(category);
             XElement.ValueBox.ValueChanged += OnXValueChanged;
@@ -499,6 +503,7 @@ namespace FlaxEditor.CustomEditors.Editors
             _defaultSlidingSpeed = XElement.ValueBox.SlideSpeed;
 
             YElement = grid.DoubleValue();
+            YElement.ValueBox.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.SetCategory(category);
             YElement.ValueBox.ValueChanged += OnYValueChanged;
@@ -509,6 +514,7 @@ namespace FlaxEditor.CustomEditors.Editors
             };
 
             ZElement = grid.DoubleValue();
+            ZElement.ValueBox.SetPrefix("Z");
             ZElement.SetLimits(limit);
             ZElement.SetCategory(category);
             ZElement.ValueBox.ValueChanged += OnZValueChanged;
@@ -798,16 +804,19 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.IntegerValue();
+            XElement.IntValue.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.IntValue.ValueChanged += OnValueChanged;
             XElement.IntValue.SlidingEnd += ClearToken;
 
             YElement = grid.IntegerValue();
+            YElement.IntValue.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.IntValue.ValueChanged += OnValueChanged;
             YElement.IntValue.SlidingEnd += ClearToken;
 
             ZElement = grid.IntegerValue();
+            ZElement.IntValue.SetPrefix("Z");
             ZElement.SetLimits(limit);
             ZElement.IntValue.ValueChanged += OnValueChanged;
             ZElement.IntValue.SlidingEnd += ClearToken;

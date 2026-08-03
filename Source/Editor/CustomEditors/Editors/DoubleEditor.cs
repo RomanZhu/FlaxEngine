@@ -3,6 +3,7 @@
 using System;
 using System.Linq;
 using FlaxEditor.CustomEditors.Elements;
+using FlaxEditor.GUI.Input;
 using FlaxEngine;
 
 namespace FlaxEditor.CustomEditors.Editors
@@ -34,6 +35,8 @@ namespace FlaxEditor.CustomEditors.Editors
                 if (valueCategory != Utils.ValueCategory.None)
                 {
                     doubleValue.SetCategory(valueCategory);
+                    if (valueCategory == Utils.ValueCategory.Angle)
+                        doubleValue.ValueBox.SetPrefixIcon(ValueBoxPrefixIcon.AngleAcute);
                     if (LinkedLabel != null)
                     {
                         LinkedLabel.SetupContextMenu += (label, menu, editor) =>

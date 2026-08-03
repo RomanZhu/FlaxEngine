@@ -57,11 +57,13 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.FloatValue();
+            XElement.ValueBox.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.ValueBox.ValueChanged += OnValueChanged;
             XElement.ValueBox.SlidingEnd += ClearToken;
 
             YElement = grid.FloatValue();
+            YElement.ValueBox.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.ValueBox.ValueChanged += OnValueChanged;
             YElement.ValueBox.SlidingEnd += ClearToken;
@@ -146,11 +148,13 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.DoubleValue();
+            XElement.ValueBox.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.ValueBox.ValueChanged += OnValueChanged;
             XElement.ValueBox.SlidingEnd += ClearToken;
 
             YElement = grid.DoubleValue();
+            YElement.ValueBox.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.ValueBox.ValueChanged += OnValueChanged;
             YElement.ValueBox.SlidingEnd += ClearToken;
@@ -235,11 +239,13 @@ namespace FlaxEditor.CustomEditors.Editors
             }
 
             XElement = grid.IntegerValue();
+            XElement.IntValue.SetPrefix("X");
             XElement.SetLimits(limit);
             XElement.IntValue.ValueChanged += OnValueChanged;
             XElement.IntValue.SlidingEnd += ClearToken;
 
             YElement = grid.IntegerValue();
+            YElement.IntValue.SetPrefix("Y");
             YElement.SetLimits(limit);
             YElement.IntValue.ValueChanged += OnValueChanged;
             YElement.IntValue.SlidingEnd += ClearToken;
