@@ -286,7 +286,7 @@ CollisionData::LoadResult CollisionData::load(const SerializedOptions* options, 
             _convexMesh = PhysicsBackend::CreateConvexMesh(dataPtr, dataSize, _options.Box);
             if (!_convexMesh)
             {
-                LOG(Error, "Failed to create convex mesh");
+                LOG(Error, "Failed to create convex mesh for {0}. Collision data may be cooked for another physics backend; recook the asset.", ToString());
                 return LoadResult::Failed;
             }
         }
@@ -295,7 +295,7 @@ CollisionData::LoadResult CollisionData::load(const SerializedOptions* options, 
             _triangleMesh = PhysicsBackend::CreateTriangleMesh(dataPtr, dataSize, _options.Box);
             if (!_triangleMesh)
             {
-                LOG(Error, "Failed to create triangle mesh");
+                LOG(Error, "Failed to create triangle mesh for {0}. Collision data may be cooked for another physics backend; recook the asset.", ToString());
                 return LoadResult::Failed;
             }
         }
