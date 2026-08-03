@@ -263,7 +263,7 @@ namespace FlaxEditor.Windows
         }
 
         /// <summary>
-        /// Gets or sets a value indicating whether the game window is maximized (only in play mode).
+        /// Gets or sets a value indicating whether the game window is maximized.
         /// </summary>
         private bool IsMaximized
         {
@@ -277,13 +277,23 @@ namespace FlaxEditor.Windows
                 {
                     IsFloating = true;
                     var rootWindow = RootWindow;
-                    rootWindow.Maximize();
+                    rootWindow?.Maximize();
                 }
                 else
                 {
                     IsFloating = false;
                 }
             }
+        }
+
+        /// <summary>
+        /// Toggles the game view fullscreen mode.
+        /// </summary>
+        internal void ToggleFullscreen()
+        {
+            if (!_isMaximized)
+                ShowGameWindow();
+            IsMaximized = !_isMaximized;
         }
 
         /// <summary>
@@ -435,7 +445,7 @@ namespace FlaxEditor.Windows
             InputActions.Add(options => options.TakeScreenshot, () => Screenshot.Capture(string.Empty));
             InputActions.Add(options => options.DebuggerUnlockMouse, UnlockMouseInPlay);
             InputActions.Add(options => Editor.StateMachine.IsPlayMode ? options.DebuggerUnlockMouseSecondary : new InputBinding(KeyboardKeys.None), UnlockMouseInPlay);
-            InputActions.Add(options => options.ToggleFullscreen, () => { if (Editor.IsPlayMode) IsMaximized = !IsMaximized; });
+            InputActions.Add(options => options.ToggleFullscreen, ToggleFullscreen);
             InputActions.Add(options => options.Play, Editor.Instance.Simulation.DelegatePlayOrStopPlayInEditor);
             InputActions.Add(options => options.Pause, Editor.Instance.Simulation.RequestResumeOrPause);
             InputActions.Add(options => options.StepFrame, Editor.Instance.Simulation.RequestPlayOneFrame);

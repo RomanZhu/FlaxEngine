@@ -135,9 +135,9 @@ namespace FlaxEditor.Options
         [EditorDisplay("Common"), EditorOrder(230)]
         public InputBinding RotateSelection = new InputBinding(KeyboardKeys.None);
 
-        [DefaultValue(typeof(InputBinding), "F11")]
-        [EditorDisplay("Common"), EditorOrder(240)]
-        public InputBinding ToggleFullscreen = new InputBinding(KeyboardKeys.F11);
+        [DefaultValue(typeof(InputBinding), "F10")]
+        [EditorDisplay("Common", "Toggle Game View Fullscreen"), EditorOrder(240)]
+        public InputBinding ToggleFullscreen = new InputBinding(KeyboardKeys.F10);
 
         [DefaultValue(typeof(InputBinding), "Ctrl+BackQuote")]
         [EditorDisplay("Common"), EditorOrder(250)]
@@ -191,9 +191,13 @@ namespace FlaxEditor.Options
         [EditorDisplay("Scene"), EditorOrder(530)]
         public InputBinding Pause = new InputBinding(KeyboardKeys.F6);
 
-        [DefaultValue(typeof(InputBinding), "F11")]
+        [DefaultValue(typeof(InputBinding), "F7")]
         [EditorDisplay("Scene"), EditorOrder(540)]
-        public InputBinding StepFrame = new InputBinding(KeyboardKeys.F11);
+        public InputBinding StepFrame = new InputBinding(KeyboardKeys.F7);
+
+        [DefaultValue(typeof(InputBinding), "F11")]
+        [EditorDisplay("Scene", "Toggle Scene View Fullscreen"), EditorOrder(545)]
+        public InputBinding ToggleSceneFullscreen = new InputBinding(KeyboardKeys.F11);
 
         [DefaultValue(typeof(InputBinding), "None")]
         [EditorDisplay("Scene", "Cook & Run"), EditorOrder(550)]

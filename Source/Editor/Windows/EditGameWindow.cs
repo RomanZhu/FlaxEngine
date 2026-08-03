@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml;
+using FlaxEditor.GUI.Docking;
+using FlaxEditor.Modules;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEditor.Viewport;
@@ -126,6 +128,9 @@ namespace FlaxEditor.Windows
         private BoundingBox _pilotBounds;
         private Transform _pilotStart;
         private ViewportWidgetButton _pilotWidget;
+        private bool _isFullscreen;
+        private DockPanel _fullscreenRestoreDockTo;
+        private DockState _fullscreenRestoreDockState;
 
         /// <summary>
         /// The viewport control.
@@ -149,10 +154,40 @@ namespace FlaxEditor.Windows
                 NearPlane = 8.0f,
                 FarPlane = 20000.0f
             };
+            InputActions.Add(options => options.ToggleSceneFullscreen, ToggleFullscreen);
             Viewport.Task.ViewFlags = ViewFlags.DefaultEditor;
 
             Editor.SceneEditing.SelectionChanged += OnSelectionChanged;
             Editor.Scene.ActorRemoved += SceneOnActorRemoved;
+        }
+
+        internal void ToggleFullscreen()
+        {
+            if (_isFullscreen)
+            {
+                _isFullscreen = false;
+                RootWindow?.Restore();
+                if (_fullscreenRestoreDockTo != null && _fullscreenRestoreDockTo.IsDisposing)
+                    _fullscreenRestoreDockTo = null;
+                Show(_fullscreenRestoreDockState, _fullscreenRestoreDockTo);
+                return;
+            }
+
+            if (_dockedTo == null)
+            {
+                FocusOrShow();
+                if (_dockedTo == null)
+                    return;
+            }
+
+            _isFullscreen = true;
+            _fullscreenRestoreDockTo = _dockedTo;
+            _fullscreenRestoreDockState = _dockedTo.TryGetDockState(out _);
+            var monitorBounds = Platform.GetMonitorBounds(PointToScreen(Size * 0.5f));
+            var size = DefaultSize;
+            var location = monitorBounds.Location + monitorBounds.Size * 0.5f - size * 0.5f;
+            ShowFloating(location, size, WindowStartPosition.Manual);
+            RootWindow?.Maximize();
         }
 
         /// <inheritdoc />

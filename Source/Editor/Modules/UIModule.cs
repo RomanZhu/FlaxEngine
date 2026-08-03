@@ -213,8 +213,21 @@ namespace FlaxEditor.Modules
                 if (base.OnKeyDown(key))
                     return true;
 
-                // Fallback to the edit window for shortcuts
                 var editor = Editor.Instance;
+                var input = editor.Options.Options.Input;
+                if (input.ToggleFullscreen.Process(this, key))
+                {
+                    editor.Windows.GameWin.ToggleFullscreen();
+                    return true;
+                }
+                if (input.ToggleSceneFullscreen.Process(this, key))
+                {
+                    editor.Windows.EditWin.ToggleFullscreen();
+                    return true;
+                }
+
+
+                // Fallback to the edit window for shortcuts
                 return editor.Windows.EditWin.InputActions.Process(editor, this, key);
             }
 

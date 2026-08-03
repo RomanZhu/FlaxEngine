@@ -280,6 +280,18 @@ namespace FlaxEditor.Windows
                     return true;
             }
 
+            var input = Editor.Options.Options.Input;
+            if (input.ToggleFullscreen.Process(this, key))
+            {
+                Editor.Windows.GameWin.ToggleFullscreen();
+                return true;
+            }
+            if (input.ToggleSceneFullscreen.Process(this, key))
+            {
+                Editor.Windows.EditWin.ToggleFullscreen();
+                return true;
+            }
+
             if (base.OnKeyDown(key))
                 return true;
 
