@@ -19,6 +19,8 @@ namespace FlaxEditor.CustomEditors.Editors
     [CustomEditor(typeof(Tag)), DefaultEditor]
     public sealed class TagEditor : CustomEditor
     {
+        internal const float SelectButtonWidth = 48.0f;
+
         private ClickableLabel _label;
 
         /// <inheritdoc />
@@ -29,15 +31,7 @@ namespace FlaxEditor.CustomEditors.Editors
         {
             _label = layout.ClickableLabel(Tag.ToString()).CustomControl;
             _label.RightClick += ShowPicker;
-            var button = new Button
-            {
-                Size = new Float2(16.0f),
-                Text = "...",
-                TooltipText = "Edit...",
-                Parent = _label,
-            };
-            button.SetAnchorPreset(AnchorPresets.MiddleRight, false, true);
-            button.Clicked += ShowPicker;
+            AddSelectButton(_label, ShowPicker);
         }
 
         /// <inheritdoc />
@@ -80,6 +74,22 @@ namespace FlaxEditor.CustomEditors.Editors
                 SetValue = value => { Tag = value; },
             });
             menu.Show(_label, new Float2(0, _label.Height));
+        }
+
+        internal static Button AddSelectButton(ClickableLabel label, Action clicked)
+        {
+            label.Margin = label.Margin with { Left = SelectButtonWidth + 4.0f };
+
+            var button = new Button
+            {
+                Size = new Float2(SelectButtonWidth, label.Height),
+                Text = "Select",
+                TooltipText = "Select...",
+                Parent = label,
+            };
+            button.SetAnchorPreset(AnchorPresets.MiddleLeft, false, true);
+            button.Clicked += clicked;
+            return button;
         }
 
         internal class PickerData
@@ -627,20 +637,7 @@ namespace FlaxEditor.CustomEditors.Editors
         {
             _label = layout.ClickableLabel(GetText(out _)).CustomControl;
             _label.RightClick += ShowPicker;
-            var buttonText = "...";
-            var button = new Button
-            {
-                Size = new Float2(16.0f),
-                Text = buttonText,
-                TooltipText = "Edit...",
-                Parent = _label,
-            };
-            var textSize = FlaxEngine.GUI.Style.Current.FontMedium.MeasureText(buttonText);
-            if (textSize.Y > button.Width)
-                button.Width = textSize.Y + 2;
-
-            button.SetAnchorPreset(AnchorPresets.MiddleRight, false, true);
-            button.Clicked += ShowPicker;
+            TagEditor.AddSelectButton(_label, ShowPicker);
         }
 
         /// <inheritdoc />

@@ -253,6 +253,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 HeaderHeight = 18;
                 _canReorder = canReorder;
                 EnableDropDownIcon = true;
+                EnableDropDownIconDragOpenClose = true;
                 var icons = FlaxEditor.Editor.Instance.Icons;
                 ArrowImageClosed = new SpriteBrush(icons.ArrowRight12);
                 ArrowImageOpened = new SpriteBrush(icons.ArrowDown12);
@@ -934,8 +935,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 {
                     var style = FlaxEngine.GUI.Style.Current;
                     var area = new Rectangle(Float2.Zero, Size);
-                    Render2D.FillRectangle(area, style.Selection);
-                    Render2D.DrawRectangle(area, style.SelectionBorder);
+                    StyleRendering.DrawRoundedRectangle(area, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
                 }
 
                 base.Draw();

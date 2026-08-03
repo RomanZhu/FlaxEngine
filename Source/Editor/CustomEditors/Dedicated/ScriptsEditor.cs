@@ -176,8 +176,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             if (IsDragOver && _dragHandlers != null && _dragHandlers.HasValidDrag)
             {
                 var area = new Rectangle(Float2.Zero, size);
-                Render2D.FillRectangle(area, style.Selection);
-                Render2D.DrawRectangle(area, style.SelectionBorder);
+                StyleRendering.DrawRoundedRectangle(area, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
             }
 
             base.Draw();
@@ -854,7 +853,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 float totalHeaderButtonsOffset = 0f;
                 group.Panel.TooltipText = Editor.Instance.CodeDocs.GetTooltip(scriptType);
                 if (script.HasPrefabLink)
-                    group.Panel.HeaderTextColor = style.ProgressNormal;
+                    group.Panel.HeaderTextColor = style.BorderSelected;
 
                 // Add toggle button to the group
                 var headerHeight = group.Panel.HeaderHeight;
@@ -866,7 +865,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     Parent = group.Panel,
                     Size = new Float2(headerHeight),
                     Bounds = new Rectangle(headerHeight, 0, headerHeight, headerHeight),
-                    BoxSize = headerHeight - 4.0f,
+                    BoxSize = Mathf.Min(headerHeight - 4.0f, 12.0f),
                     Tag = script,
                 };
                 scriptToggle.StateChanged += OnScriptToggleCheckChanged;
@@ -917,8 +916,8 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 if (isPrefabActor && script.PrefabID == Guid.Empty)
                 {
                     var prefabInstanceButton = group.AddHeaderButton("Script only exists in this prefab instance.", totalHeaderButtonsOffset, Editor.Instance.Icons.Add32);
-                    prefabInstanceButton.Color = style.ProgressNormal;
-                    prefabInstanceButton.MouseOverColor = style.ProgressNormal * 0.9f;
+                    prefabInstanceButton.Color = style.BorderSelected;
+                    prefabInstanceButton.MouseOverColor = style.BorderSelected * 0.9f;
                     totalHeaderButtonsOffset += prefabInstanceButton.Width;
                 }
 

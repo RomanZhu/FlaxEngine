@@ -1,5 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using FlaxEditor.Content;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Utilities;
 using FlaxEngine;
@@ -55,9 +56,18 @@ namespace FlaxEditor.CustomEditors.GUI
         private string _lastText;
         private QueryFilterHelper.Range[] _highlightRanges;
 
-        private void UpdateHighlights()
+        private string GetDisplayText()
         {
             var text = Text?.ToString() ?? string.Empty;
+            var font = Font?.GetFont();
+            if (font == null)
+                return text;
+
+            return ContentItem.TruncateText(font, text, Mathf.Max(0.0f, Width - Margin.Width));
+        }
+
+        private void UpdateHighlights(string text)
+        {
             if (_lastSearchText == SearchText && _lastText == text)
                 return;
 
@@ -86,9 +96,9 @@ namespace FlaxEditor.CustomEditors.GUI
         public PropertyNameLabel(string name)
         {
             Text = name;
-            HorizontalAlignment = TextAlignment.Near;
+            HorizontalAlignment = TextAlignment.Far;
             VerticalAlignment = TextAlignment.Center;
-            Margin = new Margin(4, 0, 0, 0);
+            Margin = new Margin(4, 8, 0, 0);
             ClipText = true;
 
             HighlightStripColor = Color.Transparent;
@@ -113,11 +123,11 @@ namespace FlaxEditor.CustomEditors.GUI
                 Render2D.FillRectangle(new Rectangle(0, 0, 2, Height), HighlightStripColor);
             }
 
-            UpdateHighlights();
+            var text = GetDisplayText();
+            UpdateHighlights(text);
 
             if (_highlightRanges != null && _highlightRanges.Length > 0)
             {
-                var text = Text.ToString();
                 var font = Font?.GetFont();
                 if (font != null)
                 {
@@ -126,6 +136,10 @@ namespace FlaxEditor.CustomEditors.GUI
                     var margin = Margin;
                     var textSize = font.MeasureText(text);
                     var textX = margin.Left;
+                    if (HorizontalAlignment == TextAlignment.Far)
+                        textX = Width - margin.Right - textSize.X;
+                    else if (HorizontalAlignment == TextAlignment.Center)
+                        textX = margin.Left + (Width - margin.Width - textSize.X) * 0.5f;
                     var textY = margin.Top + (Height - margin.Height - textSize.Y) * 0.5f;
 
                     for (int i = 0; i < _highlightRanges.Length; i++)
@@ -136,6 +150,28 @@ namespace FlaxEditor.CustomEditors.GUI
                         Render2D.FillRectangle(highlightRect, color);
                     }
                 }
+            }
+        }
+
+        /// <inheritdoc />
+        public override void DrawSelf()
+        {
+            var text = Text;
+            var displayText = GetDisplayText();
+            if (displayText == (text?.ToString() ?? string.Empty))
+            {
+                base.DrawSelf();
+                return;
+            }
+
+            Text = displayText;
+            try
+            {
+                base.DrawSelf();
+            }
+            finally
+            {
+                Text = text;
             }
         }
 

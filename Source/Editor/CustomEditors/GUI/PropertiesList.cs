@@ -17,15 +17,17 @@ namespace FlaxEditor.CustomEditors.GUI
        
         private const float SplitterPadding = 15;
         private const float EditorsMinWidthRatio = 0.4f;
+        private const float LabelInputGutter = 8.0f;
 
         /// <summary>
         /// The splitter size (in pixels).
         /// </summary>
-        public const int SplitterSize = 2;
+        public const int SplitterSize = 1;
 
         private PropertiesListElement _element;
         private float _splitterValue;
         private Rectangle _splitterRect;
+        private Rectangle _splitterHitRect;
         private bool _splitterClicked, _mouseOverSplitter;
         private bool _cursorChanged;
         private bool _hasCustomSplitterValue;
@@ -66,7 +68,7 @@ namespace FlaxEditor.CustomEditors.GUI
             _element = element;
             _splitterValue = 0.4f;
             Margin = new Margin();
-            Spacing = Utilities.Constants.UIMargin;
+            Spacing = 2.0f;
             UpdateSplitRect();
         }
 
@@ -82,7 +84,7 @@ namespace FlaxEditor.CustomEditors.GUI
             {
                 Label currentLabel = _element.Labels[i];
                 Float2 dimensions = font.MeasureText(currentLabel.Text);
-                float width = dimensions.X + currentLabel.Margin.Left + SplitterPadding;
+                float width = dimensions.X + currentLabel.Margin.Width + SplitterPadding;
 
                 largestWidth = Mathf.Max(largestWidth, width);
             }
@@ -93,7 +95,8 @@ namespace FlaxEditor.CustomEditors.GUI
         private void UpdateSplitRect()
         {
             _splitterRect = new Rectangle(Mathf.Clamp(_splitterValue * Width - SplitterSize * 0.5f, 0.0f, Width), 0, SplitterSize, Height);
-            LeftMargin = _splitterValue * Width + _spacing;
+            _splitterHitRect = new Rectangle(_splitterRect.X - 3.0f, 0, 7.0f, Height);
+            LeftMargin = _splitterValue * Width + LabelInputGutter;
         }
 
         private void StartTracking()
@@ -125,7 +128,7 @@ namespace FlaxEditor.CustomEditors.GUI
             var style = Style.Current;
 
             // Draw splitter
-            Render2D.FillRectangle(_splitterRect, _splitterClicked ? style.BackgroundSelected : _mouseOverSplitter ? style.BackgroundHighlighted : style.Background * 0.8f);
+            Render2D.FillRectangle(_splitterRect, _splitterClicked ? style.BorderSelected : _mouseOverSplitter ? style.BorderHighlighted : style.BorderNormal.AlphaMultiplied(0.55f));
         }
 
         /// <inheritdoc />
@@ -139,7 +142,7 @@ namespace FlaxEditor.CustomEditors.GUI
         /// <inheritdoc />
         public override void OnMouseMove(Float2 location)
         {
-            _mouseOverSplitter = _splitterRect.Contains(location);
+            _mouseOverSplitter = _splitterHitRect.Contains(location);
 
             if (_splitterClicked)
             {
@@ -167,7 +170,7 @@ namespace FlaxEditor.CustomEditors.GUI
         {
             if (button == MouseButton.Left)
             {
-                if (_splitterRect.Contains(location))
+                if (_splitterHitRect.Contains(location))
                 {
                     // Start moving splitter
                     StartTracking();
@@ -181,7 +184,7 @@ namespace FlaxEditor.CustomEditors.GUI
         /// <inheritdoc />
         public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
-            if (button == MouseButton.Left && _splitterRect.Contains(location))
+            if (button == MouseButton.Left && _splitterHitRect.Contains(location))
             {
                 if (_splitterClicked)
                     EndTracking();
