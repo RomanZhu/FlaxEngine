@@ -324,30 +324,38 @@ namespace FlaxEditor.Options
             var options = Options;
             var style = new Style
             {
-                Background = Color.FromBgra(0xFF1C1C1C),
-                LightBackground = Color.FromBgra(0xFF2D2D30),
-                Foreground = Color.FromBgra(0xFFFFFFFF),
-                ForegroundGrey = Color.FromBgra(0xFFA9A9B3),
-                ForegroundDisabled = Color.FromBgra(0xFF787883),
+                Background = Color.FromBgra(0xFF222224),
+                LightBackground = Color.FromBgra(0xFF0F0F0F),
+                Foreground = Color.FromBgra(0xFFD3D4D5),
+                ForegroundGrey = Color.FromBgra(0xFFA1A5A9),
+                ForegroundDisabled = Color.FromBgra(0xFF6C6F75),
                 ForegroundViewport = Color.FromBgra(0xFFFFFFFF),
-                BackgroundHighlighted = Color.FromBgra(0xFF54545C),
-                BorderHighlighted = Color.FromBgra(0xFF6A6A75),
-                BackgroundSelected = Color.FromBgra(0xFF007ACC),
-                BorderSelected = Color.FromBgra(0xFF1C97EA),
-                BackgroundNormal = Color.FromBgra(0xFF3F3F46),
-                BorderNormal = Color.FromBgra(0xFF54545C),
-                TextBoxBackground = Color.FromBgra(0xFF333337),
-                TextBoxBackgroundSelected = Color.FromBgra(0xFF3F3F46),
-                CollectionBackgroundColor = Color.FromBgra(0x14CCCCCC),
-                ProgressNormal = Color.FromBgra(0xFF0ad328),
-                Selection = Color.Orange * 0.4f,
-                SelectionBorder = Color.Orange,
+                BackgroundHighlighted = Color.FromBgra(0xFF3C3C3C),
+                BorderHighlighted = Color.FromBgra(0xFF000000),
+                BackgroundSelected = Color.FromBgra(0xFF3B3D42),
+                BorderSelected = Color.FromBgra(0xFF3D91D9),
+                BackgroundNormal = Color.FromBgra(0xFF222224),
+                BorderNormal = Color.FromBgra(0xFF18191C),
+                TextBoxBackground = Color.FromBgra(0xFF333137),
+                TextBoxBackgroundSelected = Color.FromBgra(0xFF3C3C3C),
+                CollectionBackgroundColor = Color.FromBgra(0xFF222224),
+                ProgressNormal = Color.FromBgra(0xFF58A873),
+                Selection = Color.FromBgra(0xFF3B3D42),
+                SelectionBorder = Color.FromBgra(0xFF3D91D9),
+                CornerRadius = 4.0f,
+                ControlHeight = 24.0f,
+                ToolbarHeight = 24.0f,
+                TabHeight = 24.0f,
+                TreeRowHeight = 20.0f,
+                PropertyRowHeight = 24.0f,
+                PanelPadding = 2.0f,
+                IconSize = 12.0f,
 
                 Statusbar = new Style.StatusbarStyle
                 {
-                    PlayMode = Color.FromBgra(0xFF2F9135),
-                    Failed = Color.FromBgra(0xFF9C2424),
-                    Loading = Color.FromBgra(0xFF2D2D30),
+                    PlayMode = Color.FromBgra(0xFF58A873),
+                    Failed = Color.FromBgra(0xFFE3656B),
+                    Loading = Color.FromBgra(0xFF62A9E8),
                 },
 
                 // Fonts
@@ -373,7 +381,7 @@ namespace FlaxEditor.Options
                 SharedTooltip = new Tooltip(),
             };
             style.SharedTooltip.HorizontalTextAlignment = Editor.Instance.Options.Options.Interface.TooltipTextAlignment;
-            style.DragWindow = style.BackgroundSelected * 0.7f;
+            style.DragWindow = Color.FromBgra(0xFF25577F).AlphaMultiplied(0.7f);
             return style;
         }
 

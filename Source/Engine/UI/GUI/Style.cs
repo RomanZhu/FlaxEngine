@@ -183,9 +183,57 @@ namespace FlaxEngine.GUI
         public Color SelectionBorder;
 
         /// <summary>
-        /// The status bar style
+        /// The preferred corner radius for interactive controls. A value of zero preserves square corners.
+        /// </summary>
+        [EditorOrder(207)]
+        public float CornerRadius;
+
+        /// <summary>
+        /// The preferred height for compact interactive controls. A value of zero lets controls use their legacy size.
+        /// </summary>
+        [EditorOrder(208)]
+        public float ControlHeight;
+
+        /// <summary>
+        /// The preferred height of the global editor toolbar.
+        /// </summary>
+        [EditorOrder(209)]
+        public float ToolbarHeight;
+
+        /// <summary>
+        /// The preferred height of window and document tabs.
         /// </summary>
         [EditorOrder(210)]
+        public float TabHeight;
+
+        /// <summary>
+        /// The preferred height of compact hierarchy rows.
+        /// </summary>
+        [EditorOrder(211)]
+        public float TreeRowHeight;
+
+        /// <summary>
+        /// The preferred height of property editor rows.
+        /// </summary>
+        [EditorOrder(212)]
+        public float PropertyRowHeight;
+
+        /// <summary>
+        /// The preferred inset used inside editor panels.
+        /// </summary>
+        [EditorOrder(213)]
+        public float PanelPadding;
+
+        /// <summary>
+        /// The maximum size of standard interface glyphs. Content previews and viewport gizmos are excluded.
+        /// </summary>
+        [EditorOrder(214)]
+        public float IconSize;
+
+        /// <summary>
+        /// The status bar style
+        /// </summary>
+        [EditorOrder(220)]
         public StatusbarStyle Statusbar;
 
         /// <summary>
@@ -286,6 +334,62 @@ namespace FlaxEngine.GUI
             /// Color of the Statusbar in its failed state (e.g. with compilation errors)
             /// </summary>
             public Color Failed;
+        }
+    }
+
+    /// <summary>
+    /// Shared rendering helpers for style-aware GUI chrome.
+    /// </summary>
+    public static class StyleRendering
+    {
+        /// <summary>
+        /// Draws a filled rectangle with compact rounded corners.
+        /// </summary>
+        /// <param name="bounds">The rectangle bounds.</param>
+        /// <param name="color">The fill color.</param>
+        /// <param name="radius">The corner radius.</param>
+        public static void FillRoundedRectangle(Rectangle bounds, Color color, float radius)
+        {
+            radius = Mathf.Min(radius, Mathf.Min(bounds.Width, bounds.Height) * 0.5f);
+            if (radius < 1.0f)
+            {
+                Render2D.FillRectangle(bounds, color);
+                return;
+            }
+
+            var steps = Mathf.CeilToInt(radius);
+            Render2D.FillRectangle(new Rectangle(bounds.X + radius, bounds.Y, bounds.Width - radius * 2.0f, bounds.Height), color);
+            Render2D.FillRectangle(new Rectangle(bounds.X, bounds.Y + radius, bounds.Width, bounds.Height - radius * 2.0f), color);
+            for (int i = 0; i < steps; i++)
+            {
+                var dy = radius - i - 0.5f;
+                var inset = radius - Mathf.Sqrt(Mathf.Max(0.0f, radius * radius - dy * dy));
+                var width = Mathf.Max(0.0f, bounds.Width - inset * 2.0f);
+                Render2D.FillRectangle(new Rectangle(bounds.X + inset, bounds.Y + i, width, 1.0f), color);
+                Render2D.FillRectangle(new Rectangle(bounds.X + inset, bounds.Bottom - i - 1.0f, width, 1.0f), color);
+            }
+        }
+
+        /// <summary>
+        /// Draws a filled rounded rectangle with an inset border.
+        /// </summary>
+        /// <param name="bounds">The rectangle bounds.</param>
+        /// <param name="fillColor">The fill color.</param>
+        /// <param name="borderColor">The border color.</param>
+        /// <param name="borderThickness">The border thickness.</param>
+        /// <param name="radius">The corner radius.</param>
+        public static void DrawRoundedRectangle(Rectangle bounds, Color fillColor, Color borderColor, float borderThickness, float radius)
+        {
+            if (borderThickness <= 0.0f)
+            {
+                FillRoundedRectangle(bounds, fillColor, radius);
+                return;
+            }
+
+            FillRoundedRectangle(bounds, borderColor, radius);
+            var inner = bounds.MakeExpanded(-borderThickness);
+            if (inner.Width > 0.0f && inner.Height > 0.0f)
+                FillRoundedRectangle(inner, fillColor, Mathf.Max(0.0f, radius - borderThickness));
         }
     }
 }
