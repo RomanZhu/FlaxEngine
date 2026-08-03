@@ -126,9 +126,9 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Draw background
             if (IsMouseOver && Enabled)
-                Render2D.FillRectangle(backgroundRect, style.LightBackground);
+                Render2D.FillRectangle(backgroundRect, style.SecondaryBackground);
             else if (IsFocused)
-                Render2D.FillRectangle(backgroundRect, style.LightBackground);
+                Render2D.FillRectangle(backgroundRect, style.SecondaryBackground);
 
             base.Draw();
 

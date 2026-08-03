@@ -1221,7 +1221,7 @@ namespace FlaxEditor.Windows
             var platformSelector = new PlatformSelector
             {
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
-                BackgroundColor = Style.Current.LightBackground,
+                BackgroundColor = Style.Current.SecondaryBackground,
                 Parent = tab,
             };
             platformSelector.SizeChanged += OnPlatformSelectorSizeChanged;

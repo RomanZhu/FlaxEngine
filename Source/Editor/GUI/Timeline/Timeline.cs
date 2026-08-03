@@ -637,7 +637,7 @@ namespace FlaxEditor.GUI.Timeline
             var headerTopArea = new ContainerControl
             {
                 AutoFocus = false,
-                BackgroundColor = style.LightBackground,
+                BackgroundColor = style.SecondaryBackground,
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 Offsets = new Margin(0, 0, 0, HeaderTopAreaHeight),
                 Parent = _splitter.Panel1
@@ -690,7 +690,7 @@ namespace FlaxEditor.GUI.Timeline
                 {
                     AutoFocus = false,
                     ClipChildren = false,
-                    BackgroundColor = style.LightBackground,
+                    BackgroundColor = style.SecondaryBackground,
                     AnchorPreset = AnchorPresets.HorizontalStretchBottom,
                     Offsets = new Margin(0, 0, -playbackButtonsSize, playbackButtonsSize),
                     Parent = _splitter.Panel1

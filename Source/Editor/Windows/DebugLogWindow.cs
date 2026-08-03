@@ -126,7 +126,7 @@ namespace FlaxEditor.Windows
                 // Background
                 if (_window._selected == this)
                 {
-                    Render2D.FillRectangle(clientRect, style.LightBackground);
+                    Render2D.FillRectangle(clientRect, style.SecondaryBackground);
                     // Small rectangle to signal that entry is selected
                     Rectangle selectionHighlightRect = clientRect with { Width = 5 };
                     Render2D.FillRectangle(selectionHighlightRect, style.BackgroundSelected);

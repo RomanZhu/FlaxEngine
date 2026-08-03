@@ -958,7 +958,7 @@ namespace FlaxEditor.GUI.Timeline
             var textColor = style.Foreground * TitleTintColor;
             var backgroundColorSelected = style.BackgroundSelected;
             var backgroundColorHighlighted = style.BackgroundHighlighted;
-            var backgroundColorSelectedUnfocused = style.LightBackground;
+            var backgroundColorSelectedUnfocused = style.SecondaryBackground;
             var isMouseOver = IsMouseOver;
 
             // Draw background

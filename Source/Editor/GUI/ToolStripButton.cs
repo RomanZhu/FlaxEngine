@@ -192,7 +192,7 @@ namespace FlaxEditor.GUI
 
             // Draw background
             if (enabled && (IsMouseOver || IsNavFocused || Checked))
-                StyleRendering.FillRoundedRectangle(clientRect.MakeExpanded(-2.0f), Checked ? style.BackgroundSelected : mouseButtonDown ? style.BackgroundHighlighted : (style.LightBackground * 1.3f), style.CornerRadius);
+                StyleRendering.FillRoundedRectangle(clientRect.MakeExpanded(-2.0f), Checked ? style.BackgroundSelected : mouseButtonDown ? style.BackgroundHighlighted : (style.SecondaryBackground * 1.3f), style.CornerRadius);
 
             // Draw icon
             if (_glyph != ToolStripGlyph.None)

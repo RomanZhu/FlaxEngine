@@ -316,7 +316,7 @@ namespace FlaxEditor.GUI.Tabs
 
             TabsPanel = new TabsHeader(this);
 
-            TabStripColor = Style.Current.LightBackground;
+            TabStripColor = Style.Current.SecondaryBackground;
 
             TabsPanel.Parent = this;
         }

@@ -361,7 +361,7 @@ namespace FlaxEditor.GUI.Tree
             TextColor = style.Foreground;
             BackgroundColorSelected = style.BackgroundSelected;
             BackgroundColorHighlighted = style.BackgroundHighlighted;
-            BackgroundColorSelectedUnfocused = style.LightBackground;
+            BackgroundColorSelectedUnfocused = style.SecondaryBackground;
             TextFont = new FontReference(style.FontSmall);
         }
 
@@ -1016,7 +1016,7 @@ namespace FlaxEditor.GUI.Tree
                     var lineRect1 = new Rectangle(parentNode.TextRect.Left - leftOffset, parentNode.HeaderRect.Top + topOffset, 1, parentNode.HeaderRect.Height - bottomOffset);
                     if (HasAnyVisibleChild && CustomArrowRect.HasValue && CustomArrowRect.Value.Intersects(lineRect1))
                         lineRect1 = Rectangle.Empty; // Skip drawing line if it's overlapping the arrow rectangle
-                    Render2D.FillRectangle(lineRect1, isSelected ? style.ForegroundGrey : style.LightBackground);
+                    Render2D.FillRectangle(lineRect1, isSelected ? style.ForegroundGrey : style.SecondaryBackground);
                     parentNode = parentNode.Parent as TreeNode;
                 }
             }

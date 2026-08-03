@@ -27,7 +27,7 @@ namespace FlaxEditor.GUI.ContextMenu
             base.Draw();
 
             // Draw separator line
-            Render2D.FillRectangle(new Rectangle(0, 1, Width - 4, 1), Style.Current.LightBackground);
+            Render2D.FillRectangle(new Rectangle(0, 1, Width - 4, 1), Style.Current.SecondaryBackground);
         }
     }
 }

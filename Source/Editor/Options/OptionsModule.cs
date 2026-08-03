@@ -333,7 +333,7 @@ namespace FlaxEditor.Options
             var style = new Style
             {
                 Background = Color.FromBgra(0xFF222224),
-                LightBackground = Color.FromBgra(0xFF0F0F0F),
+                SecondaryBackground = Color.FromBgra(0xFF0F0F0F),
                 Foreground = Color.FromBgra(0xFFD3D4D5),
                 ForegroundGrey = Color.FromBgra(0xFFA1A5A9),
                 ForegroundDisabled = Color.FromBgra(0xFF6C6F75),
@@ -403,7 +403,7 @@ namespace FlaxEditor.Options
             var style = new Style
             {
                 Background = new Color(0.92f, 0.92f, 0.92f, 1f),
-                LightBackground = new Color(0.84f, 0.84f, 0.88f, 1f),
+                SecondaryBackground = new Color(0.84f, 0.84f, 0.88f, 1f),
                 DragWindow = new Color(0.0f, 0.26f, 0.43f, 0.70f),
                 Foreground = new Color(0.0f, 0.0f, 0.0f, 1f),
                 ForegroundGrey = new Color(0.30f, 0.30f, 0.31f, 1f),

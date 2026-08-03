@@ -493,7 +493,7 @@ namespace FlaxEngine.GUI
 
             // Draw splitter
             var style = Style.Current;
-            Render2D.FillRectangle(_splitterRect, _splitterClicked ? style.BackgroundSelected : _mouseOverSplitter ? style.BackgroundHighlighted : style.LightBackground);
+            Render2D.FillRectangle(_splitterRect, _splitterClicked ? style.BackgroundSelected : _mouseOverSplitter ? style.BackgroundHighlighted : style.SecondaryBackground);
         }
 
         /// <inheritdoc />

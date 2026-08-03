@@ -120,6 +120,8 @@ namespace FlaxEditor.Modules
             public override void Draw()
             {
                 var style = Style.Current;
+                Render2D.FillRectangle(new Rectangle(Float2.Zero, Size), style.Background);
+
                 float x = OuterPadding;
                 DrawMetric(style, InterfaceOptions.EditorPerformanceStats.FPS, "FPS:", _fps.ToString(), FpsWidth, _fps >= 60 ? style.Statusbar.PlayMode : style.Statusbar.Failed, ref x);
                 DrawMetric(style, InterfaceOptions.EditorPerformanceStats.RAM, "RAM:", _ram, RamWidth, style.Foreground, ref x);
@@ -189,6 +191,7 @@ namespace FlaxEditor.Modules
                     Title.TextColor = Style.Current.ForegroundDisabled;
                     Title.TextColorHighlighted = Style.Current.ForegroundDisabled;
                     TitleLeftPadding = 24.0f;
+                    TitleBackgroundColor = Style.Current.SecondaryBackground;
                 }
 
                 if (!iconOnly)

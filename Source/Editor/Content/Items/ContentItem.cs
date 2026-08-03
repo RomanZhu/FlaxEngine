@@ -701,7 +701,7 @@ namespace FlaxEditor.Content
                     Render2D.FillRectangle(clientRect, style.Background.RGBMultiplied(1.25f));
 
                     if (isSelected)
-                        Render2D.FillRectangle(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.LightBackground);
+                        Render2D.FillRectangle(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.SecondaryBackground);
                     else if (IsMouseOver)
                         Render2D.FillRectangle(clientRect, style.BackgroundHighlighted);
 
@@ -715,7 +715,7 @@ namespace FlaxEditor.Content
                     Render2D.FillRectangle(shadowRect, color);
 
                     Render2D.FillRectangle(clientRect, style.Background.RGBMultiplied(1.25f));
-                    Render2D.FillRectangle(TextRectangle, style.LightBackground);
+                    Render2D.FillRectangle(TextRectangle, style.SecondaryBackground);
 
                     var accentHeight = 2 * view.ViewScale;
                     var barRect = new Rectangle(0, thumbnailRect.Height - accentHeight, clientRect.Width, accentHeight);
@@ -724,8 +724,8 @@ namespace FlaxEditor.Content
                     DrawThumbnail(ref thumbnailRect, false);
                     if (isSelected)
                     {
-                        Render2D.FillRectangle(textRect, Parent.ContainsFocus ? style.BackgroundSelected : style.LightBackground);
-                        Render2D.DrawRectangle(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.LightBackground);
+                        Render2D.FillRectangle(textRect, Parent.ContainsFocus ? style.BackgroundSelected : style.SecondaryBackground);
+                        Render2D.DrawRectangle(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.SecondaryBackground);
                     }
                     else if (IsMouseOver)
                     {
@@ -742,7 +742,7 @@ namespace FlaxEditor.Content
                 nameAlignment = TextAlignment.Near;
 
                 if (isSelected)
-                    Render2D.FillRectangle(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.LightBackground);
+                    Render2D.FillRectangle(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.SecondaryBackground);
                 else if (IsMouseOver)
                     Render2D.FillRectangle(clientRect, style.BackgroundHighlighted);
 
@@ -775,7 +775,7 @@ namespace FlaxEditor.Content
 
             if (IsBeingCut)
             {
-                var color = style.LightBackground.AlphaMultiplied(0.5f);
+                var color = style.SecondaryBackground.AlphaMultiplied(0.5f);
                 Render2D.FillRectangle(clientRect, color);
             }
         }

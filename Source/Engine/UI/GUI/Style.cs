@@ -75,10 +75,10 @@ namespace FlaxEngine.GUI
         public Color Background;
 
         /// <summary>
-        /// The light background color.
+        /// The secondary background color.
         /// </summary>
         [EditorOrder(70)]
-        public Color LightBackground;
+        public Color SecondaryBackground;
 
         /// <summary>
         /// The drag window color.

@@ -302,7 +302,7 @@ public class Slider : ContainerControl
 
         var style = Style.Current;
         TrackLineColor = style.BackgroundHighlighted;
-        TrackFillLineColor = style.LightBackground;
+        TrackFillLineColor = style.SecondaryBackground;
         ThumbColor = style.BackgroundNormal;
         ThumbColorSelected = style.BackgroundSelected;
         ThumbColorHighlighted = style.BackgroundHighlighted;

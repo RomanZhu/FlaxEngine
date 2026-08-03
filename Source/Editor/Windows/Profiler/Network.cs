@@ -260,7 +260,7 @@ namespace FlaxEditor.Windows.Profiler
         private static Table InitTable(ContainerControl parent, string name)
         {
             var style = Style.Current;
-            var headerColor = style.LightBackground;
+            var headerColor = style.SecondaryBackground;
             var textColor = style.Foreground;
             var table = new Table
             {

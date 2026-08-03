@@ -318,7 +318,7 @@ namespace FlaxEditor.GUI.Docking
                 {
                     // Draw header
                     bool isMouseOver = headerRect.Contains(MousePosition);
-                    Render2D.FillRectangle(headerRect, containsFocus ? style.BackgroundSelected : isMouseOver ? style.BackgroundHighlighted : style.LightBackground);
+                    Render2D.FillRectangle(headerRect, containsFocus ? style.BackgroundSelected : isMouseOver ? style.BackgroundHighlighted : style.SecondaryBackground);
 
                     float iconWidth = tab.Icon.IsValid ? DockPanel.DefaultButtonsSize + DockPanel.DefaultLeftTextMargin : 0;
 
@@ -345,13 +345,13 @@ namespace FlaxEditor.GUI.Docking
                         var crossRect = new Rectangle(Width - DockPanel.DefaultButtonsSize - DockPanel.DefaultButtonsMargin, (HeaderRectangle.Height - DockPanel.DefaultButtonsSize) / 2, DockPanel.DefaultButtonsSize, DockPanel.DefaultButtonsSize);
                         bool isMouseOverCross = isMouseOver && crossRect.Contains(MousePosition);
                         if (isMouseOverCross)
-                            Render2D.FillRectangle(crossRect, (containsFocus ? style.BackgroundSelected : style.LightBackground) * 1.3f);
+                            Render2D.FillRectangle(crossRect, (containsFocus ? style.BackgroundSelected : style.SecondaryBackground) * 1.3f);
                         Render2D.DrawSprite(style.Cross, crossRect, isMouseOverCross ? style.Foreground : style.ForegroundGrey);
                     }
                 }
                 else
                 {
-                    Render2D.FillRectangle(headerRect, style.LightBackground);
+                    Render2D.FillRectangle(headerRect, style.SecondaryBackground);
                     var ghostWidth = GetTabInsertionFeedbackWidth(sourcePanel);
                     if (feedbackIndex == 0)
                     {
@@ -373,7 +373,7 @@ namespace FlaxEditor.GUI.Docking
             else
             {
                 // Draw background
-                Render2D.FillRectangle(headerRect, style.LightBackground);
+                Render2D.FillRectangle(headerRect, style.SecondaryBackground);
 
                 // Render all tabs and insert the ghost tabs into the same flow.
                 float x = 0;

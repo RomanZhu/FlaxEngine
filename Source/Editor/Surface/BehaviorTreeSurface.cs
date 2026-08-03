@@ -49,7 +49,7 @@ namespace FlaxEditor.Surface
                 return;
 
             var style = FlaxEngine.GUI.Style.Current;
-            var color = style.LightBackground;
+            var color = style.SecondaryBackground;
             if (box.IsMouseOver)
                 color *= 1.2f;
             Render2D.FillRectangle(rect, color);

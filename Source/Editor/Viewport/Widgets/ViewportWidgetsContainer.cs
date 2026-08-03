@@ -68,7 +68,7 @@ namespace FlaxEditor.Viewport.Widgets
             var clientRect = new Rectangle(Float2.Zero, Size);
 
             // Draw background
-            Render2D.FillRectangle(clientRect, style.LightBackground * (IsMouseOver ? 0.3f : 0.2f));
+            Render2D.FillRectangle(clientRect, style.SecondaryBackground * (IsMouseOver ? 0.3f : 0.2f));
 
             base.Draw();
 

@@ -24,6 +24,7 @@ public class WindowDecorations : ContainerControl
     private LocalizedString _charChromeRestore, _charChromeMaximize;
     private Window _window;
     private bool _showingUnsavedChangesChip;
+    private float _titleBackgroundLeft;
 
     /// <summary>
     /// Gets the left edge of the native window-button group after layout.
@@ -39,6 +40,11 @@ public class WindowDecorations : ContainerControl
     /// Gets or sets the extra left padding applied to the title label.
     /// </summary>
     protected float TitleLeftPadding { get; set; }
+
+    /// <summary>
+    /// Gets or sets the color used to fill the title area behind the title label.
+    /// </summary>
+    protected Color TitleBackgroundColor { get; set; } = Color.Transparent;
 
     /// <summary>
     /// Gets a value indicating whether the unsaved changes chip should be displayed.
@@ -84,7 +90,7 @@ public class WindowDecorations : ContainerControl
             Margin = new Margin(4, 4, 4, 4),
             Brush = new TextureBrush(windowIcon),
             Color = Style.Current.Foreground,
-            BackgroundColor = Style.Current.LightBackground,
+            BackgroundColor = Style.Current.SecondaryBackground,
             KeepAspectRatio = false,
             Parent = this,
         };
@@ -116,7 +122,7 @@ public class WindowDecorations : ContainerControl
             {
                 Text = ((char)EditorAssets.SegMDL2Icons.ChromeClose).ToString(),
                 Font = new FontReference(iconFont),
-                BackgroundColor = Style.Current.LightBackground,
+                BackgroundColor = Style.Current.SecondaryBackground,
                 BorderColor = Color.Transparent,
                 BorderColorHighlighted = Color.Transparent,
                 BorderColorSelected = Color.Transparent,
@@ -132,13 +138,13 @@ public class WindowDecorations : ContainerControl
             {
                 Text = ((char)EditorAssets.SegMDL2Icons.ChromeMinimize).ToString(),
                 Font = new FontReference(iconFont),
-                BackgroundColor = Style.Current.LightBackground,
+                BackgroundColor = Style.Current.SecondaryBackground,
                 BorderColor = Color.Transparent,
                 BorderColorHighlighted = Color.Transparent,
                 BorderColorSelected = Color.Transparent,
                 TextColor = Style.Current.Foreground,
                 Width = 46,
-                BackgroundColorHighlighted = Style.Current.LightBackground.RGBMultiplied(1.3f),
+                BackgroundColorHighlighted = Style.Current.SecondaryBackground.RGBMultiplied(1.3f),
                 Parent = this,
             };
             _minimizeButton.Clicked += () => _window.Minimize();
@@ -147,13 +153,13 @@ public class WindowDecorations : ContainerControl
             {
                 Text = ((char)(_window.IsMaximized ? EditorAssets.SegMDL2Icons.ChromeRestore : EditorAssets.SegMDL2Icons.ChromeMaximize)).ToString(),
                 Font = new FontReference(iconFont),
-                BackgroundColor = Style.Current.LightBackground,
+                BackgroundColor = Style.Current.SecondaryBackground,
                 BorderColor = Color.Transparent,
                 BorderColorHighlighted = Color.Transparent,
                 BorderColorSelected = Color.Transparent,
                 TextColor = Style.Current.Foreground,
                 Width = 46,
-                BackgroundColorHighlighted = Style.Current.LightBackground.RGBMultiplied(1.3f),
+                BackgroundColorHighlighted = Style.Current.SecondaryBackground.RGBMultiplied(1.3f),
                 Parent = this,
             };
             _maximizeButton.Clicked += () =>
@@ -329,6 +335,7 @@ public class WindowDecorations : ContainerControl
         if (_title != null)
         {
             _showingUnsavedChangesChip = ShowUnsavedChangesChip;
+            _titleBackgroundLeft = x;
             var titleX = x + TitleLeftPadding;
             var titleWidth = Mathf.Max(0.0f, rightMostButtonX - titleX);
             if (_showingUnsavedChangesChip)
@@ -337,6 +344,17 @@ public class WindowDecorations : ContainerControl
             _title.Text = _window.Title;
             _title.Bounds = new Rectangle(titleX, 0, titleWidth, Height);
         }
+    }
+
+    /// <inheritdoc />
+    public override void DrawSelf()
+    {
+        base.DrawSelf();
+
+        if (_title == null || TitleBackgroundColor.A <= 0.0f)
+            return;
+
+        Render2D.FillRectangle(new Rectangle(_titleBackgroundLeft, 0.0f, Mathf.Max(0.0f, ContentRight - _titleBackgroundLeft), Height), TitleBackgroundColor);
     }
 
     /// <inheritdoc />

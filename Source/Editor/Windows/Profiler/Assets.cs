@@ -76,7 +76,7 @@ namespace FlaxEditor.Windows.Profiler
 
             // Table
             var style = Style.Current;
-            var headerColor = style.LightBackground;
+            var headerColor = style.SecondaryBackground;
             var textColor = style.Foreground;
             _table = new Table
             {

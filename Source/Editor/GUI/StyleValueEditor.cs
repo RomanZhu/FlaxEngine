@@ -99,7 +99,7 @@ namespace FlaxEditor.GUI
                 // Draw the style colors
                 /*
                 -Background
-                -LightBackground
+                -SecondaryBackground
                 -DragWindow
                 -Foreground
                 -ForegroundDisabled
@@ -136,7 +136,7 @@ namespace FlaxEditor.GUI
                 x += size.X;
                 Render2D.FillRectangle(new Rectangle(x, 2 + size.Y, size), Value.BackgroundNormal);
                 x += size.X;
-                Render2D.FillRectangle(new Rectangle(x, 2 + size.Y, size), Value.LightBackground);
+                Render2D.FillRectangle(new Rectangle(x, 2 + size.Y, size), Value.SecondaryBackground);
                 x += size.X;
                 Render2D.FillRectangle(new Rectangle(x, 2 + size.Y, size), Value.BackgroundHighlighted);
                 x += size.X;

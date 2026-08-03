@@ -47,7 +47,7 @@ namespace FlaxEditor.Windows.Assets
             {
                 AutoFocus = false,
                 ClipChildren = false,
-                BackgroundColor = style.LightBackground,
+                BackgroundColor = style.SecondaryBackground,
                 AnchorPreset = AnchorPresets.HorizontalStretchBottom,
                 Offsets = new Margin(0, 0, -playbackButtonsSize, playbackButtonsSize),
                 Parent = this
