@@ -41,7 +41,7 @@ namespace FlaxEditor.SceneGraph.GUI
         private string _shownSceneIconTooltip;
         private Rectangle _sceneIconTooltipArea;
 
-        private const float SceneIconSize = 12.0f;
+        private const float SceneIconSize = 16.0f;
         private const float SceneIconSpacing = 3.0f;
         private const float SceneIconRightMargin = 4.0f;
         private const float SceneIconTextPadding = 6.0f;
@@ -65,10 +65,12 @@ namespace FlaxEditor.SceneGraph.GUI
         {
             public SpriteHandle Sprite;
             public Texture Texture;
+            public SemanticIcons.Glyph Glyph;
+            public bool UseGlyph;
             public Color Color;
             public string Tooltip;
 
-            public bool IsValid => Sprite.IsValid || Texture != null;
+            public bool IsValid => UseGlyph || Sprite.IsValid || Texture != null;
         }
 
         /// <summary>
@@ -85,6 +87,9 @@ namespace FlaxEditor.SceneGraph.GUI
         /// Gets the actor node.
         /// </summary>
         public ActorNode ActorNode => _actorNode;
+
+        /// <inheritdoc />
+        protected override float HeaderTextLeftOffset => SceneIconSize + 4.0f;
 
         /// <inheritdoc />
         public override float MinimumWidth => base.MinimumWidth + ActiveCheckboxColumnWidth;
@@ -483,7 +488,7 @@ namespace FlaxEditor.SceneGraph.GUI
             // Evaluate tooltip text once it's actually needed
             var actor = _actorNode.Actor;
             if (string.IsNullOrEmpty(TooltipText) && actor)
-                TooltipText = Surface.SurfaceUtils.GetVisualScriptTypeDescription(TypeUtils.GetObjectType(actor));
+                TooltipText = GetActorTooltipText(actor);
 
             return base.OnShowTooltip(out text, out location, out area);
         }
@@ -501,7 +506,7 @@ namespace FlaxEditor.SceneGraph.GUI
                     if (actor.HasPrefabLink)
                     {
                         // Prefab
-                        color = Style.Current.ProgressNormal;
+                        color = Style.Current.BorderSelected;
                     }
 
                     if (!actor.IsActiveInHierarchy)
@@ -551,6 +556,21 @@ namespace FlaxEditor.SceneGraph.GUI
             if (type)
                 return type.Name;
             return obj.GetType().GetTypeDisplayName();
+        }
+
+        private static string GetPrefabInstanceTypeTooltip(Actor actor)
+        {
+            return "Type: Prefab Instance\nPrefab Instance Type: " + GetSceneObjectTypeName(actor);
+        }
+
+        private static string GetActorTooltipText(Actor actor)
+        {
+            var description = Surface.SurfaceUtils.GetVisualScriptTypeDescription(TypeUtils.GetObjectType(actor));
+            if (!actor.HasPrefabLink)
+                return description;
+
+            var prefabTooltip = GetPrefabInstanceTypeTooltip(actor);
+            return string.IsNullOrEmpty(description) ? prefabTooltip : prefabTooltip + "\n\n" + description;
         }
 
         private static bool IsSimpleActor(Actor actor)
@@ -649,11 +669,31 @@ namespace FlaxEditor.SceneGraph.GUI
         private static bool TryGetActorTypeIcon(Actor actor, out SceneRowIcon icon)
         {
             icon = new SceneRowIcon();
-            if (IsSimpleActor(actor))
+            if (!actor)
                 return false;
 
-            icon.Color = GetActorTypeColor(actor);
-            icon.Tooltip = "Type: " + GetSceneObjectTypeName(actor);
+            var isPrefabInstance = actor.HasPrefabLink;
+            icon.Color = isPrefabInstance ? Style.Current.BorderSelected : GetActorTypeColor(actor);
+            icon.Tooltip = isPrefabInstance ? GetPrefabInstanceTypeTooltip(actor) : "Type: " + GetSceneObjectTypeName(actor);
+            if (isPrefabInstance && !TryGetActorTypeTexture(actor, out icon.Texture))
+            {
+                icon.UseGlyph = true;
+                icon.Glyph = SemanticIcons.Glyph.Prefab;
+                return true;
+            }
+            if (actor is Collider)
+            {
+                icon.UseGlyph = true;
+                icon.Glyph = SemanticIcons.Glyph.Collider;
+                return true;
+            }
+            if (IsSimpleActor(actor))
+            {
+                icon.UseGlyph = true;
+                icon.Glyph = SemanticIcons.Glyph.Model;
+                icon.Color = Style.Current.ForegroundGrey;
+                return true;
+            }
             if (!TryGetActorTypeTexture(actor, out icon.Texture))
                 TryGetActorTypeSprite(actor, out icon.Sprite);
             return icon.IsValid;
@@ -677,6 +717,10 @@ namespace FlaxEditor.SceneGraph.GUI
                 Render2D.DrawTexture(icon.Texture, rect, active ? Color.White : Color.White.AlphaMultiplied(0.45f));
                 Render2D.FillRectangle(new Rectangle(rect.X, rect.Bottom - 2.0f, rect.Width, 2.0f), color);
             }
+            else if (icon.UseGlyph)
+            {
+                SemanticIcons.Draw(icon.Glyph, rect, color);
+            }
             else if (icon.Sprite.IsValid)
             {
                 Render2D.DrawSprite(icon.Sprite, rect, color);
@@ -689,13 +733,6 @@ namespace FlaxEditor.SceneGraph.GUI
 
         private bool TryGetSceneRowIcon(Actor actor, int iconIndex, out SceneRowIcon icon)
         {
-            if (TryGetActorTypeIcon(actor, out icon))
-            {
-                if (iconIndex == 0)
-                    return true;
-                iconIndex--;
-            }
-
             for (int i = 0; i < actor.ScriptsCount; i++)
             {
                 var script = actor.GetScript(i);
@@ -718,7 +755,7 @@ namespace FlaxEditor.SceneGraph.GUI
             if (!actor)
                 return 0;
 
-            int result = TryGetActorTypeIcon(actor, out _) ? 1 : 0;
+            int result = 0;
             for (int i = 0; i < actor.ScriptsCount; i++)
             {
                 if (actor.GetScript(i))
@@ -784,6 +821,20 @@ namespace FlaxEditor.SceneGraph.GUI
             }
         }
 
+        private Rectangle GetLeadingActorIconRect()
+        {
+            var textRect = TextRect;
+            return new Rectangle(textRect.Left - HeaderTextLeftOffset, (HeaderHeight - SceneIconSize) * 0.5f, SceneIconSize, SceneIconSize);
+        }
+
+        private void DrawLeadingActorIcon()
+        {
+            var actor = Actor;
+            if (!actor || !TryGetActorTypeIcon(actor, out var icon))
+                return;
+            DrawSceneRowIcon(ref icon, GetLeadingActorIconRect(), actor.IsActiveInHierarchy);
+        }
+
         private Rectangle GetActiveCheckboxRect()
         {
             return new Rectangle(2.0f, (HeaderHeight - ActiveCheckboxSize) * 0.5f, ActiveCheckboxSize, ActiveCheckboxSize);
@@ -830,15 +881,16 @@ namespace FlaxEditor.SceneGraph.GUI
             var mouseLocation = PointFromScreen(Input.MouseScreenPosition);
             var enabled = CanToggleActorActive();
             var isMouseOverCheckbox = rect.Contains(ref mouseLocation);
-            var borderColor = enabled && (_activeCheckboxPressed || isMouseOverCheckbox) ? style.BorderSelected : style.BorderNormal;
-            var imageColor = enabled ? style.BorderSelected * 1.2f : style.ForegroundDisabled;
-
+            var highlighted = enabled && (_activeCheckboxPressed || isMouseOverCheckbox);
+            var fillColor = actor.IsActive
+                ? (highlighted ? Color.Lerp(style.BorderSelected, Color.White, 0.28f) : style.BorderSelected)
+                : Color.Lerp(style.Background, style.Foreground, highlighted ? 0.30f : 0.14f);
             if (!enabled)
-                borderColor *= 0.5f;
-            Render2D.DrawRectangle(rect.MakeExpanded(-1.0f), borderColor);
+                fillColor = Color.Lerp(fillColor, style.Background, 0.45f);
+            StyleRendering.FillCheckBox(rect, fillColor);
 
             if (actor.IsActive && style.CheckBoxTick.IsValid)
-                Render2D.DrawSprite(style.CheckBoxTick, rect, imageColor);
+                Render2D.DrawSprite(style.CheckBoxTick, rect, enabled ? Color.White : style.ForegroundDisabled);
         }
 
         private bool TryGetSceneIconTooltip(ref Float2 location, out string tooltip, out Rectangle area)
@@ -847,7 +899,18 @@ namespace FlaxEditor.SceneGraph.GUI
             area = Rectangle.Empty;
 
             var actor = Actor;
-            if (!actor || !TryGetSceneIconsStart(out var startX, out var iconsCount))
+            if (!actor)
+                return false;
+
+            var leadingRect = GetLeadingActorIconRect();
+            if (leadingRect.Contains(ref location) && TryGetActorTypeIcon(actor, out var leadingIcon))
+            {
+                tooltip = leadingIcon.Tooltip;
+                area = leadingRect;
+                return !string.IsNullOrEmpty(tooltip);
+            }
+
+            if (!TryGetSceneIconsStart(out var startX, out var iconsCount))
                 return false;
 
             for (int i = 0; i < iconsCount; i++)
@@ -936,6 +999,8 @@ namespace FlaxEditor.SceneGraph.GUI
         public override void Draw()
         {
             base.Draw();
+            if (!ShowHeader)
+                return;
 
             // Draw all highlights
             if (_highlights != null)
@@ -952,6 +1017,7 @@ namespace FlaxEditor.SceneGraph.GUI
             }
 
             DrawActiveCheckbox();
+            DrawLeadingActorIcon();
             DrawSceneRowIcons();
         }
 

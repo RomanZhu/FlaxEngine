@@ -27,6 +27,8 @@ namespace FlaxEditor.SceneGraph
         : base(null, Guid.NewGuid())
         {
             _treeNode.AutoFocus = false;
+            _treeNode.IsSelectable = false;
+            _treeNode.ShowHeader = false;
         }
 
         /// <summary>
@@ -37,6 +39,8 @@ namespace FlaxEditor.SceneGraph
         : base(null, id)
         {
             _treeNode.AutoFocus = false;
+            _treeNode.IsSelectable = false;
+            _treeNode.ShowHeader = false;
         }
 
         /// <summary>
