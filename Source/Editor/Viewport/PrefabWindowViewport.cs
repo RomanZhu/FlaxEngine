@@ -731,6 +731,21 @@ namespace FlaxEditor.Viewport
         }
 
         /// <inheritdoc />
+        public override void Draw()
+        {
+            base.Draw();
+
+            // Draw gizmo screen-space overlays
+            foreach (var gizmo in Gizmos)
+            {
+                if (gizmo.Visible)
+                {
+                    gizmo.Draw();
+                }
+            }
+        }
+
+        /// <inheritdoc />
         protected override void OnDebugDraw(GPUContext context, ref RenderContext renderContext)
         {
             base.OnDebugDraw(context, ref renderContext);

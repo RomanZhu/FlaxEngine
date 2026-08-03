@@ -669,6 +669,15 @@ namespace FlaxEditor.Viewport
         {
             base.Draw();
 
+            // Draw gizmo screen-space overlays
+            foreach (var gizmo in Gizmos)
+            {
+                if (gizmo.Visible)
+                {
+                    gizmo.Draw();
+                }
+            }
+
             // Draw rubber band for rectangle selection
             _rubberBandSelector.Draw();
         }
