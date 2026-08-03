@@ -74,6 +74,7 @@ namespace FlaxEditor.GUI.Input
         protected string _startEditText;
 
         private Float2 _startSlideLocation;
+        private Float2 _slidingMouseOffset;
         private double _clickStartTime = -1;
         private bool _cursorChanged;
         private bool _isSlidingPending;
@@ -303,8 +304,14 @@ namespace FlaxEditor.GUI.Input
         private void BeginSliding()
         {
             _isSlidingPending = false;
+            OnSelectingEnd();
             _isSliding = true;
+            _slidingMouseOffset = Float2.Zero;
+#if PLATFORM_SDL
             StartMouseCapture(true);
+#else
+            StartMouseCapture();
+#endif
             EndEditOnClick = false;
 
             // Hide cursor and cache location
@@ -326,6 +333,7 @@ namespace FlaxEditor.GUI.Input
         {
             _isSlidingPending = false;
             _isSliding = false;
+            _slidingMouseOffset = Float2.Zero;
             EndEditOnClick = true;
             EndMouseCapture();
             if (_cursorChanged)
@@ -337,6 +345,34 @@ namespace FlaxEditor.GUI.Input
             Defocus();
             Parent?.Focus();
         }
+
+#if !PLATFORM_SDL
+        private void WrapSlidingMouse(Float2 location)
+        {
+            const float edgeThreshold = 2.0f;
+            const float wrapInset = 4.0f;
+
+            var root = RootWindow;
+            if (root == null || root.Width <= wrapInset * 2.0f)
+                return;
+
+            var windowLocation = PointToWindow(location);
+            var newWindowLocation = windowLocation;
+            if (windowLocation.X <= edgeThreshold)
+                newWindowLocation.X = root.Width - wrapInset;
+            else if (windowLocation.X >= root.Width - edgeThreshold)
+                newWindowLocation.X = wrapInset;
+            else
+                return;
+
+            if (root.Height > wrapInset * 2.0f)
+                newWindowLocation.Y = Mathf.Clamp(newWindowLocation.Y, wrapInset, root.Height - wrapInset);
+
+            var newLocation = PointFromWindow(newWindowLocation);
+            _slidingMouseOffset += location - newLocation;
+            root.MousePosition = newWindowLocation;
+        }
+#endif
 
         /// <inheritdoc />
         public override void Draw()
@@ -453,6 +489,12 @@ namespace FlaxEditor.GUI.Input
             // Check if was sliding
             if (_isSliding)
             {
+                if (Root != null && Root.GetMouseButton(MouseButton.Left))
+                {
+                    base.OnLostFocus();
+                    return;
+                }
+
                 EndSliding();
 
                 base.OnLostFocus();
@@ -515,11 +557,12 @@ namespace FlaxEditor.GUI.Input
 #if !PLATFORM_SDL
             if (_isSlidingPending && Mathf.Abs(location.X - _startSlideLocation.X) >= 2.0f)
                 BeginSliding();
-            if (_isSliding && !RootWindow.Window.IsMouseFlippingHorizontally)
+            if (_isSliding)
             {
-                // Update sliding
-                var slideLocation = location + Root.TrackingMouseOffset;
+                // Update sliding in virtual space so cursor wrapping does not break the drag delta.
+                var slideLocation = location + _slidingMouseOffset;
                 ApplySliding(GetSlidingDelta(slideLocation.X - _startSlideLocation.X));
+                WrapSlidingMouse(location);
                 return;
             }
 #endif
@@ -597,7 +640,7 @@ namespace FlaxEditor.GUI.Input
         /// <inheritdoc />
         public override void OnMouseLeave()
         {
-            if (_cursorChanged)
+            if (_cursorChanged && !_isSliding)
             {
                 Cursor = CursorType.Default;
                 _cursorChanged = false;

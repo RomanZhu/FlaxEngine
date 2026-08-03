@@ -26,6 +26,13 @@ namespace FlaxEditor.Windows.Assets
         protected readonly ToolStrip _toolstrip;
 
         /// <summary>
+        /// The minimum time after the last edit before asset auto-save can run.
+        /// </summary>
+        protected static readonly TimeSpan AutoSaveEditDelay = TimeSpan.FromMilliseconds(300.0);
+
+        private DateTime _lastAutoSaveEditTime = DateTime.MinValue;
+
+        /// <summary>
         /// Gets the item.
         /// </summary>
         public AssetItem Item => _item;
@@ -99,6 +106,33 @@ namespace FlaxEditor.Windows.Assets
         /// </summary>
         public virtual void Save()
         {
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether this window can be saved by timer-driven auto-save now.
+        /// </summary>
+        public virtual bool CanRunAutoSave => true;
+
+        /// <summary>
+        /// Records an asset edit that should delay auto-save.
+        /// </summary>
+        protected void MarkAutoSaveEdit()
+        {
+            _lastAutoSaveEditTime = DateTime.Now;
+        }
+
+        /// <summary>
+        /// Returns true if enough time has passed since the last asset edit.
+        /// </summary>
+        protected bool IsAutoSaveEditDelayElapsed => IsAutoSaveEditDelayElapsedFor(AutoSaveEditDelay);
+
+        /// <summary>
+        /// Returns true if the given delay has passed since the last asset edit.
+        /// </summary>
+        /// <param name="editDelay">The required edit delay.</param>
+        protected bool IsAutoSaveEditDelayElapsedFor(TimeSpan editDelay)
+        {
+            return DateTime.Now - _lastAutoSaveEditTime >= editDelay;
         }
 
         /// <inheritdoc />

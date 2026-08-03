@@ -69,7 +69,7 @@ namespace FlaxEditor.Windows.Assets
         
         private const float AutoSavePanelWidth = 96.0f;
         private const float AutoSaveLabelWidth = 70.0f;
-        private const string AutoSaveTooltip = "Automatically saves this settings asset after values are applied. Mouse-driven edits are saved after the mouse button is released.";
+        private const string AutoSaveTooltip = "Automatically saves this settings asset 300 ms after values are applied.";
 
         private readonly CustomEditorPresenter _presenter;
         private SearchBox _searchBox;
@@ -82,10 +82,8 @@ namespace FlaxEditor.Windows.Assets
         private readonly CheckBox _autoSaveCheckBox;
         private object _object;
         private bool _isRegisteredForScriptsReload;
-        private bool _isLeftMouseButtonDown;
         private bool _pendingAutoSave;
         private bool _isAutoSaving;
-        private FlaxEngine.Window _autoSaveMouseWindow;
         private Label _typeText;
         private ToolStripButton _optionsButton;
         private ContextMenu _optionsCM;
@@ -177,24 +175,30 @@ namespace FlaxEditor.Windows.Assets
             UpdateToolstrip();
         }
 
-        private bool CanAutoSave => _isSettingsAsset && _autoSaveCheckBox != null && _autoSaveCheckBox.Checked;
+        private bool IsAutoSaveEnabled => _isSettingsAsset && _autoSaveCheckBox != null && _autoSaveCheckBox.Checked;
+
+        /// <inheritdoc />
+        public override bool CanRunAutoSave => !IsAutoSaveEnabled || !_pendingAutoSave || IsAutoSaveEditDelayElapsed;
 
         private void OnObjectModified()
         {
             MarkAsEdited();
-            AutoSaveIfNeeded();
+            RequestAutoSave();
+        }
+
+        private void RequestAutoSave()
+        {
+            _pendingAutoSave = true;
+            MarkAutoSaveEdit();
         }
 
         private void AutoSaveIfNeeded()
         {
-            if (!CanAutoSave || !IsEdited || _isAutoSaving)
+            if (!IsAutoSaveEnabled || !IsEdited || !_pendingAutoSave || _isAutoSaving)
                 return;
 
-            if (_isLeftMouseButtonDown)
-            {
-                _pendingAutoSave = true;
+            if (!IsAutoSaveEditDelayElapsed)
                 return;
-            }
 
             _pendingAutoSave = false;
             _isAutoSaving = true;
@@ -213,64 +217,12 @@ namespace FlaxEditor.Windows.Assets
             }
         }
 
-        private void FlushPendingAutoSave()
-        {
-            if (!_pendingAutoSave)
-                return;
-
-            _pendingAutoSave = false;
-            AutoSaveIfNeeded();
-        }
-
         private void OnAutoSaveCheckBoxStateChanged(CheckBox box)
         {
             if (box.Checked)
-                AutoSaveIfNeeded();
+                RequestAutoSave();
             else
                 _pendingAutoSave = false;
-        }
-
-        private void OnAutoSaveMouseDown(ref Float2 location, MouseButton button, ref bool handled)
-        {
-            if (button == MouseButton.Left)
-                _isLeftMouseButtonDown = true;
-        }
-
-        private void OnAutoSaveMouseUp(ref Float2 location, MouseButton button, ref bool handled)
-        {
-            if (button != MouseButton.Left)
-                return;
-
-            _isLeftMouseButtonDown = false;
-            FlushPendingAutoSave();
-        }
-
-        private void BindAutoSaveMouseEvents()
-        {
-            if (!_isSettingsAsset)
-                return;
-
-            var window = RootWindow?.Window;
-            if (_autoSaveMouseWindow == window)
-                return;
-
-            UnbindAutoSaveMouseEvents();
-            _autoSaveMouseWindow = window;
-            if (_autoSaveMouseWindow != null)
-            {
-                _autoSaveMouseWindow.MouseDown += OnAutoSaveMouseDown;
-                _autoSaveMouseWindow.MouseUp += OnAutoSaveMouseUp;
-            }
-        }
-
-        private void UnbindAutoSaveMouseEvents()
-        {
-            if (_autoSaveMouseWindow == null)
-                return;
-
-            _autoSaveMouseWindow.MouseDown -= OnAutoSaveMouseDown;
-            _autoSaveMouseWindow.MouseUp -= OnAutoSaveMouseUp;
-            _autoSaveMouseWindow = null;
         }
 
         /// <inheritdoc />
@@ -310,17 +262,9 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
-            BindAutoSaveMouseEvents();
-
             base.Update(deltaTime);
-        }
 
-        /// <inheritdoc />
-        protected override void OnShow()
-        {
-            base.OnShow();
-
-            BindAutoSaveMouseEvents();
+            AutoSaveIfNeeded();
         }
 
         /// <inheritdoc />
@@ -479,17 +423,7 @@ namespace FlaxEditor.Windows.Assets
         public override void OnLostFocus()
         {
             base.OnLostFocus();
-            _isLeftMouseButtonDown = false;
-            FlushPendingAutoSave();
             _optionsCM?.Dispose();
-        }
-
-        /// <inheritdoc />
-        protected override void OnClose()
-        {
-            UnbindAutoSaveMouseEvents();
-
-            base.OnClose();
         }
 
         /// <inheritdoc />
@@ -512,8 +446,6 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override void OnDestroy()
         {
-            UnbindAutoSaveMouseEvents();
-
             if (IsDisposing)
                 return;
             base.OnDestroy();

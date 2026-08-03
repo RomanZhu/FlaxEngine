@@ -540,7 +540,7 @@ namespace FlaxEditor
                     if (options.AutoSaveScenes)
                         Scene.SaveScenes();
                     if (options.AutoSaveContent)
-                        SaveContent();
+                        SaveContent(!_autoSaveNow);
 
                     _autoSaveNow = false;
 
@@ -783,12 +783,14 @@ namespace FlaxEditor
         /// <summary>
         /// Saves all content (assets, etc.).
         /// </summary>
-        public void SaveContent()
+        public void SaveContent(bool autoSave = false)
         {
             for (int i = 0; i < Windows.Windows.Count; i++)
             {
                 if (Windows.Windows[i] is AssetEditorWindow win)
                 {
+                    if (autoSave && !win.CanRunAutoSave)
+                        continue;
                     win.Save();
                 }
             }
