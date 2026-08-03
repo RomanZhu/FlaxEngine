@@ -50,6 +50,8 @@ namespace FlaxEditor.Modules
         /// </summary>
         public ScenesRootNode Root;
 
+        internal bool SuppressUndoDirtyTracking;
+
         /// <summary>
         /// Occurs when actor gets removed. Editor and all submodules should remove references to that actor.
         /// </summary>
@@ -77,8 +79,12 @@ namespace FlaxEditor.Modules
         /// <param name="scene">The scene.</param>
         public void MarkSceneEdited(SceneNode scene)
         {
-            if (scene != null)
-                scene.IsEdited = true;
+            if (scene == null)
+                return;
+
+            scene.IsEdited = true;
+            if (!SuppressUndoDirtyTracking)
+                Editor.Undo.MarkSceneChangedOutsideUndo();
         }
 
         /// <summary>
@@ -122,6 +128,15 @@ namespace FlaxEditor.Modules
                     return true;
             }
             return false;
+        }
+
+        internal void ClearEditedScenes()
+        {
+            foreach (var scene in Root.ChildNodes)
+            {
+                if (scene is SceneNode node)
+                    node.IsEdited = false;
+            }
         }
 
         /// <summary>
@@ -221,6 +236,8 @@ namespace FlaxEditor.Modules
 
             scene.IsEdited = false;
             Level.SaveSceneAsync(scene.Scene);
+            if (!IsEdited())
+                Editor.Undo.MarkScenesSaved();
         }
 
         /// <summary>
@@ -237,6 +254,7 @@ namespace FlaxEditor.Modules
                     node.IsEdited = false;
             }
             Level.SaveAllScenesAsync();
+            Editor.Undo.MarkScenesSaved();
             Editor.UI.AddStatusMessage("Saved!");
         }
 

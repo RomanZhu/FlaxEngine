@@ -183,6 +183,14 @@ namespace FlaxEditor.Modules
             public MainWindowDecorations(RootControl window, bool iconOnly)
             : base(window, iconOnly)
             {
+                if (Title != null)
+                {
+                    Title.HorizontalAlignment = TextAlignment.Near;
+                    Title.TextColor = Style.Current.ForegroundDisabled;
+                    Title.TextColorHighlighted = Style.Current.ForegroundDisabled;
+                    TitleLeftPadding = 24.0f;
+                }
+
                 if (!iconOnly)
                 {
                     _performanceStats = new TitleBarPerformanceStats
@@ -191,6 +199,8 @@ namespace FlaxEditor.Modules
                     };
                 }
             }
+
+            protected override bool ShowUnsavedChangesChip => (Editor.Instance?.Undo?.HasUnsavedSceneChanges ?? false) || (Editor.Instance?.Scene?.IsEdited() ?? false);
 
             protected override void PerformLayoutAfterChildren()
             {
@@ -563,8 +573,25 @@ namespace FlaxEditor.Modules
             }
 
             StatusBar.Text = text;
-            StatusBar.StatusColor = color;
+            ApplyStatusBarColor(color);
             _contentStats = contentStats;
+        }
+
+        private static Color GetStatusBarTextColor(Color statusColor)
+        {
+            var style = Style.Current;
+            if ((statusColor == style.Statusbar.Loading || statusColor == style.BackgroundSelected) && statusColor.Brightness > 0.35f)
+                return Color.Lerp(statusColor, Color.Black, 0.82f);
+            return style.Foreground;
+        }
+
+        private void ApplyStatusBarColor(Color color)
+        {
+            var textColor = GetStatusBarTextColor(color);
+            StatusBar.StatusColor = color;
+            StatusBar.TextColor = textColor;
+            if (_progressLabel != null)
+                _progressLabel.TextColor = textColor;
         }
 
         /// <summary>
@@ -628,7 +655,7 @@ namespace FlaxEditor.Modules
         internal void ProgressFailed(string message)
         {
             _progressFailed = true;
-            StatusBar.StatusColor = Style.Current.Statusbar.Failed;
+            ApplyStatusBarColor(Style.Current.Statusbar.Failed);
             StatusBar.Text = message;
             _outputLogButton.Visible = true;
         }
@@ -1108,9 +1135,8 @@ namespace FlaxEditor.Modules
                 BorderColorSelected = Color.Transparent,
             };
             _outputLogButton.LocalY -= 2;
-            var defaultTextColor = StatusBar.TextColor;
-            _outputLogButton.HoverBegin += () => StatusBar.TextColor = Style.Current.BackgroundSelected;
-            _outputLogButton.HoverEnd += () => StatusBar.TextColor = defaultTextColor;
+            _outputLogButton.HoverBegin += () => StatusBar.TextColor = GetStatusBarTextColor(Style.Current.BackgroundSelected);
+            _outputLogButton.HoverEnd += () => StatusBar.TextColor = GetStatusBarTextColor(StatusBar.StatusColor);
             _outputLogButton.Clicked += () => { Editor.Windows.OutputLogWin.FocusOrShow(); };
 
             // Progress bar with label

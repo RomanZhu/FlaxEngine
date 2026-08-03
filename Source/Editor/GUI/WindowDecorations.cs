@@ -11,6 +11,11 @@ namespace FlaxEditor.GUI;
 /// <seealso cref="FlaxEngine.GUI.ContainerControl" />
 public class WindowDecorations : ContainerControl
 {
+    private const string UnsavedChangesText = "Unsaved changes";
+    private const float UnsavedChangesGap = 8.0f;
+    private const float UnsavedChangesChipHeight = 16.0f;
+    private const float UnsavedChangesChipHorizontalPadding = 8.0f;
+
     private Image _icon;
     private Label _title;
     private Button _closeButton;
@@ -18,6 +23,7 @@ public class WindowDecorations : ContainerControl
     private Button _maximizeButton;
     private LocalizedString _charChromeRestore, _charChromeMaximize;
     private Window _window;
+    private bool _showingUnsavedChangesChip;
 
     /// <summary>
     /// Gets the left edge of the native window-button group after layout.
@@ -28,6 +34,16 @@ public class WindowDecorations : ContainerControl
     /// The title label in the title bar.
     /// </summary>
     public Label Title => _title;
+
+    /// <summary>
+    /// Gets or sets the extra left padding applied to the title label.
+    /// </summary>
+    protected float TitleLeftPadding { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether the unsaved changes chip should be displayed.
+    /// </summary>
+    protected virtual bool ShowUnsavedChangesChip => false;
 
     /// <summary>
     /// The icon used in the title bar.
@@ -92,7 +108,7 @@ public class WindowDecorations : ContainerControl
                 ClipText = true,
                 TextColor = Style.Current.ForegroundGrey,
                 TextColorHighlighted = Style.Current.ForegroundGrey,
-                BackgroundColor = Style.Current.LightBackground,
+                BackgroundColor = Color.Transparent,
                 Parent = this,
             };
 
@@ -163,6 +179,16 @@ public class WindowDecorations : ContainerControl
             var maximizeText = _window.IsMaximized ? _charChromeRestore : _charChromeMaximize;
             if (_maximizeButton.Text != maximizeText)
                 _maximizeButton.Text = maximizeText;
+        }
+
+        if (_title != null)
+        {
+            var showUnsavedChangesChip = ShowUnsavedChangesChip;
+            if (_showingUnsavedChangesChip != showUnsavedChangesChip)
+            {
+                _showingUnsavedChangesChip = showUnsavedChangesChip;
+                PerformLayout();
+            }
         }
     }
 
@@ -302,8 +328,14 @@ public class WindowDecorations : ContainerControl
         // Title
         if (_title != null)
         {
+            _showingUnsavedChangesChip = ShowUnsavedChangesChip;
+            var titleX = x + TitleLeftPadding;
+            var titleWidth = Mathf.Max(0.0f, rightMostButtonX - titleX);
+            if (_showingUnsavedChangesChip)
+                titleWidth = Mathf.Max(0.0f, titleWidth - GetUnsavedChangesChipWidth(Style.Current) - UnsavedChangesGap);
+
             _title.Text = _window.Title;
-            _title.Bounds = new Rectangle(x, 0, rightMostButtonX - x, Height);
+            _title.Bounds = new Rectangle(titleX, 0, titleWidth, Height);
         }
     }
 
@@ -311,7 +343,46 @@ public class WindowDecorations : ContainerControl
     public override void Draw()
     {
         base.Draw();
+        DrawWindowControlsDivider();
+        DrawUnsavedChangesChip();
         DrawBorders();
+    }
+
+    private void DrawWindowControlsDivider()
+    {
+        if (_minimizeButton == null)
+            return;
+
+        Render2D.FillRectangle(new Rectangle(_minimizeButton.X, 0, 1.0f, Height), Style.Current.BorderNormal);
+    }
+
+    private static float GetUnsavedChangesChipWidth(Style style)
+    {
+        return style.FontSmall.MeasureText(UnsavedChangesText).X + UnsavedChangesChipHorizontalPadding * 2.0f;
+    }
+
+    private void DrawUnsavedChangesChip()
+    {
+        if (_title == null || !_showingUnsavedChangesChip)
+            return;
+
+        var style = Style.Current;
+        var chipWidth = GetUnsavedChangesChipWidth(style);
+        var titleWidth = Mathf.Min(style.FontMedium.MeasureText(_title.Text).X, _title.Width);
+        var chipX = _title.X + titleWidth + UnsavedChangesGap;
+        if (chipX + chipWidth > ContentRight - UnsavedChangesGap)
+            return;
+
+        var chipBounds = new Rectangle(chipX, (Height - UnsavedChangesChipHeight) * 0.5f, chipWidth, UnsavedChangesChipHeight);
+        StyleRendering.DrawRoundedRectangle(chipBounds, style.BackgroundNormal, style.BorderNormal, 1.0f, style.CornerRadius);
+        Render2D.DrawText(
+            style.FontSmall,
+            UnsavedChangesText,
+            new Rectangle(chipBounds.X + UnsavedChangesChipHorizontalPadding, chipBounds.Y, chipBounds.Width - UnsavedChangesChipHorizontalPadding * 2.0f, chipBounds.Height),
+            style.ForegroundGrey,
+            TextAlignment.Center,
+            TextAlignment.Center,
+            TextWrapping.NoWrap);
     }
 
     /// <summary>

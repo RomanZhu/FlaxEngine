@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using FlaxEditor.History;
 using FlaxEditor.Options;
 using FlaxEngine;
@@ -13,7 +14,22 @@ namespace FlaxEditor
     /// <seealso cref="FlaxEditor.Undo" />
     public class EditorUndo : Undo
     {
+        private struct SceneState
+        {
+            public int Before;
+            public int After;
+        }
+
         private readonly Editor _editor;
+        private readonly Dictionary<IUndoAction, SceneState> _sceneStates = new Dictionary<IUndoAction, SceneState>();
+        private int _nextSceneStateID = 1;
+        private int _currentSceneStateID;
+        private int _savedSceneStateID;
+
+        /// <summary>
+        /// Gets a value indicating whether scene undo history has changes since the last scene save point.
+        /// </summary>
+        public bool HasUnsavedSceneChanges => _currentSceneStateID != _savedSceneStateID;
 
         internal EditorUndo(Editor editor)
         : base(500)
@@ -38,66 +54,142 @@ namespace FlaxEditor
         /// <inheritdoc />
         protected override void OnAction(IUndoAction action)
         {
-            CheckSceneEdited(action);
+            if (CheckSceneEdited(action))
+            {
+                var state = new SceneState
+                {
+                    Before = _currentSceneStateID,
+                    After = _nextSceneStateID++,
+                };
+                _sceneStates[action] = state;
+                _currentSceneStateID = state.After;
+            }
             base.OnAction(action);
         }
 
         /// <inheritdoc />
         protected override void OnUndo(IUndoAction action)
         {
-            CheckSceneEdited(action);
+            if (CheckSceneEdited(action))
+            {
+                if (_sceneStates.TryGetValue(action, out var state))
+                    _currentSceneStateID = state.Before;
+                else
+                    MarkSceneChangedOutsideUndo();
+                SyncSceneEditedFlags();
+            }
             base.OnUndo(action);
         }
 
         /// <inheritdoc />
         protected override void OnRedo(IUndoAction action)
         {
-            CheckSceneEdited(action);
+            if (CheckSceneEdited(action))
+            {
+                if (_sceneStates.TryGetValue(action, out var state))
+                    _currentSceneStateID = state.After;
+                else
+                    MarkSceneChangedOutsideUndo();
+                SyncSceneEditedFlags();
+            }
             base.OnRedo(action);
+        }
+
+        /// <summary>
+        /// Marks the current scene undo state as saved.
+        /// </summary>
+        public void MarkScenesSaved()
+        {
+            _savedSceneStateID = _currentSceneStateID;
+        }
+
+        /// <summary>
+        /// Marks scene state dirty for scene edits that are not tracked by undo history.
+        /// </summary>
+        internal void MarkSceneChangedOutsideUndo()
+        {
+            _currentSceneStateID = _nextSceneStateID++;
+        }
+
+        /// <summary>
+        /// Clears the history.
+        /// </summary>
+        public new void Clear()
+        {
+            base.Clear();
+            _sceneStates.Clear();
+            _nextSceneStateID = 1;
+            _currentSceneStateID = 0;
+            _savedSceneStateID = 0;
+        }
+
+        private void SyncSceneEditedFlags()
+        {
+            if (!HasUnsavedSceneChanges)
+                Editor.Instance.Scene.ClearEditedScenes();
         }
 
         /// <summary>
         /// Checks if the any scene has been edited after performing the given action.
         /// </summary>
         /// <param name="action">The action.</param>
-        private void CheckSceneEdited(IUndoAction action)
+        private bool CheckSceneEdited(IUndoAction action)
         {
             // Note: this is automatic tracking system to check if undo action modifies scene objects
 
-            // Skip if all scenes are already modified
-            if (Editor.Instance.Scene.IsEverySceneEdited())
-                return;
+            var sceneModule = Editor.Instance.Scene;
+            var scenesDirty = false;
+            var markScenes = !sceneModule.IsEverySceneEdited();
+            var suppressUndoDirtyTracking = sceneModule.SuppressUndoDirtyTracking;
+            sceneModule.SuppressUndoDirtyTracking = true;
 
-            // ReSharper disable once SuspiciousTypeConversion.Global
-            if (action is ISceneEditAction sceneEditAction)
+            try
             {
-                sceneEditAction.MarkSceneEdited(Editor.Instance.Scene);
-            }
-            else if (action is UndoActionObject undoActionObject)
-            {
-                var data = undoActionObject.PrepareData();
+                // ReSharper disable once SuspiciousTypeConversion.Global
+                if (action is ISceneEditAction sceneEditAction)
+                {
+                    scenesDirty = true;
+                    if (markScenes)
+                        sceneEditAction.MarkSceneEdited(sceneModule);
+                }
+                else if (action is UndoActionObject undoActionObject)
+                {
+                    var data = undoActionObject.PrepareData();
 
-                if (data.TargetInstance is SceneGraph.SceneGraphNode node)
-                {
-                    Editor.Instance.Scene.MarkSceneEdited(node.ParentScene);
+                    if (data.TargetInstance is SceneGraph.SceneGraphNode node)
+                    {
+                        scenesDirty = true;
+                        if (markScenes)
+                            sceneModule.MarkSceneEdited(node.ParentScene);
+                    }
+                    else if (data.TargetInstance is Actor actor)
+                    {
+                        scenesDirty = true;
+                        if (markScenes)
+                            sceneModule.MarkSceneEdited(actor.Scene);
+                    }
+                    else if (data.TargetInstance is Script script && script.Actor != null)
+                    {
+                        scenesDirty = true;
+                        if (markScenes)
+                            sceneModule.MarkSceneEdited(script.Actor.Scene);
+                    }
                 }
-                else if (data.TargetInstance is Actor actor)
+                else if (action is MultiUndoAction multiUndoAction)
                 {
-                    Editor.Instance.Scene.MarkSceneEdited(actor.Scene);
-                }
-                else if (data.TargetInstance is Script script && script.Actor != null)
-                {
-                    Editor.Instance.Scene.MarkSceneEdited(script.Actor.Scene);
+                    // Process child actions
+                    for (int i = 0; i < multiUndoAction.Actions.Length; i++)
+                    {
+                        scenesDirty |= CheckSceneEdited(multiUndoAction.Actions[i]);
+                    }
                 }
             }
-            else if (action is MultiUndoAction multiUndoAction)
+            finally
             {
-                // Process child actions
-                for (int i = 0; i < multiUndoAction.Actions.Length; i++)
-                {
-                    CheckSceneEdited(multiUndoAction.Actions[i]);
-                }
+                sceneModule.SuppressUndoDirtyTracking = suppressUndoDirtyTracking;
             }
+
+            return scenesDirty;
         }
     }
 }
