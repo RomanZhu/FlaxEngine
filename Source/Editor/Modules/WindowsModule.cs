@@ -141,6 +141,11 @@ namespace FlaxEditor.Modules
         public VisualScriptDebuggerWindow VisualScriptDebuggerWin;
 
         /// <summary>
+        /// The live UI design inspector window.
+        /// </summary>
+        public UIDesignInspectorWindow UIDesignInspectorWin;
+
+        /// <summary>
         /// List with all created editor windows.
         /// </summary>
         public readonly List<EditorWindow> Windows = new List<EditorWindow>(32);
@@ -808,6 +813,7 @@ namespace FlaxEditor.Modules
             EditorOptionsWin = new EditorOptionsWindow(Editor);
             PluginsWin = new PluginsWindow(Editor);
             VisualScriptDebuggerWin = new VisualScriptDebuggerWindow(Editor);
+            UIDesignInspectorWin = new UIDesignInspectorWindow(Editor);
 
             // Bind events
             Level.SceneSaveError += OnSceneSaveError;

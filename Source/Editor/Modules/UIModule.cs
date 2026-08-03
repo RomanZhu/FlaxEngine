@@ -1017,6 +1017,7 @@ namespace FlaxEditor.Modules
             cm.AddButton("Profiler", inputOptions.ProfilerWindow, Editor.Windows.ProfilerWin.FocusOrShow);
             cm.AddButton("Content Search", inputOptions.ContentSearchWindow, Editor.ContentFinding.ShowSearch);
             cm.AddButton("Visual Script Debugger", inputOptions.VisualScriptDebuggerWindow, Editor.Windows.VisualScriptDebuggerWin.FocusOrShow);
+            cm.AddButton("UI Design Inspector", Editor.Windows.UIDesignInspectorWin.FocusOrShow);
             cm.AddSeparator();
             cm.AddButton("Save window layout", Editor.Windows.SaveLayout);
             _menuWindowApplyWindowLayout = cm.AddChildMenu("Window layouts");
