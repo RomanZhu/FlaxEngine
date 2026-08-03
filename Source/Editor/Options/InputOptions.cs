@@ -403,12 +403,16 @@ namespace FlaxEditor.Options
         [EditorDisplay("Viewport"), EditorOrder(1760)]
         public InputBinding ToggleOrthographic = new InputBinding(KeyboardKeys.NumpadDecimal);
 
-        [DefaultValue(typeof(InputBinding), "G")]
+        [DefaultValue(typeof(InputBinding), "Shift+G")]
         [EditorDisplay("Viewport"), EditorOrder(1770)]
-        public InputBinding ToggleGameView = new InputBinding(KeyboardKeys.G);
+        public InputBinding ToggleGameView = new InputBinding(KeyboardKeys.G, KeyboardKeys.Shift);
+
+        [DefaultValue(typeof(InputBinding), "G")]
+        [EditorDisplay("Viewport"), EditorOrder(1771)]
+        public InputBinding ToggleCharacterControllerMode = new InputBinding(KeyboardKeys.G);
 
         [DefaultValue(typeof(InputBinding), "P")]
-        [EditorDisplay("Viewport"), EditorOrder(1770)]
+        [EditorDisplay("Viewport"), EditorOrder(1780)]
         public InputBinding ToggleNavMeshVisibility = new InputBinding(KeyboardKeys.P);
 
         #endregion

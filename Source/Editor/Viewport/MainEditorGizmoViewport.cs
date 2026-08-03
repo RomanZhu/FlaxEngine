@@ -11,6 +11,7 @@ using FlaxEditor.GUI.Input;
 using FlaxEditor.Options;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Scripting;
+using FlaxEditor.Viewport.Cameras;
 using FlaxEditor.Viewport.Modes;
 using FlaxEditor.Viewport.Widgets;
 using FlaxEditor.Windows;
@@ -30,10 +31,12 @@ namespace FlaxEditor.Viewport
         private readonly ContextMenuButton _showGridButton;
         private readonly ContextMenuButton _showNavigationButton;
         private readonly ContextMenuButton _toggleGameViewButton;
+        private readonly ContextMenuButton _toggleCharacterControllerModeButton;
         private readonly ContextMenuButton _showDirectionGizmoButton;
         private ToolStripButton _overlayGridButton;
         private ToolStripButton _overlayNavigationButton;
         private ToolStripButton _overlayGameViewButton;
+        private ToolStripButton _overlayCharacterControllerModeButton;
         private ToolStripButton _overlayModeButton;
         private ToolStripButton _overlayTranslateModeButton;
         private ToolStripButton _overlayRotateModeButton;
@@ -136,6 +139,13 @@ namespace FlaxEditor.Viewport
         private bool _gameViewWasGridShown;
         private bool _gameViewWasFpsCounterShown;
         private bool _gameViewWasNavigationShown;
+        private InSceneCharacterControllerCamera _characterControllerCamera;
+        private ViewportCamera _preCharacterControllerCamera;
+        private bool _characterControllerModeActive;
+        private bool _characterControllerControlMouseActive;
+        private bool _characterControllerWasOrthographic;
+        private bool _characterControllerWasTransformGizmoVisible;
+        private bool _characterControllerWasSelectionOutlineShown;
 
         /// <summary>
         /// Drag and drop handlers
@@ -171,6 +181,9 @@ namespace FlaxEditor.Viewport
         /// Gets the debug draw data for the viewport.
         /// </summary>
         public ViewportDebugDrawData DebugDrawData => _debugDrawData;
+
+        /// <inheritdoc />
+        protected override bool IsControllingMouse => IsCharacterControllerLookActive() || base.IsControllingMouse;
 
         /// <summary>
         /// Gets or sets a value indicating whether show navigation mesh.
@@ -291,6 +304,9 @@ namespace FlaxEditor.Viewport
             ViewWidgetButtonMenu.AddSeparator();
             _toggleGameViewButton = ViewWidgetButtonMenu.AddButton("Game View", inputOptions.ToggleGameView, ToggleGameView);
             _toggleGameViewButton.CloseMenuOnClick = false;
+            _toggleCharacterControllerModeButton = ViewWidgetButtonMenu.AddButton("Character Controller", inputOptions.ToggleCharacterControllerMode, ToggleCharacterControllerMode);
+            _toggleCharacterControllerModeButton.CloseMenuOnClick = false;
+            _toggleCharacterControllerModeButton.LinkTooltip("Toggle in-scene character controller camera mode.");
 
             // Create camera widget
             ViewWidgetButtonMenu.AddSeparator();
@@ -322,10 +338,12 @@ namespace FlaxEditor.Viewport
             InputActions.Add(options => options.Delete, _editor.SceneEditing.Delete);
             InputActions.Add(options => options.ToggleNavMeshVisibility, () => ShowNavigation = !ShowNavigation);
 
-            // Game View
+            // View modes
+            InputActions.Add(options => options.ToggleCharacterControllerMode, ToggleCharacterControllerMode);
             InputActions.Add(options => options.ToggleGameView, ToggleGameView);
 
             editor.Options.OptionsChanged += OnEditorOptionsChanged;
+            editor.PlayModeBeginning += OnPlayModeBeginning;
             OnEditorOptionsChanged(editor.Options.Options);
         }
 
@@ -403,7 +421,9 @@ namespace FlaxEditor.Viewport
             _overlayNavigationButton = AddViewportToolStripButton("Nav", SpriteHandle.Invalid, ToolStripAnchor.Right, "Flax.Scene.Navigation", () => ShowNavigation = !ShowNavigation);
             _overlayNavigationButton.LinkTooltip("Toggle navigation mesh.");
             _overlayGameViewButton = AddViewportToolStripGlyphButton(ToolStripGlyph.Eye, ToolStripAnchor.Right, "Flax.Scene.GameView", ToggleGameView);
-            _overlayGameViewButton.LinkTooltip("Toggle game view preview.");
+            _overlayGameViewButton.LinkTooltip("Toggle game view preview.", ref inputOptions.ToggleGameView);
+            _overlayCharacterControllerModeButton = AddViewportToolStripButton("Walk", SpriteHandle.Invalid, ToolStripAnchor.Right, "Flax.Scene.CharacterController", ToggleCharacterControllerMode);
+            _overlayCharacterControllerModeButton.LinkTooltip("Toggle in-scene character controller camera mode.", ref inputOptions.ToggleCharacterControllerMode);
             AddViewportToolStripButton("Cam+", Editor.Instance.Icons.CameraFill32, ToolStripAnchor.Right, "Flax.Scene.CreateCamera", CreateCameraAtView).LinkTooltip("Create camera here.");
             UpdateViewportToolStrip();
         }
@@ -518,6 +538,17 @@ namespace FlaxEditor.Viewport
             base.Update(deltaTime);
             UpdateViewportToolStrip();
 
+            if (_characterControllerModeActive)
+            {
+                if (_characterControllerCamera == null || !_characterControllerCamera.IsActive)
+                {
+                    StopCharacterControllerMode();
+                    return;
+                }
+
+                return;
+            }
+
             var selection = TransformGizmo.SelectedParents;
             var requestUnlockFocus = FlaxEngine.Input.Mouse.GetButtonDown(MouseButton.Right) || FlaxEngine.Input.Mouse.GetButtonDown(MouseButton.Left);
             if (TransformGizmo.SelectedParents.Count == 0 || (requestUnlockFocus && ContainsFocus))
@@ -563,6 +594,100 @@ namespace FlaxEditor.Viewport
             }
 
             _customSelectionOutline = customSelectionOutline;
+        }
+
+        private void OnPlayModeBeginning()
+        {
+            StopCharacterControllerMode();
+        }
+
+        private void ToggleCharacterControllerMode()
+        {
+            if (_characterControllerModeActive)
+                StopCharacterControllerMode();
+            else
+                StartCharacterControllerMode();
+        }
+
+        private void StartCharacterControllerMode()
+        {
+            if (_characterControllerModeActive || !Level.IsAnySceneLoaded)
+                return;
+
+            if (_gameViewActive)
+                ToggleGameView();
+
+            _characterControllerCamera ??= new InSceneCharacterControllerCamera();
+            _preCharacterControllerCamera = ViewportCamera;
+            _characterControllerWasOrthographic = UseOrthographicProjection;
+            _characterControllerWasTransformGizmoVisible = TransformGizmo.Visible;
+            _characterControllerWasSelectionOutlineShown = SelectionOutline.ShowSelectionOutline;
+
+            UseOrthographicProjection = false;
+            ViewportCamera = _characterControllerCamera;
+            if (!_characterControllerCamera.Enter())
+            {
+                ViewportCamera = _preCharacterControllerCamera;
+                _preCharacterControllerCamera = null;
+                UseOrthographicProjection = _characterControllerWasOrthographic;
+                return;
+            }
+
+            _characterControllerModeActive = true;
+            Focus();
+            UpdateCharacterControllerModeButtons();
+            UpdateViewportToolStrip();
+        }
+
+        private void StopCharacterControllerMode()
+        {
+            if (!_characterControllerModeActive)
+                return;
+
+            if (_characterControllerControlMouseActive && RootWindow?.Window != null)
+            {
+                base.OnControlMouseEnd(RootWindow.Window);
+                _characterControllerControlMouseActive = false;
+            }
+            _characterControllerCamera?.Exit();
+
+            if (ViewportCamera == _characterControllerCamera)
+                ViewportCamera = _preCharacterControllerCamera ?? new FPSCamera();
+            _preCharacterControllerCamera = null;
+
+            UseOrthographicProjection = _characterControllerWasOrthographic;
+            TransformGizmo.Visible = _characterControllerWasTransformGizmoVisible && !_gameViewActive;
+            SelectionOutline.ShowSelectionOutline = _characterControllerWasSelectionOutlineShown && !_gameViewActive;
+            _characterControllerModeActive = false;
+            UpdateCharacterControllerModeButtons();
+            UpdateViewportToolStrip();
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseWheel(Float2 location, float delta)
+        {
+            if (_characterControllerModeActive)
+            {
+                base.OnMouseWheel(location, delta);
+                return true;
+            }
+
+            return base.OnMouseWheel(location, delta);
+        }
+
+        private void UpdateCharacterControllerModeButtons()
+        {
+            if (_toggleCharacterControllerModeButton != null)
+                _toggleCharacterControllerModeButton.Icon = _characterControllerModeActive ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+            if (_overlayCharacterControllerModeButton != null)
+                _overlayCharacterControllerModeButton.Checked = _characterControllerModeActive;
+        }
+
+        private bool IsCharacterControllerLookActive()
+        {
+            if (!_characterControllerModeActive)
+                return false;
+            return (Root?.GetMouseButton(MouseButton.Right) ?? false) || _input.IsMouseRightDown;
         }
 
         private void CreateCameraAtView()
@@ -741,6 +866,9 @@ namespace FlaxEditor.Viewport
         /// </summary>
         public void ToggleGameView()
         {
+            if (_characterControllerModeActive)
+                StopCharacterControllerMode();
+
             if (!_gameViewActive)
             {
                 // Cache flags & values
@@ -804,6 +932,7 @@ namespace FlaxEditor.Viewport
                 _overlayNavigationButton.Checked = ShowNavigation;
             if (_overlayGameViewButton != null)
                 _overlayGameViewButton.Checked = _gameViewActive;
+            UpdateCharacterControllerModeButtons();
         }
 
         private static void SetViewportToolStripButtonText(ToolStripButton button, string text)
@@ -967,6 +1096,29 @@ namespace FlaxEditor.Viewport
 
             // Draw rubber band for rectangle selection
             _rubberBandSelector.Draw();
+
+            if (IsCharacterControllerLookActive())
+                DrawCharacterControllerReticle();
+        }
+
+        private void DrawCharacterControllerReticle()
+        {
+            var center = Size * 0.5f;
+            var shadow = Color.Black.AlphaMultiplied(0.65f);
+            var color = Color.White.AlphaMultiplied(0.85f);
+            var left = center + new Float2(-10.0f, 0.0f);
+            var right = center + new Float2(10.0f, 0.0f);
+            var top = center + new Float2(0.0f, -10.0f);
+            var bottom = center + new Float2(0.0f, 10.0f);
+
+            Render2D.DrawLine(left, center + new Float2(-3.0f, 0.0f), shadow, 3.0f);
+            Render2D.DrawLine(center + new Float2(3.0f, 0.0f), right, shadow, 3.0f);
+            Render2D.DrawLine(top, center + new Float2(0.0f, -3.0f), shadow, 3.0f);
+            Render2D.DrawLine(center + new Float2(0.0f, 3.0f), bottom, shadow, 3.0f);
+            Render2D.DrawLine(left, center + new Float2(-3.0f, 0.0f), color, 1.0f);
+            Render2D.DrawLine(center + new Float2(3.0f, 0.0f), right, color, 1.0f);
+            Render2D.DrawLine(top, center + new Float2(0.0f, -3.0f), color, 1.0f);
+            Render2D.DrawLine(center + new Float2(0.0f, 3.0f), bottom, color, 1.0f);
         }
 
         /// <inheritdoc />
@@ -983,6 +1135,9 @@ namespace FlaxEditor.Viewport
         {
             base.OnMouseMove(location);
 
+            if (IsCharacterControllerLookActive())
+                return;
+
             // Don't allow rubber band selection when gizmo is controlling mouse, vertex painting mode, or cloth painting is enabled
             bool canStart = !(IsControllingMouse || IsRightMouseButtonDown || IsAltKeyDown) &&
                             Gizmos?.Active is TransformGizmo;
@@ -992,9 +1147,21 @@ namespace FlaxEditor.Viewport
         /// <inheritdoc />
         protected override void OnControlMouseBegin(Window win)
         {
-            _rubberBandSelector.ReleaseRubberBandSelection();
+            if (IsCharacterControllerLookActive())
+                _characterControllerControlMouseActive = true;
+            else
+                _rubberBandSelector.ReleaseRubberBandSelection();
 
             base.OnControlMouseBegin(win);
+        }
+
+        /// <inheritdoc />
+        protected override void OnControlMouseEnd(Window win)
+        {
+            if (_characterControllerControlMouseActive)
+                _characterControllerControlMouseActive = false;
+
+            base.OnControlMouseEnd(win);
         }
 
         /// <inheritdoc />
@@ -1040,6 +1207,57 @@ namespace FlaxEditor.Viewport
             }
 
             return false;
+        }
+
+        private bool IsCharacterControllerMovementKey(KeyboardKeys key)
+        {
+            var input = _editor.Options.Options.Input;
+            return key == input.Forward.Key
+                || key == input.Backward.Key
+                || key == input.Left.Key
+                || key == input.Right.Key;
+        }
+
+        private bool ProcessCharacterControllerModeShortcut(KeyboardKeys key)
+        {
+            if (key != KeyboardKeys.G)
+                return false;
+
+            var root = Root;
+            if ((root?.GetKey(KeyboardKeys.Control) ?? false) || (root?.GetKey(KeyboardKeys.Alt) ?? false))
+                return false;
+
+            if (root?.GetKey(KeyboardKeys.Shift) ?? false)
+                ToggleGameView();
+            else
+                ToggleCharacterControllerMode();
+            return true;
+        }
+
+        /// <inheritdoc />
+        public override bool OnKeyDown(KeyboardKeys key)
+        {
+            if (_characterControllerModeActive)
+            {
+                if (key == KeyboardKeys.Escape)
+                {
+                    StopCharacterControllerMode();
+                    return true;
+                }
+
+                if (ProcessCharacterControllerModeShortcut(key))
+                    return true;
+
+                var root = Root;
+                bool shortcutModifier = (root?.GetKey(KeyboardKeys.Control) ?? false) || (root?.GetKey(KeyboardKeys.Alt) ?? false);
+                if (IsCharacterControllerLookActive() && !shortcutModifier && (key == KeyboardKeys.Shift || key == KeyboardKeys.Spacebar || IsCharacterControllerMovementKey(key)))
+                    return true;
+            }
+
+            if (ProcessCharacterControllerModeShortcut(key))
+                return true;
+
+            return base.OnKeyDown(key);
         }
 
         /// <inheritdoc />
@@ -1135,6 +1353,8 @@ namespace FlaxEditor.Viewport
             if (IsDisposing)
                 return;
 
+            StopCharacterControllerMode();
+            _editor.PlayModeBeginning -= OnPlayModeBeginning;
             _debugDrawData.Dispose();
             if (_task != null)
             {

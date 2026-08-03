@@ -145,6 +145,83 @@ namespace FlaxEditor.Options
         public bool UsePersistenceOverDefaults { get; set; } = true;
 
         /// <summary>
+        /// Gets or sets the default walking speed for the in-scene character controller camera mode.
+        /// </summary>
+        [DefaultValue(420.0f), Limit(1.0f, 10000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(240), Tooltip("The default walking speed for the in-scene character controller camera mode.")]
+        public float CharacterControllerWalkSpeed { get; set; } = 420.0f;
+
+        /// <summary>
+        /// Gets or sets the minimum walking speed used when mouse wheel speed adjustment is active.
+        /// </summary>
+        [DefaultValue(60.0f), Limit(1.0f, 10000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(241), Tooltip("The minimum walking speed used when mouse wheel speed adjustment is active.")]
+        public float CharacterControllerMinWalkSpeed { get; set; } = 60.0f;
+
+        /// <summary>
+        /// Gets or sets the maximum walking speed used when mouse wheel speed adjustment is active.
+        /// </summary>
+        [DefaultValue(2000.0f), Limit(1.0f, 10000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(242), Tooltip("The maximum walking speed used when mouse wheel speed adjustment is active.")]
+        public float CharacterControllerMaxWalkSpeed { get; set; } = 2000.0f;
+
+        /// <summary>
+        /// Gets or sets the speed change applied per mouse wheel step in the in-scene character controller camera mode.
+        /// </summary>
+        [DefaultValue(50.0f), Limit(1.0f, 10000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(243), Tooltip("The speed change applied per mouse wheel step in the in-scene character controller camera mode.")]
+        public float CharacterControllerScrollSpeedStep { get; set; } = 50.0f;
+
+        /// <summary>
+        /// Gets or sets the sprint speed multiplier for the in-scene character controller camera mode.
+        /// </summary>
+        [DefaultValue(1.85f), Limit(1.0f, 20.0f, 0.05f)]
+        [EditorDisplay("Character Controller"), EditorOrder(244), Tooltip("The sprint speed multiplier for the in-scene character controller camera mode.")]
+        public float CharacterControllerSprintMultiplier { get; set; } = 1.85f;
+
+        /// <summary>
+        /// Gets or sets the jump speed for the in-scene character controller camera mode.
+        /// </summary>
+        [DefaultValue(560.0f), Limit(0.0f, 10000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(245), Tooltip("The jump speed for the in-scene character controller camera mode.")]
+        public float CharacterControllerJumpSpeed { get; set; } = 560.0f;
+
+        /// <summary>
+        /// Gets or sets the radius for the in-scene character controller.
+        /// </summary>
+        [DefaultValue(35.0f), Limit(1.0f, 1000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(246), Tooltip("The radius for the in-scene character controller.")]
+        public float CharacterControllerRadius { get; set; } = 35.0f;
+
+        /// <summary>
+        /// Gets or sets the height for the in-scene character controller.
+        /// </summary>
+        [DefaultValue(115.0f), Limit(1.0f, 2000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(247), Tooltip("The height for the in-scene character controller.")]
+        public float CharacterControllerHeight { get; set; } = 115.0f;
+
+        /// <summary>
+        /// Gets or sets the eye height above the in-scene character controller position.
+        /// </summary>
+        [DefaultValue(160.0f), Limit(1.0f, 2000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(248), Tooltip("The eye height above the in-scene character controller position.")]
+        public float CharacterControllerEyeHeight { get; set; } = 160.0f;
+
+        /// <summary>
+        /// Gets or sets the step offset for the in-scene character controller.
+        /// </summary>
+        [DefaultValue(35.0f), Limit(0.0f, 1000.0f, 1.0f)]
+        [EditorDisplay("Character Controller"), EditorOrder(249), Tooltip("The step offset for the in-scene character controller.")]
+        public float CharacterControllerStepOffset { get; set; } = 35.0f;
+
+        /// <summary>
+        /// Gets or sets the slope limit for the in-scene character controller.
+        /// </summary>
+        [DefaultValue(50.0f), Limit(0.0f, 90.0f, 0.1f)]
+        [EditorDisplay("Character Controller"), EditorOrder(250), Tooltip("The slope limit for the in-scene character controller.")]
+        public float CharacterControllerSlopeLimit { get; set; } = 50.0f;
+
+        /// <summary>
         /// Gets or sets the view distance you can see the grid.
         /// </summary>
         [DefaultValue(2500.0f)]
