@@ -137,6 +137,8 @@ namespace FlaxEditor.GUI.Input
                 value = value.ToSRgb();
             var isTransparent = value.A < 1;
             var style = Style.Current;
+            var enabled = VisuallyEnabledInHierarchy;
+            var disabledValue = Color.Lerp(value, style.TextBoxBackground, 0.6f);
             var fullRect = new Rectangle(0, 0, Width, Height);
             var colorRect = new Rectangle(0, 0, isTransparent ? Width * 0.7f : Width, Height);
 
@@ -162,11 +164,12 @@ namespace FlaxEditor.GUI.Input
                         }
                     }
                 }
-                Render2D.FillRectangle(alphaRect, value);
+                Render2D.FillRectangle(alphaRect, enabled ? value : disabledValue);
             }
 
-            Render2D.FillRectangle(colorRect, value with { A = 1 });
-            Render2D.DrawRectangle(fullRect, IsMouseOver || IsNavFocused ? style.BackgroundSelected : Color.Black);
+            var colorValue = enabled ? value : disabledValue;
+            Render2D.FillRectangle(colorRect, colorValue with { A = 1 });
+            Render2D.DrawRectangle(fullRect, enabled && (IsMouseOver || IsNavFocused) ? style.BackgroundSelected : Color.Black);
         }
 
         /// <inheritdoc />

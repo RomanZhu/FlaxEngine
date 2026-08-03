@@ -61,7 +61,7 @@ namespace FlaxEditor.GUI
             var clientRect = new Rectangle(0, 0, Width, Height);
             var hasChildItems = ContextMenu.HasChildren;
             var isOpened = ContextMenu.IsOpened;
-            bool enabled = EnabledInHierarchy;
+            bool enabled = VisuallyEnabledInHierarchy;
 
             // Draw background
             if (enabled && hasChildItems && (isOpened || IsMouseOver))

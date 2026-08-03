@@ -116,7 +116,7 @@ namespace FlaxEngine.GUI
             Margin.ShrinkRectangle(ref rect);
 
             var color = IsMouseOver || IsNavFocused ? MouseOverColor : Color;
-            if (!Enabled)
+            if (!VisuallyEnabledInHierarchy)
                 color *= DisabledTint;
             Brush.Draw(rect, color);
         }

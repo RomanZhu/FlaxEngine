@@ -56,7 +56,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     rect.Y = (rect.Height - rect.Width) * 0.5f;
                     rect.Height = rect.Width;
                 }
-                var enabled = EnabledInHierarchy;
+                var enabled = VisuallyEnabledInHierarchy;
                 var style = FlaxEngine.GUI.Style.Current;
                 var backgroundColor = BackgroundColor;
                 var borderColor = BorderColor;

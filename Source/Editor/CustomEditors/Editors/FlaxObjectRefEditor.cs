@@ -200,7 +200,7 @@ namespace FlaxEditor.CustomEditors.Editors
             // Cache data
             var style = Style.Current;
             bool isSelected = _value != null;
-            bool isEnabled = EnabledInHierarchy;
+            bool isEnabled = VisuallyEnabledInHierarchy;
             var frameRect = new Rectangle(0, 0, Width, 16);
             if (isSelected)
                 frameRect.Width -= 16;

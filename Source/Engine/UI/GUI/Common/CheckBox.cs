@@ -231,7 +231,7 @@ namespace FlaxEngine.GUI
         {
             base.Draw();
 
-            bool enabled = EnabledInHierarchy;
+            bool enabled = VisuallyEnabledInHierarchy;
 
             // Border
             if (HasBorder)

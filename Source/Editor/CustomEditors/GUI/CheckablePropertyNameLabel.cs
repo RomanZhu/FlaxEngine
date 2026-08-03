@@ -20,6 +20,11 @@ namespace FlaxEditor.CustomEditors.GUI
         public readonly CheckBox CheckBox;
 
         /// <summary>
+        /// Gets or sets a value indicating whether child controls remain interactive but draw as disabled when unchecked.
+        /// </summary>
+        public bool UseAnticipatingChildInput { get; set; }
+
+        /// <summary>
         /// Event fired when 'checked' state gets changed.
         /// </summary>
         public event Action<CheckablePropertyNameLabel> CheckChanged;
@@ -35,7 +40,7 @@ namespace FlaxEditor.CustomEditors.GUI
                 Parent = this
             };
             CheckBox.StateChanged += OnCheckChanged;
-            Margin = new Margin(CheckBox.Right + 4, 0, 0, 0);
+            Margin = new Margin(CheckBox.Width + 6, 4, 0, 0);
         }
 
         private void OnCheckChanged(CheckBox box)
@@ -51,6 +56,8 @@ namespace FlaxEditor.CustomEditors.GUI
         {
             var style = Style.Current;
             bool check = CheckBox.Checked;
+            bool anticipateChildInput = UseAnticipatingChildInput && !check;
+            bool enableChildControls = check || UseAnticipatingChildInput;
 
             // Update label text color
             TextColor = check ? style.Foreground : style.ForegroundGrey;
@@ -72,7 +79,8 @@ namespace FlaxEditor.CustomEditors.GUI
                 int lastControl = Mathf.Min(FirstChildControlIndex + childControlsCount, controls.Count);
                 for (int i = FirstChildControlIndex; i < lastControl; i++)
                 {
-                    controls[i].Enabled = check;
+                    controls[i].Enabled = enableChildControls;
+                    controls[i].DrawAsDisabled = anticipateChildInput;
                 }
             }
         }
@@ -82,7 +90,12 @@ namespace FlaxEditor.CustomEditors.GUI
         {
             base.PerformLayoutBeforeChildren();
 
-            // Center checkbox
+            // Place the checkbox directly to the left of the right-aligned label text.
+            var font = Font?.GetFont();
+            var text = Text?.ToString() ?? string.Empty;
+            var textWidth = font != null ? font.MeasureText(text).X : 0.0f;
+            var textX = Width - Margin.Right - textWidth;
+            CheckBox.X = Mathf.Max(2.0f, textX - CheckBox.Width - 4.0f);
             CheckBox.Y = (Height - CheckBox.Height) / 2;
         }
     }

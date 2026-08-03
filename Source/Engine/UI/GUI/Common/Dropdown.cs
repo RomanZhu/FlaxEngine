@@ -724,7 +724,7 @@ namespace FlaxEngine.GUI
             float margin = clientRect.Height * 0.2f;
             float boxSize = clientRect.Height - margin * 2;
             bool isOpened = IsPopupOpened;
-            bool enabled = EnabledInHierarchy;
+            bool enabled = VisuallyEnabledInHierarchy;
             Color backgroundColor = BackgroundColor;
             Color borderColor = BorderColor;
             Color arrowColor = ArrowColor;

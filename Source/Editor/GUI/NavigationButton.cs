@@ -58,7 +58,7 @@ namespace FlaxEditor.GUI
             }
 
             // Draw text
-            Render2D.DrawText(style.FontMedium, Text, textRect, EnabledInHierarchy ? style.Foreground : style.ForegroundDisabled, TextAlignment.Near, TextAlignment.Center);
+            Render2D.DrawText(style.FontMedium, Text, textRect, VisuallyEnabledInHierarchy ? style.Foreground : style.ForegroundDisabled, TextAlignment.Near, TextAlignment.Center);
         }
 
         /// <inheritdoc />

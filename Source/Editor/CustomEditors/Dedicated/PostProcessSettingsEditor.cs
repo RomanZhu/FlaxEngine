@@ -41,6 +41,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
 
             // Add labels with a check box
             var label = new CheckablePropertyNameLabel(item.DisplayName);
+            label.UseAnticipatingChildInput = true;
             label.CheckBox.Tag = setting.Bit;
             label.CheckChanged += CheckBoxOnCheckChanged;
             _labels.Add(label);
@@ -61,6 +62,29 @@ namespace FlaxEditor.CustomEditors.Dedicated
             OverrideFlags = overrideFlags;
         }
 
+        private void EnableOverrideForEditor(CustomEditor editor)
+        {
+            if (IsSetBlocked || _labels == null || editor == null)
+                return;
+
+            for (var current = editor; current != null && current != this; current = current.ParentEditor)
+            {
+                if (current.LinkedLabel is CheckablePropertyNameLabel label && _labels.Contains(label))
+                {
+                    if (!label.CheckBox.Checked)
+                        label.CheckBox.Checked = true;
+                    return;
+                }
+            }
+        }
+
+        /// <inheritdoc />
+        protected override bool OnDirty(CustomEditor editor, object value, object token = null)
+        {
+            EnableOverrideForEditor(editor);
+            return base.OnDirty(editor, value, token);
+        }
+
         /// <inheritdoc />
         public override void Refresh()
         {
@@ -72,6 +96,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             {
                 var bit = (int)_labels[i].CheckBox.Tag;
                 _labels[i].CheckBox.Checked = (overrideFlags & bit) != 0;
+                _labels[i].UpdateStyle();
             }
         }
 

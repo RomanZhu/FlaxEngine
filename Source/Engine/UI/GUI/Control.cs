@@ -60,6 +60,7 @@ namespace FlaxEngine.GUI
         private bool _isMouseOver, _isDragOver;
         private bool _isVisible = true;
         private bool _isEnabled = true;
+        private bool _drawAsDisabled;
         private bool _autoFocus = true;
         private bool _pivotRelativeSizing = false;
         private List<int> _touchOvers;
@@ -251,6 +252,32 @@ namespace FlaxEngine.GUI
                     return false;
                 if (_parent != null)
                     return _parent.EnabledInHierarchy;
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether this control should use disabled visual style while remaining interactive.
+        /// </summary>
+        [HideInEditor, NoSerialize]
+        public bool DrawAsDisabled
+        {
+            get => _drawAsDisabled;
+            set => _drawAsDisabled = value;
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether this control should be drawn as enabled in the hierarchy.
+        /// </summary>
+        [HideInEditor, NoSerialize]
+        public bool VisuallyEnabledInHierarchy
+        {
+            get
+            {
+                if (!EnabledInHierarchy || _drawAsDisabled)
+                    return false;
+                if (_parent != null)
+                    return _parent.VisuallyEnabledInHierarchy;
                 return true;
             }
         }

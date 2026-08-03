@@ -116,16 +116,19 @@ namespace FlaxEditor.GUI
             var button1Rect = Button1Rect;
             var button2Rect = Button2Rect;
             var button3Rect = Button3Rect;
+            var visuallyEnabled = VisuallyEnabledInHierarchy;
+            var foreground = visuallyEnabled ? style.Foreground : style.ForegroundGrey;
+            var foregroundGrey = visuallyEnabled ? style.ForegroundGrey : style.ForegroundDisabled;
 
             // Draw asset picker button
             if (CanEdit)
-                Render2D.DrawSprite(style.ArrowDown, button1Rect, button1Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
+                Render2D.DrawSprite(style.ArrowDown, button1Rect, visuallyEnabled && button1Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
 
             if (DifferentValues)
             {
                 // No element selected
                 Render2D.FillRectangle(iconRect, style.BackgroundNormal);
-                Render2D.DrawText(style.FontMedium, "Multiple\nValues", iconRect, style.Foreground, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap, 1.0f, Height / DefaultIconSize);
+                Render2D.DrawText(style.FontMedium, "Multiple\nValues", iconRect, foreground, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap, 1.0f, Height / DefaultIconSize);
             }
             else if (Validator.SelectedItem != null)
             {
@@ -135,12 +138,12 @@ namespace FlaxEditor.GUI
                 // Draw buttons
                 if (CanEdit)
                 {
-                    Render2D.DrawSprite(style.Search, button2Rect, button2Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
-                    Render2D.DrawSprite(style.Cross, button3Rect, button3Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
+                    Render2D.DrawSprite(style.Search, button2Rect, visuallyEnabled && button2Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
+                    Render2D.DrawSprite(style.Cross, button3Rect, visuallyEnabled && button3Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
                 }
                 else
                 {
-                    Render2D.DrawSprite(style.Search, button1Rect, button1Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
+                    Render2D.DrawSprite(style.Search, button1Rect, visuallyEnabled && button1Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
                 }
 
                 // Draw name
@@ -151,14 +154,14 @@ namespace FlaxEditor.GUI
                                       style.FontSmall,
                                       Validator.SelectedItem.ShortName,
                                       new Rectangle(button1Rect.Right + 2, 0, sizeForTextLeft, ButtonsSize),
-                                      style.Foreground,
+                                      foreground,
                                       TextAlignment.Near,
                                       TextAlignment.Center);
                     Render2D.DrawText(
                                       style.FontSmall,
                                       $"{Validator.AssetType.Type.GetTypeDisplayName()}",
                                       new Rectangle(button1Rect.Right + 2, ButtonsSize + 2, sizeForTextLeft, ButtonsSize),
-                                      style.ForegroundGrey,
+                                      foregroundGrey,
                                       TextAlignment.Near,
                                       TextAlignment.Center);
                 }
@@ -167,7 +170,7 @@ namespace FlaxEditor.GUI
             else if (Validator.SelectedAsset)
             {
                 // Draw remove button
-                Render2D.DrawSprite(style.Cross, button3Rect, button3Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
+                Render2D.DrawSprite(style.Cross, button3Rect, visuallyEnabled && button3Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
 
                 // Draw name
                 float sizeForTextLeft = Width - button1Rect.Right;
@@ -180,14 +183,14 @@ namespace FlaxEditor.GUI
                                       style.FontSmall,
                                       name,
                                       new Rectangle(button1Rect.Right + 2, 0, sizeForTextLeft, ButtonsSize),
-                                      style.Foreground,
+                                      foreground,
                                       TextAlignment.Near,
                                       TextAlignment.Center);
                     Render2D.DrawText(
                                       style.FontSmall,
                                       $"{Validator.AssetType.Type.GetTypeDisplayName()}",
                                       new Rectangle(button1Rect.Right + 2, ButtonsSize + 2, sizeForTextLeft, ButtonsSize),
-                                      style.ForegroundGrey,
+                                      foregroundGrey,
                                       TextAlignment.Near,
                                       TextAlignment.Center);
                 }
@@ -196,7 +199,7 @@ namespace FlaxEditor.GUI
             {
                 // No element selected
                 Render2D.FillRectangle(iconRect, style.BackgroundNormal);
-                Render2D.DrawText(style.FontMedium, "No asset\nselected", iconRect, Color.Orange, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap, 1.0f, Height / DefaultIconSize);
+                Render2D.DrawText(style.FontMedium, "No asset\nselected", iconRect, visuallyEnabled ? Color.Orange : style.ForegroundGrey, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap, 1.0f, Height / DefaultIconSize);
                 float sizeForTextLeft = Width - button1Rect.Right;
                 if (sizeForTextLeft > 30)
                 {
@@ -204,14 +207,14 @@ namespace FlaxEditor.GUI
                                       style.FontSmall,
                                       $"None",
                                       new Rectangle(button1Rect.Right + 2, 0, sizeForTextLeft, ButtonsSize),
-                                      style.Foreground,
+                                      foreground,
                                       TextAlignment.Near,
                                       TextAlignment.Center);
                     Render2D.DrawText(
                                       style.FontSmall,
                                       $"{Validator.AssetType.Type.GetTypeDisplayName()}",
                                       new Rectangle(button1Rect.Right + 2, ButtonsSize + 2, sizeForTextLeft, ButtonsSize),
-                                      style.ForegroundGrey,
+                                      foregroundGrey,
                                       TextAlignment.Near,
                                       TextAlignment.Center);
                 }

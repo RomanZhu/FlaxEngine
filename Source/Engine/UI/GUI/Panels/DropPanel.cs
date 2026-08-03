@@ -398,7 +398,7 @@ namespace FlaxEngine.GUI
         public override void Draw()
         {
             var style = Style.Current;
-            var enabled = EnabledInHierarchy;
+            var enabled = VisuallyEnabledInHierarchy;
 
             // Draw Background
             var backgroundColor = BackgroundColor;

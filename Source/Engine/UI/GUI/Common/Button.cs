@@ -195,7 +195,7 @@ namespace FlaxEngine.GUI
         public override void DrawSelf()
         {
             Rectangle clientRect = new Rectangle(Float2.Zero, Size);
-            bool enabled = EnabledInHierarchy;
+            bool enabled = VisuallyEnabledInHierarchy;
             Color backgroundColor = BackgroundColor;
             Color borderColor = BorderColor;
             if (!enabled)

@@ -187,7 +187,7 @@ namespace FlaxEditor.GUI
             float iconX = hasText ? DefaultMargin : (Width - iconSize) * 0.5f;
             var iconRect = new Rectangle(iconX, (Height - iconSize) * 0.5f, iconSize, iconSize);
             var textRect = new Rectangle(DefaultMargin, 0, 0, Height);
-            bool enabled = EnabledInHierarchy;
+            bool enabled = VisuallyEnabledInHierarchy;
             bool mouseButtonDown = _primaryMouseDown || _secondaryMouseDown;
 
             // Draw background

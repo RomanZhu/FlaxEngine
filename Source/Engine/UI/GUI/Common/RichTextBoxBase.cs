@@ -313,7 +313,7 @@ namespace FlaxEngine.GUI
         {
             // Cache data
             var rect = new Rectangle(Float2.Zero, Size);
-            bool enabled = EnabledInHierarchy;
+            bool enabled = VisuallyEnabledInHierarchy;
 
             // Background
             Color backColor = BackgroundColor;

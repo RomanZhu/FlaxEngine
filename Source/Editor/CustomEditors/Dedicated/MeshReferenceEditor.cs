@@ -92,7 +92,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 // Cache data
                 var style = FlaxEngine.GUI.Style.Current;
                 bool isSelected = _valueName != null;
-                bool isEnabled = EnabledInHierarchy;
+                bool isEnabled = VisuallyEnabledInHierarchy;
                 var frameRect = new Rectangle(0, 0, Width, 16);
                 if (isSelected)
                     frameRect.Width -= 16;

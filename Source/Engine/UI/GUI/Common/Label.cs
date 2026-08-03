@@ -264,7 +264,7 @@ namespace FlaxEngine.GUI
                 Render2D.PushClip(ref rect);
 
             var color = IsMouseOver || IsNavFocused ? TextColorHighlighted : TextColor;
-            if (!EnabledInHierarchy)
+            if (!VisuallyEnabledInHierarchy)
                 color *= 0.6f;
             var scale = 1.0f;
             var hAlignment = HorizontalAlignment;
