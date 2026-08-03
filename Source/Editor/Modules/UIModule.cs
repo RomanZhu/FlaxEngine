@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Text;
 using FlaxEditor.Content;
 using FlaxEditor.Gizmo;
 using FlaxEditor.GUI;
@@ -211,7 +212,7 @@ namespace FlaxEditor.Modules
                 if (_performanceStats == null)
                     return;
 
-                var right = ContentRight - 8.0f;
+                var right = ContentRight;
                 var available = Mathf.Max(0.0f, right - Title.X - 20.0f);
                 _performanceStats.FitToWidth(available);
                 if (!_performanceStats.Visible)
@@ -238,7 +239,6 @@ namespace FlaxEditor.Modules
                     editor.Windows.EditWin.ToggleFullscreen();
                     return true;
                 }
-
 
                 // Fallback to the edit window for shortcuts
                 return editor.Windows.EditWin.InputActions.Process(editor, this, key);
