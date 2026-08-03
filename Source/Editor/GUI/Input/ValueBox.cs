@@ -280,6 +280,9 @@ namespace FlaxEditor.GUI.Input
         /// </summary>
         protected virtual bool CanUseSliding => true;
 
+        /// <inheritdoc />
+        protected override bool EndEditOnLostFocus => !(_isSliding && Root != null && Root.GetMouseButton(MouseButton.Left));
+
         /// <summary>
         /// Gets whether the active drag should snap to the value grid.
         /// </summary>
@@ -343,6 +346,8 @@ namespace FlaxEditor.GUI.Input
             }
             SlidingEnd?.Invoke();
             Defocus();
+            if (_isEditing)
+                OnEditEnd();
             Parent?.Focus();
         }
 

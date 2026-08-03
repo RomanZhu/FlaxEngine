@@ -1186,6 +1186,11 @@ namespace FlaxEngine.GUI
         }
 
         /// <summary>
+        /// Gets a value indicating whether losing input focus should end text editing.
+        /// </summary>
+        protected virtual bool EndEditOnLostFocus => true;
+
+        /// <summary>
         /// Action called when text gets modified.
         /// </summary>
         protected virtual void OnTextChanged()
@@ -1250,7 +1255,7 @@ namespace FlaxEngine.GUI
         {
             base.OnLostFocus();
 
-            if (IsReadOnly)
+            if (IsReadOnly || !EndEditOnLostFocus)
                 return;
             OnEditEnd();
         }
