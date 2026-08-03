@@ -51,7 +51,8 @@ namespace FlaxEditor.GUI
         {
             return filter switch
             {
-                ContentItemSearchFilter.Model or ContentItemSearchFilter.SkinnedModel or ContentItemSearchFilter.Prefab => new Color(0.30f, 0.66f, 0.98f),
+                ContentItemSearchFilter.Model or ContentItemSearchFilter.SkinnedModel => new Color(0.30f, 0.66f, 0.98f),
+                ContentItemSearchFilter.Prefab => style.BorderSelected,
                 ContentItemSearchFilter.Material => new Color(0.92f, 0.40f, 0.42f),
                 ContentItemSearchFilter.Texture => new Color(0.38f, 0.80f, 0.60f),
                 ContentItemSearchFilter.Scene => new Color(0.92f, 0.76f, 0.30f),

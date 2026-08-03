@@ -105,7 +105,10 @@ namespace FlaxEditor.GUI
                 base.Draw();
 
                 if (IsKeyboardSelected)
-                    Render2D.DrawRectangle(new Rectangle(Float2.Zero, Size).MakeExpanded(-1.0f), Style.Current.BorderSelected);
+                {
+                    var style = Style.Current;
+                    StyleRendering.DrawRoundedRectangleBorder(new Rectangle(Float2.Zero, Size).MakeExpanded(-1.0f), style.BorderSelected, 1.0f, style.CornerRadius);
+                }
             }
         }
 

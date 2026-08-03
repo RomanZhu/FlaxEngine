@@ -151,7 +151,7 @@ namespace FlaxEditor.GUI
                 Render2D.FillRectangle(r, Style.Current.BackgroundNormal);
             }
 
-            Render2D.DrawRectangle(r, IsMouseOver ? style.BackgroundSelected : style.Background);
+            StyleRendering.DrawRoundedRectangleBorder(r, IsMouseOver ? style.BackgroundSelected : style.Background, 1.0f, style.CornerRadius);
 
             if (_value == null)
             {

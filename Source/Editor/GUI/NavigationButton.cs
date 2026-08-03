@@ -45,16 +45,15 @@ namespace FlaxEditor.GUI
             // Draw background
             if (IsDragOver && _validDragOver)
             {
-                Render2D.FillRectangle(clientRect, style.Selection);
-                Render2D.DrawRectangle(clientRect, style.SelectionBorder);
+                StyleRendering.DrawRoundedRectangle(clientRect, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
             }
             else if (_isPressed)
             {
-                Render2D.FillRectangle(clientRect, style.BackgroundSelected);
+                StyleRendering.FillRoundedRectangle(clientRect, style.BackgroundSelected, style.CornerRadius);
             }
             else if (IsMouseOver)
             {
-                Render2D.FillRectangle(clientRect, style.BackgroundHighlighted);
+                StyleRendering.FillRoundedRectangle(clientRect, style.BackgroundHighlighted, style.CornerRadius);
             }
 
             // Draw text

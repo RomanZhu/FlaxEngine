@@ -51,7 +51,7 @@ namespace FlaxEditor.GUI
         /// Initializes a new instance of the <see cref="MainMenu"/> class.
         /// </summary>
         public MainMenu()
-        : base(0, 0, 0, 20)
+        : base(0, 0, 0, Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 20.0f)
         {
             AutoFocus = false;
             AnchorPreset = AnchorPresets.HorizontalStretchTop;

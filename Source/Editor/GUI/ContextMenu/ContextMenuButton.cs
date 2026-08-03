@@ -67,7 +67,7 @@ namespace FlaxEditor.GUI.ContextMenu
         /// <param name="text">The text.</param>
         /// <param name="shortKeys">The short keys tip.</param>
         public ContextMenuButton(ContextMenu parent, string text, string shortKeys = "")
-        : base(parent, 8, 22)
+        : base(parent, 8, Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 22.0f)
         {
             Text = text;
             ShortKeys = shortKeys;
@@ -126,9 +126,9 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Draw background
             if (IsMouseOver && Enabled)
-                Render2D.FillRectangle(backgroundRect, style.SecondaryBackground);
+                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), Color.Lerp(style.Background, style.Foreground, 0.08f), style.CornerRadius);
             else if (IsFocused)
-                Render2D.FillRectangle(backgroundRect, style.SecondaryBackground);
+                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), Color.Lerp(style.Background, style.Foreground, 0.08f), style.CornerRadius);
 
             base.Draw();
 
@@ -142,7 +142,7 @@ namespace FlaxEditor.GUI.ContextMenu
             }
 
             // Draw icon
-            const float iconSize = 14;
+            var iconSize = Mathf.Min(16.0f, style.IconSize > 0.0f ? style.IconSize : 16.0f);
             var icon = Checked ? style.CheckBoxTick : Icon;
             if (icon.IsValid)
                 Render2D.DrawSprite(icon, new Rectangle(-iconSize - 1, (Height - iconSize) / 2, iconSize, iconSize), textColor);

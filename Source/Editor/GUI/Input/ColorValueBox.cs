@@ -169,7 +169,7 @@ namespace FlaxEditor.GUI.Input
 
             var colorValue = enabled ? value : disabledValue;
             Render2D.FillRectangle(colorRect, colorValue with { A = 1 });
-            Render2D.DrawRectangle(fullRect, enabled && (IsMouseOver || IsNavFocused) ? style.BackgroundSelected : Color.Black);
+            StyleRendering.DrawRoundedRectangleBorder(fullRect, enabled && (IsMouseOver || IsNavFocused) ? style.BackgroundSelected : Color.Black, 1.0f, style.CornerRadius);
         }
 
         /// <inheritdoc />

@@ -66,12 +66,20 @@ namespace FlaxEditor.GUI.Tabs
                 // Draw bar
                 if (Tabs.SelectedTab == Tab)
                 {
-                    var color = style.BackgroundSelected;
+                    var color = style.Background;
                     if (!enabled)
                         color *= 0.6f;
                     if (Tabs._orientation == Orientation.Horizontal)
                     {
-                        Render2D.FillRectangle(tabRect, color);
+                        if (style.CornerRadius > 0.0f)
+                        {
+                            var selectedRect = tabRect.MakeExpanded(-2.0f);
+                            StyleRendering.FillRoundedRectangle(selectedRect, color, style.CornerRadius);
+                        }
+                        else
+                        {
+                            Render2D.FillRectangle(tabRect, color);
+                        }
                     }
                     else
                     {
@@ -87,13 +95,14 @@ namespace FlaxEditor.GUI.Tabs
                 }
                 else if (IsMouseOver && enabled)
                 {
-                    Render2D.FillRectangle(tabRect, style.BackgroundHighlighted);
+                    StyleRendering.FillRoundedRectangle(style.CornerRadius > 0.0f ? tabRect.MakeExpanded(-2.0f) : tabRect, style.BackgroundHighlighted, style.CornerRadius);
                 }
 
                 // Draw icon
                 if (Tab.Icon.IsValid)
                 {
-                    Render2D.DrawSprite(Tab.Icon, tabRect.MakeExpanded(-8), style.Foreground);
+                    var iconSize = Mathf.Min(16.0f, style.IconSize > 0.0f ? style.IconSize : 16.0f);
+                    Render2D.DrawSprite(Tab.Icon, new Rectangle((tabRect.Width - iconSize) * 0.5f, (tabRect.Height - iconSize) * 0.5f, iconSize, iconSize), style.Foreground);
                 }
 
                 // Draw text
@@ -311,7 +320,8 @@ namespace FlaxEditor.GUI.Tabs
             BackgroundColor = Style.Current.Background;
 
             _selectedIndex = -1;
-            _tabsSize = new Float2(70, 16);
+            var tabHeight = Style.Current.TabHeight > 0.0f ? Style.Current.TabHeight : 16.0f;
+            _tabsSize = new Float2(86, tabHeight);
             _orientation = Orientation.Horizontal;
 
             TabsPanel = new TabsHeader(this);
