@@ -861,6 +861,19 @@ namespace FlaxEditor.Content
                 if (otherItem.IsFolder)
                     return 1;
                 return string.Compare(ShortName, otherItem.ShortName, StringComparison.InvariantCulture);
+        /// <inheritdoc />
+        public override bool OnMouseWheel(Float2 location, float delta)
+        {
+            // ContentItem fills each list row, so explicitly forward Ctrl+wheel instead of
+            // relying on parent bubbling (which differs between platform input backends).
+            if (Parent is ContentView view && Root.GetKey(KeyboardKeys.Control))
+            {
+                view.Zoom(delta);
+                return true;
+            }
+            return base.OnMouseWheel(location, delta);
+        }
+
             }
 
             return base.Compare(other);

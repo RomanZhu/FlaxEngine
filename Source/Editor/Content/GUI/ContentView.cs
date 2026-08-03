@@ -786,6 +786,15 @@ namespace FlaxEditor.Content.GUI
             if (key == KeyboardKeys.Backspace)
             {
                 OnNavigateBack?.Invoke();
+        /// <summary>
+        /// Changes the visual density of the content items without changing typography.
+        /// </summary>
+        /// <param name="wheelDelta">Mouse wheel delta.</param>
+        public void Zoom(float wheelDelta)
+        {
+            ViewScale += wheelDelta * 0.05f;
+        }
+
                 return true;
             }
 
