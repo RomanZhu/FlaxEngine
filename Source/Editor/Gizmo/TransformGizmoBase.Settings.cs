@@ -97,9 +97,24 @@ namespace FlaxEditor.Gizmo
         public float ScaleSnapValue = 1.0f;
 
         /// <summary>
-        /// Gets the current pivot type.
+        /// Gets or sets the current pivot type.
         /// </summary>
-        public PivotType ActivePivot => _activePivotType;
+        public PivotType ActivePivot
+        {
+            get => _activePivotType;
+            set
+            {
+                if (_activePivotType != value)
+                {
+                    _isTransforming = false;
+                    _isDuplicating = false;
+                    _startTransforms.Clear();
+                    ClearTransformInteraction();
+                    _activePivotType = value;
+                    PivotChanged?.Invoke();
+                }
+            }
+        }
 
         /// <summary>
         /// Gets the current axis type.
@@ -132,6 +147,11 @@ namespace FlaxEditor.Gizmo
         public Action ModeChanged;
 
         /// <summary>
+        /// Event fired when active gizmo pivot gets changed.
+        /// </summary>
+        public Action PivotChanged;
+
+        /// <summary>
         /// Gets or sets the current gizmo transform space.
         /// </summary>
         public TransformSpace ActiveTransformSpace
@@ -158,6 +178,14 @@ namespace FlaxEditor.Gizmo
         public void ToggleTransformSpace()
         {
             ActiveTransformSpace = _activeTransformSpace == TransformSpace.World ? TransformSpace.Local : TransformSpace.World;
+        }
+
+        /// <summary>
+        /// Toggles gizmo pivot between selection center and object origin.
+        /// </summary>
+        public void TogglePivot()
+        {
+            ActivePivot = _activePivotType == PivotType.SelectionCenter ? PivotType.ObjectCenter : PivotType.SelectionCenter;
         }
     }
 }

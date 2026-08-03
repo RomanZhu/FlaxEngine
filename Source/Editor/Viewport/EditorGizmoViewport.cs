@@ -462,6 +462,14 @@ namespace FlaxEditor.Viewport
                 onTransformSpaceToggled?.Invoke();
                 onTransformSpaceVisibilityUpdated?.Invoke();
             });
+            viewport.InputActions.Add(options => options.TogglePivot, () =>
+            {
+                viewport.GetInput(out var input);
+                if (input.IsMouseRightDown)
+                    return;
+
+                transformGizmo.TogglePivot();
+            });
         }
 
         internal static readonly float[] TranslateSnapValues =

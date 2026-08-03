@@ -327,6 +327,10 @@ namespace FlaxEditor.Options
         [EditorDisplay("Gizmo"), EditorOrder(1030)]
         public InputBinding ToggleTransformSpace = new InputBinding(KeyboardKeys.Alpha4);
 
+        [DefaultValue(typeof(InputBinding), "Z")]
+        [EditorDisplay("Gizmo"), EditorOrder(1040)]
+        public InputBinding TogglePivot = new InputBinding(KeyboardKeys.Z);
+
         #endregion
 
         #region Viewport
