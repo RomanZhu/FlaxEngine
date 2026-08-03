@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using FlaxEditor.Content.GUI;
+using FlaxEditor.GUI;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.GUI.Tree;
 using FlaxEditor.Utilities;
@@ -14,7 +15,7 @@ namespace FlaxEditor.Content;
 /// <summary>
 /// Tree node for non-folder content items.
 /// </summary>
-public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner
+public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipPreviewProvider
 {
     private List<Rectangle> _highlights;
 
@@ -22,6 +23,22 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner
     /// The content item.
     /// </summary>
     public ContentItem Item { get; }
+
+    /// <inheritdoc />
+    public SpriteHandle TooltipPreview => Item?.Thumbnail ?? SpriteHandle.Invalid;
+
+    /// <inheritdoc />
+    protected override float HeaderTextLeftOffset
+    {
+        get
+        {
+            var contentWindow = Editor.Instance.Windows.ContentWin;
+            var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
+            var glyphSize = Mathf.Clamp(16.0f * scale, 12.0f, 24.0f);
+            var previewSize = Mathf.Clamp(18.0f * scale, 12.0f, 28.0f);
+            return glyphSize + 4.0f + previewSize + 2.0f;
+        }
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ContentItemTreeNode"/> class.
@@ -63,21 +80,49 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner
         }
         else
         {
+            var terms = filterText.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            var nameTerms = new List<string>(terms.Length);
+            var isTypeMatch = true;
+            for (int i = 0; i < terms.Length; i++)
+            {
+                var term = terms[i];
+                if (term.StartsWith("t:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var typeQuery = term.Substring(2);
+                    if (typeQuery.Length == 0 && i + 1 < terms.Length && !terms[i + 1].Contains(":"))
+                        typeQuery = terms[++i];
+                    if (typeQuery.Length != 0)
+                    {
+                        var typeText = Item.TypeDescription + " " + Item.SearchFilter + " " + Item.GetType().Name;
+                        isTypeMatch &= QueryFilterHelper.FuzzyMatch(typeQuery, typeText, out _, out _);
+                    }
+                }
+                else
+                {
+                    nameTerms.Add(term);
+                }
+            }
+
             var text = Text;
-            if (QueryFilterHelper.Match(filterText, text, out QueryFilterHelper.Range[] ranges))
+            QueryFilterHelper.Range[] ranges = null;
+            var isNameMatch = nameTerms.Count == 0 || QueryFilterHelper.Match(string.Join(" ", nameTerms), text, out ranges);
+            if (isTypeMatch && isNameMatch)
             {
                 if (_highlights == null)
-                    _highlights = new List<Rectangle>(ranges.Length);
+                    _highlights = new List<Rectangle>(ranges?.Length ?? 0);
                 else
                     _highlights.Clear();
-                var style = Style.Current;
-                var font = style.FontSmall;
-                var textRect = TextRect;
-                for (int i = 0; i < ranges.Length; i++)
+                if (ranges != null)
                 {
-                    var start = font.GetCharPosition(text, ranges[i].StartIndex);
-                    var end = font.GetCharPosition(text, ranges[i].EndIndex);
-                    _highlights.Add(new Rectangle(start.X + textRect.X, textRect.Y, end.X - start.X, textRect.Height));
+                    var style = Style.Current;
+                    var font = style.FontSmall;
+                    var textRect = TextRect;
+                    for (int i = 0; i < ranges.Length; i++)
+                    {
+                        var start = font.GetCharPosition(text, ranges[i].StartIndex);
+                        var end = font.GetCharPosition(text, ranges[i].EndIndex);
+                        _highlights.Add(new Rectangle(start.X + textRect.X, textRect.Y, end.X - start.X, textRect.Height));
+                    }
                 }
                 isVisible = true;
             }
@@ -96,20 +141,48 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner
     {
         base.Draw();
 
+        var style = Style.Current;
+        var contentWindow = Editor.Instance.Windows.ContentWin;
+        var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
+        var glyphSize = Mathf.Clamp(16.0f * scale, 12.0f, Mathf.Max(12.0f, HeaderHeight - 4.0f));
+        var iconSize = Mathf.Clamp(16.0f * scale, 12.0f, Mathf.Max(12.0f, HeaderHeight - 4.0f));
+        var textRect = TextRect;
+
+        var glyphRect = new Rectangle(textRect.Left - HeaderTextLeftOffset, (HeaderHeight - glyphSize) * 0.5f, glyphSize, glyphSize);
+        SemanticIcons.Draw(SemanticIcons.ForContent(Item.SearchFilter), glyphRect, SemanticIcons.GetContentColor(Item.SearchFilter, style));
+
         var icon = GetIcon(Item);
         if (icon.IsValid)
         {
-            var contentWindow = Editor.Instance.Windows.ContentWin;
-            var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
-            var iconSize = Mathf.Clamp(16.0f * scale, 12.0f, 28.0f);
-            var textRect = TextRect;
             var iconRect = new Rectangle(textRect.Left - iconSize - 2.0f, (HeaderHeight - iconSize) * 0.5f, iconSize, iconSize);
             Render2D.DrawSprite(icon, iconRect);
         }
 
+        var typeText = Item.TypeDescription;
+        if (!string.IsNullOrWhiteSpace(typeText))
+        {
+            const float TypeGap = 8.0f;
+            const float MinimumTypeWidth = 12.0f;
+            const float PreferredTypeWidth = 112.0f;
+            const float RightPadding = 6.0f;
+
+            var titleWidth = TextFont.GetFont().MeasureText(Text ?? string.Empty).X;
+            var preferredTypeX = Mathf.Max(textRect.X, Width - PreferredTypeWidth);
+            var typeX = Mathf.Max(preferredTypeX, textRect.X + titleWidth + TypeGap);
+            var typeRight = Width - RightPadding;
+            if (typeX + MinimumTypeWidth <= typeRight)
+            {
+                var typeRect = new Rectangle(typeX, 0.0f, typeRight - typeX, HeaderHeight);
+                var displayType = ContentItem.TruncateText(style.FontSmall, typeText, Mathf.Max(0.0f, typeRect.Width - 2.0f));
+                var typeColor = Color.Lerp(style.Background, style.Foreground, 0.2f);
+                Render2D.PushClip(ref typeRect);
+                Render2D.DrawText(style.FontSmall, displayType, typeRect, typeColor, TextAlignment.Far, TextAlignment.Center, TextWrapping.NoWrap);
+                Render2D.PopClip();
+            }
+        }
+
         if (_highlights != null)
         {
-            var style = Style.Current;
             var color = style.ProgressNormal * 0.6f;
             for (int i = 0; i < _highlights.Count; i++)
                 Render2D.FillRectangle(_highlights[i], color);

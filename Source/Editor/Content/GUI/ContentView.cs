@@ -42,7 +42,12 @@ namespace FlaxEditor.Content.GUI
         /// <summary>
         /// The reverse alphabetic sort method (Z-A).
         /// </summary>
-        AlphabeticReverse
+        AlphabeticReverse,
+
+        /// <summary>
+        /// Keeps the caller-provided order (used for fuzzy relevance results).
+        /// </summary>
+        Relevance
     }
 
     /// <summary>
@@ -149,7 +154,7 @@ namespace FlaxEditor.Content.GUI
             get => _viewScale;
             set
             {
-                value = Mathf.Clamp(value, 0.3f, 3.0f);
+                value = Mathf.Clamp(value, 0.8f, 3.0f);
                 if (value != _viewScale)
                 {
                     _viewScale = value;
@@ -302,21 +307,24 @@ namespace FlaxEditor.Content.GUI
                 selectionRestored = true;
             }
 
-            // Sort items depending on sortMethod parameter
-            _children.Sort(((control, control1) =>
-                               {
-                                   if (control == null || control1 == null)
-                                       return 0;
-                                   if (sortType == SortType.AlphabeticReverse)
-                                   {
-                                       if (control.CompareTo(control1) > 0)
-                                           return -1;
-                                       if (control.CompareTo(control1) == 0)
-                                           return 0;
-                                       return 1;
-                                   }
-                                   return control.CompareTo(control1);
-                               }));
+            // Relevance results have already been ordered by the caller.
+            if (sortType != SortType.Relevance)
+            {
+                _children.Sort(((control, control1) =>
+                {
+                    if (control == null || control1 == null)
+                        return 0;
+                    if (sortType == SortType.AlphabeticReverse)
+                    {
+                        if (control.CompareTo(control1) > 0)
+                            return -1;
+                        if (control.CompareTo(control1) == 0)
+                            return 0;
+                        return 1;
+                    }
+                    return control.CompareTo(control1);
+                }));
+            }
 
             // Unload and perform UI layout
             IsLayoutLocked = wasLayoutLocked;
@@ -769,8 +777,7 @@ namespace FlaxEditor.Content.GUI
             // Check if pressing control key
             if (Root.GetKey(KeyboardKeys.Control))
             {
-                // Zoom
-                ViewScale += delta * 0.05f;
+                Zoom(delta);
 
                 // Handled
                 return true;
@@ -779,13 +786,6 @@ namespace FlaxEditor.Content.GUI
             return base.OnMouseWheel(location, delta);
         }
 
-        /// <inheritdoc />
-        public override bool OnKeyDown(KeyboardKeys key)
-        {
-            // Navigate backward
-            if (key == KeyboardKeys.Backspace)
-            {
-                OnNavigateBack?.Invoke();
         /// <summary>
         /// Changes the visual density of the content items without changing typography.
         /// </summary>
@@ -795,6 +795,13 @@ namespace FlaxEditor.Content.GUI
             ViewScale += wheelDelta * 0.05f;
         }
 
+        /// <inheritdoc />
+        public override bool OnKeyDown(KeyboardKeys key)
+        {
+            // Navigate backward
+            if (key == KeyboardKeys.Backspace)
+            {
+                OnNavigateBack?.Invoke();
                 return true;
             }
 
@@ -904,7 +911,7 @@ namespace FlaxEditor.Content.GUI
 
         private bool ValidateDragActors(ActorNode actor)
         {
-            return actor.CanCreatePrefab && Editor.Instance.Windows.ContentWin.CurrentViewFolder.CanHaveAssets;
+            return actor.CanCreatePrefab && Editor.Instance.Windows.ContentWin?.CurrentViewFolder?.CanHaveAssets == true;
         }
 
         private void ImportActors(DragActors actors, ContentFolder location)
@@ -1024,7 +1031,9 @@ namespace FlaxEditor.Content.GUI
             }
             case ContentViewType.List:
             {
-                float itemsHeight = 50.0f * viewScale;
+                // Explorer-style density: keep text at the editor font size and scale the
+                // preview, row height and whitespace. The 24 px floor remains readable.
+                float itemsHeight = Mathf.Clamp(32.0f * viewScale, 24.0f, 96.0f);
                 for (int i = 0; i < _children.Count; i++)
                 {
                     var c = _children[i];
