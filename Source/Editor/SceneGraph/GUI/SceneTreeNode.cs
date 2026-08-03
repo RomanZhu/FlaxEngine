@@ -13,6 +13,9 @@ namespace FlaxEditor.SceneGraph.GUI
     public sealed class SceneTreeNode : ActorTreeNode
     {
         /// <inheritdoc />
+        protected override bool SkipRecursiveCollapseAnimation => true;
+
+        /// <inheritdoc />
         public override void UpdateText()
         {
             base.UpdateText();
