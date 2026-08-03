@@ -746,6 +746,8 @@ namespace FlaxEditor.Content
                 else if (IsMouseOver)
                     Render2D.FillRectangle(clientRect, style.BackgroundHighlighted);
 
+                if (!isSelected && !IsMouseOver && Editor.Instance.Options.Options.Interface.AlternatingTreeRows && (IndexInParent & 1) != 0)
+                    Render2D.FillRectangle(clientRect, Color.Lerp(style.Background, style.Foreground, 0.02f));
                 DrawThumbnail(ref thumbnailRect);
                 break;
             }

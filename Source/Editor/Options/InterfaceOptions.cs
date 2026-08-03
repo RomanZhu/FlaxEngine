@@ -339,6 +339,12 @@ namespace FlaxEditor.Options
 
         private TextAlignment _tooltipTextAlignment = TextAlignment.Near;
 
+        /// <summary>
+        /// Gets or sets whether dense tree views use a subtle alternating row background.
+        /// </summary>
+        [DefaultValue(true)]
+        [EditorDisplay("Interface"), EditorOrder(322)]
+        public bool AlternatingTreeRows { get; set; } = true;
 
         /// <summary>
         /// Gets or sets whether compact performance statistics are visible beside the window controls.

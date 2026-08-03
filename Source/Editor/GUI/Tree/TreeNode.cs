@@ -787,6 +787,13 @@ namespace FlaxEditor.GUI.Tree
                 ContainerControl parent = Parent;
                 TreeNode parentNode = parent as TreeNode;
                 bool thisNodeIsLast = false;
+            if (!isSelected && !_mouseOverHeader && Editor.Instance?.Options?.Options?.Interface?.AlternatingTreeRows == true)
+            {
+                var treeY = PointToParent(tree, Float2.Zero).Y;
+                var row = (int)Mathf.Floor(treeY / Mathf.Max(1.0f, _headerHeight));
+                if ((row & 1) != 0)
+                    Render2D.FillRectangle(_headerRect, Color.Lerp(style.Background, style.Foreground, 0.02f));
+            }
                 while (parentNode != null && (parentNode != tree.Children[0] || tree.DrawRootTreeLine))
                 {
                     float bottomOffset = 0;
