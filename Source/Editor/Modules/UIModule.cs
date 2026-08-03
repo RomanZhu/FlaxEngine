@@ -354,14 +354,6 @@ namespace FlaxEditor.Modules
         private ContextMenuButton _menuToolsOpenLocalFolder;
         private ContextMenuChildMenu _menuWindowApplyWindowLayout;
 
-        private ToolStripButton _toolStripSaveAll;
-        private ToolStripButton _toolStripUndo;
-        private ToolStripButton _toolStripRedo;
-        private ToolStripButton _toolStripTranslate;
-        private ToolStripButton _toolStripRotate;
-        private ToolStripButton _toolStripScale;
-        private ToolStripButton _toolStripBuildScenes;
-        private ToolStripButton _toolStripCook;
         private ToolStripButton _toolStripPlay;
         private ToolStripButton _toolStripPause;
         private ToolStripButton _toolStripStep;
@@ -466,31 +458,13 @@ namespace FlaxEditor.Modules
             if (ToolStrip == null)
                 return;
 
-            var undoRedo = Editor.Undo;
-            var gizmo = Editor.MainTransformGizmo;
             var state = Editor.StateMachine.CurrentState;
-            var canEditScene = state.CanEditScene && Level.IsAnySceneLoaded;
-            var canUseUndoRedo = state.CanUseUndoRedo;
             var canEnterPlayMode = state.CanEnterPlayMode && Level.IsAnySceneLoaded;
             var isPlayMode = Editor.StateMachine.IsPlayMode;
             var isDuringBreakpointHang = Editor.Simulation.IsDuringBreakpointHang;
 
-            // Update buttons
-            //
-            _toolStripSaveAll.Enabled = !isDuringBreakpointHang;
-            //
-            _toolStripUndo.Enabled = canEditScene && undoRedo.CanUndo && canUseUndoRedo;
-            _toolStripRedo.Enabled = canEditScene && undoRedo.CanRedo && canUseUndoRedo;
-            //
-            var gizmoMode = gizmo.ActiveMode;
-            _toolStripTranslate.Checked = gizmoMode == TransformGizmoBase.Mode.Translate;
-            _toolStripRotate.Checked = gizmoMode == TransformGizmoBase.Mode.Rotate;
-            _toolStripScale.Checked = gizmoMode == TransformGizmoBase.Mode.Scale;
-            //
-            _toolStripBuildScenes.Enabled = (canEditScene && !isPlayMode) || Editor.StateMachine.BuildingScenesState.IsActive;
-            _toolStripBuildScenes.Visible = Editor.Options.Options.General.BuildActions?.Length != 0;
-            _toolStripCook.Enabled = Editor.Windows.GameCookerWin.CanBuild(Platform.PlatformType) && !GameCooker.IsRunning;
-            //
+            // The global toolbar intentionally owns only play-state controls. Editing,
+            // transform and build commands live in their contextual surfaces and menus.
             var play = _toolStripPlay;
             var pause = _toolStripPause;
             var step = _toolStripStep;
@@ -499,6 +473,7 @@ namespace FlaxEditor.Modules
             {
                 play.Checked = false;
                 play.Icon = Editor.Icons.Stop64;
+                play.Glyph = ToolStripGlyph.Stop;
                 pause.Enabled = false;
                 pause.Checked = true;
                 pause.AutoCheck = false;
@@ -508,6 +483,7 @@ namespace FlaxEditor.Modules
             {
                 play.Checked = false;
                 play.Icon = Editor.Icons.Stop64;
+                play.Glyph = ToolStripGlyph.Stop;
                 pause.Enabled = true;
                 pause.Checked = Editor.StateMachine.PlayingState.IsPaused;
                 pause.AutoCheck = false;
@@ -517,6 +493,7 @@ namespace FlaxEditor.Modules
             {
                 play.Checked = Editor.Simulation.IsPlayModeRequested;
                 play.Icon = Editor.Icons.Play64;
+                play.Glyph = ToolStripGlyph.Play;
                 pause.Enabled = canEnterPlayMode;
                 pause.AutoCheck = true;
                 step.Enabled = false;
@@ -1066,23 +1043,19 @@ namespace FlaxEditor.Modules
         {
             var inputOptions = Editor.Options.Options.Input;
 
-            ToolStrip = new ToolStrip(34.0f, MainMenu.Bottom)
+            ToolStrip = new ToolStrip(Style.Current.ToolbarHeight > 0.0f ? Style.Current.ToolbarHeight : 32.0f, MainMenu.Bottom)
             {
                 Parent = mainWindow,
             };
-
-            _toolStripSaveAll = ToolStrip.AddButton(Editor.Icons.Save64, Editor.SaveAll).LinkTooltip("Save all", ref inputOptions.Save);
-            ToolStrip.AddSeparator();
-            _toolStripUndo = ToolStrip.AddButton(Editor.Icons.Undo64, Editor.PerformUndo).LinkTooltip("Undo", ref inputOptions.Undo);
-            _toolStripRedo = ToolStrip.AddButton(Editor.Icons.Redo64, Editor.PerformRedo).LinkTooltip("Redo", ref inputOptions.Redo);
-            ToolStrip.AddSeparator();
-            _toolStripTranslate = ToolStrip.AddButton(Editor.Icons.Translate32, () => Editor.MainTransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate).LinkTooltip("Change Gizmo tool mode to Translate", ref inputOptions.TranslateMode);
-            _toolStripRotate = ToolStrip.AddButton(Editor.Icons.Rotate32, () => Editor.MainTransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate).LinkTooltip("Change Gizmo tool mode to Rotate", ref inputOptions.RotateMode);
-            _toolStripScale = ToolStrip.AddButton(Editor.Icons.Scale32, () => Editor.MainTransformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale).LinkTooltip("Change Gizmo tool mode to Scale", ref inputOptions.ScaleMode);
-            ToolStrip.AddSeparator();
+            ToolStrip.ApplyLayout(Editor.Options.Options.Interface.ToolStripLayout);
+            ToolStrip.LayoutChanged += () =>
+            {
+                Editor.Options.Options.Interface.ToolStripLayout = ToolStrip.CaptureLayout();
+                Editor.Options.SaveOptions();
+            };
 
             // Play
-            _toolStripPlay = ToolStrip.AddButton(Editor.Icons.Play64, Editor.Simulation.DelegatePlayOrStopPlayInEditor).LinkTooltip("Play In Editor", ref inputOptions.Play);
+            _toolStripPlay = ToolStrip.AddGlyphButton(ToolStripGlyph.Play, ToolStripAnchor.Center, "Flax.Play", Editor.Simulation.DelegatePlayOrStopPlayInEditor).LinkTooltip("Play In Editor", ref inputOptions.Play);
             _toolStripPlay.ContextMenu = new ContextMenu();
             var playSubMenu = _toolStripPlay.ContextMenu.AddChildMenu("Play button action");
             var playActionGroup = new ContextMenuSingleSelectGroup<InterfaceOptions.PlayAction>();
@@ -1103,21 +1076,8 @@ namespace FlaxEditor.Modules
             windowModesGroup.SelectedChanged = SetGameWindowMode;
             Editor.Options.OptionsChanged += options => { windowModesGroup.Selected = options.Interface.DefaultGameWindowMode; };
 
-            _toolStripPause = ToolStrip.AddButton(Editor.Icons.Pause64, Editor.Simulation.RequestResumeOrPause).LinkTooltip("Pause/Resume game", ref inputOptions.Pause);
-            _toolStripStep = ToolStrip.AddButton(Editor.Icons.Skip64, Editor.Simulation.RequestPlayOneFrame).LinkTooltip("Step one frame in game", ref inputOptions.StepFrame);
-
-            ToolStrip.AddSeparator();
-
-            // Build scenes
-            _toolStripBuildScenes = ToolStrip.AddButton(Editor.Icons.Build64, Editor.BuildScenesOrCancel).LinkTooltip("Build scenes data - CSG, navmesh, static lighting, env probes - configurable via Build Actions in editor options", ref inputOptions.BuildScenesData);
-
-            // Cook and run
-            _toolStripCook = ToolStrip.AddButton(Editor.Icons.ShipIt64, Editor.Windows.GameCookerWin.BuildAndRun).LinkTooltip("Cook & Run - build game for the current platform and run it locally", ref inputOptions.CookAndRun);
-            _toolStripCook.ContextMenu = new ContextMenu();
-            _toolStripCook.ContextMenu.AddButton("Run cooked game", Editor.Windows.GameCookerWin.RunCooked);
-            _toolStripCook.ContextMenu.AddSeparator();
-            var numberOfClientsMenu = _toolStripCook.ContextMenu.AddChildMenu("Number of game clients");
-            _numberOfClientsGroup.AddItemsToContextMenu(numberOfClientsMenu.ContextMenu);
+            _toolStripPause = ToolStrip.AddGlyphButton(ToolStripGlyph.Pause, ToolStripAnchor.Center, "Flax.Pause", Editor.Simulation.RequestResumeOrPause).LinkTooltip("Pause/Resume game", ref inputOptions.Pause);
+            _toolStripStep = ToolStrip.AddGlyphButton(ToolStripGlyph.Step, ToolStripAnchor.Center, "Flax.Step", Editor.Simulation.RequestPlayOneFrame).LinkTooltip("Step one frame in game", ref inputOptions.StepFrame);
 
             UpdateToolstrip();
         }

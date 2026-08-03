@@ -319,6 +319,14 @@ namespace FlaxEditor.Options
         /// Creates the default style.
         /// </summary>
         /// <returns>The style object.</returns>
+        /// <summary>
+        /// Persists the current editor options without broadcasting an options-changed event.
+        /// </summary>
+        public void SaveOptions()
+        {
+            Save();
+        }
+
         public Style CreateDefaultStyle()
         {
             var options = Options;

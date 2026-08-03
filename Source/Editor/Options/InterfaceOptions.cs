@@ -280,6 +280,12 @@ namespace FlaxEditor.Options
         public float IconsScale { get; set; } = 1.0f;
 
         /// <summary>
+        /// Gets or sets the persisted global toolbar anchor and item order.
+        /// </summary>
+        [HideInEditor]
+        public string ToolStripLayout { get; set; } = string.Empty;
+
+        /// <summary>
         /// Gets or sets the editor content window orientation.
         /// </summary>
         [DefaultValue(FlaxEngine.GUI.Orientation.Horizontal)]
