@@ -317,7 +317,7 @@ namespace FlaxEditor.Options
         /// <summary>
         /// Gets or sets tooltip text alignment.
         /// </summary>
-        [DefaultValue(TextAlignment.Center)]
+        [DefaultValue(TextAlignment.Near)]
         [EditorDisplay("Interface"), EditorOrder(321)]
         public TextAlignment TooltipTextAlignment
         {
@@ -331,7 +331,7 @@ namespace FlaxEditor.Options
             }
         }
 
-        private TextAlignment _tooltipTextAlignment = TextAlignment.Center;
+        private TextAlignment _tooltipTextAlignment = TextAlignment.Near;
 
 
         /// <summary>

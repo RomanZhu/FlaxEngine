@@ -5,6 +5,17 @@ using System;
 namespace FlaxEngine.GUI
 {
     /// <summary>
+    /// Optional tooltip target contract for controls that can supply a visual preview.
+    /// </summary>
+    public interface ITooltipPreviewProvider
+    {
+        /// <summary>
+        /// Gets the preview sprite displayed beside tooltip metadata.
+        /// </summary>
+        SpriteHandle TooltipPreview { get; }
+    }
+
+    /// <summary>
     /// The tooltip popup.
     /// </summary>
     /// <seealso cref="FlaxEngine.GUI.ContainerControl" />
@@ -25,7 +36,7 @@ namespace FlaxEngine.GUI
         /// <summary>
         /// The horizontal alignment of the text.
         /// </summary>
-        public TextAlignment HorizontalTextAlignment = TextAlignment.Center;
+        public TextAlignment HorizontalTextAlignment = TextAlignment.Near;
 
         /// <summary>
         /// Gets or sets the time in seconds that mouse have to be over the target to show the tooltip.
@@ -70,6 +81,8 @@ namespace FlaxEngine.GUI
             if (!Platform.HasFocus)
                 return;
 
+            _showTarget = target;
+
             // Unlock and perform controls update
             UnlockChildrenRecursive();
             PerformLayout();
@@ -88,7 +101,6 @@ namespace FlaxEngine.GUI
             var locationWS = target.PointToWindow(location);
             var locationSS = parentWin.PointToScreen(locationWS);
             var mousePos = Input.MouseScreenPosition;
-            _showTarget = target;
             //WrapPosition(ref locationSS);
             WrapPosition(ref mousePos, 10);
             locationSS = mousePos + TooltipOffset;
@@ -255,28 +267,44 @@ namespace FlaxEngine.GUI
             Render2D.FillRectangle(new Rectangle(Float2.Zero, Size), Color.Lerp(style.BackgroundSelected, style.Background, 0.6f));
             Render2D.FillRectangle(new Rectangle(1.1f, 1.1f, Width - 2, Height - 2), style.Background);
 
+            // Optional asset/control preview.
+            var preview = (_showTarget as ITooltipPreviewProvider)?.TooltipPreview ?? SpriteHandle.Invalid;
+            var previewWidth = preview.IsValid ? 54.0f : 0.0f;
+            if (preview.IsValid)
+                Render2D.DrawSprite(preview, new Rectangle(6, 6, 48, 48), Color.White);
+
             // Padding for text
             var textRect = GetClientArea();
-            float textX = HorizontalTextAlignment switch
-            {
-                TextAlignment.Near => 15,
-                TextAlignment.Center => 5,
-                TextAlignment.Far => -5,
-                _ => throw new ArgumentOutOfRangeException()
-            };
-            textRect.X += textX;
-            textRect.Width -= 10;
+            textRect.X += 6.0f + previewWidth;
+            textRect.Y += 6.0f;
+            textRect.Width -= 12.0f + previewWidth;
+            textRect.Height -= 12.0f;
 
-            // Tooltip text
-            Render2D.DrawText(
-                              style.FontMedium,
-                              _currentText,
-                              textRect,
-                              style.Foreground,
-                              HorizontalTextAlignment,
-                              TextAlignment.Center,
-                              TextWrapping.WrapWords
-                             );
+            // Metadata tooltips use a clear label/value hierarchy; ordinary text remains supported.
+            var lines = (_currentText ?? string.Empty).Split('\n');
+            const float lineHeight = 16.0f;
+            float y = textRect.Y;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                var separator = line.IndexOf(':');
+                var lineRect = new Rectangle(textRect.X, y, textRect.Width, lineHeight);
+                if (separator > 0)
+                {
+                    var label = line.Substring(0, separator + 1);
+                    var value = line.Substring(separator + 1).TrimStart();
+                    var labelWidth = style.FontMedium.MeasureText(label).X + 6.0f;
+                    Render2D.DrawText(style.FontMedium, label, lineRect, style.Foreground, TextAlignment.Near, TextAlignment.Center, TextWrapping.NoWrap);
+                    lineRect.X += labelWidth;
+                    lineRect.Width -= labelWidth;
+                    Render2D.DrawText(style.FontSmall, value, lineRect, Color.Lerp(style.Background, style.Foreground, 0.7f), TextAlignment.Near, TextAlignment.Center, TextWrapping.NoWrap);
+                }
+                else
+                {
+                    Render2D.DrawText(style.FontMedium, line, lineRect, style.Foreground, TextAlignment.Near, TextAlignment.Center, TextWrapping.WrapWords);
+                }
+                y += lineHeight;
+            }
         }
 
         /// <inheritdoc />
@@ -293,7 +321,7 @@ namespace FlaxEngine.GUI
             {
                 var layout = TextLayoutOptions.Default;
                 layout.Bounds = new Rectangle(0, 0, MaxWidth, 10000000);
-                layout.HorizontalAlignment = TextAlignment.Center;
+                layout.HorizontalAlignment = TextAlignment.Near;
                 layout.VerticalAlignment = TextAlignment.Center;
                 layout.TextWrapping = TextWrapping.WrapWords;
                 var items = style.FontMedium.ProcessText(_currentText, ref layout);
@@ -305,7 +333,15 @@ namespace FlaxEngine.GUI
                 }
                 //size.X += style.FontMedium.MeasureText(_currentText).X;
             }
-            Size = size + new Float2(24.0f);
+            var preview = (_showTarget as ITooltipPreviewProvider)?.TooltipPreview ?? SpriteHandle.Invalid;
+            if (preview.IsValid)
+            {
+                size.X += 54.0f;
+                size.Y = Mathf.Max(size.Y, 48.0f);
+            }
+            var lineCount = (_currentText ?? string.Empty).Split('\n').Length;
+            size.Y = Mathf.Max(size.Y, lineCount * 16.0f);
+            Size = size + new Float2(12.0f);
 
             // Check if is visible size get changed
             if (Visible && prevSize != Size)

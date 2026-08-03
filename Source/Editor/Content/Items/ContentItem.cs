@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using FlaxEditor.Content.GUI;
+using FlaxEditor.GUI;
 using FlaxEditor.GUI.Drag;
 using FlaxEngine;
 using FlaxEngine.Assertions;
@@ -155,7 +156,7 @@ namespace FlaxEditor.Content
     /// </summary>
     /// <seealso cref="FlaxEngine.GUI.Control" />
     [HideInEditor]
-    public abstract class ContentItem : Control
+    public abstract class ContentItem : Control, ITooltipPreviewProvider
     {
         /// <summary>
         /// The default margin size.
@@ -303,6 +304,9 @@ namespace FlaxEditor.Content
             get => _thumbnail;
             set => _thumbnail = value;
         }
+
+        /// <inheritdoc />
+        public SpriteHandle TooltipPreview => Thumbnail;
 
         /// <summary>
         /// True if force show file extension.
