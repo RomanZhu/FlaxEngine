@@ -21,6 +21,8 @@ namespace FlaxEditor.GUI.Tree
         public override void Draw()
         {
             base.Draw();
+            if (!ShowHeader)
+                return;
 
             foreach (var child in Addons)
             {
@@ -33,6 +35,9 @@ namespace FlaxEditor.GUI.Tree
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
+            if (!ShowHeader)
+                return base.OnMouseDown(location, button);
+
             foreach (var child in Addons)
             {
                 if (child.Visible && child.Enabled)
@@ -51,6 +56,9 @@ namespace FlaxEditor.GUI.Tree
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
+            if (!ShowHeader)
+                return base.OnMouseUp(location, button);
+
             foreach (var child in Addons)
             {
                 if (child.Visible && child.Enabled)
@@ -69,6 +77,9 @@ namespace FlaxEditor.GUI.Tree
         /// <inheritdoc />
         public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
+            if (!ShowHeader)
+                return base.OnMouseDoubleClick(location, button);
+
             foreach (var child in Addons)
             {
                 if (child.Visible && child.Enabled)
@@ -89,7 +100,7 @@ namespace FlaxEditor.GUI.Tree
         {
             base.OnMouseMove(location);
 
-            if (IsCollapsed)
+            if (ShowHeader && IsCollapsed)
             {
                 foreach (var child in Addons)
                 {
