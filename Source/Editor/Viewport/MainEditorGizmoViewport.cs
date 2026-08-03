@@ -42,6 +42,7 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayRotateModeButton;
         private ToolStripButton _overlayScaleModeButton;
         private ToolStripButton _overlayTransformSpaceButton;
+        private ToolStripButton _overlayPivotButton;
         private ToolStripButton _overlayAbsoluteSnapButton;
         private ToolStripButton _overlayTranslateSnapButton;
         private ToolStripButton _overlayRotateSnapButton;
@@ -329,6 +330,7 @@ namespace FlaxEditor.Viewport
             Gizmos.ActiveModeChanged += _ => UpdateViewportToolStrip();
             TransformGizmo.ModeChanged += UpdateViewportToolStrip;
             TransformGizmo.TransformSpaceChanged += UpdateViewportToolStrip;
+            TransformGizmo.PivotChanged += UpdateViewportToolStrip;
             AddMainViewportToolStripButtons();
 
             // Setup input actions
@@ -377,6 +379,9 @@ namespace FlaxEditor.Viewport
                 _editor.ProjectCache.SetCustomData("TransformSpaceState", TransformGizmo.ActiveTransformSpace.ToString());
             });
             _overlayTransformSpaceButton.LinkTooltip("Toggle gizmo transform space.", ref inputOptions.ToggleTransformSpace);
+            _overlayPivotButton = AddViewportToolStripButton("Center", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.Transform.Pivot.Left", () => TransformGizmo.TogglePivot());
+            _overlayPivotButton.CustomizationLabel = "Pivot / Center";
+            _overlayPivotButton.LinkTooltip("Toggle gizmo pivot between selection center and object pivot.", ref inputOptions.TogglePivot);
             _overlayAbsoluteSnapButton = AddViewportToolStripButton("Abs", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.Transform.AbsoluteSnap.Left", () =>
             {
                 TransformGizmo.AbsoluteSnapEnabled = !TransformGizmo.AbsoluteSnapEnabled;
@@ -911,6 +916,12 @@ namespace FlaxEditor.Viewport
                 var isWorld = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
                 _overlayTransformSpaceButton.Checked = isWorld;
                 SetViewportToolStripButtonText(_overlayTransformSpaceButton, isWorld ? "World" : "Local");
+            }
+            if (_overlayPivotButton != null)
+            {
+                var isObjectPivot = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
+                _overlayPivotButton.Checked = isObjectPivot;
+                SetViewportToolStripButtonText(_overlayPivotButton, isObjectPivot ? "Pivot" : "Center");
             }
             if (_overlayAbsoluteSnapButton != null)
             {

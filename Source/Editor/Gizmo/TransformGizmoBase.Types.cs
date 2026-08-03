@@ -98,12 +98,12 @@ namespace FlaxEditor.Gizmo
         public enum PivotType
         {
             /// <summary>
-            /// First selected object center
+            /// First selected object pivot/origin
             /// </summary>
             ObjectCenter,
 
             /// <summary>
-            /// Selection pool center point
+            /// Selection bounds center point
             /// </summary>
             SelectionCenter,
 

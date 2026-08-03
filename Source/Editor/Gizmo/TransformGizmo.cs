@@ -303,7 +303,7 @@ namespace FlaxEditor.Gizmo
             {
                 if (_selectionParents[i] is ActorNode actorNode)
                 {
-                    bounds = BoundingBox.Merge(bounds, actorNode.Actor.BoxWithChildren);
+                    bounds = BoundingBox.Merge(bounds, actorNode.Actor.EditorBoxChildren);
                     navigationDirty |= actorNode.AffectsNavigationWithChildren;
                 }
             }
