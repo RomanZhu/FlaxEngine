@@ -7,6 +7,23 @@ using FlaxEngine.GUI;
 namespace FlaxEditor.GUI.Input
 {
     /// <summary>
+    /// Inline icon prefixes for value boxes.
+    /// </summary>
+    public enum ValueBoxPrefixIcon
+    {
+        /// <summary>
+        /// No icon prefix.
+        /// </summary>
+        None,
+
+        /// <summary>
+        /// Material Design Icons angle-acute SVG glyph.
+        /// Source: https://pictogrammers.com/library/mdi/icon/angle-acute/
+        /// </summary>
+        AngleAcute,
+    }
+
+    /// <summary>
     /// Base class for text boxes for float/int value editing. Supports slider and range clamping.
     /// </summary>
     /// <typeparam name="T">The value type.</typeparam>
@@ -14,6 +31,8 @@ namespace FlaxEditor.GUI.Input
     [HideInEditor]
     public abstract class ValueBox<T> : TextBox where T : struct, IComparable<T>
     {
+        private const float PrefixValueOffset = 26.0f;
+
         /// <summary>
         /// The sliding box size.
         /// </summary>
@@ -61,6 +80,36 @@ namespace FlaxEditor.GUI.Input
         private Float2 _mouseClickedPosition;
 
         /// <summary>
+        /// Optional short prefix drawn before the edited value (for vector component glyphs).
+        /// </summary>
+        public string PrefixText;
+
+        /// <summary>
+        /// Optional icon prefix drawn before the edited value.
+        /// </summary>
+        public ValueBoxPrefixIcon PrefixIcon;
+
+        /// <summary>
+        /// Optional sprite prefix drawn before the edited value.
+        /// </summary>
+        public SpriteHandle PrefixSprite = SpriteHandle.Invalid;
+
+        /// <summary>
+        /// Prefix width reserved inside the value box.
+        /// </summary>
+        public float PrefixWidth = 12.0f;
+
+        /// <summary>
+        /// Additional padding reserved between the prefix and edited value.
+        /// </summary>
+        public float PrefixPadding = 4.0f;
+
+        /// <summary>
+        /// Prefix color. Transparent uses the input background color with HSV value increased by 26 HSB value units.
+        /// </summary>
+        public Color PrefixColor = Color.Transparent;
+
+        /// <summary>
         /// Occurs when value gets changed.
         /// </summary>
         public event Action ValueChanged;
@@ -104,6 +153,47 @@ namespace FlaxEditor.GUI.Input
         /// Occurs when sliding ends.
         /// </summary>
         public event Action SlidingEnd;
+
+        /// <summary>
+        /// Sets the inline value prefix.
+        /// </summary>
+        /// <param name="text">The prefix text.</param>
+        public void SetPrefix(string text)
+        {
+            PrefixText = text;
+            PrefixIcon = ValueBoxPrefixIcon.None;
+            PrefixSprite = SpriteHandle.Invalid;
+            UpdatePrefixPadding();
+        }
+
+        /// <summary>
+        /// Sets the inline value icon prefix.
+        /// </summary>
+        /// <param name="icon">The prefix icon.</param>
+        public void SetPrefixIcon(ValueBoxPrefixIcon icon)
+        {
+            PrefixText = null;
+            PrefixIcon = icon;
+            PrefixSprite = SpriteHandle.Invalid;
+            UpdatePrefixPadding();
+        }
+
+        /// <summary>
+        /// Sets the inline value sprite prefix.
+        /// </summary>
+        /// <param name="sprite">The prefix sprite.</param>
+        public void SetPrefixIcon(SpriteHandle sprite)
+        {
+            PrefixText = null;
+            PrefixIcon = ValueBoxPrefixIcon.None;
+            PrefixSprite = sprite;
+            UpdatePrefixPadding();
+        }
+
+        private void UpdatePrefixPadding()
+        {
+            LeftContentPadding = HasPrefix ? PrefixWidth + PrefixPadding : 0.0f;
+        }
 
         /// <summary>
         /// If enabled, pressing the arrow up or down key increments/ decrements the value.
@@ -251,14 +341,33 @@ namespace FlaxEditor.GUI.Input
         /// <inheritdoc />
         public override void Draw()
         {
-            base.Draw();
-
             if (_isSliding)
             {
                 var style = Style.Current;
-                var bounds = new Rectangle(Float2.Zero, Size);
-                Render2D.FillRectangle(bounds, style.Selection);
-                Render2D.DrawRectangle(bounds, style.SelectionBorder);
+                var backgroundColor = BackgroundColor;
+                var backgroundSelectedColor = BackgroundSelectedColor;
+                var borderColor = BorderColor;
+                var borderSelectedColor = BorderSelectedColor;
+
+                BackgroundColor = style.Selection;
+                BackgroundSelectedColor = style.Selection;
+                BorderColor = style.SelectionBorder;
+                BorderSelectedColor = style.SelectionBorder;
+                try
+                {
+                    base.Draw();
+                }
+                finally
+                {
+                    BackgroundColor = backgroundColor;
+                    BackgroundSelectedColor = backgroundSelectedColor;
+                    BorderColor = borderColor;
+                    BorderSelectedColor = borderSelectedColor;
+                }
+            }
+            else
+            {
+                base.Draw();
             }
 
             if (HighlightColor != Color.Transparent)
@@ -266,6 +375,68 @@ namespace FlaxEditor.GUI.Input
                 var highlightRect = new Rectangle(-3.0f, 0.0f, 3.0f, Height);
                 Render2D.FillRectangle(highlightRect, HighlightColor);
             }
+
+            DrawPrefix();
+        }
+
+        private void DrawPrefix()
+        {
+            if (!HasPrefix)
+                return;
+
+            var prefixColor = PrefixColor.A > 0.0f ? PrefixColor : AdjustValueUnits(BackgroundColor, PrefixValueOffset);
+            var prefixRect = new Rectangle(TextBoxBase.DefaultMargin, 0.0f, PrefixWidth, Height);
+            if (PrefixSprite.IsValid)
+            {
+                var iconSize = Mathf.Min(prefixRect.Width, prefixRect.Height - 6.0f);
+                Render2D.DrawSprite(PrefixSprite, new Rectangle(prefixRect.X + (prefixRect.Width - iconSize) * 0.5f, prefixRect.Y + (prefixRect.Height - iconSize) * 0.5f, iconSize, iconSize), prefixColor);
+                return;
+            }
+
+            if (PrefixIcon == ValueBoxPrefixIcon.AngleAcute)
+            {
+                DrawAngleAcuteIcon(prefixRect, prefixColor);
+                return;
+            }
+
+            Render2D.DrawText(Font.GetFont(), PrefixText, prefixRect, prefixColor, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap);
+        }
+
+        private bool HasPrefix => !string.IsNullOrEmpty(PrefixText) || PrefixIcon != ValueBoxPrefixIcon.None || PrefixSprite.IsValid;
+
+        private static void DrawAngleAcuteIcon(Rectangle rect, Color color)
+        {
+            var size = Mathf.Min(rect.Width, rect.Height - 6.0f);
+            if (size <= 0.0f)
+                return;
+
+            var bounds = new Rectangle(rect.X + (rect.Width - size) * 0.5f, rect.Y + (rect.Height - size) * 0.5f, size, size);
+            var thickness = Mathf.Clamp(size / 8.0f, 1.0f, 1.5f);
+
+            // Material Design Icons angle-acute SVG path geometry, viewBox 0 0 24 24.
+            DrawSvgLine(bounds, 20.0f, 19.0f, 4.09f, 19.0f, color, thickness);
+            DrawSvgLine(bounds, 4.09f, 19.0f, 14.18f, 4.43f, color, thickness);
+            DrawSvgLine(bounds, 14.18f, 4.43f, 15.82f, 5.57f, color, thickness);
+            DrawSvgLine(bounds, 15.82f, 5.57f, 11.28f, 12.13f, color, thickness);
+            Render2D.DrawBezier(SvgPoint(bounds, 11.28f, 12.13f), SvgPoint(bounds, 12.89f, 12.96f), SvgPoint(bounds, 14.0f, 14.62f), SvgPoint(bounds, 14.0f, 16.54f), color, thickness);
+            Render2D.DrawBezier(SvgPoint(bounds, 10.14f, 13.78f), SvgPoint(bounds, 11.24f, 14.22f), SvgPoint(bounds, 12.0f, 15.28f), SvgPoint(bounds, 12.0f, 16.54f), color, thickness);
+        }
+
+        private static void DrawSvgLine(Rectangle bounds, float x1, float y1, float x2, float y2, Color color, float thickness)
+        {
+            Render2D.DrawLine(SvgPoint(bounds, x1, y1), SvgPoint(bounds, x2, y2), color, thickness);
+        }
+
+        private static Float2 SvgPoint(Rectangle bounds, float x, float y)
+        {
+            return new Float2(bounds.X + bounds.Width * x / 24.0f, bounds.Y + bounds.Height * y / 24.0f);
+        }
+
+        private static Color AdjustValueUnits(Color color, float units)
+        {
+            var hsv = color.ToHSV();
+            hsv.Z = Mathf.Saturate(hsv.Z + units / 100.0f);
+            return Color.FromHSV(hsv, color.A);
         }
 
         /// <inheritdoc />
