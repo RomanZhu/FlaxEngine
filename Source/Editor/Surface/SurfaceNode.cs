@@ -1152,8 +1152,8 @@ namespace FlaxEditor.Surface
             if (Breakpoint.Set)
             {
                 var icon = Breakpoint.Enabled ? Surface.Style.Icons.BoxClose : Surface.Style.Icons.BoxOpen;
-                Render2D.DrawSprite(icon, new Rectangle(-7, -7, 16, 16), new Color(0.9f, 0.9f, 0.9f));
-                Render2D.DrawSprite(icon, new Rectangle(-6, -6, 14, 14), new Color(0.894117647f, 0.0784313725f, 0.0f));
+                Render2D.DrawSprite(icon, new Rectangle(-5, -5, 12, 12), new Color(0.9f, 0.9f, 0.9f));
+                Render2D.DrawSprite(icon, new Rectangle(-4, -4, 10, 10), new Color(0.894117647f, 0.0784313725f, 0.0f));
             }
 
             if (highlightBox != null)

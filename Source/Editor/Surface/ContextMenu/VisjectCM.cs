@@ -250,14 +250,14 @@ namespace FlaxEditor.Surface.ContextMenu
                     BackgroundColor = Style.Current.BackgroundNormal,
                 };
 
-                _descriptionDeclaringClassImage = new Image(8, 12, 20, 20)
+                _descriptionDeclaringClassImage = new Image(8, 16, 12, 12)
                 {
                     Parent = _descriptionPanel,
                     Brush = new SpriteBrush(info.Style.Icons.BoxClose),
                 };
 
                 var descriptionFontReference = new FontReference(Style.Current.FontMedium.Asset, 9f);
-                _descriptionSignatureLabel = new Label(32, 8, Width - 40, 0)
+                _descriptionSignatureLabel = new Label(24, 8, Width - 32, 0)
                 {
                     Parent = _descriptionPanel,
                     HorizontalAlignment = TextAlignment.Near,
@@ -269,7 +269,7 @@ namespace FlaxEditor.Surface.ContextMenu
                 };
                 _descriptionSignatureLabel.SetAnchorPreset(AnchorPresets.TopLeft, true);
 
-                _descriptionLabel = new Label(32, 0, Width - 40, 0)
+                _descriptionLabel = new Label(24, 0, Width - 32, 0)
                 {
                     Parent = _descriptionPanel,
                     HorizontalAlignment = TextAlignment.Near,

@@ -56,20 +56,17 @@ namespace FlaxEditor.Surface.Elements
             bool value = Value;
 
             // Background
-            var backgroundColor = IsMouseOver ? style.TextBoxBackgroundSelected : style.TextBoxBackground;
-            Render2D.FillRectangle(box, backgroundColor);
-
-            // Border
-            Color borderColor = style.BorderNormal;
+            var highlighted = IsMouseOver || _mouseDown;
+            var backgroundColor = value
+                ? (highlighted ? Color.Lerp(style.BorderSelected, Color.White, 0.28f) : style.BorderSelected)
+                : Color.Lerp(style.Background, style.Foreground, highlighted ? 0.30f : 0.14f);
             if (!Enabled)
-                borderColor *= 0.5f;
-            else if (_mouseDown)
-                borderColor = style.BorderSelected;
-            Render2D.DrawRectangle(box, borderColor);
+                backgroundColor = Color.Lerp(backgroundColor, style.Background, 0.45f);
+            StyleRendering.FillCheckBox(box, backgroundColor);
 
             // Icon
             if (value)
-                Render2D.DrawSprite(style.CheckBoxTick, box, Enabled ? style.BorderSelected * 1.2f : style.ForegroundDisabled);
+                Render2D.DrawSprite(style.CheckBoxTick, box, Enabled ? Color.White : style.ForegroundDisabled);
         }
 
         /// <inheritdoc />

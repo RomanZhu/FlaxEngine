@@ -51,7 +51,10 @@ namespace FlaxEditor.Surface.Elements
 
             // Draw border
             if (!IsFocused)
-                Render2D.DrawRectangle(new Rectangle(Float2.Zero, Size), Style.Current.BorderNormal);
+            {
+                var style = Style.Current;
+                StyleRendering.DrawRoundedRectangleBorder(new Rectangle(Float2.Zero, Size), style.BorderNormal, 1.0f, style.CornerRadius);
+            }
         }
 
         /// <inheritdoc />
