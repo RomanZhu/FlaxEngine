@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Content.Thumbnails;
+using FlaxEditor.History;
 using FlaxEditor.Modules;
 using FlaxEditor.Modules.SourceCodeEditing;
 using FlaxEditor.Options;
@@ -186,6 +187,11 @@ namespace FlaxEditor
         public EditorUndo Undo;
 
         /// <summary>
+        /// The navigation history.
+        /// </summary>
+        public NavigationHistory NavigationHistory;
+
+        /// <summary>
         /// The icons container.
         /// </summary>
         public EditorIcons Icons;
@@ -277,6 +283,8 @@ namespace FlaxEditor
             Icons.LoadIcons();
             Profiler.EndEvent();
 
+            NavigationHistory = new NavigationHistory();
+
             // Create common editor modules
             Profiler.BeginEvent("Modules");
             RegisterModule(Options = new OptionsModule(this));
@@ -299,6 +307,8 @@ namespace FlaxEditor
 
             StateMachine = new EditorStateMachine(this);
             Undo = new EditorUndo(this);
+            ApplyHistoryOptions(Options.Options);
+            Options.OptionsChanged += ApplyHistoryOptions;
 
             if (flags.HasFlag(StartupFlags.NewProject))
                 InitProject();
@@ -629,6 +639,12 @@ namespace FlaxEditor
             }
         }
 
+        private void ApplyHistoryOptions(EditorOptions options)
+        {
+            if (NavigationHistory != null)
+                NavigationHistory.Capacity = Mathf.Max(1, options.General.NavigationHistoryActionsCapacity);
+        }
+
         private void InitProject()
         {
             // Initialize empty project with default game configuration
@@ -729,6 +745,7 @@ namespace FlaxEditor
             }
 
             // Cleanup
+            NavigationHistory.Dispose();
             Undo.Dispose();
             foreach (var cache in Surface.VisjectSurface.NodesCache.Caches.ToArray())
                 cache.Clear();

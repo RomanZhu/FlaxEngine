@@ -299,7 +299,7 @@ namespace FlaxEditor.Content
             else if (_dragOverItems.HasValidDrag)
             {
                 // Move items
-                Editor.Instance.ContentDatabase.Move(_dragOverItems.Objects, this);
+                Editor.Instance.Windows.ContentWin.MoveWithUndo(_dragOverItems.Objects, this);
                 result = DragDropEffect.Move;
             }
 

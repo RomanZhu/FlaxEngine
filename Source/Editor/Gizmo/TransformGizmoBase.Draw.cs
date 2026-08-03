@@ -29,6 +29,9 @@ namespace FlaxEditor.Gizmo
         private MaterialInstance _materialTrackballFocus;
         private MaterialInstance _materialTrackballTriangle;
         private MaterialInstance _materialTrackballPoint;
+        private MaterialInstance _materialVertexSnapPoint;
+        private MaterialInstance _materialVertexSnapTargetPoint;
+        private MaterialInstance _materialVertexSnapPointShadow;
         private MaterialBase _materialSphere;
 
         // Material Parameter Names
@@ -46,6 +49,8 @@ namespace FlaxEditor.Gizmo
         private const float _rotationTrackballPointRadiusRaw = 0.12f;
         private const float _rotationScreenRingRadiusRaw = _rotationSphereRadiusRaw + 0.20f;
         private const float _rotationScreenRingThicknessRaw = 0.045f;
+        private const float _vertexSnapPointOuterScale = 0.0018f;
+        private const float _vertexSnapPointInnerScale = 0.0011f;
         private static readonly Color _translationDistanceColor = new Color(1.0f, 0.8980392f, 0.039215688f, 1.0f);
         private static readonly Color _translationDistancePillColor = new Color(0.0f, 0.0f, 0.0f, 0.68f);
 
@@ -97,6 +102,12 @@ namespace FlaxEditor.Gizmo
             _materialTrackballTriangle.SetParameterValue(_opacityParamName, _rotationTrackballTriangleOpacity);
             _materialTrackballPoint = _materialAxisX.CreateVirtualInstance();
             _materialTrackballPoint.SetParameterValue(_colorParamName, Color.White);
+            _materialVertexSnapPoint = _materialAxisFocus.CreateVirtualInstance();
+            _materialVertexSnapPoint.SetParameterValue(_colorParamName, new Color(0.0f, 0.95f, 1.0f, 1.0f));
+            _materialVertexSnapTargetPoint = _materialAxisFocus.CreateVirtualInstance();
+            _materialVertexSnapTargetPoint.SetParameterValue(_colorParamName, new Color(1.0f, 0.10f, 0.82f, 1.0f));
+            _materialVertexSnapPointShadow = _materialAxisX.CreateVirtualInstance();
+            _materialVertexSnapPointShadow.SetParameterValue(_colorParamName, new Color(0.0f, 0.0f, 0.0f, 1.0f));
 
             // Setup editor options
             OnEditorOptionsChanged(Editor.Instance.Options.Options);
@@ -235,6 +246,9 @@ namespace FlaxEditor.Gizmo
             _materialTrackballFocus.SetParameterValue(_opacityParamName, opacity * _rotationTrackballOpacity);
             _materialTrackballTriangle.SetParameterValue(_opacityParamName, opacity * _rotationTrackballTriangleOpacity);
             _materialTrackballPoint.SetParameterValue(_opacityParamName, opacity);
+            _materialVertexSnapPoint.SetParameterValue(_opacityParamName, opacity);
+            _materialVertexSnapTargetPoint.SetParameterValue(_opacityParamName, opacity);
+            _materialVertexSnapPointShadow.SetParameterValue(_opacityParamName, opacity * 0.75f);
         }
 
         private void UpdateGizmoBrightness(EditorOptions options)
@@ -251,6 +265,9 @@ namespace FlaxEditor.Gizmo
             _materialAxisBack.SetParameterValue(_brightnessParamName, brightness);
             _materialTrackballTriangle.SetParameterValue(_brightnessParamName, brightness);
             _materialTrackballPoint.SetParameterValue(_brightnessParamName, brightness);
+            _materialVertexSnapPoint.SetParameterValue(_brightnessParamName, brightness);
+            _materialVertexSnapTargetPoint.SetParameterValue(_brightnessParamName, brightness);
+            _materialVertexSnapPointShadow.SetParameterValue(_brightnessParamName, brightness);
         }
 
         private bool ShouldGizmoBeLocked()
@@ -426,7 +443,7 @@ namespace FlaxEditor.Gizmo
             return Vector3.Dot(moveDelta, worldAxis) < 0.0f;
         }
 
-        private bool TryProjectTranslationMeasurePoint(Vector3 worldPosition, out Float2 screenPosition)
+        private bool TryProjectGizmoPoint(Vector3 worldPosition, out Float2 screenPosition)
         {
             screenPosition = Float2.Zero;
             var viewport = Owner.Viewport;
@@ -442,6 +459,11 @@ namespace FlaxEditor.Gizmo
 
             viewport.ProjectPoint(worldPosition, out screenPosition);
             return true;
+        }
+
+        private bool TryProjectTranslationMeasurePoint(Vector3 worldPosition, out Float2 screenPosition)
+        {
+            return TryProjectGizmoPoint(worldPosition, out screenPosition);
         }
 
         private static void DrawTranslationDistanceDashLine(Float2 start, Float2 end, Color color)
@@ -509,6 +531,50 @@ namespace FlaxEditor.Gizmo
             Render2D.DrawText(font, label, pillRect, Color.White, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap);
 
             Render2D.Features = features;
+        }
+
+        private float GetVertexSnapPointScreenScale(Vector3 worldPosition)
+        {
+            float gizmoSize = Editor.Instance.Options.Options.Visual.GizmoSize;
+            if (Owner.Viewport.UseOrthographicProjection)
+                return gizmoSize * (50 * Owner.Viewport.OrthographicScale);
+
+            Vector3 vLength = Owner.ViewPosition - worldPosition;
+            return (float)(vLength.Length / GizmoScaleFactor * gizmoSize);
+        }
+
+        private void DrawVertexSnapPointHighlight(ref RenderContext renderContext, Mesh sphereMesh, Vector3 worldPosition, MaterialBase material, sbyte sortOrder)
+        {
+            float screenScale = GetVertexSnapPointScreenScale(worldPosition);
+            var transform = new Transform(worldPosition, Quaternion.Identity, new Float3(screenScale));
+            renderContext.View.GetWorldMatrix(ref transform, out var world);
+
+            Matrix.Scaling(_vertexSnapPointOuterScale, out var scale);
+            Matrix.Multiply(ref scale, ref world, out var markerWorld);
+            sphereMesh.Draw(ref renderContext, _materialVertexSnapPointShadow, ref markerWorld, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+
+            Matrix.Scaling(_vertexSnapPointInnerScale, out scale);
+            Matrix.Multiply(ref scale, ref world, out markerWorld);
+            sphereMesh.Draw(ref renderContext, material, ref markerWorld, StaticFlags.None, true, DrawPass.Default, 0.0f, (sbyte)(sortOrder + 1));
+        }
+
+        private void DrawVertexSnapPointHighlights(ref RenderContext renderContext, Mesh sphereMesh, sbyte sortOrder)
+        {
+            if (!_isActive || !IsActive)
+                return;
+            if (_activeMode != Mode.Translate)
+                return;
+
+            if (_vertexSnapObject != null)
+            {
+                var worldPosition = _vertexSnapObject.Transform.LocalToWorld(_vertexSnapPoint);
+                DrawVertexSnapPointHighlight(ref renderContext, sphereMesh, worldPosition, _materialVertexSnapPoint, sortOrder);
+            }
+            if (_vertexSnapObjectTo != null)
+            {
+                var worldPosition = _vertexSnapObjectTo.Transform.LocalToWorld(_vertexSnapPointTo);
+                DrawVertexSnapPointHighlight(ref renderContext, sphereMesh, worldPosition, _materialVertexSnapTargetPoint, (sbyte)(sortOrder + 2));
+            }
         }
 
         /// <inheritdoc />
@@ -603,9 +669,12 @@ namespace FlaxEditor.Gizmo
                     cubeMesh.Draw(ref renderContext, yzPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
                     // Center sphere
-                    Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
-                    Matrix.Multiply(ref m2, ref m1, out m3);
-                    sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    if (_vertexSnapObject == null)
+                    {
+                        Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
+                        Matrix.Multiply(ref m2, ref m1, out m3);
+                        sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    }
                 }
 
                 break;
@@ -702,14 +771,7 @@ namespace FlaxEditor.Gizmo
             }
             }
 
-            // Vertex snapping
-            if (_vertexSnapObject != null || _vertexSnapObjectTo != null)
-            {
-                Transform t = _vertexSnapObject?.Transform ?? _vertexSnapObjectTo.Transform;
-                Vector3 p = t.LocalToWorld(_vertexSnapObject != null ? _vertexSnapPoint : _vertexSnapPointTo);
-                Matrix matrix = new Transform(p, t.Orientation, new Float3(gizmoModelsScale2RealGizmoSize)).GetWorld();
-                cubeMesh.Draw(ref renderContext, _materialSphere, ref matrix, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
-            }
+            DrawVertexSnapPointHighlights(ref renderContext, sphereMesh, (sbyte)(sortOrder + 3));
         }
     }
 }

@@ -10,7 +10,7 @@ namespace FlaxEditor
     /// </summary>
     /// <seealso cref="IUndoAction" />
     [Serializable]
-    public class SelectionChangeAction : UndoActionBase<SelectionChangeAction.DataStorage>
+    public class SelectionChangeAction : UndoActionBase<SelectionChangeAction.DataStorage>, IUndoActionMetadata
     {
         /// <summary>
         /// The undo data.
@@ -49,6 +49,27 @@ namespace FlaxEditor
 
         /// <inheritdoc />
         public override string ActionString => "Selection change";
+
+        /// <inheritdoc />
+        public UndoActionInfo ActionInfo
+        {
+            get
+            {
+                var data = Data;
+                var after = data.After ?? Array.Empty<SceneGraphNode>();
+                var target = after.Length == 1 ? after[0] : null;
+                return new UndoActionInfo
+                {
+                    Operation = ActionString,
+                    TargetType = target != null ? UndoActionTargetType.SceneObject : UndoActionTargetType.Multiple,
+                    TargetName = target != null ? target.Name : "Scene Selection",
+                    TargetId = target?.ID ?? Guid.Empty,
+                    TargetObjectId = target?.ID.ToString("N"),
+                    Flags = UndoActionFlags.SelectionOnly,
+                    SizeInBytes = 0,
+                };
+            }
+        }
 
         /// <inheritdoc />
         public override void Do()

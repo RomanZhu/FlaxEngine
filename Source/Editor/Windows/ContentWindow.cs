@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Xml;
+using FlaxEditor.Actions;
 using FlaxEditor.Content;
 using FlaxEditor.Content.GUI;
 using FlaxEditor.GUI;
@@ -16,6 +17,7 @@ using FlaxEditor.Options;
 using FlaxEngine;
 using FlaxEngine.Assertions;
 using FlaxEngine.GUI;
+using FlaxEngine.Utilities;
 
 namespace FlaxEditor.Windows
 {
@@ -76,11 +78,15 @@ namespace FlaxEditor.Windows
         private bool _showAllContentInTree;
         private bool _suppressExpandedStateSave;
         private bool _isClearingSelection;
+        private bool _suppressContentSelectionNavigation;
+        private bool _suppressContentOpenNavigation;
         private readonly HashSet<string> _expandedFolderPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private bool _renameInTree;
 
         private RootContentFolderTreeNode _root;
         private readonly List<ContentItem> _treeSelectionCache = new List<ContentItem>();
+        private string[] _lastContentSelectionPaths = Array.Empty<string>();
+        private string _lastContentOpenPath;
 
         private bool _navigationUnlocked;
         private readonly Stack<ContentFolderTreeNode> _navigationUndo = new Stack<ContentFolderTreeNode>(32);
@@ -89,6 +95,9 @@ namespace FlaxEditor.Windows
         private NewItem _newElement;
         private List<string> _newFilesCache;
         private int _newFilesCacheSize;
+        private readonly object _importUndoLock = new object();
+        private readonly HashSet<string> _importExistingOutputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<ContentItem> _importedItemsForUndo = new List<ContentItem>();
 
         /// <summary>
         /// Gets the toolstrip.
@@ -130,11 +139,12 @@ namespace FlaxEditor.Windows
         /// <summary>
         /// Clears the selected content items.
         /// </summary>
-        public void ClearSelection()
+        /// <param name="recordUndo">True if record the selection change in edit and navigation history.</param>
+        public void ClearSelection(bool recordUndo = true)
         {
             if (_showAllContentInTree)
             {
-                _isClearingSelection = true;
+                _isClearingSelection = !recordUndo;
                 try
                 {
                     _tree.Deselect();
@@ -147,7 +157,21 @@ namespace FlaxEditor.Windows
                 return;
             }
 
-            _view.ClearSelection();
+            if (recordUndo)
+            {
+                _view.ClearSelection();
+                return;
+            }
+
+            _isClearingSelection = true;
+            try
+            {
+                _view.ClearSelection();
+            }
+            finally
+            {
+                _isClearingSelection = false;
+            }
         }
 
         internal bool ShowEngineFiles
@@ -406,6 +430,7 @@ namespace FlaxEditor.Windows
 
         private void OnContentViewSelectionChanged()
         {
+            RecordContentSelectionNavigation();
             ClearSceneSelection();
             SelectionChanged?.Invoke();
         }
@@ -593,7 +618,7 @@ namespace FlaxEditor.Windows
                 _contentViewPanel.Visible = false;
                 RefreshTreeItems();
                 if (Editor.SceneEditing.SelectionCount != 0)
-                    ClearSelection();
+                    ClearSelection(false);
             }
             else
             {
@@ -800,13 +825,15 @@ namespace FlaxEditor.Windows
             // Cache data
             string extension = item.IsFolder ? "" : Path.GetExtension(item.Path);
             var newPath = StringUtils.CombinePaths(item.ParentFolder.Path, newShortName + extension);
+            var oldPath = item.Path;
+            var wasNewElement = _newElement == item;
 
             // Check if was renaming mock element
             // Note: we create `_newElement` and then rename it to create new asset
             var itemFolder = item.ParentFolder;
             Action<ContentItem> endEvent = null;
             bool lazyCreation = false;
-            if (_newElement == item)
+            if (wasNewElement)
             {
                 try
                 {
@@ -876,6 +903,15 @@ namespace FlaxEditor.Windows
             // Auto-select item
             Select(newItem, true);
 
+            if (wasNewElement)
+            {
+                Editor.Undo.AddAction(ContentItemFilesystemAction.Create(Editor, newItem));
+            }
+            else if (!oldPath.Equals(newPath, StringComparison.Ordinal))
+            {
+                Editor.Undo.AddAction(new MoveContentItemAction(Editor, oldPath, newPath, "Rename " + newItem.FileName));
+            }
+
             // Custom post-action
             endEvent?.Invoke(newItem);
         }
@@ -909,8 +945,8 @@ namespace FlaxEditor.Windows
             string singularPlural = toDelete.Count > 1 ? "s" : "";
 
             string msg = toDelete.Count == 1
-                         ? string.Format("Delete \'{0}\'?\n\nThis action cannot be undone.\nFile will be deleted permanently.", items[0].Path)
-                         : string.Format("Delete {0} selected items?\n\nThis action cannot be undone.\nFiles will be deleted permanently.", items.Count);
+                         ? string.Format("Delete \'{0}\'?\n\nThis action can be undone from the edit history.", items[0].Path)
+                         : string.Format("Delete {0} selected items?\n\nThis action can be undone from the edit history.", items.Count);
 
             // Ask user
             if (MessageBox.Show(msg, "Delete asset" + singularPlural, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
@@ -921,8 +957,9 @@ namespace FlaxEditor.Windows
             NavigationClearHistory();
 
             // Delete items
-            for (int i = 0; i < toDelete.Count; i++)
-                Editor.ContentDatabase.Delete(toDelete[i], true);
+            var action = ContentItemFilesystemAction.Delete(Editor, toDelete);
+            if (action != null)
+                Editor.Undo.AddAction(action);
 
             RefreshView();
         }
@@ -972,6 +1009,7 @@ namespace FlaxEditor.Windows
             // Start renaming it
             if (targetItem != null)
             {
+                Editor.Undo.AddAction(ContentItemFilesystemAction.Create(Editor, targetItem));
                 Select(targetItem);
                 Rename(targetItem);
             }
@@ -998,13 +1036,24 @@ namespace FlaxEditor.Windows
             {
                 // TODO: remove items that depend on different items in the list: use wants to remove `folderA` and `folderA/asset.x`, we should just remove `folderA`
                 var toDuplicate = new List<ContentItem>(items);
+                var createdItems = new List<ContentItem>(items.Count);
 
                 // Duplicate every item
                 for (int i = 0; i < toDuplicate.Count; i++)
                 {
                     var item = toDuplicate[i];
-                    Editor.ContentDatabase.Copy(item, GetClonedAssetPath(item));
+                    var targetPath = GetClonedAssetPath(item);
+                    Editor.ContentDatabase.Copy(item, targetPath);
+                    Editor.ContentDatabase.RefreshFolder(item.ParentFolder, true);
+                    var targetItem = item.ParentFolder.FindChild(targetPath);
+                    if (targetItem != null)
+                        createdItems.Add(targetItem);
                 }
+                var action = ContentItemFilesystemAction.Create(Editor, createdItems);
+                if (action != null)
+                    Editor.Undo.AddAction(action);
+                RefreshView();
+                RefreshTreeItems();
             }
         }
 
@@ -1016,6 +1065,7 @@ namespace FlaxEditor.Windows
         public void Paste(string[] files, bool isCutting)
         {
             var importFiles = new List<string>();
+            var createdItems = new List<ContentItem>();
             foreach (var sourcePath in files)
             {
                 var item = Editor.ContentDatabase.Find(sourcePath);
@@ -1025,13 +1075,22 @@ namespace FlaxEditor.Windows
                     if (sourcePath.Equals(newPath))
                         newPath = GetClonedAssetPath(item);
                     if (isCutting)
-                        Editor.ContentDatabase.Move(item, newPath);
+                        MoveWithUndo(item, newPath);
                     else
+                    {
                         Editor.ContentDatabase.Copy(item, newPath);
+                        Editor.ContentDatabase.RefreshFolder(CurrentViewFolder, false);
+                        var newItem = CurrentViewFolder.FindChild(newPath);
+                        if (newItem != null)
+                            createdItems.Add(newItem);
+                    }
                 }
                 else
                     importFiles.Add(sourcePath);
             }
+            var action = ContentItemFilesystemAction.Create(Editor, createdItems);
+            if (action != null)
+                Editor.Undo.AddAction(action);
             Editor.ContentImporting.Import(importFiles, CurrentViewFolder);
         }
 
@@ -1061,6 +1120,7 @@ namespace FlaxEditor.Windows
             // Start renaming it
             if (targetItem != null)
             {
+                Editor.Undo.AddAction(ContentItemFilesystemAction.Create(Editor, targetItem));
                 Rename(targetItem);
             }
         }
@@ -1146,13 +1206,68 @@ namespace FlaxEditor.Windows
                 // Auto-select item
                 Select(newItem, true);
 
+                Editor.Undo.AddAction(ContentItemFilesystemAction.Create(Editor, newItem));
+
                 // Custom post-action
                 created?.Invoke(newItem);
             }
         }
 
+        /// <summary>
+        /// Moves the content items and records the operation in the global edit history.
+        /// </summary>
+        /// <param name="items">The items.</param>
+        /// <param name="newParent">The new parent folder.</param>
+        internal void MoveWithUndo(List<ContentItem> items, ContentFolder newParent)
+        {
+            if (items == null)
+                throw new ArgumentNullException(nameof(items));
+            for (int i = 0; i < items.Count; i++)
+                MoveWithUndo(items[i], newParent);
+        }
+
+        /// <summary>
+        /// Moves the content item and records the operation in the global edit history.
+        /// </summary>
+        /// <param name="item">The item.</param>
+        /// <param name="newParent">The new parent folder.</param>
+        internal void MoveWithUndo(ContentItem item, ContentFolder newParent)
+        {
+            if (item == null || newParent == null)
+                throw new ArgumentNullException();
+
+            if (item.ParentFolder == newParent)
+                return;
+
+            var oldPath = item.Path;
+            Editor.ContentDatabase.Move(item, newParent);
+            var newPath = item.Path;
+            if (!oldPath.Equals(newPath, StringComparison.Ordinal))
+                Editor.Undo.AddAction(new MoveContentItemAction(Editor, oldPath, newPath, "Move " + item.FileName));
+        }
+
+        /// <summary>
+        /// Moves the content item and records the operation in the global edit history.
+        /// </summary>
+        /// <param name="item">The item.</param>
+        /// <param name="newPath">The new path.</param>
+        internal void MoveWithUndo(ContentItem item, string newPath)
+        {
+            if (item == null || string.IsNullOrEmpty(newPath))
+                throw new ArgumentNullException();
+
+            var oldPath = item.Path;
+            Editor.ContentDatabase.Move(item, newPath);
+            newPath = StringUtils.NormalizePath(newPath);
+            if (Editor.ContentDatabase.Find(newPath) != null && !oldPath.Equals(newPath, StringComparison.Ordinal))
+                Editor.Undo.AddAction(new MoveContentItemAction(Editor, oldPath, newPath, "Move " + item.FileName));
+        }
+
         private void OnContentDatabaseItemRemoved(ContentItem contentItem)
         {
+            Editor.NavigationHistory.RemoveActions(x =>
+                x is ContentSelectionNavigationAction selectionAction && selectionAction.Contains(contentItem.Path) ||
+                x is ContentOpenNavigationAction openAction && openAction.Contains(contentItem.Path));
             if (contentItem is ContentFolder folder)
             {
                 var node = folder.Node;
@@ -1165,6 +1280,7 @@ namespace FlaxEditor.Windows
                 }
 
                 // Check if folder is in navigation
+                Editor.NavigationHistory.RemoveActions(x => x is ContentFolderNavigationAction action && action.Contains(node));
                 if (_navigationRedo.Contains(node) || _navigationUndo.Contains(node))
                 {
                     // Clear all to prevent leaks
@@ -1205,6 +1321,8 @@ namespace FlaxEditor.Windows
             }
 
             // Open it
+            RecordContentOpenNavigation(item);
+            Assets.AssetEditorWindow.SuppressNextDocumentNavigation(item.Path);
             Editor.ContentEditing.Open(item);
         }
 
@@ -1748,6 +1866,7 @@ namespace FlaxEditor.Windows
             Editor.ContentImporting.ImportFileBegin += OnImportFileBegin;
             Editor.ContentImporting.ImportFileEnd += OnImportFileEnd;
             Editor.ContentImporting.ImportingQueueBegin += OnImportingQueueBegin;
+            Editor.ContentImporting.ImportingQueueEnd += OnImportingQueueEnd;
 
             LoadExpandedFolders();
             Refresh();
@@ -1791,6 +1910,15 @@ namespace FlaxEditor.Windows
             _newFilesCache ??= new List<string>();
             _newFilesCache.Add(entry.ResultUrl);
             _newFilesCacheSize++;
+
+            var path = StringUtils.NormalizePath(entry.ResultUrl);
+            if (File.Exists(path) || Directory.Exists(path))
+            {
+                lock (_importUndoLock)
+                {
+                    _importExistingOutputPaths.Add(path);
+                }
+            }
         }
 
         private void OnImportFileEnd(IFileEntryAction entry, bool failed)
@@ -1814,6 +1942,7 @@ namespace FlaxEditor.Windows
                 {
                     bool additive = _newFilesCache.Count != _newFilesCacheSize;
                     Select(item, true, additive);
+                    TrackImportedItemForUndo(item);
                 }
                 _newFilesCache.Remove(entry.ResultUrl);
             }
@@ -1824,6 +1953,61 @@ namespace FlaxEditor.Windows
             // Clear cache to auto-select all imported files
             _newFilesCache?.Clear();
             _newFilesCacheSize = 0;
+            lock (_importUndoLock)
+            {
+                _importExistingOutputPaths.Clear();
+                _importedItemsForUndo.Clear();
+            }
+        }
+
+        private void OnImportingQueueEnd()
+        {
+            if (!Platform.IsInMainThread)
+            {
+                FlaxEngine.Scripting.InvokeOnUpdate(OnImportingQueueEnd);
+                return;
+            }
+
+            List<ContentItem> items;
+            lock (_importUndoLock)
+            {
+                if (_importedItemsForUndo.Count == 0)
+                {
+                    _importExistingOutputPaths.Clear();
+                    return;
+                }
+
+                items = new List<ContentItem>(_importedItemsForUndo);
+                _importedItemsForUndo.Clear();
+                _importExistingOutputPaths.Clear();
+            }
+
+            for (int i = items.Count - 1; i >= 0; i--)
+            {
+                var item = items[i];
+                if (item == null || Editor.ContentDatabase.Find(item.Path) == null)
+                    items.RemoveAt(i);
+            }
+
+            var action = ContentItemFilesystemAction.Create(Editor, items);
+            if (action != null)
+                Editor.Undo.AddAction(action);
+        }
+
+        private void TrackImportedItemForUndo(ContentItem item)
+        {
+            var path = StringUtils.NormalizePath(item.Path);
+            lock (_importUndoLock)
+            {
+                if (_importExistingOutputPaths.Contains(path))
+                    return;
+                for (int i = 0; i < _importedItemsForUndo.Count; i++)
+                {
+                    if (_importedItemsForUndo[i].Path.Equals(path, StringComparison.OrdinalIgnoreCase))
+                        return;
+                }
+                _importedItemsForUndo.Add(item);
+            }
         }
 
         private ContentItem EnsureItem(string path)
@@ -1935,9 +2119,21 @@ namespace FlaxEditor.Windows
         {
             // Navigate through directories using the side mouse buttons
             if (button == MouseButton.Extended1)
-                NavigateBackward();
+            {
+                if (Editor.NavigationHistory.CanGoBack)
+                    Editor.NavigationHistory.GoBack();
+                else
+                    NavigateBackward();
+                return true;
+            }
             else if (button == MouseButton.Extended2)
-                NavigateForward();
+            {
+                if (Editor.NavigationHistory.CanGoForward)
+                    Editor.NavigationHistory.GoForward();
+                else
+                    NavigateForward();
+                return true;
+            }
 
             return base.OnMouseDown(location, button);
         }
@@ -1945,6 +2141,9 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
+            if (button == MouseButton.Extended1 || button == MouseButton.Extended2)
+                return true;
+
             if (button == MouseButton.Right)
             {
                 // Find control that is under the mouse
@@ -2078,6 +2277,7 @@ namespace FlaxEditor.Windows
                 Editor.ContentImporting.ImportFileBegin -= OnImportFileBegin;
                 Editor.ContentImporting.ImportFileEnd -= OnImportFileEnd;
                 Editor.ContentImporting.ImportingQueueBegin -= OnImportingQueueBegin;
+                Editor.ContentImporting.ImportingQueueEnd -= OnImportingQueueEnd;
             }
 
             base.OnDestroy();

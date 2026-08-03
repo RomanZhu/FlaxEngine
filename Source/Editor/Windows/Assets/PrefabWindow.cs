@@ -9,6 +9,7 @@ using FlaxEditor.CustomEditors.GUI;
 using FlaxEditor.Gizmo;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.Input;
+using FlaxEditor.History;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Viewport;
 using FlaxEngine;
@@ -156,7 +157,7 @@ namespace FlaxEditor.Windows.Assets
             var inputOptions = Editor.Options.Options.Input;
 
             // Undo
-            _undo = new Undo();
+            _undo = new Undo(Editor.Undo, this);
             _undo.UndoDone += OnUndoEvent;
             _undo.RedoDone += OnUndoEvent;
             _undo.ActionDone += OnUndoEvent;
@@ -420,11 +421,8 @@ namespace FlaxEditor.Windows.Assets
 
         private void OnUndoEvent(IUndoAction action)
         {
-            // All undo actions modify the asset except selection change
-            if (!(action is SelectionChangeAction))
-            {
+            if (!UndoActionMetadata.IsSelectionOnly(action))
                 OnPrefabModified();
-            }
 
             UpdateToolstrip();
         }
@@ -679,6 +677,7 @@ namespace FlaxEditor.Windows.Assets
 
             Editor.Prefabs.PrefabApplied -= OnPrefabApplied;
             ScriptsBuilder.ScriptsReloadBegin -= OnScriptsReloadBegin;
+            Editor.NavigationHistory.RemoveActions(x => x is SelectionNavigationAction action && action.Owner == this);
 
             _undo.Dispose();
             Graph.Dispose();

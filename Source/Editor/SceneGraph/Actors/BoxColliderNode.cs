@@ -75,6 +75,22 @@ namespace FlaxEditor.SceneGraph.Actors
         }
 
         /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, out Vector3 result)
+        {
+            var box = ((BoxCollider)_actor).OrientedBox;
+            var corners = box.GetCorners();
+            return FindClosestVertexToRay(ref ray, corners, corners.Length, out result);
+        }
+
+        /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, out Vector3 result, out Real screenDistance)
+        {
+            var box = ((BoxCollider)_actor).OrientedBox;
+            var corners = box.GetCorners();
+            return FindClosestVertexToScreen(ref ray, viewport, mousePosition, corners, corners.Length, out result, out screenDistance);
+        }
+
+        /// <inheritdoc />
         public override void PostSpawn()
         {
             base.PostSpawn();

@@ -291,13 +291,15 @@ namespace FlaxEditor.Windows
             public readonly Panel Panel;
             public readonly CustomEditorPresenter Presenter;
             public readonly object[] Selection;
+            public readonly Guid[] ContentAssetIds;
 
-            public PinnedTab(Tab tab, Panel panel, CustomEditorPresenter presenter, object[] selection)
+            public PinnedTab(Tab tab, Panel panel, CustomEditorPresenter presenter, object[] selection, Guid[] contentAssetIds)
             {
                 Tab = tab;
                 Panel = panel;
                 Presenter = presenter;
                 Selection = selection;
+                ContentAssetIds = contentAssetIds;
             }
         }
 
@@ -389,6 +391,7 @@ namespace FlaxEditor.Windows
             _scrollingPanel.VScrollBar.ValueChanged += OnScrollValueChanged;
             Editor.SceneEditing.SelectionChanged += OnSceneSelectionChanged;
             Editor.Windows.ContentWin.SelectionChanged += OnContentSelectionChanged;
+            Editor.ContentDatabase.ItemRemoved += OnContentItemRemoved;
             UpdateTabsBarVisibility();
         }
 
@@ -507,6 +510,7 @@ namespace FlaxEditor.Windows
                 return;
 
             var selection = Presenter.Selection.ToArray();
+            var contentAssetIds = _showContentSelection ? GetSelectedContentAssetIds() : Array.Empty<Guid>();
             var pinnedUndoObjects = Presenter.GetUndoObjects?.Invoke(Presenter)?.ToArray() ?? Array.Empty<object>();
             var tab = new PropertiesTab(this, TruncateTabTitle(GetSelectionTabTitle()), true);
             var presenter = new CustomEditorPresenter(Editor.Undo)
@@ -526,7 +530,7 @@ namespace FlaxEditor.Windows
             presenter.Select(selection);
             presenter.BuildLayout();
 
-            _pinnedTabs.Add(new PinnedTab(tab, panel, presenter, selection));
+            _pinnedTabs.Add(new PinnedTab(tab, panel, presenter, selection, contentAssetIds));
             _tabs.AddTab(tab);
             UpdateTabsBarVisibility();
             _tabs.SelectedTab = tab;
@@ -598,6 +602,77 @@ namespace FlaxEditor.Windows
             UpdateTabsBarVisibility();
 
             _tabs.SelectedTab = selected == tab ? fallback ?? _selectionTab : selected;
+        }
+
+        private void OnContentItemRemoved(ContentItem item)
+        {
+            if (item is not AssetItem assetItem)
+                return;
+
+            if (_showContentSelection && ContentSelectionContainsAsset(assetItem.ID))
+            {
+                _waitingForContentAssets.Clear();
+                ClearContentAssetState();
+                Presenter.OverrideEditor = null;
+                undoRecordObjects = Array.Empty<object>();
+                Presenter.Deselect();
+                UpdateSelectionTabTitle();
+            }
+
+            for (int i = _pinnedTabs.Count - 1; i >= 0; i--)
+            {
+                var pinned = _pinnedTabs[i];
+                if (ContentAssetIdsContain(pinned.ContentAssetIds, assetItem.ID) || SelectionContainsContentAsset(pinned.Selection, assetItem.ID))
+                    ClosePinnedTab((PropertiesTab)pinned.Tab);
+            }
+        }
+
+        private Guid[] GetSelectedContentAssetIds()
+        {
+            var selection = Editor.Windows.ContentWin.Selection;
+            if (selection.Count == 0)
+                return Array.Empty<Guid>();
+
+            var result = new List<Guid>(selection.Count);
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is AssetItem assetItem)
+                    result.Add(assetItem.ID);
+            }
+            return result.Count != 0 ? result.ToArray() : Array.Empty<Guid>();
+        }
+
+        private bool ContentSelectionContainsAsset(Guid assetId)
+        {
+            var selection = Editor.Windows.ContentWin.Selection;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is AssetItem assetItem && assetItem.ID == assetId)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool ContentAssetIdsContain(IReadOnlyList<Guid> contentAssetIds, Guid assetId)
+        {
+            for (int i = 0; i < contentAssetIds.Count; i++)
+            {
+                if (contentAssetIds[i] == assetId)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool SelectionContainsContentAsset(IReadOnlyList<object> selection, Guid assetId)
+        {
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is Asset asset && asset.ID == assetId)
+                    return true;
+                if (selection[i] is MaterialAssetPropertiesProxy materialProxy && materialProxy.Material != null && materialProxy.Material.ID == assetId)
+                    return true;
+            }
+            return false;
         }
 
 
@@ -1256,6 +1331,8 @@ namespace FlaxEditor.Windows
             Editor.SceneEditing.SelectionChanged -= OnSceneSelectionChanged;
             if (Editor.Windows.ContentWin != null)
                 Editor.Windows.ContentWin.SelectionChanged -= OnContentSelectionChanged;
+            if (Editor.ContentDatabase != null)
+                Editor.ContentDatabase.ItemRemoved -= OnContentItemRemoved;
             Presenter.Modified -= OnPresenterModified;
             ClearContentAssetState();
 

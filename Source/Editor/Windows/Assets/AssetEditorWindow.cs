@@ -4,6 +4,7 @@ using System;
 using FlaxEditor.Content;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
+using FlaxEditor.History;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -15,6 +16,48 @@ namespace FlaxEditor.Windows.Assets
     /// <seealso cref="FlaxEditor.Windows.EditorWindow" />
     public abstract class AssetEditorWindow : EditorWindow, IEditable, IContentItemOwner
     {
+        private sealed class AssetDocumentNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
+        {
+            private readonly Editor _editor;
+            private readonly string _sourcePath;
+            private readonly string _targetPath;
+
+            public AssetDocumentNavigationAction(Editor editor, string sourcePath, string targetPath)
+            {
+                _editor = editor;
+                _sourcePath = sourcePath;
+                _targetPath = targetPath;
+            }
+
+            public object Owner => _editor;
+
+            public string ActionString => "Asset document change";
+
+            public bool IsSameDestination(INavigationHistoryAction other)
+            {
+                return other is AssetDocumentNavigationAction action &&
+                       action._targetPath.Equals(_targetPath, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public void NavigateBack()
+            {
+                OpenAssetDocument(_editor, _sourcePath);
+            }
+
+            public void NavigateForward()
+            {
+                OpenAssetDocument(_editor, _targetPath);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private static string _lastFocusedAssetPath;
+        private static string _suppressNextDocumentNavigationPath;
+        private static bool _isRestoringDocumentNavigation;
+
         /// <summary>
         /// The item.
         /// </summary>
@@ -70,12 +113,85 @@ namespace FlaxEditor.Windows.Assets
         }
 
         /// <summary>
+        /// Prevents the next matching asset-document focus from adding a separate navigation entry.
+        /// </summary>
+        /// <param name="path">The content item path.</param>
+        internal static void SuppressNextDocumentNavigation(string path)
+        {
+            _suppressNextDocumentNavigationPath = path;
+        }
+
+        /// <inheritdoc />
+        public override void Focus()
+        {
+            base.Focus();
+            RecordDocumentNavigation();
+        }
+
+        /// <inheritdoc />
+        protected override void OnShow()
+        {
+            base.OnShow();
+            RecordDocumentNavigation();
+        }
+
+        /// <summary>
         /// Unlinks the item. Removes reference to it and unbinds all events.
         /// </summary>
         protected virtual void UnlinkItem()
         {
             _item.RemoveReference(this);
             _item = null;
+        }
+
+        private void RecordDocumentNavigation()
+        {
+            var targetPath = _item?.Path;
+            if (_isRestoringDocumentNavigation || string.IsNullOrEmpty(targetPath))
+                return;
+
+            if (_suppressNextDocumentNavigationPath != null &&
+                _suppressNextDocumentNavigationPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+            {
+                _lastFocusedAssetPath = targetPath;
+                _suppressNextDocumentNavigationPath = null;
+                return;
+            }
+
+            if (_lastFocusedAssetPath != null && _lastFocusedAssetPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var sourcePath = _lastFocusedAssetPath;
+            _lastFocusedAssetPath = targetPath;
+            if (!string.IsNullOrEmpty(sourcePath))
+                Editor.NavigationHistory.AddAction(new AssetDocumentNavigationAction(Editor, sourcePath, targetPath));
+        }
+
+        private static bool OpenAssetDocument(Editor editor, string path)
+        {
+            if (editor == null || string.IsNullOrEmpty(path))
+                return false;
+
+            var item = editor.ContentDatabase.Find(path);
+            if (item == null || item.IsFolder)
+            {
+                Editor.LogWarning("Cannot restore asset document navigation. Missing item: " + path);
+                return false;
+            }
+
+            _isRestoringDocumentNavigation = true;
+            try
+            {
+                var window = editor.ContentEditing.Open(item);
+                if (window == null)
+                    return false;
+                _lastFocusedAssetPath = path;
+                return true;
+            }
+            finally
+            {
+                _isRestoringDocumentNavigation = false;
+            }
         }
 
         /// <summary>

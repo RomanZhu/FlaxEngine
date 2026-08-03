@@ -13,7 +13,7 @@ namespace FlaxEditor
     /// <seealso cref="FlaxEditor.IUndoAction" />
     [Serializable]
     [HideInEditor]
-    public class MultiUndoAction : IUndoAction
+    public class MultiUndoAction : IUndoAction, IUndoActionMetadata
     {
         /// <summary>
         /// The child actions.
@@ -48,6 +48,34 @@ namespace FlaxEditor
 
         /// <inheritdoc />
         public string ActionString { get; }
+
+        /// <inheritdoc />
+        public UndoActionInfo ActionInfo
+        {
+            get
+            {
+                var result = UndoActionMetadata.GetActionInfo(Actions[0]).Clone();
+                result.Operation = ActionString;
+                if (Actions.Length > 1)
+                    result.TargetType = UndoActionTargetType.Multiple;
+
+                long sizeInBytes = 0;
+                bool sizeKnown = true;
+                for (int i = 0; i < Actions.Length; i++)
+                {
+                    var info = UndoActionMetadata.GetActionInfo(Actions[i]);
+                    result.Flags |= info.Flags;
+                    if (info.SizeInBytes >= 0)
+                        sizeInBytes += info.SizeInBytes;
+                    else
+                        sizeKnown = false;
+                }
+                if (sizeKnown)
+                    result.SizeInBytes = sizeInBytes;
+
+                return result;
+            }
+        }
 
         /// <inheritdoc />
         public void Do()

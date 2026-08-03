@@ -317,6 +317,34 @@ namespace FlaxEditor.Windows
         }
 
         /// <inheritdoc />
+        public override bool OnMouseDown(Float2 location, MouseButton button)
+        {
+            if (button == MouseButton.Extended1)
+            {
+                if (Editor.NavigationHistory.CanGoBack)
+                    Editor.NavigationHistory.GoBack();
+                return true;
+            }
+            if (button == MouseButton.Extended2)
+            {
+                if (Editor.NavigationHistory.CanGoForward)
+                    Editor.NavigationHistory.GoForward();
+                return true;
+            }
+
+            return base.OnMouseDown(location, button);
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            if (button == MouseButton.Extended1 || button == MouseButton.Extended2)
+                return true;
+
+            return base.OnMouseUp(location, button);
+        }
+
+        /// <inheritdoc />
         public override void OnDestroy()
         {
             if (IsDisposing)

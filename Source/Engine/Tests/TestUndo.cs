@@ -2,6 +2,7 @@
 
 #if FLAX_TESTS
 using System;
+using FlaxEditor.History;
 using NUnit.Framework;
 using Assert = FlaxEngine.Assertions.Assert;
 
@@ -50,6 +51,35 @@ namespace FlaxEditor.Tests
                     PropertyObject = new UndoObject()
                 };
             }
+        }
+
+        private sealed class MetadataUndoAction : IUndoAction, IUndoActionMetadata
+        {
+            public string ActionString { get; set; }
+
+            public UndoActionInfo ActionInfo { get; set; }
+
+            public Action DoAction { get; set; }
+
+            public Action UndoAction { get; set; }
+
+            public void Do()
+            {
+                DoAction?.Invoke();
+            }
+
+            public void Undo()
+            {
+                UndoAction?.Invoke();
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class MetadataOwner
+        {
         }
 
         [Test]
@@ -135,6 +165,249 @@ namespace FlaxEditor.Tests
             Assert.AreEqual(0, instance.PropertyInteger);
             Assert.AreEqual(0, instance.PropertyFloat);
             Assert.AreEqual(null, instance.PropertyObject);
+        }
+
+        [Test]
+        public void UndoTestLinkedParent()
+        {
+            var parent = new Undo();
+            var child = new Undo(parent, new object());
+            var instance = new UndoObject();
+
+            child.RecordAction(instance, "Child Edit", i => i.FieldInteger = 25);
+
+            Assert.AreEqual(25, instance.FieldInteger);
+            Assert.AreEqual(1, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, parent.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual("Child Edit", parent.FirstUndoName);
+
+            parent.PerformUndo();
+
+            Assert.AreEqual(10, instance.FieldInteger);
+            Assert.AreEqual(0, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, child.UndoOperationsStack.ReverseCount);
+            Assert.AreEqual("Child Edit", parent.FirstRedoName);
+
+            parent.PerformRedo();
+
+            Assert.AreEqual(25, instance.FieldInteger);
+            Assert.AreEqual(1, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(0, child.UndoOperationsStack.ReverseCount);
+        }
+
+        [Test]
+        public void UndoTestPerformingUndoRedoState()
+        {
+            var undo = new Undo();
+            var wasUndoing = false;
+            var wasRedoing = false;
+
+            undo.AddAction(new MetadataUndoAction
+            {
+                ActionString = "State",
+                UndoAction = () => wasUndoing = undo.IsPerformingUndoRedo,
+                DoAction = () => wasRedoing = undo.IsPerformingUndoRedo,
+            });
+
+            Assert.AreEqual(false, undo.IsPerformingUndoRedo);
+            undo.PerformUndo();
+            Assert.AreEqual(true, wasUndoing);
+            Assert.AreEqual(false, undo.IsPerformingUndoRedo);
+            undo.PerformRedo();
+            Assert.AreEqual(true, wasRedoing);
+            Assert.AreEqual(false, undo.IsPerformingUndoRedo);
+
+            var parent = new Undo();
+            var child = new Undo(parent, new object());
+            var childWasUndoing = false;
+            var parentWasUndoing = false;
+
+            child.AddAction(new MetadataUndoAction
+            {
+                ActionString = "Linked State",
+                UndoAction = () =>
+                {
+                    childWasUndoing = child.IsPerformingUndoRedo;
+                    parentWasUndoing = parent.IsPerformingUndoRedo;
+                },
+            });
+
+            parent.PerformUndo();
+            Assert.AreEqual(true, childWasUndoing);
+            Assert.AreEqual(true, parentWasUndoing);
+            Assert.AreEqual(false, child.IsPerformingUndoRedo);
+            Assert.AreEqual(false, parent.IsPerformingUndoRedo);
+        }
+
+        [Test]
+        public void UndoTestActionMetadata()
+        {
+            var parent = new Undo();
+            var child = new Undo(parent, new MetadataOwner());
+            var instance = new UndoObject();
+
+            child.RecordAction(instance, "Child Edit", i => i.FieldInteger = 25);
+
+            var linkedInfo = parent.FirstUndoInfo;
+            Assert.AreEqual("Child Edit", linkedInfo.Operation);
+            Assert.AreEqual(typeof(MetadataOwner).FullName, linkedInfo.DisplayEditorTypeName);
+
+            var firstAction = new MetadataUndoAction
+            {
+                ActionString = "First",
+                ActionInfo = new UndoActionInfo
+                {
+                    Operation = "First",
+                    TargetType = UndoActionTargetType.Asset,
+                    Flags = UndoActionFlags.RequiresReload,
+                    SizeInBytes = 5,
+                },
+            };
+            var secondAction = new MetadataUndoAction
+            {
+                ActionString = "Second",
+                ActionInfo = new UndoActionInfo
+                {
+                    Operation = "Second",
+                    TargetType = UndoActionTargetType.ContentItem,
+                    Flags = UndoActionFlags.AffectsContentDatabase,
+                    SizeInBytes = 7,
+                },
+            };
+            var multiAction = new MultiUndoAction(new IUndoAction[] { firstAction, secondAction }, "Batch");
+
+            var multiInfo = multiAction.ActionInfo;
+            Assert.AreEqual("Batch", multiInfo.Operation);
+            Assert.AreEqual(UndoActionTargetType.Multiple, multiInfo.TargetType);
+            Assert.AreEqual(UndoActionFlags.RequiresReload | UndoActionFlags.AffectsContentDatabase, multiInfo.Flags);
+            Assert.AreEqual(12, multiInfo.SizeInBytes);
+        }
+
+        [Test]
+        public void UndoTestSizeCapacityUsesActionMetadata()
+        {
+            var undo = new Undo(10)
+            {
+                SizeCapacityInBytes = 10,
+            };
+            var discardedActionName = string.Empty;
+            var discardReason = HistoryStackDiscardReason.Unknown;
+            undo.ActionDiscarded += (action, reason) =>
+            {
+                discardedActionName = action.ActionString;
+                discardReason = reason;
+            };
+
+            undo.AddAction(new MetadataUndoAction
+            {
+                ActionString = "First",
+                ActionInfo = new UndoActionInfo
+                {
+                    Operation = "First",
+                    SizeInBytes = 3,
+                },
+            });
+            undo.AddAction(new MetadataUndoAction
+            {
+                ActionString = "Second",
+                ActionInfo = new UndoActionInfo
+                {
+                    Operation = "Second",
+                    SizeInBytes = 4,
+                },
+            });
+            undo.AddAction(new MetadataUndoAction
+            {
+                ActionString = "Third",
+                ActionInfo = new UndoActionInfo
+                {
+                    Operation = "Third",
+                    SizeInBytes = 5,
+                },
+            });
+
+            Assert.AreEqual(2, undo.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(9, undo.SizeInBytes);
+            Assert.AreEqual("First", discardedActionName);
+            Assert.AreEqual(HistoryStackDiscardReason.SizeLimit, discardReason);
+            Assert.AreEqual("Third", undo.FirstUndoName);
+
+            var undoInfos = undo.GetUndoActionInfos();
+            Assert.AreEqual(2, undoInfos.Length);
+            Assert.AreEqual("Third", undoInfos[0].Operation);
+            Assert.AreEqual("Second", undoInfos[1].Operation);
+
+            undo.PerformUndo();
+            Assert.AreEqual(1, undo.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, undo.UndoOperationsStack.ReverseCount);
+            Assert.AreEqual(9, undo.SizeInBytes);
+
+            var redoInfos = undo.GetRedoActionInfos();
+            Assert.AreEqual(1, redoInfos.Length);
+            Assert.AreEqual("Third", redoInfos[0].Operation);
+        }
+
+        [Test]
+        public void UndoTestLinkedChildClearRemovesParentAction()
+        {
+            var parent = new Undo();
+            var child = new Undo(parent, new object());
+            var instance = new UndoObject();
+
+            child.RecordAction(instance, "Child Edit", i => i.FieldInteger = 25);
+            child.Clear();
+
+            Assert.AreEqual(0, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(0, child.UndoOperationsStack.ReverseCount);
+            Assert.AreEqual(0, parent.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(0, parent.UndoOperationsStack.ReverseCount);
+        }
+
+        [Test]
+        public void UndoTestLinkedParentHistoryPruningRemovesChildAction()
+        {
+            var parent = new Undo(1);
+            var child = new Undo(parent, new object(), 10);
+            var first = new UndoObject();
+            var second = new UndoObject();
+
+            child.RecordAction(first, "First Edit", i => i.FieldInteger = 25);
+            child.RecordAction(second, "Second Edit", i => i.FieldInteger = 30);
+
+            Assert.AreEqual(1, parent.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(25, first.FieldInteger);
+            Assert.AreEqual(30, second.FieldInteger);
+
+            parent.PerformUndo();
+
+            Assert.AreEqual(25, first.FieldInteger);
+            Assert.AreEqual(10, second.FieldInteger);
+            Assert.AreEqual(0, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, child.UndoOperationsStack.ReverseCount);
+        }
+
+        [Test]
+        public void UndoTestLinkedChildHistoryPruningRemovesParentAction()
+        {
+            var parent = new Undo(10);
+            var child = new Undo(parent, new object(), 1);
+            var first = new UndoObject();
+            var second = new UndoObject();
+
+            child.RecordAction(first, "First Edit", i => i.FieldInteger = 25);
+            child.RecordAction(second, "Second Edit", i => i.FieldInteger = 30);
+
+            Assert.AreEqual(1, parent.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual("Second Edit", parent.FirstUndoName);
+
+            parent.PerformUndo();
+
+            Assert.AreEqual(25, first.FieldInteger);
+            Assert.AreEqual(10, second.FieldInteger);
+            Assert.AreEqual(0, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, child.UndoOperationsStack.ReverseCount);
         }
 
         [Test]

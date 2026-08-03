@@ -324,6 +324,111 @@ namespace FlaxEditor.SceneGraph
             return _actor.IntersectsItself(ray.Ray, out distance, out normal);
         }
 
+        /// <summary>
+        /// Updates the closest vertex picked by the given ray.
+        /// </summary>
+        /// <param name="ray">The ray.</param>
+        /// <param name="vertex">The world-space vertex.</param>
+        /// <param name="minDistance">The closest squared distance to the ray.</param>
+        /// <param name="minRayDistance">The closest distance along the ray.</param>
+        /// <param name="result">The closest vertex.</param>
+        /// <returns>True if the vertex became the closest vertex, otherwise false.</returns>
+        protected static bool UpdateClosestVertexToRay(ref Ray ray, Vector3 vertex, ref Real minDistance, ref Real minRayDistance, ref Vector3 result)
+        {
+            var vertexRayDistance = Vector3.Dot(vertex - ray.Position, ray.Direction);
+            if (vertexRayDistance < 0.0f)
+                return false;
+            var closestPointOnRay = ray.Position + ray.Direction * vertexRayDistance;
+            var distance = Vector3.DistanceSquared(vertex, closestPointOnRay);
+            if (distance >= minDistance && (distance != minDistance || vertexRayDistance >= minRayDistance))
+                return false;
+
+            minDistance = distance;
+            minRayDistance = vertexRayDistance;
+            result = vertex;
+            return true;
+        }
+
+        /// <summary>
+        /// Updates the closest vertex picked by the given screen-space mouse position.
+        /// </summary>
+        /// <param name="ray">The ray.</param>
+        /// <param name="viewport">The viewport used to project the vertex.</param>
+        /// <param name="mousePosition">The mouse position in viewport UI space.</param>
+        /// <param name="vertex">The world-space vertex.</param>
+        /// <param name="minScreenDistance">The closest squared distance to the mouse position.</param>
+        /// <param name="minRayDistance">The closest distance along the ray.</param>
+        /// <param name="result">The closest vertex.</param>
+        /// <returns>True if the vertex became the closest vertex, otherwise false.</returns>
+        protected static bool UpdateClosestVertexToScreen(ref Ray ray, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, Vector3 vertex, ref Real minScreenDistance, ref Real minRayDistance, ref Vector3 result)
+        {
+            var vertexRayDistance = Vector3.Dot(vertex - ray.Position, ray.Direction);
+            if (vertexRayDistance < 0.0f)
+                return false;
+
+            viewport.ProjectPoint(vertex, out var screenPosition);
+            if (float.IsNaN(screenPosition.X) || float.IsNaN(screenPosition.Y) ||
+                float.IsInfinity(screenPosition.X) || float.IsInfinity(screenPosition.Y))
+            {
+                return false;
+            }
+            var screenDistance = (Real)(screenPosition - mousePosition).LengthSquared;
+            if (screenDistance >= minScreenDistance && (screenDistance != minScreenDistance || vertexRayDistance >= minRayDistance))
+                return false;
+
+            minScreenDistance = screenDistance;
+            minRayDistance = vertexRayDistance;
+            result = vertex;
+            return true;
+        }
+
+        /// <summary>
+        /// Finds the vertex closest to the ray in world-space.
+        /// </summary>
+        /// <param name="ray">The ray.</param>
+        /// <param name="vertices">The world-space vertices.</param>
+        /// <param name="count">The amount of vertices.</param>
+        /// <param name="result">The closest vertex.</param>
+        /// <returns>True if found a vertex, otherwise false.</returns>
+        protected static bool FindClosestVertexToRay(ref Ray ray, Vector3[] vertices, int count, out Vector3 result)
+        {
+            result = Vector3.Zero;
+            var minDistance = Real.MaxValue;
+            var minRayDistance = Real.MaxValue;
+            var hit = false;
+            for (int i = 0; i < count; i++)
+            {
+                if (UpdateClosestVertexToRay(ref ray, vertices[i], ref minDistance, ref minRayDistance, ref result))
+                    hit = true;
+            }
+            return hit;
+        }
+
+        /// <summary>
+        /// Finds the vertex closest to the mouse position in screen-space.
+        /// </summary>
+        /// <param name="ray">The ray.</param>
+        /// <param name="viewport">The viewport used to project vertices.</param>
+        /// <param name="mousePosition">The mouse position in viewport UI space.</param>
+        /// <param name="vertices">The world-space vertices.</param>
+        /// <param name="count">The amount of vertices.</param>
+        /// <param name="result">The closest vertex.</param>
+        /// <param name="screenDistance">The squared screen-space distance from the mouse position to the result.</param>
+        /// <returns>True if found a vertex, otherwise false.</returns>
+        protected static bool FindClosestVertexToScreen(ref Ray ray, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, Vector3[] vertices, int count, out Vector3 result, out Real screenDistance)
+        {
+            result = Vector3.Zero;
+            screenDistance = Real.MaxValue;
+            var minRayDistance = Real.MaxValue;
+            var hit = false;
+            for (int i = 0; i < count; i++)
+            {
+                if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertices[i], ref screenDistance, ref minRayDistance, ref result))
+                    hit = true;
+            }
+            return hit;
+        }
+
         /// <inheritdoc />
         public override void GetEditorSphere(out BoundingSphere sphere)
         {

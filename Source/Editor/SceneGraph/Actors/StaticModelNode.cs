@@ -58,6 +58,16 @@ namespace FlaxEditor.SceneGraph.Actors
         {
         }
 
+        private bool TryGetPrimitiveSnapPoints(out Vector3[] points)
+        {
+            points = null;
+            if (!IsPrimitive)
+                return false;
+
+            points = Actor.EditorBox.GetCorners();
+            return points != null && points.Length != 0;
+        }
+
         /// <inheritdoc />
         public override void OnDispose()
         {
@@ -71,18 +81,25 @@ namespace FlaxEditor.SceneGraph.Actors
         /// <inheritdoc />
         public override bool OnVertexSnap(ref Ray ray, Real hitDistance, out Vector3 result)
         {
-            // Find the closest vertex to bounding box point (collision detection approximation)
-            result = ray.GetPoint(hitDistance);
+            result = Vector3.Zero;
+            if (TryGetPrimitiveSnapPoints(out var primitivePoints))
+                return FindClosestVertexToRay(ref ray, primitivePoints, primitivePoints.Length, out result);
+
             var model = ((StaticModel)Actor).Model;
             if (model && !model.WaitForLoaded())
             {
                 // TODO: move to C++ and use cached vertex buffer internally inside the Mesh
                 if (_vertices == null)
                     _vertices = new();
-                var pointLocal = (Float3)Actor.Transform.WorldToLocal(result);
+                var transform = Actor.Transform;
                 var minDistance = Real.MaxValue;
+                var minRayDistance = Real.MaxValue;
                 var lodIndex = 0; // TODO: use LOD index based on the game view
+                if (model.LODs == null || model.LODs.Length <= lodIndex)
+                    return false;
                 var lod = model.LODs[lodIndex];
+                if (lod.Meshes == null || lod.Meshes.Length == 0)
+                    return false;
                 {
                     var hit = false;
                     foreach (var mesh in lod.Meshes)
@@ -101,18 +118,67 @@ namespace FlaxEditor.SceneGraph.Actors
                         for (int i = 0; i < verts.Length; i++)
                         {
                             ref var v = ref verts[i];
-                            var distance = Float3.DistanceSquared(ref pointLocal, ref v);
-                            if (distance <= minDistance)
-                            {
+                            Vector3 vertex = transform.LocalToWorld(v);
+                            if (UpdateClosestVertexToRay(ref ray, vertex, ref minDistance, ref minRayDistance, ref result))
                                 hit = true;
-                                minDistance = distance;
-                                result = v;
-                            }
                         }
                     }
                     if (hit)
                     {
-                        result = Actor.Transform.LocalToWorld(result);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, out Vector3 result, out Real screenDistance)
+        {
+            result = Vector3.Zero;
+            screenDistance = Real.MaxValue;
+            if (TryGetPrimitiveSnapPoints(out var primitivePoints))
+                return FindClosestVertexToScreen(ref ray, viewport, mousePosition, primitivePoints, primitivePoints.Length, out result, out screenDistance);
+
+            var model = ((StaticModel)Actor).Model;
+            if (model && !model.WaitForLoaded())
+            {
+                // TODO: move to C++ and use cached vertex buffer internally inside the Mesh
+                if (_vertices == null)
+                    _vertices = new();
+                var transform = Actor.Transform;
+                var minRayDistance = Real.MaxValue;
+                var lodIndex = 0; // TODO: use LOD index based on the game view
+                if (model.LODs == null || model.LODs.Length <= lodIndex)
+                    return false;
+                var lod = model.LODs[lodIndex];
+                if (lod.Meshes == null || lod.Meshes.Length == 0)
+                    return false;
+                {
+                    var hit = false;
+                    foreach (var mesh in lod.Meshes)
+                    {
+                        var key = FlaxEngine.Object.GetUnmanagedPtr(mesh);
+                        if (!_vertices.TryGetValue(key, out var verts))
+                        {
+                            var accessor = new MeshAccessor();
+                            if (accessor.LoadMesh(mesh))
+                                continue;
+                            verts = accessor.Positions;
+                            if (verts == null)
+                                continue;
+                            _vertices.Add(key, verts);
+                        }
+                        for (int i = 0; i < verts.Length; i++)
+                        {
+                            ref var v = ref verts[i];
+                            Vector3 vertex = transform.LocalToWorld(v);
+                            if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertex, ref screenDistance, ref minRayDistance, ref result))
+                                hit = true;
+                        }
+                    }
+                    if (hit)
+                    {
                         return true;
                     }
                 }

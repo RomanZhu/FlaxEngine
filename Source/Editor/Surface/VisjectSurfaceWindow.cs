@@ -1068,7 +1068,8 @@ namespace FlaxEditor.Surface
             }
 
             _paramValueChange = false;
-            MarkAsEdited();
+            if (!UndoActionMetadata.IsSelectionOnly(action))
+                MarkAsEdited();
             UpdateToolstrip();
             _propertiesEditor.BuildLayoutOnUpdate();
         }

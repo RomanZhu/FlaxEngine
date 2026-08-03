@@ -386,7 +386,7 @@ public class ContentFolderTreeNode : TreeNode
         else if (_dragOverItems != null && _dragOverItems.HasValidDrag)
         {
             // Move items
-            Editor.Instance.ContentDatabase.Move(_dragOverItems.Objects, _folder);
+            Editor.Instance.Windows.ContentWin.MoveWithUndo(_dragOverItems.Objects, _folder);
             result = DragDropEffect.Move;
 
             Expand();

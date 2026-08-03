@@ -809,6 +809,8 @@ namespace FlaxEditor.Surface
             bool handled = base.OnMouseUp(location, button);
             if (!handled)
                 CustomMouseUp?.Invoke(ref location, button, ref handled);
+            if (button == MouseButton.Left)
+                CommitPendingGraphNavigationState();
             if (handled)
             {
                 // Clear flags

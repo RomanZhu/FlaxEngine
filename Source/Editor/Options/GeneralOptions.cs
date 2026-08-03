@@ -101,6 +101,20 @@ namespace FlaxEditor.Options
         public int UndoActionsCapacity { get; set; } = 500;
 
         /// <summary>
+        /// Gets or sets the approximate memory or staging storage budget for editor undo actions, in megabytes. Value 0 disables size-based pruning.
+        /// </summary>
+        [DefaultValue(1024)]
+        [EditorDisplay("General"), EditorOrder(101), Tooltip("Approximate memory or staging storage budget for editor undo actions, in megabytes. Value 0 disables size-based pruning.")]
+        public int UndoHistorySizeLimitMB { get; set; } = 1024;
+
+        /// <summary>
+        /// Gets or sets a limit for mouse back/forward navigation history entries.
+        /// </summary>
+        [DefaultValue(200), Limit(1)]
+        [EditorDisplay("General"), EditorOrder(102), Tooltip("Limit for mouse back/forward navigation history entries.")]
+        public int NavigationHistoryActionsCapacity { get; set; } = 200;
+
+        /// <summary>
         /// Gets or sets a limit for the editor draw/update frames per second rate (FPS). Use higher values if you need more responsive interface or lower values to use less device power. Value 0 disables any limits.
         /// </summary>
         [DefaultValue(60.0f), Limit(0, 666)]

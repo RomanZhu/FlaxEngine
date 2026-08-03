@@ -233,6 +233,72 @@ namespace FlaxEditor.GUI.Timeline
         private bool _isMovingPositionHandle;
         private bool _canPlayPause = true, _canStop = true;
         private List<IUndoAction> _batchedUndoActions;
+        private TimelineSelectionState _lastSelectionState;
+        private bool _isRestoringSelectionHistory;
+
+        private struct TimelineMediaSelectionState
+        {
+            public string TrackName;
+            public int MediaIndex;
+        }
+
+        private struct TimelineSelectionState
+        {
+            public string[] TrackNames;
+            public TimelineMediaSelectionState[] Media;
+        }
+
+        private sealed class TimelineSelectionUndoAction : FlaxEditor.IUndoAction, FlaxEditor.IUndoActionMetadata
+        {
+            private Timeline _timeline;
+            private readonly TimelineSelectionState _source;
+            private readonly TimelineSelectionState _target;
+
+            public TimelineSelectionUndoAction(Timeline timeline, TimelineSelectionState source, TimelineSelectionState target)
+            {
+                _timeline = timeline;
+                _source = source;
+                _target = target;
+            }
+
+            public string ActionString => "Timeline selection change";
+
+            public FlaxEditor.UndoActionInfo ActionInfo
+            {
+                get
+                {
+                    var trackNames = _target.TrackNames ?? Array.Empty<string>();
+                    var media = _target.Media ?? Array.Empty<TimelineMediaSelectionState>();
+                    var count = trackNames.Length + media.Length;
+                    var targetName = count == 1 && trackNames.Length == 1 ? trackNames[0] : "Timeline Selection";
+                    return new FlaxEditor.UndoActionInfo
+                    {
+                        Operation = ActionString,
+                        TargetType = count > 1 ? FlaxEditor.UndoActionTargetType.Multiple : FlaxEditor.UndoActionTargetType.Document,
+                        TargetName = targetName,
+                        TargetObjectId = count == 1 && trackNames.Length == 1 ? trackNames[0] : null,
+                        DisplayEditorTypeName = _timeline?.GetType().FullName,
+                        Flags = FlaxEditor.UndoActionFlags.SelectionOnly,
+                        SizeInBytes = 0,
+                    };
+                }
+            }
+
+            public void Do()
+            {
+                _timeline?.RestoreTimelineSelectionState(_target);
+            }
+
+            public void Undo()
+            {
+                _timeline?.RestoreTimelineSelectionState(_source);
+            }
+
+            public void Dispose()
+            {
+                _timeline = null;
+            }
+        }
 
         /// <summary>
         /// Gets or sets the current time showing mode.
@@ -1427,6 +1493,121 @@ namespace FlaxEditor.GUI.Timeline
         protected virtual void OnSelectionChanged()
         {
             SelectionChanged?.Invoke();
+            RecordTimelineSelectionHistory();
+        }
+
+        private void RecordTimelineSelectionHistory()
+        {
+            var target = CaptureTimelineSelectionState();
+            var source = _lastSelectionState;
+            _lastSelectionState = target;
+            if (_isRestoringSelectionHistory || Undo == null || Undo.IsPerformingUndoRedo || AreSameTimelineSelectionState(source, target))
+                return;
+
+            Undo.AddAction(new TimelineSelectionUndoAction(this, source, target));
+        }
+
+        private TimelineSelectionState CaptureTimelineSelectionState()
+        {
+            var trackNames = new string[SelectedTracks.Count];
+            for (int i = 0; i < SelectedTracks.Count; i++)
+                trackNames[i] = SelectedTracks[i]?.Name;
+
+            var media = new TimelineMediaSelectionState[SelectedMedia.Count];
+            for (int i = 0; i < SelectedMedia.Count; i++)
+            {
+                var selectedMedia = SelectedMedia[i];
+                var track = selectedMedia?.Track;
+                media[i] = new TimelineMediaSelectionState
+                {
+                    TrackName = track?.Name,
+                    MediaIndex = IndexOfMedia(track, selectedMedia),
+                };
+            }
+
+            return new TimelineSelectionState
+            {
+                TrackNames = trackNames,
+                Media = media,
+            };
+        }
+
+        private void RestoreTimelineSelectionState(TimelineSelectionState state)
+        {
+            _isRestoringSelectionHistory = true;
+            try
+            {
+                SelectedTracks.Clear();
+                SelectedMedia.Clear();
+
+                var trackNames = state.TrackNames ?? Array.Empty<string>();
+                for (int i = 0; i < trackNames.Length; i++)
+                {
+                    var track = FindTrack(trackNames[i]);
+                    if (track != null && !SelectedTracks.Contains(track))
+                        SelectedTracks.Add(track);
+                }
+
+                var media = state.Media ?? Array.Empty<TimelineMediaSelectionState>();
+                for (int i = 0; i < media.Length; i++)
+                {
+                    var track = FindTrack(media[i].TrackName);
+                    var mediaIndex = media[i].MediaIndex;
+                    if (track != null && mediaIndex >= 0 && mediaIndex < track.Media.Count)
+                    {
+                        var selectedMedia = track.Media[mediaIndex];
+                        if (selectedMedia != null && !SelectedMedia.Contains(selectedMedia))
+                            SelectedMedia.Add(selectedMedia);
+                    }
+                }
+
+                OnSelectionChanged();
+            }
+            finally
+            {
+                _isRestoringSelectionHistory = false;
+            }
+        }
+
+        private static int IndexOfMedia(Track track, Media media)
+        {
+            if (track == null || media == null)
+                return -1;
+
+            var mediaList = track.Media;
+            for (int i = 0; i < mediaList.Count; i++)
+            {
+                if (ReferenceEquals(mediaList[i], media))
+                    return i;
+            }
+            return -1;
+        }
+
+        private static bool AreSameTimelineSelectionState(TimelineSelectionState a, TimelineSelectionState b)
+        {
+            var aTracks = a.TrackNames ?? Array.Empty<string>();
+            var bTracks = b.TrackNames ?? Array.Empty<string>();
+            if (aTracks.Length != bTracks.Length)
+                return false;
+            for (int i = 0; i < aTracks.Length; i++)
+            {
+                if (!string.Equals(aTracks[i], bTracks[i], StringComparison.Ordinal))
+                    return false;
+            }
+
+            var aMedia = a.Media ?? Array.Empty<TimelineMediaSelectionState>();
+            var bMedia = b.Media ?? Array.Empty<TimelineMediaSelectionState>();
+            if (aMedia.Length != bMedia.Length)
+                return false;
+            for (int i = 0; i < aMedia.Length; i++)
+            {
+                if (!string.Equals(aMedia[i].TrackName, bMedia[i].TrackName, StringComparison.Ordinal) ||
+                    aMedia[i].MediaIndex != bMedia[i].MediaIndex)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private void GetTracks(Track track, List<Track> tracks)

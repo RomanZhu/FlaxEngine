@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FlaxEditor.History;
 using FlaxEditor.GUI.Tree;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.GUI;
@@ -49,14 +50,17 @@ namespace FlaxEditor.Windows.Assets
         /// Called when selection gets changed.
         /// </summary>
         /// <param name="before">The selection before the change.</param>
-        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        /// <param name="recordUndo">True if record the selection change in edit and navigation history.</param>
         public void OnSelectionChanged(SceneGraphNode[] before, bool recordUndo = true)
         {
             if (LockSelection)
                 return;
 
-            if (recordUndo)
-                Undo.AddAction(new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
+            if (recordUndo && !_undo.IsPerformingUndoRedo)
+            {
+                _undo.AddAction(new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
+                Editor.NavigationHistory.AddAction(new SelectionNavigationAction(this, before, Selection.ToArray(), OnSelectionUndo));
+            }
 
             OnSelectionChanges();
         }
@@ -125,7 +129,7 @@ namespace FlaxEditor.Windows.Assets
         /// Selects the specified nodes collection.
         /// </summary>
         /// <param name="nodes">The nodes.</param>
-        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        /// <param name="recordUndo">True if record the selection change in edit and navigation history.</param>
         public void Select(List<SceneGraphNode> nodes, bool recordUndo)
         {
             nodes?.RemoveAll(x => x == null);

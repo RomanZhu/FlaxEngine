@@ -370,6 +370,31 @@ namespace FlaxEditor.SceneGraph
         }
 
         /// <summary>
+        /// Performs the vertex snapping for a given ray and viewport cursor position.
+        /// </summary>
+        /// <param name="ray">The ray to raycast.</param>
+        /// <param name="hitDistance">Hit distance from ray to object bounding box.</param>
+        /// <param name="viewport">The viewport used to project vertices to screen space.</param>
+        /// <param name="mousePosition">The mouse position in viewport UI space.</param>
+        /// <param name="result">The result point on the object mesh that is closest to the mouse position.</param>
+        /// <param name="screenDistance">The squared screen-space distance from the mouse position to the result.</param>
+        /// <returns>True if got a valid result value, otherwise false (eg. if missing data or not initialized).</returns>
+        public virtual bool OnVertexSnap(ref Ray ray, Real hitDistance, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, out Vector3 result, out Real screenDistance)
+        {
+            screenDistance = Real.MaxValue;
+            if (!OnVertexSnap(ref ray, hitDistance, out result))
+                return false;
+            viewport.ProjectPoint(result, out var screenPosition);
+            if (float.IsNaN(screenPosition.X) || float.IsNaN(screenPosition.Y) ||
+                float.IsInfinity(screenPosition.X) || float.IsInfinity(screenPosition.Y))
+            {
+                return false;
+            }
+            screenDistance = (Real)(screenPosition - mousePosition).LengthSquared;
+            return true;
+        }
+
+        /// <summary>
         /// Called when selected nodes should draw debug shapes using <see cref="DebugDraw"/> interface.
         /// </summary>
         /// <param name="data">The debug draw data.</param>
