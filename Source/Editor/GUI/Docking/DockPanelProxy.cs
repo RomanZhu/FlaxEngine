@@ -188,7 +188,7 @@ namespace FlaxEditor.GUI.Docking
 
         private bool IsCloseButtonVisible(DockWindow win, InterfaceOptions.TabCloseButtonVisibility visibilityMode, DockPanel panel)
         {
-            return visibilityMode != InterfaceOptions.TabCloseButtonVisibility.Never &&
+            return panel.IsFloating && visibilityMode != InterfaceOptions.TabCloseButtonVisibility.Never &&
                 (visibilityMode == InterfaceOptions.TabCloseButtonVisibility.Always ||
                 (visibilityMode == InterfaceOptions.TabCloseButtonVisibility.SelectedTab && panel.SelectedTab == win));
         }
