@@ -720,15 +720,45 @@ namespace FlaxEditor.Modules
                 });
                 DefaultViewportScaleOptions.Add(new ViewportScaleOption
                 {
+                    Label = "4:3 Aspect",
+                    ScaleType = ViewportScaleOption.ViewportScaleType.Aspect,
+                    Size = new Int2(4, 3),
+                });
+                DefaultViewportScaleOptions.Add(new ViewportScaleOption
+                {
+                    Label = "21:9 Aspect",
+                    ScaleType = ViewportScaleOption.ViewportScaleType.Aspect,
+                    Size = new Int2(21, 9),
+                });
+                DefaultViewportScaleOptions.Add(new ViewportScaleOption
+                {
+                    Label = "320x240 Resolution",
+                    ScaleType = ViewportScaleOption.ViewportScaleType.Resolution,
+                    Size = new Int2(320, 240),
+                });
+                DefaultViewportScaleOptions.Add(new ViewportScaleOption
+                {
+                    Label = "640x480 Resolution",
+                    ScaleType = ViewportScaleOption.ViewportScaleType.Resolution,
+                    Size = new Int2(640, 480),
+                });
+                DefaultViewportScaleOptions.Add(new ViewportScaleOption
+                {
                     Label = "1920x1080 Resolution (Full HD)",
                     ScaleType = ViewportScaleOption.ViewportScaleType.Resolution,
                     Size = new Int2(1920, 1080),
                 });
                 DefaultViewportScaleOptions.Add(new ViewportScaleOption
                 {
-                    Label = "2560x1440 Resolution (2K)",
+                    Label = "2560x1440 Resolution (QHD)",
                     ScaleType = ViewportScaleOption.ViewportScaleType.Resolution,
                     Size = new Int2(2560, 1440),
+                });
+                DefaultViewportScaleOptions.Add(new ViewportScaleOption
+                {
+                    Label = "3840x2160 Resolution (4K UHD)",
+                    ScaleType = ViewportScaleOption.ViewportScaleType.Resolution,
+                    Size = new Int2(3840, 2160),
                 });
             }
 
