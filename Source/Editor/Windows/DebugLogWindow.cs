@@ -139,10 +139,11 @@ namespace FlaxEditor.Windows
                 var color = Group == LogGroup.Error ? _window._colorError : (Group == LogGroup.Warning ? _window._colorWarning : _window._colorInfo);
 
                 // Icon
-                Render2D.DrawSprite(Icon, new Rectangle(8, 0, 32, 32), color);
+                var iconSize = style.IconSize > 0.0f ? Mathf.Min(style.IconSize, 16.0f) : 16.0f;
+                Render2D.DrawSprite(Icon, new Rectangle(8, (32.0f - iconSize) * 0.5f, iconSize, iconSize), color);
 
                 // Title
-                var textRect = new Rectangle(43, 2, clientRect.Width - 40, clientRect.Height - 10);
+                var textRect = new Rectangle(24, 2, clientRect.Width - 26, clientRect.Height - 10);
                 Render2D.PushClip(ref clientRect);
                 bool coloredText = _window._colorDebugLogText;
                 if (LogCount == 1)
