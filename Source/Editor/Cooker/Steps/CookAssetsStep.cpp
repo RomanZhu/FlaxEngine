@@ -32,6 +32,7 @@
 #include "Engine/Graphics/Textures/TextureData.h"
 #include "Engine/Graphics/Materials/MaterialShader.h"
 #include "Engine/Graphics/PixelFormatExtensions.h"
+#include "Engine/Level/Level.h"
 #include "Engine/Particles/Graph/GPU/ParticleEmitterGraph.GPU.h"
 #include "Engine/Engine/Base/GameBase.h"
 #include "Engine/Engine/Globals.h"
@@ -345,8 +346,19 @@ bool CookAssetsStep::ProcessDefaultAsset(AssetCookData& options)
     {
         // Use compact json
         rapidjson_flax::StringBuffer buffer;
-        CompactJsonWriter writerObj(buffer);
-        asJsonAsset->Save(writerObj);
+        if (Level::IsExternalActorsSceneAsset(asJsonAsset))
+        {
+            Array<String> externalActorFiles;
+            if (Level::SaveSceneAssetToBytes(asJsonAsset, buffer, &externalActorFiles, false))
+                return true;
+            for (const String& file : externalActorFiles)
+                options.FileDependencies.Add(ToPair(file, FileSystem::GetFileLastEditTime(file)));
+        }
+        else
+        {
+            CompactJsonWriter writerObj(buffer);
+            asJsonAsset->Save(writerObj);
+        }
 
         // Store json data in the first chunk
         auto chunk = New<FlaxChunk>();

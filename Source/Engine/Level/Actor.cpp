@@ -343,6 +343,9 @@ void Actor::SetParent(Actor* value, bool worldPositionsStays, bool canBreakPrefa
 
     // Set value
     _parent = value;
+#if USE_EDITOR
+    _externalOrderInParent = 0;
+#endif
 
     // Link to the new one
     if (_parent)
@@ -440,6 +443,13 @@ void Actor::SetOrderInParent(int32 index)
             parentChildren.Insert(index, this);
         }
         _parent->_isHierarchyDirty = true;
+
+#if USE_EDITOR
+        const int32 newIndex = parentChildren.Find(this);
+        const int64 prevOrder = newIndex > 0 ? parentChildren[newIndex - 1]->_externalOrderInParent : 0;
+        const int64 nextOrder = newIndex + 1 < parentChildren.Count() ? parentChildren[newIndex + 1]->_externalOrderInParent : 0;
+        _externalOrderInParent = nextOrder > prevOrder + 1 ? (prevOrder + nextOrder) / 2 : prevOrder + 1024;
+#endif
 
         // Fire event
         OnOrderInParentChanged();

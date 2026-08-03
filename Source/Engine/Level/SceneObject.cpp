@@ -25,6 +25,7 @@ SceneObject::SceneObject(const SpawnParams& params)
     , _parent(nullptr)
     , _prefabID(Guid::Empty)
     , _prefabObjectID(Guid::Empty)
+    , _externalOrderInParent(0)
 {
 }
 
@@ -149,6 +150,7 @@ void SceneObject::Deserialize(DeserializeStream& stream, ISerializeModifier* mod
     // _parent is deserialized by Actor/Script impl
     // _prefabID is deserialized by Actor/Script impl
     DESERIALIZE_MEMBER(PrefabObjectID, _prefabObjectID);
+    DESERIALIZE_MEMBER(OrderInParent, _externalOrderInParent);
 
 #if !COMPILE_WITHOUT_CSHARP
     // Handle C# objects data serialization

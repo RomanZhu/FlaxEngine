@@ -78,13 +78,14 @@ namespace FlaxEditor.SceneGraph.Actors
                 var b = contextMenu.AddButton("Show in content window", OnSelect);
                 b.Icon = Editor.Instance.Icons.Search12;
                 b.TooltipText = "Finds and selects the scene asset int Content window.";
+                contextMenu.AddButton("Convert to external actors", OnConvertToExternalActors).LinkTooltip("Stores actors in separate files for source control merging.").Enabled = !Scene.UseExternalActors && !Editor.IsPlayMode;
             }
             contextMenu.AddButton("Save scene", OnSave).LinkTooltip("Saves this scene.").Enabled = IsEdited && !Editor.IsPlayMode;
             contextMenu.AddButton("Unload scene", OnUnload).LinkTooltip("Unloads this scene.").Enabled = Editor.Instance.StateMachine.CurrentState.CanChangeScene;
             if (Level.ScenesCount > 1)
                 contextMenu.AddButton("Unload all but this scene", OnUnloadAllButSelectedScene).LinkTooltip("Unloads all of the active scenes except for the selected scene.").Enabled = Editor.Instance.StateMachine.CurrentState.CanChangeScene;
 
-            contextMenu.MaximumItemsInViewCount += 3;
+            contextMenu.MaximumItemsInViewCount += 4;
             base.OnContextMenu(contextMenu, window);
         }
 
@@ -96,6 +97,12 @@ namespace FlaxEditor.SceneGraph.Actors
         private void OnSave()
         {
             Editor.Instance.Scene.SaveScene(this);
+        }
+
+        private void OnConvertToExternalActors()
+        {
+            if (!Level.ConvertSceneToExternalActors(Scene))
+                IsEdited = false;
         }
 
         private void OnUnload()

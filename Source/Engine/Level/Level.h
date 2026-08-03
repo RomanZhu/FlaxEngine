@@ -12,6 +12,7 @@
 #include "Types.h"
 
 class JsonWriter;
+class JsonAssetBase;
 class Engine;
 struct RenderView;
 struct RenderContext;
@@ -339,6 +340,23 @@ public:
     API_FUNCTION() static void UnloadAllScenesAsync();
 
 #if USE_EDITOR
+
+    /// <summary>
+    /// Converts loaded scene to external actors format and stores a backup of the original scene file.
+    /// </summary>
+    /// <param name="scene">Scene to convert.</param>
+    /// <returns>True if failed, otherwise false.</returns>
+    API_FUNCTION() static bool ConvertSceneToExternalActors(Scene* scene);
+
+    /// <summary>
+    /// Checks if scene asset uses external actors storage.
+    /// </summary>
+    static bool IsExternalActorsSceneAsset(const JsonAssetBase* sceneAsset);
+
+    /// <summary>
+    /// Saves scene asset data to bytes with external actors expanded into a unified scene.
+    /// </summary>
+    static bool SaveSceneAssetToBytes(JsonAssetBase* sceneAsset, rapidjson_flax::StringBuffer& outData, Array<String>* externalActorFiles = nullptr, bool prettyJson = false);
 
     /// <summary>
     /// Reloads scripts. Done in the background.

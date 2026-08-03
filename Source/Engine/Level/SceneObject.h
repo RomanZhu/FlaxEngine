@@ -81,6 +81,7 @@ protected:
     Actor* _parent;
     Guid _prefabID;
     Guid _prefabObjectID;
+    int64 _externalOrderInParent;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SceneObject"/> class.
@@ -135,6 +136,20 @@ public:
     /// <param name="value">The new parent.</param>
     /// <param name="canBreakPrefabLink">True if can break prefab link on changing the parent.</param>
     API_FUNCTION() virtual void SetParent(Actor* value, bool canBreakPrefabLink) = 0;
+
+#if USE_EDITOR
+
+    FORCE_INLINE int64 GetExternalOrderInParent() const
+    {
+        return _externalOrderInParent;
+    }
+
+    FORCE_INLINE void SetExternalOrderInParent(int64 value)
+    {
+        _externalOrderInParent = value;
+    }
+
+#endif
 
     /// <summary>
     /// Gets the scene object ID.

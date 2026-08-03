@@ -11,10 +11,15 @@
 #include "Loading/ContentLoadTask.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/LogContext.h"
+#include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/ObjectsRemovalService.h"
+#include "Engine/Serialization/JsonTools.h"
+#include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Serialization/Serialization.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/StringUtils.h"
 #include "Engine/Platform/ConditionVariable.h"
 #include "Engine/Platform/Thread.h"
 #include "Engine/Platform/CPUInfo.h"
@@ -35,9 +40,6 @@
 #if USE_EDITOR
 #include "Editor/Editor.h"
 #include "Editor/ProjectInfo.h"
-#endif
-#if ENABLE_ASSETS_DISCOVERY
-#include "Engine/Core/Collections/HashSet.h"
 #endif
 #if USE_EDITOR && PLATFORM_WINDOWS
 #include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
@@ -100,6 +102,235 @@ namespace
 #endif
 #if USE_EDITOR
     Dictionary<Guid, HashSet<BinaryAsset*>> PendingDependencies;
+
+    constexpr const Char* SceneActorsFolderName = TEXT("SceneActors");
+    constexpr const Char* ExternalActorsFolderName = TEXT("ExternalActors");
+    constexpr const Char* ExternalActorExtension = TEXT(".actor");
+
+    bool IsSceneAssetPath(const StringView& path)
+    {
+        return FileSystem::GetExtension(path).ToLower() == TEXT("scene");
+    }
+
+    String GetSceneActorsFolderPath(const StringView& scenePath)
+    {
+        String relativePath = FileSystem::ConvertAbsolutePathToRelative(Globals::ProjectContentFolder, String(scenePath));
+        FileSystem::NormalizePath(relativePath);
+        const String directory = String(StringUtils::GetDirectoryName(relativePath));
+        const String filename = String(StringUtils::GetFileNameWithoutExtension(relativePath));
+        return directory.HasChars()
+               ? Globals::ProjectFolder / SceneActorsFolderName / directory / filename
+               : Globals::ProjectFolder / SceneActorsFolderName / filename;
+    }
+
+    String GetExternalActorsFolderPath(const StringView& scenePath)
+    {
+        return GetSceneActorsFolderPath(scenePath) / ExternalActorsFolderName;
+    }
+
+    bool ReadJsonDocument(const StringView& path, rapidjson_flax::Document& document)
+    {
+        BytesContainer fileData;
+        if (File::ReadAllBytes(path, fileData))
+            return true;
+        document.Parse(fileData.Get<char>(), fileData.Length());
+        if (document.HasParseError())
+        {
+            LOG(Error, "Failed to parse json file '{0}' at offset {1}.", path, document.GetErrorOffset());
+            return true;
+        }
+        return false;
+    }
+
+    bool WriteJsonDocument(const StringView& path, rapidjson_flax::Document& document)
+    {
+        if (FileSystem::CreateDirectory(StringUtils::GetDirectoryName(path)))
+            return true;
+        rapidjson_flax::StringBuffer buffer;
+        PrettyJsonWriter writer(buffer);
+        document.Accept(writer.GetWriter());
+        return File::WriteAllBytes(path, buffer.GetString(), static_cast<int32>(buffer.GetSize()));
+    }
+
+    bool IsExternalActorsSceneDocument(const rapidjson_flax::Document& document)
+    {
+        if (!document.IsObject())
+            return false;
+        const auto externalActors = document.FindMember("ExternalActors");
+        if (externalActors != document.MemberEnd() && externalActors->value.IsBool() && externalActors->value.GetBool())
+            return true;
+        const auto data = document.FindMember("Data");
+        if (data != document.MemberEnd() && data->value.IsArray() && !data->value.Empty() && data->value[0].IsObject())
+        {
+            const auto useExternalActors = data->value[0].FindMember("UseExternalActors");
+            return useExternalActors != data->value[0].MemberEnd() && useExternalActors->value.IsBool() && useExternalActors->value.GetBool();
+        }
+        return false;
+    }
+
+    void FindObjectIds(const rapidjson_flax::Value& obj, const rapidjson_flax::Document& document, HashSet<Guid>& ids, const char* parentName = nullptr)
+    {
+        if (obj.IsObject())
+        {
+            for (rapidjson_flax::Value::ConstMemberIterator i = obj.MemberBegin(); i != obj.MemberEnd(); ++i)
+                FindObjectIds(i->value, document, ids, i->name.GetString());
+        }
+        else if (obj.IsArray())
+        {
+            for (rapidjson::SizeType i = 0; i < obj.Size(); i++)
+                FindObjectIds(obj[i], document, ids, parentName);
+        }
+        else if (obj.IsString() && obj.GetStringLength() == 32 && parentName && StringUtils::Compare(parentName, "ID") == 0)
+        {
+            const Guid value = JsonTools::GetGuid(obj);
+            if (value.IsValid())
+                ids.Add(value);
+        }
+    }
+
+    bool GetExternalActorId(const rapidjson_flax::Document& document, Guid& id)
+    {
+        const auto data = document.FindMember("Data");
+        if (data == document.MemberEnd() || !data->value.IsArray() || data->value.Empty() || !data->value[0].IsObject())
+            return true;
+        id = JsonTools::GetGuid(data->value[0], "ID");
+        return !id.IsValid();
+    }
+
+    String GetExternalActorFilePath(const String& actorsFolder, const Guid& actorId)
+    {
+        const String actorIdText = actorId.ToString(Guid::FormatType::N);
+        return actorsFolder / actorIdText.Substring(0, 2) / actorIdText + ExternalActorExtension;
+    }
+
+    bool RemoveEmptySceneActorsFile(const StringView& path)
+    {
+        if (!FileSystem::FileExists(path))
+            return false;
+        if (FileSystem::GetFileSize(path) != 0)
+            return true;
+        if (FileSystem::DeleteFile(path))
+        {
+            LOG(Error, "Cannot remove empty scene actors placeholder file '{0}'.", path);
+            return true;
+        }
+        return false;
+    }
+
+    bool CopyExternalActorsSceneData(const StringView& dstPath, const StringView& srcPath, const Guid& dstId, rapidjson_flax::Document& sceneDocument)
+    {
+        const Guid srcId = JsonTools::GetGuid(sceneDocument, "ID");
+        if (!srcId.IsValid())
+            return true;
+
+        const String srcActorsFolder = GetExternalActorsFolderPath(srcPath);
+        const String dstActorsFolder = GetExternalActorsFolderPath(dstPath);
+        if (FileSystem::DirectoryExists(dstActorsFolder) || FileSystem::FileExists(dstActorsFolder))
+        {
+            LOG(Error, "Cannot copy external actors scene data because destination already exists: '{0}'.", dstActorsFolder);
+            return true;
+        }
+
+        Array<String> actorFiles;
+        if (srcActorsFolder.HasChars() &&
+            FileSystem::DirectoryExists(srcActorsFolder) &&
+            FileSystem::DirectoryGetFiles(actorFiles, srcActorsFolder, TEXT("*.actor"), DirectorySearchOption::AllDirectories))
+        {
+            return true;
+        }
+
+        HashSet<Guid> ids;
+        FindObjectIds(sceneDocument, sceneDocument, ids);
+        for (const String& actorFile : actorFiles)
+        {
+            rapidjson_flax::Document actorDocument;
+            if (ReadJsonDocument(actorFile, actorDocument))
+                return true;
+            FindObjectIds(actorDocument, actorDocument, ids);
+        }
+
+        Dictionary<Guid, Guid> remap;
+        remap.EnsureCapacity(ids.Count());
+        for (const auto& id : ids)
+            remap.Add(id.Item, Guid::New());
+        remap[srcId] = dstId;
+
+        JsonTools::ChangeIds(sceneDocument, remap);
+        if (WriteJsonDocument(dstPath, sceneDocument))
+            return true;
+
+        for (const String& actorFile : actorFiles)
+        {
+            rapidjson_flax::Document actorDocument;
+            if (ReadJsonDocument(actorFile, actorDocument))
+                return true;
+            JsonTools::ChangeIds(actorDocument, remap);
+
+            Guid actorId;
+            if (GetExternalActorId(actorDocument, actorId))
+            {
+                LOG(Error, "Cannot copy invalid external actor file '{0}'.", actorFile);
+                return true;
+            }
+
+            if (WriteJsonDocument(GetExternalActorFilePath(dstActorsFolder, actorId), actorDocument))
+                return true;
+        }
+
+        return false;
+    }
+
+    bool MoveSceneActorsFolder(const StringView& oldScenePath, const StringView& newScenePath)
+    {
+        const String srcSceneActorsFolder = GetSceneActorsFolderPath(oldScenePath);
+        if (!FileSystem::DirectoryExists(srcSceneActorsFolder))
+            return false;
+
+        const String dstSceneActorsFolder = GetSceneActorsFolderPath(newScenePath);
+        if (FileSystem::AreFilePathsEqual(srcSceneActorsFolder, dstSceneActorsFolder))
+            return false;
+        if (RemoveEmptySceneActorsFile(dstSceneActorsFolder))
+        {
+            LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
+            return true;
+        }
+        if (FileSystem::DirectoryExists(dstSceneActorsFolder) || FileSystem::FileExists(dstSceneActorsFolder))
+        {
+            LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
+            return true;
+        }
+        Array<String> sceneActorFiles;
+        if (FileSystem::DirectoryGetFiles(sceneActorFiles, srcSceneActorsFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
+        {
+            LOG(Error, "Cannot list scene actors folder '{0}'.", srcSceneActorsFolder);
+            return true;
+        }
+        if (FileSystem::CreateDirectory(dstSceneActorsFolder) && !FileSystem::DirectoryExists(dstSceneActorsFolder))
+        {
+            LOG(Error, "Cannot create scene actors destination folder '{0}'.", dstSceneActorsFolder);
+            return true;
+        }
+        for (const String& srcFile : sceneActorFiles)
+        {
+            String relativePath = FileSystem::ConvertAbsolutePathToRelative(srcSceneActorsFolder, srcFile);
+            FileSystem::NormalizePath(relativePath);
+            const String dstFile = dstSceneActorsFolder / relativePath;
+            const String dstFileDirectory = StringUtils::GetDirectoryName(dstFile);
+            if (FileSystem::CreateDirectory(dstFileDirectory) && !FileSystem::DirectoryExists(dstFileDirectory))
+            {
+                LOG(Error, "Cannot create scene actors destination folder '{0}'.", dstFileDirectory);
+                return true;
+            }
+            if (FileSystem::CopyFile(dstFile, srcFile))
+            {
+                LOG(Error, "Cannot copy scene actors file from '{0}' to '{1}'.", srcFile, dstFile);
+                return true;
+            }
+        }
+        if (FileSystem::DeleteDirectory(srcSceneActorsFolder))
+            LOG(Warning, "Cannot remove old scene actors folder '{0}'.", srcSceneActorsFolder);
+        return false;
+    }
 #endif
 }
 
@@ -920,12 +1151,31 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     // Cache data
     Asset* oldAsset = GetAsset(oldPath);
     Asset* newAsset = GetAsset(newPath);
+    const bool isSceneAsset = IsSceneAssetPath(oldPath);
+    bool moveSceneActorsFolder = false;
 
     // Validate name
     if (newAsset != nullptr && newAsset != oldAsset)
     {
         LOG(Error, "Invalid name '{0}' when trying to rename '{1}'.", newPath, oldPath);
         return true;
+    }
+
+    if (isSceneAsset)
+    {
+        const String srcSceneActorsFolder = GetSceneActorsFolderPath(oldPath);
+        const String dstSceneActorsFolder = GetSceneActorsFolderPath(newPath);
+        moveSceneActorsFolder = FileSystem::DirectoryExists(srcSceneActorsFolder) && !FileSystem::AreFilePathsEqual(srcSceneActorsFolder, dstSceneActorsFolder);
+        if (moveSceneActorsFolder && RemoveEmptySceneActorsFile(dstSceneActorsFolder))
+        {
+            LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
+            return true;
+        }
+        if (moveSceneActorsFolder && (FileSystem::DirectoryExists(dstSceneActorsFolder) || FileSystem::FileExists(dstSceneActorsFolder)))
+        {
+            LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
+            return true;
+        }
     }
 
     // Ensure asset is ready for renaming
@@ -949,9 +1199,14 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     // Ensure to unlock file
     ContentStorageManager::EnsureAccess(oldPath);
 
+    if (moveSceneActorsFolder && MoveSceneActorsFolder(oldPath, newPath))
+        return true;
+
     // Move file
     if (FileSystem::MoveFile(newPath, oldPath))
     {
+        if (moveSceneActorsFolder)
+            MoveSceneActorsFolder(newPath, oldPath);
         LOG(Error, "Cannot move file '{0}' to '{1}'", oldPath, newPath);
         return true;
     }
@@ -1023,6 +1278,15 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
         // Special case for json resources
         if (JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(srcPath).ToLower()))
         {
+            if (IsSceneAssetPath(srcPath))
+            {
+                rapidjson_flax::Document sourceDocument;
+                if (ReadJsonDocument(srcPath, sourceDocument))
+                    return true;
+                if (IsExternalActorsSceneDocument(sourceDocument))
+                    return CopyExternalActorsSceneData(dstPath, srcPath, dstId, sourceDocument);
+            }
+
             if (FileSystem::CopyFile(dstPath, srcPath))
             {
                 LOG(Warning, "Cannot copy file to destination.");

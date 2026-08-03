@@ -85,6 +85,12 @@ public:
 #if USE_EDITOR
 
     /// <summary>
+    /// True if scene actors are stored as external editor files for source-control merging.
+    /// </summary>
+    API_FIELD(Attributes="HideInEditor")
+    bool UseExternalActors = false;
+
+    /// <summary>
     /// Gets path to the scene file
     /// </summary>
     API_PROPERTY() String GetPath() const;
