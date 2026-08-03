@@ -23,6 +23,11 @@ namespace FlaxEditor.Windows.Assets
     /// <seealso cref="FlaxEditor.Windows.Assets.AssetEditorWindow" />
     public sealed partial class PrefabWindow : AssetEditorWindowBase<Prefab>, IPresenterOwner, ISceneEditingContext
     {
+        private const float AutoSaveToolStripWidth = 98.0f;
+        private const float AutoSaveLabelWidth = 70.0f;
+        private const float AutoSaveCheckBoxSize = 18.0f;
+        private const string AutoSaveTooltip = "Automatically saves prefab changes after values are applied. Mouse-driven edits are saved after the mouse button is released.";
+
         private readonly SplitPanel _split1;
         private readonly SplitPanel _split2;
         private readonly TextBox _searchBox;
@@ -39,14 +44,18 @@ namespace FlaxEditor.Windows.Assets
         private readonly ToolStripButton _toolStripTranslate;
         private readonly ToolStripButton _toolStripRotate;
         private readonly ToolStripButton _toolStripScale;
-        private readonly ToolStripButton _toolStripLiveReload;
+        private readonly CheckBox _autoSaveCheckBox;
 
         private Undo _undo;
         private bool _focusCamera;
-        private bool _liveReload = false;
+        private bool _autoSave = true;
         private bool _isUpdatingSelection, _isScriptsReloading;
         private DateTime _modifiedTime = DateTime.MinValue;
         private bool _isDropping = false;
+        private bool _isAutoSaving = false;
+        private bool _isLeftMouseButtonDown = false;
+        private bool _pendingAutoSave = false;
+        private FlaxEngine.Window _autoSaveMouseWindow;
 
         private bool _lockSelection = false;
 
@@ -98,26 +107,44 @@ namespace FlaxEditor.Windows.Assets
         public ISceneEditingContext SceneContext => this;
 
         /// <summary>
-        /// Gets or sets a value indicating whether use live reloading for the prefab changes (applies prefab changes on modification by auto).
+        /// Gets or sets a value indicating whether prefab changes are saved automatically after editing.
         /// </summary>
-        public bool LiveReload
+        public bool AutoSave
         {
-            get => _liveReload;
+            get => _autoSave;
             set
             {
-                if (_liveReload != value)
-                {
-                    _liveReload = value;
+                if (_autoSave == value)
+                    return;
 
-                    UpdateToolstrip();
-                }
+                _autoSave = value;
+                _modifiedTime = DateTime.Now;
+                UpdateToolstrip();
             }
         }
 
         /// <summary>
+        /// Gets or sets a value indicating whether use live reloading for the prefab changes (applies prefab changes on modification by auto).
+        /// </summary>
+        public bool LiveReload
+        {
+            get => AutoSave;
+            set => AutoSave = value;
+        }
+
+        /// <summary>
+        /// Gets or sets the auto save timeout. It defines the time to apply prefab changes after modification.
+        /// </summary>
+        public TimeSpan AutoSaveTimeout { get; set; } = TimeSpan.FromMilliseconds(100);
+
+        /// <summary>
         /// Gets or sets the live reload timeout. It defines the time to apply prefab changes after modification.
         /// </summary>
-        public TimeSpan LiveReloadTimeout { get; set; } = TimeSpan.FromMilliseconds(100);
+        public TimeSpan LiveReloadTimeout
+        {
+            get => AutoSaveTimeout;
+            set => AutoSaveTimeout = value;
+        }
 
         /// <inheritdoc />
         public PrefabWindow(Editor editor, AssetItem item)
@@ -183,7 +210,7 @@ namespace FlaxEditor.Windows.Assets
             Graph.Root.TreeNode.Expand(true);
             _tree = new PrefabTree
             {
-                Margin = new Margin(0.0f, 0.0f, -16.0f, _treePanel.ScrollBarsSize), // Hide root node
+                Margin = new Margin(0.0f, 0.0f, 0.0f, _treePanel.ScrollBarsSize),
                 IsScrollable = true,
             };
             _tree.AddChild(Graph.Root.TreeNode);
@@ -225,7 +252,7 @@ namespace FlaxEditor.Windows.Assets
 
             _propertiesEditor = new CustomEditorPresenter(_undo, null, this);
             _propertiesEditor.Panel.Parent = _propertiesScrollingPanel;
-            _propertiesEditor.Modified += MarkAsEdited;
+            _propertiesEditor.Modified += OnPrefabModified;
             _propertiesEditor.AfterLayout += OnPresenterAfterLayout;
 
             // Toolstrip
@@ -237,8 +264,27 @@ namespace FlaxEditor.Windows.Assets
             _toolStripTranslate = _toolstrip.AddButton(Editor.Icons.Translate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate).LinkTooltip("Change Gizmo tool mode to Translate", ref inputOptions.TranslateMode);
             _toolStripRotate = _toolstrip.AddButton(Editor.Icons.Rotate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate).LinkTooltip("Change Gizmo tool mode to Rotate", ref inputOptions.RotateMode);
             _toolStripScale = _toolstrip.AddButton(Editor.Icons.Scale32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale).LinkTooltip("Change Gizmo tool mode to Scale", ref inputOptions.ScaleMode);
-            _toolstrip.AddSeparator();
-            _toolStripLiveReload = (ToolStripButton)_toolstrip.AddButton(Editor.Icons.Refresh64, () => LiveReload = !LiveReload).SetChecked(true).SetAutoCheck(true).LinkTooltip("Live changes preview (applies prefab changes on modification by auto)");
+            var autoSavePanel = new ContainerControl
+            {
+                Size = new Float2(AutoSaveToolStripWidth, _toolstrip.ItemsHeight),
+                TooltipText = AutoSaveTooltip,
+            };
+            var autoSaveLabel = new Label
+            {
+                Bounds = new Rectangle(0.0f, 0.0f, AutoSaveLabelWidth, autoSavePanel.Height),
+                HorizontalAlignment = TextAlignment.Far,
+                Parent = autoSavePanel,
+                Text = "Auto Save",
+                TooltipText = AutoSaveTooltip,
+            };
+            _autoSaveCheckBox = new CheckBox(AutoSaveLabelWidth + 6.0f, 0.0f, AutoSave, AutoSaveCheckBoxSize)
+            {
+                Parent = autoSavePanel,
+                TooltipText = AutoSaveTooltip,
+            };
+            _autoSaveCheckBox.LocalY = (autoSavePanel.Height - _autoSaveCheckBox.Height) * 0.5f;
+            _autoSaveCheckBox.StateChanged += OnAutoSaveCheckBoxStateChanged;
+            _toolstrip.AddItem(autoSavePanel, ToolStripAnchor.Right, "Flax.Prefab.AutoSave");
 
             Editor.Prefabs.PrefabApplied += OnPrefabApplied;
             ScriptsBuilder.ScriptsReloadBegin += OnScriptsReloadBegin;
@@ -374,10 +420,18 @@ namespace FlaxEditor.Windows.Assets
             // All undo actions modify the asset except selection change
             if (!(action is SelectionChangeAction))
             {
-                MarkAsEdited();
+                OnPrefabModified();
             }
 
             UpdateToolstrip();
+        }
+
+        private void OnPrefabModified()
+        {
+            _modifiedTime = DateTime.Now;
+            if (_isLeftMouseButtonDown)
+                _pendingAutoSave = true;
+            MarkAsEdited();
         }
 
         private void OnPrefabApplied(Prefab prefab, Actor instance)
@@ -410,6 +464,93 @@ namespace FlaxEditor.Windows.Assets
             Editor.ProjectCache.SetCustomData($"UIMode:{_asset.ID}", value);
         }
 
+        private void OnAutoSaveCheckBoxStateChanged(CheckBox box)
+        {
+            AutoSave = box.Checked;
+            if (box.Checked)
+                AutoSaveIfNeeded();
+            else
+                _pendingAutoSave = false;
+        }
+
+        private void AutoSaveIfNeeded(bool ignoreTimeout = false)
+        {
+            if (!IsEdited || !AutoSave || _isAutoSaving)
+                return;
+
+            if (_isLeftMouseButtonDown)
+                return;
+
+            if (!ignoreTimeout && DateTime.Now - _modifiedTime <= AutoSaveTimeout)
+                return;
+
+            _pendingAutoSave = false;
+            _isAutoSaving = true;
+            try
+            {
+                Save();
+            }
+            catch (Exception ex)
+            {
+                AutoSave = false;
+                Editor.LogWarning(ex);
+                Editor.LogError("Cannot auto-save prefab. Auto Save has been disabled. See log for more.");
+            }
+            finally
+            {
+                _isAutoSaving = false;
+            }
+        }
+
+        private void FlushPendingAutoSave()
+        {
+            if (!_pendingAutoSave)
+                return;
+
+            _pendingAutoSave = false;
+            AutoSaveIfNeeded(true);
+        }
+
+        private void OnAutoSaveMouseDown(ref Float2 location, MouseButton button, ref bool handled)
+        {
+            if (button == MouseButton.Left)
+                _isLeftMouseButtonDown = true;
+        }
+
+        private void OnAutoSaveMouseUp(ref Float2 location, MouseButton button, ref bool handled)
+        {
+            if (button != MouseButton.Left)
+                return;
+
+            _isLeftMouseButtonDown = false;
+            FlushPendingAutoSave();
+        }
+
+        private void BindAutoSaveMouseEvents()
+        {
+            var window = RootWindow?.Window;
+            if (_autoSaveMouseWindow == window)
+                return;
+
+            UnbindAutoSaveMouseEvents();
+            _autoSaveMouseWindow = window;
+            if (_autoSaveMouseWindow != null)
+            {
+                _autoSaveMouseWindow.MouseDown += OnAutoSaveMouseDown;
+                _autoSaveMouseWindow.MouseUp += OnAutoSaveMouseUp;
+            }
+        }
+
+        private void UnbindAutoSaveMouseEvents()
+        {
+            if (_autoSaveMouseWindow == null)
+                return;
+
+            _autoSaveMouseWindow.MouseDown -= OnAutoSaveMouseDown;
+            _autoSaveMouseWindow.MouseUp -= OnAutoSaveMouseUp;
+            _autoSaveMouseWindow = null;
+        }
+
         /// <inheritdoc />
         public override void Save()
         {
@@ -429,11 +570,8 @@ namespace FlaxEditor.Windows.Assets
             }
             catch (Exception)
             {
-                // Disable live reload on error
-                if (LiveReload)
-                {
-                    LiveReload = false;
-                }
+                // Disable auto save on error to prevent repeated failing saves.
+                AutoSave = false;
 
                 throw;
             }
@@ -458,7 +596,8 @@ namespace FlaxEditor.Windows.Assets
             _toolStripRotate.Checked = gizmoMode == TransformGizmoBase.Mode.Rotate;
             _toolStripScale.Checked = gizmoMode == TransformGizmoBase.Mode.Scale;
             //
-            _toolStripLiveReload.Checked = _liveReload;
+            if (_autoSaveCheckBox != null)
+                _autoSaveCheckBox.Checked = _autoSave;
 
             base.UpdateToolstrip();
         }
@@ -469,6 +608,8 @@ namespace FlaxEditor.Windows.Assets
             base.OnEditedState();
 
             _modifiedTime = DateTime.Now;
+            if (_isLeftMouseButtonDown)
+                _pendingAutoSave = true;
         }
 
         /// <inheritdoc />
@@ -503,6 +644,8 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
+            BindAutoSaveMouseEvents();
+
             try
             {
                 FlaxEngine.Profiler.BeginEvent("PrefabWindow.Update");
@@ -544,10 +687,7 @@ namespace FlaxEditor.Windows.Assets
             }
 
             // Auto save
-            if (IsEdited && LiveReload && DateTime.Now - _modifiedTime > LiveReloadTimeout)
-            {
-                Save();
-            }
+            AutoSaveIfNeeded();
         }
 
         /// <inheritdoc />
@@ -558,7 +698,7 @@ namespace FlaxEditor.Windows.Assets
         {
             LayoutSerializeSplitter(writer, "Split1", _split1);
             LayoutSerializeSplitter(writer, "Split2", _split2);
-            writer.WriteAttributeString("LiveReload", LiveReload.ToString());
+            writer.WriteAttributeString("AutoSave", AutoSave.ToString());
             writer.WriteAttributeString("GizmoMode", Viewport.TransformGizmo.ActiveMode.ToString());
         }
 
@@ -567,8 +707,10 @@ namespace FlaxEditor.Windows.Assets
         {
             LayoutDeserializeSplitter(node, "Split1", _split1);
             LayoutDeserializeSplitter(node, "Split2", _split2);
-            if (bool.TryParse(node.GetAttribute("LiveReload"), out bool value2))
-                LiveReload = value2;
+            if (bool.TryParse(node.GetAttribute("AutoSave"), out bool value2))
+                AutoSave = value2;
+            else if (bool.TryParse(node.GetAttribute("LiveReload"), out value2) && value2)
+                AutoSave = true;
             if (Enum.TryParse(node.GetAttribute("GizmoMode"), out TransformGizmoBase.Mode value3))
                 Viewport.TransformGizmo.ActiveMode = value3;
         }
@@ -578,12 +720,14 @@ namespace FlaxEditor.Windows.Assets
         {
             _split1.SplitterValue = 0.2f;
             _split2.SplitterValue = 0.6f;
-            LiveReload = false;
+            AutoSave = true;
         }
 
         /// <inheritdoc />
         public override void OnDestroy()
         {
+            UnbindAutoSaveMouseEvents();
+
             if (IsDisposing)
                 return;
             base.OnDestroy();
@@ -598,10 +742,20 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override void OnClose()
         {
+            UnbindAutoSaveMouseEvents();
+
             // Save current UI view size state.
             _viewport.SaveActiveUIScalingOption();
    
             base.OnClose();
+        }
+
+        /// <inheritdoc />
+        public override void OnLostFocus()
+        {
+            base.OnLostFocus();
+            _isLeftMouseButtonDown = false;
+            FlushPendingAutoSave();
         }
 
         /// <inheritdoc />

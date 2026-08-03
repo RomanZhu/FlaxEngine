@@ -133,10 +133,9 @@ namespace FlaxEditor.Viewport
                 _disableInputUpdate = _showUI;
                 _spritesRenderer.Enabled = defaultFeatures;
                 SelectionOutline.Enabled = defaultFeatures;
-                _showDefaultSceneButton.Visible = defaultFeatures;
-                _cameraWidget.Visible = defaultFeatures;
-                _cameraButton.Visible = defaultFeatures;
-                _orthographicModeButton.Visible = defaultFeatures;
+                if (_showDefaultSceneButton != null)
+                    _showDefaultSceneButton.Visible = defaultFeatures;
+                SetViewportCameraControlsVisible(defaultFeatures);
                 Task.Enabled = defaultFeatures;
                 UseAutomaticTaskManagement = defaultFeatures;
                 ShowDefaultSceneActors = defaultFeatures;
