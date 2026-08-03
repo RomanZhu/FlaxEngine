@@ -96,7 +96,7 @@ namespace FlaxEditor.Modules
                 return;
 
             // Skip if cannot create assets in the given location
-            if (!Editor.Windows.ContentWin.CurrentViewFolder.CanHaveAssets)
+            if (Editor.Windows.ContentWin?.CurrentViewFolder?.CanHaveAssets != true)
                 return;
 
             PrefabCreating?.Invoke(actor);

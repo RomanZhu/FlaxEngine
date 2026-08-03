@@ -27,6 +27,7 @@ namespace FlaxEditor.Windows
             bool hasSthSelected = Editor.SceneEditing.HasSthSelected;
             bool isSingleActorSelected = Editor.SceneEditing.SelectionCount == 1 && Editor.SceneEditing.Selection[0] is ActorNode;
             bool canEditScene = Editor.StateMachine.CurrentState.CanEditScene && Level.IsAnySceneLoaded;
+            bool canCreatePrefabAsset = Editor.Windows.ContentWin?.CurrentViewFolder?.CanHaveAssets == true;
             var inputOptions = Editor.Options.Options.Input;
 
             // Create popup
@@ -140,7 +141,7 @@ namespace FlaxEditor.Windows
             b = contextMenu.AddButton("Create Prefab", Editor.Prefabs.CreatePrefab);
             b.Enabled = isSingleActorSelected &&
                         (firstSelection != null ? firstSelection.CanCreatePrefab : false) &&
-                        Editor.Windows.ContentWin.CurrentViewFolder.CanHaveAssets;
+                        canCreatePrefabAsset;
 
             bool hasPrefabLink = canEditScene && isSingleActorSelected && (firstSelection != null ? firstSelection.HasPrefabLink : false);
             if (hasPrefabLink)
