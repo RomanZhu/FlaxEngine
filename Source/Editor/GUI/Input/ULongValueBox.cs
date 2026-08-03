@@ -133,12 +133,16 @@ namespace FlaxEditor.GUI.Input
         protected override void ApplySliding(float delta)
         {
             // Check for negative overflow to positive numbers
+            ulong value;
             if (delta < 0 && _startSlideValue > delta)
-                Value = (ulong)Mathf.Max(0, (long)_startSlideValue + (long)delta);
+                value = (ulong)Mathf.Max(0, (long)_startSlideValue + (long)delta);
             else if (delta < 0)
-                Value = _startSlideValue - (ulong)(-delta);
+                value = _startSlideValue - (ulong)(-delta);
             else
-                Value = _startSlideValue + (ulong)delta;
+                value = _startSlideValue + (ulong)delta;
+            if (IsGridSnapping)
+                value = (ulong)Mathd.Clamp(Math.Round(value / (double)GridSnapStep) * GridSnapStep, 0.0, ulong.MaxValue);
+            Value = value;
         }
     }
 }

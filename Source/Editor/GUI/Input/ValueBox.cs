@@ -57,6 +57,7 @@ namespace FlaxEditor.GUI.Input
         private Float2 _startSlideLocation;
         private double _clickStartTime = -1;
         private bool _cursorChanged;
+        private bool _isSlidingPending;
         private Float2 _mouseClickedPosition;
 
         /// <summary>
@@ -110,7 +111,27 @@ namespace FlaxEditor.GUI.Input
         public bool ArrowKeysIncrement = true;
 
         /// <summary>
-        /// Gets or sets the slider speed. Use value 0 to disable and hide slider UI.
+        /// The base increment used by the up and down arrow keys.
+        /// </summary>
+        public float ArrowKeyStep = 1.0f;
+
+        /// <summary>
+        /// The arrow-key increment multiplier used while holding Shift.
+        /// </summary>
+        public float ShiftArrowKeyMultiplier = 10.0f;
+
+        /// <summary>
+        /// The arrow-key increment multiplier used while holding Control.
+        /// </summary>
+        public float ControlArrowKeyMultiplier = 100.0f;
+
+        /// <summary>
+        /// The arrow-key increment multiplier used while holding Alt.
+        /// </summary>
+        public float AltArrowKeyMultiplier = 0.1f;
+
+        /// <summary>
+        /// Gets or sets the slider speed. A value of zero uses <see cref="ArrowKeyStep"/> for drag adjustment.
         /// </summary>
         public float SlideSpeed
         {
@@ -135,6 +156,7 @@ namespace FlaxEditor.GUI.Input
             _min = min;
             _max = max;
             _slideSpeed = sliderSpeed;
+            HorizontalAlignment = TextAlignment.Near;
         }
 
         /// <summary>
@@ -165,7 +187,17 @@ namespace FlaxEditor.GUI.Input
         /// <summary>
         /// Gets a value indicating whether this value box can use sliding.
         /// </summary>
-        protected virtual bool CanUseSliding => _slideSpeed > Mathf.Epsilon;
+        protected virtual bool CanUseSliding => true;
+
+        /// <summary>
+        /// Gets whether the active drag should snap to the value grid.
+        /// </summary>
+        protected bool IsGridSnapping => Root != null && Root.GetKey(KeyboardKeys.Control);
+
+        /// <summary>
+        /// Gets the value grid step used while snapping.
+        /// </summary>
+        protected float GridSnapStep => Mathf.Max(Mathf.Abs(ArrowKeyStep), Mathf.Epsilon);
 
         /// <summary>
         /// Gets the slide rectangle.
@@ -174,14 +206,35 @@ namespace FlaxEditor.GUI.Input
         {
             get
             {
-                float x = Width - SlidingBoxSize - 1.0f;
-                float y = (Height - SlidingBoxSize) * 0.5f;
-                return new Rectangle(x, y, SlidingBoxSize, SlidingBoxSize);
+                return new Rectangle(Float2.Zero, Size);
             }
+        }
+
+        private void BeginSliding()
+        {
+            _isSlidingPending = false;
+            _isSliding = true;
+            StartMouseCapture(true);
+            EndEditOnClick = false;
+
+            // Hide cursor and cache location
+            Cursor = CursorType.Hidden;
+            _mouseClickedPosition = PointToWindow(_startSlideLocation);
+            _cursorChanged = true;
+
+            SlidingStart?.Invoke();
+        }
+
+        private float GetSlidingDelta(float mouseDelta)
+        {
+            var speed = Mathf.Abs(_slideSpeed) > Mathf.Epsilon ? _slideSpeed : ArrowKeyStep;
+            var multiplier = Root.GetKey(KeyboardKeys.Alt) ? 0.1f : (Root.GetKey(KeyboardKeys.Shift) ? 10.0f : 1.0f);
+            return Mathf.RoundToInt(mouseDelta) * speed * multiplier;
         }
 
         private void EndSliding()
         {
+            _isSlidingPending = false;
             _isSliding = false;
             EndEditOnClick = true;
             EndMouseCapture();
@@ -200,21 +253,12 @@ namespace FlaxEditor.GUI.Input
         {
             base.Draw();
 
-            if (CanUseSliding)
+            if (_isSliding)
             {
                 var style = Style.Current;
-
-                // Draw sliding UI
-                Render2D.DrawSprite(style.Scalar, SlideRect, EnabledInHierarchy ? style.Foreground : style.ForegroundDisabled);
-
-                // Check if is sliding
-                if (_isSliding)
-                {
-                    // Draw overlay
-                    var bounds = new Rectangle(Float2.Zero, Size);
-                    Render2D.FillRectangle(bounds, style.Selection);
-                    Render2D.DrawRectangle(bounds, style.SelectionBorder);
-                }
+                var bounds = new Rectangle(Float2.Zero, Size);
+                Render2D.FillRectangle(bounds, style.Selection);
+                Render2D.DrawRectangle(bounds, style.SelectionBorder);
             }
 
             if (HighlightColor != Color.Transparent)
@@ -263,7 +307,8 @@ namespace FlaxEditor.GUI.Input
                 bool altDown = Root.GetKey(KeyboardKeys.Alt);
                 bool shiftDown = Root.GetKey(KeyboardKeys.Shift);
                 bool controlDown = Root.GetKey(KeyboardKeys.Control);
-                float deltaValue = altDown ? 0.1f : (shiftDown ? 10f : (controlDown ? 100f : 1f));
+                float multiplier = altDown ? AltArrowKeyMultiplier : (shiftDown ? ShiftArrowKeyMultiplier : (controlDown ? ControlArrowKeyMultiplier : 1.0f));
+                float deltaValue = ArrowKeyStep * multiplier;
                 float slideDelta = key == KeyboardKeys.ArrowUp ? deltaValue : -deltaValue;
 
                 _startSlideValue = Value;
@@ -281,20 +326,10 @@ namespace FlaxEditor.GUI.Input
         {
             if (button == MouseButton.Left && CanUseSliding && SlideRect.Contains(location))
             {
-                // Start sliding
-                _isSliding = true;
+                // A click remains a normal text edit; crossing the short drag threshold starts sliding.
+                _isSlidingPending = true;
                 _startSlideLocation = location;
                 _startSlideValue = _value;
-                StartMouseCapture(true);
-                EndEditOnClick = false;
-
-                // Hide cursor and cache location
-                Cursor = CursorType.Hidden;
-                _mouseClickedPosition = PointToWindow(location);
-                _cursorChanged = true;
-
-                SlidingStart?.Invoke();
-                return true;
             }
 
             if (button == MouseButton.Left && !IsFocused)
@@ -307,11 +342,13 @@ namespace FlaxEditor.GUI.Input
         public override void OnMouseMove(Float2 location)
         {
 #if !PLATFORM_SDL
+            if (_isSlidingPending && Mathf.Abs(location.X - _startSlideLocation.X) >= 2.0f)
+                BeginSliding();
             if (_isSliding && !RootWindow.Window.IsMouseFlippingHorizontally)
             {
                 // Update sliding
                 var slideLocation = location + Root.TrackingMouseOffset;
-                ApplySliding(Mathf.RoundToInt(slideLocation.X - _startSlideLocation.X) * _slideSpeed);
+                ApplySliding(GetSlidingDelta(slideLocation.X - _startSlideLocation.X));
                 return;
             }
 #endif
@@ -339,7 +376,7 @@ namespace FlaxEditor.GUI.Input
             if (_isSliding)
             {
                 // Update sliding
-                ApplySliding(Root.TrackingMouseOffset.X * _slideSpeed);
+                ApplySliding(GetSlidingDelta(Root.TrackingMouseOffset.X));
                 return;
             }
 
@@ -371,6 +408,9 @@ namespace FlaxEditor.GUI.Input
                 EndSliding();
                 return true;
             }
+
+            if (button == MouseButton.Left)
+                _isSlidingPending = false;
 
             if (button == MouseButton.Left && _clickStartTime > 0 && (Platform.TimeSeconds - _clickStartTime) < 0.2f)
             {
@@ -435,12 +475,7 @@ namespace FlaxEditor.GUI.Input
         {
             get
             {
-                var result = base.TextRectangle;
-                if (CanUseSliding)
-                {
-                    result.Size.X -= SlidingBoxSize;
-                }
-                return result;
+                return base.TextRectangle;
             }
         }
 
@@ -449,12 +484,7 @@ namespace FlaxEditor.GUI.Input
         {
             get
             {
-                var result = base.TextRectangle;
-                if (CanUseSliding)
-                {
-                    result.Size.X -= SlidingBoxSize;
-                }
-                return result;
+                return base.TextRectangle;
             }
         }
     }

@@ -127,7 +127,10 @@ namespace FlaxEditor.GUI.Input
         /// <inheritdoc />
         protected override void ApplySliding(float delta)
         {
-            Value = _startSlideValue + (long)delta;
+            var value = _startSlideValue + (long)delta;
+            if (IsGridSnapping)
+                value = (long)(Math.Round(value / (double)GridSnapStep) * GridSnapStep);
+            Value = value;
         }
     }
 }
