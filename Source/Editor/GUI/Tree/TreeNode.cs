@@ -52,6 +52,7 @@ namespace FlaxEditor.GUI.Tree
         private bool _isDragOverHeader;
         private static ulong _dragEndFrame;
 
+        private float _suppressLeftMouseUpUntil = -1.0f;
         /// <summary>
         /// Gets or sets the text.
         /// </summary>
@@ -947,8 +948,10 @@ namespace FlaxEditor.GUI.Tree
         {
             UpdateMouseOverFlags(location);
 
-            // Clear flag for left button
-            if (button == MouseButton.Left && _isMouseDown)
+            // A platform mouse-up follows the double-click notification. Without this guard
+            // disclosure arrows toggle open in the double-click handler and immediately
+            // toggle closed again here; selection can also mutate after an editor opens.
+            if (button == MouseButton.Left && Time.UnscaledGameTime <= _suppressLeftMouseUpUntil)
             {
                 _isMouseDown = false;
                 _mouseDownTime = -1;
@@ -958,6 +961,7 @@ namespace FlaxEditor.GUI.Tree
             if (_mouseOverHeader)
             {
                 // Skip mouse up event right after drag drop ends
+                    _mouseDownOverArrow = _mouseOverArrow;
                 if (button == MouseButton.Left && Engine.FrameCount - _dragEndFrame < 10)
                     return true;
 
@@ -984,12 +988,27 @@ namespace FlaxEditor.GUI.Tree
                     else
                     {
                         // Select
+                _suppressLeftMouseUpUntil = -1.0f;
                         tree.Select(this);
+                _mouseDownOverArrow = false;
+                _mouseDownTime = -1.0f;
+                return true;
+            }
+
+            // A primary click is valid only when this node received its matching press.
+            // Keep the press target so releasing over another part of the row cannot turn
+            // a disclosure-arrow press into selection (or the inverse).
+            bool completedLeftClick = button == MouseButton.Left && _isMouseDown;
+            bool pressedArrow = _mouseDownOverArrow;
+            if (button == MouseButton.Left)
+            {
+                _isMouseDown = false;
+                _mouseDownOverArrow = false;
                     }
                 }
 
                 // Check if mouse hits arrow
-                if (_mouseOverArrow && HasAnyVisibleChild)
+                if (button == MouseButton.Left && completedLeftClick && pressedArrow && _mouseOverArrow && HasAnyVisibleChild)
                 {
                     if (ParentTree.Root.GetKey(KeyboardKeys.Alt))
                     {
@@ -998,6 +1017,11 @@ namespace FlaxEditor.GUI.Tree
                         else
                             ExpandAll();
                     }
+                    // Ignore primary releases that did not start on this row, or that
+                    // started on its disclosure arrow and ended over the label.
+                    if (button == MouseButton.Left && (!completedLeftClick || pressedArrow))
+                        return true;
+
                     else
                     {
                         if (_opened)
@@ -1068,6 +1092,13 @@ namespace FlaxEditor.GUI.Tree
             if (_animationProgress >= 1.0f)
             {
                 // Base
+                if (button == MouseButton.Left)
+                {
+                    _isMouseDown = false;
+                    _mouseDownOverArrow = false;
+                    _mouseDownTime = -1.0f;
+                    _suppressLeftMouseUpUntil = Time.UnscaledGameTime + 0.15f;
+                }
                 if (_opened)
                     base.OnMouseMove(location);
             }

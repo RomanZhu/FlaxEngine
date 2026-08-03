@@ -788,8 +788,10 @@ namespace FlaxEditor.Content
                 // Clear flag
                 _isMouseDown = false;
 
-                // Fire event
-                (Parent as ContentView).OnItemClick(this);
+                // A click only completes over the same live item. This prevents a release
+                // from mutating selection after a popup, navigation or asset editor changed UI.
+                if (new Rectangle(Float2.Zero, Size).Contains(location) && Parent is ContentView view)
+                    view.OnItemClick(this);
             }
 
             return base.OnMouseUp(location, button);
@@ -839,8 +841,14 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void OnSubmit()
         {
-            // Open
-            (Parent as ContentView).OnItemDoubleClick(this);
+            if (button == MouseButton.Left && new Rectangle(Float2.Zero, Size).Contains(location))
+            {
+                // The input backend sends a release after the double-click notification.
+                // Disarm the ordinary click first so opening cannot be immediately followed
+                // by a stale selection/click against the newly changed editor hierarchy.
+                _isMouseDown = false;
+                (Parent as ContentView)?.OnItemDoubleClick(this);
+            }
 
             base.OnSubmit();
         }
