@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -45,8 +46,15 @@ namespace FlaxEditor.GUI.Tree
         private string _text;
         private bool _textChanged;
         private bool _isMouseDown;
+        private bool _mouseDownOverArrow;
         private float _mouseDownTime;
         private Float2 _mouseDownPos;
+        private bool _arrowMouseCaptureActive;
+        private bool _arrowMouseCaptureSuppressActions;
+        private bool _arrowMouseCaptureExpand;
+        private bool _arrowMouseCaptureRecursive;
+        private ContainerControl _arrowMouseCaptureParent;
+        private HashSet<TreeNode> _arrowMouseCaptureProcessedNodes;
 
         private DragItemPositioning _dragOverMode;
         private bool _isDragOverHeader;
@@ -448,6 +456,195 @@ namespace FlaxEditor.GUI.Tree
             PerformLayout();
         }
 
+        private void BeginArrowMouseCapture()
+        {
+            _arrowMouseCaptureSuppressActions = true;
+            _arrowMouseCaptureActive = true;
+            _arrowMouseCaptureExpand = !_opened;
+            _arrowMouseCaptureRecursive = ParentTree?.Root?.GetKey(KeyboardKeys.Alt) ?? false;
+            _arrowMouseCaptureParent = Parent;
+
+            if (_arrowMouseCaptureProcessedNodes == null)
+                _arrowMouseCaptureProcessedNodes = new HashSet<TreeNode>();
+            else
+                _arrowMouseCaptureProcessedNodes.Clear();
+
+            StartMouseCapture();
+            ApplyArrowMouseCapture(this);
+        }
+
+        private void ClearArrowMouseCapture()
+        {
+            _arrowMouseCaptureActive = false;
+            _arrowMouseCaptureSuppressActions = false;
+            _arrowMouseCaptureParent = null;
+            _arrowMouseCaptureProcessedNodes?.Clear();
+        }
+
+        private void EndArrowMouseCapture()
+        {
+            if (!_arrowMouseCaptureActive && !_arrowMouseCaptureSuppressActions)
+                return;
+
+            var wasCapturing = _arrowMouseCaptureActive;
+            ClearArrowMouseCapture();
+            if (wasCapturing)
+                EndMouseCapture();
+        }
+
+        private void UpdateArrowMouseCapture(Float2 location)
+        {
+            var parent = _arrowMouseCaptureParent;
+            if (parent == null)
+                return;
+
+            var parentLocation = PointToParent(parent, location);
+            var children = parent.Children;
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                if (children[i] is TreeNode node && node.Visible && node.Enabled && node.HasAnyVisibleChild)
+                {
+                    var nodeLocation = node.PointFromParent(parent, parentLocation);
+                    if (node.ArrowRect.Contains(nodeLocation))
+                    {
+                        ApplyArrowMouseCapture(node);
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void ApplyArrowMouseCapture(TreeNode node)
+        {
+            if (node == null || node.Parent != _arrowMouseCaptureParent || !node.HasAnyVisibleChild)
+                return;
+            if (!_arrowMouseCaptureProcessedNodes.Add(node))
+                return;
+
+            if (_arrowMouseCaptureRecursive)
+            {
+                if (_arrowMouseCaptureExpand)
+                    node.ExpandAll();
+                else
+                    node.CollapseAll();
+            }
+            else
+            {
+                if (_arrowMouseCaptureExpand)
+                    node.Expand();
+                else
+                    node.Collapse();
+            }
+        }
+
+        /// <summary>
+        /// Ensure that all node parents are expanded.
+        /// </summary>
+        /// <param name="noAnimation">True if skip node expanding animation.</param>
+        public void ExpandAllParents(bool noAnimation = false)
+        {
+            (Parent as TreeNode)?.Expand(noAnimation);
+        }
+
+        /// <summary>
+        /// Ends open/close animation by force.
+        /// </summary>
+        public void EndAnimation()
+        {
+            if (_animationProgress < 1.0f)
+            {
+                _animationProgress = 1.0f;
+                OnExpandAnimationChanged();
+            }
+        }
+
+        /// <summary>
+        /// Select node in the tree.
+        /// </summary>
+        public void Select()
+        {
+            ParentTree.Select(this);
+        }
+
+        /// <summary>
+        /// Called when drag and drop enters the node header area.
+        /// </summary>
+        /// <param name="data">The data.</param>
+        /// <returns>Drag action response.</returns>
+        protected virtual DragDropEffect OnDragEnterHeader(DragData data)
+        {
+            return DragDropEffect.None;
+        }
+
+        /// <summary>
+        /// Called when drag and drop moves over the node header area.
+        /// </summary>
+        /// <param name="data">The data.</param>
+        /// <returns>Drag action response.</returns>
+        protected virtual DragDropEffect OnDragMoveHeader(DragData data)
+        {
+            return DragDropEffect.None;
+        }
+
+        /// <summary>
+        /// Called when drag and drop performs over the node header area.
+        /// </summary>
+        /// <param name="data">The data.</param>
+        /// <returns>Drag action response.</returns>
+        protected virtual DragDropEffect OnDragDropHeader(DragData data)
+        {
+            return DragDropEffect.None;
+        }
+
+        /// <summary>
+        /// Called when drag and drop leaves the node header area.
+        /// </summary>
+        protected virtual void OnDragLeaveHeader()
+        {
+        }
+
+        /// <summary>
+        /// Begins the drag drop operation.
+        /// </summary>
+        protected virtual void DoDragDrop()
+        {
+        }
+
+        /// <summary>
+        /// Called when mouse double clicks header.
+        /// </summary>
+        /// <param name="location">The mouse location.</param>
+        /// <param name="button">The button.</param>
+        /// <returns>True if event has been handled.</returns>
+        protected virtual bool OnMouseDoubleClickHeader(ref Float2 location, MouseButton button)
+        {
+            if (HasAnyVisibleChild)
+            {
+                // Toggle open state
+                if (_opened)
+                    Collapse();
+                else
+                    Expand();
+            }
+
+            // Handled
+            return true;
+        }
+
+        /// <summary>
+        /// Called when mouse is pressing node header for a long time.
+        /// </summary>
+        protected virtual void OnLongPress()
+        {
+        }
+
+        /// <summary>
+        /// Called when expanded/collapsed state changes.
+        /// </summary>
+        protected virtual void OnExpandedChanged()
+        {
+        }
+
         /// <summary>
         /// Ensure that all node parents are expanded.
         /// </summary>
@@ -702,7 +899,7 @@ namespace FlaxEditor.GUI.Tree
 
             // Check for long press
             const float longPressTimeSeconds = 0.6f;
-            if (_isMouseDown && Time.UnscaledGameTime - _mouseDownTime > longPressTimeSeconds)
+            if (_isMouseDown && !_mouseDownOverArrow && !_arrowMouseCaptureSuppressActions && Time.UnscaledGameTime - _mouseDownTime > longPressTimeSeconds)
             {
                 OnLongPress();
             }
@@ -925,15 +1122,20 @@ namespace FlaxEditor.GUI.Tree
         {
             UpdateMouseOverFlags(location);
 
-            // Check if mouse hits bar and node isn't a root
+            // Check if mouse hits the header
             if (_mouseOverHeader)
             {
                 // Check if left button goes down
                 if (button == MouseButton.Left)
                 {
                     _isMouseDown = true;
+                    _mouseDownOverArrow = _mouseOverArrow;
                     _mouseDownPos = location;
                     _mouseDownTime = Time.UnscaledGameTime;
+                    if (_mouseDownOverArrow && HasAnyVisibleChild)
+                    {
+                        BeginArrowMouseCapture();
+                    }
                 }
 
                 // Handled
@@ -960,21 +1162,53 @@ namespace FlaxEditor.GUI.Tree
             // toggle closed again here; selection can also mutate after an editor opens.
             if (button == MouseButton.Left && Time.UnscaledGameTime <= _suppressLeftMouseUpUntil)
             {
+                _suppressLeftMouseUpUntil = -1.0f;
                 _isMouseDown = false;
+                _mouseDownOverArrow = false;
+                _mouseDownTime = -1.0f;
+                EndArrowMouseCapture();
+                return true;
+            }
+
+            if (button == MouseButton.Left && (_arrowMouseCaptureActive || _arrowMouseCaptureSuppressActions))
+            {
+                if (_arrowMouseCaptureActive)
+                    UpdateArrowMouseCapture(location);
+                _isMouseDown = false;
+                _mouseDownOverArrow = false;
+                _mouseDownTime = -1.0f;
+                EndArrowMouseCapture();
+                Focus();
+                return true;
+            }
+
+            // A primary click is valid only when this node received its matching press.
+            // Keep the press target so releasing over another part of the row cannot turn
+            // a disclosure-arrow press into selection (or the inverse).
+            bool completedLeftClick = button == MouseButton.Left && _isMouseDown;
+            bool pressedArrow = _mouseDownOverArrow;
+            if (button == MouseButton.Left)
+            {
+                _isMouseDown = false;
+                _mouseDownOverArrow = false;
                 _mouseDownTime = -1;
             }
 
-            // Check if mouse hits bar and node isn't a root
+            // Check if mouse hits the header
             if (_mouseOverHeader)
             {
                 // Skip mouse up event right after drag drop ends
-                    _mouseDownOverArrow = _mouseOverArrow;
                 if (button == MouseButton.Left && Engine.FrameCount - _dragEndFrame < 10)
                     return true;
 
                 // Prevent from selecting node when user is just clicking at an arrow
                 if (!_mouseOverArrow)
                 {
+                    // Ignore primary releases that did not start on this row, or that
+                    // started on its disclosure arrow and ended over the label.
+                    if (button == MouseButton.Left && (!completedLeftClick || pressedArrow))
+                        return true;
+
                     // Check if user is pressing control key
                     var tree = ParentTree;
                     var window = tree.Root;
@@ -995,22 +1229,7 @@ namespace FlaxEditor.GUI.Tree
                     else
                     {
                         // Select
-                _suppressLeftMouseUpUntil = -1.0f;
                         tree.Select(this);
-                _mouseDownOverArrow = false;
-                _mouseDownTime = -1.0f;
-                return true;
-            }
-
-            // A primary click is valid only when this node received its matching press.
-            // Keep the press target so releasing over another part of the row cannot turn
-            // a disclosure-arrow press into selection (or the inverse).
-            bool completedLeftClick = button == MouseButton.Left && _isMouseDown;
-            bool pressedArrow = _mouseDownOverArrow;
-            if (button == MouseButton.Left)
-            {
-                _isMouseDown = false;
-                _mouseDownOverArrow = false;
                     }
                 }
 
@@ -1024,11 +1243,6 @@ namespace FlaxEditor.GUI.Tree
                         else
                             ExpandAll();
                     }
-                    // Ignore primary releases that did not start on this row, or that
-                    // started on its disclosure arrow and ended over the label.
-                    if (button == MouseButton.Left && (!completedLeftClick || pressedArrow))
-                        return true;
-
                     else
                     {
                         if (_opened)
@@ -1062,9 +1276,26 @@ namespace FlaxEditor.GUI.Tree
         /// <inheritdoc />
         public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
+            if (button == MouseButton.Left && (_arrowMouseCaptureActive || _arrowMouseCaptureSuppressActions))
+            {
+                _isMouseDown = false;
+                _mouseDownOverArrow = false;
+                _mouseDownTime = -1.0f;
+                _suppressLeftMouseUpUntil = Time.UnscaledGameTime + 0.15f;
+                EndArrowMouseCapture();
+                return true;
+            }
+
             // Check if mouse hits bar
             if (TestHeaderHit(ref location))
             {
+                if (button == MouseButton.Left)
+                {
+                    _isMouseDown = false;
+                    _mouseDownOverArrow = false;
+                    _mouseDownTime = -1.0f;
+                    _suppressLeftMouseUpUntil = Time.UnscaledGameTime + 0.15f;
+                }
                 return OnMouseDoubleClickHeader(ref location, button);
             }
 
@@ -1083,8 +1314,15 @@ namespace FlaxEditor.GUI.Tree
         {
             UpdateMouseOverFlags(location);
 
+            if (_arrowMouseCaptureActive || _arrowMouseCaptureSuppressActions)
+            {
+                if (_arrowMouseCaptureActive)
+                    UpdateArrowMouseCapture(location);
+                return;
+            }
+
             // Check if start drag and drop
-            if (_isMouseDown && Float2.Distance(_mouseDownPos, location) > 10.0f)
+            if (_isMouseDown && !_mouseDownOverArrow && Float2.Distance(_mouseDownPos, location) > 10.0f)
             {
                 // Clear flag
                 _isMouseDown = false;
@@ -1099,13 +1337,6 @@ namespace FlaxEditor.GUI.Tree
             if (_animationProgress >= 1.0f)
             {
                 // Base
-                if (button == MouseButton.Left)
-                {
-                    _isMouseDown = false;
-                    _mouseDownOverArrow = false;
-                    _mouseDownTime = -1.0f;
-                    _suppressLeftMouseUpUntil = Time.UnscaledGameTime + 0.15f;
-                }
                 if (_opened)
                     base.OnMouseMove(location);
             }
@@ -1137,6 +1368,12 @@ namespace FlaxEditor.GUI.Tree
             _mouseOverArrow = false;
             _mouseOverHeader = false;
 
+            if (_arrowMouseCaptureActive || _arrowMouseCaptureSuppressActions)
+            {
+                base.OnMouseLeave();
+                return;
+            }
+
             // Check if start drag and drop
             if (_isMouseDown)
             {
@@ -1144,12 +1381,30 @@ namespace FlaxEditor.GUI.Tree
                 _isMouseDown = false;
                 _mouseDownTime = -1;
 
-                // Start
-                DoDragDrop();
+                if (!_mouseDownOverArrow)
+                {
+                    // Start
+                    DoDragDrop();
+                }
+                _mouseDownOverArrow = false;
             }
 
             // Base
             base.OnMouseLeave();
+        }
+
+        /// <inheritdoc />
+        public override void OnEndMouseCapture()
+        {
+            if (_arrowMouseCaptureActive || _arrowMouseCaptureSuppressActions)
+            {
+                ClearArrowMouseCapture();
+                _isMouseDown = false;
+                _mouseDownOverArrow = false;
+                _mouseDownTime = -1.0f;
+            }
+
+            base.OnEndMouseCapture();
         }
 
         /// <inheritdoc />

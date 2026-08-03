@@ -569,6 +569,17 @@ namespace FlaxEditor.GUI.Tree
         }
 
         /// <inheritdoc />
+public override void Draw()
+        {
+            // Expansion can queue layout from input/update after the update-time flush.
+            // Do not render one frame with stale child widths/positions.
+            if (_deferLayoutUpdate)
+                FlushPendingPerformLayout();
+
+            base.Draw();
+        }
+
+        /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
             // Check if can use multi selection
