@@ -385,7 +385,7 @@ namespace FlaxEngine.GUI
         /// Initializes a new instance of the <see cref="Dropdown"/> class.
         /// </summary>
         public Dropdown()
-        : base(0, 0, 120, 18.0f)
+        : base(0, 0, 120, Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 22.0f)
         {
             AutoFocus = true;
 
@@ -393,15 +393,15 @@ namespace FlaxEngine.GUI
             Font = new FontReference(style.FontMedium);
             TextColor = style.Foreground;
             TextColorHighlighted = style.Foreground;
-            BackgroundColor = style.BackgroundNormal;
-            BackgroundColorHighlighted = BackgroundColor;
-            BackgroundColorSelected = BackgroundColor;
+            BackgroundColor = style.TextBoxBackground;
+            BackgroundColorHighlighted = style.TextBoxBackgroundSelected;
+            BackgroundColorSelected = style.TextBoxBackgroundSelected;
             BorderColor = style.BorderNormal;
             BorderColorHighlighted = style.BorderSelected;
             BorderColorSelected = BorderColorHighlighted;
             ArrowImage = new SpriteBrush(style.ArrowDown);
             ArrowColor = style.Foreground * 0.6f;
-            ArrowColorSelected = style.BackgroundSelected;
+            ArrowColorSelected = style.BorderSelected;
             ArrowColorHighlighted = style.Foreground;
             CheckedImage = new SpriteBrush(style.CheckBoxTick);
         }
@@ -722,7 +722,8 @@ namespace FlaxEngine.GUI
             // Cache data
             var clientRect = new Rectangle(Float2.Zero, Size);
             float margin = clientRect.Height * 0.2f;
-            float boxSize = clientRect.Height - margin * 2;
+            float boxSize = Mathf.Min(12.0f, clientRect.Height - margin * 2);
+            margin = (clientRect.Height - boxSize) * 0.5f;
             bool isOpened = IsPopupOpened;
             bool enabled = VisuallyEnabledInHierarchy;
             Color backgroundColor = BackgroundColor;
@@ -747,8 +748,14 @@ namespace FlaxEngine.GUI
             }
 
             // Background
-            Render2D.FillRectangle(clientRect, backgroundColor);
-            Render2D.DrawRectangle(clientRect, borderColor);
+            var cornerRadius = Style.Current != null ? Style.Current.CornerRadius : 0.0f;
+            if (cornerRadius > 0.0f)
+                StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, 1.0f, cornerRadius);
+            else
+            {
+                Render2D.FillRectangle(clientRect, backgroundColor);
+                Render2D.DrawRectangle(clientRect, borderColor);
+            }
 
             // Check if has selected item
             if (_selectedIndex > -1 && _selectedIndex < _items.Count)

@@ -80,12 +80,14 @@ namespace FlaxEngine.GUI
         /// <summary>
         /// Default height of the text box
         /// </summary>
-        public static float DefaultHeight = 18;
+        public static float DefaultHeight = 22;
 
         /// <summary>
         /// Left and right margin for text inside the text box bounds rectangle
         /// </summary>
         public static float DefaultMargin = 4;
+
+        private float _leftContentPadding;
 
         /// <summary>
         /// The current text value.
@@ -399,6 +401,23 @@ namespace FlaxEngine.GUI
         public bool IsEditing => _isEditing;
 
         /// <summary>
+        /// Gets or sets the extra left padding reserved for inline prefix content.
+        /// </summary>
+        [NoSerialize, HideInEditor]
+        public float LeftContentPadding
+        {
+            get => _leftContentPadding;
+            set
+            {
+                value = Mathf.Max(0.0f, value);
+                if (Mathf.NearEqual(_leftContentPadding, value))
+                    return;
+                _leftContentPadding = value;
+                OnSizeChanged();
+            }
+        }
+
+        /// <summary>
         /// Gets or sets text property.
         /// </summary>
         [EditorOrder(0), MultilineText, Tooltip("The entered text.")]
@@ -570,7 +589,7 @@ namespace FlaxEngine.GUI
         /// <summary>
         /// Gets rectangle with area for text
         /// </summary>
-        protected virtual Rectangle TextRectangle => new Rectangle(DefaultMargin, 1, Width - 2 * DefaultMargin, Height - 2);
+        protected virtual Rectangle TextRectangle => new Rectangle(DefaultMargin + LeftContentPadding, 1, Width - 2 * DefaultMargin - LeftContentPadding, Height - 2);
 
         /// <summary>
         /// Gets rectangle used to clip text
@@ -603,8 +622,8 @@ namespace FlaxEngine.GUI
 
             var style = Style.Current;
             CaretColor = style.Foreground;
-            BorderColor = Color.Transparent;
-            BorderSelectedColor = style.BackgroundSelected;
+            BorderColor = style.BorderNormal;
+            BorderSelectedColor = style.BorderSelected;
             BackgroundColor = style.TextBoxBackground;
             BackgroundSelectedColor = style.TextBoxBackgroundSelected;
         }

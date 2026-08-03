@@ -175,10 +175,10 @@ namespace FlaxEngine.GUI
         : base(x, y, size, size)
         {
             _state = isChecked ? CheckBoxState.Checked : CheckBoxState.Default;
-            _boxSize = Mathf.Min(16.0f, size);
+            _boxSize = Mathf.Min(12.0f, size);
 
             var style = Style.Current;
-            ImageColor = style.BorderSelected * 1.2f;
+            ImageColor = Color.White;
             BorderColor = style.BorderNormal;
             BorderColorHighlighted = style.BorderSelected;
             CheckedImage = style.CheckBoxTick.IsValid ? new SpriteBrush(style.CheckBoxTick) : new SolidColorBrush(style.Foreground);
@@ -233,23 +233,23 @@ namespace FlaxEngine.GUI
 
             bool enabled = VisuallyEnabledInHierarchy;
 
-            // Border
+            // Box
             if (HasBorder)
             {
-                Color borderColor = BorderColor;
+                var style = Style.Current;
+                var highlighted = enabled && (_isPressed || _mouseOverBox || IsNavFocused);
+                var fillColor = _state != CheckBoxState.Default
+                    ? (highlighted ? Color.Lerp(BorderColorHighlighted, Color.White, 0.28f) : BorderColorHighlighted)
+                    : Color.Lerp(style.Background, style.Foreground, highlighted ? 0.30f : 0.14f);
                 if (!enabled)
-                    borderColor *= 0.5f;
-                else if (_isPressed || _mouseOverBox || IsNavFocused)
-                    borderColor = BorderColorHighlighted;
-                Render2D.DrawRectangle(_box.MakeExpanded(-2.0f), borderColor, BorderThickness);
+                    fillColor = Color.Lerp(fillColor, style.Background, 0.45f);
+                StyleRendering.FillCheckBox(_box, fillColor);
             }
 
             // Icon
             if (_state != CheckBoxState.Default)
             {
-                var color = ImageColor;
-                if (!enabled)
-                    color *= 0.6f;
+                var color = enabled ? ImageColor : Style.Current.ForegroundDisabled;
 
                 if (_state == CheckBoxState.Checked)
                     CheckedImage?.Draw(_box, color);

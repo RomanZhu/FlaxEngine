@@ -41,7 +41,7 @@ namespace FlaxEngine.GUI
         /// <summary>
         /// Gets or sets the time in seconds that mouse have to be over the target to show the tooltip.
         /// </summary>
-        public float TimeToShow { get; set; } = 0.3f; // 300ms by default
+        public float TimeToShow { get; set; } = 0.1f; // 100ms by default
 
         /// <summary>
         /// Gets or sets the maximum width of the tooltip. Used to wrap text that overflows and ensure that tooltip stays readable.

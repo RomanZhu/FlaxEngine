@@ -216,11 +216,27 @@ namespace FlaxEngine.GUI
 
             // Draw background
             if (BackgroundBrush != null)
-                BackgroundBrush.Draw(clientRect, backgroundColor);
+            {
+                var brushRect = clientRect;
+                var style = Style.Current;
+                if (BackgroundBrush is SpriteBrush && style != null && Width <= 48.0f && Height <= 48.0f)
+                {
+                    var iconSize = Mathf.Min(16.0f, style.IconSize > 0.0f ? style.IconSize : 16.0f);
+                    brushRect = new Rectangle((Width - iconSize) * 0.5f, (Height - iconSize) * 0.5f, iconSize, iconSize);
+                }
+                BackgroundBrush.Draw(brushRect, backgroundColor);
+            }
+            else if (Style.Current != null && Style.Current.CornerRadius > 0.0f)
+                StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, HasBorder ? BorderThickness : 0.0f, Style.Current.CornerRadius);
             else
                 Render2D.FillRectangle(clientRect, backgroundColor);
-            if (HasBorder)
-                Render2D.DrawRectangle(clientRect, borderColor, BorderThickness);
+            if (HasBorder && (BackgroundBrush != null || Style.Current == null || Style.Current.CornerRadius <= 0.0f))
+            {
+                if (Style.Current != null && Style.Current.CornerRadius > 0.0f)
+                    StyleRendering.DrawRoundedRectangleBorder(clientRect, borderColor, BorderThickness, Style.Current.CornerRadius);
+                else
+                    Render2D.DrawRectangle(clientRect, borderColor, BorderThickness);
+            }
 
             // Draw text
             backgroundColor = BackgroundColor;

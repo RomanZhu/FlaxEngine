@@ -235,9 +235,14 @@ namespace FlaxEngine.GUI
             Color backColor = BackgroundColor;
             if (IsMouseOver || IsNavFocused)
                 backColor = BackgroundSelectedColor;
-            Render2D.FillRectangle(rect, backColor);
-            if (HasBorder)
-                Render2D.DrawRectangle(rect, IsFocused ? BorderSelectedColor : BorderColor, BorderThickness);
+            var cornerRadius = Style.Current != null ? Style.Current.CornerRadius : 0.0f;
+            var drawBorder = HasBorder && IsFocused;
+            if (cornerRadius > 0.0f)
+                StyleRendering.DrawRoundedRectangle(rect, backColor, BorderSelectedColor, drawBorder ? BorderThickness : 0.0f, cornerRadius);
+            else
+                Render2D.FillRectangle(rect, backColor);
+            if (drawBorder && cornerRadius <= 0.0f)
+                Render2D.DrawRectangle(rect, BorderSelectedColor, BorderThickness);
 
             // Apply view offset and clip mask
             if (ClipText)
