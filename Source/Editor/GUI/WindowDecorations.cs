@@ -20,6 +20,11 @@ public class WindowDecorations : ContainerControl
     private Window _window;
 
     /// <summary>
+    /// Gets the left edge of the native window-button group after layout.
+    /// </summary>
+    protected float ContentRight { get; private set; }
+
+    /// <summary>
     /// The title label in the title bar.
     /// </summary>
     public Label Title => _title;
@@ -292,6 +297,7 @@ public class WindowDecorations : ContainerControl
             _minimizeButton.X = rightMostButtonX - _minimizeButton.Width;
             rightMostButtonX = _minimizeButton.X;
         }
+        ContentRight = rightMostButtonX;
 
         // Title
         if (_title != null)

@@ -1,5 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using FlaxEditor.Modules;
+using FlaxEditor.Windows;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -14,11 +16,38 @@ namespace FlaxEditor.GUI.Docking
         private class FloatWindowDecorations : WindowDecorations
         {
             private FloatWindowDockPanel _panel;
+            private readonly UIModule.TitleBarPerformanceStats _performanceStats;
 
             public FloatWindowDecorations(FloatWindowDockPanel panel)
             : base(panel.RootWindow)
             {
                 _panel = panel;
+                _performanceStats = new UIModule.TitleBarPerformanceStats
+                {
+                    Parent = this,
+                };
+            }
+
+            /// <inheritdoc />
+            protected override void PerformLayoutAfterChildren()
+            {
+                base.PerformLayoutAfterChildren();
+
+                // Game and Scene floating/maximized views use the same title-bar treatment as the main editor.
+                if (!(_panel.SelectedTab is GameWindow) && !(_panel.SelectedTab is EditGameWindow))
+                {
+                    _performanceStats.Visible = false;
+                    return;
+                }
+
+                var right = ContentRight - 8.0f;
+                var available = Mathf.Max(0.0f, right - Title.X - 20.0f);
+                _performanceStats.FitToWidth(available);
+                if (!_performanceStats.Visible)
+                    return;
+
+                _performanceStats.Bounds = new Rectangle(Mathf.Max(Title.X, right - _performanceStats.Width), 0.0f, _performanceStats.Width, Height);
+                Title.Width = Mathf.Max(0.0f, _performanceStats.X - Title.X);
             }
 
             /// <inheritdoc />
@@ -237,6 +266,7 @@ namespace FlaxEditor.GUI.Docking
             {
                 UpdateTitle(SelectedTab.Title);
             }
+            Parent?.PerformLayout();
         }
 
         /// <inheritdoc />
