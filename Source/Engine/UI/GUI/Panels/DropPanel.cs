@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 
 namespace FlaxEngine.GUI
 {
@@ -14,7 +15,10 @@ namespace FlaxEngine.GUI
         /// <summary>
         /// Size of the drop down icon. 
         /// </summary>
-        public const float DropDownIconSize = 14.0f;
+        public const float DropDownIconSize = 12.0f;
+
+        private const float DropDownIconPadding = 4.0f;
+        private const float DropDownIconTextSpacing = 6.0f;
 
         /// <summary>
         /// The header height.
@@ -45,6 +49,12 @@ namespace FlaxEngine.GUI
         /// The 'mouse down' flag (over header) for the right mouse button.
         /// </summary>
         protected bool _mouseButtonRightDown;
+
+        private bool _dropDownIconMouseCaptureActive;
+        private bool _dropDownIconMouseCaptureSuppressActions;
+        private bool _dropDownIconMouseCaptureClose;
+        private ContainerControl _dropDownIconMouseCaptureParent;
+        private HashSet<DropPanel> _dropDownIconMouseCaptureProcessedPanels;
 
         /// <summary>
         /// The animation progress (normalized).
@@ -140,6 +150,18 @@ namespace FlaxEngine.GUI
         public bool EnableDropDownIcon { get; set; }
 
         /// <summary>
+        /// Gets or sets a value indicating whether dragging from the drop down icon opens/closes sibling panels.
+        /// </summary>
+        [EditorOrder(2)]
+        public bool EnableDropDownIconDragOpenClose { get; set; }
+
+        /// <summary>
+        /// Gets or sets additional left indentation for the drop down icon and header text.
+        /// </summary>
+        [EditorDisplay("Icon Style"), EditorOrder(2029), Tooltip("Additional left indentation for the drop down icon and header text.")]
+        public float DropDownIconIndent { get; set; }
+
+        /// <summary>
         /// Get or sets a value indicating whether the panel can be opened or closed via the user interacting with the ui.
         /// Changing the open/ closed state from code or the Properties panel will still work regardless.
         /// </summary>
@@ -169,6 +191,12 @@ namespace FlaxEngine.GUI
         /// </summary>
         [EditorDisplay("Header Style"), EditorOrder(2012)]
         public Color HeaderColorMouseOver { get; set; }
+
+        /// <summary>
+        /// Gets or sets the border color (transparent if not used).
+        /// </summary>
+        [EditorDisplay("Border Style"), EditorOrder(2013)]
+        public Color BorderColor { get; set; }
 
         /// <summary>
         /// Gets or sets the font used to render panel header text.
@@ -268,6 +296,11 @@ namespace FlaxEngine.GUI
         /// </summary>
         protected Rectangle HeaderRectangle => new Rectangle(0, 0, Width, HeaderHeight);
 
+        /// <summary>
+        /// Gets the drop down icon rectangle.
+        /// </summary>
+        protected Rectangle DropDownIconRectangle => EnableDropDownIcon ? new Rectangle(DropDownIconPadding + DropDownIconIndent, (HeaderHeight - DropDownIconSize) * 0.5f, DropDownIconSize, DropDownIconSize) : Rectangle.Empty;
+
         /// <inheritdoc />
         protected override bool ShowTooltip => base.ShowTooltip && _mouseOverHeader;
 
@@ -299,6 +332,7 @@ namespace FlaxEngine.GUI
             var style = Style.Current;
             HeaderColor = style.BackgroundNormal;
             HeaderColorMouseOver = style.BackgroundHighlighted;
+            BorderColor = Color.Transparent;
             HeaderTextFont = new FontReference(style.FontMedium);
             HeaderTextColor = style.Foreground;
             ArrowImageOpened = new SpriteBrush(style.ArrowDown);
@@ -364,6 +398,78 @@ namespace FlaxEngine.GUI
                 Close(true);
         }
 
+        private bool CanDragDropDownIcon => EnableDropDownIconDragOpenClose && EnableDropDownIcon && CanOpenClose;
+
+        private void BeginDropDownIconMouseCapture()
+        {
+            _dropDownIconMouseCaptureSuppressActions = true;
+            _dropDownIconMouseCaptureActive = true;
+            _dropDownIconMouseCaptureClose = !_isClosed;
+            _dropDownIconMouseCaptureParent = Parent;
+
+            if (_dropDownIconMouseCaptureProcessedPanels == null)
+                _dropDownIconMouseCaptureProcessedPanels = new HashSet<DropPanel>();
+            else
+                _dropDownIconMouseCaptureProcessedPanels.Clear();
+
+            StartMouseCapture();
+            ApplyDropDownIconMouseCapture(this);
+        }
+
+        private void ClearDropDownIconMouseCapture()
+        {
+            _dropDownIconMouseCaptureActive = false;
+            _dropDownIconMouseCaptureSuppressActions = false;
+            _dropDownIconMouseCaptureParent = null;
+            _dropDownIconMouseCaptureProcessedPanels?.Clear();
+        }
+
+        private void EndDropDownIconMouseCapture()
+        {
+            if (!_dropDownIconMouseCaptureActive && !_dropDownIconMouseCaptureSuppressActions)
+                return;
+
+            var wasCapturing = _dropDownIconMouseCaptureActive;
+            ClearDropDownIconMouseCapture();
+            if (wasCapturing)
+                EndMouseCapture();
+        }
+
+        private void UpdateDropDownIconMouseCapture(Float2 location)
+        {
+            var parent = _dropDownIconMouseCaptureParent;
+            if (parent == null)
+                return;
+
+            var parentLocation = PointToParent(parent, location);
+            var children = parent.Children;
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                if (children[i] is DropPanel dropPanel && dropPanel.Visible && dropPanel.Enabled && dropPanel.CanDragDropDownIcon)
+                {
+                    var dropPanelLocation = dropPanel.PointFromParent(parent, parentLocation);
+                    if (dropPanel.HeaderRectangle.Contains(dropPanelLocation))
+                    {
+                        ApplyDropDownIconMouseCapture(dropPanel);
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void ApplyDropDownIconMouseCapture(DropPanel dropPanel)
+        {
+            if (dropPanel == null || dropPanel.Parent != _dropDownIconMouseCaptureParent || !dropPanel.CanDragDropDownIcon)
+                return;
+            if (!_dropDownIconMouseCaptureProcessedPanels.Add(dropPanel))
+                return;
+
+            if (_dropDownIconMouseCaptureClose)
+                dropPanel.Close(true);
+            else
+                dropPanel.Open(true);
+        }
+
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
@@ -399,27 +505,50 @@ namespace FlaxEngine.GUI
         {
             var style = Style.Current;
             var enabled = VisuallyEnabledInHierarchy;
+            var cornerRadius = style.CornerRadius;
 
             // Draw Background
             var backgroundColor = BackgroundColor;
             if (backgroundColor.A > 0.0f)
             {
-                Render2D.FillRectangle(new Rectangle(Float2.Zero, Size), backgroundColor);
+                var backgroundRect = new Rectangle(Float2.Zero, Size);
+                if (cornerRadius > 0.0f)
+                    StyleRendering.FillRoundedRectangle(backgroundRect, backgroundColor, cornerRadius);
+                else
+                    Render2D.FillRectangle(backgroundRect, backgroundColor);
+            }
+
+            if (BorderColor.A > 0.0f)
+            {
+                var borderRect = new Rectangle(Float2.Zero, Size).MakeExpanded(-0.5f);
+                if (cornerRadius > 0.0f)
+                    StyleRendering.DrawRoundedRectangleBorder(borderRect, BorderColor, 1.0f, Mathf.Max(0.0f, cornerRadius - 0.5f));
+                else
+                    Render2D.DrawRectangle(borderRect, BorderColor);
             }
 
             // Header
             var color = _mouseOverHeader && CanOpenClose ? HeaderColorMouseOver : HeaderColor;
             if (color.A > 0.0f)
             {
-                Render2D.FillRectangle(new Rectangle(0, 0, Width, HeaderHeight), color);
+                var headerRect = new Rectangle(0, 0, Width, HeaderHeight);
+                if (cornerRadius > 0.0f && backgroundColor.A > 0.0f)
+                {
+                    headerRect = new Rectangle(1.0f, 1.0f, Mathf.Max(0.0f, Width - 2.0f), Mathf.Max(0.0f, HeaderHeight - (_isClosed ? 2.0f : 1.0f)));
+                    StyleRendering.FillRoundedRectangle(headerRect, color, Mathf.Max(0.0f, cornerRadius - 1.0f), _isClosed ? RoundedCorners.All : RoundedCorners.Top);
+                }
+                else
+                {
+                    Render2D.FillRectangle(headerRect, color);
+                }
             }
 
             // Drop down icon
             float textLeft = 0;
             if (EnableDropDownIcon)
             {
-                textLeft += DropDownIconSize;
-                var dropDownRect = new Rectangle(2, (HeaderHeight - 12) / 2, 12, 12);
+                var dropDownRect = DropDownIconRectangle;
+                textLeft += dropDownRect.Right + DropDownIconTextSpacing;
                 var arrowColor = _mouseOverHeader ? style.Foreground : style.ForegroundGrey;
                 if (_isClosed)
                     ArrowImageClosed?.Draw(dropDownRect, arrowColor);
@@ -537,6 +666,8 @@ namespace FlaxEngine.GUI
             if (button == MouseButton.Left && _mouseOverHeader)
             {
                 _mouseButtonLeftDown = true;
+                if (CanDragDropDownIcon && DropDownIconRectangle.Contains(location))
+                    BeginDropDownIconMouseCapture();
                 return true;
             }
             if (button == MouseButton.Right && _mouseOverHeader)
@@ -553,12 +684,30 @@ namespace FlaxEngine.GUI
         {
             _mouseOverHeader = HeaderRectangle.Contains(location);
 
+            if (_dropDownIconMouseCaptureActive || _dropDownIconMouseCaptureSuppressActions)
+            {
+                if (_dropDownIconMouseCaptureActive)
+                    UpdateDropDownIconMouseCapture(location);
+                return;
+            }
+
             base.OnMouseMove(location);
         }
 
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
+            if (button == MouseButton.Left && (_dropDownIconMouseCaptureActive || _dropDownIconMouseCaptureSuppressActions))
+            {
+                _mouseOverHeader = HeaderRectangle.Contains(location);
+                if (_dropDownIconMouseCaptureActive)
+                    UpdateDropDownIconMouseCapture(location);
+                _mouseButtonLeftDown = false;
+                EndDropDownIconMouseCapture();
+                Focus();
+                return true;
+            }
+
             if (base.OnMouseUp(location, button))
                 return true;
 
@@ -583,6 +732,13 @@ namespace FlaxEngine.GUI
         /// <inheritdoc />
         public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
+            if (button == MouseButton.Left && (_dropDownIconMouseCaptureActive || _dropDownIconMouseCaptureSuppressActions))
+            {
+                _mouseButtonLeftDown = false;
+                EndDropDownIconMouseCapture();
+                return true;
+            }
+
             if (base.OnMouseDoubleClick(location, button))
                 return true;
             
@@ -606,11 +762,30 @@ namespace FlaxEngine.GUI
         /// <inheritdoc />
         public override void OnMouseLeave()
         {
+            if (_dropDownIconMouseCaptureActive || _dropDownIconMouseCaptureSuppressActions)
+            {
+                _mouseOverHeader = false;
+                base.OnMouseLeave();
+                return;
+            }
+
             _mouseButtonLeftDown = false;
             _mouseButtonRightDown = false;
             _mouseOverHeader = false;
 
             base.OnMouseLeave();
+        }
+
+        /// <inheritdoc />
+        public override void OnEndMouseCapture()
+        {
+            if (_dropDownIconMouseCaptureActive || _dropDownIconMouseCaptureSuppressActions)
+            {
+                ClearDropDownIconMouseCapture();
+                _mouseButtonLeftDown = false;
+            }
+
+            base.OnEndMouseCapture();
         }
 
         /// <inheritdoc />
