@@ -33,6 +33,7 @@ private:
     int _cursorHiddenSafetyCount = 0;
     float _opacity = 1.0f;
     bool _isDuringMaximize = false;
+    bool _isBorderlessFullscreen = false;
     Windows::HANDLE _monitor = nullptr;
     Windows::LONG _clipCursorRect[4];
     int32 _regionWidth = 0, _regionHeight = 0;

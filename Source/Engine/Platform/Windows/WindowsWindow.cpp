@@ -41,6 +41,15 @@ namespace
         const bool success = ::DwmIsCompositionEnabled(&result) == S_OK;
         return result && success;
     }
+
+    void SetDwmFrameExtension(HWND window, bool enabled)
+    {
+        if (!IsCompositionEnabled())
+            return;
+        const int margin = enabled ? 1 : 0;
+        const int margins[4] = { margin, margin, margin, margin };
+        ::DwmExtendFrameIntoClientArea(window, margins);
+    }
 }
 #endif
 
@@ -161,8 +170,7 @@ WindowsWindow::WindowsWindow(const CreateWindowSettings& settings)
     // Enable shadow
     if (settings.Type == WindowType::Regular && !_settings.HasBorder && IsCompositionEnabled())
     {
-        const int margin[4] = { 1, 1, 1, 1 };
-        ::DwmExtendFrameIntoClientArea(_handle, margin);
+        SetDwmFrameExtension(_handle, true);
     }
 #endif
 
@@ -278,16 +286,22 @@ void WindowsWindow::SetBorderless(bool isBorderless, bool maximized)
 
     if (isBorderless)
     {
+        _isBorderlessFullscreen = maximized;
         LONG lStyle = GetWindowLong(_handle, GWL_STYLE);
         lStyle &= ~(WS_THICKFRAME | WS_SYSMENU | WS_OVERLAPPED | WS_BORDER | WS_CAPTION);
         lStyle |= WS_POPUP;
         lStyle |= WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
 #if WINDOWS_USE_NEW_BORDER_LESS
-        if (_settings.Type == WindowType::Regular)
-            style |= WS_BORDER | WS_CAPTION | WS_DLGFRAME | WS_SYSMENU | WS_THICKFRAME | WS_GROUP;
+        if (_settings.Type == WindowType::Regular && !maximized)
+            lStyle |= WS_BORDER | WS_CAPTION | WS_DLGFRAME | WS_SYSMENU | WS_THICKFRAME | WS_GROUP;
 #elif WINDOWS_USE_NEWER_BORDER_LESS
-        if (_settings.Type == WindowType::Regular)
+        if (_settings.Type == WindowType::Regular && !maximized)
             lStyle |= WS_THICKFRAME | WS_SYSMENU;
+#endif
+
+#if WINDOWS_USE_NEWER_BORDER_LESS
+        if (_settings.Type == WindowType::Regular)
+            SetDwmFrameExtension(_handle, !maximized);
 #endif
 
         SetWindowLong(_handle, GWL_STYLE, lStyle);
@@ -295,7 +309,14 @@ void WindowsWindow::SetBorderless(bool isBorderless, bool maximized)
 
         if (maximized)
         {
-            ShowWindow(_handle, SW_SHOWMAXIMIZED);
+            HMONITOR monitor = MonitorFromWindow(_handle, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO monitorInfo;
+            monitorInfo.cbSize = sizeof(MONITORINFO);
+            GetMonitorInfoW(monitor, &monitorInfo);
+            const int32 width = monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left;
+            const int32 height = monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top;
+            SetWindowPos(_handle, HWND_TOP, monitorInfo.rcMonitor.left, monitorInfo.rcMonitor.top, width, height, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            ShowWindow(_handle, SW_SHOW);
         }
         else
         {
@@ -304,6 +325,7 @@ void WindowsWindow::SetBorderless(bool isBorderless, bool maximized)
     }
     else
     {
+        _isBorderlessFullscreen = false;
         LONG lStyle = GetWindowLong(_handle, GWL_STYLE);
         lStyle &= ~(WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS);
         if (_settings.AllowMaximize)
@@ -313,6 +335,11 @@ void WindowsWindow::SetBorderless(bool isBorderless, bool maximized)
         if (_settings.HasSizingFrame)
             lStyle |= WS_THICKFRAME;
         lStyle |= WS_OVERLAPPED | WS_SYSMENU | WS_BORDER | WS_CAPTION;
+
+#if WINDOWS_USE_NEWER_BORDER_LESS
+        if (_settings.Type == WindowType::Regular)
+            SetDwmFrameExtension(_handle, false);
+#endif
 
         SetWindowLong(_handle, GWL_STYLE, lStyle);
         const Float2 clientSize = GetClientSize();
@@ -1010,7 +1037,7 @@ LRESULT WindowsWindow::WndProc(UINT msg, WPARAM wParam, LPARAM lParam)
 #elif WINDOWS_USE_NEWER_BORDER_LESS
         if (wParam == TRUE && !_settings.HasBorder) // && _settings.Type == WindowType::Regular)
         {
-            // In maximized mode fill the whole work area of the monitor (excludes task bar)
+            // Borderless fullscreen fills the whole monitor. Maximized borderless windows fill the work area.
             if (IsWindowMaximized(_handle))
             {
                 HMONITOR monitor = ::MonitorFromWindow(_handle, MONITOR_DEFAULTTONULL);
@@ -1021,7 +1048,7 @@ LRESULT WindowsWindow::WndProc(UINT msg, WPARAM wParam, LPARAM lParam)
                     if (::GetMonitorInfoW(monitor, &monitorInfo))
                     {
                         LPNCCALCSIZE_PARAMS rects = (LPNCCALCSIZE_PARAMS)lParam;
-                        rects->rgrc[0] = monitorInfo.rcWork;
+                        rects->rgrc[0] = _isBorderlessFullscreen ? monitorInfo.rcMonitor : monitorInfo.rcWork;
                     }
                 }
             }
@@ -1033,8 +1060,8 @@ LRESULT WindowsWindow::WndProc(UINT msg, WPARAM wParam, LPARAM lParam)
     }
     case WM_NCHITTEST:
     {
-        // Override it for fullscreen mode
-        if (IsFullscreen())
+        // Override it for fullscreen modes
+        if (IsFullscreen() || _isBorderlessFullscreen)
             return static_cast<int32>(WindowHitCodes::Client);
 
         const Float2 mouse(static_cast<float>(WINDOWS_GET_X_LPARAM(lParam)), static_cast<float>(WINDOWS_GET_Y_LPARAM(lParam)));
