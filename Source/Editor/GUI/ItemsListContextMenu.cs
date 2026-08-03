@@ -25,6 +25,7 @@ namespace FlaxEditor.GUI
         {
             private bool _isStartsWithMatch;
             private bool _isFullMatch;
+            private float _fuzzyScore;
 
             /// <summary>
             /// The is mouse down flag.
@@ -40,6 +41,11 @@ namespace FlaxEditor.GUI
             /// The item name.
             /// </summary>
             public string Name;
+
+            /// <summary>
+            /// Optional aliases and metadata used by fuzzy search without changing the displayed name.
+            /// </summary>
+            public string SearchText;
 
             /// <summary>
             /// The item category name (optional).
@@ -84,7 +90,7 @@ namespace FlaxEditor.GUI
             /// </summary>
             public void UpdateScore()
             {
-                SortScore = 0;
+                SortScore = _fuzzyScore;
 
                 if (!Visible)
                     return;
@@ -113,7 +119,14 @@ namespace FlaxEditor.GUI
                     return;
                 }
 
-                if (QueryFilterHelper.Match(filterText, Name, out var ranges))
+                var matchedName = QueryFilterHelper.FuzzyMatch(filterText, Name, out _fuzzyScore, out var ranges);
+                if (!matchedName && !string.IsNullOrEmpty(SearchText) && QueryFilterHelper.FuzzyMatch(filterText, SearchText, out _fuzzyScore, out _))
+                {
+                    _highlights?.Clear();
+                    Visible = true;
+                    return;
+                }
+                if (matchedName)
                 {
                     // Update highlights
                     if (_highlights == null)
@@ -131,7 +144,7 @@ namespace FlaxEditor.GUI
                         if (ranges[i].StartIndex <= 0)
                         {
                             _isStartsWithMatch = true;
-                            if (ranges[i].Length == Name.Length)
+                            if (ranges.Length == 1 && ranges[i].Length == Name.Length)
                                 _isFullMatch = true;
                         }
                     }
@@ -140,6 +153,7 @@ namespace FlaxEditor.GUI
                 }
 
                 // Hide
+                _fuzzyScore = 0.0f;
                 _highlights?.Clear();
                 Visible = false;
             }
@@ -241,6 +255,7 @@ namespace FlaxEditor.GUI
         }
 
         private readonly SearchBox _searchBox;
+        private readonly Label _titleLabel;
         private readonly Panel _scrollPanel;
         private List<DropPanel> _categoryPanels;
         private bool _waitingForInput;
@@ -257,6 +272,11 @@ namespace FlaxEditor.GUI
         public event Action<string> TextChanged;
 
         /// <summary>
+        /// Optional query normalizer used by specialized menus (for example, stripping a <c>t:</c> type operator).
+        /// </summary>
+        public Func<string, string> SearchTextTransform;
+
+        /// <summary>
         /// The panel control where you should add your items.
         /// </summary>
         public readonly VerticalPanel ItemsPanel;
@@ -267,21 +287,39 @@ namespace FlaxEditor.GUI
         /// <param name="width">The control width.</param>
         /// <param name="height">The control height.</param>
         /// <param name="withSearch">Enables search field.</param>
-        public ItemsListContextMenu(float width = 320, float height = 220, bool withSearch = true)
+        /// <param name="title">Optional popup heading.</param>
+        public ItemsListContextMenu(float width = 320, float height = 220, bool withSearch = true, string title = null)
         {
             // Context menu dimensions
             Size = new Float2(width, height);
+            float contentTop = 0.0f;
+
+            if (!string.IsNullOrEmpty(title))
+            {
+                _titleLabel = new Label
+                {
+                    Parent = this,
+                    Bounds = new Rectangle(10, 4, Width - 20, 24),
+                    Text = title,
+                    Font = new FontReference(Style.Current.FontMedium),
+                    TextColor = Style.Current.Foreground,
+                    HorizontalAlignment = TextAlignment.Near,
+                    VerticalAlignment = TextAlignment.Center,
+                };
+                contentTop = _titleLabel.Bottom + 2.0f;
+            }
 
             if (withSearch)
             {
                 // Search box
-                _searchBox = new SearchBox(false, 1, 1)
+                _searchBox = new SearchBox(false, 6, contentTop + 1)
                 {
                     Parent = this,
-                    Width = Width - 3,
+                    Width = Width - 12,
                 };
                 _searchBox.TextChanged += OnSearchFilterChanged;
                 _searchBox.ClearSearchButton.Clicked += () => PerformLayout();
+                contentTop = _searchBox.Bottom + 2.0f;
             }
 
             // Panel with scrollbar
@@ -289,7 +327,7 @@ namespace FlaxEditor.GUI
             {
                 Parent = this,
                 AnchorPreset = AnchorPresets.StretchAll,
-                Bounds = withSearch ? new Rectangle(0, _searchBox.Bottom + 1, Width, Height - _searchBox.Bottom - 2) : new Rectangle(Float2.Zero, Size),
+                Bounds = new Rectangle(0, contentTop, Width, Height - contentTop),
             };
 
             // Items list panel
@@ -309,7 +347,8 @@ namespace FlaxEditor.GUI
 
             LockChildrenRecursive();
 
-            var searchText = _searchBox?.Text ?? _customSearch;
+            var rawSearchText = _searchBox?.Text ?? _customSearch;
+            var searchText = SearchTextTransform?.Invoke(rawSearchText) ?? rawSearchText;
             var items = ItemsPanel.Children;
             for (int i = 0; i < items.Count; i++)
             {
@@ -347,7 +386,7 @@ namespace FlaxEditor.GUI
             UnlockChildrenRecursive();
             PerformLayout(true);
             _searchBox?.Focus();
-            TextChanged?.Invoke(searchText);
+            TextChanged?.Invoke(rawSearchText);
         }
 
         /// <summary>
@@ -545,7 +584,10 @@ namespace FlaxEditor.GUI
         {
             // Prepare
             ResetView();
-            Focus();
+            if (_searchBox != null)
+                _searchBox.Focus();
+            else
+                Focus();
             _waitingForInput = true;
 
             base.OnShow();
