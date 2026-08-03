@@ -754,10 +754,23 @@ namespace FlaxEditor.Content
             default: throw new ArgumentOutOfRangeException();
             }
 
-            // Draw short name
+            // Draw a type label directly after the short name when there is room for both.
+            if (view.ViewType == ContentViewType.List && !string.IsNullOrWhiteSpace(TypeDescription))
+            {
+                var name = ShowFileExtension || view.ShowFileExtensions ? FileName : ShortName;
+                var typeX = textRect.X + style.FontMedium.MeasureText(name).X + 8.0f;
+                if (typeX + 12.0f <= textRect.Right)
+                {
+                    var typeRect = new Rectangle(typeX, textRect.Y, textRect.Right - typeX, textRect.Height);
+                    var typeText = TruncateText(style.FontSmall, TypeDescription, Mathf.Max(0.0f, typeRect.Width - 2.0f));
+                    var typeColor = Color.Lerp(style.Background, style.Foreground, 0.2f);
+                    Render2D.PushClip(ref typeRect);
+                    Render2D.DrawText(style.FontSmall, typeText, typeRect, typeColor, TextAlignment.Near, TextAlignment.Center, TextWrapping.NoWrap);
+                    Render2D.PopClip();
+                }
+            }
             Render2D.PushClip(ref textRect);
-            var scale = 0.95f * view.ViewScale;
-            Render2D.DrawText(style.FontMedium, ShowFileExtension || view.ShowFileExtensions ? FileName : ShortName, textRect, style.Foreground, nameAlignment, TextAlignment.Center, TextWrapping.WrapWords, 1f, scale);
+            Render2D.DrawText(style.FontMedium, ShowFileExtension || view.ShowFileExtensions ? FileName : ShortName, textRect, style.Foreground, nameAlignment, TextAlignment.Center, view.ViewType == ContentViewType.List ? TextWrapping.NoWrap : TextWrapping.WrapWords);
             Render2D.PopClip();
 
             if (IsBeingCut)
@@ -765,6 +778,31 @@ namespace FlaxEditor.Content
                 var color = style.LightBackground.AlphaMultiplied(0.5f);
                 Render2D.FillRectangle(clientRect, color);
             }
+        }
+
+        internal static string TruncateText(Font font, string text, float width)
+        {
+            if (string.IsNullOrEmpty(text) || width <= 0.0f)
+                return string.Empty;
+            if (font.MeasureText(text).X <= width)
+                return text;
+
+            const string ellipsis = "...";
+            var ellipsisWidth = font.MeasureText(ellipsis).X;
+            if (ellipsisWidth >= width)
+                return ellipsis;
+
+            int low = 0;
+            int high = text.Length;
+            while (low < high)
+            {
+                int middle = (low + high + 1) / 2;
+                if (font.MeasureText(text.Substring(0, middle)).X + ellipsisWidth <= width)
+                    low = middle;
+                else
+                    high = middle - 1;
+            }
+            return text.Substring(0, low) + ellipsis;
         }
 
         /// <inheritdoc />
