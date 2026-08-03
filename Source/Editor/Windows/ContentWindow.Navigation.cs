@@ -79,8 +79,10 @@ namespace FlaxEditor.Windows
 
         private void Navigate(ContentFolderTreeNode source, ContentFolderTreeNode target)
         {
+            if (target == null || target == _root)
+                target = GetFirstVisibleRootFolder();
             if (target == null)
-                target = _root;
+                return;
 
             // Check if can do this action
             if (_navigationUnlocked && source != target)
@@ -273,12 +275,28 @@ namespace FlaxEditor.Windows
                 : selection[0];
         }
 
+        private ContentFolderTreeNode GetFirstVisibleRootFolder()
+        {
+            if (_root == null)
+                return null;
+            for (int i = 0; i < _root.ChildrenCount; i++)
+            {
+                if (_root.GetChild(i) is ContentFolderTreeNode node && node.Visible && node.IsSelectable)
+                    return node;
+            }
+            return null;
+        }
+
         /// <summary>
-        /// Shows the root folder.
+        /// Shows the first visible root folder.
         /// </summary>
         public void ShowRoot()
         {
-            _tree.Select(_root);
+            var node = GetFirstVisibleRootFolder();
+            if (node != null)
+                _tree.Select(node);
+            else
+                _tree.Deselect();
         }
 
         private void SaveLastViewedFolder(ContentFolderTreeNode node)

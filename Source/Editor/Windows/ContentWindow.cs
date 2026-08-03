@@ -1789,7 +1789,7 @@ namespace FlaxEditor.Windows
 
             // Setup navigation
             _navigationUnlocked = true;
-            _tree.Select(_root);
+            ShowRoot();
             NavigationClearHistory();
 
             // Update UI layout
