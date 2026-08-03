@@ -39,6 +39,29 @@ namespace FlaxEditor.Windows
         private DragHandlers _dragHandlers;
         private bool _isDropping = false;
         private bool _forceScrollNodeToView = false;
+        private SelectionOverflowDirection _selectionOverflowHoverDirection;
+        private SelectionOverflowDirection _selectionOverflowMouseDownDirection;
+
+        private const float SelectionOverflowToastMargin = 6.0f;
+        private const float SelectionOverflowToastHeight = 22.0f;
+        private const float SelectionOverflowToastHorizontalPadding = 10.0f;
+
+        private enum SelectionOverflowDirection
+        {
+            None,
+            Above,
+            Below,
+        }
+
+        private struct SelectionOverflowState
+        {
+            public int AboveCount;
+            public int BelowCount;
+            public TreeNode AboveTarget;
+            public TreeNode BelowTarget;
+            public Rectangle AboveToastBounds;
+            public Rectangle BelowToastBounds;
+        }
 
         /// <summary>
         /// Scene tree panel.
@@ -190,12 +213,233 @@ namespace FlaxEditor.Windows
             }
         }
 
+        private static bool IsTreeNodeHeaderVisible(TreeNode node)
+        {
+            if (node == null || !node.VisibleInHierarchy || node.HeaderRect.Height <= 0.0f)
+                return false;
+
+            return !(node.Parent is TreeNode parentNode) || !parentNode.IsCollapsedInHierarchy;
+        }
+
+        private Rectangle GetTreeNodeHeaderBounds(TreeNode node)
+        {
+            var headerRect = node.HeaderRect;
+            headerRect.Location = node.PointToParent(_sceneTreePanel, headerRect.Location);
+            return headerRect;
+        }
+
+        private static string GetSelectionOverflowText(int count, string direction)
+        {
+            return count == 1 ? $"1 selected item {direction}" : $"{count} selected items {direction}";
+        }
+
+        private static Rectangle GetSelectionOverflowToastBounds(Rectangle area, string text, bool top, float toastHeight, Font font)
+        {
+            if (!font || area.Width <= SelectionOverflowToastMargin * 2.0f || area.Height <= SelectionOverflowToastMargin * 2.0f)
+                return Rectangle.Empty;
+
+            var maxWidth = Mathf.Max(1.0f, area.Width - SelectionOverflowToastMargin * 2.0f);
+            var maxTextWidth = Mathf.Max(1.0f, maxWidth - SelectionOverflowToastHorizontalPadding * 2.0f);
+            var maxTextHeight = Mathf.Max(1.0f, toastHeight - 4.0f);
+            var textSize = font.MeasureText(text);
+            var textScale = 1.0f;
+            if (textSize.X > maxTextWidth && textSize.X > 0.0f)
+                textScale = Mathf.Min(textScale, maxTextWidth / textSize.X);
+            if (textSize.Y > maxTextHeight && textSize.Y > 0.0f)
+                textScale = Mathf.Min(textScale, maxTextHeight / textSize.Y);
+            var toastWidth = Mathf.Min(maxWidth, textSize.X * textScale + SelectionOverflowToastHorizontalPadding * 2.0f);
+            var toastX = area.X + (area.Width - toastWidth) * 0.5f;
+            var toastY = top ? area.Y + SelectionOverflowToastMargin : area.Bottom - toastHeight - SelectionOverflowToastMargin;
+            return new Rectangle(toastX, toastY, toastWidth, toastHeight);
+        }
+
+        private SelectionOverflowState GetSelectionOverflowState()
+        {
+            var result = new SelectionOverflowState
+            {
+                AboveToastBounds = Rectangle.Empty,
+                BelowToastBounds = Rectangle.Empty,
+            };
+
+            if (_sceneTreePanel.VScrollBar == null || !_sceneTreePanel.VScrollBar.Enabled || _tree.Selection.Count == 0)
+                return result;
+
+            var clientArea = _sceneTreePanel.GetClientArea();
+            var viewTop = -_sceneTreePanel.ViewOffset.Y + clientArea.Top;
+            var viewBottom = viewTop + clientArea.Height;
+            var nearestAboveBottom = float.MinValue;
+            var nearestBelowTop = float.MaxValue;
+
+            for (int i = 0; i < _tree.Selection.Count; i++)
+            {
+                var node = _tree.Selection[i];
+                if (!IsTreeNodeHeaderVisible(node))
+                    continue;
+
+                var bounds = GetTreeNodeHeaderBounds(node);
+                if (bounds.Bottom <= viewTop + Mathf.Epsilon)
+                {
+                    result.AboveCount++;
+                    if (bounds.Bottom > nearestAboveBottom)
+                    {
+                        nearestAboveBottom = bounds.Bottom;
+                        result.AboveTarget = node;
+                    }
+                }
+                else if (bounds.Top >= viewBottom - Mathf.Epsilon)
+                {
+                    result.BelowCount++;
+                    if (bounds.Top < nearestBelowTop)
+                    {
+                        nearestBelowTop = bounds.Top;
+                        result.BelowTarget = node;
+                    }
+                }
+            }
+
+            if (result.AboveCount == 0 && result.BelowCount == 0)
+                return result;
+
+            var sceneTreeArea = new Rectangle(_sceneTreePanel.X + clientArea.X, _sceneTreePanel.Y + clientArea.Y, clientArea.Width, clientArea.Height);
+            var toastHeight = Mathf.Min(SelectionOverflowToastHeight, sceneTreeArea.Height - SelectionOverflowToastMargin * 2.0f);
+            if (result.AboveCount > 0 && result.BelowCount > 0)
+                toastHeight = Mathf.Min(toastHeight, (sceneTreeArea.Height - SelectionOverflowToastMargin * 3.0f) * 0.5f);
+            if (toastHeight <= 1.0f)
+                return result;
+
+            var font = Style.Current.FontSmall;
+            if (result.AboveCount > 0)
+                result.AboveToastBounds = GetSelectionOverflowToastBounds(sceneTreeArea, GetSelectionOverflowText(result.AboveCount, "above"), true, toastHeight, font);
+            if (result.BelowCount > 0)
+                result.BelowToastBounds = GetSelectionOverflowToastBounds(sceneTreeArea, GetSelectionOverflowText(result.BelowCount, "below"), false, toastHeight, font);
+
+            return result;
+        }
+
+        private static void DrawSelectionOverflowToast(Rectangle toastRect, string text, bool isHovered, bool isPressed, Style style)
+        {
+            var font = style.FontSmall;
+            if (!font || toastRect.Width <= 1.0f || toastRect.Height <= 1.0f)
+                return;
+
+            var maxTextWidth = Mathf.Max(1.0f, toastRect.Width - SelectionOverflowToastHorizontalPadding * 2.0f);
+            var maxTextHeight = Mathf.Max(1.0f, toastRect.Height - 4.0f);
+            var textSize = font.MeasureText(text);
+            var textScale = 1.0f;
+            if (textSize.X > maxTextWidth && textSize.X > 0.0f)
+                textScale = Mathf.Min(textScale, maxTextWidth / textSize.X);
+            if (textSize.Y > maxTextHeight && textSize.Y > 0.0f)
+                textScale = Mathf.Min(textScale, maxTextHeight / textSize.Y);
+
+            var fillColor = isPressed
+                ? Color.Lerp(style.Background, style.BackgroundSelected, 0.62f)
+                : isHovered
+                    ? Color.Lerp(style.Background, style.BackgroundSelected, 0.46f)
+                    : Color.Lerp(style.Background, style.BackgroundSelected, 0.30f);
+            var borderColor = isHovered || isPressed ? style.BorderSelected : style.BorderSelected.AlphaMultiplied(0.75f);
+            StyleRendering.DrawRoundedRectangle(toastRect, fillColor.AlphaMultiplied(0.96f), borderColor, 1.0f, style.CornerRadius);
+            if (isHovered || isPressed)
+                Render2D.FillRectangle(new Rectangle(toastRect.X + 3.0f, toastRect.Y + 2.0f, 2.0f, toastRect.Height - 4.0f), style.BorderSelected);
+            Render2D.DrawText(font, text, toastRect, style.Foreground, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap, 1.0f, textScale);
+        }
+
+        private void DrawSelectionOverflowToasts(Style style)
+        {
+            var state = GetSelectionOverflowState();
+
+            if (state.AboveCount > 0)
+            {
+                var isHovered = _selectionOverflowHoverDirection == SelectionOverflowDirection.Above;
+                var isPressed = _selectionOverflowMouseDownDirection == SelectionOverflowDirection.Above && isHovered;
+                DrawSelectionOverflowToast(state.AboveToastBounds, GetSelectionOverflowText(state.AboveCount, "above"), isHovered, isPressed, style);
+            }
+            if (state.BelowCount > 0)
+            {
+                var isHovered = _selectionOverflowHoverDirection == SelectionOverflowDirection.Below;
+                var isPressed = _selectionOverflowMouseDownDirection == SelectionOverflowDirection.Below && isHovered;
+                DrawSelectionOverflowToast(state.BelowToastBounds, GetSelectionOverflowText(state.BelowCount, "below"), isHovered, isPressed, style);
+            }
+        }
+
+        private bool TryGetSelectionOverflowTarget(Float2 location, out SelectionOverflowDirection direction, out TreeNode target)
+        {
+            direction = SelectionOverflowDirection.None;
+            target = null;
+
+            var state = GetSelectionOverflowState();
+            if (state.AboveTarget != null && state.AboveToastBounds.Width > 1.0f && state.AboveToastBounds.Height > 1.0f && state.AboveToastBounds.Contains(ref location))
+            {
+                direction = SelectionOverflowDirection.Above;
+                target = state.AboveTarget;
+                return true;
+            }
+            if (state.BelowTarget != null && state.BelowToastBounds.Width > 1.0f && state.BelowToastBounds.Height > 1.0f && state.BelowToastBounds.Contains(ref location))
+            {
+                direction = SelectionOverflowDirection.Below;
+                target = state.BelowTarget;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool IsSelectionOverflowToastHit(Float2 location)
+        {
+            return TryGetSelectionOverflowTarget(location, out _, out _);
+        }
+
+        private void UpdateSelectionOverflowHover(Float2 location)
+        {
+            if (TryGetSelectionOverflowTarget(location, out var direction, out _))
+            {
+                _selectionOverflowHoverDirection = direction;
+                Cursor = CursorType.Hand;
+            }
+            else
+            {
+                _selectionOverflowHoverDirection = SelectionOverflowDirection.None;
+                Cursor = CursorType.Default;
+            }
+        }
+
+        private void ClearSelectionOverflowInputState()
+        {
+            _selectionOverflowHoverDirection = SelectionOverflowDirection.None;
+            _selectionOverflowMouseDownDirection = SelectionOverflowDirection.None;
+            Cursor = CursorType.Default;
+        }
+
+        private void ScrollToSelectionOverflowTarget(TreeNode target, SelectionOverflowDirection direction)
+        {
+            if (target == null)
+                return;
+
+            target.ExpandAllParents(true);
+            if (direction != SelectionOverflowDirection.Below || _sceneTreePanel.VScrollBar == null || !_sceneTreePanel.VScrollBar.Enabled)
+            {
+                _sceneTreePanel.ScrollViewTo(target);
+                return;
+            }
+
+            _tree.FlushPendingPerformLayout();
+            _sceneTreePanel.PerformLayout();
+
+            var bounds = GetTreeNodeHeaderBounds(target);
+            if (_sceneTreePanel.HScrollBar != null && _sceneTreePanel.HScrollBar.Enabled)
+                _sceneTreePanel.HScrollBar.ScrollViewTo(bounds.Left, bounds.Right);
+
+            var clientArea = _sceneTreePanel.GetClientArea();
+            var scrollValue = bounds.Bottom - clientArea.Top - clientArea.Height;
+            _sceneTreePanel.VScrollBar.Value = scrollValue;
+        }
+
         private void OnSearchBoxTextChanged()
         {
             // Skip events during setup or init stuff
             if (IsLayoutLocked)
                 return;
 
+            ClearSelectionOverflowInputState();
             PerformLayout();
             _tree.LockChildrenRecursive();
 
@@ -354,6 +598,7 @@ namespace FlaxEditor.Windows
 
         private void OnSelectionChanged()
         {
+            ClearSelectionOverflowInputState();
             _isUpdatingSelection = true;
 
             var selection = Editor.SceneEditing.Selection;
@@ -443,11 +688,63 @@ namespace FlaxEditor.Windows
             }
 
             base.Draw();
+
+            if (overlayText == null)
+                DrawSelectionOverflowToasts(style);
+        }
+
+        /// <inheritdoc />
+        public override bool IntersectsChildContent(Control child, Float2 location, out Float2 childSpaceLocation)
+        {
+            if (child == _sceneTreePanel && IsSelectionOverflowToastHit(location))
+            {
+                childSpaceLocation = Float2.Zero;
+                return false;
+            }
+
+            return base.IntersectsChildContent(child, location, out childSpaceLocation);
+        }
+
+        /// <inheritdoc />
+        public override void OnMouseEnter(Float2 location)
+        {
+            UpdateSelectionOverflowHover(location);
+
+            base.OnMouseEnter(location);
+        }
+
+        /// <inheritdoc />
+        public override void OnMouseMove(Float2 location)
+        {
+            UpdateSelectionOverflowHover(location);
+
+            base.OnMouseMove(location);
+        }
+
+        /// <inheritdoc />
+        public override void OnMouseLeave()
+        {
+            ClearSelectionOverflowInputState();
+
+            base.OnMouseLeave();
         }
 
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton buttons)
         {
+            if (IsSelectionOverflowToastHit(location))
+            {
+                if (buttons == MouseButton.Left && TryGetSelectionOverflowTarget(location, out var direction, out _))
+                {
+                    _selectionOverflowHoverDirection = direction;
+                    _selectionOverflowMouseDownDirection = direction;
+                    Cursor = CursorType.Hand;
+                }
+                return true;
+            }
+            if (buttons == MouseButton.Left)
+                _selectionOverflowMouseDownDirection = SelectionOverflowDirection.None;
+
             if (base.OnMouseDown(location, buttons))
                 return true;
 
@@ -458,8 +755,32 @@ namespace FlaxEditor.Windows
         }
 
         /// <inheritdoc />
+        public override bool OnMouseWheel(Float2 location, float delta)
+        {
+            if (IsSelectionOverflowToastHit(location))
+                return true;
+
+            return base.OnMouseWheel(location, delta);
+        }
+
+        /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton buttons)
         {
+            if (buttons == MouseButton.Left && _selectionOverflowMouseDownDirection != SelectionOverflowDirection.None)
+            {
+                var mouseDownDirection = _selectionOverflowMouseDownDirection;
+                _selectionOverflowMouseDownDirection = SelectionOverflowDirection.None;
+                if (TryGetSelectionOverflowTarget(location, out var direction, out var target) && direction == mouseDownDirection)
+                    ScrollToSelectionOverflowTarget(target, direction);
+                UpdateSelectionOverflowHover(location);
+                return true;
+            }
+            if (IsSelectionOverflowToastHit(location))
+            {
+                _selectionOverflowMouseDownDirection = SelectionOverflowDirection.None;
+                return true;
+            }
+
             if (base.OnMouseUp(location, buttons))
                 return true;
 
@@ -487,6 +808,15 @@ namespace FlaxEditor.Windows
             }
 
             return false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseDoubleClick(Float2 location, MouseButton buttons)
+        {
+            if (IsSelectionOverflowToastHit(location))
+                return true;
+
+            return base.OnMouseDoubleClick(location, buttons);
         }
 
         /// <inheritdoc />
