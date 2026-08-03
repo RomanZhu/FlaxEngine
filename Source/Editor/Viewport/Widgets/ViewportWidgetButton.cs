@@ -16,9 +16,9 @@ namespace FlaxEditor.Viewport.Widgets
     public class OrthoCamToggleViewportWidgetButton : ViewportWidgetButton
     {
         private const int iconPointCount = 4;
-        private const float iconRenderScale = 4.0f;
+        private const float iconRenderScale = 3.0f;
 
-        private readonly Float2 iconDrawOffset = new Float2(3.0f, 3.0f);
+        private readonly Float2 iconDrawOffset = new Float2(0.0f, 4.5f);
 
         private readonly Float2[] iconPointsPerspective = new[]
         {
@@ -73,9 +73,9 @@ namespace FlaxEditor.Viewport.Widgets
 
             // Check if is checked or mouse is over
             if (Checked)
-                Render2D.FillRectangle(backgroundRect, style.BackgroundSelected * (IsMouseOver ? 0.9f : 0.6f));
+                StyleRendering.FillRoundedRectangle(backgroundRect, style.BackgroundSelected.AlphaMultiplied(IsMouseOver ? 0.9f : 0.65f), 2.0f);
             else if (IsMouseOver)
-                Render2D.FillRectangle(backgroundRect, style.BackgroundHighlighted);
+                StyleRendering.FillRoundedRectangle(backgroundRect, style.BackgroundHighlighted.AlphaMultiplied(0.8f), 2.0f);
 
             // Draw text
             Render2D.DrawText(style.FontMedium, Text, textRect, style.ForegroundViewport * (IsMouseOver ? 1.0f : 0.9f), TextAlignment.Far, TextAlignment.Center);
@@ -201,9 +201,9 @@ namespace FlaxEditor.Viewport.Widgets
 
             // Check if is checked or mouse is over and auto check feature is enabled
             if (_checked)
-                Render2D.FillRectangle(textRect, style.BackgroundSelected * (IsMouseOver ? 0.9f : 0.6f));
+                StyleRendering.FillRoundedRectangle(textRect, style.BackgroundSelected.AlphaMultiplied(IsMouseOver ? 0.9f : 0.65f), 2.0f);
             else if (_autoCheck && IsMouseOver)
-                Render2D.FillRectangle(textRect, style.BackgroundHighlighted);
+                StyleRendering.FillRoundedRectangle(textRect, style.BackgroundHighlighted.AlphaMultiplied(0.8f), 2.0f);
 
             // Check if has icon
             if (Icon.IsValid)

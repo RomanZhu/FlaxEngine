@@ -330,8 +330,9 @@ public sealed class ViewportRubberBandSelector
         if (!_isRubberBandSpanning)
             return;
         var style = Style.Current;
-        Render2D.FillRectangle(_rubberBandRect, style.Selection);
-        Render2D.DrawRectangle(_rubberBandRect, style.SelectionBorder);
+        var selectionBorder = style.SelectionBorder;
+        Render2D.FillRectangle(_rubberBandRect, selectionBorder.AlphaMultiplied(0.18f));
+        Render2D.DrawRectangle(_rubberBandRect, selectionBorder);
     }
 
     /// <summary>

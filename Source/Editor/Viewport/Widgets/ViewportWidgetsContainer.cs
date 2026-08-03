@@ -68,12 +68,12 @@ namespace FlaxEditor.Viewport.Widgets
             var clientRect = new Rectangle(Float2.Zero, Size);
 
             // Draw background
-            Render2D.FillRectangle(clientRect, style.SecondaryBackground * (IsMouseOver ? 0.3f : 0.2f));
+            StyleRendering.FillRoundedRectangle(clientRect, style.SecondaryBackground.AlphaMultiplied(IsMouseOver ? 0.78f : 0.58f), 2.0f);
 
             base.Draw();
 
             // Draw frame
-            Render2D.DrawRectangle(clientRect, style.BackgroundSelected * (IsMouseOver ? 1.0f : 0.6f));
+            StyleRendering.DrawRoundedRectangle(clientRect, style.BackgroundSelected.AlphaMultiplied(IsMouseOver ? 0.9f : 0.45f), style.BorderNormal.AlphaMultiplied(0.55f), 1.0f, 2.0f);
         }
 
         /// <inheritdoc />
