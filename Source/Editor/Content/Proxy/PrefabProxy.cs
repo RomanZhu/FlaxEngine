@@ -3,6 +3,7 @@
 using System;
 using FlaxEditor.Content.Create;
 using FlaxEditor.Content.Thumbnails;
+using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Viewport.Previews;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
@@ -19,6 +20,17 @@ namespace FlaxEditor.Content
     public sealed class PrefabProxy : JsonAssetBaseProxy
     {
         private PrefabPreview _preview;
+
+        private sealed class PrefabVariantCreateInfo
+        {
+            public Guid PrefabId;
+        }
+
+        private static bool CanCreatePrefabAssets()
+        {
+            return Editor.Instance.StateMachine.CurrentState.CanEditContent &&
+                   Editor.Instance.Windows.ContentWin?.CurrentViewFolder?.CanHaveAssets == true;
+        }
 
         /// <summary>
         /// The prefab files extension.
@@ -55,7 +67,7 @@ namespace FlaxEditor.Content
         }
 
         /// <inheritdoc />
-        public override Color AccentColor => Color.FromRGB(0x7eef21);
+        public override Color AccentColor => Style.Current?.BorderSelected ?? Color.FromRGB(0x3D91D9);
 
         /// <inheritdoc />
         public override string TypeName => AssetTypename;
@@ -83,8 +95,58 @@ namespace FlaxEditor.Content
         }
 
         /// <inheritdoc />
+        public override void OnContentWindowContextMenu(ContextMenu menu, ContentItem item)
+        {
+            base.OnContentWindowContextMenu(menu, item);
+
+            if (item is not PrefabItem prefabItem)
+                return;
+
+            var variantButton = menu.AddButton("Create Prefab Variant", CreatePrefabVariantClicked);
+            variantButton.Tag = prefabItem;
+            variantButton.Enabled = CanCreatePrefabAssets();
+        }
+
+        private static void CreatePrefabVariantClicked(ContextMenuButton button)
+        {
+            if (button.Tag is PrefabItem prefabItem)
+                CreatePrefabVariant(prefabItem);
+        }
+
+        private static void CreatePrefabVariant(PrefabItem prefabItem)
+        {
+            if (!CanCreatePrefabAssets())
+                return;
+
+            var proxy = Editor.Instance.ContentDatabase.GetProxy<Prefab>();
+            Editor.Instance.Windows.ContentWin.NewItem(proxy, new PrefabVariantCreateInfo { PrefabId = prefabItem.ID }, null, prefabItem.ShortName + " Variant");
+        }
+
+        /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
+            if (arg is PrefabVariantCreateInfo variant)
+            {
+                var prefab = FlaxEngine.Content.LoadAsync<Prefab>(variant.PrefabId);
+                var variantActor = PrefabManager.SpawnPrefab(prefab, null);
+                if (!variantActor)
+                {
+                    Editor.LogError("Failed to create prefab variant.");
+                    return;
+                }
+
+                try
+                {
+                    variantActor.Name = System.IO.Path.GetFileNameWithoutExtension(outputPath);
+                    PrefabManager.CreatePrefab(variantActor, outputPath, true);
+                }
+                finally
+                {
+                    FlaxEngine.Object.Destroy(variantActor, 20.0f);
+                }
+                return;
+            }
+
             bool resetTransform = false;
             var transform = Transform.Identity;
             if (!(arg is Actor actor))

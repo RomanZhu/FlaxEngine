@@ -1,7 +1,11 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.IO;
+using System.Text;
+using FlaxEditor.Scripting;
 using FlaxEngine;
+using FlaxEngine.Utilities;
 
 namespace FlaxEditor.Content
 {
@@ -12,6 +16,7 @@ namespace FlaxEditor.Content
     public sealed class PrefabItem : JsonAssetItem
     {
         private string _cachedTypeDescription = null;
+        private string _cachedInstanceTypeDescription = null;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="PrefabItem"/> class.
@@ -62,6 +67,39 @@ namespace FlaxEditor.Content
                 }
                 return _cachedTypeDescription;
             }
+        }
+
+        private string InstanceTypeDescription
+        {
+            get
+            {
+                if (_cachedInstanceTypeDescription == null)
+                {
+                    _cachedInstanceTypeDescription = string.Empty;
+                    var prefab = FlaxEngine.Content.Load<Prefab>(ID);
+                    if (prefab)
+                    {
+                        var root = prefab.GetDefaultInstance();
+                        if (root)
+                        {
+                            var type = TypeUtils.GetObjectType(root);
+                            _cachedInstanceTypeDescription = type ? type.Name : root.GetType().GetTypeDisplayName();
+                        }
+                    }
+                }
+                return _cachedInstanceTypeDescription;
+            }
+        }
+
+        /// <inheritdoc />
+        protected override void OnBuildTooltipText(StringBuilder sb)
+        {
+            sb.Append("Type: ").Append(TypeDescription).AppendLine();
+            if (!string.IsNullOrEmpty(InstanceTypeDescription))
+                sb.Append("Prefab Instance Type: ").Append(InstanceTypeDescription).AppendLine();
+            if (File.Exists(Path))
+                sb.Append("Size: ").Append(FlaxEditor.Utilities.Utils.FormatBytesCount((ulong)new FileInfo(Path).Length)).AppendLine();
+            sb.Append("Path: ").Append(FlaxEditor.Utilities.Utils.GetAssetNamePathWithExt(Path)).AppendLine();
         }
 
         /// <inheritdoc />

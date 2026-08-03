@@ -503,6 +503,8 @@ namespace FlaxEditor.Content
                 Render2D.DrawSprite(_thumbnail, rectangle);
             else
                 Render2D.FillRectangle(rectangle, Color.Black);
+
+            DrawThumbnailAccent(ref rectangle);
         }
 
         /// <summary>
@@ -527,6 +529,18 @@ namespace FlaxEditor.Content
                 Render2D.DrawSprite(_thumbnail, rectangle);
             else
                 Render2D.FillRectangle(rectangle, Color.Black);
+
+            DrawThumbnailAccent(ref rectangle);
+        }
+
+        private void DrawThumbnailAccent(ref Rectangle rectangle)
+        {
+            if (SearchFilter != ContentItemSearchFilter.Prefab)
+                return;
+
+            var height = Mathf.Max(2.0f, rectangle.Height * 0.08f);
+            var accentRect = new Rectangle(rectangle.X, rectangle.Bottom - height, rectangle.Width, height);
+            Render2D.FillRectangle(accentRect, SemanticIcons.GetContentColor(SearchFilter, Style.Current));
         }
 
         /// <summary>
