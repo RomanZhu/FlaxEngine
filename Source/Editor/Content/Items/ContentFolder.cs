@@ -244,8 +244,7 @@ namespace FlaxEditor.Content
             {
                 var style = Style.Current;
                 var bounds = new Rectangle(Float2.Zero, Size);
-                Render2D.FillRectangle(bounds, style.Selection);
-                Render2D.DrawRectangle(bounds, style.SelectionBorder);
+                StyleRendering.DrawRoundedRectangle(bounds, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
             }
         }
 

@@ -109,10 +109,17 @@ public class ContentFolderTreeNode : TreeNode
     /// </summary>
     private void UpdateCustomArrowRect()
     {
+        if (!ShowHeader)
+        {
+            CustomArrowRect = Rectangle.Empty;
+            return;
+        }
+
         var contentWindow = Editor.Instance?.Windows?.ContentWin;
         var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
-        var arrowSize = Mathf.Clamp(12.0f * scale, 10.0f, 20.0f);
-        var iconSize = Mathf.Clamp(16.0f * scale, 12.0f, 28.0f);
+        var maximumIconSize = Mathf.Max(10.0f, HeaderHeight - 4.0f);
+        var arrowSize = Mathf.Min(12.0f * scale, maximumIconSize);
+        var iconSize = Mathf.Min(16.0f * scale, maximumIconSize);
 
         // Use the current text layout, not just cached values.
         var textRect = TextRect;
@@ -237,6 +244,8 @@ public class ContentFolderTreeNode : TreeNode
     public override void Draw()
     {
         base.Draw();
+        if (!ShowHeader)
+            return;
 
         // Draw all highlights
         if (_highlights != null)
@@ -250,7 +259,8 @@ public class ContentFolderTreeNode : TreeNode
         var contentWindow = Editor.Instance.Windows.ContentWin;
         var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
         var icon = IsExpanded ? Editor.Instance.Icons.FolderOpen32 : Editor.Instance.Icons.FolderClosed32;
-        var iconSize = Mathf.Clamp(16.0f * scale, 12.0f, 28.0f);
+        var maximumIconSize = Mathf.Max(10.0f, HeaderHeight - 4.0f);
+        var iconSize = Mathf.Min(16.0f * scale, maximumIconSize);
         var iconRect = new Rectangle(TextRect.Left - iconSize - 2.0f, (HeaderHeight - iconSize) * 0.5f, iconSize, iconSize);
         Render2D.DrawSprite(icon, iconRect);
     }

@@ -14,6 +14,9 @@ namespace FlaxEditor.Content
         public RootContentFolderTreeNode()
         : base(null, string.Empty)
         {
+            AutoFocus = false;
+            IsSelectable = false;
+            ShowHeader = false;
         }
 
         /// <inheritdoc />

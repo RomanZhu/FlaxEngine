@@ -112,7 +112,12 @@ namespace FlaxEditor.Content.Import
                 Parent = splitPanel.Panel1
             };
             _tree.RightClick += OnTreeRightClick;
-            _rootNode = new TreeNode(false);
+            _rootNode = new TreeNode(false)
+            {
+                AutoFocus = false,
+                IsSelectable = false,
+                ShowHeader = false,
+            };
             for (int i = 0; i < entries.Count; i++)
             {
                 var entry = entries[i];
@@ -126,7 +131,7 @@ namespace FlaxEditor.Content.Import
             _rootNode.Expand();
             _rootNode.ChildrenIndent = 0;
             _rootNode.Parent = _tree;
-            _tree.Margin = new Margin(0.0f, 0.0f, -16.0f, 2.0f); // Hide root node
+            _tree.Margin = new Margin(0.0f, 0.0f, 0.0f, 2.0f);
             _tree.SelectedChanged += OnSelectedChanged;
 
             // Select the first item

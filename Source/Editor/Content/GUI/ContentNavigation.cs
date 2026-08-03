@@ -163,7 +163,9 @@ namespace FlaxEditor.Content.GUI
             var rect = new Rectangle(Float2.Zero, Size);
             var color = IsDragOver ? Color.Transparent : (_mouseDown ? style.BackgroundSelected : (IsMouseOver ? style.BackgroundHighlighted : Color.Transparent));
             Render2D.FillRectangle(rect, color);
-            Render2D.DrawSprite(Editor.Instance.Icons.ArrowRight12, new Rectangle(rect.Location.X, rect.Y + rect.Size.Y * 0.25f, rect.Size.X, rect.Size.X), EnabledInHierarchy ? style.Foreground : style.ForegroundDisabled);
+            const float iconSize = 12.0f;
+            var iconRect = new Rectangle(rect.X + (rect.Width - iconSize) * 0.5f, rect.Y + (rect.Height - iconSize) * 0.5f, iconSize, iconSize);
+            Render2D.DrawSprite(Editor.Instance.Icons.ArrowRight12, iconRect, EnabledInHierarchy ? style.Foreground : style.ForegroundDisabled);
         }
 
         protected override void OnLayoutMenuButton(ContextMenuButton button, int index, bool construct = false)
