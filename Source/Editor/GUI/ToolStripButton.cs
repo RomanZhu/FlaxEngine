@@ -31,6 +31,16 @@ namespace FlaxEditor.GUI
         Right,
         /// <summary>Navigate up.</summary>
         Up,
+        /// <summary>Visibility.</summary>
+        Eye,
+        /// <summary>Audio enabled.</summary>
+        Speaker,
+        /// <summary>Audio muted.</summary>
+        MutedSpeaker,
+        /// <summary>Keyboard shortcuts.</summary>
+        Keyboard,
+        /// <summary>Debugging.</summary>
+        Bug,
     }
 
     /// <summary>
@@ -73,6 +83,41 @@ namespace FlaxEditor.GUI
         /// The automatic check mode.
         /// </summary>
         public bool AutoCheck;
+
+        /// <summary>
+        /// Draws this button as a text menu label without the usual idle button background.
+        /// </summary>
+        public bool DrawAsTextLabel;
+
+        /// <summary>
+        /// Draws a subtle text shadow for overlay labels.
+        /// </summary>
+        public bool DrawTextShadow;
+
+        /// <summary>
+        /// Uses a blue checked state with white foreground, matching viewport overlay toggles.
+        /// </summary>
+        public bool UseBlueCheckedStyle;
+
+        /// <summary>
+        /// The inner margin between button parts.
+        /// </summary>
+        public int ContentMargin = DefaultMargin;
+
+        /// <summary>
+        /// The maximum icon size.
+        /// </summary>
+        public float MaxIconSize = 16.0f;
+
+        /// <summary>
+        /// Optional label used by toolstrip customization menus.
+        /// </summary>
+        public string CustomizationLabel;
+
+        /// <summary>
+        /// Draws a small dropdown chevron on the right side.
+        /// </summary>
+        public bool DrawMenuChevron;
 
         /// <summary>
         /// Gets or sets the button text.
@@ -181,38 +226,55 @@ namespace FlaxEditor.GUI
 
             // Cache data
             var style = Style.Current;
-            float iconSize = Mathf.Min(12.0f, style.IconSize > 0.0f ? style.IconSize : 12.0f);
+            float iconSize = Mathf.Min(MaxIconSize, style.IconSize > 0.0f ? style.IconSize : MaxIconSize);
+            int margin = ContentMargin;
             var clientRect = new Rectangle(Float2.Zero, Size);
             bool hasText = !string.IsNullOrEmpty(_text);
-            float iconX = hasText ? DefaultMargin : (Width - iconSize) * 0.5f;
+            float iconX = hasText ? margin : (Width - iconSize) * 0.5f;
             var iconRect = new Rectangle(iconX, (Height - iconSize) * 0.5f, iconSize, iconSize);
-            var textRect = new Rectangle(DefaultMargin, 0, 0, Height);
+            var textRect = new Rectangle(margin, 0, 0, Height);
             bool enabled = VisuallyEnabledInHierarchy;
             bool mouseButtonDown = _primaryMouseDown || _secondaryMouseDown;
+            bool blueChecked = enabled && Checked && UseBlueCheckedStyle;
+            var foreground = !enabled ? style.ForegroundDisabled : blueChecked ? Color.White : style.Foreground;
 
             // Draw background
-            if (enabled && (IsMouseOver || IsNavFocused || Checked))
-                StyleRendering.FillRoundedRectangle(clientRect.MakeExpanded(-2.0f), Checked ? style.BackgroundSelected : mouseButtonDown ? style.BackgroundHighlighted : (style.SecondaryBackground * 1.3f), style.CornerRadius);
+            if (enabled && (IsMouseOver || IsNavFocused || Checked) && (!DrawAsTextLabel || Checked))
+            {
+                var background = Checked ? blueChecked ? new Color(0.0f, 0.38f, 0.95f, 0.95f) : style.BackgroundSelected : mouseButtonDown ? style.BackgroundHighlighted : (style.SecondaryBackground * 1.3f);
+                StyleRendering.FillRoundedRectangle(clientRect, background, style.CornerRadius);
+            }
 
             // Draw icon
             if (_glyph != ToolStripGlyph.None)
             {
-                var iconColor = !enabled ? style.ForegroundDisabled : Checked ? style.BorderSelected : style.Foreground;
+                var iconColor = !enabled ? style.ForegroundDisabled : blueChecked ? Color.White : Checked ? style.BorderSelected : style.Foreground;
                 DrawGlyph(_glyph, iconRect, iconColor);
-                textRect.Location.X = iconRect.Right + DefaultMargin;
+                textRect.Location.X = iconRect.Right + margin;
             }
             else if (_icon.IsValid)
             {
-                var iconColor = !enabled ? style.ForegroundDisabled : Checked ? style.BorderSelected : style.Foreground;
+                var iconColor = !enabled ? style.ForegroundDisabled : blueChecked ? Color.White : Checked ? style.BorderSelected : style.Foreground;
                 Render2D.DrawSprite(_icon, iconRect, iconColor);
-                textRect.Location.X = iconRect.Right + DefaultMargin;
+                textRect.Location.X = iconRect.Right + margin;
             }
 
             // Draw text
             if (!string.IsNullOrEmpty(_text))
             {
-                textRect.Size.X = Width - DefaultMargin - textRect.Left;
-                Render2D.DrawText(style.FontMedium, _text, textRect, enabled ? style.Foreground : style.ForegroundDisabled, TextAlignment.Near, TextAlignment.Center);
+                textRect.Size.X = Width - margin - textRect.Left - (DrawMenuChevron ? 8.0f : 0.0f);
+                if (DrawTextShadow)
+                    Render2D.DrawText(style.FontMedium, _text, new Rectangle(textRect.Location + Float2.One, textRect.Size), Color.Black.AlphaMultiplied(0.65f), TextAlignment.Near, TextAlignment.Center);
+                Render2D.DrawText(style.FontMedium, _text, textRect, foreground, TextAlignment.Near, TextAlignment.Center);
+            }
+
+            // Draw menu chevron
+            if (DrawMenuChevron)
+            {
+                var x = Width - margin - 6.0f;
+                var y = (Height - 4.0f) * 0.5f;
+                Render2D.DrawLine(new Float2(x, y), new Float2(x + 3.0f, y + 3.0f), foreground);
+                Render2D.DrawLine(new Float2(x + 3.0f, y + 3.0f), new Float2(x + 6.0f, y), foreground);
             }
         }
 
@@ -220,16 +282,19 @@ namespace FlaxEditor.GUI
         public override void PerformLayout(bool force = false)
         {
             var style = Style.Current;
-            float iconSize = Mathf.Min(12.0f, style.IconSize > 0.0f ? style.IconSize : 12.0f);
+            float iconSize = Mathf.Min(MaxIconSize, style.IconSize > 0.0f ? style.IconSize : MaxIconSize);
+            int margin = ContentMargin;
             bool hasSprite = _icon.IsValid || _glyph != ToolStripGlyph.None;
-            float width = DefaultMargin * 2;
+            float width = margin * 2;
 
             if (hasSprite)
                 width += iconSize;
             if (!string.IsNullOrEmpty(_text) && style.FontMedium)
-                width += style.FontMedium.MeasureText(_text).X + (hasSprite ? DefaultMargin : 0);
+                width += style.FontMedium.MeasureText(_text).X + (hasSprite ? margin : 0);
+            if (DrawMenuChevron)
+                width += margin + 6.0f;
 
-            Width = hasSprite && string.IsNullOrEmpty(_text) ? Mathf.Max(style.ControlHeight, width) : width;
+            Width = hasSprite && string.IsNullOrEmpty(_text) ? Mathf.Max(Height, width) : width;
         }
 
         private static void DrawGlyph(ToolStripGlyph glyph, Rectangle bounds, Color color)
@@ -274,6 +339,21 @@ namespace FlaxEditor.GUI
                 Render2D.FillRectangle(new Rectangle(x + 4, y + 2, 4, 2), color);
                 Render2D.FillRectangle(new Rectangle(x + 5, y + 1, 2, 2), color);
                 break;
+            case ToolStripGlyph.Eye:
+                DrawEye(x, y, color);
+                break;
+            case ToolStripGlyph.Speaker:
+                DrawSpeaker(x, y, color, false);
+                break;
+            case ToolStripGlyph.MutedSpeaker:
+                DrawSpeaker(x, y, color, true);
+                break;
+            case ToolStripGlyph.Keyboard:
+                DrawKeyboard(x, y, color);
+                break;
+            case ToolStripGlyph.Bug:
+                DrawBug(x, y, color);
+                break;
             }
         }
 
@@ -301,6 +381,56 @@ namespace FlaxEditor.GUI
             }
         }
 
+        private static void DrawEye(float x, float y, Color color)
+        {
+            Render2D.DrawLine(new Float2(x + 1, y + 6), new Float2(x + 4, y + 3), color);
+            Render2D.DrawLine(new Float2(x + 4, y + 3), new Float2(x + 8, y + 3), color);
+            Render2D.DrawLine(new Float2(x + 8, y + 3), new Float2(x + 11, y + 6), color);
+            Render2D.DrawLine(new Float2(x + 11, y + 6), new Float2(x + 8, y + 9), color);
+            Render2D.DrawLine(new Float2(x + 8, y + 9), new Float2(x + 4, y + 9), color);
+            Render2D.DrawLine(new Float2(x + 4, y + 9), new Float2(x + 1, y + 6), color);
+            StyleRendering.FillRoundedRectangle(new Rectangle(x + 5, y + 5, 2, 2), color, 1.0f);
+        }
+
+        private static void DrawSpeaker(float x, float y, Color color, bool muted)
+        {
+            Render2D.FillRectangle(new Rectangle(x + 1, y + 5, 3, 3), color);
+            Render2D.DrawLine(new Float2(x + 4, y + 5), new Float2(x + 7, y + 2), color);
+            Render2D.DrawLine(new Float2(x + 7, y + 2), new Float2(x + 7, y + 11), color);
+            Render2D.DrawLine(new Float2(x + 7, y + 11), new Float2(x + 4, y + 8), color);
+            if (muted)
+            {
+                Render2D.DrawLine(new Float2(x + 9, y + 4), new Float2(x + 12, y + 8), color);
+                Render2D.DrawLine(new Float2(x + 12, y + 4), new Float2(x + 9, y + 8), color);
+            }
+            else
+            {
+                Render2D.DrawLine(new Float2(x + 9, y + 4), new Float2(x + 10, y + 5), color);
+                Render2D.DrawLine(new Float2(x + 10, y + 5), new Float2(x + 10, y + 8), color);
+                Render2D.DrawLine(new Float2(x + 10, y + 8), new Float2(x + 9, y + 9), color);
+            }
+        }
+
+        private static void DrawKeyboard(float x, float y, Color color)
+        {
+            StyleRendering.DrawRoundedRectangle(new Rectangle(x + 1, y + 3, 11, 7), color, color, 1.0f, 1.0f);
+            for (int row = 0; row < 2; row++)
+            {
+                for (int column = 0; column < 4; column++)
+                    Render2D.FillRectangle(new Rectangle(x + 3 + column * 2, y + 5 + row * 2, 1, 1), color);
+            }
+        }
+
+        private static void DrawBug(float x, float y, Color color)
+        {
+            StyleRendering.FillRoundedRectangle(new Rectangle(x + 4, y + 3, 5, 7), color, 2.0f);
+            Render2D.FillRectangle(new Rectangle(x + 5, y + 1, 3, 2), color);
+            Render2D.DrawLine(new Float2(x + 2, y + 4), new Float2(x + 4, y + 5), color);
+            Render2D.DrawLine(new Float2(x + 2, y + 8), new Float2(x + 4, y + 7), color);
+            Render2D.DrawLine(new Float2(x + 11, y + 4), new Float2(x + 9, y + 5), color);
+            Render2D.DrawLine(new Float2(x + 11, y + 8), new Float2(x + 9, y + 7), color);
+        }
+
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
@@ -315,6 +445,13 @@ namespace FlaxEditor.GUI
                     Focus();
                     return true;
                 }
+                if (Parent is ToolStrip toolStrip && toolStrip.UseMenuSelection && ContextMenu != null)
+                {
+                    Focus();
+                    toolStrip.SelectedMenuButton = this;
+                    return true;
+                }
+
                 _primaryMouseDown = true;
                 Focus();
                 return true;
@@ -350,6 +487,11 @@ namespace FlaxEditor.GUI
             if (button == MouseButton.Right && _secondaryMouseDown)
             {
                 _secondaryMouseDown = false;
+                if (Parent is ToolStrip toolStrip && toolStrip.UseItemContextMenu)
+                {
+                    toolStrip.ShowItemContextMenu(this, new Float2(0, Height));
+                    return true;
+                }
                 SecondaryClicked?.Invoke();
                 (Parent as ToolStrip)?.OnSecondaryButtonClicked(this);
                 ContextMenu?.Show(this, new Float2(0, Height));
@@ -357,6 +499,15 @@ namespace FlaxEditor.GUI
             }
 
             return base.OnMouseUp(location, button);
+        }
+
+        /// <inheritdoc />
+        public override void OnMouseEnter(Float2 location)
+        {
+            base.OnMouseEnter(location);
+
+            if (Parent is ToolStrip toolStrip && toolStrip.UseMenuSelection && toolStrip.SelectedMenuButton != null && toolStrip.SelectedMenuButton != this && ContextMenu != null)
+                toolStrip.SelectedMenuButton = this;
         }
 
         /// <inheritdoc />

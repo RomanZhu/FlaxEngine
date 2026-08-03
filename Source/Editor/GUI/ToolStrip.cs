@@ -44,10 +44,12 @@ namespace FlaxEditor.GUI
         };
         private readonly Dictionary<Control, string> _itemIds = new Dictionary<Control, string>();
         private readonly Dictionary<string, SavedPlacement> _savedPlacements = new Dictionary<string, SavedPlacement>();
+        private readonly HashSet<string> _hiddenItemIds = new HashSet<string>();
         private Control _draggedItem;
         private ToolStripAnchor _dragTargetAnchor;
         private int _dragTargetIndex = -1;
         private float _dragPreviewX;
+        private ToolStripButton _selectedMenuButton;
 
         private struct SavedPlacement
         {
@@ -69,6 +71,53 @@ namespace FlaxEditor.GUI
         /// Event fired after the user rearranges items with Ctrl+drag.
         /// </summary>
         public Action LayoutChanged;
+
+        /// <summary>
+        /// True if this strip should open and switch dropdown menus like the main editor menu.
+        /// </summary>
+        public bool UseMenuSelection;
+
+        /// <summary>
+        /// True if right-click opens item visibility customization instead of the item's normal context menu.
+        /// </summary>
+        public bool UseItemContextMenu;
+
+        /// <summary>
+        /// True if use the viewport overlay visual style.
+        /// </summary>
+        public bool UseOverlayStyle;
+
+        /// <summary>
+        /// The viewport overlay background color.
+        /// </summary>
+        public Color OverlayBackgroundColor = new Color(0.06f, 0.06f, 0.06f, 0.5f);
+
+        /// <summary>
+        /// Gets or sets the selected menu button.
+        /// </summary>
+        public ToolStripButton SelectedMenuButton
+        {
+            get => _selectedMenuButton;
+            set
+            {
+                if (_selectedMenuButton == value)
+                    return;
+
+                if (_selectedMenuButton != null && _selectedMenuButton.ContextMenu != null)
+                {
+                    _selectedMenuButton.ContextMenu.VisibleChanged -= OnSelectedMenuVisibleChanged;
+                    _selectedMenuButton.ContextMenu.Hide();
+                }
+
+                _selectedMenuButton = value;
+
+                if (_selectedMenuButton != null && _selectedMenuButton.ContextMenu != null)
+                {
+                    _selectedMenuButton.ContextMenu.Show(_selectedMenuButton, new Float2(0, _selectedMenuButton.Height));
+                    _selectedMenuButton.ContextMenu.VisibleChanged += OnSelectedMenuVisibleChanged;
+                }
+            }
+        }
 
         /// <summary>
         /// Tries to get the last button.
@@ -149,6 +198,7 @@ namespace FlaxEditor.GUI
             var button = new ToolStripButton(ItemsHeight, ref sprite)
             {
                 Parent = this,
+                UseBlueCheckedStyle = UseOverlayStyle,
             };
             SetItemPlacement(button, ToolStripAnchor.Left);
             if (onClick != null)
@@ -180,6 +230,7 @@ namespace FlaxEditor.GUI
             {
                 Glyph = glyph,
                 Parent = this,
+                UseBlueCheckedStyle = UseOverlayStyle,
             };
             SetItemPlacement(button, anchor, -1, id);
             if (onClick != null)
@@ -200,6 +251,7 @@ namespace FlaxEditor.GUI
             {
                 Text = text,
                 Parent = this,
+                UseBlueCheckedStyle = UseOverlayStyle,
             };
             SetItemPlacement(button, ToolStripAnchor.Left);
             if (onClick != null)
@@ -219,6 +271,7 @@ namespace FlaxEditor.GUI
             {
                 Text = text,
                 Parent = this,
+                UseBlueCheckedStyle = UseOverlayStyle,
             };
             SetItemPlacement(button, ToolStripAnchor.Left);
             if (onClick != null)
@@ -273,6 +326,8 @@ namespace FlaxEditor.GUI
             if (!string.IsNullOrEmpty(id))
             {
                 _itemIds[control] = id;
+                control.Visible = !_hiddenItemIds.Contains(id);
+                control.Enabled = control.Visible;
                 if (_savedPlacements.TryGetValue(id, out var saved))
                 {
                     anchor = saved.Anchor;
@@ -299,7 +354,7 @@ namespace FlaxEditor.GUI
                 for (int index = 0; index < items.Count; index++)
                 {
                     if (_itemIds.TryGetValue(items[index], out var id) && !string.IsNullOrEmpty(id))
-                        entries.Add(id + "@" + anchor + "@" + index);
+                        entries.Add(id + "@" + anchor + "@" + index + (items[index].Visible ? string.Empty : "@h"));
                 }
             }
             return string.Join("|", entries);
@@ -313,19 +368,22 @@ namespace FlaxEditor.GUI
         public void ApplyLayout(string layout)
         {
             _savedPlacements.Clear();
+            _hiddenItemIds.Clear();
             if (!string.IsNullOrEmpty(layout))
             {
                 var entries = layout.Split('|');
                 for (int i = 0; i < entries.Length; i++)
                 {
                     var parts = entries[i].Split('@');
-                    if (parts.Length == 3 && int.TryParse(parts[1], out var anchor) && int.TryParse(parts[2], out var index) && anchor >= 0 && anchor < _anchorItems.Length)
+                    if (parts.Length >= 3 && int.TryParse(parts[1], out var anchor) && int.TryParse(parts[2], out var index) && anchor >= 0 && anchor < _anchorItems.Length)
                     {
                         _savedPlacements[parts[0]] = new SavedPlacement
                         {
                             Anchor = (ToolStripAnchor)anchor,
                             Index = Mathf.Max(0, index),
                         };
+                        if (parts.Length >= 4 && parts[3] == "h")
+                            _hiddenItemIds.Add(parts[0]);
                     }
                 }
             }
@@ -335,10 +393,41 @@ namespace FlaxEditor.GUI
             {
                 var control = controls[i];
                 var id = _itemIds[control];
+                control.Visible = !_hiddenItemIds.Contains(id);
+                control.Enabled = control.Visible;
                 if (_savedPlacements.TryGetValue(id, out var saved))
                     SetItemPlacement(control, saved.Anchor, saved.Index, id);
             }
             PerformLayout();
+        }
+
+        /// <summary>
+        /// Returns true if the saved layout contains state for the given item id.
+        /// </summary>
+        public bool HasSavedState(string id)
+        {
+            return _savedPlacements.ContainsKey(id) || _hiddenItemIds.Contains(id);
+        }
+
+        /// <summary>
+        /// Sets item visibility and stores it in captured layout.
+        /// </summary>
+        public void SetItemVisible(Control control, bool visible, bool notify = true)
+        {
+            if (control == null || !_itemIds.TryGetValue(control, out var id))
+                return;
+
+            control.Visible = visible;
+            control.Enabled = visible;
+            if (visible)
+                _hiddenItemIds.Remove(id);
+            else
+                _hiddenItemIds.Add(id);
+            if (_selectedMenuButton == control)
+                SelectedMenuButton = null;
+            PerformLayout();
+            if (notify)
+                LayoutChanged?.Invoke();
         }
 
         /// <summary>
@@ -385,6 +474,80 @@ namespace FlaxEditor.GUI
         internal void OnSecondaryButtonClicked(ToolStripButton button)
         {
             SecondaryButtonClicked?.Invoke(button);
+        }
+
+        internal void ShowItemContextMenu(ToolStripButton button, Float2 location)
+        {
+            var menu = new ContextMenu.ContextMenu
+            {
+                MinimumWidth = 190,
+            };
+            if (button != null && _itemIds.ContainsKey(button))
+            {
+                var remove = menu.AddButton("Remove from Toolstrip", () => SetItemVisible(button, false));
+                remove.Enabled = CountVisibleItems() > 1;
+                menu.AddSeparator();
+            }
+
+            var addMenu = menu.AddChildMenu("Add").ContextMenu;
+            bool hasHidden = false;
+            foreach (var pair in _itemIds)
+            {
+                var control = pair.Key;
+                if (control.Visible)
+                    continue;
+                hasHidden = true;
+                addMenu.AddButton(GetCustomizationLabel(control, pair.Value), () => SetItemVisible(control, true));
+            }
+            if (!hasHidden)
+                addMenu.AddButton("No hidden items").Enabled = false;
+
+            menu.AddButton("Show All", ShowAllItems).Enabled = _hiddenItemIds.Count != 0;
+            menu.Show((Control)button ?? this, location);
+        }
+
+        private int CountVisibleItems()
+        {
+            int result = 0;
+            foreach (var pair in _itemIds)
+            {
+                if (pair.Key.Visible)
+                    result++;
+            }
+            return result;
+        }
+
+        private void ShowAllItems()
+        {
+            var controls = new List<Control>(_itemIds.Keys);
+            for (int i = 0; i < controls.Count; i++)
+            {
+                controls[i].Visible = true;
+                controls[i].Enabled = true;
+            }
+            _hiddenItemIds.Clear();
+            PerformLayout();
+            LayoutChanged?.Invoke();
+        }
+
+        private static string GetCustomizationLabel(Control control, string id)
+        {
+            if (control is ToolStripButton button)
+            {
+                if (!string.IsNullOrEmpty(button.CustomizationLabel))
+                    return button.CustomizationLabel;
+                if (!string.IsNullOrEmpty(button.Text))
+                    return button.Text;
+            }
+
+            int lastDot = id.LastIndexOf('.');
+            return lastDot != -1 && lastDot + 1 < id.Length ? id.Substring(lastDot + 1) : id;
+        }
+
+        private void OnSelectedMenuVisibleChanged(Control control)
+        {
+            if (_selectedMenuButton != null && !control.Visible)
+                SelectedMenuButton = null;
         }
 
         /// <inheritdoc />
@@ -439,6 +602,13 @@ namespace FlaxEditor.GUI
         /// <inheritdoc />
         public override void DrawSelf()
         {
+            if (UseOverlayStyle)
+            {
+                Render2D.FillRectangle(new Rectangle(Float2.Zero, Size), OverlayBackgroundColor);
+                Render2D.FillRectangle(new Rectangle(0.0f, Height - 1.0f, Width, 1.0f), Color.White.AlphaMultiplied(0.08f));
+                return;
+            }
+
             base.DrawSelf();
             var style = Style.Current;
             for (int anchor = 0; anchor < _anchorItems.Length; anchor++)
@@ -458,6 +628,36 @@ namespace FlaxEditor.GUI
                 var groupRect = new Rectangle(first.Left - 2.0f, first.Top - 1.0f, last.Right - first.Left + 4.0f, first.Height + 2.0f);
                 StyleRendering.DrawRoundedRectangle(groupRect, style.BackgroundNormal, style.BorderNormal.AlphaMultiplied(0.72f), 1.0f, style.CornerRadius);
             }
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseDown(Float2 location, MouseButton button)
+        {
+            if (base.OnMouseDown(location, button))
+                return true;
+
+            if (button == MouseButton.Right && UseItemContextMenu)
+            {
+                Focus();
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            if (base.OnMouseUp(location, button))
+                return true;
+
+            if (button == MouseButton.Right && UseItemContextMenu)
+            {
+                ShowItemContextMenu(null, location);
+                return true;
+            }
+
+            return false;
         }
 
         internal void UpdateItemDrag(Control control, Float2 location)
