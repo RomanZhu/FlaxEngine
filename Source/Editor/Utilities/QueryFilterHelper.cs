@@ -180,6 +180,78 @@ namespace FlaxEditor.Utilities
         }
 
         /// <summary>
+        /// Fuzzy-matches a query against text and returns ordered highlight ranges and a relevance score.
+        /// Exact, prefix, contiguous and word-boundary matches receive the highest scores while gaps are penalized.
+        /// </summary>
+        /// <param name="filter">The filter query.</param>
+        /// <param name="text">The text to search.</param>
+        /// <param name="score">The match relevance score.</param>
+        /// <param name="matches">The matching character ranges.</param>
+        /// <returns>True if every query character can be matched in order.</returns>
+        public static bool FuzzyMatch(string filter, string text, out float score, out Range[] matches)
+        {
+            score = 0.0f;
+            matches = null;
+            if (string.IsNullOrWhiteSpace(filter) || string.IsNullOrWhiteSpace(text))
+                return false;
+
+            filter = filter.Trim();
+            if (string.Equals(filter, text, StringComparison.CurrentCultureIgnoreCase))
+            {
+                score = 1000.0f;
+                matches = new[] { new Range(0, text.Length) };
+                return true;
+            }
+
+            var positions = new int[filter.Length];
+            int filterIndex = 0;
+            int previous = -1;
+            for (int textIndex = 0; textIndex < text.Length && filterIndex < filter.Length; textIndex++)
+            {
+                if (char.ToLowerInvariant(filter[filterIndex]) != char.ToLowerInvariant(text[textIndex]))
+                    continue;
+
+                positions[filterIndex++] = textIndex;
+                bool boundary = textIndex == 0 || !char.IsLetterOrDigit(text[textIndex - 1]) ||
+                                (char.IsLower(text[textIndex - 1]) && char.IsUpper(text[textIndex]));
+                score += boundary ? 14.0f : 4.0f;
+                if (previous + 1 == textIndex)
+                    score += 9.0f;
+                else if (previous >= 0)
+                    score -= Math.Min(8, textIndex - previous - 1);
+                previous = textIndex;
+            }
+
+            if (filterIndex != filter.Length)
+                return false;
+
+            if (positions[0] == 0)
+                score += 80.0f;
+            score += Math.Max(0, 40 - positions[0] * 2);
+            score -= Math.Max(0, text.Length - filter.Length) * 0.15f;
+
+            var ranges = new List<Range>();
+            int rangeStart = positions[0];
+            int rangeLength = 1;
+            for (int i = 1; i < positions.Length; i++)
+            {
+                if (positions[i] == positions[i - 1] + 1)
+                {
+                    rangeLength++;
+                }
+                else
+                {
+                    ranges.Add(new Range(rangeStart, rangeLength));
+                    rangeStart = positions[i];
+                    rangeLength = 1;
+                }
+            }
+            ranges.Add(new Range(rangeStart, rangeLength));
+            matches = ranges.ToArray();
+            return true;
+        }
+
+        /// <summary>
         /// Describes sub range of the text.
         /// </summary>
         public readonly struct Range
