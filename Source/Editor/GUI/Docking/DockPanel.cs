@@ -69,27 +69,27 @@ namespace FlaxEditor.GUI.Docking
         /// <summary>
         /// The default dock tabs header height.
         /// </summary>
-        public const float DefaultHeaderHeight = 20;
+        public const float DefaultHeaderHeight = 24;
 
         /// <summary>
         /// The default tabs header text left margin.
         /// </summary>
-        public const float DefaultLeftTextMargin = 4;
+        public const float DefaultLeftTextMargin = 8;
 
         /// <summary>
         /// The default tabs header text right margin.
         /// </summary>
-        public const float DefaultRightTextMargin = 8;
+        public const float DefaultRightTextMargin = 12;
 
         /// <summary>
         /// The default tabs header buttons size.
         /// </summary>
-        public const float DefaultButtonsSize = 15;
+        public const float DefaultButtonsSize = 12;
 
         /// <summary>
         /// The default tabs header buttons margin.
         /// </summary>
-        public const float DefaultButtonsMargin = 2;
+        public const float DefaultButtonsMargin = 6;
 
         /// <summary>
         /// The default splitters value.

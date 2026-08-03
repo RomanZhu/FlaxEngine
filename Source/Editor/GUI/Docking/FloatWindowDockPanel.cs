@@ -40,7 +40,7 @@ namespace FlaxEditor.GUI.Docking
                     return;
                 }
 
-                var right = ContentRight - 8.0f;
+                var right = ContentRight;
                 var available = Mathf.Max(0.0f, right - Title.X - 20.0f);
                 _performanceStats.FitToWidth(available);
                 if (!_performanceStats.Visible)
@@ -78,6 +78,7 @@ namespace FlaxEditor.GUI.Docking
 
         private MasterDockPanel _masterPanel;
         private WindowRootControl _window;
+        private bool _hideDecorations;
 
         /// <summary>
         /// Gets the master panel.
@@ -93,6 +94,21 @@ namespace FlaxEditor.GUI.Docking
         /// True if user is dragging this panel.
         /// </summary>
         public bool IsDragging { get; internal set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether custom window decorations should be hidden.
+        /// </summary>
+        internal bool HideDecorations
+        {
+            get => _hideDecorations;
+            set
+            {
+                if (_hideDecorations == value)
+                    return;
+                _hideDecorations = value;
+                UpdateDecorationsVisibility();
+            }
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="FloatWindowDockPanel"/> class.
@@ -115,7 +131,19 @@ namespace FlaxEditor.GUI.Docking
             {
                 var decorations = Parent.AddChild(new FloatWindowDecorations(this));
                 decorations.SetAnchorPreset(AnchorPresets.HorizontalStretchTop, false);
+                UpdateDecorationsVisibility();
             }
+        }
+
+        private void UpdateDecorationsVisibility()
+        {
+            var decorations = Parent?.GetChild<FloatWindowDecorations>();
+            if (decorations != null)
+                decorations.Visible = !_hideDecorations;
+            if (TabsProxy != null)
+                TabsProxy.HideHeader = _hideDecorations;
+            PerformLayout();
+            Parent?.PerformLayout();
         }
 
         /// <inheritdoc />
@@ -124,11 +152,12 @@ namespace FlaxEditor.GUI.Docking
             base.PerformLayoutBeforeChildren();
 
             var decorations = Parent.GetChild<FloatWindowDecorations>();
+            float topOffset = decorations != null && decorations.Visible ? decorations.Height : 0.0f;
             if (decorations != null)
             {
                 // Apply offset for the title bar
                 foreach (var child in Children)
-                    child.Bounds = child.Bounds with { Y = decorations.Height, Height = Parent.Height - decorations.Height };
+                    child.Bounds = child.Bounds with { Y = topOffset, Height = Mathf.Max(0.0f, Height - topOffset) };
             }
         }
 
