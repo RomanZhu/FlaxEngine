@@ -4,10 +4,12 @@ using System;
 using System.Collections.Generic;
 using System.Xml;
 using FlaxEditor.Gizmo;
+using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Input;
 using FlaxEditor.Modules;
 using FlaxEditor.Options;
+using FlaxEditor.Viewport;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -122,17 +124,34 @@ namespace FlaxEditor.Windows
     {
         private readonly ScaledRenderOutputControl _viewport;
         private readonly GameRoot _guiRoot;
+        private ToolStrip _toolStrip;
+        private ToolStripButton _viewportSizeButton;
+        private ToolStripButton _debugViewButton;
+        private ToolStripButton _showGuiButton;
+        private ToolStripButton _editGuiButton;
+        private ToolStripButton _debugDrawButton;
+        private ToolStripButton _vsyncButton;
+        private ToolStripButton _muteButton;
+        private ToolStripButton _shortcutsButton;
+        private ToolStripButton _gizmosButton;
         private bool _showGUI = true, _editGUI = true;
         private bool _showDebugDraw = true;
+        private bool _flaxShortcutsEnabled = true;
+        private bool _showGameViewGizmos = false;
         private bool _audioMuted = false;
         private float _audioVolume = 1;
-        private bool _isMaximized = false, _isUnlockingMouse = false;
+        private bool _isMaximized = false, _isFullscreen = false, _isUnlockingMouse = false;
         private bool _isFloating = false, _isBorderless = false;
         private bool _isMouseLockBlocked = false;
+        private bool _forceHideToolStrip = false;
         private bool _cursorVisible = true;
         private float _gameStartTime;
         private GUI.Docking.DockState _maximizeRestoreDockState;
         private GUI.Docking.DockPanel _maximizeRestoreDockTo;
+        private int _maximizeRestoreTabIndex = -1;
+        private ContainerControl _maximizeRestoreParent;
+        private AnchorPresets _maximizeRestoreAnchorPreset;
+        private Margin _maximizeRestoreOffsets;
         private CursorLockMode _cursorLockMode = CursorLockMode.None;
 
         // Viewport scaling variables
@@ -244,6 +263,7 @@ namespace FlaxEditor.Windows
                 Audio.MasterVolume = value ? 0 : AudioVolume;
                 _audioMuted = value;
                 MuteAudio?.Invoke();
+                UpdateToolStrip();
             }
         }
 
@@ -275,13 +295,30 @@ namespace FlaxEditor.Windows
                 _isMaximized = value;
                 if (value)
                 {
-                    IsFloating = true;
-                    var rootWindow = RootWindow;
-                    rootWindow?.Maximize();
+                    ShowGameWindow();
+                    IsFullscreen = false;
+                    _maximizeRestoreParent = Parent;
+                    _maximizeRestoreAnchorPreset = AnchorPreset;
+                    _maximizeRestoreOffsets = Offsets;
+                    Parent = Editor.Instance.UI.MasterPanel;
+                    AnchorPreset = AnchorPresets.StretchAll;
+                    Offsets = Margin.Zero;
+                    FocusGameViewport();
                 }
                 else
                 {
-                    IsFloating = false;
+                    if (_maximizeRestoreParent != null)
+                    {
+                        AnchorPreset = _maximizeRestoreAnchorPreset;
+                        Offsets = _maximizeRestoreOffsets;
+                        Parent = _maximizeRestoreParent;
+                        _maximizeRestoreParent = null;
+                    }
+                    if (_dockedTo != null)
+                    {
+                        _dockedTo.SelectTab(null, false);
+                        _dockedTo.SelectTab(this, false);
+                    }
                 }
             }
         }
@@ -291,9 +328,52 @@ namespace FlaxEditor.Windows
         /// </summary>
         internal void ToggleFullscreen()
         {
-            if (!_isMaximized)
-                ShowGameWindow();
-            IsMaximized = !_isMaximized;
+            IsFullscreen = !_isFullscreen;
+        }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the game window is shown in a borderless fullscreen floating window.
+        /// </summary>
+        private bool IsFullscreen
+        {
+            get => _isFullscreen;
+            set
+            {
+                if (_isFullscreen == value)
+                    return;
+                _isFullscreen = value;
+                if (value)
+                {
+                    IsMaximized = false;
+                    if (_isBorderless)
+                        IsBorderless = false;
+                    var monitorBounds = Platform.GetMonitorBounds(PointToScreen(Size * 0.5f));
+                    SetFullscreenToolStripHidden(true);
+                    EditorViewport.SetFullscreenRenderingSuppression(_viewport, true);
+                    IsFloating = true;
+                    if (_dockedTo is GUI.Docking.FloatWindowDockPanel floatingPanel)
+                        floatingPanel.HideDecorations = true;
+                    var rootWindow = RootWindow;
+                    if (rootWindow != null)
+                    {
+                        rootWindow.Window.Position = monitorBounds.Location;
+                        rootWindow.Window.SetBorderless(true, true);
+                        rootWindow.Window.ClientSize = monitorBounds.Size;
+                        rootWindow.BringToFront(true);
+                        FocusGameViewport();
+                    }
+                }
+                else
+                {
+                    SetFullscreenToolStripHidden(false);
+                    EditorViewport.SetFullscreenRenderingSuppression(_viewport, false);
+                    if (_dockedTo is GUI.Docking.FloatWindowDockPanel floatingPanel)
+                        floatingPanel.HideDecorations = false;
+                    var rootWindow = RootWindow;
+                    rootWindow?.Window.SetBorderless(false);
+                    IsFloating = false;
+                }
+            }
         }
 
         /// <summary>
@@ -311,7 +391,8 @@ namespace FlaxEditor.Windows
                 if (value)
                 {
                     _maximizeRestoreDockTo = _dockedTo;
-                    _maximizeRestoreDockState = _dockedTo.TryGetDockState(out _);
+                    _maximizeRestoreDockState = _dockedTo?.TryGetDockState(out _) ?? GUI.Docking.DockState.Unknown;
+                    _maximizeRestoreTabIndex = _dockedTo?.GetTabIndex(this) ?? -1;
                     if (_maximizeRestoreDockState != GUI.Docking.DockState.Float)
                     {
                         var monitorBounds = Platform.GetMonitorBounds(PointToScreen(Size * 0.5f));
@@ -327,7 +408,11 @@ namespace FlaxEditor.Windows
                         rootWindow.Restore();
                     if (_maximizeRestoreDockTo != null && _maximizeRestoreDockTo.IsDisposing)
                         _maximizeRestoreDockTo = null;
-                    Show(_maximizeRestoreDockState, _maximizeRestoreDockTo);
+                    if (_maximizeRestoreDockTo != null && _maximizeRestoreDockState != GUI.Docking.DockState.Float)
+                        _maximizeRestoreDockTo.DockWindowAt(this, _maximizeRestoreTabIndex, true);
+                    else
+                        Show(_maximizeRestoreDockState, _maximizeRestoreDockTo);
+                    _maximizeRestoreTabIndex = -1;
                 }
             }
         }
@@ -345,15 +430,24 @@ namespace FlaxEditor.Windows
                 _isBorderless = value;
                 if (value)
                 {
+                    SetFullscreenToolStripHidden(true);
+                    EditorViewport.SetFullscreenRenderingSuppression(_viewport, true);
                     IsFloating = true;
+                    if (_dockedTo is GUI.Docking.FloatWindowDockPanel floatingPanel)
+                        floatingPanel.HideDecorations = true;
                     var rootWindow = RootWindow;
                     var monitorBounds = Platform.GetMonitorBounds(rootWindow.RootWindow.Window.ClientPosition);
                     rootWindow.Window.Position = monitorBounds.Location;
-                    rootWindow.Window.SetBorderless(true);
+                    rootWindow.Window.SetBorderless(true, true);
                     rootWindow.Window.ClientSize = monitorBounds.Size;
                 }
                 else
                 {
+                    SetFullscreenToolStripHidden(false);
+                    EditorViewport.SetFullscreenRenderingSuppression(_viewport, false);
+                    if (_dockedTo is GUI.Docking.FloatWindowDockPanel floatingPanel)
+                        floatingPanel.HideDecorations = false;
+                    RootWindow?.Window.SetBorderless(false);
                     IsFloating = false;
                 }
             }
@@ -432,6 +526,7 @@ namespace FlaxEditor.Windows
                 Parent = _viewport
             };
             RootControl.GameRoot = _guiRoot.UIRoot;
+            InitToolStrip();
 
             SizeChanged += control => { ResizeViewport(); };
 
@@ -515,6 +610,348 @@ namespace FlaxEditor.Windows
             InputActions.Add(options => options.FocusConsoleCommand, () => Editor.Instance.Windows.OutputLogWin.FocusCommand());
         }
 
+        private void InitToolStrip()
+        {
+            var interfaceOptions = Editor.Options.Options.Interface;
+            _toolStrip = new ToolStrip(22.0f)
+            {
+                Parent = this,
+                ItemsMargin = new Margin(2, 2, 1, 1),
+                UseMenuSelection = true,
+                UseItemContextMenu = true,
+                UseOverlayStyle = true,
+                BackgroundColor = Color.Transparent,
+            };
+            _toolStrip.ApplyLayout(interfaceOptions.GameViewToolStripLayout);
+            _toolStrip.LayoutChanged += () =>
+            {
+                Editor.Options.Options.Interface.GameViewToolStripLayout = _toolStrip.CaptureLayout();
+                Editor.Options.SaveOptions();
+            };
+
+            _viewportSizeButton = AddToolStripMenuButton(GetViewportSizeLabel(), SpriteHandle.Invalid, CreateViewportSizeMenu(), ToolStripAnchor.Left, "Flax.Game.Size");
+            _viewportSizeButton.LinkTooltip("Viewport size.");
+            AddToolStripMenuButton("View", SpriteHandle.Invalid, CreateGameViewOptionsMenu(), ToolStripAnchor.Left, "Flax.Game.View").LinkTooltip("Game view options.");
+            _debugViewButton = AddToolStripMenuButton("Default", SpriteHandle.Invalid, EditorViewport.CreateViewModeContextMenu(_viewport.Task), ToolStripAnchor.Left, "Flax.Game.Debug");
+            _debugViewButton.LinkTooltip("Debug view.");
+            var flagsButton = AddToolStripMenuButton("Flags", SpriteHandle.Invalid, EditorViewport.CreateViewFlagsContextMenu(_viewport.Task, ViewFlags.DefaultGame), ToolStripAnchor.Left, "Flax.Game.Flags.Optional");
+            flagsButton.LinkTooltip("View flags.");
+            if (!_toolStrip.HasSavedState("Flax.Game.Flags.Optional"))
+                _toolStrip.SetItemVisible(flagsButton, false, false);
+            var layersButton = AddToolStripMenuButton("Layers", SpriteHandle.Invalid, EditorViewport.CreateViewLayersContextMenu(_viewport.Task), ToolStripAnchor.Left, "Flax.Game.Layers.Optional");
+            layersButton.LinkTooltip("View layer visibility.");
+            if (!_toolStrip.HasSavedState("Flax.Game.Layers.Optional"))
+                _toolStrip.SetItemVisible(layersButton, false, false);
+            _showGuiButton = AddToolStripButton("GUI", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Game.Gui", () => ShowGUI = !ShowGUI);
+            _showGuiButton.LinkTooltip("Toggle game GUI.");
+            _editGuiButton = AddToolStripButton("Edit GUI", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Game.EditGui", () => EditGUI = !EditGUI);
+            _editGuiButton.LinkTooltip("Toggle game GUI editing.");
+            _debugDrawButton = AddToolStripButton("Debug Draw", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Game.DebugDraw", () => ShowDebugDraw = !ShowDebugDraw);
+            _debugDrawButton.LinkTooltip("Toggle debug draw.");
+            AddToolStripMenuButton("Play Focus", SpriteHandle.Invalid, CreatePlayFocusMenu(), ToolStripAnchor.Center, "Flax.Game.Focus").LinkTooltip("Focus behavior when play mode starts.");
+            AddToolStripMenuButton("Window", SpriteHandle.Invalid, CreateWindowModeMenu(), ToolStripAnchor.Center, "Flax.Game.WindowMode").LinkTooltip("Game window mode when play mode starts.");
+            _vsyncButton = AddToolStripButton("VSync", SpriteHandle.Invalid, ToolStripAnchor.Right, "Flax.Game.VSync", () => Graphics.UseVSync = !Graphics.UseVSync);
+            _vsyncButton.LinkTooltip("Toggle VSync.");
+            _muteButton = _toolStrip.AddGlyphButton(ToolStripGlyph.Speaker, ToolStripAnchor.Right, "Flax.Game.Audio", () => AudioMuted = !AudioMuted);
+            CompactToolStripButton(_muteButton, "Audio");
+            _muteButton.LinkTooltip("Mute or unmute game audio.");
+            _shortcutsButton = _toolStrip.AddGlyphButton(ToolStripGlyph.Keyboard, ToolStripAnchor.Right, "Flax.Game.Shortcuts", () => _flaxShortcutsEnabled = !_flaxShortcutsEnabled);
+            CompactToolStripButton(_shortcutsButton, "Shortcuts");
+            _shortcutsButton.LinkTooltip("Enable Flax editor shortcuts in Game View.");
+            _gizmosButton = _toolStrip.AddGlyphButton(ToolStripGlyph.Eye, ToolStripAnchor.Right, "Flax.Game.Gizmos", () => _showGameViewGizmos = !_showGameViewGizmos);
+            CompactToolStripButton(_gizmosButton, "Gizmos");
+            _gizmosButton.LinkTooltip("Toggle editor gizmos in Game View.");
+
+            UpdateToolStrip();
+        }
+
+        private ToolStripButton AddToolStripButton(string text, SpriteHandle icon, ToolStripAnchor anchor, string id, Action onClick = null)
+        {
+            var button = new ToolStripButton(_toolStrip.ItemsHeight, ref icon)
+            {
+                Text = text,
+                Parent = _toolStrip,
+                UseBlueCheckedStyle = true,
+                ContentMargin = 4,
+                MaxIconSize = 14.0f,
+            };
+            _toolStrip.SetItemPlacement(button, anchor, -1, id);
+            button.CustomizationLabel = GetToolStripItemLabel(text, id);
+            button.PerformLayout();
+            if (onClick != null)
+                button.Clicked += onClick;
+            return button;
+        }
+
+        private static void CompactToolStripButton(ToolStripButton button, string label)
+        {
+            button.ContentMargin = 4;
+            button.MaxIconSize = 14.0f;
+            button.CustomizationLabel = label;
+            button.PerformLayout();
+        }
+
+        private ToolStripButton AddToolStripMenuButton(string text, SpriteHandle icon, ContextMenu menu, ToolStripAnchor anchor, string id)
+        {
+            var button = AddToolStripButton(text, icon, anchor, id);
+            button.ContextMenu = menu;
+            if (!icon.IsValid)
+            {
+                button.DrawAsTextLabel = true;
+                button.DrawTextShadow = true;
+                button.UseBlueCheckedStyle = false;
+            }
+            button.Clicked += () => _toolStrip.SelectedMenuButton = button;
+            return button;
+        }
+
+        private static string GetToolStripItemLabel(string text, string id)
+        {
+            if (!string.IsNullOrEmpty(text))
+                return text;
+            int lastDot = id.LastIndexOf('.');
+            return lastDot != -1 && lastDot + 1 < id.Length ? id.Substring(lastDot + 1) : id;
+        }
+
+        private ContextMenu CreateViewportSizeMenu()
+        {
+            var menu = new ContextMenu();
+            menu.VisibleChanged += control =>
+            {
+                if (!menu.IsOpened)
+                    return;
+                menu.DisposeAllItems();
+                Editor.UI.CreateViewportSizingContextMenu(menu, _defaultScaleActiveIndex, _customScaleActiveIndex, false, v =>
+                {
+                    ChangeViewportRatio(v);
+                    UpdateToolStrip();
+                }, (a, b) =>
+                {
+                    _defaultScaleActiveIndex = a;
+                    _customScaleActiveIndex = b;
+                    UpdateToolStrip();
+                });
+                menu.PerformLayout();
+            };
+            return menu;
+        }
+
+        private ContextMenu CreateGameViewOptionsMenu()
+        {
+            var menu = new ContextMenu
+            {
+                MinimumWidth = 220,
+            };
+            AddCheckMenuItem(menu, "Show GUI", () => ShowGUI, value => ShowGUI = value);
+            AddCheckMenuItem(menu, "Edit GUI", () => EditGUI, value => EditGUI = value);
+            AddCheckMenuItem(menu, "Show Debug Draw", () => ShowDebugDraw, value => ShowDebugDraw = value);
+            AddCheckMenuItem(menu, "Editor Gizmos", () => _showGameViewGizmos, value => _showGameViewGizmos = value);
+            AddCheckMenuItem(menu, "Flax Shortcuts", () => _flaxShortcutsEnabled, value => _flaxShortcutsEnabled = value);
+            AddCheckMenuItem(menu, "Mute Audio", () => AudioMuted, value => AudioMuted = value);
+            AddCheckMenuItem(menu, "VSync", () => Graphics.UseVSync, value => Graphics.UseVSync = value);
+
+            menu.AddSeparator();
+            EditorViewport.PopulateViewFlagsContextMenu(menu.AddChildMenu("View Flags").ContextMenu, _viewport.Task, ViewFlags.DefaultGame);
+            EditorViewport.PopulateViewLayersContextMenu(menu.AddChildMenu("View Layers").ContextMenu, _viewport.Task);
+
+            menu.AddSeparator();
+
+            var brightness = menu.AddButton("Viewport Brightness");
+            brightness.CloseMenuOnClick = false;
+            var brightnessValue = new FloatValueBox(_viewport.Brightness, 150, 2, 55.0f, 0.001f, 10.0f, 0.001f)
+            {
+                Parent = brightness
+            };
+            brightnessValue.ValueChanged += () => _viewport.Brightness = brightnessValue.Value;
+            menu.VisibleChanged += control => brightnessValue.Value = _viewport.Brightness;
+
+            var resolution = menu.AddButton("Viewport Resolution");
+            resolution.CloseMenuOnClick = false;
+            var resolutionValue = new FloatValueBox(_viewport.ResolutionScale, 150, 2, 55.0f, 0.1f, 4.0f, 0.001f)
+            {
+                Parent = resolution
+            };
+            resolutionValue.ValueChanged += () => _viewport.ResolutionScale = resolutionValue.Value;
+            menu.VisibleChanged += control => resolutionValue.Value = _viewport.ResolutionScale;
+
+            menu.AddSeparator();
+            menu.AddButton("Take Screenshot", TakeScreenshot);
+            var clearDebugDraw = menu.AddButton("Clear Debug Draw", () => DebugDraw.Clear());
+            clearDebugDraw.CloseMenuOnClick = false;
+            menu.VisibleChanged += control => clearDebugDraw.Visible = DebugDraw.CanClear();
+            AddToolStripVisibilityItem(menu, "Game View Toolstrip");
+            return menu;
+        }
+
+        private void AddCheckMenuItem(ContextMenu menu, string text, Func<bool> getter, Action<bool> setter)
+        {
+            var button = menu.AddButton(text);
+            button.CloseMenuOnClick = false;
+            var checkbox = new CheckBox(150, 2, getter())
+            {
+                Parent = button
+            };
+            checkbox.StateChanged += x =>
+            {
+                setter(x.Checked);
+                UpdateToolStrip();
+            };
+            menu.VisibleChanged += control => checkbox.Checked = getter();
+        }
+
+        private ContextMenu CreatePlayFocusMenu()
+        {
+            var menu = new ContextMenu
+            {
+                MinimumWidth = 240,
+            };
+            GenerateFocusOptionsContextMenu(menu);
+            menu.AddSeparator();
+            var reset = menu.AddButton("Remove override");
+            reset.TooltipText = "Reset the override to the value set in the editor options.";
+            reset.Clicked += () => FocusOnPlayOption = Editor.Options.Options.Interface.FocusOnPlayMode;
+            menu.VisibleChanged += UpdateFocusOptionsContextMenu;
+            return menu;
+        }
+
+        private void UpdateFocusOptionsContextMenu(Control control)
+        {
+            var menu = (ContextMenu)control;
+            foreach (var child in menu.Items)
+            {
+                if (child is ContextMenuButton button && button.Tag is PlayModeFocusOptions option)
+                {
+                    option.Active = option.FocusOption == FocusOnPlayOption;
+                    button.Icon = option.Active ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                }
+            }
+        }
+
+        private ContextMenu CreateWindowModeMenu()
+        {
+            var menu = new ContextMenu
+            {
+                MinimumWidth = 220,
+            };
+            AddWindowModeButton(menu, "Docked", InterfaceOptions.GameWindowMode.Docked, "Shows the game window docked, inside the editor.");
+            AddWindowModeButton(menu, "Popup", InterfaceOptions.GameWindowMode.PopupWindow, "Shows the game window as a popup.");
+            AddWindowModeButton(menu, "Maximized", InterfaceOptions.GameWindowMode.MaximizedWindow, "Shows the game window maximized in the editor window.");
+            AddWindowModeButton(menu, "Borderless", InterfaceOptions.GameWindowMode.BorderlessWindow, "Shows the game window borderless.");
+            menu.VisibleChanged += UpdateWindowModeContextMenu;
+            return menu;
+        }
+
+        private void AddWindowModeButton(ContextMenu menu, string text, InterfaceOptions.GameWindowMode mode, string tooltip)
+        {
+            var button = menu.AddButton(text);
+            button.CloseMenuOnClick = false;
+            button.Tag = mode;
+            button.TooltipText = tooltip;
+            button.Clicked += () =>
+            {
+                Editor.Options.Options.Interface.DefaultGameWindowMode = mode;
+                Editor.Options.SaveOptions();
+                UpdateWindowModeContextMenu(menu);
+            };
+        }
+
+        private void UpdateWindowModeContextMenu(Control control)
+        {
+            var menu = (ContextMenu)control;
+            var selected = Editor.Options.Options.Interface.DefaultGameWindowMode;
+            foreach (var child in menu.Items)
+            {
+                if (child is ContextMenuButton button && button.Tag is InterfaceOptions.GameWindowMode mode)
+                    button.Icon = mode == selected ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+            }
+        }
+
+        private ContextMenu CreateToolStripSettingsMenu()
+        {
+            var menu = new ContextMenu
+            {
+                MinimumWidth = 220,
+            };
+            AddToolStripVisibilityItem(menu, "Game View Toolstrip");
+            return menu;
+        }
+
+        private void AddToolStripVisibilityItem(ContextMenu menu, string text)
+        {
+            var button = menu.AddButton(text);
+            button.CloseMenuOnClick = false;
+            var checkbox = new CheckBox(150, 2, Editor.Options.Options.Interface.ShowGameViewToolStrip)
+            {
+                Parent = button
+            };
+            checkbox.StateChanged += x => SetToolStripVisible(x.Checked);
+            menu.VisibleChanged += control => checkbox.Checked = Editor.Options.Options.Interface.ShowGameViewToolStrip;
+        }
+
+        private void SetToolStripVisible(bool visible)
+        {
+            var interfaceOptions = Editor.Options.Options.Interface;
+            if (interfaceOptions.ShowGameViewToolStrip == visible)
+                return;
+            interfaceOptions.ShowGameViewToolStrip = visible;
+            Editor.Options.SaveOptions();
+            UpdateToolStrip();
+        }
+
+        private void SetFullscreenToolStripHidden(bool value)
+        {
+            if (_forceHideToolStrip == value)
+                return;
+            _forceHideToolStrip = value;
+            UpdateToolStrip();
+            PerformLayout();
+        }
+
+        private void UpdateToolStrip(bool forceNotPlaying = false)
+        {
+            if (_toolStrip == null)
+                return;
+            var visible = !_forceHideToolStrip && Editor.Options.Options.Interface.ShowGameViewToolStrip && (forceNotPlaying || !Editor.IsPlayMode);
+            _toolStrip.Visible = visible;
+            _toolStrip.Enabled = visible;
+            SetButtonText(_viewportSizeButton, GetViewportSizeLabel());
+            SetButtonText(_debugViewButton, EditorViewport.GetViewModeDisplayName(_viewport.Task.ViewMode));
+            if (_showGuiButton != null)
+                _showGuiButton.Checked = ShowGUI;
+            if (_editGuiButton != null)
+                _editGuiButton.Checked = EditGUI;
+            if (_debugDrawButton != null)
+                _debugDrawButton.Checked = ShowDebugDraw;
+            if (_vsyncButton != null)
+                _vsyncButton.Checked = Graphics.UseVSync;
+            if (_muteButton != null)
+            {
+                _muteButton.Checked = AudioMuted;
+                var glyph = AudioMuted ? ToolStripGlyph.MutedSpeaker : ToolStripGlyph.Speaker;
+                if (_muteButton.Glyph != glyph)
+                    _muteButton.Glyph = glyph;
+            }
+            if (_shortcutsButton != null)
+                _shortcutsButton.Checked = _flaxShortcutsEnabled;
+            if (_gizmosButton != null)
+                _gizmosButton.Checked = _showGameViewGizmos;
+        }
+
+        private static void SetButtonText(ToolStripButton button, string text)
+        {
+            if (button != null && button.Text != text)
+                button.Text = text;
+        }
+
+        private string GetViewportSizeLabel()
+        {
+            if (_customScaleActiveIndex >= 0 && _customScaleActiveIndex < Editor.UI.CustomViewportScaleOptions.Count)
+                return Editor.UI.CustomViewportScaleOptions[_customScaleActiveIndex].Label;
+            if (_defaultScaleActiveIndex >= 0 && _defaultScaleActiveIndex < Editor.UI.DefaultViewportScaleOptions.Count)
+                return Editor.UI.DefaultViewportScaleOptions[_defaultScaleActiveIndex].Label;
+            return "Viewport Size";
+        }
+
         private void ChangeViewportRatio(UIModule.ViewportScaleOption v)
         {
             if (v == null)
@@ -564,6 +1001,7 @@ namespace FlaxEditor.Windows
             }
 
             ResizeViewport();
+            UpdateToolStrip();
         }
 
         private void ResizeViewport()
@@ -629,12 +1067,20 @@ namespace FlaxEditor.Windows
 
                 DebugDraw.Draw(ref renderContext, task.OutputView);
             }
+
+            if (_showGameViewGizmos && !Editor.IsPlayMode)
+            {
+                var editWindowViewport = Editor.Windows.EditWin.Viewport;
+                if (editWindowViewport.EditorPrimitives && editWindowViewport.EditorPrimitives.CanRender())
+                    editWindowViewport.EditorPrimitives.Render(context, ref renderContext, _viewport.Task.Output, _viewport.Task.Output);
+            }
         }
 
         private void OnOptionsChanged(EditorOptions options)
         {
             CenterMouseOnFocus = options.Interface.CenterMouseOnGameWinFocus;
             FocusOnPlayOption = options.Interface.FocusOnPlayMode;
+            UpdateToolStrip();
         }
 
         private void PlayingStateOnSceneDuplicating()
@@ -670,6 +1116,7 @@ namespace FlaxEditor.Windows
             _cursorLockMode = CursorLockMode.None;
             Screen.CursorVisible = true;
             Screen.CursorLock = CursorLockMode.None;
+            UpdateToolStrip();
         }
 
         /// <inheritdoc />
@@ -681,8 +1128,9 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override void OnPlayEnd()
         {
-            IsFloating = false;
             _isMouseLockBlocked = false;
+            IsFullscreen = false;
+            IsFloating = false;
             IsMaximized = false;
             IsBorderless = false;
             Cursor = CursorType.Default;
@@ -690,6 +1138,7 @@ namespace FlaxEditor.Windows
             if (Screen.MainWindow != null && Screen.MainWindow.IsMouseTracking)
                 Screen.MainWindow.EndTrackingMouse();
             RootControl.GameRoot?.EndMouseCapture();
+            UpdateToolStrip(true);
         }
 
         /// <inheritdoc />
@@ -755,6 +1204,8 @@ namespace FlaxEditor.Windows
                     _customScaleActiveIndex = b;
                 });
             }
+
+            AddToolStripVisibilityItem(menu, "Game View Toolstrip");
 
             // Take Screenshot
             {
@@ -854,6 +1305,7 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override void Draw()
         {
+            UpdateToolStrip();
             base.Draw();
 
             var mainRenderTask = MainRenderTask.Instance;
@@ -1014,15 +1466,26 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
-            // Prevent closing the game window tab during a play session
-            if (Editor.StateMachine.IsPlayMode && Editor.Options.Options.Input.CloseTab.Process(this, key))
-            {
-                return true;
-            }
-
             if (Editor.StateMachine.IsPlayMode && Editor.Options.Options.Input.DebuggerUnlockMouseSecondary.Process(this, key))
             {
                 UnlockMouseInPlay();
+                return true;
+            }
+
+            if (!_flaxShortcutsEnabled)
+            {
+                for (int i = 0; i < _children.Count; i++)
+                {
+                    var child = _children[i];
+                    if (child.Enabled && child.ContainsFocus && child.OnKeyDown(key))
+                        return true;
+                }
+                return true;
+            }
+
+            // Prevent closing the game window tab during a play session
+            if (Editor.StateMachine.IsPlayMode && Editor.Options.Options.Input.CloseTab.Process(this, key))
+            {
                 return true;
             }
 
@@ -1120,6 +1583,8 @@ namespace FlaxEditor.Windows
             writer.WriteAttributeString("ShowGUI", ShowGUI.ToString());
             writer.WriteAttributeString("EditGUI", EditGUI.ToString());
             writer.WriteAttributeString("ShowDebugDraw", ShowDebugDraw.ToString());
+            writer.WriteAttributeString("FlaxShortcutsEnabled", _flaxShortcutsEnabled.ToString());
+            writer.WriteAttributeString("ShowGameViewGizmos", _showGameViewGizmos.ToString());
             writer.WriteAttributeString("DefaultViewportScalingIndex", _defaultScaleActiveIndex.ToString());
             writer.WriteAttributeString("CustomViewportScalingIndex", _customScaleActiveIndex.ToString());
         }
@@ -1133,6 +1598,10 @@ namespace FlaxEditor.Windows
                 EditGUI = value1;
             if (bool.TryParse(node.GetAttribute("ShowDebugDraw"), out value1))
                 ShowDebugDraw = value1;
+            if (bool.TryParse(node.GetAttribute("FlaxShortcutsEnabled"), out value1))
+                _flaxShortcutsEnabled = value1;
+            if (bool.TryParse(node.GetAttribute("ShowGameViewGizmos"), out value1))
+                _showGameViewGizmos = value1;
             if (int.TryParse(node.GetAttribute("DefaultViewportScalingIndex"), out int value2))
                 _defaultScaleActiveIndex = value2;
             if (int.TryParse(node.GetAttribute("CustomViewportScalingIndex"), out value2))
@@ -1158,6 +1627,8 @@ namespace FlaxEditor.Windows
                     _customScaleActiveIndex = -1;
                 }
             }
+
+            UpdateToolStrip();
         }
 
         /// <inheritdoc />
@@ -1166,6 +1637,9 @@ namespace FlaxEditor.Windows
             ShowGUI = true;
             EditGUI = true;
             ShowDebugDraw = false;
+            _flaxShortcutsEnabled = true;
+            _showGameViewGizmos = false;
+            UpdateToolStrip();
         }
     }
 }

@@ -1130,7 +1130,7 @@ namespace FlaxEditor.Modules
             var windowTypeMenu = _toolStripPlay.ContextMenu.AddChildMenu("Game window mode");
             windowModesGroup.AddItem("Docked", InterfaceOptions.GameWindowMode.Docked, null, "Shows the game window docked, inside the editor");
             windowModesGroup.AddItem("Popup", InterfaceOptions.GameWindowMode.PopupWindow, null, "Shows the game window as a popup");
-            windowModesGroup.AddItem("Maximized", InterfaceOptions.GameWindowMode.MaximizedWindow, null, "Shows the game window maximized (Same as pressing F11)");
+            windowModesGroup.AddItem("Maximized", InterfaceOptions.GameWindowMode.MaximizedWindow, null, "Shows the game window maximized in the editor window (Same as pressing F10)");
             windowModesGroup.AddItem("Borderless", InterfaceOptions.GameWindowMode.BorderlessWindow, null, "Shows the game window borderless");
             windowModesGroup.AddItemsToContextMenu(windowTypeMenu.ContextMenu);
             windowModesGroup.Selected = Editor.Options.Options.Interface.DefaultGameWindowMode;

@@ -131,6 +131,7 @@ namespace FlaxEditor.Windows
         private bool _isFullscreen;
         private DockPanel _fullscreenRestoreDockTo;
         private DockState _fullscreenRestoreDockState;
+        private int _fullscreenRestoreTabIndex = -1;
 
         /// <summary>
         /// The viewport control.
@@ -166,10 +167,18 @@ namespace FlaxEditor.Windows
             if (_isFullscreen)
             {
                 _isFullscreen = false;
-                RootWindow?.Restore();
+                EditorViewport.SetFullscreenRenderingSuppression(Viewport, false);
+                var rootWindow = RootWindow;
+                if (_dockedTo is FloatWindowDockPanel restoreFloatingPanel)
+                    restoreFloatingPanel.HideDecorations = false;
+                rootWindow?.Window.SetBorderless(false);
                 if (_fullscreenRestoreDockTo != null && _fullscreenRestoreDockTo.IsDisposing)
                     _fullscreenRestoreDockTo = null;
-                Show(_fullscreenRestoreDockState, _fullscreenRestoreDockTo);
+                if (_fullscreenRestoreDockTo != null && _fullscreenRestoreDockState != DockState.Float)
+                    _fullscreenRestoreDockTo.DockWindowAt(this, _fullscreenRestoreTabIndex, true);
+                else
+                    Show(_fullscreenRestoreDockState, _fullscreenRestoreDockTo);
+                _fullscreenRestoreTabIndex = -1;
                 return;
             }
 
@@ -181,13 +190,25 @@ namespace FlaxEditor.Windows
             }
 
             _isFullscreen = true;
+            EditorViewport.SetFullscreenRenderingSuppression(Viewport, true);
             _fullscreenRestoreDockTo = _dockedTo;
             _fullscreenRestoreDockState = _dockedTo.TryGetDockState(out _);
+            _fullscreenRestoreTabIndex = _dockedTo.GetTabIndex(this);
             var monitorBounds = Platform.GetMonitorBounds(PointToScreen(Size * 0.5f));
             var size = DefaultSize;
             var location = monitorBounds.Location + monitorBounds.Size * 0.5f - size * 0.5f;
             ShowFloating(location, size, WindowStartPosition.Manual);
-            RootWindow?.Maximize();
+            if (_dockedTo is FloatWindowDockPanel fullscreenFloatingPanel)
+                fullscreenFloatingPanel.HideDecorations = true;
+            var root = RootWindow;
+            if (root != null)
+            {
+                root.Window.Position = monitorBounds.Location;
+                root.Window.SetBorderless(true, true);
+                root.Window.ClientSize = monitorBounds.Size;
+                root.BringToFront(true);
+                Focus();
+            }
         }
 
         /// <inheritdoc />
