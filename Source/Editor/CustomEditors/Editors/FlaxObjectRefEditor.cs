@@ -1,10 +1,12 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using FlaxEditor.Content;
 using FlaxEditor.CustomEditors.Elements;
 using FlaxEditor.GUI;
+using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.GUI;
@@ -23,12 +25,17 @@ namespace FlaxEditor.CustomEditors.Editors
     /// </summary>
     /// <seealso cref="FlaxEngine.GUI.Control" />
     [HideInEditor]
-    public class FlaxObjectRefPickerControl : Control
+    public class FlaxObjectRefPickerControl : Control, ITooltipPreviewProvider
     {
+        private const float FieldHeight = 22.0f;
+        private const float ButtonSize = 16.0f;
+        private const float IconSize = 12.0f;
+
         private ScriptType _type;
         private ActorTreeNode _linkedTreeNode;
         private Object _value;
         private string _valueName;
+        private string _valueTypeName;
         private bool _supportsPickDropDown;
 
         private bool _isMouseDown;
@@ -89,10 +96,11 @@ namespace FlaxEditor.CustomEditors.Editors
 
                 _value = value;
                 var type = TypeUtils.GetObjectType(_value);
+                _valueTypeName = GetTypeDisplayName(type);
 
                 // Get name to display
                 if (_value is Script script)
-                    _valueName = script.Actor ? $"{type.Name} ({script.Actor.Name})" : type.Name;
+                    _valueName = script.Actor ? script.Actor.Name : type.Name;
                 else if (_value != null)
                     _valueName = _value.ToString();
                 else
@@ -133,10 +141,18 @@ namespace FlaxEditor.CustomEditors.Editors
         public bool DifferentValues;
 
         /// <summary>
+        /// Custom background color used by the reference field.
+        /// </summary>
+        public Color ReferenceBackgroundColor = Color.Transparent;
+
+        /// <inheritdoc />
+        public SpriteHandle TooltipPreview => GetSelectedAssetItem()?.TooltipPreview ?? SpriteHandle.Invalid;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="FlaxObjectRefPickerControl"/> class.
         /// </summary>
         public FlaxObjectRefPickerControl()
-        : base(0, 0, 50, 16)
+        : base(0, 0, 50, FieldHeight)
         {
             _type = ScriptType.Object;
         }
@@ -150,6 +166,43 @@ namespace FlaxEditor.CustomEditors.Editors
         {
             var type = TypeUtils.GetObjectType(obj);
             return obj == null || _type.IsAssignableFrom(type) && (CheckValid == null || CheckValid(obj, type));
+        }
+
+        private Rectangle FieldRect => new Rectangle(0, 0, Width, Height);
+
+        private Rectangle PickerButtonRect => new Rectangle(1, (Height - ButtonSize) * 0.5f, ButtonSize, ButtonSize);
+
+        private Rectangle SearchButtonRect => new Rectangle(Width - ButtonSize - 1, (Height - ButtonSize) * 0.5f, ButtonSize, ButtonSize);
+
+        private Rectangle TextRect => new Rectangle(ButtonSize + 3, 0, Mathf.Max(0.0f, Width - ButtonSize * 2 - 6), Height);
+
+        private static string GetTypeDisplayName(ScriptType type)
+        {
+            return type.Type != null ? type.Type.GetTypeDisplayName() : Utilities.Utils.GetPropertyNameUI(type.ToString());
+        }
+
+        private string GetExpectedTypeName()
+        {
+            return GetTypeDisplayName(_type);
+        }
+
+        private string GetDisplayText()
+        {
+            if (DifferentValues)
+                return $"Multiple Values ({GetExpectedTypeName()})";
+            if (_value != null)
+                return $"{_valueName} ({_valueTypeName})";
+            return $"None ({GetExpectedTypeName()})";
+        }
+
+        private static void DrawPickerIcon(Rectangle rect, Color color)
+        {
+            var center = new Float2(rect.X + rect.Width * 0.5f, rect.Y + rect.Height * 0.5f);
+            Render2D.DrawLine(new Float2(rect.X + 3, center.Y), new Float2(center.X - 2, center.Y), color);
+            Render2D.DrawLine(new Float2(center.X + 2, center.Y), new Float2(rect.Right - 3, center.Y), color);
+            Render2D.DrawLine(new Float2(center.X, rect.Y + 3), new Float2(center.X, center.Y - 2), color);
+            Render2D.DrawLine(new Float2(center.X, center.Y + 2), new Float2(center.X, rect.Bottom - 3), color);
+            Render2D.DrawRectangle(new Rectangle(center.X - 2, center.Y - 2, 4, 4), color);
         }
 
         private void ShowDropDownMenu()
@@ -197,61 +250,36 @@ namespace FlaxEditor.CustomEditors.Editors
         {
             base.Draw();
 
-            // Cache data
             var style = Style.Current;
-            bool isSelected = _value != null;
-            bool isEnabled = VisuallyEnabledInHierarchy;
-            var frameRect = new Rectangle(0, 0, Width, 16);
-            if (isSelected)
-                frameRect.Width -= 16;
-            if (_supportsPickDropDown && isEnabled)
-                frameRect.Width -= 16;
-            var nameRect = new Rectangle(2, 1, frameRect.Width - 4, 14);
-            var button1Rect = new Rectangle(nameRect.Right + 2, 1, 14, 14);
-            var button2Rect = new Rectangle(button1Rect.Right + 2, 1, 14, 14);
+            var isSelected = _value != null;
+            var isEnabled = VisuallyEnabledInHierarchy;
+            var fieldRect = FieldRect;
+            var pickerRect = PickerButtonRect;
+            var searchRect = SearchButtonRect;
+            var textRect = TextRect;
+            var borderColor = isEnabled && (IsMouseOver || IsFocused || IsNavFocused) ? style.BorderHighlighted : style.BorderNormal;
+            var textColor = isEnabled && isSelected && !DifferentValues ? style.Foreground : style.ForegroundGrey;
+            var iconColor = isEnabled ? style.ForegroundGrey : style.ForegroundDisabled;
+            var backgroundColor = ReferenceBackgroundColor.A > 0.0f ? ReferenceBackgroundColor : style.TextBoxBackground;
 
-            // Draw frame
-            Render2D.DrawRectangle(frameRect, isEnabled && (IsMouseOver || IsNavFocused) ? style.BorderHighlighted : style.BorderNormal);
+            StyleRendering.DrawRoundedRectangle(fieldRect, backgroundColor, borderColor, 1.0f, style.CornerRadius);
 
-            // Check if has item selected
-            if (DifferentValues)
+            if (isEnabled)
             {
-                // Draw info
-                Render2D.PushClip(nameRect);
-                Render2D.DrawText(style.FontMedium, Type != null ? $"Multiple Values ({Utilities.Utils.GetPropertyNameUI(Type.ToString())})" : "-", nameRect, isEnabled ? style.ForegroundGrey : style.ForegroundGrey.AlphaMultiplied(0.75f), TextAlignment.Near, TextAlignment.Center);
-                Render2D.PopClip();
-            }
-            else if (isSelected)
-            {
-                // Draw name
-                Render2D.PushClip(nameRect);
-                Render2D.DrawText(style.FontMedium, _valueName, nameRect, isEnabled ? style.Foreground : style.ForegroundDisabled, TextAlignment.Near, TextAlignment.Center);
-                Render2D.PopClip();
-
-                // Draw deselect button
-                Render2D.DrawSprite(style.Cross, button1Rect, isEnabled && button1Rect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
-            }
-            else
-            {
-                // Draw info
-                Render2D.PushClip(nameRect);
-                Render2D.DrawText(style.FontMedium, Type != null ? $"None ({Utilities.Utils.GetPropertyNameUI(Type.ToString())})" : "-", nameRect, isEnabled ? style.ForegroundGrey : style.ForegroundGrey.AlphaMultiplied(0.75f), TextAlignment.Near, TextAlignment.Center);
-                Render2D.PopClip();
+                var pickerIconRect = new Rectangle(pickerRect.X + (pickerRect.Width - IconSize) * 0.5f, pickerRect.Y + (pickerRect.Height - IconSize) * 0.5f, IconSize, IconSize);
+                DrawPickerIcon(pickerIconRect, pickerRect.Contains(_mousePos) ? style.Foreground : iconColor);
+                if (_supportsPickDropDown)
+                    Render2D.DrawSprite(style.Search, searchRect, searchRect.Contains(_mousePos) ? style.Foreground : iconColor);
             }
 
-            // Draw picker button
-            if (_supportsPickDropDown && isEnabled)
-            {
-                var pickerRect = isSelected ? button2Rect : button1Rect;
-                Render2D.DrawSprite(style.ArrowDown, pickerRect, isEnabled && pickerRect.Contains(_mousePos) ? style.Foreground : style.ForegroundGrey);
-            }
+            Render2D.PushClip(textRect);
+            Render2D.DrawText(style.FontMedium, GetDisplayText(), textRect, textColor, TextAlignment.Near, TextAlignment.Center);
+            Render2D.PopClip();
 
             // Check if drag is over
             if (IsDragOver && _hasValidDragOver)
             {
-                var bounds = new Rectangle(Float2.Zero, Size);
-                Render2D.FillRectangle(bounds, style.Selection);
-                Render2D.DrawRectangle(bounds, style.SelectionBorder);
+                StyleRendering.DrawRoundedRectangle(fieldRect, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
             }
         }
 
@@ -288,7 +316,8 @@ namespace FlaxEditor.CustomEditors.Editors
             _mousePos = location;
 
             // Check if start drag drop
-            if (_isMouseDown && Float2.Distance(location, _mouseDownPos) > 10.0f)
+            var dragRect = TextRect;
+            if (_isMouseDown && Float2.Distance(location, _mouseDownPos) > 10.0f && dragRect.Contains(_mouseDownPos))
             {
                 // Do the drag
                 DoDrag();
@@ -303,69 +332,33 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
-            if (button == MouseButton.Left)
+            _isMouseDown = false;
+
+            if (button == MouseButton.Right)
             {
-                // Clear flag
-                _isMouseDown = false;
-            }
-
-            // Cache data
-            bool isSelected = _value != null;
-            var frameRect = new Rectangle(0, 0, Width, 16);
-            if (isSelected)
-                frameRect.Width -= 16;
-            if (_supportsPickDropDown)
-                frameRect.Width -= 16;
-            var nameRect = new Rectangle(2, 1, frameRect.Width - 4, 14);
-            var button1Rect = new Rectangle(nameRect.Right + 2, 1, 14, 14);
-            var button2Rect = new Rectangle(button1Rect.Right + 2, 1, 14, 14);
-
-            // Deselect
-            if (_value != null && button1Rect.Contains(ref location))
-                Value = null;
-
-            // Picker dropdown menu
-            if (_supportsPickDropDown && (isSelected ? button2Rect : button1Rect).Contains(ref location))
-            {
-                ShowDropDownMenu();
+                Focus();
+                ShowContextMenu(location);
                 return true;
             }
 
             if (button == MouseButton.Left)
             {
-                _isMouseDown = false;
-
-                // Highlight actor or script reference
-                if (!_hasValidDragOver && !IsDragOver)
+                Focus();
+                if (VisuallyEnabledInHierarchy && PickerButtonRect.Contains(ref location))
                 {
-                    Actor actor = _value as Actor;
-                    if (actor == null && _value is Script script)
-                        actor = script.Actor;
-                    if (actor != null)
-                    {
-                        if (_linkedTreeNode != null && _linkedTreeNode.Actor == actor)
-                        {
-                            _linkedTreeNode.ExpandAllParents();
-                            _linkedTreeNode.StartHighlight();
-                        }
-                        else
-                        {
-                            if (PresenterContext is PropertiesWindow || PresenterContext == null)
-                                _linkedTreeNode = Editor.Instance.Scene.GetActorNode(actor).TreeNode;
-                            else if (PresenterContext is PrefabWindow prefabWindow)
-                                _linkedTreeNode = prefabWindow.Graph.Root.Find(actor).TreeNode;
-                            if (_linkedTreeNode != null)
-                            {
-                                _linkedTreeNode.ExpandAllParents();
-                                if (PresenterContext is PropertiesWindow || PresenterContext == null)
-                                    Editor.Instance.Windows.SceneWin.SceneTreePanel.ScrollViewTo(_linkedTreeNode, true);
-                                else if (PresenterContext is PrefabWindow prefabWindow)
-                                    (prefabWindow.Tree.Parent as Panel).ScrollViewTo(_linkedTreeNode, true);
-                                _linkedTreeNode.StartHighlight();
-                            }
-                        }
-                        return true;
-                    }
+                    if (!TryAssignCurrentSelection() && _supportsPickDropDown)
+                        ShowDropDownMenu();
+                    return true;
+                }
+                if (VisuallyEnabledInHierarchy && _supportsPickDropDown && SearchButtonRect.Contains(ref location))
+                {
+                    ShowDropDownMenu();
+                    return true;
+                }
+                if (VisuallyEnabledInHierarchy && TextRect.Contains(ref location))
+                {
+                    FocusSource();
+                    return true;
                 }
 
                 // Reset valid drag over if still true at this point
@@ -393,26 +386,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
             Focus();
-
-            // Check if has object selected
-            if (_value != null)
-            {
-                if (_linkedTreeNode != null)
-                {
-                    _linkedTreeNode.StopHighlight();
-                    _linkedTreeNode = null;
-                }
-
-                // Select object
-                if (_value is Actor actor)
-                    Select(actor);
-                else if (_value is Script script && script.Actor)
-                    Select(script.Actor);
-                else if (_value is Asset asset)
-                    Editor.Instance.Windows.ContentWin.Select(asset);
-            }
-
-            return base.OnMouseDoubleClick(location, button);
+            return true;
         }
 
         /// <inheritdoc />
@@ -425,18 +399,157 @@ namespace FlaxEditor.CustomEditors.Editors
                 ShowDropDownMenu();
         }
 
-        private void Select(Actor actor)
+        private Actor GetReferenceActor()
         {
+            if (_value is Actor actor)
+                return actor;
+            if (_value is Script script)
+                return script.Actor;
+            return null;
+        }
+
+        private ContentItem GetSelectedAssetItem()
+        {
+            return _value is Asset asset ? Editor.Instance.ContentDatabase.FindAsset(asset.ID) : null;
+        }
+
+        /// <inheritdoc />
+        public override bool OnShowTooltip(out string text, out Float2 location, out Rectangle area)
+        {
+            var item = GetSelectedAssetItem();
+            if (item != null)
+            {
+                item.UpdateTooltipText();
+                TooltipText = item.TooltipText;
+            }
+
+            return base.OnShowTooltip(out text, out location, out area);
+        }
+
+        private bool FindReference()
+        {
+            var actor = GetReferenceActor();
+            if (actor == null)
+                return false;
+
+            if (_linkedTreeNode != null && _linkedTreeNode.Actor == actor)
+            {
+                HighlightLinkedTreeNode();
+                return true;
+            }
+
             if (PresenterContext is PropertiesWindow || PresenterContext == null)
-                Editor.Instance.SceneEditing.Select(actor);
+                _linkedTreeNode = Editor.Instance.Scene.GetActorNode(actor)?.TreeNode;
             else if (PresenterContext is PrefabWindow prefabWindow)
-                prefabWindow.Select(prefabWindow.Graph.Root.Find(actor));
+                _linkedTreeNode = prefabWindow.Graph.Root.Find(actor)?.TreeNode;
+            if (_linkedTreeNode == null)
+                return false;
+
+            HighlightLinkedTreeNode();
+            return true;
+        }
+
+        private void HighlightLinkedTreeNode()
+        {
+            _linkedTreeNode.ExpandAllParents();
+            if (PresenterContext is PropertiesWindow || PresenterContext == null)
+                Editor.Instance.Windows.SceneWin.SceneTreePanel.ScrollViewTo(_linkedTreeNode, true);
+            else if (PresenterContext is PrefabWindow prefabWindow)
+                (prefabWindow.Tree.Parent as Panel)?.ScrollViewTo(_linkedTreeNode, true);
+            _linkedTreeNode.StartHighlight();
+        }
+
+        private void FocusSource()
+        {
+            var actor = GetReferenceActor();
+            if (actor != null)
+            {
+                FindReference();
+            }
+            else if (_value is Asset asset)
+            {
+                var item = Editor.Instance.ContentDatabase.FindAsset(asset.ID);
+                if (item != null)
+                    Editor.Instance.Windows.ContentWin.Highlight(item, true);
+            }
+        }
+
+        private void ShowContextMenu(Float2 location)
+        {
+            var menu = new ContextMenu();
+            var clear = menu.AddButton("Clear", () => Value = null);
+            clear.Enabled = VisuallyEnabledInHierarchy && _value != null;
+
+            if (_value != null)
+            {
+                menu.AddSeparator();
+
+                var actor = GetReferenceActor();
+                if (actor != null)
+                {
+                    menu.AddButton("Find Reference", () => FindReference());
+                    menu.AddButton("Focus on Source", FocusSource);
+                }
+
+                if (_value is Asset asset)
+                {
+                    var item = Editor.Instance.ContentDatabase.FindAsset(asset.ID);
+                    if (item != null)
+                    {
+                        menu.AddButton("Find References", () => Editor.Instance.Windows.Open(new AssetReferencesGraphWindow(Editor.Instance, item)));
+                        menu.AddButton("Open", () => Editor.Instance.ContentEditing.Open(item));
+                        menu.AddButton("Focus on Source", FocusSource);
+                    }
+                }
+            }
+
+            menu.Show(this, location);
+        }
+
+        private Object GetObjectFromActor(Actor actor)
+        {
+            if (actor == null)
+                return null;
+            if (IsValid(actor))
+                return actor;
+            return actor.Scripts.FirstOrDefault(IsValid);
+        }
+
+        private Object GetObjectFromSelection(IReadOnlyList<SceneGraphNode> selection)
+        {
+            if (selection == null || selection.Count != 1)
+                return null;
+
+            var node = selection[0];
+            if (node.EditableObject is Object obj && IsValid(obj))
+                return obj;
+            return node is ActorNode actorNode ? GetObjectFromActor(actorNode.Actor) : null;
+        }
+
+        private Object GetObjectFromCurrentSelection()
+        {
+            return PresenterContext is PrefabWindow prefabWindow
+                ? GetObjectFromSelection(prefabWindow.Selection)
+                : GetObjectFromSelection(Editor.Instance.SceneEditing.Selection);
+        }
+
+        private bool TryAssignCurrentSelection()
+        {
+            var obj = GetObjectFromCurrentSelection();
+            if (obj == null || obj == _value)
+                return false;
+
+            Value = obj;
+            RootWindow.Focus();
+            Focus();
+            return true;
         }
 
         private void DoDrag()
         {
             // Do the drag drop operation if has selected element
-            if (_value != null)
+            var dragRect = TextRect;
+            if (_value != null && dragRect.Contains(ref _mouseDownPos))
             {
                 if (_value is Actor actor)
                     DoDragDrop(DragActors.GetDragData(actor));
@@ -602,6 +715,7 @@ namespace FlaxEditor.CustomEditors.Editors
             _value = null;
             _type = ScriptType.Null;
             _valueName = null;
+            _valueTypeName = null;
             _linkedTreeNode = null;
 
             base.OnDestroy();

@@ -158,6 +158,10 @@ namespace FlaxEditor.Content
     [HideInEditor]
     public abstract class ContentItem : Control, ITooltipPreviewProvider
     {
+        private const float TargetHighlightScale = 1.25f;
+        private const float HighlightScaleAnimDuration = 0.85f;
+        private const float ListVerticalInset = 1.0f;
+
         /// <summary>
         /// The default margin size.
         /// </summary>
@@ -192,6 +196,11 @@ namespace FlaxEditor.Content
 
         private bool _isMouseDown;
         private Float2 _mouseDownStartPos;
+        private bool _isHighlighted;
+        private float _targetHighlightTimeSec;
+        private float _currentHighlightTimeSec;
+        private float _debounceHighlightTime;
+        private float _highlightScale;
         private readonly List<IContentItemOwner> _references = new List<IContentItemOwner>(4);
 
         private SpriteHandle _thumbnail;
@@ -462,9 +471,11 @@ namespace FlaxEditor.Content
                 }
                 case ContentViewType.List:
                 {
-                    var thumbnailSize = size.Y - 2 * DefaultMarginSize;
+                    var thumbnailSize = Mathf.Max(0.0f, size.Y - ListVerticalInset * 2.0f);
                     var textHeight = Mathf.Min(size.Y, 24.0f);
-                    return new Rectangle(thumbnailSize + DefaultMarginSize * 2, (size.Y - textHeight) * 0.5f, size.X - textHeight - DefaultMarginSize * 3.0f, textHeight);
+                    var semanticIconSize = Mathf.Clamp(thumbnailSize * 0.55f, 12.0f, 20.0f);
+                    var textX = DefaultMarginSize + semanticIconSize + 3.0f + thumbnailSize + DefaultMarginSize;
+                    return new Rectangle(textX, (size.Y - textHeight) * 0.5f, Mathf.Max(0.0f, size.X - textX - DefaultMarginSize), textHeight);
                 }
                 default: throw new ArgumentOutOfRangeException();
                 }
@@ -617,6 +628,48 @@ namespace FlaxEditor.Content
         }
 
         /// <summary>
+        /// Adds a temporary animated highlight around the item.
+        /// </summary>
+        /// <param name="durationSec">The duration of the highlight in seconds.</param>
+        public void StartHighlight(float durationSec = 3)
+        {
+            _isHighlighted = true;
+            _targetHighlightTimeSec = durationSec;
+            _currentHighlightTimeSec = 0;
+            _debounceHighlightTime = 0;
+            _highlightScale = 2.0f;
+        }
+
+        /// <summary>
+        /// Stops any current highlight.
+        /// </summary>
+        public void StopHighlight()
+        {
+            _isHighlighted = false;
+            _targetHighlightTimeSec = 0;
+            _currentHighlightTimeSec = 0;
+            _debounceHighlightTime = 0;
+        }
+
+        /// <inheritdoc />
+        public override void Update(float deltaTime)
+        {
+            if (_isHighlighted)
+            {
+                _debounceHighlightTime += deltaTime;
+                _currentHighlightTimeSec += deltaTime;
+
+                if (_currentHighlightTimeSec < HighlightScaleAnimDuration)
+                    _highlightScale = Mathf.Lerp(_highlightScale, TargetHighlightScale, _currentHighlightTimeSec);
+
+                if (_currentHighlightTimeSec >= _targetHighlightTimeSec)
+                    _isHighlighted = false;
+            }
+
+            base.Update(deltaTime);
+        }
+
+        /// <summary>
         /// Called when item gets reimported or reloaded.
         /// </summary>
         protected virtual void OnReimport()
@@ -673,6 +726,35 @@ namespace FlaxEditor.Content
                 (Parent as ContentView)?.Select(this);
         }
 
+        private Rectangle GetHighlightRect(ContentView view, Rectangle clientRect, Rectangle textRect, string displayName)
+        {
+            Rectangle result;
+            if (view.ViewType == ContentViewType.List)
+            {
+                var nameWidth = Style.Current.FontMedium.MeasureText(displayName).X;
+                var right = Mathf.Min(clientRect.Right, textRect.X + nameWidth + DefaultMarginSize);
+                result = new Rectangle(clientRect.X, clientRect.Y, Mathf.Max(textRect.X + 12.0f, right), clientRect.Height);
+            }
+            else
+            {
+                result = clientRect;
+            }
+            result.Scale(_highlightScale);
+            return result;
+        }
+
+        private void DrawHighlight(Rectangle rect, bool border)
+        {
+            if (!_isHighlighted || _debounceHighlightTime <= 0.1f)
+                return;
+
+            var color = Editor.Instance.Options.Options.Visual.HighlightColor;
+            if (border)
+                Render2D.DrawRectangle(rect, color, 3);
+            else
+                Render2D.FillRectangle(rect, color.AlphaMultiplied(0.3f));
+        }
+
         /// <inheritdoc />
         public override void Draw()
         {
@@ -682,6 +764,8 @@ namespace FlaxEditor.Content
             var isSelected = view.IsSelected(this);
             var clientRect = new Rectangle(Float2.Zero, size);
             var textRect = TextRectangle;
+            var displayName = ShowFileExtension || view.ShowFileExtensions ? FileName : ShortName;
+            var highlightRect = GetHighlightRect(view, clientRect, textRect, displayName);
             Rectangle thumbnailRect;
             TextAlignment nameAlignment;
             switch (view.ViewType)
@@ -725,40 +809,44 @@ namespace FlaxEditor.Content
                     if (isSelected)
                     {
                         Render2D.FillRectangle(textRect, Parent.ContainsFocus ? style.BackgroundSelected : style.SecondaryBackground);
-                        Render2D.DrawRectangle(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.SecondaryBackground);
+                        StyleRendering.DrawRoundedRectangleBorder(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.SecondaryBackground, 1.0f, style.CornerRadius);
                     }
                     else if (IsMouseOver)
                     {
                         Render2D.FillRectangle(textRect, style.BackgroundHighlighted);
-                        Render2D.DrawRectangle(clientRect, style.BackgroundHighlighted);
+                        StyleRendering.DrawRoundedRectangleBorder(clientRect, style.BackgroundHighlighted, 1.0f, style.CornerRadius);
                     }
                 }
                 break;
             }
             case ContentViewType.List:
             {
-                var thumbnailSize = size.Y - 2 * DefaultMarginSize;
-                thumbnailRect = new Rectangle(DefaultMarginSize, DefaultMarginSize, thumbnailSize, thumbnailSize);
+                var thumbnailSize = Mathf.Max(0.0f, size.Y - ListVerticalInset * 2.0f);
+                var semanticIconSize = Mathf.Clamp(thumbnailSize * 0.55f, 12.0f, 20.0f);
+                thumbnailRect = new Rectangle(DefaultMarginSize + semanticIconSize + 3.0f, ListVerticalInset, thumbnailSize, thumbnailSize);
                 nameAlignment = TextAlignment.Near;
 
+                if (!isSelected && !IsMouseOver && Editor.Instance.Options.Options.Interface.AlternatingTreeRows && (IndexInParent & 1) != 0)
+                    Render2D.FillRectangle(clientRect, Color.Lerp(style.Background, style.Foreground, 0.02f));
                 if (isSelected)
                     Render2D.FillRectangle(clientRect, Parent.ContainsFocus ? style.BackgroundSelected : style.SecondaryBackground);
                 else if (IsMouseOver)
                     Render2D.FillRectangle(clientRect, style.BackgroundHighlighted);
 
-                if (!isSelected && !IsMouseOver && Editor.Instance.Options.Options.Interface.AlternatingTreeRows && (IndexInParent & 1) != 0)
-                    Render2D.FillRectangle(clientRect, Color.Lerp(style.Background, style.Foreground, 0.02f));
+                var semanticIconRect = new Rectangle(DefaultMarginSize, (size.Y - semanticIconSize) * 0.5f, semanticIconSize, semanticIconSize);
+                SemanticIcons.Draw(SemanticIcons.ForContent(SearchFilter), semanticIconRect, SemanticIcons.GetContentColor(SearchFilter, style));
                 DrawThumbnail(ref thumbnailRect);
                 break;
             }
             default: throw new ArgumentOutOfRangeException();
             }
 
+            DrawHighlight(highlightRect, false);
+
             // Draw a type label directly after the short name when there is room for both.
             if (view.ViewType == ContentViewType.List && !string.IsNullOrWhiteSpace(TypeDescription))
             {
-                var name = ShowFileExtension || view.ShowFileExtensions ? FileName : ShortName;
-                var typeX = textRect.X + style.FontMedium.MeasureText(name).X + 8.0f;
+                var typeX = textRect.X + style.FontMedium.MeasureText(displayName).X + 8.0f;
                 if (typeX + 12.0f <= textRect.Right)
                 {
                     var typeRect = new Rectangle(typeX, textRect.Y, textRect.Right - typeX, textRect.Height);
@@ -770,8 +858,10 @@ namespace FlaxEditor.Content
                 }
             }
             Render2D.PushClip(ref textRect);
-            Render2D.DrawText(style.FontMedium, ShowFileExtension || view.ShowFileExtensions ? FileName : ShortName, textRect, style.Foreground, nameAlignment, TextAlignment.Center, view.ViewType == ContentViewType.List ? TextWrapping.NoWrap : TextWrapping.WrapWords);
+            Render2D.DrawText(style.FontMedium, displayName, textRect, style.Foreground, nameAlignment, TextAlignment.Center, view.ViewType == ContentViewType.List ? TextWrapping.NoWrap : TextWrapping.WrapWords);
             Render2D.PopClip();
+
+            DrawHighlight(highlightRect, true);
 
             if (IsBeingCut)
             {
@@ -842,10 +932,29 @@ namespace FlaxEditor.Content
         {
             Focus();
 
-            // Open
-            (Parent as ContentView).OnItemDoubleClick(this);
+            if (button == MouseButton.Left && new Rectangle(Float2.Zero, Size).Contains(location))
+            {
+                // The input backend sends a release after the double-click notification.
+                // Disarm the ordinary click first so opening cannot be immediately followed
+                // by a stale selection/click against the newly changed editor hierarchy.
+                _isMouseDown = false;
+                (Parent as ContentView)?.OnItemDoubleClick(this);
+            }
 
             return true;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseWheel(Float2 location, float delta)
+        {
+            // ContentItem fills each list row, so explicitly forward Ctrl+wheel instead of
+            // relying on parent bubbling (which differs between platform input backends).
+            if (Parent is ContentView view && Root.GetKey(KeyboardKeys.Control))
+            {
+                view.Zoom(delta);
+                return true;
+            }
+            return base.OnMouseWheel(location, delta);
         }
 
         /// <inheritdoc />
@@ -881,14 +990,8 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void OnSubmit()
         {
-            if (button == MouseButton.Left && new Rectangle(Float2.Zero, Size).Contains(location))
-            {
-                // The input backend sends a release after the double-click notification.
-                // Disarm the ordinary click first so opening cannot be immediately followed
-                // by a stale selection/click against the newly changed editor hierarchy.
-                _isMouseDown = false;
-                (Parent as ContentView)?.OnItemDoubleClick(this);
-            }
+            // Open
+            (Parent as ContentView).OnItemDoubleClick(this);
 
             base.OnSubmit();
         }
@@ -901,19 +1004,6 @@ namespace FlaxEditor.Content
                 if (otherItem.IsFolder)
                     return 1;
                 return string.Compare(ShortName, otherItem.ShortName, StringComparison.InvariantCulture);
-        /// <inheritdoc />
-        public override bool OnMouseWheel(Float2 location, float delta)
-        {
-            // ContentItem fills each list row, so explicitly forward Ctrl+wheel instead of
-            // relying on parent bubbling (which differs between platform input backends).
-            if (Parent is ContentView view && Root.GetKey(KeyboardKeys.Control))
-            {
-                view.Zoom(delta);
-                return true;
-            }
-            return base.OnMouseWheel(location, delta);
-        }
-
             }
 
             return base.Compare(other);

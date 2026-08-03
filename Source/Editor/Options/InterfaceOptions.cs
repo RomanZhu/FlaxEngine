@@ -151,7 +151,7 @@ namespace FlaxEditor.Options
             PopupWindow,
 
             /// <summary>
-            /// Shows the game window maximized. (Same as pressing F11)
+            /// Shows the game window maximized in the editor window. (Same as pressing F10)
             /// </summary>
             MaximizedWindow,
 
@@ -280,10 +280,43 @@ namespace FlaxEditor.Options
         public float IconsScale { get; set; } = 1.0f;
 
         /// <summary>
+        /// Gets or sets a value indicating whether show the scene viewport overlay toolstrip.
+        /// </summary>
+        [DefaultValue(true)]
+        [EditorDisplay("Interface", "Show Scene View Toolstrip"), EditorOrder(260), Tooltip("Shows the editable overlay toolstrip in the scene viewport.")]
+        public bool ShowSceneViewToolStrip { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether show the game viewport overlay toolstrip while not in play mode.
+        /// </summary>
+        [DefaultValue(true)]
+        [EditorDisplay("Interface", "Show Game View Toolstrip"), EditorOrder(261), Tooltip("Shows the editable overlay toolstrip in the game viewport while not in play mode.")]
+        public bool ShowGameViewToolStrip { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether editor viewport rendering should be disabled while a viewport is fullscreened.
+        /// </summary>
+        [DefaultValue(true)]
+        [EditorDisplay("Interface", "Disable Editor Rendering In Fullscreen"), EditorOrder(262), Tooltip("Disables non-fullscreen editor viewport rendering while a viewport is fullscreened to improve fullscreen performance.")]
+        public bool DisableEditorRenderingInFullscreen { get; set; } = true;
+
+        /// <summary>
         /// Gets or sets the persisted global toolbar anchor and item order.
         /// </summary>
         [HideInEditor]
         public string ToolStripLayout { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets the persisted scene viewport overlay toolstrip anchor and item order.
+        /// </summary>
+        [HideInEditor]
+        public string SceneViewToolStripLayout { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets the persisted game viewport overlay toolstrip anchor and item order.
+        /// </summary>
+        [HideInEditor]
+        public string GameViewToolStripLayout { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the editor content window orientation.
@@ -312,6 +345,13 @@ namespace FlaxEditor.Options
         [DefaultValue(false)]
         [EditorDisplay("Interface"), EditorOrder(311)]
         public bool AutoSizePropertiesPanelSplitter { get; set; }
+
+        /// <summary>
+        /// Gets or sets the option to show asset thumbnails next to compact reference fields in the Properties panel.
+        /// </summary>
+        [DefaultValue(true)]
+        [EditorDisplay("Interface", "Show Reference Previews in Properties"), EditorOrder(312), Tooltip("Shows asset thumbnails next to compact asset reference fields in the Properties panel.")]
+        public bool ShowReferencePreviewsInProperties { get; set; } = true;
 
         /// <summary>
         /// Gets or sets tree line visibility.
@@ -364,7 +404,7 @@ namespace FlaxEditor.Options
         /// Whether to scroll to the script when a script is added to an actor.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface"), EditorOrder(322)]
+        [EditorDisplay("Interface"), EditorOrder(325)]
         public bool ScrollToScriptOnAdd { get; set; } = true;
 
 #if PLATFORM_SDL || PLATFORM_MAC

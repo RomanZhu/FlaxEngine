@@ -32,11 +32,9 @@ namespace FlaxEditor.CustomEditors.Editors
             if (assetReference != null)
             {
                 _picker = layout.Custom<AssetPicker>().CustomControl;
+                _picker.ShowCompactPreview = Editor.Instance.Options.Options.Interface.ShowReferencePreviewsInProperties;
+                _picker.UseCompactField = true;
                 ScriptType assetType = new ScriptType();
-
-                float height = 48;
-                if (assetReference.UseSmallPicker)
-                    height = 36;
 
                 if (string.IsNullOrEmpty(assetReference.TypeName))
                 {
@@ -60,7 +58,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 }
 
                 _picker.Validator.AssetType = assetType;
-                _picker.Height = height;
+                _picker.Height = _picker.CompactHeight;
                 _picker.SelectedItemChanged += OnSelectedItemChanged;
                 _isReference = true;
             }

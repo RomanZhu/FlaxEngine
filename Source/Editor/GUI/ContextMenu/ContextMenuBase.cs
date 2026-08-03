@@ -121,6 +121,11 @@ namespace FlaxEditor.GUI.ContextMenu
         public bool UseNavigation = true;
 
         /// <summary>
+        /// Optional popup background override. Transparent color uses the current style popup background.
+        /// </summary>
+        public Color PopupBackgroundColor = Color.Transparent;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="ContextMenuBase"/> class.
         /// </summary>
         public ContextMenuBase()
@@ -628,9 +633,8 @@ namespace FlaxEditor.GUI.ContextMenu
             // Draw background
             var style = Style.Current;
             var bounds = new Rectangle(Float2.Zero, Size);
-            var popup = Color.Lerp(style.Background, Color.Black, 0.08f).AlphaMultiplied(0.97f);
-            Render2D.FillRectangle(bounds, popup);
-            Render2D.DrawRectangle(bounds, style.BorderNormal.AlphaMultiplied(0.8f));
+            var popup = PopupBackgroundColor.A > 0.0f ? PopupBackgroundColor : Color.Lerp(style.Background, Color.Black, 0.08f).AlphaMultiplied(0.97f);
+            StyleRendering.DrawRoundedRectangle(bounds, popup, style.BorderNormal.AlphaMultiplied(0.8f), 1.0f, style.CornerRadius);
 
             base.Draw();
         }

@@ -48,6 +48,40 @@ namespace FlaxEditor.Windows
 
         private const int MaxTabTitleLength = 24;
         private const float TabCloseButtonSize = 14.0f;
+        private const float TabCloseButtonHitSize = 18.0f;
+        private const float TabCloseButtonMargin = 5.0f;
+        private const float TabHorizontalPadding = 10.0f;
+        private const float TabTextCloseGap = 4.0f;
+        private const float TabMinWidth = 86.0f;
+        private const float TabMaxWidth = 168.0f;
+        private const float TabSelectedLineHeight = 2.0f;
+
+        private static float PropertiesPanelPadding => Mathf.Max(4.0f, Style.Current.PanelPadding > 0.0f ? Style.Current.PanelPadding : 2.0f);
+
+        private static void ApplyPropertiesPanelStyle(CustomEditorPresenter presenter)
+        {
+            var padding = PropertiesPanelPadding;
+            presenter.Panel.Margin = new Margin(padding);
+            presenter.Panel.Spacing = padding;
+        }
+
+        private static float GetPropertiesTabHeaderWidth(PropertiesTab tab)
+        {
+            var style = Style.Current;
+            var textWidth = style.FontMedium ? style.FontMedium.MeasureText(tab.Text ?? string.Empty).X : 0.0f;
+            var closeWidth = tab.Closeable ? TabTextCloseGap + TabCloseButtonHitSize + TabCloseButtonMargin : 0.0f;
+            return Mathf.Clamp(textWidth + TabHorizontalPadding * 2.0f + closeWidth, TabMinWidth, TabMaxWidth);
+        }
+
+        private static Color GetPinnedTabsBackgroundColor()
+        {
+            var style = Style.Current;
+            var color = style.Background;
+            var hsv = color.ToHSV();
+            hsv.Z = Mathf.Saturate(hsv.Z - 0.03f);
+            return Color.FromHSV(hsv, color.A);
+        }
+
         private sealed class PropertiesTab : Tab
         {
             private readonly PropertiesWindow _owner;
@@ -82,9 +116,24 @@ namespace FlaxEditor.Windows
             {
                 _owner = owner;
                 _closeable = tab.Closeable;
+                UpdateSize(tabs.TabsSize.Y);
             }
 
-            private Rectangle CloseButtonBounds => new Rectangle(Size.X - TabCloseButtonSize, 0.0f, TabCloseButtonSize, Size.Y);
+            private Rectangle CloseButtonBounds => new Rectangle(Size.X - TabCloseButtonHitSize - TabCloseButtonMargin, (Size.Y - TabCloseButtonHitSize) * 0.5f, TabCloseButtonHitSize, TabCloseButtonHitSize);
+
+            private Rectangle CloseIconBounds
+            {
+                get
+                {
+                    var bounds = CloseButtonBounds;
+                    return new Rectangle(bounds.X + (bounds.Width - TabCloseButtonSize) * 0.5f, bounds.Y + (bounds.Height - TabCloseButtonSize) * 0.5f, TabCloseButtonSize, TabCloseButtonSize);
+                }
+            }
+
+            public void UpdateSize(float height)
+            {
+                Size = new Float2(GetPropertiesTabHeaderWidth(PropertiesTab), height);
+            }
 
             public override bool OnMouseDown(Float2 location, MouseButton button)
             {
@@ -149,7 +198,7 @@ namespace FlaxEditor.Windows
             private void ReorderTab(Float2 location)
             {
                 int headerIndex = _owner._tabs.TabsPanel.Children.IndexOf(this);
-                if (headerIndex <= 0)
+                if (headerIndex < 0 || !_closeable)
                     return;
 
                 float pointerX = Location.X + location.X;
@@ -157,31 +206,81 @@ namespace FlaxEditor.Windows
                 if (direction == 0)
                     return;
 
-                int targetIndex = headerIndex + direction;
-                if (targetIndex < 1 || targetIndex >= _owner._tabs.TabsPanel.Children.Count)
+                var targetHeader = GetReorderTargetHeader(headerIndex, direction);
+                if (targetHeader == null)
                     return;
 
+                var tabIndex = _owner._tabs.Children.IndexOf(PropertiesTab);
+                var targetTabIndex = _owner._tabs.Children.IndexOf(targetHeader.PropertiesTab);
+                var targetHeaderIndex = _owner._tabs.TabsPanel.Children.IndexOf(targetHeader);
+                if (tabIndex < 0 || targetTabIndex < 0 || targetHeaderIndex < 0)
+                    return;
+
+                var tabInsertIndex = direction > 0 ? targetTabIndex + 1 : targetTabIndex;
+                var headerInsertIndex = direction > 0 ? targetHeaderIndex + 1 : targetHeaderIndex;
                 var selectedTab = _owner._tabs.SelectedTab;
-                var tab = _owner._tabs.Children[headerIndex + 1];
+                var tab = _owner._tabs.Children[tabIndex];
                 var headerControl = _owner._tabs.TabsPanel.Children[headerIndex];
-                _owner._tabs.Children.RemoveAt(headerIndex + 1);
-                _owner._tabs.Children.Insert(targetIndex + 1, tab);
+
+                _owner._tabs.Children.RemoveAt(tabIndex);
+                if (tabInsertIndex > tabIndex)
+                    tabInsertIndex--;
+                _owner._tabs.Children.Insert(tabInsertIndex, tab);
+
                 _owner._tabs.TabsPanel.Children.RemoveAt(headerIndex);
-                _owner._tabs.TabsPanel.Children.Insert(targetIndex, headerControl);
+                if (headerInsertIndex > headerIndex)
+                    headerInsertIndex--;
+                _owner._tabs.TabsPanel.Children.Insert(headerInsertIndex, headerControl);
+
                 _owner._tabs.PerformLayout();
                 _owner._tabs.TabsPanel.PerformLayout();
                 _owner._tabs.SelectedTab = selectedTab;
             }
 
+            private PropertiesTabHeader GetReorderTargetHeader(int headerIndex, int direction)
+            {
+                var children = _owner._tabs.TabsPanel.Children;
+                for (int i = headerIndex + direction; i >= 0 && i < children.Count; i += direction)
+                {
+                    if (children[i] is PropertiesTabHeader header)
+                        return header._closeable ? header : null;
+                }
+                return null;
+            }
+
             public override void Draw()
             {
-                base.Draw();
+                var style = Style.Current;
+                var enabled = EnabledInHierarchy && Tab.EnabledInHierarchy;
+                var isSelected = _owner._tabs.SelectedTab == Tab;
+                var isMouseOver = IsMouseOver && enabled;
+                var tabRect = new Rectangle(Float2.Zero, Size);
+
+                if (isSelected)
+                {
+                    Render2D.FillRectangle(tabRect, style.Background);
+                    Render2D.FillRectangle(new Rectangle(tabRect.X, tabRect.Y, tabRect.Width, TabSelectedLineHeight), style.BorderSelected);
+                }
+                else if (isMouseOver)
+                {
+                    Render2D.FillRectangle(tabRect, style.BackgroundHighlighted);
+                }
+
+                var closeWidth = _closeable ? TabTextCloseGap + TabCloseButtonHitSize + TabCloseButtonMargin : 0.0f;
+                var textRect = new Rectangle(TabHorizontalPadding, 0.0f, Mathf.Max(0.0f, Width - TabHorizontalPadding - closeWidth), Height);
+                var textColor = !enabled ? style.ForegroundDisabled : isSelected || isMouseOver ? style.Foreground : style.ForegroundGrey;
+                Render2D.PushClip(ref textRect);
+                Render2D.DrawText(style.FontMedium, Tab.Text, textRect, textColor, TextAlignment.Near, TextAlignment.Center);
+                Render2D.PopClip();
 
                 if (_closeable)
                 {
-                    var style = Style.Current;
                     var bounds = CloseButtonBounds;
-                    Render2D.DrawSprite(style.Cross, bounds.MakeExpanded(-2.0f), IsMouseOver ? style.Foreground : style.ForegroundGrey);
+                    var mousePosition = RootWindow != null ? PointFromWindow(RootWindow.MousePosition) : Float2.Minimum;
+                    bool closeMouseOver = isMouseOver && bounds.Contains(mousePosition);
+                    if (closeMouseOver)
+                        Render2D.FillRectangle(bounds, style.BackgroundHighlighted * 1.2f);
+                    Render2D.DrawSprite(style.Cross, CloseIconBounds, closeMouseOver ? style.Foreground : textColor.AlphaMultiplied(isSelected ? 1.0f : 0.75f));
                 }
             }
         }
@@ -249,14 +348,17 @@ namespace FlaxEditor.Windows
             Title = "Properties";
             Icon = editor.Icons.Build64;
             AutoFocus = true;
+            var controlHeight = Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 18.0f;
 
             _tabs = new Tabs
             {
                 AnchorPreset = AnchorPresets.StretchAll,
                 Offsets = Margin.Zero,
-                AutoTabsSize = true,
+                AutoTabsSize = false,
+                UseScroll = true,
                 Parent = this,
             };
+            _tabs.TabStripColor = GetPinnedTabsBackgroundColor();
             _tabsBarHeight = _tabs.TabsSize.Y;
             _selectionTab = _tabs.AddTab(new PropertiesTab(this, "Selection", false));
 
@@ -264,7 +366,7 @@ namespace FlaxEditor.Windows
             {
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 Parent = _selectionTab,
-                Bounds = new Rectangle(4, 2, Width - 8, 18),
+                Bounds = new Rectangle(6, 4, Width - 12, controlHeight),
                 Visible = false,
             };
             _searchBox.TextChanged += ApplySearchFilter;
@@ -282,6 +384,7 @@ namespace FlaxEditor.Windows
             Presenter.Features |= FeatureFlags.CacheExpandedGroups;
             Presenter.AfterLayout += OnPresenterAfterLayout;
             Presenter.Modified += OnPresenterModified;
+            ApplyPropertiesPanelStyle(Presenter);
 
             _scrollingPanel.VScrollBar.ValueChanged += OnScrollValueChanged;
             Editor.SceneEditing.SelectionChanged += OnSceneSelectionChanged;
@@ -360,6 +463,7 @@ namespace FlaxEditor.Windows
         private void UpdateSelectionTabTitle()
         {
             _selectionTab.Text = GetSelectionTabTitle();
+            UpdatePropertiesTabHeaderSizes();
         }
 
         private void UpdateTabsBarVisibility()
@@ -367,7 +471,23 @@ namespace FlaxEditor.Windows
             UpdateSelectionTabTitle();
             bool visible = _pinnedTabs.Count != 0;
             _tabs.TabsPanel.Visible = visible;
-            _tabs.TabsSize = new Float2(_tabs.TabsSize.X, visible ? _tabsBarHeight : 0.0f);
+            _tabs.TabStripColor = GetPinnedTabsBackgroundColor();
+            _tabs.TabsSize = new Float2(TabMinWidth, visible ? _tabsBarHeight : 0.0f);
+            UpdatePropertiesTabHeaderSizes();
+        }
+
+        private void UpdatePropertiesTabHeaderSizes()
+        {
+            if (_tabs == null)
+                return;
+
+            var headerHeight = _tabs.TabsSize.Y;
+            for (int i = 0; i < _tabs.TabsPanel.ChildrenCount; i++)
+            {
+                if (_tabs.TabsPanel.Children[i] is PropertiesTabHeader header)
+                    header.UpdateSize(headerHeight);
+            }
+            _tabs.TabsPanel.PerformLayout();
         }
 
         /// <summary>
@@ -402,6 +522,7 @@ namespace FlaxEditor.Windows
             presenter.Panel.AnchorPreset = AnchorPresets.StretchAll;
             presenter.Panel.Offsets = Margin.Zero;
             presenter.Panel.Parent = panel;
+            ApplyPropertiesPanelStyle(presenter);
             presenter.Select(selection);
             presenter.BuildLayout();
 

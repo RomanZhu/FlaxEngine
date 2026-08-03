@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using FlaxEditor.CustomEditors.Elements;
+using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.GUI;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
@@ -29,6 +30,9 @@ namespace FlaxEditor.CustomEditors
         /// Parent container who created this one.
         /// </summary>
         internal LayoutElementsContainer _parent;
+
+        private bool _hasPropertySectionBackgroundColor;
+        private Color _propertySectionBackgroundColor;
 
         /// <summary>
         /// The children.
@@ -110,6 +114,19 @@ namespace FlaxEditor.CustomEditors
             return expandPath;
         }
 
+        private int GetParentGroupDepth()
+        {
+            int depth = 0;
+            var container = this;
+            while (container != null && !(container is CustomEditorPresenter))
+            {
+                if (container.ContainerControl is DropPanel)
+                    depth++;
+                container = container._parent;
+            }
+            return depth;
+        }
+
         /// <summary>
         /// Adds new group element.
         /// </summary>
@@ -119,6 +136,7 @@ namespace FlaxEditor.CustomEditors
         public GroupElement Group(string title, bool useTransparentHeader = false)
         {
             var element = new GroupElement();
+            element.ApplyHierarchyStyle(GetParentGroupDepth());
             var presenter = Presenter;
             var isSubGroup = !isRootGroup;
             if (isSubGroup)
@@ -790,14 +808,89 @@ namespace FlaxEditor.CustomEditors
             OnAddElement(element);
         }
 
+        internal void SetPropertySectionBackgroundColor(Color color)
+        {
+            _propertySectionBackgroundColor = color;
+            _hasPropertySectionBackgroundColor = color.A > 0.0f;
+
+            if (!_hasPropertySectionBackgroundColor)
+                return;
+
+            for (int i = 0; i < Children.Count; i++)
+            {
+                var child = Children[i];
+                ApplyPropertySectionStyle(child.Control, _propertySectionBackgroundColor);
+                if (child is LayoutElementsContainer childContainer && child is not GroupElement)
+                    childContainer.SetPropertySectionBackgroundColor(_propertySectionBackgroundColor);
+            }
+        }
+
+        private static void ApplyPropertySectionStyle(Control control, Color sectionBackgroundColor)
+        {
+            if (control is ComboBox comboBox)
+            {
+                var dropdownColor = GetDropdownBackgroundColor(sectionBackgroundColor);
+                comboBox.BackgroundColor = dropdownColor;
+                comboBox.BackgroundColorHighlighted = dropdownColor;
+                comboBox.BackgroundColorSelected = dropdownColor;
+            }
+            else if (control is Dropdown dropdown)
+            {
+                var dropdownColor = GetDropdownBackgroundColor(sectionBackgroundColor);
+                dropdown.BackgroundColor = dropdownColor;
+                dropdown.BackgroundColorHighlighted = dropdownColor;
+                dropdown.BackgroundColorSelected = dropdownColor;
+            }
+            else if (control is AssetPicker assetPicker)
+            {
+                assetPicker.CompactBackgroundColor = GetDropdownBackgroundColor(sectionBackgroundColor);
+            }
+            else if (control is FlaxObjectRefPickerControl objectRefPicker)
+            {
+                objectRefPicker.ReferenceBackgroundColor = GetDropdownBackgroundColor(sectionBackgroundColor);
+            }
+            else if (control is TextBoxBase textBox)
+            {
+                var inputColor = AdjustValueUnits(sectionBackgroundColor, 15.0f);
+                textBox.BackgroundColor = inputColor;
+                textBox.BackgroundSelectedColor = inputColor;
+            }
+
+            if (control is ContainerControl container)
+            {
+                for (int i = 0; i < container.ChildrenCount; i++)
+                    ApplyPropertySectionStyle(container.Children[i], sectionBackgroundColor);
+            }
+        }
+
+        private static Color GetDropdownBackgroundColor(Color sectionBackgroundColor)
+        {
+            return AdjustValueUnits(sectionBackgroundColor, -5.0f);
+        }
+
+        private static Color AdjustValueUnits(Color color, float units)
+        {
+            var hsv = color.ToHSV();
+            hsv.Z = Mathf.Saturate(hsv.Z + units / 100.0f);
+            return Color.FromHSV(hsv, color.A);
+        }
+
         /// <summary>
         /// Called when element is added to the layout.
         /// </summary>
         /// <param name="element">The element.</param>
         protected virtual void OnAddElement(LayoutElement element)
         {
+            if (element is LayoutElementsContainer childContainer)
+                childContainer._parent = this;
             element.Control.Parent = ContainerControl;
             Children.Add(element);
+            if (_hasPropertySectionBackgroundColor)
+            {
+                ApplyPropertySectionStyle(element.Control, _propertySectionBackgroundColor);
+                if (element is LayoutElementsContainer childContainerForStyle && element is not GroupElement)
+                    childContainerForStyle.SetPropertySectionBackgroundColor(_propertySectionBackgroundColor);
+            }
         }
 
         /// <summary>

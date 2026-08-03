@@ -52,6 +52,8 @@ namespace FlaxEditor.CustomEditors.Editors
             if (HasDifferentTypes)
                 return;
             Picker = layout.Custom<AssetPicker>().CustomControl;
+            Picker.ShowCompactPreview = Editor.Instance.Options.Options.Interface.ShowReferencePreviewsInProperties;
+            Picker.UseCompactField = true;
             var value = Values[0];
             _valueType = Values.Type.Type != typeof(object) || value == null ? Values.Type : TypeUtils.GetObjectType(value);
             var assetType = _valueType;
@@ -60,8 +62,8 @@ namespace FlaxEditor.CustomEditors.Editors
             else if (_valueType.Type != null && _valueType.Type.Name == typeof(JsonAssetReference<>).Name)
                 assetType = new ScriptType(_valueType.Type.GenericTypeArguments[0]);
             Picker.Validator.AssetType = assetType;
-            ApplyAssetReferenceAttribute(Values, out var height, Picker.Validator);
-            Picker.Height = height;
+            ApplyAssetReferenceAttribute(Values, out _, Picker.Validator);
+            Picker.Height = Picker.CompactHeight;
             Picker.SelectedItemChanged += OnSelectedItemChanged;
         }
 
@@ -157,7 +159,7 @@ namespace FlaxEditor.CustomEditors.Editors
         private sealed class TextBoxWithPicker : TextBox
         {
             private const float DropdownIconMargin = 3.0f;
-            private const float DropdownIconSize = 12.0f;
+            private const float DropdownIconSize = 16.0f;
             private Rectangle DropdownRect => new Rectangle(Width - DropdownIconSize - DropdownIconMargin, DropdownIconMargin, DropdownIconSize, DropdownIconSize);
 
             public Action ShowPicker;
@@ -185,8 +187,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 if (IsDragOver && _hasValidDragOver)
                 {
                     var bounds = new Rectangle(Float2.Zero, Size);
-                    Render2D.FillRectangle(bounds, style.Selection);
-                    Render2D.DrawRectangle(bounds, style.SelectionBorder);
+                    StyleRendering.DrawRoundedRectangle(bounds, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
                 }
             }
 

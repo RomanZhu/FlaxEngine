@@ -23,7 +23,7 @@ namespace FlaxEditor.GUI
         /// <summary>
         /// The default height of the control.
         /// </summary>
-        public const float DefaultHeight = 18.0f;
+        public const float DefaultHeight = 22.0f;
 
         /// <summary>
         /// The items.
@@ -275,15 +275,15 @@ namespace FlaxEditor.GUI
             var style = Style.Current;
             Font = new FontReference(style.FontMedium);
             TextColor = style.Foreground;
-            BackgroundColor = style.BackgroundNormal;
-            BackgroundColorHighlighted = BackgroundColor;
-            BackgroundColorSelected = BackgroundColor;
+            BackgroundColor = style.Background;
+            BackgroundColorHighlighted = style.BackgroundHighlighted;
+            BackgroundColorSelected = style.BackgroundSelected;
             BorderColor = style.BorderNormal;
             BorderColorHighlighted = style.BorderSelected;
-            BorderColorSelected = BorderColorHighlighted;
+            BorderColorSelected = style.BorderSelected;
             ArrowImage = new SpriteBrush(style.ArrowDown);
             ArrowColor = style.Foreground * 0.6f;
-            ArrowColorSelected = style.BackgroundSelected;
+            ArrowColorSelected = style.Foreground;
             ArrowColorHighlighted = style.Foreground;
         }
 
@@ -384,6 +384,7 @@ namespace FlaxEditor.GUI
             if (_popupMenu == null)
             {
                 _popupMenu = OnCreatePopup();
+                _popupMenu.PopupBackgroundColor = BackgroundColor;
                 _popupMenu.MaximumItemsInViewCount = MaximumItemsInViewCount;
 
                 // Bind events
@@ -419,6 +420,7 @@ namespace FlaxEditor.GUI
             }
 
             PopupShowing?.Invoke(this);
+            _popupMenu.PopupBackgroundColor = BackgroundColor;
 
             // Check if has any items
             if (_items.Count > 0)
@@ -523,7 +525,7 @@ namespace FlaxEditor.GUI
             // Cache data
             var clientRect = new Rectangle(Float2.Zero, Size);
             float margin = clientRect.Height * 0.2f;
-            float boxSize = clientRect.Height - margin * 2;
+            float boxSize = Mathf.Min(12.0f, clientRect.Height - margin * 2);
             bool isOpened = IsPopupOpened;
             bool enabled = VisuallyEnabledInHierarchy;
             Color backgroundColor = BackgroundColor;
@@ -548,8 +550,16 @@ namespace FlaxEditor.GUI
             }
 
             // Background
-            Render2D.FillRectangle(clientRect, backgroundColor);
-            Render2D.DrawRectangle(clientRect.MakeExpanded(-2.0f), borderColor);
+            var cornerRadius = Style.Current.CornerRadius;
+            var drawBorder = isOpened || _mouseDown || IsNavFocused;
+            if (cornerRadius > 0.0f)
+                StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, drawBorder ? 1.0f : 0.0f, cornerRadius);
+            else
+            {
+                Render2D.FillRectangle(clientRect, backgroundColor);
+                if (drawBorder)
+                    Render2D.DrawRectangle(clientRect, borderColor);
+            }
 
             // Check if has selected item
             if (_selectedIndices != null && _selectedIndices.Count > 0)
@@ -566,7 +576,7 @@ namespace FlaxEditor.GUI
             }
 
             // Arrow
-            ArrowImage?.Draw(new Rectangle(clientRect.Width - margin - boxSize, margin, boxSize, boxSize), arrowColor);
+            ArrowImage?.Draw(new Rectangle(clientRect.Width - margin - boxSize, (clientRect.Height - boxSize) * 0.5f, boxSize, boxSize), arrowColor);
         }
 
         /// <inheritdoc />

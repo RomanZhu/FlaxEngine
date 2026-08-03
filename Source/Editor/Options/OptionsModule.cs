@@ -41,6 +41,7 @@ namespace FlaxEditor.Options
 
         private readonly string _optionsFilePath;
         private readonly Dictionary<string, CreateCustomSettingsDelegate> _customSettings = new Dictionary<string, CreateCustomSettingsDelegate>();
+        private bool _showReferencePreviewsInProperties = true;
 
         /// <summary>
         /// Gets the custom settings factories. Each entry defines the custom settings type identified by the given key name. The value is a factory function that returns the default options for a given type.
@@ -224,6 +225,14 @@ namespace FlaxEditor.Options
             }
         }
 
+        /// <summary>
+        /// Persists the current editor options without broadcasting an options-changed event.
+        /// </summary>
+        public void SaveOptions()
+        {
+            Save();
+        }
+
         private void OnOptionsChanged()
         {
             Editor.Log("Editor options changed!");
@@ -246,6 +255,8 @@ namespace FlaxEditor.Options
             bool useUnitsFormatting = Options.Interface.ValueFormatting != InterfaceOptions.ValueFormattingType.None;
             bool automaticUnitsFormatting = Options.Interface.ValueFormatting == InterfaceOptions.ValueFormattingType.AutoUnit;
             bool separateValueAndUnit = Options.Interface.SeparateValueAndUnit;
+            bool showReferencePreviewsInPropertiesChanged = Options.Interface.ShowReferencePreviewsInProperties != _showReferencePreviewsInProperties;
+            _showReferencePreviewsInProperties = Options.Interface.ShowReferencePreviewsInProperties;
             if (useUnitsFormatting != Utilities.Units.UseUnitsFormatting ||
                 automaticUnitsFormatting != Utilities.Units.AutomaticUnitsFormatting ||
                 separateValueAndUnit != Utilities.Units.SeparateValueAndUnit)
@@ -255,16 +266,23 @@ namespace FlaxEditor.Options
                 Utilities.Units.SeparateValueAndUnit = separateValueAndUnit;
 
                 // Refresh UI in property panels
-                Editor.Windows.PropertiesWin?.Presenter.BuildLayoutOnUpdate();
-                foreach (var window in Editor.Windows.Windows)
-                {
-                    if (window is Windows.Assets.PrefabWindow prefabWindow)
-                        prefabWindow.Presenter.BuildLayoutOnUpdate();
-                }
+                RefreshPropertiesPanels();
             }
+            if (showReferencePreviewsInPropertiesChanged)
+                RefreshPropertiesPanels();
 
             // Send event
             OptionsChanged?.Invoke(Options);
+        }
+
+        private void RefreshPropertiesPanels()
+        {
+            Editor.Windows.PropertiesWin?.Presenter.BuildLayoutOnUpdate();
+            foreach (var window in Editor.Windows.Windows)
+            {
+                if (window is Windows.Assets.PrefabWindow prefabWindow)
+                    prefabWindow.Presenter.BuildLayoutOnUpdate();
+            }
         }
 
         private void SetupStyle()
@@ -319,14 +337,6 @@ namespace FlaxEditor.Options
         /// Creates the default style.
         /// </summary>
         /// <returns>The style object.</returns>
-        /// <summary>
-        /// Persists the current editor options without broadcasting an options-changed event.
-        /// </summary>
-        public void SaveOptions()
-        {
-            Save();
-        }
-
         public Style CreateDefaultStyle()
         {
             var options = Options;
@@ -357,7 +367,7 @@ namespace FlaxEditor.Options
                 TreeRowHeight = 20.0f,
                 PropertyRowHeight = 24.0f,
                 PanelPadding = 2.0f,
-                IconSize = 12.0f,
+                IconSize = 16.0f,
 
                 Statusbar = new Style.StatusbarStyle
                 {
@@ -421,6 +431,7 @@ namespace FlaxEditor.Options
                 ProgressNormal = new Color(0.03f, 0.65f, 0.12f, 1f),
                 Selection = Color.Orange * 0.4f,
                 SelectionBorder = Color.Orange,
+                IconSize = 16.0f,
 
                 // Fonts
                 FontTitle = options.Interface.TitleFont.GetFont(),
