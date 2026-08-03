@@ -51,6 +51,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
         {
             // Check for prefab link
             var actor = Values.Count == 1 ? Values[0] as Actor : null;
+            Prefab sourcePrefab = null;
             if (actor != null && actor.HasPrefabLink)
             {
                 // TODO: consider editing more than one instance of the same prefab asset at once
@@ -68,12 +69,13 @@ namespace FlaxEditor.CustomEditors.Dedicated
                         // Display prefab UI (when displaying object inside Prefab Window then display only nested prefabs)
                         prefab.GetNestedObject(ref prefabObjectId, out var nestedPrefabId, out var nestedPrefabObjectId);
                         var nestedPrefab = FlaxEngine.Content.Load<Prefab>(nestedPrefabId);
+                        var targetPrefab = nestedPrefab ? nestedPrefab : prefab;
+                        sourcePrefab = targetPrefab;
                         var panel = layout.UniformGrid();
                         panel.CustomControl.Height = 20.0f;
                         panel.CustomControl.SlotsVertically = 1;
                         if (Presenter == Editor.Instance.Windows.PropertiesWin.Presenter || nestedPrefab)
                         {
-                            var targetPrefab = nestedPrefab ?? prefab;
                             panel.CustomControl.SlotsHorizontally = 3;
 
                             // Selecting actor prefab asset
@@ -114,11 +116,63 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 {
                     if (actor != null)
                         group.Panel.TooltipText = Surface.SurfaceUtils.GetVisualScriptTypeDescription(TypeUtils.GetObjectType(actor));
+                    AddSourcePrefabReference(group, sourcePrefab);
                     var settingsButton = group.AddSettingsButton();
                     settingsButton.Clicked += OnSettingsButtonClicked;
                     break;
                 }
             }
+        }
+
+        private static void AddSourcePrefabReference(GroupElement group, Prefab sourcePrefab)
+        {
+            if (!sourcePrefab)
+                return;
+
+            var label = group.ClickableLabel("Source Prefab", GetPrefabDisplayName(sourcePrefab), "The prefab asset this object inherits from.").CustomControl;
+            label.TextColor = FlaxEngine.GUI.Style.Current.BorderSelected;
+            label.TextColorHighlighted = FlaxEngine.GUI.Style.Current.BorderSelected;
+            label.TooltipText = "Click to select the source prefab. Double-click to open it.";
+            label.LeftClick += () =>
+            {
+                Editor.Instance.Windows.ContentWin.ClearItemsSearch();
+                Editor.Instance.Windows.ContentWin.Select(sourcePrefab);
+            };
+            label.DoubleClick += () =>
+            {
+                var item = Editor.Instance.ContentDatabase.FindAsset(sourcePrefab.ID);
+                if (item != null)
+                    Editor.Instance.Windows.ContentWin.Open(item);
+            };
+            label.RightClick += () =>
+            {
+                var menu = new ContextMenu();
+                menu.AddButton("Select Prefab", () =>
+                {
+                    Editor.Instance.Windows.ContentWin.ClearItemsSearch();
+                    Editor.Instance.Windows.ContentWin.Select(sourcePrefab);
+                });
+                menu.AddButton("Edit Prefab", () =>
+                {
+                    var item = Editor.Instance.ContentDatabase.FindAsset(sourcePrefab.ID);
+                    if (item != null)
+                        Editor.Instance.Windows.ContentWin.Open(item);
+                }).Enabled = Editor.Instance.ContentDatabase.FindAsset(sourcePrefab.ID) != null;
+                menu.AddButton("Copy ID", () => Clipboard.Text = JsonSerializer.GetStringID(sourcePrefab.ID));
+                menu.Show(label, label.PointFromScreen(Input.MouseScreenPosition));
+            };
+        }
+
+        private static string GetPrefabDisplayName(Prefab prefab)
+        {
+            var item = Editor.Instance.ContentDatabase.FindAsset(prefab.ID);
+            if (item != null)
+                return item.ShortName;
+
+            if (FlaxEngine.Content.GetAssetInfo(prefab.ID, out var info))
+                return System.IO.Path.GetFileNameWithoutExtension(info.Path);
+
+            return prefab.ID.ToString();
         }
 
         private void OnSettingsButtonClicked(Image image, MouseButton mouseButton)

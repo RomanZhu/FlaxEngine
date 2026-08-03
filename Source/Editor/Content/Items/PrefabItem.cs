@@ -17,6 +17,9 @@ namespace FlaxEditor.Content
     {
         private string _cachedTypeDescription = null;
         private string _cachedInstanceTypeDescription = null;
+        private string _cachedSourcePrefabDescription = null;
+        private Guid _cachedSourcePrefabId = Guid.Empty;
+        private bool _hasCachedSourcePrefabId;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="PrefabItem"/> class.
@@ -61,11 +64,57 @@ namespace FlaxEditor.Content
                     if (prefab)
                     {
                         Actor root = prefab.GetDefaultInstance();
-                        if (root is UIControl or UICanvas)
+                        if (root && root.HasPrefabLink)
+                            _cachedTypeDescription = "Prefab Variant";
+                        else if (root is UIControl or UICanvas)
                             _cachedTypeDescription = "Widget";
                     }
                 }
                 return _cachedTypeDescription;
+            }
+        }
+
+        private Guid SourcePrefabID
+        {
+            get
+            {
+                if (!_hasCachedSourcePrefabId)
+                {
+                    _hasCachedSourcePrefabId = true;
+                    var prefab = FlaxEngine.Content.Load<Prefab>(ID);
+                    if (prefab)
+                    {
+                        var root = prefab.GetDefaultInstance();
+                        if (root && root.HasPrefabLink)
+                            _cachedSourcePrefabId = root.PrefabID;
+                    }
+                }
+                return _cachedSourcePrefabId;
+            }
+        }
+
+        private string SourcePrefabDescription
+        {
+            get
+            {
+                if (_cachedSourcePrefabDescription == null)
+                {
+                    _cachedSourcePrefabDescription = string.Empty;
+                    var sourcePrefabId = SourcePrefabID;
+                    if (sourcePrefabId != Guid.Empty)
+                    {
+                        var item = Editor.Instance.ContentDatabase.FindAsset(sourcePrefabId);
+                        if (item != null)
+                        {
+                            _cachedSourcePrefabDescription = item.ShortName;
+                        }
+                        else if (FlaxEngine.Content.GetAssetInfo(sourcePrefabId, out var info))
+                        {
+                            _cachedSourcePrefabDescription = System.IO.Path.GetFileNameWithoutExtension(info.Path);
+                        }
+                    }
+                }
+                return _cachedSourcePrefabDescription;
             }
         }
 
@@ -95,6 +144,8 @@ namespace FlaxEditor.Content
         protected override void OnBuildTooltipText(StringBuilder sb)
         {
             sb.Append("Type: ").Append(TypeDescription).AppendLine();
+            if (!string.IsNullOrEmpty(SourcePrefabDescription))
+                sb.Append("Source Prefab: ").Append(SourcePrefabDescription).AppendLine();
             if (!string.IsNullOrEmpty(InstanceTypeDescription))
                 sb.Append("Prefab Instance Type: ").Append(InstanceTypeDescription).AppendLine();
             if (File.Exists(Path))
