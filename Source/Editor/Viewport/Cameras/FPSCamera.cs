@@ -213,7 +213,7 @@ namespace FlaxEditor.Viewport.Cameras
             if (_hasAltRightMouseZoomDirection)
             {
                 var distance = Vector3.Dot(TargetPoint - Viewport.ViewPosition, _altRightMouseZoomDirection);
-                if (distance < AltRightMouseZoomMinDistance)
+                if (distance <= 0.0f)
                     TargetPoint += _altRightMouseZoomDirection * (AltRightMouseZoomMinDistance - distance);
                 _hasAltRightMouseZoomDirection = false;
             }

@@ -113,7 +113,7 @@ namespace FlaxEditor.Viewport.Cameras
         /// <inheritdoc />
         public override void EndAltRightMouseZoom()
         {
-            if (_orbitRadius < AltRightMouseZoomMinDistance)
+            if (_orbitRadius <= 0.0f)
             {
                 _orbitCenter += Viewport.ViewDirection * (AltRightMouseZoomMinDistance - _orbitRadius);
                 _orbitRadius = AltRightMouseZoomMinDistance;
