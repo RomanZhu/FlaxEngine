@@ -261,11 +261,15 @@ namespace FlaxEditor.Viewport
 
         private int _speedStep;
         private int _maxSpeedSteps;
+        private float _cameraMoveSpeedOverlayHideTime = -1.0f;
+        private string _cameraMoveSpeedOverlayText;
 
         /// <summary>
         /// The viewport overlay toolstrip height.
         /// </summary>
         protected const float ViewportToolStripHeight = 22.0f;
+        private const float CameraMoveSpeedOverlayDuration = 0.85f;
+        private const float CameraMoveSpeedOverlayFadeDuration = 0.2f;
 
         /// <summary>
         /// Speed of the mouse.
@@ -1681,6 +1685,31 @@ namespace FlaxEditor.Viewport
             var speed = Mathf.Lerp(_minMovementSpeed, _maxMovementSpeed, progress);
             MovementSpeed = (float)Math.Round(speed, 3);
             _editor.ProjectCache.SetCustomData("CameraMovementSpeedValue", _movementSpeed);
+            ShowCameraMoveSpeedOverlay();
+        }
+
+        private void ShowCameraMoveSpeedOverlay()
+        {
+            _cameraMoveSpeedOverlayText = string.Format(MovementSpeedTextFormat, _movementSpeed) + "x";
+            _cameraMoveSpeedOverlayHideTime = Time.UnscaledGameTime + CameraMoveSpeedOverlayDuration;
+        }
+
+        private void DrawCameraMoveSpeedOverlay()
+        {
+            var timeLeft = _cameraMoveSpeedOverlayHideTime - Time.UnscaledGameTime;
+            if (timeLeft <= 0.0f || string.IsNullOrEmpty(_cameraMoveSpeedOverlayText))
+                return;
+
+            var alpha = Mathf.Saturate(timeLeft / CameraMoveSpeedOverlayFadeDuration);
+            var style = Style.Current;
+            var font = style.FontMedium;
+            var textSize = font.MeasureText(_cameraMoveSpeedOverlayText);
+            var width = Mathf.Max(textSize.X + 20.0f, 54.0f);
+            var height = 24.0f;
+            var bounds = new Rectangle((Width - width) * 0.5f, (Height - height) * 0.5f, width, height);
+
+            StyleRendering.DrawRoundedRectangle(bounds, Color.Black.AlphaMultiplied(0.55f * alpha), Color.White.AlphaMultiplied(0.12f * alpha), 1.0f, 6.0f);
+            Render2D.DrawText(font, _cameraMoveSpeedOverlayText, bounds, Color.White.AlphaMultiplied(alpha), TextAlignment.Center, TextAlignment.Center);
         }
 
         private void OnEditorOptionsChanged(EditorOptions options)
@@ -2418,6 +2447,7 @@ namespace FlaxEditor.Viewport
         public override void Draw()
         {
             base.Draw();
+            DrawCameraMoveSpeedOverlay();
 
             // Add overlay during debugger breakpoint hang
             if (_editor.Simulation.IsDuringBreakpointHang)
