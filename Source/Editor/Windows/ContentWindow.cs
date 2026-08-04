@@ -152,6 +152,8 @@ namespace FlaxEditor.Windows
                 }
                 finally
                 {
+                    if (!recordUndo)
+                        _lastContentSelectionPaths = GetContentSelectionPaths();
                     _isClearingSelection = false;
                 }
                 return;
@@ -425,13 +427,14 @@ namespace FlaxEditor.Windows
         private void OnSceneSelectionChanged()
         {
             if (Editor.SceneEditing.SelectionCount != 0)
-                ClearSelection();
+                ClearSelection(false);
         }
 
         private void OnContentViewSelectionChanged()
         {
             RecordContentSelectionNavigation();
-            ClearSceneSelection();
+            if (!IsContentSelectionHistorySuppressed)
+                ClearSceneSelection();
             SelectionChanged?.Invoke();
         }
 
@@ -616,9 +619,12 @@ namespace FlaxEditor.Windows
                 // View still needs search, so never hide it with the legacy item panel.
                 _itemsSearchBox.Visible = true;
                 _contentViewPanel.Visible = false;
-                RefreshTreeItems();
-                if (Editor.SceneEditing.SelectionCount != 0)
-                    ClearSelection(false);
+                RunWithContentSelectionHistorySuppressed(() =>
+                {
+                    RefreshTreeItems();
+                    if (Editor.SceneEditing.SelectionCount != 0)
+                        ClearSelection(false);
+                });
             }
             else
             {
@@ -629,11 +635,14 @@ namespace FlaxEditor.Windows
                 _contentItemsSearchPanel.Visible = true;
                 _itemsSearchBox.Visible = true;
                 _contentViewPanel.Visible = true;
-                if (_tree.SelectedNode is ContentItemTreeNode itemNode && itemNode.Parent is TreeNode parentNode)
-                    _tree.Select(parentNode);
-                if (_root != null)
-                    RemoveTreeAssetNodes(_root);
-                RefreshView(SelectedNode);
+                RunWithContentSelectionHistorySuppressed(() =>
+                {
+                    if (_tree.SelectedNode is ContentItemTreeNode itemNode && itemNode.Parent is TreeNode parentNode)
+                        _tree.Select(parentNode);
+                    if (_root != null)
+                        RemoveTreeAssetNodes(_root);
+                    RefreshView(SelectedNode);
+                });
             }
 
             PerformLayout();
@@ -1003,7 +1012,7 @@ namespace FlaxEditor.Windows
             // Refresh this folder now and try to find duplicated item
             Editor.ContentDatabase.RefreshFolder(item.ParentFolder, true);
             RefreshView();
-            RefreshTreeItems();
+            RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
             var targetItem = item.ParentFolder.FindChild(targetPath);
 
             // Start renaming it
@@ -1053,7 +1062,7 @@ namespace FlaxEditor.Windows
                 if (action != null)
                     Editor.Undo.AddAction(action);
                 RefreshView();
-                RefreshTreeItems();
+                RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
             }
         }
 
@@ -1276,7 +1285,7 @@ namespace FlaxEditor.Windows
                 if (contentItem.Find(CurrentViewFolder))
                 {
                     // Navigate to root to prevent leaks
-                    ShowRoot();
+                    RunWithContentSelectionHistorySuppressed(ShowRoot);
                 }
 
                 // Check if folder is in navigation
@@ -1314,13 +1323,17 @@ namespace FlaxEditor.Windows
                 // Show folder
                 var folder = (ContentFolder)item;
                 folder.Node.Expand();
-                _tree.Select(folder.Node);
-                if (!_showAllContentInTree)
-                    _view.SelectFirstItem();
+                RunWithContentSelectionHistorySuppressed(() =>
+                {
+                    _tree.Select(folder.Node);
+                    if (!_showAllContentInTree)
+                        _view.SelectFirstItem();
+                });
                 return;
             }
 
             // Open it
+            Editor.Windows.OnWindowFocused(this);
             RecordContentOpenNavigation(item);
             Assets.AssetEditorWindow.SuppressNextDocumentNavigation(item.Path);
             Editor.ContentEditing.Open(item);
@@ -1466,7 +1479,7 @@ namespace FlaxEditor.Windows
         public void RefreshView()
         {
             if (_showAllContentInTree)
-                RefreshTreeItems();
+                RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
             else if (_view.IsSearching)
                 UpdateItemsSearch();
             else
@@ -1481,7 +1494,7 @@ namespace FlaxEditor.Windows
         {
             if (_showAllContentInTree)
             {
-                RefreshTreeItems();
+                RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
                 return;
             }
 
@@ -1497,7 +1510,7 @@ namespace FlaxEditor.Windows
                         items.Add(node.Folder);
                     }
                 }
-                _view.ShowItems(items, _sortType, false, true);
+                RunWithContentSelectionHistorySuppressed(() => _view.ShowItems(items, _sortType, false, true));
             }
             else if (target != null)
             {
@@ -1507,7 +1520,7 @@ namespace FlaxEditor.Windows
                     items = items.Where(x => !(x is FileItem)).ToList();
                 if (!_showGeneratedFiles)
                     items = items.Where(x => !(x.Path.EndsWith(".Gen.cs", StringComparison.Ordinal) || x.Path.EndsWith(".Gen.h", StringComparison.Ordinal) || x.Path.EndsWith(".Gen.cpp", StringComparison.Ordinal) || x.Path.EndsWith(".csproj", StringComparison.Ordinal) || x.Path.Contains(".CSharp"))).ToList();
-                _view.ShowItems(items, _sortType, false, true);
+                RunWithContentSelectionHistorySuppressed(() => _view.ShowItems(items, _sortType, false, true));
             }
         }
 
@@ -1853,15 +1866,18 @@ namespace FlaxEditor.Windows
                 var selected = Editor.ContentDatabase.Find(_workspaceRebuildLocation);
                 if (selected is ContentFolder selectedFolder)
                 {
-                    _navigationUnlocked = false;
-                    RefreshView(selectedFolder.Node);
-                    _tree.Select(selectedFolder.Node);
-                    UpdateItemsSearch();
-                    _navigationUnlocked = true;
+                    RunWithContentSelectionHistorySuppressed(() =>
+                    {
+                        _navigationUnlocked = false;
+                        RefreshView(selectedFolder.Node);
+                        _tree.Select(selectedFolder.Node);
+                        UpdateItemsSearch();
+                        _navigationUnlocked = true;
+                    });
                     UpdateUI();
                 }
                 else if (_root != null)
-                    ShowRoot();
+                    RunWithContentSelectionHistorySuppressed(ShowRoot);
             };
             Editor.ContentImporting.ImportFileBegin += OnImportFileBegin;
             Editor.ContentImporting.ImportFileEnd += OnImportFileEnd;
@@ -1875,7 +1891,7 @@ namespace FlaxEditor.Windows
             if (Editor.ProjectCache.TryGetCustomData(ProjectDataLastViewedFolder, out string lastViewedFolder))
             {
                 if (Editor.ContentDatabase.Find(lastViewedFolder) is ContentFolder folder)
-                    _tree.Select(folder.Node);
+                    RunWithContentSelectionHistorySuppressed(() => _tree.Select(folder.Node));
             }
 
             ScriptsBuilder.ScriptsReloadBegin += OnScriptsReloadBegin;
@@ -1898,7 +1914,7 @@ namespace FlaxEditor.Windows
             if (!string.IsNullOrEmpty(_lastViewedFolderBeforeReload))
             {
                 if (Editor.ContentDatabase.Find(_lastViewedFolderBeforeReload) is ContentFolder folder)
-                    _tree.Select(folder.Node);
+                    RunWithContentSelectionHistorySuppressed(() => _tree.Select(folder.Node));
             }
 
             OnFoldersSearchBoxTextChanged();
@@ -2060,7 +2076,7 @@ namespace FlaxEditor.Windows
 
             // Setup navigation
             _navigationUnlocked = true;
-            ShowRoot();
+            RunWithContentSelectionHistorySuppressed(ShowRoot);
             NavigationClearHistory();
 
             // Update UI layout
@@ -2077,10 +2093,7 @@ namespace FlaxEditor.Windows
             if (_isWorkspaceDirty)
             {
                 _isWorkspaceDirty = false;
-                if (_showAllContentInTree)
-                    RefreshTreeItems();
-                else
-                    RefreshView();
+                RefreshView();
             }
 
             base.Update(deltaTime);
@@ -2102,7 +2115,7 @@ namespace FlaxEditor.Windows
             Editor.ProjectCache.SetCustomData(ProjectDataLastViewedFolder, lastViewedFolder?.Path ?? string.Empty);
 
             // Clear view
-            _view.ClearItems();
+            RunWithContentSelectionHistorySuppressed(() => _view.ClearItems());
 
             // Unlink used directories
             if (_root != null)
@@ -2117,23 +2130,8 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
-            // Navigate through directories using the side mouse buttons
-            if (button == MouseButton.Extended1)
-            {
-                if (Editor.NavigationHistory.CanGoBack)
-                    Editor.NavigationHistory.GoBack();
-                else
-                    NavigateBackward();
+            if (button == MouseButton.Extended1 || button == MouseButton.Extended2)
                 return true;
-            }
-            else if (button == MouseButton.Extended2)
-            {
-                if (Editor.NavigationHistory.CanGoForward)
-                    Editor.NavigationHistory.GoForward();
-                else
-                    NavigateForward();
-                return true;
-            }
 
             return base.OnMouseDown(location, button);
         }
@@ -2151,8 +2149,6 @@ namespace FlaxEditor.Windows
 
                 if (c is ContentItem item)
                 {
-                    if (_view.IsSelected(item) == false)
-                        _view.Select(item);
                     ShowContextMenuForItem(item, ref location, false);
                 }
                 else if (c is ContentView)
@@ -2161,12 +2157,10 @@ namespace FlaxEditor.Windows
                 }
                 else if (c is ContentItemTreeNode itemNode)
                 {
-                    _tree.Select(itemNode);
                     ShowContextMenuForItem(itemNode.Item, ref location, false);
                 }
                 else if (c is ContentFolderTreeNode node)
                 {
-                    _tree.Select(node);
                     ShowContextMenuForItem(node.Folder, ref location, true);
                 }
 

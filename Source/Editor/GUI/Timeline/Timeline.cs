@@ -263,6 +263,13 @@ namespace FlaxEditor.GUI.Timeline
 
             public string ActionString => "Timeline selection change";
 
+            public bool IsSameTransition(Timeline timeline, TimelineSelectionState source, TimelineSelectionState target)
+            {
+                return _timeline == timeline &&
+                       AreSameTimelineSelectionState(_source, source) &&
+                       AreSameTimelineSelectionState(_target, target);
+            }
+
             public FlaxEditor.UndoActionInfo ActionInfo
             {
                 get
@@ -1504,7 +1511,9 @@ namespace FlaxEditor.GUI.Timeline
             if (_isRestoringSelectionHistory || Undo == null || Undo.IsPerformingUndoRedo || AreSameTimelineSelectionState(source, target))
                 return;
 
-            Undo.AddAction(new TimelineSelectionUndoAction(this, source, target));
+            var previousSelectionAction = Undo.UndoOperationsStack.PeekHistory() as TimelineSelectionUndoAction;
+            if (previousSelectionAction == null || !previousSelectionAction.IsSameTransition(this, source, target))
+                Undo.AddAction(new TimelineSelectionUndoAction(this, source, target));
         }
 
         private TimelineSelectionState CaptureTimelineSelectionState()

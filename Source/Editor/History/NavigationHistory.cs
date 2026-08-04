@@ -15,6 +15,7 @@ namespace FlaxEditor.History
         public const int DefaultHistoryActionsLimit = 200;
 
         private readonly HistoryStack _historyStack;
+        private int _navigationDepth;
 
         /// <summary>
         /// Occurs when navigation history action gets added.
@@ -35,6 +36,11 @@ namespace FlaxEditor.History
         /// Gets or sets a value indicating whether recording navigation history is enabled.
         /// </summary>
         public bool Enabled { get; set; } = true;
+
+        /// <summary>
+        /// Gets a value indicating whether navigation history is currently restoring a previous or next destination.
+        /// </summary>
+        public bool IsNavigating => _navigationDepth != 0;
 
         /// <summary>
         /// Gets a value indicating whether navigation can travel back.
@@ -99,7 +105,7 @@ namespace FlaxEditor.History
             if (action == null)
                 throw new ArgumentNullException(nameof(action));
 
-            if (!Enabled)
+            if (!Enabled || IsNavigating)
             {
                 action.Dispose();
                 return;
@@ -125,8 +131,16 @@ namespace FlaxEditor.History
             if (action == null)
                 return;
 
-            action.NavigateBack();
-            BackDone?.Invoke(action);
+            _navigationDepth++;
+            try
+            {
+                action.NavigateBack();
+                BackDone?.Invoke(action);
+            }
+            finally
+            {
+                _navigationDepth--;
+            }
         }
 
         /// <summary>
@@ -138,8 +152,16 @@ namespace FlaxEditor.History
             if (action == null)
                 return;
 
-            action.NavigateForward();
-            ForwardDone?.Invoke(action);
+            _navigationDepth++;
+            try
+            {
+                action.NavigateForward();
+                ForwardDone?.Invoke(action);
+            }
+            finally
+            {
+                _navigationDepth--;
+            }
         }
 
         /// <summary>

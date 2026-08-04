@@ -1231,27 +1231,26 @@ namespace FlaxEditor.GUI.Tree
                     if (button == MouseButton.Left && (!completedLeftClick || pressedArrow))
                         return true;
 
-                    // Check if user is pressing control key
-                    var tree = ParentTree;
-                    var window = tree.Root;
-                    if (window.GetKey(KeyboardKeys.Shift))
+                    if (button == MouseButton.Left)
                     {
-                        // Select range
-                        tree.SelectRange(this);
-                    }
-                    else if (window.GetKey(KeyboardKeys.Control))
-                    {
-                        // Add/Remove
-                        tree.AddOrRemoveSelection(this);
-                    }
-                    else if (button == MouseButton.Right && tree.Selection.Contains(this))
-                    {
-                        // Do nothing
-                    }
-                    else
-                    {
-                        // Select
-                        tree.Select(this);
+                        // Check if user is pressing control key
+                        var tree = ParentTree;
+                        var window = tree.Root;
+                        if (window.GetKey(KeyboardKeys.Shift))
+                        {
+                            // Select range
+                            tree.SelectRange(this);
+                        }
+                        else if (window.GetKey(KeyboardKeys.Control))
+                        {
+                            // Add/Remove
+                            tree.AddOrRemoveSelection(this);
+                        }
+                        else
+                        {
+                            // Select
+                            tree.Select(this);
+                        }
                     }
                 }
 

@@ -2,6 +2,7 @@
 
 using System;
 using FlaxEditor.Content;
+using FlaxEditor.Modules;
 using FlaxEditor.Options;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -291,6 +292,17 @@ namespace FlaxEditor.Windows
                 Editor.Windows.EditWin.ToggleFullscreen();
                 return true;
             }
+            var window = RootWindow?.Window;
+            if (window != null && WindowsModule.IsNavigationBackInput(window, key))
+            {
+                Editor.Windows.NavigateBack();
+                return true;
+            }
+            if (window != null && WindowsModule.IsNavigationForwardInput(window, key))
+            {
+                Editor.Windows.NavigateForward();
+                return true;
+            }
 
             if (base.OnKeyDown(key))
                 return true;
@@ -319,18 +331,8 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
-            if (button == MouseButton.Extended1)
-            {
-                if (Editor.NavigationHistory.CanGoBack)
-                    Editor.NavigationHistory.GoBack();
+            if (button == MouseButton.Extended1 || button == MouseButton.Extended2)
                 return true;
-            }
-            if (button == MouseButton.Extended2)
-            {
-                if (Editor.NavigationHistory.CanGoForward)
-                    Editor.NavigationHistory.GoForward();
-                return true;
-            }
 
             return base.OnMouseDown(location, button);
         }
@@ -338,10 +340,26 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
-            if (button == MouseButton.Extended1 || button == MouseButton.Extended2)
+            if (button == MouseButton.Extended1)
+            {
+                Editor.Windows.NavigateBack();
                 return true;
+            }
+            if (button == MouseButton.Extended2)
+            {
+                Editor.Windows.NavigateForward();
+                return true;
+            }
 
             return base.OnMouseUp(location, button);
+        }
+
+        /// <inheritdoc />
+        public override void OnStartContainsFocus()
+        {
+            base.OnStartContainsFocus();
+
+            Editor.Windows.OnWindowFocused(this);
         }
 
         /// <inheritdoc />

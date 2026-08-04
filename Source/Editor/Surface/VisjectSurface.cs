@@ -88,6 +88,13 @@ namespace FlaxEditor.Surface
 
             public string ActionString => "Graph selection change";
 
+            public bool IsSameTransition(VisjectSurface surface, uint[] sourceNodeIds, uint[] targetNodeIds)
+            {
+                return _surface == surface &&
+                       AreSameNodeSelection(_sourceNodeIds, sourceNodeIds) &&
+                       AreSameNodeSelection(_targetNodeIds, targetNodeIds);
+            }
+
             public UndoActionInfo ActionInfo => new UndoActionInfo
             {
                 Operation = ActionString,
@@ -854,7 +861,11 @@ namespace FlaxEditor.Surface
             if (Undo != null && Undo.IsPerformingUndoRedo)
                 return;
             if (Undo != null && !AreSameNodeSelection(source.NodeIds, target.NodeIds))
-                Undo.AddAction(new GraphSelectionUndoAction(this, source.NodeIds, target.NodeIds));
+            {
+                var previousSelectionAction = Undo.UndoOperationsStack.PeekHistory() as GraphSelectionUndoAction;
+                if (previousSelectionAction == null || !previousSelectionAction.IsSameTransition(this, source.NodeIds, target.NodeIds))
+                    Undo.AddAction(new GraphSelectionUndoAction(this, source.NodeIds, target.NodeIds));
+            }
             Editor.Instance.NavigationHistory.AddAction(new GraphNavigationAction(this, source, target));
         }
 

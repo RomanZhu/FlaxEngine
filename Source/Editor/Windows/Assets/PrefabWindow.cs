@@ -367,7 +367,6 @@ namespace FlaxEditor.Windows.Assets
 
             if (button == MouseButton.Right && _treePanel.ContainsPoint(ref location))
             {
-                _tree.Deselect();
                 var locationCM = location + _searchBox.BottomLeft;
                 ShowContextMenu(Parent, ref locationCM);
                 return true;

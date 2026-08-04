@@ -790,7 +790,6 @@ namespace FlaxEditor.Windows
                 if (Editor.StateMachine.CurrentState.CanEditScene)
                 {
                     // Show context menu
-                    Editor.SceneEditing.Deselect();
                     ShowContextMenu(Parent, location + _searchBox.BottomLeft);
                 }
 

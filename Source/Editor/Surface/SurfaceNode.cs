@@ -1195,8 +1195,6 @@ namespace FlaxEditor.Surface
                 if (distance > 2.5f)
                     return true;
 
-                if (!IsSelected)
-                    Surface.Select(this);
                 var tmp = PointToParent(ref location);
                 Surface.ShowSecondaryCM(Parent.PointToParent(ref tmp), this);
                 return true;

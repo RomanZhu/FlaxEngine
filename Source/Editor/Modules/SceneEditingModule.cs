@@ -196,10 +196,25 @@ namespace FlaxEditor.Modules
 
         private void SelectionChange(SceneGraphNode[] before, bool recordUndo = true)
         {
+            var after = Selection.ToArray();
+            var contentSelectionBefore = Array.Empty<string>();
+            var contentSelectionAfter = Array.Empty<string>();
+            Action<string[]> contentSelectionCallback = null;
+            var contentWindow = Editor.Windows?.ContentWin;
+            if (recordUndo && !Editor.Undo.IsPerformingUndoRedo && contentWindow != null && after.Length != 0)
+            {
+                contentSelectionBefore = contentWindow.GetSelectionPathsForSceneUndo();
+                if (contentSelectionBefore.Length != 0)
+                {
+                    contentSelectionCallback = contentWindow.RestoreSelectionFromSceneUndo;
+                }
+            }
             if (recordUndo && !Editor.Undo.IsPerformingUndoRedo)
             {
-                Editor.Undo.AddAction(new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
-                Editor.NavigationHistory.AddAction(new SelectionNavigationAction(this, before, Selection.ToArray(), OnSelectionUndo));
+                var previousSelectionAction = Editor.Undo.UndoOperationsStack.PeekHistory() as SelectionChangeAction;
+                if (previousSelectionAction == null || !previousSelectionAction.IsSameTransition(before, after, OnSelectionUndo, contentSelectionBefore, contentSelectionAfter, contentSelectionCallback))
+                    Editor.Undo.AddAction(new SelectionChangeAction(before, after, OnSelectionUndo, contentSelectionBefore, contentSelectionAfter, contentSelectionCallback));
+                Editor.NavigationHistory.AddAction(new SelectionNavigationAction(this, before, after, OnSelectionUndo, contentSelectionBefore, contentSelectionAfter, contentSelectionCallback));
             }
 
             OnSelectionChanged();

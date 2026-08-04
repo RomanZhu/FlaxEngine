@@ -39,6 +39,12 @@ namespace FlaxEditor.Windows.Assets
                        action._targetPath.Equals(_targetPath, StringComparison.OrdinalIgnoreCase);
             }
 
+            public bool Contains(string path)
+            {
+                return string.Equals(_sourcePath, path, StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(_targetPath, path, StringComparison.OrdinalIgnoreCase);
+            }
+
             public void NavigateBack()
             {
                 OpenAssetDocument(_editor, _sourcePath);
@@ -121,6 +127,20 @@ namespace FlaxEditor.Windows.Assets
             _suppressNextDocumentNavigationPath = path;
         }
 
+        private static void RemoveDocumentNavigation(Editor editor, AssetItem item)
+        {
+            if (editor == null || item == null)
+                return;
+
+            var path = item.Path;
+            editor.NavigationHistory?.RemoveActions(x => x is AssetDocumentNavigationAction action && action.Contains(path));
+            editor.Windows.RemoveWindowNavigation(item.ID.ToString());
+            if (string.Equals(_lastFocusedAssetPath, path, StringComparison.OrdinalIgnoreCase))
+                _lastFocusedAssetPath = null;
+            if (string.Equals(_suppressNextDocumentNavigationPath, path, StringComparison.OrdinalIgnoreCase))
+                _suppressNextDocumentNavigationPath = null;
+        }
+
         /// <inheritdoc />
         public override void Focus()
         {
@@ -142,6 +162,11 @@ namespace FlaxEditor.Windows.Assets
         {
             _item.RemoveReference(this);
             _item = null;
+        }
+
+        private void ClearLinkedUndoHistory()
+        {
+            Editor.Undo?.RemoveActions(x => x is Undo.LinkedUndoAction action && ReferenceEquals(action.Owner, this));
         }
 
         private void RecordDocumentNavigation()
@@ -292,6 +317,7 @@ namespace FlaxEditor.Windows.Assets
         protected override void OnClose()
         {
             ScriptsBuilder.ScriptsReloadBegin -= OnScriptsReloadBegin;
+            ClearLinkedUndoHistory();
 
             if (_item != null)
             {
@@ -306,6 +332,7 @@ namespace FlaxEditor.Windows.Assets
         public override void OnDestroy()
         {
             ScriptsBuilder.ScriptsReloadBegin -= OnScriptsReloadBegin;
+            ClearLinkedUndoHistory();
 
             if (_item != null)
             {
@@ -421,6 +448,7 @@ namespace FlaxEditor.Windows.Assets
         {
             if (item == _item)
             {
+                RemoveDocumentNavigation(Editor, _item);
                 Close();
             }
         }
@@ -444,6 +472,7 @@ namespace FlaxEditor.Windows.Assets
         {
             if (item == _item)
             {
+                RemoveDocumentNavigation(Editor, _item);
                 Close();
             }
         }

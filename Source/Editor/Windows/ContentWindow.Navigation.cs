@@ -132,12 +132,22 @@ namespace FlaxEditor.Windows
 
             public string ActionString => "Content selection change";
 
+            public bool IsSameTransition(ContentWindow window, string[] source, string[] target, SceneGraphNode[] sourceSceneSelection, SceneGraphNode[] targetSceneSelection)
+            {
+                return _window == window &&
+                       AreSameContentSelection(_source, source) &&
+                       AreSameContentSelection(_target, target) &&
+                       AreSameSceneSelection(_sourceSceneSelection, sourceSceneSelection) &&
+                       AreSameSceneSelection(_targetSceneSelection, targetSceneSelection);
+            }
+
             public UndoActionInfo ActionInfo => new UndoActionInfo
             {
                 Operation = ActionString,
-                TargetType = _target.Length > 1 ? UndoActionTargetType.Multiple : UndoActionTargetType.ContentItem,
-                TargetName = _target.Length == 1 ? _target[0] : "Content Selection",
+                TargetType = GetSelectionTargetType(_target),
+                TargetName = DescribeSelection(_source) + " -> " + DescribeSelection(_target),
                 TargetPath = _target.Length == 1 ? _target[0] : null,
+                SecondaryTargetPath = _source.Length == 1 ? _source[0] : null,
                 DisplayEditorTypeName = typeof(ContentWindow).FullName,
                 Flags = UndoActionFlags.SelectionOnly,
                 SizeInBytes = 0,
@@ -156,6 +166,34 @@ namespace FlaxEditor.Windows
             public void Dispose()
             {
                 _window = null;
+            }
+
+            private static bool AreSameSceneSelection(SceneGraphNode[] a, SceneGraphNode[] b)
+            {
+                a ??= Array.Empty<SceneGraphNode>();
+                b ??= Array.Empty<SceneGraphNode>();
+                if (a.Length != b.Length)
+                    return false;
+                for (int i = 0; i < a.Length; i++)
+                {
+                    if (!ReferenceEquals(a[i], b[i]))
+                        return false;
+                }
+                return true;
+            }
+
+            private static UndoActionTargetType GetSelectionTargetType(string[] paths)
+            {
+                if (paths == null || paths.Length == 0)
+                    return UndoActionTargetType.Unknown;
+                return paths.Length == 1 ? UndoActionTargetType.ContentItem : UndoActionTargetType.Multiple;
+            }
+
+            private static string DescribeSelection(string[] paths)
+            {
+                if (paths == null || paths.Length == 0)
+                    return "<empty>";
+                return paths.Length == 1 ? paths[0] : paths.Length + " content items";
             }
         }
 
@@ -315,7 +353,7 @@ namespace FlaxEditor.Windows
 
                 DoNavigate(node);
                 if (!_showAllContentInTree)
-                    _view.SelectFirstItem();
+                    RunWithContentSelectionHistorySuppressed(() => _view.SelectFirstItem());
             }
         }
 
@@ -338,7 +376,7 @@ namespace FlaxEditor.Windows
 
                 DoNavigate(node);
                 if (!_showAllContentInTree)
-                    _view.SelectFirstItem();
+                    RunWithContentSelectionHistorySuppressed(() => _view.SelectFirstItem());
             }
         }
 
@@ -377,6 +415,7 @@ namespace FlaxEditor.Windows
             if (node == null)
                 return;
 
+            var wasSuppressed = _suppressContentSelectionNavigation;
             _suppressContentSelectionNavigation = true;
             try
             {
@@ -390,7 +429,7 @@ namespace FlaxEditor.Windows
             finally
             {
                 _lastContentSelectionPaths = GetContentSelectionPaths();
-                _suppressContentSelectionNavigation = false;
+                _suppressContentSelectionNavigation = wasSuppressed;
             }
         }
 
@@ -425,7 +464,7 @@ namespace FlaxEditor.Windows
             var source = _lastContentSelectionPaths ?? Array.Empty<string>();
             var target = GetContentSelectionPaths();
             _lastContentSelectionPaths = target;
-            if (_suppressContentSelectionNavigation || _isClearingSelection || Editor.Undo.IsPerformingUndoRedo || AreSameContentSelection(source, target))
+            if (IsContentSelectionHistorySuppressed || AreSameContentSelection(source, target))
                 return;
 
             var currentSceneSelection = Editor.SceneEditing.Selection.ToArray();
@@ -436,12 +475,15 @@ namespace FlaxEditor.Windows
             if (source.Length != 0 && target.Length == 0 && currentSceneSelection.Length != 0)
                 sourceSceneSelection = Array.Empty<SceneGraphNode>();
 
-            Editor.Undo.AddAction(new ContentSelectionUndoAction(this, source, target, sourceSceneSelection, targetSceneSelection));
+            var previousSelectionAction = Editor.Undo.UndoOperationsStack.PeekHistory() as ContentSelectionUndoAction;
+            if (previousSelectionAction == null || !previousSelectionAction.IsSameTransition(this, source, target, sourceSceneSelection, targetSceneSelection))
+                Editor.Undo.AddAction(new ContentSelectionUndoAction(this, source, target, sourceSceneSelection, targetSceneSelection));
             Editor.NavigationHistory.AddAction(new ContentSelectionNavigationAction(this, source, target));
         }
 
         private void DoSelectContentItemsFromHistory(string[] paths, bool focusWindow = true)
         {
+            var wasSuppressed = _suppressContentSelectionNavigation;
             _suppressContentSelectionNavigation = true;
             try
             {
@@ -449,7 +491,7 @@ namespace FlaxEditor.Windows
                     FocusOrShow();
                 if (paths == null || paths.Length == 0)
                 {
-                    ClearSelection();
+                    ClearSelection(false);
                     _lastContentSelectionPaths = Array.Empty<string>();
                     return;
                 }
@@ -494,17 +536,29 @@ namespace FlaxEditor.Windows
                         _view.Focus();
                     }
                 }
-                _lastContentSelectionPaths = GetContentSelectionPaths();
             }
             finally
             {
-                _suppressContentSelectionNavigation = false;
+                _lastContentSelectionPaths = GetContentSelectionPaths();
+                _suppressContentSelectionNavigation = wasSuppressed;
             }
+        }
+
+        internal string[] GetSelectionPathsForSceneUndo()
+        {
+            return GetContentSelectionPaths();
+        }
+
+        internal void RestoreSelectionFromSceneUndo(string[] paths)
+        {
+            DoSelectContentItemsFromHistory(paths, paths != null && paths.Length != 0);
         }
 
         private void RestoreContentSelectionFromUndo(string[] paths, SceneGraphNode[] sceneSelection)
         {
-            DoSelectContentItemsFromHistory(paths, false);
+            var hasContentSelection = paths != null && paths.Length != 0;
+            var hasSceneSelection = sceneSelection != null && sceneSelection.Length != 0;
+            DoSelectContentItemsFromHistory(paths, hasContentSelection || !hasSceneSelection);
             RestoreSceneSelectionFromContentUndo(sceneSelection);
         }
 
@@ -533,9 +587,27 @@ namespace FlaxEditor.Windows
             if (_showAllContentInTree)
             {
                 RecordContentSelectionNavigation();
-                ClearSceneSelection();
+                if (!IsContentSelectionHistorySuppressed)
+                    ClearSceneSelection();
             }
             SelectionChanged?.Invoke();
+        }
+
+        private bool IsContentSelectionHistorySuppressed => _suppressContentSelectionNavigation || _isClearingSelection || (Editor.Undo != null && Editor.Undo.IsPerformingUndoRedo);
+
+        private void RunWithContentSelectionHistorySuppressed(Action action)
+        {
+            var wasSuppressed = _suppressContentSelectionNavigation;
+            _suppressContentSelectionNavigation = true;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                _lastContentSelectionPaths = GetContentSelectionPaths();
+                _suppressContentSelectionNavigation = wasSuppressed;
+            }
         }
 
         private void SelectInTreeWithoutFocus(ContentItem item, bool additive)
