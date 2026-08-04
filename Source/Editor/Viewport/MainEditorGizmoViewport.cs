@@ -1219,6 +1219,30 @@ namespace FlaxEditor.Viewport
         }
 
         /// <inheritdoc />
+        protected override void OnMiddleMouseButtonDown()
+        {
+            base.OnMiddleMouseButtonDown();
+
+            TryRecenterCameraToMouseHit();
+        }
+
+        private void TryRecenterCameraToMouseHit()
+        {
+            if (IsAltKeyDown || _directionGizmo.IsMouseOver || !(ViewportCamera is FPSCamera fpsCamera))
+                return;
+
+            var ray = ConvertMouseToRay(ref _viewMousePos);
+            var view = new Ray(ViewPosition, ViewDirection);
+            var flags = SceneGraphNode.RayCastData.FlagTypes.SkipTriggers;
+            var hit = SceneGraphRoot.RayCast(ref ray, ref view, out var distance, flags);
+            if (hit == null)
+                return;
+
+            fpsCamera.RecenterView(ray.GetPoint(distance));
+            _mouseDelta = Float2.Zero;
+        }
+
+        /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
             if (base.OnMouseUp(location, button))
