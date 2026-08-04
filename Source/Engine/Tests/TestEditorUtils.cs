@@ -3,6 +3,8 @@
 #if FLAX_TESTS
 using System;
 using System.Globalization;
+using System.IO;
+using FlaxEditor.Actions;
 using FlaxEditor.Content;
 using FlaxEditor.Modules;
 using NUnit.Framework;
@@ -73,6 +75,22 @@ namespace FlaxEngine.Tests
             Assert.IsTrue(ContentDatabaseModule.UseContentBackendForFileOperation(sceneItem));
             Assert.IsFalse(ContentDatabaseModule.UseContentBackendForFileOperation(fileItem));
             Assert.IsFalse(ContentDatabaseModule.UseContentBackendForFileOperation(null));
+        }
+
+        [Test]
+        public void TestSceneActorsSidecarPathForStagedContentDelete()
+        {
+            var scenePath = Path.Combine(Globals.ProjectContentFolder, "Scenes", "Main.scene");
+            var folderPath = Path.Combine(Globals.ProjectContentFolder, "Scenes");
+            var filePath = Path.Combine(Globals.ProjectContentFolder, "Scenes", "Notes.txt");
+
+            Assert.AreEqual(
+                StringUtils.NormalizePath(Path.Combine(Globals.ProjectFolder, "SceneActors", "Scenes", "Main")),
+                StringUtils.NormalizePath(ContentItemFilesystemAction.GetSceneActorsFolderPath(scenePath, false)));
+            Assert.AreEqual(
+                StringUtils.NormalizePath(Path.Combine(Globals.ProjectFolder, "SceneActors", "Scenes")),
+                StringUtils.NormalizePath(ContentItemFilesystemAction.GetSceneActorsFolderPath(folderPath, true)));
+            Assert.IsNull(ContentItemFilesystemAction.GetSceneActorsFolderPath(filePath, false));
         }
     }
 }

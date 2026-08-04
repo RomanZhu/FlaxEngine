@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Core/Math/Vector3.h"
+#include "Engine/Core/ObjectsRemovalService.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Types/StringView.h"
@@ -745,6 +746,51 @@ TEST_CASE("ExternalActorsSceneStorage")
         Array<String> renamedActorFiles;
         REQUIRE(!FileSystem::DirectoryGetFiles(renamedActorFiles, GetExternalActorsFolder(renamedPath), TEXT("*.actor"), DirectorySearchOption::AllDirectories));
         CHECK(renamedActorFiles.Count() == 1);
+    }
+
+    SECTION("Delete external actors scene removes scene actors folder")
+    {
+        const Guid sceneId = ParseGuid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11");
+        const Guid actorId = ParseGuid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa12");
+        const String scenePath = GetTestScenePath(TEXT("Delete"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+        WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
+
+        CHECK(FileSystem::DirectoryExists(GetSceneActorsFolder(scenePath)));
+        REQUIRE(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+
+        Content::DeleteAsset(scenePath);
+
+        CHECK(!FileSystem::DirectoryExists(GetSceneActorsFolder(scenePath)));
+    }
+
+    SECTION("Delete loaded external actors scene removes scene actors folder")
+    {
+        const Guid sceneId = ParseGuid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa21");
+        const Guid actorId = ParseGuid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa22");
+        const String scenePath = GetTestScenePath(TEXT("DeleteLoaded"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+        WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
+
+        SceneAsset* sceneAsset = Content::Load<SceneAsset>(scenePath);
+        REQUIRE(sceneAsset);
+        CHECK(FileSystem::DirectoryExists(GetSceneActorsFolder(scenePath)));
+        REQUIRE(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+
+        Content::DeleteAsset(sceneAsset);
+        ObjectsRemovalService::Flush();
+
+        CHECK(!FileSystem::DirectoryExists(GetSceneActorsFolder(scenePath)));
     }
 
     SECTION("Recompose ignores actors with missing parent chains")
