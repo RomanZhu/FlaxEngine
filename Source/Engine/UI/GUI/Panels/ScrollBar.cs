@@ -14,12 +14,26 @@ namespace FlaxEngine.GUI
         /// <summary>
         /// The default size.
         /// </summary>
-        public const int DefaultSize = 14;
+        public const int DefaultSize = 9;
 
         /// <summary>
         /// The default minimum opacity.
         /// </summary>
         public const float DefaultMinimumOpacity = 0.75f;
+
+        private const float DefaultThumbThickness = 3.0f;
+        private const float ExpandedThumbThickness = 9.0f;
+        private const float ThumbExpandDistance = 20.0f;
+
+        /// <summary>
+        /// The default thumb color.
+        /// </summary>
+        public static readonly Color DefaultThumbColor = Color.FromHSV(220.0f, 0.08f, 0.20f);
+
+        /// <summary>
+        /// The default thumb highlight color.
+        /// </summary>
+        public static readonly Color DefaultThumbHighlightedColor = Color.FromHSV(220.0f, 0.08f, 0.28f);
 
         // Scrolling
 
@@ -41,7 +55,7 @@ namespace FlaxEngine.GUI
 
         // Smoothing
 
-        private float _thumbOpacity = DefaultMinimumOpacity;
+        private float _thumbHoverProgress;
         private float _scrollAnimationProgress = 0f;
 
         /// <summary>
@@ -50,14 +64,14 @@ namespace FlaxEngine.GUI
         public Orientation Orientation => _orientation;
 
         /// <summary>
-        /// Gets or sets the thumb box thickness.
+        /// Gets or sets the thumb box thickness. Values less than or equal to zero use proximity-based sizing from 3 to 9 px.
         /// </summary>
-        public float ThumbThickness { get; set; } = 8;
+        public float ThumbThickness { get; set; } = 0.0f;
 
         /// <summary>
-        /// Gets or sets the track line thickness.
+        /// Gets or sets the track thickness. Values less than or equal to zero fill the current scrollbar thickness.
         /// </summary>
-        public float TrackThickness { get; set; } = 2.0f;
+        public float TrackThickness { get; set; } = 0.0f;
 
         /// <summary>
         /// The maximum time it takes to animate from current to target scroll position 
@@ -167,7 +181,6 @@ namespace FlaxEngine.GUI
                 {
                     _targetValue = value;
                     _value = value;
-                    SetUpdate(ref _update, null);
                     OnValueChanged();
                 }
             }
@@ -227,9 +240,10 @@ namespace FlaxEngine.GUI
 
             _orientation = orientation;
             var style = Style.Current;
-            TrackColor = style.BackgroundHighlighted;
-            ThumbColor = style.BackgroundNormal;
-            ThumbSelectedColor = style.BackgroundSelected;
+            TrackColor = style.BackgroundNormal;
+            ThumbColor = DefaultThumbColor;
+            ThumbSelectedColor = DefaultThumbHighlightedColor;
+            _update = OnUpdate;
         }
 
         /// <summary>
@@ -241,7 +255,6 @@ namespace FlaxEngine.GUI
             {
                 _value = _targetValue = _startValue;
                 _scrollAnimationProgress = 0f;
-                SetUpdate(ref _update, null);
                 OnValueChanged();
             }
         }
@@ -283,12 +296,45 @@ namespace FlaxEngine.GUI
             float percentage = (_value - _minimum) / range;
             float thumbPosition = (int)(percentage * pixelRange);
             _thumbCenter = thumbPosition + _thumbSize / 2;
+            float availableThickness = _orientation == Orientation.Vertical ? width : height;
+            float thumbProgress = CalculateThumbHoverProgress(width, height, thumbPosition, _thumbSize - 8, availableThickness);
+            _thumbHoverProgress = thumbProgress;
+            float thumbThicknessDefault = Mathf.Lerp(DefaultThumbThickness, ExpandedThumbThickness, thumbProgress);
+            float thumbThickness = ThumbThickness > 0.0f
+                                   ? Mathf.Min(ThumbThickness, availableThickness)
+                                   : Mathf.Min(thumbThicknessDefault, availableThickness);
+            float trackThickness = TrackThickness > 0.0f ? Mathf.Min(TrackThickness, availableThickness) : availableThickness;
             _thumbRect = _orientation == Orientation.Vertical
-                         ? new Rectangle((width - ThumbThickness) / 2, thumbPosition + 4, ThumbThickness, _thumbSize - 8)
-                         : new Rectangle(thumbPosition + 4, (height - ThumbThickness) / 2, _thumbSize - 8, ThumbThickness);
+                         ? new Rectangle(width - thumbThickness, thumbPosition + 4, thumbThickness, _thumbSize - 8)
+                         : new Rectangle(thumbPosition + 4, height - thumbThickness, _thumbSize - 8, thumbThickness);
             _trackRect = _orientation == Orientation.Vertical
-                         ? new Rectangle((width - TrackThickness) / 2, 4, TrackThickness, height - 8)
-                         : new Rectangle(4, (height - TrackThickness) / 2, width - 8, TrackThickness);
+                         ? new Rectangle((width - trackThickness) / 2, 4, trackThickness, height - 8)
+                         : new Rectangle(4, (height - trackThickness) / 2, width - 8, trackThickness);
+        }
+
+        private float CalculateThumbHoverProgress(float width, float height, float thumbPosition, float thumbLength, float availableThickness)
+        {
+            if (_thumbClicked)
+                return 1.0f;
+
+            var root = Root;
+            if (root == null)
+                return 0.0f;
+
+            var mousePosition = PointFromWindow(root.MousePosition);
+            float expandedThickness = Mathf.Min(ExpandedThumbThickness, availableThickness);
+            var expandedThumbRect = _orientation == Orientation.Vertical
+                                    ? new Rectangle(width - expandedThickness, thumbPosition + 4, expandedThickness, thumbLength)
+                                    : new Rectangle(thumbPosition + 4, height - expandedThickness, thumbLength, expandedThickness);
+            float distance = DistanceToRectangle(ref mousePosition, ref expandedThumbRect);
+            return Mathf.Saturate(1.0f - distance / ThumbExpandDistance);
+        }
+
+        private static float DistanceToRectangle(ref Float2 location, ref Rectangle rect)
+        {
+            float dx = Mathf.Max(0.0f, Mathf.Max(rect.Left - location.X, location.X - rect.Right));
+            float dy = Mathf.Max(0.0f, Mathf.Max(rect.Top - location.Y, location.Y - rect.Bottom));
+            return Mathf.Sqrt(dx * dx + dy * dy);
         }
 
         private void EndTracking()
@@ -322,12 +368,11 @@ namespace FlaxEngine.GUI
 
         private void OnUpdate(float deltaTime)
         {
-            bool isDeltaSlow = deltaTime > (1 / 20.0f);
+            if (!VisibleInHierarchy)
+                return;
 
-            // Opacity smoothing
-            float targetOpacity = IsMouseOver ? 1.0f : DefaultMinimumOpacity;
-            _thumbOpacity = isDeltaSlow ? targetOpacity : Mathf.Lerp(_thumbOpacity, targetOpacity, deltaTime * 10.0f);
-            bool needUpdate = Mathf.Abs(_thumbOpacity - targetOpacity) > 0.001f;
+            bool isDeltaSlow = deltaTime > (1 / 20.0f);
+            UpdateThumb();
 
             // Ensure scroll bar is visible and smoothing is required
             if (Visible && Mathf.Abs(_targetValue - _value) > 0.01f)
@@ -363,13 +408,6 @@ namespace FlaxEngine.GUI
                 
                 _value = value;
                 OnValueChanged();
-                needUpdate = true;
-            }
-
-            // End updating if all animations are done
-            if (!needUpdate)
-            {
-                SetUpdate(ref _update, null);
             }
         }
 
@@ -399,9 +437,9 @@ namespace FlaxEngine.GUI
         {
             base.Draw();
 
-            var style = Style.Current;
-            Render2D.FillRectangle(_trackRect, TrackColor * _thumbOpacity);
-            Render2D.FillRectangle(_thumbRect, (_thumbClicked ? ThumbSelectedColor : ThumbColor) * _thumbOpacity);
+            Render2D.FillRectangle(_trackRect, TrackColor);
+            var thumbColor = Color.Lerp(ThumbColor, ThumbSelectedColor, _thumbHoverProgress);
+            StyleRendering.FillRoundedRectangle(_thumbRect, thumbColor, Mathf.Min(_thumbRect.Width, _thumbRect.Height) * 0.5f);
         }
 
         /// <inheritdoc />
@@ -446,6 +484,7 @@ namespace FlaxEngine.GUI
                 // Remove focus
                 var root = Root;
                 root.FocusedControl?.Defocus();
+                UpdateThumb();
 
                 float mousePosition = _orientation == Orientation.Vertical ? location.Y : location.X;
 
@@ -453,6 +492,7 @@ namespace FlaxEngine.GUI
                 {
                     // Start moving thumb
                     _thumbClicked = true;
+                    UpdateThumb();
                     _mouseOffset = mousePosition - _thumbCenter;
 
                     // Start capturing mouse
