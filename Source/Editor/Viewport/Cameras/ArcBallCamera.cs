@@ -19,7 +19,6 @@ namespace FlaxEditor.Viewport.Cameras
     {
         private Vector3 _orbitCenter;
         private Real _orbitRadius;
-        private const float AltRightMouseZoomSpeed = 12.5f;
         private const float AltRightMouseZoomMinDistance = 500.0f;
 
         /// <summary>
@@ -136,7 +135,7 @@ namespace FlaxEditor.Viewport.Cameras
             // Zoom
             if (input.IsAltRightMouseZooming)
             {
-                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * EditorViewport.GetAltRightMouseZoomDelta(ref mouseDelta) * AltRightMouseZoomSpeed;
+                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * EditorViewport.GetAltRightMouseZoomDelta(ref mouseDelta) * Editor.Instance.Options.Options.Viewport.AltRightMouseZoomSpeed;
                 if (Mathf.Abs(zoomDelta) > Mathf.Epsilon)
                 {
                     var orbitRadius = _orbitRadius - zoomDelta;

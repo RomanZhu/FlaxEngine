@@ -2285,7 +2285,8 @@ namespace FlaxEditor.Viewport
                 {
                     if (_input.IsAltRightMouseZooming)
                     {
-                        _orthoSize = Mathf.Max(0.001f, _orthoSize - GetAltRightMouseZoomDelta(ref mouseDelta) * options.Viewport.MouseWheelSensitivity * 0.01f * _orthoSize);
+                        var altRightMouseZoomScale = options.Viewport.AltRightMouseZoomSpeed / ViewportOptions.DefaultAltRightMouseZoomSpeed;
+                        _orthoSize = Mathf.Max(0.001f, _orthoSize - GetAltRightMouseZoomDelta(ref mouseDelta) * options.Viewport.MouseWheelSensitivity * altRightMouseZoomScale * 0.01f * _orthoSize);
                     }
                     else
                     {

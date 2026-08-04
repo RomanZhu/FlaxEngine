@@ -21,7 +21,6 @@ namespace FlaxEditor.Viewport.Cameras
         private const float FlyMoveInertiaResponse = 24.0f;
         private const float FlyLookInertiaResponse = 55.0f;
         private const float FlyInertiaStopThresholdSq = 0.000001f;
-        private const float AltRightMouseZoomSpeed = 12.5f;
         private const float AltRightMouseZoomMinDistance = 500.0f;
 
         private Transform _startMove;
@@ -315,7 +314,7 @@ namespace FlaxEditor.Viewport.Cameras
             // Zoom in/out with mouse wheel or Alt+RMB horizontal drag
             if (input.IsAltRightMouseZooming)
             {
-                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * EditorViewport.GetAltRightMouseZoomDelta(ref mouseDelta) * AltRightMouseZoomSpeed;
+                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * EditorViewport.GetAltRightMouseZoomDelta(ref mouseDelta) * Editor.Instance.Options.Options.Viewport.AltRightMouseZoomSpeed;
                 if (Mathf.Abs(zoomDelta) > Mathf.Epsilon)
                 {
                     if (!_hasAltRightMouseZoomDirection)
