@@ -38,6 +38,7 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayGameViewButton;
         private ToolStripButton _overlayCharacterControllerModeButton;
         private ToolStripButton _overlayModeButton;
+        private ToolStripButton _overlaySelectModeButton;
         private ToolStripButton _overlayTranslateModeButton;
         private ToolStripButton _overlayRotateModeButton;
         private ToolStripButton _overlayScaleModeButton;
@@ -367,6 +368,8 @@ namespace FlaxEditor.Viewport
             _overlayModeButton.LinkTooltip("Scene editing mode.");
 
             var inputOptions = _editor.Options.Options.Input;
+            _overlaySelectModeButton = AddViewportToolStripButton("Select", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.Transform.Select.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Select);
+            _overlaySelectModeButton.LinkTooltip("Select mode.", ref inputOptions.SelectMode);
             _overlayTranslateModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Translate32, ToolStripAnchor.Left, "Flax.Scene.Transform.Translate.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate);
             _overlayTranslateModeButton.LinkTooltip("Translate gizmo mode.", ref inputOptions.TranslateMode);
             _overlayRotateModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Rotate32, ToolStripAnchor.Left, "Flax.Scene.Transform.Rotate.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate);
@@ -905,6 +908,8 @@ namespace FlaxEditor.Viewport
         {
             base.UpdateViewportToolStrip();
             SetViewportToolStripButtonText(_overlayModeButton, GetGizmoModeLabel());
+            if (_overlaySelectModeButton != null)
+                _overlaySelectModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Select;
             if (_overlayTranslateModeButton != null)
                 _overlayTranslateModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Translate;
             if (_overlayRotateModeButton != null)

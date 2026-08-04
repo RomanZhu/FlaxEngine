@@ -388,11 +388,19 @@ namespace FlaxEditor.Viewport
 
             // Gizmo mode widget
             var gizmoMode = new ViewportWidgetsContainer(ViewportWidgetLocation.UpperRight);
+            var gizmoModeSelect = new ViewportWidgetButton("Select", SpriteHandle.Invalid, null, true, 44.0f)
+            {
+                Tag = TransformGizmoBase.Mode.Select,
+                TooltipText = $"Select mode ({inputOptions.SelectMode})",
+                Checked = transformGizmo.ActiveMode == TransformGizmoBase.Mode.Select,
+                Parent = gizmoMode
+            };
+            gizmoModeSelect.Toggled += _ => transformGizmo.ActiveMode = TransformGizmoBase.Mode.Select;
             var gizmoModeTranslate = new ViewportWidgetButton(string.Empty, editor.Icons.Translate32, null, true)
             {
                 Tag = TransformGizmoBase.Mode.Translate,
                 TooltipText = $"Translate gizmo mode ({inputOptions.TranslateMode})",
-                Checked = true,
+                Checked = transformGizmo.ActiveMode == TransformGizmoBase.Mode.Translate,
                 Parent = gizmoMode
             };
             gizmoModeTranslate.Toggled += _ => transformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate;
@@ -414,6 +422,7 @@ namespace FlaxEditor.Viewport
             transformGizmo.ModeChanged += () =>
             {
                 var mode = transformGizmo.ActiveMode;
+                gizmoModeSelect.Checked = mode == TransformGizmoBase.Mode.Select;
                 gizmoModeTranslate.Checked = mode == TransformGizmoBase.Mode.Translate;
                 gizmoModeRotate.Checked = mode == TransformGizmoBase.Mode.Rotate;
                 gizmoModeScale.Checked = mode == TransformGizmoBase.Mode.Scale;
@@ -426,6 +435,14 @@ namespace FlaxEditor.Viewport
         {
             var editor = Editor.Instance;
 
+            viewport.InputActions.Add(options => options.SelectMode, () =>
+            {
+                viewport.GetInput(out var input);
+                if (input.IsMouseRightDown)
+                    return;
+
+                transformGizmo.ActiveMode = TransformGizmoBase.Mode.Select;
+            });
             viewport.InputActions.Add(options => options.TranslateMode, () =>
             {
                 viewport.GetInput(out var input);

@@ -42,6 +42,7 @@ namespace FlaxEditor.Windows.Assets
         private readonly ToolStripButton _saveButton;
         private readonly ToolStripButton _toolStripUndo;
         private readonly ToolStripButton _toolStripRedo;
+        private readonly ToolStripButton _toolStripSelect;
         private readonly ToolStripButton _toolStripTranslate;
         private readonly ToolStripButton _toolStripRotate;
         private readonly ToolStripButton _toolStripScale;
@@ -265,6 +266,7 @@ namespace FlaxEditor.Windows.Assets
             _toolStripUndo = _toolstrip.AddButton(Editor.Icons.Undo64, _undo.PerformUndo).LinkTooltip("Undo", ref inputOptions.Undo);
             _toolStripRedo = _toolstrip.AddButton(Editor.Icons.Redo64, _undo.PerformRedo).LinkTooltip("Redo", ref inputOptions.Redo);
             _toolstrip.AddSeparator();
+            _toolStripSelect = _toolstrip.AddButton("Select", () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Select).LinkTooltip("Change Gizmo tool mode to Select", ref inputOptions.SelectMode);
             _toolStripTranslate = _toolstrip.AddButton(Editor.Icons.Translate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate).LinkTooltip("Change Gizmo tool mode to Translate", ref inputOptions.TranslateMode);
             _toolStripRotate = _toolstrip.AddButton(Editor.Icons.Rotate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate).LinkTooltip("Change Gizmo tool mode to Rotate", ref inputOptions.RotateMode);
             _toolStripScale = _toolstrip.AddButton(Editor.Icons.Scale32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale).LinkTooltip("Change Gizmo tool mode to Scale", ref inputOptions.ScaleMode);
@@ -541,6 +543,7 @@ namespace FlaxEditor.Windows.Assets
             _toolStripRedo.Enabled = undoRedo.CanRedo;
             //
             var gizmoMode = gizmo.ActiveMode;
+            _toolStripSelect.Checked = gizmoMode == TransformGizmoBase.Mode.Select;
             _toolStripTranslate.Checked = gizmoMode == TransformGizmoBase.Mode.Translate;
             _toolStripRotate.Checked = gizmoMode == TransformGizmoBase.Mode.Rotate;
             _toolStripScale.Checked = gizmoMode == TransformGizmoBase.Mode.Scale;

@@ -149,6 +149,7 @@ namespace FlaxEditor.Windows
             headerPanel.Parent = this;
 
             // Setup input actions
+            InputActions.Add(options => options.SelectMode, () => Editor.MainTransformGizmo.ActiveMode = TransformGizmoBase.Mode.Select);
             InputActions.Add(options => options.TranslateMode, () => Editor.MainTransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate);
             InputActions.Add(options => options.RotateMode, () => Editor.MainTransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate);
             InputActions.Add(options => options.ScaleMode, () => Editor.MainTransformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale);
