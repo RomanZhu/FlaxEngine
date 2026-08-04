@@ -27,7 +27,10 @@ namespace FlaxEditor.Actions
         {
             public string OriginalPath;
             public string TrashPath;
+            public string SidecarOriginalPath;
+            public string SidecarTrashPath;
             public bool IsFolder;
+            public bool HasSidecarFolder;
             public Guid AssetId;
             public string TypeName;
             public long SizeInBytes;
@@ -182,7 +185,11 @@ namespace FlaxEditor.Actions
             if (_entries != null && _isDeleted)
             {
                 for (int i = 0; i < _entries.Length; i++)
+                {
                     DeletePath(_entries[i].TrashPath, _entries[i].IsFolder);
+                    if (_entries[i].HasSidecarFolder)
+                        DeletePath(_entries[i].SidecarTrashPath, true);
+                }
             }
             _editor = null;
             _entries = null;
@@ -225,17 +232,57 @@ namespace FlaxEditor.Actions
                    path[folderPath.Length] == '/';
         }
 
+        private static bool IsSceneFilePath(string path)
+        {
+            return string.Equals(Path.GetExtension(path), ".scene", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static string GetSceneActorsFolderPath(string path, bool isFolder)
+        {
+            if (!isFolder && !IsSceneFilePath(path))
+                return null;
+
+            path = StringUtils.NormalizePath(Path.GetFullPath(path));
+            var contentFolder = StringUtils.NormalizePath(Path.GetFullPath(Globals.ProjectContentFolder)).TrimEnd('/', '\\');
+            if (path.Length <= contentFolder.Length ||
+                !path.StartsWith(contentFolder, StringComparison.OrdinalIgnoreCase) ||
+                (path[contentFolder.Length] != '/' && path[contentFolder.Length] != '\\'))
+            {
+                return null;
+            }
+
+            var relativePath = StringUtils.NormalizePath(path.Substring(contentFolder.Length + 1));
+            if (!isFolder)
+                relativePath = StringUtils.GetPathWithoutExtension(relativePath);
+            if (string.IsNullOrEmpty(relativePath))
+                return null;
+            return StringUtils.CombinePaths(Globals.ProjectFolder, "SceneActors", relativePath);
+        }
+
         private static Entry CreateEntry(ContentItem item)
         {
             var trashRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "EditorTrash", Guid.NewGuid().ToString("N"));
+            var originalPath = StringUtils.NormalizePath(item.Path);
+            var sidecarOriginalPath = GetSceneActorsFolderPath(originalPath, item.IsFolder);
+            var hasSidecarFolder = sidecarOriginalPath != null && Directory.Exists(sidecarOriginalPath);
+            var sizeInBytes = GetPathSize(originalPath, item.IsFolder);
+            if (hasSidecarFolder)
+            {
+                var sidecarSizeInBytes = GetPathSize(sidecarOriginalPath, true);
+                if (sidecarSizeInBytes >= 0)
+                    sizeInBytes = sizeInBytes >= 0 ? sizeInBytes + sidecarSizeInBytes : sidecarSizeInBytes;
+            }
             return new Entry
             {
-                OriginalPath = StringUtils.NormalizePath(item.Path),
+                OriginalPath = originalPath,
                 TrashPath = StringUtils.CombinePaths(trashRoot, item.FileName),
+                SidecarOriginalPath = sidecarOriginalPath,
+                SidecarTrashPath = StringUtils.CombinePaths(trashRoot, "SceneActors"),
                 IsFolder = item.IsFolder,
+                HasSidecarFolder = hasSidecarFolder,
                 AssetId = item is AssetItem assetItem ? assetItem.ID : Guid.Empty,
                 TypeName = item is AssetItem typedAssetItem ? typedAssetItem.TypeName : null,
-                SizeInBytes = GetPathSize(item.Path, item.IsFolder),
+                SizeInBytes = sizeInBytes,
             };
         }
 
@@ -255,8 +302,7 @@ namespace FlaxEditor.Actions
             for (int i = 0; i < items.Count; i++)
             {
                 var item = items[i];
-                var entry = _entries[i];
-                if (!StageEntry(item, entry))
+                if (!StageEntry(item, ref _entries[i]))
                 {
                     Restore(stagedCount);
                     return false;
@@ -276,9 +322,8 @@ namespace FlaxEditor.Actions
             var stagedCount = 0;
             for (int i = 0; i < _entries.Length; i++)
             {
-                var entry = _entries[i];
-                var item = _editor.ContentDatabase.Find(entry.OriginalPath);
-                if (!StageEntry(item, entry))
+                var item = _editor.ContentDatabase.Find(_entries[i].OriginalPath);
+                if (!StageEntry(item, ref _entries[i]))
                 {
                     Restore(stagedCount);
                     return false;
@@ -305,7 +350,14 @@ namespace FlaxEditor.Actions
                     Editor.LogWarning("Cannot restore staged content item because the original path already exists: " + entry.OriginalPath);
                     return false;
                 }
+                if (entry.HasSidecarFolder && PathExists(entry.SidecarOriginalPath, true))
+                {
+                    Editor.LogWarning("Cannot restore staged scene actors folder because the original path already exists: " + entry.SidecarOriginalPath);
+                    return false;
+                }
                 if (!MovePath(entry.TrashPath, entry.OriginalPath, entry.IsFolder))
+                    return false;
+                if (entry.HasSidecarFolder && !MovePath(entry.SidecarTrashPath, entry.SidecarOriginalPath, true))
                     return false;
                 RefreshParent(entry.OriginalPath, true);
             }
@@ -329,16 +381,25 @@ namespace FlaxEditor.Actions
                 _editor.ContentDatabase.Rebuild(true);
         }
 
-        private bool StageEntry(ContentItem item, Entry entry)
+        private bool StageEntry(ContentItem item, ref Entry entry)
         {
             if (!CopyPath(entry.OriginalPath, entry.TrashPath, entry.IsFolder))
                 return false;
+            entry.HasSidecarFolder = entry.SidecarOriginalPath != null && Directory.Exists(entry.SidecarOriginalPath);
+            if (entry.HasSidecarFolder && !CopyPath(entry.SidecarOriginalPath, entry.SidecarTrashPath, true))
+            {
+                DeletePath(entry.TrashPath, entry.IsFolder);
+                DeletePath(entry.SidecarTrashPath, true);
+                return false;
+            }
 
             if (item != null)
             {
                 if (!DeleteContentItem(item, entry))
                 {
                     DeletePath(entry.TrashPath, entry.IsFolder);
+                    if (entry.HasSidecarFolder)
+                        DeletePath(entry.SidecarTrashPath, true);
                     RefreshParent(entry.OriginalPath, true);
                     return false;
                 }
@@ -346,7 +407,14 @@ namespace FlaxEditor.Actions
             else if (!DeletePathWithRetries(entry.OriginalPath, entry.IsFolder, "original content item"))
             {
                 DeletePath(entry.TrashPath, entry.IsFolder);
+                if (entry.HasSidecarFolder)
+                    DeletePath(entry.SidecarTrashPath, true);
                 RefreshParent(entry.OriginalPath, true);
+                return false;
+            }
+            if (entry.HasSidecarFolder && Directory.Exists(entry.SidecarOriginalPath) && !DeletePathWithRetries(entry.SidecarOriginalPath, true, "original scene actors folder"))
+            {
+                Editor.LogWarning("Cannot remove original scene actors folder after staging: " + entry.SidecarOriginalPath);
                 return false;
             }
 

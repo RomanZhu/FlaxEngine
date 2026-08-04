@@ -375,6 +375,22 @@ namespace
             LOG(Warning, "Cannot remove old scene actors folder '{0}'.", srcSceneActorsFolder);
         return false;
     }
+
+    void DeleteSceneActorsFolder(const StringView& scenePath)
+    {
+        if (!IsSceneAssetPath(scenePath))
+            return;
+        const String sceneActorsFolder = GetSceneActorsFolderPath(scenePath);
+        if (!FileSystem::DirectoryExists(sceneActorsFolder))
+            return;
+#if PLATFORM_WINDOWS || PLATFORM_LINUX
+        if (FileSystem::MoveFileToRecycleBin(sceneActorsFolder))
+            LOG(Warning, "Failed to move scene actors folder to Recycle Bin. Path: '{0}'", sceneActorsFolder);
+#else
+        if (FileSystem::DeleteDirectory(sceneActorsFolder))
+            LOG(Warning, "Failed to delete scene actors folder. Path: '{0}'", sceneActorsFolder);
+#endif
+    }
 #endif
 }
 
@@ -1154,18 +1170,26 @@ void Content::deleteFileSafety(const StringView& path, const Guid* id)
         }
     }
 
+    bool removeFileFailed;
 #if PLATFORM_WINDOWS || PLATFORM_LINUX
     // Safety way - move file to the recycle bin
-    if (FileSystem::MoveFileToRecycleBin(path))
+    removeFileFailed = FileSystem::MoveFileToRecycleBin(path);
+    if (removeFileFailed)
     {
         LOG(Warning, "Failed to move file to Recycle Bin. Path: \'{0}\'", path);
     }
 #else
     // Remove file
-    if (FileSystem::DeleteFile(path))
+    removeFileFailed = FileSystem::DeleteFile(path);
+    if (removeFileFailed)
     {
         LOG(Warning, "Failed to delete file Path: \'{0}\'", path);
     }
+#endif
+
+#if USE_EDITOR
+    if (!removeFileFailed)
+        DeleteSceneActorsFolder(path);
 #endif
 }
 
