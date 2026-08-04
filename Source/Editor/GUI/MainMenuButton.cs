@@ -79,7 +79,7 @@ namespace FlaxEditor.GUI
         {
             Focus();
 
-            if (Parent is MainMenu menu)
+            if (button == MouseButton.Left && Parent is MainMenu menu)
                 menu.Selected = this;
 
             return true;

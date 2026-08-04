@@ -255,9 +255,9 @@ namespace FlaxEngine.GUI
         {
             AutoFocus = autoFocus;
             var style = Style.Current;
-            _scrollbarTrackColor = style.BackgroundHighlighted;
-            _scrollbarThumbColor = style.BackgroundNormal;
-            _scrollbarThumbSelectedColor = style.BackgroundSelected;
+            _scrollbarTrackColor = style.BackgroundNormal;
+            _scrollbarThumbColor = ScrollBar.DefaultThumbColor;
+            _scrollbarThumbSelectedColor = ScrollBar.DefaultThumbHighlightedColor;
             ScrollBars = scrollBars;
         }
 

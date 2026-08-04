@@ -291,13 +291,15 @@ namespace FlaxEditor.Windows
             public readonly Panel Panel;
             public readonly CustomEditorPresenter Presenter;
             public readonly object[] Selection;
+            public readonly Guid[] ContentAssetIds;
 
-            public PinnedTab(Tab tab, Panel panel, CustomEditorPresenter presenter, object[] selection)
+            public PinnedTab(Tab tab, Panel panel, CustomEditorPresenter presenter, object[] selection, Guid[] contentAssetIds)
             {
                 Tab = tab;
                 Panel = panel;
                 Presenter = presenter;
                 Selection = selection;
+                ContentAssetIds = contentAssetIds;
             }
         }
 
@@ -389,6 +391,7 @@ namespace FlaxEditor.Windows
             _scrollingPanel.VScrollBar.ValueChanged += OnScrollValueChanged;
             Editor.SceneEditing.SelectionChanged += OnSceneSelectionChanged;
             Editor.Windows.ContentWin.SelectionChanged += OnContentSelectionChanged;
+            Editor.ContentDatabase.ItemRemoved += OnContentItemRemoved;
             UpdateTabsBarVisibility();
         }
 
@@ -507,6 +510,7 @@ namespace FlaxEditor.Windows
                 return;
 
             var selection = Presenter.Selection.ToArray();
+            var contentAssetIds = _showContentSelection ? GetSelectedContentAssetIds() : Array.Empty<Guid>();
             var pinnedUndoObjects = Presenter.GetUndoObjects?.Invoke(Presenter)?.ToArray() ?? Array.Empty<object>();
             var tab = new PropertiesTab(this, TruncateTabTitle(GetSelectionTabTitle()), true);
             var presenter = new CustomEditorPresenter(Editor.Undo)
@@ -526,7 +530,7 @@ namespace FlaxEditor.Windows
             presenter.Select(selection);
             presenter.BuildLayout();
 
-            _pinnedTabs.Add(new PinnedTab(tab, panel, presenter, selection));
+            _pinnedTabs.Add(new PinnedTab(tab, panel, presenter, selection, contentAssetIds));
             _tabs.AddTab(tab);
             UpdateTabsBarVisibility();
             _tabs.SelectedTab = tab;
@@ -598,6 +602,77 @@ namespace FlaxEditor.Windows
             UpdateTabsBarVisibility();
 
             _tabs.SelectedTab = selected == tab ? fallback ?? _selectionTab : selected;
+        }
+
+        private void OnContentItemRemoved(ContentItem item)
+        {
+            if (item is not AssetItem assetItem)
+                return;
+
+            if (_showContentSelection && ContentSelectionContainsAsset(assetItem.ID))
+            {
+                _waitingForContentAssets.Clear();
+                ClearContentAssetState();
+                Presenter.OverrideEditor = null;
+                undoRecordObjects = Array.Empty<object>();
+                Presenter.Deselect();
+                UpdateSelectionTabTitle();
+            }
+
+            for (int i = _pinnedTabs.Count - 1; i >= 0; i--)
+            {
+                var pinned = _pinnedTabs[i];
+                if (ContentAssetIdsContain(pinned.ContentAssetIds, assetItem.ID) || SelectionContainsContentAsset(pinned.Selection, assetItem.ID))
+                    ClosePinnedTab((PropertiesTab)pinned.Tab);
+            }
+        }
+
+        private Guid[] GetSelectedContentAssetIds()
+        {
+            var selection = Editor.Windows.ContentWin.Selection;
+            if (selection.Count == 0)
+                return Array.Empty<Guid>();
+
+            var result = new List<Guid>(selection.Count);
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is AssetItem assetItem)
+                    result.Add(assetItem.ID);
+            }
+            return result.Count != 0 ? result.ToArray() : Array.Empty<Guid>();
+        }
+
+        private bool ContentSelectionContainsAsset(Guid assetId)
+        {
+            var selection = Editor.Windows.ContentWin.Selection;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is AssetItem assetItem && assetItem.ID == assetId)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool ContentAssetIdsContain(IReadOnlyList<Guid> contentAssetIds, Guid assetId)
+        {
+            for (int i = 0; i < contentAssetIds.Count; i++)
+            {
+                if (contentAssetIds[i] == assetId)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool SelectionContainsContentAsset(IReadOnlyList<object> selection, Guid assetId)
+        {
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is Asset asset && asset.ID == assetId)
+                    return true;
+                if (selection[i] is MaterialAssetPropertiesProxy materialProxy && materialProxy.Material != null && materialProxy.Material.ID == assetId)
+                    return true;
+            }
+            return false;
         }
 
 
@@ -740,7 +815,9 @@ namespace FlaxEditor.Windows
                 }
                 if (asset is MaterialBase material)
                 {
-                    return new MaterialAssetPropertiesProxy(material);
+                    var materialState = new MaterialAssetPropertiesProxy(material);
+                    state = materialState;
+                    return materialState;
                 }
                 if (asset is ParticleSystem particleSystem)
                 {
@@ -787,7 +864,9 @@ namespace FlaxEditor.Windows
                 }
             }
 
-            if (_showContentSelection && _contentAssetState is ParticleAssetPropertiesProxy particleState)
+            if (_showContentSelection && _contentAssetState is MaterialAssetPropertiesProxy materialState)
+                materialState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
+            else if (_showContentSelection && _contentAssetState is ParticleAssetPropertiesProxy particleState)
                 particleState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
 
             base.Update(deltaTime);
@@ -848,8 +927,12 @@ namespace FlaxEditor.Windows
         }
 
         [CustomEditor(typeof(MaterialAssetPropertiesEditor))]
-        private sealed class MaterialAssetPropertiesProxy
+        private sealed class MaterialAssetPropertiesProxy : IDisposable
         {
+            private const float MaterialSaveDelay = 0.15f;
+            private bool _hasPendingSave;
+            private float _pendingSaveDelay;
+
             [HideInEditor]
             public MaterialBase Material { get; }
 
@@ -858,6 +941,87 @@ namespace FlaxEditor.Windows
 
             [HideInEditor]
             public bool IsMaterialInstance => Material is MaterialInstance;
+
+            /// <summary>
+            /// The material parameter values collection. Used to record undo changes.
+            /// </summary>
+            /// <remarks>
+            /// Contains only items with raw values excluding Flax Objects.
+            /// </remarks>
+            [HideInEditor]
+            public object[] Values
+            {
+                get => Material?.Parameters != null ? Material.Parameters.Select(x => x.Value).ToArray() : null;
+                set
+                {
+                    if (Material == null)
+                        return;
+                    var parameters = Material.Parameters;
+                    if (value == null || parameters == null || value.Length != parameters.Length)
+                        return;
+
+                    for (int i = 0; i < value.Length; i++)
+                    {
+                        var p = parameters[i].Value;
+                        if (p is FlaxEngine.Object || p == null)
+                            continue;
+
+                        parameters[i].Value = value[i];
+                    }
+                    RequestSave();
+                }
+            }
+
+            /// <summary>
+            /// The material parameter reference values collection. Used to record undo changes.
+            /// </summary>
+            /// <remarks>
+            /// Contains only items with references to Flax Objects.
+            /// </remarks>
+            [HideInEditor]
+            public FlaxEngine.Object[] ValuesRef
+            {
+                get => Material?.Parameters != null ? Material.Parameters.Select(x => x.Value as FlaxEngine.Object).ToArray() : null;
+                set
+                {
+                    if (Material == null)
+                        return;
+                    var parameters = Material.Parameters;
+                    if (value == null || parameters == null || value.Length != parameters.Length)
+                        return;
+
+                    for (int i = 0; i < value.Length; i++)
+                    {
+                        var p = parameters[i].Value;
+                        if (!(p is FlaxEngine.Object || p == null))
+                            continue;
+
+                        parameters[i].Value = value[i];
+                    }
+                    RequestSave();
+                }
+            }
+
+            /// <summary>
+            /// The material parameter override flags. Used to record undo changes.
+            /// </summary>
+            [HideInEditor]
+            public bool[] Overrides
+            {
+                get => Material?.Parameters != null ? Material.Parameters.Select(x => x.IsOverride).ToArray() : null;
+                set
+                {
+                    if (Material == null)
+                        return;
+                    var parameters = Material.Parameters;
+                    if (value == null || parameters == null || value.Length != parameters.Length)
+                        return;
+
+                    for (int i = 0; i < value.Length; i++)
+                        parameters[i].IsOverride = value[i];
+                    RequestSave();
+                }
+            }
 
             [EditorOrder(10), EditorDisplay("General"), VisibleIf(nameof(IsMaterial))]
             public MaterialDomain Domain => Material != null ? Material.Info.Domain : MaterialDomain.Surface;
@@ -877,7 +1041,7 @@ namespace FlaxEditor.Windows
                     if (Material is not MaterialInstance instance || value == instance)
                         return;
                     instance.BaseMaterial = value;
-                    Save();
+                    RequestSave();
                     Editor.Instance.Windows.PropertiesWin.Presenter.BuildLayoutOnUpdate();
                 }
             }
@@ -887,10 +1051,41 @@ namespace FlaxEditor.Windows
                 Material = material;
             }
 
-            public void Save()
+            public void RequestSave()
             {
+                _hasPendingSave = true;
+                _pendingSaveDelay = MaterialSaveDelay;
+            }
+
+            public void UpdateDeferredSave(float deltaTime, bool isDragging)
+            {
+                if (!_hasPendingSave)
+                    return;
+
+                if (isDragging)
+                {
+                    _pendingSaveDelay = MaterialSaveDelay;
+                    return;
+                }
+
+                _pendingSaveDelay -= deltaTime;
+                if (_pendingSaveDelay <= 0.0f)
+                    SavePendingChanges();
+            }
+
+            public void SavePendingChanges()
+            {
+                if (!_hasPendingSave)
+                    return;
+
+                _hasPendingSave = false;
                 if (Material != null && Material.IsLoaded && Material.Save())
                     Editor.LogError("Cannot save asset.");
+            }
+
+            public void Dispose()
+            {
+                SavePendingChanges();
             }
         }
 
@@ -944,7 +1139,7 @@ namespace FlaxEditor.Windows
                                                         {
                                                             var materialParameter = (MaterialParameter)nameLabel.CheckBox.Tag;
                                                             materialParameter.IsOverride = nameLabel.CheckBox.Checked;
-                                                            proxy.Save();
+                                                            proxy.RequestSave();
                                                             nameLabel.UpdateStyle();
                                                         };
                                                         itemLayout.Property(label, valueContainer, null, e.Tooltip?.Text);
@@ -968,7 +1163,7 @@ namespace FlaxEditor.Windows
             {
                 var proxy = (MaterialAssetPropertiesProxy)instance;
                 ((MaterialParameter)tag).Value = value;
-                proxy.Save();
+                proxy.RequestSave();
             }
         }
 
@@ -982,9 +1177,11 @@ namespace FlaxEditor.Windows
             private ParticleSystemTimeline _timeline;
             private ParticleEmitterSurface _emitterSurface;
             private bool _hasPendingParticleSystemSave;
+            private bool _hasPendingParticleEmitterSave;
             private float _pendingParticleSystemSaveDelay;
+            private float _pendingParticleEmitterSaveDelay;
 
-            private const float ParticleSystemSaveDelay = 0.15f;
+            private const float ParticleSaveDelay = 0.15f;
 
             public ParticleEffect Effect => _preview?.PreviewActor;
 
@@ -1027,23 +1224,49 @@ namespace FlaxEditor.Windows
                 _timeline.OnEmittersParametersOverridesEdited();
                 _timeline.MarkAsEdited();
                 _hasPendingParticleSystemSave = true;
-                _pendingParticleSystemSaveDelay = ParticleSystemSaveDelay;
+                _pendingParticleSystemSaveDelay = ParticleSaveDelay;
+            }
+
+            public void RequestEmitterSurfaceSave()
+            {
+                _hasPendingParticleEmitterSave = true;
+                _pendingParticleEmitterSaveDelay = ParticleSaveDelay;
             }
 
             public void UpdateDeferredSave(float deltaTime, bool isDragging)
             {
-                if (!_hasPendingParticleSystemSave)
+                if (!_hasPendingParticleSystemSave && !_hasPendingParticleEmitterSave)
                     return;
 
                 if (isDragging)
                 {
-                    _pendingParticleSystemSaveDelay = ParticleSystemSaveDelay;
+                    if (_hasPendingParticleSystemSave)
+                        _pendingParticleSystemSaveDelay = ParticleSaveDelay;
+                    if (_hasPendingParticleEmitterSave)
+                        _pendingParticleEmitterSaveDelay = ParticleSaveDelay;
                     return;
                 }
 
-                _pendingParticleSystemSaveDelay -= deltaTime;
-                if (_pendingParticleSystemSaveDelay <= 0.0f)
-                    SavePendingParticleSystemChanges();
+                if (_hasPendingParticleSystemSave)
+                {
+                    _pendingParticleSystemSaveDelay -= deltaTime;
+                    if (_pendingParticleSystemSaveDelay <= 0.0f)
+                        SavePendingParticleSystemChanges();
+                }
+                if (_hasPendingParticleEmitterSave)
+                {
+                    _pendingParticleEmitterSaveDelay -= deltaTime;
+                    if (_pendingParticleEmitterSaveDelay <= 0.0f)
+                        SavePendingEmitterSurfaceChanges();
+                }
+            }
+
+            public void SavePendingChanges(bool rebuildLayout = true)
+            {
+                if (_hasPendingParticleSystemSave)
+                    SavePendingParticleSystemChanges(rebuildLayout);
+                if (_hasPendingParticleEmitterSave)
+                    SavePendingEmitterSurfaceChanges(rebuildLayout);
             }
 
             public void SavePendingParticleSystemChanges(bool rebuildLayout = true)
@@ -1058,15 +1281,31 @@ namespace FlaxEditor.Windows
                     Editor.Instance.Windows.PropertiesWin.Presenter.BuildLayoutOnUpdate();
             }
 
+            public void SavePendingEmitterSurfaceChanges(bool rebuildLayout = true)
+            {
+                if (!_hasPendingParticleEmitterSave)
+                    return;
+
+                _hasPendingParticleEmitterSave = false;
+                SaveEmitterSurface(rebuildLayout);
+            }
+
             public void SaveEmitterSurface()
+            {
+                SaveEmitterSurface(false);
+            }
+
+            private void SaveEmitterSurface(bool rebuildLayout)
             {
                 if (_particleEmitter && _emitterSurface != null && _emitterSurface.Save())
                     Editor.LogError("Failed to save Particle Emitter surface.");
+                if (rebuildLayout)
+                    Editor.Instance.Windows.PropertiesWin.Presenter.BuildLayoutOnUpdate();
             }
 
             public void Dispose()
             {
-                SavePendingParticleSystemChanges(false);
+                SavePendingChanges(false);
                 _timeline?.Dispose();
                 _timeline = null;
                 _emitterSurface?.Dispose();
@@ -1221,7 +1460,7 @@ namespace FlaxEditor.Windows
             {
                 var proxy = (ParticleAssetPropertiesProxy)instance;
                 ((SurfaceParameter)tag).Value = value;
-                proxy.SaveEmitterSurface();
+                proxy.RequestEmitterSurfaceSave();
             }
         }
 
@@ -1256,6 +1495,8 @@ namespace FlaxEditor.Windows
             Editor.SceneEditing.SelectionChanged -= OnSceneSelectionChanged;
             if (Editor.Windows.ContentWin != null)
                 Editor.Windows.ContentWin.SelectionChanged -= OnContentSelectionChanged;
+            if (Editor.ContentDatabase != null)
+                Editor.ContentDatabase.ItemRemoved -= OnContentItemRemoved;
             Presenter.Modified -= OnPresenterModified;
             ClearContentAssetState();
 

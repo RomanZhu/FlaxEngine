@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.Drag;
+using FlaxEditor.History;
 using FlaxEditor.Options;
 using FlaxEditor.Scripting;
 using FlaxEditor.Surface.Archetypes;
@@ -25,6 +26,101 @@ namespace FlaxEditor.Surface
     public partial class VisjectSurface : ContainerControl, IParametersDependantNode
     {
         private static readonly List<VisjectSurfaceContext> NavUpdateCache = new List<VisjectSurfaceContext>(8);
+
+        private struct GraphNavigationState
+        {
+            public uint[] NodeIds;
+            public Float2 ViewPosition;
+            public float ViewScale;
+        }
+
+        private sealed class GraphNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
+        {
+            private readonly VisjectSurface _surface;
+            private readonly GraphNavigationState _source;
+            private readonly GraphNavigationState _target;
+
+            public GraphNavigationAction(VisjectSurface surface, GraphNavigationState source, GraphNavigationState target)
+            {
+                _surface = surface;
+                _source = source;
+                _target = target;
+            }
+
+            public object Owner => _surface;
+
+            public string ActionString => "Graph selection change";
+
+            public bool IsSameDestination(INavigationHistoryAction other)
+            {
+                return other is GraphNavigationAction action &&
+                       action.Owner == Owner &&
+                       AreSameNavigationState(action._target, _target);
+            }
+
+            public void NavigateBack()
+            {
+                _surface.RestoreGraphNavigationState(_source);
+            }
+
+            public void NavigateForward()
+            {
+                _surface.RestoreGraphNavigationState(_target);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class GraphSelectionUndoAction : IUndoAction, IUndoActionMetadata
+        {
+            private VisjectSurface _surface;
+            private readonly uint[] _sourceNodeIds;
+            private readonly uint[] _targetNodeIds;
+
+            public GraphSelectionUndoAction(VisjectSurface surface, uint[] sourceNodeIds, uint[] targetNodeIds)
+            {
+                _surface = surface;
+                _sourceNodeIds = sourceNodeIds ?? Array.Empty<uint>();
+                _targetNodeIds = targetNodeIds ?? Array.Empty<uint>();
+            }
+
+            public string ActionString => "Graph selection change";
+
+            public bool IsSameTransition(VisjectSurface surface, uint[] sourceNodeIds, uint[] targetNodeIds)
+            {
+                return _surface == surface &&
+                       AreSameNodeSelection(_sourceNodeIds, sourceNodeIds) &&
+                       AreSameNodeSelection(_targetNodeIds, targetNodeIds);
+            }
+
+            public UndoActionInfo ActionInfo => new UndoActionInfo
+            {
+                Operation = ActionString,
+                TargetType = _targetNodeIds.Length > 1 ? UndoActionTargetType.Multiple : UndoActionTargetType.Document,
+                TargetName = _targetNodeIds.Length == 1 ? _targetNodeIds[0].ToString() : "Graph Selection",
+                TargetObjectId = _targetNodeIds.Length == 1 ? _targetNodeIds[0].ToString() : null,
+                DisplayEditorTypeName = _surface?.Owner?.GetType().FullName,
+                Flags = UndoActionFlags.SelectionOnly,
+                SizeInBytes = 0,
+            };
+
+            public void Do()
+            {
+                _surface?.RestoreGraphSelectionState(_targetNodeIds);
+            }
+
+            public void Undo()
+            {
+                _surface?.RestoreGraphSelectionState(_sourceNodeIds);
+            }
+
+            public void Dispose()
+            {
+                _surface = null;
+            }
+        }
 
         /// <summary>
         /// The surface control.
@@ -123,6 +219,9 @@ namespace FlaxEditor.Surface
         /// The connection start.
         /// </summary>
         protected List<IConnectionInstigator> _connectionInstigators = new List<IConnectionInstigator>();
+        private GraphNavigationState _lastGraphNavigationState;
+        private bool _isRestoringGraphNavigationState;
+        private bool _hasPendingGraphNavigationState;
 
         /// <summary>
         /// The last connection instigator under mouse.
@@ -432,7 +531,8 @@ namespace FlaxEditor.Surface
             Context.ControlSpawned += OnSurfaceControlSpawned;
             Context.ControlDeleted += OnSurfaceControlDeleted;
 
-            SelectionChanged += () => { _selectedConnectionIndex = 0; };
+            _lastGraphNavigationState = CaptureGraphNavigationState();
+            SelectionChanged += OnGraphSelectionChanged;
 
             // Init drag handlers
             DragHandlers.Add(_dragAssets = new DragAssets<DragDropEventArgs>(ValidateDragItem));
@@ -724,6 +824,158 @@ namespace FlaxEditor.Surface
             }
             if (selectionChanged)
                 SelectionChanged?.Invoke();
+        }
+
+        private void OnGraphSelectionChanged()
+        {
+            _selectedConnectionIndex = 0;
+            if (_isRestoringGraphNavigationState)
+                return;
+
+            if (_leftMouseDown)
+            {
+                _hasPendingGraphNavigationState = true;
+                return;
+            }
+
+            RecordGraphNavigationState();
+        }
+
+        private void CommitPendingGraphNavigationState()
+        {
+            if (!_hasPendingGraphNavigationState)
+                return;
+
+            _hasPendingGraphNavigationState = false;
+            RecordGraphNavigationState();
+        }
+
+        private void RecordGraphNavigationState()
+        {
+            var target = CaptureGraphNavigationState();
+            if (AreSameNavigationState(_lastGraphNavigationState, target))
+                return;
+
+            var source = _lastGraphNavigationState;
+            _lastGraphNavigationState = target;
+            if (Undo != null && Undo.IsPerformingUndoRedo)
+                return;
+            if (Undo != null && !AreSameNodeSelection(source.NodeIds, target.NodeIds))
+            {
+                var previousSelectionAction = Undo.UndoOperationsStack.PeekHistory() as GraphSelectionUndoAction;
+                if (previousSelectionAction == null || !previousSelectionAction.IsSameTransition(this, source.NodeIds, target.NodeIds))
+                    Undo.AddAction(new GraphSelectionUndoAction(this, source.NodeIds, target.NodeIds));
+            }
+            Editor.Instance.NavigationHistory.AddAction(new GraphNavigationAction(this, source, target));
+        }
+
+        private GraphNavigationState CaptureGraphNavigationState()
+        {
+            var selectedNodes = SelectedNodes;
+            var nodeIds = new uint[selectedNodes.Count];
+            for (int i = 0; i < selectedNodes.Count; i++)
+                nodeIds[i] = selectedNodes[i].ID;
+            Array.Sort(nodeIds);
+
+            return new GraphNavigationState
+            {
+                NodeIds = nodeIds,
+                ViewPosition = ViewPosition,
+                ViewScale = ViewScale,
+            };
+        }
+
+        private void RestoreGraphNavigationState(GraphNavigationState state)
+        {
+            if (IsDisposing || _rootControl == null)
+                return;
+
+            Focus();
+            _isRestoringGraphNavigationState = true;
+            try
+            {
+                ViewScale = state.ViewScale;
+                ViewPosition = state.ViewPosition;
+
+                var controls = new List<SurfaceControl>(state.NodeIds?.Length ?? 0);
+                if (state.NodeIds != null)
+                {
+                    for (int i = 0; i < state.NodeIds.Length; i++)
+                    {
+                        var node = FindNode(state.NodeIds[i]);
+                        if (node != null)
+                            controls.Add(node);
+                    }
+                }
+                Select(controls);
+                _lastGraphNavigationState = CaptureGraphNavigationState();
+                _hasPendingGraphNavigationState = false;
+            }
+            finally
+            {
+                _isRestoringGraphNavigationState = false;
+            }
+        }
+
+        private void RestoreGraphSelectionState(uint[] nodeIds)
+        {
+            if (IsDisposing || _rootControl == null)
+                return;
+
+            _isRestoringGraphNavigationState = true;
+            try
+            {
+                var controls = new List<SurfaceControl>(nodeIds?.Length ?? 0);
+                if (nodeIds != null)
+                {
+                    for (int i = 0; i < nodeIds.Length; i++)
+                    {
+                        var node = FindNode(nodeIds[i]);
+                        if (node != null)
+                            controls.Add(node);
+                    }
+                }
+                Select(controls);
+                _lastGraphNavigationState = CaptureGraphNavigationState();
+                _hasPendingGraphNavigationState = false;
+            }
+            finally
+            {
+                _isRestoringGraphNavigationState = false;
+            }
+        }
+
+        private static bool AreSameNavigationState(GraphNavigationState a, GraphNavigationState b)
+        {
+            if (Mathf.Abs(a.ViewScale - b.ViewScale) > 0.0001f)
+                return false;
+            if ((a.ViewPosition - b.ViewPosition).LengthSquared > 0.01f)
+                return false;
+
+            var aIds = a.NodeIds ?? Array.Empty<uint>();
+            var bIds = b.NodeIds ?? Array.Empty<uint>();
+            if (aIds.Length != bIds.Length)
+                return false;
+            for (int i = 0; i < aIds.Length; i++)
+            {
+                if (aIds[i] != bIds[i])
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool AreSameNodeSelection(uint[] a, uint[] b)
+        {
+            a ??= Array.Empty<uint>();
+            b ??= Array.Empty<uint>();
+            if (a.Length != b.Length)
+                return false;
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (a[i] != b[i])
+                    return false;
+            }
+            return true;
         }
 
         internal void ToggleGridSnapping()
@@ -1097,6 +1349,8 @@ namespace FlaxEditor.Surface
                 return;
             _isReleasing = true;
 
+            Editor.Instance.NavigationHistory.RemoveActions(x => x is GraphNavigationAction action && action.Owner == this);
+
             // Cleanup context cache
             _root = null;
             _context = null;
@@ -1113,7 +1367,7 @@ namespace FlaxEditor.Surface
             _cmPrimaryMenu?.Dispose();
 
             ScriptsBuilder.ScriptsReloadBegin -= OnScriptsReloadBegin;
-            Editor.Instance.Options.OptionsChanged += OnEditorOptionsChanged;
+            Editor.Instance.Options.OptionsChanged -= OnEditorOptionsChanged;
 
             base.OnDestroy();
         }

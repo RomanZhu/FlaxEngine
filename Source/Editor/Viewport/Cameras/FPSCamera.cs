@@ -21,15 +21,18 @@ namespace FlaxEditor.Viewport.Cameras
         private const float FlyMoveInertiaResponse = 24.0f;
         private const float FlyLookInertiaResponse = 55.0f;
         private const float FlyInertiaStopThresholdSq = 0.000001f;
-        private const float AltRightMouseZoomSpeed = 12.5f;
         private const float AltRightMouseZoomMinDistance = 500.0f;
+        private const float RecenterMinMoveDistanceSq = 0.000001f;
 
         private Transform _startMove;
         private Transform _endMove;
+        private Vector3 _startMoveTargetPoint;
+        private Vector3 _endMoveTargetPoint;
         private Vector3 _flyMoveDelta;
         private Float2 _flyMouseDelta;
         private Vector3 _altRightMouseZoomDirection;
         private bool _hasAltRightMouseZoomDirection;
+        private bool _animateMoveTargetPoint;
         private float _moveStartTime = -1;
         private float _additionalFOV;
 
@@ -106,6 +109,7 @@ namespace FlaxEditor.Viewport.Cameras
 
             _startMove = Viewport.ViewTransform;
             _endMove = target;
+            _animateMoveTargetPoint = false;
             _moveStartTime = Time.UnscaledGameTime;
         }
 
@@ -169,6 +173,32 @@ namespace FlaxEditor.Viewport.Cameras
             TargetPoint = orbitCenter;
         }
 
+        /// <summary>
+        /// Moves the camera center toward the given world-space hit without changing view rotation or distance.
+        /// </summary>
+        /// <param name="hitPoint">The target hit point.</param>
+        public void RecenterView(Vector3 hitPoint)
+        {
+            ResetFlyInertia();
+
+            var viewPosition = Viewport.ViewPosition;
+            var rotation = Viewport.ViewOrientation;
+            var forward = Vector3.Forward * rotation;
+            var up = Vector3.Up * rotation;
+            var right = Vector3.Cross(forward, up);
+            var toHit = hitPoint - viewPosition;
+            var planarMove = right * Vector3.Dot(toHit, right) + up * Vector3.Dot(toHit, up);
+            if (planarMove.LengthSquared < RecenterMinMoveDistanceSq)
+                return;
+
+            _startMove = Viewport.ViewTransform;
+            _endMove = new Transform(viewPosition + planarMove, rotation);
+            _startMoveTargetPoint = TargetPoint;
+            _endMoveTargetPoint = TargetPoint + planarMove;
+            _animateMoveTargetPoint = true;
+            _moveStartTime = Time.UnscaledGameTime;
+        }
+
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
@@ -198,12 +228,19 @@ namespace FlaxEditor.Viewport.Cameras
                     targetTransform.Scale = Vector3.Zero;
                     Viewport.ViewPosition = targetTransform.Translation;
                     Viewport.ViewOrientation = targetTransform.Orientation;
+                    if (_animateMoveTargetPoint)
+                    {
+                        TargetPoint = progress >= 1.0f ? _endMoveTargetPoint : Vector3.Lerp(_startMoveTargetPoint, _endMoveTargetPoint, a);
+                        if (progress >= 1.0f)
+                            _animateMoveTargetPoint = false;
+                    }
                 }
                 catch
                 {
                     // Fix camera if lerp failed (eg. large world with NaNs inside)
                     Viewport.ViewPosition = Vector3.Zero;
                     Viewport.ViewOrientation = Quaternion.Identity;
+                    _animateMoveTargetPoint = false;
                 }
             }
         }
@@ -214,10 +251,23 @@ namespace FlaxEditor.Viewport.Cameras
             if (_hasAltRightMouseZoomDirection)
             {
                 var distance = Vector3.Dot(TargetPoint - Viewport.ViewPosition, _altRightMouseZoomDirection);
-                if (distance < AltRightMouseZoomMinDistance)
+                if (distance <= 0.0f)
                     TargetPoint += _altRightMouseZoomDirection * (AltRightMouseZoomMinDistance - distance);
                 _hasAltRightMouseZoomDirection = false;
             }
+        }
+
+        /// <inheritdoc />
+        public override void CancelInputInertia()
+        {
+            ResetFlyInertia();
+        }
+
+        /// <inheritdoc />
+        public override bool TryGetCameraCenter(out Vector3 center)
+        {
+            center = TargetPoint;
+            return true;
         }
 
         /// <inheritdoc />
@@ -243,6 +293,9 @@ namespace FlaxEditor.Viewport.Cameras
             var forward = Vector3.Forward * rotation;
             var up = Vector3.Up * rotation;
             var right = Vector3.Cross(forward, up);
+            var targetDistance = (float)Vector3.Dot(TargetPoint - position, forward);
+            if (targetDistance < 0.0001f)
+                targetDistance = Mathf.Max((float)Vector3.Distance(ref position, ref TargetPoint), 0.0001f);
 
             var flyMoveDelta = moveDelta;
             var flyMouseDelta = mouseDelta;
@@ -259,6 +312,7 @@ namespace FlaxEditor.Viewport.Cameras
 
             var useFlyMove = input.IsRotating || (useFlyInertia && !_flyMoveDelta.IsZero);
             var useFlyLook = input.IsRotating || (useFlyInertia && !_flyMouseDelta.IsZero);
+            var updateTargetFromView = !input.IsAltRightMouseZooming && (useFlyLook || (input.IsMoving && !mouseDelta.IsZero));
 
             // Dolly
             if (input.IsPanning || input.IsMoving)
@@ -315,7 +369,7 @@ namespace FlaxEditor.Viewport.Cameras
             // Zoom in/out with mouse wheel or Alt+RMB horizontal drag
             if (input.IsAltRightMouseZooming)
             {
-                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * EditorViewport.GetAltRightMouseZoomDelta(ref mouseDelta) * AltRightMouseZoomSpeed;
+                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * EditorViewport.GetAltRightMouseZoomDelta(ref mouseDelta) * Editor.Instance.Options.Options.Viewport.AltRightMouseZoomSpeed;
                 if (Mathf.Abs(zoomDelta) > Mathf.Epsilon)
                 {
                     if (!_hasAltRightMouseZoomDirection)
@@ -362,7 +416,9 @@ namespace FlaxEditor.Viewport.Cameras
             }
             else
             {
-                if (!input.IsAltRightMouseZooming)
+                if (updateTargetFromView)
+                    TargetPoint = position + Viewport.ViewDirection * targetDistance;
+                else if (!input.IsAltRightMouseZooming)
                     TargetPoint += position - Viewport.ViewPosition;
                 Viewport.ViewPosition = position;
             }

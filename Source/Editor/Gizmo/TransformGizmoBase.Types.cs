@@ -63,17 +63,22 @@ namespace FlaxEditor.Gizmo
             /// <summary>
             /// Translate object(s)
             /// </summary>
-            Translate,
+            Translate = 0,
 
             /// <summary>
             /// Rotate object(s)
             /// </summary>
-            Rotate,
+            Rotate = 1,
 
             /// <summary>
             /// Scale object(s)
             /// </summary>
-            Scale
+            Scale = 2,
+
+            /// <summary>
+            /// Select object(s) without transform handles.
+            /// </summary>
+            Select = 3
         }
 
         /// <summary>
@@ -98,12 +103,12 @@ namespace FlaxEditor.Gizmo
         public enum PivotType
         {
             /// <summary>
-            /// First selected object center
+            /// First selected object pivot/origin
             /// </summary>
             ObjectCenter,
 
             /// <summary>
-            /// Selection pool center point
+            /// Selection bounds center point
             /// </summary>
             SelectionCenter,
 

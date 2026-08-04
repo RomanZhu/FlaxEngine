@@ -36,12 +36,27 @@ namespace FlaxEditor
         {
             _editor = editor;
 
+            OnOptionsChanged(editor.Options.Options);
             editor.Options.OptionsChanged += OnOptionsChanged;
+            ActionDiscarded += OnActionDiscarded;
         }
 
         private void OnOptionsChanged(EditorOptions options)
         {
             Capacity = options.General.UndoActionsCapacity;
+            SizeCapacityInBytes = options.General.UndoHistorySizeLimitMB > 0
+                ? options.General.UndoHistorySizeLimitMB * 1024L * 1024L
+                : -1;
+        }
+
+        private void OnActionDiscarded(IUndoAction action, HistoryStackDiscardReason reason)
+        {
+            if (reason != HistoryStackDiscardReason.SizeLimit)
+                return;
+
+            var info = UndoActionMetadata.GetActionInfo(action);
+            var operation = string.IsNullOrEmpty(info.Operation) ? action.ActionString : info.Operation;
+            Editor.LogWarning(string.Format("Undo history discarded '{0}' because the configured undo history size budget was exceeded.", operation));
         }
 
         /// <inheritdoc />

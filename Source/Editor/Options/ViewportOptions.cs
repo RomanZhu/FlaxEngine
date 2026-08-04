@@ -12,6 +12,11 @@ namespace FlaxEditor.Options
     public class ViewportOptions
     {
         /// <summary>
+        /// The default Alt+right mouse button drag zoom speed for viewport cameras.
+        /// </summary>
+        public const float DefaultAltRightMouseZoomSpeed = 12.5f;
+
+        /// <summary>
         /// Gets or sets the mouse movement sensitivity scale applied when using the viewport camera.
         /// </summary>
         [DefaultValue(1.0f), Limit(0.01f, 100.0f)]
@@ -45,6 +50,20 @@ namespace FlaxEditor.Options
         [DefaultValue(3.0f), Limit(1.0f, 8.0f)]
         [EditorDisplay("Camera"), EditorOrder(111), Tooltip("The degree to which the camera will be eased when using camera flight in the editor window (ignored if camera easing degree is enabled).")]
         public float CameraEasingDegree { get; set; } = 3.0f;
+
+        /// <summary>
+        /// Gets or sets the Alt+right mouse button drag zoom speed for viewport cameras.
+        /// </summary>
+        [DefaultValue(DefaultAltRightMouseZoomSpeed), Limit(0.01f, 100.0f, 0.1f)]
+        [EditorDisplay("Camera"), EditorOrder(112), Tooltip("The Alt+right mouse button drag zoom speed for viewport cameras.")]
+        public float AltRightMouseZoomSpeed { get; set; } = DefaultAltRightMouseZoomSpeed;
+
+        /// <summary>
+        /// Gets or sets the sensitivity scale for changing camera movement speed with right mouse button and mouse wheel.
+        /// </summary>
+        [DefaultValue(1.0f), Limit(0.01f, 10.0f, 0.01f)]
+        [EditorDisplay("Camera"), EditorOrder(113), Tooltip("The sensitivity scale for changing viewport camera movement speed with right mouse button and mouse wheel.")]
+        public float CameraMovementSpeedScrollSensitivity { get; set; } = 1.0f;
 
         /// <summary>
         /// Gets or sets the default movement speed for the viewport camera (must be in range between minimum and maximum movement speed values).

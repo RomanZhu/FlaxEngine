@@ -756,6 +756,9 @@ namespace FlaxEditor.Modules
                 // Check if it's an asset
                 if (item.IsAsset)
                 {
+                    if (item is AssetItem assetItem)
+                        Editor.Windows.CloseAllEditors(assetItem);
+
                     // Delete asset by using content pool
                     FlaxEngine.Content.DeleteAsset(path);
                 }
@@ -779,6 +782,61 @@ namespace FlaxEditor.Modules
 
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
+        }
+
+        /// <summary>
+        /// Removes the specified item from the content database without deleting its backing files.
+        /// </summary>
+        /// <param name="item">The item.</param>
+        internal void RemoveFromDatabase(ContentItem item)
+        {
+            if (item == null)
+                throw new ArgumentNullException();
+
+            RemoveFromDatabaseInternal(item);
+
+            if (_enableEvents)
+                WorkspaceModified?.Invoke();
+        }
+
+        private void RemoveFromDatabaseInternal(ContentItem item)
+        {
+            if (_enableEvents)
+                ItemRemoved?.Invoke(item);
+            item.OnDelete();
+            _itemsDeleted++;
+
+            if (item is ContentFolder folder)
+            {
+                if (folder.Children.Count > 0)
+                {
+                    var children = folder.Children.ToArray();
+                    for (int i = 0; i < children.Length; i++)
+                        RemoveFromDatabaseInternal(children[i]);
+                }
+
+                item.ParentFolder = null;
+                folder.Node.Dispose();
+            }
+            else
+            {
+                if (item.Path.Contains(".Build.cs", StringComparison.Ordinal) && item.ItemType == ContentItemType.Script)
+                    Editor.Instance.CodeEditing.RemoveModule(item.Path);
+
+                if (item is AssetItem assetItem)
+                {
+                    Editor.Windows.CloseAllEditors(assetItem);
+                    var asset = FlaxEngine.Content.GetAsset(assetItem.ID);
+                    if (asset)
+                    {
+                        FlaxEngine.Content.UnloadAsset(asset);
+                        FlaxEngine.Scripting.FlushRemovedObjects();
+                    }
+                }
+
+                item.ParentFolder = null;
+                item.Dispose();
+            }
         }
 
         /// <summary>

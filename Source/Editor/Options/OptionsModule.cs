@@ -154,29 +154,40 @@ namespace FlaxEditor.Options
         private static bool MigrateInputBindings(InputOptions input)
         {
             bool migrated = false;
+            if (input.SelectMode == new InputBinding(KeyboardKeys.Q) &&
+                input.TranslateMode == new InputBinding(KeyboardKeys.Q) &&
+                input.RotateMode == new InputBinding(KeyboardKeys.W) &&
+                input.ScaleMode == new InputBinding(KeyboardKeys.E))
+            {
+                input.TranslateMode = new InputBinding(KeyboardKeys.W);
+                input.RotateMode = new InputBinding(KeyboardKeys.E);
+                input.ScaleMode = new InputBinding(KeyboardKeys.R);
+                migrated = true;
+            }
+
             if (input.TranslateMode == new InputBinding(KeyboardKeys.W) &&
                 input.RotateMode == new InputBinding(KeyboardKeys.None) &&
                 input.ScaleMode == new InputBinding(KeyboardKeys.E) &&
                 input.RotateSelection == new InputBinding(KeyboardKeys.None))
             {
-                input.TranslateMode = new InputBinding(KeyboardKeys.Q);
-                input.RotateMode = new InputBinding(KeyboardKeys.W);
+                input.RotateMode = new InputBinding(KeyboardKeys.E);
+                input.ScaleMode = new InputBinding(KeyboardKeys.R);
                 migrated = true;
             }
 
             if (input.TranslateMode == new InputBinding(KeyboardKeys.Alpha1))
             {
-                input.TranslateMode = new InputBinding(KeyboardKeys.Q);
+                input.TranslateMode = new InputBinding(KeyboardKeys.W);
                 migrated = true;
             }
             if (input.RotateMode == new InputBinding(KeyboardKeys.Alpha2))
             {
-                input.RotateMode = new InputBinding(KeyboardKeys.W);
+                input.RotateMode = new InputBinding(KeyboardKeys.E);
                 migrated = true;
             }
             if (input.ScaleMode == new InputBinding(KeyboardKeys.Alpha3))
             {
-                input.ScaleMode = new InputBinding(KeyboardKeys.E);
+                input.ScaleMode = new InputBinding(KeyboardKeys.R);
                 migrated = true;
             }
             if (input.RotateSelection == new InputBinding(KeyboardKeys.R))

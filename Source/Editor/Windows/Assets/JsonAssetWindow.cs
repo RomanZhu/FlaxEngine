@@ -101,7 +101,7 @@ namespace FlaxEditor.Windows.Assets
             _isSettingsAsset = editor.ContentDatabase.GetProxy(item) is SettingsProxy;
 
             // Undo
-            _undo = new Undo();
+            _undo = new Undo(Editor.Undo, this);
             _undo.UndoDone += OnUndoRedo;
             _undo.RedoDone += OnUndoRedo;
             _undo.ActionDone += OnUndoRedo;
@@ -171,7 +171,8 @@ namespace FlaxEditor.Windows.Assets
 
         private void OnUndoRedo(IUndoAction action)
         {
-            OnObjectModified();
+            if (!UndoActionMetadata.IsSelectionOnly(action))
+                OnObjectModified();
             UpdateToolstrip();
         }
 

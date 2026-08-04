@@ -8,6 +8,8 @@ namespace FlaxEditor.GUI.Input
     /// </summary>
     public class SearchBox : TextBox
     {
+        private const float BackgroundValueOffset = -6.0f;
+
         /// <summary>
         /// A button that clears the search bar.
         /// </summary>
@@ -29,10 +31,11 @@ namespace FlaxEditor.GUI.Input
         {
             WatermarkText = "Search...";
             var style = Style.Current;
+            var backgroundColor = AdjustValueUnits(style.BackgroundNormal, BackgroundValueOffset);
             // Search is a primary navigation control. Keep its resting affordance visible
             // instead of relying on hover to reveal an otherwise toolbar-colored field.
-            BackgroundColor = style.BackgroundNormal;
-            BackgroundSelectedColor = Color.Lerp(style.BackgroundNormal, style.Foreground, 0.06f);
+            BackgroundColor = backgroundColor;
+            BackgroundSelectedColor = Color.Lerp(backgroundColor, style.Foreground, 0.06f);
             BorderColor = style.BorderNormal;
             BorderSelectedColor = style.BorderSelected;
             WatermarkTextColor = style.ForegroundGrey;
@@ -45,6 +48,7 @@ namespace FlaxEditor.GUI.Input
                 AnchorPreset = AnchorPresets.TopRight,
                 Text = "",
                 TooltipText = "Cancel Search.",
+                HasBorder = false,
                 BackgroundColor = TextColor,
                 BorderColor = Color.Transparent,
                 BackgroundColorHighlighted = style.ForegroundGrey,
@@ -65,6 +69,13 @@ namespace FlaxEditor.GUI.Input
             ClearSearchButton.HoverEnd += () => _changeCursor = true;
 
             TextChanged += () => ClearSearchButton.Visible = !string.IsNullOrEmpty(Text);
+        }
+
+        private static Color AdjustValueUnits(Color color, float units)
+        {
+            var hsv = color.ToHSV();
+            hsv.Z = Mathf.Saturate(hsv.Z + units / 100.0f);
+            return Color.FromHSV(hsv, color.A);
         }
 
         /// <inheritdoc />

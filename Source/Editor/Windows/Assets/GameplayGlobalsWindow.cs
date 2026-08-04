@@ -455,7 +455,7 @@ namespace FlaxEditor.Windows.Assets
         {
             var inputOptions = Editor.Options.Options.Input;
 
-            _undo = new Undo();
+            _undo = new Undo(Editor.Undo, this);
             _undo.ActionDone += OnUndo;
             _undo.UndoDone += OnUndo;
             _undo.RedoDone += OnUndo;
@@ -497,7 +497,8 @@ namespace FlaxEditor.Windows.Assets
                 return;
 
             UpdateToolstrip();
-            MarkAsEdited();
+            if (!UndoActionMetadata.IsSelectionOnly(action))
+                MarkAsEdited();
         }
 
         private void Reset()

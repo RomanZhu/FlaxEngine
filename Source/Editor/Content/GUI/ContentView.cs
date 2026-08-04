@@ -749,7 +749,7 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
-            if (_isRubberBandSpanning)
+            if (_isRubberBandSpanning && button == MouseButton.Left)
             {
                 _isRubberBandSpanning = false;
                 EndMouseCapture();

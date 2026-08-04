@@ -313,22 +313,26 @@ namespace FlaxEditor.Options
 
         [DefaultValue(typeof(InputBinding), "Q")]
         [EditorDisplay("Gizmo"), EditorOrder(1000)]
-        public InputBinding TranslateMode = new InputBinding(KeyboardKeys.Q);
+        public InputBinding SelectMode = new InputBinding(KeyboardKeys.Q);
 
         [DefaultValue(typeof(InputBinding), "W")]
         [EditorDisplay("Gizmo"), EditorOrder(1010)]
-        public InputBinding RotateMode = new InputBinding(KeyboardKeys.W);
+        public InputBinding TranslateMode = new InputBinding(KeyboardKeys.W);
 
         [DefaultValue(typeof(InputBinding), "E")]
         [EditorDisplay("Gizmo"), EditorOrder(1020)]
-        public InputBinding ScaleMode = new InputBinding(KeyboardKeys.E);
+        public InputBinding RotateMode = new InputBinding(KeyboardKeys.E);
+
+        [DefaultValue(typeof(InputBinding), "R")]
+        [EditorDisplay("Gizmo"), EditorOrder(1030)]
+        public InputBinding ScaleMode = new InputBinding(KeyboardKeys.R);
 
         [DefaultValue(typeof(InputBinding), "Alpha4")]
-        [EditorDisplay("Gizmo"), EditorOrder(1030)]
+        [EditorDisplay("Gizmo"), EditorOrder(1040)]
         public InputBinding ToggleTransformSpace = new InputBinding(KeyboardKeys.Alpha4);
 
         [DefaultValue(typeof(InputBinding), "Z")]
-        [EditorDisplay("Gizmo"), EditorOrder(1040)]
+        [EditorDisplay("Gizmo"), EditorOrder(1050)]
         public InputBinding TogglePivot = new InputBinding(KeyboardKeys.Z);
 
         #endregion

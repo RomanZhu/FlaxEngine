@@ -14,7 +14,7 @@ namespace FlaxEditor.History
     /// </summary>
     /// <seealso cref="IUndoAction" />
     [Serializable]
-    public class UndoActionObject : UndoActionBase<UndoActionObject.DataStorage>
+    public class UndoActionObject : UndoActionBase<UndoActionObject.DataStorage>, IUndoActionMetadata
     {
         /// <summary>
         /// The data value storage to solve issue for flax objects and editor scene tree nodes which are serialized by ref id.
@@ -201,6 +201,27 @@ namespace FlaxEditor.History
 
         /// <inheritdoc />
         public override string ActionString { get; }
+
+        /// <inheritdoc />
+        public UndoActionInfo ActionInfo
+        {
+            get
+            {
+                object target = TargetInstance;
+                if (target == null)
+                {
+                    try
+                    {
+                        target = Data.Instance.Value;
+                    }
+                    catch
+                    {
+                        target = null;
+                    }
+                }
+                return UndoActionInfo.ForObject(ActionString, target);
+            }
+        }
 
         /// <inheritdoc />
         public override void Do()

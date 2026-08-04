@@ -38,10 +38,12 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayGameViewButton;
         private ToolStripButton _overlayCharacterControllerModeButton;
         private ToolStripButton _overlayModeButton;
+        private ToolStripButton _overlaySelectModeButton;
         private ToolStripButton _overlayTranslateModeButton;
         private ToolStripButton _overlayRotateModeButton;
         private ToolStripButton _overlayScaleModeButton;
         private ToolStripButton _overlayTransformSpaceButton;
+        private ToolStripButton _overlayPivotButton;
         private ToolStripButton _overlayAbsoluteSnapButton;
         private ToolStripButton _overlayTranslateSnapButton;
         private ToolStripButton _overlayRotateSnapButton;
@@ -329,6 +331,7 @@ namespace FlaxEditor.Viewport
             Gizmos.ActiveModeChanged += _ => UpdateViewportToolStrip();
             TransformGizmo.ModeChanged += UpdateViewportToolStrip;
             TransformGizmo.TransformSpaceChanged += UpdateViewportToolStrip;
+            TransformGizmo.PivotChanged += UpdateViewportToolStrip;
             AddMainViewportToolStripButtons();
 
             // Setup input actions
@@ -365,6 +368,8 @@ namespace FlaxEditor.Viewport
             _overlayModeButton.LinkTooltip("Scene editing mode.");
 
             var inputOptions = _editor.Options.Options.Input;
+            _overlaySelectModeButton = AddViewportToolStripButton("Select", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.Transform.Select.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Select);
+            _overlaySelectModeButton.LinkTooltip("Select mode.", ref inputOptions.SelectMode);
             _overlayTranslateModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Translate32, ToolStripAnchor.Left, "Flax.Scene.Transform.Translate.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate);
             _overlayTranslateModeButton.LinkTooltip("Translate gizmo mode.", ref inputOptions.TranslateMode);
             _overlayRotateModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Rotate32, ToolStripAnchor.Left, "Flax.Scene.Transform.Rotate.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate);
@@ -377,6 +382,9 @@ namespace FlaxEditor.Viewport
                 _editor.ProjectCache.SetCustomData("TransformSpaceState", TransformGizmo.ActiveTransformSpace.ToString());
             });
             _overlayTransformSpaceButton.LinkTooltip("Toggle gizmo transform space.", ref inputOptions.ToggleTransformSpace);
+            _overlayPivotButton = AddViewportToolStripButton("Center", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.Transform.Pivot.Left", () => TransformGizmo.TogglePivot());
+            _overlayPivotButton.CustomizationLabel = "Pivot / Center";
+            _overlayPivotButton.LinkTooltip("Toggle gizmo pivot between selection center and object pivot.", ref inputOptions.TogglePivot);
             _overlayAbsoluteSnapButton = AddViewportToolStripButton("Abs", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.Transform.AbsoluteSnap.Left", () =>
             {
                 TransformGizmo.AbsoluteSnapEnabled = !TransformGizmo.AbsoluteSnapEnabled;
@@ -900,6 +908,8 @@ namespace FlaxEditor.Viewport
         {
             base.UpdateViewportToolStrip();
             SetViewportToolStripButtonText(_overlayModeButton, GetGizmoModeLabel());
+            if (_overlaySelectModeButton != null)
+                _overlaySelectModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Select;
             if (_overlayTranslateModeButton != null)
                 _overlayTranslateModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Translate;
             if (_overlayRotateModeButton != null)
@@ -911,6 +921,12 @@ namespace FlaxEditor.Viewport
                 var isWorld = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
                 _overlayTransformSpaceButton.Checked = isWorld;
                 SetViewportToolStripButtonText(_overlayTransformSpaceButton, isWorld ? "World" : "Local");
+            }
+            if (_overlayPivotButton != null)
+            {
+                var isObjectPivot = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
+                _overlayPivotButton.Checked = isObjectPivot;
+                SetViewportToolStripButtonText(_overlayPivotButton, isObjectPivot ? "Pivot" : "Center");
             }
             if (_overlayAbsoluteSnapButton != null)
             {
@@ -1170,18 +1186,27 @@ namespace FlaxEditor.Viewport
             base.OnLeftMouseButtonDown();
 
             if (Root.GetMouseButtonDown(MouseButton.Left) && !IsAltKeyDown && !_directionGizmo.IsMouseOver)
+            {
                 _rubberBandSelector.TryStartingRubberBandSelection(_viewMousePos);
+            }
         }
 
         /// <inheritdoc />
         protected override void OnLeftMouseButtonUp()
         {
+            var rubberBandHandled = _rubberBandSelector.ReleaseRubberBandSelection();
+
             // Skip if was controlling mouse or mouse is not over the area
-            if (_prevInput.IsControllingMouse || !Bounds.Contains(ref _viewMousePos) || _directionGizmo.IsMouseOver)
+            var containsViewMouse = ContainsPoint(ref _viewMousePos);
+            if (_prevInput.IsControllingMouse || !containsViewMouse || _directionGizmo.IsMouseOver)
+            {
+                if (rubberBandHandled)
+                    Focus();
                 return;
+            }
 
             // Select rubberbanded rect actor nodes or pick with gizmo
-            if (!_rubberBandSelector.ReleaseRubberBandSelection())
+            if (!rubberBandHandled)
             {
                 // Try to pick something with the current gizmo
                 Gizmos.Active?.Pick();
@@ -1191,6 +1216,30 @@ namespace FlaxEditor.Viewport
             Focus();
 
             base.OnLeftMouseButtonUp();
+        }
+
+        /// <inheritdoc />
+        protected override void OnMiddleMouseButtonDown()
+        {
+            base.OnMiddleMouseButtonDown();
+
+            TryRecenterCameraToMouseHit();
+        }
+
+        private void TryRecenterCameraToMouseHit()
+        {
+            if (IsAltKeyDown || _directionGizmo.IsMouseOver || !(ViewportCamera is FPSCamera fpsCamera))
+                return;
+
+            var ray = ConvertMouseToRay(ref _viewMousePos);
+            var view = new Ray(ViewPosition, ViewDirection);
+            var flags = SceneGraphNode.RayCastData.FlagTypes.SkipTriggers;
+            var hit = SceneGraphRoot.RayCast(ref ray, ref view, out var distance, flags);
+            if (hit == null)
+                return;
+
+            fpsCamera.RecenterView(ray.GetPoint(distance));
+            _mouseDelta = Float2.Zero;
         }
 
         /// <inheritdoc />

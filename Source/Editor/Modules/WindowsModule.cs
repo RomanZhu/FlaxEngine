@@ -10,6 +10,7 @@ using System.Text;
 using System.Xml;
 using FlaxEditor.Content;
 using FlaxEditor.GUI.Dialogs;
+using FlaxEditor.History;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEditor.Windows.Profiler;
@@ -32,6 +33,10 @@ namespace FlaxEditor.Modules
         private DateTime _lastLayoutSaveTime;
         private float _projectIconScreenshotTimeout = -1;
         private string _windowsLayoutPath;
+        private WindowNavigationContext _lastNavigationWindowContext;
+        private bool _suppressWindowNavigation;
+
+        private static readonly bool LogFocusRecovery = false;
 
         private struct WindowRestoreData
         {
@@ -59,6 +64,81 @@ namespace FlaxEditor.Modules
         }
 
         private readonly List<WindowRestoreData> _restoreWindows = new List<WindowRestoreData>();
+        private readonly List<EditorWindow> _focusedWindows = new List<EditorWindow>(32);
+
+        private struct WindowNavigationContext : IEquatable<WindowNavigationContext>
+        {
+            public readonly string Typename;
+            public readonly string Title;
+            public readonly bool IsAssetDocument;
+
+            public bool IsValid => !string.IsNullOrEmpty(Typename);
+
+            public WindowNavigationContext(string typename, string title, bool isAssetDocument)
+            {
+                Typename = typename;
+                Title = title;
+                IsAssetDocument = isAssetDocument;
+            }
+
+            public bool Equals(WindowNavigationContext other)
+            {
+                return string.Equals(Typename, other.Typename, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is WindowNavigationContext other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                return StringComparer.OrdinalIgnoreCase.GetHashCode(Typename ?? string.Empty);
+            }
+        }
+
+        private sealed class WindowNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
+        {
+            private readonly WindowsModule _windows;
+            private readonly WindowNavigationContext _source;
+            private readonly WindowNavigationContext _target;
+
+            public WindowNavigationAction(WindowsModule windows, WindowNavigationContext source, WindowNavigationContext target)
+            {
+                _windows = windows;
+                _source = source;
+                _target = target;
+            }
+
+            public object Owner => _windows;
+
+            public string ActionString => string.Format("Window change: {0} -> {1}", _source.Title, _target.Title);
+
+            public bool IsSameDestination(INavigationHistoryAction other)
+            {
+                return other is WindowNavigationAction action && _target.Equals(action._target);
+            }
+
+            public bool Contains(string typename)
+            {
+                return string.Equals(_source.Typename, typename, StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(_target.Typename, typename, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public void NavigateBack()
+            {
+                _windows.NavigateToWindowContext(_source);
+            }
+
+            public void NavigateForward()
+            {
+                _windows.NavigateToWindowContext(_target);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
 
         /// <summary>
         /// The main editor window.
@@ -739,7 +819,7 @@ namespace FlaxEditor.Modules
             // Try use already opened window
             for (int i = 0; i < Windows.Count; i++)
             {
-                if (string.Equals(Windows[i].SerializationTypename, typename, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(GetWindowNavigationTypename(Windows[i]), typename, StringComparison.OrdinalIgnoreCase))
                     return Windows[i];
             }
 
@@ -796,6 +876,7 @@ namespace FlaxEditor.Modules
                 // Link for main window events
                 MainWindow.Closing += MainWindow_OnClosing;
                 MainWindow.Closed += MainWindow_OnClosed;
+                MainWindow.GUI.UnhandledKeyDown += MainWindow_OnUnhandledKeyDown;
             }
 
             // Create default editor windows
@@ -1052,6 +1133,8 @@ namespace FlaxEditor.Modules
         private void MainWindow_OnClosed()
         {
             Editor.Log("Main window is closed");
+            if (MainWindow != null)
+                MainWindow.GUI.UnhandledKeyDown -= MainWindow_OnUnhandledKeyDown;
             MainWindow = null;
 
             // Capture project icon screenshot (not in play mode and if editor was used for some time)
@@ -1079,10 +1162,127 @@ namespace FlaxEditor.Modules
             WindowAdded?.Invoke(window);
         }
 
+        internal void OnWindowFocused(EditorWindow window)
+        {
+            if (window == null || window.IsDisposing || !Windows.Contains(window))
+                return;
+
+            _focusedWindows.Remove(window);
+            _focusedWindows.Add(window);
+            RecordWindowNavigation(window);
+        }
+
         internal void OnWindowRemove(EditorWindow window)
         {
             Windows.Remove(window);
+            _focusedWindows.Remove(window);
+            ClearFocusForWindow(window);
             WindowRemoved?.Invoke(window);
+            RestoreEditorFocusIfNeeded(window);
+        }
+
+        /// <summary>
+        /// Navigates back to the previous editor context.
+        /// </summary>
+        public void NavigateBack()
+        {
+            Editor.NavigationHistory?.GoBack();
+            RestoreEditorFocusIfNeeded(null);
+        }
+
+        /// <summary>
+        /// Navigates forward to the next editor context.
+        /// </summary>
+        public void NavigateForward()
+        {
+            Editor.NavigationHistory?.GoForward();
+            RestoreEditorFocusIfNeeded(null);
+        }
+
+        /// <summary>
+        /// Removes window navigation actions that reference the specified serialized window typename.
+        /// </summary>
+        /// <param name="typename">The serialized window typename.</param>
+        public void RemoveWindowNavigation(string typename)
+        {
+            if (string.IsNullOrEmpty(typename))
+                return;
+
+            Editor.NavigationHistory?.RemoveActions(x => x is WindowNavigationAction action && action.Contains(typename));
+            if (_lastNavigationWindowContext.IsValid && string.Equals(_lastNavigationWindowContext.Typename, typename, StringComparison.OrdinalIgnoreCase))
+                _lastNavigationWindowContext = default;
+        }
+
+        private void RecordWindowNavigation(EditorWindow window)
+        {
+            var target = GetWindowNavigationContext(window);
+            if (!target.IsValid)
+                return;
+
+            if (_suppressWindowNavigation || Editor.NavigationHistory == null || Editor.NavigationHistory.IsNavigating)
+            {
+                _lastNavigationWindowContext = target;
+                return;
+            }
+
+            var source = _lastNavigationWindowContext;
+            _lastNavigationWindowContext = target;
+            if (!source.IsValid || source.Equals(target))
+                return;
+
+            if (source.IsAssetDocument && target.IsAssetDocument)
+                return;
+
+            Editor.NavigationHistory.AddAction(new WindowNavigationAction(this, source, target));
+        }
+
+        private static WindowNavigationContext GetWindowNavigationContext(EditorWindow window)
+        {
+            if (window == null)
+                return default;
+
+            var title = window.Title;
+            if (string.IsNullOrEmpty(title))
+                title = window.GetType().Name;
+
+            return new WindowNavigationContext(GetWindowNavigationTypename(window), title, window is AssetEditorWindow);
+        }
+
+        private static string GetWindowNavigationTypename(EditorWindow window)
+        {
+            if (window == null)
+                return null;
+
+            var typename = window.SerializationTypename;
+            return !string.IsNullOrEmpty(typename) ? typename : window.GetType().FullName;
+        }
+
+        private bool NavigateToWindowContext(WindowNavigationContext context)
+        {
+            if (!context.IsValid)
+                return false;
+
+            var window = GetWindow(context.Typename);
+            if (window == null)
+            {
+                Editor.LogWarning("Cannot restore window navigation. Missing window: " + context.Title);
+                return false;
+            }
+
+            var wasSuppressed = _suppressWindowNavigation;
+            _suppressWindowNavigation = true;
+            try
+            {
+                window.FocusOrShow();
+                if (!TryFocusEditorWindow(window))
+                    return false;
+                _lastNavigationWindowContext = GetWindowNavigationContext(window);
+                return true;
+            }
+            finally
+            {
+                _suppressWindowNavigation = wasSuppressed;
+            }
         }
 
         /// <inheritdoc />
@@ -1157,6 +1357,8 @@ namespace FlaxEditor.Modules
             Level.SceneUnloading -= OnSceneUnloading;
             Editor.ContentDatabase.WorkspaceRebuilt -= OnWorkspaceRebuilt;
             Editor.StateMachine.StateChanged -= OnEditorStateChanged;
+            if (MainWindow != null)
+                MainWindow.GUI.UnhandledKeyDown -= MainWindow_OnUnhandledKeyDown;
 
             // Close main window
             MainWindow?.Close(ClosingReason.EngineExit);
@@ -1172,6 +1374,205 @@ namespace FlaxEditor.Modules
         }
 
         #region Window Events
+
+        private bool MainWindow_OnUnhandledKeyDown(KeyboardKeys key)
+        {
+            var mainWindow = MainWindow;
+            if (!mainWindow || (!mainWindow.IsFocused && !Platform.HasFocus))
+                return false;
+
+            var input = Editor.Options.Options.Input;
+            if (input.Undo.Process(mainWindow, key))
+            {
+                Editor.PerformUndo();
+                RestoreEditorFocusIfNeeded(null);
+                return true;
+            }
+            if (input.Redo.Process(mainWindow, key))
+            {
+                Editor.PerformRedo();
+                RestoreEditorFocusIfNeeded(null);
+                return true;
+            }
+            if (IsNavigationBackInput(mainWindow, key))
+            {
+                NavigateBack();
+                return true;
+            }
+            if (IsNavigationForwardInput(mainWindow, key))
+            {
+                NavigateForward();
+                return true;
+            }
+
+            return false;
+        }
+
+        internal static bool IsNavigationBackInput(Window window, KeyboardKeys key)
+        {
+            return key == KeyboardKeys.ArrowLeft &&
+                   window.GetKey(KeyboardKeys.Alt) &&
+                   !window.GetKey(KeyboardKeys.Control) &&
+                   !window.GetKey(KeyboardKeys.Shift);
+        }
+
+        internal static bool IsNavigationForwardInput(Window window, KeyboardKeys key)
+        {
+            return key == KeyboardKeys.ArrowRight &&
+                   window.GetKey(KeyboardKeys.Alt) &&
+                   !window.GetKey(KeyboardKeys.Control) &&
+                   !window.GetKey(KeyboardKeys.Shift);
+        }
+
+        private void RestoreEditorFocusIfNeeded(EditorWindow closedWindow)
+        {
+            if (GetFocusedEditorWindow() != null)
+                return;
+
+            if (LogFocusRecovery)
+            {
+                Editor.Log(string.Format("Editor focus lost{0}. AppFocus: {1}, MainWindowFocus: {2}, MainGuiFocus: {3}.",
+                    closedWindow != null ? " after closing " + DescribeWindow(closedWindow) : string.Empty,
+                    Platform.HasFocus,
+                    MainWindow && MainWindow.IsFocused,
+                    DescribeControl(MainWindow ? MainWindow.GUI?.FocusedControl : null)));
+            }
+
+            if (!Platform.HasFocus)
+                return;
+
+            if (TryFocusPreviousEditorWindow(out var restoredWindow))
+            {
+                if (LogFocusRecovery)
+                    Editor.Log("Editor focus restored to " + DescribeWindow(restoredWindow) + ".");
+                return;
+            }
+
+            if (LogFocusRecovery)
+                Editor.Log("Editor focus recovery found no visible editor window to focus.");
+        }
+
+        private EditorWindow GetFocusedEditorWindow()
+        {
+            for (int i = 0; i < Windows.Count; i++)
+            {
+                var window = Windows[i];
+                if (window.IsDisposing || window.IsHidden)
+                    continue;
+                if (window.RootWindow is WindowRootControl root && root.Window && root.Window.IsFocused && window.ContainsFocus)
+                    return window;
+            }
+
+            var mainWindow = MainWindow;
+            var mainRoot = mainWindow ? mainWindow.GUI : null;
+            if (mainWindow && mainWindow.IsFocused)
+            {
+                var window = GetEditorWindow(mainRoot?.FocusedControl);
+                if (window != null && Windows.Contains(window) && !window.IsDisposing && !window.IsHidden)
+                    return window;
+            }
+
+            return null;
+        }
+
+        private static void ClearFocusForWindow(EditorWindow window)
+        {
+            if (window?.RootWindow is WindowRootControl root && GetEditorWindow(root.FocusedControl) == window)
+                root.FocusedControl = null;
+        }
+
+        private bool TryFocusPreviousEditorWindow(out EditorWindow restoredWindow)
+        {
+            for (int i = _focusedWindows.Count - 1; i >= 0; i--)
+            {
+                var window = _focusedWindows[i];
+                if (TryFocusEditorWindow(window))
+                {
+                    restoredWindow = window;
+                    return true;
+                }
+                _focusedWindows.RemoveAt(i);
+            }
+
+            for (int i = Windows.Count - 1; i >= 0; i--)
+            {
+                var window = Windows[i];
+                if (window.IsSelected && TryFocusEditorWindow(window))
+                {
+                    restoredWindow = window;
+                    return true;
+                }
+            }
+
+            if (TryFocusEditorWindow(EditWin))
+            {
+                restoredWindow = EditWin;
+                return true;
+            }
+
+            restoredWindow = null;
+            return false;
+        }
+
+        private bool TryFocusEditorWindow(EditorWindow window)
+        {
+            if (window == null || window.IsDisposing || window.IsHidden || !(window.RootWindow is WindowRootControl root) || !root.Window)
+                return false;
+
+            var rootWindowFocused = root.Window.IsFocused;
+            var focusedControl = root.FocusedControl;
+            if (focusedControl != null)
+            {
+                if (!focusedControl.IsDisposing && focusedControl.RootWindow == root && focusedControl.VisibleInHierarchy && focusedControl.EnabledInHierarchy)
+                {
+                    var focusedWindow = GetEditorWindow(focusedControl);
+                    if (focusedWindow != null && focusedWindow != window)
+                    {
+                        if (rootWindowFocused && Windows.Contains(focusedWindow) && !focusedWindow.IsDisposing && !focusedWindow.IsHidden)
+                            return false;
+                        root.FocusedControl = null;
+                    }
+                }
+                else
+                {
+                    root.FocusedControl = null;
+                }
+            }
+
+            if (!rootWindowFocused)
+                root.Window.Focus();
+            window.Focus();
+            return true;
+        }
+
+        private static EditorWindow GetEditorWindow(Control control)
+        {
+            while (control != null)
+            {
+                if (control is EditorWindow window)
+                    return window;
+                control = control.Parent;
+            }
+            return null;
+        }
+
+        private static string DescribeWindow(EditorWindow window)
+        {
+            return window != null ? string.Format("'{0}' ({1})", window.Title, window.GetType().Name) : "<none>";
+        }
+
+        private static string DescribeControl(Control control)
+        {
+            if (control == null)
+                return "<none>";
+
+            return string.Format("{0} in {1}, Disposing: {2}, Visible: {3}, Enabled: {4}",
+                control.GetType().Name,
+                DescribeWindow(GetEditorWindow(control)),
+                control.IsDisposing,
+                control.VisibleInHierarchy,
+                control.EnabledInHierarchy);
+        }
 
         private void OnEditorStateChanged()
         {

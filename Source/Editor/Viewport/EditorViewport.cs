@@ -249,10 +249,12 @@ namespace FlaxEditor.Viewport
         private float _panningSpeed;
         private bool _relativePanning;
         private bool _invertPanning;
+        private bool _showCameraCenter;
         private ContextMenu _cameraWidgetMenu;
         private ContextMenu _viewLayersMenu;
         private ContextMenu _viewFlagsMenu;
         private ContextMenu _debugViewMenu;
+        private ContextMenuButton _showCameraCenterButton;
         private ToolStripButton _overlayCameraButton;
         private ToolStripButton _overlayFpsButton;
         private ToolStripButton _overlayOrthographicButton;
@@ -261,11 +263,18 @@ namespace FlaxEditor.Viewport
 
         private int _speedStep;
         private int _maxSpeedSteps;
+        private float _cameraMoveSpeedWheelRemainder;
+        private float _cameraMoveSpeedOverlayHideTime = -1.0f;
+        private string _cameraMoveSpeedOverlayText;
 
         /// <summary>
         /// The viewport overlay toolstrip height.
         /// </summary>
         protected const float ViewportToolStripHeight = 22.0f;
+        private const float CameraMoveSpeedOverlayDuration = 0.85f;
+        private const float CameraMoveSpeedOverlayFadeDuration = 0.2f;
+        private const float CameraCenterMarkerSize = 9.0f;
+        private const float CameraCenterMarkerGap = 3.0f;
 
         /// <summary>
         /// Speed of the mouse.
@@ -666,6 +675,8 @@ namespace FlaxEditor.Viewport
                 _nearPlane = cachedFloat;
             if (_editor.ProjectCache.TryGetCustomData("CameraFarPlaneValue", out cachedFloat))
                 _farPlane = cachedFloat;
+            if (_editor.ProjectCache.TryGetCustomData("ShowCameraCenterState", out cachedBool))
+                _showCameraCenter = cachedBool;
 
             OnCameraMovementProgressChanged();
 
@@ -914,13 +925,20 @@ namespace FlaxEditor.Viewport
 
                 // Show
                 {
-                    ViewWidgetShowMenu = new ContextMenu();
+                    ViewWidgetShowMenu = ViewWidgetButtonMenu.AddChildMenu("Show").ContextMenu;
 
                     // Show FPS
                     {
                         InitFpsCounter();
                         _showFpsButton = ViewWidgetShowMenu.AddButton("FPS Counter", () => ShowFpsCounter = !ShowFpsCounter);
                         _showFpsButton.CloseMenuOnClick = false;
+                    }
+
+                    // Show Camera Center
+                    {
+                        _showCameraCenterButton = ViewWidgetShowMenu.AddButton("Camera Center", () => ShowCameraCenter = !ShowCameraCenter);
+                        _showCameraCenterButton.CloseMenuOnClick = false;
+                        UpdateShowCameraCenterButton();
                     }
                 }
 
@@ -1681,6 +1699,61 @@ namespace FlaxEditor.Viewport
             var speed = Mathf.Lerp(_minMovementSpeed, _maxMovementSpeed, progress);
             MovementSpeed = (float)Math.Round(speed, 3);
             _editor.ProjectCache.SetCustomData("CameraMovementSpeedValue", _movementSpeed);
+            ShowCameraMoveSpeedOverlay();
+        }
+
+        private void ShowCameraMoveSpeedOverlay()
+        {
+            _cameraMoveSpeedOverlayText = string.Format(MovementSpeedTextFormat, _movementSpeed) + "x";
+            _cameraMoveSpeedOverlayHideTime = Time.UnscaledGameTime + CameraMoveSpeedOverlayDuration;
+        }
+
+        private void DrawCameraMoveSpeedOverlay()
+        {
+            var timeLeft = _cameraMoveSpeedOverlayHideTime - Time.UnscaledGameTime;
+            if (timeLeft <= 0.0f || string.IsNullOrEmpty(_cameraMoveSpeedOverlayText))
+                return;
+
+            var alpha = Mathf.Saturate(timeLeft / CameraMoveSpeedOverlayFadeDuration);
+            var style = Style.Current;
+            var font = style.FontMedium;
+            var textSize = font.MeasureText(_cameraMoveSpeedOverlayText);
+            var width = Mathf.Max(textSize.X + 20.0f, 54.0f);
+            var height = 24.0f;
+            var bounds = new Rectangle((Width - width) * 0.5f, (Height - height) * 0.5f, width, height);
+
+            StyleRendering.DrawRoundedRectangle(bounds, Color.Black.AlphaMultiplied(0.55f * alpha), Color.White.AlphaMultiplied(0.12f * alpha), 1.0f, 6.0f);
+            Render2D.DrawText(font, _cameraMoveSpeedOverlayText, bounds, Color.White.AlphaMultiplied(alpha), TextAlignment.Center, TextAlignment.Center);
+        }
+
+        private void DrawCameraCenterOverlay()
+        {
+            if (!_showCameraCenter || _camera == null || !_camera.TryGetCameraCenter(out var cameraCenter))
+                return;
+
+            var distance = Vector3.Dot(cameraCenter - ViewPosition, ViewDirection);
+            if (distance <= _nearPlane || distance > _farPlane)
+                return;
+
+            ProjectPoint(cameraCenter, out var center);
+            if (center.X < -CameraCenterMarkerSize || center.Y < -CameraCenterMarkerSize || center.X > Width + CameraCenterMarkerSize || center.Y > Height + CameraCenterMarkerSize)
+                return;
+
+            var shadow = Color.Black.AlphaMultiplied(0.7f);
+            var color = new Color(1.0f, 0.78f, 0.18f, 0.9f);
+            var left = center + new Float2(-CameraCenterMarkerSize, 0.0f);
+            var right = center + new Float2(CameraCenterMarkerSize, 0.0f);
+            var top = center + new Float2(0.0f, -CameraCenterMarkerSize);
+            var bottom = center + new Float2(0.0f, CameraCenterMarkerSize);
+
+            Render2D.DrawLine(left, center + new Float2(-CameraCenterMarkerGap, 0.0f), shadow, 3.0f);
+            Render2D.DrawLine(center + new Float2(CameraCenterMarkerGap, 0.0f), right, shadow, 3.0f);
+            Render2D.DrawLine(top, center + new Float2(0.0f, -CameraCenterMarkerGap), shadow, 3.0f);
+            Render2D.DrawLine(center + new Float2(0.0f, CameraCenterMarkerGap), bottom, shadow, 3.0f);
+            Render2D.DrawLine(left, center + new Float2(-CameraCenterMarkerGap, 0.0f), color, 1.0f);
+            Render2D.DrawLine(center + new Float2(CameraCenterMarkerGap, 0.0f), right, color, 1.0f);
+            Render2D.DrawLine(top, center + new Float2(0.0f, -CameraCenterMarkerGap), color, 1.0f);
+            Render2D.DrawLine(center + new Float2(0.0f, CameraCenterMarkerGap), bottom, color, 1.0f);
         }
 
         private void OnEditorOptionsChanged(EditorOptions options)
@@ -1748,6 +1821,29 @@ namespace FlaxEditor.Viewport
                 _showFpsButton.Icon = value ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
                 UpdateViewportToolStrip();
             }
+        }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to show or hide the viewport camera center.
+        /// </summary>
+        public bool ShowCameraCenter
+        {
+            get => _showCameraCenter;
+            set
+            {
+                if (_showCameraCenter == value)
+                    return;
+
+                _showCameraCenter = value;
+                UpdateShowCameraCenterButton();
+                _editor.ProjectCache.SetCustomData("ShowCameraCenterState", _showCameraCenter);
+            }
+        }
+
+        private void UpdateShowCameraCenterButton()
+        {
+            if (_showCameraCenterButton != null)
+                _showCameraCenterButton.Icon = _showCameraCenter ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
         }
 
         private void InitFpsCounter()
@@ -1952,6 +2048,15 @@ namespace FlaxEditor.Viewport
             win.MouseMoveRelative -= OnMouseMoveRelative;
         }
 
+        private void ResetMouseDeltaState()
+        {
+            _startPos = _viewMousePos;
+            _mouseDelta = Float2.Zero;
+            _mouseDeltaLast = Float2.Zero;
+            _deltaFilteringStep = 0;
+            Array.Clear(_deltaFilteringBuffer, 0, _deltaFilteringBuffer.Length);
+        }
+
         /// <summary>
         /// Called when left mouse button goes down (on press).
         /// </summary>
@@ -2072,7 +2177,8 @@ namespace FlaxEditor.Viewport
                 if (useViewportMouseInput)
                     hit = null;
 #endif
-                if (canUseInput && (ContainsFocus || useViewportMouseInput) && hit == null)
+                var shouldGatherInput = canUseInput && (ContainsFocus || useViewportMouseInput) && hit == null;
+                if (shouldGatherInput)
                     _input.Gather(win.Window, useMouse, ref _prevInput);
                 else
                     _input.Clear();
@@ -2146,12 +2252,23 @@ namespace FlaxEditor.Viewport
                     _input.IsZooming = wheelZooming || _input.IsAltRightMouseZooming;
                     _input.IsOrbiting = isAltDown && lbDown && !mbDown && !rbDown;
 
+                    if ((_input.IsOrbiting && !_prevInput.IsOrbiting) || (_prevInput.IsOrbiting && !_input.IsOrbiting && lbDown))
+                    {
+                        ResetMouseDeltaState();
+                        _camera?.CancelInputInertia();
+                    }
+
                     // Control move speed with RMB+Wheel
                     rmbWheel = useMovementSpeed && !isAltNavigation && (_input.IsMouseRightDown || _isVirtualMouseRightDown) && wheelInUse;
                     if (rmbWheel)
                     {
-                        var step = _input.MouseWheelDelta * options.Viewport.MouseWheelSensitivity;
-                        AdjustCameraMoveSpeed(step > 0.0f ? 1 : -1);
+                        _cameraMoveSpeedWheelRemainder += _input.MouseWheelDelta * options.Viewport.CameraMovementSpeedScrollSensitivity;
+                        var step = _cameraMoveSpeedWheelRemainder > 0.0f ? Mathf.FloorToInt(_cameraMoveSpeedWheelRemainder) : Mathf.CeilToInt(_cameraMoveSpeedWheelRemainder);
+                        if (step != 0)
+                        {
+                            _cameraMoveSpeedWheelRemainder -= step;
+                            AdjustCameraMoveSpeed(step);
+                        }
                     }
                 }
 
@@ -2256,7 +2373,8 @@ namespace FlaxEditor.Viewport
                 {
                     if (_input.IsAltRightMouseZooming)
                     {
-                        _orthoSize = Mathf.Max(0.001f, _orthoSize - GetAltRightMouseZoomDelta(ref mouseDelta) * options.Viewport.MouseWheelSensitivity * 0.01f * _orthoSize);
+                        var altRightMouseZoomScale = options.Viewport.AltRightMouseZoomSpeed / ViewportOptions.DefaultAltRightMouseZoomSpeed;
+                        _orthoSize = Mathf.Max(0.001f, _orthoSize - GetAltRightMouseZoomDelta(ref mouseDelta) * options.Viewport.MouseWheelSensitivity * altRightMouseZoomScale * 0.01f * _orthoSize);
                     }
                     else
                     {
@@ -2347,9 +2465,14 @@ namespace FlaxEditor.Viewport
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
             Focus();
-
             base.OnMouseDown(location, button);
             return true;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            return base.OnMouseUp(location, button);
         }
 
         /// <inheritdoc />
@@ -2418,6 +2541,8 @@ namespace FlaxEditor.Viewport
         public override void Draw()
         {
             base.Draw();
+            DrawCameraCenterOverlay();
+            DrawCameraMoveSpeedOverlay();
 
             // Add overlay during debugger breakpoint hang
             if (_editor.Simulation.IsDuringBreakpointHang)

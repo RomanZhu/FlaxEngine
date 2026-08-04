@@ -1087,12 +1087,15 @@ namespace FlaxEditor.GUI.Timeline
                 }
                 OnContextMenu(menu);
                 menu.Show(this, location);
+                Focus();
+                return true;
             }
-            else if (button == MouseButton.Left)
-            {
-                // Clear flag
-                _isMouseDown = false;
-            }
+
+            if (button != MouseButton.Left)
+                return true;
+
+            // Clear flag
+            _isMouseDown = false;
 
             // Prevent from selecting track when user is just clicking at an arrow
             if (!_mouseOverArrow)

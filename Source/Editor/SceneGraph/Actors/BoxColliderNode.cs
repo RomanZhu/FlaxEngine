@@ -6,6 +6,7 @@ using Real = System.Double;
 using Real = System.Single;
 #endif
 
+using System.Collections.Generic;
 using FlaxEngine;
 using FlaxEditor.CustomEditors.Dedicated;
 using FlaxEditor.CustomEditors;
@@ -72,6 +73,29 @@ namespace FlaxEditor.SceneGraph.Actors
             }
 
             return base.RayCastSelf(ref ray, out distance, out normal);
+        }
+
+        /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, out Vector3 result)
+        {
+            var box = ((BoxCollider)_actor).OrientedBox;
+            var corners = box.GetCorners();
+            return FindClosestVertexToRay(ref ray, corners, corners.Length, out result);
+        }
+
+        /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, out Vector3 result, out Real screenDistance)
+        {
+            var box = ((BoxCollider)_actor).OrientedBox;
+            var corners = box.GetCorners();
+            return FindClosestVertexToScreen(ref ray, viewport, mousePosition, corners, corners.Length, hitDistance, out result, out screenDistance);
+        }
+
+        /// <inheritdoc />
+        public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
+            var box = ((BoxCollider)_actor).OrientedBox;
+            GetBoxVertexSnapEdges(box.GetCorners(), vertex, connectedVertices);
         }
 
         /// <inheritdoc />

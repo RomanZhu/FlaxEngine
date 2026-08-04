@@ -226,15 +226,15 @@ namespace FlaxEditor.Viewport.Widgets
             if (button == MouseButton.Left)
             {
                 _isMosueDown = true;
-            }
-            if (_autoCheck)
-            {
-                // Toggle
-                Checked = !_checked;
-                Toggled?.Invoke(this);
-            }
+                if (_autoCheck)
+                {
+                    // Toggle
+                    Checked = !_checked;
+                    Toggled?.Invoke(this);
+                }
 
-            _cm?.Show(this, new Float2(-1, Height + 2));
+                _cm?.Show(this, new Float2(-1, Height + 2));
+            }
 
             return base.OnMouseDown(location, button);
         }

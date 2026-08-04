@@ -1,10 +1,13 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using System;
 using System.Collections.Generic;
 using FlaxEditor.Content;
 using FlaxEditor.Content.GUI;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.Tree;
+using FlaxEditor.History;
+using FlaxEditor.SceneGraph;
 
 namespace FlaxEditor.Windows
 {
@@ -12,17 +15,241 @@ namespace FlaxEditor.Windows
     {
         private static readonly List<ContentFolderTreeNode> NavUpdateCache = new List<ContentFolderTreeNode>(8);
 
+        private sealed class ContentFolderNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
+        {
+            private readonly ContentWindow _window;
+            private readonly ContentFolderTreeNode _source;
+            private readonly ContentFolderTreeNode _target;
+
+            public ContentFolderNavigationAction(ContentWindow window, ContentFolderTreeNode source, ContentFolderTreeNode target)
+            {
+                _window = window;
+                _source = source;
+                _target = target;
+            }
+
+            public object Owner => _window;
+
+            public string ActionString => "Content folder change";
+
+            public bool IsSameDestination(INavigationHistoryAction other)
+            {
+                return other is ContentFolderNavigationAction action &&
+                       action.Owner == Owner &&
+                       action._target == _target;
+            }
+
+            public bool Contains(ContentFolderTreeNode node)
+            {
+                return _source == node || _target == node;
+            }
+
+            public void NavigateBack()
+            {
+                _window.DoNavigateFromHistory(_source);
+            }
+
+            public void NavigateForward()
+            {
+                _window.DoNavigateFromHistory(_target);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class ContentSelectionNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
+        {
+            private readonly ContentWindow _window;
+            private readonly string[] _source;
+            private readonly string[] _target;
+
+            public ContentSelectionNavigationAction(ContentWindow window, string[] source, string[] target)
+            {
+                _window = window;
+                _source = source ?? Array.Empty<string>();
+                _target = target ?? Array.Empty<string>();
+            }
+
+            public object Owner => _window;
+
+            public string ActionString => "Content selection change";
+
+            public bool IsSameDestination(INavigationHistoryAction other)
+            {
+                return other is ContentSelectionNavigationAction action &&
+                       action.Owner == Owner &&
+                       AreSameContentSelection(action._target, _target);
+            }
+
+            public bool Contains(string path)
+            {
+                return Contains(_source, path) || Contains(_target, path);
+            }
+
+            public void NavigateBack()
+            {
+                _window.DoSelectContentItemsFromHistory(_source);
+            }
+
+            public void NavigateForward()
+            {
+                _window.DoSelectContentItemsFromHistory(_target);
+            }
+
+            public void Dispose()
+            {
+            }
+
+            private static bool Contains(string[] paths, string path)
+            {
+                for (int i = 0; i < paths.Length; i++)
+                {
+                    if (paths[i].Equals(path, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                return false;
+            }
+        }
+
+        private sealed class ContentSelectionUndoAction : IUndoAction, IUndoActionMetadata
+        {
+            private ContentWindow _window;
+            private readonly string[] _source;
+            private readonly string[] _target;
+            private readonly SceneGraphNode[] _sourceSceneSelection;
+            private readonly SceneGraphNode[] _targetSceneSelection;
+
+            public ContentSelectionUndoAction(ContentWindow window, string[] source, string[] target, SceneGraphNode[] sourceSceneSelection, SceneGraphNode[] targetSceneSelection)
+            {
+                _window = window;
+                _source = source ?? Array.Empty<string>();
+                _target = target ?? Array.Empty<string>();
+                _sourceSceneSelection = sourceSceneSelection ?? Array.Empty<SceneGraphNode>();
+                _targetSceneSelection = targetSceneSelection ?? Array.Empty<SceneGraphNode>();
+            }
+
+            public string ActionString => "Content selection change";
+
+            public bool IsSameTransition(ContentWindow window, string[] source, string[] target, SceneGraphNode[] sourceSceneSelection, SceneGraphNode[] targetSceneSelection)
+            {
+                return _window == window &&
+                       AreSameContentSelection(_source, source) &&
+                       AreSameContentSelection(_target, target) &&
+                       AreSameSceneSelection(_sourceSceneSelection, sourceSceneSelection) &&
+                       AreSameSceneSelection(_targetSceneSelection, targetSceneSelection);
+            }
+
+            public UndoActionInfo ActionInfo => new UndoActionInfo
+            {
+                Operation = ActionString,
+                TargetType = GetSelectionTargetType(_target),
+                TargetName = DescribeSelection(_source) + " -> " + DescribeSelection(_target),
+                TargetPath = _target.Length == 1 ? _target[0] : null,
+                SecondaryTargetPath = _source.Length == 1 ? _source[0] : null,
+                DisplayEditorTypeName = typeof(ContentWindow).FullName,
+                Flags = UndoActionFlags.SelectionOnly,
+                SizeInBytes = 0,
+            };
+
+            public void Do()
+            {
+                _window?.RestoreContentSelectionFromUndo(_target, _targetSceneSelection);
+            }
+
+            public void Undo()
+            {
+                _window?.RestoreContentSelectionFromUndo(_source, _sourceSceneSelection);
+            }
+
+            public void Dispose()
+            {
+                _window = null;
+            }
+
+            private static bool AreSameSceneSelection(SceneGraphNode[] a, SceneGraphNode[] b)
+            {
+                a ??= Array.Empty<SceneGraphNode>();
+                b ??= Array.Empty<SceneGraphNode>();
+                if (a.Length != b.Length)
+                    return false;
+                for (int i = 0; i < a.Length; i++)
+                {
+                    if (!ReferenceEquals(a[i], b[i]))
+                        return false;
+                }
+                return true;
+            }
+
+            private static UndoActionTargetType GetSelectionTargetType(string[] paths)
+            {
+                if (paths == null || paths.Length == 0)
+                    return UndoActionTargetType.Unknown;
+                return paths.Length == 1 ? UndoActionTargetType.ContentItem : UndoActionTargetType.Multiple;
+            }
+
+            private static string DescribeSelection(string[] paths)
+            {
+                if (paths == null || paths.Length == 0)
+                    return "<empty>";
+                return paths.Length == 1 ? paths[0] : paths.Length + " content items";
+            }
+        }
+
+        private sealed class ContentOpenNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
+        {
+            private readonly ContentWindow _window;
+            private readonly string[] _sourceSelection;
+            private readonly string _targetPath;
+
+            public ContentOpenNavigationAction(ContentWindow window, string[] sourceSelection, string targetPath)
+            {
+                _window = window;
+                _sourceSelection = sourceSelection ?? Array.Empty<string>();
+                _targetPath = targetPath;
+            }
+
+            public object Owner => _window;
+
+            public string ActionString => "Open content item";
+
+            public bool IsSameDestination(INavigationHistoryAction other)
+            {
+                return other is ContentOpenNavigationAction action &&
+                       action.Owner == Owner &&
+                       action._targetPath.Equals(_targetPath, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public bool Contains(string path)
+            {
+                return _targetPath.Equals(path, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public void NavigateBack()
+            {
+                _window.DoSelectContentItemsFromHistory(_sourceSelection);
+            }
+
+            public void NavigateForward()
+            {
+                _window.DoOpenContentItemFromHistory(_targetPath);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
         private void OnTreeSelectionChanged(List<TreeNode> from, List<TreeNode> to)
         {
             if (_isClearingSelection)
             {
                 UpdateUI();
+                _lastContentSelectionPaths = GetContentSelectionPaths();
                 SelectionChanged?.Invoke();
                 return;
             }
-
-            if (_showAllContentInTree)
-                ClearSceneSelection();
 
             bool setLastViewFolder = !IsLayoutLocked;
             if (!_showAllContentInTree && to.Count > 1)
@@ -41,7 +268,7 @@ namespace FlaxEditor.Windows
                         SaveLastViewedFolder(activeNode as ContentFolderTreeNode);
                 }
                 UpdateUI();
-                SelectionChanged?.Invoke();
+                NotifyTreeContentSelectionChanged();
                 return;
             }
 
@@ -54,7 +281,7 @@ namespace FlaxEditor.Windows
                     SaveLastViewedFolder(itemNode2.Item?.ParentFolder?.Node);
                 UpdateUI();
                 itemNode2.Focus();
-                SelectionChanged?.Invoke();
+                NotifyTreeContentSelectionChanged();
                 return;
             }
 
@@ -65,7 +292,7 @@ namespace FlaxEditor.Windows
                 SaveLastViewedFolder(target);
             target?.Focus();
             if (_showAllContentInTree)
-                SelectionChanged?.Invoke();
+                NotifyTreeContentSelectionChanged();
         }
 
         /// <summary>
@@ -100,6 +327,9 @@ namespace FlaxEditor.Windows
                 // Clear redo list
                 _navigationRedo.Clear();
 
+                if (source != null)
+                    Editor.NavigationHistory.AddAction(new ContentFolderNavigationAction(this, source, target));
+
                 DoNavigate(target);
             }
         }
@@ -123,7 +353,7 @@ namespace FlaxEditor.Windows
 
                 DoNavigate(node);
                 if (!_showAllContentInTree)
-                    _view.SelectFirstItem();
+                    RunWithContentSelectionHistorySuppressed(() => _view.SelectFirstItem());
             }
         }
 
@@ -146,7 +376,7 @@ namespace FlaxEditor.Windows
 
                 DoNavigate(node);
                 if (!_showAllContentInTree)
-                    _view.SelectFirstItem();
+                    RunWithContentSelectionHistorySuppressed(() => _view.SelectFirstItem());
             }
         }
 
@@ -173,7 +403,34 @@ namespace FlaxEditor.Windows
         {
             _navigationUndo.Clear();
             _navigationRedo.Clear();
+            Editor.NavigationHistory.RemoveActions(x =>
+                x is ContentFolderNavigationAction folderAction && folderAction.Owner == this ||
+                x is ContentSelectionNavigationAction selectionAction && selectionAction.Owner == this ||
+                x is ContentOpenNavigationAction openAction && openAction.Owner == this);
             UpdateUI();
+        }
+
+        private void DoNavigateFromHistory(ContentFolderTreeNode node)
+        {
+            if (node == null)
+                return;
+
+            var wasSuppressed = _suppressContentSelectionNavigation;
+            _suppressContentSelectionNavigation = true;
+            try
+            {
+                _navigationUndo.Clear();
+                _navigationRedo.Clear();
+                _navigationUnlocked = false;
+                DoNavigate(node);
+                if (!_showAllContentInTree)
+                    _view.SelectFirstItem();
+            }
+            finally
+            {
+                _lastContentSelectionPaths = GetContentSelectionPaths();
+                _suppressContentSelectionNavigation = wasSuppressed;
+            }
         }
 
         private void DoNavigate(ContentFolderTreeNode node)
@@ -200,6 +457,240 @@ namespace FlaxEditor.Windows
             // Clear auto-select cache for new/imported files
             _newFilesCache?.Clear();
             _newFilesCacheSize = 0;
+        }
+
+        private void RecordContentSelectionNavigation()
+        {
+            var source = _lastContentSelectionPaths ?? Array.Empty<string>();
+            var target = GetContentSelectionPaths();
+            _lastContentSelectionPaths = target;
+            if (IsContentSelectionHistorySuppressed || AreSameContentSelection(source, target))
+                return;
+
+            var currentSceneSelection = Editor.SceneEditing.Selection.ToArray();
+            var sourceSceneSelection = currentSceneSelection;
+            var targetSceneSelection = currentSceneSelection;
+            if (target.Length != 0)
+                targetSceneSelection = Array.Empty<SceneGraphNode>();
+            if (source.Length != 0 && target.Length == 0 && currentSceneSelection.Length != 0)
+                sourceSceneSelection = Array.Empty<SceneGraphNode>();
+
+            var previousSelectionAction = Editor.Undo.UndoOperationsStack.PeekHistory() as ContentSelectionUndoAction;
+            if (previousSelectionAction == null || !previousSelectionAction.IsSameTransition(this, source, target, sourceSceneSelection, targetSceneSelection))
+                Editor.Undo.AddAction(new ContentSelectionUndoAction(this, source, target, sourceSceneSelection, targetSceneSelection));
+            Editor.NavigationHistory.AddAction(new ContentSelectionNavigationAction(this, source, target));
+        }
+
+        private void DoSelectContentItemsFromHistory(string[] paths, bool focusWindow = true)
+        {
+            var wasSuppressed = _suppressContentSelectionNavigation;
+            _suppressContentSelectionNavigation = true;
+            try
+            {
+                if (focusWindow)
+                    FocusOrShow();
+                if (paths == null || paths.Length == 0)
+                {
+                    ClearSelection(false);
+                    _lastContentSelectionPaths = Array.Empty<string>();
+                    return;
+                }
+
+                var items = new List<ContentItem>(paths.Length);
+                ContentFolder folder = null;
+                for (int i = 0; i < paths.Length; i++)
+                {
+                    var item = Editor.ContentDatabase.Find(paths[i]);
+                    if (item == null)
+                        continue;
+                    items.Add(item);
+                    folder ??= item as ContentFolder ?? item.ParentFolder;
+                }
+                if (items.Count == 0)
+                    return;
+
+                if (_showAllContentInTree)
+                {
+                    if (focusWindow)
+                    {
+                        for (int i = 0; i < items.Count; i++)
+                            Select(items[i], true, i != 0);
+                    }
+                    else
+                    {
+                        for (int i = 0; i < items.Count; i++)
+                            SelectInTreeWithoutFocus(items[i], i != 0);
+                    }
+                }
+                else
+                {
+                    if (folder?.Node != null && SelectedNode != folder.Node)
+                    {
+                        _navigationUnlocked = false;
+                        DoNavigate(folder.Node);
+                    }
+                    _view.Select(items);
+                    if (focusWindow)
+                    {
+                        _contentViewPanel.ScrollViewTo(items[0], true);
+                        _view.Focus();
+                    }
+                }
+            }
+            finally
+            {
+                _lastContentSelectionPaths = GetContentSelectionPaths();
+                _suppressContentSelectionNavigation = wasSuppressed;
+            }
+        }
+
+        internal string[] GetSelectionPathsForSceneUndo()
+        {
+            return GetContentSelectionPaths();
+        }
+
+        internal void RestoreSelectionFromSceneUndo(string[] paths)
+        {
+            DoSelectContentItemsFromHistory(paths, paths != null && paths.Length != 0);
+        }
+
+        private void RestoreContentSelectionFromUndo(string[] paths, SceneGraphNode[] sceneSelection)
+        {
+            var hasContentSelection = paths != null && paths.Length != 0;
+            var hasSceneSelection = sceneSelection != null && sceneSelection.Length != 0;
+            DoSelectContentItemsFromHistory(paths, hasContentSelection || !hasSceneSelection);
+            RestoreSceneSelectionFromContentUndo(sceneSelection);
+        }
+
+        private void RestoreSceneSelectionFromContentUndo(SceneGraphNode[] sceneSelection)
+        {
+            if (sceneSelection == null || sceneSelection.Length == 0)
+            {
+                Editor.SceneEditing.Deselect(false);
+                return;
+            }
+
+            var nodes = new List<SceneGraphNode>(sceneSelection.Length);
+            for (int i = 0; i < sceneSelection.Length; i++)
+            {
+                if (sceneSelection[i] != null)
+                    nodes.Add(sceneSelection[i]);
+            }
+            if (nodes.Count != 0)
+                Editor.SceneEditing.Select(nodes, false, false);
+            else
+                Editor.SceneEditing.Deselect(false);
+        }
+
+        private void NotifyTreeContentSelectionChanged()
+        {
+            if (_showAllContentInTree)
+            {
+                RecordContentSelectionNavigation();
+                if (!IsContentSelectionHistorySuppressed)
+                    ClearSceneSelection();
+            }
+            SelectionChanged?.Invoke();
+        }
+
+        private bool IsContentSelectionHistorySuppressed => _suppressContentSelectionNavigation || _isClearingSelection || (Editor.Undo != null && Editor.Undo.IsPerformingUndoRedo);
+
+        private void RunWithContentSelectionHistorySuppressed(Action action)
+        {
+            var wasSuppressed = _suppressContentSelectionNavigation;
+            _suppressContentSelectionNavigation = true;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                _lastContentSelectionPaths = GetContentSelectionPaths();
+                _suppressContentSelectionNavigation = wasSuppressed;
+            }
+        }
+
+        private void SelectInTreeWithoutFocus(ContentItem item, bool additive)
+        {
+            var parent = item.ParentFolder;
+            if (parent == null || !parent.Visible)
+                return;
+
+            var targetNode = item is ContentFolder folder ? folder.Node : parent.Node;
+            if (targetNode == null)
+                return;
+
+            targetNode.ExpandAllParents();
+            if (item is ContentFolder)
+            {
+                _tree.Select(targetNode, additive);
+                return;
+            }
+
+            var itemNode = FindTreeItemNode(targetNode, item);
+            TreeNode nodeToSelect = itemNode != null ? itemNode : targetNode;
+            _tree.Select(nodeToSelect, additive);
+        }
+
+        private void RecordContentOpenNavigation(ContentItem item)
+        {
+            if (_suppressContentOpenNavigation || item == null || item.IsFolder)
+                return;
+
+            var targetPath = item.Path;
+            if (_lastContentOpenPath != null && _lastContentOpenPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _lastContentOpenPath = targetPath;
+            Editor.NavigationHistory.AddAction(new ContentOpenNavigationAction(this, _lastContentSelectionPaths, targetPath));
+        }
+
+        private void DoOpenContentItemFromHistory(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return;
+
+            var item = Editor.ContentDatabase.Find(path);
+            if (item == null)
+                return;
+
+            _suppressContentOpenNavigation = true;
+            try
+            {
+                Open(item);
+            }
+            finally
+            {
+                _lastContentOpenPath = path;
+                _suppressContentOpenNavigation = false;
+            }
+        }
+
+        private string[] GetContentSelectionPaths()
+        {
+            var selection = Selection;
+            if (selection.Count == 0)
+                return Array.Empty<string>();
+
+            var result = new List<string>(selection.Count);
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] != null)
+                    result.Add(selection[i].Path);
+            }
+            return result.ToArray();
+        }
+
+        private static bool AreSameContentSelection(string[] a, string[] b)
+        {
+            if (a.Length != b.Length)
+                return false;
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (!a[i].Equals(b[i], StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            return true;
         }
 
         private void UpdateNavigationBar()

@@ -7,6 +7,7 @@ using Real = System.Single;
 #endif
 
 using System;
+using System.Collections.Generic;
 using FlaxEngine;
 
 namespace FlaxEditor.SceneGraph.Actors
@@ -111,6 +112,24 @@ namespace FlaxEditor.SceneGraph.Actors
             }
 
             /// <inheritdoc />
+            public override bool OnVertexSnap(ref Ray ray, Real hitDistance, out Vector3 result)
+            {
+                return ((BoxVolumeNode)ParentNode).OnVertexSnap(ref ray, hitDistance, out result);
+            }
+
+            /// <inheritdoc />
+            public override bool OnVertexSnap(ref Ray ray, Real hitDistance, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, out Vector3 result, out Real screenDistance)
+            {
+                return ((BoxVolumeNode)ParentNode).OnVertexSnap(ref ray, hitDistance, viewport, mousePosition, out result, out screenDistance);
+            }
+
+            /// <inheritdoc />
+            public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+            {
+                ((BoxVolumeNode)ParentNode).OnVertexSnapEdges(vertex, connectedVertices);
+            }
+
+            /// <inheritdoc />
             public override unsafe void OnDebugDraw(ViewportDebugDrawData data)
             {
                 // Draw box volume debug shapes
@@ -193,6 +212,29 @@ namespace FlaxEditor.SceneGraph.Actors
             var actor = (BoxVolume)_actor;
             var box = actor.OrientedBox;
             return Utilities.Utils.RayCastWire(ref box, ref ray.Ray, out distance, ref ray.View.Position);
+        }
+
+        /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, out Vector3 result)
+        {
+            var box = ((BoxVolume)_actor).OrientedBox;
+            var corners = box.GetCorners();
+            return FindClosestVertexToRay(ref ray, corners, corners.Length, out result);
+        }
+
+        /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, out Vector3 result, out Real screenDistance)
+        {
+            var box = ((BoxVolume)_actor).OrientedBox;
+            var corners = box.GetCorners();
+            return FindClosestVertexToScreen(ref ray, viewport, mousePosition, corners, corners.Length, hitDistance, out result, out screenDistance);
+        }
+
+        /// <inheritdoc />
+        public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
+            var box = ((BoxVolume)_actor).OrientedBox;
+            GetBoxVertexSnapEdges(box.GetCorners(), vertex, connectedVertices);
         }
     }
 }

@@ -69,6 +69,7 @@ namespace FlaxEditor.Surface
         : base(owner, onSave, undo, null, null, true)
         {
             _supportsImplicitCastFromObjectToBoolean = true;
+            PanWithMiddleMouse = true;
             DragHandlers.Add(_dragActors = new DragActors(ValidateDragActor));
             ScriptsBuilder.ScriptsReloadBegin += OnScriptsReloadBegin;
         }

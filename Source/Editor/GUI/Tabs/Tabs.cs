@@ -44,7 +44,7 @@ namespace FlaxEditor.GUI.Tabs
             /// <inheritdoc />
             public override bool OnMouseUp(Float2 location, MouseButton button)
             {
-                if (EnabledInHierarchy && Tab.Enabled)
+                if (button == MouseButton.Left && EnabledInHierarchy && Tab.Enabled)
                 {
                     Tabs.SelectedTab = Tab;
                     Tab.PerformLayout(true);

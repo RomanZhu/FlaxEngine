@@ -53,7 +53,7 @@ namespace FlaxEditor.Gizmo
 
         private BoundingBox CenterBoxRaw = new BoundingBox(new Vector3(-0.5f * CenterBoxScale), new Vector3(0.5f * CenterBoxScale));
         private OrientedBoundingBox CenterBox => new OrientedBoundingBox(CenterBoxRaw) * _gizmoWorld;
-        private const float RotateRadiusRaw = 4.0f;
+        private const float RotateRadiusRaw = 3.2f;
         private const float RotateTrackballSensitivity = 1.0f / 60.0f;
 
         private Mode _activeMode = Mode.Translate;
@@ -109,7 +109,7 @@ namespace FlaxEditor.Gizmo
                     _isTransforming = false;
                     _isDuplicating = false;
                     _startTransforms.Clear();
-                    ClearTransformInteraction();
+                    ClearTransformInteraction(!_isVertexSnapTemporaryPivot);
                     _activePivotType = value;
                     PivotChanged?.Invoke();
                 }
@@ -134,7 +134,7 @@ namespace FlaxEditor.Gizmo
                     _isTransforming = false;
                     _isDuplicating = false;
                     _startTransforms.Clear();
-                    ClearTransformInteraction();
+                    ClearTransformInteraction(!_isVertexSnapTemporaryPivot);
                     _activeMode = value;
                     ModeChanged?.Invoke();
                 }

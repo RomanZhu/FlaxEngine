@@ -53,6 +53,7 @@ namespace FlaxEditor.GUI.Tree
         private bool _textChanged;
         private bool _isMouseDown;
         private bool _mouseDownOverArrow;
+        private bool _mouseDownRecursiveToggle;
         private float _mouseDownTime;
         private Float2 _mouseDownPos;
         private float _suppressLeftMouseUpUntil = -1.0f;
@@ -524,8 +525,8 @@ namespace FlaxEditor.GUI.Tree
         {
             _arrowMouseCaptureSuppressActions = true;
             _arrowMouseCaptureActive = true;
-            _arrowMouseCaptureExpand = !_opened;
-            _arrowMouseCaptureRecursive = ParentTree?.Root?.GetKey(KeyboardKeys.Alt) ?? false;
+            _arrowMouseCaptureRecursive = IsRecursiveToggleModifierDown();
+            _arrowMouseCaptureExpand = ShouldExpandRecursiveToggle(_arrowMouseCaptureRecursive);
             _arrowMouseCaptureParent = Parent;
 
             if (_arrowMouseCaptureProcessedNodes == null)
@@ -535,6 +536,47 @@ namespace FlaxEditor.GUI.Tree
 
             StartMouseCapture();
             ApplyArrowMouseCapture(this);
+        }
+
+        private bool IsVisibleRootNode => Parent is TreeNode parentNode && !parentNode.ShowHeader;
+
+        /// <summary>
+        /// Gets a value indicating whether recursive collapse animation should be skipped for this node.
+        /// </summary>
+        protected virtual bool SkipRecursiveCollapseAnimation => false;
+
+        private bool IsRecursiveToggleModifierDown()
+        {
+            return (ParentTree?.Root?.GetKey(KeyboardKeys.Alt) ?? false) || FlaxEngine.Input.GetKey(KeyboardKeys.Alt);
+        }
+
+        private bool IsHierarchyFullyExpanded()
+        {
+            if (!_opened)
+                return false;
+
+            for (int i = 0; i < _children.Count; i++)
+            {
+                if (_children[i] is TreeNode node && node.Visible && node.HasAnyVisibleChild && !node.IsHierarchyFullyExpanded())
+                    return false;
+            }
+
+            return true;
+        }
+
+        private bool ShouldExpandRecursiveToggle(bool recursive)
+        {
+            if (recursive && IsVisibleRootNode)
+                return !IsHierarchyFullyExpanded();
+            return !_opened;
+        }
+
+        private void ToggleRecursive()
+        {
+            if (ShouldExpandRecursiveToggle(true))
+                ExpandAll();
+            else
+                CollapseAll(SkipRecursiveCollapseAnimation && IsVisibleRootNode);
         }
 
         private void ClearArrowMouseCapture()
@@ -1098,9 +1140,10 @@ namespace FlaxEditor.GUI.Tree
                 {
                     _isMouseDown = true;
                     _mouseDownOverArrow = _mouseOverArrow;
+                    _mouseDownRecursiveToggle = HasAnyVisibleChild && IsRecursiveToggleModifierDown();
                     _mouseDownPos = location;
                     _mouseDownTime = Time.UnscaledGameTime;
-                    if (_mouseDownOverArrow && HasAnyVisibleChild)
+                    if (_mouseDownOverArrow && HasAnyVisibleChild && !(_mouseDownRecursiveToggle && IsVisibleRootNode))
                     {
                         BeginArrowMouseCapture();
                     }
@@ -1133,6 +1176,7 @@ namespace FlaxEditor.GUI.Tree
                 _suppressLeftMouseUpUntil = -1.0f;
                 _isMouseDown = false;
                 _mouseDownOverArrow = false;
+                _mouseDownRecursiveToggle = false;
                 _mouseDownTime = -1.0f;
                 EndArrowMouseCapture();
                 return true;
@@ -1144,6 +1188,7 @@ namespace FlaxEditor.GUI.Tree
                     UpdateArrowMouseCapture(location);
                 _isMouseDown = false;
                 _mouseDownOverArrow = false;
+                _mouseDownRecursiveToggle = false;
                 _mouseDownTime = -1.0f;
                 EndArrowMouseCapture();
                 Focus();
@@ -1155,10 +1200,12 @@ namespace FlaxEditor.GUI.Tree
             // a disclosure-arrow press into selection (or the inverse).
             bool completedLeftClick = button == MouseButton.Left && _isMouseDown;
             bool pressedArrow = _mouseDownOverArrow;
+            bool recursiveToggle = _mouseDownRecursiveToggle;
             if (button == MouseButton.Left)
             {
                 _isMouseDown = false;
                 _mouseDownOverArrow = false;
+                _mouseDownRecursiveToggle = false;
                 _mouseDownTime = -1;
             }
 
@@ -1172,45 +1219,46 @@ namespace FlaxEditor.GUI.Tree
                 // Prevent from selecting node when user is just clicking at an arrow
                 if (!_mouseOverArrow)
                 {
+                    if (button == MouseButton.Left && completedLeftClick && recursiveToggle && HasAnyVisibleChild)
+                    {
+                        ToggleRecursive();
+                        Focus();
+                        return true;
+                    }
+
                     // Ignore primary releases that did not start on this row, or that
                     // started on its disclosure arrow and ended over the label.
                     if (button == MouseButton.Left && (!completedLeftClick || pressedArrow))
                         return true;
 
-                    // Check if user is pressing control key
-                    var tree = ParentTree;
-                    var window = tree.Root;
-                    if (window.GetKey(KeyboardKeys.Shift))
+                    if (button == MouseButton.Left)
                     {
-                        // Select range
-                        tree.SelectRange(this);
-                    }
-                    else if (window.GetKey(KeyboardKeys.Control))
-                    {
-                        // Add/Remove
-                        tree.AddOrRemoveSelection(this);
-                    }
-                    else if (button == MouseButton.Right && tree.Selection.Contains(this))
-                    {
-                        // Do nothing
-                    }
-                    else
-                    {
-                        // Select
-                        tree.Select(this);
+                        // Check if user is pressing control key
+                        var tree = ParentTree;
+                        var window = tree.Root;
+                        if (window.GetKey(KeyboardKeys.Shift))
+                        {
+                            // Select range
+                            tree.SelectRange(this);
+                        }
+                        else if (window.GetKey(KeyboardKeys.Control))
+                        {
+                            // Add/Remove
+                            tree.AddOrRemoveSelection(this);
+                        }
+                        else
+                        {
+                            // Select
+                            tree.Select(this);
+                        }
                     }
                 }
 
                 // Check if mouse hits arrow
                 if (button == MouseButton.Left && completedLeftClick && pressedArrow && _mouseOverArrow && HasAnyVisibleChild)
                 {
-                    if (ParentTree.Root.GetKey(KeyboardKeys.Alt))
-                    {
-                        if (_opened)
-                            CollapseAll();
-                        else
-                            ExpandAll();
-                    }
+                    if (recursiveToggle)
+                        ToggleRecursive();
                     else
                     {
                         if (_opened)
@@ -1248,6 +1296,7 @@ namespace FlaxEditor.GUI.Tree
             {
                 _isMouseDown = false;
                 _mouseDownOverArrow = false;
+                _mouseDownRecursiveToggle = false;
                 _mouseDownTime = -1.0f;
                 _suppressLeftMouseUpUntil = Time.UnscaledGameTime + 0.15f;
                 EndArrowMouseCapture();
@@ -1261,6 +1310,7 @@ namespace FlaxEditor.GUI.Tree
                 {
                     _isMouseDown = false;
                     _mouseDownOverArrow = false;
+                    _mouseDownRecursiveToggle = false;
                     _mouseDownTime = -1.0f;
                     _suppressLeftMouseUpUntil = Time.UnscaledGameTime + 0.15f;
                 }
@@ -1294,6 +1344,7 @@ namespace FlaxEditor.GUI.Tree
             {
                 // Clear flag
                 _isMouseDown = false;
+                _mouseDownRecursiveToggle = false;
                 _mouseDownTime = -1;
 
                 // Start
@@ -1362,6 +1413,7 @@ namespace FlaxEditor.GUI.Tree
                     DoDragDrop();
                 }
                 _mouseDownOverArrow = false;
+                _mouseDownRecursiveToggle = false;
             }
 
             // Base
@@ -1376,6 +1428,7 @@ namespace FlaxEditor.GUI.Tree
                 ClearArrowMouseCapture();
                 _isMouseDown = false;
                 _mouseDownOverArrow = false;
+                _mouseDownRecursiveToggle = false;
                 _mouseDownTime = -1.0f;
             }
 

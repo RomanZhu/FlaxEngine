@@ -474,22 +474,6 @@ namespace FlaxEditor.GUI
                     {
                         var selectionCount = _editor.SelectionCount;
                         var point = GetChildAt(location) as KeyframePoint;
-                        if (selectionCount == 0 && point != null)
-                        {
-                            // Select node
-                            selectionCount = 1;
-                            point.IsSelected = true;
-                            if (_editor.ShowCollapsed)
-                            {
-                                for (int i = 0; i < _editor._points.Count; i++)
-                                {
-                                    var p = _editor._points[i];
-                                    if (p.Index == point.Index)
-                                        p.IsSelected = point.IsSelected;
-                                }
-                            }
-                            _editor.UpdateTangents();
-                        }
 
                         var viewRect = _editor._mainPanel.GetClientArea();
                         _cmShowPos = PointToKeyframes(location, ref viewRect);

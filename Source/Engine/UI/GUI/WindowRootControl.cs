@@ -17,6 +17,11 @@ namespace FlaxEngine.GUI
         private Control _trackingControl;
 
         /// <summary>
+        /// Occurs when key down input was not handled by any focused control.
+        /// </summary>
+        public event Func<KeyboardKeys, bool> UnhandledKeyDown;
+
+        /// <summary>
         /// Gets the native window object.
         /// </summary>
         public Window Window => _window;
@@ -139,7 +144,7 @@ namespace FlaxEngine.GUI
             get => _focusedControl;
             set
             {
-                Assert.IsTrue(_focusedControl == null || _focusedControl.Root == this, "Invalid control to focus");
+                Assert.IsTrue(value == null || value.Root == this, "Invalid control to focus");
                 Focus(value);
             }
         }
@@ -326,6 +331,24 @@ namespace FlaxEngine.GUI
             }
 
             return base.OnMouseWheel(location, delta);
+        }
+
+        /// <inheritdoc />
+        public override bool OnKeyDown(KeyboardKeys key)
+        {
+            if (base.OnKeyDown(key))
+                return true;
+
+            var unhandledKeyDown = UnhandledKeyDown;
+            if (unhandledKeyDown == null)
+                return false;
+
+            foreach (Func<KeyboardKeys, bool> handler in unhandledKeyDown.GetInvocationList())
+            {
+                if (handler(key))
+                    return true;
+            }
+            return false;
         }
 
         /// <inheritdoc />

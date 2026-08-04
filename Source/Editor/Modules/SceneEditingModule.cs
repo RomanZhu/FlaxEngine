@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using FlaxEditor.Actions;
+using FlaxEditor.History;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEngine;
@@ -101,7 +102,7 @@ namespace FlaxEditor.Modules
         /// </summary>
         /// <param name="selection">The selection.</param>
         /// <param name="additive">if set to <c>true</c> will use additive mode, otherwise will clear previous selection.</param>
-        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        /// <param name="recordUndo">True if record the selection change in edit and navigation history.</param>
         public void Select(List<SceneGraphNode> selection, bool additive = false, bool recordUndo = true)
         {
             if (selection == null)
@@ -130,7 +131,7 @@ namespace FlaxEditor.Modules
         /// </summary>
         /// <param name="selection">The selection.</param>
         /// <param name="additive">if set to <c>true</c> will use additive mode, otherwise will clear previous selection.</param>
-        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        /// <param name="recordUndo">True if record the selection change in edit and navigation history.</param>
         public void Select(SceneGraphNode[] selection, bool additive = false, bool recordUndo = true)
         {
             if (selection == null)
@@ -180,7 +181,7 @@ namespace FlaxEditor.Modules
         /// <summary>
         /// Clears selected objects collection.
         /// </summary>
-        /// <param name="recordUndo">True if record the selection change in undo history.</param>
+        /// <param name="recordUndo">True if record the selection change in edit and navigation history.</param>
         public void Deselect(bool recordUndo = true)
         {
             // Check if won't change
@@ -195,8 +196,26 @@ namespace FlaxEditor.Modules
 
         private void SelectionChange(SceneGraphNode[] before, bool recordUndo = true)
         {
-            if (recordUndo)
-                Undo.AddAction(new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
+            var after = Selection.ToArray();
+            var contentSelectionBefore = Array.Empty<string>();
+            var contentSelectionAfter = Array.Empty<string>();
+            Action<string[]> contentSelectionCallback = null;
+            var contentWindow = Editor.Windows?.ContentWin;
+            if (recordUndo && !Editor.Undo.IsPerformingUndoRedo && contentWindow != null && after.Length != 0)
+            {
+                contentSelectionBefore = contentWindow.GetSelectionPathsForSceneUndo();
+                if (contentSelectionBefore.Length != 0)
+                {
+                    contentSelectionCallback = contentWindow.RestoreSelectionFromSceneUndo;
+                }
+            }
+            if (recordUndo && !Editor.Undo.IsPerformingUndoRedo)
+            {
+                var previousSelectionAction = Editor.Undo.UndoOperationsStack.PeekHistory() as SelectionChangeAction;
+                if (previousSelectionAction == null || !previousSelectionAction.IsSameTransition(before, after, OnSelectionUndo, contentSelectionBefore, contentSelectionAfter, contentSelectionCallback))
+                    Editor.Undo.AddAction(new SelectionChangeAction(before, after, OnSelectionUndo, contentSelectionBefore, contentSelectionAfter, contentSelectionCallback));
+                Editor.NavigationHistory.AddAction(new SelectionNavigationAction(this, before, after, OnSelectionUndo, contentSelectionBefore, contentSelectionAfter, contentSelectionCallback));
+            }
 
             OnSelectionChanged();
 

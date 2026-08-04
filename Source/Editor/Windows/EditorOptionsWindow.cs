@@ -6,6 +6,7 @@ using FlaxEditor.CustomEditors;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.Input;
 using FlaxEditor.GUI.Tabs;
+using FlaxEditor.History;
 using FlaxEditor.Options;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -20,6 +21,50 @@ namespace FlaxEditor.Windows
     /// <seealso cref="FlaxEditor.Windows.EditorWindow" />
     public sealed class EditorOptionsWindow : EditorWindow
     {
+        private sealed class OptionsPageNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
+        {
+            private readonly Editor _editor;
+            private readonly string _sourceTab;
+            private readonly string _targetTab;
+
+            public OptionsPageNavigationAction(Editor editor, string sourceTab, string targetTab)
+            {
+                _editor = editor;
+                _sourceTab = sourceTab;
+                _targetTab = targetTab;
+            }
+
+            public object Owner => _editor;
+
+            public string ActionString => "Editor options page change";
+
+            public bool IsSameDestination(INavigationHistoryAction other)
+            {
+                return other is OptionsPageNavigationAction action &&
+                       action.Owner == Owner &&
+                       action._targetTab.Equals(_targetTab, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public void NavigateBack()
+            {
+                SelectOptionsTab(_editor, _sourceTab);
+            }
+
+            public void NavigateForward()
+            {
+                SelectOptionsTab(_editor, _targetTab);
+            }
+
+            public void Dispose()
+            {
+            }
+
+            private static void SelectOptionsTab(Editor editor, string tabName)
+            {
+                editor?.Windows?.EditorOptionsWin?.SelectTabFromHistory(tabName);
+            }
+        }
+
         private bool _isDataDirty;
         private Tabs _tabs;
         private EditorOptions _options;
@@ -27,6 +72,8 @@ namespace FlaxEditor.Windows
         private readonly Undo _undo;
         private readonly List<Tab> _customTabs = new List<Tab>();
         private SearchBox _searchBox;
+        private string _lastSelectedTabName;
+        private bool _isSelectingTabFromHistory;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="EditorOptionsWindow"/> class.
@@ -92,11 +139,13 @@ namespace FlaxEditor.Windows
             InputActions.Add(options => options.Save, SaveData);
 
             _tabs.SelectedTabIndex = 0;
+            _lastSelectedTabName = _tabs.SelectedTab?.Text;
         }
         
         private void OnUndoRedo(IUndoAction action)
         {
-            MarkAsEdited();
+            if (!UndoActionMetadata.IsSelectionOnly(action))
+                MarkAsEdited();
         }
 
         private Tab CreateTab(string name, Func<object> getValue)
@@ -191,7 +240,9 @@ namespace FlaxEditor.Windows
                 _options.CustomSettings[name] = JsonSerializer.Serialize(settings.Selection[0], typeof(object));
             }
 
-            Editor.Options.Apply(_options);
+            var action = new ApplyEditorOptionsAction(Editor.Options, Editor.Options.Options, _options);
+            action.Do();
+            Editor.Undo.AddAction(action);
 
             GatherData();
         }
@@ -250,6 +301,7 @@ namespace FlaxEditor.Windows
 
             // Register for custom settings changes
             Editor.Options.CustomSettingsChanged += SetupCustomTabs;
+            Editor.Options.OptionsChanged += OnEditorOptionsChanged;
 
             // Update UI
             GatherData();
@@ -258,6 +310,9 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override void OnDestroy()
         {
+            Editor.Options.CustomSettingsChanged -= SetupCustomTabs;
+            Editor.Options.OptionsChanged -= OnEditorOptionsChanged;
+            _undo.Dispose();
             _customTabs.Clear();
             _tabs = null;
             _saveButton = null;
@@ -308,11 +363,58 @@ namespace FlaxEditor.Windows
             return base.OnClosing(reason);
         }
 
+        private void OnEditorOptionsChanged(EditorOptions options)
+        {
+            if (!IsDisposing && !_isDataDirty)
+                GatherData();
+        }
+
         private void OnSelectedTabChanged(Tabs tabs)
         {
             if (IsDisposing)
                 return;
+            RecordOptionsPageNavigation(tabs.SelectedTab);
             ApplySearchFilter();
+        }
+
+        private void RecordOptionsPageNavigation(Tab selectedTab)
+        {
+            var target = selectedTab?.Text;
+            if (_isSelectingTabFromHistory || string.IsNullOrEmpty(target))
+            {
+                _lastSelectedTabName = target;
+                return;
+            }
+
+            var source = _lastSelectedTabName;
+            _lastSelectedTabName = target;
+            if (!string.IsNullOrEmpty(source) && !source.Equals(target, StringComparison.OrdinalIgnoreCase))
+                Editor.NavigationHistory.AddAction(new OptionsPageNavigationAction(Editor, source, target));
+        }
+
+        private void SelectTabFromHistory(string tabName)
+        {
+            if (string.IsNullOrEmpty(tabName) || _tabs == null)
+                return;
+
+            FocusOrShow();
+            _isSelectingTabFromHistory = true;
+            try
+            {
+                for (int i = 0; i < _tabs.ChildrenCount; i++)
+                {
+                    if (_tabs.GetChild(i) is Tab tab && tab.Text.Equals(tabName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _tabs.SelectedTab = tab;
+                        _lastSelectedTabName = tab.Text;
+                        return;
+                    }
+                }
+            }
+            finally
+            {
+                _isSelectingTabFromHistory = false;
+            }
         }
 
         private CustomEditorPresenter GetTabPresenter(Tab tab)

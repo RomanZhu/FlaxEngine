@@ -13,7 +13,7 @@ namespace FlaxEditor.Gizmo
     public partial class TransformGizmoBase
     {
         /// <summary>
-        /// Gets the selection center point (in world space).
+        /// Gets the selection bounds center point (in world space).
         /// </summary>
         /// <returns>Center point or <see cref="Vector3.Zero"/> if no object selected.</returns>
         public Vector3 GetSelectionCenter()
@@ -24,13 +24,21 @@ namespace FlaxEditor.Gizmo
             if (count == 0)
                 return Vector3.Zero;
 
-            // Get center point
+            GetSelectedObjectsBounds(out var bounds, out _);
+            if (IsValidBounds(ref bounds))
+                return bounds.Center;
+
+            // Fallback for gizmos that cannot provide bounds.
             Vector3 center = Vector3.Zero;
             for (int i = 0; i < count; i++)
                 center += GetSelectedTransform(i).Translation;
 
-            // Return arithmetic average or whatever it means
             return center / count;
+        }
+
+        private static bool IsValidBounds(ref BoundingBox bounds)
+        {
+            return bounds.Minimum.X <= bounds.Maximum.X && bounds.Minimum.Y <= bounds.Maximum.Y && bounds.Minimum.Z <= bounds.Maximum.Z;
         }
 
         private bool IntersectsRotateCircle(Vector3 normal, ref Ray ray, out Real distance)

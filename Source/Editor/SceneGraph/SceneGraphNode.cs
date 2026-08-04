@@ -24,6 +24,8 @@ namespace FlaxEditor.SceneGraph
     [HideInEditor]
     public abstract class SceneGraphNode
     {
+        private const Real VertexSnapDepthTolerance = 2.0f;
+
         /// <summary>
         /// The parent node.
         /// </summary>
@@ -367,6 +369,48 @@ namespace FlaxEditor.SceneGraph
         {
             result = Vector3.Zero;
             return false;
+        }
+
+        /// <summary>
+        /// Performs the vertex snapping for a given ray and viewport cursor position.
+        /// </summary>
+        /// <param name="ray">The ray to raycast.</param>
+        /// <param name="hitDistance">Hit distance from ray to object bounding box.</param>
+        /// <param name="viewport">The viewport used to project vertices to screen space.</param>
+        /// <param name="mousePosition">The mouse position in viewport UI space.</param>
+        /// <param name="result">The result point on the object mesh that is closest to the mouse position.</param>
+        /// <param name="screenDistance">The squared screen-space distance from the mouse position to the result.</param>
+        /// <returns>True if got a valid result value, otherwise false (eg. if missing data or not initialized).</returns>
+        public virtual bool OnVertexSnap(ref Ray ray, Real hitDistance, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, out Vector3 result, out Real screenDistance)
+        {
+            screenDistance = Real.MaxValue;
+            if (!OnVertexSnap(ref ray, hitDistance, out result))
+                return false;
+            var vertexRayDistance = Vector3.Dot(result - ray.Position, ray.Direction);
+            if (vertexRayDistance < 0.0f)
+                return false;
+
+            var closestPointOnRay = ray.Position + ray.Direction * vertexRayDistance;
+            var distanceToCursorRay = Vector3.DistanceSquared(result, closestPointOnRay);
+            if (hitDistance < Real.MaxValue)
+            {
+                var depthTolerance = VertexSnapDepthTolerance + (Real)Math.Sqrt(distanceToCursorRay);
+                if (vertexRayDistance > hitDistance + depthTolerance)
+                    return false;
+            }
+
+            var depth = Math.Max((double)vertexRayDistance, 0.0001);
+            screenDistance = (Real)(distanceToCursorRay / (depth * depth));
+            return true;
+        }
+
+        /// <summary>
+        /// Gets vertices connected to the specified vertex snapping point.
+        /// </summary>
+        /// <param name="vertex">The vertex snapping point in world space.</param>
+        /// <param name="connectedVertices">The connected vertices in world space.</param>
+        public virtual void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
         }
 
         /// <summary>

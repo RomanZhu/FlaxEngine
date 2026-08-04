@@ -1,7 +1,9 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using System.Collections.Generic;
 using System.Globalization;
 using FlaxEditor.Options;
+using FlaxEditor.SceneGraph;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -29,7 +31,11 @@ namespace FlaxEditor.Gizmo
         private MaterialInstance _materialTrackballFocus;
         private MaterialInstance _materialTrackballTriangle;
         private MaterialInstance _materialTrackballPoint;
+        private MaterialInstance _materialVertexSnapPoint;
+        private MaterialInstance _materialVertexSnapTargetPoint;
+        private MaterialInstance _materialVertexSnapPointShadow;
         private MaterialBase _materialSphere;
+        private readonly List<Vector3> _vertexSnapEdgePoints = new List<Vector3>();
 
         // Material Parameter Names
         private const string _brightnessParamName = "Brightness";
@@ -46,8 +52,13 @@ namespace FlaxEditor.Gizmo
         private const float _rotationTrackballPointRadiusRaw = 0.12f;
         private const float _rotationScreenRingRadiusRaw = _rotationSphereRadiusRaw + 0.20f;
         private const float _rotationScreenRingThicknessRaw = 0.045f;
+        private const float _vertexSnapPointOuterScale = 0.0018f;
+        private const float _vertexSnapPointInnerScale = 0.0011f;
+        private const int _vertexSnapEdgeSegments = 10;
+        private const float _vertexSnapEdgeThickness = 2.0f;
         private static readonly Color _translationDistanceColor = new Color(1.0f, 0.8980392f, 0.039215688f, 1.0f);
         private static readonly Color _translationDistancePillColor = new Color(0.0f, 0.0f, 0.0f, 0.68f);
+        private static readonly Color _vertexSnapEdgeColor = new Color(0.0f, 0.72f, 1.0f, 1.0f);
 
         /// <summary>
         /// Used for example when the selection can't be moved because one actor is static.
@@ -97,6 +108,12 @@ namespace FlaxEditor.Gizmo
             _materialTrackballTriangle.SetParameterValue(_opacityParamName, _rotationTrackballTriangleOpacity);
             _materialTrackballPoint = _materialAxisX.CreateVirtualInstance();
             _materialTrackballPoint.SetParameterValue(_colorParamName, Color.White);
+            _materialVertexSnapPoint = _materialAxisFocus.CreateVirtualInstance();
+            _materialVertexSnapPoint.SetParameterValue(_colorParamName, new Color(0.0f, 0.95f, 1.0f, 1.0f));
+            _materialVertexSnapTargetPoint = _materialAxisFocus.CreateVirtualInstance();
+            _materialVertexSnapTargetPoint.SetParameterValue(_colorParamName, new Color(1.0f, 0.10f, 0.82f, 1.0f));
+            _materialVertexSnapPointShadow = _materialAxisX.CreateVirtualInstance();
+            _materialVertexSnapPointShadow.SetParameterValue(_colorParamName, new Color(0.0f, 0.0f, 0.0f, 1.0f));
 
             // Setup editor options
             OnEditorOptionsChanged(Editor.Instance.Options.Options);
@@ -235,6 +252,9 @@ namespace FlaxEditor.Gizmo
             _materialTrackballFocus.SetParameterValue(_opacityParamName, opacity * _rotationTrackballOpacity);
             _materialTrackballTriangle.SetParameterValue(_opacityParamName, opacity * _rotationTrackballTriangleOpacity);
             _materialTrackballPoint.SetParameterValue(_opacityParamName, opacity);
+            _materialVertexSnapPoint.SetParameterValue(_opacityParamName, opacity);
+            _materialVertexSnapTargetPoint.SetParameterValue(_opacityParamName, opacity);
+            _materialVertexSnapPointShadow.SetParameterValue(_opacityParamName, opacity * 0.75f);
         }
 
         private void UpdateGizmoBrightness(EditorOptions options)
@@ -251,6 +271,9 @@ namespace FlaxEditor.Gizmo
             _materialAxisBack.SetParameterValue(_brightnessParamName, brightness);
             _materialTrackballTriangle.SetParameterValue(_brightnessParamName, brightness);
             _materialTrackballPoint.SetParameterValue(_brightnessParamName, brightness);
+            _materialVertexSnapPoint.SetParameterValue(_brightnessParamName, brightness);
+            _materialVertexSnapTargetPoint.SetParameterValue(_brightnessParamName, brightness);
+            _materialVertexSnapPointShadow.SetParameterValue(_brightnessParamName, brightness);
         }
 
         private bool ShouldGizmoBeLocked()
@@ -426,7 +449,7 @@ namespace FlaxEditor.Gizmo
             return Vector3.Dot(moveDelta, worldAxis) < 0.0f;
         }
 
-        private bool TryProjectTranslationMeasurePoint(Vector3 worldPosition, out Float2 screenPosition)
+        private bool TryProjectGizmoPoint(Vector3 worldPosition, out Float2 screenPosition)
         {
             screenPosition = Float2.Zero;
             var viewport = Owner.Viewport;
@@ -442,6 +465,11 @@ namespace FlaxEditor.Gizmo
 
             viewport.ProjectPoint(worldPosition, out screenPosition);
             return true;
+        }
+
+        private bool TryProjectTranslationMeasurePoint(Vector3 worldPosition, out Float2 screenPosition)
+        {
+            return TryProjectGizmoPoint(worldPosition, out screenPosition);
         }
 
         private static void DrawTranslationDistanceDashLine(Float2 start, Float2 end, Color color)
@@ -511,10 +539,109 @@ namespace FlaxEditor.Gizmo
             Render2D.Features = features;
         }
 
+        private float GetVertexSnapPointScreenScale(Vector3 worldPosition)
+        {
+            float gizmoSize = Editor.Instance.Options.Options.Visual.GizmoSize;
+            if (Owner.Viewport.UseOrthographicProjection)
+                return gizmoSize * (50 * Owner.Viewport.OrthographicScale);
+
+            Vector3 vLength = Owner.ViewPosition - worldPosition;
+            return (float)(vLength.Length / GizmoScaleFactor * gizmoSize);
+        }
+
+        private void DrawVertexSnapPointHighlight(ref RenderContext renderContext, Mesh sphereMesh, Vector3 worldPosition, MaterialBase material, sbyte sortOrder)
+        {
+            float screenScale = GetVertexSnapPointScreenScale(worldPosition);
+            var transform = new Transform(worldPosition, Quaternion.Identity, new Float3(screenScale));
+            renderContext.View.GetWorldMatrix(ref transform, out var world);
+
+            Matrix.Scaling(_vertexSnapPointOuterScale, out var scale);
+            Matrix.Multiply(ref scale, ref world, out var markerWorld);
+            sphereMesh.Draw(ref renderContext, _materialVertexSnapPointShadow, ref markerWorld, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+
+            Matrix.Scaling(_vertexSnapPointInnerScale, out scale);
+            Matrix.Multiply(ref scale, ref world, out markerWorld);
+            sphereMesh.Draw(ref renderContext, material, ref markerWorld, StaticFlags.None, true, DrawPass.Default, 0.0f, (sbyte)(sortOrder + 1));
+        }
+
+        private void DrawVertexSnapPointHighlights(ref RenderContext renderContext, Mesh sphereMesh, sbyte sortOrder)
+        {
+            if (!_isActive || !IsActive)
+                return;
+            if (_isVertexSnapTemporaryPivot)
+                return;
+
+            if (_vertexSnapObject != null)
+            {
+                var worldPosition = _vertexSnapObject.Transform.LocalToWorld(_vertexSnapPoint);
+                DrawVertexSnapPointHighlight(ref renderContext, sphereMesh, worldPosition, _materialVertexSnapPoint, sortOrder);
+            }
+            if (_vertexSnapObjectTo != null)
+            {
+                var worldPosition = _vertexSnapObjectTo.Transform.LocalToWorld(_vertexSnapPointTo);
+                DrawVertexSnapPointHighlight(ref renderContext, sphereMesh, worldPosition, _materialVertexSnapTargetPoint, (sbyte)(sortOrder + 2));
+            }
+        }
+
+        private static void DrawVertexSnapEdgeFadeLine(Float2 start, Float2 end)
+        {
+            var line = end - start;
+            if (line.LengthSquared < 1.0f)
+                return;
+
+            for (int i = 0; i < _vertexSnapEdgeSegments; i++)
+            {
+                float t0 = (float)i / _vertexSnapEdgeSegments;
+                float t1 = (float)(i + 1) / _vertexSnapEdgeSegments;
+                var segmentStart = start + line * t0;
+                var segmentEnd = start + line * t1;
+                float alpha = 0.9f * (1.0f - t0);
+                Render2D.DrawLine(segmentStart, segmentEnd, Color.Black.AlphaMultiplied(alpha * 0.35f), _vertexSnapEdgeThickness + 2.0f);
+                Render2D.DrawLine(segmentStart, segmentEnd, _vertexSnapEdgeColor.AlphaMultiplied(alpha), _vertexSnapEdgeThickness);
+            }
+        }
+
+        private void DrawVertexSnapConnectedEdges(SceneGraphNode node, Vector3 worldPosition)
+        {
+            if (node == null || !TryProjectGizmoPoint(worldPosition, out var startScreen))
+                return;
+
+            _vertexSnapEdgePoints.Clear();
+            node.OnVertexSnapEdges(worldPosition, _vertexSnapEdgePoints);
+            for (int i = 0; i < _vertexSnapEdgePoints.Count; i++)
+            {
+                var connectedVertex = _vertexSnapEdgePoints[i];
+                if (Vector3.DistanceSquared(connectedVertex, worldPosition) <= 0.0001)
+                    continue;
+                if (TryProjectGizmoPoint(connectedVertex, out var endScreen))
+                    DrawVertexSnapEdgeFadeLine(startScreen, endScreen);
+            }
+        }
+
+        private void DrawVertexSnapEdgeHighlights()
+        {
+            if (!_isActive || !IsActive || !Owner.SnapToVertex || _vertexSnapObject == null)
+                return;
+
+            var features = Render2D.Features;
+            Render2D.Features = features & ~Render2D.RenderingFeatures.VertexSnapping;
+
+            var worldPosition = _vertexSnapObject.Transform.LocalToWorld(_vertexSnapPoint);
+            DrawVertexSnapConnectedEdges(_vertexSnapObject, worldPosition);
+            if (_vertexSnapObjectTo != null)
+            {
+                worldPosition = _vertexSnapObjectTo.Transform.LocalToWorld(_vertexSnapPointTo);
+                DrawVertexSnapConnectedEdges(_vertexSnapObjectTo, worldPosition);
+            }
+
+            Render2D.Features = features;
+        }
+
         /// <inheritdoc />
         public override void Draw()
         {
             base.Draw();
+            DrawVertexSnapEdgeHighlights();
             DrawTranslationDistance();
         }
 
@@ -603,9 +730,12 @@ namespace FlaxEditor.Gizmo
                     cubeMesh.Draw(ref renderContext, yzPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
                     // Center sphere
-                    Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
-                    Matrix.Multiply(ref m2, ref m1, out m3);
-                    sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    if (_vertexSnapObject == null)
+                    {
+                        Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
+                        Matrix.Multiply(ref m2, ref m1, out m3);
+                        sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    }
                 }
 
                 break;
@@ -694,22 +824,18 @@ namespace FlaxEditor.Gizmo
                 cubeMesh.Draw(ref renderContext, yzPlaneMaterialScale, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
 
                 // Center box
-                Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
-                Matrix.Multiply(ref m2, ref m1, out m3);
-                sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                if (_vertexSnapObject == null)
+                {
+                    Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
+                    Matrix.Multiply(ref m2, ref m1, out m3);
+                    sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                }
 
                 break;
             }
             }
 
-            // Vertex snapping
-            if (_vertexSnapObject != null || _vertexSnapObjectTo != null)
-            {
-                Transform t = _vertexSnapObject?.Transform ?? _vertexSnapObjectTo.Transform;
-                Vector3 p = t.LocalToWorld(_vertexSnapObject != null ? _vertexSnapPoint : _vertexSnapPointTo);
-                Matrix matrix = new Transform(p, t.Orientation, new Float3(gizmoModelsScale2RealGizmoSize)).GetWorld();
-                cubeMesh.Draw(ref renderContext, _materialSphere, ref matrix, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
-            }
+            DrawVertexSnapPointHighlights(ref renderContext, sphereMesh, (sbyte)(sortOrder + 3));
         }
     }
 }

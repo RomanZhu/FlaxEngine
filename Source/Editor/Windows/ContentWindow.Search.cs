@@ -504,7 +504,7 @@ namespace FlaxEditor.Windows
                 return;
             if (_showAllContentInTree)
             {
-                RefreshTreeItems();
+                RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
                 return;
             }
 
@@ -589,11 +589,11 @@ namespace FlaxEditor.Windows
                     var scoreCompare = scores[b].CompareTo(scores[a]);
                     return scoreCompare != 0 ? scoreCompare : string.Compare(a.ShortName, b.ShortName, System.StringComparison.OrdinalIgnoreCase);
                 });
-                _view.ShowItems(items, FlaxEditor.Content.GUI.SortType.Relevance);
+                RunWithContentSelectionHistorySuppressed(() => _view.ShowItems(items, FlaxEditor.Content.GUI.SortType.Relevance));
             }
             else
             {
-                _view.ShowItems(items, _sortType);
+                RunWithContentSelectionHistorySuppressed(() => _view.ShowItems(items, _sortType));
             }
         }
 

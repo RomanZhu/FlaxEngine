@@ -1,6 +1,5 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
-using System;
 using FlaxEngine;
 
 namespace FlaxEditor.Surface.Undo
@@ -42,16 +41,22 @@ namespace FlaxEditor.Surface.Undo
         private void Apply(Float2 delta)
         {
             var context = _context.Get(_surface);
+            var modified = false;
             foreach (var nodeId in _nodeIds)
             {
                 var node = context.FindNode(nodeId);
                 if (node == null)
-                    throw new Exception("Missing node.");
+                {
+                    Editor.LogWarning("Cannot move missing Visject node " + nodeId + ".");
+                    continue;
+                }
 
                 node.Location += delta;
+                modified = true;
             }
 
-            context.MarkAsModified(false);
+            if (modified)
+                context.MarkAsModified(false);
         }
 
         /// <inheritdoc />

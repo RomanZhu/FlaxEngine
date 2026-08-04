@@ -27,6 +27,7 @@ namespace FlaxEditor.Surface.Undo
             _context = new ContextHandle(node.Context);
             _nodeId = node.ID;
             _isAdd = isAdd;
+            CacheNodeState(node);
         }
 
         /// <inheritdoc />
@@ -56,6 +57,11 @@ namespace FlaxEditor.Surface.Undo
             var context = _context.Get(_surface);
             if (_nodeId == 0)
                 throw new Exception("Node already added.");
+            if (context.FindNode(_nodeId) != null)
+            {
+                Editor.LogWarning("Cannot add Visject node " + _nodeId + " because it already exists.");
+                return;
+            }
 
             // Create node
             var node = NodeFactory.CreateNode(context.Surface.NodeArchetypes, _nodeId, context, _groupId, _typeId);
@@ -64,12 +70,15 @@ namespace FlaxEditor.Surface.Undo
             context.Nodes.Add(node);
 
             // Initialize
-            if (node.Values != null && node.Values.Length == _nodeValues.Length)
-                Array.Copy(_nodeValues, node.Values, _nodeValues.Length);
-            else if (_nodeValues != null && (node.Archetype.Flags & NodeFlags.VariableValuesSize) != 0)
-                node.Values = (object[])_nodeValues.Clone();
-            else if (_nodeValues != null && _nodeValues.Length != 0)
-                throw new InvalidOperationException("Invalid node values.");
+            if (_nodeValues != null)
+            {
+                if (node.Values != null && node.Values.Length == _nodeValues.Length)
+                    Array.Copy(_nodeValues, node.Values, _nodeValues.Length);
+                else if ((node.Archetype.Flags & NodeFlags.VariableValuesSize) != 0)
+                    node.Values = (object[])_nodeValues.Clone();
+                else if (_nodeValues.Length != 0)
+                    throw new InvalidOperationException("Invalid node values.");
+            }
             node.Location = _nodeLocation;
             context.OnControlLoaded(node, _actionType);
             node.OnSurfaceLoaded(_actionType);
@@ -82,20 +91,28 @@ namespace FlaxEditor.Surface.Undo
             var context = _context.Get(_surface);
             var node = context.FindNode(_nodeId);
             if (node == null)
-                throw new Exception("Missing node to remove.");
+            {
+                Editor.LogWarning("Cannot remove missing Visject node " + _nodeId + ".");
+                return;
+            }
 
             // Cache node state
-            _nodeId = node.ID;
-            _groupId = node.GroupArchetype.GroupID;
-            _typeId = node.Archetype.TypeID;
-            _nodeLocation = node.Location;
-            _nodeValues = (object[])node.Values?.Clone();
+            CacheNodeState(node);
 
             // Remove node
             context.Nodes.Remove(node);
             context.OnControlDeleted(node, _actionType);
 
             context.MarkAsModified();
+        }
+
+        private void CacheNodeState(SurfaceNode node)
+        {
+            _nodeId = node.ID;
+            _groupId = node.GroupArchetype.GroupID;
+            _typeId = node.Archetype.TypeID;
+            _nodeLocation = node.Location;
+            _nodeValues = (object[])node.Values?.Clone();
         }
 
         /// <inheritdoc />

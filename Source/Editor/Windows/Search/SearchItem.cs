@@ -82,15 +82,14 @@ namespace FlaxEditor.Windows.Search
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
-            // Select and focus the item on right click to prevent the search from being cleared
+            // Keep the finder open on right click without changing its selected item.
             if (button == MouseButton.Right)
             {
-                _finder.SelectedItem = this;
                 _finder.Hand = true;
                 Focus();
                 return true;
             }
-            return base.OnMouseUp(location, button);
+            return base.OnMouseDown(location, button);
         }
 
         /// <inheritdoc />

@@ -46,6 +46,12 @@ namespace FlaxEditor.Viewport.Cameras
             var transformGizmo = gizmos.Get<TransformGizmo>();
             if (transformGizmo == null || transformGizmo.SelectedParents.Count == 0)
                 return;
+            if (transformGizmo.TryGetTemporaryVertexSnapPivot(out var vertexSnapPivot))
+            {
+                var vertexSnapBounds = new BoundingSphere(vertexSnapPivot, 15.0f);
+                ShowSphere(ref vertexSnapBounds, ref orientation);
+                return;
+            }
             if (gizmos.Active != null)
             {
                 var gizmoBounds = gizmos.Active.FocusBounds;
@@ -175,6 +181,24 @@ namespace FlaxEditor.Viewport.Cameras
         /// </summary>
         public virtual void EndAltRightMouseZoom()
         {
+        }
+
+        /// <summary>
+        /// Cancels any camera navigation inertia that should not carry across input mode changes.
+        /// </summary>
+        public virtual void CancelInputInertia()
+        {
+        }
+
+        /// <summary>
+        /// Gets the camera center point used by orbit and Alt+right mouse button zooming.
+        /// </summary>
+        /// <param name="center">The camera center point.</param>
+        /// <returns>True if this camera has a center point, otherwise false.</returns>
+        public virtual bool TryGetCameraCenter(out Vector3 center)
+        {
+            center = Vector3.Zero;
+            return false;
         }
 
         /// <inheritdoc />

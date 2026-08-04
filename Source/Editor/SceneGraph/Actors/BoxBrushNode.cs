@@ -7,6 +7,7 @@ using Real = System.Single;
 #endif
 
 using System;
+using System.Collections.Generic;
 using FlaxEngine;
 
 namespace FlaxEditor.SceneGraph.Actors
@@ -219,6 +220,57 @@ namespace FlaxEditor.SceneGraph.Actors
             distance = 0;
             normal = Vector3.Up;
             return false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, out Vector3 result)
+        {
+            result = Vector3.Zero;
+            var brush = (BoxBrush)_actor;
+            var minDistance = Real.MaxValue;
+            var minRayDistance = Real.MaxValue;
+            var hit = false;
+            for (int surfaceIndex = 0; surfaceIndex < 6; surfaceIndex++)
+            {
+                brush.GetVertices(surfaceIndex, out var vertices);
+                if (vertices == null)
+                    continue;
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    if (UpdateClosestVertexToRay(ref ray, vertices[i], ref minDistance, ref minRayDistance, ref result))
+                        hit = true;
+                }
+            }
+            return hit;
+        }
+
+        /// <inheritdoc />
+        public override bool OnVertexSnap(ref Ray ray, Real hitDistance, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, out Vector3 result, out Real screenDistance)
+        {
+            result = Vector3.Zero;
+            screenDistance = Real.MaxValue;
+            var brush = (BoxBrush)_actor;
+            var minRayDistance = Real.MaxValue;
+            var hit = false;
+            for (int surfaceIndex = 0; surfaceIndex < 6; surfaceIndex++)
+            {
+                brush.GetVertices(surfaceIndex, out var vertices);
+                if (vertices == null)
+                    continue;
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertices[i], hitDistance, ref screenDistance, ref minRayDistance, ref result))
+                        hit = true;
+                }
+            }
+            return hit;
+        }
+
+        /// <inheritdoc />
+        public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
+            var brush = (BoxBrush)_actor;
+            GetBoxVertexSnapEdges(brush.OrientedBox.GetCorners(), vertex, connectedVertices);
         }
     }
 }

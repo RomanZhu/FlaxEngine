@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Content.Thumbnails;
+using FlaxEditor.History;
 using FlaxEditor.Modules;
 using FlaxEditor.Modules.SourceCodeEditing;
 using FlaxEditor.Options;
@@ -186,6 +187,11 @@ namespace FlaxEditor
         public EditorUndo Undo;
 
         /// <summary>
+        /// The navigation history.
+        /// </summary>
+        public NavigationHistory NavigationHistory;
+
+        /// <summary>
         /// The icons container.
         /// </summary>
         public EditorIcons Icons;
@@ -277,6 +283,8 @@ namespace FlaxEditor
             Icons.LoadIcons();
             Profiler.EndEvent();
 
+            NavigationHistory = new NavigationHistory();
+
             // Create common editor modules
             Profiler.BeginEvent("Modules");
             RegisterModule(Options = new OptionsModule(this));
@@ -299,6 +307,8 @@ namespace FlaxEditor
 
             StateMachine = new EditorStateMachine(this);
             Undo = new EditorUndo(this);
+            ApplyHistoryOptions(Options.Options);
+            Options.OptionsChanged += ApplyHistoryOptions;
 
             if (flags.HasFlag(StartupFlags.NewProject))
                 InitProject();
@@ -629,6 +639,12 @@ namespace FlaxEditor
             }
         }
 
+        private void ApplyHistoryOptions(EditorOptions options)
+        {
+            if (NavigationHistory != null)
+                NavigationHistory.Capacity = Mathf.Max(1, options.General.NavigationHistoryActionsCapacity);
+        }
+
         private void InitProject()
         {
             // Initialize empty project with default game configuration
@@ -729,6 +745,7 @@ namespace FlaxEditor
             }
 
             // Cleanup
+            NavigationHistory.Dispose();
             Undo.Dispose();
             foreach (var cache in Surface.VisjectSurface.NodesCache.Caches.ToArray())
                 cache.Clear();
@@ -757,7 +774,9 @@ namespace FlaxEditor
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void PerformUndo()
         {
+            var action = Undo?.UndoOperationsStack.PeekHistory() as IUndoAction;
             Undo.PerformUndo();
+            CleanupObsoleteResourceUndoActionsAfterUndo(action);
         }
 
         /// <summary>
@@ -767,6 +786,63 @@ namespace FlaxEditor
         public void PerformRedo()
         {
             Undo.PerformRedo();
+        }
+
+        private void CleanupObsoleteResourceUndoActionsAfterUndo(IUndoAction action)
+        {
+            if (action == null || Undo == null)
+                return;
+
+            var info = UndoActionMetadata.GetActionInfo(action);
+            if (!IsContentCreateAction(info) || UndoResourceExists(info))
+                return;
+
+            Undo.RemoveActions(other =>
+            {
+                if (ReferenceEquals(other, action))
+                    return false;
+
+                var otherInfo = UndoActionMetadata.GetActionInfo(other);
+                if ((otherInfo.Flags & UndoActionFlags.AffectsContentDatabase) != 0)
+                    return false;
+                if (!IsSameUndoResource(info, otherInfo))
+                    return false;
+                return (otherInfo.Flags & (UndoActionFlags.RequiresReload | UndoActionFlags.RequiresReopen)) != 0;
+            });
+        }
+
+        private static bool IsContentCreateAction(UndoActionInfo info)
+        {
+            return info != null &&
+                   string.Equals(info.Operation, "Create", StringComparison.OrdinalIgnoreCase) &&
+                   (info.Flags & UndoActionFlags.AffectsContentDatabase) != 0;
+        }
+
+        private bool UndoResourceExists(UndoActionInfo info)
+        {
+            if (info == null)
+                return false;
+            if (info.TargetId != Guid.Empty && ContentDatabase.FindAsset(info.TargetId) != null)
+                return true;
+            if (!string.IsNullOrEmpty(info.TargetPath))
+            {
+                if (ContentDatabase.Find(info.TargetPath) != null)
+                    return true;
+                if (File.Exists(info.TargetPath) || Directory.Exists(info.TargetPath))
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool IsSameUndoResource(UndoActionInfo a, UndoActionInfo b)
+        {
+            if (a == null || b == null)
+                return false;
+            if (a.TargetId != Guid.Empty && b.TargetId != Guid.Empty && a.TargetId == b.TargetId)
+                return true;
+            return !string.IsNullOrEmpty(a.TargetPath) &&
+                   !string.IsNullOrEmpty(b.TargetPath) &&
+                   string.Equals(StringUtils.NormalizePath(a.TargetPath), StringUtils.NormalizePath(b.TargetPath), StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

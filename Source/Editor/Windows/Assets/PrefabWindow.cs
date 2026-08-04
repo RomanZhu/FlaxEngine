@@ -9,6 +9,7 @@ using FlaxEditor.CustomEditors.GUI;
 using FlaxEditor.Gizmo;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.Input;
+using FlaxEditor.History;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Viewport;
 using FlaxEngine;
@@ -41,6 +42,7 @@ namespace FlaxEditor.Windows.Assets
         private readonly ToolStripButton _saveButton;
         private readonly ToolStripButton _toolStripUndo;
         private readonly ToolStripButton _toolStripRedo;
+        private readonly ToolStripButton _toolStripSelect;
         private readonly ToolStripButton _toolStripTranslate;
         private readonly ToolStripButton _toolStripRotate;
         private readonly ToolStripButton _toolStripScale;
@@ -156,7 +158,7 @@ namespace FlaxEditor.Windows.Assets
             var inputOptions = Editor.Options.Options.Input;
 
             // Undo
-            _undo = new Undo();
+            _undo = new Undo(Editor.Undo, this);
             _undo.UndoDone += OnUndoEvent;
             _undo.RedoDone += OnUndoEvent;
             _undo.ActionDone += OnUndoEvent;
@@ -264,6 +266,7 @@ namespace FlaxEditor.Windows.Assets
             _toolStripUndo = _toolstrip.AddButton(Editor.Icons.Undo64, _undo.PerformUndo).LinkTooltip("Undo", ref inputOptions.Undo);
             _toolStripRedo = _toolstrip.AddButton(Editor.Icons.Redo64, _undo.PerformRedo).LinkTooltip("Redo", ref inputOptions.Redo);
             _toolstrip.AddSeparator();
+            _toolStripSelect = _toolstrip.AddButton("Select", () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Select).LinkTooltip("Change Gizmo tool mode to Select", ref inputOptions.SelectMode);
             _toolStripTranslate = _toolstrip.AddButton(Editor.Icons.Translate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate).LinkTooltip("Change Gizmo tool mode to Translate", ref inputOptions.TranslateMode);
             _toolStripRotate = _toolstrip.AddButton(Editor.Icons.Rotate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate).LinkTooltip("Change Gizmo tool mode to Rotate", ref inputOptions.RotateMode);
             _toolStripScale = _toolstrip.AddButton(Editor.Icons.Scale32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale).LinkTooltip("Change Gizmo tool mode to Scale", ref inputOptions.ScaleMode);
@@ -364,7 +367,6 @@ namespace FlaxEditor.Windows.Assets
 
             if (button == MouseButton.Right && _treePanel.ContainsPoint(ref location))
             {
-                _tree.Deselect();
                 var locationCM = location + _searchBox.BottomLeft;
                 ShowContextMenu(Parent, ref locationCM);
                 return true;
@@ -420,11 +422,8 @@ namespace FlaxEditor.Windows.Assets
 
         private void OnUndoEvent(IUndoAction action)
         {
-            // All undo actions modify the asset except selection change
-            if (!(action is SelectionChangeAction))
-            {
+            if (!UndoActionMetadata.IsSelectionOnly(action))
                 OnPrefabModified();
-            }
 
             UpdateToolstrip();
         }
@@ -543,6 +542,7 @@ namespace FlaxEditor.Windows.Assets
             _toolStripRedo.Enabled = undoRedo.CanRedo;
             //
             var gizmoMode = gizmo.ActiveMode;
+            _toolStripSelect.Checked = gizmoMode == TransformGizmoBase.Mode.Select;
             _toolStripTranslate.Checked = gizmoMode == TransformGizmoBase.Mode.Translate;
             _toolStripRotate.Checked = gizmoMode == TransformGizmoBase.Mode.Rotate;
             _toolStripScale.Checked = gizmoMode == TransformGizmoBase.Mode.Scale;
@@ -679,6 +679,7 @@ namespace FlaxEditor.Windows.Assets
 
             Editor.Prefabs.PrefabApplied -= OnPrefabApplied;
             ScriptsBuilder.ScriptsReloadBegin -= OnScriptsReloadBegin;
+            Editor.NavigationHistory.RemoveActions(x => x is SelectionNavigationAction action && action.Owner == this);
 
             _undo.Dispose();
             Graph.Dispose();
