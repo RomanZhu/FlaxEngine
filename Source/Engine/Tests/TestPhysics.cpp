@@ -506,6 +506,86 @@ TEST_CASE("PhysicsBackendActorRemovalQueue")
 #endif
 }
 
+TEST_CASE("PhysicsBackendBulletCCD")
+{
+#if !COMPILE_WITH_EMPTY_PHYSICS
+    for (int32 targetUsesCCD = 0; targetUsesCCD < 2; targetUsesCCD++)
+    {
+        PhysicsSettings settings;
+        settings.DefaultGravity = Vector3::Zero;
+        settings.DisableCCD = false;
+
+        void* scene = PhysicsBackend::CreateScene(settings);
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            PhysicsBackend::DestroyScene(scene);
+        };
+
+        TestPhysicsOwner targetOwner;
+        TestPhysicsOwner projectileOwner;
+        void* targetActor = PhysicsBackend::CreateRigidDynamicActor(&targetOwner, Vector3::Zero, Quaternion::Identity, scene);
+        void* projectileActor = PhysicsBackend::CreateRigidDynamicActor(&projectileOwner, Vector3(-100.0, 0.0, 0.0), Quaternion::Identity, scene);
+        REQUIRE(targetActor);
+        REQUIRE(projectileActor);
+        targetOwner.Actor = targetActor;
+        projectileOwner.Actor = projectileActor;
+        SCOPE_EXIT
+        {
+            PhysicsBackend::DestroyActor(projectileActor);
+            PhysicsBackend::DestroyActor(targetActor);
+        };
+
+        auto targetCollider = CreateTestCollider();
+        auto projectileCollider = CreateTestCollider();
+        REQUIRE(targetCollider);
+        REQUIRE(projectileCollider);
+        SCOPE_EXIT
+        {
+            projectileCollider->DeleteObjectNow();
+            targetCollider->DeleteObjectNow();
+        };
+
+        CollisionShape targetGeometry;
+        float targetHalfExtents[3] = { 10.0f, 10.0f, 10.0f };
+        targetGeometry.SetBox(targetHalfExtents);
+        void* targetShape = PhysicsBackend::CreateShape(targetCollider, targetGeometry, (JsonAsset*)nullptr, true, false);
+        REQUIRE(targetShape);
+        SCOPE_EXIT
+        {
+            PhysicsBackend::DestroyShape(targetShape);
+        };
+        PhysicsBackend::AttachShape(targetShape, targetActor);
+
+        CollisionShape projectileGeometry;
+        projectileGeometry.SetSphere(5.0f);
+        void* projectileShape = PhysicsBackend::CreateShape(projectileCollider, projectileGeometry, (JsonAsset*)nullptr, true, false);
+        REQUIRE(projectileShape);
+        SCOPE_EXIT
+        {
+            PhysicsBackend::DestroyShape(projectileShape);
+        };
+        PhysicsBackend::AttachShape(projectileShape, projectileActor);
+
+        if (targetUsesCCD != 0)
+            PhysicsBackend::SetRigidDynamicActorFlags(targetActor, PhysicsBackend::RigidDynamicFlags::CCD);
+        PhysicsBackend::SetRigidDynamicActorFlags(projectileActor, PhysicsBackend::RigidDynamicFlags::CCD);
+        PhysicsBackend::AddSceneActor(scene, targetActor);
+        PhysicsBackend::AddSceneActor(scene, projectileActor);
+        PhysicsBackend::RigidDynamicActorSleep(targetActor);
+        PhysicsBackend::SetRigidDynamicActorLinearVelocity(projectileActor, Vector3(12000.0f, 0.0f, 0.0f), true);
+
+        PhysicsBackend::StartSimulateScene(scene, 1.0f / 60.0f);
+        PhysicsBackend::EndSimulateScene(scene);
+
+        Vector3 projectilePosition;
+        Quaternion projectileOrientation;
+        PhysicsBackend::GetRigidActorPose(projectileActor, projectilePosition, projectileOrientation);
+        CHECK(projectilePosition.X < -10.0f);
+    }
+#endif
+}
+
 TEST_CASE("PhysicsBackendTriangleMesh")
 {
 #if !COMPILE_WITH_EMPTY_PHYSICS && COMPILE_WITH_PHYSICS_COOKING

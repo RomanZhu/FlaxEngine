@@ -381,8 +381,9 @@ static bool b3ContinuousQueryCallback( int proxyId, uint64_t userData, void* con
 	b3BodySim* bodySim = b3GetBodySim( world, body );
 	B3_ASSERT( body->type == b3_staticBody || ( fastBodySim->flags & b3_isBullet ) );
 
-	// Skip bullets
-	if ( bodySim->flags & b3_isBullet )
+	// Skip CCD only against other fast bullets. Slow/resting bullet bodies still
+	// need to be valid CCD targets.
+	if ( ( bodySim->flags & ( b3_isBullet | b3_isFast ) ) == ( b3_isBullet | b3_isFast ) )
 	{
 		return true;
 	}
