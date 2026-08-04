@@ -44,6 +44,13 @@ namespace FlaxEditor.Windows
             public string Message;
         };
 
+        private struct EntryRange
+        {
+            public int EntryIndex;
+            public int StartIndex;
+            public int EndIndex;
+        }
+
         private struct TextBlockTag
         {
             internal enum Types
@@ -62,6 +69,9 @@ namespace FlaxEditor.Windows
         /// <seealso cref="FlaxEngine.GUI.RichTextBoxBase" />
         private sealed class OutputTextBox : RichTextBoxBase
         {
+            private bool _isSelectingEntryBlocks;
+            private int _entrySelectionAnchor = -1;
+
             /// <summary>
             /// The parent window.
             /// </summary>
@@ -101,26 +111,63 @@ namespace FlaxEditor.Windows
                 _textBlocks.AddRange(Window._textBlocks);
             }
 
+            public void RefreshTextLayout()
+            {
+                UpdateTextBlocks();
+                _textSize = GetTextSize();
+            }
+
+            /// <inheritdoc />
+            protected override void OnSizeChanged()
+            {
+                base.OnSizeChanged();
+
+                Window?.OnOutputBoundsChanged();
+            }
+
             /// <inheritdoc />
             public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
             {
-                // Click on text block
-                int textLength = TextLength;
-                if (textLength != 0)
+                if (button == MouseButton.Left && Window != null && Window.SelectEntryBlockAt(ref location, out _entrySelectionAnchor))
                 {
-                    var hitPos = CharIndexAtPoint(ref location);
-                    if (hitPos != -1 && GetTextBlock(hitPos, out var textBlock) && textBlock.Tag is TextBlockTag tag)
-                    {
-                        switch (tag.Type)
-                        {
-                        case TextBlockTag.Types.CodeLocation:
-                            Window.Editor.CodeEditing.OpenFile(tag.Url, tag.Line);
-                            return true;
-                        }
-                    }
+                    _isSelectingEntryBlocks = true;
+                    StartMouseCapture();
+                    return true;
                 }
 
                 return base.OnMouseDoubleClick(location, button);
+            }
+
+            /// <inheritdoc />
+            public override void OnMouseMove(Float2 location)
+            {
+                if (_isSelectingEntryBlocks)
+                {
+                    Window?.ExtendEntryBlockSelection(_entrySelectionAnchor, ref location);
+                    return;
+                }
+
+                base.OnMouseMove(location);
+            }
+
+            /// <inheritdoc />
+            public override bool OnMouseUp(Float2 location, MouseButton button)
+            {
+                if (_isSelectingEntryBlocks && button == MouseButton.Left)
+                {
+                    _isSelectingEntryBlocks = false;
+                    EndMouseCapture();
+                    return true;
+                }
+
+                return base.OnMouseUp(location, button);
+            }
+
+            /// <inheritdoc />
+            public override void OnEndMouseCapture()
+            {
+                _isSelectingEntryBlocks = false;
+                base.OnEndMouseCapture();
             }
         }
 
@@ -492,7 +539,7 @@ namespace FlaxEditor.Windows
         private List<Entry> _entries = new List<Entry>(1024);
         private bool _isDirty;
         private int _logTypeShowMask = (int)LogType.Info | (int)LogType.Warning | (int)LogType.Error | (int)LogType.Fatal;
-        private float _scrollSize = 18.0f;
+        private float _scrollSize = ScrollBar.DefaultSize;
         private const int OutCapacity = 64;
         private string[] _outMessages = new string[OutCapacity];
         private byte[] _outLogTypes = new byte[OutCapacity];
@@ -500,12 +547,16 @@ namespace FlaxEditor.Windows
         private int _textBufferCount;
         private StringBuilder _textBuffer = new StringBuilder();
         private List<TextBlock> _textBlocks = new List<TextBlock>();
+        private List<EntryRange> _entryRanges = new List<EntryRange>(1024);
         private DateTime _startupTime;
-        private Regex _compileRegex = new Regex("(?<path>^(?:[a-zA-Z]\\:|\\\\\\\\[ \\-\\.\\w\\.]+\\\\[ \\-\\.\\w.$]+)\\\\(?:[ \\-\\.\\w]+\\\\)*\\w([ \\w.])+)\\((?<line>\\d{1,}),\\d{1,},\\d{1,},\\d{1,}\\): (?<level>error|warning) (?<message>.*)", RegexOptions.Compiled);
+        private Regex _compileRegex = new Regex("(?<path>^(?:[a-zA-Z]\\:|\\\\\\\\[ \\-\\.\\w\\.]+\\\\[ \\-\\.\\w.$]+)\\\\(?:[ \\-\\.\\w]+\\\\)*\\w([ \\w.])+)\\((?<line>\\d{1,}),\\d{1,},\\d{1,},\\d{1,}\\): (?<level>error|warning) (?<message>.*)", RegexOptions.Compiled | RegexOptions.Multiline);
         private List<string> _commandHistory;
         private const string CommandHistoryKey = "CommandHistory";
         private const int CommandHistoryLimit = 30;
+        private const float OutputPadding = 2.0f;
+        private const float EntrySpacing = 3.0f;
 
+        private Button _clearButton;
         private Button _viewDropdown;
         private TextBox _searchBox;
         private HScrollBar _hScroll;
@@ -513,6 +564,9 @@ namespace FlaxEditor.Windows
         private OutputTextBox _output;
         private CommandLineBox _commandLineBox;
         private ContextMenu _contextMenu;
+        private int _selectedEntryIndex = -1;
+        private float _lastOutputWrapWidth = -1.0f;
+        private bool _wrapLogLines = true;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DebugLogWindow"/> class.
@@ -527,27 +581,32 @@ namespace FlaxEditor.Windows
             FlaxEditor.Utilities.Utils.SetupCommonInputActions(this);
 
             // Setup UI
-            _viewDropdown = new Button(2, 2, 40.0f, TextBoxBase.DefaultHeight)
+            _clearButton = new Button(2, 2, 44.0f, TextBoxBase.DefaultHeight)
+            {
+                TooltipText = "Clear output log",
+                Text = "Clear",
+                Parent = this,
+            };
+            _clearButton.Clicked += Clear;
+            _searchBox = new SearchBox(false, _clearButton.Right + 2, 2, Width - _clearButton.Right - 46.0f)
+            {
+                Parent = this,
+            };
+            _searchBox.TextChanged += Refresh;
+            _viewDropdown = new Button(_searchBox.Right + 2, 2, 40.0f, TextBoxBase.DefaultHeight)
             {
                 TooltipText = "Change output log view options",
                 Text = "View",
                 Parent = this,
             };
             _viewDropdown.Clicked += OnViewButtonClicked;
-            _searchBox = new SearchBox(false, _viewDropdown.Right + 2, 2, Width - _viewDropdown.Right - 4)
-            {
-                Parent = this,
-            };
-            _searchBox.TextChanged += Refresh;
             _hScroll = new HScrollBar(this, Height - _scrollSize - TextBox.DefaultHeight - 2, Width - _scrollSize, _scrollSize)
             {
-                ThumbThickness = 10,
                 Maximum = 0,
             };
             _hScroll.ValueChanged += OnHScrollValueChanged;
             _vScroll = new VScrollBar(this, Width - _scrollSize, Height - _viewDropdown.Height - 4 - TextBox.DefaultHeight, _scrollSize)
             {
-                ThumbThickness = 10,
                 Maximum = 0,
             };
             _vScroll.Y += _viewDropdown.Height + 2;
@@ -558,7 +617,11 @@ namespace FlaxEditor.Windows
                 IsReadOnly = true,
                 IsMultiline = true,
                 BackgroundSelectedFlashSpeed = 0.0f,
-                Location = new Float2(2, _viewDropdown.Bottom + 2),
+                BackgroundColor = Style.Current.Background,
+                BackgroundSelectedColor = Style.Current.Background,
+                BorderColor = Color.Transparent,
+                BorderSelectedColor = Color.Transparent,
+                Location = new Float2(OutputPadding, _viewDropdown.Bottom + 2),
                 Parent = this,
             };
             _output.TargetViewOffsetChanged += OnOutputTargetViewOffsetChanged;
@@ -607,6 +670,13 @@ namespace FlaxEditor.Windows
 
             menu.AddSeparator();
 
+            var wrapButton = menu.AddButton("Wrap");
+            wrapButton.AutoCheck = true;
+            wrapButton.Checked = _wrapLogLines;
+            wrapButton.Clicked += ToggleWrapLogLines;
+
+            menu.AddSeparator();
+
             menu.AddButton("Load log file...", LoadLogFile);
 
             menu.Show(_viewDropdown.Parent, _viewDropdown.BottomLeft);
@@ -618,8 +688,19 @@ namespace FlaxEditor.Windows
             Refresh();
         }
 
+        private void ToggleWrapLogLines()
+        {
+            _wrapLogLines = !_wrapLogLines;
+            if (_wrapLogLines)
+                _output.TargetViewOffset = new Float2(0.0f, _output.TargetViewOffset.Y);
+            Refresh();
+        }
+
         private void OnHScrollValueChanged()
         {
+            if (_wrapLogLines)
+                return;
+
             var viewOffset = _output.ViewOffset;
             viewOffset.X = _hScroll.Value;
             _output.TargetViewOffset = viewOffset;
@@ -642,21 +723,47 @@ namespace FlaxEditor.Windows
 
         private void OnOutputTextChanged()
         {
-            if (IsLayoutLocked || _output == null)
+            if (IsLayoutLocked || _output == null || _hScroll == null || _vScroll == null)
                 return;
 
-            _hScroll.Maximum = Mathf.Max(_output.TextSize.X, _hScroll.Minimum);
+            _hScroll.Maximum = _wrapLogLines ? _hScroll.Minimum : Mathf.Max(_output.TextSize.X - _output.Width, _hScroll.Minimum);
             _vScroll.Maximum = Mathf.Max(_output.TextSize.Y - _output.Height, _vScroll.Minimum);
+        }
+
+        private void OnOutputBoundsChanged()
+        {
+            if (_output == null)
+                return;
+
+            if (_wrapLogLines)
+            {
+                var wrapWidth = GetOutputWrapWidth();
+                if (!_isDirty && !Mathf.NearEqual(_lastOutputWrapWidth, wrapWidth))
+                {
+                    _output.TargetViewOffset = new Float2(0.0f, _output.TargetViewOffset.Y);
+                    Refresh();
+                }
+            }
+            OnOutputTextChanged();
         }
 
         private void OnEditorOptionsChanged(EditorOptions options)
         {
+            var style = Style.Current;
+            _output.BackgroundColor = style.Background;
+            _output.BackgroundSelectedColor = style.Background;
+            _output.BorderColor = Color.Transparent;
+            _output.BorderSelectedColor = Color.Transparent;
+            var selectionBrush = _output.DefaultStyle.BackgroundSelectedBrush as SolidColorBrush;
+
             if (options.Interface.OutputLogTimestampsFormat == _timestampsFormats &&
                 options.Interface.OutputLogShowLogType == _showLogType &&
                 _output.DefaultStyle.Font == options.Interface.OutputLogTextFont &&
                 _output.DefaultStyle.Color == options.Visual.LogInfoColor &&
                 _output.DefaultStyle.ShadowColor == options.Interface.OutputLogTextShadowColor &&
                 _output.DefaultStyle.ShadowOffset == options.Interface.OutputLogTextShadowOffset &&
+                selectionBrush != null &&
+                selectionBrush.Color == style.BorderSelected &&
                 _output.WarningStyle.Color == options.Visual.LogWarningColor &&
                 _output.ErrorStyle.Color == options.Visual.LogErrorColor)
                 return;
@@ -667,7 +774,7 @@ namespace FlaxEditor.Windows
                 Color = options.Visual.LogInfoColor,
                 ShadowColor = options.Interface.OutputLogTextShadowColor,
                 ShadowOffset = options.Interface.OutputLogTextShadowOffset,
-                BackgroundSelectedBrush = new SolidColorBrush(Style.Current.BackgroundSelected),
+                BackgroundSelectedBrush = new SolidColorBrush(style.BorderSelected),
             };
 
             _output.WarningStyle = _output.DefaultStyle;
@@ -709,7 +816,208 @@ namespace FlaxEditor.Windows
             _textBufferCount = 0;
             _textBuffer.Clear();
             _textBlocks.Clear();
+            _entryRanges.Clear();
+            _lastOutputWrapWidth = -1.0f;
             _isDirty = true;
+        }
+
+        private static string SanitizeMessage(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+                return string.Empty;
+            return message.IndexOf('\r') != -1 ? message.Replace("\r", "") : message;
+        }
+
+        private TextBlockStyle GetEntryStyle(LogType level)
+        {
+            switch (level)
+            {
+            case LogType.Info:
+                return _output.DefaultStyle;
+            case LogType.Warning:
+                return _output.WarningStyle;
+            case LogType.Error:
+            case LogType.Fatal:
+                return _output.ErrorStyle;
+            default: throw new ArgumentOutOfRangeException();
+            }
+        }
+
+        private int AppendEntryPrefix(ref Entry entry)
+        {
+            switch (_timestampsFormats)
+            {
+            case InterfaceOptions.TimestampsFormats.Utc:
+                _textBuffer.AppendFormat("[ {0} ]: ", entry.Time.ToUniversalTime());
+                break;
+            case InterfaceOptions.TimestampsFormats.LocalTime:
+                _textBuffer.AppendFormat("[ {0} ]: ", entry.Time);
+                break;
+            case InterfaceOptions.TimestampsFormats.TimeSinceStartup:
+                var diff = entry.Time - _startupTime;
+                _textBuffer.AppendFormat("[ {0:00}:{1:00}:{2:00}.{3:000} ]: ", diff.Hours, diff.Minutes, diff.Seconds, diff.Milliseconds);
+                break;
+            }
+            if (_showLogType)
+            {
+                _textBuffer.AppendFormat("[{0}] ", entry.Level);
+            }
+            return _textBuffer.Length;
+        }
+
+        private float GetOutputWrapWidth()
+        {
+            return _wrapLogLines ? Mathf.Max(_output != null ? _output.Width : 0.0f, 1.0f) : float.MaxValue;
+        }
+
+        private bool FindEntryRange(int entryIndex, out EntryRange range)
+        {
+            for (int i = 0; i < _entryRanges.Count; i++)
+            {
+                range = _entryRanges[i];
+                if (range.EntryIndex == entryIndex)
+                    return true;
+            }
+
+            range = new EntryRange();
+            return false;
+        }
+
+        private bool FindEntryRangeAt(int charIndex, out EntryRange range)
+        {
+            for (int i = 0; i < _entryRanges.Count; i++)
+            {
+                range = _entryRanges[i];
+                if (charIndex >= range.StartIndex && charIndex <= range.EndIndex)
+                    return true;
+            }
+
+            range = new EntryRange();
+            return false;
+        }
+
+        private void SelectEntryRange(EntryRange from, EntryRange to)
+        {
+            _selectedEntryIndex = to.EntryIndex;
+            _output.Focus();
+            _output.SelectionRange = new TextRange(Mathf.Min(from.StartIndex, to.StartIndex), Mathf.Max(from.EndIndex, to.EndIndex));
+        }
+
+        private bool SelectEntryBlockAt(ref Float2 location, out int entryIndex)
+        {
+            entryIndex = -1;
+            if (_output == null || _output.TextLength == 0 || _entryRanges.Count == 0)
+                return false;
+
+            var hitPos = _output.CharIndexAtPoint(ref location);
+            if (!FindEntryRangeAt(hitPos, out var range))
+                return false;
+
+            entryIndex = range.EntryIndex;
+            SelectEntryRange(range, range);
+            return true;
+        }
+
+        private void ExtendEntryBlockSelection(int anchorEntryIndex, ref Float2 location)
+        {
+            if (!FindEntryRange(anchorEntryIndex, out var anchor))
+                return;
+
+            var hitPos = _output.CharIndexAtPoint(ref location);
+            if (FindEntryRangeAt(hitPos, out var target))
+                SelectEntryRange(anchor, target);
+        }
+
+        private void AddWrappedTextBlocks(string text, int textStartIndex, TextBlockStyle style, ref float y, float wrapWidth, int firstLineParseOffset)
+        {
+            if (string.IsNullOrEmpty(text))
+                return;
+
+            var font = style.Font.GetFont();
+            if (!font)
+                return;
+
+            var layout = TextLayoutOptions.Default;
+            layout.Bounds = new Rectangle(0, 0, wrapWidth, 10000000.0f);
+            layout.HorizontalAlignment = TextAlignment.Near;
+            layout.VerticalAlignment = TextAlignment.Near;
+            layout.TextWrapping = _wrapLogLines ? TextWrapping.WrapChars : TextWrapping.NoWrap;
+            var lines = font.ProcessText(text, ref layout);
+            var startY = y;
+            var bottom = y;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                ref var line = ref lines[i];
+                var lineStart = Mathf.Clamp(line.FirstCharIndex, 0, text.Length);
+                var lineEnd = Mathf.Clamp(line.LastCharIndex + 1, lineStart, text.Length);
+                var textBlock = new TextBlock
+                {
+                    Style = style,
+                    Range = new TextRange(textStartIndex + lineStart, textStartIndex + lineEnd),
+                    Bounds = new Rectangle(new Float2(line.Location.X, startY + line.Location.Y), line.Size),
+                };
+
+                if (lineEnd > lineStart)
+                {
+                    var rawLineStart = lineStart;
+                    while (rawLineStart > 0 && text[rawLineStart - 1] != '\n')
+                        rawLineStart--;
+                    var rawLineEnd = lineEnd;
+                    while (rawLineEnd < text.Length && text[rawLineEnd] != '\n')
+                        rawLineEnd++;
+
+                    var regexStart = rawLineStart == 0 ? Mathf.Min(firstLineParseOffset, rawLineEnd) : rawLineStart;
+                    var regexLength = rawLineEnd - regexStart;
+                    if (regexLength > 0)
+                    {
+                        var match = _compileRegex.Match(text, regexStart, regexLength);
+                        if (match.Success)
+                        {
+                            switch (match.Groups["level"].Value)
+                            {
+                            case "error":
+                                textBlock.Style = _output.ErrorStyle;
+                                break;
+                            case "warning":
+                                textBlock.Style = _output.WarningStyle;
+                                break;
+                            }
+                            textBlock.Tag = new TextBlockTag
+                            {
+                                Type = TextBlockTag.Types.CodeLocation,
+                                Url = match.Groups["path"].Value,
+                                Line = int.Parse(match.Groups["line"].Value),
+                            };
+                        }
+                    }
+                }
+
+                _textBlocks.Add(textBlock);
+                bottom = Mathf.Max(bottom, textBlock.Bounds.Bottom);
+            }
+            y = bottom;
+        }
+
+        private void AppendVisibleEntry(int entryIndex, ref Entry entry, float wrapWidth)
+        {
+            entry.Message = SanitizeMessage(entry.Message);
+
+            var entryStart = _textBuffer.Length;
+            var y = _textBlocks.Count == 0 ? 0.0f : _textBlocks[_textBlocks.Count - 1].Bounds.Bottom + EntrySpacing;
+            var style = GetEntryStyle(entry.Level);
+            var messageStart = AppendEntryPrefix(ref entry);
+            var prefixLength = messageStart - entryStart;
+            _textBuffer.Append(entry.Message);
+            var entryEnd = _textBuffer.Length;
+            _textBuffer.Append('\n');
+            AddWrappedTextBlocks(_textBuffer.ToString(entryStart, entryEnd - entryStart), entryStart, style, ref y, wrapWidth, prefixLength);
+
+            _entryRanges.Add(new EntryRange
+            {
+                EntryIndex = entryIndex,
+                StartIndex = entryStart,
+                EndIndex = entryEnd,
+            });
         }
 
         /// <summary>
@@ -718,6 +1026,7 @@ namespace FlaxEditor.Windows
         public void Clear()
         {
             _entries?.Clear();
+            _selectedEntryIndex = -1;
             Refresh();
         }
 
@@ -744,6 +1053,7 @@ namespace FlaxEditor.Windows
             using (var stream = new StreamReader(file))
             {
                 _entries.Clear();
+                _selectedEntryIndex = -1;
                 var regex = new Regex(@"\[ (\d\d:\d\d:\d\d.\d\d\d) \]\: \[(\w*)\]");
 
                 while (!stream.EndOfStream)
@@ -801,10 +1111,18 @@ namespace FlaxEditor.Windows
 
             if (_output != null)
             {
-                _searchBox.Width = Width - _viewDropdown.Right - 4;
-                _output.Size = new Float2(_vScroll.X - 2, _hScroll.Y - 4 - _viewDropdown.Bottom);
+                _viewDropdown.X = Width - _viewDropdown.Width - 2;
+                _searchBox.X = _clearButton.Right + 2;
+                _searchBox.Width = Mathf.Max(_viewDropdown.X - _searchBox.X - 2, 0.0f);
                 _commandLineBox.Width = Width - 4;
                 _commandLineBox.Y = Height - 2 - _commandLineBox.Height;
+                var outputBottom = _wrapLogLines ? _commandLineBox.Y - OutputPadding : _commandLineBox.Y - _scrollSize;
+                _hScroll.Visible = !_wrapLogLines;
+                _hScroll.Enabled = !_wrapLogLines;
+                _hScroll.Bounds = new Rectangle(0, _commandLineBox.Y - _scrollSize, Mathf.Max(Width - _scrollSize, 0.0f), _scrollSize);
+                _vScroll.Bounds = new Rectangle(Mathf.Max(Width - _scrollSize, 0.0f), _viewDropdown.Bottom + 2, _scrollSize, Mathf.Max(outputBottom - _viewDropdown.Bottom - 2, 0.0f));
+                _output.Bounds = new Rectangle(OutputPadding, _vScroll.Y, Mathf.Max(_vScroll.X - OutputPadding * 2, 0.0f), Mathf.Max(outputBottom - _vScroll.Y, 0.0f));
+                OnOutputBoundsChanged();
             }
         }
 
@@ -867,7 +1185,7 @@ namespace FlaxEditor.Windows
             base.OnSizeChanged();
 
             // Update scroll range
-            OnOutputTextChanged();
+            OnOutputBoundsChanged();
         }
 
         /// <summary>
@@ -917,114 +1235,19 @@ namespace FlaxEditor.Windows
                 // Generate the output log
                 Span<Entry> entries = CollectionsMarshal.AsSpan(_entries);
                 var searchQuery = _searchBox.Text;
+                var wrapWidth = GetOutputWrapWidth();
+                _lastOutputWrapWidth = wrapWidth;
                 for (int i = _textBufferCount; i < _entries.Count; i++)
                 {
                     ref var entry = ref entries[i];
                     if (((int)entry.Level & _logTypeShowMask) == 0)
                         continue;
+
+                    entry.Message = SanitizeMessage(entry.Message);
                     if (searchQuery.Length != 0 && entry.Message.IndexOf(searchQuery, StringComparison.OrdinalIgnoreCase) == -1)
                         continue;
 
-                    var startIndex = _textBuffer.Length;
-                    switch (_timestampsFormats)
-                    {
-                    case InterfaceOptions.TimestampsFormats.Utc:
-                        _textBuffer.AppendFormat("[ {0} ]: ", entry.Time.ToUniversalTime());
-                        break;
-                    case InterfaceOptions.TimestampsFormats.LocalTime:
-                        _textBuffer.AppendFormat("[ {0} ]: ", entry.Time);
-                        break;
-                    case InterfaceOptions.TimestampsFormats.TimeSinceStartup:
-                        var diff = entry.Time - _startupTime;
-                        _textBuffer.AppendFormat("[ {0:00}:{1:00}:{2:00}.{3:000} ]: ", diff.Hours, diff.Minutes, diff.Seconds, diff.Milliseconds);
-                        break;
-                    }
-                    if (_showLogType)
-                    {
-                        _textBuffer.AppendFormat("[{0}] ", entry.Level);
-                    }
-
-                    var prefixLength = _textBuffer.Length - startIndex;
-                    if (entry.Message.IndexOf('\r') != -1)
-                        entry.Message = entry.Message.Replace("\r", "");
-                    _textBuffer.Append(entry.Message);
-                    var endIndex = _textBuffer.Length;
-                    _textBuffer.Append('\n');
-
-                    var textBlock = new TextBlock
-                    {
-                        Range = new TextRange
-                        {
-                            StartIndex = startIndex,
-                            EndIndex = endIndex - 1,
-                        },
-                    };
-
-                    switch (entry.Level)
-                    {
-                    case LogType.Info:
-                        textBlock.Style = _output.DefaultStyle;
-                        break;
-                    case LogType.Warning:
-                        textBlock.Style = _output.WarningStyle;
-                        break;
-                    case LogType.Error:
-                    case LogType.Fatal:
-                        textBlock.Style = _output.ErrorStyle;
-                        break;
-                    default: throw new ArgumentOutOfRangeException();
-                    }
-                    var prevBlockBottom = _textBlocks.Count == 0 ? 0.0f : _textBlocks[_textBlocks.Count - 1].Bounds.Bottom;
-                    var entryText = _textBuffer.ToString(startIndex, endIndex - startIndex);
-                    var font = textBlock.Style.Font.GetFont();
-                    if (!font)
-                        continue;
-                    var style = textBlock.Style;
-                    var lines = font.ProcessText(entryText);
-                    for (int j = 0; j < lines.Length; j++)
-                    {
-                        ref var line = ref lines[j];
-                        textBlock.Range.StartIndex = startIndex + line.FirstCharIndex;
-                        textBlock.Range.EndIndex = startIndex + line.LastCharIndex + 1;
-                        textBlock.Bounds = new Rectangle(new Float2(0.0f, prevBlockBottom), line.Size);
-
-                        if (textBlock.Range.Length > 0)
-                        {
-                            // Parse compilation error/warning
-                            var regexStart = line.FirstCharIndex;
-                            if (j == 0)
-                                regexStart += prefixLength;
-                            var regexLength = line.LastCharIndex + 1 - regexStart;
-                            if (regexLength > 0)
-                            {
-                                var match = _compileRegex.Match(entryText, regexStart, regexLength);
-                                if (match.Success)
-                                {
-                                    switch (match.Groups["level"].Value)
-                                    {
-                                    case "error":
-                                        textBlock.Style = _output.ErrorStyle;
-                                        break;
-                                    case "warning":
-                                        textBlock.Style = _output.WarningStyle;
-                                        break;
-                                    }
-                                    textBlock.Tag = new TextBlockTag
-                                    {
-                                        Type = TextBlockTag.Types.CodeLocation,
-                                        Url = match.Groups["path"].Value,
-                                        Line = int.Parse(match.Groups["line"].Value),
-                                    };
-                                }
-                                // TODO: parsing hyperlinks with link
-                                // TODO: parsing file paths with link
-                            }
-                        }
-
-                        prevBlockBottom += line.Size.Y;
-                        _textBlocks.Add(textBlock);
-                        textBlock.Style = style;
-                    }
+                    AppendVisibleEntry(i, ref entry, wrapWidth);
                 }
 
                 // Update the output
@@ -1032,7 +1255,16 @@ namespace FlaxEditor.Windows
                 var cachedSelection = _output.SelectionRange;
                 var cachedOutputTargetViewOffset = _output.TargetViewOffset;
                 var isBottomScroll = _vScroll.Value >= _vScroll.Maximum - (_scrollSize * 2) || wasEmpty;
-                _output.Text = _textBuffer.ToString();
+                var outputText = _textBuffer.ToString();
+                if (_output.Text.Equals(outputText, StringComparison.Ordinal))
+                {
+                    _output.RefreshTextLayout();
+                    OnOutputTextChanged();
+                }
+                else
+                {
+                    _output.Text = outputText;
+                }
                 if (_hScroll.Maximum <= 0.0)
                     cachedOutputTargetViewOffset.X = 0;
                 if (_vScroll.Maximum <= 0.0)
@@ -1041,7 +1273,20 @@ namespace FlaxEditor.Windows
                 _textBufferCount = _entries.Count;
                 if (!_vScroll.IsThumbClicked)
                     _vScroll.TargetValue = isBottomScroll ? _vScroll.Maximum : cachedScrollValue;
-                _output.SelectionRange = cachedSelection;
+                if (_selectedEntryIndex != -1)
+                {
+                    if (FindEntryRange(_selectedEntryIndex, out var selectedRange))
+                        _output.SelectionRange = new TextRange(selectedRange.StartIndex, selectedRange.EndIndex);
+                    else
+                    {
+                        _selectedEntryIndex = -1;
+                        _output.Deselect();
+                    }
+                }
+                else
+                {
+                    _output.SelectionRange = cachedSelection;
+                }
             }
 
             base.Update(deltaTime);
@@ -1081,6 +1326,7 @@ namespace FlaxEditor.Windows
         public override void OnLayoutSerialize(XmlWriter writer)
         {
             writer.WriteAttributeString("LogTypeShowMask", _logTypeShowMask.ToString());
+            writer.WriteAttributeString("WrapLogLines", _wrapLogLines.ToString());
         }
 
         /// <inheritdoc />
@@ -1088,6 +1334,14 @@ namespace FlaxEditor.Windows
         {
             if (int.TryParse(node.GetAttribute("LogTypeShowMask"), out int value1))
                 _logTypeShowMask = value1;
+            if (bool.TryParse(node.GetAttribute("WrapLogLines"), out var value2))
+                _wrapLogLines = value2;
+        }
+
+        /// <inheritdoc />
+        public override void OnLayoutDeserialize()
+        {
+            _wrapLogLines = true;
         }
 
         /// <inheritdoc />
@@ -1106,6 +1360,8 @@ namespace FlaxEditor.Windows
             _textBuffer = null;
             _textBlocks.Clear();
             _textBlocks = null;
+            _entryRanges.Clear();
+            _entryRanges = null;
             _entries.Clear();
             _entries = null;
             _outMessages = null;
