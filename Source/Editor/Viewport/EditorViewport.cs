@@ -2048,6 +2048,15 @@ namespace FlaxEditor.Viewport
             win.MouseMoveRelative -= OnMouseMoveRelative;
         }
 
+        private void ResetMouseDeltaState()
+        {
+            _startPos = _viewMousePos;
+            _mouseDelta = Float2.Zero;
+            _mouseDeltaLast = Float2.Zero;
+            _deltaFilteringStep = 0;
+            Array.Clear(_deltaFilteringBuffer, 0, _deltaFilteringBuffer.Length);
+        }
+
         /// <summary>
         /// Called when left mouse button goes down (on press).
         /// </summary>
@@ -2241,6 +2250,12 @@ namespace FlaxEditor.Viewport
                     _input.IsMoving = !isAltNavigation && mbDown && rbDown;
                     _input.IsZooming = wheelZooming || _input.IsAltRightMouseZooming;
                     _input.IsOrbiting = isAltDown && lbDown && !mbDown && !rbDown;
+
+                    if ((_input.IsOrbiting && !_prevInput.IsOrbiting) || (_prevInput.IsOrbiting && !_input.IsOrbiting && lbDown))
+                    {
+                        ResetMouseDeltaState();
+                        _camera?.CancelInputInertia();
+                    }
 
                     // Control move speed with RMB+Wheel
                     rmbWheel = useMovementSpeed && !isAltNavigation && (_input.IsMouseRightDown || _isVirtualMouseRightDown) && wheelInUse;

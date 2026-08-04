@@ -220,6 +220,12 @@ namespace FlaxEditor.Viewport.Cameras
         }
 
         /// <inheritdoc />
+        public override void CancelInputInertia()
+        {
+            ResetFlyInertia();
+        }
+
+        /// <inheritdoc />
         public override bool TryGetCameraCenter(out Vector3 center)
         {
             center = TargetPoint;
@@ -249,6 +255,9 @@ namespace FlaxEditor.Viewport.Cameras
             var forward = Vector3.Forward * rotation;
             var up = Vector3.Up * rotation;
             var right = Vector3.Cross(forward, up);
+            var targetDistance = (float)Vector3.Dot(TargetPoint - position, forward);
+            if (targetDistance < 0.0001f)
+                targetDistance = Mathf.Max((float)Vector3.Distance(ref position, ref TargetPoint), 0.0001f);
 
             var flyMoveDelta = moveDelta;
             var flyMouseDelta = mouseDelta;
@@ -265,6 +274,7 @@ namespace FlaxEditor.Viewport.Cameras
 
             var useFlyMove = input.IsRotating || (useFlyInertia && !_flyMoveDelta.IsZero);
             var useFlyLook = input.IsRotating || (useFlyInertia && !_flyMouseDelta.IsZero);
+            var updateTargetFromView = !input.IsAltRightMouseZooming && (useFlyLook || (input.IsMoving && !mouseDelta.IsZero));
 
             // Dolly
             if (input.IsPanning || input.IsMoving)
@@ -368,7 +378,9 @@ namespace FlaxEditor.Viewport.Cameras
             }
             else
             {
-                if (!input.IsAltRightMouseZooming)
+                if (updateTargetFromView)
+                    TargetPoint = position + Viewport.ViewDirection * targetDistance;
+                else if (!input.IsAltRightMouseZooming)
                     TargetPoint += position - Viewport.ViewPosition;
                 Viewport.ViewPosition = position;
             }

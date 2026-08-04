@@ -184,6 +184,13 @@ namespace FlaxEditor.Viewport.Cameras
         }
 
         /// <summary>
+        /// Cancels any camera navigation inertia that should not carry across input mode changes.
+        /// </summary>
+        public virtual void CancelInputInertia()
+        {
+        }
+
+        /// <summary>
         /// Gets the camera center point used by orbit and Alt+right mouse button zooming.
         /// </summary>
         /// <param name="center">The camera center point.</param>
