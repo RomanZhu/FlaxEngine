@@ -230,6 +230,20 @@ namespace FlaxEditor.Options
             return window.GetKey(Key) && ProcessModifiers(window);
         }
 
+        /// <summary>
+        /// Processes this input binding to check if state matches.
+        /// </summary>
+        /// <param name="window">The input providing window.</param>
+        /// <param name="key">The input key.</param>
+        /// <returns>True if input has been processed, otherwise false.</returns>
+        public bool Process(Window window, KeyboardKeys key)
+        {
+            if (key != Key)
+                return false;
+
+            return ProcessModifiers(window);
+        }
+
         /// <inheritdoc />
         public override string ToString()
         {

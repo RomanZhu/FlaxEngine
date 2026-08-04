@@ -1186,18 +1186,27 @@ namespace FlaxEditor.Viewport
             base.OnLeftMouseButtonDown();
 
             if (Root.GetMouseButtonDown(MouseButton.Left) && !IsAltKeyDown && !_directionGizmo.IsMouseOver)
+            {
                 _rubberBandSelector.TryStartingRubberBandSelection(_viewMousePos);
+            }
         }
 
         /// <inheritdoc />
         protected override void OnLeftMouseButtonUp()
         {
+            var rubberBandHandled = _rubberBandSelector.ReleaseRubberBandSelection();
+
             // Skip if was controlling mouse or mouse is not over the area
-            if (_prevInput.IsControllingMouse || !Bounds.Contains(ref _viewMousePos) || _directionGizmo.IsMouseOver)
+            var containsViewMouse = ContainsPoint(ref _viewMousePos);
+            if (_prevInput.IsControllingMouse || !containsViewMouse || _directionGizmo.IsMouseOver)
+            {
+                if (rubberBandHandled)
+                    Focus();
                 return;
+            }
 
             // Select rubberbanded rect actor nodes or pick with gizmo
-            if (!_rubberBandSelector.ReleaseRubberBandSelection())
+            if (!rubberBandHandled)
             {
                 // Try to pick something with the current gizmo
                 Gizmos.Active?.Pick();

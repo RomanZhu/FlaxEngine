@@ -2177,7 +2177,8 @@ namespace FlaxEditor.Viewport
                 if (useViewportMouseInput)
                     hit = null;
 #endif
-                if (canUseInput && (ContainsFocus || useViewportMouseInput) && hit == null)
+                var shouldGatherInput = canUseInput && (ContainsFocus || useViewportMouseInput) && hit == null;
+                if (shouldGatherInput)
                     _input.Gather(win.Window, useMouse, ref _prevInput);
                 else
                     _input.Clear();
@@ -2464,9 +2465,14 @@ namespace FlaxEditor.Viewport
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
             Focus();
-
             base.OnMouseDown(location, button);
             return true;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            return base.OnMouseUp(location, button);
         }
 
         /// <inheritdoc />
