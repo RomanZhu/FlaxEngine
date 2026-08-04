@@ -263,6 +263,7 @@ namespace FlaxEditor.Viewport
 
         private int _speedStep;
         private int _maxSpeedSteps;
+        private float _cameraMoveSpeedWheelRemainder;
         private float _cameraMoveSpeedOverlayHideTime = -1.0f;
         private string _cameraMoveSpeedOverlayText;
 
@@ -2245,8 +2246,13 @@ namespace FlaxEditor.Viewport
                     rmbWheel = useMovementSpeed && !isAltNavigation && (_input.IsMouseRightDown || _isVirtualMouseRightDown) && wheelInUse;
                     if (rmbWheel)
                     {
-                        var step = _input.MouseWheelDelta * options.Viewport.MouseWheelSensitivity;
-                        AdjustCameraMoveSpeed(step > 0.0f ? 1 : -1);
+                        _cameraMoveSpeedWheelRemainder += _input.MouseWheelDelta * options.Viewport.CameraMovementSpeedScrollSensitivity;
+                        var step = _cameraMoveSpeedWheelRemainder > 0.0f ? Mathf.FloorToInt(_cameraMoveSpeedWheelRemainder) : Mathf.CeilToInt(_cameraMoveSpeedWheelRemainder);
+                        if (step != 0)
+                        {
+                            _cameraMoveSpeedWheelRemainder -= step;
+                            AdjustCameraMoveSpeed(step);
+                        }
                     }
                 }
 

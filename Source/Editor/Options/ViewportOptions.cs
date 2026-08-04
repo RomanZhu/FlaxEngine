@@ -59,6 +59,13 @@ namespace FlaxEditor.Options
         public float AltRightMouseZoomSpeed { get; set; } = DefaultAltRightMouseZoomSpeed;
 
         /// <summary>
+        /// Gets or sets the sensitivity scale for changing camera movement speed with right mouse button and mouse wheel.
+        /// </summary>
+        [DefaultValue(1.0f), Limit(0.01f, 10.0f, 0.01f)]
+        [EditorDisplay("Camera"), EditorOrder(113), Tooltip("The sensitivity scale for changing viewport camera movement speed with right mouse button and mouse wheel.")]
+        public float CameraMovementSpeedScrollSensitivity { get; set; } = 1.0f;
+
+        /// <summary>
         /// Gets or sets the default movement speed for the viewport camera (must be in range between minimum and maximum movement speed values).
         /// </summary>
         [DefaultValue(1.0f), Limit(0.05f, 32.0f)]
