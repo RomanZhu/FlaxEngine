@@ -783,12 +783,9 @@ namespace FlaxEditor.Surface
             if (_middleMouseDown && button == MouseButton.Middle)
             {
                 _middleMouseDown = false;
-                if (_middleMouseDown)
-                {
-                    EndMouseCapture();
-                    Cursor = CursorType.Default;
-                }
-                if (_mouseMoveAmount > 0 && _middleMouseDown)
+                EndMouseCapture();
+                Cursor = CursorType.Default;
+                if (_mouseMoveAmount > 0 && PanWithMiddleMouse)
                     _mouseMoveAmount = 0;
                 else if (CanEdit)
                 {
