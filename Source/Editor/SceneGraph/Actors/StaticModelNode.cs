@@ -25,6 +25,7 @@ namespace FlaxEditor.SceneGraph.Actors
     public sealed class StaticModelNode : ActorNode
     {
         private Dictionary<IntPtr, Float3[]> _vertices;
+        private Dictionary<IntPtr, uint[]> _triangles;
         private Vector3[] _selectionPoints;
         private Transform _selectionPointsTransform;
         private Model _selectionPointsModel;
@@ -64,7 +65,14 @@ namespace FlaxEditor.SceneGraph.Actors
             if (!IsPrimitive)
                 return false;
 
-            points = Actor.EditorBox.GetCorners();
+            var model = ((StaticModel)Actor).Model;
+            if (!model || model.WaitForLoaded())
+                return false;
+
+            points = model.GetBox(0).GetCorners();
+            var transform = Actor.Transform;
+            for (int i = 0; i < points.Length; i++)
+                points[i] = transform.LocalToWorld(points[i]);
             return points != null && points.Length != 0;
         }
 
@@ -72,10 +80,69 @@ namespace FlaxEditor.SceneGraph.Actors
         public override void OnDispose()
         {
             _vertices = null;
+            _triangles = null;
             _selectionPoints = null;
             _selectionPointsModel = null;
 
             base.OnDispose();
+        }
+
+        private bool TryGetCachedMeshData(Mesh mesh, out Float3[] vertices, out uint[] triangles)
+        {
+            vertices = null;
+            triangles = null;
+            if (mesh == null)
+                return false;
+
+            if (_vertices == null)
+                _vertices = new();
+            if (_triangles == null)
+                _triangles = new();
+
+            var key = FlaxEngine.Object.GetUnmanagedPtr(mesh);
+            bool hasVertices = _vertices.TryGetValue(key, out vertices);
+            bool hasTriangles = _triangles.TryGetValue(key, out triangles);
+            if (hasVertices && hasTriangles)
+                return vertices != null && triangles != null;
+
+            var accessor = new MeshAccessor();
+            if (accessor.LoadMesh(mesh))
+                return false;
+
+            if (!hasVertices)
+            {
+                vertices = accessor.Positions;
+                if (vertices != null)
+                    _vertices.Add(key, vertices);
+            }
+            if (!hasTriangles)
+            {
+                triangles = accessor.Triangles;
+                if (triangles != null)
+                    _triangles.Add(key, triangles);
+            }
+            return vertices != null && triangles != null;
+        }
+
+        private static bool TryGetVertex(Float3[] vertices, uint index, out Float3 vertex)
+        {
+            vertex = new Float3();
+            if (vertices == null || index >= (uint)vertices.Length)
+                return false;
+            vertex = vertices[(int)index];
+            return true;
+        }
+
+        private static bool IsVertexAtPosition(Float3[] vertices, uint index, Vector3 localVertex, Real toleranceSquared)
+        {
+            return TryGetVertex(vertices, index, out var vertex) &&
+                   Vector3.DistanceSquared(vertex, localVertex) <= toleranceSquared;
+        }
+
+        private static void AddStaticModelVertexSnapEdge(List<Vector3> connectedVertices, Transform transform, Float3[] vertices, uint index)
+        {
+            if (TryGetVertex(vertices, index, out var vertex))
+                AddUniqueVertexSnapEdge(connectedVertices, transform.LocalToWorld(vertex));
         }
 
         /// <inheritdoc />
@@ -138,7 +205,7 @@ namespace FlaxEditor.SceneGraph.Actors
             result = Vector3.Zero;
             screenDistance = Real.MaxValue;
             if (TryGetPrimitiveSnapPoints(out var primitivePoints))
-                return FindClosestVertexToScreen(ref ray, viewport, mousePosition, primitivePoints, primitivePoints.Length, out result, out screenDistance);
+                return FindClosestVertexToScreen(ref ray, viewport, mousePosition, primitivePoints, primitivePoints.Length, hitDistance, out result, out screenDistance);
 
             var model = ((StaticModel)Actor).Model;
             if (model && !model.WaitForLoaded())
@@ -173,7 +240,7 @@ namespace FlaxEditor.SceneGraph.Actors
                         {
                             ref var v = ref verts[i];
                             Vector3 vertex = transform.LocalToWorld(v);
-                            if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertex, ref screenDistance, ref minRayDistance, ref result))
+                            if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertex, hitDistance, ref screenDistance, ref minRayDistance, ref result))
                                 hit = true;
                         }
                     }
@@ -184,6 +251,77 @@ namespace FlaxEditor.SceneGraph.Actors
                 }
             }
             return false;
+        }
+
+        /// <inheritdoc />
+        public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
+            if (TryGetPrimitiveSnapPoints(out var primitivePoints))
+            {
+                GetBoxVertexSnapEdges(primitivePoints, vertex, connectedVertices);
+                return;
+            }
+
+            var model = ((StaticModel)Actor).Model;
+            if (!model || model.WaitForLoaded())
+                return;
+            var lodIndex = 0; // TODO: use LOD index based on the game view
+            if (model.LODs == null || model.LODs.Length <= lodIndex)
+                return;
+            var lod = model.LODs[lodIndex];
+            if (lod.Meshes == null || lod.Meshes.Length == 0)
+                return;
+
+            var transform = Actor.Transform;
+            var localVertex = transform.WorldToLocal(vertex);
+            Real closestDistance = Real.MaxValue;
+            foreach (var mesh in lod.Meshes)
+            {
+                if (!TryGetCachedMeshData(mesh, out var vertices, out _))
+                    continue;
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    var distance = Vector3.DistanceSquared(vertices[i], localVertex);
+                    if (distance < closestDistance)
+                        closestDistance = distance;
+                }
+            }
+            if (closestDistance == Real.MaxValue)
+                return;
+
+            var toleranceSquared = closestDistance + (Real)0.0001;
+            if (toleranceSquared < (Real)0.0001)
+                toleranceSquared = (Real)0.0001;
+
+            foreach (var mesh in lod.Meshes)
+            {
+                if (!TryGetCachedMeshData(mesh, out var vertices, out var triangles))
+                    continue;
+                for (int i = 0; i + 2 < triangles.Length; i += 3)
+                {
+                    var a = triangles[i];
+                    var b = triangles[i + 1];
+                    var c = triangles[i + 2];
+                    bool aSelected = IsVertexAtPosition(vertices, a, localVertex, toleranceSquared);
+                    bool bSelected = IsVertexAtPosition(vertices, b, localVertex, toleranceSquared);
+                    bool cSelected = IsVertexAtPosition(vertices, c, localVertex, toleranceSquared);
+                    if (aSelected)
+                    {
+                        AddStaticModelVertexSnapEdge(connectedVertices, transform, vertices, b);
+                        AddStaticModelVertexSnapEdge(connectedVertices, transform, vertices, c);
+                    }
+                    if (bSelected)
+                    {
+                        AddStaticModelVertexSnapEdge(connectedVertices, transform, vertices, a);
+                        AddStaticModelVertexSnapEdge(connectedVertices, transform, vertices, c);
+                    }
+                    if (cSelected)
+                    {
+                        AddStaticModelVertexSnapEdge(connectedVertices, transform, vertices, a);
+                        AddStaticModelVertexSnapEdge(connectedVertices, transform, vertices, b);
+                    }
+                }
+            }
         }
 
         /// <inheritdoc />

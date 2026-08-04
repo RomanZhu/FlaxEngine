@@ -24,6 +24,14 @@ namespace FlaxEditor.SceneGraph
     [HideInEditor]
     public class ActorNode : SceneGraphNode
     {
+        private const Real VertexSnapDepthTolerance = 2.0f;
+        private static readonly int[] BoxVertexSnapEdgeIndices =
+        {
+            0, 1, 1, 2, 2, 3, 3, 0,
+            4, 5, 5, 6, 6, 7, 7, 4,
+            0, 4, 1, 5, 2, 6, 3, 7,
+        };
+
         /// <summary>
         /// The linked actor object.
         /// </summary>
@@ -356,23 +364,28 @@ namespace FlaxEditor.SceneGraph
         /// <param name="viewport">The viewport used to project the vertex.</param>
         /// <param name="mousePosition">The mouse position in viewport UI space.</param>
         /// <param name="vertex">The world-space vertex.</param>
+        /// <param name="hitDistance">Hit distance from ray to object.</param>
         /// <param name="minScreenDistance">The closest squared distance to the mouse position.</param>
         /// <param name="minRayDistance">The closest distance along the ray.</param>
         /// <param name="result">The closest vertex.</param>
         /// <returns>True if the vertex became the closest vertex, otherwise false.</returns>
-        protected static bool UpdateClosestVertexToScreen(ref Ray ray, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, Vector3 vertex, ref Real minScreenDistance, ref Real minRayDistance, ref Vector3 result)
+        protected static bool UpdateClosestVertexToScreen(ref Ray ray, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, Vector3 vertex, Real hitDistance, ref Real minScreenDistance, ref Real minRayDistance, ref Vector3 result)
         {
             var vertexRayDistance = Vector3.Dot(vertex - ray.Position, ray.Direction);
             if (vertexRayDistance < 0.0f)
                 return false;
 
-            viewport.ProjectPoint(vertex, out var screenPosition);
-            if (float.IsNaN(screenPosition.X) || float.IsNaN(screenPosition.Y) ||
-                float.IsInfinity(screenPosition.X) || float.IsInfinity(screenPosition.Y))
+            var closestPointOnRay = ray.Position + ray.Direction * vertexRayDistance;
+            var distanceToCursorRay = Vector3.DistanceSquared(vertex, closestPointOnRay);
+            if (hitDistance < Real.MaxValue)
             {
-                return false;
+                var depthTolerance = VertexSnapDepthTolerance + (Real)Math.Sqrt(distanceToCursorRay);
+                if (vertexRayDistance > hitDistance + depthTolerance)
+                    return false;
             }
-            var screenDistance = (Real)(screenPosition - mousePosition).LengthSquared;
+
+            var depth = Math.Max((double)vertexRayDistance, 0.0001);
+            var screenDistance = (Real)(distanceToCursorRay / (depth * depth));
             if (screenDistance >= minScreenDistance && (screenDistance != minScreenDistance || vertexRayDistance >= minRayDistance))
                 return false;
 
@@ -412,10 +425,11 @@ namespace FlaxEditor.SceneGraph
         /// <param name="mousePosition">The mouse position in viewport UI space.</param>
         /// <param name="vertices">The world-space vertices.</param>
         /// <param name="count">The amount of vertices.</param>
+        /// <param name="hitDistance">Hit distance from ray to object.</param>
         /// <param name="result">The closest vertex.</param>
         /// <param name="screenDistance">The squared screen-space distance from the mouse position to the result.</param>
         /// <returns>True if found a vertex, otherwise false.</returns>
-        protected static bool FindClosestVertexToScreen(ref Ray ray, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, Vector3[] vertices, int count, out Vector3 result, out Real screenDistance)
+        protected static bool FindClosestVertexToScreen(ref Ray ray, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, Vector3[] vertices, int count, Real hitDistance, out Vector3 result, out Real screenDistance)
         {
             result = Vector3.Zero;
             screenDistance = Real.MaxValue;
@@ -423,10 +437,62 @@ namespace FlaxEditor.SceneGraph
             var hit = false;
             for (int i = 0; i < count; i++)
             {
-                if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertices[i], ref screenDistance, ref minRayDistance, ref result))
+                if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertices[i], hitDistance, ref screenDistance, ref minRayDistance, ref result))
                     hit = true;
             }
             return hit;
+        }
+
+        /// <summary>
+        /// Gets the box edge vertices connected to a vertex snapping point.
+        /// </summary>
+        /// <param name="corners">The box corners in world space.</param>
+        /// <param name="vertex">The vertex snapping point in world space.</param>
+        /// <param name="connectedVertices">The connected vertices in world space.</param>
+        protected static void GetBoxVertexSnapEdges(Vector3[] corners, Vector3 vertex, List<Vector3> connectedVertices)
+        {
+            if (corners == null || corners.Length < 8 || connectedVertices == null)
+                return;
+
+            int closestIndex = 0;
+            Real closestDistance = Real.MaxValue;
+            for (int i = 0; i < 8; i++)
+            {
+                var distance = Vector3.DistanceSquared(corners[i], vertex);
+                if (distance < closestDistance)
+                {
+                    closestIndex = i;
+                    closestDistance = distance;
+                }
+            }
+
+            for (int i = 0; i < BoxVertexSnapEdgeIndices.Length; i += 2)
+            {
+                int a = BoxVertexSnapEdgeIndices[i];
+                int b = BoxVertexSnapEdgeIndices[i + 1];
+                if (a == closestIndex)
+                    AddUniqueVertexSnapEdge(connectedVertices, corners[b]);
+                else if (b == closestIndex)
+                    AddUniqueVertexSnapEdge(connectedVertices, corners[a]);
+            }
+        }
+
+        /// <summary>
+        /// Adds a vertex snapping edge endpoint if it was not added already.
+        /// </summary>
+        /// <param name="connectedVertices">The connected vertices in world space.</param>
+        /// <param name="vertex">The vertex to add.</param>
+        protected static void AddUniqueVertexSnapEdge(List<Vector3> connectedVertices, Vector3 vertex)
+        {
+            if (connectedVertices == null)
+                return;
+
+            for (int i = 0; i < connectedVertices.Count; i++)
+            {
+                if (Vector3.DistanceSquared(connectedVertices[i], vertex) <= (Real)0.0001)
+                    return;
+            }
+            connectedVertices.Add(vertex);
         }
 
         /// <inheritdoc />

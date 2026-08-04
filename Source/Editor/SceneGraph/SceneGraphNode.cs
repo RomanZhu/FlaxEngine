@@ -24,6 +24,8 @@ namespace FlaxEditor.SceneGraph
     [HideInEditor]
     public abstract class SceneGraphNode
     {
+        private const Real VertexSnapDepthTolerance = 2.0f;
+
         /// <summary>
         /// The parent node.
         /// </summary>
@@ -384,14 +386,31 @@ namespace FlaxEditor.SceneGraph
             screenDistance = Real.MaxValue;
             if (!OnVertexSnap(ref ray, hitDistance, out result))
                 return false;
-            viewport.ProjectPoint(result, out var screenPosition);
-            if (float.IsNaN(screenPosition.X) || float.IsNaN(screenPosition.Y) ||
-                float.IsInfinity(screenPosition.X) || float.IsInfinity(screenPosition.Y))
-            {
+            var vertexRayDistance = Vector3.Dot(result - ray.Position, ray.Direction);
+            if (vertexRayDistance < 0.0f)
                 return false;
+
+            var closestPointOnRay = ray.Position + ray.Direction * vertexRayDistance;
+            var distanceToCursorRay = Vector3.DistanceSquared(result, closestPointOnRay);
+            if (hitDistance < Real.MaxValue)
+            {
+                var depthTolerance = VertexSnapDepthTolerance + (Real)Math.Sqrt(distanceToCursorRay);
+                if (vertexRayDistance > hitDistance + depthTolerance)
+                    return false;
             }
-            screenDistance = (Real)(screenPosition - mousePosition).LengthSquared;
+
+            var depth = Math.Max((double)vertexRayDistance, 0.0001);
+            screenDistance = (Real)(distanceToCursorRay / (depth * depth));
             return true;
+        }
+
+        /// <summary>
+        /// Gets vertices connected to the specified vertex snapping point.
+        /// </summary>
+        /// <param name="vertex">The vertex snapping point in world space.</param>
+        /// <param name="connectedVertices">The connected vertices in world space.</param>
+        public virtual void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
         }
 
         /// <summary>

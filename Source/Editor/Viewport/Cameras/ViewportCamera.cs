@@ -46,6 +46,12 @@ namespace FlaxEditor.Viewport.Cameras
             var transformGizmo = gizmos.Get<TransformGizmo>();
             if (transformGizmo == null || transformGizmo.SelectedParents.Count == 0)
                 return;
+            if (transformGizmo.TryGetTemporaryVertexSnapPivot(out var vertexSnapPivot))
+            {
+                var vertexSnapBounds = new BoundingSphere(vertexSnapPivot, 15.0f);
+                ShowSphere(ref vertexSnapBounds, ref orientation);
+                return;
+            }
             if (gizmos.Active != null)
             {
                 var gizmoBounds = gizmos.Active.FocusBounds;

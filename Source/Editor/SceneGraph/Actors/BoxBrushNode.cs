@@ -7,6 +7,7 @@ using Real = System.Single;
 #endif
 
 using System;
+using System.Collections.Generic;
 using FlaxEngine;
 
 namespace FlaxEditor.SceneGraph.Actors
@@ -258,11 +259,18 @@ namespace FlaxEditor.SceneGraph.Actors
                     continue;
                 for (int i = 0; i < vertices.Length; i++)
                 {
-                    if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertices[i], ref screenDistance, ref minRayDistance, ref result))
+                    if (UpdateClosestVertexToScreen(ref ray, viewport, mousePosition, vertices[i], hitDistance, ref screenDistance, ref minRayDistance, ref result))
                         hit = true;
                 }
             }
             return hit;
+        }
+
+        /// <inheritdoc />
+        public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
+            var brush = (BoxBrush)_actor;
+            GetBoxVertexSnapEdges(brush.OrientedBox.GetCorners(), vertex, connectedVertices);
         }
     }
 }

@@ -6,6 +6,7 @@ using Real = System.Double;
 using Real = System.Single;
 #endif
 
+using System.Collections.Generic;
 using FlaxEngine;
 using FlaxEditor.CustomEditors.Dedicated;
 using FlaxEditor.CustomEditors;
@@ -87,7 +88,14 @@ namespace FlaxEditor.SceneGraph.Actors
         {
             var box = ((BoxCollider)_actor).OrientedBox;
             var corners = box.GetCorners();
-            return FindClosestVertexToScreen(ref ray, viewport, mousePosition, corners, corners.Length, out result, out screenDistance);
+            return FindClosestVertexToScreen(ref ray, viewport, mousePosition, corners, corners.Length, hitDistance, out result, out screenDistance);
+        }
+
+        /// <inheritdoc />
+        public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
+            var box = ((BoxCollider)_actor).OrientedBox;
+            GetBoxVertexSnapEdges(box.GetCorners(), vertex, connectedVertices);
         }
 
         /// <inheritdoc />

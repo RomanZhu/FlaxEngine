@@ -65,16 +65,36 @@ namespace FlaxEditor.Gizmo
 
         private SceneGraphNode _vertexSnapObject, _vertexSnapObjectTo;
         private Vector3 _vertexSnapPoint, _vertexSnapPointTo;
+        private Float2 _vertexSnapDragStartMousePosition;
         private bool _isVertexSnapPivotLocked;
+        private bool _isVertexSnapTemporaryPivot;
+        private bool _isVertexSnapDragPending;
         private bool _wasLeftMouseButtonDown;
-        private const float VertexSnapMaxScreenDistance = 24.0f;
-        private const float VertexSnapMaxScreenDistanceSquared = VertexSnapMaxScreenDistance * VertexSnapMaxScreenDistance;
+        private bool _wasSnapToVertex;
+        private const float VertexSnapDragStartDistanceSquared = 16.0f;
         private static readonly SceneGraphNode.RayCastData.FlagTypes VertexSnapRayCastFlags = SceneGraphNode.RayCastData.FlagTypes.None;
 
         /// <summary>
         /// Gets the gizmo position.
         /// </summary>
         public Vector3 Position { get; private set; }
+
+        /// <summary>
+        /// Gets the selected temporary vertex snapping pivot point.
+        /// </summary>
+        /// <param name="worldPosition">The selected pivot position in world space.</param>
+        /// <returns>True if the temporary pivot is selected, otherwise false.</returns>
+        public bool TryGetTemporaryVertexSnapPivot(out Vector3 worldPosition)
+        {
+            if (_isVertexSnapTemporaryPivot && _vertexSnapObject != null)
+            {
+                worldPosition = _vertexSnapObject.Transform.LocalToWorld(_vertexSnapPoint);
+                return true;
+            }
+
+            worldPosition = Vector3.Zero;
+            return false;
+        }
 
         /// <summary>
         /// Gets the last transformation delta.
@@ -415,7 +435,7 @@ namespace FlaxEditor.Gizmo
 
         private void ResetTranslationScale()
         {
-            ClearTransformInteraction();
+            ClearTransformInteraction(!_isVertexSnapTemporaryPivot);
         }
 
         private static bool IsTranslateAxis(Axis axis)
@@ -767,12 +787,27 @@ namespace FlaxEditor.Gizmo
         public override void Update(float dt)
         {
             LastDelta = Transform.Identity;
+            bool wasLeftBtnDown = _wasLeftMouseButtonDown;
             bool isLeftBtnDown = Owner.IsLeftMouseButtonDown;
-            bool isLeftMouseButtonPressed = isLeftBtnDown && !_wasLeftMouseButtonDown;
+            bool isLeftMouseButtonPressed = isLeftBtnDown && !wasLeftBtnDown;
+            bool isLeftMouseButtonReleased = !isLeftBtnDown && wasLeftBtnDown;
             _wasLeftMouseButtonDown = isLeftBtnDown;
             if (!IsActive)
                 return;
             bool snapToVertex = Owner.SnapToVertex;
+            bool snapToVertexPressed = snapToVertex && !_wasSnapToVertex;
+            _wasSnapToVertex = snapToVertex;
+            bool cancelVertexSnapPivot = (snapToVertexPressed && _isVertexSnapTemporaryPivot) ||
+                                         (Owner.Viewport.Root != null && Owner.Viewport.Root.GetKeyDown(KeyboardKeys.Escape));
+            if (cancelVertexSnapPivot)
+                EndVertexSnapping();
+            bool skipVertexSnapSelection = cancelVertexSnapPivot;
+            if (_isVertexSnapDragPending)
+            {
+                var mouseDelta = Owner.Viewport.ViewMousePosition - _vertexSnapDragStartMousePosition;
+                if (!isLeftBtnDown || mouseDelta.LengthSquared >= VertexSnapDragStartDistanceSquared)
+                    _isVertexSnapDragPending = false;
+            }
 
             // Snap to ground
             if (_activeAxis == Axis.None && SelectionCount != 0 && Owner.SnapToGround)
@@ -786,10 +821,10 @@ namespace FlaxEditor.Gizmo
                 _lastIntersectionPosition = _intersectPosition;
                 _intersectPosition = Vector3.Zero;
 
-                if (snapToVertex && isLeftMouseButtonPressed)
+                if (snapToVertex && !skipVertexSnapSelection && isLeftMouseButtonPressed)
                 {
                     bool selectedSourceOnPress = false;
-                    if (!_isVertexSnapPivotLocked && TrySelectVertexSnappingSource())
+                    if (!_isVertexSnapTemporaryPivot && !_isVertexSnapPivotLocked && TrySelectVertexSnappingSource())
                     {
                         selectedSourceOnPress = true;
                         UpdateGizmoPosition();
@@ -799,13 +834,18 @@ namespace FlaxEditor.Gizmo
                     if (_vertexSnapObject != null && (_activeAxis != Axis.None || selectedSourceOnPress))
                     {
                         _isVertexSnapPivotLocked = true;
+                        if (selectedSourceOnPress)
+                        {
+                            _isVertexSnapDragPending = true;
+                            _vertexSnapDragStartMousePosition = Owner.Viewport.ViewMousePosition;
+                        }
                         if (_activeAxis == Axis.None && selectedSourceOnPress)
                             _activeAxis = Axis.Center;
                     }
                 }
 
                 // Check if user is holding left mouse button and any axis is selected
-                if (isLeftBtnDown && _activeAxis != Axis.None)
+                if (isLeftBtnDown && _activeAxis != Axis.None && !_isVertexSnapDragPending)
                 {
                     _isSelected = true; // setting later is too late, need to set here for rubber band selection in GizmoViewport
                     switch (_activeMode)
@@ -833,7 +873,14 @@ namespace FlaxEditor.Gizmo
                     {
                         if (snapToVertex)
                         {
-                            if (!_isVertexSnapPivotLocked && !TrySelectVertexSnappingSource())
+                            if (isLeftMouseButtonReleased)
+                            {
+                                if (_isVertexSnapPivotLocked && _vertexSnapObject != null)
+                                    _isVertexSnapTemporaryPivot = true;
+                                _isVertexSnapPivotLocked = false;
+                                EndVertexSnappingTarget();
+                            }
+                            if (!skipVertexSnapSelection && !_isVertexSnapTemporaryPivot && !_isVertexSnapPivotLocked && !TrySelectVertexSnappingSource())
                                 EndVertexSnapping();
                             UpdateGizmoPosition();
                             UpdateMatrices();
@@ -841,7 +888,16 @@ namespace FlaxEditor.Gizmo
                         }
                         else
                         {
-                            EndVertexSnapping();
+                            if (isLeftMouseButtonReleased && _isVertexSnapPivotLocked && _vertexSnapObject != null)
+                            {
+                                _isVertexSnapTemporaryPivot = true;
+                                _isVertexSnapPivotLocked = false;
+                                EndVertexSnappingTarget();
+                            }
+                            if (_isVertexSnapTemporaryPivot)
+                                EndVertexSnappingTarget();
+                            else
+                                EndVertexSnapping();
                             SelectAxis();
                         }
                     }
@@ -902,7 +958,7 @@ namespace FlaxEditor.Gizmo
                 else
                 {
                     // Clear cache
-                    ClearTransformInteraction(!(snapToVertex && _vertexSnapObject != null));
+                    ClearTransformInteraction(!((snapToVertex || _isVertexSnapTemporaryPivot) && _vertexSnapObject != null));
                     EndTransforming();
                 }
             }
@@ -934,6 +990,7 @@ namespace FlaxEditor.Gizmo
             var ray = new SceneGraphNode.RayCastData
             {
                 Ray = Owner.MouseRay,
+                View = Owner.Viewport.ViewRay,
                 Flags = VertexSnapRayCastFlags,
             };
             var closestScreenDistance = Real.MaxValue;
@@ -955,6 +1012,7 @@ namespace FlaxEditor.Gizmo
             _vertexSnapPoint = closestObject.Transform.WorldToLocal(closestPoint);
             _vertexSnapObjectTo = null;
             _vertexSnapPointTo = Vector3.Zero;
+            _isVertexSnapTemporaryPivot = false;
             return true;
         }
 
@@ -976,9 +1034,9 @@ namespace FlaxEditor.Gizmo
             if (node == null || !node.IsActive || IsVertexSnapExcluded(node, excludedRoots))
                 return;
 
-            if (node.RayCastSelf(ref ray, out var distance, out _) &&
-                node.OnVertexSnap(ref ray.Ray, distance, viewport, mousePosition, out var vertexSnapPoint, out var screenDistance) &&
-                screenDistance <= VertexSnapMaxScreenDistanceSquared &&
+            if (!node.RayCastSelf(ref ray, out var distance, out _))
+                distance = Real.MaxValue;
+            if (node.OnVertexSnap(ref ray.Ray, distance, viewport, mousePosition, out var vertexSnapPoint, out var screenDistance) &&
                 (screenDistance < closestScreenDistance || (screenDistance == closestScreenDistance && distance < closestRayDistance)))
             {
                 closestScreenDistance = screenDistance;
@@ -996,7 +1054,10 @@ namespace FlaxEditor.Gizmo
             // Clear current vertex snapping data
             _vertexSnapObject = null;
             _vertexSnapPoint = Vector3.Zero;
+            _vertexSnapDragStartMousePosition = Float2.Zero;
             _isVertexSnapPivotLocked = false;
+            _isVertexSnapTemporaryPivot = false;
+            _isVertexSnapDragPending = false;
             EndVertexSnappingTarget();
         }
 
@@ -1017,6 +1078,7 @@ namespace FlaxEditor.Gizmo
             var rayCast = new SceneGraphNode.RayCastData
             {
                 Ray = Owner.MouseRay,
+                View = Owner.Viewport.ViewRay,
                 Flags = VertexSnapRayCastFlags,
             };
             var excludeObjects = new List<SceneGraphNode>();

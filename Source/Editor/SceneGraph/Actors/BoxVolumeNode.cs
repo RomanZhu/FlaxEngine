@@ -7,6 +7,7 @@ using Real = System.Single;
 #endif
 
 using System;
+using System.Collections.Generic;
 using FlaxEngine;
 
 namespace FlaxEditor.SceneGraph.Actors
@@ -123,6 +124,12 @@ namespace FlaxEditor.SceneGraph.Actors
             }
 
             /// <inheritdoc />
+            public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+            {
+                ((BoxVolumeNode)ParentNode).OnVertexSnapEdges(vertex, connectedVertices);
+            }
+
+            /// <inheritdoc />
             public override unsafe void OnDebugDraw(ViewportDebugDrawData data)
             {
                 // Draw box volume debug shapes
@@ -220,7 +227,14 @@ namespace FlaxEditor.SceneGraph.Actors
         {
             var box = ((BoxVolume)_actor).OrientedBox;
             var corners = box.GetCorners();
-            return FindClosestVertexToScreen(ref ray, viewport, mousePosition, corners, corners.Length, out result, out screenDistance);
+            return FindClosestVertexToScreen(ref ray, viewport, mousePosition, corners, corners.Length, hitDistance, out result, out screenDistance);
+        }
+
+        /// <inheritdoc />
+        public override void OnVertexSnapEdges(Vector3 vertex, List<Vector3> connectedVertices)
+        {
+            var box = ((BoxVolume)_actor).OrientedBox;
+            GetBoxVertexSnapEdges(box.GetCorners(), vertex, connectedVertices);
         }
     }
 }
