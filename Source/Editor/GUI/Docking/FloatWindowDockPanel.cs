@@ -24,6 +24,7 @@ namespace FlaxEditor.GUI.Docking
                 _panel = panel;
                 _performanceStats = new UIModule.TitleBarPerformanceStats
                 {
+                    StartTitleBarDrag = _panel.BeginDrag,
                     Parent = this,
                 };
             }

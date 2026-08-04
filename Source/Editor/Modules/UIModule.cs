@@ -49,6 +49,14 @@ namespace FlaxEditor.Modules
             private InterfaceOptions.EditorPerformanceStats _requestedValues;
             private InterfaceOptions.EditorPerformanceStats _visibleValues;
             private bool _enabledByOptions;
+            private bool _isDraggingWindow;
+            private Float2 _dragStartMouse;
+            private Float2 _dragStartWindowPosition;
+
+            /// <summary>
+            /// Optional callback used to start the owning title bar drag action.
+            /// </summary>
+            public Action StartTitleBarDrag { get; set; }
 
             public TitleBarPerformanceStats()
             : base(0, 0, 0, 28)
@@ -146,8 +154,68 @@ namespace FlaxEditor.Modules
                 x += fieldWidth;
             }
 
+            public override bool OnMouseDown(Float2 location, MouseButton button)
+            {
+                if (button != MouseButton.Left)
+                    return base.OnMouseDown(location, button);
+
+                if (StartTitleBarDrag != null)
+                {
+                    StartTitleBarDrag();
+                    return true;
+                }
+
+                var window = RootWindow?.Window;
+                if (window == null || window.IsFullscreen || window.IsMinimized)
+                    return base.OnMouseDown(location, button);
+
+                _isDraggingWindow = true;
+                _dragStartMouse = Platform.MousePosition;
+                _dragStartWindowPosition = window.Position;
+                StartMouseCapture();
+                return true;
+            }
+
+            public override void OnMouseMove(Float2 location)
+            {
+                if (!_isDraggingWindow)
+                {
+                    base.OnMouseMove(location);
+                    return;
+                }
+
+                var root = Root;
+                var window = RootWindow?.Window;
+                if (root == null || window == null || !root.GetMouseButton(MouseButton.Left))
+                {
+                    EndWindowDrag();
+                    return;
+                }
+
+                var mouse = Platform.MousePosition;
+                if (window.IsMaximized)
+                {
+                    var windowMousePos = mouse - window.Position;
+                    var previousSize = window.Size;
+                    window.Restore();
+                    window.Position = mouse - windowMousePos * window.Size / previousSize;
+                    _dragStartMouse = mouse;
+                    _dragStartWindowPosition = window.Position;
+                }
+                else
+                {
+                    window.Position = _dragStartWindowPosition + mouse - _dragStartMouse;
+                }
+            }
+
             public override bool OnMouseUp(Float2 location, MouseButton button)
             {
+                if (button == MouseButton.Left && _isDraggingWindow)
+                {
+                    EndWindowDrag();
+                    return true;
+                }
+
                 if (button != MouseButton.Right)
                     return base.OnMouseUp(location, button);
 
@@ -176,6 +244,20 @@ namespace FlaxEditor.Modules
                     Editor.Instance.Options.Apply(Editor.Instance.Options.Options);
                 });
                 button.Checked = (options.TitleBarPerformanceStats & flag) != 0;
+            }
+
+            public override void OnEndMouseCapture()
+            {
+                _isDraggingWindow = false;
+                base.OnEndMouseCapture();
+            }
+
+            private void EndWindowDrag()
+            {
+                if (!_isDraggingWindow)
+                    return;
+                _isDraggingWindow = false;
+                EndMouseCapture();
             }
         }
 
