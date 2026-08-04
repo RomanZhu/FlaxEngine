@@ -727,7 +727,7 @@ namespace FlaxEditor.Surface.Elements
             {
                 if (!iB.CanUseType(oB.CurrentType))
                 {
-                    if (!oB.CurrentType.CanCastTo(iB.CurrentType))
+                    if (!CanUseImplicitAsCast(oB.CurrentType, iB.CurrentType))
                     {
                         // Cannot
                         return false;
@@ -738,7 +738,7 @@ namespace FlaxEditor.Surface.Elements
             {
                 if (!oB.CanUseType(iB.CurrentType))
                 {
-                    if (!oB.CurrentType.CanCastTo(iB.CurrentType))
+                    if (!CanUseImplicitAsCast(oB.CurrentType, iB.CurrentType))
                     {
                         // Cannot
                         return false;
@@ -748,6 +748,13 @@ namespace FlaxEditor.Surface.Elements
 
             // Can
             return true;
+        }
+
+        private static bool CanUseImplicitAsCast(ScriptType from, ScriptType to)
+        {
+            return ScriptType.FlaxObject.IsAssignableFrom(from) &&
+                   ScriptType.FlaxObject.IsAssignableFrom(to) &&
+                   from.CanCastTo(to);
         }
 
         /// <inheritdoc />
@@ -811,7 +818,7 @@ namespace FlaxEditor.Surface.Elements
             bool useCaster = false;
             if (!iB.CanUseType(oB.CurrentType))
             {
-                if (oB.CurrentType.CanCastTo(iB.CurrentType))
+                if (CanUseImplicitAsCast(oB.CurrentType, iB.CurrentType))
                     useCaster = true;
                 else
                     return;
