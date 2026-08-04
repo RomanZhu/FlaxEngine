@@ -177,6 +177,17 @@ namespace FlaxEditor.Viewport.Cameras
         {
         }
 
+        /// <summary>
+        /// Gets the camera center point used by orbit and Alt+right mouse button zooming.
+        /// </summary>
+        /// <param name="center">The camera center point.</param>
+        /// <returns>True if this camera has a center point, otherwise false.</returns>
+        public virtual bool TryGetCameraCenter(out Vector3 center)
+        {
+            center = Vector3.Zero;
+            return false;
+        }
+
         /// <inheritdoc />
         public abstract void UpdateView(float dt, ref Vector3 moveDelta, ref Float2 mouseDelta, out bool centerMouse);
     }

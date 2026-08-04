@@ -122,6 +122,13 @@ namespace FlaxEditor.Viewport.Cameras
         }
 
         /// <inheritdoc />
+        public override bool TryGetCameraCenter(out Vector3 center)
+        {
+            center = _orbitCenter;
+            return true;
+        }
+
+        /// <inheritdoc />
         public override void UpdateView(float dt, ref Vector3 moveDelta, ref Float2 mouseDelta, out bool centerMouse)
         {
             centerMouse = true;
