@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using FlaxEditor.SceneGraph;
 using FlaxEngine;
+using Object = FlaxEngine.Object;
 
 namespace FlaxEditor.Actions
 {
@@ -22,6 +23,9 @@ namespace FlaxEditor.Actions
 
         [Serialize]
         private Guid _pasteParent;
+
+        [Serialize]
+        private bool _insertAfterSource;
 
         /// <summary>
         /// The node parents.
@@ -66,7 +70,25 @@ namespace FlaxEditor.Actions
             if (objectIds == null)
                 return null;
 
-            return new PasteActorsAction(data, objectIds, ref pasteParent, "Duplicate actors");
+            return new PasteActorsAction(data, objectIds, ref pasteParent, "Duplicate actors")
+            {
+                _insertAfterSource = pasteParent == Guid.Empty,
+            };
+        }
+
+        private struct DuplicatePlacement
+        {
+            public Actor Source;
+            public Actor Clone;
+        }
+
+        private static int SortDuplicatePlacement(DuplicatePlacement a, DuplicatePlacement b)
+        {
+            var parentA = Object.GetUnmanagedPtr(a.Source.Parent);
+            var parentB = Object.GetUnmanagedPtr(b.Source.Parent);
+            if (parentA == parentB)
+                return a.Source.OrderInParent.CompareTo(b.Source.OrderInParent);
+            return parentA.CompareTo(parentB);
         }
 
         /// <summary>
@@ -151,6 +173,9 @@ namespace FlaxEditor.Actions
                     CheckBrokenParentReference(node);
             }
 
+            if (_insertAfterSource)
+                InsertAfterSourceActors(nodeParents);
+
             // Store previously looked up names and the results
             Dictionary<string, bool> foundNamesResults = new();
             for (int i = 0; i < nodeParents.Count; i++)
@@ -191,6 +216,47 @@ namespace FlaxEditor.Actions
 
             for (int i = 0; i < nodeParents.Count; i++)
                 nodeParents[i].PostPaste();
+        }
+
+        private void InsertAfterSourceActors(List<ActorNode> nodeParents)
+        {
+            var placements = new List<DuplicatePlacement>(nodeParents.Count);
+            for (int i = 0; i < nodeParents.Count; i++)
+            {
+                var clone = nodeParents[i].Actor;
+                if (clone == null)
+                    continue;
+
+                var cloneId = clone.ID;
+                Guid sourceId = Guid.Empty;
+                foreach (var idsMapping in _idsMapping)
+                {
+                    if (idsMapping.Value == cloneId)
+                    {
+                        sourceId = idsMapping.Key;
+                        break;
+                    }
+                }
+                if (sourceId == Guid.Empty)
+                    continue;
+
+                var source = Object.Find<Actor>(ref sourceId);
+                if (source == null || source.Parent == null || clone.Parent != source.Parent)
+                    continue;
+
+                placements.Add(new DuplicatePlacement
+                {
+                    Source = source,
+                    Clone = clone,
+                });
+            }
+
+            placements.Sort(SortDuplicatePlacement);
+            for (int i = 0; i < placements.Count; i++)
+            {
+                var placement = placements[i];
+                placement.Clone.OrderInParent = placement.Source.OrderInParent + 1;
+            }
         }
 
         /// <summary>

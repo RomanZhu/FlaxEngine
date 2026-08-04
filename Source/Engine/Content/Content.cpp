@@ -12,6 +12,7 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Core/LogContext.h"
 #include "Engine/Core/Collections/HashSet.h"
+#include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/ObjectsRemovalService.h"
 #include "Engine/Serialization/JsonTools.h"
@@ -224,12 +225,54 @@ namespace
             return true;
 
         const String srcActorsFolder = GetExternalActorsFolderPath(srcPath);
-        const String dstActorsFolder = GetExternalActorsFolderPath(dstPath);
+        const String dstSceneActorsFolder = GetSceneActorsFolderPath(dstPath);
+        const String dstActorsFolder = dstSceneActorsFolder / ExternalActorsFolderName;
+        if (RemoveEmptySceneActorsFile(dstActorsFolder))
+        {
+            LOG(Error, "Cannot copy external actors scene data because destination already exists: '{0}'.", dstActorsFolder);
+            return true;
+        }
+        if (FileSystem::DirectoryExists(dstActorsFolder))
+        {
+            Array<String> dstActorFiles;
+            if (FileSystem::DirectoryGetFiles(dstActorFiles, dstActorsFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
+            {
+                LOG(Error, "Cannot list external actors destination folder '{0}'.", dstActorsFolder);
+                return true;
+            }
+            if (dstActorFiles.Count() != 0)
+            {
+                LOG(Error, "Cannot copy external actors scene data because destination already exists: '{0}'.", dstActorsFolder);
+                return true;
+            }
+            if (FileSystem::DeleteDirectory(dstActorsFolder))
+            {
+                LOG(Error, "Cannot remove empty external actors destination folder '{0}'.", dstActorsFolder);
+                return true;
+            }
+        }
         if (FileSystem::DirectoryExists(dstActorsFolder) || FileSystem::FileExists(dstActorsFolder))
         {
             LOG(Error, "Cannot copy external actors scene data because destination already exists: '{0}'.", dstActorsFolder);
             return true;
         }
+
+        const bool hadDstFile = FileSystem::FileExists(dstPath);
+        const bool hadDstSceneActorsFolder = FileSystem::DirectoryExists(dstSceneActorsFolder);
+        const bool hadDstActorsFolder = FileSystem::DirectoryExists(dstActorsFolder);
+        bool succeeded = false;
+        SCOPE_EXIT
+        {
+            if (!succeeded)
+            {
+                if (!hadDstFile)
+                    FileSystem::DeleteFile(dstPath);
+                if (!hadDstActorsFolder)
+                    FileSystem::DeleteDirectory(dstActorsFolder);
+                if (!hadDstSceneActorsFolder)
+                    FileSystem::DeleteDirectory(dstSceneActorsFolder);
+            }
+        };
 
         Array<String> actorFiles;
         if (srcActorsFolder.HasChars() &&
@@ -277,6 +320,7 @@ namespace
                 return true;
         }
 
+        succeeded = true;
         return false;
     }
 

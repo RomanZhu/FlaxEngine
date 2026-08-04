@@ -615,8 +615,8 @@ void Serialization::Deserialize(ISerializable::DeserializeStream& stream, Double
 {
     const auto mX = SERIALIZE_FIND_MEMBER(stream, "X");
     const auto mY = SERIALIZE_FIND_MEMBER(stream, "Y");
-    v.X = mX != stream.MemberEnd() ? mX->value.GetFloat() : 0.0f;
-    v.Y = mY != stream.MemberEnd() ? mY->value.GetFloat() : 0.0f;
+    v.X = mX != stream.MemberEnd() ? mX->value.GetDouble() : 0.0;
+    v.Y = mY != stream.MemberEnd() ? mY->value.GetDouble() : 0.0;
 }
 
 bool Serialization::ShouldSerialize(const Double3& v, const void* otherObj)
@@ -629,9 +629,9 @@ void Serialization::Deserialize(ISerializable::DeserializeStream& stream, Double
     const auto mX = SERIALIZE_FIND_MEMBER(stream, "X");
     const auto mY = SERIALIZE_FIND_MEMBER(stream, "Y");
     const auto mZ = SERIALIZE_FIND_MEMBER(stream, "Z");
-    v.X = mX != stream.MemberEnd() ? mX->value.GetFloat() : 0.0f;
-    v.Y = mY != stream.MemberEnd() ? mY->value.GetFloat() : 0.0f;
-    v.Z = mZ != stream.MemberEnd() ? mZ->value.GetFloat() : 0.0f;
+    v.X = mX != stream.MemberEnd() ? mX->value.GetDouble() : 0.0;
+    v.Y = mY != stream.MemberEnd() ? mY->value.GetDouble() : 0.0;
+    v.Z = mZ != stream.MemberEnd() ? mZ->value.GetDouble() : 0.0;
 }
 
 bool Serialization::ShouldSerialize(const Double4& v, const void* otherObj)
@@ -645,10 +645,10 @@ void Serialization::Deserialize(ISerializable::DeserializeStream& stream, Double
     const auto mY = SERIALIZE_FIND_MEMBER(stream, "Y");
     const auto mZ = SERIALIZE_FIND_MEMBER(stream, "Z");
     const auto mW = SERIALIZE_FIND_MEMBER(stream, "W");
-    v.X = mX != stream.MemberEnd() ? mX->value.GetFloat() : 0.0f;
-    v.Y = mY != stream.MemberEnd() ? mY->value.GetFloat() : 0.0f;
-    v.Z = mZ != stream.MemberEnd() ? mZ->value.GetFloat() : 0.0f;
-    v.W = mW != stream.MemberEnd() ? mW->value.GetFloat() : 0.0f;
+    v.X = mX != stream.MemberEnd() ? mX->value.GetDouble() : 0.0;
+    v.Y = mY != stream.MemberEnd() ? mY->value.GetDouble() : 0.0;
+    v.Z = mZ != stream.MemberEnd() ? mZ->value.GetDouble() : 0.0;
+    v.W = mW != stream.MemberEnd() ? mW->value.GetDouble() : 0.0;
 }
 
 bool Serialization::ShouldSerialize(const Int2& v, const void* otherObj)

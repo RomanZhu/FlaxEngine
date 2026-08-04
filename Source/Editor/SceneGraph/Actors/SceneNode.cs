@@ -78,7 +78,9 @@ namespace FlaxEditor.SceneGraph.Actors
                 var b = contextMenu.AddButton("Show in content window", OnSelect);
                 b.Icon = Editor.Instance.Icons.Search12;
                 b.TooltipText = "Finds and selects the scene asset int Content window.";
-                contextMenu.AddButton("Convert to external actors", OnConvertToExternalActors).LinkTooltip("Stores actors in separate files for source control merging.").Enabled = !Scene.UseExternalActors && !Editor.IsPlayMode;
+                var convertText = Scene.UseExternalActors ? "Convert to internal actors" : "Convert to external actors";
+                var convertTooltip = Scene.UseExternalActors ? "Stores actors in the scene file." : "Stores actors in separate files for source control merging.";
+                contextMenu.AddButton(convertText, OnConvertActorsStorage).LinkTooltip(convertTooltip).Enabled = !Editor.IsPlayMode;
             }
             contextMenu.AddButton("Save scene", OnSave).LinkTooltip("Saves this scene.").Enabled = IsEdited && !Editor.IsPlayMode;
             contextMenu.AddButton("Unload scene", OnUnload).LinkTooltip("Unloads this scene.").Enabled = Editor.Instance.StateMachine.CurrentState.CanChangeScene;
@@ -99,9 +101,9 @@ namespace FlaxEditor.SceneGraph.Actors
             Editor.Instance.Scene.SaveScene(this);
         }
 
-        private void OnConvertToExternalActors()
+        private void OnConvertActorsStorage()
         {
-            if (!Level.ConvertSceneToExternalActors(Scene))
+            if (Scene.UseExternalActors ? !Level.ConvertSceneToInternalActors(Scene) : !Level.ConvertSceneToExternalActors(Scene))
                 IsEdited = false;
         }
 

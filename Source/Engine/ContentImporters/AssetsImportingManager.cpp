@@ -11,6 +11,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 #include "Engine/Engine/EngineService.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/Platform.h"
 #include "Engine/Profiler/ProfilerMemory.h"
@@ -58,6 +59,17 @@ namespace
         if (IsAssetTypeNameModelFile(a) && IsAssetTypeNameModelFile(b))
             return true;
         return a == b;
+    }
+
+    bool HasSameFileBytes(const StringView& a, const StringView& b)
+    {
+        BytesContainer dataA;
+        BytesContainer dataB;
+        if (File::ReadAllBytes(a, dataA) || File::ReadAllBytes(b, dataB))
+            return false;
+        if (dataA.Length() != dataB.Length())
+            return false;
+        return dataA.Length() == 0 || Platform::MemoryCompare(dataA.Get(), dataB.Get(), dataA.Length()) == 0;
     }
 }
 
@@ -217,6 +229,12 @@ void CreateAssetContext::ApplyChanges()
             _applyChangesResult = CreateAssetResult::CannotSaveFile;
             return;
         }
+    }
+
+    if (FileSystem::FileExists(TargetAssetPath) && HasSameFileBytes(TargetAssetPath, OutputPath))
+    {
+        _applyChangesResult = CreateAssetResult::Ok;
+        return;
     }
 
     // Move file

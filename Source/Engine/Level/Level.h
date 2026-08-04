@@ -349,6 +349,13 @@ public:
     API_FUNCTION() static bool ConvertSceneToExternalActors(Scene* scene);
 
     /// <summary>
+    /// Converts loaded scene to internal actors format and removes external actor files.
+    /// </summary>
+    /// <param name="scene">Scene to convert.</param>
+    /// <returns>True if failed, otherwise false.</returns>
+    API_FUNCTION() static bool ConvertSceneToInternalActors(Scene* scene);
+
+    /// <summary>
     /// Checks if scene asset uses external actors storage.
     /// </summary>
     static bool IsExternalActorsSceneAsset(const JsonAssetBase* sceneAsset);

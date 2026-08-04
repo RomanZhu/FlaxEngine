@@ -12,7 +12,9 @@
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Core/Cache.h"
 #include "Engine/Core/Collections/CollectionPoolCache.h"
+#include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Core/Collections/HashSet.h"
+#include "Engine/Core/Collections/Sorting.h"
 #include "Engine/Core/ObjectsRemovalService.h"
 #include "Engine/Core/Config/LayersTagsSettings.h"
 #include "Engine/Core/Types/LayersMask.h"
@@ -126,6 +128,7 @@ namespace
         String File;
         Guid ActorId = Guid::Empty;
         Guid ParentId = Guid::Empty;
+        int64 OrderInParent = 0;
         bool IsValid = false;
     };
 
@@ -158,16 +161,14 @@ namespace
         return member->value.GetInt();
     }
 
-    bool SortSceneObjectsByExternalOrder(const rapidjson_flax::Value& a, const rapidjson_flax::Value& b)
+    bool SortExternalActorFileInfo(const ExternalActorFileInfo& a, const ExternalActorFileInfo& b)
     {
-        const int32 parentCompare = CompareGuids(JsonTools::GetGuid(a, ParentIDKey), JsonTools::GetGuid(b, ParentIDKey));
+        const int32 parentCompare = CompareGuids(a.ParentId, b.ParentId);
         if (parentCompare != 0)
             return parentCompare < 0;
-        const int64 orderA = GetSerializedOrderInParent(a);
-        const int64 orderB = GetSerializedOrderInParent(b);
-        if (orderA != orderB)
-            return orderA < orderB;
-        return CompareGuids(JsonTools::GetGuid(a, IDKey), JsonTools::GetGuid(b, IDKey)) < 0;
+        if (a.OrderInParent != b.OrderInParent)
+            return a.OrderInParent < b.OrderInParent;
+        return CompareGuids(a.ActorId, b.ActorId) < 0;
     }
 
     String GetSceneActorsFolder(const StringView& scenePath)
@@ -200,6 +201,53 @@ namespace
             Platform::MemoryCompare(existingData.Get(), data, length) == 0)
         {
             return false;
+        }
+        return File::WriteAllBytes(path, data, length);
+    }
+
+    bool ReadExternalActorData(const void* data, int32 length, rapidjson_flax::Document& document, const rapidjson_flax::Value*& actorData)
+    {
+        if (!data || length <= 0)
+            return true;
+
+        document.Parse(static_cast<const char*>(data), length);
+        if (document.HasParseError())
+            return true;
+
+        const auto dataMember = document.FindMember(DataKey);
+        if (dataMember == document.MemberEnd() || !dataMember->value.IsArray())
+            return true;
+
+        actorData = &dataMember->value;
+        return false;
+    }
+
+    bool HasSameExternalActorData(const BytesContainer& existingData, const void* data, int32 length)
+    {
+        rapidjson_flax::Document existingDocument;
+        rapidjson_flax::Document newDocument;
+        const rapidjson_flax::Value* existingActorData = nullptr;
+        const rapidjson_flax::Value* newActorData = nullptr;
+        if (ReadExternalActorData(existingData.Get(), existingData.Length(), existingDocument, existingActorData) ||
+            ReadExternalActorData(data, length, newDocument, newActorData))
+        {
+            return false;
+        }
+        return *existingActorData == *newActorData;
+    }
+
+    bool WriteExternalActorBytesIfChanged(const StringView& path, const void* data, int32 length)
+    {
+        BytesContainer existingData;
+        if (!File::ReadAllBytes(path, existingData))
+        {
+            if (existingData.Length() == length &&
+                Platform::MemoryCompare(existingData.Get(), data, length) == 0)
+            {
+                return false;
+            }
+            if (HasSameExternalActorData(existingData, data, length))
+                return false;
         }
         return File::WriteAllBytes(path, data, length);
     }
@@ -328,7 +376,7 @@ namespace
         writer.EndObject();
 
         writtenFiles.Add(path);
-        return WriteAllBytesIfChanged(path, buffer.GetString(), static_cast<int32>(buffer.GetSize()));
+        return WriteExternalActorBytesIfChanged(path, buffer.GetString(), static_cast<int32>(buffer.GetSize()));
     }
 
     bool IsWrittenExternalActorFile(const HashSet<String>& writtenFiles, const String& path)
@@ -395,6 +443,7 @@ namespace
         info.File = actorFile;
         info.ActorId = JsonTools::GetGuid((*actorData)[0], IDKey);
         info.ParentId = JsonTools::GetGuid((*actorData)[0], ParentIDKey);
+        info.OrderInParent = GetSerializedOrderInParent((*actorData)[0]);
         return false;
     }
 
@@ -479,10 +528,30 @@ namespace
         for (const ExternalActorFileInfo& info : actorInfos)
         {
             if (!info.IsValid)
-            {
                 LOG(Error, "Ignoring external actor '{0}' ({1}) because its ParentID '{2}' is missing or ignored.", info.File, info.ActorId, info.ParentId);
-                continue;
+        }
+
+        Sorting::QuickSort(actorInfos.Get(), actorInfos.Count(), SortExternalActorFileInfo);
+
+        Dictionary<Guid, Array<int32>> childrenByParent(actorInfos.Count());
+        int32 validActors = 0;
+        for (int32 i = 0; i < actorInfos.Count(); i++)
+        {
+            const ExternalActorFileInfo& info = actorInfos[i];
+            if (info.IsValid)
+            {
+                childrenByParent[info.ParentId].Add(i);
+                validActors++;
             }
+        }
+
+        int32 writtenActors = 0;
+        Array<int32> pendingActors(actorInfos.Count());
+        if (Array<int32>* rootActors = childrenByParent.TryGet(sceneId))
+            pendingActors.Add(rootActors->Get(), rootActors->Count());
+        for (int32 pendingActorIndex = 0; pendingActorIndex < pendingActors.Count(); pendingActorIndex++)
+        {
+            const ExternalActorFileInfo& info = actorInfos[pendingActors[pendingActorIndex]];
 
             rapidjson_flax::Document actorDocument;
             const rapidjson_flax::Value* actorData = nullptr;
@@ -495,10 +564,18 @@ namespace
                 value.CopyFrom((*actorData)[i], allocator);
                 data.PushBack(value, allocator);
             }
+
+            writtenActors++;
+            if (Array<int32>* childActors = childrenByParent.TryGet(info.ActorId))
+                pendingActors.Add(childActors->Get(), childActors->Count());
         }
 
-        if (data.Size() > 2)
-            std::sort(data.Begin() + 1, data.End(), SortSceneObjectsByExternalOrder);
+        if (writtenActors != validActors)
+        {
+            LOG(Error, "Failed to compose external actor hierarchy for scene '{0}'.", sceneAsset->GetPath());
+            return true;
+        }
+
         document.AddMember(JsonKey(DataKey, allocator), data, allocator);
         return false;
     }
@@ -670,8 +747,8 @@ namespace LevelImpl
     bool unloadScenes();
     bool saveScene(Scene* scene);
     bool saveScene(Scene* scene, const String& path);
-    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson);
-    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer);
+    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson, bool useExternalActorsStorage = true);
+    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool useExternalActorsStorage = true);
     bool spawnActor(Actor* actor, Actor* parent);
     bool deleteActor(Actor* actor);
 }
@@ -1088,7 +1165,7 @@ public:
             LOG(Info, "Caching scene {0}", scenes[i].Name);
 
             // Serialize to json
-            if (saveScene(scene, scenes[i].Data, false))
+            if (saveScene(scene, scenes[i].Data, false, false))
             {
                 LOG(Error, "Failed to save scene '{0}' for scripts reload.", scenes[i].Name);
                 CallSceneEvent(SceneEventType::OnSceneSaveError, scene, scene->GetID());
@@ -1956,23 +2033,23 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     return false;
 }
 
-bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson)
+bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson, bool useExternalActorsStorage)
 {
     PROFILE_CPU_NAMED("Level.SaveScene");
     PROFILE_MEM(Level);
     if (prettyJson)
     {
         PrettyJsonWriter writerObj(outBuffer);
-        return saveScene(scene, outBuffer, writerObj);
+        return saveScene(scene, outBuffer, writerObj, useExternalActorsStorage);
     }
     else
     {
         CompactJsonWriter writerObj(outBuffer);
-        return saveScene(scene, outBuffer, writerObj);
+        return saveScene(scene, outBuffer, writerObj, useExternalActorsStorage);
     }
 }
 
-bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer)
+bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool useExternalActorsStorage)
 {
     ASSERT(scene);
     const auto sceneId = scene->GetID();
@@ -1981,11 +2058,11 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
     CallSceneEvent(SceneEventType::OnSceneSaving, scene, sceneId);
 
 #if USE_EDITOR
-    if (scene->UseExternalActors)
+    if (useExternalActorsStorage && scene->UseExternalActors)
     {
         EnsureExternalOrderInParent(scene);
 
-        const String actorsFolder = scene->GetDataFolderPath() / ExternalActorsFolderName;
+        const String actorsFolder = GetExternalActorsFolder(scene->GetPath());
         if (FileSystem::CreateDirectory(actorsFolder))
             return true;
 
@@ -2096,7 +2173,7 @@ bool Level::SaveSceneToBytes(Scene* scene, rapidjson_flax::StringBuffer& outData
     LOG(Info, "Saving scene {0} to bytes", scene->GetName());
 
     // Serialize to json
-    if (saveScene(scene, outData, prettyJson))
+    if (saveScene(scene, outData, prettyJson, false))
     {
         CallSceneEvent(SceneEventType::OnSceneSaveError, scene, scene->GetID());
         return true;
@@ -2333,6 +2410,46 @@ bool Level::ConvertSceneToExternalActors(Scene* scene)
     }
 
     return saveScene(scene);
+}
+
+bool Level::ConvertSceneToInternalActors(Scene* scene)
+{
+    if (!scene)
+    {
+        Log::ArgumentNullException();
+        return true;
+    }
+    if (Editor::IsPlayMode)
+    {
+        LOG(Error, "Cannot convert scene storage while in play mode.");
+        return true;
+    }
+
+    const String path = scene->GetPath();
+    if (path.IsEmpty() || !FileSystem::FileExists(path))
+    {
+        LOG(Error, "Missing scene path.");
+        return true;
+    }
+
+    if (scene->UseExternalActors)
+    {
+        scene->UseExternalActors = false;
+        if (saveScene(scene))
+        {
+            scene->UseExternalActors = true;
+            return true;
+        }
+
+        const String actorsFolder = GetSceneActorsFolder(path);
+        if (FileSystem::DirectoryExists(actorsFolder) && FileSystem::DeleteDirectory(actorsFolder))
+        {
+            LOG(Error, "Cannot delete scene actors folder '{0}'.", actorsFolder);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void Level::ReloadScriptsAsync()

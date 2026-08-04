@@ -72,7 +72,7 @@ void JsonWriter::Float2(const ::Float2& value)
 {
     StartObject();
     JKEY("X");
-    Real(value.X);
+    Float(value.X);
     JKEY("Y");
     Float(value.Y);
     EndObject();

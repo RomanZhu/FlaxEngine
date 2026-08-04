@@ -536,6 +536,13 @@ TEST_CASE("PhysicsBackendTriangleMesh")
     input.IndexData = triangleIndices;
     BytesContainer cookedData;
     REQUIRE_FALSE(CollisionCooking::CookTriangleMesh(input, cookedData));
+#if COMPILE_WITH_BOX3D && USE_LARGE_WORLDS
+    REQUIRE(cookedData.Length() > 24);
+    CHECK(cookedData.Get()[20] == 0);
+    CHECK(cookedData.Get()[21] == 0);
+    CHECK(cookedData.Get()[22] == 0);
+    CHECK(cookedData.Get()[23] == 0);
+#endif
     BoundingBox localBounds;
     void* triangleMesh = PhysicsBackend::CreateTriangleMesh(cookedData.Get(), cookedData.Length(), localBounds);
     REQUIRE(triangleMesh);

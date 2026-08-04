@@ -973,6 +973,7 @@ namespace
 
     void FillMeshHeader(Box3DCookedHeader& header, CollisionDataType type, int32 vertexCount, int32 indexCount, const BoundingBox& bounds)
     {
+        Platform::MemoryClear(&header, sizeof(header));
         header.Magic = BOX3D_COOKED_MAGIC;
         header.Version = BOX3D_COOKED_VERSION;
         header.Type = (uint32)type;

@@ -19,7 +19,6 @@
 #include "Engine/Terrain/Terrain.h"
 #if USE_EDITOR
 #include "Engine/Engine/Globals.h"
-#include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
 #endif
 
@@ -142,13 +141,7 @@ String Scene::GetFilename() const
 
 String Scene::GetDataFolderPath() const
 {
-    String relativePath = FileSystem::ConvertAbsolutePathToRelative(Globals::ProjectContentFolder, GetPath());
-    FileSystem::NormalizePath(relativePath);
-    const String directory = String(StringUtils::GetDirectoryName(relativePath));
-    const String filename = String(StringUtils::GetFileNameWithoutExtension(relativePath));
-    return directory.HasChars()
-           ? Globals::ProjectFolder / TEXT("SceneActors") / directory / filename
-           : Globals::ProjectFolder / TEXT("SceneActors") / filename;
+    return Globals::ProjectContentFolder / TEXT("SceneData") / GetFilename();
 }
 
 Array<Guid> Scene::GetAssetReferences() const

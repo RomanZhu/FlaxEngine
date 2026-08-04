@@ -94,6 +94,11 @@ namespace FlaxEditor.Modules
             ScriptsBuilder.ScriptsReloadEnd += OnScriptsReloadEnd;
         }
 
+        internal static bool UseContentBackendForFileOperation(ContentItem item)
+        {
+            return item != null && (item.IsAsset || item.ItemType == ContentItemType.Scene);
+        }
+
         private void OnContentAssetDisposing(Asset asset)
         {
             // Handle deleted asset
@@ -372,7 +377,7 @@ namespace FlaxEditor.Modules
             string oldPath = el.Path;
 
             // Check if use content pool
-            if (el.IsAsset)
+            if (UseContentBackendForFileOperation(el))
             {
                 // Rename asset
                 // Note: we use content backend because file may be in use or sth, it's safe
@@ -659,7 +664,7 @@ namespace FlaxEditor.Modules
                 else
                 {
                     // Check if use content pool
-                    if (item.IsAsset || item.ItemType == ContentItemType.Scene)
+                    if (UseContentBackendForFileOperation(item))
                     {
                         // Rename asset
                         // Note: we use content backend because file may be in use or sth, it's safe

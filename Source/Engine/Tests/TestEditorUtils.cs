@@ -3,6 +3,8 @@
 #if FLAX_TESTS
 using System;
 using System.Globalization;
+using FlaxEditor.Content;
+using FlaxEditor.Modules;
 using NUnit.Framework;
 
 namespace FlaxEngine.Tests
@@ -60,6 +62,17 @@ namespace FlaxEngine.Tests
                     Assert.AreEqual(value2, value1);
                 }
             }
+        }
+
+        [Test]
+        public void TestSceneItemsUseContentBackendForFileOperations()
+        {
+            var sceneItem = new SceneItem("C:/Project/Content/Scene.scene", Guid.NewGuid());
+            var fileItem = new FileItem("C:/Project/Content/Notes.txt");
+
+            Assert.IsTrue(ContentDatabaseModule.UseContentBackendForFileOperation(sceneItem));
+            Assert.IsFalse(ContentDatabaseModule.UseContentBackendForFileOperation(fileItem));
+            Assert.IsFalse(ContentDatabaseModule.UseContentBackendForFileOperation(null));
         }
     }
 }
