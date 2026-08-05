@@ -68,10 +68,24 @@ namespace FlaxEditor.CustomEditors.Elements
         }
 
         /// <inheritdoc />
+        public float DefaultValue
+        {
+            get => Slider.DefaultValue;
+            set => Slider.DefaultValue = value;
+        }
+
+        /// <inheritdoc />
         int IIntegerValueEditor.Value
         {
             get => (int)Slider.Value;
             set => Slider.Value = value;
+        }
+
+        /// <inheritdoc />
+        int IIntegerValueEditor.DefaultValue
+        {
+            get => (int)Slider.DefaultValue;
+            set => Slider.DefaultValue = value;
         }
 
         /// <inheritdoc cref="IFloatValueEditor.IsSliding" />

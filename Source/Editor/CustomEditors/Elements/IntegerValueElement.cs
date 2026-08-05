@@ -80,6 +80,13 @@ namespace FlaxEditor.CustomEditors.Elements
         }
 
         /// <inheritdoc />
+        public int DefaultValue
+        {
+            get => IntValue.DefaultValue;
+            set => IntValue.DefaultValue = value;
+        }
+
+        /// <inheritdoc />
         public bool IsSliding => IntValue.IsSliding;
     }
 

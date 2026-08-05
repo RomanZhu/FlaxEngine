@@ -28,25 +28,6 @@ namespace FlaxEditor.CustomEditors.Dedicated
         private Guid _linkedPrefabId;
 
         /// <inheritdoc />
-        protected override List<ItemInfo> GetItemsForType(ScriptType type)
-        {
-            var items = base.GetItemsForType(type);
-
-            // Inject scripts editor
-            var scriptsMember = type.GetProperty("Scripts");
-            if (scriptsMember != ScriptMemberInfo.Null)
-            {
-                var item = new ItemInfo(scriptsMember)
-                {
-                    CustomEditor = new CustomEditorAttribute(typeof(ScriptsEditor))
-                };
-                items.Add(item);
-            }
-
-            return items;
-        }
-
-        /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
             // Check for prefab link
@@ -122,6 +103,25 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     break;
                 }
             }
+
+            AddScriptsEditor(layout);
+        }
+
+        private void AddScriptsEditor(LayoutElementsContainer layout)
+        {
+            var type = Values.Count > 0 && Values[0] != null ? TypeUtils.GetObjectType(Values[0]) : new ScriptType(typeof(Actor));
+            var scriptsMember = type.GetProperty("Scripts");
+            if (scriptsMember == ScriptMemberInfo.Null)
+                scriptsMember = new ScriptType(typeof(Actor)).GetProperty("Scripts");
+            if (scriptsMember == ScriptMemberInfo.Null)
+                return;
+
+            var item = new ItemInfo(scriptsMember)
+            {
+                CustomEditor = new CustomEditorAttribute(typeof(ScriptsEditor)),
+                IsReadOnly = false,
+            };
+            layout.Object(item.GetValues(Values), new ScriptsEditor());
         }
 
         private static void AddSourcePrefabReference(GroupElement group, Prefab sourcePrefab)
@@ -129,50 +129,12 @@ namespace FlaxEditor.CustomEditors.Dedicated
             if (!sourcePrefab)
                 return;
 
-            var label = group.ClickableLabel("Source Prefab", GetPrefabDisplayName(sourcePrefab), "The prefab asset this object inherits from.").CustomControl;
-            label.TextColor = FlaxEngine.GUI.Style.Current.BorderSelected;
-            label.TextColorHighlighted = FlaxEngine.GUI.Style.Current.BorderSelected;
-            label.TooltipText = "Click to select the source prefab. Double-click to open it.";
-            label.LeftClick += () =>
-            {
-                Editor.Instance.Windows.ContentWin.ClearItemsSearch();
-                Editor.Instance.Windows.ContentWin.Select(sourcePrefab);
-            };
-            label.DoubleClick += () =>
-            {
-                var item = Editor.Instance.ContentDatabase.FindAsset(sourcePrefab.ID);
-                if (item != null)
-                    Editor.Instance.Windows.ContentWin.Open(item);
-            };
-            label.RightClick += () =>
-            {
-                var menu = new ContextMenu();
-                menu.AddButton("Select Prefab", () =>
-                {
-                    Editor.Instance.Windows.ContentWin.ClearItemsSearch();
-                    Editor.Instance.Windows.ContentWin.Select(sourcePrefab);
-                });
-                menu.AddButton("Edit Prefab", () =>
-                {
-                    var item = Editor.Instance.ContentDatabase.FindAsset(sourcePrefab.ID);
-                    if (item != null)
-                        Editor.Instance.Windows.ContentWin.Open(item);
-                }).Enabled = Editor.Instance.ContentDatabase.FindAsset(sourcePrefab.ID) != null;
-                menu.AddButton("Copy ID", () => Clipboard.Text = JsonSerializer.GetStringID(sourcePrefab.ID));
-                menu.Show(label, label.PointFromScreen(Input.MouseScreenPosition));
-            };
-        }
-
-        private static string GetPrefabDisplayName(Prefab prefab)
-        {
-            var item = Editor.Instance.ContentDatabase.FindAsset(prefab.ID);
-            if (item != null)
-                return item.ShortName;
-
-            if (FlaxEngine.Content.GetAssetInfo(prefab.ID, out var info))
-                return System.IO.Path.GetFileNameWithoutExtension(info.Path);
-
-            return prefab.ID.ToString();
+            var picker = group.Custom<AssetPicker>("Source Prefab", "The prefab asset this object inherits from.").CustomControl;
+            picker.UseCompactField = true;
+            picker.ShowCompactPreview = Editor.Instance.Options.Options.Interface.ShowReferencePreviewsInProperties;
+            picker.CanEdit = false;
+            picker.Validator.AssetType = new ScriptType(typeof(Prefab));
+            picker.Validator.SelectedID = sourcePrefab.ID;
         }
 
         private void OnSettingsButtonClicked(Image image, MouseButton mouseButton)
@@ -548,9 +510,12 @@ namespace FlaxEditor.CustomEditors.Dedicated
         private void OnDiffNodeRightClick(TreeNode node, Float2 location)
         {
             var diffMenu = (PrefabDiffContextMenu)node.ParentTree.Tag;
+            var editor = (CustomEditor)node.Tag;
 
             var menu = new ContextMenu();
-            menu.AddButton("Revert", () => OnDiffRevert((CustomEditor)node.Tag));
+            if (CanDiffApply(editor))
+                menu.AddButton("Apply Changes", () => OnDiffApply(editor));
+            menu.AddButton("Revert", () => OnDiffRevert(editor));
             menu.AddSeparator();
             menu.AddButton("Revert All", OnDiffRevertAll);
             menu.AddButton("Apply All", OnDiffApplyAll);
@@ -566,6 +531,26 @@ namespace FlaxEditor.CustomEditors.Dedicated
         private void OnDiffApplyAll()
         {
             Editor.Instance.Prefabs.ApplyAll((Actor)Values[0]);
+
+            // Ensure to refresh the layout
+            Presenter.BuildLayoutOnUpdate();
+        }
+
+        private bool CanDiffApply(CustomEditor editor)
+        {
+            return editor?.Values != null &&
+                   editor.Values.Count == 1 &&
+                   editor.Values[0] is SceneObject sceneObject &&
+                   CustomEditor.TryGetAddedPrefabObjectApplyTargets(sceneObject, out _, out _);
+        }
+
+        private void OnDiffApply(CustomEditor editor)
+        {
+            if (!CanDiffApply(editor))
+                return;
+
+            CustomEditor.TryGetAddedPrefabObjectApplyTargets((SceneObject)editor.Values[0], out var prefabRoot, out var objectToApply);
+            Editor.Instance.Prefabs.ApplyAddedObject(prefabRoot, objectToApply);
 
             // Ensure to refresh the layout
             Presenter.BuildLayoutOnUpdate();

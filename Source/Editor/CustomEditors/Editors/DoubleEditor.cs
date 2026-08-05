@@ -26,6 +26,7 @@ namespace FlaxEditor.CustomEditors.Editors
             doubleValue.ValueBox.ValueChanged += OnValueChanged;
             doubleValue.ValueBox.SlidingEnd += ClearToken;
             _element = doubleValue;
+            SetDefaultValue();
             var attributes = Values.GetAttributes();
             if (attributes != null)
             {
@@ -51,6 +52,20 @@ namespace FlaxEditor.CustomEditors.Editors
             }
         }
 
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue)
+                return;
+
+            var value = Values.DefaultValue;
+            if (value is double asDouble)
+                _element.ValueBox.DefaultValue = asDouble;
+            else if (value is float asFloat)
+                _element.ValueBox.DefaultValue = asFloat;
+            else if (value is int asInt)
+                _element.ValueBox.DefaultValue = asInt;
+        }
+
         private void OnValueChanged()
         {
             var isSliding = _element.IsSliding;
@@ -62,6 +77,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {

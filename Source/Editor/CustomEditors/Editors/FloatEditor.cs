@@ -39,6 +39,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 slider.Slider.ValueChanged += OnValueChanged;
                 slider.Slider.SlidingEnd += ClearToken;
                 _element = slider;
+                SetDefaultValue();
                 return;
             }
 
@@ -46,6 +47,7 @@ namespace FlaxEditor.CustomEditors.Editors
             floatValue.ValueBox.ValueChanged += OnValueChanged;
             floatValue.ValueBox.SlidingEnd += ClearToken;
             _element = floatValue;
+            SetDefaultValue();
             if (attributes != null)
             {
                 var limit = (LimitAttribute)attributes.FirstOrDefault(x => x is LimitAttribute);
@@ -70,6 +72,20 @@ namespace FlaxEditor.CustomEditors.Editors
             }
         }
 
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue)
+                return;
+
+            var value = Values.DefaultValue;
+            if (value is float asFloat)
+                _element.DefaultValue = asFloat;
+            else if (value is double asDouble)
+                _element.DefaultValue = (float)asDouble;
+            else if (value is int asInt)
+                _element.DefaultValue = asInt;
+        }
+
         private void OnValueChanged()
         {
             var isSliding = _element.IsSliding;
@@ -81,6 +97,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {

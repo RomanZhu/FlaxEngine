@@ -429,7 +429,7 @@ namespace FlaxEditor.CustomEditors
             {
                 var color = Color.Transparent;
                 if (Values.HasReferenceValue && CanRevertReferenceValue)
-                    color = FlaxEngine.GUI.Style.Current.BackgroundSelected;
+                    color = FlaxEngine.GUI.Style.Current.BorderSelected;
                 else if (Values.HasDefaultValue && CanRevertDefaultValue)
                     color = Color.Yellow * 0.8f;
                 LinkedLabel.HighlightStripColor = color;
@@ -566,6 +566,92 @@ namespace FlaxEditor.CustomEditors
             if (!Values.HasReferenceValue || !CanEditValue)
                 return;
             RevertDiffToReference();
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether this editor represents an object added to a prefab instance that can be applied to the prefab.
+        /// </summary>
+        public bool CanApplyAddedPrefabObject
+        {
+            get
+            {
+                return Values != null &&
+                       Values.Count == 1 &&
+                       Values[0] is SceneObject sceneObject &&
+                       TryGetAddedPrefabObjectApplyTargets(sceneObject, out _, out _);
+            }
+        }
+
+        /// <summary>
+        /// Applies this added prefab instance object to its source prefab.
+        /// </summary>
+        public void ApplyAddedPrefabObject()
+        {
+            if (!CanApplyAddedPrefabObject)
+                return;
+
+            var sceneObject = (SceneObject)Values[0];
+            if (!TryGetAddedPrefabObjectApplyTargets(sceneObject, out var prefabRoot, out var objectToApply))
+                return;
+
+            Editor.Instance.Prefabs.ApplyAddedObject(prefabRoot, objectToApply);
+            Presenter?.BuildLayoutOnUpdate();
+        }
+
+        internal static bool TryGetAddedPrefabObjectApplyTargets(SceneObject sceneObject, out Actor prefabRoot, out SceneObject objectToApply)
+        {
+            prefabRoot = null;
+            objectToApply = null;
+            if (!sceneObject || sceneObject.PrefabID != Guid.Empty)
+                return false;
+
+            Actor ownerActor;
+            if (sceneObject is Script script)
+                ownerActor = script.Actor;
+            else if (sceneObject is Actor actor)
+                ownerActor = actor;
+            else
+                return false;
+            if (!ownerActor)
+                return false;
+
+            for (var actor = ownerActor; actor; actor = actor.Parent)
+            {
+                if (actor.IsPrefabRoot && actor.HasPrefabLink)
+                {
+                    prefabRoot = actor;
+                    break;
+                }
+            }
+            if (!prefabRoot)
+                return false;
+
+            objectToApply = sceneObject;
+            if (sceneObject is Script sceneScript && (!sceneScript.Actor || !sceneScript.Actor.HasPrefabLink))
+                objectToApply = FindLocalActorRoot(sceneScript.Actor);
+            else if (sceneObject is Actor sceneActor && (!sceneActor.Parent || !sceneActor.Parent.HasPrefabLink))
+                objectToApply = FindLocalActorRoot(sceneActor);
+
+            return HasPrefabLinkedOwner(objectToApply);
+        }
+
+        private static Actor FindLocalActorRoot(Actor actor)
+        {
+            if (!actor)
+                return null;
+
+            while (actor.Parent && actor.Parent.PrefabID == Guid.Empty)
+                actor = actor.Parent;
+            return actor;
+        }
+
+        private static bool HasPrefabLinkedOwner(SceneObject sceneObject)
+        {
+            if (sceneObject is Script script)
+                return script.Actor && script.Actor.HasPrefabLink;
+            if (sceneObject is Actor actor)
+                return actor.Parent && actor.Parent.HasPrefabLink;
+            return false;
         }
 
         /// <summary>

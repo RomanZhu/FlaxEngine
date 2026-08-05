@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Scripting;
+using FlaxEditor.Utilities;
 using FlaxEngine;
 using FlaxEngine.GUI;
 using FlaxEngine.Utilities;
@@ -98,8 +99,8 @@ namespace FlaxEditor.CustomEditors
                 Offsets = Margin.Zero;
                 Pivot = Float2.Zero;
                 IsScrollable = true;
-                Spacing = Utilities.Constants.UIMargin;
-                Margin = new Margin(Utilities.Constants.UIMargin);
+                Spacing = Style.Current.GetPropertyPanelSpacing(Utilities.Constants.UIMargin);
+                Margin = new Margin(Style.Current.GetPropertyPanelPadding(Utilities.Constants.UIMargin));
             }
 
             /// <inheritdoc />
@@ -255,6 +256,11 @@ namespace FlaxEditor.CustomEditors
         public string SearchText = string.Empty;
 
         /// <summary>
+        /// The current root group filter name.
+        /// </summary>
+        public string GroupFilterText = string.Empty;
+
+        /// <summary>
         /// The undo object used by this editor.
         /// </summary>
         public readonly Undo Undo;
@@ -400,7 +406,7 @@ namespace FlaxEditor.CustomEditors
                 return;
             }
             var objectsArray = objects as object[] ?? objects.ToArray();
-            if (Utils.ArraysEqual(objectsArray, Selection))
+            if (FlaxEngine.Utils.ArraysEqual(objectsArray, Selection))
                 return;
 
             Selection.Clear();
@@ -502,6 +508,27 @@ namespace FlaxEditor.CustomEditors
         }
 
         /// <summary>
+        /// Gets the root group names used by this presenter layout.
+        /// </summary>
+        /// <param name="result">The output group names list.</param>
+        public void GetRootGroupNames(List<string> result)
+        {
+            if (result == null)
+                throw new ArgumentNullException(nameof(result));
+
+            var usedNames = new HashSet<string>(result, StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < Panel.ChildrenCount; i++)
+            {
+                if (Panel.GetChild(i) is DropPanel group)
+                {
+                    var name = group.HeaderText;
+                    if (!string.IsNullOrEmpty(name) && usedNames.Add(name))
+                        result.Add(name);
+                }
+            }
+        }
+
+        /// <summary>
         /// Invokes <see cref="Modified"/> event.
         /// </summary>
         public void OnModified()
@@ -533,6 +560,8 @@ namespace FlaxEditor.CustomEditors
             }
 
             Editor?.RefreshInternal();
+            if (!string.IsNullOrEmpty(SearchText) || !string.IsNullOrEmpty(GroupFilterText))
+                ApplyCurrentFilters();
         }
 
         /// <summary>
@@ -540,15 +569,31 @@ namespace FlaxEditor.CustomEditors
         /// </summary>
         public void ApplySearchFilter(string query)
         {
-            SearchText = query;
+            SearchText = query?.Trim() ?? string.Empty;
+            ApplyCurrentFilters();
+        }
+
+        /// <summary>
+        /// Applies root group filter to the presenter layout controls.
+        /// </summary>
+        public void ApplyGroupFilter(string groupName)
+        {
+            GroupFilterText = groupName?.Trim() ?? string.Empty;
+            ApplyCurrentFilters();
+        }
+
+        private void ApplyCurrentFilters()
+        {
             if (Root == null)
                 return;
 
+            var query = SearchText;
             var isQueryEmpty = string.IsNullOrEmpty(query);
             var groupMatchCache = new Dictionary<DropPanel, bool>();
             UpdateFilter(Root, query, isQueryEmpty, groupMatchCache);
             UpdatePropertiesListsVisibility(Panel, query);
             UpdateGroupsVisibility(Panel, query);
+            UpdateRootGroupFilterVisibility();
             Panel.PerformLayout();
         }
 
@@ -566,7 +611,27 @@ namespace FlaxEditor.CustomEditors
                 UpdatePropertiesListsVisibility(Panel, SearchText);
                 UpdateGroupsVisibility(Panel, SearchText);
             }
+            UpdateRootGroupFilterVisibility();
             Panel.PerformLayout();
+        }
+
+        private void UpdateRootGroupFilterVisibility()
+        {
+            if (string.IsNullOrEmpty(GroupFilterText))
+                return;
+
+            for (int i = 0; i < Panel.ChildrenCount; i++)
+            {
+                var child = Panel.GetChild(i);
+                if (child is DropPanel group)
+                {
+                    group.Visible = group.Visible && string.Equals(group.HeaderText, GroupFilterText, StringComparison.OrdinalIgnoreCase);
+                }
+                else
+                {
+                    child.Visible = false;
+                }
+            }
         }
 
         private void RestoreVisibilities(Control control)
@@ -684,7 +749,7 @@ namespace FlaxEditor.CustomEditors
                     if (!groupMatchCache.TryGetValue(dropPanel, out bool matches))
                     {
                         var headerText = dropPanel.HeaderText;
-                        matches = headerText != null && headerText.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+                        matches = IsSearchMatch(query, headerText);
                         groupMatchCache[dropPanel] = matches;
                     }
                     if (matches)
@@ -693,6 +758,11 @@ namespace FlaxEditor.CustomEditors
                 p = p.Parent;
             }
             return false;
+        }
+
+        private static bool IsSearchMatch(string query, string text)
+        {
+            return QueryFilterHelper.FuzzyMatch(query, text, out _, out _);
         }
 
         private bool UpdateFilter(CustomEditor editor, string query, bool forceVisible, Dictionary<DropPanel, bool> groupMatchCache)
@@ -710,7 +780,7 @@ namespace FlaxEditor.CustomEditors
                 else if (!string.IsNullOrEmpty(query))
                 {
                     var labelText = editor.LinkedLabel.Text.ToString();
-                    if (labelText.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (IsSearchMatch(query, labelText))
                     {
                         labelMatches = true;
                     }

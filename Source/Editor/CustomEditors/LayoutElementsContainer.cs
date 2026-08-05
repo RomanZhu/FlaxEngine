@@ -87,6 +87,8 @@ namespace FlaxEditor.CustomEditors
             var linkedEditor = (CustomEditor)groupPanel.Tag;
             var menu = new ContextMenu();
 
+            if (linkedEditor.CanApplyAddedPrefabObject)
+                menu.AddButton("Apply Changes", linkedEditor.ApplyAddedPrefabObject);
             var revertToPrefab = menu.AddButton("Revert to Prefab", linkedEditor.RevertToReferenceValue);
             revertToPrefab.Enabled = linkedEditor.CanRevertReferenceValue;
             var resetToDefault = menu.AddButton("Reset to default", linkedEditor.RevertToDefaultValue);
@@ -227,8 +229,35 @@ namespace FlaxEditor.CustomEditors
         public CustomElementsContainer<UniformGridPanel> UniformGrid()
         {
             var grid = CustomContainer<UniformGridPanel>();
-            grid.CustomControl.SlotSpacing = new Float2(Utilities.Constants.UIMargin);
+            grid.CustomControl.SlotSpacing = new Float2(Style.Current.GetPropertyGridSpacing(Utilities.Constants.UIMargin));
             return grid;
+        }
+
+        /// <summary>
+        /// Adds new uniform grid control configured for prefixed value boxes.
+        /// </summary>
+        /// <returns>The created element.</returns>
+        public CustomElementsContainer<UniformGridPanel> PrefixedValueGrid()
+        {
+            var grid = UniformGrid();
+            SetupPrefixedValueGrid(grid.CustomControl);
+            return grid;
+        }
+
+        /// <summary>
+        /// Applies the shared layout used by prefixed value-box grids.
+        /// </summary>
+        /// <param name="grid">The grid.</param>
+        public static void SetupPrefixedValueGrid(UniformGridPanel grid)
+        {
+            if (grid == null)
+                return;
+
+            var spacing = Style.Current.GetPropertyGridSpacing(Utilities.Constants.UIMargin);
+            grid.ClipChildren = false;
+            grid.Height = FlaxEngine.GUI.TextBox.DefaultHeight + 2.0f;
+            grid.SlotSpacing = new Float2(spacing + 2.0f);
+            grid.SlotPadding = new Margin(0.0f);
         }
 
         /// <summary>
@@ -448,7 +477,7 @@ namespace FlaxEditor.CustomEditors
         public CustomElement<ClickableLabel> ClickableLabel(string text, TextAlignment horizontalAlignment = TextAlignment.Near)
         {
             var element = new CustomElement<ClickableLabel>();
-            element.CustomControl.Height = 18.0f;
+            element.CustomControl.Height = 22.0f;
             element.CustomControl.Text = text;
             element.CustomControl.HorizontalAlignment = horizontalAlignment;
             OnAddElement(element);
@@ -853,7 +882,7 @@ namespace FlaxEditor.CustomEditors
             {
                 var inputColor = AdjustValueUnits(sectionBackgroundColor, 15.0f);
                 textBox.BackgroundColor = inputColor;
-                textBox.BackgroundSelectedColor = inputColor;
+                textBox.BackgroundSelectedColor = FlaxEngine.GUI.Style.Current.SecondaryBackground;
             }
 
             if (control is ContainerControl container)

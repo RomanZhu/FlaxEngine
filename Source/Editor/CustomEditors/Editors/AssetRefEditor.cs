@@ -187,7 +187,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 if (IsDragOver && _hasValidDragOver)
                 {
                     var bounds = new Rectangle(Float2.Zero, Size);
-                    StyleRendering.DrawRoundedRectangle(bounds, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
+                    StyleRendering.DrawRoundedRectangle(bounds, style.Selection, style.SelectionBorder, 1.0f, style.GetSelectionCornerRadius());
                 }
             }
 

@@ -935,7 +935,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 {
                     var style = FlaxEngine.GUI.Style.Current;
                     var area = new Rectangle(Float2.Zero, Size);
-                    StyleRendering.DrawRoundedRectangle(area, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
+                    StyleRendering.DrawRoundedRectangle(area, style.Selection, style.SelectionBorder, 1.0f, style.GetSelectionCornerRadius());
                 }
 
                 base.Draw();

@@ -46,10 +46,8 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            var grid = layout.UniformGrid();
+            var grid = layout.PrefixedValueGrid();
             var gridControl = grid.CustomControl;
-            gridControl.ClipChildren = false;
-            gridControl.Height = TextBox.DefaultHeight;
             gridControl.SlotsHorizontally = 3;
             gridControl.SlotsVertically = 1;
 
@@ -84,6 +82,8 @@ namespace FlaxEditor.CustomEditors.Editors
                 ClearToken();
             };
 
+            SetDefaultValue();
+
             if (LinkedLabel != null)
             {
                 LinkedLabel.SetupContextMenu += (label, menu, editor) =>
@@ -93,6 +93,17 @@ namespace FlaxEditor.CustomEditors.Editors
                     menu.AddButton("Copy Euler", () => { Clipboard.Text = JsonSerializer.Serialize(value); }).TooltipText = "Copy the Euler Angles in Degrees";
                 };
             }
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue || !(Values.DefaultValue is Quaternion value))
+                return;
+
+            var euler = value.EulerAngles;
+            XElement.ValueBox.DefaultValue = euler.X;
+            YElement.ValueBox.DefaultValue = euler.Y;
+            ZElement.ValueBox.DefaultValue = euler.Z;
         }
         
         private void OnXValueChanged()
@@ -219,6 +230,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {

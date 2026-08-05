@@ -65,6 +65,19 @@ namespace FlaxEditor.CustomEditors.Editors
             Revision.IntValue.SetLimits(-1, 100000000);
             Revision.IntValue.ValueChanged += OnValueChanged;
             Revision.IntValue.SlidingEnd += ClearToken;
+
+            SetDefaultValue();
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue || !(Values.DefaultValue is Version value))
+                return;
+
+            Major.IntValue.DefaultValue = value.Major;
+            Minor.IntValue.DefaultValue = value.Minor;
+            Build.IntValue.DefaultValue = value.Build;
+            Revision.IntValue.DefaultValue = value.Revision;
         }
 
         private void OnValueChanged()
@@ -97,6 +110,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {

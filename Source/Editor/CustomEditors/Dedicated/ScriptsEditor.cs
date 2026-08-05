@@ -50,34 +50,55 @@ namespace FlaxEditor.CustomEditors.Dedicated
         private DragScriptItems _dragScripts;
         private DragAssets _dragAssets;
         private Button _addScriptsButton;
+        private static readonly Color AddScriptsButtonBackgroundColor = new Color(0.2470588f, 0.2470588f, 0.2588235f, 1.0f);
 
         /// <summary>
         /// The parent scripts editor.
         /// </summary>
         public ScriptsEditor ScriptsEditor;
 
+        private static void ApplyAddScriptsButtonStyle(Button button)
+        {
+            var style = Style.Current;
+
+            button.BackgroundColor = AddScriptsButtonBackgroundColor;
+            button.BackgroundColorHighlighted = AddScriptsButtonBackgroundColor.RGBMultiplied(1.12f);
+            button.BackgroundColorSelected = style?.BorderSelected ?? AddScriptsButtonBackgroundColor.RGBMultiplied(0.9f);
+            button.BorderColor = Color.Transparent;
+            button.BorderColorHighlighted = Color.Transparent;
+            button.BorderColorSelected = Color.Transparent;
+            button.HasBorder = false;
+            button.CornerRadius = 3.0f;
+        }
+
         /// <summary>
         /// Initializes a new instance of the <see cref="DragAreaControl"/> class.
         /// </summary>
         public DragAreaControl()
-        : base(0, 0, 120, 40)
+        : base(0, 0, 120, 22)
         {
             AutoFocus = false;
 
             // Add script button
-            var buttonText = "Add script";
-            var textSize = Style.Current.FontMedium.MeasureText(buttonText);
-            float addScriptButtonWidth = (textSize.X < 60.0f) ? 60.0f : textSize.X + 4;
-            var buttonHeight = (textSize.Y < 18) ? 18 : textSize.Y + 4;
             _addScriptsButton = new Button
             {
                 TooltipText = "Add new scripts to the actor.",
-                AnchorPreset = AnchorPresets.MiddleCenter,
-                Text = buttonText,
+                AnchorPreset = AnchorPresets.StretchAll,
+                Text = "Add Script",
                 Parent = this,
-                Bounds = new Rectangle((Width - addScriptButtonWidth) / 2, 1, addScriptButtonWidth, buttonHeight),
+                Bounds = new Rectangle(Float2.Zero, Size),
             };
+            ApplyAddScriptsButtonStyle(_addScriptsButton);
             _addScriptsButton.ButtonClicked += OnAddScriptButtonClicked;
+        }
+
+        /// <inheritdoc />
+        protected override void PerformLayoutBeforeChildren()
+        {
+            base.PerformLayoutBeforeChildren();
+
+            _addScriptsButton.Bounds = new Rectangle(Float2.Zero, Size);
+            ApplyAddScriptsButtonStyle(_addScriptsButton);
         }
 
         private void OnAddScriptButtonClicked(Button button)
@@ -169,17 +190,14 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var style = Style.Current;
             var size = Size;
 
-            // Info
-            Render2D.DrawText(style.FontSmall, "Drag scripts here", new Rectangle(2, _addScriptsButton.Height + 4, size.X - 4, size.Y - 4 - 20), style.ForegroundDisabled, TextAlignment.Center, TextAlignment.Center);
+            base.Draw();
 
             // Check if drag is over
             if (IsDragOver && _dragHandlers != null && _dragHandlers.HasValidDrag)
             {
                 var area = new Rectangle(Float2.Zero, size);
-                StyleRendering.DrawRoundedRectangle(area, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangle(area, style.Selection, style.SelectionBorder, 1.0f, style.GetSelectionCornerRadius());
             }
-
-            base.Draw();
         }
 
         private bool ValidateScript(ScriptItem scriptItem)
@@ -630,6 +648,9 @@ namespace FlaxEditor.CustomEditors.Dedicated
         /// <inheritdoc />
         public override IEnumerable<object> UndoObjects => _scripts;
 
+        /// <inheritdoc />
+        public override DisplayStyle Style => DisplayStyle.InlineIntoParent;
+
         /// <summary>
         /// Cached the newly created script name - used to add script after compilation.
         /// </summary>
@@ -643,6 +664,15 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var settingsButton = group.AddSettingsButton();
             settingsButton.Tag = index;
             settingsButton.Clicked += MissingSettingsButtonOnClicked;
+            group.Panel.MouseButtonRightClicked += (panel, location) =>
+            {
+                var cm = new ContextMenu
+                {
+                    Tag = index
+                };
+                AddMissingScriptSettingsContextMenuItems(cm);
+                cm.Show(panel, location);
+            };
         }
 
         private void MissingSettingsButtonOnClicked(Image image, MouseButton mouseButton)
@@ -656,8 +686,13 @@ namespace FlaxEditor.CustomEditors.Dedicated
             {
                 Tag = index
             };
-            cm.AddButton("Remove", OnClickMissingRemove);
+            AddMissingScriptSettingsContextMenuItems(cm);
             cm.Show(image, image.Size);
+        }
+
+        private void AddMissingScriptSettingsContextMenuItems(ContextMenu menu)
+        {
+            menu.AddButton("Remove", OnClickMissingRemove);
         }
 
         private void OnClickMissingRemove(ContextMenuButton button)
@@ -838,6 +873,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 var group = layout.Group(title, editor);
                 if (!hasAllRequirements)
                     group.Panel.HeaderTextColor = style.Statusbar.Failed;
+                group.Panel.DrawAsDisabled = !script.Enabled;
                 if ((Presenter.Features & FeatureFlags.CacheExpandedGroups) != 0)
                 {
                     if (Editor.Instance.ProjectCache.IsGroupToggled(title))
@@ -855,33 +891,21 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 if (script.HasPrefabLink)
                     group.Panel.HeaderTextColor = style.BorderSelected;
 
-                // Add toggle button to the group
+                // Add script icon to the group
                 var headerHeight = group.Panel.HeaderHeight;
-                var scriptToggle = new CheckBox
-                {
-                    TooltipText = "If checked, script will be enabled.",
-                    IsScrollable = false,
-                    Checked = script.Enabled,
-                    Parent = group.Panel,
-                    Size = new Float2(headerHeight),
-                    Bounds = new Rectangle(headerHeight, 0, headerHeight, headerHeight),
-                    BoxSize = Mathf.Min(headerHeight - 4.0f, 12.0f),
-                    Tag = script,
-                };
-                scriptToggle.StateChanged += OnScriptToggleCheckChanged;
-                _scriptToggles[i] = scriptToggle;
-
-                // Add drag button to the group
-                var scriptDrag = new DragImage
+                var scriptIconSprite = scriptType.ContentItem?.DefaultThumbnail ?? Editor.Instance.Icons.CSharpScript128;
+                if (!scriptIconSprite.IsValid)
+                    scriptIconSprite = Editor.Instance.Icons.CSharpScript128;
+                var scriptIcon = new DragImage
                 {
                     TooltipText = "Script reference.",
                     AutoFocus = true,
                     IsScrollable = false,
-                    Color = style.ForegroundGrey,
+                    Color = Color.White,
                     Parent = group.Panel,
-                    Bounds = new Rectangle(scriptToggle.Right, 0.5f, headerHeight, headerHeight),
-                    Margin = new Margin(1),
-                    Brush = new SpriteBrush(Editor.Instance.Icons.DragBar12),
+                    Bounds = new Rectangle(headerHeight, 0.5f, headerHeight, headerHeight),
+                    Margin = new Margin(2),
+                    Brush = new SpriteBrush(scriptIconSprite),
                     Tag = script,
                     Drag = img =>
                     {
@@ -892,11 +916,32 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     }
                 };
 
+                // Add toggle button to the group
+                var scriptToggle = new CheckBox
+                {
+                    TooltipText = "If checked, script will be enabled.",
+                    IsScrollable = false,
+                    Checked = script.Enabled,
+                    Parent = group.Panel,
+                    Size = new Float2(headerHeight),
+                    Bounds = new Rectangle(scriptIcon.Right, 0, headerHeight, headerHeight),
+                    BoxSize = Mathf.Min(headerHeight - 4.0f, 12.0f),
+                    Tag = script,
+                };
+                scriptToggle.StateChanged += OnScriptToggleCheckChanged;
+                _scriptToggles[i] = scriptToggle;
+
                 // Add settings button to the group
                 var settingsButton = group.AddSettingsButton();
                 settingsButton.Tag = script;
                 settingsButton.Clicked += OnSettingsButtonClicked;
                 totalHeaderButtonsOffset += settingsButton.Width + FlaxEditor.Utilities.Constants.UIMargin;
+                group.SetupContextMenu += (menu, panel) =>
+                {
+                    menu.Tag = script;
+                    menu.AddSeparator();
+                    AddScriptSettingsContextMenuItems(menu, script);
+                };
 
                 // Add script obsolete icon to the group
                 if (scriptType.HasAttribute(typeof(ObsoleteAttribute), false))
@@ -918,11 +963,22 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     var prefabInstanceButton = group.AddHeaderButton("Script only exists in this prefab instance.", totalHeaderButtonsOffset, Editor.Instance.Icons.Add32);
                     prefabInstanceButton.Color = style.BorderSelected;
                     prefabInstanceButton.MouseOverColor = style.BorderSelected * 0.9f;
+                    prefabInstanceButton.Tag = editor;
+                    prefabInstanceButton.Clicked += OnPrefabInstanceButtonClicked;
                     totalHeaderButtonsOffset += prefabInstanceButton.Width;
                 }
 
                 // Adjust margin to not overlap with other ui elements in the header
-                group.Panel.HeaderTextMargin = group.Panel.HeaderTextMargin with { Left = scriptDrag.Right - 12, Right = settingsButton.Width + Utilities.Constants.UIMargin };
+                var headerButtonsWidth = totalHeaderButtonsOffset;
+                group.Panel.HeaderTextMargin = group.Panel.HeaderTextMargin with { Left = scriptToggle.Right - DropPanel.DropDownIconSize, Right = headerButtonsWidth };
+                group.Panel.HeaderInputHitTest = location =>
+                {
+                    if (location.Y < 0.0f || location.Y > group.Panel.HeaderHeight)
+                        return false;
+
+                    var headerButtonsLeft = group.Panel.Width - headerButtonsWidth;
+                    return (location.X >= 0.0f && location.X < scriptIcon.Left) || (location.X >= scriptToggle.Right && location.X <= headerButtonsLeft);
+                };
                 group.Object(values, editor);
 
                 // Remove drop down arrows and containment lines if no objects in the group
@@ -975,9 +1031,38 @@ namespace FlaxEditor.CustomEditors.Dedicated
             if (script.Enabled == box.Checked)
                 return;
 
+            if (box.Parent is DropPanel panel)
+                panel.DrawAsDisabled = !box.Checked;
+
             var action = ChangeScriptAction.ChangeEnabled(script, box.Checked);
             action.Do();
             Presenter?.Undo.AddAction(action);
+        }
+
+        private void OnPrefabInstanceButtonClicked(Image image, MouseButton mouseButton)
+        {
+            if (mouseButton != MouseButton.Left)
+                return;
+
+            var editor = image.Tag as CustomEditor;
+            var cm = new ContextMenu();
+            if (editor?.CanApplyAddedPrefabObject ?? false)
+                cm.AddButton("Apply Changes", () => editor.ApplyAddedPrefabObject());
+            cm.Show(image, image.Size);
+        }
+
+        private static bool CanApplyAddedScript(Script script)
+        {
+            return CustomEditor.TryGetAddedPrefabObjectApplyTargets(script, out _, out _);
+        }
+
+        private void OnClickApplyAddedScript(ContextMenuButton button)
+        {
+            var script = (Script)button.ParentContextMenu.Tag;
+            if (!CustomEditor.TryGetAddedPrefabObjectApplyTargets(script, out var prefabRoot, out var objectToApply))
+                return;
+            Editor.Instance.Prefabs.ApplyAddedObject(prefabRoot, objectToApply);
+            Presenter?.BuildLayoutOnUpdate();
         }
 
         private void OnSettingsButtonClicked(Image image, MouseButton mouseButton)
@@ -986,27 +1071,33 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 return;
 
             var script = (Script)image.Tag;
-            var scriptType = TypeUtils.GetType(script.TypeName);
-            var item = scriptType.ContentItem;
-
             var cm = new ContextMenu
             {
                 Tag = script
             };
-            cm.AddButton("Remove", OnClickRemove).Icon = Editor.Instance.Icons.Cross12;
-            cm.AddButton("Move up", OnClickMoveUp).Enabled = script.OrderInParent > 0;
-            cm.AddButton("Move down", OnClickMoveDown).Enabled = script.OrderInParent < script.Actor.Scripts.Length - 1;
+            AddScriptSettingsContextMenuItems(cm, script);
+            cm.Show(image, image.Size);
+        }
+
+        private void AddScriptSettingsContextMenuItems(ContextMenu menu, Script script)
+        {
+            if (CanApplyAddedScript(script))
+                menu.AddButton("Apply Changes", OnClickApplyAddedScript);
+            menu.AddButton("Remove", OnClickRemove).Icon = Editor.Instance.Icons.Cross12;
+            menu.AddButton("Move up", OnClickMoveUp).Enabled = script.OrderInParent > 0;
+            menu.AddButton("Move down", OnClickMoveDown).Enabled = script.OrderInParent < script.Actor.Scripts.Length - 1;
             // TODO: copy script
             // TODO: paste script values
             // TODO: paste script as new
             // TODO: copy script reference
-            cm.AddSeparator();
-            cm.AddButton("Copy type name", OnClickCopyTypeName);
-            cm.AddButton("Edit script", OnClickEditScript).Enabled = item != null;
-            var showButton = cm.AddButton("Show in content window", OnClickShowScript);
+            menu.AddSeparator();
+            menu.AddButton("Copy type name", OnClickCopyTypeName);
+            var scriptType = TypeUtils.GetType(script.TypeName);
+            var item = scriptType.ContentItem;
+            menu.AddButton("Edit script", OnClickEditScript).Enabled = item != null;
+            var showButton = menu.AddButton("Show in content window", OnClickShowScript);
             showButton.Enabled = item != null;
             showButton.Icon = Editor.Instance.Icons.Search12;
-            cm.Show(image, image.Size);
         }
 
         private void OnClickRemove(ContextMenuButton button)
@@ -1072,7 +1163,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 for (int i = 0; i < _scriptToggles.Length; i++)
                 {
                     if (_scriptToggles[i] != null)
+                    {
                         _scriptToggles[i].Checked = scripts[i].Enabled;
+                        if (_scriptToggles[i].Parent is DropPanel panel)
+                            panel.DrawAsDisabled = !scripts[i].Enabled;
+                    }
                 }
             }
 

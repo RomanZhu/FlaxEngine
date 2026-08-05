@@ -42,10 +42,8 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            var grid = layout.UniformGrid();
+            var grid = layout.PrefixedValueGrid();
             var gridControl = grid.CustomControl;
-            gridControl.ClipChildren = false;
-            gridControl.Height = TextBox.DefaultHeight;
             gridControl.SlotsHorizontally = 2;
             gridControl.SlotsVertically = 1;
 
@@ -67,6 +65,27 @@ namespace FlaxEditor.CustomEditors.Editors
             YElement.SetLimits(limit);
             YElement.ValueBox.ValueChanged += OnValueChanged;
             YElement.ValueBox.SlidingEnd += ClearToken;
+
+            SetDefaultValue();
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue)
+                return;
+
+            var value = Float2.Zero;
+            if (Values.DefaultValue is Vector2 asVector2)
+                value = asVector2;
+            else if (Values.DefaultValue is Float2 asFloat2)
+                value = asFloat2;
+            else if (Values.DefaultValue is Double2 asDouble2)
+                value = asDouble2;
+            else
+                return;
+
+            XElement.ValueBox.DefaultValue = value.X;
+            YElement.ValueBox.DefaultValue = value.Y;
         }
 
         private void OnValueChanged()
@@ -91,6 +110,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {
@@ -133,10 +153,8 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            var grid = layout.UniformGrid();
+            var grid = layout.PrefixedValueGrid();
             var gridControl = grid.CustomControl;
-            gridControl.ClipChildren = false;
-            gridControl.Height = TextBox.DefaultHeight;
             gridControl.SlotsHorizontally = 2;
             gridControl.SlotsVertically = 1;
 
@@ -158,6 +176,27 @@ namespace FlaxEditor.CustomEditors.Editors
             YElement.SetLimits(limit);
             YElement.ValueBox.ValueChanged += OnValueChanged;
             YElement.ValueBox.SlidingEnd += ClearToken;
+
+            SetDefaultValue();
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue)
+                return;
+
+            var value = Double2.Zero;
+            if (Values.DefaultValue is Vector2 asVector2)
+                value = asVector2;
+            else if (Values.DefaultValue is Float2 asFloat2)
+                value = asFloat2;
+            else if (Values.DefaultValue is Double2 asDouble2)
+                value = asDouble2;
+            else
+                return;
+
+            XElement.ValueBox.DefaultValue = value.X;
+            YElement.ValueBox.DefaultValue = value.Y;
         }
 
         private void OnValueChanged()
@@ -182,6 +221,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {
@@ -224,10 +264,8 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            var grid = layout.UniformGrid();
+            var grid = layout.PrefixedValueGrid();
             var gridControl = grid.CustomControl;
-            gridControl.ClipChildren = false;
-            gridControl.Height = TextBox.DefaultHeight;
             gridControl.SlotsHorizontally = 2;
             gridControl.SlotsVertically = 1;
 
@@ -249,6 +287,17 @@ namespace FlaxEditor.CustomEditors.Editors
             YElement.SetLimits(limit);
             YElement.IntValue.ValueChanged += OnValueChanged;
             YElement.IntValue.SlidingEnd += ClearToken;
+
+            SetDefaultValue();
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue || !(Values.DefaultValue is Int2 value))
+                return;
+
+            XElement.IntValue.DefaultValue = value.X;
+            YElement.IntValue.DefaultValue = value.Y;
         }
 
         private void OnValueChanged()
@@ -266,6 +315,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {

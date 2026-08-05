@@ -261,6 +261,11 @@ namespace FlaxEditor.CustomEditors.Editors
             var textColor = isEnabled && isSelected && !DifferentValues ? style.Foreground : style.ForegroundGrey;
             var iconColor = isEnabled ? style.ForegroundGrey : style.ForegroundDisabled;
             var backgroundColor = ReferenceBackgroundColor.A > 0.0f ? ReferenceBackgroundColor : style.TextBoxBackground;
+            if (!isEnabled)
+            {
+                backgroundColor = StyleRendering.GetDisabledInputColor(backgroundColor);
+                borderColor = StyleRendering.GetDisabledInputAccentColor(borderColor);
+            }
 
             StyleRendering.DrawRoundedRectangle(fieldRect, backgroundColor, borderColor, 1.0f, style.CornerRadius);
 
@@ -386,6 +391,8 @@ namespace FlaxEditor.CustomEditors.Editors
         public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
             Focus();
+            if (button == MouseButton.Left)
+                OpenOrFocusSource();
             return true;
         }
 
@@ -432,7 +439,7 @@ namespace FlaxEditor.CustomEditors.Editors
             if (actor == null)
                 return false;
 
-            if (_linkedTreeNode != null && _linkedTreeNode.Actor == actor)
+            if (_linkedTreeNode != null && !_linkedTreeNode.IsDisposing && _linkedTreeNode.Actor == actor)
             {
                 HighlightLinkedTreeNode();
                 return true;
@@ -456,6 +463,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 Editor.Instance.Windows.SceneWin.SceneTreePanel.ScrollViewTo(_linkedTreeNode, true);
             else if (PresenterContext is PrefabWindow prefabWindow)
                 (prefabWindow.Tree.Parent as Panel)?.ScrollViewTo(_linkedTreeNode, true);
+
             _linkedTreeNode.StartHighlight();
         }
 
@@ -472,6 +480,30 @@ namespace FlaxEditor.CustomEditors.Editors
                 if (item != null)
                     Editor.Instance.Windows.ContentWin.Highlight(item, true);
             }
+        }
+
+        private void OpenOrFocusSource()
+        {
+            if (_value is Asset asset)
+            {
+                var item = Editor.Instance.ContentDatabase.FindAsset(asset.ID);
+                if (item != null)
+                {
+                    Editor.Instance.ContentEditing.Open(item);
+                    return;
+                }
+            }
+            else if (_value is Script script)
+            {
+                var item = TypeUtils.GetType(script.TypeName).ContentItem;
+                if (item != null)
+                {
+                    Editor.Instance.ContentEditing.Open(item);
+                    return;
+                }
+            }
+
+            FocusSource();
         }
 
         private void ShowContextMenu(Float2 location)

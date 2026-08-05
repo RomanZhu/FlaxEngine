@@ -46,6 +46,17 @@ namespace FlaxEditor.CustomEditors.Editors
                 elemnt.ValueBox.SlidingEnd += ClearToken;
                 Elements[i] = elemnt;
             }
+
+            SetDefaultValue();
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue || !(Values.DefaultValue is Matrix value))
+                return;
+
+            for (int i = 0; i < 16; i++)
+                Elements[i].ValueBox.DefaultValue = value[i];
         }
 
         private void OnValueChanged()
@@ -71,6 +82,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {

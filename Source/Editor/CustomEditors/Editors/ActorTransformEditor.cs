@@ -37,12 +37,6 @@ namespace FlaxEditor.CustomEditors.Editors
             {
                 base.Initialize(layout);
 
-                if (XElement.ValueBox.Parent is UniformGridPanel ug)
-                {
-                    ug.SlotPadding = new Margin(3.0f, 0.0f, 0.0f, 0.0f);
-                    CheckLayout(ug);
-                }
-
                 // Override colors
                 XElement.ValueBox.BorderSelectedColor = AxisColorX;
                 YElement.ValueBox.BorderSelectedColor = AxisColorY;
@@ -66,12 +60,6 @@ namespace FlaxEditor.CustomEditors.Editors
             public override void Initialize(LayoutElementsContainer layout)
             {
                 base.Initialize(layout);
-                
-                if (XElement.ValueBox.Parent is UniformGridPanel ug)
-                {
-                    ug.SlotPadding = new Margin(3.0f, 0.0f, 0.0f, 0.0f);
-                    CheckLayout(ug);
-                }
 
                 // Override colors
                 XElement.ValueBox.BorderSelectedColor = AxisColorX;
@@ -125,12 +113,6 @@ namespace FlaxEditor.CustomEditors.Editors
                         else
                             menu.AddButton("Link", ToggleLink).LinkTooltip("Links scale components for uniform scaling");
                     };
-                }
-
-                if (XElement.ValueBox.Parent is UniformGridPanel ug)
-                {
-                    ug.SlotPadding = new Margin(3.0f, 0.0f, 0.0f, 0.0f);
-                    CheckLayout(ug);
                 }
 
                 // Override colors
@@ -191,14 +173,6 @@ namespace FlaxEditor.CustomEditors.Editors
                 _linkButton.TooltipText = LinkValues ? "Unlinks scale components from uniform scaling" : "Links scale components for uniform scaling";
                 _linkButton.BackgroundBrush = new SpriteBrush(LinkValues ? Editor.Instance.Icons.Link32 : Editor.Instance.Icons.BrokenLink32);
             }
-        }
-
-        private static void CheckLayout(UniformGridPanel ug)
-        {
-            // Enlarge to fix border visibility
-            ug.Height += 2;
-            ug.SlotSpacing += new Float2(2);
-            ug.SlotPadding += new Margin(0, 0, 1, 1);
         }
     }
 }

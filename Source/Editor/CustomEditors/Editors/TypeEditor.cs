@@ -149,7 +149,7 @@ namespace FlaxEditor.CustomEditors.Editors
             var button2Rect = new Rectangle(button1Rect.Right + 2, 1, 14, 14);
 
             // Draw frame
-            StyleRendering.DrawRoundedRectangleBorder(frameRect, IsMouseOver ? style.BorderHighlighted : style.BorderNormal, 1.0f, style.CornerRadius);
+            StyleRendering.DrawRoundedRectangleBorder(frameRect, IsMouseOver ? style.BorderHighlighted : style.BorderNormal, 1.0f, style.GetInputCornerRadius());
 
             // Check if has item selected
             if (isSelected)
@@ -177,7 +177,7 @@ namespace FlaxEditor.CustomEditors.Editors
             if (IsDragOver && _hasValidDragOver)
             {
                 var bounds = new Rectangle(Float2.Zero, Size);
-                StyleRendering.DrawRoundedRectangle(bounds, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangle(bounds, style.Selection, style.SelectionBorder, 1.0f, style.GetSelectionCornerRadius());
             }
         }
 

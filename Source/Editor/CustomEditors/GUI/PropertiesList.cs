@@ -18,6 +18,7 @@ namespace FlaxEditor.CustomEditors.GUI
         private const float SplitterPadding = 15;
         private const float EditorsMinWidthRatio = 0.4f;
         private const float LabelInputGutter = 8.0f;
+        private static readonly Color SplitterColor = Color.FromBgra(0xFF434347);
 
         /// <summary>
         /// The splitter size (in pixels).
@@ -128,7 +129,7 @@ namespace FlaxEditor.CustomEditors.GUI
             var style = Style.Current;
 
             // Draw splitter
-            Render2D.FillRectangle(_splitterRect, _splitterClicked ? style.BorderSelected : _mouseOverSplitter ? style.BorderHighlighted : style.BorderNormal.AlphaMultiplied(0.55f));
+            Render2D.FillRectangle(_splitterRect, _splitterClicked ? style.BorderSelected : _mouseOverSplitter ? style.BorderHighlighted : SplitterColor);
         }
 
         /// <inheritdoc />

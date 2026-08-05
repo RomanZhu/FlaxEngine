@@ -82,10 +82,8 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            var grid = layout.UniformGrid();
+            var grid = layout.PrefixedValueGrid();
             var gridControl = grid.CustomControl;
-            gridControl.ClipChildren = false;
-            gridControl.Height = TextBox.DefaultHeight;
             gridControl.SlotsHorizontally = 3;
             gridControl.SlotsVertically = 1;
 
@@ -134,6 +132,8 @@ namespace FlaxEditor.CustomEditors.Editors
                 ClearToken();
             };
 
+            SetDefaultValue();
+
             if (LinkedLabel != null)
             {
                 LinkedLabel.SetupContextMenu += (label, menu, editor) =>
@@ -149,6 +149,26 @@ namespace FlaxEditor.CustomEditors.Editors
                     mb.Checked = XElement.ValueBox.Category != Utils.ValueCategory.None;
                 };
             }
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue)
+                return;
+
+            var value = Float3.Zero;
+            if (Values.DefaultValue is Vector3 asVector3)
+                value = asVector3;
+            else if (Values.DefaultValue is Float3 asFloat3)
+                value = asFloat3;
+            else if (Values.DefaultValue is Double3 asDouble3)
+                value = asDouble3;
+            else
+                return;
+
+            XElement.ValueBox.DefaultValue = value.X;
+            YElement.ValueBox.DefaultValue = value.Y;
+            ZElement.ValueBox.DefaultValue = value.Z;
         }
 
         private void OnXValueChanged()
@@ -336,6 +356,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {
@@ -472,10 +493,8 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            var grid = layout.UniformGrid();
+            var grid = layout.PrefixedValueGrid();
             var gridControl = grid.CustomControl;
-            gridControl.ClipChildren = false;
-            gridControl.Height = TextBox.DefaultHeight;
             gridControl.SlotsHorizontally = 3;
             gridControl.SlotsVertically = 1;
 
@@ -524,6 +543,8 @@ namespace FlaxEditor.CustomEditors.Editors
                 ClearToken();
             };
 
+            SetDefaultValue();
+
             if (LinkedLabel != null)
             {
                 LinkedLabel.SetupContextMenu += (label, menu, editor) =>
@@ -541,7 +562,27 @@ namespace FlaxEditor.CustomEditors.Editors
             }
         }
 
-              private void OnXValueChanged()
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue)
+                return;
+
+            var value = Double3.Zero;
+            if (Values.DefaultValue is Vector3 asVector3)
+                value = asVector3;
+            else if (Values.DefaultValue is Float3 asFloat3)
+                value = asFloat3;
+            else if (Values.DefaultValue is Double3 asDouble3)
+                value = asDouble3;
+            else
+                return;
+
+            XElement.ValueBox.DefaultValue = value.X;
+            YElement.ValueBox.DefaultValue = value.Y;
+            ZElement.ValueBox.DefaultValue = value.Z;
+        }
+
+        private void OnXValueChanged()
         {
             if (IsSetBlocked)
                 return;
@@ -656,6 +697,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {
@@ -789,10 +831,8 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            var grid = layout.UniformGrid();
+            var grid = layout.PrefixedValueGrid();
             var gridControl = grid.CustomControl;
-            gridControl.ClipChildren = false;
-            gridControl.Height = TextBox.DefaultHeight;
             gridControl.SlotsHorizontally = 3;
             gridControl.SlotsVertically = 1;
 
@@ -820,6 +860,18 @@ namespace FlaxEditor.CustomEditors.Editors
             ZElement.SetLimits(limit);
             ZElement.IntValue.ValueChanged += OnValueChanged;
             ZElement.IntValue.SlidingEnd += ClearToken;
+
+            SetDefaultValue();
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue || !(Values.DefaultValue is Int3 value))
+                return;
+
+            XElement.IntValue.DefaultValue = value.X;
+            YElement.IntValue.DefaultValue = value.Y;
+            ZElement.IntValue.DefaultValue = value.Z;
         }
 
         private void OnValueChanged()
@@ -837,6 +889,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {

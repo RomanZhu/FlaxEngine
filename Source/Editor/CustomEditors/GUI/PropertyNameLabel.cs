@@ -76,7 +76,7 @@ namespace FlaxEditor.CustomEditors.GUI
 
             if (!string.IsNullOrEmpty(SearchText))
             {
-                QueryFilterHelper.Match(SearchText, text, out _highlightRanges);
+                QueryFilterHelper.FuzzyMatch(SearchText, text, out _, out _highlightRanges);
             }
             else
             {
@@ -120,7 +120,8 @@ namespace FlaxEditor.CustomEditors.GUI
 
             if (HighlightStripColor.A > 0.0f)
             {
-                Render2D.FillRectangle(new Rectangle(0, 0, 2, Height), HighlightStripColor);
+                var highlightColor = VisuallyEnabledInHierarchy ? HighlightStripColor : StyleRendering.GetDisabledInputAccentColor(HighlightStripColor);
+                Render2D.FillRectangle(new Rectangle(0, 0, 2, Height), highlightColor);
             }
 
             var text = GetDisplayText();
@@ -216,6 +217,8 @@ namespace FlaxEditor.CustomEditors.GUI
                     var features = linkedEditor.Presenter.Features;
                     if ((features & (FeatureFlags.UseDefault | FeatureFlags.UsePrefab)) != 0)
                     {
+                        if (linkedEditor.CanApplyAddedPrefabObject)
+                            menu.AddButton("Apply Changes", linkedEditor.ApplyAddedPrefabObject);
                         if ((features & FeatureFlags.UsePrefab) != 0)
                             menu.AddButton("Revert to Prefab", linkedEditor.RevertToReferenceValue).Enabled = linkedEditor.CanRevertReferenceValue;
                         if ((features & FeatureFlags.UseDefault) != 0)

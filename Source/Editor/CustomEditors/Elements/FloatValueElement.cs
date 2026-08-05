@@ -95,6 +95,13 @@ namespace FlaxEditor.CustomEditors.Elements
         }
 
         /// <inheritdoc />
+        public float DefaultValue
+        {
+            get => ValueBox.DefaultValue;
+            set => ValueBox.DefaultValue = value;
+        }
+
+        /// <inheritdoc />
         public bool IsSliding => ValueBox.IsSliding;
     }
 }

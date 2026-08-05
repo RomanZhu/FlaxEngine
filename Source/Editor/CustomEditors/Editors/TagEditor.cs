@@ -13,6 +13,52 @@ using FlaxEditor.Content.Settings;
 
 namespace FlaxEditor.CustomEditors.Editors
 {
+    [HideInEditor]
+    internal sealed class TagPickerControl : ContainerControl
+    {
+        private const float TextGap = 4.0f;
+        private const float SingleLineHeight = 22.0f;
+        private const float LineHeight = 18.0f;
+
+        public readonly ClickableLabel Label;
+        public readonly Button SelectButton;
+
+        public TagPickerControl()
+        : base(0, 0, 120, SingleLineHeight)
+        {
+            AutoFocus = false;
+
+            SelectButton = new Button
+            {
+                Parent = this,
+                Text = "Select",
+                TooltipText = "Select...",
+            };
+
+            Label = new ClickableLabel
+            {
+                Parent = this,
+                HorizontalAlignment = TextAlignment.Near,
+                VerticalAlignment = TextAlignment.Center,
+            };
+        }
+
+        public void SetText(string text, int lineCount = 1)
+        {
+            Label.Text = text;
+            Height = Mathf.Max(SingleLineHeight, Mathf.Max(1, lineCount) * LineHeight);
+            PerformLayout();
+        }
+
+        protected override void PerformLayoutBeforeChildren()
+        {
+            base.PerformLayoutBeforeChildren();
+
+            SelectButton.Bounds = new Rectangle(0, 0, TagEditor.SelectButtonWidth, Height);
+            Label.Bounds = new Rectangle(TagEditor.SelectButtonWidth + TextGap, 0, Mathf.Max(0.0f, Width - TagEditor.SelectButtonWidth - TextGap), Height);
+        }
+    }
+
     /// <summary>
     /// Custom editor for <see cref="Tag"/>.
     /// </summary>
@@ -21,7 +67,7 @@ namespace FlaxEditor.CustomEditors.Editors
     {
         internal const float SelectButtonWidth = 48.0f;
 
-        private ClickableLabel _label;
+        private TagPickerControl _field;
 
         /// <inheritdoc />
         public override DisplayStyle Style => DisplayStyle.Inline;
@@ -29,9 +75,10 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            _label = layout.ClickableLabel(Tag.ToString()).CustomControl;
-            _label.RightClick += ShowPicker;
-            AddSelectButton(_label, ShowPicker);
+            _field = layout.Custom<TagPickerControl>().CustomControl;
+            _field.SetText(Tag.ToString());
+            _field.Label.RightClick += ShowPicker;
+            _field.SelectButton.Clicked += ShowPicker;
         }
 
         /// <inheritdoc />
@@ -40,7 +87,7 @@ namespace FlaxEditor.CustomEditors.Editors
             base.Refresh();
 
             // Update label
-            _label.Text = Tag.ToString();
+            _field.SetText(Tag.ToString());
         }
 
         private Tag Tag
@@ -73,23 +120,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 IsSingle = true,
                 SetValue = value => { Tag = value; },
             });
-            menu.Show(_label, new Float2(0, _label.Height));
-        }
-
-        internal static Button AddSelectButton(ClickableLabel label, Action clicked)
-        {
-            label.Margin = label.Margin with { Left = SelectButtonWidth + 4.0f };
-
-            var button = new Button
-            {
-                Size = new Float2(SelectButtonWidth, label.Height),
-                Text = "Select",
-                TooltipText = "Select...",
-                Parent = label,
-            };
-            button.SetAnchorPreset(AnchorPresets.MiddleLeft, false, true);
-            button.Clicked += clicked;
-            return button;
+            menu.Show(_field, new Float2(0, _field.Height));
         }
 
         internal class PickerData
@@ -384,7 +415,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 if (uniqueText)
                 {
                     nameTextBox.BorderColor = Color.Transparent;
-                    nameTextBox.BorderSelectedColor = currentStyle.BackgroundSelected;
+                    nameTextBox.BorderSelectedColor = currentStyle.BorderSelected;
                 }
                 else
                 {
@@ -402,7 +433,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 if (addTagDropPanel.IsClosed)
                 {
                     nameTextBox.BorderColor = Color.Transparent;
-                    nameTextBox.BorderSelectedColor = FlaxEngine.GUI.Style.Current.BackgroundSelected;
+                    nameTextBox.BorderSelectedColor = FlaxEngine.GUI.Style.Current.BorderSelected;
                     return;
                 }
 
@@ -627,7 +658,7 @@ namespace FlaxEditor.CustomEditors.Editors
     [CustomEditor(typeof(Tag[])), DefaultEditor]
     public sealed class TagsEditor : CustomEditor
     {
-        private ClickableLabel _label;
+        private TagPickerControl _field;
 
         /// <inheritdoc />
         public override DisplayStyle Style => DisplayStyle.Inline;
@@ -635,9 +666,10 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            _label = layout.ClickableLabel(GetText(out _)).CustomControl;
-            _label.RightClick += ShowPicker;
-            TagEditor.AddSelectButton(_label, ShowPicker);
+            _field = layout.Custom<TagPickerControl>().CustomControl;
+            _field.SetText(GetText(out var tags), Mathf.Max(tags.Length, 1));
+            _field.Label.RightClick += ShowPicker;
+            _field.SelectButton.Clicked += ShowPicker;
         }
 
         /// <inheritdoc />
@@ -646,8 +678,7 @@ namespace FlaxEditor.CustomEditors.Editors
             base.Refresh();
 
             // Update label
-            _label.Text = GetText(out var tags);
-            _label.Height = Math.Max(tags.Length, 1) * 18.0f;
+            _field.SetText(GetText(out var tags), Mathf.Max(tags.Length, 1));
         }
 
         private string GetText(out Tag[] tags)
@@ -680,6 +711,7 @@ namespace FlaxEditor.CustomEditors.Editors
             }
             set
             {
+                value ??= Utils.GetEmptyArray<Tag>();
                 if (Values[0] is Tag[] || Values.Type.Type == typeof(Tag[]))
                     SetValue(value);
                 else if (Values[0] is List<Tag> || Values.Type.Type == typeof(List<Tag>))
@@ -693,7 +725,7 @@ namespace FlaxEditor.CustomEditors.Editors
             {
                 SetValues = value => { Tags = value; },
             });
-            menu.Show(_label, new Float2(0, _label.Height));
+            menu.Show(_field, new Float2(0, _field.Height));
         }
     }
 }

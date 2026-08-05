@@ -36,6 +36,7 @@ namespace FlaxEditor.CustomEditors.Editors
                     element.Slider.ValueChanged += OnValueChanged;
                     element.Slider.SlidingEnd += ClearToken;
                     _element = element;
+                    SetDefaultValue();
                     return;
                 }
                 var limit = attributes.FirstOrDefault(x => x is LimitAttribute);
@@ -47,6 +48,7 @@ namespace FlaxEditor.CustomEditors.Editors
                     element.IntValue.ValueChanged += OnValueChanged;
                     element.IntValue.SlidingEnd += ClearToken;
                     _element = element;
+                    SetDefaultValue();
                     return;
                 }
             }
@@ -56,7 +58,36 @@ namespace FlaxEditor.CustomEditors.Editors
                 element.IntValue.ValueChanged += OnValueChanged;
                 element.IntValue.SlidingEnd += ClearToken;
                 _element = element;
+                SetDefaultValue();
             }
+        }
+
+        private void SetDefaultValue()
+        {
+            if (!Values.HasDefaultValue)
+                return;
+
+            var value = Values.DefaultValue;
+            if (value is int asInt)
+                _element.DefaultValue = asInt;
+            else if (value is float asFloat)
+                _element.DefaultValue = (int)asFloat;
+            else if (value is double asDouble)
+                _element.DefaultValue = (int)asDouble;
+            else if (value is uint asUint)
+                _element.DefaultValue = (int)asUint;
+            else if (value is long asLong)
+                _element.DefaultValue = (int)asLong;
+            else if (value is ulong asULong)
+                _element.DefaultValue = (int)asULong;
+            else if (value is short asShort)
+                _element.DefaultValue = asShort;
+            else if (value is ushort asUshort)
+                _element.DefaultValue = asUshort;
+            else if (value is byte asByte)
+                _element.DefaultValue = asByte;
+            else if (value is sbyte asSbyte)
+                _element.DefaultValue = asSbyte;
         }
 
         private void OnValueChanged()
@@ -70,6 +101,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {
@@ -135,6 +167,7 @@ namespace FlaxEditor.CustomEditors.Editors
                     element.LongValue.ValueChanged += OnValueChanged;
                     element.LongValue.SlidingEnd += ClearToken;
                     _element = element;
+                    SetDefaultValue();
                     return;
                 }
             }
@@ -146,7 +179,14 @@ namespace FlaxEditor.CustomEditors.Editors
                 element.LongValue.ValueChanged += OnValueChanged;
                 element.LongValue.SlidingEnd += ClearToken;
                 _element = element;
+                SetDefaultValue();
             }
+        }
+
+        private void SetDefaultValue()
+        {
+            if (Values.HasDefaultValue)
+                _element.LongValue.DefaultValue = GetValue(Values.DefaultValue);
         }
 
         private void OnValueChanged()
@@ -160,6 +200,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {
@@ -302,6 +343,7 @@ namespace FlaxEditor.CustomEditors.Editors
                     element.ULongValue.ValueChanged += OnValueChanged;
                     element.ULongValue.SlidingEnd += ClearToken;
                     _element = element;
+                    SetDefaultValue();
                     return;
                 }
             }
@@ -313,7 +355,14 @@ namespace FlaxEditor.CustomEditors.Editors
                 element.ULongValue.ValueChanged += OnValueChanged;
                 element.ULongValue.SlidingEnd += ClearToken;
                 _element = element;
+                SetDefaultValue();
             }
+        }
+
+        private void SetDefaultValue()
+        {
+            if (Values.HasDefaultValue)
+                _element.ULongValue.DefaultValue = GetValue(Values.DefaultValue);
         }
 
         private void OnValueChanged()
@@ -327,6 +376,7 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Refresh()
         {
             base.Refresh();
+            SetDefaultValue();
 
             if (HasDifferentValues)
             {

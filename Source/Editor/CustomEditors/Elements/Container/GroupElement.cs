@@ -17,6 +17,7 @@ namespace FlaxEditor.CustomEditors.Elements
         private const float GroupBorderValueDelta = 1.5f;
         private const float NestedGroupValueStep = 1.5f;
         private const float MinimumGroupValueOffset = 1.0f;
+        private const float MinimumGroupPadding = 4.0f;
         private const float NestedGroupIndent = 12.0f;
 
         /// <summary>
@@ -29,8 +30,8 @@ namespace FlaxEditor.CustomEditors.Elements
             ArrowImageOpened = new SpriteBrush(Style.Current.ArrowDown),
             EnableDropDownIcon = true,
             EnableDropDownIconDragOpenClose = true,
-            ItemsMargin = new Margin(Mathf.Max(4.0f, Style.Current.PanelPadding > 0.0f ? Style.Current.PanelPadding : Utilities.Constants.UIMargin)),
-            ItemsSpacing = 2.0f,
+            ItemsMargin = new Margin(Mathf.Max(MinimumGroupPadding, Style.Current.GetPropertyGroupPadding(Utilities.Constants.UIMargin))),
+            ItemsSpacing = Style.Current.GetPropertyGroupSpacing(2.0f),
             HeaderHeight = Style.Current.PropertyRowHeight > 0.0f ? Style.Current.PropertyRowHeight : 20.0f,
             EnableContainmentLines = false,
         };
@@ -96,7 +97,7 @@ namespace FlaxEditor.CustomEditors.Elements
         {
             var style = Style.Current;
             var settingsButtonSize = Panel.HeaderHeight;
-            var iconSize = Mathf.Min(16.0f, style.IconSize > 0.0f ? style.IconSize : 16.0f);
+            var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetPropertyIconSize()), Mathf.Max(0.0f, settingsButtonSize - 2.0f));
             var iconMargin = Mathf.Max(1.0f, (settingsButtonSize - iconSize) * 0.5f);
             Panel.HeaderTextMargin = Panel.HeaderTextMargin with { Right = settingsButtonSize + Utilities.Constants.UIMargin };
             return new Image

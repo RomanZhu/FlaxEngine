@@ -16,6 +16,11 @@ namespace FlaxEditor.CustomEditors.Elements
         int Value { get; set; }
 
         /// <summary>
+        /// Gets or sets the default value used when committing an empty edit.
+        /// </summary>
+        int DefaultValue { get; set; }
+
+        /// <summary>
         /// Gets a value indicating whether user is using a slider.
         /// </summary>
         bool IsSliding { get; }
