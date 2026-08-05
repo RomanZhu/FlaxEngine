@@ -54,7 +54,7 @@ namespace FlaxEditor.GUI.ContextMenu
         private const float PopupInnerBorderInset = 1.5f;
         private const float SubmenuAimVerticalPadding = 18.0f;
         private const float ForegroundCloseGraceDuration = 0.18f;
-        private const bool LogVisibilityReasons = false;
+        private static readonly bool LogVisibilityReasons = false;
         private static readonly List<ContextMenuBase> OpenMenus = new List<ContextMenuBase>();
         private static readonly Color PopupInnerBorderColor = new Color(1.0f, 1.0f, 1.0f, 0.05f);
         private static readonly Color PopupSurfaceColor = Color.FromBgra(0xFF303033);
@@ -873,7 +873,10 @@ namespace FlaxEditor.GUI.ContextMenu
             var cornerRadius = style.GetDropdownCornerRadius();
             StyleRendering.DrawRoundedRectangle(new Rectangle(PopupShadowOffset, PopupShadowOffset, Width, Height), Color.Black.AlphaMultiplied(PopupShadowOpacity), Color.Transparent, 0.0f, cornerRadius);
             var popup = PopupBackgroundColor.A > 0.0f ? PopupBackgroundColor : PopupSurfaceColor;
-            StyleRendering.DrawRoundedRectangle(bounds, popup, PopupBorderColor, 1.0f, cornerRadius);
+            var popupRect = bounds.MakeExpanded(-1.0f);
+            if (popupRect.Width > 0.0f && popupRect.Height > 0.0f)
+                StyleRendering.DrawRoundedRectangle(popupRect, popup, Color.Transparent, 0.0f, Mathf.Max(0.0f, cornerRadius - 1.0f));
+            StyleRendering.DrawRoundedRectangleBorder(bounds, PopupBorderColor, 1.0f, cornerRadius);
             var innerBorderRect = bounds.MakeExpanded(-PopupInnerBorderInset);
             if (innerBorderRect.Width > 0.0f && innerBorderRect.Height > 0.0f)
                 StyleRendering.DrawRoundedRectangleBorder(innerBorderRect, PopupInnerBorderColor, 1.0f, Mathf.Max(0.0f, cornerRadius - PopupInnerBorderInset));
