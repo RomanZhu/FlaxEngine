@@ -44,9 +44,10 @@ namespace FlaxEditor.SceneGraph.GUI
         private const float SceneIconSpacing = 3.0f;
         private const float SceneIconRightMargin = 4.0f;
         private const float SceneIconTextPadding = 6.0f;
+        private const float ActiveCheckboxResizePadding = 2.0f;
         private const float ActiveCheckboxSize = 12.0f;
         private const float ActiveCheckboxSpacing = 4.0f;
-        private const float ActiveCheckboxColumnWidth = ActiveCheckboxSize + ActiveCheckboxSpacing;
+        private const float ActiveCheckboxColumnWidth = ActiveCheckboxResizePadding + ActiveCheckboxSize + ActiveCheckboxSpacing;
 
         private static bool _sceneTypeIconsLoaded;
         private static Texture _iconPointLight;
@@ -850,7 +851,7 @@ namespace FlaxEditor.SceneGraph.GUI
 
         private Rectangle GetActiveCheckboxRect()
         {
-            return new Rectangle(2.0f, (HeaderHeight - ActiveCheckboxSize) * 0.5f, ActiveCheckboxSize, ActiveCheckboxSize);
+            return new Rectangle(2.0f + ActiveCheckboxResizePadding, (HeaderHeight - ActiveCheckboxSize) * 0.5f, ActiveCheckboxSize, ActiveCheckboxSize);
         }
 
         private bool TestActiveCheckboxHit(ref Float2 location)
