@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FlaxEditor.Content;
 using FlaxEditor.History;
 using FlaxEditor.Utilities;
 using FlaxEngine.Collections;
@@ -54,10 +55,14 @@ namespace FlaxEditor
                 get
                 {
                     var info = UndoActionMetadata.GetActionInfo(_action).Clone();
+                    var ownerInfo = UndoActionMetadata.GetOwnerActionInfo(Owner);
+                    UndoActionMetadata.ApplyOwnerInfo(info, ownerInfo);
                     if (_action != null && string.IsNullOrEmpty(info.Operation))
                         info.Operation = _action.ActionString;
                     if (Owner != null && string.IsNullOrEmpty(info.DisplayEditorTypeName))
                         info.DisplayEditorTypeName = Owner.GetType().FullName;
+                    info.Flags |= UndoActionFlags.RequiresLiveOwner;
+                    info.ReplayPolicy = UndoActionReplayPolicy.LiveOwner;
                     return info;
                 }
             }
@@ -114,6 +119,7 @@ namespace FlaxEditor
         private readonly object _parentOwner;
         private bool _isSyncingLinkedHistory;
         private int _performingUndoRedoDepth;
+        private IUndoAction _preparedReopenReplayAction;
 
         /// <summary>
         /// Gets the undo operations stack.
@@ -492,9 +498,14 @@ namespace FlaxEditor
             if (action == null)
                 throw new ArgumentNullException();
             if (!Enabled)
+            {
+                LogUndoHistory("Add ignored because undo is disabled. Action: " + DescribeAction(action));
                 return;
+            }
 
+            _preparedReopenReplayAction = null;
             UndoOperationsStack.Push(action);
+            LogUndoHistory(string.Format("Add {0}. UndoCount: {1}, RedoCount: {2}", DescribeAction(action), UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
             OnAction(action);
             AddLinkedAction(action);
         }
@@ -506,19 +517,35 @@ namespace FlaxEditor
         {
             if (_parentUndo != null)
             {
+                LogUndoHistory("Undo requested on linked context. Delegating to parent. Owner: " + DescribeOwner(_parentOwner));
                 _parentUndo.PerformUndo();
                 return;
             }
 
-            if (!Enabled || !CanUndo)
+            if (!Enabled)
+            {
+                LogUndoHistory("Undo ignored because undo is disabled.");
+                return;
+            }
+            if (!CanUndo)
+            {
+                LogUndoHistory(string.Format("Undo ignored because history is empty. UndoCount: {0}, RedoCount: {1}", UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
+                return;
+            }
+
+            var nextAction = (IUndoAction)UndoOperationsStack.PeekHistory();
+            if (TryPrepareReopenReplay(nextAction, "Undo"))
                 return;
 
             var action = (IUndoAction)UndoOperationsStack.PopHistory();
+            _preparedReopenReplayAction = null;
+            LogUndoHistory(string.Format("Undo {0}. UndoCount: {1}, RedoCount: {2}", DescribeAction(action), UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
             _performingUndoRedoDepth++;
             try
             {
                 action.Undo();
                 OnUndo(action);
+                LogUndoHistory("Undo applied " + DescribeAction(action));
             }
             finally
             {
@@ -533,19 +560,35 @@ namespace FlaxEditor
         {
             if (_parentUndo != null)
             {
+                LogUndoHistory("Redo requested on linked context. Delegating to parent. Owner: " + DescribeOwner(_parentOwner));
                 _parentUndo.PerformRedo();
                 return;
             }
 
-            if (!Enabled || !CanRedo)
+            if (!Enabled)
+            {
+                LogUndoHistory("Redo ignored because undo is disabled.");
+                return;
+            }
+            if (!CanRedo)
+            {
+                LogUndoHistory(string.Format("Redo ignored because history is empty. UndoCount: {0}, RedoCount: {1}", UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
+                return;
+            }
+
+            var nextAction = (IUndoAction)UndoOperationsStack.PeekReverse();
+            if (TryPrepareReopenReplay(nextAction, "Redo"))
                 return;
 
             var action = (IUndoAction)UndoOperationsStack.PopReverse();
+            _preparedReopenReplayAction = null;
+            LogUndoHistory(string.Format("Redo {0}. UndoCount: {1}, RedoCount: {2}", DescribeAction(action), UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
             _performingUndoRedoDepth++;
             try
             {
                 action.Do();
                 OnRedo(action);
+                LogUndoHistory("Redo applied " + DescribeAction(action));
             }
             finally
             {
@@ -562,12 +605,81 @@ namespace FlaxEditor
             if (match == null)
                 throw new ArgumentNullException(nameof(match));
 
+            _preparedReopenReplayAction = null;
             UndoOperationsStack.RemoveAll(x => x is IUndoAction action && match(action));
+        }
+
+        private bool TryPrepareReopenReplay(IUndoAction action, string operation)
+        {
+            if (action == null)
+                return false;
+
+            if (ReferenceEquals(_preparedReopenReplayAction, action))
+            {
+                LogUndoHistory(operation + " target already prepared. Applying " + DescribeAction(action));
+                return false;
+            }
+
+            var info = UndoActionMetadata.GetActionInfo(action);
+            if (info.ReplayPolicy != UndoActionReplayPolicy.Reopen && (info.Flags & UndoActionFlags.RequiresReopen) == 0)
+                return false;
+            if (info.ReplayPolicy == UndoActionReplayPolicy.LiveOwner || (info.Flags & UndoActionFlags.RequiresLiveOwner) != 0)
+                return false;
+
+            var item = ResolveReplayContentItem(info);
+            if (item == null || !(item is AssetItem))
+                return false;
+
+            var editor = Editor.Instance;
+            var focusedWindow = editor.Windows.FocusedEditorWindow;
+            if (focusedWindow != null && focusedWindow.IsEditingItem(item))
+                return false;
+
+            var window = editor.ContentEditing.Open(item);
+            if (window == null)
+            {
+                LogUndoHistory(operation + " prepare reopen failed. Could not open " + item.Path + ". Action: " + DescribeAction(action));
+                return false;
+            }
+
+            _preparedReopenReplayAction = action;
+            LogUndoHistory(operation + " prepared target editor before replay. Opened: " + window.Title + ", Action: " + DescribeAction(action));
+            return true;
+        }
+
+        private static ContentItem ResolveReplayContentItem(UndoActionInfo info)
+        {
+            if (info == null)
+                return null;
+
+            var content = Editor.Instance.ContentDatabase;
+            ContentItem item = null;
+            var id = info.OwnerId != Guid.Empty ? info.OwnerId : info.TargetId;
+            if (id != Guid.Empty)
+                item = content.FindAsset(id);
+
+            var path = !string.IsNullOrEmpty(info.OwnerPath) ? info.OwnerPath : info.TargetPath;
+            if (item == null && !string.IsNullOrEmpty(path))
+                item = content.Find(path);
+
+            return item;
         }
 
         private void AddLinkedAction(IUndoAction action)
         {
-            _parentUndo?.AddAction(new LinkedUndoAction(this, action, _parentOwner));
+            if (_parentUndo == null)
+                return;
+
+            var parentAction = _parentOwner is IUndoLinkedActionProvider provider ? provider.CreateLinkedUndoAction(this, action) : null;
+            if (parentAction != null)
+            {
+                LogUndoHistory(string.Format("Link converted {0} -> {1}. Owner: {2}", DescribeAction(action), DescribeAction(parentAction), DescribeOwner(_parentOwner)));
+            }
+            else
+            {
+                LogUndoHistory(string.Format("Link fallback live action {0}. Owner: {1}", DescribeAction(action), DescribeOwner(_parentOwner)));
+            }
+            _parentUndo.AddAction(parentAction ?? new LinkedUndoAction(this, action, _parentOwner));
         }
 
         private static long GetActionSizeInBytes(IHistoryAction action)
@@ -618,6 +730,7 @@ namespace FlaxEditor
             if (_parentUndo == null || _isSyncingLinkedHistory || !(action is IUndoAction undoAction))
                 return;
 
+            LogUndoHistory("Linked child action disposed. Removing parent live-linked action for " + DescribeAction(undoAction));
             _isSyncingLinkedHistory = true;
             try
             {
@@ -632,7 +745,10 @@ namespace FlaxEditor
         private void OnHistoryActionDiscarded(IHistoryAction action, HistoryStackDiscardReason reason)
         {
             if (action is IUndoAction undoAction)
+            {
+                LogUndoHistory(string.Format("Discard {0}. Reason: {1}", DescribeAction(undoAction), reason));
                 ActionDiscarded?.Invoke(undoAction, reason);
+            }
         }
 
         private void RemoveLinkedAction(IUndoAction action)
@@ -683,6 +799,8 @@ namespace FlaxEditor
         /// </summary>
         public void Clear()
         {
+            LogUndoHistory(string.Format("Clear undo context. UndoCount: {0}, RedoCount: {1}, Owner: {2}", UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount, DescribeOwner(_parentOwner)));
+            _preparedReopenReplayAction = null;
             _parentUndo?.RemoveActions(x => x is LinkedUndoAction action && ReferenceEquals(action.SourceUndo, this));
             _snapshots.Clear();
             UndoOperationsStack.Clear();
@@ -697,6 +815,56 @@ namespace FlaxEditor
             ActionDiscarded = null;
 
             Clear();
+        }
+
+        private static void LogUndoHistory(string message)
+        {
+            Editor.Log("[UndoHistory] " + message);
+        }
+
+        private static string DescribeOwner(object owner)
+        {
+            if (owner == null)
+                return "Root";
+            try
+            {
+                if (owner is IUndoActionOwnerMetadata metadata)
+                {
+                    var info = metadata.UndoOwnerActionInfo;
+                    if (info != null)
+                    {
+                        var name = !string.IsNullOrEmpty(info.TargetName) ? info.TargetName : info.OwnerPath;
+                        var id = info.OwnerId != Guid.Empty ? info.OwnerId : info.TargetId;
+                        return string.Format("{0} ({1}, {2})", string.IsNullOrEmpty(name) ? owner.GetType().FullName : name, id, info.ReplayPolicy);
+                    }
+                }
+            }
+            catch
+            {
+                // Best-effort debug description only.
+            }
+            return owner.GetType().FullName;
+        }
+
+        private static string DescribeAction(IUndoAction action)
+        {
+            if (action == null)
+                return "<null>";
+            try
+            {
+                var info = UndoActionMetadata.GetActionInfo(action);
+                var name = action.ActionString;
+                if (string.IsNullOrEmpty(name))
+                    name = action.GetType().Name;
+                var target = !string.IsNullOrEmpty(info.TargetName) ? info.TargetName : info.TargetPath;
+                if (string.IsNullOrEmpty(target))
+                    target = !string.IsNullOrEmpty(info.OwnerPath) ? info.OwnerPath : info.TargetType.ToString();
+                return string.Format("{0} ({1}, target: {2}, flags: {3}, replay: {4}, size: {5})", name, action.GetType().Name, target, info.Flags, info.ReplayPolicy, info.SizeInBytes);
+            }
+            catch
+            {
+                return action.GetType().FullName;
+            }
         }
     }
 }

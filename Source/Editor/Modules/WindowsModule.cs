@@ -34,9 +34,15 @@ namespace FlaxEditor.Modules
         private float _projectIconScreenshotTimeout = -1;
         private string _windowsLayoutPath;
         private WindowNavigationContext _lastNavigationWindowContext;
+        private WindowNavigationContext _pendingContentBounceSource;
+        private WindowNavigationContext _pendingContentBounceTarget;
+        private string _contentOpenNavigationTargetTypename;
+        private bool _lastAssetFocusWasContentOpen;
+        private bool _pendingContentBounceWasContentOpen;
         private bool _suppressWindowNavigation;
 
         private static readonly bool LogFocusRecovery = false;
+        private static readonly bool LogWindowNavigation = true;
 
         private struct WindowRestoreData
         {
@@ -65,6 +71,7 @@ namespace FlaxEditor.Modules
 
         private readonly List<WindowRestoreData> _restoreWindows = new List<WindowRestoreData>();
         private readonly List<EditorWindow> _focusedWindows = new List<EditorWindow>(32);
+        private readonly NavigationHistory _windowNavigationHistory = new NavigationHistory();
 
         private struct WindowNavigationContext : IEquatable<WindowNavigationContext>
         {
@@ -114,6 +121,10 @@ namespace FlaxEditor.Modules
 
             public string ActionString => string.Format("Window change: {0} -> {1}", _source.Title, _target.Title);
 
+            public WindowNavigationContext Source => _source;
+
+            public WindowNavigationContext Target => _target;
+
             public bool IsSameDestination(INavigationHistoryAction other)
             {
                 return other is WindowNavigationAction action && _target.Equals(action._target);
@@ -149,6 +160,16 @@ namespace FlaxEditor.Modules
         /// Occurs when main editor window is being closed.
         /// </summary>
         public event Action MainWindowClosing;
+
+        /// <summary>
+        /// Gets a value indicating whether window navigation can travel back.
+        /// </summary>
+        public bool CanNavigateBack => HasPendingContentBounce || _windowNavigationHistory.CanGoBack;
+
+        /// <summary>
+        /// Gets a value indicating whether window navigation can travel forward.
+        /// </summary>
+        public bool CanNavigateForward => _windowNavigationHistory.CanGoForward;
 
         /// <summary>
         /// The content window.
@@ -312,6 +333,11 @@ namespace FlaxEditor.Modules
             }
             return null;
         }
+
+        /// <summary>
+        /// Gets the focused editor window, if any.
+        /// </summary>
+        internal EditorWindow FocusedEditorWindow => GetFocusedEditorWindow();
 
         /// <summary>
         /// Closes all windows that are using given element to view/edit it.
@@ -834,6 +860,16 @@ namespace FlaxEditor.Modules
                 }
             }
 
+            // Check if it's a content-backed tool window
+            if (AssetReferencesGraphWindow.TryParseSerializationTypename(typename, out id))
+            {
+                var item = Editor.ContentDatabase.FindAsset(id);
+                if (item != null)
+                    return new AssetReferencesGraphWindow(Editor, item);
+
+                Editor.LogWarning("Cannot restore asset references graph navigation. Missing asset: " + id);
+            }
+
             return null;
         }
 
@@ -876,6 +912,8 @@ namespace FlaxEditor.Modules
                 // Link for main window events
                 MainWindow.Closing += MainWindow_OnClosing;
                 MainWindow.Closed += MainWindow_OnClosed;
+                MainWindow.MouseDown += OnNavigationMouseDown;
+                MainWindow.MouseUp += OnNavigationMouseUp;
                 MainWindow.GUI.UnhandledKeyDown += MainWindow_OnUnhandledKeyDown;
             }
 
@@ -1134,7 +1172,11 @@ namespace FlaxEditor.Modules
         {
             Editor.Log("Main window is closed");
             if (MainWindow != null)
+            {
+                MainWindow.MouseDown -= OnNavigationMouseDown;
+                MainWindow.MouseUp -= OnNavigationMouseUp;
                 MainWindow.GUI.UnhandledKeyDown -= MainWindow_OnUnhandledKeyDown;
+            }
             MainWindow = null;
 
             // Capture project icon screenshot (not in play mode and if editor was used for some time)
@@ -1174,6 +1216,9 @@ namespace FlaxEditor.Modules
 
         internal void OnWindowRemove(EditorWindow window)
         {
+            if (!CanRecordWindowNavigation(window))
+                RemoveWindowNavigation(GetWindowNavigationTypename(window));
+
             Windows.Remove(window);
             _focusedWindows.Remove(window);
             ClearFocusForWindow(window);
@@ -1181,22 +1226,67 @@ namespace FlaxEditor.Modules
             RestoreEditorFocusIfNeeded(window);
         }
 
-        /// <summary>
-        /// Navigates back to the previous editor context.
-        /// </summary>
-        public void NavigateBack()
+        internal void BeginContentWindowOpen(ContentItem item)
         {
-            Editor.NavigationHistory?.GoBack();
-            RestoreEditorFocusIfNeeded(null);
+            OnWindowFocused(ContentWin);
+
+            if (item is AssetItem assetItem)
+            {
+                _contentOpenNavigationTargetTypename = assetItem.ID.ToString();
+                LogWindowNavigationDebug("Begin content open " + item + " -> " + _contentOpenNavigationTargetTypename);
+            }
+            else
+            {
+                ClearContentOpenNavigation();
+            }
+        }
+
+        internal void EndContentWindowOpen(EditorWindow window)
+        {
+            if (string.IsNullOrEmpty(_contentOpenNavigationTargetTypename))
+                return;
+
+            if (window != null)
+                OnWindowFocused(window);
+            ClearContentOpenNavigation();
         }
 
         /// <summary>
-        /// Navigates forward to the next editor context.
+        /// Navigates back to the previous editor window.
         /// </summary>
-        public void NavigateForward()
+        /// <returns>True if the window history had a back entry to consume, otherwise false.</returns>
+        public bool NavigateBack()
         {
-            Editor.NavigationHistory?.GoForward();
+            FlushPendingContentBounce("back requested");
+            LogWindowNavigationDebug("Back requested. CanGoBack: " + CanNavigateBack);
+            if (!CanNavigateBack)
+            {
+                RestoreEditorFocusIfNeeded(null);
+                return false;
+            }
+
+            _windowNavigationHistory.GoBack();
             RestoreEditorFocusIfNeeded(null);
+            return true;
+        }
+
+        /// <summary>
+        /// Navigates forward to the next editor window.
+        /// </summary>
+        /// <returns>True if the window history had a forward entry to consume, otherwise false.</returns>
+        public bool NavigateForward()
+        {
+            FlushPendingContentBounce("forward requested");
+            LogWindowNavigationDebug("Forward requested. CanGoForward: " + CanNavigateForward);
+            if (!CanNavigateForward)
+            {
+                RestoreEditorFocusIfNeeded(null);
+                return false;
+            }
+
+            _windowNavigationHistory.GoForward();
+            RestoreEditorFocusIfNeeded(null);
+            return true;
         }
 
         /// <summary>
@@ -1208,32 +1298,169 @@ namespace FlaxEditor.Modules
             if (string.IsNullOrEmpty(typename))
                 return;
 
-            Editor.NavigationHistory?.RemoveActions(x => x is WindowNavigationAction action && action.Contains(typename));
+            LogWindowNavigationDebug("Remove entries containing " + typename);
+            _windowNavigationHistory.RemoveActions(x => x is WindowNavigationAction action && action.Contains(typename));
+            if (ContainsWindowNavigationContext(_pendingContentBounceSource, typename) || ContainsWindowNavigationContext(_pendingContentBounceTarget, typename))
+                ClearPendingContentBounce();
             if (_lastNavigationWindowContext.IsValid && string.Equals(_lastNavigationWindowContext.Typename, typename, StringComparison.OrdinalIgnoreCase))
                 _lastNavigationWindowContext = default;
         }
 
         private void RecordWindowNavigation(EditorWindow window)
         {
-            var target = GetWindowNavigationContext(window);
-            if (!target.IsValid)
-                return;
-
-            if (_suppressWindowNavigation || Editor.NavigationHistory == null || Editor.NavigationHistory.IsNavigating)
+            if (!CanRecordWindowNavigation(window))
             {
-                _lastNavigationWindowContext = target;
+                LogWindowNavigationDebug("Skip non-recordable focus: " + DescribeWindowForNavigation(window));
                 return;
             }
+
+            var target = GetWindowNavigationContext(window);
+            if (!target.IsValid)
+            {
+                LogWindowNavigationDebug("Skip invalid focus target: " + DescribeWindowForNavigation(window));
+                return;
+            }
+
+            if (_suppressWindowNavigation || _windowNavigationHistory.IsNavigating)
+            {
+                LogWindowNavigationDebug("Sync current during restore: " + DescribeWindowNavigationContext(target));
+                _lastNavigationWindowContext = target;
+                _lastAssetFocusWasContentOpen = false;
+                return;
+            }
+
+            if (TryRecordContentOpenTarget(target))
+                return;
 
             var source = _lastNavigationWindowContext;
             _lastNavigationWindowContext = target;
             if (!source.IsValid || source.Equals(target))
+            {
+                LogWindowNavigationDebug("Set current without action. Source: " + DescribeWindowNavigationContext(source) + ", Target: " + DescribeWindowNavigationContext(target));
+                if (target.IsAssetDocument)
+                    _lastAssetFocusWasContentOpen = false;
+                return;
+            }
+
+            if (TryCompletePendingContentBounce(source, target))
                 return;
 
-            if (source.IsAssetDocument && target.IsAssetDocument)
+            FlushPendingContentBounce("before adding " + DescribeWindowNavigationContext(source) + " -> " + DescribeWindowNavigationContext(target));
+
+            if (source.IsAssetDocument && IsContentWindowContext(target))
+            {
+                _pendingContentBounceSource = source;
+                _pendingContentBounceTarget = target;
+                _pendingContentBounceWasContentOpen = _lastAssetFocusWasContentOpen;
+                LogWindowNavigationDebug("Hold pending " + DescribeWindowNavigationContext(source) + " -> " + DescribeWindowNavigationContext(target) + ". ContentOpen: " + _pendingContentBounceWasContentOpen);
+                return;
+            }
+
+            AddWindowNavigationAction(source, target);
+            if (target.IsAssetDocument)
+                _lastAssetFocusWasContentOpen = false;
+        }
+
+        private bool HasPendingContentBounce => _pendingContentBounceSource.IsValid && _pendingContentBounceTarget.IsValid;
+
+        private bool TryRecordContentOpenTarget(WindowNavigationContext target)
+        {
+            if (string.IsNullOrEmpty(_contentOpenNavigationTargetTypename) || !target.IsAssetDocument)
+                return false;
+
+            if (!string.Equals(target.Typename, _contentOpenNavigationTargetTypename, StringComparison.OrdinalIgnoreCase))
+            {
+                LogWindowNavigationDebug("Skip asset focus " + DescribeWindowNavigationContext(target) + " while waiting for content-open target " + _contentOpenNavigationTargetTypename);
+                return true;
+            }
+
+            ClearContentOpenNavigation();
+            var source = _lastNavigationWindowContext;
+            _lastNavigationWindowContext = target;
+            if (!source.IsValid || source.Equals(target))
+            {
+                LogWindowNavigationDebug("Set content-open current without action. Source: " + DescribeWindowNavigationContext(source) + ", Target: " + DescribeWindowNavigationContext(target));
+                _lastAssetFocusWasContentOpen = true;
+                return true;
+            }
+
+            if (TryCompletePendingContentBounce(source, target))
+            {
+                _lastAssetFocusWasContentOpen = true;
+                return true;
+            }
+
+            FlushPendingContentBounce("before content-open " + DescribeWindowNavigationContext(target));
+            AddWindowNavigationAction(source, target);
+            _lastAssetFocusWasContentOpen = true;
+            return true;
+        }
+
+        private bool TryCompletePendingContentBounce(WindowNavigationContext source, WindowNavigationContext target)
+        {
+            if (!HasPendingContentBounce || !target.IsAssetDocument || !IsContentWindowContext(source))
+                return false;
+            if (!_pendingContentBounceWasContentOpen)
+            {
+                FlushPendingContentBounce("not a content-open chain before " + DescribeWindowNavigationContext(target));
+                return false;
+            }
+
+            var pendingSource = _pendingContentBounceSource;
+            var pendingTarget = _pendingContentBounceTarget;
+            ClearPendingContentBounce();
+
+            if (pendingSource.Equals(target))
+            {
+                LogWindowNavigationDebug("Drop pending bounce back to same asset " + DescribeWindowNavigationContext(pendingSource) + " -> " + DescribeWindowNavigationContext(pendingTarget) + " -> " + DescribeWindowNavigationContext(target));
+                return true;
+            }
+
+            LogWindowNavigationDebug("Coalesce " + DescribeWindowNavigationContext(pendingSource) + " -> " + DescribeWindowNavigationContext(pendingTarget) + " -> " + DescribeWindowNavigationContext(target));
+            AddWindowNavigationAction(pendingSource, target);
+            return true;
+        }
+
+        private void FlushPendingContentBounce(string reason)
+        {
+            if (!HasPendingContentBounce)
                 return;
 
-            Editor.NavigationHistory.AddAction(new WindowNavigationAction(this, source, target));
+            var source = _pendingContentBounceSource;
+            var target = _pendingContentBounceTarget;
+            ClearPendingContentBounce();
+            LogWindowNavigationDebug("Flush pending " + DescribeWindowNavigationContext(source) + " -> " + DescribeWindowNavigationContext(target) + ". Reason: " + reason);
+            AddWindowNavigationAction(source, target);
+        }
+
+        private void ClearPendingContentBounce()
+        {
+            _pendingContentBounceSource = default;
+            _pendingContentBounceTarget = default;
+            _pendingContentBounceWasContentOpen = false;
+        }
+
+        private void ClearContentOpenNavigation()
+        {
+            _contentOpenNavigationTargetTypename = null;
+        }
+
+        private void AddWindowNavigationAction(WindowNavigationContext source, WindowNavigationContext target)
+        {
+            LogWindowNavigationDebug("Add " + DescribeWindowNavigationContext(source) + " -> " + DescribeWindowNavigationContext(target));
+            _windowNavigationHistory.AddAction(new WindowNavigationAction(this, source, target));
+        }
+
+        private static bool ContainsWindowNavigationContext(WindowNavigationContext context, string typename)
+        {
+            return context.IsValid && string.Equals(context.Typename, typename, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool IsContentWindowContext(WindowNavigationContext context)
+        {
+            return context.IsValid &&
+                   ContentWin != null &&
+                   string.Equals(context.Typename, GetWindowNavigationTypename(ContentWin), StringComparison.OrdinalIgnoreCase);
         }
 
         private static WindowNavigationContext GetWindowNavigationContext(EditorWindow window)
@@ -1257,15 +1484,46 @@ namespace FlaxEditor.Modules
             return !string.IsNullOrEmpty(typename) ? typename : window.GetType().FullName;
         }
 
+        private bool CanRecordWindowNavigation(EditorWindow window)
+        {
+            if (window == null)
+                return false;
+
+            if (window is AssetEditorWindow || window is AssetReferencesGraphWindow)
+                return true;
+
+            return ReferenceEquals(window, ContentWin) ||
+                   ReferenceEquals(window, EditWin) ||
+                   ReferenceEquals(window, GameWin) ||
+                   ReferenceEquals(window, PropertiesWin) ||
+                   ReferenceEquals(window, SceneWin) ||
+                   ReferenceEquals(window, DebugLogWin) ||
+                   ReferenceEquals(window, OutputLogWin) ||
+                   ReferenceEquals(window, ToolboxWin) ||
+                   ReferenceEquals(window, GraphicsQualityWin) ||
+                   ReferenceEquals(window, GameCookerWin) ||
+                   ReferenceEquals(window, ProfilerWin) ||
+                   ReferenceEquals(window, EditorOptionsWin) ||
+                   ReferenceEquals(window, PluginsWin) ||
+                   ReferenceEquals(window, VisualScriptDebuggerWin) ||
+                   ReferenceEquals(window, UIDesignInspectorWin);
+        }
+
         private bool NavigateToWindowContext(WindowNavigationContext context)
         {
             if (!context.IsValid)
+            {
+                LogWindowNavigationDebug("Restore skipped invalid context.");
                 return false;
+            }
 
+            LogWindowNavigationDebug("Restore " + DescribeWindowNavigationContext(context));
             var window = GetWindow(context.Typename);
             if (window == null)
             {
                 Editor.LogWarning("Cannot restore window navigation. Missing window: " + context.Title);
+                LogWindowNavigationDebug("Restore failed, missing window " + DescribeWindowNavigationContext(context));
+                RemoveWindowNavigation(context.Typename);
                 return false;
             }
 
@@ -1273,16 +1531,54 @@ namespace FlaxEditor.Modules
             _suppressWindowNavigation = true;
             try
             {
+                if (window.IsHidden)
+                {
+                    LogWindowNavigationDebug("Restore opening hidden window " + DescribeWindowForNavigation(window));
+                    Open(window);
+                }
                 window.FocusOrShow();
                 if (!TryFocusEditorWindow(window))
+                {
+                    LogWindowNavigationDebug("Restore failed to focus " + DescribeWindowForNavigation(window) + ". Hidden: " + window.IsHidden + ", Visible: " + window.Visible + ", Docked: " + window.IsDocked);
                     return false;
+                }
                 _lastNavigationWindowContext = GetWindowNavigationContext(window);
+                LogWindowNavigationDebug("Restored " + DescribeWindowForNavigation(window));
                 return true;
             }
             finally
             {
                 _suppressWindowNavigation = wasSuppressed;
             }
+        }
+
+        internal void SetWindowNavigationHistoryCapacity(int capacity)
+        {
+            _windowNavigationHistory.Capacity = Mathf.Max(1, capacity);
+        }
+
+        private void LogWindowNavigationDebug(string message)
+        {
+            if (LogWindowNavigation)
+                Editor.Log("[WindowHistory] " + message);
+        }
+
+        private static string DescribeWindowNavigationContext(WindowNavigationContext context)
+        {
+            if (!context.IsValid)
+                return "<none>";
+
+            var type = context.IsAssetDocument ? "asset" : "window";
+            return string.Format("{0} ({1}, {2})", context.Title, context.Typename, type);
+        }
+
+        private static string DescribeWindowForNavigation(EditorWindow window)
+        {
+            if (window == null)
+                return "<null>";
+
+            var context = GetWindowNavigationContext(window);
+            return context.IsValid ? DescribeWindowNavigationContext(context) : window.GetType().FullName;
         }
 
         /// <inheritdoc />
@@ -1358,7 +1654,11 @@ namespace FlaxEditor.Modules
             Editor.ContentDatabase.WorkspaceRebuilt -= OnWorkspaceRebuilt;
             Editor.StateMachine.StateChanged -= OnEditorStateChanged;
             if (MainWindow != null)
+            {
+                MainWindow.MouseDown -= OnNavigationMouseDown;
+                MainWindow.MouseUp -= OnNavigationMouseUp;
                 MainWindow.GUI.UnhandledKeyDown -= MainWindow_OnUnhandledKeyDown;
+            }
 
             // Close main window
             MainWindow?.Close(ClosingReason.EngineExit);
@@ -1371,6 +1671,10 @@ namespace FlaxEditor.Modules
                 if (windows[i] != null)
                     windows[i].Close(ClosingReason.EngineExit);
             }
+            _windowNavigationHistory.Dispose();
+            _lastNavigationWindowContext = default;
+            ClearPendingContentBounce();
+            _focusedWindows.Clear();
         }
 
         #region Window Events
@@ -1408,6 +1712,38 @@ namespace FlaxEditor.Modules
             return false;
         }
 
+        internal void OnNavigationMouseDown(ref Float2 mousePosition, MouseButton button, ref bool handled)
+        {
+            if (handled)
+                return;
+
+            if (button == MouseButton.Extended1 || button == MouseButton.Extended2)
+                handled = true;
+        }
+
+        internal void OnNavigationMouseUp(ref Float2 mousePosition, MouseButton button, ref bool handled)
+        {
+            if (handled)
+                return;
+
+            if (button == MouseButton.Extended1)
+            {
+                if (CanNavigateBack)
+                    NavigateBack();
+                else if (GetFocusedEditorWindow() == ContentWin)
+                    ContentWin.NavigateBackward();
+                handled = true;
+            }
+            else if (button == MouseButton.Extended2)
+            {
+                if (CanNavigateForward)
+                    NavigateForward();
+                else if (GetFocusedEditorWindow() == ContentWin)
+                    ContentWin.NavigateForward();
+                handled = true;
+            }
+        }
+
         internal static bool IsNavigationBackInput(Window window, KeyboardKeys key)
         {
             return key == KeyboardKeys.ArrowLeft &&
@@ -1443,6 +1779,7 @@ namespace FlaxEditor.Modules
 
             if (TryFocusPreviousEditorWindow(out var restoredWindow))
             {
+                RecordWindowNavigation(restoredWindow);
                 if (LogFocusRecovery)
                     Editor.Log("Editor focus restored to " + DescribeWindow(restoredWindow) + ".");
                 return;

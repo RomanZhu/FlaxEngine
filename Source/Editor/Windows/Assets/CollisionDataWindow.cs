@@ -22,7 +22,7 @@ namespace FlaxEditor.Windows.Assets
     /// </summary>
     /// <seealso cref="CollisionData" />
     /// <seealso cref="FlaxEditor.Windows.Assets.AssetEditorWindow" />
-    public sealed class CollisionDataWindow : AssetEditorWindowBase<CollisionData>
+    public sealed class CollisionDataWindow : AssetEditorWindowBase<CollisionData>, IUndoLinkedActionProvider
     {
         [Flags]
         private enum MaterialSlotsMask : uint
@@ -31,6 +31,125 @@ namespace FlaxEditor.Windows.Assets
             Slot0=1u<<0,Slot1=1u<<1,Slot2=1u<<2,Slot3=1u<<3,Slot4=1u<<4,Slot5=1u<<5,Slot6=1u<<6,Slot7=1u<<7,Slot8=1u<<8,Slot9=1u<<9,Slot10=1u<<10,Slot11=1u<<11,Slot12=1u<<12,Slot13=1u<<13,Slot14=1u<<14,Slot15=1u<<15,Slot16=1u<<16,Slot17=1u<<17,Slot18=1u<<18,Slot19=1u<<19,Slot20=1u<<20,Slot21=1u<<21,Slot22=1u<<22,Slot23=1u<<23,Slot24=1u<<24,Slot25=1u<<25,Slot26=1u<<26,Slot27=1u<<27,Slot28=1u<<28,Slot29=1u<<29,Slot30=1u<<30,Slot31=1u<<31,
             // @formatter:on
             All = uint.MaxValue,
+        }
+
+        private struct CollisionDataOptionsState
+        {
+            public const long SizeInBytes = 36;
+
+            public CollisionDataType Type;
+            public Guid ModelId;
+            public int ModelLodIndex;
+            public uint MaterialSlotsMaskValue;
+            public ConvexMeshGenerationFlags ConvexFlags;
+            public int ConvexVertexLimit;
+
+            public bool HasSameValues(CollisionDataOptionsState other)
+            {
+                return Type == other.Type &&
+                       ModelId == other.ModelId &&
+                       ModelLodIndex == other.ModelLodIndex &&
+                       MaterialSlotsMaskValue == other.MaterialSlotsMaskValue &&
+                       ConvexFlags == other.ConvexFlags &&
+                       ConvexVertexLimit == other.ConvexVertexLimit;
+            }
+        }
+
+        private sealed class CollisionDataOptionsUndoAction : IUndoAction, IUndoActionMetadata
+        {
+            private readonly FlaxEditor.Editor _editor;
+            private readonly Guid _assetId;
+            private readonly string _assetPath;
+            private readonly string _assetName;
+            private readonly string _ownerTypeName;
+            private readonly string _editorTypeName;
+            private readonly string _actionString;
+            private readonly CollisionDataOptionsState _oldState;
+            private readonly CollisionDataOptionsState _newState;
+
+            public CollisionDataOptionsUndoAction(CollisionDataWindow window, string actionString, CollisionDataOptionsState oldState, CollisionDataOptionsState newState)
+            {
+                _editor = window.Editor;
+                _assetId = window.Item.ID;
+                _assetPath = window.Item.Path;
+                _assetName = window.Item.ShortName;
+                _ownerTypeName = window.Item.GetType().FullName;
+                _editorTypeName = window.GetType().FullName;
+                _actionString = string.IsNullOrEmpty(actionString) ? "Edit collision data options" : actionString;
+                _oldState = oldState;
+                _newState = newState;
+            }
+
+            /// <inheritdoc />
+            public string ActionString => _actionString;
+
+            /// <inheritdoc />
+            public UndoActionInfo ActionInfo => new UndoActionInfo
+            {
+                Operation = ActionString,
+                TargetType = UndoActionTargetType.Asset,
+                TargetName = _assetName,
+                TargetPath = _assetPath,
+                TargetId = _assetId,
+                OwnerTypeName = _ownerTypeName,
+                OwnerPath = _assetPath,
+                OwnerId = _assetId,
+                DisplayEditorTypeName = _editorTypeName,
+                Flags = UndoActionFlags.RequiresReopen,
+                ReplayPolicy = UndoActionReplayPolicy.Reopen,
+                SizeInBytes = CollisionDataOptionsState.SizeInBytes * 2,
+            };
+
+            /// <inheritdoc />
+            public void Do()
+            {
+                Apply(_newState);
+            }
+
+            /// <inheritdoc />
+            public void Undo()
+            {
+                Apply(_oldState);
+            }
+
+            private void Apply(CollisionDataOptionsState state)
+            {
+                var window = ResolveWindow();
+                if (window == null)
+                    return;
+
+                window.ApplyCollisionDataOptionsState(state);
+            }
+
+            private CollisionDataWindow ResolveWindow()
+            {
+                if (_editor == null)
+                    return null;
+
+                ContentItem item = null;
+                if (_assetId != Guid.Empty)
+                    item = _editor.ContentDatabase.FindAsset(_assetId);
+                if (item == null && !string.IsNullOrEmpty(_assetPath))
+                    item = _editor.ContentDatabase.Find(_assetPath);
+                if (item == null)
+                {
+                    FlaxEditor.Editor.LogWarning("Cannot restore collision data undo. Missing item: " + _assetPath);
+                    return null;
+                }
+
+                var window = _editor.ContentEditing.Open(item) as CollisionDataWindow;
+                if (window == null)
+                {
+                    FlaxEditor.Editor.LogWarning("Cannot restore collision data undo. Missing collision data editor for item: " + item.Path);
+                    return null;
+                }
+                return window;
+            }
+
+            /// <inheritdoc />
+            public void Dispose()
+            {
+            }
         }
 
         /// <summary>
@@ -266,6 +385,32 @@ namespace FlaxEditor.Windows.Assets
                     Type = CollisionDataType.ConvexMesh;
             }
 
+            public CollisionDataOptionsState CaptureState()
+            {
+                var modelId = Guid.Empty;
+                if ((object)Model != null)
+                    modelId = Model.ID;
+                return new CollisionDataOptionsState
+                {
+                    Type = Type,
+                    ModelId = modelId,
+                    ModelLodIndex = ModelLodIndex,
+                    MaterialSlotsMaskValue = (uint)MaterialSlotsMask,
+                    ConvexFlags = ConvexFlags,
+                    ConvexVertexLimit = ConvexVertexLimit,
+                };
+            }
+
+            public void ApplyState(CollisionDataOptionsState state)
+            {
+                Type = state.Type;
+                Model = state.ModelId != Guid.Empty ? FlaxEngine.Content.LoadAsync<ModelBase>(state.ModelId) : null;
+                ModelLodIndex = state.ModelLodIndex;
+                MaterialSlotsMask = (CollisionDataWindow.MaterialSlotsMask)state.MaterialSlotsMaskValue;
+                ConvexFlags = state.ConvexFlags;
+                ConvexVertexLimit = state.ConvexVertexLimit;
+            }
+
             public void OnClean()
             {
                 // Unlink
@@ -286,18 +431,22 @@ namespace FlaxEditor.Windows.Assets
         private readonly CustomEditorPresenter _propertiesPresenter;
         private readonly PropertiesProxy _properties;
         private readonly ToolStripButton _saveButton;
+        private readonly ToolStripButton _undoButton;
+        private readonly ToolStripButton _redoButton;
         private readonly ToolStripButton _cookButton;
+        private readonly Undo _undo;
         private Model _collisionWiresModel;
         private StaticModel _collisionWiresShowActor;
         private bool _updateWireMesh;
+        private bool _isCreatingOptionsUndoAction;
 
         private class CollisionDataPreview : ModelBasePreview
         {
             public bool ShowInfo;
             public string Info;
-            
+
             /// <inheritdoc />
-            public CollisionDataPreview(bool useWidgets) 
+            public CollisionDataPreview(bool useWidgets)
             : base(useWidgets)
             {
                 ViewportCamera = new FPSCamera();
@@ -327,9 +476,18 @@ namespace FlaxEditor.Windows.Assets
         {
             var inputOptions = Editor.Options.Options.Input;
 
+            // Undo
+            _undo = new Undo(Editor.Undo, this);
+            _undo.UndoDone += OnUndoRedo;
+            _undo.RedoDone += OnUndoRedo;
+            _undo.ActionDone += OnUndoRedo;
+
             // Toolstrip
             _saveButton = _toolstrip.AddButton(editor.Icons.Save64, Save).LinkTooltip("Cook and save", ref inputOptions.Save);
             _cookButton = (ToolStripButton)_toolstrip.AddButton(editor.Icons.Build64, () => _properties.Cook()).LinkTooltip("Cook collision data");
+            _toolstrip.AddSeparator();
+            _undoButton = _toolstrip.AddButton(Editor.Icons.Undo64, _undo.PerformUndo).LinkTooltip("Undo", ref inputOptions.Undo);
+            _redoButton = _toolstrip.AddButton(Editor.Icons.Redo64, _undo.PerformRedo).LinkTooltip("Redo", ref inputOptions.Redo);
             _toolstrip.AddSeparator();
             _toolstrip.AddButton(editor.Icons.CenterView64, () => _preview.ResetCamera()).LinkTooltip("Show whole collision");
             var infoButton = (ToolStripButton)_toolstrip.AddButton(editor.Icons.Info64).LinkTooltip("Show Collision Data info");
@@ -356,11 +514,80 @@ namespace FlaxEditor.Windows.Assets
             };
 
             // Asset properties
-            _propertiesPresenter = new CustomEditorPresenter(null);
+            _propertiesPresenter = new CustomEditorPresenter(_undo);
             _propertiesPresenter.Panel.Parent = _split.Panel2;
-            _propertiesPresenter.Modified += MarkAsEdited;
+            _propertiesPresenter.Modified += OnPropertiesModified;
             _properties = new PropertiesProxy();
             _propertiesPresenter.Select(_properties);
+
+            // Setup input actions
+            InputActions.Add(options => options.Undo, _undo.PerformUndo);
+            InputActions.Add(options => options.Redo, _undo.PerformRedo);
+        }
+
+        IUndoAction IUndoLinkedActionProvider.CreateLinkedUndoAction(Undo sourceUndo, IUndoAction sourceAction)
+        {
+            if (!ReferenceEquals(sourceUndo, _undo) || _isCreatingOptionsUndoAction || UndoActionMetadata.DoesNotModifyData(sourceAction))
+                return null;
+
+            return CreateCollisionDataOptionsUndoAction(sourceAction);
+        }
+
+        private IUndoAction CreateCollisionDataOptionsUndoAction(IUndoAction sourceAction)
+        {
+            if (sourceAction == null || _properties == null)
+                return null;
+
+            var afterState = _properties.CaptureState();
+            CollisionDataOptionsState beforeState;
+            var sourceActionUndone = false;
+            _isCreatingOptionsUndoAction = true;
+            try
+            {
+                sourceAction.Undo();
+                sourceActionUndone = true;
+                beforeState = _properties.CaptureState();
+
+                sourceAction.Do();
+                sourceActionUndone = false;
+            }
+            finally
+            {
+                if (sourceActionUndone)
+                {
+                    try
+                    {
+                        sourceAction.Do();
+                    }
+                    catch (Exception ex)
+                    {
+                        FlaxEditor.Editor.LogWarning(ex);
+                        FlaxEditor.Editor.LogWarning("Failed to restore collision data options after creating an undo snapshot.");
+                    }
+                }
+                _isCreatingOptionsUndoAction = false;
+            }
+
+            if (beforeState.HasSameValues(afterState))
+                return null;
+            return new CollisionDataOptionsUndoAction(this, sourceAction.ActionString, beforeState, afterState);
+        }
+
+        private void OnPropertiesModified()
+        {
+            MarkAsEdited();
+            MarkAutoSaveEdit();
+        }
+
+        private void OnUndoRedo(IUndoAction action)
+        {
+            if (!UndoActionMetadata.DoesNotModifyData(action))
+            {
+                MarkAsEdited();
+                MarkAutoSaveEdit();
+                _propertiesPresenter.BuildLayout();
+            }
+            UpdateToolstrip();
         }
 
         /// <inheritdoc />
@@ -380,6 +607,10 @@ namespace FlaxEditor.Windows.Assets
         {
             if (_saveButton != null)
                 _saveButton.Enabled = _properties != null && _properties.CanCook;
+            if (_undoButton != null)
+                _undoButton.Enabled = _undo.CanUndo;
+            if (_redoButton != null)
+                _redoButton.Enabled = _undo.CanRedo;
             if (_cookButton != null)
                 _cookButton.Enabled = _properties != null && _properties.CanCook;
 
@@ -387,9 +618,21 @@ namespace FlaxEditor.Windows.Assets
         }
 
         /// <inheritdoc />
+        public override bool CanRunAutoSave => false;
+
+        /// <inheritdoc />
         public override void Save()
         {
             _properties.Save();
+        }
+
+        private void ApplyCollisionDataOptionsState(CollisionDataOptionsState state)
+        {
+            _properties.ApplyState(state);
+            _propertiesPresenter.BuildLayout();
+            MarkAsEdited();
+            MarkAutoSaveEdit();
+            UpdateToolstrip();
         }
 
         private void OnCookFinished(bool failed)
@@ -470,6 +713,7 @@ namespace FlaxEditor.Windows.Assets
         {
             _properties.OnLoad(this);
             _propertiesPresenter.BuildLayout();
+            _undo.Clear();
             ClearEditedFlag();
             UpdateToolstrip();
             UpdateWiresModel();
@@ -482,6 +726,7 @@ namespace FlaxEditor.Windows.Assets
         {
             _properties.OnLoad(this);
             _propertiesPresenter.BuildLayout();
+            _undo.Clear();
             ClearEditedFlag();
             UpdateToolstrip();
 
@@ -494,10 +739,19 @@ namespace FlaxEditor.Windows.Assets
             // Refresh the properties (will get new data in OnAssetLoaded)
             _properties.OnClean();
             _propertiesPresenter.BuildLayout();
+            _undo.Clear();
             ClearEditedFlag();
             UpdateToolstrip();
 
             base.OnItemReimported(item);
+        }
+
+        /// <inheritdoc />
+        protected override void OnClose()
+        {
+            _undo.Clear();
+
+            base.OnClose();
         }
 
         /// <inheritdoc />
@@ -545,6 +799,3 @@ namespace FlaxEditor.Windows.Assets
         }
     }
 }
-        /// <inheritdoc />
-        public override bool CanRunAutoSave => false;
-
