@@ -5,6 +5,7 @@
 #include "Engine/Debug/Exceptions/ArgumentNullException.h"
 #include "Engine/Level/Prefabs/Prefab.h"
 #include "Engine/Level/SceneObjectsFactory.h"
+#include "Engine/Level/SceneObject.h"
 #include "Engine/Level/SceneQuery.h"
 #include "Engine/Level/ActorsCache.h"
 #include "Engine/Content/Content.h"
@@ -591,6 +592,61 @@ bool PrefabManager::ApplyAll(Actor* instance)
     }
 
     return prefab->ApplyAll(rootObjectInstance);
+}
+
+bool PrefabManager::ApplyAddedObject(Actor* instanceRoot, SceneObject* addedObject)
+{
+    PROFILE_CPU_NAMED("Prefab.ApplyAddedObject");
+
+    // Validate input
+    if (instanceRoot == nullptr || addedObject == nullptr)
+    {
+        Log::ArgumentNullException();
+        return true;
+    }
+    if (!instanceRoot->HasPrefabLink() || instanceRoot->GetPrefabID() == Guid::Empty)
+    {
+        Log::ArgumentException(TEXT("The modified actor instance has missing prefab link."));
+        return true;
+    }
+    if (addedObject->HasPrefabLink())
+    {
+        Log::ArgumentException(TEXT("The prefab object is already linked to a prefab."));
+        return true;
+    }
+
+    // Get prefab asset
+    auto prefab = Content::LoadAsync<Prefab>(instanceRoot->GetPrefabID());
+    if (prefab == nullptr)
+    {
+        Log::Exception(TEXT("Missing prefab asset."));
+        return true;
+    }
+    if (prefab->WaitForLoaded())
+    {
+        Log::Exception(TEXT("Failed to load prefab asset."));
+        return true;
+    }
+
+    // Get root object of this prefab instance
+    const auto rootObjectId = prefab->GetRootObjectId();
+    auto rootObjectInstance = instanceRoot;
+    while (rootObjectInstance && rootObjectInstance->GetPrefabObjectID() != rootObjectId)
+    {
+        rootObjectInstance = rootObjectInstance->GetParent();
+    }
+    if (rootObjectInstance == nullptr)
+    {
+        // Use the input object as fallback
+        rootObjectInstance = instanceRoot;
+    }
+    while (rootObjectInstance->GetParent() && rootObjectInstance->GetParent()->GetPrefabID() == rootObjectInstance->GetPrefabID())
+    {
+        // Move up to the root of the prefab instance (eg. in case of root change on instance to apply)
+        rootObjectInstance = rootObjectInstance->GetParent();
+    }
+
+    return prefab->ApplyAddedObject(rootObjectInstance, addedObject);
 }
 
 #endif

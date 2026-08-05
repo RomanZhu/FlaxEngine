@@ -282,5 +282,35 @@ namespace FlaxEditor.Modules
 
             PrefabApplied?.Invoke(prefab, instance);
         }
+
+        /// <summary>
+        /// Applies a single object added to the prefab instance, saves the changes and synchronizes them with the active instances of the prefab asset.
+        /// </summary>
+        /// <param name="instanceRoot">The root actor of spawned prefab instance to use as modified changes source.</param>
+        /// <param name="addedObject">The added actor or script to apply to the prefab.</param>
+        public void ApplyAddedObject(Actor instanceRoot, SceneObject addedObject)
+        {
+            // Validate input
+            if (!instanceRoot)
+                throw new ArgumentNullException(nameof(instanceRoot));
+            if (!addedObject)
+                throw new ArgumentNullException(nameof(addedObject));
+            if (!instanceRoot.HasPrefabLink || instanceRoot.PrefabID == Guid.Empty)
+                throw new ArgumentException("The modified actor instance has missing prefab link.");
+            if (addedObject.HasPrefabLink)
+                throw new ArgumentException("The prefab object is already linked to a prefab.");
+
+            var prefab = FlaxEngine.Content.LoadAsync<Prefab>(instanceRoot.PrefabID);
+            if (prefab == null)
+                throw new ArgumentException("Missing prefab to apply.");
+            PrefabApplying?.Invoke(prefab, instanceRoot);
+
+            // Call backend
+            var failed = PrefabManager.ApplyAddedObject(instanceRoot, addedObject);
+            if (failed)
+                throw new Exception("Failed to apply the prefab change. See log to learn more.");
+
+            PrefabApplied?.Invoke(prefab, instanceRoot);
+        }
     }
 }

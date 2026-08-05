@@ -20,6 +20,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 #include "Engine/ContentImporters/CreateJson.h"
+#include "Engine/Debug/Exceptions/ArgumentException.h"
 #include "Engine/Debug/Exceptions/ArgumentNullException.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Threading/MainThreadTask.h"
@@ -86,6 +87,36 @@ namespace
         if (auto actor = ScriptingObject::Cast<Actor>(obj))
             name += TEXT(":") + actor->GetName();
         return name;
+    }
+
+    bool IsActorInHierarchy(Actor* root, Actor* actor)
+    {
+        return root && actor && (root == actor || root->HasActorInHierarchy(actor));
+    }
+
+    bool IsObjectInAddedObjectScope(SceneObject* obj, SceneObject* addedObject)
+    {
+        if (obj == addedObject)
+            return true;
+
+        auto addedActor = ScriptingObject::Cast<Actor>(addedObject);
+        if (!addedActor)
+            return false;
+
+        if (auto actor = ScriptingObject::Cast<Actor>(obj))
+            return IsActorInHierarchy(addedActor, actor);
+        if (auto script = ScriptingObject::Cast<Script>(obj))
+            return IsActorInHierarchy(addedActor, script->GetActor());
+        return false;
+    }
+
+    bool IsObjectInsideActor(Actor* actor, SceneObject* obj)
+    {
+        if (auto objActor = ScriptingObject::Cast<Actor>(obj))
+            return IsActorInHierarchy(actor, objActor);
+        if (auto script = ScriptingObject::Cast<Script>(obj))
+            return IsActorInHierarchy(actor, script->GetActor());
+        return false;
     }
 };
 
@@ -786,6 +817,164 @@ bool Prefab::ApplyAll(Actor* targetActor)
     return false;
 }
 
+bool Prefab::ApplyAddedObject(Actor* targetActor, SceneObject* addedObject)
+{
+    PROFILE_CPU();
+    const auto startTime = DateTime::NowUTC();
+
+    // Perform validation
+    if (!IsLoaded())
+    {
+        Log::Exception(TEXT("Cannot apply changes on not loaded prefab asset."));
+        return true;
+    }
+    if (targetActor == nullptr || addedObject == nullptr)
+    {
+        Log::ArgumentNullException();
+        return true;
+    }
+    if (targetActor->GetPrefabID() != GetID())
+    {
+        Log::Exception(TEXT("Cannot apply changes to the prefab. Prefab instance root object has link to the other prefab."));
+        return true;
+    }
+    if (addedObject->HasPrefabLink())
+    {
+        Log::ArgumentException(TEXT("The prefab object is already linked to a prefab."));
+        return true;
+    }
+    if (!IsObjectInsideActor(targetActor, addedObject))
+    {
+        Log::ArgumentException(TEXT("The added prefab object is not part of the target prefab instance."));
+        return true;
+    }
+    if (auto addedActor = ScriptingObject::Cast<Actor>(addedObject))
+    {
+        if (addedActor->GetParent() == nullptr || !addedActor->GetParent()->HasPrefabLink())
+        {
+            Log::ArgumentException(TEXT("The added prefab actor has to be parented to an existing prefab object."));
+            return true;
+        }
+    }
+    else if (auto addedScript = ScriptingObject::Cast<Script>(addedObject))
+    {
+        if (addedScript->GetActor() == nullptr || !addedScript->GetActor()->HasPrefabLink())
+        {
+            Log::ArgumentException(TEXT("The added prefab script has to belong to an existing prefab actor."));
+            return true;
+        }
+    }
+    if (GetDefaultInstance() == nullptr)
+    {
+        LOG(Warning, "Failed to create default prefab instance for the prefab asset.");
+        return true;
+    }
+    if (targetActor == _defaultInstance || targetActor->HasActorInHierarchy(_defaultInstance) || _defaultInstance->HasActorInHierarchy(targetActor))
+    {
+        LOG(Error, "Cannot apply changes to the prefab using default instance. Use manually spawned prefab instance instead.");
+        return true;
+    }
+    if (!IsInMainThread())
+    {
+        // Prefabs cannot be updated on async thread so sync it with a Main Thread
+        bool result = true;
+        Function<void()> action = [&]
+        {
+            result = ApplyAddedObject(targetActor, addedObject);
+        };
+        const auto task = Task::StartNew(New<MainThreadActionTask>(action));
+        if (task->Wait(TimeSpan::FromSeconds(10)))
+            result = true;
+        return result;
+    }
+
+    // Prevent cyclic references
+    if (auto addedActor = ScriptingObject::Cast<Actor>(addedObject))
+    {
+        PROFILE_CPU_NAMED("Prefab.FindCyclicReferences");
+
+        ASSERT(GetDefaultInstance() != nullptr);
+        if (FindCyclicReferences(addedActor, targetActor->GetPrefabObjectID()))
+        {
+            Log::Exception(TEXT("Cannot apply changes to the prefab. Cyclic reference found in the actor."));
+            return true;
+        }
+    }
+
+    // Collect all prefabs that use this prefab, load them and create default instance for each prefab
+    // To apply changes in a proper way the default instance is required to preserve the local modification applied to the nested prefab
+    NestedPrefabsList allPrefabs;
+    {
+        PROFILE_CPU_NAMED("Prefab.CollectNestedPrefabs");
+
+        // Get all prefab assets ids from project
+        Array<Guid> nestedPrefabIds;
+        Content::GetRegistry()->GetAllByTypeName(Prefab::TypeName, nestedPrefabIds);
+
+        // Assign references to the prefabs
+        allPrefabs.EnsureCapacity(Math::RoundUpToPowerOf2(Math::Max(30, nestedPrefabIds.Count())));
+        const Dictionary<Guid, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
+        for (auto& e : assetsRaw)
+        {
+            if (e.Value->GetTypeHandle() == Prefab::TypeInitializer)
+                nestedPrefabIds.AddUnique(e.Key);
+        }
+        for (int32 i = 0; i < nestedPrefabIds.Count(); i++)
+        {
+            const auto nestedPrefab = Content::LoadAsync<Prefab>(nestedPrefabIds[i]);
+            if (nestedPrefab && nestedPrefab != this && EnumHasNoneFlags(nestedPrefab->Flags, ObjectFlags::WasMarkedToDelete))
+            {
+                allPrefabs.Add(nestedPrefab);
+            }
+        }
+
+        // Setup default instances (skip invalid prefabs)
+        for (int32 i = allPrefabs.Count() - 1; i >= 0; i--)
+        {
+            Prefab* prefab = allPrefabs[i];
+            if (prefab->WaitForLoaded() || prefab->GetDefaultInstance() == nullptr)
+                allPrefabs.RemoveAt(i);
+        }
+    }
+
+    ObjectsRemovalService::Flush();
+
+    // Collect existing prefab instances (this and nested ones) to cache 'before' state used later to restore it
+    PrefabInstancesData thisPrefabInstancesData;
+    Array<PrefabInstancesData> allPrefabsInstancesData;
+    {
+        PROFILE_CPU_NAMED("Prefab.CachePrefabInstancesData");
+
+        rapidjson_flax::StringBuffer dataBuffer;
+        PrefabInstanceData::CollectPrefabInstances(thisPrefabInstancesData, GetID(), _defaultInstance, targetActor);
+        PrefabInstanceData::SerializePrefabInstances(thisPrefabInstancesData, dataBuffer, this);
+
+        allPrefabsInstancesData.Resize(allPrefabs.Count());
+        for (int32 i = 0; i < allPrefabs.Count(); i++)
+        {
+            Prefab* prefab = allPrefabs[i];
+            PrefabInstanceData::CollectPrefabInstances(allPrefabsInstancesData[i], prefab->GetID(), prefab->GetDefaultInstance(), prefab->GetDefaultInstance());
+            PrefabInstanceData::SerializePrefabInstances(allPrefabsInstancesData[i], dataBuffer, prefab);
+        }
+    }
+
+    // Use internal call to improve shared collections memory sharing
+    if (ApplyAllInternal(targetActor, true, thisPrefabInstancesData, addedObject))
+        return true;
+
+    // Sync nested prefabs
+    if (allPrefabs.HasItems())
+    {
+        LOG(Info, "Updating referencing prefabs");
+        HashSet<Guid> synced;
+        SyncNestedPrefabs(allPrefabs, allPrefabsInstancesData, synced);
+    }
+
+    const auto endTime = DateTime::NowUTC();
+    LOG(Info, "Prefab updated! {0} ms", (int32)(endTime - startTime).GetTotalMilliseconds());
+    return false;
+}
+
 bool Prefab::Resave()
 {
     if (OnCheckSave())
@@ -830,13 +1019,14 @@ bool Prefab::Resave()
     return false;
 }
 
-bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPrefab, PrefabInstancesData& prefabInstancesData)
+bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPrefab, PrefabInstancesData& prefabInstancesData, SceneObject* objectToApply)
 {
     PROFILE_CPU_NAMED("Prefab.Apply");
     ScopeLock lock(Locker);
     const auto prefabId = GetID();
     const auto oldRootId = GetRootObjectId();
     const auto newRootId = targetActor->GetPrefabObjectID();
+    const bool hasObjectFilter = objectToApply != nullptr;
 
     // Gather all scene objects in target instance (reused later)
     CollectionPoolCache<ActorsCache::SceneObjectsListType>::ScopeCache targetObjects = ActorsCache::SceneObjectsListCache.Get();
@@ -909,6 +1099,7 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
         {
             SceneObject* obj = targetObjects.Value->At(i);
             auto data = it->GetObject();
+            const bool shouldApplyObject = !hasObjectFilter || IsObjectInAddedObjectScope(obj, objectToApply);
 
             // Check if object is from this prefab
             if (obj->GetPrefabID() == prefabId)
@@ -924,8 +1115,11 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
                     return true;
                 }
 
-                // Cache connection for fast lookup
-                diffPrefabObjectIdToDataIndex[obj->GetPrefabObjectID()] = i;
+                if (shouldApplyObject)
+                {
+                    // Cache connection for fast lookup
+                    diffPrefabObjectIdToDataIndex[obj->GetPrefabObjectID()] = i;
+                }
 
                 // Strip unwanted data
                 data.RemoveMember("ID");
@@ -935,7 +1129,8 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
             else
             {
                 // Object if a new thing
-                newPrefabInstanceIdToDataIndex[obj->GetSceneObjectId()] = i;
+                if (shouldApplyObject)
+                    newPrefabInstanceIdToDataIndex[obj->GetSceneObjectId()] = i;
             }
         }
 
@@ -1091,9 +1286,12 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
             }
             else
             {
-                // Remove object removed from the prefab
-                LOG(Info, "Removing object {0} from prefab default instance", GetObjectName(obj));
-                PrefabInstanceData::DeletePrefabObject(obj, i, sceneObjects, false);
+                if (!hasObjectFilter)
+                {
+                    // Remove object removed from the prefab
+                    LOG(Info, "Removing object {0} from prefab default instance", GetObjectName(obj));
+                    PrefabInstanceData::DeletePrefabObject(obj, i, sceneObjects, false);
+                }
             }
         }
 
@@ -1219,6 +1417,8 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
                 Guid prefabObjectId;
                 if (!newPrefabInstanceIdToPrefabObjectId.TryGet(obj->GetSceneObjectId(), prefabObjectId))
                 {
+                    if (hasObjectFilter)
+                        continue;
                     LOG(Warning, "Missing prefab object linkage in 'NewPrefabInstanceIdToPrefabObjectId' cache table.");
                     return true;
                 }

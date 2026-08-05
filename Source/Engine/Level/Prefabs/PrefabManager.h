@@ -171,5 +171,13 @@ API_CLASS(Static) class FLAXENGINE_API PrefabManager
     /// <returns>True if data is failed to apply the changes, otherwise false.</returns>
     API_FUNCTION() static bool ApplyAll(Actor* instance);
 
+    /// <summary>
+    /// Applies a single object added to the prefab instance, saves the changes and synchronizes them with the active instances of the prefab asset.
+    /// </summary>
+    /// <param name="instanceRoot">The root actor of spawned prefab instance to use as modified changes source.</param>
+    /// <param name="addedObject">The added actor or script to apply to the prefab.</param>
+    /// <returns>True if data is failed to apply the change, otherwise false.</returns>
+    API_FUNCTION() static bool ApplyAddedObject(Actor* instanceRoot, SceneObject* addedObject);
+
 #endif
 };

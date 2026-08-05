@@ -91,6 +91,14 @@ public:
     bool ApplyAll(Actor* targetActor);
 
     /// <summary>
+    /// Applies a single object added to the prefab instance, saves the changes and synchronizes them with the active instances of the prefab asset.
+    /// </summary>
+    /// <param name="targetActor">The root actor of spawned prefab instance to use as modified changes source.</param>
+    /// <param name="addedObject">The added actor or script to apply to the prefab.</param>
+    /// <returns>True if failed, otherwise false.</returns>
+    bool ApplyAddedObject(Actor* targetActor, SceneObject* addedObject);
+
+    /// <summary>
     /// Resaves the prefab asset to the file by serializing default instance in the latest format and defaults.
     /// </summary>
     /// <returns>True if failed, otherwise false.</returns>
@@ -101,7 +109,7 @@ private:
 #if USE_EDITOR
     typedef Array<class PrefabInstanceData> PrefabInstancesData;
     typedef Array<AssetReference<Prefab>> NestedPrefabsList;
-    bool ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPrefab, PrefabInstancesData& prefabInstancesData);
+    bool ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPrefab, PrefabInstancesData& prefabInstancesData, SceneObject* objectToApply = nullptr);
     bool UpdateInternal(const Array<SceneObject*>& defaultInstanceObjects, rapidjson_flax::StringBuffer& tmpBuffer);
     bool SyncChangesInternal(PrefabInstancesData& prefabInstancesData);
     void SyncNestedPrefabs(const NestedPrefabsList& allPrefabs, Array<PrefabInstancesData>& allPrefabsInstancesData, HashSet<Guid, HeapAllocation>& synced) const;
