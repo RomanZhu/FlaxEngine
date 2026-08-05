@@ -33,6 +33,9 @@ namespace FlaxEditor.Windows.Assets
         }
 
         /// <inheritdoc />
+        public override bool CanRunAutoSave => false;
+
+        /// <inheritdoc />
         protected override void UnlinkItem()
         {
             _preview.Asset = null;

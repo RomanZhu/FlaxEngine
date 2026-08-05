@@ -167,6 +167,9 @@ namespace FlaxEditor.Windows.Assets
         }
 
         /// <inheritdoc />
+        public override bool CanRunAutoSave => false;
+
+        /// <inheritdoc />
         public override void Save()
         {
             // Check if don't need to push any new changes to the original asset

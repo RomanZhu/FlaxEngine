@@ -117,7 +117,7 @@ namespace FlaxEditor.Windows.Assets
                         layout.Label("Loading...", TextAlignment.Center);
                         return;
                     }
-                    
+
                     base.Initialize(layout);
 
                     // Creates the import path UI
@@ -352,6 +352,9 @@ namespace FlaxEditor.Windows.Assets
 
             base.UpdateToolstrip();
         }
+
+        /// <inheritdoc />
+        public override bool CanRunAutoSave => false;
 
         /// <inheritdoc />
         protected override void UnlinkItem()
