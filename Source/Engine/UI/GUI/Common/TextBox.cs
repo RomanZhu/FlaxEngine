@@ -304,6 +304,7 @@ namespace FlaxEngine.GUI
                     color *= 0.6f;
                 else if (_isReadOnly)
                     color *= 0.85f;
+                Render2D.DrawTextShadow(font, text, color, ref _layout, TextMaterial);
                 Render2D.DrawText(font, text, color, ref _layout, TextMaterial);
             }
             else
@@ -311,7 +312,9 @@ namespace FlaxEngine.GUI
                 text = _watermarkText;
                 if (text?.Length > 0)
                 {
-                    Render2D.DrawText(font, _watermarkText, WatermarkTextColor, ref _layout, TextMaterial);
+                    var color = WatermarkTextColor;
+                    Render2D.DrawTextShadow(font, _watermarkText, color, ref _layout, TextMaterial);
+                    Render2D.DrawText(font, _watermarkText, color, ref _layout, TextMaterial);
                 }
             }
 

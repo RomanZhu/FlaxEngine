@@ -100,6 +100,40 @@ namespace FlaxEngine
         }
 
         /// <summary>
+        /// Draws a text shadow using the current GUI style.
+        /// </summary>
+        /// <param name="font">The font to use.</param>
+        /// <param name="text">The text to render.</param>
+        /// <param name="color">The text color used to scale the shadow opacity.</param>
+        /// <param name="location">The text drawing location.</param>
+        /// <param name="customMaterial">Custom material for font characters rendering. It must contain texture parameter named Font used to sample font texture.</param>
+        public static void DrawTextShadow(Font font, string text, Color color, Float2 location, MaterialBase customMaterial = null)
+        {
+            var style = GUI.Style.Current;
+            if (style == null || !style.HasTextShadow || color.A <= 0.0f)
+                return;
+            DrawText(font, text, style.TextShadowColor.AlphaMultiplied(color.A), location + style.TextShadowOffset, customMaterial);
+        }
+
+        /// <summary>
+        /// Draws a text shadow using the current GUI style.
+        /// </summary>
+        /// <param name="font">The font to use.</param>
+        /// <param name="text">The text to render.</param>
+        /// <param name="color">The text color used to scale the shadow opacity.</param>
+        /// <param name="layout">Text layout options.</param>
+        /// <param name="customMaterial">Custom material for font characters rendering. It must contain texture parameter named Font used to sample font texture.</param>
+        public static void DrawTextShadow(Font font, string text, Color color, ref TextLayoutOptions layout, MaterialBase customMaterial = null)
+        {
+            var style = GUI.Style.Current;
+            if (style == null || !style.HasTextShadow || color.A <= 0.0f)
+                return;
+            var shadowLayout = layout;
+            shadowLayout.Bounds.Location = shadowLayout.Bounds.Location + style.TextShadowOffset;
+            DrawText(font, text, style.TextShadowColor.AlphaMultiplied(color.A), ref shadowLayout, customMaterial);
+        }
+
+        /// <summary>
         /// Draws a text.
         /// </summary>
         /// <param name="font">The font to use.</param>
@@ -122,6 +156,7 @@ namespace FlaxEngine
                 Scale = scale,
                 BaseLinesGapScale = baseLinesGapScale,
             };
+            DrawTextShadow(font, text, color, ref layout);
             DrawText(font, text, color, ref layout);
         }
 
@@ -149,6 +184,7 @@ namespace FlaxEngine
                 Scale = scale,
                 BaseLinesGapScale = baseLinesGapScale,
             };
+            DrawTextShadow(font, text, color, ref layout, customMaterial);
             DrawText(font, text, color, ref layout, customMaterial);
         }
 

@@ -58,7 +58,9 @@ namespace FlaxEditor.GUI.Timeline.GUI
             Render2D.PopTransform();
             var textMatrix = Matrix3x3.Translation2D(12, timeAxisHeaderOffset);
             Render2D.PushTransform(ref textMatrix);
-            Render2D.DrawText(style.FontSmall, labelText, style.Foreground, new Float2(2, -6));
+            var textLocation = new Float2(2, -6);
+            Render2D.DrawTextShadow(style.FontSmall, labelText, style.Foreground, textLocation);
+            Render2D.DrawText(style.FontSmall, labelText, style.Foreground, textLocation);
             Render2D.PopTransform();
 
             color = _timeline.IsMovingPositionHandle ? style.SelectionBorder : style.Foreground.RGBMultiplied(0.8f);

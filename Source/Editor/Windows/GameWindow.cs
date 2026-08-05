@@ -1334,7 +1334,8 @@ namespace FlaxEditor.Windows
                     if (input.DebuggerUnlockMouseSecondary.Key != KeyboardKeys.None)
                         text += $" or {input.DebuggerUnlockMouseSecondary}";
                     text += " to unlock the mouse";
-                    Render2D.DrawText(style.FontSmall, text, rect + new Float2(1.0f), style.Background * alpha, TextAlignment.Near, TextAlignment.Far);
+                    if (!style.HasTextShadow)
+                        Render2D.DrawText(style.FontSmall, text, rect + new Float2(1.0f), style.Background * alpha, TextAlignment.Near, TextAlignment.Far);
                     Render2D.DrawText(style.FontSmall, text, rect, style.Foreground * alpha, TextAlignment.Near, TextAlignment.Far);
                 }
 

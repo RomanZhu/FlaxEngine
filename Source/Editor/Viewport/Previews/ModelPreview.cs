@@ -453,9 +453,11 @@ namespace FlaxEditor.Viewport.Previews
                     }
                     text += string.Format("\nTriangles: {0:N0}\nVertices: {1:N0}", triangleCount, vertexCount);
                 }
-                var font = Style.Current.FontMedium;
+                var style = Style.Current;
+                var font = style.FontMedium;
                 var pos = new Float2(10, 50);
-                Render2D.DrawText(font, text, new Rectangle(pos + Float2.One, Size), Color.Black);
+                if (!style.HasTextShadow)
+                    Render2D.DrawText(font, text, new Rectangle(pos + Float2.One, Size), Color.Black);
                 Render2D.DrawText(font, text, new Rectangle(pos, Size), Color.White);
             }
         }

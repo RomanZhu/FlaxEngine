@@ -311,9 +311,11 @@ namespace FlaxEditor.Windows.Assets
 
                 if (ShowInfo)
                 {
-                    var font = Style.Current.FontMedium;
+                    var style = Style.Current;
+                    var font = style.FontMedium;
                     var pos = new Float2(10, 50);
-                    Render2D.DrawText(font, Info, new Rectangle(pos + Float2.One, Size), Color.Black);
+                    if (!style.HasTextShadow)
+                        Render2D.DrawText(font, Info, new Rectangle(pos + Float2.One, Size), Color.Black);
                     Render2D.DrawText(font, Info, new Rectangle(pos, Size), Color.White);
                 }
             }

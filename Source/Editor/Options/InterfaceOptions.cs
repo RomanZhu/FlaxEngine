@@ -567,16 +567,16 @@ namespace FlaxEditor.Options
         /// <summary>
         /// Gets or sets the output log text shadow color.
         /// </summary>
-        [DefaultValue(typeof(Color), "0,0,0,0.5")]
+        [DefaultValue(typeof(Color), "0,0,0,0.35")]
         [EditorDisplay("Output Log", "Text Shadow Color"), EditorOrder(440), Tooltip("The output log text shadow color.")]
-        public Color OutputLogTextShadowColor { get; set; } = new Color(0, 0, 0, 0.5f);
+        public Color OutputLogTextShadowColor { get; set; } = new Color(0, 0, 0, 0.35f);
 
         /// <summary>
         /// Gets or sets the output log text shadow offset. Set to 0 to disable this feature.
         /// </summary>
-        [DefaultValue(typeof(Float2), "1,1")]
+        [DefaultValue(typeof(Float2), "0,1")]
         [EditorDisplay("Output Log", "Text Shadow Offset"), EditorOrder(445), Tooltip("The output log text shadow offset. Set to 0 to disable this feature.")]
-        public Float2 OutputLogTextShadowOffset { get; set; } = new Float2(1);
+        public Float2 OutputLogTextShadowOffset { get; set; } = new Float2(0, 1);
 
         // [Deprecated in v1.10]
         [Serialize, Obsolete, NoUndo]

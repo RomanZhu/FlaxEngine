@@ -333,13 +333,19 @@ internal class DirectionGizmo : ContainerControl
             {
                 Render2D.DrawLine(relativeCenter, tipScreen, axisColor, 1.5f);
                 Render2D.DrawSprite(_posHandle, new Rectangle(tipScreen - new Float2(_spriteRadius), new Float2(_spriteRadius * 2)), axisColor);
-                Render2D.DrawText(font, axis.Label, Color.Black, tipScreen - font.MeasureText(axis.Label) * 0.5f);
+                var labelLocation = tipScreen - font.MeasureText(axis.Label) * 0.5f;
+                Render2D.DrawTextShadow(font, axis.Label, Color.Black, labelLocation);
+                Render2D.DrawText(font, axis.Label, Color.Black, labelLocation);
             }
             else
             {
                 Render2D.DrawSprite(_posHandle, new Rectangle(tipScreen - new Float2(_spriteRadius), new Float2(_spriteRadius * 2)), axisColor.RGBMultiplied(0.85f).AlphaMultiplied(0.8f));
                 if (isHovered)
-                    Render2D.DrawText(font, axis.Label, Color.Black, tipScreen - font.MeasureText(axis.Label) * 0.5f);
+                {
+                    var labelLocation = tipScreen - font.MeasureText(axis.Label) * 0.5f;
+                    Render2D.DrawTextShadow(font, axis.Label, Color.Black, labelLocation);
+                    Render2D.DrawText(font, axis.Label, Color.Black, labelLocation);
+                }
             }
         }
 

@@ -48,6 +48,8 @@ namespace FlaxEngine.GUI
             {
                 Font = new FontReference(style.FontMedium),
                 Color = style.Foreground,
+                ShadowColor = style.TextShadowColor,
+                ShadowOffset = style.TextShadowOffset,
                 BackgroundSelectedBrush = new SolidColorBrush(style.BackgroundSelected),
             };
         }

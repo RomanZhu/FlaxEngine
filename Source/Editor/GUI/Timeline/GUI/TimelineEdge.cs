@@ -63,7 +63,9 @@ namespace FlaxEditor.GUI.Timeline.GUI
                     break;
                 default: throw new ArgumentOutOfRangeException();
                 }
-                Render2D.DrawText(style.FontSmall, labelText, style.Foreground, new Float2((Width - thickness) * 0.5f + 4, timeAxisHeaderOffset));
+                var labelLocation = new Float2((Width - thickness) * 0.5f + 4, timeAxisHeaderOffset);
+                Render2D.DrawTextShadow(style.FontSmall, labelText, style.Foreground, labelLocation);
+                Render2D.DrawText(style.FontSmall, labelText, style.Foreground, labelLocation);
             }
         }
 

@@ -282,6 +282,8 @@ void SplashScreen::OnDraw()
     // Check fonts
     if (!HasLoadedFonts())
         return;
+    const Float2 textShadowOffset(0.0f, 1.0f * s);
+    const Color textShadowColor = Color::Black.AlphaMultiplied(0.35f);
 
     // Title
     const auto titleLength = _titleFont->MeasureText(GetTitle());
@@ -290,6 +292,9 @@ void SplashScreen::OnDraw()
     layout.HorizontalAlignment = TextAlignment::Near;
     layout.VerticalAlignment = TextAlignment::Near;
     layout.Scale = Math::Min((width - 20 * s) / titleLength.X, 1.0f);
+    TextLayoutOptions shadowLayout = layout;
+    shadowLayout.Bounds.Location = shadowLayout.Bounds.Location + textShadowOffset;
+    Render2D::DrawText(_titleFont, GetTitle(), textShadowColor, shadowLayout);
     Render2D::DrawText(_titleFont, GetTitle(), Color::White, layout);
 
     // Subtitle
@@ -313,6 +318,9 @@ void SplashScreen::OnDraw()
     }
     layout.Scale = 1.0f;
     layout.HorizontalAlignment = TextAlignment::Far;
+    shadowLayout = layout;
+    shadowLayout.Bounds.Location = shadowLayout.Bounds.Location + textShadowOffset;
+    Render2D::DrawText(_subtitleFont, subtitle, textShadowColor, shadowLayout);
     Render2D::DrawText(_subtitleFont, subtitle, Color::FromRGB(0x8C8C8C), layout);
 
     // Additional info
@@ -324,6 +332,9 @@ void SplashScreen::OnDraw()
     
     layout.HorizontalAlignment = TextAlignment::Near;
     layout.VerticalAlignment = TextAlignment::Center;
+    shadowLayout = layout;
+    shadowLayout.Bounds.Location = shadowLayout.Bounds.Location + textShadowOffset;
+    Render2D::DrawText(_subtitleFont, _infoText, textShadowColor, shadowLayout);
     Render2D::DrawText(_subtitleFont, _infoText, Color::FromRGB(0xFFFFFF) * 0.9f, layout);
 }
 
