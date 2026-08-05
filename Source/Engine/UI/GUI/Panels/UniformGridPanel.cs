@@ -12,6 +12,7 @@ namespace FlaxEngine.GUI
         private Margin _slotPadding;
         private int _slotsV, _slotsH;
         private Float2 _slotSpacing;
+        private static readonly Color ButtonBackgroundColor = new Color(0.2470588f, 0.2470588f, 0.2588235f, 1.0f);
 
         /// <summary>
         /// Gets or sets the padding given to each slot.
@@ -149,8 +150,25 @@ namespace FlaxEngine.GUI
                     _slotPadding.ShrinkRectangle(ref slotBounds);
 
                     var c = _children[i++];
+                    ApplySlotControlStyle(c);
                     c.Bounds = slotBounds;
                 }
+            }
+        }
+
+        private static void ApplySlotControlStyle(Control control)
+        {
+            if (control is Button button)
+            {
+                var style = Style.Current;
+                button.BackgroundColor = ButtonBackgroundColor;
+                button.BackgroundColorHighlighted = ButtonBackgroundColor.RGBMultiplied(1.12f);
+                button.BackgroundColorSelected = style?.BorderSelected ?? ButtonBackgroundColor.RGBMultiplied(0.9f);
+                button.BorderColor = Color.Transparent;
+                button.BorderColorHighlighted = Color.Transparent;
+                button.BorderColorSelected = Color.Transparent;
+                button.HasBorder = false;
+                button.CornerRadius = 3.0f;
             }
         }
     }

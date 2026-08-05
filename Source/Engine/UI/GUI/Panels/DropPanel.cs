@@ -19,6 +19,8 @@ namespace FlaxEngine.GUI
 
         private const float DropDownIconPadding = 4.0f;
         private const float DropDownIconTextSpacing = 6.0f;
+        private const float InnerBorderInset = 1.5f;
+        private static readonly Color InnerBorderColor = new Color(1.0f, 1.0f, 1.0f, 0.05f);
 
         /// <summary>
         /// The header height.
@@ -169,6 +171,12 @@ namespace FlaxEngine.GUI
         public bool CanOpenClose { get; set; } = true;
 
         /// <summary>
+        /// Optional local-space hit test for header open/close mouse input. Null uses the whole header.
+        /// </summary>
+        [NoSerialize, HideInEditor]
+        public Func<Float2, bool> HeaderInputHitTest { get; set; }
+
+        /// <summary>
         /// Gets or sets a value indicating whether to enable containment line drawing,
         /// </summary>
         [EditorOrder(3)]
@@ -301,6 +309,11 @@ namespace FlaxEngine.GUI
         /// </summary>
         protected Rectangle DropDownIconRectangle => EnableDropDownIcon ? new Rectangle(DropDownIconPadding + DropDownIconIndent, (HeaderHeight - DropDownIconSize) * 0.5f, DropDownIconSize, DropDownIconSize) : Rectangle.Empty;
 
+        private bool IsHeaderInputLocation(Float2 location)
+        {
+            return HeaderInputHitTest != null ? HeaderInputHitTest(location) : HeaderRectangle.Contains(location);
+        }
+
         /// <inheritdoc />
         protected override bool ShowTooltip => base.ShowTooltip && _mouseOverHeader;
 
@@ -318,7 +331,7 @@ namespace FlaxEngine.GUI
         /// <inheritdoc />
         public override bool OnTestTooltipOverControl(ref Float2 location)
         {
-            return HeaderRectangle.Contains(ref location);
+            return IsHeaderInputLocation(location);
         }
 
         /// <summary>
@@ -448,7 +461,7 @@ namespace FlaxEngine.GUI
                 if (children[i] is DropPanel dropPanel && dropPanel.Visible && dropPanel.Enabled && dropPanel.CanDragDropDownIcon)
                 {
                     var dropPanelLocation = dropPanel.PointFromParent(parent, parentLocation);
-                    if (dropPanel.HeaderRectangle.Contains(dropPanelLocation))
+                    if (dropPanel.IsHeaderInputLocation(dropPanelLocation))
                     {
                         ApplyDropDownIconMouseCapture(dropPanel);
                         break;
@@ -505,7 +518,7 @@ namespace FlaxEngine.GUI
         {
             var style = Style.Current;
             var enabled = VisuallyEnabledInHierarchy;
-            var cornerRadius = style.CornerRadius;
+            var cornerRadius = 5.0f;
 
             // Draw Background
             var backgroundColor = BackgroundColor;
@@ -520,9 +533,9 @@ namespace FlaxEngine.GUI
 
             if (BorderColor.A > 0.0f)
             {
-                var borderRect = new Rectangle(Float2.Zero, Size).MakeExpanded(-0.5f);
+                var borderRect = new Rectangle(Float2.Zero, Size);
                 if (cornerRadius > 0.0f)
-                    StyleRendering.DrawRoundedRectangleBorder(borderRect, BorderColor, 1.0f, Mathf.Max(0.0f, cornerRadius - 0.5f));
+                    StyleRendering.DrawRoundedRectangleBorder(borderRect, BorderColor, 1.0f, cornerRadius);
                 else
                     Render2D.DrawRectangle(borderRect, BorderColor);
             }
@@ -534,12 +547,23 @@ namespace FlaxEngine.GUI
                 var headerRect = new Rectangle(0, 0, Width, HeaderHeight);
                 if (cornerRadius > 0.0f && backgroundColor.A > 0.0f)
                 {
-                    headerRect = new Rectangle(1.0f, 1.0f, Mathf.Max(0.0f, Width - 2.0f), Mathf.Max(0.0f, HeaderHeight - (_isClosed ? 2.0f : 1.0f)));
-                    StyleRendering.FillRoundedRectangle(headerRect, color, Mathf.Max(0.0f, cornerRadius - 1.0f), _isClosed ? RoundedCorners.All : RoundedCorners.Top);
+                    StyleRendering.FillRoundedRectangle(headerRect, color, cornerRadius, _isClosed ? RoundedCorners.All : RoundedCorners.Top);
                 }
                 else
                 {
                     Render2D.FillRectangle(headerRect, color);
+                }
+            }
+
+            if (BorderColor.A > 0.0f)
+            {
+                var innerBorderRect = new Rectangle(Float2.Zero, Size).MakeExpanded(-InnerBorderInset);
+                if (innerBorderRect.Width > 0.0f && innerBorderRect.Height > 0.0f)
+                {
+                    if (cornerRadius > 0.0f)
+                        StyleRendering.DrawRoundedRectangleBorder(innerBorderRect, InnerBorderColor, 1.0f, Mathf.Max(0.0f, cornerRadius - InnerBorderInset));
+                    else
+                        Render2D.DrawRectangle(innerBorderRect, InnerBorderColor);
                 }
             }
 
@@ -662,11 +686,11 @@ namespace FlaxEngine.GUI
             if (base.OnMouseDown(location, button))
                 return true;
 
-            _mouseOverHeader = HeaderRectangle.Contains(location);
+            _mouseOverHeader = IsHeaderInputLocation(location);
             if (button == MouseButton.Left && _mouseOverHeader)
             {
                 _mouseButtonLeftDown = true;
-                if (CanDragDropDownIcon && DropDownIconRectangle.Contains(location))
+                if (CanDragDropDownIcon)
                     BeginDropDownIconMouseCapture();
                 return true;
             }
@@ -682,7 +706,7 @@ namespace FlaxEngine.GUI
         /// <inheritdoc />
         public override void OnMouseMove(Float2 location)
         {
-            _mouseOverHeader = HeaderRectangle.Contains(location);
+            _mouseOverHeader = IsHeaderInputLocation(location);
 
             if (_dropDownIconMouseCaptureActive || _dropDownIconMouseCaptureSuppressActions)
             {
@@ -699,7 +723,7 @@ namespace FlaxEngine.GUI
         {
             if (button == MouseButton.Left && (_dropDownIconMouseCaptureActive || _dropDownIconMouseCaptureSuppressActions))
             {
-                _mouseOverHeader = HeaderRectangle.Contains(location);
+                _mouseOverHeader = IsHeaderInputLocation(location);
                 if (_dropDownIconMouseCaptureActive)
                     UpdateDropDownIconMouseCapture(location);
                 _mouseButtonLeftDown = false;
@@ -711,7 +735,7 @@ namespace FlaxEngine.GUI
             if (base.OnMouseUp(location, button))
                 return true;
 
-            _mouseOverHeader = HeaderRectangle.Contains(location);
+            _mouseOverHeader = IsHeaderInputLocation(location);
             if (button == MouseButton.Left && _mouseButtonLeftDown)
             {
                 _mouseButtonLeftDown = false;
@@ -742,7 +766,7 @@ namespace FlaxEngine.GUI
             if (base.OnMouseDoubleClick(location, button))
                 return true;
             
-            _mouseOverHeader = HeaderRectangle.Contains(location);
+            _mouseOverHeader = IsHeaderInputLocation(location);
             if (button == MouseButton.Left && _mouseOverHeader)
             {
                 _mouseButtonLeftDown = true;

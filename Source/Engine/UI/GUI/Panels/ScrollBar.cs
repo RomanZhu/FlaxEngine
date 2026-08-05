@@ -237,6 +237,7 @@ namespace FlaxEngine.GUI
         protected ScrollBar(Orientation orientation)
         {
             AutoFocus = false;
+            IsScrollable = false;
 
             _orientation = orientation;
             var style = Style.Current;
@@ -322,10 +323,12 @@ namespace FlaxEngine.GUI
                 return 0.0f;
 
             var mousePosition = PointFromWindow(root.MousePosition);
+            if (Parent is ScrollableControl panel)
+                mousePosition += panel.ViewOffset;
             float expandedThickness = Mathf.Min(ExpandedThumbThickness, availableThickness);
             var expandedThumbRect = _orientation == Orientation.Vertical
-                                    ? new Rectangle(width - expandedThickness, thumbPosition + 4, expandedThickness, thumbLength)
-                                    : new Rectangle(thumbPosition + 4, height - expandedThickness, thumbLength, expandedThickness);
+                                     ? new Rectangle(width - expandedThickness, thumbPosition + 4, expandedThickness, thumbLength)
+                                     : new Rectangle(thumbPosition + 4, height - expandedThickness, thumbLength, expandedThickness);
             float distance = DistanceToRectangle(ref mousePosition, ref expandedThumbRect);
             return Mathf.Saturate(1.0f - distance / ThumbExpandDistance);
         }

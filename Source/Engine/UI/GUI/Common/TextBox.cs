@@ -142,7 +142,7 @@ namespace FlaxEngine.GUI
             Font = new FontReference(style.FontMedium);
             TextColor = style.Foreground;
             WatermarkTextColor = style.ForegroundDisabled;
-            SelectionColor = style.BackgroundSelected;
+            SelectionColor = style.BorderSelected;
         }
 
         /// <inheritdoc />
@@ -232,17 +232,24 @@ namespace FlaxEngine.GUI
                 return;
 
             // Background
-            Color backColor = BackgroundColor;
-            if (IsMouseOver || IsNavFocused)
-                backColor = BackgroundSelectedColor;
-            var cornerRadius = Style.Current != null ? Style.Current.CornerRadius : 0.0f;
-            var drawBorder = HasBorder && IsFocused;
+            var style = Style.Current;
+            var isInputActive = enabled && (IsEditing || IsFocused || IsNavFocused);
+            Color backColor = isInputActive ? BackgroundSelectedColor : BackgroundColor;
+            Color borderColor = isInputActive ? BorderSelectedColor : BorderColor;
+            if (!enabled)
+            {
+                backColor = StyleRendering.GetDisabledInputColor(backColor);
+                borderColor = StyleRendering.GetDisabledInputAccentColor(borderColor);
+            }
+            var cornerRadius = style != null ? style.GetInputCornerRadius() : 0.0f;
+            var drawBorder = HasBorder && isInputActive;
+            var borderThickness = BorderThickness;
             if (cornerRadius > 0.0f)
-                StyleRendering.DrawRoundedRectangle(rect, backColor, BorderSelectedColor, drawBorder ? BorderThickness : 0.0f, cornerRadius);
+                StyleRendering.DrawRoundedRectangle(rect, backColor, borderColor, drawBorder ? borderThickness : 0.0f, cornerRadius);
             else
                 Render2D.FillRectangle(rect, backColor);
             if (drawBorder && cornerRadius <= 0.0f)
-                Render2D.DrawRectangle(rect, BorderSelectedColor, BorderThickness);
+                Render2D.DrawRectangle(rect, borderColor, borderThickness);
 
             // Apply view offset and clip mask
             if (ClipText)
@@ -254,7 +261,7 @@ namespace FlaxEngine.GUI
             var text = ConvertedText();
 
             // Check if sth is selected to draw selection
-            if (HasSelection && IsFocused)
+            if (enabled && HasSelection && IsFocused)
             {
                 var leftEdge = font.GetCharPosition(text, SelectionLeft, ref _layout);
                 var rightEdge = font.GetCharPosition(text, SelectionRight, ref _layout);
@@ -319,7 +326,7 @@ namespace FlaxEngine.GUI
             }
 
             // Caret
-            if (IsFocused && CaretPosition > -1)
+            if (enabled && IsFocused && CaretPosition > -1)
             {
                 float alpha = Mathf.Saturate(Mathf.Cos(_animateTime * CaretFlashSpeed) * 0.5f + 0.8f);
                 alpha = alpha * alpha;

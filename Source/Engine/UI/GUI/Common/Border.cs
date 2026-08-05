@@ -37,8 +37,9 @@ namespace FlaxEngine.GUI
 
             var style = Style.Current;
             var bounds = new Rectangle(Float2.Zero, Size);
-            if (style != null && style.CornerRadius > 0.0f)
-                StyleRendering.DrawRoundedRectangleBorder(bounds, BorderColor, BorderWidth, style.CornerRadius);
+            var cornerRadius = style != null ? style.GetPanelCornerRadius() : 0.0f;
+            if (cornerRadius > 0.0f)
+                StyleRendering.DrawRoundedRectangleBorder(bounds, BorderColor, BorderWidth, cornerRadius);
             else
                 Render2D.DrawRectangle(bounds, BorderColor, BorderWidth);
         }

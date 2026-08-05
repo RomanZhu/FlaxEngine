@@ -1,7 +1,5 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
-using System.IO;
-
 namespace FlaxEngine.GUI
 {
     /// <summary>
@@ -231,6 +229,12 @@ namespace FlaxEngine.GUI
         /// </summary>
         [EditorOrder(211)]
         public float ValueBoxPrefixOffset;
+
+        /// <summary>
+        /// The horizontal offset for inline value-box prefix content. This moves only the text or icon inside the prefix segment.
+        /// </summary>
+        [EditorOrder(212)]
+        public float ValueBoxPrefixContentOffset;
 
         /// <summary>
         /// The preferred corner radius for panels and framed containers. A value of zero inherits <see cref="CornerRadius"/>. A negative value preserves square corners.
@@ -519,6 +523,14 @@ namespace FlaxEngine.GUI
         }
 
         /// <summary>
+        /// Gets the resolved value-box prefix content horizontal offset.
+        /// </summary>
+        public float GetValueBoxPrefixContentOffset()
+        {
+            return ValueBoxPrefixContentOffset;
+        }
+
+        /// <summary>
         /// Gets the resolved panel corner radius.
         /// </summary>
         public float GetPanelCornerRadius()
@@ -804,6 +816,33 @@ namespace FlaxEngine.GUI
         private const float RoundedRectangleBorderThicknessTolerance = 0.01f;
         private const float RoundedRectangleSquareMaskSlice = 1.0f;
         private static Texture _roundedRectangleSquareFillTexture;
+
+        /// <summary>
+        /// Gets a muted color for disabled input backgrounds. Keeps a small amount of the source tint without leaving accent colors active.
+        /// </summary>
+        /// <param name="color">The source input color.</param>
+        /// <returns>The disabled input color.</returns>
+        public static Color GetDisabledInputColor(Color color)
+        {
+            var style = Style.Current;
+            if (style == null)
+                return color * 0.65f;
+            var mutedBase = Color.Lerp(style.Background, style.ForegroundDisabled, 0.18f);
+            return Color.Lerp(mutedBase, color, 0.16f);
+        }
+
+        /// <summary>
+        /// Gets a muted color for disabled input borders or active accents.
+        /// </summary>
+        /// <param name="color">The source accent color.</param>
+        /// <returns>The disabled accent color.</returns>
+        public static Color GetDisabledInputAccentColor(Color color)
+        {
+            var style = Style.Current;
+            if (style == null)
+                return color * 0.55f;
+            return Color.Lerp(style.Background, style.ForegroundDisabled, 0.28f);
+        }
 
         /// <summary>
         /// Draws a filled rectangle with compact rounded corners.
@@ -1130,8 +1169,6 @@ namespace FlaxEngine.GUI
 
             private readonly ushort[] _fillRle;
             private readonly ushort[] _borderRle;
-            private readonly string _fillFileName;
-            private readonly string _borderFileName;
             private Texture _fillTexture;
             private Texture _borderTexture;
 
@@ -1142,63 +1179,31 @@ namespace FlaxEngine.GUI
                 SourceSlice = slice * RoundedRectangleMaskAssetScale;
                 _fillRle = fillRle;
                 _borderRle = borderRle;
-                _fillFileName = $"RoundedFill_R{(int)radius}.png";
-                _borderFileName = $"RoundedBorder_R{(int)radius}_T1.png";
             }
 
             public Texture GetFillTexture()
             {
-                return GetMaskTexture(ref _fillTexture, _fillFileName, _fillRle);
+                return GetMaskTexture(ref _fillTexture, _fillRle);
             }
 
             public Texture GetBorderTexture()
             {
-                return GetMaskTexture(ref _borderTexture, _borderFileName, _borderRle);
+                return GetMaskTexture(ref _borderTexture, _borderRle);
             }
         }
 
         private static Texture GetSquareFillTexture()
         {
-            return GetMaskTexture(ref _roundedRectangleSquareFillTexture, "SquareFill.png", RoundedRectangleSquareFillRle, "SquareFill_R5.png");
+            return GetMaskTexture(ref _roundedRectangleSquareFillTexture, RoundedRectangleSquareFillRle);
         }
 
-        private static Texture GetMaskTexture(ref Texture texture, string fileName, ushort[] fallbackRle, string legacyFileName = null)
+        private static Texture GetMaskTexture(ref Texture texture, ushort[] rle)
         {
             if (texture)
                 return texture;
 
-            texture = LoadExternalTexture(fileName);
-            if (!texture && !string.IsNullOrEmpty(legacyFileName))
-                texture = LoadExternalTexture(legacyFileName);
-            if (texture)
-                return texture;
-
-            texture = CreateTextureFromRle(fallbackRle);
+            texture = CreateTextureFromRle(rle);
             return texture;
-        }
-
-        private static Texture LoadExternalTexture(string fileName)
-        {
-            var startupFolder = Globals.StartupFolder;
-            if (string.IsNullOrEmpty(startupFolder))
-                return null;
-
-            var path = Path.Combine(startupFolder, "Docs", fileName);
-            if (!File.Exists(path))
-            {
-                path = Path.Combine(startupFolder, "docs", fileName);
-                if (!File.Exists(path))
-                    return null;
-            }
-
-            try
-            {
-                return Texture.FromFile(path);
-            }
-            catch
-            {
-                return null;
-            }
         }
 
         private static Texture CreateTextureFromRle(ushort[] rle)

@@ -74,6 +74,12 @@ namespace FlaxEngine.GUI
         public Color BorderColorSelected { get; set; }
 
         /// <summary>
+        /// Gets or sets the custom corner radius. A value of zero uses the current style radius, and a negative value preserves square corners.
+        /// </summary>
+        [EditorDisplay("Background Style"), EditorOrder(2003)]
+        public float CornerRadius { get; set; }
+
+        /// <summary>
         /// Event fired when user clicks on the button.
         /// </summary>
         public event Action Clicked;
@@ -124,7 +130,7 @@ namespace FlaxEngine.GUI
                 TextColor = style.Foreground;
                 BackgroundColor = style.BackgroundNormal;
                 BorderColor = style.BorderNormal;
-                BackgroundColorSelected = style.BackgroundSelected;
+                BackgroundColorSelected = style.BorderSelected;
                 BorderColorSelected = style.BorderSelected;
                 BackgroundColorHighlighted = style.BackgroundHighlighted;
                 BorderColorHighlighted = style.BorderHighlighted;
@@ -196,6 +202,8 @@ namespace FlaxEngine.GUI
         {
             Rectangle clientRect = new Rectangle(Float2.Zero, Size);
             bool enabled = VisuallyEnabledInHierarchy;
+            var style = Style.Current;
+            var cornerRadius = CornerRadius < 0.0f ? 0.0f : CornerRadius > 0.0f ? CornerRadius : style != null ? style.GetButtonCornerRadius() : 0.0f;
             Color backgroundColor = BackgroundColor;
             Color borderColor = BorderColor;
             if (!enabled)
@@ -205,35 +213,34 @@ namespace FlaxEngine.GUI
             }
             else if (_isPressed)
             {
-                backgroundColor = BackgroundColorSelected;
-                borderColor = BorderColorSelected;
+                backgroundColor = ResolveStateColor(BackgroundColorSelected, style?.BorderSelected ?? BackgroundColorHighlighted);
+                borderColor = ResolveStateColor(BorderColorSelected, style?.BorderSelected ?? BorderColorHighlighted);
             }
             else if (IsMouseOver || IsNavFocused)
             {
-                backgroundColor = BackgroundColorHighlighted;
-                borderColor = BorderColorHighlighted;
+                backgroundColor = ResolveStateColor(BackgroundColorHighlighted, style?.BackgroundHighlighted ?? BackgroundColor);
+                borderColor = ResolveStateColor(BorderColorHighlighted, style?.BorderHighlighted ?? BorderColor);
             }
 
             // Draw background
             if (BackgroundBrush != null)
             {
                 var brushRect = clientRect;
-                var style = Style.Current;
                 if (BackgroundBrush is SpriteBrush && style != null && Width <= 48.0f && Height <= 48.0f)
                 {
-                    var iconSize = Mathf.Min(16.0f, style.IconSize > 0.0f ? style.IconSize : 16.0f);
+                    var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetButtonIconSize()), Mathf.Max(0.0f, Mathf.Min(Width, Height) - 2.0f));
                     brushRect = new Rectangle((Width - iconSize) * 0.5f, (Height - iconSize) * 0.5f, iconSize, iconSize);
                 }
                 BackgroundBrush.Draw(brushRect, backgroundColor);
             }
-            else if (Style.Current != null && Style.Current.CornerRadius > 0.0f)
-                StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, HasBorder ? BorderThickness : 0.0f, Style.Current.CornerRadius);
+            else if (cornerRadius > 0.0f)
+                StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, HasBorder ? BorderThickness : 0.0f, cornerRadius);
             else
                 Render2D.FillRectangle(clientRect, backgroundColor);
-            if (HasBorder && (BackgroundBrush != null || Style.Current == null || Style.Current.CornerRadius <= 0.0f))
+            if (HasBorder && (BackgroundBrush != null || cornerRadius <= 0.0f))
             {
-                if (Style.Current != null && Style.Current.CornerRadius > 0.0f)
-                    StyleRendering.DrawRoundedRectangleBorder(clientRect, borderColor, BorderThickness, Style.Current.CornerRadius);
+                if (cornerRadius > 0.0f)
+                    StyleRendering.DrawRoundedRectangleBorder(clientRect, borderColor, BorderThickness, cornerRadius);
                 else
                     Render2D.DrawRectangle(clientRect, borderColor, BorderThickness);
             }
@@ -243,6 +250,11 @@ namespace FlaxEngine.GUI
             BackgroundColor = Color.Transparent; // Skip background drawing in Control
             base.DrawSelf();
             BackgroundColor = backgroundColor;
+        }
+
+        private static Color ResolveStateColor(Color color, Color fallback)
+        {
+            return color.A > 0.0f ? color : fallback;
         }
 
         /// <inheritdoc />

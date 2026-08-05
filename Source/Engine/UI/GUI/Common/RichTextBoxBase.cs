@@ -316,11 +316,16 @@ namespace FlaxEngine.GUI
             bool enabled = VisuallyEnabledInHierarchy;
 
             // Background
-            Color backColor = BackgroundColor;
-            if (IsMouseOver || IsNavFocused)
-                backColor = BackgroundSelectedColor;
-            var borderColor = IsFocused ? BorderSelectedColor : BorderColor;
-            var cornerRadius = Style.Current != null ? Style.Current.CornerRadius : 0.0f;
+            var style = Style.Current;
+            var isInputActive = enabled && (IsFocused || IsNavFocused);
+            Color backColor = isInputActive ? BackgroundSelectedColor : BackgroundColor;
+            var borderColor = isInputActive ? BorderSelectedColor : BorderColor;
+            if (!enabled)
+            {
+                backColor = StyleRendering.GetDisabledInputColor(backColor);
+                borderColor = StyleRendering.GetDisabledInputAccentColor(borderColor);
+            }
+            var cornerRadius = style != null ? style.GetInputCornerRadius() : 0.0f;
             if (cornerRadius > 0.0f)
                 StyleRendering.DrawRoundedRectangle(rect, backColor, borderColor, HasBorder ? BorderThickness : 0.0f, cornerRadius);
             else
@@ -340,7 +345,7 @@ namespace FlaxEngine.GUI
             // Calculate text blocks for drawing
             var textBlocks = CollectionsMarshal.AsSpan(_textBlocks);
             var textBlocksCount = _textBlocks?.Count ?? 0;
-            var hasSelection = HasSelection;
+            var hasSelection = enabled && HasSelection;
             var selection = new TextRange(SelectionLeft, SelectionRight);
             var viewRect = new Rectangle(_viewOffset, Size).MakeExpanded(10.0f);
             var firstTextBlock = textBlocksCount;
@@ -411,7 +416,7 @@ namespace FlaxEngine.GUI
                 Color color;
                 if (!textBlock.Style.ShadowOffset.IsZero && textBlock.Style.ShadowColor != Color.Transparent)
                 {
-                    color = textBlock.Style.ShadowColor;
+                    color = textBlock.Style.ShadowColor.AlphaMultiplied(textBlock.Style.Color.A);
                     if (!enabled)
                         color *= 0.6f;
                     Render2D.DrawText(font, _text, ref textBlock.Range, color, textBlock.Bounds.Location + textBlock.Style.ShadowOffset, textBlock.Style.CustomMaterial);

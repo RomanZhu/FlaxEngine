@@ -240,10 +240,11 @@ namespace FlaxEngine.GUI
                 var highlighted = enabled && (_isPressed || _mouseOverBox || IsNavFocused);
                 var fillColor = _state != CheckBoxState.Default
                     ? (highlighted ? Color.Lerp(BorderColorHighlighted, Color.White, 0.28f) : BorderColorHighlighted)
-                    : Color.Lerp(style.Background, style.Foreground, highlighted ? 0.30f : 0.14f);
+                    : (highlighted ? Color.Lerp(style.BackgroundNormal, style.Foreground, 0.12f) : style.BackgroundNormal);
                 if (!enabled)
                     fillColor = Color.Lerp(fillColor, style.Background, 0.45f);
                 StyleRendering.FillCheckBox(_box, fillColor);
+                Render2D.DrawRectangle(_box, Color.White.AlphaMultiplied(0.05f), 0.5f);
             }
 
             // Icon

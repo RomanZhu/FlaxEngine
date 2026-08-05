@@ -297,7 +297,8 @@ namespace FlaxEngine
                 BackgroundNormal = Color.FromBgra(0xFF3F3F46),
                 BorderNormal = Color.FromBgra(0xFF54545C),
                 TextBoxBackground = Color.FromBgra(0xFF333337),
-                TextBoxBackgroundSelected = Color.FromBgra(0xFF3F3F46),
+                TextBoxBackgroundSelected = Color.FromBgra(0xFF2D2D30),
+                TabIconSize = 18.0f,
                 CollectionBackgroundColor = Color.FromBgra(0x14CCCCCC),
                 ProgressNormal = Color.FromBgra(0xFF0ad328),
                 Statusbar = new Style.StatusbarStyle

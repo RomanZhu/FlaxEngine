@@ -625,7 +625,7 @@ namespace FlaxEngine.GUI
             BorderColor = style.BorderNormal;
             BorderSelectedColor = style.BorderSelected;
             BackgroundColor = style.TextBoxBackground;
-            BackgroundSelectedColor = style.TextBoxBackgroundSelected;
+            BackgroundSelectedColor = style.SecondaryBackground;
         }
 
         /// <summary>

@@ -395,7 +395,7 @@ namespace FlaxEngine.GUI
             TextColorHighlighted = style.Foreground;
             BackgroundColor = style.TextBoxBackground;
             BackgroundColorHighlighted = style.TextBoxBackgroundSelected;
-            BackgroundColorSelected = style.TextBoxBackgroundSelected;
+            BackgroundColorSelected = style.SecondaryBackground;
             BorderColor = style.BorderNormal;
             BorderColorHighlighted = style.BorderSelected;
             BorderColorSelected = BorderColorHighlighted;
@@ -731,8 +731,9 @@ namespace FlaxEngine.GUI
             Color arrowColor = ArrowColor;
             if (!enabled)
             {
-                backgroundColor *= 0.5f;
-                arrowColor *= 0.7f;
+                backgroundColor = StyleRendering.GetDisabledInputColor(backgroundColor);
+                borderColor = StyleRendering.GetDisabledInputAccentColor(borderColor);
+                arrowColor = Style.Current.ForegroundDisabled;
             }
             else if (isOpened || _touchDown)
             {
@@ -764,7 +765,7 @@ namespace FlaxEngine.GUI
                 // Draw text of the selected item
                 var textRect = new Rectangle(margin, 0, clientRect.Width - boxSize - 2.0f * margin, clientRect.Height);
                 Render2D.PushClip(textRect);
-                var textColor = (IsMouseOver || IsNavFocused) ? TextColorHighlighted : TextColor;
+                var textColor = enabled && (IsMouseOver || IsNavFocused) ? TextColorHighlighted : TextColor;
                 string text = _items[_selectedIndex];
                 string format = TextFormat != null ? TextFormat : null;
                 if (!string.IsNullOrEmpty(format))

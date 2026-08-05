@@ -301,6 +301,20 @@ namespace FlaxEditor.Options
         public bool DisableEditorRenderingInFullscreen { get; set; } = true;
 
         /// <summary>
+        /// Gets or sets a value indicating whether hovering Scene window items highlights their actors in the editor viewport.
+        /// </summary>
+        [DefaultValue(true)]
+        [EditorDisplay("Interface", "Highlight in Editor"), EditorOrder(263), Tooltip("When hovered Scene items will highlight items in Editor.")]
+        public bool HighlightSceneTreeHoverInViewport { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether hovering editor viewport objects highlights them and their Scene window rows.
+        /// </summary>
+        [DefaultValue(true)]
+        [EditorDisplay("Interface", "Highlight Scene Items from Editor"), EditorOrder(264), Tooltip("When hovered Editor items will highlight items in Scene.")]
+        public bool HighlightViewportObjectHover { get; set; } = true;
+
+        /// <summary>
         /// Gets or sets the persisted global toolbar anchor and item order.
         /// </summary>
         [HideInEditor]
@@ -387,24 +401,45 @@ namespace FlaxEditor.Options
         public bool AlternatingTreeRows { get; set; } = true;
 
         /// <summary>
+        /// Gets or sets the quick override for compact tree row height. A value of zero uses the active style value.
+        /// </summary>
+        [DefaultValue(0.0f), Limit(0.0f, 96.0f, 1.0f)]
+        [EditorDisplay("Interface"), EditorOrder(323)]
+        public float TreeRowHeight { get; set; }
+
+        /// <summary>
+        /// Gets or sets the quick override for content tree icon size. A value of zero uses the active style value.
+        /// </summary>
+        [DefaultValue(0.0f), Limit(0.0f, 96.0f, 1.0f)]
+        [EditorDisplay("Interface"), EditorOrder(324)]
+        public float ContentTreeIconSize { get; set; }
+
+        /// <summary>
+        /// Gets or sets the quick override for scene tree icon size. A value of zero uses the active style value.
+        /// </summary>
+        [DefaultValue(0.0f), Limit(0.0f, 96.0f, 1.0f)]
+        [EditorDisplay("Interface"), EditorOrder(325)]
+        public float SceneTreeIconSize { get; set; }
+
+        /// <summary>
         /// Gets or sets whether compact performance statistics are visible beside the window controls.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface", "Title Bar Performance Stats"), EditorOrder(323)]
+        [EditorDisplay("Interface", "Title Bar Performance Stats"), EditorOrder(326)]
         public bool ShowTitleBarPerformanceStats { get; set; } = true;
 
         /// <summary>
         /// Gets or sets the statistics shown in the editor title bar.
         /// </summary>
         [DefaultValue(EditorPerformanceStats.All)]
-        [EditorDisplay("Interface", "Displayed Performance Stats"), EditorOrder(324), VisibleIf(nameof(ShowTitleBarPerformanceStats))]
+        [EditorDisplay("Interface", "Displayed Performance Stats"), EditorOrder(327), VisibleIf(nameof(ShowTitleBarPerformanceStats))]
         public EditorPerformanceStats TitleBarPerformanceStats { get; set; } = EditorPerformanceStats.All;
 
         /// <summary>
         /// Whether to scroll to the script when a script is added to an actor.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface"), EditorOrder(325)]
+        [EditorDisplay("Interface"), EditorOrder(328)]
         public bool ScrollToScriptOnAdd { get; set; } = true;
 
 #if PLATFORM_SDL || PLATFORM_MAC

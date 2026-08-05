@@ -22,6 +22,8 @@ namespace FlaxEngine.GUI
         private Color _scrollbarThumbSelectedColor;
         private Rectangle _controlsBoundsBeforeLayout;
 
+        private const float VerticalScrollBarRightOffset = 2.0f;
+
         /// <summary>
         /// The cached scroll area bounds. Used to scroll contents of the panel control. Cached during performing layout.
         /// </summary>
@@ -70,7 +72,7 @@ namespace FlaxEngine.GUI
                         VScrollBar = GetChild<VScrollBar>();
                     if (VScrollBar == null)
                     {
-                        VScrollBar = new VScrollBar(this, Width - _scrollBarsSize, Height)
+                        VScrollBar = new VScrollBar(this, Width - _scrollBarsSize - VerticalScrollBarRightOffset, Height)
                         {
                             AnchorPreset = AnchorPresets.TopLeft
                         };
@@ -79,6 +81,7 @@ namespace FlaxEngine.GUI
                     }
                     if (VScrollBar != null)
                     {
+                        VScrollBar.IsScrollable = false;
                         VScrollBar.TrackColor = _scrollbarTrackColor;
                         VScrollBar.ThumbColor = _scrollbarThumbColor;
                         VScrollBar.ThumbSelectedColor = _scrollbarThumbSelectedColor;
@@ -106,6 +109,7 @@ namespace FlaxEngine.GUI
                     }
                     if (HScrollBar != null)
                     {
+                        HScrollBar.IsScrollable = false;
                         HScrollBar.TrackColor = _scrollbarTrackColor;
                         HScrollBar.ThumbColor = _scrollbarThumbColor;
                         HScrollBar.ThumbSelectedColor = _scrollbarThumbSelectedColor;
@@ -583,7 +587,7 @@ namespace FlaxEngine.GUI
                         max = Mathf.Max(scrollBounds.Top, scrollBounds.Height - height);
                     VScrollBar.SetScrollRange(scrollBounds.Top, max);
                 }
-                VScrollBar.Bounds = new Rectangle(Width - _scrollBarsSize, 0, _scrollBarsSize, Height);
+                VScrollBar.Bounds = new Rectangle(Mathf.Max(0.0f, Width - _scrollBarsSize - VerticalScrollBarRightOffset), 0, _scrollBarsSize, Height);
             }
             if (HScrollBar != null)
             {
@@ -615,7 +619,8 @@ namespace FlaxEngine.GUI
                         max = Mathf.Max(scrollBounds.Left, scrollBounds.Width - width);
                     HScrollBar.SetScrollRange(scrollBounds.Left, max);
                 }
-                HScrollBar.Bounds = new Rectangle(0, Height - _scrollBarsSize, Width - (VScrollBar != null && VScrollBar.Visible ? VScrollBar.Width : 0), _scrollBarsSize);
+                var scrollBarWidth = Width - (VScrollBar != null && VScrollBar.Visible ? VScrollBar.Width + VerticalScrollBarRightOffset : 0.0f);
+                HScrollBar.Bounds = new Rectangle(0, Height - _scrollBarsSize, Mathf.Max(0.0f, scrollBarWidth), _scrollBarsSize);
             }
         }
 
@@ -674,7 +679,7 @@ namespace FlaxEngine.GUI
 
             if (VScrollBar != null && VScrollBar.Visible)
             {
-                rect.Width -= VScrollBar.Width;
+                rect.Width = Mathf.Max(0.0f, rect.Width - VScrollBar.Width - VerticalScrollBarRightOffset);
             }
 
             if (HScrollBar != null && HScrollBar.Visible)
