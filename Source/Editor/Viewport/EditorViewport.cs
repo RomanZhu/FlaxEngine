@@ -632,6 +632,8 @@ namespace FlaxEditor.Viewport
             // Setup options
             {
                 _editor.Options.OptionsChanged += OnEditorOptionsChanged;
+                _editor.PlayModeBeginning += HideCameraMoveSpeedOverlay;
+                _editor.PlayModeEnding += HideCameraMoveSpeedOverlay;
                 SetupViewportOptions();
             }
 
@@ -1705,14 +1707,26 @@ namespace FlaxEditor.Viewport
         private void ShowCameraMoveSpeedOverlay()
         {
             _cameraMoveSpeedOverlayText = string.Format(MovementSpeedTextFormat, _movementSpeed) + "x";
-            _cameraMoveSpeedOverlayHideTime = Time.UnscaledGameTime + CameraMoveSpeedOverlayDuration;
+            _cameraMoveSpeedOverlayHideTime = Time.TimeSinceStartup + CameraMoveSpeedOverlayDuration;
+        }
+
+        private void HideCameraMoveSpeedOverlay()
+        {
+            _cameraMoveSpeedOverlayText = null;
+            _cameraMoveSpeedOverlayHideTime = -1.0f;
         }
 
         private void DrawCameraMoveSpeedOverlay()
         {
-            var timeLeft = _cameraMoveSpeedOverlayHideTime - Time.UnscaledGameTime;
-            if (timeLeft <= 0.0f || string.IsNullOrEmpty(_cameraMoveSpeedOverlayText))
+            if (string.IsNullOrEmpty(_cameraMoveSpeedOverlayText))
                 return;
+
+            var timeLeft = _cameraMoveSpeedOverlayHideTime - Time.TimeSinceStartup;
+            if (timeLeft <= 0.0f)
+            {
+                HideCameraMoveSpeedOverlay();
+                return;
+            }
 
             var alpha = Mathf.Saturate(timeLeft / CameraMoveSpeedOverlayFadeDuration);
             var style = Style.Current;
@@ -2558,6 +2572,8 @@ namespace FlaxEditor.Viewport
         {
             base.OnLostFocus();
 
+            HideCameraMoveSpeedOverlay();
+
             if (_isControllingMouse)
             {
                 if (RootWindow?.Window != null)
@@ -2571,6 +2587,8 @@ namespace FlaxEditor.Viewport
         public override void OnDestroy()
         {
             _editor.Options.OptionsChanged -= OnEditorOptionsChanged;
+            _editor.PlayModeBeginning -= HideCameraMoveSpeedOverlay;
+            _editor.PlayModeEnding -= HideCameraMoveSpeedOverlay;
 
             base.OnDestroy();
         }
