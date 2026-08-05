@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
+using FlaxEditor.CustomEditors.Elements;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Drag;
@@ -50,26 +51,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
         private DragScriptItems _dragScripts;
         private DragAssets _dragAssets;
         private Button _addScriptsButton;
-        private static readonly Color AddScriptsButtonBackgroundColor = new Color(0.2470588f, 0.2470588f, 0.2588235f, 1.0f);
 
         /// <summary>
         /// The parent scripts editor.
         /// </summary>
         public ScriptsEditor ScriptsEditor;
-
-        private static void ApplyAddScriptsButtonStyle(Button button)
-        {
-            var style = Style.Current;
-
-            button.BackgroundColor = AddScriptsButtonBackgroundColor;
-            button.BackgroundColorHighlighted = AddScriptsButtonBackgroundColor.RGBMultiplied(1.12f);
-            button.BackgroundColorSelected = style?.BorderSelected ?? AddScriptsButtonBackgroundColor.RGBMultiplied(0.9f);
-            button.BorderColor = Color.Transparent;
-            button.BorderColorHighlighted = Color.Transparent;
-            button.BorderColorSelected = Color.Transparent;
-            button.HasBorder = false;
-            button.CornerRadius = 3.0f;
-        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DragAreaControl"/> class.
@@ -88,7 +74,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 Parent = this,
                 Bounds = new Rectangle(Float2.Zero, Size),
             };
-            ApplyAddScriptsButtonStyle(_addScriptsButton);
+            ButtonElement.ApplyPropertyButtonStyle(_addScriptsButton);
             _addScriptsButton.ButtonClicked += OnAddScriptButtonClicked;
         }
 
@@ -98,7 +84,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             base.PerformLayoutBeforeChildren();
 
             _addScriptsButton.Bounds = new Rectangle(Float2.Zero, Size);
-            ApplyAddScriptsButtonStyle(_addScriptsButton);
+            ButtonElement.ApplyPropertyButtonStyle(_addScriptsButton);
         }
 
         private void OnAddScriptButtonClicked(Button button)
