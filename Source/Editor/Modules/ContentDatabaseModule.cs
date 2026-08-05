@@ -992,6 +992,29 @@ namespace FlaxEditor.Modules
                             }
                         }
                     }
+                    else if (canHaveAssets && child is FileItem && FlaxEngine.Content.GetAssetInfo(child.Path, out var assetInfo))
+                    {
+                        // The asset info can become available after the file system notification that created
+                        // a temporary generic file item. Upgrade it into the proper asset item when refreshing.
+                        var proxy = GetAssetProxy(assetInfo.TypeName, child.Path);
+                        var item = proxy?.ConstructItem(child.Path, assetInfo.TypeName, ref assetInfo.ID);
+                        if (item != null)
+                        {
+                            var index = folder.Children.IndexOf(child);
+                            Dispose(child);
+                            item.ParentFolder = folder;
+                            if (index >= 0 && index < folder.Children.Count)
+                            {
+                                folder.Children.Remove(item);
+                                folder.Children.Insert(index, item);
+                            }
+                            if (_enableEvents)
+                            {
+                                ItemAdded?.Invoke(item);
+                                WorkspaceModified?.Invoke();
+                            }
+                        }
+                    }
                 }
             }
 
