@@ -107,10 +107,10 @@ namespace FlaxEditor.Windows.Assets
 
             _toolstrip = new ToolStrip
             {
+                BackgroundColor = Style.Current.Background,
                 Parent = this
             };
             _toolstrip.AddButton(editor.Icons.Search64, () => Editor.Windows.ContentWin.Select(_item)).LinkTooltip("Show and select in Content Window.");
-                BackgroundColor = Style.Current.Background,
 
             InputActions.Add(options => options.Save, Save);
 
