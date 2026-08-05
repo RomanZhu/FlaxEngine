@@ -168,70 +168,12 @@ namespace FlaxEditor.Gizmo
 
         internal void Pick(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode, bool addRemove)
         {
-            bool selectColliders = (viewFlags & ViewFlags.PhysicsDebug) == ViewFlags.PhysicsDebug || viewMode == ViewMode.PhysicsColliders;
-            SceneGraphNode.RayCastData.FlagTypes rayCastFlags = SceneGraphNode.RayCastData.FlagTypes.None;
-            if (!selectColliders)
-                rayCastFlags |= SceneGraphNode.RayCastData.FlagTypes.SkipColliders;
-            var hit = Editor.Instance.Scene.Root.RayCast(ref ray, ref view, out _, rayCastFlags);
+            var hit = GetPickTarget(ref ray, ref view, viewFlags, viewMode);
 
             // Update selection
             var sceneEditing = Editor.Instance.SceneEditing;
             if (hit != null)
             {
-                // For child actor nodes (mesh, link or sth) we need to select it's owning actor node first or any other child node (but not a child actor)
-                if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
-                {
-                    var parentNode = actorChildNode.ParentNode;
-                    bool canChildBeSelected = sceneEditing.Selection.Contains(parentNode);
-                    if (!canChildBeSelected)
-                    {
-                        for (int i = 0; i < parentNode.ChildNodes.Count; i++)
-                        {
-                            if (sceneEditing.Selection.Contains(parentNode.ChildNodes[i]))
-                            {
-                                canChildBeSelected = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (canChildBeSelected && sceneEditing.Selection.Count > 1)
-                    {
-                        // Don't select child node if multiple nodes are selected
-                        canChildBeSelected = false;
-                    }
-
-                    if (!canChildBeSelected)
-                    {
-                        // Select parent
-                        hit = parentNode;
-                    }
-                }
-
-                // Select prefab root and then go down until you find the actual item in which case select the prefab root again
-                if (hit is ActorNode actorNode)
-                {
-                    ActorNode prefabRoot = GetPrefabRootInParent(actorNode);
-                    if (prefabRoot != null && actorNode != prefabRoot)
-                    {
-                        bool isPrefabInSelection = false;
-                        foreach (var e in sceneEditing.Selection)
-                        {
-                            if (e is ActorNode ae && GetPrefabRootInParent(ae) == prefabRoot)
-                            {
-                                isPrefabInSelection = true;
-                                break;
-                            }
-                        }
-
-                        // Skip selecting prefab root if we already had object from that prefab selected
-                        if (!isPrefabInSelection)
-                        {
-                            hit = WalkUpAndFindActorNodeBeforeSelection(actorNode, prefabRoot);
-                        }
-                    }
-                }
-
                 bool isSelected = sceneEditing.Selection.Contains(hit);
 
                 if (addRemove)
@@ -250,6 +192,83 @@ namespace FlaxEditor.Gizmo
             {
                 sceneEditing.Deselect();
             }
+        }
+
+        /// <summary>
+        /// Gets the scene graph node that would be selected by a pick at the given ray.
+        /// </summary>
+        /// <param name="ray">The mouse ray.</param>
+        /// <param name="view">The view ray.</param>
+        /// <param name="viewFlags">The view flags.</param>
+        /// <param name="viewMode">The view mode.</param>
+        /// <returns>The node that would be selected, or null if nothing was hit.</returns>
+        internal SceneGraphNode GetPickTarget(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode)
+        {
+            bool selectColliders = (viewFlags & ViewFlags.PhysicsDebug) == ViewFlags.PhysicsDebug || viewMode == ViewMode.PhysicsColliders;
+            SceneGraphNode.RayCastData.FlagTypes rayCastFlags = SceneGraphNode.RayCastData.FlagTypes.None;
+            if (!selectColliders)
+                rayCastFlags |= SceneGraphNode.RayCastData.FlagTypes.SkipColliders;
+            var hit = Editor.Instance.Scene.Root.RayCast(ref ray, ref view, out _, rayCastFlags);
+            if (hit == null)
+                return null;
+
+            var sceneEditing = Editor.Instance.SceneEditing;
+
+            // For child actor nodes (mesh, link or sth) we need to select it's owning actor node first or any other child node (but not a child actor)
+            if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
+            {
+                var parentNode = actorChildNode.ParentNode;
+                bool canChildBeSelected = sceneEditing.Selection.Contains(parentNode);
+                if (!canChildBeSelected)
+                {
+                    for (int i = 0; i < parentNode.ChildNodes.Count; i++)
+                    {
+                        if (sceneEditing.Selection.Contains(parentNode.ChildNodes[i]))
+                        {
+                            canChildBeSelected = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (canChildBeSelected && sceneEditing.Selection.Count > 1)
+                {
+                    // Don't select child node if multiple nodes are selected
+                    canChildBeSelected = false;
+                }
+
+                if (!canChildBeSelected)
+                {
+                    // Select parent
+                    hit = parentNode;
+                }
+            }
+
+            // Select prefab root and then go down until you find the actual item in which case select the prefab root again
+            if (hit is ActorNode actorNode)
+            {
+                ActorNode prefabRoot = GetPrefabRootInParent(actorNode);
+                if (prefabRoot != null && actorNode != prefabRoot)
+                {
+                    bool isPrefabInSelection = false;
+                    foreach (var e in sceneEditing.Selection)
+                    {
+                        if (e is ActorNode ae && GetPrefabRootInParent(ae) == prefabRoot)
+                        {
+                            isPrefabInSelection = true;
+                            break;
+                        }
+                    }
+
+                    // Skip selecting prefab root if we already had object from that prefab selected
+                    if (!isPrefabInSelection)
+                    {
+                        hit = WalkUpAndFindActorNodeBeforeSelection(actorNode, prefabRoot);
+                    }
+                }
+            }
+
+            return hit;
         }
 
         /// <inheritdoc />
