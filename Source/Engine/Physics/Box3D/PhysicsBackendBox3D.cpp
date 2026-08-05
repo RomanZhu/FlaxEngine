@@ -364,6 +364,35 @@ namespace
         return B3_IS_NON_NULL(shape->Shape) && b3Shape_IsValid(shape->Shape);
     }
 
+    bool ComputeActorMassData(ActorBox3D* actor, b3MassData& result)
+    {
+        result = {};
+        Array<b3MassData, InlinedAllocation<8>> shapeMasses;
+        b3Vec3 center = b3Vec3_zero;
+        for (auto shape : actor->Shapes)
+        {
+            if (!IsShapeValid(shape))
+                continue;
+            b3MassData massData = b3Shape_ComputeMassData(shape->Shape);
+            if (massData.mass <= 0.0f)
+                continue;
+            result.mass += massData.mass;
+            center = b3MulAdd(center, massData.mass, massData.center);
+            shapeMasses.Add(massData);
+        }
+        if (result.mass <= 0.0f)
+            return false;
+
+        center = b3MulSV(1.0f / result.mass, center);
+        for (const b3MassData& massData : shapeMasses)
+        {
+            const b3Vec3 offset = b3Sub(center, massData.center);
+            result.inertia = b3AddMM(result.inertia, b3AddMM(massData.inertia, b3Steiner(massData.mass, offset)));
+        }
+        result.center = center;
+        return true;
+    }
+
     PhysicsColliderActor* GetCollider(b3ShapeId shapeId)
     {
         if (B3_IS_NULL(shapeId) || !b3Shape_IsValid(shapeId))
@@ -1705,8 +1734,21 @@ void PhysicsBackend::UpdateRigidDynamicActorMass(void* actor, float& mass, float
     }
     else
     {
-        b3MassData massData = b3Body_GetMassData(actorBox3D->Body);
-        massData.mass = Math::Max(mass * massScale, 0.001f);
+        b3MassData massData;
+        const b3MassData currentMassData = b3Body_GetMassData(actorBox3D->Body);
+        const float targetMass = Math::Max(mass * massScale, 0.001f);
+        if (ComputeActorMassData(actorBox3D, massData))
+        {
+            massData.inertia = b3MulSM(targetMass / massData.mass, massData.inertia);
+            massData.center = currentMassData.center;
+        }
+        else
+        {
+            massData = currentMassData;
+            if (massData.mass > ZeroTolerance)
+                massData.inertia = b3MulSM(targetMass / massData.mass, massData.inertia);
+        }
+        massData.mass = targetMass;
         b3Body_SetMassData(actorBox3D->Body, massData);
     }
 }
