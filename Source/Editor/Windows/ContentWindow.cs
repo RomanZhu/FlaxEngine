@@ -263,10 +263,12 @@ namespace FlaxEditor.Windows
             options.OptionsChanged += OnOptionsChanged;
 
             // Toolstrip
-            _toolStrip = new ToolStrip(controlHeight + 10.0f)
+            _toolStrip = new ToolStrip(ToolStrip.GetCompactHeaderHeight(controlHeight))
             {
                 Parent = this,
                 BackgroundColor = style.Background,
+                ItemsMargin = ToolStrip.CompactHeaderItemsMargin,
+                UseCompactButtonStyle = true,
             };
             _createNewButton = (ToolStripButton)_toolStrip.AddGlyphButton(ToolStripGlyph.Add, ToolStripAnchor.Left, "Flax.Content.Create", OnCreateNewItemButtonClicked).LinkTooltip("Create a new asset. Shift + left click to create a new folder.");
             _importButton = (ToolStripButton)_toolStrip.AddGlyphButton(ToolStripGlyph.Import, ToolStripAnchor.Left, "Flax.Content.Import", () => Editor.ContentImporting.ShowImportFileDialog(CurrentViewFolder)).LinkTooltip("Import content.");
@@ -276,7 +278,7 @@ namespace FlaxEditor.Windows
             {
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 Parent = _toolStrip,
-                Bounds = new Rectangle(58.0f, 1.0f, Width - 98.0f, controlHeight),
+                Bounds = new Rectangle(58.0f, ToolStrip.CompactHeaderPadding, Width - 98.0f, controlHeight),
                 TooltipText = "Search content. Use t: to filter by asset type.",
             };
             _itemsSearchBox = _foldersSearchBox;
@@ -361,7 +363,7 @@ namespace FlaxEditor.Windows
 
             _viewDropdownPanel = new Panel
             {
-                Width = 30.0f,
+                Width = controlHeight,
                 BackgroundColor = Color.Transparent,
             };
             _toolStrip.AddItem(_viewDropdownPanel, ToolStripAnchor.Right, "Flax.Content.View");
@@ -371,12 +373,18 @@ namespace FlaxEditor.Windows
                 SupportMultiSelect = true,
                 TooltipText = "Change content view and filter options",
                 Offsets = Margin.Zero,
-                Width = 28.0f,
+                Width = controlHeight,
                 Height = controlHeight,
+                BackgroundColor = Color.Transparent,
+                BackgroundColorHighlighted = style.BackgroundHighlighted.AlphaMultiplied(0.82f),
+                BackgroundColorSelected = style.BorderSelected,
+                BorderColor = Color.Transparent,
+                BorderColorHighlighted = Color.Transparent,
+                BorderColorSelected = Color.Transparent,
+                TextColor = style.Foreground,
+                TextColorHighlighted = style.Foreground,
                 Parent = _viewDropdownPanel,
             };
-            _viewDropdown.LocalX += 2.0f;
-            _viewDropdown.LocalY += _toolStrip.ItemsHeight * 0.5f - controlHeight * 0.5f;
             _viewDropdown.SelectedIndexChanged += e => UpdateItemsSearch();
             for (int i = 0; i <= (int)ContentItemSearchFilter.Other; i++)
                 _viewDropdown.Items.Add(((ContentItemSearchFilter)i).ToString());
@@ -475,6 +483,37 @@ namespace FlaxEditor.Windows
                 Editor.Options.Apply(Editor.Options.Options);
             });
             alternatingRows.Checked = Editor.Options.Options.Interface.AlternatingTreeRows;
+
+            var treeRowHeight = menu.AddButton("Tree Row Height");
+            treeRowHeight.CloseMenuOnClick = false;
+            var treeRowHeightValue = new FloatValueBox(Style.Current.TreeRowHeight > 0.0f ? Style.Current.TreeRowHeight : 18.0f, 135, 2, 55.0f, 12.0f, 96.0f, 1.0f)
+            {
+                Parent = treeRowHeight
+            };
+            treeRowHeightValue.ValueChanged += () =>
+            {
+                var value = Mathf.Clamp(treeRowHeightValue.Value, 12.0f, 96.0f);
+                Editor.Options.Options.Interface.TreeRowHeight = value;
+                Style.Current.TreeRowHeight = value;
+                Editor.Options.SaveOptions();
+                ApplyTreeViewScale();
+            };
+
+            var treeIconSize = menu.AddButton("Tree Icon Size");
+            treeIconSize.CloseMenuOnClick = false;
+            var treeIconSizeValue = new FloatValueBox(Style.Current.GetContentTreeIconSize(), 135, 2, 55.0f, 0.0f, 96.0f, 1.0f)
+            {
+                Parent = treeIconSize
+            };
+            treeIconSizeValue.ValueChanged += () =>
+            {
+                var value = Mathf.Clamp(treeIconSizeValue.Value, 0.0f, 96.0f);
+                Editor.Options.Options.Interface.ContentTreeIconSize = value;
+                Style.Current.ContentTreeIconSize = value;
+                Editor.Options.SaveOptions();
+                ApplyTreeViewScale();
+            };
+
             menu.AddSeparator();
 
             var viewScale = menu.AddButton("View Scale");
@@ -484,7 +523,14 @@ namespace FlaxEditor.Windows
                 Parent = viewScale
             };
             scaleValue.ValueChanged += () => View.ViewScale = scaleValue.Value;
-            menu.VisibleChanged += control => { scaleValue.Value = View.ViewScale; };
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                treeRowHeightValue.Value = Style.Current.TreeRowHeight > 0.0f ? Style.Current.TreeRowHeight : 18.0f;
+                treeIconSizeValue.Value = Style.Current.GetContentTreeIconSize();
+                scaleValue.Value = View.ViewScale;
+            };
 
             var viewType = menu.AddChildMenu("View Type");
             viewType.ContextMenu.AddButton("Tiles", OnViewTypeButtonClicked).Tag = ContentViewType.Tiles;
@@ -592,6 +638,7 @@ namespace FlaxEditor.Windows
             _split.Orientation = options.Interface.ContentWindowOrientation;
 
             RefreshView();
+            ApplyTreeViewScale();
         }
 
         private void SetShowAllContentInTree(bool value)
@@ -1722,12 +1769,12 @@ namespace FlaxEditor.Windows
 
             var scale = _showAllContentInTree ? View.ViewScale : 1.0f;
             var baseHeaderHeight = Style.Current.TreeRowHeight > 0.0f ? Style.Current.TreeRowHeight : 18.0f;
-            var headerHeight = Mathf.Clamp(baseHeaderHeight * scale, 16.0f, 32.0f);
+            var headerHeight = Mathf.Clamp(baseHeaderHeight * scale, 12.0f, 96.0f);
             var style = Style.Current;
             // Density changes row geometry and previews, never editor typography.
             var fontRef = new FontReference(style.FontSmall.Asset, style.FontSmall.Size);
-            var iconSize = Mathf.Min(16.0f, style.IconSize > 0.0f ? style.IconSize : 16.0f);
-            var textMarginLeft = Mathf.Clamp(2.0f * scale + Mathf.Max(0.0f, iconSize - 12.0f), 2.0f, 6.0f);
+            var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetContentTreeIconSize() * scale), Mathf.Max(0.0f, headerHeight - 2.0f));
+            var textMarginLeft = Mathf.Clamp(2.0f * scale + Mathf.Max(0.0f, iconSize - 12.0f), 2.0f, 16.0f);
             var rowPadding = Mathf.Clamp(2.0f * scale, 1.0f, 5.0f);
             var childrenIndent = Mathf.Clamp(12.0f * scale, 8.0f, 24.0f);
             ApplyTreeNodeScale(_root, headerHeight, fontRef, textMarginLeft, rowPadding, childrenIndent);
@@ -1786,9 +1833,9 @@ namespace FlaxEditor.Windows
             var scale = Editor.Instance?.Windows?.ContentWin?.IsTreeOnlyMode == true
                 ? Editor.Instance.Windows.ContentWin.View.ViewScale
                 : 1.0f;
-            var maximumIconSize = Mathf.Max(10.0f, headerHeight - 4.0f);
+            var maximumIconSize = Mathf.Max(10.0f, headerHeight - 1.0f);
             var arrowSize = Mathf.Min(12.0f * scale, maximumIconSize);
-            var iconSize = Mathf.Min(16.0f * scale, maximumIconSize);
+            var iconSize = Mathf.Min(Mathf.Max(0.0f, Style.Current.GetContentTreeIconSize() * scale), maximumIconSize);
             var textRect = node.TextRect;
             var iconLeft = textRect.Left - iconSize - 2.0f;
             var x = iconLeft - arrowSize - 2.0f;
@@ -1837,7 +1884,10 @@ namespace FlaxEditor.Windows
             if (_viewDropdownPanel == null || _toolStrip == null)
                 return;
 
-            _viewDropdownPanel.Height = _toolStrip.ItemsHeight;
+            var itemHeight = _toolStrip.ItemsHeight;
+            _viewDropdownPanel.Size = new Float2(itemHeight, itemHeight);
+            if (_viewDropdown != null)
+                _viewDropdown.Bounds = new Rectangle(0.0f, 0.0f, itemHeight, itemHeight);
         }
 
         private void UpdateHeaderBounds()
