@@ -38,7 +38,13 @@ namespace FlaxEditor.Windows
             {
                 folder = CurrentViewFolder;
             }
-            Assert.IsNotNull(folder);
+            if (folder == null)
+                folder = CurrentViewFolder;
+            if (folder == null)
+            {
+                Editor.LogWarning("Failed to show content context menu because item has no parent folder: " + item);
+                return;
+            }
             
             // Create context menu
             ContextMenuButton b;
@@ -50,10 +56,10 @@ namespace FlaxEditor.Windows
             if (isTreeNode)
             {
                 b = cm.AddButton("Expand All", OnExpandAllClicked);
-                b.Enabled = CurrentViewFolder.Node.ChildrenCount != 0;
+                b.Enabled = folder.Node != null && folder.Node.ChildrenCount != 0;
 
                 b = cm.AddButton("Collapse All", OnCollapseAllClicked);
-                b.Enabled = CurrentViewFolder.Node.ChildrenCount != 0;
+                b.Enabled = folder.Node != null && folder.Node.ChildrenCount != 0;
 
                 cm.AddSeparator();
             }
