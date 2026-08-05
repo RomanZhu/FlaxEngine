@@ -41,12 +41,25 @@ namespace FlaxEditor.Windows
         private bool _showContentSelection;
         private bool _isApplyingContentAssetChanges;
         private SearchBox _searchBox;
+        private ContainerControl _filtersPanel;
+        private ContainerControl _groupFilterPanel;
         private Panel _scrollingPanel;
         private Tabs _tabs;
         private Tab _selectionTab;
         private float _tabsBarHeight;
+        private string _selectedGroupFilter = string.Empty;
+        private readonly List<GroupFilterButton> _groupFilterButtons = new List<GroupFilterButton>();
 
         private const int MaxTabTitleLength = 24;
+        private const float FilterHorizontalPadding = 6.0f;
+        private const float FilterTopPadding = 4.0f;
+        private const float FilterBottomPadding = 5.0f;
+        private const float FilterVerticalSpacing = 4.0f;
+        private const float GroupFilterButtonHeight = 22.0f;
+        private const float GroupFilterButtonSpacing = 4.0f;
+        private const float GroupFilterButtonHorizontalPadding = 18.0f;
+        private const float GroupFilterButtonMinWidth = 34.0f;
+        private const float GroupFilterButtonMaxWidth = 180.0f;
         private const float TabCloseButtonSize = 14.0f;
         private const float TabCloseButtonHitSize = 18.0f;
         private const float TabCloseButtonMargin = 5.0f;
@@ -55,8 +68,9 @@ namespace FlaxEditor.Windows
         private const float TabMinWidth = 86.0f;
         private const float TabMaxWidth = 168.0f;
         private const float TabSelectedLineHeight = 2.0f;
+        private const float PropertiesScrollbarWidthReduction = 4.0f;
 
-        private static float PropertiesPanelPadding => Mathf.Max(4.0f, Style.Current.PanelPadding > 0.0f ? Style.Current.PanelPadding : 2.0f);
+        private static float PropertiesPanelPadding => Mathf.Max(4.0f, Style.Current.GetPropertyPanelPadding());
 
         private static void ApplyPropertiesPanelStyle(CustomEditorPresenter presenter)
         {
@@ -258,17 +272,19 @@ namespace FlaxEditor.Windows
 
                 if (isSelected)
                 {
-                    Render2D.FillRectangle(tabRect, style.Background);
-                    Render2D.FillRectangle(new Rectangle(tabRect.X, tabRect.Y, tabRect.Width, TabSelectedLineHeight), style.BorderSelected);
+                    var cornerRadius = style.GetTabCornerRadius();
+                    if (cornerRadius > 0.0f)
+                        StyleRendering.FillRoundedRectangle(tabRect, style.BorderSelected, cornerRadius, RoundedCorners.Top);
+                    else
+                        Render2D.FillRectangle(tabRect, style.BorderSelected);
                 }
                 else if (isMouseOver)
                 {
-                    Render2D.FillRectangle(tabRect, style.BackgroundHighlighted);
+                    StyleRendering.FillRoundedRectangle(tabRect, style.BackgroundHighlighted.AlphaMultiplied(0.82f), style.GetTabCornerRadius(), RoundedCorners.Top);
                 }
-
                 var closeWidth = _closeable ? TabTextCloseGap + TabCloseButtonHitSize + TabCloseButtonMargin : 0.0f;
                 var textRect = new Rectangle(TabHorizontalPadding, 0.0f, Mathf.Max(0.0f, Width - TabHorizontalPadding - closeWidth), Height);
-                var textColor = !enabled ? style.ForegroundDisabled : isSelected || isMouseOver ? style.Foreground : style.ForegroundGrey;
+                var textColor = !enabled ? style.ForegroundDisabled : isSelected ? Color.White : isMouseOver ? style.Foreground : style.ForegroundGrey;
                 Render2D.PushClip(ref textRect);
                 Render2D.DrawText(style.FontMedium, Tab.Text, textRect, textColor, TextAlignment.Near, TextAlignment.Center);
                 Render2D.PopClip();
@@ -279,9 +295,46 @@ namespace FlaxEditor.Windows
                     var mousePosition = RootWindow != null ? PointFromWindow(RootWindow.MousePosition) : Float2.Minimum;
                     bool closeMouseOver = isMouseOver && bounds.Contains(mousePosition);
                     if (closeMouseOver)
-                        Render2D.FillRectangle(bounds, style.BackgroundHighlighted * 1.2f);
+                        StyleRendering.FillRoundedRectangle(bounds, style.BackgroundHighlighted * 1.2f, style.GetButtonCornerRadius());
                     Render2D.DrawSprite(style.Cross, CloseIconBounds, closeMouseOver ? style.Foreground : textColor.AlphaMultiplied(isSelected ? 1.0f : 0.75f));
                 }
+            }
+        }
+
+        private sealed class FiltersPanel : ContainerControl
+        {
+            private readonly PropertiesWindow _owner;
+
+            public FiltersPanel(PropertiesWindow owner)
+            {
+                _owner = owner;
+                ClipChildren = false;
+                CullChildren = false;
+            }
+
+            protected override void PerformLayoutBeforeChildren()
+            {
+                _owner.LayoutFilterControls();
+                base.PerformLayoutBeforeChildren();
+            }
+        }
+
+        private sealed class GroupFilterButton : Button
+        {
+            public readonly string GroupName;
+
+            public GroupFilterButton(string text, string groupName)
+            {
+                Text = text;
+                GroupName = groupName;
+                Height = GroupFilterButtonHeight;
+                HorizontalAlignment = TextAlignment.Center;
+                VerticalAlignment = TextAlignment.Center;
+                Margin = new Margin(7.0f, 7.0f, 0.0f, 0.0f);
+                ClipText = true;
+                HasBorder = false;
+                CornerRadius = 3.0f;
+                TooltipText = string.IsNullOrEmpty(groupName) ? "Show all property groups." : $"Show only {groupName} properties.";
             }
         }
 
@@ -364,20 +417,35 @@ namespace FlaxEditor.Windows
             _tabsBarHeight = _tabs.TabsSize.Y;
             _selectionTab = _tabs.AddTab(new PropertiesTab(this, "Selection", false));
 
-            _searchBox = new SearchBox
+            _filtersPanel = new FiltersPanel(this)
             {
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 Parent = _selectionTab,
-                Bounds = new Rectangle(6, 4, Width - 12, controlHeight),
-                Visible = false,
+                Offsets = new Margin(0.0f, 0.0f, 0.0f, controlHeight + FilterTopPadding + FilterBottomPadding),
+            };
+
+            _searchBox = new SearchBox
+            {
+                Parent = _filtersPanel,
+                Bounds = new Rectangle(FilterHorizontalPadding, FilterTopPadding, Width - FilterHorizontalPadding * 2.0f, controlHeight),
+                TooltipText = "Search properties.",
             };
             _searchBox.TextChanged += ApplySearchFilter;
+
+            _groupFilterPanel = new ContainerControl
+            {
+                Parent = _filtersPanel,
+                Visible = false,
+                ClipChildren = false,
+                CullChildren = false,
+            };
 
             _scrollingPanel = new Panel(ScrollBars.Vertical)
             {
                 AnchorPreset = AnchorPresets.StretchAll,
-                Offsets = Margin.Zero,
+                Offsets = new Margin(0.0f, 0.0f, controlHeight + FilterTopPadding + FilterBottomPadding, 0.0f),
                 Parent = _selectionTab,
+                ScrollBarsSize = Mathf.Max(1.0f, ScrollBar.DefaultSize - PropertiesScrollbarWidthReduction),
             };
 
             Presenter = new CustomEditorPresenter(editor.Undo, null, this);
@@ -560,6 +628,19 @@ namespace FlaxEditor.Windows
             return true;
         }
 
+        private void ResetFilters()
+        {
+            if (!string.IsNullOrEmpty(_selectedGroupFilter))
+            {
+                _selectedGroupFilter = string.Empty;
+                Presenter.ApplyGroupFilter(string.Empty);
+                UpdateGroupFilterButtonStyles();
+            }
+
+            if (_searchBox != null && !string.IsNullOrEmpty(_searchBox.Text))
+                _searchBox.Text = string.Empty;
+        }
+
         /// <summary>
         /// Gets whether the current selection has a pinned properties tab.
         /// </summary>
@@ -702,7 +783,9 @@ namespace FlaxEditor.Windows
             // Update selected objects
             // TODO: use cached collection for less memory allocations
             undoRecordObjects = Editor.SceneEditing.Selection.ConvertAll(x => x.UndoRecordObject).Distinct();
-            var objects = Editor.SceneEditing.Selection.ConvertAll(x => x.EditableObject).Distinct();
+            var objects = Editor.SceneEditing.Selection.ConvertAll(x => x.EditableObject).Distinct().ToArray();
+            if (!SelectionsMatch(objects, Presenter.Selection))
+                ResetFilters();
             Presenter.Select(objects);
             UpdateSelectionTabTitle();
 
@@ -783,6 +866,8 @@ namespace FlaxEditor.Windows
 
             undoRecordObjects = objects;
             Presenter.OverrideEditor = objects.Count != 0 && objects.All(x => x is Asset) ? _contentAssetEditor : null;
+            if (!forceRebuild && !SelectionsMatch(objects, Presenter.Selection))
+                ResetFilters();
             Presenter.Select(objects);
             UpdateSelectionTabTitle();
             if (forceRebuild)
@@ -874,6 +959,7 @@ namespace FlaxEditor.Windows
 
         private void OnPresenterAfterLayout(LayoutElementsContainer layout)
         {
+            UpdateGroupFilterButtons();
             ApplySearchFilter();
         }
 
@@ -899,6 +985,169 @@ namespace FlaxEditor.Windows
         private void ApplySearchFilter()
         {
             Presenter.ApplySearchFilter(_searchBox.Text);
+        }
+
+        private void UpdateGroupFilterButtons()
+        {
+            if (_groupFilterPanel == null)
+                return;
+
+            var groupNames = new List<string>();
+            Presenter.GetRootGroupNames(groupNames);
+
+            if (groupNames.Count <= 1)
+            {
+                if (!string.IsNullOrEmpty(_selectedGroupFilter))
+                {
+                    _selectedGroupFilter = string.Empty;
+                    Presenter.ApplyGroupFilter(string.Empty);
+                }
+                _groupFilterButtons.Clear();
+                _groupFilterPanel.DisposeChildren();
+                _groupFilterPanel.Visible = false;
+                LayoutFilterControls();
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_selectedGroupFilter) && !groupNames.Contains(_selectedGroupFilter, StringComparer.OrdinalIgnoreCase))
+            {
+                _selectedGroupFilter = string.Empty;
+                Presenter.ApplyGroupFilter(string.Empty);
+            }
+
+            _groupFilterButtons.Clear();
+            _groupFilterPanel.DisposeChildren();
+            _groupFilterPanel.Visible = true;
+
+            AddGroupFilterButton("All", string.Empty);
+            foreach (var groupName in groupNames)
+                AddGroupFilterButton(groupName, groupName);
+
+            UpdateGroupFilterButtonStyles();
+            LayoutFilterControls();
+        }
+
+        private void AddGroupFilterButton(string text, string groupName)
+        {
+            var filterName = groupName ?? string.Empty;
+            var button = new GroupFilterButton(text, filterName)
+            {
+                Parent = _groupFilterPanel,
+            };
+            button.Clicked += () => SetGroupFilter(filterName);
+            _groupFilterButtons.Add(button);
+        }
+
+        private void SetGroupFilter(string groupName)
+        {
+            groupName ??= string.Empty;
+            if (string.Equals(_selectedGroupFilter, groupName, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _selectedGroupFilter = groupName;
+            Presenter.ApplyGroupFilter(_selectedGroupFilter);
+            UpdateGroupFilterButtonStyles();
+            LayoutFilterControls();
+        }
+
+        private void UpdateGroupFilterButtonStyles()
+        {
+            var style = Style.Current;
+            foreach (var button in _groupFilterButtons)
+            {
+                bool selected = string.Equals(button.GroupName, _selectedGroupFilter, StringComparison.OrdinalIgnoreCase);
+                if (selected)
+                {
+                    button.BackgroundColor = style.BorderSelected;
+                    button.BackgroundColorHighlighted = style.BorderSelected.RGBMultiplied(1.08f);
+                    button.BackgroundColorSelected = style.BorderSelected.RGBMultiplied(0.92f);
+                    button.TextColor = Color.White;
+                }
+                else
+                {
+                    button.BackgroundColor = style.BackgroundNormal;
+                    button.BackgroundColorHighlighted = style.BackgroundHighlighted;
+                    button.BackgroundColorSelected = style.BorderSelected;
+                    button.TextColor = style.ForegroundGrey;
+                }
+
+                button.BorderColor = Color.Transparent;
+                button.BorderColorHighlighted = Color.Transparent;
+                button.BorderColorSelected = Color.Transparent;
+            }
+        }
+
+        private void LayoutFilterControls()
+        {
+            if (_filtersPanel == null || _searchBox == null || _scrollingPanel == null)
+                return;
+
+            _filtersPanel.UpdateBounds();
+            var controlHeight = Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 18.0f;
+            var width = Mathf.Max(0.0f, _filtersPanel.Width);
+            var innerWidth = Mathf.Max(0.0f, width - FilterHorizontalPadding * 2.0f);
+            var y = FilterTopPadding;
+
+            _searchBox.Bounds = new Rectangle(FilterHorizontalPadding, y, innerWidth, controlHeight);
+            y += controlHeight;
+
+            if (_groupFilterPanel != null && _groupFilterPanel.Visible && _groupFilterButtons.Count != 0)
+            {
+                y += FilterVerticalSpacing;
+                var groupButtonsHeight = LayoutGroupFilterButtons(innerWidth);
+                _groupFilterPanel.Bounds = new Rectangle(FilterHorizontalPadding, y, innerWidth, groupButtonsHeight);
+                y += groupButtonsHeight;
+            }
+
+            y += FilterBottomPadding;
+
+            var filterOffsets = _filtersPanel.Offsets;
+            if (!Mathf.NearEqual(filterOffsets.Left, 0.0f) ||
+                !Mathf.NearEqual(filterOffsets.Right, 0.0f) ||
+                !Mathf.NearEqual(filterOffsets.Top, 0.0f) ||
+                !Mathf.NearEqual(filterOffsets.Bottom, y))
+            {
+                _filtersPanel.Offsets = new Margin(0.0f, 0.0f, 0.0f, y);
+            }
+
+            var offsets = _scrollingPanel.Offsets;
+            if (!Mathf.NearEqual(offsets.Top, y))
+            {
+                _scrollingPanel.Offsets = new Margin(0.0f, 0.0f, y, 0.0f);
+                _scrollingPanel.UpdateBounds();
+            }
+        }
+
+        private float LayoutGroupFilterButtons(float width)
+        {
+            if (_groupFilterButtons.Count == 0)
+                return 0.0f;
+
+            var availableWidth = Mathf.Max(GroupFilterButtonMinWidth, width);
+            float x = 0.0f;
+            float y = 0.0f;
+            for (int i = 0; i < _groupFilterButtons.Count; i++)
+            {
+                var button = _groupFilterButtons[i];
+                var buttonWidth = Mathf.Min(GetGroupFilterButtonWidth(button.Text?.ToString()), availableWidth);
+                if (x > 0.0f && x + buttonWidth > availableWidth)
+                {
+                    x = 0.0f;
+                    y += GroupFilterButtonHeight + GroupFilterButtonSpacing;
+                }
+
+                button.Bounds = new Rectangle(x, y, buttonWidth, GroupFilterButtonHeight);
+                x += buttonWidth + GroupFilterButtonSpacing;
+            }
+
+            return y + GroupFilterButtonHeight;
+        }
+
+        private static float GetGroupFilterButtonWidth(string text)
+        {
+            var style = Style.Current;
+            var textWidth = style.FontMedium ? style.FontMedium.MeasureText(text ?? string.Empty).X : (text?.Length ?? 0) * 7.0f;
+            return Mathf.Clamp(textWidth + GroupFilterButtonHorizontalPadding, GroupFilterButtonMinWidth, GroupFilterButtonMaxWidth);
         }
 
         /// <inheritdoc />
