@@ -6,7 +6,9 @@ using System.Globalization;
 using System.IO;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
+using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Modules;
+using FlaxEditor.Windows;
 using NUnit.Framework;
 
 namespace FlaxEngine.Tests
@@ -75,6 +77,32 @@ namespace FlaxEngine.Tests
             Assert.IsTrue(ContentDatabaseModule.UseContentBackendForFileOperation(sceneItem));
             Assert.IsFalse(ContentDatabaseModule.UseContentBackendForFileOperation(fileItem));
             Assert.IsFalse(ContentDatabaseModule.UseContentBackendForFileOperation(null));
+        }
+
+        [Test]
+        public void TestNewItemSurvivesContentRefreshBeforeFileExists()
+        {
+            var folder = new ContentFolder(ContentFolderType.Content, Path.Combine(Path.GetTempPath(), "FlaxContentFolder"), null);
+            var proxy = new GenericJsonAssetProxy();
+            var newItem = new NewItem(Path.Combine(folder.Path, "Json Asset.json"), proxy, null);
+            var fileItem = new FileItem(Path.Combine(folder.Path, "Notes.txt"));
+
+            Assert.IsFalse(ContentDatabaseModule.ShouldRemoveMissingContentItem(newItem));
+            Assert.IsTrue(ContentDatabaseModule.ShouldRemoveMissingContentItem(fileItem));
+            Assert.IsFalse(ContentDatabaseModule.ShouldRemoveMissingContentItem(null));
+        }
+
+        [Test]
+        public void TestNewItemContextMenuButtonDefersAutoClose()
+        {
+            var menu = new ContextMenu();
+            var clicked = false;
+
+            var button = ContentWindow.CreateDeferredNewItemButton(menu, "Json Asset", _ => clicked = true);
+
+            Assert.IsFalse(button.CloseMenuOnClick);
+            button.Click();
+            Assert.IsTrue(clicked);
         }
 
         [Test]

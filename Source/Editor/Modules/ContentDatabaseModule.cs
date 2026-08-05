@@ -99,6 +99,11 @@ namespace FlaxEditor.Modules
             return item != null && (item.IsAsset || item.ItemType == ContentItemType.Scene);
         }
 
+        internal static bool ShouldRemoveMissingContentItem(ContentItem item)
+        {
+            return item is not NewItem && item?.Exists == false;
+        }
+
         private void OnContentAssetDisposing(Asset asset)
         {
             // Handle deleted asset
@@ -964,7 +969,7 @@ namespace FlaxEditor.Modules
                 for (int i = 0; i < folder.Children.Count; i++)
                 {
                     var child = folder.Children[i];
-                    if (!child.Exists)
+                    if (ShouldRemoveMissingContentItem(child))
                     {
                         // Item doesn't exist anymore
                         Editor.Log(string.Format($"Content item \'{child.Path}\' has been removed"));
