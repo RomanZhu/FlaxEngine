@@ -545,3 +545,6 @@ namespace FlaxEditor.Windows.Assets
         }
     }
 }
+        /// <inheritdoc />
+        public override bool CanRunAutoSave => false;
+
