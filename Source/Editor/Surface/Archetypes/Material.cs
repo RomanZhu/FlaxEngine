@@ -302,7 +302,7 @@ namespace FlaxEditor.Surface.Archetypes
                 if (!IsFocused)
                 {
                     var style = Style.Current;
-                    StyleRendering.DrawRoundedRectangleBorder(new Rectangle(Float2.Zero, Size), style.BorderNormal, 1.0f, style.CornerRadius);
+                    StyleRendering.DrawRoundedRectangleBorder(new Rectangle(Float2.Zero, Size), style.BorderNormal, 1.0f, style.GetInputCornerRadius());
                 }
             }
         }

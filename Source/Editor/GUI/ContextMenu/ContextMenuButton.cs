@@ -15,6 +15,11 @@ namespace FlaxEditor.GUI.ContextMenu
     {
         private const float DefaultIconSize = 16.0f;
         private const float IconRightPadding = 5.0f;
+        private const float AccessKeyUnderlineBottomOffset = 3.0f;
+        private const float AccessKeyUnderlineHeight = 1.0f;
+        private const float CheckBoxSize = 12.0f;
+        private const float CheckedValueMultiplier = 0.8f;
+        private static readonly Color ItemHighlightColor = Color.FromBgra(0xFF424247);
 
         private bool _isMouseDown;
         
@@ -106,7 +111,7 @@ namespace FlaxEditor.GUI.ContextMenu
             if (CloseMenuOnClick)
             {
                 // Close topmost context menu
-                ParentContextMenu?.TopmostCM.Hide();
+                ParentContextMenu?.TopmostCM.HideWithReason("button clicked: " + Text);
             }
 
             // Auto check logic
@@ -127,12 +132,23 @@ namespace FlaxEditor.GUI.ContextMenu
             var textRect = new Rectangle(0, 0, Width - 8, Height);
             var textColor = Enabled ? style.Foreground : style.ForegroundDisabled;
             var selectionCornerRadius = style.GetSelectionCornerRadius();
+            if (Checked && Enabled)
+                textColor = Color.White;
 
             // Draw background
-            if (IsMouseOver && Enabled)
-                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), style.BackgroundSelected, selectionCornerRadius);
+            if (Checked)
+            {
+                var checkedColor = style.BorderSelected;
+                if (Enabled && (IsMouseOver || IsFocused))
+                    checkedColor = MultiplyValue(checkedColor, CheckedValueMultiplier);
+                if (!Enabled)
+                    checkedColor = Color.Lerp(checkedColor, style.Background, 0.45f);
+                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), checkedColor, selectionCornerRadius);
+            }
+            else if (IsMouseOver && Enabled)
+                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), ItemHighlightColor, selectionCornerRadius);
             else if (IsFocused)
-                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), style.BackgroundSelected, selectionCornerRadius);
+                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), ItemHighlightColor, selectionCornerRadius);
 
             base.Draw();
 
@@ -148,9 +164,28 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Draw icon
             var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetMenuIconSize(DefaultIconSize)), Mathf.Max(0.0f, Height - 2.0f));
-            var icon = Checked ? style.CheckBoxTick : Icon;
-            if (icon.IsValid && iconSize > 0.0f)
-                Render2D.DrawSprite(icon, new Rectangle(-iconSize - IconRightPadding, (Height - iconSize) / 2, iconSize, iconSize), textColor);
+            var drawCheckBox = Icon.IsValid && Icon == style.CheckBoxTick;
+            if (drawCheckBox && style.CheckBoxTick.IsValid)
+            {
+                var checkBoxSize = Mathf.Min(CheckBoxSize, Mathf.Max(0.0f, Height - 2.0f));
+                var checkBoxRect = new Rectangle(-IconRightPadding - DefaultIconSize * 0.5f - checkBoxSize * 0.5f, (Height - checkBoxSize) * 0.5f, checkBoxSize, checkBoxSize);
+                var checkBoxColor = Enabled ? style.BorderSelected : Color.Lerp(style.BorderSelected, style.Background, 0.45f);
+                if (Enabled && (IsMouseOver || IsFocused))
+                    checkBoxColor = Color.Lerp(checkBoxColor, Color.White, 0.28f);
+                StyleRendering.FillCheckBox(checkBoxRect, checkBoxColor);
+                Render2D.DrawSprite(style.CheckBoxTick, checkBoxRect, Enabled ? Color.White : style.ForegroundDisabled);
+            }
+            else if (Icon.IsValid && iconSize > 0.0f)
+            {
+                Render2D.DrawSprite(Icon, new Rectangle(-iconSize - IconRightPadding, (Height - iconSize) / 2, iconSize, iconSize), textColor);
+            }
+        }
+
+        private static Color MultiplyValue(Color color, float multiplier)
+        {
+            var hsv = color.ToHSV();
+            hsv.Z = Mathf.Saturate(hsv.Z * multiplier);
+            return Color.FromHSV(hsv, color.A);
         }
 
         internal static void DrawAccessKeyUnderline(Font font, string text, Rectangle textRect, Color color, TextAlignment horizontalAlignment, TextAlignment verticalAlignment, int accessKeyIndex)
@@ -173,21 +208,10 @@ namespace FlaxEditor.GUI.ContextMenu
                 break;
             }
 
-            float y = textRect.Y;
-            switch (verticalAlignment)
-            {
-            case TextAlignment.Center:
-                y += (textRect.Height + textSize.Y) * 0.5f - 2.0f;
-                break;
-            case TextAlignment.Far:
-                y += textRect.Height - 2.0f;
-                break;
-            default:
-                y += textSize.Y - 2.0f;
-                break;
-            }
-
-            Render2D.DrawLine(new Float2(x + prefixWidth, y), new Float2(x + prefixWidth + keyWidth, y), color, 1.0f);
+            var underlineY = Mathf.Min(textRect.Bottom - AccessKeyUnderlineBottomOffset, textRect.Bottom - AccessKeyUnderlineHeight);
+            underlineY = Mathf.Floor(Mathf.Max(textRect.Y, underlineY));
+            var underlineRect = new Rectangle(Mathf.Floor(x + prefixWidth), Mathf.Floor(underlineY), Mathf.Max(1.0f, Mathf.Ceil(keyWidth)), AccessKeyUnderlineHeight);
+            Render2D.FillRectangle(underlineRect, color);
         }
 
         /// <inheritdoc />
@@ -258,7 +282,7 @@ namespace FlaxEditor.GUI.ContextMenu
                 Click();
                 return true;
             case KeyboardKeys.Escape:
-                ParentContextMenu.Hide();
+                ParentContextMenu.HideWithReason("Escape key on menu item: " + Text);
                 return true;
             }
 

@@ -60,21 +60,22 @@ namespace FlaxEditor.GUI.Tabs
 
                 var style = Style.Current;
                 var enabled = EnabledInHierarchy && Tab.EnabledInHierarchy;
+                var selected = Tabs.SelectedTab == Tab;
                 var tabRect = new Rectangle(Float2.Zero, Size);
                 var textOffset = Tabs._orientation == Orientation.Horizontal ? 0 : 8;
 
                 // Draw bar
-                if (Tabs.SelectedTab == Tab)
+                if (selected)
                 {
-                    var color = style.Background;
+                    var color = style.BorderSelected;
                     if (!enabled)
                         color *= 0.6f;
                     if (Tabs._orientation == Orientation.Horizontal)
                     {
-                        if (style.CornerRadius > 0.0f)
+                        var cornerRadius = style.GetTabCornerRadius();
+                        if (cornerRadius > 0.0f)
                         {
-                            var selectedRect = tabRect.MakeExpanded(-2.0f);
-                            StyleRendering.FillRoundedRectangle(selectedRect, color, style.CornerRadius);
+                            StyleRendering.FillRoundedRectangle(tabRect, color, cornerRadius, RoundedCorners.Top);
                         }
                         else
                         {
@@ -89,26 +90,26 @@ namespace FlaxEditor.GUI.Tabs
                         var fillRect = tabRect;
                         fillRect.Size.X -= lefEdgeWidth;
                         fillRect.Location.X += lefEdgeWidth;
-                        Render2D.FillRectangle(fillRect, style.Background);
+                        Render2D.FillRectangle(fillRect, color);
                         Render2D.FillRectangle(leftEdgeRect, color);
                     }
                 }
-                else if (IsMouseOver && enabled)
+                else if (enabled && IsMouseOver)
                 {
-                    StyleRendering.FillRoundedRectangle(style.CornerRadius > 0.0f ? tabRect.MakeExpanded(-2.0f) : tabRect, style.BackgroundHighlighted, style.CornerRadius);
+                    StyleRendering.FillRoundedRectangle(tabRect, style.BackgroundHighlighted.AlphaMultiplied(0.82f), style.GetTabCornerRadius(), Tabs._orientation == Orientation.Horizontal ? RoundedCorners.Top : RoundedCorners.All);
                 }
-
                 // Draw icon
                 if (Tab.Icon.IsValid)
                 {
-                    var iconSize = Mathf.Min(16.0f, style.IconSize > 0.0f ? style.IconSize : 16.0f);
-                    Render2D.DrawSprite(Tab.Icon, new Rectangle((tabRect.Width - iconSize) * 0.5f, (tabRect.Height - iconSize) * 0.5f, iconSize, iconSize), style.Foreground);
+                    var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetTabIconSize()), Mathf.Max(0.0f, tabRect.Height - 2.0f));
+                    if (iconSize > 0.0f)
+                        Render2D.DrawSprite(Tab.Icon, new Rectangle((tabRect.Width - iconSize) * 0.5f, (tabRect.Height - iconSize) * 0.5f, iconSize, iconSize), selected && enabled ? Color.White : style.Foreground);
                 }
 
                 // Draw text
                 if (!string.IsNullOrEmpty(Tab.Text))
                 {
-                    Render2D.DrawText(style.FontMedium, Tab.Text, new Rectangle(tabRect.X + textOffset, tabRect.Y, tabRect.Width - textOffset, tabRect.Height), style.Foreground, Tabs.TabsTextHorizontalAlignment, Tabs.TabsTextVerticalAlignment);
+                    Render2D.DrawText(style.FontMedium, Tab.Text, new Rectangle(tabRect.X + textOffset, tabRect.Y, tabRect.Width - textOffset, tabRect.Height), selected && enabled ? Color.White : style.Foreground, Tabs.TabsTextHorizontalAlignment, Tabs.TabsTextVerticalAlignment);
                 }
             }
         }

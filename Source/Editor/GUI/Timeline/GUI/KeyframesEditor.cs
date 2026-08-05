@@ -1258,7 +1258,7 @@ namespace FlaxEditor.GUI
             // Draw border
             if (ContainsFocus)
             {
-                StyleRendering.DrawRoundedRectangleBorder(rect, style.BackgroundSelected, 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangleBorder(rect, style.BackgroundSelected, 1.0f, style.GetSelectionCornerRadius());
             }
         }
 

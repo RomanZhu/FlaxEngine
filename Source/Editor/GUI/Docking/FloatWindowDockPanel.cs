@@ -18,15 +18,40 @@ namespace FlaxEditor.GUI.Docking
             private FloatWindowDockPanel _panel;
             private readonly UIModule.TitleBarPerformanceStats _performanceStats;
 
+            private bool UseContentTitleBarColors => !(_panel.SelectedTab is GameWindow) && !(_panel.SelectedTab is EditGameWindow);
+
             public FloatWindowDecorations(FloatWindowDockPanel panel)
             : base(panel.RootWindow)
             {
                 _panel = panel;
+                BackgroundColor = Color.Transparent;
                 _performanceStats = new UIModule.TitleBarPerformanceStats
                 {
                     StartTitleBarDrag = _panel.BeginDrag,
                     Parent = this,
                 };
+            }
+
+            /// <inheritdoc />
+            public override void DrawSelf()
+            {
+                var style = Style.Current;
+                if (UseContentTitleBarColors)
+                {
+                    BackgroundColor = style.SecondaryBackground;
+                    if (Title != null)
+                    {
+                        var titleColor = _panel.Window.Window.IsFocused ? style.Foreground : style.ForegroundGrey;
+                        Title.TextColor = titleColor;
+                        Title.TextColorHighlighted = titleColor;
+                    }
+                }
+                else
+                {
+                    BackgroundColor = Color.Transparent;
+                }
+
+                base.DrawSelf();
             }
 
             /// <inheritdoc />
@@ -127,6 +152,8 @@ namespace FlaxEditor.GUI.Docking
             Parent = window;
             _window.Window.Closing += OnClosing;
             _window.Window.LeftButtonHit += OnLeftButtonHit;
+            _window.Window.MouseDown += Editor.Instance.Windows.OnNavigationMouseDown;
+            _window.Window.MouseUp += Editor.Instance.Windows.OnNavigationMouseUp;
 
             if (Utilities.Utils.UseCustomWindowDecorations())
             {
@@ -252,6 +279,8 @@ namespace FlaxEditor.GUI.Docking
             // Unlink
             _window.Window.Closing -= OnClosing;
             _window.Window.LeftButtonHit = null;
+            _window.Window.MouseDown -= Editor.Instance.Windows.OnNavigationMouseDown;
+            _window.Window.MouseUp -= Editor.Instance.Windows.OnNavigationMouseUp;
             _window = null;
 
             // Remove object

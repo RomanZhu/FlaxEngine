@@ -38,7 +38,7 @@ namespace FlaxEditor.GUI
         /// <summary>
         /// Standard compact toolstrip height used by viewport-style overlays.
         /// </summary>
-        public const float CompactToolStripHeight = 22.0f;
+        public const float CompactToolStripHeight = 28.0f;
 
         /// <summary>
         /// Standard vertical padding for compact header toolstrips with search fields.
@@ -101,6 +101,11 @@ namespace FlaxEditor.GUI
         /// True if the strip should draw rounded background frames behind anchored item groups.
         /// </summary>
         public bool UseGroupFrames;
+
+        /// <summary>
+        /// True if the strip should apply compact sizing to newly added toolbar buttons.
+        /// </summary>
+        public bool UseCompactButtonStyle;
 
         /// <summary>
         /// The viewport overlay background color.
@@ -229,6 +234,8 @@ namespace FlaxEditor.GUI
                 Parent = this,
                 UseBlueCheckedStyle = UseOverlayStyle,
             };
+            if (UseCompactButtonStyle)
+                button.SetCompactStyle();
             SetItemPlacement(button, ToolStripAnchor.Left);
             if (onClick != null)
                 button.Clicked += onClick;
@@ -261,6 +268,8 @@ namespace FlaxEditor.GUI
                 Parent = this,
                 UseBlueCheckedStyle = UseOverlayStyle,
             };
+            if (UseCompactButtonStyle)
+                button.SetCompactStyle();
             SetItemPlacement(button, anchor, -1, id);
             if (onClick != null)
                 button.Clicked += onClick;
@@ -282,6 +291,8 @@ namespace FlaxEditor.GUI
                 Parent = this,
                 UseBlueCheckedStyle = UseOverlayStyle,
             };
+            if (UseCompactButtonStyle)
+                button.SetCompactStyle();
             SetItemPlacement(button, ToolStripAnchor.Left);
             if (onClick != null)
                 button.Clicked += onClick;
@@ -302,6 +313,8 @@ namespace FlaxEditor.GUI
                 Parent = this,
                 UseBlueCheckedStyle = UseOverlayStyle,
             };
+            if (UseCompactButtonStyle)
+                button.SetCompactStyle();
             SetItemPlacement(button, ToolStripAnchor.Left);
             if (onClick != null)
                 button.Clicked += onClick;
@@ -575,7 +588,7 @@ namespace FlaxEditor.GUI
 
         private void OnSelectedMenuVisibleChanged(Control control)
         {
-            if (_selectedMenuButton != null && !control.Visible)
+            if (_selectedMenuButton != null && _selectedMenuButton.ContextMenu == control && !control.Visible)
                 SelectedMenuButton = null;
         }
 

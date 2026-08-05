@@ -17,6 +17,16 @@ namespace FlaxEditor.GUI
         private bool _isRightDown;
 
         /// <summary>
+        /// Initializes a new instance of the <see cref="ClickableLabel"/> class.
+        /// </summary>
+        public ClickableLabel()
+        {
+            Height = 22.0f;
+            BackgroundColor = Color.Transparent;
+            VerticalAlignment = TextAlignment.Center;
+        }
+
+        /// <summary>
         /// The double click event.
         /// </summary>
         public Action DoubleClick;

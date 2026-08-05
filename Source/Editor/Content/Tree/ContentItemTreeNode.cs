@@ -34,9 +34,8 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
         {
             var contentWindow = Editor.Instance.Windows.ContentWin;
             var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
-            var glyphSize = Mathf.Clamp(16.0f * scale, 12.0f, 24.0f);
-            var previewSize = Mathf.Clamp(18.0f * scale, 12.0f, 28.0f);
-            return glyphSize + 4.0f + previewSize + 2.0f;
+            var iconSize = Mathf.Min(Mathf.Max(0.0f, Style.Current.GetContentTreeIconSize() * scale), Mathf.Max(0.0f, HeaderHeight - 4.0f));
+            return iconSize > 0.0f ? iconSize * 2.0f + 6.0f : 0.0f;
         }
     }
 
@@ -144,15 +143,18 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
         var style = Style.Current;
         var contentWindow = Editor.Instance.Windows.ContentWin;
         var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
-        var glyphSize = Mathf.Clamp(16.0f * scale, 12.0f, Mathf.Max(12.0f, HeaderHeight - 4.0f));
-        var iconSize = Mathf.Clamp(16.0f * scale, 12.0f, Mathf.Max(12.0f, HeaderHeight - 4.0f));
+        var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetContentTreeIconSize() * scale), Mathf.Max(0.0f, HeaderHeight - 4.0f));
+        var glyphSize = iconSize;
         var textRect = TextRect;
 
-        var glyphRect = new Rectangle(textRect.Left - HeaderTextLeftOffset, (HeaderHeight - glyphSize) * 0.5f, glyphSize, glyphSize);
-        SemanticIcons.Draw(SemanticIcons.ForContent(Item.SearchFilter), glyphRect, SemanticIcons.GetContentColor(Item.SearchFilter, style));
+        if (glyphSize > 0.0f)
+        {
+            var glyphRect = new Rectangle(textRect.Left - HeaderTextLeftOffset, (HeaderHeight - glyphSize) * 0.5f, glyphSize, glyphSize);
+            SemanticIcons.Draw(SemanticIcons.ForContent(Item.SearchFilter), glyphRect, SemanticIcons.GetContentColor(Item.SearchFilter, style));
+        }
 
         var icon = GetIcon(Item);
-        if (icon.IsValid)
+        if (icon.IsValid && iconSize > 0.0f)
         {
             var iconRect = new Rectangle(textRect.Left - iconSize - 2.0f, (HeaderHeight - iconSize) * 0.5f, iconSize, iconSize);
             Render2D.DrawSprite(icon, iconRect);

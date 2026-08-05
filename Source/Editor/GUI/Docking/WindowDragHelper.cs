@@ -391,7 +391,7 @@ namespace FlaxEditor.GUI.Docking
                     fillColor,
                     borderColor,
                     1.0f,
-                    style.CornerRadius);
+                    style.GetPopupCornerRadius());
             }
         }
 

@@ -139,11 +139,13 @@ namespace FlaxEditor.Windows
                 var color = Group == LogGroup.Error ? _window._colorError : (Group == LogGroup.Warning ? _window._colorWarning : _window._colorInfo);
 
                 // Icon
-                var iconSize = style.IconSize > 0.0f ? Mathf.Min(style.IconSize, 16.0f) : 16.0f;
-                Render2D.DrawSprite(Icon, new Rectangle(8, (32.0f - iconSize) * 0.5f, iconSize, iconSize), color);
+                var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetMenuIconSize()), 30.0f);
+                if (iconSize > 0.0f)
+                    Render2D.DrawSprite(Icon, new Rectangle(8, (32.0f - iconSize) * 0.5f, iconSize, iconSize), color);
 
                 // Title
-                var textRect = new Rectangle(24, 2, clientRect.Width - 26, clientRect.Height - 10);
+                var textLeft = iconSize > 0.0f ? iconSize + 12.0f : 8.0f;
+                var textRect = new Rectangle(textLeft, 2, clientRect.Width - textLeft - 2.0f, clientRect.Height - 10);
                 Render2D.PushClip(ref clientRect);
                 bool coloredText = _window._colorDebugLogText;
                 if (LogCount == 1)
@@ -332,9 +334,10 @@ namespace FlaxEditor.Windows
             FlaxEditor.Utilities.Utils.SetupCommonInputActions(this);
 
             // Toolstrip
-            var toolstrip = new ToolStrip(22.0f)
+            var toolstrip = new ToolStrip(ToolStrip.CompactToolStripHeight)
             {
                 Parent = this,
+                UseCompactButtonStyle = true,
             };
             toolstrip.AddButton("Clear", Clear).LinkTooltip("Clears all log entries.");
             _clearOnPlayButton = (ToolStripButton)toolstrip.AddButton("Clear on Play", () =>

@@ -35,7 +35,7 @@ namespace FlaxEditor.GUI.Input
             // Search is a primary navigation control. Keep its resting affordance visible
             // instead of relying on hover to reveal an otherwise toolbar-colored field.
             BackgroundColor = backgroundColor;
-            BackgroundSelectedColor = Color.Lerp(backgroundColor, style.Foreground, 0.06f);
+            BackgroundSelectedColor = style.SecondaryBackground;
             BorderColor = style.BorderNormal;
             BorderSelectedColor = style.BorderSelected;
             WatermarkTextColor = style.ForegroundGrey;

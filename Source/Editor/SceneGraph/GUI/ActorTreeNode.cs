@@ -41,7 +41,6 @@ namespace FlaxEditor.SceneGraph.GUI
         private string _shownSceneIconTooltip;
         private Rectangle _sceneIconTooltipArea;
 
-        private const float SceneIconSize = 16.0f;
         private const float SceneIconSpacing = 3.0f;
         private const float SceneIconRightMargin = 4.0f;
         private const float SceneIconTextPadding = 6.0f;
@@ -88,8 +87,16 @@ namespace FlaxEditor.SceneGraph.GUI
         /// </summary>
         public ActorNode ActorNode => _actorNode;
 
+        /// <summary>
+        /// Gets or sets a value indicating whether this node is highlighted because its actor is hovered in the editor viewport.
+        /// </summary>
+        public bool IsViewportHovered { get; set; }
+
         /// <inheritdoc />
-        protected override float HeaderTextLeftOffset => SceneIconSize + 4.0f;
+        protected override bool IsHeaderExternallyHighlighted => IsViewportHovered;
+
+        /// <inheritdoc />
+        protected override float HeaderTextLeftOffset => SceneIconSize > 0.0f ? SceneIconSize + 4.0f : 0.0f;
 
         /// <inheritdoc />
         public override float MinimumWidth => base.MinimumWidth + ActiveCheckboxColumnWidth;
@@ -102,6 +109,8 @@ namespace FlaxEditor.SceneGraph.GUI
                 return actor && (IsMouseOverHeader || _activeCheckboxPressed);
             }
         }
+
+        private float SceneIconSize => Mathf.Min(Mathf.Max(0.0f, Style.Current.GetSceneTreeIconSize()), Mathf.Max(0.0f, HeaderHeight - 2.0f));
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ActorTreeNode"/> class.
@@ -766,7 +775,8 @@ namespace FlaxEditor.SceneGraph.GUI
 
         private Rectangle GetSceneIconRect(float startX, int iconIndex)
         {
-            return new Rectangle(startX + iconIndex * (SceneIconSize + SceneIconSpacing), (HeaderHeight - SceneIconSize) * 0.5f, SceneIconSize, SceneIconSize);
+            var iconSize = SceneIconSize;
+            return new Rectangle(startX + iconIndex * (iconSize + SceneIconSpacing), (HeaderHeight - iconSize) * 0.5f, iconSize, iconSize);
         }
 
         private float GetSceneIconsRightEdge()
@@ -795,6 +805,9 @@ namespace FlaxEditor.SceneGraph.GUI
             iconsCount = GetSceneRowIconsCount(Actor);
             if (iconsCount == 0)
                 return false;
+            var iconSize = SceneIconSize;
+            if (iconSize <= 0.0f)
+                return false;
 
             var font = TextFont.GetFont();
             if (!font)
@@ -802,7 +815,7 @@ namespace FlaxEditor.SceneGraph.GUI
 
             var textRect = TextRect;
             var textWidth = font.MeasureText(Text ?? string.Empty).X;
-            var iconsWidth = iconsCount * SceneIconSize + (iconsCount - 1) * SceneIconSpacing;
+            var iconsWidth = iconsCount * iconSize + (iconsCount - 1) * SceneIconSpacing;
             startX = GetSceneIconsRightEdge() - SceneIconRightMargin - iconsWidth;
             return startX > textRect.Left && textRect.Left + textWidth + SceneIconTextPadding <= startX;
         }
@@ -830,7 +843,7 @@ namespace FlaxEditor.SceneGraph.GUI
         private void DrawLeadingActorIcon()
         {
             var actor = Actor;
-            if (!actor || !TryGetActorTypeIcon(actor, out var icon))
+            if (!actor || SceneIconSize <= 0.0f || !TryGetActorTypeIcon(actor, out var icon))
                 return;
             DrawSceneRowIcon(ref icon, GetLeadingActorIconRect(), actor.IsActiveInHierarchy);
         }

@@ -164,19 +164,29 @@ namespace FlaxEditor.GUI.Input
                 var style = Style.Current;
                 var rect = new Rectangle(Float2.Zero, Size);
                 var cornerRadius = style.GetInputCornerRadius();
-                var backgroundColor = IsMouseOver || IsFocused ? style.TextBoxBackgroundSelected : TrackLineColor;
-                StyleRendering.DrawRoundedRectangle(rect, backgroundColor, style.BorderNormal.AlphaMultiplied(IsMouseOver ? 0.9f : 0.45f), 1.0f, cornerRadius);
+                var visuallyEnabled = VisuallyEnabledInHierarchy;
+                var isActive = visuallyEnabled && (IsFocused || _isSliding || _isSlidingPending);
+                var backgroundColor = isActive ? style.SecondaryBackground : TrackLineColor;
+                var borderColor = isActive ? style.BorderSelected : style.BorderNormal.AlphaMultiplied(IsMouseOver ? 0.9f : 0.45f);
+                if (!visuallyEnabled)
+                {
+                    backgroundColor = StyleRendering.GetDisabledInputColor(backgroundColor);
+                    borderColor = StyleRendering.GetDisabledInputAccentColor(borderColor);
+                }
+                StyleRendering.DrawRoundedRectangle(rect, backgroundColor, borderColor, 1.0f, cornerRadius);
 
                 if (_fillRect.Width > 0.0f)
                 {
                     var fillColor = _isSliding ? ThumbColorSelected : IsMouseOver ? ThumbColorHovered : ThumbColor;
+                    if (!visuallyEnabled)
+                        fillColor = StyleRendering.GetDisabledInputAccentColor(fillColor);
                     StyleRendering.FillRoundedRectangle(_fillRect, fillColor, cornerRadius);
                 }
 
                 if (!string.IsNullOrEmpty(DisplayText))
                 {
                     var textRect = new Rectangle(6.0f, 0.0f, Mathf.Max(0.0f, Width - 12.0f), Height);
-                    Render2D.DrawText(style.FontMedium, DisplayText, textRect, VisuallyEnabledInHierarchy ? style.Foreground : style.ForegroundDisabled, TextAlignment.Near, TextAlignment.Center, TextWrapping.NoWrap);
+                    Render2D.DrawText(style.FontMedium, DisplayText, textRect, visuallyEnabled ? style.Foreground : style.ForegroundDisabled, TextAlignment.Near, TextAlignment.Center, TextWrapping.NoWrap);
                 }
             }
 

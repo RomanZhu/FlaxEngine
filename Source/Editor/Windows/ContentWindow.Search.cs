@@ -144,7 +144,7 @@ namespace FlaxEditor.Windows
             {
                 var style = Style.Current;
                 var bounds = new Rectangle(Float2.Zero, Size);
-                StyleRendering.DrawRoundedRectangle(bounds, style.Background, style.BorderNormal, 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangle(bounds, style.Background, style.BorderNormal, 1.0f, style.GetPopupCornerRadius());
                 if (_typeSuggestions.Count != 0)
                 {
                     Render2D.DrawText(style.FontMedium, "TYPE SUGGESTIONS", new Rectangle(12, 8, Width - 24, 20), style.ForegroundGrey, TextAlignment.Near, TextAlignment.Center);
@@ -152,7 +152,7 @@ namespace FlaxEditor.Windows
                     {
                         var row = new Rectangle(6, 34 + i * 24, Width - 12, 22);
                         if (_hoveredSuggestion == i || _selectedSuggestion == i)
-                            StyleRendering.FillRoundedRectangle(row, style.BackgroundHighlighted, style.CornerRadius);
+                            StyleRendering.FillRoundedRectangle(row, style.BackgroundHighlighted, style.GetSelectionCornerRadius());
                         var type = _typeSuggestions[i].Type;
                         var iconRect = new Rectangle(row.X + 6.0f, row.Y + 4.0f, 14.0f, 14.0f);
                         SemanticIcons.Draw(SemanticIcons.ForContent(type), iconRect, SemanticIcons.GetContentColor(type, style));
@@ -207,6 +207,8 @@ namespace FlaxEditor.Windows
 
         private class ViewDropdown : ComboBox
         {
+            public Color TextColorHighlighted { get; set; }
+
             public void OnClicked(int index)
             {
                 OnItemClicked(index);
@@ -217,7 +219,6 @@ namespace FlaxEditor.Windows
             {
                 // Cache data
                 var clientRect = new Rectangle(Float2.Zero, Size);
-                float margin = clientRect.Height * 0.2f;
                 bool isOpened = IsPopupOpened;
                 bool enabled = EnabledInHierarchy;
                 Color backgroundColor = BackgroundColor;
@@ -238,7 +239,7 @@ namespace FlaxEditor.Windows
                 }
 
                 // Background
-                var cornerRadius = Style.Current.CornerRadius;
+                var cornerRadius = Style.Current.GetInputCornerRadius();
                 if (cornerRadius > 0.0f)
                     StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, 1.0f, cornerRadius);
                 else
@@ -251,7 +252,7 @@ namespace FlaxEditor.Windows
                 float textScale = Height / DefaultHeight;
                 var textRect = clientRect;
                 Render2D.PushClip(textRect);
-                var textColor = TextColor;
+                var textColor = enabled && (isOpened || _mouseDown) ? TextColorHighlighted : TextColor;
                 Render2D.DrawText(Font.GetFont(), "•••", textRect, enabled ? textColor : textColor * 0.5f, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap, 1.0f, textScale);
                 Render2D.PopClip();
             }

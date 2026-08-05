@@ -66,6 +66,88 @@ namespace FlaxEditor.GUI.Dialogs
             }
         }
 
+        private static float GetRoundedInset(float localY, float height, float radius)
+        {
+            if (radius < 1.0f)
+                return 0.0f;
+
+            var centerY = localY + 0.5f;
+            if (centerY < radius)
+            {
+                var dy = radius - centerY;
+                return radius - (float)Math.Sqrt(Mathf.Max(0.0f, radius * radius - dy * dy));
+            }
+
+            if (centerY > height - radius)
+            {
+                var dy = centerY - (height - radius);
+                return radius - (float)Math.Sqrt(Mathf.Max(0.0f, radius * radius - dy * dy));
+            }
+
+            return 0.0f;
+        }
+
+        protected static void FillRoundedVerticalGradient(Rectangle bounds, Color topColor, Color bottomColor, float radius)
+        {
+            if (bounds.Width <= 0.0f || bounds.Height <= 0.0f)
+                return;
+
+            radius = Mathf.Clamp(radius, 0.0f, Mathf.Min(bounds.Width, bounds.Height) * 0.5f);
+            var rowCount = Mathf.CeilToInt(bounds.Height);
+            for (int i = 0; i < rowCount; i++)
+            {
+                var rowHeight = Mathf.Min(1.0f, bounds.Height - i);
+                if (rowHeight <= 0.0f)
+                    continue;
+
+                var inset = GetRoundedInset(i, bounds.Height, radius);
+                var rowWidth = bounds.Width - inset * 2.0f;
+                if (rowWidth <= 0.0f)
+                    continue;
+
+                var alpha = bounds.Height <= 1.0f ? 0.0f : i / (bounds.Height - 1.0f);
+                Render2D.FillRectangle(new Rectangle(bounds.X + inset, bounds.Y + i, rowWidth, rowHeight), Color.Lerp(topColor, bottomColor, alpha));
+            }
+        }
+
+        protected static void FillRoundedCheckerboard(Rectangle bounds, float radius, float cellSize)
+        {
+            if (bounds.Width <= 0.0f || bounds.Height <= 0.0f || cellSize <= 0.0f)
+                return;
+
+            radius = Mathf.Clamp(radius, 0.0f, Mathf.Min(bounds.Width, bounds.Height) * 0.5f);
+            var rowCount = Mathf.CeilToInt(bounds.Height);
+            for (int row = 0; row < rowCount; row++)
+            {
+                var rowHeight = Mathf.Min(1.0f, bounds.Height - row);
+                if (rowHeight <= 0.0f)
+                    continue;
+
+                var inset = GetRoundedInset(row, bounds.Height, radius);
+                var rowLeft = bounds.X + inset;
+                var rowRight = bounds.X + bounds.Width - inset;
+                var rowWidth = rowRight - rowLeft;
+                if (rowWidth <= 0.0f)
+                    continue;
+
+                Render2D.FillRectangle(new Rectangle(rowLeft, bounds.Y + row, rowWidth, rowHeight), Color.White);
+
+                var cellY = Mathf.FloorToInt(row / cellSize);
+                var startCellX = Mathf.FloorToInt((rowLeft - bounds.X) / cellSize);
+                var endCellX = Mathf.CeilToInt((rowRight - bounds.X) / cellSize);
+                for (int cellX = startCellX; cellX < endCellX; cellX++)
+                {
+                    if ((cellX + cellY) % 2 != 0)
+                        continue;
+
+                    var x1 = Mathf.Max(rowLeft, bounds.X + cellX * cellSize);
+                    var x2 = Mathf.Min(rowRight, bounds.X + (cellX + 1) * cellSize);
+                    if (x2 > x1)
+                        Render2D.FillRectangle(new Rectangle(x1, bounds.Y + row, x2 - x1, rowHeight), Color.Gray);
+                }
+            }
+        }
+
         /// <summary>
         /// Gets a value indicating whether user is using a wheel.
         /// </summary>
@@ -339,6 +421,7 @@ namespace FlaxEditor.GUI.Dialogs
             var hs = hsv;
             hs.Z = 1.0f;
             Color hsC = Color.FromHSV(hs);
+            var sliderCornerRadius = style.GetInputCornerRadius();
 
             // Value slider
             float valueKnobExpand = _isMouseDownValueSlider ? 10.0f : 4.0f;
@@ -348,29 +431,15 @@ namespace FlaxEditor.GUI.Dialogs
             float valueKnobX = _valueSliderRect.X - valueKnobExpand * 0.5f;
             float valueKnobY = _valueSliderRect.Y + valueY - valueKnobHeight * 0.5f;
             Rectangle valueKnobRect = new Rectangle(valueKnobX, valueKnobY, valueKnobWidth, valueKnobHeight);
-            Render2D.FillRectangle(_valueSliderRect, hsC, hsC, Color.Black, Color.Black);
+            FillRoundedVerticalGradient(_valueSliderRect, hsC, Color.Black, sliderCornerRadius);
+            StyleRendering.DrawRoundedRectangleBorder(_valueSliderRect, style.BorderNormal, 1.0f, sliderCornerRadius);
             // Draw one black and one white border to make the knob visible at any saturation level
             Render2D.DrawRectangle(valueKnobRect, Color.White, _isMouseDownValueSlider ? 3.0f : 2.0f);
             Render2D.DrawRectangle(valueKnobRect, Color.Black, _isMouseDownValueSlider ? 2.0f : 1.0f);
 
             // Draw checkerboard pattern as background of alpha slider
-            Render2D.FillRectangle(_alphaSliderRect, Color.White);
             var smallRectSize = _alphaSliderRect.Width / 2.0f;
-            var numHor = Mathf.CeilToInt(_alphaSliderRect.Width / smallRectSize);
-            var numVer = Mathf.CeilToInt(_alphaSliderRect.Height / smallRectSize);
-            Render2D.PushClip(_alphaSliderRect);
-            for (int i = 0; i < numHor; i++)
-            {
-                for (int j = 0; j < numVer; j++)
-                {
-                    if ((i + j) % 2 == 0)
-                    {
-                        var rect = new Rectangle(_alphaSliderRect.X + smallRectSize * i, _alphaSliderRect.Y + smallRectSize * j, new Float2(smallRectSize));
-                        Render2D.FillRectangle(rect, Color.Gray);
-                    }
-                }
-            }
-            Render2D.PopClip();
+            FillRoundedCheckerboard(_alphaSliderRect, sliderCornerRadius, smallRectSize);
 
             // Alpha slider
             float alphaKnobExpand = _isMouseDownAlphaSlider ? 10.0f : 4.0f;
@@ -382,7 +451,8 @@ namespace FlaxEditor.GUI.Dialogs
             Rectangle alphaKnobRect = new Rectangle(alphaKnobX, alphaKnobY, alphaKnobWidth, alphaKnobHeight);
             var color = _color;
             color.A = 1; // Prevent alpha slider fill from becoming transparent
-            Render2D.FillRectangle(_alphaSliderRect, color, color, Color.Transparent, Color.Transparent);
+            FillRoundedVerticalGradient(_alphaSliderRect, color, Color.Transparent, sliderCornerRadius);
+            StyleRendering.DrawRoundedRectangleBorder(_alphaSliderRect, style.BorderNormal, 1.0f, sliderCornerRadius);
             // Draw one black and one white border to make the knob visible at any saturation level
             Render2D.DrawRectangle(alphaKnobRect, Color.White, _isMouseDownAlphaSlider ? 3.0f : 2.0f);
             Render2D.DrawRectangle(alphaKnobRect, Color.Black, _isMouseDownAlphaSlider ? 2.0f : 1.0f);

@@ -12,6 +12,9 @@ namespace FlaxEditor.GUI.ContextMenu
     [HideInEditor]
     public class ContextMenuSeparator : ContextMenuItem
     {
+        private const float SeparatorSidePadding = 3.0f;
+        private static readonly Color SeparatorColor = Color.FromBgra(0xFF434347);
+
         /// <summary>
         /// Initializes a new instance of the <see cref="ContextMenuSeparator"/> class.
         /// </summary>
@@ -27,7 +30,7 @@ namespace FlaxEditor.GUI.ContextMenu
             base.Draw();
 
             // Draw separator line
-            Render2D.FillRectangle(new Rectangle(0, 1, Width - 4, 1), Style.Current.BorderNormal.AlphaMultiplied(0.65f));
+            Render2D.FillRectangle(new Rectangle(-X + SeparatorSidePadding, 1, Parent.Width - SeparatorSidePadding * 2.0f, 1), SeparatorColor);
         }
     }
 }

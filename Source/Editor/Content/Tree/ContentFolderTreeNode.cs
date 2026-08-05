@@ -117,9 +117,9 @@ public class ContentFolderTreeNode : TreeNode
 
         var contentWindow = Editor.Instance?.Windows?.ContentWin;
         var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
-        var maximumIconSize = Mathf.Max(10.0f, HeaderHeight - 4.0f);
+        var maximumIconSize = Mathf.Max(10.0f, HeaderHeight - 1.0f);
         var arrowSize = Mathf.Min(12.0f * scale, maximumIconSize);
-        var iconSize = Mathf.Min(16.0f * scale, maximumIconSize);
+        var iconSize = Mathf.Min(Mathf.Max(0.0f, Style.Current.GetContentTreeIconSize() * scale), maximumIconSize);
 
         // Use the current text layout, not just cached values.
         var textRect = TextRect;
@@ -260,9 +260,12 @@ public class ContentFolderTreeNode : TreeNode
         var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
         var icon = IsExpanded ? Editor.Instance.Icons.FolderOpen32 : Editor.Instance.Icons.FolderClosed32;
         var maximumIconSize = Mathf.Max(10.0f, HeaderHeight - 4.0f);
-        var iconSize = Mathf.Min(16.0f * scale, maximumIconSize);
-        var iconRect = new Rectangle(TextRect.Left - iconSize - 2.0f, (HeaderHeight - iconSize) * 0.5f, iconSize, iconSize);
-        Render2D.DrawSprite(icon, iconRect);
+        var iconSize = Mathf.Min(Mathf.Max(0.0f, Style.Current.GetContentTreeIconSize() * scale), maximumIconSize);
+        if (iconSize > 0.0f)
+        {
+            var iconRect = new Rectangle(TextRect.Left - iconSize - 2.0f, (HeaderHeight - iconSize) * 0.5f, iconSize, iconSize);
+            Render2D.DrawSprite(icon, iconRect);
+        }
     }
 
     /// <inheritdoc />

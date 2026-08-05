@@ -256,11 +256,17 @@ namespace FlaxEditor.GUI
         private void DrawCompactPreview()
         {
             var style = Style.Current;
+            var visuallyEnabled = VisuallyEnabledInHierarchy;
             var previewRect = CompactPreviewRect;
-            var borderColor = VisuallyEnabledInHierarchy && (previewRect.Contains(_mousePos) || IsFocused || IsNavFocused) ? style.BorderHighlighted : style.BorderNormal;
+            var borderColor = visuallyEnabled && (previewRect.Contains(_mousePos) || IsFocused || IsNavFocused) ? style.BorderHighlighted : style.BorderNormal;
             var backgroundColor = CompactBackgroundColor.A > 0.0f ? CompactBackgroundColor : style.TextBoxBackground;
+            if (!visuallyEnabled)
+            {
+                backgroundColor = StyleRendering.GetDisabledInputColor(backgroundColor);
+                borderColor = StyleRendering.GetDisabledInputAccentColor(borderColor);
+            }
 
-            StyleRendering.DrawRoundedRectangle(previewRect, backgroundColor, borderColor, 1.0f, style.CornerRadius);
+            StyleRendering.DrawRoundedRectangle(previewRect, backgroundColor, borderColor, 1.0f, style.GetInputCornerRadius());
 
             if (DifferentValues)
             {
@@ -288,11 +294,16 @@ namespace FlaxEditor.GUI
             var textRect = CompactTextRect;
             var borderColor = visuallyEnabled && (IsMouseOver || IsFocused || IsNavFocused) ? style.BorderHighlighted : style.BorderNormal;
             var backgroundColor = CompactBackgroundColor.A > 0.0f ? CompactBackgroundColor : style.TextBoxBackground;
+            if (!visuallyEnabled)
+            {
+                backgroundColor = StyleRendering.GetDisabledInputColor(backgroundColor);
+                borderColor = StyleRendering.GetDisabledInputAccentColor(borderColor);
+            }
 
             if (HasCompactPreview)
                 DrawCompactPreview();
 
-            StyleRendering.DrawRoundedRectangle(fieldRect, backgroundColor, borderColor, 1.0f, style.CornerRadius);
+            StyleRendering.DrawRoundedRectangle(fieldRect, backgroundColor, borderColor, 1.0f, style.GetInputCornerRadius());
 
             if (CanEdit && visuallyEnabled)
             {
@@ -307,11 +318,11 @@ namespace FlaxEditor.GUI
 
             if (IsDragOver && _dragOverElement != null && _dragOverElement.HasValidDrag)
             {
-                StyleRendering.DrawRoundedRectangle(new Rectangle(Float2.Zero, Size), style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangle(new Rectangle(Float2.Zero, Size), style.Selection, style.SelectionBorder, 1.0f, style.GetSelectionCornerRadius());
             }
 
-            if (IsNavFocused)
-                StyleRendering.DrawRoundedRectangleBorder(new Rectangle(Float2.Zero, Size), style.BackgroundSelected, 1.0f, style.CornerRadius);
+            if (visuallyEnabled && IsNavFocused)
+                StyleRendering.DrawRoundedRectangleBorder(new Rectangle(Float2.Zero, Size), style.BackgroundSelected, 1.0f, style.GetSelectionCornerRadius());
         }
 
         /// <inheritdoc />
@@ -436,14 +447,14 @@ namespace FlaxEditor.GUI
             if (IsDragOver && _dragOverElement != null && _dragOverElement.HasValidDrag)
             {
                 var bounds = new Rectangle(Float2.Zero, Size);
-                StyleRendering.DrawRoundedRectangle(bounds, style.Selection, style.SelectionBorder, 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangle(bounds, style.Selection, style.SelectionBorder, 1.0f, style.GetSelectionCornerRadius());
             }
 
             // Navigation focus highlight
-            if (IsNavFocused)
+            if (visuallyEnabled && IsNavFocused)
             {
                 var bounds = new Rectangle(Float2.Zero, Size);
-                StyleRendering.DrawRoundedRectangleBorder(bounds, style.BackgroundSelected, 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangleBorder(bounds, style.BackgroundSelected, 1.0f, style.GetSelectionCornerRadius());
             }
         }
 
@@ -561,7 +572,7 @@ namespace FlaxEditor.GUI
 
             if (UseCompactField)
             {
-                if (button == MouseButton.Left && HasCompactPreview && CompactPreviewRect.Contains(ref location))
+                if (button == MouseButton.Left && ((HasCompactPreview && CompactPreviewRect.Contains(ref location)) || CompactFieldRect.Contains(ref location)))
                     OpenSelectedContentItem();
                 return true;
             }

@@ -1189,6 +1189,7 @@ namespace FlaxEditor.Modules
             ToolStrip = new ToolStrip(Style.Current.ToolbarHeight > 0.0f ? Style.Current.ToolbarHeight : 32.0f, MainMenu.Bottom)
             {
                 Parent = mainWindow,
+                UseGroupFrames = true,
             };
             ToolStrip.ApplyLayout(Editor.Options.Options.Interface.ToolStripLayout);
             ToolStrip.LayoutChanged += () =>

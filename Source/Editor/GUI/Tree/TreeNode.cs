@@ -37,14 +37,15 @@ namespace FlaxEditor.GUI.Tree
         // Used to prevent showing highlight on double mouse click
         private float _debounceHighlightTime;
         private float _highlightScale;
+        private static TreeNode _lastHighlightedNode;
         private bool _mouseOverArrow, _mouseOverHeader;
         private float _xOffset, _textWidth;
         private float _headerHeight = 16.0f;
         private bool _showHeader = true;
 
-        private float HeaderIconSize => Mathf.Min(16.0f, Style.Current.IconSize > 0.0f ? Style.Current.IconSize : 16.0f);
+        private float HeaderIconSize => Mathf.Min(Mathf.Max(0.0f, Style.Current.GetTreeIconSize()), Mathf.Max(0.0f, _headerHeight - 2.0f));
 
-        private float HeaderIconSlotWidth => HeaderIconSize + 4.0f;
+        private float HeaderIconSlotWidth => HeaderIconSize > 0.0f ? HeaderIconSize + 4.0f : 0.0f;
         private float LayoutHeaderHeight => _showHeader ? _headerHeight : 0.0f;
         private Rectangle _headerRect;
         private SpriteHandle _iconCollaped, _iconOpened;
@@ -308,7 +309,7 @@ namespace FlaxEditor.GUI.Tree
                 _margin.ShrinkRectangle(ref textRect);
 
                 // Icon
-                if (_iconCollaped.IsValid)
+                if (_iconCollaped.IsValid && HeaderIconSize > 0.0f)
                 {
                     textRect.X += HeaderIconSlotWidth;
                     textRect.Width -= HeaderIconSlotWidth;
@@ -334,6 +335,11 @@ namespace FlaxEditor.GUI.Tree
         /// Gets a value indicating whether the mouse is over the node header.
         /// </summary>
         protected bool IsMouseOverHeader => _mouseOverHeader;
+
+        /// <summary>
+        /// Gets a value indicating whether the node header should be highlighted by an external source.
+        /// </summary>
+        protected virtual bool IsHeaderExternallyHighlighted => false;
 
         private void ApplyHeaderTextLeftOffset(ref Rectangle textRect)
         {
@@ -840,13 +846,17 @@ namespace FlaxEditor.GUI.Tree
         /// Adds a box around the text to highlight the node.
         /// </summary>
         /// <param name="durationSec">The duration of the highlight in seconds.</param>
-        public void StartHighlight(float durationSec = 3)
+        public void StartHighlight(float durationSec = 0.5f)
         {
+            if (_lastHighlightedNode != null && _lastHighlightedNode != this && !_lastHighlightedNode.IsDisposing)
+                _lastHighlightedNode.StopHighlight();
+
             _isHightlighted = true;
             _targetHighlightTimeSec = durationSec;
             _currentHighlightTimeSec = 0;
             _debounceHighlightTime = 0;
             _highlightScale = 2f;
+            _lastHighlightedNode = this;
         }
 
         /// <summary>
@@ -858,6 +868,8 @@ namespace FlaxEditor.GUI.Tree
             _targetHighlightTimeSec = 0;
             _currentHighlightTimeSec = 0;
             _debounceHighlightTime = 0;
+            if (_lastHighlightedNode == this)
+                _lastHighlightedNode = null;
         }
 
         /// <inheritdoc />
@@ -874,7 +886,7 @@ namespace FlaxEditor.GUI.Tree
                     _highlightScale = Mathf.Lerp(_highlightScale, _targetHighlightScale, _currentHighlightTimeSec);
 
                 if (_currentHighlightTimeSec >= _targetHighlightTimeSec)
-                    _isHightlighted = false;
+                    StopHighlight();
             }
 
             // Drop/down animation
@@ -924,21 +936,22 @@ namespace FlaxEditor.GUI.Tree
                 var tree = ParentTree;
                 bool isSelected = tree.Selection.Contains(this);
                 bool isFocused = tree.ContainsFocus;
+                bool isHeaderHighlighted = _mouseOverHeader || IsHeaderExternallyHighlighted;
                 var left = _xOffset + 16; // offset + arrow
                 var textRect = new Rectangle(left, 0, Width - left, _headerHeight);
                 _margin.ShrinkRectangle(ref textRect);
 
                 // Draw background
-                if (!isSelected && !_mouseOverHeader && Editor.Instance?.Options?.Options?.Interface?.AlternatingTreeRows == true)
+                if (!isSelected && !isHeaderHighlighted && Editor.Instance?.Options?.Options?.Interface?.AlternatingTreeRows == true)
                 {
                     var treeY = PointToParent(tree, Float2.Zero).Y;
                     var row = (int)Mathf.Floor(treeY / Mathf.Max(1.0f, _headerHeight));
                     if ((row & 1) != 0)
                         Render2D.FillRectangle(_headerRect, Color.Lerp(style.Background, style.Foreground, 0.02f));
                 }
-                if (isSelected || _mouseOverHeader)
+                if (isSelected || isHeaderHighlighted)
                 {
-                    Render2D.FillRectangle(_headerRect, (isSelected && isFocused) ? BackgroundColorSelected : (_mouseOverHeader ? BackgroundColorHighlighted : BackgroundColorSelectedUnfocused));
+                    Render2D.FillRectangle(_headerRect, (isSelected && isFocused) ? BackgroundColorSelected : (isHeaderHighlighted ? BackgroundColorHighlighted : BackgroundColorSelectedUnfocused));
                     if (isSelected && isFocused)
                         Render2D.FillRectangle(new Rectangle(_headerRect.X, _headerRect.Y + 2.0f, 2.0f, _headerRect.Height - 4.0f), style.BorderSelected);
                 }
@@ -946,16 +959,19 @@ namespace FlaxEditor.GUI.Tree
                 // Draw arrow
                 if (HasAnyVisibleChild)
                 {
-                    Render2D.DrawSprite(_opened ? style.ArrowDown : style.ArrowRight, ArrowRect, _mouseOverHeader ? style.Foreground : style.ForegroundGrey);
+                    Render2D.DrawSprite(_opened ? style.ArrowDown : style.ArrowRight, ArrowRect, isHeaderHighlighted ? style.Foreground : style.ForegroundGrey);
                 }
 
                 // Draw icon
                 if (_iconCollaped.IsValid)
                 {
                     var iconSize = HeaderIconSize;
-                    Render2D.DrawSprite(_opened ? _iconOpened : _iconCollaped, new Rectangle(textRect.Left, (_headerHeight - iconSize) * 0.5f, iconSize, iconSize), IconColor);
-                    textRect.X += HeaderIconSlotWidth;
-                    textRect.Width -= HeaderIconSlotWidth;
+                    if (iconSize > 0.0f)
+                    {
+                        Render2D.DrawSprite(_opened ? _iconOpened : _iconCollaped, new Rectangle(textRect.Left, (_headerHeight - iconSize) * 0.5f, iconSize, iconSize), IconColor);
+                        textRect.X += HeaderIconSlotWidth;
+                        textRect.Width -= HeaderIconSlotWidth;
+                    }
                 }
                 ApplyHeaderTextLeftOffset(ref textRect);
                 ApplyHeaderTextRightOffset(ref textRect);
@@ -1721,6 +1737,8 @@ namespace FlaxEditor.GUI.Tree
         /// <inheritdoc />
         public override void OnDestroy()
         {
+            if (_lastHighlightedNode == this)
+                _lastHighlightedNode = null;
             ParentTree?.Selection.Remove(this);
 
             base.OnDestroy();

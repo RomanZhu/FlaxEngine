@@ -43,7 +43,7 @@ namespace FlaxEditor.GUI
 
         private void OnSelectedContextMenuVisibleChanged(Control control)
         {
-            if (_selected != null)
+            if (_selected != null && _selected.ContextMenu == control && !control.Visible)
                 Selected = null;
         }
 

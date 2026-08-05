@@ -314,7 +314,7 @@ namespace FlaxEditor.GUI.Docking
         {
             // Cache data
             var style = Style.Current;
-            StyleRendering.FillRoundedRectangle(new Rectangle(0, 0, Width, Height), style.Background, style.CornerRadius, RoundedCorners.Bottom);
+            StyleRendering.FillRoundedRectangle(new Rectangle(0, 0, Width, Height), style.Background, style.GetPanelCornerRadius(), RoundedCorners.Bottom);
 
             base.Draw();
             if (_hideHeader)
@@ -369,14 +369,14 @@ namespace FlaxEditor.GUI.Docking
             if (isSelected)
             {
                 tabColor = style.Background;
-                StyleRendering.FillRoundedRectangle(tabRect, tabColor, style.CornerRadius, RoundedCorners.Top);
+                StyleRendering.FillRoundedRectangle(tabRect, tabColor, style.GetTabCornerRadius(), RoundedCorners.Top);
                 if (containsFocus)
                     StyleRendering.FillRoundedRectangle(new Rectangle(tabRect.X, tabRect.Y, tabRect.Width, 2.0f), style.BorderSelected, 1.0f, RoundedCorners.Top);
             }
             else if (isMouseOver)
             {
                 tabColor = style.BackgroundHighlighted;
-                StyleRendering.FillRoundedRectangle(tabRect, tabColor, style.CornerRadius, RoundedCorners.Top);
+                StyleRendering.FillRoundedRectangle(tabRect, tabColor, style.GetTabCornerRadius(), RoundedCorners.Top);
             }
             else
             {
@@ -405,7 +405,7 @@ namespace FlaxEditor.GUI.Docking
                 var crossRect = new Rectangle(x + width - DockPanel.DefaultButtonsSize - DockPanel.DefaultButtonsMargin, (HeaderRectangle.Height - DockPanel.DefaultButtonsSize) / 2, DockPanel.DefaultButtonsSize, DockPanel.DefaultButtonsSize);
                 bool isMouseOverCross = isMouseOver && crossRect.Contains(MousePosition);
                 if (isMouseOverCross)
-                    StyleRendering.FillRoundedRectangle(crossRect, style.BackgroundHighlighted * 1.2f, style.CornerRadius);
+                    StyleRendering.FillRoundedRectangle(crossRect, style.BackgroundHighlighted * 1.2f, style.GetButtonCornerRadius());
                 Render2D.DrawSprite(style.Cross, crossRect, isMouseOverCross ? style.Foreground : style.ForegroundGrey);
             }
         }
@@ -430,7 +430,7 @@ namespace FlaxEditor.GUI.Docking
                 var tabRect = new Rectangle(x, 0, width, HeaderRectangle.Height);
                 var iconWidth = tab.Icon.IsValid ? DockPanel.DefaultButtonsSize + DockPanel.DefaultLeftTextMargin : 0;
 
-                StyleRendering.DrawRoundedRectangle(tabRect, ghostColor, ghostBorderColor, 1.0f, style.CornerRadius, RoundedCorners.Top);
+                StyleRendering.DrawRoundedRectangle(tabRect, ghostColor, ghostBorderColor, 1.0f, style.GetTabCornerRadius(), RoundedCorners.Top);
                 if (tab.Icon.IsValid)
                 {
                     Render2D.DrawSprite(

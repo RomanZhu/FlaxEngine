@@ -392,7 +392,7 @@ public class WindowDecorations : ContainerControl
             return;
 
         var chipBounds = new Rectangle(chipX, (Height - UnsavedChangesChipHeight) * 0.5f, chipWidth, UnsavedChangesChipHeight);
-        StyleRendering.DrawRoundedRectangle(chipBounds, style.BackgroundNormal, style.BorderNormal, 1.0f, style.CornerRadius);
+        StyleRendering.DrawRoundedRectangle(chipBounds, style.BackgroundNormal, style.BorderNormal, 1.0f, style.GetButtonCornerRadius());
         Render2D.DrawText(
             style.FontSmall,
             UnsavedChangesText,

@@ -9,6 +9,7 @@ using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Tree;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.GUI.Input;
+using FlaxEditor.Options;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.GUI;
 using FlaxEditor.Scripting;
@@ -41,11 +42,11 @@ namespace FlaxEditor.Windows
         private bool _forceScrollNodeToView = false;
         private SelectionOverflowDirection _selectionOverflowHoverDirection;
         private SelectionOverflowDirection _selectionOverflowMouseDownDirection;
+        private ActorTreeNode _viewportHoveredTreeNode;
 
         private const float SelectionOverflowToastMargin = 6.0f;
         private const float SelectionOverflowToastHeight = 22.0f;
         private const float SelectionOverflowToastHorizontalPadding = 10.0f;
-
         private enum SelectionOverflowDirection
         {
             None,
@@ -78,6 +79,9 @@ namespace FlaxEditor.Windows
             Title = "Scene";
             Icon = editor.Icons.Globe32;
             var controlHeight = Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 18.0f;
+            const float headerGap = 4.0f;
+            var headerPadding = ToolStrip.CompactHeaderPadding;
+            var headerButtonSize = controlHeight;
 
             // Compact creation, search, and view toolbar shared with content-oriented panels.
             var headerPanel = new ContainerControl
@@ -85,21 +89,24 @@ namespace FlaxEditor.Windows
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 BackgroundColor = Style.Current.Background,
                 IsScrollable = false,
-                Offsets = new Margin(0, 0, 0, controlHeight + 10.0f),
+                Offsets = new Margin(0, 0, 0, ToolStrip.GetCompactHeaderHeight(controlHeight)),
             };
             _newButton = new Button
             {
                 Parent = headerPanel,
-                Bounds = new Rectangle(6, 5, 26, controlHeight),
+                Bounds = new Rectangle(headerPadding, headerPadding, headerButtonSize, headerButtonSize),
                 Text = "+",
                 TooltipText = "New actor or control",
             };
+            ApplyHeaderButtonStyle(_newButton);
             _newButton.Clicked += ShowNewMenu;
+            var searchLeft = headerPadding + headerButtonSize + headerGap;
+            var searchRightPadding = headerPadding + headerButtonSize + headerGap;
             _searchBox = new SearchBox
             {
                 AnchorPreset = AnchorPresets.HorizontalStretchMiddle,
                 Parent = headerPanel,
-                Bounds = new Rectangle(36, 5, headerPanel.Width - 72, controlHeight),
+                Bounds = new Rectangle(searchLeft, headerPadding, headerPanel.Width - searchLeft - searchRightPadding, controlHeight),
                 TooltipText = "Search the scene tree.\n\nt: or a: Actor type\ns: Script type\nc: Control type",
             };
             _searchBox.TextChanged += OnSearchBoxTextChanged;
@@ -108,10 +115,11 @@ namespace FlaxEditor.Windows
             {
                 Parent = headerPanel,
                 AnchorPreset = AnchorPresets.MiddleRight,
-                Bounds = new Rectangle(headerPanel.Width - 32, 5, 26, controlHeight),
+                Bounds = new Rectangle(headerPanel.Width - headerPadding - headerButtonSize, headerPadding, headerButtonSize, headerButtonSize),
                 Text = "•••",
                 TooltipText = "Scene view options",
             };
+            ApplyHeaderButtonStyle(_viewButton);
             _viewButton.Clicked += ShowViewMenu;
 
             // Scene tree panel
@@ -147,6 +155,8 @@ namespace FlaxEditor.Windows
             };
 
             headerPanel.Parent = this;
+            Editor.Options.OptionsChanged += OnOptionsChanged;
+            ApplySceneTreeStyle();
 
             // Setup input actions
             InputActions.Add(options => options.SelectMode, () => Editor.MainTransformGizmo.ActiveMode = TransformGizmoBase.Mode.Select);
@@ -156,6 +166,20 @@ namespace FlaxEditor.Windows
             InputActions.Add(options => options.FocusSelection, () => Editor.Windows.EditWin.Viewport.FocusSelection());
             InputActions.Add(options => options.LockFocusSelection, () => Editor.Windows.EditWin.Viewport.LockFocusSelection());
             InputActions.Add(options => options.Rename, RenameSelection);
+        }
+
+        private static void ApplyHeaderButtonStyle(Button button)
+        {
+            var style = Style.Current;
+            button.BackgroundColor = Color.Transparent;
+            button.BackgroundColorHighlighted = style.BackgroundHighlighted.AlphaMultiplied(0.82f);
+            button.BackgroundColorSelected = style.BorderSelected;
+            button.BorderColor = Color.Transparent;
+            button.BorderColorHighlighted = Color.Transparent;
+            button.BorderColorSelected = Color.Transparent;
+            button.HasBorder = false;
+            button.TextColor = style.Foreground;
+            button.TextColorHighlighted = style.Foreground;
         }
 
         /// <inheritdoc />
@@ -212,6 +236,25 @@ namespace FlaxEditor.Windows
                 var scrollControl = nodeSelection[nodeSelection.Count - 1];
                 _sceneTreePanel.ScrollViewTo(scrollControl);
             }
+        }
+
+        /// <summary>
+        /// Sets the actor highlighted in the scene tree when hovering the editor viewport.
+        /// </summary>
+        /// <param name="actorNode">The hovered actor node or null to clear the highlight.</param>
+        public void SetViewportHoveredActor(ActorNode actorNode)
+        {
+            var treeNode = actorNode?.TreeNode;
+            if (_viewportHoveredTreeNode == treeNode)
+                return;
+
+            if (_viewportHoveredTreeNode != null)
+                _viewportHoveredTreeNode.IsViewportHovered = false;
+
+            _viewportHoveredTreeNode = treeNode;
+
+            if (_viewportHoveredTreeNode != null)
+                _viewportHoveredTreeNode.IsViewportHovered = true;
         }
 
         private static bool IsTreeNodeHeaderVisible(TreeNode node)
@@ -338,7 +381,7 @@ namespace FlaxEditor.Windows
                     ? Color.Lerp(style.Background, style.BackgroundSelected, 0.46f)
                     : Color.Lerp(style.Background, style.BackgroundSelected, 0.30f);
             var borderColor = isHovered || isPressed ? style.BorderSelected : style.BorderSelected.AlphaMultiplied(0.75f);
-            StyleRendering.DrawRoundedRectangle(toastRect, fillColor.AlphaMultiplied(0.96f), borderColor, 1.0f, style.CornerRadius);
+            StyleRendering.DrawRoundedRectangle(toastRect, fillColor.AlphaMultiplied(0.96f), borderColor, 1.0f, style.GetPopupCornerRadius());
             if (isHovered || isPressed)
                 Render2D.FillRectangle(new Rectangle(toastRect.X + 3.0f, toastRect.Y + 2.0f, 2.0f, toastRect.Height - 4.0f), style.BorderSelected);
             Render2D.DrawText(font, text, toastRect, style.Foreground, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap, 1.0f, textScale);
@@ -401,6 +444,57 @@ namespace FlaxEditor.Windows
                 _selectionOverflowHoverDirection = SelectionOverflowDirection.None;
                 Cursor = CursorType.Default;
             }
+        }
+
+        private ActorNode FindHoveredSceneTreeActorNode(TreeNode node, ref Float2 location)
+        {
+            if (node == null || !node.VisibleInHierarchy)
+                return null;
+
+            if (IsTreeNodeHeaderVisible(node))
+            {
+                var bounds = GetTreeNodeHeaderBounds(node);
+                if (bounds.Contains(ref location))
+                    return node is ActorTreeNode actorTreeNode && actorTreeNode.Actor ? actorTreeNode.ActorNode : null;
+            }
+            if (node.IsCollapsed)
+                return null;
+
+            for (int i = 0; i < node.ChildrenCount; i++)
+            {
+                if (node.GetChild(i) is TreeNode childNode)
+                {
+                    var result = FindHoveredSceneTreeActorNode(childNode, ref location);
+                    if (result != null)
+                        return result;
+                }
+            }
+
+            return null;
+        }
+
+        private void UpdateSceneTreeHoverOutline(Float2 location)
+        {
+            ActorNode actorNode = null;
+            if (Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport && _sceneTreePanel != null && _tree != null)
+            {
+                var panelLocation = _sceneTreePanel.PointFromParent(this, location);
+                for (int i = 0; i < _tree.ChildrenCount; i++)
+                {
+                    if (_tree.GetChild(i) is TreeNode node)
+                    {
+                        actorNode = FindHoveredSceneTreeActorNode(node, ref panelLocation);
+                        if (actorNode != null)
+                            break;
+                    }
+                }
+            }
+            Editor.Windows.EditWin.Viewport.SetSceneTreeHoveredActor(actorNode);
+        }
+
+        private void ClearSceneTreeHoverOutline()
+        {
+            Editor.Windows.EditWin.Viewport.SetSceneTreeHoveredActor(null);
         }
 
         private void ClearSelectionOverflowInputState()
@@ -479,7 +573,108 @@ namespace FlaxEditor.Windows
                 Editor.Options.Apply(Editor.Options.Options);
             });
             alternating.Checked = Editor.Options.Options.Interface.AlternatingTreeRows;
+
+            ContextMenuButton highlightInViewport = null;
+            highlightInViewport = menu.AddButton("Highlight in Editor", () =>
+            {
+                Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport = !Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport;
+                if (!Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport)
+                    ClearSceneTreeHoverOutline();
+                highlightInViewport.Checked = Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport;
+                Editor.Options.SaveOptions();
+            });
+            highlightInViewport.CloseMenuOnClick = false;
+            highlightInViewport.TooltipText = "When hovered Scene items will highlight items in Editor.";
+            highlightInViewport.Checked = Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport;
+
+            ContextMenuButton highlightEditorHoverInScene = null;
+            highlightEditorHoverInScene = menu.AddButton("Highlight Scene Items from Editor", () =>
+            {
+                Editor.Options.Options.Interface.HighlightViewportObjectHover = !Editor.Options.Options.Interface.HighlightViewportObjectHover;
+                if (!Editor.Options.Options.Interface.HighlightViewportObjectHover)
+                    SetViewportHoveredActor(null);
+                highlightEditorHoverInScene.Checked = Editor.Options.Options.Interface.HighlightViewportObjectHover;
+                Editor.Options.SaveOptions();
+            });
+            highlightEditorHoverInScene.CloseMenuOnClick = false;
+            highlightEditorHoverInScene.TooltipText = "When hovered Editor items will highlight items in Scene.";
+            highlightEditorHoverInScene.Checked = Editor.Options.Options.Interface.HighlightViewportObjectHover;
+
+            var treeRowHeight = menu.AddButton("Tree Row Height");
+            treeRowHeight.CloseMenuOnClick = false;
+            var treeRowHeightValue = new FloatValueBox(Style.Current.TreeRowHeight > 0.0f ? Style.Current.TreeRowHeight : 16.0f, 135, 2, 55.0f, 12.0f, 96.0f, 1.0f)
+            {
+                Parent = treeRowHeight
+            };
+            treeRowHeightValue.ValueChanged += () =>
+            {
+                var value = Mathf.Clamp(treeRowHeightValue.Value, 12.0f, 96.0f);
+                Editor.Options.Options.Interface.TreeRowHeight = value;
+                Style.Current.TreeRowHeight = value;
+                Editor.Options.SaveOptions();
+                ApplySceneTreeStyle();
+            };
+
+            var sceneIconSize = menu.AddButton("Scene Icon Size");
+            sceneIconSize.CloseMenuOnClick = false;
+            var sceneIconSizeValue = new FloatValueBox(Style.Current.GetSceneTreeIconSize(), 135, 2, 55.0f, 0.0f, 96.0f, 1.0f)
+            {
+                Parent = sceneIconSize
+            };
+            sceneIconSizeValue.ValueChanged += () =>
+            {
+                var value = Mathf.Clamp(sceneIconSizeValue.Value, 0.0f, 96.0f);
+                Editor.Options.Options.Interface.SceneTreeIconSize = value;
+                Style.Current.SceneTreeIconSize = value;
+                Editor.Options.SaveOptions();
+                ApplySceneTreeStyle();
+            };
+
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                highlightInViewport.Checked = Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport;
+                highlightEditorHoverInScene.Checked = Editor.Options.Options.Interface.HighlightViewportObjectHover;
+                treeRowHeightValue.Value = Style.Current.TreeRowHeight > 0.0f ? Style.Current.TreeRowHeight : 16.0f;
+                sceneIconSizeValue.Value = Style.Current.GetSceneTreeIconSize();
+            };
             menu.Show(_viewButton.Parent, _viewButton.BottomLeft);
+        }
+
+        private void OnOptionsChanged(EditorOptions options)
+        {
+            if (!options.Interface.HighlightSceneTreeHoverInViewport)
+                ClearSceneTreeHoverOutline();
+            if (!options.Interface.HighlightViewportObjectHover)
+                SetViewportHoveredActor(null);
+            ApplySceneTreeStyle();
+        }
+
+        private void ApplySceneTreeStyle()
+        {
+            if (_tree == null)
+                return;
+
+            var headerHeight = Mathf.Clamp(Style.Current.TreeRowHeight > 0.0f ? Style.Current.TreeRowHeight : 16.0f, 12.0f, 96.0f);
+            ApplySceneTreeNodeStyle(_tree, headerHeight);
+            _tree.PerformLayout(true);
+            _sceneTreePanel?.PerformLayout();
+        }
+
+        private static void ApplySceneTreeNodeStyle(ContainerControl control, float headerHeight)
+        {
+            if (control == null)
+                return;
+
+            for (int i = 0; i < control.ChildrenCount; i++)
+            {
+                if (control.GetChild(i) is TreeNode node)
+                {
+                    node.HeaderHeight = headerHeight;
+                    ApplySceneTreeNodeStyle(node, headerHeight);
+                }
+            }
         }
 
         private void Spawn(ActorCreationContextMenu.Entry entry)
@@ -710,6 +905,7 @@ namespace FlaxEditor.Windows
         public override void OnMouseEnter(Float2 location)
         {
             UpdateSelectionOverflowHover(location);
+            UpdateSceneTreeHoverOutline(location);
 
             base.OnMouseEnter(location);
         }
@@ -718,6 +914,7 @@ namespace FlaxEditor.Windows
         public override void OnMouseMove(Float2 location)
         {
             UpdateSelectionOverflowHover(location);
+            UpdateSceneTreeHoverOutline(location);
 
             base.OnMouseMove(location);
         }
@@ -726,6 +923,7 @@ namespace FlaxEditor.Windows
         public override void OnMouseLeave()
         {
             ClearSelectionOverflowInputState();
+            ClearSceneTreeHoverOutline();
 
             base.OnMouseLeave();
         }
@@ -987,6 +1185,7 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override void OnDestroy()
         {
+            SetViewportHoveredActor(null);
             _dragAssets = null;
             _dragActorType = null;
             _dragControlType = null;
@@ -995,6 +1194,7 @@ namespace FlaxEditor.Windows
             _dragHandlers = null;
             _tree = null;
             _searchBox = null;
+            Editor.Options.OptionsChanged -= OnOptionsChanged;
             ScriptsBuilder.ScriptsReloadEnd -= OnSearchBoxTextChanged;
 
             base.OnDestroy();

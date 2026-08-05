@@ -2,6 +2,7 @@
 
 using FlaxEngine;
 using FlaxEngine.GUI;
+using ContextMenuBase = FlaxEditor.GUI.ContextMenu.ContextMenuBase;
 
 namespace FlaxEditor.GUI
 {
@@ -91,7 +92,7 @@ namespace FlaxEditor.GUI
         {
             base.OnMouseEnter(location);
 
-            if (Parent is MainMenu menu && menu.Selected != null)
+            if (Parent is MainMenu menu && (menu.Selected != null || ContextMenuBase.HasOpenMenu))
                 menu.Selected = this;
         }
 

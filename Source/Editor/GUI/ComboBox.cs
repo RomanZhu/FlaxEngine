@@ -275,9 +275,9 @@ namespace FlaxEditor.GUI
             var style = Style.Current;
             Font = new FontReference(style.FontMedium);
             TextColor = style.Foreground;
-            BackgroundColor = style.Background;
-            BackgroundColorHighlighted = style.BackgroundHighlighted;
-            BackgroundColorSelected = style.BackgroundSelected;
+            BackgroundColor = style.TextBoxBackground;
+            BackgroundColorHighlighted = style.TextBoxBackgroundSelected;
+            BackgroundColorSelected = style.SecondaryBackground;
             BorderColor = style.BorderNormal;
             BorderColorHighlighted = style.BorderSelected;
             BorderColorSelected = style.BorderSelected;
@@ -384,7 +384,7 @@ namespace FlaxEditor.GUI
             if (_popupMenu == null)
             {
                 _popupMenu = OnCreatePopup();
-                _popupMenu.PopupBackgroundColor = BackgroundColor;
+                _popupMenu.PopupBackgroundColor = Color.Transparent;
                 _popupMenu.MaximumItemsInViewCount = MaximumItemsInViewCount;
 
                 // Bind events
@@ -420,7 +420,7 @@ namespace FlaxEditor.GUI
             }
 
             PopupShowing?.Invoke(this);
-            _popupMenu.PopupBackgroundColor = BackgroundColor;
+            _popupMenu.PopupBackgroundColor = Color.Transparent;
 
             // Check if has any items
             if (_items.Count > 0)
@@ -533,8 +533,9 @@ namespace FlaxEditor.GUI
             Color arrowColor = ArrowColor;
             if (!enabled)
             {
-                backgroundColor *= 0.5f;
-                arrowColor *= 0.7f;
+                backgroundColor = StyleRendering.GetDisabledInputColor(backgroundColor);
+                borderColor = StyleRendering.GetDisabledInputAccentColor(borderColor);
+                arrowColor = Style.Current.ForegroundDisabled;
             }
             else if (isOpened || _mouseDown)
             {
@@ -551,7 +552,7 @@ namespace FlaxEditor.GUI
 
             // Background
             var cornerRadius = Style.Current.GetDropdownCornerRadius();
-            var drawBorder = isOpened || _mouseDown || IsNavFocused;
+            var drawBorder = enabled && (isOpened || _mouseDown || IsNavFocused);
             if (cornerRadius > 0.0f)
                 StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, drawBorder ? 1.0f : 0.0f, cornerRadius);
             else

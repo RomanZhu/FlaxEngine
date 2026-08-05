@@ -21,7 +21,6 @@ namespace FlaxEditor.Windows
         private const float HeaderHeight = 58.0f;
         private const float FooterHeight = 22.0f;
         private const float ButtonHeight = 24.0f;
-
         private readonly Button _pickButton;
         private readonly Button _parentButton;
         private readonly Button _layoutTab;
@@ -121,8 +120,24 @@ namespace FlaxEditor.Windows
                 Parent = this,
                 Text = text,
             };
+            SetButtonStyle(button, false);
             button.Clicked += clicked;
             return button;
+        }
+
+        private static void SetButtonStyle(Button button, bool active)
+        {
+            var style = Style.Current;
+            var background = active ? style.BorderSelected : Color.Transparent;
+            button.BackgroundColor = background;
+            button.BackgroundColorHighlighted = active ? background.RGBMultiplied(1.05f) : style.BackgroundHighlighted.AlphaMultiplied(0.82f);
+            button.BackgroundColorSelected = active ? background.RGBMultiplied(0.94f) : style.BorderSelected;
+            button.BorderColor = Color.Transparent;
+            button.BorderColorHighlighted = Color.Transparent;
+            button.BorderColorSelected = Color.Transparent;
+            button.HasBorder = false;
+            button.TextColor = active ? Color.White : style.Foreground;
+            button.TextColorHighlighted = active ? Color.White : style.Foreground;
         }
 
         private Panel CreateHost()
@@ -220,9 +235,9 @@ namespace FlaxEditor.Windows
             _layoutHost.Visible = mode == InspectorMode.Layout;
             _controlHost.Visible = mode == InspectorMode.Control;
             _themeHost.Visible = mode == InspectorMode.Theme;
-            _layoutTab.BackgroundColor = mode == InspectorMode.Layout ? Style.Current.Selection : Color.Transparent;
-            _controlTab.BackgroundColor = mode == InspectorMode.Control ? Style.Current.Selection : Color.Transparent;
-            _themeTab.BackgroundColor = mode == InspectorMode.Theme ? Style.Current.Selection : Color.Transparent;
+            SetButtonStyle(_layoutTab, mode == InspectorMode.Layout);
+            SetButtonStyle(_controlTab, mode == InspectorMode.Control);
+            SetButtonStyle(_themeTab, mode == InspectorMode.Theme);
             _selectionLabel.Text = mode == InspectorMode.Theme
                 ? "Global theme  /  Style.Current"
                 : (_selectedControl != null ? BuildControlPath(_selectedControl) : "No control selected");
@@ -1085,7 +1100,7 @@ namespace FlaxEditor.Windows
                 }
 
                 var banner = new Rectangle(8, 8, Mathf.Min(460.0f, Mathf.Max(0, Width - 16.0f)), 26);
-                StyleRendering.DrawRoundedRectangle(banner, style.Background.AlphaMultiplied(0.96f), style.BorderNormal, 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangle(banner, style.Background.AlphaMultiplied(0.96f), style.BorderNormal, 1.0f, style.GetPanelCornerRadius());
                 string name = _hovered?.Label ?? "No control";
                 Render2D.DrawText(style.FontSmall, "UI PICKER  |  " + name + "  |  click to select, Esc/right-click to cancel", banner, style.Foreground, TextAlignment.Center, TextAlignment.Center);
             }

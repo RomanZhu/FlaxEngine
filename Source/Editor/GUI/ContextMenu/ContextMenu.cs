@@ -18,6 +18,7 @@ namespace FlaxEditor.GUI.ContextMenu
     {
         private const float ScrollIndicatorArea = 8.0f;
         private const int ScrollIndicatorRows = 4;
+        private const float SubmenuAimDelay = 0.14f;
 
         private ContextMenuItem _pendingAimItem;
         private float _pendingAimUntil;
@@ -41,6 +42,7 @@ namespace FlaxEditor.GUI.ContextMenu
             : base(ScrollBars.Vertical)
             {
                 _menu = menu;
+                BackgroundColor = Color.Transparent;
                 ScrollBarsSize = 0.0f;
                 ScrollbarTrackColor = Color.Transparent;
                 ScrollbarThumbColor = Color.Transparent;
@@ -180,15 +182,18 @@ namespace FlaxEditor.GUI.ContextMenu
 
         internal bool OnItemMouseEnter(ContextMenuItem item, Float2 screenLocation)
         {
+            _pendingAimItem = null;
+            if (item is ContextMenuChildMenu childMenu && childMenu.ContextMenu.HasChildren)
+                return false;
+
             if (HasChildCMOpened && IsPointerInsideSubmenuAim(screenLocation))
             {
                 _pendingAimItem = item;
-                _pendingAimUntil = Time.UnscaledGameTime + 0.22f;
+                _pendingAimUntil = Time.UnscaledGameTime + SubmenuAimDelay;
                 return true;
             }
 
-            _pendingAimItem = null;
-            HideChild();
+            HideChild("mouse entered " + item.GetType().Name + " outside submenu aim");
             return false;
         }
 
@@ -202,17 +207,25 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // If the pointer reached the already open submenu, preserve it. Otherwise
             // switch after the short geometry guard expires or the pointer leaves its aim.
-            if (!_pendingAimItem.IsMouseOver)
+            var mouseScreen = FlaxEngine.Input.MouseScreenPosition;
+            if (IsPointerInsideChildMenuTreeOrAim(mouseScreen))
             {
                 _pendingAimItem = null;
                 return;
             }
-            if (Time.UnscaledGameTime < _pendingAimUntil && IsPointerInsideSubmenuAim(FlaxEngine.Input.MouseScreenPosition))
+
+            var pendingLocation = _pendingAimItem.PointFromScreen(mouseScreen);
+            if (!_pendingAimItem.ContainsPoint(ref pendingLocation))
+            {
+                _pendingAimItem = null;
+                return;
+            }
+            if (Time.UnscaledGameTime < _pendingAimUntil && IsPointerInsideSubmenuAim(mouseScreen))
                 return;
 
             var item = _pendingAimItem;
             _pendingAimItem = null;
-            HideChild();
+            HideChild("submenu aim delay expired for " + item.GetType().Name);
             item.OnMenuAimReleased();
         }
 

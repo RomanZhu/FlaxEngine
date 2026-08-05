@@ -21,7 +21,7 @@ namespace FlaxEditor.Windows
     /// Editor tool window for <see cref="Asset"/> references debugging in a virtual dependencies graph.
     /// </summary>
     /// <seealso cref="FlaxEditor.Windows.EditorWindow" />
-    internal sealed class AssetReferencesGraphWindow : EditorWindow, IVisjectSurfaceOwner
+    internal sealed class AssetReferencesGraphWindow : EditorWindow, IVisjectSurfaceOwner, IContentItemOwner
     {
         private sealed class AssetNode : SurfaceNode
         {
@@ -148,12 +148,29 @@ namespace FlaxEditor.Windows
         private const float MarginX = 200;
         private const float MarginY = 50;
         private string _tempFolder;
+        private static readonly string SerializationTypenamePrefix = "::" + typeof(AssetReferencesGraphWindow).FullName + ":";
 
         // Async task data
         private float _progress;
         private Dictionary<Guid, Guid[]> _refs;
         private List<SurfaceNode> _nodes;
         private HashSet<Guid> _nodesAssets;
+
+        /// <inheritdoc />
+        public override string SerializationTypename => GetSerializationTypename(_item?.ID ?? Guid.Empty);
+
+        internal static string GetSerializationTypename(Guid assetId)
+        {
+            return SerializationTypenamePrefix + assetId.ToString("N");
+        }
+
+        internal static bool TryParseSerializationTypename(string typename, out Guid assetId)
+        {
+            assetId = Guid.Empty;
+            return !string.IsNullOrEmpty(typename) &&
+                   typename.StartsWith(SerializationTypenamePrefix, StringComparison.OrdinalIgnoreCase) &&
+                   Guid.TryParse(typename.Substring(SerializationTypenamePrefix.Length), out assetId);
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="PluginsWindow"/> class.
@@ -164,6 +181,7 @@ namespace FlaxEditor.Windows
         : base(editor, false, ScrollBars.None)
         {
             _item = assetItem;
+            _item.AddReference(this);
             Title = _item.ShortName + " References";
 
             _tempFolder = StringUtils.NormalizePath(Path.GetDirectoryName(Globals.TemporaryFolder));
@@ -444,8 +462,15 @@ namespace FlaxEditor.Windows
             // Wait for async end
             _token.Cancel();
             _task.Wait();
+            UnlinkItem();
 
             base.OnDestroy();
+        }
+
+        private void UnlinkItem()
+        {
+            _item?.RemoveReference(this);
+            _item = null;
         }
 
         /// <inheritdoc />
@@ -481,6 +506,38 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public void OnSurfaceClose()
         {
+        }
+
+        /// <inheritdoc />
+        public void OnItemDeleted(ContentItem item)
+        {
+            if (item == _item)
+            {
+                Editor.Windows.RemoveWindowNavigation(SerializationTypename);
+                Close();
+            }
+        }
+
+        /// <inheritdoc />
+        public void OnItemRenamed(ContentItem item)
+        {
+            if (item == _item)
+                Title = _item.ShortName + " References";
+        }
+
+        /// <inheritdoc />
+        public void OnItemReimported(ContentItem item)
+        {
+        }
+
+        /// <inheritdoc />
+        public void OnItemDispose(ContentItem item)
+        {
+            if (item == _item)
+            {
+                Editor.Windows.RemoveWindowNavigation(SerializationTypename);
+                Close();
+            }
         }
     }
 }

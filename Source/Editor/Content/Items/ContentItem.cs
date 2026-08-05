@@ -201,6 +201,7 @@ namespace FlaxEditor.Content
         private float _currentHighlightTimeSec;
         private float _debounceHighlightTime;
         private float _highlightScale;
+        private static ContentItem _lastHighlightedItem;
         private readonly List<IContentItemOwner> _references = new List<IContentItemOwner>(4);
 
         private SpriteHandle _thumbnail;
@@ -645,13 +646,17 @@ namespace FlaxEditor.Content
         /// Adds a temporary animated highlight around the item.
         /// </summary>
         /// <param name="durationSec">The duration of the highlight in seconds.</param>
-        public void StartHighlight(float durationSec = 3)
+        public void StartHighlight(float durationSec = 0.5f)
         {
+            if (_lastHighlightedItem != null && _lastHighlightedItem != this && !_lastHighlightedItem.IsDisposing)
+                _lastHighlightedItem.StopHighlight();
+
             _isHighlighted = true;
             _targetHighlightTimeSec = durationSec;
             _currentHighlightTimeSec = 0;
             _debounceHighlightTime = 0;
             _highlightScale = 2.0f;
+            _lastHighlightedItem = this;
         }
 
         /// <summary>
@@ -663,6 +668,8 @@ namespace FlaxEditor.Content
             _targetHighlightTimeSec = 0;
             _currentHighlightTimeSec = 0;
             _debounceHighlightTime = 0;
+            if (_lastHighlightedItem == this)
+                _lastHighlightedItem = null;
         }
 
         /// <inheritdoc />
@@ -677,7 +684,7 @@ namespace FlaxEditor.Content
                     _highlightScale = Mathf.Lerp(_highlightScale, TargetHighlightScale, _currentHighlightTimeSec);
 
                 if (_currentHighlightTimeSec >= _targetHighlightTimeSec)
-                    _isHighlighted = false;
+                    StopHighlight();
             }
 
             base.Update(deltaTime);
@@ -1026,6 +1033,9 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void OnDestroy()
         {
+            if (_lastHighlightedItem == this)
+                _lastHighlightedItem = null;
+
             // Fire event
             while (_references.Count > 0)
             {

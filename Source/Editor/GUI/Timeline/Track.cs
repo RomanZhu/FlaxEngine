@@ -976,10 +976,13 @@ namespace FlaxEditor.GUI.Timeline
             // Draw icon
             if (Icon.IsValid)
             {
-                var iconSize = style.IconSize > 0.0f ? Mathf.Min(style.IconSize, 16.0f) : 16.0f;
-                Render2D.DrawSprite(Icon, new Rectangle(textRect.Left, (height - iconSize) * 0.5f, iconSize, iconSize), IconColor);
-                textRect.X += iconSize + 2.0f;
-                textRect.Width -= iconSize + 2.0f;
+                var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetTimelineIconSize()), Mathf.Max(0.0f, height - 2.0f));
+                if (iconSize > 0.0f)
+                {
+                    Render2D.DrawSprite(Icon, new Rectangle(textRect.Left, (height - iconSize) * 0.5f, iconSize, iconSize), IconColor);
+                    textRect.X += iconSize + 2.0f;
+                    textRect.Width -= iconSize + 2.0f;
+                }
             }
 
             // Draw text

@@ -54,6 +54,11 @@ namespace FlaxEditor.GUI.Input
         protected T _max;
 
         /// <summary>
+        /// The default value used when committing an empty edit.
+        /// </summary>
+        protected T _defaultValue;
+
+        /// <summary>
         /// The slider speed.
         /// </summary>
         protected float _slideSpeed;
@@ -103,7 +108,7 @@ namespace FlaxEditor.GUI.Input
         /// <summary>
         /// Additional padding reserved between the prefix and edited value.
         /// </summary>
-        public float PrefixPadding = 4.0f;
+        public float PrefixPadding = 6.0f;
 
         /// <summary>
         /// Prefix color. Transparent uses the input background color with HSV value increased by 26 HSB value units.
@@ -134,6 +139,15 @@ namespace FlaxEditor.GUI.Input
         /// Gets or sets the maximum value.
         /// </summary>
         public abstract T MaxValue { get; set; }
+
+        /// <summary>
+        /// Gets or sets the default value used when committing an empty edit.
+        /// </summary>
+        public T DefaultValue
+        {
+            get => _defaultValue;
+            set => _defaultValue = value;
+        }
 
         /// <summary>
         /// Gets a value indicating whether user is using a slider.
@@ -246,6 +260,7 @@ namespace FlaxEditor.GUI.Input
             _value = value;
             _min = min;
             _max = max;
+            _defaultValue = _value;
             _slideSpeed = sliderSpeed;
             HorizontalAlignment = TextAlignment.Near;
         }
@@ -265,6 +280,15 @@ namespace FlaxEditor.GUI.Input
         /// </summary>
         /// <param name="delta">The delta (scaled).</param>
         protected abstract void ApplySliding(float delta);
+
+        /// <summary>
+        /// Applies the default value and refreshes text.
+        /// </summary>
+        protected virtual void ApplyDefaultValue()
+        {
+            Value = _defaultValue;
+            UpdateText();
+        }
 
         /// <summary>
         /// Called when value gets changed.
@@ -382,7 +406,10 @@ namespace FlaxEditor.GUI.Input
         /// <inheritdoc />
         public override void Draw()
         {
-            if (_isSliding)
+            var visuallyEnabled = VisuallyEnabledInHierarchy;
+            var isActive = visuallyEnabled && (_isSliding || IsEditing || IsFocused || IsNavFocused);
+            var prefixBackgroundBaseColor = BackgroundColor;
+            if (isActive)
             {
                 var style = Style.Current;
                 var backgroundColor = BackgroundColor;
@@ -390,13 +417,13 @@ namespace FlaxEditor.GUI.Input
                 var borderColor = BorderColor;
                 var borderSelectedColor = BorderSelectedColor;
 
-                BackgroundColor = style.Selection;
-                BackgroundSelectedColor = style.Selection;
-                BorderColor = style.SelectionBorder;
-                BorderSelectedColor = style.SelectionBorder;
+                BackgroundColor = style.SecondaryBackground;
+                BackgroundSelectedColor = style.SecondaryBackground;
+                BorderColor = style.BorderSelected;
+                BorderSelectedColor = style.BorderSelected;
                 try
                 {
-                    base.Draw();
+                    DrawValueBoxContent(prefixBackgroundBaseColor);
                 }
                 finally
                 {
@@ -408,25 +435,37 @@ namespace FlaxEditor.GUI.Input
             }
             else
             {
-                base.Draw();
+                DrawValueBoxContent(prefixBackgroundBaseColor);
             }
-
-            if (HighlightColor != Color.Transparent)
-            {
-                var highlightRect = new Rectangle(-3.0f, 0.0f, 3.0f, Height);
-                Render2D.FillRectangle(highlightRect, HighlightColor);
-            }
-
-            DrawPrefix();
         }
 
-        private void DrawPrefix()
+        private void DrawValueBoxContent(Color prefixBackgroundBaseColor)
+        {
+            base.Draw();
+
+            if (HighlightColor != Color.Transparent && !HasPrefix)
+            {
+                var highlightColor = VisuallyEnabledInHierarchy ? HighlightColor : StyleRendering.GetDisabledInputAccentColor(HighlightColor);
+                var highlightRect = new Rectangle(-3.0f, 0.0f, 3.0f, Height);
+                Render2D.FillRectangle(highlightRect, highlightColor);
+            }
+
+            DrawPrefix(prefixBackgroundBaseColor);
+        }
+
+        private void DrawPrefix(Color prefixBackgroundBaseColor)
         {
             if (!HasPrefix)
                 return;
 
-            var prefixColor = PrefixColor.A > 0.0f ? PrefixColor : AdjustValueUnits(BackgroundColor, PrefixValueOffset);
-            var prefixRect = new Rectangle(TextBoxBase.DefaultMargin, 0.0f, PrefixWidth, Height);
+            var style = Style.Current;
+            var prefixBackgroundColor = GetPrefixBackgroundColor(prefixBackgroundBaseColor);
+            DrawPrefixBackground(style, prefixBackgroundColor);
+
+            var prefixColor = VisuallyEnabledInHierarchy ? (PrefixColor.A > 0.0f ? PrefixColor : style.Foreground) : style.ForegroundDisabled;
+            var prefixOffset = GetPrefixOffset(style);
+            var prefixContentOffset = style.GetValueBoxPrefixContentOffset();
+            var prefixRect = new Rectangle(Mathf.Max(0.0f, TextBoxBase.DefaultMargin + prefixOffset + prefixContentOffset), 0.0f, PrefixWidth, Height);
             if (PrefixSprite.IsValid)
             {
                 var iconSize = Mathf.Min(prefixRect.Width, prefixRect.Height - 6.0f);
@@ -441,6 +480,38 @@ namespace FlaxEditor.GUI.Input
             }
 
             Render2D.DrawText(Font.GetFont(), PrefixText, prefixRect, prefixColor, TextAlignment.Center, TextAlignment.Center, TextWrapping.NoWrap);
+        }
+
+        private void DrawPrefixBackground(Style style, Color color)
+        {
+            if (color.A <= 0.0f)
+                return;
+
+            var prefixOffset = GetPrefixOffset(style);
+            var prefixRight = TextBoxBase.DefaultMargin + PrefixWidth;
+            var prefixLeft = Mathf.Max(0.0f, prefixOffset);
+            var prefixRect = new Rectangle(prefixLeft, 0.0f, Mathf.Max(0.0f, prefixRight - prefixLeft), Height);
+            var cornerRadius = style.GetValueBoxPrefixCornerRadius();
+            if (cornerRadius > 0.0f)
+                StyleRendering.FillRoundedRectangle(prefixRect, color, cornerRadius, RoundedCorners.Left);
+            else
+                Render2D.FillRectangle(prefixRect, color);
+        }
+
+        /// <summary>
+        /// Gets the prefix segment offset for this value-box type.
+        /// </summary>
+        /// <param name="style">The current style.</param>
+        /// <returns>The horizontal prefix offset.</returns>
+        protected virtual float GetPrefixOffset(Style style)
+        {
+            return style.GetValueBoxPrefixOffset();
+        }
+
+        private Color GetPrefixBackgroundColor(Color prefixBackgroundBaseColor)
+        {
+            var color = HighlightColor != Color.Transparent ? HighlightColor : AdjustValueUnits(prefixBackgroundBaseColor, PrefixValueOffset);
+            return VisuallyEnabledInHierarchy ? color : StyleRendering.GetDisabledInputAccentColor(color);
         }
 
         private bool HasPrefix => !string.IsNullOrEmpty(PrefixText) || PrefixIcon != ValueBoxPrefixIcon.None || PrefixSprite.IsValid;
@@ -667,8 +738,12 @@ namespace FlaxEditor.GUI.Input
         {
             if (_startEditText != _text)
             {
-                // Update value
-                TryGetValue();
+                if (string.IsNullOrWhiteSpace(_text))
+                    ApplyDefaultValue();
+                else
+                    TryGetValue();
+
+                UpdateText();
             }
             _startEditText = null;
 
@@ -694,7 +769,16 @@ namespace FlaxEditor.GUI.Input
         {
             get
             {
-                return base.TextRectangle;
+                if (HasPrefix)
+                {
+                    var textX = TextBoxBase.DefaultMargin + PrefixWidth + PrefixPadding;
+                    return new Rectangle(textX, 1, Mathf.Max(0.0f, Width - textX - TextBoxBase.DefaultMargin), Mathf.Max(0.0f, Height - 2));
+                }
+
+                var rect = base.TextRectangle;
+                rect.Width = Mathf.Max(0.0f, rect.Width);
+                rect.Height = Mathf.Max(0.0f, rect.Height);
+                return rect;
             }
         }
 
@@ -703,7 +787,7 @@ namespace FlaxEditor.GUI.Input
         {
             get
             {
-                return base.TextRectangle;
+                return TextRectangle;
             }
         }
     }

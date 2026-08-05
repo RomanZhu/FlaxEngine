@@ -69,6 +69,10 @@ namespace FlaxEditor.Windows
         /// <seealso cref="FlaxEngine.GUI.RichTextBoxBase" />
         private sealed class OutputTextBox : RichTextBoxBase
         {
+            private const float SelectionAutoScrollEdgeSize = 28.0f;
+            private const float SelectionAutoScrollMinSpeed = 140.0f;
+            private const float SelectionAutoScrollMaxSpeed = 560.0f;
+
             private bool _isSelectingEntryBlocks;
             private int _entrySelectionAnchor = -1;
 
@@ -95,6 +99,14 @@ namespace FlaxEditor.Windows
             public OutputTextBox()
             {
                 _consumeAllKeyDownEvents = false;
+            }
+
+            public bool IsSelectingText => _isSelecting || _isSelectingEntryBlocks;
+
+            public int CharIndexAtSelectionPoint(ref Float2 location)
+            {
+                var clampedLocation = ClampSelectionPoint(location);
+                return CharIndexAtPoint(ref clampedLocation);
             }
 
             /// <inheritdoc />
@@ -146,8 +158,31 @@ namespace FlaxEditor.Windows
                     Window?.ExtendEntryBlockSelection(_entrySelectionAnchor, ref location);
                     return;
                 }
+                if (_isSelecting)
+                {
+                    ExtendTextSelection(ref location);
+                    return;
+                }
 
                 base.OnMouseMove(location);
+            }
+
+            /// <inheritdoc />
+            public override void Update(float deltaTime)
+            {
+                base.Update(deltaTime);
+
+                if (!IsSelectingText || Root == null || !Root.GetMouseButton(MouseButton.Left))
+                    return;
+
+                var location = PointFromWindow(Root.MousePosition);
+                if (ScrollDuringSelection(ref location, deltaTime))
+                {
+                    if (_isSelectingEntryBlocks)
+                        Window?.ExtendEntryBlockSelection(_entrySelectionAnchor, ref location);
+                    else if (_isSelecting)
+                        ExtendTextSelection(ref location);
+                }
             }
 
             /// <inheritdoc />
@@ -168,6 +203,46 @@ namespace FlaxEditor.Windows
             {
                 _isSelectingEntryBlocks = false;
                 base.OnEndMouseCapture();
+            }
+
+            private Float2 ClampSelectionPoint(Float2 location)
+            {
+                location.X = Mathf.Clamp(location.X, 0.0f, Width);
+                location.Y = Mathf.Clamp(location.Y, 0.0f, Height);
+                return location;
+            }
+
+            private void ExtendTextSelection(ref Float2 location)
+            {
+                int currentIndex = CharIndexAtSelectionPoint(ref location);
+                SetSelection(_selectionStart, currentIndex, false);
+            }
+
+            private bool ScrollDuringSelection(ref Float2 location, float deltaTime)
+            {
+                float direction = 0.0f;
+                float distance = 0.0f;
+                if (location.Y < SelectionAutoScrollEdgeSize)
+                {
+                    direction = -1.0f;
+                    distance = SelectionAutoScrollEdgeSize - location.Y;
+                }
+                else if (location.Y > Height - SelectionAutoScrollEdgeSize)
+                {
+                    direction = 1.0f;
+                    distance = location.Y - (Height - SelectionAutoScrollEdgeSize);
+                }
+                if (Mathf.IsZero(direction))
+                    return false;
+
+                float maxOffsetY = Mathf.Max(0.0f, _textSize.Y - Height);
+                float t = Mathf.Saturate(distance / SelectionAutoScrollEdgeSize);
+                float speed = Mathf.Lerp(SelectionAutoScrollMinSpeed, SelectionAutoScrollMaxSpeed, t);
+                var viewOffset = TargetViewOffset;
+                float previousY = viewOffset.Y;
+                viewOffset.Y = Mathf.Clamp(viewOffset.Y + direction * speed * deltaTime, 0.0f, maxOffsetY);
+                TargetViewOffset = viewOffset;
+                return !Mathf.NearEqual(previousY, viewOffset.Y);
             }
         }
 
@@ -567,6 +642,7 @@ namespace FlaxEditor.Windows
         private int _selectedEntryIndex = -1;
         private float _lastOutputWrapWidth = -1.0f;
         private bool _wrapLogLines = true;
+        private bool _outputSelectionBlockedAutoScroll;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DebugLogWindow"/> class.
@@ -909,7 +985,7 @@ namespace FlaxEditor.Windows
             if (_output == null || _output.TextLength == 0 || _entryRanges.Count == 0)
                 return false;
 
-            var hitPos = _output.CharIndexAtPoint(ref location);
+            var hitPos = _output.CharIndexAtSelectionPoint(ref location);
             if (!FindEntryRangeAt(hitPos, out var range))
                 return false;
 
@@ -923,7 +999,7 @@ namespace FlaxEditor.Windows
             if (!FindEntryRange(anchorEntryIndex, out var anchor))
                 return;
 
-            var hitPos = _output.CharIndexAtPoint(ref location);
+            var hitPos = _output.CharIndexAtSelectionPoint(ref location);
             if (FindEntryRangeAt(hitPos, out var target))
                 SelectEntryRange(anchor, target);
         }
@@ -1222,7 +1298,10 @@ namespace FlaxEditor.Windows
                 }
             } while (logCount != 0);
 
-            if (_isDirty)
+            if (_isDirty && _output.IsSelectingText)
+                _outputSelectionBlockedAutoScroll = true;
+
+            if (_isDirty && !_output.IsSelectingText)
             {
                 _isDirty = false;
                 var wasEmpty = _output.TextLength == 0;
@@ -1254,7 +1333,7 @@ namespace FlaxEditor.Windows
                 var cachedScrollValue = _vScroll.Value;
                 var cachedSelection = _output.SelectionRange;
                 var cachedOutputTargetViewOffset = _output.TargetViewOffset;
-                var isBottomScroll = _vScroll.Value >= _vScroll.Maximum - (_scrollSize * 2) || wasEmpty;
+                var isBottomScroll = !_outputSelectionBlockedAutoScroll && (_vScroll.Value >= _vScroll.Maximum - (_scrollSize * 2) || wasEmpty);
                 var outputText = _textBuffer.ToString();
                 if (_output.Text.Equals(outputText, StringComparison.Ordinal))
                 {
@@ -1287,6 +1366,7 @@ namespace FlaxEditor.Windows
                 {
                     _output.SelectionRange = cachedSelection;
                 }
+                _outputSelectionBlockedAutoScroll = false;
             }
 
             base.Update(deltaTime);

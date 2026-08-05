@@ -110,7 +110,7 @@ namespace FlaxEditor.GUI
             if (valid)
             {
                 _inputField.BorderColor = Color.Transparent;
-                _inputField.BorderSelectedColor = style.BackgroundSelected;
+                _inputField.BorderSelectedColor = style.BorderSelected;
             }
             else
             {
