@@ -71,6 +71,7 @@ namespace FlaxEditor.Viewport
 
         private PrefabUIEditorRoot _uiRoot;
         private bool _showUI = false;
+        private Float2 _rightMouseDownViewPos;
 
         private int _defaultScaleActiveIndex = -1;
         private int _customScaleActiveIndex = -1;
@@ -612,6 +613,63 @@ namespace FlaxEditor.Viewport
             Focus();
 
             base.OnLeftMouseButtonUp();
+        }
+
+        /// <inheritdoc />
+        protected override void OnRightMouseButtonDown()
+        {
+            base.OnRightMouseButtonDown();
+
+            _rightMouseDownViewPos = _viewMousePos;
+        }
+
+        /// <inheritdoc />
+        protected override void OnRightMouseButtonUp()
+        {
+            if ((_viewMousePos - _rightMouseDownViewPos).LengthSquared < 4.0f &&
+                Bounds.Contains(ref _viewMousePos) &&
+                TransformGizmo.IsActive &&
+                TransformGizmo.ActiveAxis == TransformGizmoBase.Axis.None)
+            {
+                var ray = MouseRay;
+                var view = new Ray(ViewPosition, ViewDirection);
+                var hit = _window.Graph.Root.RayCast(ref ray, ref view, out _, SceneGraphNode.RayCastData.FlagTypes.SkipColliders);
+
+                if (hit != null)
+                {
+                    // For child actor nodes (mesh, link or sth) we need to select it's owning actor node first or any other child node (but not a child actor)
+                    if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
+                    {
+                        var parentNode = actorChildNode.ParentNode;
+                        bool canChildBeSelected = _window.Selection.Contains(parentNode);
+                        if (!canChildBeSelected)
+                        {
+                            for (int i = 0; i < parentNode.ChildNodes.Count; i++)
+                            {
+                                if (_window.Selection.Contains(parentNode.ChildNodes[i]))
+                                {
+                                    canChildBeSelected = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!canChildBeSelected)
+                        {
+                            // Select parent
+                            hit = parentNode;
+                        }
+                    }
+
+                    bool isSelected = _window.Selection.Contains(hit);
+                    if (!isSelected)
+                        _window.Select(hit);
+                }
+
+                Focus();
+            }
+
+            base.OnRightMouseButtonUp();
         }
 
         /// <inheritdoc />

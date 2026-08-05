@@ -7,6 +7,7 @@ using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.GUI.Tree;
 using FlaxEditor.SceneGraph;
+using FlaxEditor.SceneGraph.GUI;
 using FlaxEditor.Scripting;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -534,6 +535,8 @@ namespace FlaxEditor.Windows.Assets
             if (Graph.Main == null)
                 return;
 
+            if (node is ActorTreeNode && !_tree.Selection.Contains(node))
+                _tree.Select(node);
             ShowContextMenu(node, ref location);
         }
 

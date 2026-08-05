@@ -783,6 +783,8 @@ namespace FlaxEditor.Windows
         {
             if (!Editor.StateMachine.CurrentState.CanEditScene)
                 return;
+            if (node is ActorTreeNode && !_tree.Selection.Contains(node))
+                _tree.Select(node);
             ShowContextMenu(node, location);
         }
 

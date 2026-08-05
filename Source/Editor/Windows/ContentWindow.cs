@@ -2199,6 +2199,11 @@ namespace FlaxEditor.Windows
 
                 if (c is ContentItem item)
                 {
+                    if (!_view.IsSelected(item))
+                    {
+                        _view.Select(item);
+                        _view.Focus();
+                    }
                     ShowContextMenuForItem(item, ref location, false);
                 }
                 else if (c is ContentView)
@@ -2207,10 +2212,14 @@ namespace FlaxEditor.Windows
                 }
                 else if (c is ContentItemTreeNode itemNode)
                 {
+                    if (!_tree.Selection.Contains(itemNode))
+                        _tree.Select(itemNode);
                     ShowContextMenuForItem(itemNode.Item, ref location, false);
                 }
                 else if (c is ContentFolderTreeNode node)
                 {
+                    if (!_tree.Selection.Contains(node))
+                        _tree.Select(node);
                     ShowContextMenuForItem(node.Folder, ref location, true);
                 }
 

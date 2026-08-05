@@ -468,12 +468,32 @@ namespace FlaxEditor
             EndMovingWidget();
             if (_mouseMovesView)
             {
+                bool showContextMenu = button == MouseButton.Right && _mouseMoveSum < 2.0f;
                 EndMovingView();
-                if (button == MouseButton.Right && _mouseMoveSum < 2.0f)
+                if (showContextMenu)
+                {
+                    SelectControlUnderMouseForContextMenu();
                     TransformGizmo.Owner.OpenContextMenu();
+                }
             }
 
             return base.OnMouseUp(location, button);
+        }
+
+        private void SelectControlUnderMouseForContextMenu()
+        {
+            var transformGizmo = TransformGizmo;
+            var owner = transformGizmo?.Owner;
+            if (!EnableSelecting || owner == null)
+                return;
+
+            var mousePos = PointFromWindow(RootWindow.MousePosition);
+            if (!RayCastControl(ref mousePos, out var hitControl))
+                return;
+
+            var uiControlNode = FindUIControlNode(hitControl);
+            if (uiControlNode != null && !transformGizmo.Selection.Contains(uiControlNode))
+                owner.Select(new List<SceneGraphNode> { uiControlNode });
         }
 
         public override void OnMouseLeave()

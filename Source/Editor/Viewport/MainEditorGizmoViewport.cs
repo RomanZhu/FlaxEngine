@@ -137,6 +137,7 @@ namespace FlaxEditor.Viewport
         private EditorSpritesRenderer _editorSpritesRenderer;
         private ViewportRubberBandSelector _rubberBandSelector;
         private DirectionGizmo _directionGizmo;
+        private Float2 _rightMouseDownViewPos;
 
         private bool _gameViewActive;
         private ViewFlags _preGameViewFlags;
@@ -171,6 +172,11 @@ namespace FlaxEditor.Viewport
         /// The selection outline postFx.
         /// </summary>
         public SelectionOutline SelectionOutline;
+
+        /// <summary>
+        /// The scene tree hover outline postFx.
+        /// </summary>
+        public SelectionOutline SceneTreeHoverOutline;
 
         /// <summary>
         /// The editor primitives postFx.
@@ -254,6 +260,14 @@ namespace FlaxEditor.Viewport
             SelectionOutline = Object.New<SelectionOutline>();
             SelectionOutline.SelectionGetter = () => TransformGizmo.SelectedParents;
             Task.AddCustomPostFx(SelectionOutline);
+            SceneTreeHoverOutline = Object.New<SelectionOutline>();
+            SceneTreeHoverOutline.UseEditorOptions = false;
+            SceneTreeHoverOutline.ShowSelectionOutline = true;
+            SceneTreeHoverOutline.Order = SelectionOutline.Order + 1;
+            SceneTreeHoverOutline.SelectionOutlineColor0 = new Color(0.56f, 0.56f, 0.56f, 1.0f);
+            SceneTreeHoverOutline.SelectionOutlineColor1 = new Color(0.36f, 0.36f, 0.36f, 1.0f);
+            SceneTreeHoverOutline.SelectionGetter = GetSceneTreeHoverSelection;
+            Task.AddCustomPostFx(SceneTreeHoverOutline);
             EditorPrimitives = Object.New<EditorPrimitives>();
             EditorPrimitives.Viewport = this;
             Task.AddCustomPostFx(EditorPrimitives);
@@ -287,12 +301,6 @@ namespace FlaxEditor.Viewport
             };
 
             editor.SceneEditing.SelectionChanged += OnSelectionChanged;
-        /// <summary>
-        /// The scene tree hover outline postFx.
-        /// </summary>
-        public SelectionOutline SceneTreeHoverOutline;
-
-
             // Gizmo widgets
             AddGizmoViewportWidgets(this, TransformGizmo, true, true);
 
@@ -304,6 +312,20 @@ namespace FlaxEditor.Viewport
             // Show navigation widget
             _showNavigationButton = ViewWidgetShowMenu.AddButton("Navigation", inputOptions.ToggleNavMeshVisibility, () => ShowNavigation = !ShowNavigation);
             _showNavigationButton.CloseMenuOnClick = false;
+
+            // Hover highlights
+            ContextMenuButton objectHoverHighlights = null;
+            objectHoverHighlights = ViewWidgetShowMenu.AddButton("Highlight Scene Items from Editor", () =>
+            {
+                _editor.Options.Options.Interface.HighlightViewportObjectHover = !_editor.Options.Options.Interface.HighlightViewportObjectHover;
+                if (!_editor.Options.Options.Interface.HighlightViewportObjectHover)
+                    ClearSceneTreeHoverFromEditorViewport();
+                objectHoverHighlights.Checked = _editor.Options.Options.Interface.HighlightViewportObjectHover;
+                _editor.Options.SaveOptions();
+            });
+            objectHoverHighlights.CloseMenuOnClick = false;
+            objectHoverHighlights.TooltipText = "When hovered Editor items will highlight items in Scene.";
+            objectHoverHighlights.Checked = _editor.Options.Options.Interface.HighlightViewportObjectHover;
 
             // Direction gizmo
             _showDirectionGizmoButton = ViewWidgetButtonMenu.AddButton("Direction Gizmo", () => _directionGizmo.Visible = !_directionGizmo.Visible);
@@ -365,6 +387,10 @@ namespace FlaxEditor.Viewport
             _directionGizmo.Size = new Float2(DirectionGizmo.DefaultGizmoSize * options.Viewport.DirectionGizmoScale);
             _directionGizmo.LocalX = -_directionGizmo.Size.X * 0.5f;
             _directionGizmo.LocalY = _directionGizmo.Size.Y * 0.5f + ViewportWidgetsContainer.WidgetsHeight;
+            if (!options.Interface.HighlightViewportObjectHover)
+                ClearSceneTreeHoverFromEditorViewport();
+            if (!options.Interface.HighlightSceneTreeHoverInViewport)
+                SetSceneTreeHoveredActor(null);
         }
 
         private void AddMainViewportToolStripButtons()
@@ -374,14 +400,6 @@ namespace FlaxEditor.Viewport
             _overlayModeButton.DrawMenuChevron = true;
             _overlayModeButton.PerformLayout();
             _overlayModeButton.LinkTooltip("Scene editing mode.");
-            SceneTreeHoverOutline = Object.New<SelectionOutline>();
-            SceneTreeHoverOutline.UseEditorOptions = false;
-            SceneTreeHoverOutline.ShowSelectionOutline = true;
-            SceneTreeHoverOutline.Order = SelectionOutline.Order + 1;
-            SceneTreeHoverOutline.SelectionOutlineColor0 = new Color(0.56f, 0.56f, 0.56f, 1.0f);
-            SceneTreeHoverOutline.SelectionOutlineColor1 = new Color(0.36f, 0.36f, 0.36f, 1.0f);
-            SceneTreeHoverOutline.SelectionGetter = GetSceneTreeHoverSelection;
-            Task.AddCustomPostFx(SceneTreeHoverOutline);
 
             var inputOptions = _editor.Options.Options.Input;
             _overlaySelectModeButton = AddViewportToolStripButton("Select", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.Transform.Select.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Select);
@@ -428,20 +446,6 @@ namespace FlaxEditor.Viewport
             }), ToolStripAnchor.Left, "Flax.Scene.Transform.RotateSnapValue.Left");
             _overlayRotateSnapValueButton.LinkTooltip("Rotation snapping values.");
             _overlayScaleSnapButton = AddViewportToolStripButton(string.Empty, _editor.Icons.ScaleSnap32, ToolStripAnchor.Left, "Flax.Scene.Transform.ScaleSnap.Left", () =>
-            // Hover highlights
-            ContextMenuButton objectHoverHighlights = null;
-            objectHoverHighlights = ViewWidgetShowMenu.AddButton("Highlight Scene Items from Editor", () =>
-            {
-                _editor.Options.Options.Interface.HighlightViewportObjectHover = !_editor.Options.Options.Interface.HighlightViewportObjectHover;
-                if (!_editor.Options.Options.Interface.HighlightViewportObjectHover)
-                    ClearSceneTreeHoverFromEditorViewport();
-                objectHoverHighlights.Checked = _editor.Options.Options.Interface.HighlightViewportObjectHover;
-                _editor.Options.SaveOptions();
-            });
-            objectHoverHighlights.CloseMenuOnClick = false;
-            objectHoverHighlights.TooltipText = "When hovered Editor items will highlight items in Scene.";
-            objectHoverHighlights.Checked = _editor.Options.Options.Interface.HighlightViewportObjectHover;
-
             {
                 TransformGizmo.ScaleSnapEnabled = !TransformGizmo.ScaleSnapEnabled;
                 _editor.ProjectCache.SetCustomData("ScaleSnapState", TransformGizmo.ScaleSnapEnabled);
@@ -847,11 +851,10 @@ namespace FlaxEditor.Viewport
                 var temp = RenderTargetPool.Get(ref desc);
                 selectionOutline.Render(context, ref renderContext, task.Output, temp);
 
-                    // Copy the results back to the output
-                    context.CopyTexture(task.Output, 0, 0, 0, 0, temp, 0);
+                // Copy the results back to the output
+                context.CopyTexture(task.Output, 0, 0, 0, 0, temp, 0);
 
-                    RenderTargetPool.Release(temp);
-                }
+                RenderTargetPool.Release(temp);
             }
         }
 
@@ -935,6 +938,8 @@ namespace FlaxEditor.Viewport
 
             TransformGizmo.Visible = !_gameViewActive;
             SelectionOutline.ShowSelectionOutline = !_gameViewActive;
+            if (_gameViewActive)
+                ClearSceneTreeHoverFromEditorViewport();
 
             _toggleGameViewButton.Icon = _gameViewActive ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
             UpdateViewportToolStrip();
@@ -955,6 +960,39 @@ namespace FlaxEditor.Viewport
                 _overlayScaleModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Scale;
             if (_overlayTransformSpaceButton != null)
             {
+                var isWorld = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
+                _overlayTransformSpaceButton.Checked = isWorld;
+                SetViewportToolStripButtonText(_overlayTransformSpaceButton, isWorld ? "World" : "Local");
+            }
+            if (_overlayPivotButton != null)
+            {
+                var isObjectPivot = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
+                _overlayPivotButton.Checked = isObjectPivot;
+                SetViewportToolStripButtonText(_overlayPivotButton, isObjectPivot ? "Pivot" : "Center");
+            }
+            if (_overlayAbsoluteSnapButton != null)
+            {
+                _overlayAbsoluteSnapButton.Visible = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
+                _overlayAbsoluteSnapButton.Checked = TransformGizmo.AbsoluteSnapEnabled;
+            }
+            if (_overlayTranslateSnapButton != null)
+                _overlayTranslateSnapButton.Checked = TransformGizmo.TranslationSnapEnable;
+            if (_overlayRotateSnapButton != null)
+                _overlayRotateSnapButton.Checked = TransformGizmo.RotationSnapEnabled;
+            if (_overlayScaleSnapButton != null)
+                _overlayScaleSnapButton.Checked = TransformGizmo.ScaleSnapEnabled;
+            SetViewportToolStripButtonText(_overlayTranslateSnapValueButton, GetTranslateSnapLabel());
+            SetViewportToolStripButtonText(_overlayRotateSnapValueButton, GetRotateSnapLabel());
+            SetViewportToolStripButtonText(_overlayScaleSnapValueButton, GetScaleSnapLabel());
+            if (_overlayGridButton != null)
+                _overlayGridButton.Checked = Grid.Enabled;
+            if (_overlayNavigationButton != null)
+                _overlayNavigationButton.Checked = ShowNavigation;
+            if (_overlayGameViewButton != null)
+                _overlayGameViewButton.Checked = _gameViewActive;
+            UpdateCharacterControllerModeButtons();
+        }
+
         /// <summary>
         /// Sets the actor highlighted in the editor viewport when hovering the scene tree.
         /// </summary>
@@ -1019,39 +1057,6 @@ namespace FlaxEditor.Viewport
             _editor.Windows.SceneWin?.SetViewportHoveredActor(null);
         }
 
-                var isWorld = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
-                _overlayTransformSpaceButton.Checked = isWorld;
-                SetViewportToolStripButtonText(_overlayTransformSpaceButton, isWorld ? "World" : "Local");
-            }
-            if (_overlayPivotButton != null)
-            {
-                var isObjectPivot = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
-                _overlayPivotButton.Checked = isObjectPivot;
-                SetViewportToolStripButtonText(_overlayPivotButton, isObjectPivot ? "Pivot" : "Center");
-            }
-            if (_overlayAbsoluteSnapButton != null)
-            {
-                _overlayAbsoluteSnapButton.Visible = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
-                _overlayAbsoluteSnapButton.Checked = TransformGizmo.AbsoluteSnapEnabled;
-            }
-            if (_overlayTranslateSnapButton != null)
-                _overlayTranslateSnapButton.Checked = TransformGizmo.TranslationSnapEnable;
-            if (_overlayRotateSnapButton != null)
-                _overlayRotateSnapButton.Checked = TransformGizmo.RotationSnapEnabled;
-            if (_overlayScaleSnapButton != null)
-                _overlayScaleSnapButton.Checked = TransformGizmo.ScaleSnapEnabled;
-            SetViewportToolStripButtonText(_overlayTranslateSnapValueButton, GetTranslateSnapLabel());
-            SetViewportToolStripButtonText(_overlayRotateSnapValueButton, GetRotateSnapLabel());
-            SetViewportToolStripButtonText(_overlayScaleSnapValueButton, GetScaleSnapLabel());
-            if (_overlayGridButton != null)
-                _overlayGridButton.Checked = Grid.Enabled;
-            if (_overlayNavigationButton != null)
-                _overlayNavigationButton.Checked = ShowNavigation;
-            if (_overlayGameViewButton != null)
-                _overlayGameViewButton.Checked = _gameViewActive;
-            UpdateCharacterControllerModeButtons();
-        }
-
         private static void SetViewportToolStripButtonText(ToolStripButton button, string text)
         {
             if (button != null && button.Text != text)
@@ -1097,6 +1102,7 @@ namespace FlaxEditor.Viewport
         {
             base.OnLostFocus();
 
+            ClearSceneTreeHoverFromEditorViewport();
             _rubberBandSelector.StopRubberBand();
         }
 
@@ -1105,6 +1111,7 @@ namespace FlaxEditor.Viewport
         {
             base.OnMouseLeave();
 
+            ClearSceneTreeHoverFromEditorViewport();
             _rubberBandSelector.StopRubberBand();
         }
 
@@ -1253,7 +1260,12 @@ namespace FlaxEditor.Viewport
             base.OnMouseMove(location);
 
             if (IsCharacterControllerLookActive())
+            {
+                ClearSceneTreeHoverFromEditorViewport();
                 return;
+            }
+
+            UpdateSceneTreeHoverFromEditorViewport();
 
             // Don't allow rubber band selection when gizmo is controlling mouse, vertex painting mode, or cloth painting is enabled
             bool canStart = !(IsControllingMouse || IsRightMouseButtonDown || IsAltKeyDown) &&
@@ -1312,13 +1324,49 @@ namespace FlaxEditor.Viewport
                 // Try to pick something with the current gizmo
                 Gizmos.Active?.Pick();
             }
-            if (_gameViewActive)
-                ClearSceneTreeHoverFromEditorViewport();
 
             // Keep focus
             Focus();
 
             base.OnLeftMouseButtonUp();
+        }
+
+        /// <inheritdoc />
+        protected override void OnRightMouseButtonDown()
+        {
+            base.OnRightMouseButtonDown();
+
+            _rightMouseDownViewPos = _viewMousePos;
+        }
+
+        /// <inheritdoc />
+        protected override void OnRightMouseButtonUp()
+        {
+            if ((_viewMousePos - _rightMouseDownViewPos).LengthSquared < 4.0f &&
+                ContainsPoint(ref _viewMousePos) &&
+                !_directionGizmo.IsMouseOver &&
+                !_gameViewActive &&
+                !_characterControllerModeActive &&
+                !IsCharacterControllerLookActive() &&
+                Gizmos.Active is TransformGizmo transformGizmo &&
+                transformGizmo.ActiveAxis == TransformGizmoBase.Axis.None)
+            {
+                var ray = MouseRay;
+                var view = new Ray(ViewPosition, ViewDirection);
+                var renderView = RenderTask.View;
+                var hit = transformGizmo.GetPickTarget(ref ray, ref view, renderView.Flags, renderView.Mode);
+
+                if (hit != null)
+                {
+                    bool isSelected = _editor.SceneEditing.Selection.Contains(hit);
+                    if (!isSelected)
+                        _editor.SceneEditing.Select(hit);
+                }
+
+                Focus();
+            }
+
+            base.OnRightMouseButtonUp();
         }
 
         /// <inheritdoc />
@@ -1383,7 +1431,6 @@ namespace FlaxEditor.Viewport
                 ToggleGameView();
             else
                 ToggleCharacterControllerMode();
-            ClearSceneTreeHoverFromEditorViewport();
             return true;
         }
 
@@ -1392,7 +1439,6 @@ namespace FlaxEditor.Viewport
         {
             if (_characterControllerModeActive)
             {
-            ClearSceneTreeHoverFromEditorViewport();
                 if (key == KeyboardKeys.Escape)
                 {
                     StopCharacterControllerMode();
@@ -1507,6 +1553,7 @@ namespace FlaxEditor.Viewport
             if (IsDisposing)
                 return;
 
+            ClearSceneTreeHoverFromEditorViewport();
             StopCharacterControllerMode();
             _editor.PlayModeBeginning -= OnPlayModeBeginning;
             _debugDrawData.Dispose();
@@ -1541,12 +1588,7 @@ namespace FlaxEditor.Viewport
                 _savedTask.Enabled = false;
                 Object.Destroy(_savedTask);
                 ReleaseResources();
-            {
-                ClearSceneTreeHoverFromEditorViewport();
                 _savedTask = null;
-            }
-
-            UpdateSceneTreeHoverFromEditorViewport();
             }
             Object.Destroy(ref _savedBackBuffer);
         }
@@ -1556,17 +1598,16 @@ namespace FlaxEditor.Viewport
             if (Task)
             {
                 Task.RemoveCustomPostFx(SelectionOutline);
+                Task.RemoveCustomPostFx(SceneTreeHoverOutline);
                 Task.RemoveCustomPostFx(EditorPrimitives);
                 Task.RemoveCustomPostFx(_editorSpritesRenderer);
                 Task.RemoveCustomPostFx(_customSelectionOutline);
             }
             Object.Destroy(ref SelectionOutline);
+            Object.Destroy(ref SceneTreeHoverOutline);
             Object.Destroy(ref EditorPrimitives);
             Object.Destroy(ref _editorSpritesRenderer);
             Object.Destroy(ref _customSelectionOutline);
         }
     }
 }
-            ClearSceneTreeHoverFromEditorViewport();
-                Task.RemoveCustomPostFx(SceneTreeHoverOutline);
-            Object.Destroy(ref SceneTreeHoverOutline);
