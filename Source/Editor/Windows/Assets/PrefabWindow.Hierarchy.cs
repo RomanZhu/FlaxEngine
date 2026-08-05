@@ -295,7 +295,8 @@ namespace FlaxEditor.Windows.Assets
 
             // Basic editing options
 
-            var b = contextMenu.AddButton("Rename", RenameSelection);
+            var b = contextMenu.AddButton("Rename");
+            b.DeferClickUntilMenuClosed(_ => RenameSelection());
             b.Enabled = isSingleActorSelected;
 
             b = contextMenu.AddButton("Duplicate", Duplicate);

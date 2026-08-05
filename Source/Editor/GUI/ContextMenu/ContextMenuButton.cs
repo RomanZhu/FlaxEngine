@@ -124,6 +124,43 @@ namespace FlaxEditor.GUI.ContextMenu
             ParentContextMenu?.OnButtonClicked(this);
         }
 
+        /// <summary>
+        /// Defers the button action until the topmost context menu is fully closed.
+        /// </summary>
+        /// <param name="clicked">The action to invoke.</param>
+        public void DeferClickUntilMenuClosed(Action<ContextMenuButton> clicked)
+        {
+            CloseMenuOnClick = false;
+            ButtonClicked += button => InvokeAfterMenuClosed(button, clicked);
+        }
+
+        private static void InvokeAfterMenuClosed(ContextMenuButton button, Action<ContextMenuButton> clicked)
+        {
+            var contextMenu = button?.ParentContextMenu?.TopmostCM;
+            if (contextMenu == null || !contextMenu.Visible)
+            {
+                clicked?.Invoke(button);
+                return;
+            }
+
+            contextMenu.Hide();
+            InvokeWhenClosed();
+
+            void InvokeWhenClosed()
+            {
+                FlaxEngine.Scripting.InvokeOnUpdate(() =>
+                {
+                    if (contextMenu.Visible)
+                    {
+                        InvokeWhenClosed();
+                        return;
+                    }
+
+                    clicked?.Invoke(button);
+                });
+            }
+        }
+
         /// <inheritdoc />
         public override void Draw()
         {

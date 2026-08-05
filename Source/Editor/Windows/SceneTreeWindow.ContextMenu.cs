@@ -54,7 +54,8 @@ namespace FlaxEditor.Windows
 
             // Basic editing options
             var firstSelection = hasSthSelected ? Editor.SceneEditing.Selection[0] as ActorNode : null;
-            b = contextMenu.AddButton("Rename", inputOptions.Rename, RenameSelection);
+            b = contextMenu.AddButton("Rename", inputOptions.Rename.ToString());
+            b.DeferClickUntilMenuClosed(_ => RenameSelection());
             b.Enabled = hasSthSelected;
             b = contextMenu.AddButton("Duplicate", inputOptions.Duplicate, Editor.SceneEditing.Duplicate);
             b.Enabled = hasSthSelected && (firstSelection != null ? firstSelection.CanDuplicate : true);

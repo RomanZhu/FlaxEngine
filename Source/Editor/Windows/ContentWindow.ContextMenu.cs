@@ -318,13 +318,13 @@ namespace FlaxEditor.Windows
                         {
                             if (mainCM)
                             {
-                                var b = CreateDeferredNewItemButton(menu, part, button => NewItemAfterContextMenuClosed(button, p));
+                                var b = CreateDeferredNewItemButton(menu, part, button => NewItem(p));
                                 b.Enabled = canCreate;
                                 mainCM = false;
                             }
                             else if (childCM != null)
                             {
-                                var b = CreateDeferredNewItemButton(childCM.ContextMenu, part, button => NewItemAfterContextMenuClosed(button, p));
+                                var b = CreateDeferredNewItemButton(childCM.ContextMenu, part, button => NewItem(p));
                                 b.Enabled = canCreate;
                                 childCM.ContextMenu.AutoSort = true;
                             }
@@ -353,36 +353,8 @@ namespace FlaxEditor.Windows
         internal static ContextMenuButton CreateDeferredNewItemButton(ContextMenu menu, string text, Action<ContextMenuButton> clicked)
         {
             var button = menu.AddButton(text);
-            button.CloseMenuOnClick = false;
-            button.ButtonClicked += clicked;
+            button.DeferClickUntilMenuClosed(clicked);
             return button;
-        }
-
-        private void NewItemAfterContextMenuClosed(ContextMenuButton button, ContentProxy proxy)
-        {
-            var contextMenu = button?.ParentContextMenu?.TopmostCM;
-            if (contextMenu == null || !contextMenu.Visible)
-            {
-                NewItem(proxy);
-                return;
-            }
-
-            contextMenu.Hide();
-            InvokeAfterContextMenuClosed();
-
-            void InvokeAfterContextMenuClosed()
-            {
-                FlaxEngine.Scripting.InvokeOnUpdate(() =>
-                {
-                    if (contextMenu.Visible)
-                    {
-                        InvokeAfterContextMenuClosed();
-                        return;
-                    }
-
-                    NewItem(proxy);
-                });
-            }
         }
 
         private void OnExpandAllClicked(ContextMenuButton button)
