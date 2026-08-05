@@ -120,6 +120,19 @@ namespace FlaxEngine.Tests
                 StringUtils.NormalizePath(ContentItemFilesystemAction.GetSceneActorsFolderPath(folderPath, true)));
             Assert.IsNull(ContentItemFilesystemAction.GetSceneActorsFolderPath(filePath, false));
         }
+
+        [Test]
+        public void TestExternalActorPathMapsToScenePath()
+        {
+            var actorId = Guid.NewGuid().ToString("N");
+            var actorPath = Path.Combine(Globals.ProjectFolder, "SceneActors", "Scenes", "Main", "ExternalActors", actorId.Substring(0, 2), actorId + ".actor");
+
+            Assert.IsTrue(SceneModule.TryGetScenePathFromExternalActorPath(actorPath, out var scenePath));
+            Assert.AreEqual(
+                StringUtils.NormalizePath(Path.Combine(Globals.ProjectContentFolder, "Scenes", "Main.scene")),
+                StringUtils.NormalizePath(scenePath));
+            Assert.IsFalse(SceneModule.TryGetScenePathFromExternalActorPath(Path.Combine(Globals.ProjectContentFolder, "Scenes", "Main.actor"), out _));
+        }
     }
 }
 #endif

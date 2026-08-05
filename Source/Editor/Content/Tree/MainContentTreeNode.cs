@@ -29,13 +29,13 @@ namespace FlaxEditor.Content
         {
             _watcher = new FileSystemWatcher(path)
             {
-                IncludeSubdirectories = true,
-                EnableRaisingEvents = true
+                IncludeSubdirectories = true
             };
-            //_watcher.Changed += OnEvent;
+            _watcher.Changed += OnEvent;
             _watcher.Created += OnEvent;
             _watcher.Deleted += OnEvent;
             _watcher.Renamed += OnEvent;
+            _watcher.EnableRaisingEvents = true;
         }
 
         private void OnEvent(object sender, FileSystemEventArgs e)

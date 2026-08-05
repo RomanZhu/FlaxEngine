@@ -1400,6 +1400,8 @@ namespace FlaxEditor.Modules
             if (_isDuringFastSetup)
                 return;
 
+            Editor.Scene.QueueSceneDiskChange(e);
+
             // TODO: maybe we could make it faster! since we have a path so it would be easy to just create or delete given file. but remember about subdirectories
 
             // Switch type
