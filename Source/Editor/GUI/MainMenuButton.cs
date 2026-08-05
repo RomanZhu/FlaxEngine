@@ -66,8 +66,9 @@ namespace FlaxEditor.GUI
             // Draw background
             if (enabled && hasChildItems && (isOpened || IsMouseOver))
             {
-                var visualRect = Style.Current.CornerRadius > 0.0f ? clientRect.MakeExpanded(-2.0f) : clientRect;
-                StyleRendering.FillRoundedRectangle(visualRect, isOpened ? BackgroundColorMouseOverOpened : BackgroundColorMouseOver, Style.Current.CornerRadius);
+                var cornerRadius = style.GetToolStripButtonCornerRadius();
+                var visualRect = cornerRadius > 0.0f ? clientRect.MakeExpanded(-2.0f) : clientRect;
+                StyleRendering.FillRoundedRectangle(visualRect, isOpened ? BackgroundColorMouseOverOpened : BackgroundColorMouseOver, cornerRadius);
             }
 
             // Draw text

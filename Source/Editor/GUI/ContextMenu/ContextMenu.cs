@@ -16,8 +16,13 @@ namespace FlaxEditor.GUI.ContextMenu
     [HideInEditor]
     public class ContextMenu : ContextMenuBase
     {
+        private const float ScrollIndicatorArea = 8.0f;
+        private const int ScrollIndicatorRows = 4;
+
         private ContextMenuItem _pendingAimItem;
         private float _pendingAimUntil;
+        private bool _hasScrollIndicators;
+        private readonly Dictionary<ContextMenuButton, int> _accessKeyIndices = new Dictionary<ContextMenuButton, int>();
 
         /// <summary>
         /// The items container.
@@ -36,6 +41,10 @@ namespace FlaxEditor.GUI.ContextMenu
             : base(ScrollBars.Vertical)
             {
                 _menu = menu;
+                ScrollBarsSize = 0.0f;
+                ScrollbarTrackColor = Color.Transparent;
+                ScrollbarThumbColor = Color.Transparent;
+                ScrollbarThumbSelectedColor = Color.Transparent;
             }
 
             /// <inheritdoc />
@@ -67,7 +76,7 @@ namespace FlaxEditor.GUI.ContextMenu
         /// <summary>
         /// The items margin.
         /// </summary>
-        protected Margin _itemsMargin = new Margin(16, 0, 2, 0);
+        protected Margin _itemsMargin = new Margin(28, 0, 2, 0);
 
         /// <summary>
         /// The items panel.
@@ -86,6 +95,8 @@ namespace FlaxEditor.GUI.ContextMenu
                 PerformLayout();
             }
         }
+
+        internal Margin EffectiveItemsAreaMargin => GetItemsAreaMargin(_hasScrollIndicators);
 
         /// <summary>
         /// Gets or sets the items margin.
@@ -154,9 +165,17 @@ namespace FlaxEditor.GUI.ContextMenu
 
             _panel = new ItemsPanel(this)
             {
-                ClipChildren = false,
+                ClipChildren = true,
                 Parent = this,
             };
+        }
+
+        private Margin GetItemsAreaMargin(bool hasScrollIndicators)
+        {
+            if (!hasScrollIndicators)
+                return _itemsAreaMargin;
+
+            return new Margin(_itemsAreaMargin.Left, _itemsAreaMargin.Right, _itemsAreaMargin.Top + ScrollIndicatorArea, _itemsAreaMargin.Bottom + ScrollIndicatorArea);
         }
 
         internal bool OnItemMouseEnter(ContextMenuItem item, Float2 screenLocation)
@@ -225,6 +244,7 @@ namespace FlaxEditor.GUI.ContextMenu
                 if (_panel.Children[i] is ContextMenuItem)
                     _panel.Children[i].Dispose();
             }
+            _accessKeyIndices.Clear();
         }
 
         /// <summary>
@@ -395,6 +415,87 @@ namespace FlaxEditor.GUI.ContextMenu
             ButtonClicked?.Invoke(button);
         }
 
+        internal int GetAccessKeyIndex(ContextMenuButton button)
+        {
+            if (!_accessKeyIndices.TryGetValue(button, out var index))
+                UpdateAccessKeys();
+            return _accessKeyIndices.TryGetValue(button, out index) ? index : -1;
+        }
+
+        private void UpdateAccessKeys()
+        {
+            _accessKeyIndices.Clear();
+            var used = new HashSet<char>();
+            for (int i = 0; i < _panel.Children.Count; i++)
+            {
+                if (!(_panel.Children[i] is ContextMenuButton item) || !item.Visible)
+                    continue;
+
+                int index = FindAccessKeyIndex(item.Text, used);
+                _accessKeyIndices[item] = index;
+
+                if (index >= 0)
+                    used.Add(NormalizeAccessKey(item.Text[index]));
+            }
+        }
+
+        private static int FindAccessKeyIndex(string text, HashSet<char> used)
+        {
+            if (string.IsNullOrEmpty(text))
+                return -1;
+
+            int fallback = -1;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (!char.IsLetterOrDigit(c))
+                    continue;
+
+                if (fallback == -1)
+                    fallback = i;
+
+                if (!used.Contains(NormalizeAccessKey(c)))
+                    return i;
+            }
+
+            return fallback;
+        }
+
+        private static char NormalizeAccessKey(char c)
+        {
+            return char.ToUpperInvariant(c);
+        }
+
+        private bool ActivateAccessKey(char c)
+        {
+            if (!char.IsLetterOrDigit(c))
+                return false;
+
+            char key = NormalizeAccessKey(c);
+            for (int i = 0; i < _panel.Children.Count; i++)
+            {
+                if (!(_panel.Children[i] is ContextMenuButton item) || !item.Visible || !item.Enabled)
+                    continue;
+
+                int accessKeyIndex = GetAccessKeyIndex(item);
+                if (accessKeyIndex < 0 || NormalizeAccessKey(item.Text[accessKeyIndex]) != key)
+                    continue;
+
+                item.Focus();
+                _panel.ScrollViewTo(item);
+                if (item is ContextMenuChildMenu childMenu && childMenu.ContextMenu.HasChildren)
+                {
+                    childMenu.ShowChild(this);
+                }
+                else
+                {
+                    item.Click();
+                }
+                return true;
+            }
+            return false;
+        }
+
         /// <inheritdoc />
         public override void Show(Control parent, Float2 location, ContextMenuDirection? direction = null)
         {
@@ -404,6 +505,39 @@ namespace FlaxEditor.GUI.ContextMenu
                 separator.Dispose();
 
             base.Show(parent, location, direction);
+        }
+
+        /// <inheritdoc />
+        public override void Draw()
+        {
+            base.Draw();
+
+            DrawScrollIndicators();
+        }
+
+        private void DrawScrollIndicators()
+        {
+            var scrollBar = _panel?.VScrollBar;
+            if (!_hasScrollIndicators || scrollBar == null || !scrollBar.Enabled)
+                return;
+
+            var style = Style.Current;
+            var color = style.ForegroundGrey.AlphaMultiplied(0.85f);
+            var margin = EffectiveItemsAreaMargin;
+            if (scrollBar.TargetValue > scrollBar.Minimum + 0.5f)
+                DrawScrollIndicator(new Float2(Width * 0.5f, Mathf.Max(1.0f, margin.Top - ScrollIndicatorArea + 1.0f)), false, color);
+            if (scrollBar.TargetValue < scrollBar.Maximum - 0.5f)
+                DrawScrollIndicator(new Float2(Width * 0.5f, Height - margin.Bottom + 2.0f), true, color);
+        }
+
+        private static void DrawScrollIndicator(Float2 center, bool down, Color color)
+        {
+            for (int row = 0; row < ScrollIndicatorRows; row++)
+            {
+                int width = down ? ScrollIndicatorRows * 2 - 1 - row * 2 : row * 2 + 1;
+                float y = center.Y + row;
+                Render2D.FillRectangle(new Rectangle(center.X - width * 0.5f, y, width, 1.0f), color);
+            }
         }
 
         /// <inheritdoc />
@@ -429,7 +563,7 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Calculate size of the context menu (items only)
             float maxWidth = 0;
-            float height = _itemsAreaMargin.Height;
+            float height = 0;
             int itemsLeft = MaximumItemsInViewCount;
             int overflowItemCount = 0;
             int itemsCount = 0;
@@ -452,26 +586,27 @@ namespace FlaxEditor.GUI.ContextMenu
             }
             if (itemsCount != 0)
                 height -= _itemsMargin.Height; // Remove item margin from top and bottom
-            maxWidth = Mathf.Max(maxWidth + 20, MinimumWidth);
+            _hasScrollIndicators = overflowItemCount > 0;
+            var itemsAreaMargin = GetItemsAreaMargin(_hasScrollIndicators);
+            height += itemsAreaMargin.Height;
+            maxWidth = Mathf.Max(maxWidth + _itemsMargin.Width + 8.0f, MinimumWidth);
 
             // Move child arrows to accommodate scroll bar showing 
-            if (overflowItemCount > 0)
+            foreach (var child in _panel.Children)
             {
-                foreach (var child in _panel.Children)
+                if (child is ContextMenuButton item && item.Visible)
                 {
-                    if (child is ContextMenuButton item && item.Visible)
-                    {
-                        item.ExtraAdjustmentAmount = -_panel.VScrollBar.Width;
-                    }
+                    item.ExtraAdjustmentAmount = overflowItemCount > 0 ? -_panel.VScrollBar.Width : 0.0f;
                 }
             }
+            UpdateAccessKeys();
 
             // Resize container
             Size = new Float2(Mathf.Ceil(maxWidth), Mathf.Ceil(height));
 
             // Arrange items view panel
             var panelBounds = new Rectangle(Float2.Zero, Size);
-            _itemsAreaMargin.ShrinkRectangle(ref panelBounds);
+            itemsAreaMargin.ShrinkRectangle(ref panelBounds);
             _panel.Bounds = panelBounds;
 
             // Check if is visible size get changed
@@ -488,8 +623,11 @@ namespace FlaxEditor.GUI.ContextMenu
             if (base.OnCharInput(c))
                 return true;
 
+            if (ActivateAccessKey(c))
+                return true;
+
             // Find the item that starts with that character
-            if (char.IsLetterOrDigit(c) && _panel.VScrollBar != null && _panel.VScrollBar.Visible)
+            if (char.IsLetterOrDigit(c))
             {
                 int startIndex = 0;
                 for (int i = 0; i < _panel.Children.Count; i++)

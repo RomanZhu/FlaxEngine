@@ -42,6 +42,8 @@ namespace FlaxEditor.Options
         private readonly string _optionsFilePath;
         private readonly Dictionary<string, CreateCustomSettingsDelegate> _customSettings = new Dictionary<string, CreateCustomSettingsDelegate>();
         private bool _showReferencePreviewsInProperties = true;
+        private static readonly Color DefaultTextShadowColor = Color.Black.AlphaMultiplied(0.35f);
+        private static readonly Float2 DefaultTextShadowOffset = new Float2(0.0f, 1.0f);
 
         /// <summary>
         /// Gets the custom settings factories. Each entry defines the custom settings type identified by the given key name. The value is a factory function that returns the default options for a given type.
@@ -261,6 +263,7 @@ namespace FlaxEditor.Options
             Editor.Internal_SetOptions(ref internalOptions);
 
             EditorAssets.Cache.OnEditorOptionsChanged(Options);
+            ApplyInterfaceStyleOverrides(Style.Current);
 
             // Units formatting options
             bool useUnitsFormatting = Options.Interface.ValueFormatting != InterfaceOptions.ValueFormattingType.None;
@@ -296,6 +299,20 @@ namespace FlaxEditor.Options
             }
         }
 
+        private void ApplyInterfaceStyleOverrides(Style style)
+        {
+            if (style == null)
+                return;
+
+            var interfaceOptions = Options.Interface;
+            if (interfaceOptions.TreeRowHeight > 0.0f)
+                style.TreeRowHeight = interfaceOptions.TreeRowHeight;
+            if (interfaceOptions.ContentTreeIconSize > 0.0f)
+                style.ContentTreeIconSize = interfaceOptions.ContentTreeIconSize;
+            if (interfaceOptions.SceneTreeIconSize > 0.0f)
+                style.SceneTreeIconSize = interfaceOptions.SceneTreeIconSize;
+        }
+
         private void SetupStyle()
         {
             var themeOptions = Options.Theme;
@@ -325,6 +342,8 @@ namespace FlaxEditor.Options
                     Style.Current = CreateDefaultStyle();
                 }
             }
+            ApplyEditorTextShadow(Style.Current);
+            ApplyInterfaceStyleOverrides(Style.Current);
 
             // Ensure custom fonts are valid, reset if not
             var defaultInterfaceOptions = new InterfaceOptions();
@@ -344,6 +363,12 @@ namespace FlaxEditor.Options
             Font.FallbackFonts = fallbackFonts;
         }
 
+        private static void ApplyEditorTextShadow(Style style)
+        {
+            style.TextShadowColor = DefaultTextShadowColor;
+            style.TextShadowOffset = DefaultTextShadowOffset;
+        }
+
         /// <summary>
         /// Creates the default style.
         /// </summary>
@@ -359,6 +384,8 @@ namespace FlaxEditor.Options
                 ForegroundGrey = Color.FromBgra(0xFFA1A5A9),
                 ForegroundDisabled = Color.FromBgra(0xFF6C6F75),
                 ForegroundViewport = Color.FromBgra(0xFFFFFFFF),
+                TextShadowColor = DefaultTextShadowColor,
+                TextShadowOffset = DefaultTextShadowOffset,
                 BackgroundHighlighted = Color.FromBgra(0xFF3C3C3C),
                 BorderHighlighted = Color.FromBgra(0xFF000000),
                 BackgroundSelected = Color.FromBgra(0xFF3B3D42),
@@ -371,14 +398,39 @@ namespace FlaxEditor.Options
                 ProgressNormal = Color.FromBgra(0xFF58A873),
                 Selection = Color.FromBgra(0xFF3B3D42),
                 SelectionBorder = Color.FromBgra(0xFF3D91D9),
-                CornerRadius = 4.0f,
+                CornerRadius = 3.0f,
+                ButtonCornerRadius = 2.0f,
+                InputCornerRadius = 3.0f,
+                ValueBoxPrefixCornerRadius = 0.0f,
+                ValueBoxPrefixOffset = -3.0f,
+                PanelCornerRadius = 5.0f,
+                PopupCornerRadius = 1.0f,
+                DropdownCornerRadius = 5.0f,
+                ToolStripButtonCornerRadius = 1.0f,
+                ToolStripGroupCornerRadius = 3.0f,
+                TabCornerRadius = 5.0f,
+                SelectionCornerRadius = 1.0f,
                 ControlHeight = 24.0f,
                 ToolbarHeight = 24.0f,
                 TabHeight = 24.0f,
                 TreeRowHeight = 20.0f,
                 PropertyRowHeight = 24.0f,
-                PanelPadding = 2.0f,
-                IconSize = 16.0f,
+                PropertyPanelPadding = 0.0f,
+                PropertyPanelSpacing = 0.0f,
+                PropertyGroupPadding = 0.0f,
+                PropertyGroupSpacing = 0.0f,
+                PropertyGridSpacing = 0.0f,
+                PanelPadding = 1.0f,
+                IconSize = 18.0f,
+                ButtonIconSize = 0.0f,
+                ToolStripIconSize = 0.0f,
+                MenuIconSize = 0.0f,
+                TabIconSize = 0.0f,
+                TreeIconSize = 0.0f,
+                ContentTreeIconSize = 0.0f,
+                SceneTreeIconSize = 0.0f,
+                PropertyIconSize = 0.0f,
+                TimelineIconSize = 0.0f,
 
                 Statusbar = new Style.StatusbarStyle
                 {
@@ -430,6 +482,8 @@ namespace FlaxEditor.Options
                 ForegroundGrey = new Color(0.30f, 0.30f, 0.31f, 1f),
                 ForegroundDisabled = new Color(0.45f, 0.45f, 0.49f, 1f),
                 ForegroundViewport = new Color(1.0f, 1.0f, 1.0f, 1f),
+                TextShadowColor = DefaultTextShadowColor,
+                TextShadowOffset = DefaultTextShadowOffset,
                 BackgroundHighlighted = new Color(0.59f, 0.59f, 0.64f, 1f),
                 BorderHighlighted = new Color(0.50f, 0.50f, 0.55f, 1f),
                 BackgroundSelected = new Color(0.00f, 0.46f, 0.78f, 0.78f),
@@ -442,7 +496,33 @@ namespace FlaxEditor.Options
                 ProgressNormal = new Color(0.03f, 0.65f, 0.12f, 1f),
                 Selection = Color.Orange * 0.4f,
                 SelectionBorder = Color.Orange,
+                CornerRadius = 5.0f,
+                ButtonCornerRadius = 5.0f,
+                InputCornerRadius = 5.0f,
+                ValueBoxPrefixCornerRadius = 0.0f,
+                ValueBoxPrefixOffset = -3.0f,
+                PanelCornerRadius = 5.0f,
+                PopupCornerRadius = 1.0f,
+                DropdownCornerRadius = 1.0f,
+                ToolStripButtonCornerRadius = 5.0f,
+                ToolStripGroupCornerRadius = 5.0f,
+                TabCornerRadius = 5.0f,
+                SelectionCornerRadius = 5.0f,
+                PropertyPanelPadding = 0.0f,
+                PropertyPanelSpacing = 0.0f,
+                PropertyGroupPadding = 0.0f,
+                PropertyGroupSpacing = 0.0f,
+                PropertyGridSpacing = 0.0f,
                 IconSize = 16.0f,
+                ButtonIconSize = 0.0f,
+                ToolStripIconSize = 0.0f,
+                MenuIconSize = 0.0f,
+                TabIconSize = 0.0f,
+                TreeIconSize = 0.0f,
+                ContentTreeIconSize = 0.0f,
+                SceneTreeIconSize = 0.0f,
+                PropertyIconSize = 0.0f,
+                TimelineIconSize = 0.0f,
 
                 // Fonts
                 FontTitle = options.Interface.TitleFont.GetFont(),

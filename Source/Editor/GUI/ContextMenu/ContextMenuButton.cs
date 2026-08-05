@@ -13,6 +13,9 @@ namespace FlaxEditor.GUI.ContextMenu
     [HideInEditor]
     public class ContextMenuButton : ContextMenuItem
     {
+        private const float DefaultIconSize = 16.0f;
+        private const float IconRightPadding = 5.0f;
+
         private bool _isMouseDown;
         
         /// <summary>
@@ -123,17 +126,19 @@ namespace FlaxEditor.GUI.ContextMenu
             var backgroundRect = new Rectangle(-X + 3, 0, Parent.Width - 6, Height);
             var textRect = new Rectangle(0, 0, Width - 8, Height);
             var textColor = Enabled ? style.Foreground : style.ForegroundDisabled;
+            var selectionCornerRadius = style.GetSelectionCornerRadius();
 
             // Draw background
             if (IsMouseOver && Enabled)
-                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), Color.Lerp(style.Background, style.Foreground, 0.08f), style.CornerRadius);
+                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), style.BackgroundSelected, selectionCornerRadius);
             else if (IsFocused)
-                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), Color.Lerp(style.Background, style.Foreground, 0.08f), style.CornerRadius);
+                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), style.BackgroundSelected, selectionCornerRadius);
 
             base.Draw();
 
             // Draw text
             Render2D.DrawText(style.FontMedium, Text, textRect, textColor, TextAlignment.Near, TextAlignment.Center);
+            DrawAccessKeyUnderline(style.FontMedium, Text, textRect, textColor, TextAlignment.Near, TextAlignment.Center, ParentContextMenu?.GetAccessKeyIndex(this) ?? -1);
 
             if (!string.IsNullOrEmpty(ShortKeys))
             {
@@ -142,10 +147,47 @@ namespace FlaxEditor.GUI.ContextMenu
             }
 
             // Draw icon
-            var iconSize = Mathf.Min(16.0f, style.IconSize > 0.0f ? style.IconSize : 16.0f);
+            var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetMenuIconSize(DefaultIconSize)), Mathf.Max(0.0f, Height - 2.0f));
             var icon = Checked ? style.CheckBoxTick : Icon;
-            if (icon.IsValid)
-                Render2D.DrawSprite(icon, new Rectangle(-iconSize - 1, (Height - iconSize) / 2, iconSize, iconSize), textColor);
+            if (icon.IsValid && iconSize > 0.0f)
+                Render2D.DrawSprite(icon, new Rectangle(-iconSize - IconRightPadding, (Height - iconSize) / 2, iconSize, iconSize), textColor);
+        }
+
+        internal static void DrawAccessKeyUnderline(Font font, string text, Rectangle textRect, Color color, TextAlignment horizontalAlignment, TextAlignment verticalAlignment, int accessKeyIndex)
+        {
+            if (font == null || string.IsNullOrEmpty(text) || accessKeyIndex < 0 || accessKeyIndex >= text.Length)
+                return;
+
+            var textSize = font.MeasureText(text);
+            var prefixWidth = accessKeyIndex > 0 ? font.MeasureText(text.Substring(0, accessKeyIndex)).X : 0.0f;
+            var keyWidth = font.MeasureText(text.Substring(accessKeyIndex, 1)).X;
+
+            float x = textRect.X;
+            switch (horizontalAlignment)
+            {
+            case TextAlignment.Center:
+                x += (textRect.Width - textSize.X) * 0.5f;
+                break;
+            case TextAlignment.Far:
+                x += textRect.Width - textSize.X;
+                break;
+            }
+
+            float y = textRect.Y;
+            switch (verticalAlignment)
+            {
+            case TextAlignment.Center:
+                y += (textRect.Height + textSize.Y) * 0.5f - 2.0f;
+                break;
+            case TextAlignment.Far:
+                y += textRect.Height - 2.0f;
+                break;
+            default:
+                y += textSize.Y - 2.0f;
+                break;
+            }
+
+            Render2D.DrawLine(new Float2(x + prefixWidth, y), new Float2(x + prefixWidth + keyWidth, y), color, 1.0f);
         }
 
         /// <inheritdoc />

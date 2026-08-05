@@ -32,7 +32,7 @@ namespace FlaxEditor.GUI.ContextMenu
         internal void ShowChild(ContextMenu parentContextMenu)
         {
             // Hide parent CM popups and set itself as child
-            var vAlign = parentContextMenu.ItemsAreaMargin.Top;
+            var vAlign = parentContextMenu.EffectiveItemsAreaMargin.Top;
             var location = new Float2(Width, -vAlign);
             location = PointToParent(parentContextMenu, location);
             parentContextMenu.ShowChild(ContextMenu, location);
@@ -47,13 +47,13 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Draw background
             if (isCMopened)
-                Render2D.FillRectangle(backgroundRect, Color.Lerp(style.Background, style.Foreground, 0.08f));
+                StyleRendering.FillRoundedRectangle(backgroundRect.MakeExpanded(-2.0f), style.BackgroundSelected, style.GetSelectionCornerRadius());
 
             base.Draw();
 
             // Draw arrow
             if (ContextMenu.HasChildren)
-                Render2D.DrawSprite(style.ArrowRight, new Rectangle(Width - 15 + ExtraAdjustmentAmount, (Height - 12) / 2, 12, 12), Enabled ? isCMopened ? style.BackgroundSelected : style.Foreground : style.ForegroundDisabled);
+                Render2D.DrawSprite(style.ArrowRight, new Rectangle(Width - 15 + ExtraAdjustmentAmount, (Height - 12) / 2, 12, 12), Enabled ? style.Foreground : style.ForegroundDisabled);
         }
 
         /// <inheritdoc />

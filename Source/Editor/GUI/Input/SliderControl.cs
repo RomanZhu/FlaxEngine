@@ -41,9 +41,11 @@ namespace FlaxEditor.GUI.Input
             public const float Maximum = 100.0f;
 
             private float _value;
-            private Rectangle _thumbRect;
-            private float _thumbCenter, _thumbSize;
+            private Rectangle _fillRect;
             private bool _isSliding;
+            private bool _isSlidingPending;
+            private Float2 _startSlideLocation;
+            private float _startSlideValue;
 
             /// <summary>
             /// Gets or sets the value (normalized to range 0-100).
@@ -59,11 +61,16 @@ namespace FlaxEditor.GUI.Input
                         _value = value;
 
                         // Update
-                        UpdateThumb();
+                        UpdateFill();
                         ValueChanged?.Invoke();
                     }
                 }
             }
+
+            /// <summary>
+            /// The value text to draw over the slider body.
+            /// </summary>
+            public string DisplayText;
 
             /// <summary>
             /// Occurs when value gets changed.
@@ -106,6 +113,11 @@ namespace FlaxEditor.GUI.Input
             public Action SlidingEnd;
 
             /// <summary>
+            /// Occurs when the user clicks the slider body without dragging.
+            /// </summary>
+            public Action EditRequested;
+
+            /// <summary>
             /// Initializes a new instance of the <see cref="Slider"/> class.
             /// </summary>
             /// <param name="width">The width.</param>
@@ -114,27 +126,24 @@ namespace FlaxEditor.GUI.Input
             : base(0, 0, width, height)
             {
                 var style = Style.Current;
-                TrackLineColor = style.BackgroundHighlighted;
-                ThumbColor = style.BackgroundNormal;
-                ThumbColorSelected = style.BackgroundSelected;
-                ThumbColorHovered = style.BackgroundHighlighted;
+                TrackLineColor = style.TextBoxBackground;
+                ThumbColor = style.BorderSelected.AlphaMultiplied(0.72f);
+                ThumbColorSelected = style.BorderSelected;
+                ThumbColorHovered = style.BorderSelected.AlphaMultiplied(0.88f);
             }
 
-            private void UpdateThumb()
+            private void UpdateFill()
             {
                 // Cache data
                 float trackSize = TrackSize;
                 float range = Maximum - Minimum;
-                _thumbSize = Mathf.Min(trackSize, Mathf.Max(trackSize / range * 10.0f, 30.0f));
-                float pixelRange = trackSize - _thumbSize;
                 float perc = (_value - Minimum) / range;
-                float thumbPosition = (int)(perc * pixelRange);
-                _thumbCenter = thumbPosition + _thumbSize / 2;
-                _thumbRect = new Rectangle(thumbPosition + 4, (Height - DefaultThickness) / 2, _thumbSize - 8, DefaultThickness);
+                _fillRect = new Rectangle(0.0f, 0.0f, Mathf.RoundToInt(perc * trackSize), Height);
             }
 
             private void EndSliding()
             {
+                _isSlidingPending = false;
                 _isSliding = false;
                 EndMouseCapture();
                 SlidingEnd?.Invoke();
@@ -145,20 +154,30 @@ namespace FlaxEditor.GUI.Input
             /// <summary>
             /// Gets the size of the track.
             /// </summary>
-            private float TrackSize => Width;
+            private float TrackSize => Mathf.Max(Width, 1.0f);
 
             /// <inheritdoc />
             public override void Draw()
             {
                 base.Draw();
 
-                // Draw track line
-                var lineRect = new Rectangle(4, Height / 2, Width - 8, 1);
-                Render2D.FillRectangle(lineRect, TrackLineColor);
+                var style = Style.Current;
+                var rect = new Rectangle(Float2.Zero, Size);
+                var cornerRadius = style.GetInputCornerRadius();
+                var backgroundColor = IsMouseOver || IsFocused ? style.TextBoxBackgroundSelected : TrackLineColor;
+                StyleRendering.DrawRoundedRectangle(rect, backgroundColor, style.BorderNormal.AlphaMultiplied(IsMouseOver ? 0.9f : 0.45f), 1.0f, cornerRadius);
 
-                // Draw thumb
-                bool mouseOverThumb = _thumbRect.Contains(PointFromWindow(Root.MousePosition));
-                Render2D.FillRectangle(_thumbRect, _isSliding ? ThumbColorSelected : mouseOverThumb ? ThumbColorHovered : ThumbColor);
+                if (_fillRect.Width > 0.0f)
+                {
+                    var fillColor = _isSliding ? ThumbColorSelected : IsMouseOver ? ThumbColorHovered : ThumbColor;
+                    StyleRendering.FillRoundedRectangle(_fillRect, fillColor, cornerRadius);
+                }
+
+                if (!string.IsNullOrEmpty(DisplayText))
+                {
+                    var textRect = new Rectangle(6.0f, 0.0f, Mathf.Max(0.0f, Width - 12.0f), Height);
+                    Render2D.DrawText(style.FontMedium, DisplayText, textRect, VisuallyEnabledInHierarchy ? style.Foreground : style.ForegroundDisabled, TextAlignment.Near, TextAlignment.Center, TextWrapping.NoWrap);
+                }
             }
 
             /// <inheritdoc />
@@ -167,6 +186,10 @@ namespace FlaxEditor.GUI.Input
                 if (_isSliding)
                 {
                     EndSliding();
+                }
+                else
+                {
+                    _isSlidingPending = false;
                 }
 
                 base.OnLostFocus();
@@ -178,23 +201,10 @@ namespace FlaxEditor.GUI.Input
                 if (button == MouseButton.Left)
                 {
                     Focus();
-                    float mousePosition = location.X;
-
-                    if (_thumbRect.Contains(ref location))
-                    {
-                        // Start sliding
-                        _isSliding = true;
-                        StartMouseCapture();
-                        SlidingStart?.Invoke();
-                        return true;
-                    }
-                    else
-                    {
-                        // Click change
-                        Value += (mousePosition < _thumbCenter ? -1 : 1) * 10;
-                        Defocus();
-                        Parent?.Focus();
-                    }
+                    _isSlidingPending = true;
+                    _startSlideLocation = location;
+                    _startSlideValue = Value;
+                    return true;
                 }
 
                 return base.OnMouseDown(location, button);
@@ -203,11 +213,19 @@ namespace FlaxEditor.GUI.Input
             /// <inheritdoc />
             public override void OnMouseMove(Float2 location)
             {
+                if (_isSlidingPending && Mathf.Abs(location.X - _startSlideLocation.X) >= 2.0f)
+                {
+                    _isSlidingPending = false;
+                    _isSliding = true;
+                    StartMouseCapture();
+                    SlidingStart?.Invoke();
+                }
+
                 if (_isSliding)
                 {
                     // Update sliding
                     var slidePosition = location + Root.TrackingMouseOffset;
-                    Value = Mathf.Remap(slidePosition.X, 4, TrackSize - 4, Minimum, Maximum);
+                    Value = _startSlideValue + (slidePosition.X - _startSlideLocation.X) / TrackSize * (Maximum - Minimum);
                     if (Mathf.NearEqual(Value, Maximum))
                         Value = Maximum;
                     else if (Mathf.NearEqual(Value, Minimum))
@@ -227,8 +245,32 @@ namespace FlaxEditor.GUI.Input
                     EndSliding();
                     return true;
                 }
+                if (button == MouseButton.Left && _isSlidingPending)
+                {
+                    _isSlidingPending = false;
+                    EditRequested?.Invoke();
+                    Defocus();
+                    return true;
+                }
 
                 return base.OnMouseUp(location, button);
+            }
+
+            /// <inheritdoc />
+            public override void OnMouseEnter(Float2 location)
+            {
+                Cursor = CursorType.SizeWE;
+
+                base.OnMouseEnter(location);
+            }
+
+            /// <inheritdoc />
+            public override void OnMouseLeave()
+            {
+                if (!_isSliding)
+                    Cursor = CursorType.Default;
+
+                base.OnMouseLeave();
             }
 
             /// <inheritdoc />
@@ -241,6 +283,7 @@ namespace FlaxEditor.GUI.Input
                 }
                 else
                 {
+                    _isSlidingPending = false;
                     base.OnEndMouseCapture();
                 }
             }
@@ -250,7 +293,38 @@ namespace FlaxEditor.GUI.Input
             {
                 base.OnSizeChanged();
 
-                UpdateThumb();
+                UpdateFill();
+            }
+        }
+
+        /// <summary>
+        /// Text box used by the slider edit overlay.
+        /// </summary>
+        /// <seealso cref="FlaxEngine.GUI.TextBox" />
+        [HideInEditor]
+        protected class SliderTextBox : TextBox
+        {
+            /// <summary>
+            /// Occurs when editing ends, even if the text did not change.
+            /// </summary>
+            public Action EditingEnded;
+
+            /// <summary>
+            /// Initializes a new instance of the <see cref="SliderTextBox"/> class.
+            /// </summary>
+            public SliderTextBox()
+            : base(false, 0, 0)
+            {
+            }
+
+            /// <inheritdoc />
+            protected override void OnEditEnd()
+            {
+                bool wasEditing = IsEditing;
+                base.OnEditEnd();
+
+                if (wasEditing)
+                    EditingEnded?.Invoke();
             }
         }
 
@@ -262,15 +336,11 @@ namespace FlaxEditor.GUI.Input
         /// <summary>
         /// The text box.
         /// </summary>
-        protected TextBox _textBox;
-
-        /// <summary>
-        /// The text box size (rest will be the slider area).
-        /// </summary>
-        protected const float TextBoxSize = 30.0f;
+        protected SliderTextBox _textBox;
 
         private float _value;
         private float _min, _max;
+        private float _defaultValue;
 
         private bool _valueIsChanging;
 
@@ -342,6 +412,15 @@ namespace FlaxEditor.GUI.Input
         }
 
         /// <summary>
+        /// Gets or sets the default value used when committing an empty edit.
+        /// </summary>
+        public float DefaultValue
+        {
+            get => _defaultValue;
+            set => _defaultValue = Mathf.Clamp(value, _min, _max);
+        }
+
+        /// <summary>
         /// Gets a value indicating whether user is using a slider.
         /// </summary>
         public bool IsSliding => _slider.IsSliding;
@@ -373,23 +452,33 @@ namespace FlaxEditor.GUI.Input
             _min = min;
             _max = max;
             _value = Mathf.Clamp(value, min, max);
+            _defaultValue = _value;
 
-            float split = Width - TextBoxSize;
-            _slider = new Slider(split, Height)
+            _slider = new Slider(Width, Height)
             {
                 Parent = this,
             };
             _slider.ValueChanged += SliderOnValueChanged;
             _slider.SlidingStart += SlidingStart;
             _slider.SlidingEnd += SliderOnSliderEnd;
-            _textBox = new TextBox(false, split, 0)
+            _slider.EditRequested += BeginTextEdit;
+            _textBox = new SliderTextBox
             {
                 Text = _value.ToString(CultureInfo.InvariantCulture),
                 Parent = this,
-                Location = new Float2(split, 0),
-                Size = new Float2(Height, TextBoxSize),
+                Visible = false,
             };
-            _textBox.EditEnd += OnTextBoxEditEnd;
+            _textBox.EditingEnded += OnTextBoxEditEnd;
+            UpdateText();
+            UpdateSlider();
+        }
+
+        private void BeginTextEdit()
+        {
+            UpdateText();
+            _textBox.Visible = true;
+            _textBox.Focus();
+            _textBox.SelectAll();
         }
 
         private void SliderOnSliderEnd()
@@ -410,17 +499,27 @@ namespace FlaxEditor.GUI.Input
         private void OnTextBoxEditEnd()
         {
             if (_valueIsChanging)
+            {
+                _textBox.Visible = false;
                 return;
+            }
 
             var text = _textBox.Text.Replace(',', '.');
-            if (double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var value))
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                Value = DefaultValue;
+                UpdateText();
+            }
+            else if (double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var value))
             {
                 Value = (float)Math.Round(value, 5);
+                UpdateText();
             }
             else
             {
                 UpdateText();
             }
+            _textBox.Visible = false;
             Defocus();
             Parent?.Focus();
         }
@@ -434,6 +533,7 @@ namespace FlaxEditor.GUI.Input
             _min = limits.Min;
             _max = Mathf.Max(_min, limits.Max);
             Value = Value;
+            DefaultValue = DefaultValue;
         }
 
         /// <summary>
@@ -445,6 +545,7 @@ namespace FlaxEditor.GUI.Input
             _min = limits.Min;
             _max = Mathf.Max(_min, limits.Max);
             Value = Value;
+            DefaultValue = DefaultValue;
         }
 
         /// <summary>
@@ -452,7 +553,9 @@ namespace FlaxEditor.GUI.Input
         /// </summary>
         protected virtual void UpdateText()
         {
-            _textBox.Text = _value.ToString(CultureInfo.InvariantCulture);
+            var text = _value.ToString(CultureInfo.InvariantCulture);
+            _textBox.Text = text;
+            _slider.DisplayText = text;
         }
 
         /// <summary>
@@ -476,9 +579,8 @@ namespace FlaxEditor.GUI.Input
         {
             base.PerformLayoutBeforeChildren();
 
-            float split = Width - TextBoxSize;
-            _slider.Bounds = new Rectangle(0, 0, split, Height);
-            _textBox.Bounds = new Rectangle(split, 0, TextBoxSize, Height);
+            _slider.Bounds = new Rectangle(0, 0, Width, Height);
+            _textBox.Bounds = new Rectangle(0, 0, Width, Height);
         }
 
         /// <inheritdoc />

@@ -55,6 +55,16 @@ namespace FlaxEditor.GUI
         /// </summary>
         public const int DefaultMargin = 6;
 
+        /// <summary>
+        /// The compact margin for dense editor toolbar buttons.
+        /// </summary>
+        public const int CompactContentMargin = 4;
+
+        /// <summary>
+        /// The compact icon size limit for dense editor toolbar buttons.
+        /// </summary>
+        public const float CompactMaxIconSize = 14.0f;
+
         private SpriteHandle _icon;
         private ToolStripGlyph _glyph;
         private string _text;
@@ -95,7 +105,7 @@ namespace FlaxEditor.GUI
         public bool DrawTextShadow;
 
         /// <summary>
-        /// Uses a blue checked state with white foreground, matching viewport overlay toggles.
+        /// Uses a primary filled checked state with white foreground, matching viewport overlay toggles.
         /// </summary>
         public bool UseBlueCheckedStyle;
 
@@ -105,9 +115,20 @@ namespace FlaxEditor.GUI
         public int ContentMargin = DefaultMargin;
 
         /// <summary>
-        /// The maximum icon size.
+        /// The maximum icon size. A value of zero uses the style icon size without a per-button cap.
         /// </summary>
-        public float MaxIconSize = 16.0f;
+        public float MaxIconSize;
+
+        /// <summary>
+        /// Applies the shared compact toolbar content sizing.
+        /// </summary>
+        public ToolStripButton SetCompactStyle()
+        {
+            ContentMargin = CompactContentMargin;
+            MaxIconSize = CompactMaxIconSize;
+            PerformLayout();
+            return this;
+        }
 
         /// <summary>
         /// Optional label used by toolstrip customization menus.
@@ -226,7 +247,9 @@ namespace FlaxEditor.GUI
 
             // Cache data
             var style = Style.Current;
-            float iconSize = Mathf.Min(MaxIconSize, style.IconSize > 0.0f ? style.IconSize : MaxIconSize);
+            float iconSize = Mathf.Max(0.0f, style.GetToolStripIconSize());
+            if (MaxIconSize > 0.0f)
+                iconSize = Mathf.Min(MaxIconSize, iconSize);
             int margin = ContentMargin;
             var clientRect = new Rectangle(Float2.Zero, Size);
             bool hasText = !string.IsNullOrEmpty(_text);
@@ -234,27 +257,23 @@ namespace FlaxEditor.GUI
             var iconRect = new Rectangle(iconX, (Height - iconSize) * 0.5f, iconSize, iconSize);
             var textRect = new Rectangle(margin, 0, 0, Height);
             bool enabled = VisuallyEnabledInHierarchy;
-            bool mouseButtonDown = _primaryMouseDown || _secondaryMouseDown;
-            bool blueChecked = enabled && Checked && UseBlueCheckedStyle;
-            var foreground = !enabled ? style.ForegroundDisabled : blueChecked ? Color.White : style.Foreground;
+            bool active = enabled && Checked && UseBlueCheckedStyle;
+            var foreground = !enabled ? style.ForegroundDisabled : active ? Color.White : style.Foreground;
 
             // Draw background
-            if (enabled && (IsMouseOver || IsNavFocused || Checked) && (!DrawAsTextLabel || Checked))
-            {
-                var background = Checked ? blueChecked ? new Color(0.0f, 0.38f, 0.95f, 0.95f) : style.BackgroundSelected : mouseButtonDown ? style.BackgroundHighlighted : (style.SecondaryBackground * 1.3f);
-                StyleRendering.FillRoundedRectangle(clientRect, background, style.CornerRadius);
-            }
+            if (active)
+                StyleRendering.FillRoundedRectangle(clientRect, style.BorderSelected, style.GetToolStripButtonCornerRadius());
 
             // Draw icon
             if (_glyph != ToolStripGlyph.None)
             {
-                var iconColor = !enabled ? style.ForegroundDisabled : blueChecked ? Color.White : Checked ? style.BorderSelected : style.Foreground;
+                var iconColor = !enabled ? style.ForegroundDisabled : active ? Color.White : Checked ? style.BorderSelected : style.Foreground;
                 DrawGlyph(_glyph, iconRect, iconColor);
                 textRect.Location.X = iconRect.Right + margin;
             }
             else if (_icon.IsValid)
             {
-                var iconColor = !enabled ? style.ForegroundDisabled : blueChecked ? Color.White : Checked ? style.BorderSelected : style.Foreground;
+                var iconColor = !enabled ? style.ForegroundDisabled : active ? Color.White : Checked ? style.BorderSelected : style.Foreground;
                 Render2D.DrawSprite(_icon, iconRect, iconColor);
                 textRect.Location.X = iconRect.Right + margin;
             }
@@ -263,7 +282,7 @@ namespace FlaxEditor.GUI
             if (!string.IsNullOrEmpty(_text))
             {
                 textRect.Size.X = Width - margin - textRect.Left - (DrawMenuChevron ? 8.0f : 0.0f);
-                if (DrawTextShadow)
+                if (DrawTextShadow && !style.HasTextShadow)
                     Render2D.DrawText(style.FontMedium, _text, new Rectangle(textRect.Location + Float2.One, textRect.Size), Color.Black.AlphaMultiplied(0.65f), TextAlignment.Near, TextAlignment.Center);
                 Render2D.DrawText(style.FontMedium, _text, textRect, foreground, TextAlignment.Near, TextAlignment.Center);
             }
@@ -282,7 +301,9 @@ namespace FlaxEditor.GUI
         public override void PerformLayout(bool force = false)
         {
             var style = Style.Current;
-            float iconSize = Mathf.Min(MaxIconSize, style.IconSize > 0.0f ? style.IconSize : MaxIconSize);
+            float iconSize = Mathf.Max(0.0f, style.GetToolStripIconSize());
+            if (MaxIconSize > 0.0f)
+                iconSize = Mathf.Min(MaxIconSize, iconSize);
             int margin = ContentMargin;
             bool hasSprite = _icon.IsValid || _glyph != ToolStripGlyph.None;
             float width = margin * 2;

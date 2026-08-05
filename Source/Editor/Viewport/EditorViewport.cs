@@ -270,7 +270,7 @@ namespace FlaxEditor.Viewport
         /// <summary>
         /// The viewport overlay toolstrip height.
         /// </summary>
-        protected const float ViewportToolStripHeight = 22.0f;
+        protected const float ViewportToolStripHeight = ToolStrip.CompactToolStripHeight;
         private const float CameraMoveSpeedOverlayDuration = 0.85f;
         private const float CameraMoveSpeedOverlayFadeDuration = 0.2f;
         private const float CameraCenterMarkerSize = 9.0f;
@@ -1241,9 +1241,8 @@ namespace FlaxEditor.Viewport
                 Text = text,
                 Parent = _viewportToolStrip,
                 UseBlueCheckedStyle = true,
-                ContentMargin = 4,
-                MaxIconSize = 14.0f,
             };
+            button.SetCompactStyle();
             _viewportToolStrip.SetItemPlacement(button, anchor, -1, id);
             button.CustomizationLabel = GetViewportToolStripItemLabel(text, id);
             button.PerformLayout();
@@ -1261,8 +1260,7 @@ namespace FlaxEditor.Viewport
                 return null;
             var button = _viewportToolStrip.AddGlyphButton(glyph, anchor, id, onClick);
             button.UseBlueCheckedStyle = true;
-            button.ContentMargin = 4;
-            button.MaxIconSize = 14.0f;
+            button.SetCompactStyle();
             button.CustomizationLabel = GetViewportToolStripItemLabel(string.Empty, id);
             button.PerformLayout();
             return button;
@@ -1813,8 +1811,10 @@ namespace FlaxEditor.Viewport
                 else if (fps < 22)
                     color = Color.Yellow;
                 var text = string.Format("FPS: {0}", fps);
-                var font = Style.Current.FontMedium;
-                Render2D.DrawText(font, text, new Rectangle(Float2.One, Size), Color.Black);
+                var style = Style.Current;
+                var font = style.FontMedium;
+                if (!style.HasTextShadow)
+                    Render2D.DrawText(font, text, new Rectangle(Float2.One, Size), Color.Black);
                 Render2D.DrawText(font, text, new Rectangle(Float2.Zero, Size), color);
             }
         }

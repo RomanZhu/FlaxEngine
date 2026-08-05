@@ -35,6 +35,16 @@ namespace FlaxEditor.GUI
     /// <seealso cref="FlaxEngine.GUI.ContainerControl" />
     public class ToolStrip : ContainerControl
     {
+        /// <summary>
+        /// Standard compact toolstrip height used by viewport-style overlays.
+        /// </summary>
+        public const float CompactToolStripHeight = 22.0f;
+
+        /// <summary>
+        /// Standard vertical padding for compact header toolstrips with search fields.
+        /// </summary>
+        public const float CompactHeaderPadding = 5.0f;
+
         private Margin _itemsMargin;
         private readonly List<Control>[] _anchorItems =
         {
@@ -86,6 +96,11 @@ namespace FlaxEditor.GUI
         /// True if use the viewport overlay visual style.
         /// </summary>
         public bool UseOverlayStyle;
+
+        /// <summary>
+        /// True if the strip should draw rounded background frames behind anchored item groups.
+        /// </summary>
+        public bool UseGroupFrames;
 
         /// <summary>
         /// The viewport overlay background color.
@@ -172,6 +187,20 @@ namespace FlaxEditor.GUI
         /// Gets the height for the items.
         /// </summary>
         public float ItemsHeight => Height - _itemsMargin.Height;
+
+        /// <summary>
+        /// Gets the standard item margin for compact header toolstrips.
+        /// </summary>
+        public static Margin CompactHeaderItemsMargin => new Margin(2, 2, CompactHeaderPadding, CompactHeaderPadding);
+
+        /// <summary>
+        /// Gets the standard compact header toolstrip height for a given item height.
+        /// </summary>
+        /// <param name="itemHeight">The desired control/item height.</param>
+        public static float GetCompactHeaderHeight(float itemHeight)
+        {
+            return itemHeight + CompactHeaderPadding * 2.0f;
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ToolStrip"/> class.
@@ -610,6 +639,9 @@ namespace FlaxEditor.GUI
             }
 
             base.DrawSelf();
+            if (!UseGroupFrames)
+                return;
+
             var style = Style.Current;
             for (int anchor = 0; anchor < _anchorItems.Length; anchor++)
             {
@@ -626,7 +658,7 @@ namespace FlaxEditor.GUI
                 if (first == null)
                     continue;
                 var groupRect = new Rectangle(first.Left - 2.0f, first.Top - 1.0f, last.Right - first.Left + 4.0f, first.Height + 2.0f);
-                StyleRendering.DrawRoundedRectangle(groupRect, style.BackgroundNormal, style.BorderNormal.AlphaMultiplied(0.72f), 1.0f, style.CornerRadius);
+                StyleRendering.DrawRoundedRectangle(groupRect, style.BackgroundNormal, style.BorderNormal.AlphaMultiplied(0.72f), 1.0f, style.GetToolStripGroupCornerRadius());
             }
         }
 

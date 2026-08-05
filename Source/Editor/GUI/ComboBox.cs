@@ -550,7 +550,7 @@ namespace FlaxEditor.GUI
             }
 
             // Background
-            var cornerRadius = Style.Current.CornerRadius;
+            var cornerRadius = Style.Current.GetDropdownCornerRadius();
             var drawBorder = isOpened || _mouseDown || IsNavFocused;
             if (cornerRadius > 0.0f)
                 StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, drawBorder ? 1.0f : 0.0f, cornerRadius);

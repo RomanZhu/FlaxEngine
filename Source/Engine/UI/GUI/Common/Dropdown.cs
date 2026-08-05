@@ -748,7 +748,8 @@ namespace FlaxEngine.GUI
             }
 
             // Background
-            var cornerRadius = Style.Current != null ? Style.Current.CornerRadius : 0.0f;
+            var style = Style.Current;
+            var cornerRadius = style != null ? style.GetDropdownCornerRadius() : 0.0f;
             if (cornerRadius > 0.0f)
                 StyleRendering.DrawRoundedRectangle(clientRect, backgroundColor, borderColor, 1.0f, cornerRadius);
             else

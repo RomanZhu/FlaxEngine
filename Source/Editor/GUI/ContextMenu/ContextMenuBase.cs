@@ -48,6 +48,10 @@ namespace FlaxEditor.GUI.ContextMenu
     [HideInEditor]
     public class ContextMenuBase : ContainerControl
     {
+        private const float PopupAnimationDuration = 0.1f;
+        private const float PopupShadowOffset = 4.0f;
+        private const float PopupShadowOpacity = 0.1f;
+
         private ContextMenuDirection _direction;
         private ContextMenuBase _parentCM;
         private bool _isSubMenu;
@@ -55,11 +59,15 @@ namespace FlaxEditor.GUI.ContextMenu
         private Window _window;
         private Control _previouslyFocused;
         private Float2 _submenuAimOriginScreen;
+        private float _visibilityAlpha = 1.0f;
+        private bool _isHiding;
 
         /// <summary>
         /// Gets a value indicating whether use automatic popup direction fix based on the screen dimensions.
         /// </summary>
         protected virtual bool UseAutomaticDirectionFix => true;
+
+        private Float2 PopupWindowSize => Size + new Float2(PopupShadowOffset);
 
         /// <summary>
         /// Returns true if context menu is opened
@@ -167,21 +175,24 @@ namespace FlaxEditor.GUI.ContextMenu
         {
             Assert.IsNotNull(parent);
             bool isAlreadyVisible = Visible && _window;
-            if (!isAlreadyVisible)
+            if (!isAlreadyVisible && Visible)
                 Hide();
+            _isHiding = false;
 
             // Peek parent control window
             var parentWin = parent.RootWindow;
             if (parentWin == null)
             {
-                Hide();
+                if (Visible)
+                    Hide();
                 return;
             }
 
             // Check if show menu inside the other menu - then link as a child to prevent closing the calling menu window on lost focus
             if (_parentCM == null && parentWin.ChildrenCount == 1 && parentWin.Children[0] is ContextMenuBase parentCM)
             {
-                Hide();
+                if (Visible)
+                    Hide();
                 parentCM.ShowChild(this, parentCM.PointFromScreen(parent.PointToScreen(location)), false);
                 return;
             }
@@ -193,7 +204,7 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Calculate popup direction and initial location (fit on a single monitor)
             var dpiScale = parentWin.DpiScale;
-            var dpiSize = Size * dpiScale;
+            var dpiSize = PopupWindowSize * dpiScale;
             var locationWS = parent.PointToWindow(location);
             var locationSS = parentWin.PointToScreen(locationWS);
             var monitorBounds = Platform.GetMonitorBounds(locationSS);
@@ -280,6 +291,8 @@ namespace FlaxEditor.GUI.ContextMenu
                 desc.HasSizingFrame = false;
                 OnWindowCreating(ref desc);
                 _window = Platform.CreateWindow(ref desc);
+                _visibilityAlpha = 0.0f;
+                _window.Opacity = _visibilityAlpha;
                 if (UseVisibilityControl)
                 {
                     _window.GotFocus += OnWindowGotFocus;
@@ -302,6 +315,8 @@ namespace FlaxEditor.GUI.ContextMenu
                     return;
                 _window.Show();
             }
+            if (_window != null)
+                _window.Opacity = _visibilityAlpha;
             PerformLayout();
             if (UseVisibilityControl)
             {
@@ -327,7 +342,7 @@ namespace FlaxEditor.GUI.ContextMenu
         /// </summary>
         public virtual void Hide()
         {
-            if (!Visible)
+            if (!Visible || _isHiding)
                 return;
 
             // Lock update
@@ -338,6 +353,43 @@ namespace FlaxEditor.GUI.ContextMenu
 
             // Force defocus
             ForceDefocus(this);
+
+            // Unlink from parent immediately so delayed fade-out does not block replacement submenus.
+            if (_parentCM != null)
+            {
+                if (_parentCM._childCM == this)
+                    _parentCM._childCM = null;
+                _parentCM = null;
+            }
+
+            if (_window != null && PopupAnimationDuration > 0.0f)
+            {
+                _isHiding = true;
+                return;
+            }
+
+            CloseNow();
+        }
+
+        private void CloseNow()
+        {
+            IsLayoutLocked = true;
+
+            if (_childCM != null)
+            {
+                var child = _childCM;
+                _childCM = null;
+                child.CloseNow();
+            }
+
+            ForceDefocus(this);
+
+            if (_parentCM != null)
+            {
+                if (_parentCM._childCM == this)
+                    _parentCM._childCM = null;
+                _parentCM = null;
+            }
 
             // Unlink from window
             Parent = null;
@@ -350,13 +402,6 @@ namespace FlaxEditor.GUI.ContextMenu
                 win.Close();
             }
 
-            // Unlink from parent
-            if (_parentCM != null)
-            {
-                _parentCM._childCM = null;
-                _parentCM = null;
-            }
-
             // Return focus
             if (_previouslyFocused != null)
             {
@@ -366,6 +411,8 @@ namespace FlaxEditor.GUI.ContextMenu
             }
 
             // Hide
+            _isHiding = false;
+            _visibilityAlpha = 0.0f;
             Visible = false;
             OnHide();
         }
@@ -437,7 +484,7 @@ namespace FlaxEditor.GUI.ContextMenu
         {
             if (_window != null)
             {
-                _window.ClientSize = Size * _window.DpiScale;
+                _window.ClientSize = PopupWindowSize * _window.DpiScale;
             }
         }
 
@@ -594,6 +641,17 @@ namespace FlaxEditor.GUI.ContextMenu
         {
             get
             {
+                var mouseScreen = FlaxEngine.Input.MouseScreenPosition;
+                if (_childCM != null && (_childCM.IsMouseOver || IsPointerInsideSubmenuAim(mouseScreen)))
+                    return true;
+
+                if (_window != null)
+                {
+                    var location = PointFromScreen(mouseScreen);
+                    if (ContainsPoint(ref location))
+                        return true;
+                }
+
                 bool result = false;
                 for (int i = 0; i < _children.Count; i++)
                 {
@@ -608,24 +666,43 @@ namespace FlaxEditor.GUI.ContextMenu
             }
         }
 
-#if USE_IS_FOREGROUND
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
             base.Update(deltaTime);
 
+            UpdateVisibilityAnimation(deltaTime);
+
+#if USE_IS_FOREGROUND
             // Let root context menu to check if none of the popup windows
             if (_parentCM == null && UseVisibilityControl && !IsForeground)
             {
-#if USE_SDL_WORKAROUNDS
                 if (!IsMouseOver)
                     Hide();
-#else
-                Hide();
-#endif
             }
-        }
 #endif
+        }
+
+        private void UpdateVisibilityAnimation(float deltaTime)
+        {
+            if (_window == null)
+                return;
+
+            float target = _isHiding ? 0.0f : 1.0f;
+            if (Mathf.NearEqual(_visibilityAlpha, target))
+            {
+                _window.Opacity = target;
+                if (_isHiding)
+                    CloseNow();
+                return;
+            }
+
+            float step = PopupAnimationDuration > 0.0f ? deltaTime / PopupAnimationDuration : 1.0f;
+            _visibilityAlpha = Mathf.MoveTowards(_visibilityAlpha, target, step);
+            _window.Opacity = _visibilityAlpha;
+            if (_isHiding && Mathf.NearEqual(_visibilityAlpha, 0.0f))
+                CloseNow();
+        }
 
         /// <inheritdoc />
         public override void Draw()
@@ -633,8 +710,10 @@ namespace FlaxEditor.GUI.ContextMenu
             // Draw background
             var style = Style.Current;
             var bounds = new Rectangle(Float2.Zero, Size);
+            var cornerRadius = style.GetPopupCornerRadius();
+            StyleRendering.DrawRoundedRectangle(new Rectangle(PopupShadowOffset, PopupShadowOffset, Width, Height), Color.Black.AlphaMultiplied(PopupShadowOpacity), Color.Transparent, 0.0f, cornerRadius);
             var popup = PopupBackgroundColor.A > 0.0f ? PopupBackgroundColor : Color.Lerp(style.Background, Color.Black, 0.08f).AlphaMultiplied(0.97f);
-            StyleRendering.DrawRoundedRectangle(bounds, popup, style.BorderNormal.AlphaMultiplied(0.8f), 1.0f, style.CornerRadius);
+            StyleRendering.DrawRoundedRectangle(bounds, popup, style.BorderNormal.AlphaMultiplied(0.8f), 1.0f, cornerRadius);
 
             base.Draw();
         }
@@ -687,7 +766,8 @@ namespace FlaxEditor.GUI.ContextMenu
         public override void OnDestroy()
         {
             // Ensure to be hidden
-            Hide();
+            if (Visible)
+                CloseNow();
 
             base.OnDestroy();
         }
