@@ -868,18 +868,16 @@ namespace FlaxEditor.GUI.ContextMenu
         public override void Draw()
         {
             // Draw background
-            var style = Style.Current;
             var bounds = new Rectangle(Float2.Zero, Size);
-            var cornerRadius = style.GetDropdownCornerRadius();
-            StyleRendering.DrawRoundedRectangle(new Rectangle(PopupShadowOffset, PopupShadowOffset, Width, Height), Color.Black.AlphaMultiplied(PopupShadowOpacity), Color.Transparent, 0.0f, cornerRadius);
+            Render2D.FillRectangle(new Rectangle(PopupShadowOffset, PopupShadowOffset, Width, Height), Color.Black.AlphaMultiplied(PopupShadowOpacity));
             var popup = PopupBackgroundColor.A > 0.0f ? PopupBackgroundColor : PopupSurfaceColor;
             var popupRect = bounds.MakeExpanded(-1.0f);
             if (popupRect.Width > 0.0f && popupRect.Height > 0.0f)
-                StyleRendering.DrawRoundedRectangle(popupRect, popup, Color.Transparent, 0.0f, Mathf.Max(0.0f, cornerRadius - 1.0f));
-            StyleRendering.DrawRoundedRectangleBorder(bounds, PopupBorderColor, 1.0f, cornerRadius);
+                Render2D.FillRectangle(popupRect, popup);
+            Render2D.DrawRectangle(bounds, PopupBorderColor, 1.0f);
             var innerBorderRect = bounds.MakeExpanded(-PopupInnerBorderInset);
             if (innerBorderRect.Width > 0.0f && innerBorderRect.Height > 0.0f)
-                StyleRendering.DrawRoundedRectangleBorder(innerBorderRect, PopupInnerBorderColor, 1.0f, Mathf.Max(0.0f, cornerRadius - PopupInnerBorderInset));
+                Render2D.DrawRectangle(innerBorderRect, PopupInnerBorderColor, 1.0f);
 
             base.Draw();
         }
