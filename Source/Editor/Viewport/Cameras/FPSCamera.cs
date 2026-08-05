@@ -174,7 +174,7 @@ namespace FlaxEditor.Viewport.Cameras
         }
 
         /// <summary>
-        /// Moves the camera center toward the given world-space hit without changing view rotation or distance.
+        /// Moves the camera center to the given world-space hit without moving the view forward or backward.
         /// </summary>
         /// <param name="hitPoint">The target hit point.</param>
         public void RecenterView(Vector3 hitPoint)
@@ -188,13 +188,13 @@ namespace FlaxEditor.Viewport.Cameras
             var right = Vector3.Cross(forward, up);
             var toHit = hitPoint - viewPosition;
             var planarMove = right * Vector3.Dot(toHit, right) + up * Vector3.Dot(toHit, up);
-            if (planarMove.LengthSquared < RecenterMinMoveDistanceSq)
+            if (planarMove.LengthSquared < RecenterMinMoveDistanceSq && Vector3.DistanceSquared(TargetPoint, hitPoint) < RecenterMinMoveDistanceSq)
                 return;
 
             _startMove = Viewport.ViewTransform;
             _endMove = new Transform(viewPosition + planarMove, rotation);
             _startMoveTargetPoint = TargetPoint;
-            _endMoveTargetPoint = TargetPoint + planarMove;
+            _endMoveTargetPoint = hitPoint;
             _animateMoveTargetPoint = true;
             _moveStartTime = Time.UnscaledGameTime;
         }
@@ -401,7 +401,8 @@ namespace FlaxEditor.Viewport.Cameras
             if (input.IsOrbiting && isUsingGizmo)
             {
                 centerMouse = false;
-                Viewport.ViewPosition += transformGizmo.LastDelta.Translation;
+                if (Editor.Instance.Options.Options.Interface.MoveCameraWithAltTransformDrag)
+                    Viewport.ViewPosition += transformGizmo.LastDelta.Translation;
                 return;
             }
 
