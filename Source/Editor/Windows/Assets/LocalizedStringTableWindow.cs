@@ -76,7 +76,7 @@ namespace FlaxEditor.Windows.Assets
                             else
                             {
                                 textBox.BorderColor = Color.Transparent;
-                                textBox.BorderSelectedColor = style.BackgroundSelected;
+                                textBox.BorderSelectedColor = style.BorderSelected;
                             }
                         }
                     }
