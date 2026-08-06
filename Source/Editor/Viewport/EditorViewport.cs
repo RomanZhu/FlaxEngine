@@ -2224,6 +2224,15 @@ namespace FlaxEditor.Viewport
                 else
                     _input.Clear();
 
+                // An active gizmo owns its left-button drag. Alt is a gizmo
+                // precision modifier in that state and must not also start the
+                // viewport's Alt+left orbit capture.
+                if (IsControllingMouse && _input.IsMouseLeftDown)
+                {
+                    _input.UseAltLeftMouseOrbit = false;
+                    _input.WasAltDownBefore = false;
+                }
+
                 // Track controlling mouse state change
                 bool wasControllingMouse = _prevInput.IsControllingMouse;
                 _isControllingMouse = _input.IsControllingMouse;

@@ -49,6 +49,7 @@ namespace FlaxEditor.Gizmo
         private Quaternion _rotationDelta = Quaternion.Identity;
         private Quaternion _rotationGizmoDelta = Quaternion.Identity;
         private float _rotationSnapDelta;
+        private float _rotationAccumulatedAngle;
         private bool _isDrawingRotationDrag;
         private Vector3 _rotationDragStartPointWorld;
         private Vector3 _rotationDragCurrentPointWorld;
@@ -61,6 +62,9 @@ namespace FlaxEditor.Gizmo
         private Vector3 _tDelta;
         private Vector3 _translationDelta;
         private Vector3 _translationScaleSnapDelta;
+        private Vector3 _translationSnapAppliedTotal;
+        private Vector3 _translationSnapAnchorPosition;
+        private bool _translationSnapAnchorInitialized;
 
         private SceneGraphNode _vertexSnapObject, _vertexSnapObjectTo;
         private Vector3 _vertexSnapPoint, _vertexSnapPointTo;
@@ -71,6 +75,9 @@ namespace FlaxEditor.Gizmo
         private bool _wasLeftMouseButtonDown;
         private bool _suppressSelectionRelease;
         private bool _wasSnapToVertex;
+        private bool _geometrySnapTargetValid;
+        private Vector3 _geometrySnapTarget;
+        private SceneGraphNode _geometrySnapTargetNode;
         private const float VertexSnapDragStartDistanceSquared = 16.0f;
         private static readonly SceneGraphNode.RayCastData.FlagTypes VertexSnapRayCastFlags = SceneGraphNode.RayCastData.FlagTypes.None;
 
@@ -197,7 +204,7 @@ namespace FlaxEditor.Gizmo
             // Setup world
             Quaternion orientation = GetSelectedTransform(0).Orientation;
             _gizmoWorld = new Transform(position, orientation, new Float3(_screenScale));
-            if (_activeTransformSpace == TransformSpace.World && _activeMode != Mode.Scale)
+            if (_activeTransformSpace == TransformSpace.World)
             {
                 _gizmoWorld.Orientation = Quaternion.Identity;
             }
@@ -206,6 +213,7 @@ namespace FlaxEditor.Gizmo
         private void UpdateTranslateScale()
         {
             bool isScaling = _activeMode == Mode.Scale;
+            bool geometrySnapSolved = false;
             Vector3 delta = Vector3.Zero;
             Ray ray = Owner.MouseRay;
             Ray worldRay = ray;
@@ -354,6 +362,12 @@ namespace FlaxEditor.Gizmo
                 }
                 else
                 {
+                    if (TrySolveGeometrySnap(ref invRotationMatrix, out delta))
+                    {
+                        geometrySnapSolved = true;
+                        break;
+                    }
+
                     var viewDirection = (Vector3)Owner.ViewDirection;
                     var plane = new Plane(position, -viewDirection);
                     if (worldRay.Intersects(ref plane, out intersection))
@@ -380,13 +394,12 @@ namespace FlaxEditor.Gizmo
                 ApplyScaleScreenDirection(ref delta);
             if (isScaling)
                 delta *= 0.01f;
-            if (Owner.IsAltKeyDown)
+            if (Owner.IsAltKeyDown && !geometrySnapSolved)
                 delta *= 0.5f;
-            if ((isScaling ? ScaleSnapEnabled : TranslationSnapEnable) || Owner.UseSnapping)
+            if (!geometrySnapSolved && ((isScaling ? ScaleSnapEnabled : TranslationSnapEnable) || Owner.UseSnapping))
             {
                 var snapValue = new Vector3(isScaling ? ScaleSnapValue : TranslationSnapValue);
 
-                _translationScaleSnapDelta += delta;
                 if (!isScaling && snapValue.X < 0.0f)
                 {
                     // Snap to object bounding box
@@ -405,23 +418,65 @@ namespace FlaxEditor.Gizmo
                         snapValue.Z = (Real)b.Minimum.Z - b.Maximum.Z;
                 }
 
-                Vector3 absoluteDelta = Vector3.Zero;
-                if (AbsoluteSnapEnabled && ActiveTransformSpace == TransformSpace.World)
+                if (!isScaling)
                 {
-                    // Remove delta to offset local-space grid into the world-space grid
-                    Vector3 currentTranslationScale = isScaling ? GetSelectedTransform(0).Scale : GetSelectedTransform(0).Translation; 
-                    absoluteDelta = currentTranslationScale - new Vector3(
-                        Mathr.Round(currentTranslationScale.X / snapValue.X) * snapValue.X,
-                        Mathr.Round(currentTranslationScale.Y / snapValue.Y) * snapValue.Y,
-                        Mathr.Round(currentTranslationScale.Z / snapValue.Z) * snapValue.Z);
+                    // Snap the solved transaction total, not each individual mouse update.
+                    // In world space the grid is anchored at the world origin; in local
+                    // space the drag distance is anchored at the transaction origin.
+                    _translationScaleSnapDelta += delta;
+                    Vector3 snappedTotal;
+                    if (ActiveTransformSpace == TransformSpace.World)
+                    {
+                        if (!_translationSnapAnchorInitialized)
+                        {
+                            _translationSnapAnchorPosition = GetSelectedTransform(0).Translation;
+                            _translationSnapAnchorInitialized = true;
+                        }
+                        Vector3 target = _translationSnapAnchorPosition + _translationScaleSnapDelta;
+                        snappedTotal = new Vector3(
+                            Mathr.Round(target.X / snapValue.X) * snapValue.X,
+                            Mathr.Round(target.Y / snapValue.Y) * snapValue.Y,
+                            Mathr.Round(target.Z / snapValue.Z) * snapValue.Z) - _translationSnapAnchorPosition;
+                    }
+                    else
+                    {
+                        Vector3 anchorTotal = Vector3.Zero;
+                        if (interactionAnchor != null)
+                        {
+                            Vector3 anchorTranslation = interactionAnchor.Result.Translation;
+                            Vector3.TransformNormal(ref anchorTranslation, ref invRotationMatrix, out anchorTotal);
+                        }
+                        Vector3 targetTotal = anchorTotal + _translationScaleSnapDelta;
+                        snappedTotal = new Vector3(
+                            Mathr.Round(targetTotal.X / snapValue.X) * snapValue.X,
+                            Mathr.Round(targetTotal.Y / snapValue.Y) * snapValue.Y,
+                            Mathr.Round(targetTotal.Z / snapValue.Z) * snapValue.Z) - anchorTotal;
+                    }
+                    ConstrainSnapDeltaToActiveHandle(ref snappedTotal);
+                    delta = snappedTotal - _translationSnapAppliedTotal;
+                    _translationSnapAppliedTotal = snappedTotal;
                 }
+                else
+                {
+                    _translationScaleSnapDelta += delta;
+                    Vector3 absoluteDelta = Vector3.Zero;
+                    if (ActiveTransformSpace == TransformSpace.World && (AbsoluteSnapEnabled || ScaleSnapEnabled))
+                    {
+                        Vector3 currentScale = (Vector3)GetSelectedTransform(0).Scale;
+                        absoluteDelta = currentScale - new Vector3(
+                            Mathr.Round(currentScale.X / snapValue.X) * snapValue.X,
+                            Mathr.Round(currentScale.Y / snapValue.Y) * snapValue.Y,
+                            Mathr.Round(currentScale.Z / snapValue.Z) * snapValue.Z);
+                        ConstrainSnapDeltaToActiveHandle(ref absoluteDelta);
+                    }
 
-                delta = new Vector3(
-                                    (int)(_translationScaleSnapDelta.X / snapValue.X) * snapValue.X,
-                                    (int)(_translationScaleSnapDelta.Y / snapValue.Y) * snapValue.Y,
-                                    (int)(_translationScaleSnapDelta.Z / snapValue.Z) * snapValue.Z);
-                _translationScaleSnapDelta -= delta;
-                delta -= absoluteDelta;
+                    delta = new Vector3(
+                        (int)(_translationScaleSnapDelta.X / snapValue.X) * snapValue.X,
+                        (int)(_translationScaleSnapDelta.Y / snapValue.Y) * snapValue.Y,
+                        (int)(_translationScaleSnapDelta.Z / snapValue.Z) * snapValue.Z);
+                    _translationScaleSnapDelta -= delta;
+                    delta -= absoluteDelta;
+                }
             }
 
             if (_activeMode == Mode.Translate)
@@ -437,6 +492,81 @@ namespace FlaxEditor.Gizmo
             }
         }
 
+        private bool IsGeometrySnapActive => _activeMode == Mode.Translate && _activeAxis == Axis.Center && Owner != null && Owner.IsShiftDown;
+
+        private bool TrySolveGeometrySnap(ref Matrix invRotationMatrix, out Vector3 delta)
+        {
+            delta = Vector3.Zero;
+            if (!IsGeometrySnapActive)
+            {
+                ClearGeometrySnapTarget();
+                return false;
+            }
+
+            ClearGeometrySnapTarget();
+            if (!TryFindGeometrySnapTarget(out var targetNode, out var target))
+                return true;
+
+            _geometrySnapTargetValid = true;
+            _geometrySnapTarget = target;
+            _geometrySnapTargetNode = targetNode;
+            Vector3 worldDelta = target - Position;
+            Vector3.TransformNormal(ref worldDelta, ref invRotationMatrix, out delta);
+            return true;
+        }
+
+        private bool TryFindGeometrySnapTarget(out SceneGraphNode targetNode, out Vector3 target)
+        {
+            targetNode = null;
+            target = Vector3.Zero;
+            if (Owner.SceneGraphRoot == null)
+                return false;
+
+            var rayCast = new SceneGraphNode.RayCastData
+            {
+                Ray = Owner.MouseRay,
+                View = Owner.Viewport.ViewRay,
+                Flags = VertexSnapRayCastFlags,
+            };
+            var excludedRoots = new List<SceneGraphNode>(SelectionCount);
+            for (int i = 0; i < SelectionCount; i++)
+                excludedRoots.Add(GetSelectedObject(i));
+
+            // Use the same screen-space candidate filtering as V-snap. It only
+            // admits nodes that expose real snap geometry, avoiding cameras,
+            // icons, generic actor bounds, and enclosing helper volumes.
+            Real closestScreenDistance = Real.MaxValue;
+            Real closestRayDistance = Real.MaxValue;
+            TryFindClosestGeometrySnapPoint(Owner.SceneGraphRoot, ref rayCast, excludedRoots, Owner.Viewport, Owner.Viewport.ViewMousePosition, ref closestScreenDistance, ref closestRayDistance, ref targetNode, ref target);
+            return targetNode != null;
+        }
+
+        private static void TryFindClosestGeometrySnapPoint(SceneGraphNode node, ref SceneGraphNode.RayCastData ray, List<SceneGraphNode> excludedRoots, FlaxEditor.Viewport.EditorViewport viewport, Float2 mousePosition, ref Real closestScreenDistance, ref Real closestRayDistance, ref SceneGraphNode closestObject, ref Vector3 closestPoint)
+        {
+            if (node == null || !node.IsActive || IsVertexSnapExcluded(node, excludedRoots))
+                return;
+
+            if (node.RayCastSelf(ref ray, out var distance, out _) && distance >= 0.0f &&
+                node.OnVertexSnap(ref ray.Ray, distance, viewport, mousePosition, out _, out var screenDistance) &&
+                (screenDistance < closestScreenDistance || (screenDistance == closestScreenDistance && distance < closestRayDistance)))
+            {
+                closestScreenDistance = screenDistance;
+                closestRayDistance = distance;
+                closestObject = node;
+                closestPoint = ray.Ray.GetPoint(distance);
+            }
+
+            for (int i = 0; i < node.ChildNodes.Count; i++)
+                TryFindClosestGeometrySnapPoint(node.ChildNodes[i], ref ray, excludedRoots, viewport, mousePosition, ref closestScreenDistance, ref closestRayDistance, ref closestObject, ref closestPoint);
+        }
+
+        private void ClearGeometrySnapTarget()
+        {
+            _geometrySnapTargetValid = false;
+            _geometrySnapTarget = Vector3.Zero;
+            _geometrySnapTargetNode = null;
+        }
+
         private void ResetTranslationScale()
         {
             ClearTransformInteraction(!_isVertexSnapTemporaryPivot);
@@ -447,6 +577,36 @@ namespace FlaxEditor.Gizmo
             return axis == Axis.X || axis == Axis.Y || axis == Axis.Z;
         }
 
+        private static bool IsPlaneAxis(Axis axis)
+        {
+            return axis == Axis.XY || axis == Axis.YZ || axis == Axis.ZX;
+        }
+
+        private void ConstrainSnapDeltaToActiveHandle(ref Vector3 delta)
+        {
+            switch (_activeAxis)
+            {
+            case Axis.X:
+                delta.Y = delta.Z = 0.0f;
+                break;
+            case Axis.Y:
+                delta.X = delta.Z = 0.0f;
+                break;
+            case Axis.Z:
+                delta.X = delta.Y = 0.0f;
+                break;
+            case Axis.XY:
+                delta.Z = 0.0f;
+                break;
+            case Axis.YZ:
+                delta.X = 0.0f;
+                break;
+            case Axis.ZX:
+                delta.Y = 0.0f;
+                break;
+            }
+        }
+
         private void ClearTransformInteraction(bool clearVertexSnapping = true)
         {
             _accMoveDelta = Vector3.Zero;
@@ -455,11 +615,16 @@ namespace FlaxEditor.Gizmo
             _translationDelta = Vector3.Zero;
             _scaleDelta = Vector3.Zero;
             _translationScaleSnapDelta = Vector3.Zero;
+            _translationSnapAppliedTotal = Vector3.Zero;
+            _translationSnapAnchorPosition = Vector3.Zero;
+            _translationSnapAnchorInitialized = false;
             _rotationDelta = Quaternion.Identity;
             _rotationGizmoDelta = Quaternion.Identity;
             _rotationSnapDelta = 0.0f;
+            _rotationAccumulatedAngle = 0.0f;
             _isDrawingRotationDrag = false;
             _isDrawingTranslationDistance = false;
+            ClearGeometrySnapTarget();
             if (clearVertexSnapping)
                 EndVertexSnapping();
             else
@@ -530,10 +695,24 @@ namespace FlaxEditor.Gizmo
 
         private void StartRotationDrag(Vector3 startPoint)
         {
+            var transform = _gizmoWorld;
+            StartRotationDrag(startPoint, ref transform);
+        }
+
+        private void StartRotationDrag(Vector3 startPoint, ref Transform transform)
+        {
             _isDrawingRotationDrag = true;
-            _rotationDragStartPointWorld = _gizmoWorld.LocalToWorld(startPoint);
+            _rotationDragStartPointWorld = transform.LocalToWorld(startPoint);
             _rotationDragCurrentPointWorld = _rotationDragStartPointWorld;
             _rotationDragMousePointWorld = _rotationDragStartPointWorld;
+        }
+
+        private Transform GetRotationTrackballTransform()
+        {
+            var transform = _gizmoWorld;
+            if (_transactionOrigin != null)
+                transform.Orientation = _transactionOrigin.InitialBasis;
+            return transform;
         }
 
         private void UpdateRotationDragPoint()
@@ -548,23 +727,46 @@ namespace FlaxEditor.Gizmo
 
         private void UpdateRotateTrackball()
         {
+            var trackballTransform = GetRotationTrackballTransform();
             if (!_isDrawingRotationDrag)
             {
                 if (!GetRotateTrackballPointLocal(out var startPoint))
-                    startPoint = GetRotateToViewLocal() * _rotationTrackballRadiusRaw;
-                StartRotationDrag(startPoint);
+                    startPoint = GetRotateToViewLocal(ref trackballTransform) * _rotationTrackballRadiusRaw;
+                StartRotationDrag(startPoint, ref trackballTransform);
+                _rotationDelta = Quaternion.Identity;
+                return;
             }
 
-            Float2 mouseDelta = Owner.MouseDelta;
-            Float3 viewRight = Float3.Right * Owner.ViewOrientation;
-            Float3 viewUp = Float3.Up * Owner.ViewOrientation;
-            Float3 axis = -viewUp * mouseDelta.X - viewRight * mouseDelta.Y;
-            float delta = axis.Length * RotateTrackballSensitivity;
-            if (delta <= Mathf.Epsilon)
+            Vector3 previousPointWorld = _rotationDragMousePointWorld;
+            if (!GetRotateTrackballPointLocal(out var currentPointLocal))
             {
                 _rotationDelta = Quaternion.Identity;
                 return;
             }
+
+            _rotationDragMousePointWorld = trackballTransform.LocalToWorld(currentPointLocal);
+            _rotationDragCurrentPointWorld = _rotationDragMousePointWorld;
+            trackballTransform.WorldToLocal(ref previousPointWorld, out var previousPointLocal);
+            if (previousPointLocal.LengthSquared < 0.0001f || currentPointLocal.LengthSquared < 0.0001f)
+            {
+                _rotationDelta = Quaternion.Identity;
+                return;
+            }
+            previousPointLocal.Normalize();
+            currentPointLocal.Normalize();
+            Vector3 axisLocal = Vector3.Cross(previousPointLocal, currentPointLocal);
+            float sin = (float)axisLocal.Length;
+            float cos = Mathf.Clamp((float)Vector3.Dot(previousPointLocal, currentPointLocal), -1.0f, 1.0f);
+            float delta = (float)System.Math.Atan2(sin, cos);
+            if (delta <= Mathf.Epsilon || axisLocal.LengthSquared < 0.0001f)
+            {
+                _rotationDelta = Quaternion.Identity;
+                _rotationDragCurrentPointWorld = _rotationDragMousePointWorld;
+                return;
+            }
+            axisLocal.Normalize();
+            Vector3 axisWorld = axisLocal * trackballTransform.Orientation;
+            Float3 axis = axisWorld;
             axis.Normalize();
 
             if (RotationSnapEnabled || Owner.UseSnapping)
@@ -582,8 +784,8 @@ namespace FlaxEditor.Gizmo
                 }
             }
 
+            _rotationAccumulatedAngle += delta;
             Quaternion.RotationAxis(ref axis, delta, out _rotationDelta);
-            UpdateRotationDragPoint();
             AccumulateRotationGizmoDelta();
         }
 
@@ -761,6 +963,7 @@ namespace FlaxEditor.Gizmo
             }
 
             Float3 axis = Owner.ViewDirection;
+            _rotationAccumulatedAngle += (float)delta;
             Quaternion.RotationAxis(ref axis, (float)delta, out _rotationDelta);
             UpdateRotationDragPoint();
             AccumulateRotationGizmoDelta();
@@ -796,7 +999,7 @@ namespace FlaxEditor.Gizmo
                 float snapValue = RotationSnapValue * Mathf.DegreesToRadians;
 
                 float absoluteDelta = 0.0f;
-                if (AbsoluteSnapEnabled && ActiveTransformSpace == TransformSpace.World)
+                if (ActiveTransformSpace == TransformSpace.World && (AbsoluteSnapEnabled || RotationSnapEnabled))
                 {
                     // Remove delta to offset world-space grid into the local-space grid
                     float currentAngle = 0.0f;
@@ -824,6 +1027,7 @@ namespace FlaxEditor.Gizmo
             case Axis.Y:
             case Axis.Z:
             {
+                _rotationAccumulatedAngle += delta;
                 Quaternion.RotationAxis(ref dir, delta, out _rotationDelta);
                 UpdateRotationDragPoint();
                 AccumulateRotationGizmoDelta();
@@ -842,6 +1046,14 @@ namespace FlaxEditor.Gizmo
         /// <inheritdoc />
         public override void Update(float dt)
         {
+            if (_pressedFeedbackTime > 0.0f)
+                _pressedFeedbackTime = Mathf.Max(0.0f, _pressedFeedbackTime - Mathf.Max(dt, 0.0f));
+            if (_cancelledFeedbackTime > 0.0f)
+            {
+                _cancelledFeedbackTime = Mathf.Max(0.0f, _cancelledFeedbackTime - Mathf.Max(dt, 0.0f));
+                if (_cancelledFeedbackTime <= 0.0f)
+                    UpdateFeedbackModel();
+            }
             LastDelta = Transform.Identity;
             bool wasLeftBtnDown = _wasLeftMouseButtonDown;
             bool isLeftBtnDown = Owner.IsLeftMouseButtonDown;
@@ -886,6 +1098,13 @@ namespace FlaxEditor.Gizmo
 
             if (!HasActiveTransaction && isLeftMouseButtonPressed && _activeAxis != Axis.None)
                 ArmInteraction();
+
+            if (ConsumePointerWarpFrame())
+            {
+                UpdateGizmoPosition();
+                UpdateMatrices();
+                return;
+            }
 
             bool snapToVertex = Owner.SnapToVertex;
             bool snapToVertexPressed = snapToVertex && !_wasSnapToVertex;

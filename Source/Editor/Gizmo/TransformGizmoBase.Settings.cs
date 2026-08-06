@@ -18,41 +18,20 @@ namespace FlaxEditor.Gizmo
         private const float AxisLength = 3.5f;
 
         /// <summary>
-        /// Offset to move axis away from center
+        /// Visible start of the axis shaft, outside the center handle.
         /// </summary>
-        private const float AxisOffset = 1.2f;
+        private const float AxisVisualStart = 0.35f;
 
         /// <summary>
-        /// How thick the axis should be
+        /// Length of the compact polygonal arrow head.
         /// </summary>
-        private const float AxisThickness = 0.3f;
+        private const float AxisArrowHeadLength = 0.58f;
 
         /// <summary>
-        /// Center box scale
+        /// Size of the cube cap used by scale axes.
         /// </summary>
-        private const float CenterBoxScale = 0.8f;
+        private const float AxisScaleCubeSize = 0.50f;
 
-        /// <summary>
-        /// The inner minimum of the multiscale
-        /// </summary>
-        private const float InnerExtend = AxisOffset;
-
-        /// <summary>
-        /// The outer maximum of the multiscale
-        /// </summary>
-        private const float OuterExtend = AxisOffset + 1.25f;
-
-        // Cube with the size AxisThickness, then moves it along the axis (AxisThickness) and finally makes it really long (AxisLength)
-        private BoundingBox XAxisBox = new BoundingBox(new Vector3(-AxisThickness), new Vector3(AxisThickness)).MakeOffsetted(AxisOffset * Vector3.UnitX).Merge(AxisLength * Vector3.UnitX);
-        private BoundingBox YAxisBox = new BoundingBox(new Vector3(-AxisThickness), new Vector3(AxisThickness)).MakeOffsetted(AxisOffset * Vector3.UnitY).Merge(AxisLength * Vector3.UnitY);
-        private BoundingBox ZAxisBox = new BoundingBox(new Vector3(-AxisThickness), new Vector3(AxisThickness)).MakeOffsetted(AxisOffset * Vector3.UnitZ).Merge(AxisLength * Vector3.UnitZ);
-
-        private BoundingBox XZBox = new BoundingBox(new Vector3(InnerExtend, 0, InnerExtend), new Vector3(OuterExtend, 0, OuterExtend));
-        private BoundingBox XYBox = new BoundingBox(new Vector3(InnerExtend, InnerExtend, 0), new Vector3(OuterExtend, OuterExtend, 0));
-        private BoundingBox YZBox = new BoundingBox(new Vector3(0, InnerExtend, InnerExtend), new Vector3(0, OuterExtend, OuterExtend));
-
-        private BoundingBox CenterBoxRaw = new BoundingBox(new Vector3(-0.5f * CenterBoxScale), new Vector3(0.5f * CenterBoxScale));
-        private OrientedBoundingBox CenterBox => new OrientedBoundingBox(CenterBoxRaw) * _gizmoWorld;
         private const float RotateRadiusRaw = 3.2f;
         private const float RotateTrackballSensitivity = 1.0f / 60.0f;
 
@@ -89,7 +68,7 @@ namespace FlaxEditor.Gizmo
         /// <summary>
         /// Rotation snap value
         /// </summary>
-        public float RotationSnapValue = 15;
+        public float RotationSnapValue = 30;
 
         /// <summary>
         /// Scale snap value

@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEngine;
 
 namespace FlaxEditor.Gizmo
 {
@@ -65,9 +66,41 @@ namespace FlaxEditor.Gizmo
         /// </summary>
         /// <param name="axis">The gizmo axis or handle type.</param>
         public SemanticHandle(TransformGizmoBase.Axis axis)
+        : this(TransformGizmoBase.Mode.Translate, axis)
         {
-            Axis = axis;
         }
+
+        /// <summary>
+        /// Initializes a new semantic handle for a gizmo mode.
+        /// </summary>
+        /// <param name="mode">The gizmo mode.</param>
+        /// <param name="axis">The gizmo axis or handle type.</param>
+        public SemanticHandle(TransformGizmoBase.Mode mode, TransformGizmoBase.Axis axis)
+        {
+            Mode = mode;
+            Axis = axis;
+            WorldPosition = Vector3.Zero;
+            WorldDirection = Vector3.Zero;
+            ScreenPosition = Float2.Zero;
+            Depth = 0.0f;
+            IsAvailable = axis != TransformGizmoBase.Axis.None;
+        }
+
+        private SemanticHandle(TransformGizmoBase.Mode mode, TransformGizmoBase.Axis axis, Vector3 worldPosition, Vector3 worldDirection, Float2 screenPosition, float depth, bool isAvailable)
+        {
+            Mode = mode;
+            Axis = axis;
+            WorldPosition = worldPosition;
+            WorldDirection = worldDirection;
+            ScreenPosition = screenPosition;
+            Depth = depth;
+            IsAvailable = isAvailable;
+        }
+
+        /// <summary>
+        /// Gets the mode represented by this handle.
+        /// </summary>
+        public TransformGizmoBase.Mode Mode { get; }
 
         /// <summary>
         /// Gets the axis represented by this handle.
@@ -75,14 +108,53 @@ namespace FlaxEditor.Gizmo
         public TransformGizmoBase.Axis Axis { get; }
 
         /// <summary>
+        /// Gets the world-space display position of this handle.
+        /// </summary>
+        public Vector3 WorldPosition { get; }
+
+        /// <summary>
+        /// Gets the world-space display direction of this handle.
+        /// </summary>
+        public Vector3 WorldDirection { get; }
+
+        /// <summary>
+        /// Gets the projected display position of this handle.
+        /// </summary>
+        public Float2 ScreenPosition { get; }
+
+        /// <summary>
+        /// Gets the view-space depth of this handle.
+        /// </summary>
+        public float Depth { get; }
+
+        /// <summary>
+        /// Gets a value indicating whether this handle is available for display and acquisition.
+        /// </summary>
+        public bool IsAvailable { get; }
+
+        /// <summary>
         /// Gets a value indicating whether this handle can be used for a transaction.
         /// </summary>
         public bool IsValid => Axis != TransformGizmoBase.Axis.None;
 
+        /// <summary>
+        /// Returns a copy of this handle with its display geometry attached.
+        /// </summary>
+        /// <param name="worldPosition">The world-space display position.</param>
+        /// <param name="worldDirection">The world-space display direction.</param>
+        /// <param name="screenPosition">The projected display position.</param>
+        /// <param name="depth">The view-space depth.</param>
+        /// <param name="isAvailable">Whether the handle is available for acquisition.</param>
+        /// <returns>The handle with display geometry.</returns>
+        public SemanticHandle WithDisplayGeometry(Vector3 worldPosition, Vector3 worldDirection, Float2 screenPosition, float depth, bool isAvailable = true)
+        {
+            return new SemanticHandle(Mode, Axis, worldPosition, worldDirection, screenPosition, depth, isAvailable);
+        }
+
         /// <inheritdoc />
         public bool Equals(SemanticHandle other)
         {
-            return Axis == other.Axis;
+            return Mode == other.Mode && Axis == other.Axis;
         }
 
         /// <inheritdoc />
@@ -94,7 +166,7 @@ namespace FlaxEditor.Gizmo
         /// <inheritdoc />
         public override int GetHashCode()
         {
-            return (int)Axis;
+            return ((int)Mode * 397) ^ (int)Axis;
         }
 
         /// <summary>

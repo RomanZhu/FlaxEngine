@@ -308,6 +308,7 @@ namespace FlaxEditor.Gizmo
         private bool _focusLost;
         private bool _lastUseSnapping;
         private bool _lastPrecision;
+        private bool _lastGeometrySnap;
         private Vector3 _anchorTranslationDelta;
         private Quaternion _anchorRotationDelta = Quaternion.Identity;
         private Vector3 _anchorScaleDelta;
@@ -315,6 +316,9 @@ namespace FlaxEditor.Gizmo
         private TransformSpace? _queuedTransformSpace;
         private PivotType? _queuedPivot;
         private bool _applyingQueuedSettings;
+        private bool _pointerWarpPending;
+        private Float2 _pointerWarpTarget;
+        private int _pointerWarpFramesRemaining;
 
         /// <summary>
         /// Gets the explicit transaction state.
@@ -369,6 +373,15 @@ namespace FlaxEditor.Gizmo
         {
             if (!HasActiveTransaction && !_isTransforming && _transactionOrigin == null)
                 return false;
+
+            // Cancelling while LMB still owns the drag must also consume the
+            // eventual release. Otherwise the viewport sees that release after
+            // the transaction has reset and picks the object under the cursor.
+            _suppressSelectionRelease |= Owner != null && (Owner.IsLeftMouseButtonDown || _wasLeftMouseButtonDown);
+
+            _cancelledFeedbackHandle = _latchedHandle.IsValid ? _latchedHandle : new SemanticHandle(_activeMode, _activeAxis);
+            _cancelledFeedbackTime = FeedbackCancelledDuration;
+            UpdateFeedbackModel(FeedbackHandleState.Cancelled);
 
             try
             {
@@ -468,7 +481,8 @@ namespace FlaxEditor.Gizmo
 
             _interactionResult = CreateCurrentInteractionResult();
             _interactionAnchor = CreateInteractionAnchor();
-            ResetSolverAnchorState();
+            ResetSolverAnchorState(true);
+            UpdateFeedbackModel();
             return true;
         }
 
@@ -528,6 +542,7 @@ namespace FlaxEditor.Gizmo
                 _interactionAnchor = CreateInteractionAnchor();
                 ResetSolverAnchorState();
                 ApplyOriginAuthoritativePreview();
+                UpdateFeedbackModel();
                 return true;
             }
             catch (Exception ex)
@@ -651,7 +666,7 @@ namespace FlaxEditor.Gizmo
 
                 translation = anchor.Result.Translation + _anchorTranslationDelta;
                 rotation = _anchorRotationDelta * anchor.Result.Rotation;
-                scale = Vector3.One + _anchorScaleDelta;
+                scale = anchor.Result.Scale + _anchorScaleDelta;
             }
             else
             {
@@ -667,7 +682,9 @@ namespace FlaxEditor.Gizmo
                 CancelTransforming();
                 return;
             }
-            _interactionResult = new InteractionResult(translation, rotation, scale, null, null);
+            object snapIdentity = _vertexSnapObject != null ? _vertexSnapObjectTo : _interactionResult.SnapIdentity;
+            _interactionResult = new InteractionResult(translation, rotation, scale, null, snapIdentity);
+            UpdateFeedbackModel();
         }
 
         /// <summary>
@@ -736,6 +753,8 @@ namespace FlaxEditor.Gizmo
                 return false;
             try
             {
+                if (!_latchedHandle.IsValid && _activeAxis != Axis.None)
+                    _latchedHandle = new SemanticHandle(_activeMode, _activeAxis);
                 if (_interactionState == InteractionState.Inactive)
                     SetInteractionState(InteractionState.Hovering);
                 if (_interactionState == InteractionState.Hovering)
@@ -749,7 +768,9 @@ namespace FlaxEditor.Gizmo
                     return false;
                 }
 
-                if (allowDuplicate && Owner.UseDuplicate && !_isDuplicating && CanDuplicate)
+                // Shift is surface snap for the free/center translation handle.
+                // Keep Shift-to-duplicate available for the constrained handles.
+                if (allowDuplicate && Owner.UseDuplicate && !IsGeometrySnapActive && !_isDuplicating && CanDuplicate)
                 {
                     _isDuplicating = true;
                     _expectingSelectionChange = true;
@@ -786,12 +807,17 @@ namespace FlaxEditor.Gizmo
                 _isTransforming = true;
                 _lastUseSnapping = Owner.UseSnapping;
                 _lastPrecision = Owner.IsAltKeyDown;
+                _lastGeometrySnap = IsGeometrySnapActive;
                 SetInteractionState(InteractionState.Dragging);
                 _interactionAnchor = CreateInteractionAnchor();
                 ResetSolverAnchorState();
                 _isDrawingTranslationDistance = _activeMode == Mode.Translate && IsTranslateAxis(_activeAxis);
                 if (_isDrawingTranslationDistance)
-                    _translationDragStartPosition = Position - _translationDelta;
+                    _translationDragStartPosition = _transactionOrigin != null ? _transactionOrigin.PivotPosition : Position;
+                _cancelledFeedbackTime = 0.0f;
+                _feedbackHudQuadrantValid = false;
+                _pressedFeedbackTime = FeedbackPressedDuration;
+                UpdateFeedbackModel();
                 OnStartTransforming();
                 return true;
             }
@@ -1002,6 +1028,10 @@ namespace FlaxEditor.Gizmo
             _anchorRotationDelta = Quaternion.Identity;
             _anchorScaleDelta = Vector3.Zero;
             _latchedHandle = SemanticHandle.None;
+            _pressedFeedbackTime = 0.0f;
+            _lastGeometrySnap = false;
+            _pointerWarpPending = false;
+            _pointerWarpFramesRemaining = 0;
             _startTransforms.Clear();
             _activeAxis = Axis.None;
             try
@@ -1026,17 +1056,22 @@ namespace FlaxEditor.Gizmo
             {
                 ReportInteractionFailure("Queued gizmo settings could not be applied after the transaction.", ex);
             }
+            UpdateFeedbackModel();
         }
 
-        private void ResetSolverAnchorState()
+        private void ResetSolverAnchorState(bool preserveRotationTotal = false)
         {
             _lastIntersectionPosition = _intersectPosition = Vector3.Zero;
             _tDelta = Vector3.Zero;
             _translationScaleSnapDelta = Vector3.Zero;
+            _translationSnapAppliedTotal = Vector3.Zero;
+            _translationSnapAnchorPosition = Vector3.Zero;
+            _translationSnapAnchorInitialized = false;
             _rotationDelta = Quaternion.Identity;
             _rotationSnapDelta = 0.0f;
+            if (!preserveRotationTotal)
+                _rotationAccumulatedAngle = 0.0f;
             _isDrawingRotationDrag = false;
-            _isDrawingTranslationDistance = false;
         }
 
         private bool SetInteractionState(InteractionState state)
@@ -1050,6 +1085,7 @@ namespace FlaxEditor.Gizmo
             }
             var previous = _interactionState;
             _interactionState = state;
+            UpdateFeedbackModel();
             NotifyInteractionStateChanged(previous, state);
             return true;
         }
@@ -1219,10 +1255,47 @@ namespace FlaxEditor.Gizmo
                 return;
             if (_activeMode == Mode.Select || _activeAxis == Axis.None || !CanTransform)
                 return;
-            _latchedHandle = new SemanticHandle(_activeAxis);
+            _latchedHandle = new SemanticHandle(_activeMode, _activeAxis);
+            _cancelledFeedbackTime = 0.0f;
+            _feedbackHudQuadrantValid = false;
+            _pressedFeedbackTime = FeedbackPressedDuration;
             if (!CaptureTransactionOrigin())
                 return;
+            WarpTranslationPointerToPivot();
             SetInteractionState(InteractionState.Armed);
+        }
+
+        private void WarpTranslationPointerToPivot()
+        {
+            if (_activeMode != Mode.Translate || Owner?.Viewport?.RootWindow == null)
+                return;
+            var viewport = Owner.Viewport;
+            viewport.ProjectPoint(Position, out var target);
+            if (target.X < 0.0f || target.Y < 0.0f || target.X > viewport.Width || target.Y > viewport.Height)
+                return;
+            _pointerWarpTarget = target;
+            _pointerWarpPending = true;
+            _pointerWarpFramesRemaining = 4;
+            viewport.RootWindow.MousePosition = viewport.PointToWindow(target);
+        }
+
+        private bool ConsumePointerWarpFrame()
+        {
+            if (!_pointerWarpPending)
+                return false;
+            if (!Owner.IsLeftMouseButtonDown)
+            {
+                _pointerWarpPending = false;
+                _pointerWarpFramesRemaining = 0;
+                return false;
+            }
+
+            _pointerWarpFramesRemaining--;
+            if ((Owner.Viewport.ViewMousePosition - _pointerWarpTarget).LengthSquared <= 4.0f || _pointerWarpFramesRemaining <= 0)
+                _pointerWarpPending = false;
+            _lastIntersectionPosition = _intersectPosition = Vector3.Zero;
+            _tDelta = Vector3.Zero;
+            return true;
         }
 
         private bool IsCameraClutchActive => Owner.IsMiddleMouseButtonDown || Owner.IsRightMouseButtonDown;
@@ -1260,10 +1333,14 @@ namespace FlaxEditor.Gizmo
             {
                 bool useSnapping = Owner.UseSnapping;
                 bool precision = Owner.IsAltKeyDown;
-                if (useSnapping != _lastUseSnapping || precision != _lastPrecision)
+                bool geometrySnap = IsGeometrySnapActive;
+                if (useSnapping != _lastUseSnapping || precision != _lastPrecision || geometrySnap != _lastGeometrySnap)
                 {
                     _lastUseSnapping = useSnapping;
                     _lastPrecision = precision;
+                    _lastGeometrySnap = geometrySnap;
+                    if (!geometrySnap)
+                        ClearGeometrySnapTarget();
                     ReanchorInteraction();
                 }
             }
