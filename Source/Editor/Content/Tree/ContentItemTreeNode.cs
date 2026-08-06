@@ -27,18 +27,6 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     /// <inheritdoc />
     public SpriteHandle TooltipPreview => Item?.Thumbnail ?? SpriteHandle.Invalid;
 
-    /// <inheritdoc />
-    protected override float HeaderTextLeftOffset
-    {
-        get
-        {
-            var contentWindow = Editor.Instance.Windows.ContentWin;
-            var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
-            var iconSize = Mathf.Min(Mathf.Max(0.0f, Style.Current.GetContentTreeIconSize() * scale), Mathf.Max(0.0f, HeaderHeight - 4.0f));
-            return iconSize > 0.0f ? iconSize * 2.0f + 6.0f : 0.0f;
-        }
-    }
-
     /// <summary>
     /// Initializes a new instance of the <see cref="ContentItemTreeNode"/> class.
     /// </summary>
@@ -144,14 +132,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
         var contentWindow = Editor.Instance.Windows.ContentWin;
         var scale = contentWindow != null && contentWindow.IsTreeOnlyMode ? contentWindow.View.ViewScale : 1.0f;
         var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetContentTreeIconSize() * scale), Mathf.Max(0.0f, HeaderHeight - 4.0f));
-        var glyphSize = iconSize;
         var textRect = TextRect;
-
-        if (glyphSize > 0.0f)
-        {
-            var glyphRect = new Rectangle(textRect.Left - HeaderTextLeftOffset, (HeaderHeight - glyphSize) * 0.5f, glyphSize, glyphSize);
-            SemanticIcons.Draw(SemanticIcons.ForContent(Item.SearchFilter), glyphRect, SemanticIcons.GetContentColor(Item.SearchFilter, style));
-        }
 
         var icon = GetIcon(Item);
         if (icon.IsValid && iconSize > 0.0f)
