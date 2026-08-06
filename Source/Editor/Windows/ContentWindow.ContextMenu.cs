@@ -183,7 +183,8 @@ namespace FlaxEditor.Windows
                 }
                 else
                 {
-                    cm.AddButton("Rename", () => Rename(item));
+                    b = cm.AddButton("Rename");
+                    b.DeferClickUntilMenuClosed(_ => Rename(item));
                 }
 
                 // Custom options
