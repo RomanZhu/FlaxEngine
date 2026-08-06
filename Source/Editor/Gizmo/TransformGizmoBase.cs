@@ -65,6 +65,14 @@ namespace FlaxEditor.Gizmo
         private Vector3 _translationSnapAppliedTotal;
         private Vector3 _translationSnapAnchorPosition;
         private bool _translationSnapAnchorInitialized;
+        private Plane _axisDragPlane;
+        private bool _axisDragPlaneValid;
+        private bool _axisDragPreviousScalarValid;
+        private bool _axisDragReanchorOnNextValid;
+        private Real _axisDragPreviousScalar;
+        private bool _axisDragScreenFallbackValid;
+        private Float2 _axisDragScreenDirection;
+        private Real _axisDragWorldUnitsPerPixel;
 
         private SceneGraphNode _vertexSnapObject, _vertexSnapObjectTo;
         private Vector3 _vertexSnapPoint, _vertexSnapPointTo;
@@ -210,6 +218,106 @@ namespace FlaxEditor.Gizmo
             }
         }
 
+        private bool TrySolveAxisDrag(ref Ray worldRay, ref Matrix rotationMatrix, Vector3 axisLocal, out Vector3 deltaLocal)
+        {
+            const float minimumRayPlaneDot = 0.10f;
+            deltaLocal = Vector3.Zero;
+            Vector3 axisWorld = Vector3.TransformNormal(axisLocal, rotationMatrix);
+            if (axisWorld.LengthSquared < 0.0001f)
+                return false;
+            axisWorld.Normalize();
+
+            Vector3 pivot = _transactionOrigin != null ? _transactionOrigin.PivotPosition : Position;
+            var interactionAnchor = InteractionAnchor;
+            Ray anchorRay = interactionAnchor != null ? interactionAnchor.PointerRay : worldRay;
+            if (anchorRay.Direction.LengthSquared < 0.0001f)
+                return false;
+            anchorRay.Direction.Normalize();
+
+            if (!_axisDragPlaneValid)
+            {
+                // Freeze one well-conditioned plane for the whole anchor. The
+                // previous solver selected between two planes every frame,
+                // allowing the result to alternate as the translated pivot
+                // crossed their selection threshold.
+                Vector3 planeNormal = anchorRay.Direction - axisWorld * Vector3.Dot(anchorRay.Direction, axisWorld);
+                if (planeNormal.LengthSquared >= 0.0225f)
+                {
+                    planeNormal.Normalize();
+                }
+                else
+                {
+                    // An axis aimed almost at the camera has no stable projected
+                    // line solve. Use the frozen view plane and project its motion
+                    // onto the axis; this favors no movement over an unbounded jump.
+                    planeNormal = interactionAnchor != null ? interactionAnchor.FallbackPlane.Normal : -(Vector3)Owner.ViewDirection;
+                    if (planeNormal.LengthSquared < 0.0001f)
+                        planeNormal = Vector3.Forward;
+                    else
+                        planeNormal.Normalize();
+                }
+                _axisDragPlane = new Plane(pivot, planeNormal);
+                _axisDragPlaneValid = true;
+
+                // Cache a matching screen-space continuation for the small
+                // interval where this plane becomes parallel to the mouse ray.
+                // This keeps the control moving through the singularity without
+                // permitting an unbounded ray/plane intersection.
+                _axisDragScreenFallbackValid = false;
+                Owner.Viewport.ProjectPoint(pivot, out var pivotScreen);
+                Owner.Viewport.ProjectPoint(pivot + axisWorld * _screenScale, out var axisScreenPoint);
+                Float2 screenAxis = axisScreenPoint - pivotScreen;
+                float screenAxisLength = screenAxis.Length;
+                if (screenAxisLength >= 1.0f && _screenScale > Mathf.Epsilon)
+                {
+                    _axisDragScreenDirection = screenAxis / screenAxisLength;
+                    _axisDragWorldUnitsPerPixel = _screenScale / screenAxisLength;
+                    _axisDragScreenFallbackValid = true;
+                }
+            }
+
+            Ray currentRay = worldRay;
+            if (currentRay.Direction.LengthSquared < 0.0001f)
+                return false;
+            currentRay.Direction.Normalize();
+            if (Mathf.Abs((float)Vector3.Dot(currentRay.Direction, _axisDragPlane.Normal)) < minimumRayPlaneDot ||
+                !currentRay.Intersects(ref _axisDragPlane, out Real currentDistance) || currentDistance < 0.0f)
+            {
+                _axisDragPreviousScalarValid = false;
+                _axisDragReanchorOnNextValid = true;
+                if (_axisDragScreenFallbackValid)
+                {
+                    Real fallbackDelta = Float2.Dot(Owner.MouseDelta, _axisDragScreenDirection) * _axisDragWorldUnitsPerPixel;
+                    deltaLocal = axisLocal * fallbackDelta;
+                    return IsFinite(deltaLocal);
+                }
+                return false;
+            }
+
+            Vector3 currentPoint = currentRay.GetPoint(currentDistance);
+            Real currentScalar = Vector3.Dot(currentPoint - pivot, axisWorld);
+            if (!_axisDragPreviousScalarValid)
+            {
+                Real previousScalar = currentScalar;
+                if (!_axisDragReanchorOnNextValid &&
+                    Mathf.Abs((float)Vector3.Dot(anchorRay.Direction, _axisDragPlane.Normal)) >= minimumRayPlaneDot &&
+                    anchorRay.Intersects(ref _axisDragPlane, out Real anchorDistance) && anchorDistance >= 0.0f)
+                {
+                    Vector3 anchorPoint = anchorRay.GetPoint(anchorDistance);
+                    previousScalar = Vector3.Dot(anchorPoint - pivot, axisWorld);
+                }
+                _axisDragPreviousScalar = previousScalar;
+                _axisDragPreviousScalarValid = true;
+                _axisDragReanchorOnNextValid = false;
+            }
+
+            Real scalarDelta = currentScalar - _axisDragPreviousScalar;
+            _axisDragPreviousScalar = currentScalar;
+            _intersectPosition = currentPoint;
+            deltaLocal = axisLocal * scalarDelta;
+            return IsFinite(deltaLocal);
+        }
+
         private void UpdateTranslateScale()
         {
             bool isScaling = _activeMode == Mode.Scale;
@@ -228,72 +336,23 @@ namespace FlaxEditor.Gizmo
             var planeXY = new Plane(Vector3.Backward, Vector3.Transform(position, invRotationMatrix).Z);
             var planeYZ = new Plane(Vector3.Left, Vector3.Transform(position, invRotationMatrix).X);
             var planeZX = new Plane(Vector3.Down, Vector3.Transform(position, invRotationMatrix).Y);
-            var dir = Vector3.Normalize(ray.Position - position);
-            var planeDotXY = Mathf.Abs(Vector3.Dot(planeXY.Normal, dir));
-            var planeDotYZ = Mathf.Abs(Vector3.Dot(planeYZ.Normal, dir));
-            var planeDotZX = Mathf.Abs(Vector3.Dot(planeZX.Normal, dir));
 
             Real intersection;
             switch (_activeAxis)
             {
             case Axis.X:
             {
-                var plane = planeDotXY > planeDotZX ? planeXY : planeZX;
-                if (ray.Intersects(ref plane, out intersection))
-                {
-                    _intersectPosition = ray.GetPoint(intersection);
-                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
-                    {
-                        var anchorRay = interactionAnchor.PointerRay;
-                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
-                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
-                        if (anchorRay.Intersects(ref plane, out Real anchorIntersection))
-                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
-                    }
-                    if (!_lastIntersectionPosition.IsZero)
-                        _tDelta = _intersectPosition - _lastIntersectionPosition;
-                    delta = new Vector3(_tDelta.X, 0, 0);
-                }
+                TrySolveAxisDrag(ref worldRay, ref rotationMatrix, Vector3.UnitX, out delta);
                 break;
             }
             case Axis.Y:
             {
-                var plane = planeDotXY > planeDotYZ ? planeXY : planeYZ;
-                if (ray.Intersects(ref plane, out intersection))
-                {
-                    _intersectPosition = ray.GetPoint(intersection);
-                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
-                    {
-                        var anchorRay = interactionAnchor.PointerRay;
-                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
-                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
-                        if (anchorRay.Intersects(ref plane, out Real anchorIntersection))
-                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
-                    }
-                    if (!_lastIntersectionPosition.IsZero)
-                        _tDelta = _intersectPosition - _lastIntersectionPosition;
-                    delta = new Vector3(0, _tDelta.Y, 0);
-                }
+                TrySolveAxisDrag(ref worldRay, ref rotationMatrix, Vector3.UnitY, out delta);
                 break;
             }
             case Axis.Z:
             {
-                var plane = planeDotZX > planeDotYZ ? planeZX : planeYZ;
-                if (ray.Intersects(ref plane, out intersection))
-                {
-                    _intersectPosition = ray.GetPoint(intersection);
-                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
-                    {
-                        var anchorRay = interactionAnchor.PointerRay;
-                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
-                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
-                        if (anchorRay.Intersects(ref plane, out Real anchorIntersection))
-                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
-                    }
-                    if (!_lastIntersectionPosition.IsZero)
-                        _tDelta = _intersectPosition - _lastIntersectionPosition;
-                    delta = new Vector3(0, 0, _tDelta.Z);
-                }
+                TrySolveAxisDrag(ref worldRay, ref rotationMatrix, Vector3.UnitZ, out delta);
                 break;
             }
             case Axis.YZ:
@@ -618,6 +677,13 @@ namespace FlaxEditor.Gizmo
             _translationSnapAppliedTotal = Vector3.Zero;
             _translationSnapAnchorPosition = Vector3.Zero;
             _translationSnapAnchorInitialized = false;
+            _axisDragPlaneValid = false;
+            _axisDragPreviousScalarValid = false;
+            _axisDragReanchorOnNextValid = false;
+            _axisDragPreviousScalar = 0.0f;
+            _axisDragScreenFallbackValid = false;
+            _axisDragScreenDirection = Float2.Zero;
+            _axisDragWorldUnitsPerPixel = 0.0f;
             _rotationDelta = Quaternion.Identity;
             _rotationGizmoDelta = Quaternion.Identity;
             _rotationSnapDelta = 0.0f;

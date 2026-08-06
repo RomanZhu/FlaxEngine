@@ -1063,6 +1063,13 @@ namespace FlaxEditor.Gizmo
         {
             _lastIntersectionPosition = _intersectPosition = Vector3.Zero;
             _tDelta = Vector3.Zero;
+            _axisDragPlaneValid = false;
+            _axisDragPreviousScalarValid = false;
+            _axisDragReanchorOnNextValid = false;
+            _axisDragPreviousScalar = 0.0f;
+            _axisDragScreenFallbackValid = false;
+            _axisDragScreenDirection = Float2.Zero;
+            _axisDragWorldUnitsPerPixel = 0.0f;
             _translationScaleSnapDelta = Vector3.Zero;
             _translationSnapAppliedTotal = Vector3.Zero;
             _translationSnapAnchorPosition = Vector3.Zero;
