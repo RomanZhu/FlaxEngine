@@ -107,7 +107,7 @@ public:
     /// <summary>
     /// The Global SDF quality. Controls the volume texture resolution and amount of cascades to use.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2005), DefaultValue(Quality.High), EditorDisplay(\"Global SDF\")")
+    API_FIELD(Attributes="EditorOrder(2005), DefaultValue(Quality.High), EditorDisplay(\"Global SDF\"), CustomEditorAlias(\"FlaxEditor.CustomEditors.Editors.GlobalIlluminationQualityEditor\")")
     Quality GlobalSDFQuality = Quality::High;
 
 #if USE_EDITOR
@@ -121,7 +121,7 @@ public:
     /// <summary>
     /// The Global Illumination quality. Controls the quality of the GI effect.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2100), DefaultValue(Quality.High), EditorDisplay(\"Global Illumination\")")
+    API_FIELD(Attributes="EditorOrder(2100), DefaultValue(Quality.High), EditorDisplay(\"Global Illumination\"), CustomEditorAlias(\"FlaxEditor.CustomEditors.Editors.GlobalIlluminationQualityEditor\")")
     Quality GIQuality = Quality::High;
 
     /// <summary>
