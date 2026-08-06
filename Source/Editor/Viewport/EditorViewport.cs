@@ -88,6 +88,11 @@ namespace FlaxEditor.Viewport
             public bool WasAltDownBefore;
 
             /// <summary>
+            /// The use Alt+left mouse button orbiting flag.
+            /// </summary>
+            public bool UseAltLeftMouseOrbit;
+
+            /// <summary>
             /// The is mouse right down flag.
             /// </summary>
             public bool IsMouseRightDown;
@@ -110,7 +115,7 @@ namespace FlaxEditor.Viewport
             /// <summary>
             /// Gets a value indicating whether use is controlling mouse.
             /// </summary>
-            public bool IsControllingMouse => IsMouseMiddleDown || IsMouseRightDown || ((IsAltDown || WasAltDownBefore) && IsMouseLeftDown) || Mathf.Abs(MouseWheelDelta) > 0.1f;
+            public bool IsControllingMouse => IsMouseMiddleDown || IsMouseRightDown || (UseAltLeftMouseOrbit && (IsAltDown || WasAltDownBefore) && IsMouseLeftDown) || Mathf.Abs(MouseWheelDelta) > 0.1f;
 
             /// <summary>
             /// Gathers input from the specified window.
@@ -125,7 +130,9 @@ namespace FlaxEditor.Viewport
                 IsAltDown = window.GetKey(KeyboardKeys.Alt);
                 WasAltDownBefore = prevInput.WasAltDownBefore || prevInput.IsAltDown;
 
-                InputOptions inputOptions = Editor.Instance.Options.Options.Input;
+                var editorOptions = Editor.Instance.Options.Options;
+                UseAltLeftMouseOrbit = editorOptions.Viewport.UseAltLeftMouseOrbit;
+                InputOptions inputOptions = editorOptions.Input;
                 ZoomInDown = window.GetKey(inputOptions.ZoomIn.Key);
                 ZoomOutDown = window.GetKey(inputOptions.ZoomOut.Key);
 
@@ -147,6 +154,7 @@ namespace FlaxEditor.Viewport
                 IsShiftDown = false;
                 IsAltDown = false;
                 WasAltDownBefore = false;
+                UseAltLeftMouseOrbit = false;
 
                 IsAltRightMouseZooming = false;
 
@@ -236,11 +244,18 @@ namespace FlaxEditor.Viewport
 
         private float _rightMouseMoveSum;
         private bool _rightMouseUsedForNavigation;
+        private float _middleMouseMoveSum;
+        private bool _middleMouseUsedForNavigation;
 
         /// <summary>
         /// Gets a value indicating whether the current right mouse button gesture is a click rather than viewport navigation.
         /// </summary>
         protected bool IsRightMouseButtonClick => !_rightMouseUsedForNavigation && _rightMouseMoveSum < 2.0f;
+
+        /// <summary>
+        /// Gets a value indicating whether the current middle mouse button gesture is a click rather than viewport navigation.
+        /// </summary>
+        protected bool IsMiddleMouseButtonClick => !_middleMouseUsedForNavigation && _middleMouseMoveSum < 2.0f;
 
         // Camera
 
@@ -2122,6 +2137,8 @@ namespace FlaxEditor.Viewport
         protected virtual void OnMiddleMouseButtonDown()
         {
             _startPos = _viewMousePos;
+            _middleMouseMoveSum = 0.0f;
+            _middleMouseUsedForNavigation = false;
         }
 
         /// <summary>
@@ -2274,7 +2291,7 @@ namespace FlaxEditor.Viewport
                     _input.IsRotating = !isAltNavigation && !mbDown && rbDown;
                     _input.IsMoving = !isAltNavigation && mbDown && rbDown;
                     _input.IsZooming = wheelZooming || _input.IsAltRightMouseZooming;
-                    _input.IsOrbiting = isAltDown && lbDown && !mbDown && !rbDown;
+                    _input.IsOrbiting = options.Viewport.UseAltLeftMouseOrbit && isAltDown && lbDown && !mbDown && !rbDown;
 
                     if ((_input.IsOrbiting && !_prevInput.IsOrbiting) || (_prevInput.IsOrbiting && !_input.IsOrbiting && lbDown))
                     {
@@ -2380,6 +2397,11 @@ namespace FlaxEditor.Viewport
                 {
                     _rightMouseMoveSum += mouseDelta.Length;
                     _rightMouseUsedForNavigation |= !moveDelta.IsZero || rmbWheel;
+                }
+                if (_input.IsMouseMiddleDown)
+                {
+                    _middleMouseMoveSum += mouseDelta.Length;
+                    _middleMouseUsedForNavigation |= !moveDelta.IsZero;
                 }
 
                 // Update
@@ -2540,14 +2562,58 @@ namespace FlaxEditor.Viewport
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
+            bool logGizmoFocus = IsGizmoFocusDebugKey(key);
+            if (logGizmoFocus)
+                LogGizmoFocusDebug("KeyDown enter", key);
+
             // Base
             if (base.OnKeyDown(key))
+            {
+                if (logGizmoFocus)
+                    LogGizmoFocusDebug("KeyDown handled by base", key);
                 return true;
+            }
 
             if (IsMouseRightNavigationActive() && IsCameraMovementKey(key))
+            {
+                if (logGizmoFocus)
+                    LogGizmoFocusDebug("KeyDown consumed by camera navigation", key);
                 return true;
+            }
 
-            return InputActions.Process(_editor, this, key);
+            bool handled = InputActions.Process(_editor, this, key);
+            if (logGizmoFocus)
+                LogGizmoFocusDebug(handled ? "KeyDown handled by viewport action" : "KeyDown unhandled by viewport", key);
+            return handled;
+        }
+
+        private static bool IsGizmoFocusDebugKey(KeyboardKeys key)
+        {
+            return key == KeyboardKeys.F ||
+                   key == KeyboardKeys.Q ||
+                   key == KeyboardKeys.W ||
+                   key == KeyboardKeys.E ||
+                   key == KeyboardKeys.R ||
+                   key == KeyboardKeys.Z;
+        }
+
+        private void LogGizmoFocusDebug(string point, KeyboardKeys key = KeyboardKeys.None)
+        {
+            var root = Root;
+            var focusedControl = root?.FocusedControl;
+            Editor.Log(string.Format(
+                "[GizmoFocusDebug] {0} {1}; Key={2}; Focused={3}; ViewportFocus={4}/{5}; AppFocus={6}; Ctrl={7}; Shift={8}; Alt={9}; MouseRight={10}",
+                GetType().Name,
+                point,
+                key,
+                focusedControl != null ? focusedControl.GetType().Name : "<none>",
+                IsFocused,
+                ContainsFocus,
+                Platform.HasFocus,
+                root?.GetKey(KeyboardKeys.Control) ?? false,
+                root?.GetKey(KeyboardKeys.Shift) ?? false,
+                root?.GetKey(KeyboardKeys.Alt) ?? false,
+                _input.IsMouseRightDown));
         }
 
         /// <inheritdoc />
@@ -2584,9 +2650,23 @@ namespace FlaxEditor.Viewport
         }
 
         /// <inheritdoc />
+        public override void OnGotFocus()
+        {
+            base.OnGotFocus();
+            LogGizmoFocusDebug("OnGotFocus");
+        }
+
+        /// <inheritdoc />
         public override void OnLostFocus()
         {
+            LogGizmoFocusDebug("OnLostFocus before base");
             base.OnLostFocus();
+            LogGizmoFocusDebug("OnLostFocus after base");
+            FlaxEngine.Scripting.InvokeOnUpdate(() =>
+            {
+                if (!IsDisposing)
+                    LogGizmoFocusDebug("OnLostFocus next update");
+            });
 
             HideCameraMoveSpeedOverlay();
 

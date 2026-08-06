@@ -163,10 +163,30 @@ namespace FlaxEditor.Windows.Assets
         /// </summary>
         public void Duplicate()
         {
+            if (TryDuplicateForTransform(out _, out var undoAction))
+            {
+                Undo.AddAction(undoAction);
+                ScrollToSelectedNode();
+            }
+        }
+
+        /// <summary>
+        /// Duplicates the selected objects as part of a transform transaction.
+        /// The duplicate action is already performed but is not added to the
+        /// undo stack until the transaction commits.
+        /// </summary>
+        /// <param name="createdObjects">The created top-level objects.</param>
+        /// <param name="undoAction">The already-performed duplicate action.</param>
+        /// <returns>True if duplication produced objects.</returns>
+        internal bool TryDuplicateForTransform(out List<SceneGraphNode> createdObjects, out IUndoAction undoAction)
+        {
+            createdObjects = new List<SceneGraphNode>();
+            undoAction = null;
+
             // Peek things that can be copied (copy all actors)
             var objects = Selection.Where(x => x.CanDuplicate && x != Graph.Main).ToList().BuildAllNodes().Where(x => x.CanDuplicate && x is ActorNode).ToList();
             if (objects.Count == 0)
-                return;
+                return false;
 
             // Serialize actors
             var actors = objects.ConvertAll(x => ((ActorNode)x).Actor);
@@ -174,30 +194,118 @@ namespace FlaxEditor.Windows.Assets
             if (data == null)
             {
                 Editor.LogError("Failed to copy actors data.");
-                return;
+                return false;
             }
 
             // Create paste action (with selecting spawned objects)
             var pasteAction = CustomPasteActorsAction.CustomDuplicate(this, data, Guid.Empty);
             if (pasteAction != null)
             {
-                OnPasteAction(pasteAction);
+                if (!TryApplyPasteAction(pasteAction, out createdObjects, out undoAction))
+                    return false;
             }
 
-            // Scroll to new selected node
-            ScrollToSelectedNode();
+            return createdObjects.Count != 0;
         }
 
         private void OnPasteAction(PasteActorsAction pasteAction)
         {
-            pasteAction.Do(out _, out var nodeParents);
+            if (TryApplyPasteAction(pasteAction, out _, out var undoAction))
+                Undo.AddAction(undoAction);
+        }
+
+        private bool TryApplyPasteAction(PasteActorsAction pasteAction, out List<SceneGraphNode> createdObjects, out IUndoAction undoAction)
+        {
+            createdObjects = new List<SceneGraphNode>();
+            undoAction = null;
+            List<ActorNode> nodeParents;
+            try
+            {
+                pasteAction.Do(out _, out nodeParents);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    pasteAction.Undo();
+                }
+                catch (Exception rollbackException)
+                {
+                    Editor.LogError("Paste rollback failed. " + rollbackException.Message);
+                }
+                finally
+                {
+                    pasteAction.Dispose();
+                }
+                throw new InvalidOperationException("Pasting actors failed.", ex);
+            }
+            if (nodeParents == null || nodeParents.Count == 0)
+            {
+                try
+                {
+                    pasteAction.Undo();
+                }
+                catch (Exception rollbackException)
+                {
+                    Editor.LogError("Empty paste rollback failed. " + rollbackException.Message);
+                }
+                finally
+                {
+                    pasteAction.Dispose();
+                }
+                return false;
+            }
 
             // Select spawned objects
             var selectAction = new SelectionChangeAction(Selection.ToArray(), nodeParents.Cast<SceneGraphNode>().ToArray(), OnSelectionUndo);
-            selectAction.Do();
+            try
+            {
+                selectAction.Do();
+            }
+            catch
+            {
+                try
+                {
+                    selectAction.Undo();
+                }
+                catch (Exception rollbackException)
+                {
+                    Editor.LogError("Paste selection rollback failed. " + rollbackException.Message);
+                }
+                try
+                {
+                    pasteAction.Undo();
+                }
+                catch (Exception rollbackException)
+                {
+                    Editor.LogError("Paste rollback failed. " + rollbackException.Message);
+                }
+                pasteAction.Dispose();
+                throw;
+            }
 
-            Undo.AddAction(new MultiUndoAction(pasteAction, selectAction));
-            OnSelectionChanges();
+            createdObjects.AddRange(nodeParents.Cast<SceneGraphNode>());
+            undoAction = new MultiUndoAction(pasteAction, selectAction);
+            try
+            {
+                OnSelectionChanges();
+            }
+            catch
+            {
+                try
+                {
+                    undoAction.Undo();
+                }
+                catch (Exception rollbackException)
+                {
+                    Editor.LogError("Paste action rollback failed. " + rollbackException.Message);
+                }
+                undoAction.Dispose();
+                undoAction = null;
+                createdObjects.Clear();
+                throw;
+            }
+            return true;
         }
 
         private class CustomDeleteActorsAction : DeleteActorsAction

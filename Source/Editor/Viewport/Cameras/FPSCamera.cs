@@ -187,6 +187,8 @@ namespace FlaxEditor.Viewport.Cameras
             var up = Vector3.Up * rotation;
             var right = Vector3.Cross(forward, up);
             var toHit = hitPoint - viewPosition;
+            if (Vector3.Dot(toHit, forward) <= Viewport.NearPlane)
+                return;
             var planarMove = right * Vector3.Dot(toHit, right) + up * Vector3.Dot(toHit, up);
             if (planarMove.LengthSquared < RecenterMinMoveDistanceSq && Vector3.DistanceSquared(TargetPoint, hitPoint) < RecenterMinMoveDistanceSq)
                 return;
@@ -401,7 +403,7 @@ namespace FlaxEditor.Viewport.Cameras
             if (input.IsOrbiting && isUsingGizmo)
             {
                 centerMouse = false;
-                if (Editor.Instance.Options.Options.Interface.MoveCameraWithAltTransformDrag)
+                if (Editor.Instance.Options.Options.Viewport.MoveCameraWithAltTransformDrag)
                     Viewport.ViewPosition += transformGizmo.LastDelta.Translation;
                 return;
             }

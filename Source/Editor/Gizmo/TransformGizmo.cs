@@ -141,8 +141,10 @@ namespace FlaxEditor.Gizmo
                     var scaleDelta = Vector3.Zero;
                     if (translationDelta.IsZero)
                         break;
-                    StartTransforming();
-                    OnApplyTransformation(ref translationDelta, ref rotationDelta, ref scaleDelta);
+                    StartTransforming(false);
+                    if (State != InteractionState.Dragging)
+                        break;
+                    ApplyInteractionDelta(ref translationDelta, ref rotationDelta, ref scaleDelta);
                     EndTransforming();
                 }
                 break;
@@ -274,8 +276,11 @@ namespace FlaxEditor.Gizmo
         /// <inheritdoc />
         public override void OnSelectionChanged(List<SceneGraphNode> newSelection)
         {
-            // End current action
-            EndTransforming();
+            // An external selection change invalidates the transaction. The
+            // selection change produced by transaction-aware duplication is
+            // the one intentional exception.
+            if (HasActiveTransaction && !IsExpectingTransactionSelectionChange)
+                CancelTransforming();
 
             // Prepare collections
             _selection.Clear();
@@ -343,12 +348,21 @@ namespace FlaxEditor.Gizmo
         }
 
         /// <inheritdoc />
+        protected override bool UsesOriginAuthoritativePreview => true;
+
+        /// <inheritdoc />
         protected override void OnEndTransforming()
         {
             base.OnEndTransforming();
 
-            // Record undo action
-            Owner.Undo.AddAction(new TransformObjectsAction(SelectedParents, _startTransforms, ref _startBounds, _navigationDirty));
+            if (!HasTransformChanges || TransactionObjects.Count == 0)
+                return;
+
+            // Record one transform action. Transaction-aware duplication is
+            // composed into the same history item by the lifecycle layer.
+            var selection = new List<SceneGraphNode>(TransactionObjects);
+            var action = new TransformObjectsAction(selection, _startTransforms, ref _startBounds, _navigationDirty);
+            AddTransformUndoAction(action);
         }
 
         /// <inheritdoc />
@@ -356,7 +370,10 @@ namespace FlaxEditor.Gizmo
         {
             base.OnDuplicate();
 
-            Duplicate();
+            if (Owner.TryDuplicateForTransform(out var createdObjects, out var undoAction))
+            {
+                RegisterDuplicatedObjects(createdObjects, undoAction);
+            }
         }
     }
 }

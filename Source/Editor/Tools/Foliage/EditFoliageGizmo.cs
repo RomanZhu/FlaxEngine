@@ -133,7 +133,7 @@ namespace FlaxEditor.Tools.Foliage
 
             bool applyRotation = !rotationDelta.IsIdentity;
             bool useObjCenter = ActivePivot == PivotType.ObjectCenter;
-            Vector3 gizmoPosition = Position;
+            Vector3 gizmoPosition = InteractionPivotPosition;
 
             // Get instance transform
             var foliage = GizmoMode.SelectedFoliage;
@@ -164,8 +164,7 @@ namespace FlaxEditor.Tools.Foliage
             }
 
             // Apply scale
-            const float scaleLimit = 99_999_999.0f;
-            trans.Scale = Float3.Clamp(trans.Scale + scaleDelta, new Float3(-scaleLimit), new Float3(scaleLimit));
+            trans.Scale = ApplyScaleDelta(trans.Scale, scaleDelta);
 
             // Apply translation
             trans.Translation += translationDelta;
@@ -183,8 +182,37 @@ namespace FlaxEditor.Tools.Foliage
 
             // End undo
             _action.RecordEnd();
-            Owner.Undo?.AddAction(_action);
+            AddTransformUndoAction(_action);
             _action = null;
+        }
+
+        /// <inheritdoc />
+        protected override void OnCancelTransforming()
+        {
+            _action?.Undo();
+            _action = null;
+            base.OnCancelTransforming();
+        }
+
+        /// <inheritdoc />
+        protected override bool UsesOriginAuthoritativePreview => true;
+
+        /// <inheritdoc />
+        protected override bool RestoreTransactionObjectTransforms => false;
+
+        /// <inheritdoc />
+        protected override void ApplyTransactionTransform(SceneGraphNode node, Transform transform)
+        {
+            if (node is FoliageInstanceNode instanceNode && instanceNode.Actor)
+            {
+                var localTransform = instanceNode.Actor.Transform.WorldToLocal(transform);
+                instanceNode.Actor.SetInstanceTransform(instanceNode.Index, ref localTransform);
+                instanceNode.Actor.RebuildClusters();
+            }
+            else
+            {
+                base.ApplyTransactionTransform(node, transform);
+            }
         }
 
         /// <inheritdoc />
@@ -206,8 +234,9 @@ namespace FlaxEditor.Tools.Foliage
             var newIndex = foliage.InstancesCount;
             foliage.AddInstance(ref instance);
             action.RecordEnd();
-            Owner.Undo?.AddAction(new MultiUndoAction(action, new EditSelectedInstanceIndexAction(GizmoMode.SelectedInstanceIndex, newIndex)));
+            var duplicateAction = new MultiUndoAction(action, new EditSelectedInstanceIndexAction(GizmoMode.SelectedInstanceIndex, newIndex));
             GizmoMode.SelectedInstanceIndex = newIndex;
+            RegisterDuplicatedObjects(new[] { new FoliageInstanceNode(foliage, newIndex) }, duplicateAction);
         }
 
         /// <inheritdoc />
@@ -268,8 +297,10 @@ namespace FlaxEditor.Tools.Foliage
                 var scaleDelta = Vector3.Zero;
                 if (translationDelta.IsZero)
                     return;
-                StartTransforming();
-                OnApplyTransformation(ref translationDelta, ref rotationDelta, ref scaleDelta);
+                StartTransforming(false);
+                if (State != InteractionState.Dragging)
+                    return;
+                ApplyInteractionDelta(ref translationDelta, ref rotationDelta, ref scaleDelta);
                 EndTransforming();
             }
         }

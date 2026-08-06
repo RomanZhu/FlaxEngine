@@ -646,34 +646,63 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void Duplicate()
         {
+            if (TryDuplicateForTransform(out _, out var undoAction))
+            {
+                Undo.AddAction(undoAction);
+                // Scroll to new selected node while duplicating.
+                Editor.Windows.SceneWin.ScrollToSelectedNode();
+            }
+        }
+
+        /// <summary>
+        /// Duplicates the selected objects as part of a transform transaction.
+        /// The duplicate action is already performed but is not added to the
+        /// undo stack until the transaction commits.
+        /// </summary>
+        /// <param name="createdObjects">The created top-level objects.</param>
+        /// <param name="undoAction">The already-performed duplicate action.</param>
+        /// <returns>True if duplication produced objects.</returns>
+        internal bool TryDuplicateForTransform(out List<SceneGraphNode> createdObjects, out IUndoAction undoAction)
+        {
+            createdObjects = new List<SceneGraphNode>();
+            undoAction = null;
+
             // Peek things that can be copied (copy all actors)
             var nodes = Selection.Where(x => x.CanDuplicate).ToList().BuildAllNodes();
             if (nodes.Count == 0)
-                return;
+                return false;
             var actors = new List<Actor>();
             var newSelection = new List<SceneGraphNode>();
             List<IUndoAction> customUndoActions = null;
-            foreach (var node in nodes)
+            try
             {
-                if (node.CanDuplicate)
+                foreach (var node in nodes)
                 {
-                    if (node is ActorNode actorNode)
+                    if (node.CanDuplicate)
                     {
-                        actors.Add(actorNode.Actor);
-                    }
-                    else
-                    {
-                        var customDuplicatedObject = node.Duplicate(out var customUndoAction);
-                        if (customDuplicatedObject != null)
-                            newSelection.Add(customDuplicatedObject);
-                        if (customUndoAction != null)
+                        if (node is ActorNode actorNode)
                         {
-                            if (customUndoActions == null)
-                                customUndoActions = new List<IUndoAction>();
-                            customUndoActions.Add(customUndoAction);
+                            actors.Add(actorNode.Actor);
+                        }
+                        else
+                        {
+                            var customDuplicatedObject = node.Duplicate(out var customUndoAction);
+                            if (customDuplicatedObject != null)
+                                newSelection.Add(customDuplicatedObject);
+                            if (customUndoAction != null)
+                            {
+                                if (customUndoActions == null)
+                                    customUndoActions = new List<IUndoAction>();
+                                customUndoActions.Add(customUndoAction);
+                            }
                         }
                     }
                 }
+            }
+            catch
+            {
+                RollbackDuplicateActions(customUndoActions);
+                throw;
             }
             if (actors.Count == 0)
             {
@@ -682,7 +711,23 @@ namespace FlaxEditor.Modules
                 {
                     // Select spawned objects (parents only)
                     var selectAction = new SelectionChangeAction(Selection.ToArray(), newSelection.ToArray(), OnSelectionUndo);
-                    selectAction.Do();
+                    try
+                    {
+                        selectAction.Do();
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            selectAction.Undo();
+                        }
+                        catch (Exception ex)
+                        {
+                            Editor.LogError("Custom duplicate selection rollback failed. " + ex.Message);
+                        }
+                        RollbackDuplicateActions(customUndoActions);
+                        throw;
+                    }
 
                     // Build a single compound undo action that pastes the actors, pastes custom stuff (scene graph extension) and selects the created objects (parents only)
                     var customUndoActionsCount = customUndoActions?.Count ?? 0;
@@ -691,10 +736,33 @@ namespace FlaxEditor.Modules
                         undoActions[i] = customUndoActions[i];
                     undoActions[undoActions.Length - 1] = selectAction;
 
-                    Undo.AddAction(new MultiUndoAction(undoActions));
-                    OnSelectionChanged();
+                    undoAction = new MultiUndoAction(undoActions);
+                    createdObjects.AddRange(newSelection);
+                    try
+                    {
+                        OnSelectionChanged();
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            undoAction.Undo();
+                        }
+                        catch (Exception ex)
+                        {
+                            Editor.LogError("Custom duplicate action rollback failed. " + ex.Message);
+                        }
+                        undoAction.Dispose();
+                        undoAction = null;
+                        createdObjects.Clear();
+                        throw;
+                    }
                 }
-                return;
+                else
+                {
+                    RollbackDuplicateActions(customUndoActions);
+                }
+                return createdObjects.Count != 0;
             }
 
             // Serialize actors
@@ -702,20 +770,84 @@ namespace FlaxEditor.Modules
             if (data == null)
             {
                 Editor.LogError("Failed to copy actors data.");
-                return;
+                RollbackDuplicateActions(customUndoActions);
+                return false;
             }
 
             // Create paste action (with selecting spawned objects)
             var pasteAction = PasteActorsAction.Duplicate(data, Guid.Empty);
             if (pasteAction != null)
             {
-                pasteAction.Do(out _, out var nodeParents);
+                List<ActorNode> nodeParents;
+                try
+                {
+                    pasteAction.Do(out _, out nodeParents);
+                }
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        pasteAction.Undo();
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        Editor.LogError("Actor duplicate rollback failed. " + rollbackException.Message);
+                    }
+                    finally
+                    {
+                        pasteAction.Dispose();
+                    }
+                    RollbackDuplicateActions(customUndoActions);
+                    throw new InvalidOperationException("Actor duplication failed.", ex);
+                }
+                if (nodeParents == null || nodeParents.Count == 0)
+                {
+                    try
+                    {
+                        pasteAction.Undo();
+                    }
+                    catch (Exception ex)
+                    {
+                        Editor.LogError("Empty actor duplicate rollback failed. " + ex.Message);
+                    }
+                    finally
+                    {
+                        pasteAction.Dispose();
+                    }
+                    RollbackDuplicateActions(customUndoActions);
+                    return false;
+                }
 
                 // Select spawned objects (parents only)
                 newSelection.Clear();
                 newSelection.AddRange(nodeParents);
                 var selectAction = new SelectionChangeAction(Selection.ToArray(), newSelection.ToArray(), OnSelectionUndo);
-                selectAction.Do();
+                try
+                {
+                    selectAction.Do();
+                }
+                catch
+                {
+                    try
+                    {
+                        selectAction.Undo();
+                    }
+                    catch (Exception ex)
+                    {
+                        Editor.LogError("Actor duplicate selection rollback failed. " + ex.Message);
+                    }
+                    try
+                    {
+                        pasteAction.Undo();
+                    }
+                    catch (Exception ex)
+                    {
+                        Editor.LogError("Actor duplicate rollback failed. " + ex.Message);
+                    }
+                    pasteAction.Dispose();
+                    RollbackDuplicateActions(customUndoActions);
+                    throw;
+                }
 
                 // Build a single compound undo action that pastes the actors, pastes custom stuff (scene graph extension) and selects the created objects (parents only)
                 var customUndoActionsCount = customUndoActions?.Count ?? 0;
@@ -725,12 +857,56 @@ namespace FlaxEditor.Modules
                     undoActions[i + 1] = customUndoActions[i];
                 undoActions[undoActions.Length - 1] = selectAction;
 
-                Undo.AddAction(new MultiUndoAction(undoActions));
-                OnSelectionChanged();
+                undoAction = new MultiUndoAction(undoActions);
+                createdObjects.AddRange(newSelection);
+                try
+                {
+                    OnSelectionChanged();
+                }
+                catch
+                {
+                    try
+                    {
+                        undoAction.Undo();
+                    }
+                    catch (Exception ex)
+                    {
+                        Editor.LogError("Actor duplicate action rollback failed. " + ex.Message);
+                    }
+                    undoAction.Dispose();
+                    undoAction = null;
+                    createdObjects.Clear();
+                    throw;
+                }
+            }
+            else
+            {
+                RollbackDuplicateActions(customUndoActions);
             }
 
-            // Scroll to new selected node while duplicating
-            Editor.Windows.SceneWin.ScrollToSelectedNode();
+            return createdObjects.Count != 0;
+        }
+
+        private static void RollbackDuplicateActions(List<IUndoAction> actions)
+        {
+            if (actions == null)
+                return;
+            for (int i = actions.Count - 1; i >= 0; i--)
+            {
+                var action = actions[i];
+                try
+                {
+                    action?.Undo();
+                }
+                catch (Exception ex)
+                {
+                    Editor.LogError("Custom duplicate rollback failed. " + ex.Message);
+                }
+                finally
+                {
+                    action?.Dispose();
+                }
+            }
         }
 
         /// <summary>

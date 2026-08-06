@@ -416,6 +416,9 @@ namespace FlaxEditor.Viewport
         public bool IsRightMouseButtonDown => _input.IsMouseRightDown;
 
         /// <inheritdoc />
+        public bool IsMiddleMouseButtonDown => _input.IsMouseMiddleDown;
+
+        /// <inheritdoc />
         public bool IsAltKeyDown => _input.IsAltDown;
 
         /// <inheritdoc />
@@ -449,6 +452,12 @@ namespace FlaxEditor.Viewport
         public void Select(List<SceneGraphNode> nodes, bool recordUndo = true)
         {
             _window.Select(nodes, recordUndo);
+        }
+
+        /// <inheritdoc />
+        public bool TryDuplicateForTransform(out List<SceneGraphNode> createdObjects, out IUndoAction undoAction)
+        {
+            return _window.TryDuplicateForTransform(out createdObjects, out undoAction);
         }
 
         /// <inheritdoc />
@@ -497,9 +506,13 @@ namespace FlaxEditor.Viewport
         /// <param name="scaleDelta">The scale delta.</param>
         public void ApplyTransform(List<SceneGraphNode> selection, ref Vector3 translationDelta, ref Quaternion rotationDelta, ref Vector3 scaleDelta)
         {
+            // TransformGizmoBase restores the transaction start transforms
+            // before invoking this delegate. These deltas are therefore
+            // origin-relative preview values, never the previous frame's
+            // scene state.
             bool applyRotation = !rotationDelta.IsIdentity;
             bool useObjCenter = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
-            Vector3 gizmoPosition = TransformGizmo.Position;
+            Vector3 gizmoPosition = TransformGizmo.InteractionPivotPosition;
 
             // Transform selected objects
             for (int i = 0; i < selection.Count; i++)
@@ -527,8 +540,7 @@ namespace FlaxEditor.Viewport
                 }
 
                 // Apply scale
-                const float scaleLimit = 99_999_999.0f;
-                trans.Scale = Float3.Clamp(trans.Scale + scaleDelta, new Float3(-scaleLimit), new Float3(scaleLimit));
+                trans.Scale = TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
 
                 // Apply translation
                 trans.Translation += translationDelta;
@@ -538,8 +550,18 @@ namespace FlaxEditor.Viewport
         }
 
         /// <inheritdoc />
+        protected override void OnLeftMouseButtonDown()
+        {
+            base.OnLeftMouseButtonDown();
+            TransformGizmo.ResetSelectionReleaseSuppression();
+        }
+
+        /// <inheritdoc />
         protected override void OnLeftMouseButtonUp()
         {
+            if (TransformGizmo.ConsumeSelectionRelease())
+                return;
+
             // Skip if was controlling mouse or mouse is not over the area
             if (_prevInput.IsControllingMouse || !Bounds.Contains(ref _viewMousePos))
                 return;
@@ -612,6 +634,15 @@ namespace FlaxEditor.Viewport
             Focus();
 
             base.OnLeftMouseButtonUp();
+        }
+
+        /// <inheritdoc />
+        public override bool OnKeyDown(KeyboardKeys key)
+        {
+            var input = Editor.Instance.Options.Options.Input;
+            if (input.Undo.Process(this, key) && TransformGizmo.TryCancelPointerInteractionForUndo())
+                return true;
+            return base.OnKeyDown(key);
         }
 
         /// <inheritdoc />
@@ -756,6 +787,7 @@ namespace FlaxEditor.Viewport
         {
             if (IsDisposing)
                 return;
+            Gizmos.Clear();
             if (_tempDebugDrawContext != IntPtr.Zero)
             {
                 DebugDraw.FreeContext(_tempDebugDrawContext);
@@ -765,6 +797,28 @@ namespace FlaxEditor.Viewport
             FlaxEngine.Object.Destroy(ref _spritesRenderer);
 
             base.OnDestroy();
+        }
+
+        /// <inheritdoc />
+        public override void OnLostFocus()
+        {
+            for (int i = 0; i < Gizmos.Count; i++)
+            {
+                if (Gizmos[i] is TransformGizmoBase transformGizmo)
+                    transformGizmo.OnInteractionFocusLost();
+            }
+            base.OnLostFocus();
+        }
+
+        /// <inheritdoc />
+        public override void OnEndMouseCapture()
+        {
+            for (int i = 0; i < Gizmos.Count; i++)
+            {
+                if (Gizmos[i] is TransformGizmoBase transformGizmo)
+                    transformGizmo.OnInteractionMouseCaptureLost();
+            }
+            base.OnEndMouseCapture();
         }
 
         /// <inheritdoc />

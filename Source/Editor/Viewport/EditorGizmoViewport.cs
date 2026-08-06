@@ -66,6 +66,9 @@ namespace FlaxEditor.Viewport
         public bool IsRightMouseButtonDown => _input.IsMouseRightDown;
 
         /// <inheritdoc />
+        public bool IsMiddleMouseButtonDown => _input.IsMouseMiddleDown;
+
+        /// <inheritdoc />
         public bool IsAltKeyDown => _input.IsAltDown;
 
         /// <inheritdoc />
@@ -110,6 +113,9 @@ namespace FlaxEditor.Viewport
         public abstract void OpenContextMenu();
 
         /// <inheritdoc />
+        public abstract bool TryDuplicateForTransform(out List<SceneGraphNode> createdObjects, out IUndoAction undoAction);
+
+        /// <inheritdoc />
         protected override bool IsControllingMouse => Gizmos.Active?.IsControllingMouse ?? false;
 
         /// <inheritdoc />
@@ -137,6 +143,28 @@ namespace FlaxEditor.Viewport
             Gizmos.Clear();
 
             base.OnDestroy();
+        }
+
+        /// <inheritdoc />
+        public override void OnLostFocus()
+        {
+            for (int i = 0; i < Gizmos.Count; i++)
+            {
+                if (Gizmos[i] is TransformGizmoBase transformGizmo)
+                    transformGizmo.OnInteractionFocusLost();
+            }
+            base.OnLostFocus();
+        }
+
+        /// <inheritdoc />
+        public override void OnEndMouseCapture()
+        {
+            for (int i = 0; i < Gizmos.Count; i++)
+            {
+                if (Gizmos[i] is TransformGizmoBase transformGizmo)
+                    transformGizmo.OnInteractionMouseCaptureLost();
+            }
+            base.OnEndMouseCapture();
         }
 
         internal static void AddGizmoViewportWidgets(EditorViewport viewport, TransformGizmo transformGizmo, bool useProjectCache = false, bool hideWidgets = false)

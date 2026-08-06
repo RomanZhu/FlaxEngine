@@ -55,6 +55,7 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayRotateSnapValueButton;
         private ToolStripButton _overlayScaleSnapValueButton;
         private SelectionOutline _customSelectionOutline;
+        private bool _middleMouseRecenterCandidate;
 
         /// <summary>
         /// The editor sprites rendering effect.
@@ -879,7 +880,7 @@ namespace FlaxEditor.Viewport
                 rotationDelta = Quaternion.Euler(0.0f, 45.0f, 0.0f);
 
             bool useObjCenter = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
-            Vector3 gizmoPosition = TransformGizmo.Position;
+            Vector3 gizmoPosition = TransformGizmo.InteractionPivotPosition;
 
             // Rotate selected objects
             bool isPlayMode = _editor.StateMachine.IsPlayMode;
@@ -1158,9 +1159,13 @@ namespace FlaxEditor.Viewport
         /// <param name="scaleDelta">The scale delta.</param>
         public void ApplyTransform(List<SceneGraphNode> selection, ref Vector3 translationDelta, ref Quaternion rotationDelta, ref Vector3 scaleDelta)
         {
+            // TransformGizmoBase restores the transaction start transforms
+            // before invoking this delegate. These deltas are therefore
+            // origin-relative preview values, never the previous frame's
+            // scene state.
             bool applyRotation = !rotationDelta.IsIdentity;
             bool useObjCenter = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
-            Vector3 gizmoPosition = TransformGizmo.Position;
+            Vector3 gizmoPosition = TransformGizmo.InteractionPivotPosition;
 
             // Transform selected objects
             bool isPlayMode = _editor.StateMachine.IsPlayMode;
@@ -1193,8 +1198,7 @@ namespace FlaxEditor.Viewport
                 }
 
                 // Apply scale
-                const float scaleLimit = 99_999_999.0f;
-                trans.Scale = Float3.Clamp(trans.Scale + scaleDelta, new Float3(-scaleLimit), new Float3(scaleLimit));
+                trans.Scale = TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
 
                 // Apply translation
                 trans.Translation += translationDelta;
@@ -1296,6 +1300,8 @@ namespace FlaxEditor.Viewport
         protected override void OnLeftMouseButtonDown()
         {
             base.OnLeftMouseButtonDown();
+            if (Gizmos.Active is TransformGizmoBase transformGizmo)
+                transformGizmo.ResetSelectionReleaseSuppression();
 
             if (Root.GetMouseButtonDown(MouseButton.Left) && !IsAltKeyDown && !_directionGizmo.IsMouseOver)
             {
@@ -1307,6 +1313,8 @@ namespace FlaxEditor.Viewport
         protected override void OnLeftMouseButtonUp()
         {
             var rubberBandHandled = _rubberBandSelector.ReleaseRubberBandSelection();
+            if (Gizmos.Active is TransformGizmoBase transformGizmo && transformGizmo.ConsumeSelectionRelease())
+                return;
 
             // Skip if was controlling mouse or mouse is not over the area
             var containsViewMouse = ContainsPoint(ref _viewMousePos);
@@ -1365,20 +1373,31 @@ namespace FlaxEditor.Viewport
         protected override void OnMiddleMouseButtonDown()
         {
             base.OnMiddleMouseButtonDown();
+            _middleMouseRecenterCandidate = !IsAltKeyDown;
+        }
 
-            TryRecenterCameraToMouseHit();
+        /// <inheritdoc />
+        protected override void OnMiddleMouseButtonUp()
+        {
+            if (_middleMouseRecenterCandidate && IsMiddleMouseButtonClick)
+                TryRecenterCameraToMouseHit();
+            _middleMouseRecenterCandidate = false;
+
+            base.OnMiddleMouseButtonUp();
         }
 
         private void TryRecenterCameraToMouseHit()
         {
-            if (IsAltKeyDown || _directionGizmo.IsMouseOver || !(ViewportCamera is FPSCamera fpsCamera))
+            if (IsAltKeyDown || _directionGizmo.IsMouseOver || !(ViewportCamera is FPSCamera fpsCamera) || SceneGraphRoot == null)
                 return;
 
             var ray = ConvertMouseToRay(ref _viewMousePos);
             var view = new Ray(ViewPosition, ViewDirection);
-            var flags = SceneGraphNode.RayCastData.FlagTypes.SkipTriggers;
+            var flags = SceneGraphNode.RayCastData.FlagTypes.SkipColliders |
+                        SceneGraphNode.RayCastData.FlagTypes.SkipEditorPrimitives |
+                        SceneGraphNode.RayCastData.FlagTypes.SkipTriggers;
             var hit = SceneGraphRoot.RayCast(ref ray, ref view, out var distance, flags);
-            if (hit == null)
+            if (hit == null || distance <= NearPlane || distance >= FarPlane)
                 return;
 
             fpsCamera.RecenterView(ray.GetPoint(distance));
@@ -1429,6 +1448,14 @@ namespace FlaxEditor.Viewport
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
+            var input = _editor.Options.Options.Input;
+            if (Gizmos.Active is TransformGizmoBase transformGizmo &&
+                input.Undo.Process(this, key) &&
+                transformGizmo.TryCancelPointerInteractionForUndo())
+            {
+                return true;
+            }
+
             if (_characterControllerModeActive)
             {
                 if (key == KeyboardKeys.Escape)
@@ -1522,6 +1549,12 @@ namespace FlaxEditor.Viewport
         public override void Select(List<SceneGraphNode> nodes, bool recordUndo = true)
         {
             _editor.SceneEditing.Select(nodes, recordUndo: recordUndo);
+        }
+
+        /// <inheritdoc />
+        public override bool TryDuplicateForTransform(out List<SceneGraphNode> createdObjects, out IUndoAction undoAction)
+        {
+            return _editor.SceneEditing.TryDuplicateForTransform(out createdObjects, out undoAction);
         }
 
         /// <inheritdoc />

@@ -34,6 +34,12 @@ namespace FlaxEditor
             public SceneGraphNode[] Selection;
 
             /// <summary>
+            /// Stable selection identities used to reacquire nodes after a
+            /// duplicate action recreates them during redo.
+            /// </summary>
+            public Guid[] SelectionIds;
+
+            /// <summary>
             /// The 'before' state.
             /// </summary>
             public Transform[] Before;
@@ -64,12 +70,15 @@ namespace FlaxEditor
             var after = Utilities.Utils.GetTransformsAndBounds(selection, out var afterBounds);
 
             // TODO: support moving objects from more than one scene
-            var scene = selection[0].ParentScene?.Scene;
+            var scene = selection.Count != 0 ? selection[0].ParentScene?.Scene : null;
 
             var data = new DataStorage
             {
                 Scene = scene,
-                Selection = selection.ToArray(),
+                // Keep the legacy field available for old history entries,
+                // but do not retain live node references for new actions.
+                Selection = null,
+                SelectionIds = GetSelectionIds(selection),
                 After = after,
                 Before = before.ToArray(),
                 BeforeBounds = boundsBefore,
@@ -88,9 +97,13 @@ namespace FlaxEditor
         public override void Do()
         {
             var data = Data;
-            for (int i = 0; i < data.Selection.Length; i++)
+            var selection = ResolveSelection(ref data);
+            var count = Math.Min(selection.Length, data.After?.Length ?? 0);
+            for (int i = 0; i < count; i++)
             {
-                data.Selection[i].Transform = data.After[i];
+                var node = selection[i];
+                if (IsNodeUsable(node))
+                    node.Transform = data.After[i];
             }
             InvalidateBounds(ref data);
         }
@@ -99,11 +112,57 @@ namespace FlaxEditor
         public override void Undo()
         {
             var data = Data;
-            for (int i = 0; i < data.Selection.Length; i++)
+            var selection = ResolveSelection(ref data);
+            var count = Math.Min(selection.Length, data.Before?.Length ?? 0);
+            for (int i = 0; i < count; i++)
             {
-                data.Selection[i].Transform = data.Before[i];
+                var node = selection[i];
+                if (IsNodeUsable(node))
+                    node.Transform = data.Before[i];
             }
             InvalidateBounds(ref data);
+        }
+
+        private static bool IsNodeUsable(SceneGraphNode node)
+        {
+            if (node == null)
+                return false;
+            try
+            {
+                return node.IsActive;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static Guid[] GetSelectionIds(IReadOnlyList<SceneGraphNode> selection)
+        {
+            var result = new Guid[selection?.Count ?? 0];
+            for (int i = 0; i < result.Length; i++)
+                result[i] = selection[i]?.ID ?? Guid.Empty;
+            return result;
+        }
+
+        private static SceneGraphNode[] ResolveSelection(ref DataStorage data)
+        {
+            var ids = data.SelectionIds;
+            if (ids == null || ids.Length == 0)
+                return data.Selection ?? Array.Empty<SceneGraphNode>();
+
+            var selection = new SceneGraphNode[ids.Length];
+            for (int i = 0; i < ids.Length; i++)
+            {
+                var node = ids[i] != Guid.Empty ? SceneGraphFactory.FindNode(ids[i]) : null;
+                if (node == null && ids[i] != Guid.Empty)
+                    node = SceneGraphFactory.GetNode(ids[i]);
+                if (node == null && data.Selection != null && i < data.Selection.Length && IsNodeUsable(data.Selection[i]))
+                    node = data.Selection[i];
+                selection[i] = node;
+            }
+            data.Selection = selection;
+            return selection;
         }
 
         private void InvalidateBounds(ref DataStorage data)
@@ -134,9 +193,12 @@ namespace FlaxEditor
         void ISceneEditAction.MarkSceneEdited(SceneModule sceneModule)
         {
             var data = Data;
-            for (int i = 0; i < data.Selection.Length; i++)
+            var selection = ResolveSelection(ref data);
+            for (int i = 0; i < selection.Length; i++)
             {
-                sceneModule.MarkSceneEdited(data.Selection[i].ParentScene);
+                var node = selection[i];
+                if (node != null)
+                    sceneModule.MarkSceneEdited(node.ParentScene);
             }
         }
     }

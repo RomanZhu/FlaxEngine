@@ -315,13 +315,6 @@ namespace FlaxEditor.Options
         public bool HighlightViewportObjectHover { get; set; } = true;
 
         /// <summary>
-        /// Gets or sets a value indicating whether Alt-dragging transform gizmo handles moves the viewport camera with the transformed objects.
-        /// </summary>
-        [DefaultValue(true)]
-        [EditorDisplay("Interface", "Move Camera With Alt Transform Drag"), EditorOrder(265), Tooltip("Moves the viewport camera along with objects while Alt-dragging transform gizmo handles.")]
-        public bool MoveCameraWithAltTransformDrag { get; set; } = true;
-
-        /// <summary>
         /// Gets or sets the persisted global toolbar anchor and item order.
         /// </summary>
         [HideInEditor]

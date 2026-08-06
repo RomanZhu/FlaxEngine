@@ -44,7 +44,6 @@ namespace FlaxEditor.Gizmo
         private bool _isDuplicating;
 
         private bool _isTransforming;
-        private bool _isSelected;
         private Vector3 _lastIntersectionPosition;
 
         private Quaternion _rotationDelta = Quaternion.Identity;
@@ -70,6 +69,7 @@ namespace FlaxEditor.Gizmo
         private bool _isVertexSnapTemporaryPivot;
         private bool _isVertexSnapDragPending;
         private bool _wasLeftMouseButtonDown;
+        private bool _suppressSelectionRelease;
         private bool _wasSnapToVertex;
         private const float VertexSnapDragStartDistanceSquared = 16.0f;
         private static readonly SceneGraphNode.RayCastData.FlagTypes VertexSnapRayCastFlags = SceneGraphNode.RayCastData.FlagTypes.None;
@@ -127,65 +127,13 @@ namespace FlaxEditor.Gizmo
         /// <inheritdoc />
         public override void Destroy()
         {
+            CancelTransforming();
             if (Owner != null)
             {
                 Owner.Undo.UndoDone -= OnUndoRedoDone;
                 Owner.Undo.RedoDone -= OnUndoRedoDone;
             }
             base.Destroy();
-        }
-
-        /// <summary>
-        /// Starts the objects transforming (optionally with duplicate).
-        /// </summary>
-        public void StartTransforming()
-        {
-            // Check if can start new action
-            var count = SelectionCount;
-            if (count == 0 || _isTransforming || !CanTransform)
-                return;
-
-            // Check if duplicate objects
-            if (Owner.UseDuplicate && !_isDuplicating && CanDuplicate)
-            {
-                _isDuplicating = true;
-                OnDuplicate();
-                return;
-            }
-
-            // Cache 'before' state
-            _startTransforms.Clear();
-            if (_startTransforms.Capacity < count)
-                _startTransforms.Capacity = Mathf.NextPowerOfTwo(count);
-            for (var i = 0; i < count; i++)
-            {
-                _startTransforms.Add(GetSelectedTransform(i));
-            }
-            GetSelectedObjectsBounds(out _startBounds, out _navigationDirty);
-
-            // Start
-            _isTransforming = true;
-            _isDrawingTranslationDistance = _activeMode == Mode.Translate && IsTranslateAxis(_activeAxis);
-            if (_isDrawingTranslationDistance)
-                _translationDragStartPosition = Position - _translationDelta;
-            OnStartTransforming();
-        }
-
-        /// <summary>
-        /// Ends the objects transforming.
-        /// </summary>
-        public void EndTransforming()
-        {
-            // Check if wasn't working at all
-            if (!_isTransforming)
-                return;
-
-            // End action
-            _isTransforming = false;
-            _isDuplicating = false;
-            _isDrawingTranslationDistance = false;
-            OnEndTransforming();
-            _startTransforms.Clear();
         }
 
         private void UpdateGizmoPosition()
@@ -268,6 +216,7 @@ namespace FlaxEditor.Gizmo
             Vector3.TransformNormal(ref ray.Direction, ref invRotationMatrix, out ray.Direction);
 
             var position = Position;
+            var interactionAnchor = InteractionAnchor;
             var planeXY = new Plane(Vector3.Backward, Vector3.Transform(position, invRotationMatrix).Z);
             var planeYZ = new Plane(Vector3.Left, Vector3.Transform(position, invRotationMatrix).X);
             var planeZX = new Plane(Vector3.Down, Vector3.Transform(position, invRotationMatrix).Y);
@@ -285,6 +234,14 @@ namespace FlaxEditor.Gizmo
                 if (ray.Intersects(ref plane, out intersection))
                 {
                     _intersectPosition = ray.GetPoint(intersection);
+                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
+                    {
+                        var anchorRay = interactionAnchor.PointerRay;
+                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
+                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
+                        if (anchorRay.Intersects(ref plane, out Real anchorIntersection))
+                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
+                    }
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
                     delta = new Vector3(_tDelta.X, 0, 0);
@@ -297,6 +254,14 @@ namespace FlaxEditor.Gizmo
                 if (ray.Intersects(ref plane, out intersection))
                 {
                     _intersectPosition = ray.GetPoint(intersection);
+                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
+                    {
+                        var anchorRay = interactionAnchor.PointerRay;
+                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
+                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
+                        if (anchorRay.Intersects(ref plane, out Real anchorIntersection))
+                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
+                    }
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
                     delta = new Vector3(0, _tDelta.Y, 0);
@@ -309,6 +274,14 @@ namespace FlaxEditor.Gizmo
                 if (ray.Intersects(ref plane, out intersection))
                 {
                     _intersectPosition = ray.GetPoint(intersection);
+                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
+                    {
+                        var anchorRay = interactionAnchor.PointerRay;
+                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
+                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
+                        if (anchorRay.Intersects(ref plane, out Real anchorIntersection))
+                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
+                    }
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
                     delta = new Vector3(0, 0, _tDelta.Z);
@@ -320,6 +293,14 @@ namespace FlaxEditor.Gizmo
                 if (ray.Intersects(ref planeYZ, out intersection))
                 {
                     _intersectPosition = ray.GetPoint(intersection);
+                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
+                    {
+                        var anchorRay = interactionAnchor.PointerRay;
+                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
+                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
+                        if (anchorRay.Intersects(ref planeYZ, out Real anchorIntersection))
+                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
+                    }
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
                     delta = new Vector3(0, _tDelta.Y, _tDelta.Z);
@@ -331,6 +312,14 @@ namespace FlaxEditor.Gizmo
                 if (ray.Intersects(ref planeXY, out intersection))
                 {
                     _intersectPosition = ray.GetPoint(intersection);
+                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
+                    {
+                        var anchorRay = interactionAnchor.PointerRay;
+                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
+                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
+                        if (anchorRay.Intersects(ref planeXY, out Real anchorIntersection))
+                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
+                    }
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
                     delta = new Vector3(_tDelta.X, _tDelta.Y, 0);
@@ -342,6 +331,14 @@ namespace FlaxEditor.Gizmo
                 if (ray.Intersects(ref planeZX, out intersection))
                 {
                     _intersectPosition = ray.GetPoint(intersection);
+                    if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
+                    {
+                        var anchorRay = interactionAnchor.PointerRay;
+                        anchorRay.Position = Vector3.Transform(anchorRay.Position, invRotationMatrix);
+                        Vector3.TransformNormal(ref anchorRay.Direction, ref invRotationMatrix, out anchorRay.Direction);
+                        if (anchorRay.Intersects(ref planeZX, out Real anchorIntersection))
+                            _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
+                    }
                     if (!_lastIntersectionPosition.IsZero)
                         _tDelta = _intersectPosition - _lastIntersectionPosition;
                     delta = new Vector3(_tDelta.X, 0, _tDelta.Z);
@@ -362,6 +359,13 @@ namespace FlaxEditor.Gizmo
                     if (worldRay.Intersects(ref plane, out intersection))
                     {
                         _intersectPosition = worldRay.GetPoint(intersection);
+                        if (interactionAnchor != null && _lastIntersectionPosition.IsZero)
+                        {
+                            var anchorRay = interactionAnchor.PointerRay;
+                            var anchorPlane = interactionAnchor.FallbackPlane;
+                            if (anchorRay.Intersects(ref anchorPlane, out Real anchorIntersection))
+                                _lastIntersectionPosition = anchorRay.GetPoint(anchorIntersection);
+                        }
                         if (!_lastIntersectionPosition.IsZero)
                             _tDelta = _intersectPosition - _lastIntersectionPosition;
                         Vector3.TransformNormal(ref _tDelta, ref invRotationMatrix, out delta);
@@ -456,7 +460,6 @@ namespace FlaxEditor.Gizmo
             _rotationSnapDelta = 0.0f;
             _isDrawingRotationDrag = false;
             _isDrawingTranslationDistance = false;
-            _isSelected = false;
             if (clearVertexSnapping)
                 EndVertexSnapping();
             else
@@ -465,11 +468,64 @@ namespace FlaxEditor.Gizmo
 
         private void OnUndoRedoDone(IUndoAction action)
         {
-            _isTransforming = false;
-            _isDuplicating = false;
-            _startTransforms.Clear();
-            _activeAxis = Axis.None;
-            ClearTransformInteraction();
+            LogGizmoFocusDebug("Undo/redo callback before reset", action);
+            bool suppressSelectionRelease = Owner.IsLeftMouseButtonDown || _wasLeftMouseButtonDown;
+            if (HasActiveTransaction || _isTransforming || _transactionOrigin != null)
+                CancelTransforming();
+            else
+                ResetTransactionState();
+            // Consume the release from the cancelled drag so the viewport does not pick through the gizmo.
+            _suppressSelectionRelease |= suppressSelectionRelease;
+            LogGizmoFocusDebug("Undo/redo callback after reset", action);
+        }
+
+        internal bool ConsumeSelectionRelease()
+        {
+            if (!_suppressSelectionRelease)
+                return false;
+            _suppressSelectionRelease = false;
+            return true;
+        }
+
+        internal bool TryCancelPointerInteractionForUndo()
+        {
+            bool hasPointerGesture = Owner.IsLeftMouseButtonDown || _wasLeftMouseButtonDown;
+            bool hasTransformGesture = HasActiveTransaction || _isTransforming || _transactionOrigin != null || _activeAxis != Axis.None;
+            if (!hasPointerGesture || !hasTransformGesture)
+                return false;
+
+            if (HasActiveTransaction || _isTransforming || _transactionOrigin != null)
+                CancelTransforming();
+            else
+                ResetTransactionState();
+            _suppressSelectionRelease = true;
+            return true;
+        }
+
+        internal void ResetSelectionReleaseSuppression()
+        {
+            _suppressSelectionRelease = false;
+        }
+
+        private void LogGizmoFocusDebug(string point, IUndoAction action)
+        {
+            var viewport = Owner?.Viewport;
+            var root = viewport?.Root;
+            var focusedControl = root?.FocusedControl;
+            Editor.Log(string.Format(
+                "[GizmoFocusDebug] {0} {1}; Action={2}; Focused={3}; ViewportFocus={4}; State={5}; ActiveTransaction={6}; Transforming={7}; FocusLost={8}; Ctrl={9}; Shift={10}; Alt={11}",
+                GetType().Name,
+                point,
+                action != null ? action.GetType().Name + ": " + action.ActionString : "<none>",
+                focusedControl != null ? focusedControl.GetType().Name : "<none>",
+                viewport?.ContainsFocus ?? false,
+                State,
+                HasActiveTransaction,
+                _isTransforming,
+                _focusLost,
+                root?.GetKey(KeyboardKeys.Control) ?? false,
+                root?.GetKey(KeyboardKeys.Shift) ?? false,
+                root?.GetKey(KeyboardKeys.Alt) ?? false));
         }
 
         private void StartRotationDrag(Vector3 startPoint)
@@ -781,7 +837,7 @@ namespace FlaxEditor.Gizmo
         }
 
         /// <inheritdoc />
-        public override bool IsControllingMouse => (_isTransforming || _isSelected) && Owner.IsLeftMouseButtonDown;
+        public override bool IsControllingMouse => HasActiveTransaction && Owner.IsLeftMouseButtonDown;
 
         /// <inheritdoc />
         public override void Update(float dt)
@@ -793,7 +849,44 @@ namespace FlaxEditor.Gizmo
             bool isLeftMouseButtonReleased = !isLeftBtnDown && wasLeftBtnDown;
             _wasLeftMouseButtonDown = isLeftBtnDown;
             if (!IsActive)
+            {
+                if (HasActiveTransaction || _isTransforming)
+                    CancelTransforming();
+                SetHoveringState(false);
                 return;
+            }
+
+            var root = Owner.Viewport.Root;
+            if (HasActiveTransaction && root != null)
+            {
+                if (root.GetKeyDown(KeyboardKeys.Escape))
+                {
+                    CancelTransforming();
+                    return;
+                }
+                if (root.GetKeyDown(KeyboardKeys.Return))
+                {
+                    CommitTransforming();
+                    return;
+                }
+            }
+
+            if (HasActiveTransaction && !ValidateTransactionObjects())
+            {
+                CancelTransforming();
+                return;
+            }
+
+            if (HasActiveTransaction && HandleFocusAndClutch())
+            {
+                UpdateGizmoPosition();
+                UpdateMatrices();
+                return;
+            }
+
+            if (!HasActiveTransaction && isLeftMouseButtonPressed && _activeAxis != Axis.None)
+                ArmInteraction();
+
             bool snapToVertex = Owner.SnapToVertex;
             bool snapToVertexPressed = snapToVertex && !_wasSnapToVertex;
             _wasSnapToVertex = snapToVertex;
@@ -812,7 +905,16 @@ namespace FlaxEditor.Gizmo
             // Snap to ground
             if (_activeAxis == Axis.None && SelectionCount != 0 && Owner.SnapToGround)
             {
-                SnapToGround();
+                try
+                {
+                    SnapToGround();
+                }
+                catch (Exception ex)
+                {
+                    ReportInteractionFailure("Ground snapping failed; cancelling the transaction.", ex);
+                    CancelTransforming();
+                    return;
+                }
             }
             // Only when is active
             else if (_isActive)
@@ -845,9 +947,10 @@ namespace FlaxEditor.Gizmo
                 }
 
                 // Check if user is holding left mouse button and any axis is selected
-                if (isLeftBtnDown && _activeAxis != Axis.None && !_isVertexSnapDragPending)
+                try
                 {
-                    _isSelected = true; // setting later is too late, need to set here for rubber band selection in GizmoViewport
+                    if (_interactionState != InteractionState.Clutched && isLeftBtnDown && _activeAxis != Axis.None && !_isVertexSnapDragPending)
+                {
                     switch (_activeMode)
                     {
                     case Mode.Translate:
@@ -865,9 +968,8 @@ namespace FlaxEditor.Gizmo
                     else
                         EndVertexSnappingTarget();
                 }
-                else
+                else if (_interactionState != InteractionState.Clutched)
                 {
-                    _isSelected = false;
                     // If nothing selected, try to select any axis
                     if (!isLeftBtnDown && !Owner.IsRightMouseButtonDown)
                     {
@@ -901,6 +1003,13 @@ namespace FlaxEditor.Gizmo
                             SelectAxis();
                         }
                     }
+                }
+                }
+                catch (Exception ex)
+                {
+                    ReportInteractionFailure("Transform preview failed; cancelling the transaction.", ex);
+                    CancelTransforming();
+                    return;
                 }
 
                 // Set positions of the gizmo
@@ -950,16 +1059,37 @@ namespace FlaxEditor.Gizmo
                     // Apply transformation (but to the parents, not whole selection pool)
                     if (anyValid || (_isTransforming && Owner.UseDuplicate))
                     {
-                        StartTransforming();
-                        LastDelta = new Transform(translationDelta, rotationDelta, scaleDelta);
-                        OnApplyTransformation(ref translationDelta, ref rotationDelta, ref scaleDelta);
+                        try
+                        {
+                            StartTransforming();
+                            if (_isTransforming)
+                            {
+                                LastDelta = new Transform(translationDelta, rotationDelta, scaleDelta);
+                                ApplyInteractionDelta(ref translationDelta, ref rotationDelta, ref scaleDelta);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            ReportInteractionFailure("Transform application failed; cancelling the transaction.", ex);
+                            CancelTransforming();
+                            return;
+                        }
                     }
                 }
-                else
+                else if (_interactionState != InteractionState.Clutched)
                 {
-                    // Clear cache
-                    ClearTransformInteraction(!((snapToVertex || _isVertexSnapTemporaryPivot) && _vertexSnapObject != null));
-                    EndTransforming();
+                    try
+                    {
+                        // Clear cache
+                        ClearTransformInteraction(!((snapToVertex || _isVertexSnapTemporaryPivot) && _vertexSnapObject != null));
+                        EndTransforming();
+                    }
+                    catch (Exception ex)
+                    {
+                        ReportInteractionFailure("Transform commit failed; cancelling the transaction.", ex);
+                        CancelTransforming();
+                        return;
+                    }
                 }
             }
 
@@ -967,6 +1097,9 @@ namespace FlaxEditor.Gizmo
             if (SelectionCount == 0)
             {
                 // Deactivate
+                if (HasActiveTransaction || _isTransforming)
+                    CancelTransforming();
+                SetHoveringState(false);
                 _isActive = false;
                 _activeAxis = Axis.None;
                 ClearTransformInteraction();
@@ -979,6 +1112,14 @@ namespace FlaxEditor.Gizmo
 
             // Activate
             _isActive = true;
+
+            if (!HasActiveTransaction)
+            {
+                if (_activeAxis == Axis.None)
+                    SetHoveringState(false);
+                else
+                    SetHoveringState(true);
+            }
 
             // Update
             UpdateMatrices();

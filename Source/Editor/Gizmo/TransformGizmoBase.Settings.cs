@@ -106,6 +106,8 @@ namespace FlaxEditor.Gizmo
             {
                 if (_activePivotType != value)
                 {
+                    if (TryQueuePivot(value))
+                        return;
                     _isTransforming = false;
                     _isDuplicating = false;
                     _startTransforms.Clear();
@@ -131,6 +133,8 @@ namespace FlaxEditor.Gizmo
             {
                 if (_activeMode != value)
                 {
+                    if (TryQueueMode(value))
+                        return;
                     _isTransforming = false;
                     _isDuplicating = false;
                     _startTransforms.Clear();
@@ -161,6 +165,8 @@ namespace FlaxEditor.Gizmo
             {
                 if (_activeTransformSpace != value)
                 {
+                    if (TryQueueTransformSpace(value))
+                        return;
                     _activeTransformSpace = value;
                     TransformSpaceChanged?.Invoke();
                 }

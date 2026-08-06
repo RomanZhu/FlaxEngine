@@ -116,6 +116,17 @@ namespace FlaxEditor.GUI.Timeline
             _curveEditingStartData = null;
         }
 
+        protected override void OnCancelTransforming()
+        {
+            if (_curveEditingStartData != null && _track != null)
+            {
+                var after = EditTrackAction.CaptureData(_track);
+                new EditTrackAction(_track.Timeline, _track, _curveEditingStartData, after).Undo();
+            }
+            _curveEditingStartData = null;
+            base.OnCancelTransforming();
+        }
+
         protected override void OnApplyTransformation(ref Vector3 translationDelta, ref Quaternion rotationDelta, ref Vector3 scaleDelta)
         {
             base.OnApplyTransformation(ref translationDelta, ref rotationDelta, ref scaleDelta);

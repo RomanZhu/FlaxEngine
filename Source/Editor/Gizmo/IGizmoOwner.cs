@@ -37,6 +37,11 @@ namespace FlaxEditor.Gizmo
         bool IsRightMouseButtonDown { get; }
 
         /// <summary>
+        /// Gets a value indicating whether middle mouse button is pressed down.
+        /// </summary>
+        bool IsMiddleMouseButtonDown { get; }
+
+        /// <summary>
         /// Gets a value indicating whether Alt key is pressed down.
         /// </summary>
         bool IsAltKeyDown { get; }
@@ -110,6 +115,16 @@ namespace FlaxEditor.Gizmo
         /// Gets the root tree node for the scene graph.
         /// </summary>
         SceneGraph.RootNode SceneGraphRoot { get; }
+
+        /// <summary>
+        /// Duplicates the current selection without adding a standalone undo
+        /// item. The returned action is already performed and is owned by the
+        /// caller until it is committed or cancelled.
+        /// </summary>
+        /// <param name="createdObjects">The top-level created objects.</param>
+        /// <param name="undoAction">The already-performed duplicate action.</param>
+        /// <returns>True if objects were duplicated.</returns>
+        bool TryDuplicateForTransform(out List<SceneGraph.SceneGraphNode> createdObjects, out IUndoAction undoAction);
 
         /// <summary>
         /// Selects the scene objects.
