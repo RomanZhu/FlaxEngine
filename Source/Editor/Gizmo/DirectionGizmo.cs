@@ -73,7 +73,7 @@ internal class DirectionGizmo : ContainerControl
     private struct AxisData
     {
         public Float2 Delta;
-        public float Distance;
+        public float Depth;
         public string Label;
         public Color AxisColor;
         public bool Negative;
@@ -100,13 +100,13 @@ internal class DirectionGizmo : ContainerControl
         _viewport = owner.Viewport;
         _viewportProjection.Init(owner.Viewport);
 
-        _xAxisData = new AxisData { Delta = new Float2(0, 0), Distance = 0, Label = "X", AxisColor = new Color(1.0f, 0.0f, 0.02745f, 1.0f), Negative = false, Direction = AxisDirection.PosX };
-        _yAxisData = new AxisData { Delta = new Float2(0, 0), Distance = 0, Label = "Y", AxisColor = new Color(0.239215f, 1.0f, 0.047058f, 1.0f), Negative = false, Direction = AxisDirection.PosY };
-        _zAxisData = new AxisData { Delta = new Float2(0, 0), Distance = 0, Label = "Z", AxisColor = new Color(0.0f, 0.3607f, 0.9f, 1.0f), Negative = false, Direction = AxisDirection.PosZ };
+        _xAxisData = new AxisData { Delta = new Float2(0, 0), Depth = 0, Label = "X", AxisColor = new Color(1.0f, 0.0f, 0.02745f, 1.0f), Negative = false, Direction = AxisDirection.PosX };
+        _yAxisData = new AxisData { Delta = new Float2(0, 0), Depth = 0, Label = "Y", AxisColor = new Color(0.239215f, 1.0f, 0.047058f, 1.0f), Negative = false, Direction = AxisDirection.PosY };
+        _zAxisData = new AxisData { Delta = new Float2(0, 0), Depth = 0, Label = "Z", AxisColor = new Color(0.0f, 0.3607f, 0.9f, 1.0f), Negative = false, Direction = AxisDirection.PosZ };
 
-        _negXAxisData = new AxisData { Delta = new Float2(0, 0), Distance = 0, Label = "-X", AxisColor = new Color(1.0f, 0.0f, 0.02745f, 1.0f), Negative = true, Direction = AxisDirection.NegX };
-        _negYAxisData = new AxisData { Delta = new Float2(0, 0), Distance = 0, Label = "-Y", AxisColor = new Color(0.239215f, 1.0f, 0.047058f, 1.0f), Negative = true, Direction = AxisDirection.NegY };
-        _negZAxisData = new AxisData { Delta = new Float2(0, 0), Distance = 0, Label = "-Z", AxisColor = new Color(0.0f, 0.3607f, 0.9f, 1.0f), Negative = true, Direction = AxisDirection.NegZ };
+        _negXAxisData = new AxisData { Delta = new Float2(0, 0), Depth = 0, Label = "-X", AxisColor = new Color(1.0f, 0.0f, 0.02745f, 1.0f), Negative = true, Direction = AxisDirection.NegX };
+        _negYAxisData = new AxisData { Delta = new Float2(0, 0), Depth = 0, Label = "-Y", AxisColor = new Color(0.239215f, 1.0f, 0.047058f, 1.0f), Negative = true, Direction = AxisDirection.NegY };
+        _negZAxisData = new AxisData { Delta = new Float2(0, 0), Depth = 0, Label = "-Z", AxisColor = new Color(0.0f, 0.3607f, 0.9f, 1.0f), Negative = true, Direction = AxisDirection.NegZ };
         _axisData.EnsureCapacity(6);
         _spritePositions.EnsureCapacity(6);
 
@@ -279,32 +279,34 @@ internal class DirectionGizmo : ContainerControl
         Float2 negYDelta = (negYProjected - gizmoCenterScreen) / heightNormalization;
         Float2 negZDelta = (negZProjected - gizmoCenterScreen) / heightNormalization;
 
-        // Calculate distances from camera to determine draw order
-        Vector3 cameraPosition = _viewport.Task.View.Position;
-        float xDistance = (float)Vector3.Distance(cameraPosition, _gizmoCenter + Vector3.Right);
-        float yDistance = (float)Vector3.Distance(cameraPosition, _gizmoCenter + Vector3.Up);
-        float zDistance = (float)Vector3.Distance(cameraPosition, _gizmoCenter + Vector3.Forward);
-        float negXDistance = (float)Vector3.Distance(cameraPosition, _gizmoCenter - Vector3.Right);
-        float negYDistance = (float)Vector3.Distance(cameraPosition, _gizmoCenter - Vector3.Up);
-        float negZDistance = (float)Vector3.Distance(cameraPosition, _gizmoCenter - Vector3.Forward);
+        // Sort by signed view depth. This avoids precision loss from comparing six nearly equal
+        // world-space distances to a point placed far in front of the camera.
+        Vector3 viewDirection = _viewport.Task.View.Direction;
+        float xDepth = (float)Vector3.Dot(Vector3.Right, viewDirection);
+        float yDepth = (float)Vector3.Dot(Vector3.Up, viewDirection);
+        float zDepth = (float)Vector3.Dot(Vector3.Forward, viewDirection);
 
         _xAxisData.Delta = xDelta;
-        _xAxisData.Distance = xDistance;
+        _xAxisData.Depth = xDepth;
         _yAxisData.Delta = yDelta;
-        _yAxisData.Distance = yDistance;
+        _yAxisData.Depth = yDepth;
         _zAxisData.Delta = zDelta;
-        _zAxisData.Distance = zDistance;
+        _zAxisData.Depth = zDepth;
         _negXAxisData.Delta = negXDelta;
-        _negXAxisData.Distance = negXDistance;
+        _negXAxisData.Depth = -xDepth;
         _negYAxisData.Delta = negYDelta;
-        _negYAxisData.Distance = negYDistance;
+        _negYAxisData.Depth = -yDepth;
         _negZAxisData.Delta = negZDelta;
-        _negZAxisData.Distance = negZDistance;
+        _negZAxisData.Depth = -zDepth;
 
         // Sort for correct draw order.
         _axisData.Clear();
         _axisData.AddRange([_xAxisData, _yAxisData, _zAxisData, _negXAxisData, _negYAxisData, _negZAxisData]);
-        _axisData.Sort((a, b) => -a.Distance.CompareTo(b.Distance));
+        _axisData.Sort((a, b) =>
+        {
+            int depthComparison = b.Depth.CompareTo(a.Depth);
+            return depthComparison != 0 ? depthComparison : a.Direction.CompareTo(b.Direction);
+        });
 
         // Rebuild sprite positions list for hover detection
         _spritePositions.Clear();

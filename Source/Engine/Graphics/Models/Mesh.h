@@ -143,7 +143,8 @@ public:
     /// <param name="perInstanceRandom">The random per-instance value (normalized to range 0-1).</param>
     /// <param name="sortOrder">Object sorting key.</param>
     /// <param name="stencilValue">Object stencil value.</param>
-    API_FUNCTION() void Draw(API_PARAM(Ref) const RenderContext& renderContext, MaterialBase* material, API_PARAM(Ref) const Matrix& world, StaticFlags flags = StaticFlags::None, bool receiveDecals = true, DrawPass drawModes = DrawPass::Default, float perInstanceRandom = 0.0f, int8 sortOrder = 0, uint8 stencilValue = 0) const;
+    /// <param name="forceDepthTest">True to force depth testing during the forward color pass.</param>
+    API_FUNCTION() void Draw(API_PARAM(Ref) const RenderContext& renderContext, MaterialBase* material, API_PARAM(Ref) const Matrix& world, StaticFlags flags = StaticFlags::None, bool receiveDecals = true, DrawPass drawModes = DrawPass::Default, float perInstanceRandom = 0.0f, int8 sortOrder = 0, uint8 stencilValue = 0, bool forceDepthTest = false) const;
 
     /// <summary>
     /// Draws the mesh.

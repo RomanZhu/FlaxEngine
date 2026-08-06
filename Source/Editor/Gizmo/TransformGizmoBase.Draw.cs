@@ -342,6 +342,16 @@ namespace FlaxEditor.Gizmo
             return GetRotateFrontDirectionLocal(ref transform, normal);
         }
 
+        private static void DrawGizmoMesh(ref RenderContext renderContext, Mesh mesh, MaterialBase material, ref Matrix world, sbyte sortOrder)
+        {
+            mesh.Draw(ref renderContext, material, ref world, StaticFlags.None, true, DrawPass.Depth | DrawPass.Forward, 0.0f, sortOrder, 0, true);
+        }
+
+        private static void DrawGizmoOverlayMesh(ref RenderContext renderContext, Mesh mesh, MaterialBase material, ref Matrix world, sbyte sortOrder)
+        {
+            mesh.Draw(ref renderContext, material, ref world, StaticFlags.None, true, DrawPass.Forward, 0.0f, sortOrder);
+        }
+
         private void DrawRotationAxis(ref RenderContext renderContext, Mesh arcMesh, ref Transform transform, ref Matrix world, Vector3 normal, MaterialBase frontMaterial, sbyte sortOrder)
         {
             Vector3 frontDirection = GetRotateFrontDirectionLocal(ref transform, normal);
@@ -350,12 +360,12 @@ namespace FlaxEditor.Gizmo
             Quaternion.LookRotation(ref forward, ref up, out var rotation);
             Matrix.RotationQuaternion(ref rotation, out var m2);
             Matrix.Multiply(ref m2, ref world, out var m3);
-            arcMesh.Draw(ref renderContext, frontMaterial, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+            DrawGizmoMesh(ref renderContext, arcMesh, frontMaterial, ref m3, sortOrder);
         }
 
         private void DrawRotationSphere(ref RenderContext renderContext, Mesh mesh, ref Matrix world, MaterialBase material, sbyte sortOrder)
         {
-            mesh.Draw(ref renderContext, material, ref world, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+            DrawGizmoMesh(ref renderContext, mesh, material, ref world, sortOrder);
         }
 
         private void DrawRotationScreenRing(ref RenderContext renderContext, Mesh mesh, MaterialBase material, sbyte sortOrder)
@@ -365,7 +375,7 @@ namespace FlaxEditor.Gizmo
             Quaternion.LookRotation(ref up, ref viewDirection, out var rotation);
             var transform = new Transform(Position, rotation, new Float3(_screenScale));
             renderContext.View.GetWorldMatrix(ref transform, out var world);
-            mesh.Draw(ref renderContext, material, ref world, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+            DrawGizmoMesh(ref renderContext, mesh, material, ref world, sortOrder);
         }
 
         private void DrawRotationTrackballPoint(ref RenderContext renderContext, Mesh pointMesh, Vector3 point, ref Matrix world, sbyte sortOrder)
@@ -373,7 +383,7 @@ namespace FlaxEditor.Gizmo
             Float3 pointLocal = point;
             Matrix.Translation(ref pointLocal, out var m2);
             Matrix.Multiply(ref m2, ref world, out var m3);
-            pointMesh.Draw(ref renderContext, _materialTrackballPoint, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+            DrawGizmoOverlayMesh(ref renderContext, pointMesh, _materialTrackballPoint, ref m3, sortOrder);
         }
 
         private Vector3 GetRotationDragPointLocal(Transform drawTransform, Vector3 point)
@@ -391,7 +401,7 @@ namespace FlaxEditor.Gizmo
             Vector3 start = GetRotationDragPointLocal(drawTransform, _rotationDragStartPointWorld);
             Vector3 current = GetRotationDragPointLocal(drawTransform, _rotationDragCurrentPointWorld);
             UpdateTriangleModel(_modelRotationTrackballTriangle, center, start, current);
-            triangleMesh.Draw(ref renderContext, _materialTrackballTriangle, ref world, StaticFlags.None, true, DrawPass.Default, 0.0f, (sbyte)(sortOrder - 1));
+            DrawGizmoOverlayMesh(ref renderContext, triangleMesh, _materialTrackballTriangle, ref world, (sbyte)(sortOrder - 1));
         }
 
         private void DrawRotationTrackballPoints(ref RenderContext renderContext, Mesh pointMesh, ref Transform drawTransform, ref Matrix world, sbyte sortOrder)
@@ -557,11 +567,11 @@ namespace FlaxEditor.Gizmo
 
             Matrix.Scaling(_vertexSnapPointOuterScale, out var scale);
             Matrix.Multiply(ref scale, ref world, out var markerWorld);
-            sphereMesh.Draw(ref renderContext, _materialVertexSnapPointShadow, ref markerWorld, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+            DrawGizmoOverlayMesh(ref renderContext, sphereMesh, _materialVertexSnapPointShadow, ref markerWorld, sortOrder);
 
             Matrix.Scaling(_vertexSnapPointInnerScale, out scale);
             Matrix.Multiply(ref scale, ref world, out markerWorld);
-            sphereMesh.Draw(ref renderContext, material, ref markerWorld, StaticFlags.None, true, DrawPass.Default, 0.0f, (sbyte)(sortOrder + 1));
+            DrawGizmoOverlayMesh(ref renderContext, sphereMesh, material, ref markerWorld, (sbyte)(sortOrder + 1));
         }
 
         private void DrawVertexSnapPointHighlights(ref RenderContext renderContext, Mesh sphereMesh, sbyte sortOrder)
@@ -656,10 +666,7 @@ namespace FlaxEditor.Gizmo
             // Update the gizmo brightness every frame to ensure it updates correctly
             UpdateGizmoBrightness(Editor.Instance.Options.Options);
 
-            // As all axisMesh have the same pivot, add a little offset to the x axisMesh, this way SortDrawCalls is able to sort the draw order
-            // https://github.com/FlaxEngine/FlaxEngine/issues/680
-
-            Matrix m1, m2, m3, mx1;
+            Matrix m1, m2, m3;
             float boxScale = 300f;
             float boxSize = 0.085f;
             bool isXAxis = _activeAxis == Axis.X || _activeAxis == Axis.XY || _activeAxis == Axis.ZX;
@@ -677,8 +684,6 @@ namespace FlaxEditor.Gizmo
 
             Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m3);
             Matrix.Multiply(ref m3, ref world, out m1);
-            mx1 = m1;
-            mx1.M41 += 0.05f;
 
             switch (_activeMode)
             {
@@ -693,21 +698,21 @@ namespace FlaxEditor.Gizmo
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance xAxisMaterialTransform = (isXAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
                 if (!isShowingTranslationDistance || _activeAxis == Axis.X)
-                    transAxisMesh.Draw(ref renderContext, xAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    DrawGizmoMesh(ref renderContext, transAxisMesh, xAxisMaterialTransform, ref m3, sortOrder);
 
                 // Y axis
                 Matrix.RotationX(isShowingTranslationDistance && _activeAxis == Axis.Y && isTranslationDistanceReversed ? -Mathf.PiOverTwo : Mathf.PiOverTwo, out m2);
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance yAxisMaterialTransform = (isYAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
                 if (!isShowingTranslationDistance || _activeAxis == Axis.Y)
-                    transAxisMesh.Draw(ref renderContext, yAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    DrawGizmoMesh(ref renderContext, transAxisMesh, yAxisMaterialTransform, ref m3, sortOrder);
 
                 // Z axis
                 Matrix.RotationX(isShowingTranslationDistance && _activeAxis == Axis.Z && isTranslationDistanceReversed ? 0.0f : Mathf.Pi, out m2);
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance zAxisMaterialTransform = (isZAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
                 if (!isShowingTranslationDistance || _activeAxis == Axis.Z)
-                    transAxisMesh.Draw(ref renderContext, zAxisMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    DrawGizmoMesh(ref renderContext, transAxisMesh, zAxisMaterialTransform, ref m3, sortOrder);
 
                 if (!isShowingTranslationDistance)
                 {
@@ -715,26 +720,26 @@ namespace FlaxEditor.Gizmo
                     m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationX(Mathf.PiOverTwo), new Vector3(boxSize * boxScale, boxSize * boxScale, 0.0f));
                     Matrix.Multiply(ref m2, ref m1, out m3);
                     MaterialInstance xyPlaneMaterialTransform = (_activeAxis == Axis.XY && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
-                    cubeMesh.Draw(ref renderContext, xyPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    DrawGizmoMesh(ref renderContext, cubeMesh, xyPlaneMaterialTransform, ref m3, sortOrder);
 
                     // ZX plane
                     m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.Identity, new Vector3(boxSize * boxScale, 0.0f, boxSize * boxScale));
                     Matrix.Multiply(ref m2, ref m1, out m3);
-                    MaterialInstance zxPlaneMaterialTransform = (_activeAxis == Axis.ZX && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
-                    cubeMesh.Draw(ref renderContext, zxPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    MaterialInstance zxPlaneMaterialTransform = (_activeAxis == Axis.ZX && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
+                    DrawGizmoMesh(ref renderContext, cubeMesh, zxPlaneMaterialTransform, ref m3, sortOrder);
 
                     // YZ plane
                     m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationZ(Mathf.PiOverTwo), new Vector3(0.0f, boxSize * boxScale, boxSize * boxScale));
                     Matrix.Multiply(ref m2, ref m1, out m3);
-                    MaterialInstance yzPlaneMaterialTransform = (_activeAxis == Axis.YZ && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
-                    cubeMesh.Draw(ref renderContext, yzPlaneMaterialTransform, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    MaterialInstance yzPlaneMaterialTransform = (_activeAxis == Axis.YZ && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
+                    DrawGizmoMesh(ref renderContext, cubeMesh, yzPlaneMaterialTransform, ref m3, sortOrder);
 
                     // Center sphere
                     if (_vertexSnapObject == null)
                     {
                         Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
                         Matrix.Multiply(ref m2, ref m1, out m3);
-                        sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                        DrawGizmoMesh(ref renderContext, sphereMesh, isCenter ? _materialAxisFocus : _materialSphere, ref m3, sortOrder);
                     }
                 }
 
@@ -789,46 +794,46 @@ namespace FlaxEditor.Gizmo
 
                 // X axis
                 Matrix.RotationY(-Mathf.PiOverTwo, out m2);
-                Matrix.Multiply(ref m2, ref mx1, out m3);
+                Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance xAxisMaterialRotate = (isXAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
-                scaleAxisMesh.Draw(ref renderContext, xAxisMaterialRotate, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                DrawGizmoMesh(ref renderContext, scaleAxisMesh, xAxisMaterialRotate, ref m3, sortOrder);
 
                 // Y axis
                 Matrix.RotationX(Mathf.PiOverTwo, out m2);
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance yAxisMaterialRotate = (isYAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
-                scaleAxisMesh.Draw(ref renderContext, yAxisMaterialRotate, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                DrawGizmoMesh(ref renderContext, scaleAxisMesh, yAxisMaterialRotate, ref m3, sortOrder);
 
                 // Z axis
                 Matrix.RotationX(Mathf.Pi, out m2);
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance zAxisMaterialRotate = (isZAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
-                scaleAxisMesh.Draw(ref renderContext, zAxisMaterialRotate, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                DrawGizmoMesh(ref renderContext, scaleAxisMesh, zAxisMaterialRotate, ref m3, sortOrder);
 
                 // XY plane
                 m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationX(Mathf.PiOverTwo), new Vector3(boxSize * boxScale, boxSize * boxScale, 0.0f));
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance xyPlaneMaterialScale = (_activeAxis == Axis.XY && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
-                cubeMesh.Draw(ref renderContext, xyPlaneMaterialScale, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                DrawGizmoMesh(ref renderContext, cubeMesh, xyPlaneMaterialScale, ref m3, sortOrder);
 
                 // ZX plane
                 m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.Identity, new Vector3(boxSize * boxScale, 0.0f, boxSize * boxScale));
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance zxPlaneMaterialScale = (_activeAxis == Axis.ZX && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
-                cubeMesh.Draw(ref renderContext, zxPlaneMaterialScale, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                DrawGizmoMesh(ref renderContext, cubeMesh, zxPlaneMaterialScale, ref m3, sortOrder);
 
                 // YZ plane
                 m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationZ(Mathf.PiOverTwo), new Vector3(0.0f, boxSize * boxScale, boxSize * boxScale));
                 Matrix.Multiply(ref m2, ref m1, out m3);
                 MaterialInstance yzPlaneMaterialScale = (_activeAxis == Axis.YZ && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
-                cubeMesh.Draw(ref renderContext, yzPlaneMaterialScale, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                DrawGizmoMesh(ref renderContext, cubeMesh, yzPlaneMaterialScale, ref m3, sortOrder);
 
                 // Center box
                 if (_vertexSnapObject == null)
                 {
                     Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
                     Matrix.Multiply(ref m2, ref m1, out m3);
-                    sphereMesh.Draw(ref renderContext, isCenter ? _materialAxisFocus : _materialSphere, ref m3, StaticFlags.None, true, DrawPass.Default, 0.0f, sortOrder);
+                    DrawGizmoMesh(ref renderContext, sphereMesh, isCenter ? _materialAxisFocus : _materialSphere, ref m3, sortOrder);
                 }
 
                 break;

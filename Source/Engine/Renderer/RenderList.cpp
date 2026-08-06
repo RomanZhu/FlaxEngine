@@ -642,6 +642,7 @@ FORCE_INLINE void CalculateSortKey(const RenderContext& renderContext, DrawCall&
     if (drawCall.Material->CanUseInstancing(handler))
         handler.GetHash(drawCall, batchKey);
     batchKey = (batchKey * 397) ^ drawCall.StencilValue;
+    batchKey = (batchKey * 397) ^ drawCall.ForceDepthTest;
     uint32 drawKey = (uint32)(471 * drawCall.WorldDeterminant);
     drawKey = (drawKey * 397) ^ GetHash(drawCall.Geometry.VertexBuffers[0]);
     drawKey = (drawKey * 397) ^ GetHash(drawCall.Geometry.VertexBuffers[1]);
@@ -864,7 +865,8 @@ void RenderList::SortDrawCalls(const RenderContext& renderContext, bool reverseD
                         drawCallHandler.CanBatch == otherHandler.CanBatch &&
                         drawCallHandler.CanBatch(drawCall, other, pass) &&
                         drawCall.WorldDeterminant == other.WorldDeterminant &&
-                        drawCall.StencilValue == other.StencilValue;
+                        drawCall.StencilValue == other.StencilValue &&
+                        drawCall.ForceDepthTest == other.ForceDepthTest;
                 if (!canBatch)
                     break;
                 batchSize++;

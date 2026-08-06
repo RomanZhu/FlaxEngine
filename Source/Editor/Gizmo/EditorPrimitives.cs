@@ -60,7 +60,8 @@ namespace FlaxEditor.Gizmo
             desc = GPUTextureDescription.New2D(width, height, renderContext.Buffers.DepthBuffer.Format, GPUTextureFlags.DepthStencil, 1, 1, msaaLevel);
             var targetDepth = RenderTargetPool.Get(ref desc);
 
-            // Copy frame and clear depth
+            // Copy the scene color. Editor drawing below can change the render targets, so the
+            // transform-gizmo depth layer is cleared and rebound immediately before execution.
             context.Draw(target, input);
             context.ClearDepth(targetDepth.View());
             context.SetViewport(width, height);
@@ -81,6 +82,7 @@ namespace FlaxEditor.Gizmo
             }
 
             // Sort draw calls
+            renderList.SortDrawCalls(ref renderContext, false, DrawCallsListType.Depth, DrawPass.Depth);
             renderList.SortDrawCalls(ref renderContext, false, DrawCallsListType.GBuffer);
             renderList.SortDrawCalls(ref renderContext, false, DrawCallsListType.GBufferNoDecals);
             renderList.SortDrawCalls(ref renderContext, true, DrawCallsListType.Forward);
@@ -89,6 +91,14 @@ namespace FlaxEditor.Gizmo
             renderContext.View.Pass = DrawPass.GBuffer;
             renderList.ExecuteDrawCalls(ref renderContext, DrawCallsListType.GBuffer);
             renderList.ExecuteDrawCalls(ref renderContext, DrawCallsListType.GBufferNoDecals);
+
+            // Debug drawing is immediate and may have written this depth buffer or unbound it.
+            // Start a clean, gizmo-only depth prepass, then shade only the nearest gizmo surface.
+            context.ClearDepth(targetDepth.View());
+            context.SetViewport(width, height);
+            context.SetRenderTarget(targetDepth.View(), target.View());
+            renderContext.View.Pass = DrawPass.Depth;
+            renderList.ExecuteDrawCalls(ref renderContext, DrawCallsListType.Depth);
             renderContext.View.Pass = DrawPass.Forward;
             renderList.ExecuteDrawCalls(ref renderContext, DrawCallsListType.Forward);
 

@@ -217,7 +217,7 @@ bool Mesh::Load(uint32 vertices, uint32 triangles, const void* vb0, const void* 
     return Init(vertices, triangles, vbData, ib, use16BitIndexBuffer, vbLayout);
 }
 
-void Mesh::Draw(const RenderContext& renderContext, MaterialBase* material, const Matrix& world, StaticFlags flags, bool receiveDecals, DrawPass drawModes, float perInstanceRandom, int8 sortOrder, uint8 stencilValue) const
+void Mesh::Draw(const RenderContext& renderContext, MaterialBase* material, const Matrix& world, StaticFlags flags, bool receiveDecals, DrawPass drawModes, float perInstanceRandom, int8 sortOrder, uint8 stencilValue, bool forceDepthTest) const
 {
     if (!material || !material->IsSurface() || !IsInitialized())
         return;
@@ -241,6 +241,7 @@ void Mesh::Draw(const RenderContext& renderContext, MaterialBase* material, cons
     drawCall.Surface.PrevWorld = world;
     drawCall.PerInstanceRandom = perInstanceRandom;
     drawCall.StencilValue = stencilValue;
+    drawCall.ForceDepthTest = forceDepthTest;
 #if USE_EDITOR
     const ViewMode viewMode = renderContext.View.Mode;
     if (viewMode == ViewMode::LightmapUVsDensity || viewMode == ViewMode::LODPreview)

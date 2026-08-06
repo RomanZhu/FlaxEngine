@@ -87,7 +87,9 @@ void ForwardMaterialShader::Bind(BindParameters& params)
     }
     ASSERT_LOW_LAYER(!(useSkinning && params.Instanced)); // No support for instancing skinned meshes
     const auto cacheObj = params.Instanced ? &_cacheInstanced : &_cache;
-    PipelineStateCache* psCache = cacheObj->GetPS(view.Pass, useSkinning);
+    // Explicitly depth-prepassed geometry tests the color pass against its depth layer.
+    const bool forceDepthTest = view.Pass == DrawPass::Forward && drawCall.ForceDepthTest;
+    PipelineStateCache* psCache = cacheObj->GetPS(view.Pass, useSkinning, forceDepthTest);
     ASSERT(psCache);
     GPUPipelineState* state = psCache->GetPS(cullMode, wireframe);
 
@@ -173,10 +175,21 @@ bool ForwardMaterialShader::Load()
         break;
     }
     _cache.Default.Init(psDesc);
+
+    // The regular forward state follows the material's depth settings. Keep a depth-tested,
+    // non-writing variant for geometry that was rendered into an explicit depth prepass.
+    auto depthTestDesc = psDesc;
+    depthTestDesc.DepthEnable = true;
+    depthTestDesc.DepthWriteEnable = false;
+    depthTestDesc.DepthFunc = ComparisonFunc::LessEqual;
+    _cache.DefaultDepthTest.Init(depthTestDesc);
+
     //psDesc.VS = _shader->GetVS("VS", 1);
     //_cacheInstanced.Default.Init(psDesc);
     psDesc.VS = _shader->GetVS("VS_Skinned");
     _cache.DefaultSkinned.Init(psDesc);
+    depthTestDesc.VS = _shader->GetVS("VS_Skinned");
+    _cache.DefaultDepthTestSkinned.Init(depthTestDesc);
 
     // Depth Pass
     psDesc = GPUPipelineState::Description::Default;

@@ -14,6 +14,8 @@ private:
     {
         PipelineStateCache Default;
         PipelineStateCache DefaultSkinned;
+        PipelineStateCache DefaultDepthTest;
+        PipelineStateCache DefaultDepthTestSkinned;
         PipelineStateCache Depth;
         PipelineStateCache DepthSkinned;
         PipelineStateCache Distortion;
@@ -23,7 +25,7 @@ private:
         PipelineStateCache QuadOverdrawSkinned;
 #endif
 
-        FORCE_INLINE PipelineStateCache* GetPS(const DrawPass pass, const bool useSkinning)
+        FORCE_INLINE PipelineStateCache* GetPS(const DrawPass pass, const bool useSkinning, const bool forceDepthTest)
         {
             switch (pass)
             {
@@ -32,6 +34,8 @@ private:
             case DrawPass::Distortion:
                 return useSkinning ? &DistortionSkinned : &Distortion;
             case DrawPass::Forward:
+                if (forceDepthTest)
+                    return useSkinning ? &DefaultDepthTestSkinned : &DefaultDepthTest;
                 return useSkinning ? &DefaultSkinned : &Default;
 #if USE_EDITOR
             case DrawPass::QuadOverdraw:
@@ -46,6 +50,8 @@ private:
         {
             Default.Release();
             DefaultSkinned.Release();
+            DefaultDepthTest.Release();
+            DefaultDepthTestSkinned.Release();
             Depth.Release();
             DepthSkinned.Release();
             Distortion.Release();

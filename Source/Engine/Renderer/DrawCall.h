@@ -283,6 +283,11 @@ struct DrawCall
     uint8 WorldDeterminant : 1;
 
     /// <summary>
+    /// Forces depth testing for the forward color pass. Used by explicitly depth-prepassed geometry.
+    /// </summary>
+    uint8 ForceDepthTest : 1;
+
+    /// <summary>
     /// The sorting key for the draw call calculate by RenderList.
     /// </summary>
     uint64 SortKey;
