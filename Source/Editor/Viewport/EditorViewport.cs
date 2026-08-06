@@ -234,6 +234,14 @@ namespace FlaxEditor.Viewport
         /// </summary>
         protected Float2 _mouseDelta;
 
+        private float _rightMouseMoveSum;
+        private bool _rightMouseUsedForNavigation;
+
+        /// <summary>
+        /// Gets a value indicating whether the current right mouse button gesture is a click rather than viewport navigation.
+        /// </summary>
+        protected bool IsRightMouseButtonClick => !_rightMouseUsedForNavigation && _rightMouseMoveSum < 2.0f;
+
         // Camera
 
         private ViewportCamera _camera;
@@ -2092,6 +2100,8 @@ namespace FlaxEditor.Viewport
         protected virtual void OnRightMouseButtonDown()
         {
             _startPos = _viewMousePos;
+            _rightMouseMoveSum = 0.0f;
+            _rightMouseUsedForNavigation = false;
         }
 
         /// <summary>
@@ -2365,6 +2375,12 @@ namespace FlaxEditor.Viewport
                     _mouseDeltaLast = currentDelta;
                 }
 #endif
+
+                if (_input.IsMouseRightDown || _isVirtualMouseRightDown)
+                {
+                    _rightMouseMoveSum += mouseDelta.Length;
+                    _rightMouseUsedForNavigation |= !moveDelta.IsZero || rmbWheel;
+                }
 
                 // Update
                 moveDelta *= dt * (60.0f * 4.0f);

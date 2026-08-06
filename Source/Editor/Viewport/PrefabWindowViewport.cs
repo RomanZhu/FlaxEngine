@@ -71,7 +71,6 @@ namespace FlaxEditor.Viewport
 
         private PrefabUIEditorRoot _uiRoot;
         private bool _showUI = false;
-        private Float2 _rightMouseDownViewPos;
 
         private int _defaultScaleActiveIndex = -1;
         private int _customScaleActiveIndex = -1;
@@ -616,17 +615,9 @@ namespace FlaxEditor.Viewport
         }
 
         /// <inheritdoc />
-        protected override void OnRightMouseButtonDown()
-        {
-            base.OnRightMouseButtonDown();
-
-            _rightMouseDownViewPos = _viewMousePos;
-        }
-
-        /// <inheritdoc />
         protected override void OnRightMouseButtonUp()
         {
-            if ((_viewMousePos - _rightMouseDownViewPos).LengthSquared < 4.0f &&
+            if (IsRightMouseButtonClick &&
                 Bounds.Contains(ref _viewMousePos) &&
                 TransformGizmo.IsActive &&
                 TransformGizmo.ActiveAxis == TransformGizmoBase.Axis.None)
@@ -667,6 +658,7 @@ namespace FlaxEditor.Viewport
                 }
 
                 Focus();
+                OpenContextMenu();
             }
 
             base.OnRightMouseButtonUp();

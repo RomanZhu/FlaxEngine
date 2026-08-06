@@ -137,7 +137,6 @@ namespace FlaxEditor.Viewport
         private EditorSpritesRenderer _editorSpritesRenderer;
         private ViewportRubberBandSelector _rubberBandSelector;
         private DirectionGizmo _directionGizmo;
-        private Float2 _rightMouseDownViewPos;
 
         private bool _gameViewActive;
         private ViewFlags _preGameViewFlags;
@@ -1332,17 +1331,9 @@ namespace FlaxEditor.Viewport
         }
 
         /// <inheritdoc />
-        protected override void OnRightMouseButtonDown()
-        {
-            base.OnRightMouseButtonDown();
-
-            _rightMouseDownViewPos = _viewMousePos;
-        }
-
-        /// <inheritdoc />
         protected override void OnRightMouseButtonUp()
         {
-            if ((_viewMousePos - _rightMouseDownViewPos).LengthSquared < 4.0f &&
+            if (IsRightMouseButtonClick &&
                 ContainsPoint(ref _viewMousePos) &&
                 !_directionGizmo.IsMouseOver &&
                 !_gameViewActive &&
@@ -1364,6 +1355,7 @@ namespace FlaxEditor.Viewport
                 }
 
                 Focus();
+                OpenContextMenu();
             }
 
             base.OnRightMouseButtonUp();
