@@ -1685,17 +1685,39 @@ namespace FlaxEditor.Modules
             if (!mainWindow || (!mainWindow.IsFocused && !Platform.HasFocus))
                 return false;
 
+            bool logGizmoFocus = IsGizmoFocusDebugKey(key);
+            if (logGizmoFocus)
+                LogGizmoFocusDebug("Main window received unhandled key", key);
+
             var input = Editor.Options.Options.Input;
             if (input.Undo.Process(mainWindow, key))
             {
+                if (logGizmoFocus)
+                    LogGizmoFocusDebug("Global undo before action", key);
                 Editor.PerformUndo();
+                if (logGizmoFocus)
+                    LogGizmoFocusDebug("Global undo after action", key);
                 RestoreEditorFocusIfNeeded(null);
+                if (logGizmoFocus)
+                {
+                    LogGizmoFocusDebug("Global undo after focus recovery", key);
+                    FlaxEngine.Scripting.InvokeOnUpdate(() => LogGizmoFocusDebug("Global undo next update", key));
+                }
                 return true;
             }
             if (input.Redo.Process(mainWindow, key))
             {
+                if (logGizmoFocus)
+                    LogGizmoFocusDebug("Global redo before action", key);
                 Editor.PerformRedo();
+                if (logGizmoFocus)
+                    LogGizmoFocusDebug("Global redo after action", key);
                 RestoreEditorFocusIfNeeded(null);
+                if (logGizmoFocus)
+                {
+                    LogGizmoFocusDebug("Global redo after focus recovery", key);
+                    FlaxEngine.Scripting.InvokeOnUpdate(() => LogGizmoFocusDebug("Global redo next update", key));
+                }
                 return true;
             }
             if (IsNavigationBackInput(mainWindow, key))
@@ -1710,6 +1732,31 @@ namespace FlaxEditor.Modules
             }
 
             return false;
+        }
+
+        private static bool IsGizmoFocusDebugKey(KeyboardKeys key)
+        {
+            return key == KeyboardKeys.F ||
+                   key == KeyboardKeys.Q ||
+                   key == KeyboardKeys.W ||
+                   key == KeyboardKeys.E ||
+                   key == KeyboardKeys.R ||
+                   key == KeyboardKeys.Z;
+        }
+
+        private void LogGizmoFocusDebug(string point, KeyboardKeys key)
+        {
+            var mainWindow = MainWindow;
+            Editor.Log(string.Format(
+                "[GizmoFocusDebug] WindowsModule {0}; Key={1}; Focused={2}; AppFocus={3}; MainWindowFocus={4}; Ctrl={5}; Shift={6}; Alt={7}",
+                point,
+                key,
+                DescribeControl(mainWindow ? mainWindow.GUI?.FocusedControl : null),
+                Platform.HasFocus,
+                mainWindow && mainWindow.IsFocused,
+                mainWindow && mainWindow.GetKey(KeyboardKeys.Control),
+                mainWindow && mainWindow.GetKey(KeyboardKeys.Shift),
+                mainWindow && mainWindow.GetKey(KeyboardKeys.Alt)));
         }
 
         internal void OnNavigationMouseDown(ref Float2 mousePosition, MouseButton button, ref bool handled)

@@ -1187,12 +1187,14 @@ namespace FlaxEditor.Utilities
             inputActions.Add(options => options.Undo, () =>
             {
                 Editor.Instance.PerformUndo();
-                window.Focus();
+                if (!window.ContainsFocus)
+                    window.Focus();
             });
             inputActions.Add(options => options.Redo, () =>
             {
                 Editor.Instance.PerformRedo();
-                window.Focus();
+                if (!window.ContainsFocus)
+                    window.Focus();
             });
             inputActions.Add(options => options.Cut, Editor.Instance.SceneEditing.Cut);
             inputActions.Add(options => options.Copy, Editor.Instance.SceneEditing.Copy);

@@ -263,8 +263,8 @@ namespace FlaxEditor.Windows.Assets
             // Toolstrip
             _saveButton = _toolstrip.AddButton(Editor.Icons.Save64, Save).LinkTooltip("Save", ref inputOptions.Save);
             _toolstrip.AddSeparator();
-            _toolStripUndo = _toolstrip.AddButton(Editor.Icons.Undo64, _undo.PerformUndo).LinkTooltip("Undo", ref inputOptions.Undo);
-            _toolStripRedo = _toolstrip.AddButton(Editor.Icons.Redo64, _undo.PerformRedo).LinkTooltip("Redo", ref inputOptions.Redo);
+            _toolStripUndo = _toolstrip.AddButton(Editor.Icons.Undo64, PerformUndo).LinkTooltip("Undo", ref inputOptions.Undo);
+            _toolStripRedo = _toolstrip.AddButton(Editor.Icons.Redo64, PerformRedo).LinkTooltip("Redo", ref inputOptions.Redo);
             _toolstrip.AddSeparator();
             _toolStripSelect = _toolstrip.AddButton("Select", () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Select).LinkTooltip("Change Gizmo tool mode to Select", ref inputOptions.SelectMode);
             _toolStripTranslate = _toolstrip.AddButton(Editor.Icons.Translate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate).LinkTooltip("Change Gizmo tool mode to Translate", ref inputOptions.TranslateMode);
@@ -296,16 +296,8 @@ namespace FlaxEditor.Windows.Assets
             ScriptsBuilder.ScriptsReloadBegin += OnScriptsReloadBegin;
 
             // Setup input actions
-            InputActions.Add(options => options.Undo, () =>
-            {
-                _undo.PerformUndo();
-                Focus();
-            });
-            InputActions.Add(options => options.Redo, () =>
-            {
-                _undo.PerformRedo();
-                Focus();
-            });
+            InputActions.Add(options => options.Undo, PerformUndo);
+            InputActions.Add(options => options.Redo, PerformRedo);
             InputActions.Add(options => options.Cut, Cut);
             InputActions.Add(options => options.Copy, Copy);
             InputActions.Add(options => options.Paste, Paste);
@@ -313,6 +305,56 @@ namespace FlaxEditor.Windows.Assets
             InputActions.Add(options => options.Delete, Delete);
             InputActions.Add(options => options.Rename, RenameSelection);
             InputActions.Add(options => options.FocusSelection, FocusSelection);
+        }
+
+        private void PerformUndo()
+        {
+            var action = _undo.UndoOperationsStack.PeekHistory() as IUndoAction;
+            LogGizmoFocusDebug("Undo before", action);
+            _undo.PerformUndo();
+            LogGizmoFocusDebug("Undo after action", action);
+            _viewport.Focus();
+            LogGizmoFocusDebug("Undo after viewport.Focus", action);
+            FlaxEngine.Scripting.InvokeOnUpdate(() =>
+            {
+                if (!IsDisposing)
+                    LogGizmoFocusDebug("Undo next update", action);
+            });
+        }
+
+        private void PerformRedo()
+        {
+            var action = _undo.UndoOperationsStack.PeekReverse() as IUndoAction;
+            LogGizmoFocusDebug("Redo before", action);
+            _undo.PerformRedo();
+            LogGizmoFocusDebug("Redo after action", action);
+            _viewport.Focus();
+            LogGizmoFocusDebug("Redo after viewport.Focus", action);
+            FlaxEngine.Scripting.InvokeOnUpdate(() =>
+            {
+                if (!IsDisposing)
+                    LogGizmoFocusDebug("Redo next update", action);
+            });
+        }
+
+        private void LogGizmoFocusDebug(string point, IUndoAction action)
+        {
+            var root = Root;
+            var focusedControl = root?.FocusedControl;
+            Editor.Log(string.Format(
+                "[GizmoFocusDebug] PrefabWindow {0}; Action={1}; Focused={2}; ViewportFocus={3}/{4}; WindowContainsFocus={5}; AppFocus={6}; Ctrl={7}; Shift={8}; Alt={9}; GizmoState={10}; ActiveTransaction={11}",
+                point,
+                action != null ? action.GetType().Name + ": " + action.ActionString : "<none>",
+                focusedControl != null ? focusedControl.GetType().Name : "<none>",
+                _viewport.IsFocused,
+                _viewport.ContainsFocus,
+                ContainsFocus,
+                Platform.HasFocus,
+                root?.GetKey(KeyboardKeys.Control) ?? false,
+                root?.GetKey(KeyboardKeys.Shift) ?? false,
+                root?.GetKey(KeyboardKeys.Alt) ?? false,
+                _viewport.TransformGizmo.State,
+                _viewport.TransformGizmo.HasActiveTransaction));
         }
 
         /// <summary>
