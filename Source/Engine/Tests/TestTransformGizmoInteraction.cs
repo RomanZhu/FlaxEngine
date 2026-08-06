@@ -1,0 +1,449 @@
+// Copyright (c) Wojciech Figat. All rights reserved.
+
+#if FLAX_TESTS
+using System;
+using System.Collections.Generic;
+using FlaxEditor.Gizmo;
+using FlaxEditor.SceneGraph;
+using FlaxEngine;
+using NUnit.Framework;
+
+namespace FlaxEditor.Tests
+{
+    [TestFixture]
+    public class TestTransformGizmoInteraction
+    {
+        [Test]
+        public void TestOriginPreviewScaleAndReanchorAreDeterministic()
+        {
+            var owner = new TestGizmoOwner();
+            var node = new TestNode(Guid.NewGuid())
+            {
+                Transform = new Transform(new Vector3(4, 5, 6), Quaternion.Identity, new Float3(2, 3, 4))
+            };
+            var start = node.Transform;
+            var gizmo = new TestGizmo(owner, node);
+
+            try
+            {
+                gizmo.StartTransforming(false);
+                Assert.AreEqual(InteractionState.Dragging, gizmo.State);
+
+                gizmo.ApplyDelta(new Vector3(2, 0, 0), Quaternion.Identity, new Vector3(0.25f, 0.25f, 0.25f));
+                Assert.AreEqual(new Vector3(6, 5, 6), node.Transform.Translation);
+                Assert.AreEqual(new Float3(2.5f, 3.75f, 5.0f), node.Transform.Scale);
+
+                gizmo.ApplyDelta(new Vector3(3, 0, 0), Quaternion.Identity, new Vector3(0.25f, 0.25f, 0.25f));
+                Assert.AreEqual(new Vector3(9, 5, 6), node.Transform.Translation);
+                Assert.AreEqual(new Float3(3, 4.5f, 6), node.Transform.Scale);
+
+                var singleFrameNode = new TestNode(Guid.NewGuid())
+                {
+                    Transform = start
+                };
+                var singleFrameGizmo = new TestGizmo(owner, singleFrameNode);
+                try
+                {
+                    singleFrameGizmo.StartTransforming(false);
+                    singleFrameGizmo.ApplyDelta(new Vector3(5, 0, 0), Quaternion.Identity, new Vector3(0.5f, 0.5f, 0.5f));
+                    Assert.AreEqual(node.Transform, singleFrameNode.Transform);
+                }
+                finally
+                {
+                    singleFrameGizmo.Destroy();
+                    singleFrameNode.OnDispose();
+                }
+
+                var beforeReanchor = node.Transform;
+                Assert.IsTrue(gizmo.ReanchorInteraction());
+                Assert.AreEqual(beforeReanchor, node.Transform);
+
+                gizmo.ApplyDelta(new Vector3(1, 0, 0), Quaternion.Identity, new Vector3(0.1f, 0.1f, 0.1f));
+                Assert.AreEqual(new Vector3(10, 5, 6), node.Transform.Translation);
+                Assert.AreEqual(new Float3(3.2f, 4.8f, 6.4f), node.Transform.Scale);
+
+                Assert.IsTrue(gizmo.CancelTransforming());
+                Assert.AreEqual(start, node.Transform);
+                Assert.AreEqual(InteractionState.Inactive, gizmo.State);
+                Assert.AreEqual(0, owner.Undo.UndoOperationsStack.HistoryCount);
+            }
+            finally
+            {
+                gizmo.Destroy();
+                node.OnDispose();
+            }
+        }
+
+        [Test]
+        public void TestLifecycleClutchNumericEntryAndCaptureLoss()
+        {
+            var owner = new TestGizmoOwner();
+            var node = new TestNode(Guid.NewGuid())
+            {
+                Transform = new Transform(new Vector3(1, 2, 3))
+            };
+            var gizmo = new TestGizmo(owner, node);
+            var trace = new List<string>();
+            gizmo.InteractionStateChanged += (previous, current) => trace.Add(previous + "->" + current);
+
+            try
+            {
+                gizmo.StartTransforming(false);
+                Assert.IsTrue(gizmo.BeginCameraClutch());
+                Assert.AreEqual(InteractionState.Clutched, gizmo.State);
+                Assert.IsTrue(gizmo.EndCameraClutch());
+                Assert.AreEqual(InteractionState.Dragging, gizmo.State);
+
+                Assert.IsTrue(gizmo.BeginNumericEntry());
+                Assert.AreEqual(InteractionState.NumericEntry, gizmo.State);
+                Assert.IsTrue(gizmo.EndNumericEntry(new Vector3(7, 8, 9), Quaternion.Identity, Vector3.One));
+                Assert.AreEqual(InteractionState.Dragging, gizmo.State);
+                Assert.AreEqual(new Vector3(8, 10, 12), node.Transform.Translation);
+
+                owner.LeftMouseButtonDown = false;
+                gizmo.OnInteractionMouseCaptureLost();
+                Assert.AreEqual(InteractionState.Inactive, gizmo.State);
+                Assert.AreEqual(1, owner.Undo.UndoOperationsStack.HistoryCount);
+                CollectionAssert.Contains(trace, "Inactive->Hovering");
+                CollectionAssert.Contains(trace, "Hovering->Armed");
+                CollectionAssert.Contains(trace, "Armed->Dragging");
+                CollectionAssert.Contains(trace, "Dragging->Clutched");
+                CollectionAssert.Contains(trace, "Clutched->Dragging");
+                CollectionAssert.Contains(trace, "Dragging->NumericEntry");
+                CollectionAssert.Contains(trace, "NumericEntry->Dragging");
+                CollectionAssert.Contains(trace, "Dragging->Committing");
+                CollectionAssert.Contains(trace, "Committing->Inactive");
+            }
+            finally
+            {
+                gizmo.Destroy();
+                node.OnDispose();
+            }
+        }
+
+        [Test]
+        public void TestFocusLossFreezesAndCancellationRestoresOrigin()
+        {
+            var owner = new TestGizmoOwner();
+            var node = new TestNode(Guid.NewGuid())
+            {
+                Transform = new Transform(new Vector3(3, 4, 5))
+            };
+            var start = node.Transform;
+            var gizmo = new TestGizmo(owner, node);
+
+            try
+            {
+                gizmo.StartTransforming(false);
+                gizmo.ApplyDelta(new Vector3(4, 0, 0), Quaternion.Identity, Vector3.Zero);
+                gizmo.OnInteractionFocusLost();
+
+                Assert.AreEqual(InteractionState.Clutched, gizmo.State);
+                Assert.IsTrue(gizmo.HasActiveTransaction);
+                Assert.IsTrue(gizmo.CancelTransforming());
+                Assert.AreEqual(start, node.Transform);
+                Assert.AreEqual(InteractionState.Inactive, gizmo.State);
+                Assert.AreEqual(0, owner.Undo.UndoOperationsStack.HistoryCount);
+            }
+            finally
+            {
+                gizmo.Destroy();
+                node.OnDispose();
+            }
+        }
+
+        [Test]
+        public void TestTransactionDuplicateRollbackDeletesCreatedObjects()
+        {
+            var owner = new TestGizmoOwner
+            {
+                UseDuplicateValue = true
+            };
+            var original = new TestNode(Guid.NewGuid())
+            {
+                Transform = new Transform(new Vector3(2, 3, 4))
+            };
+            var gizmo = new TestGizmo(owner, original);
+            TestNode duplicate = null;
+
+            try
+            {
+                gizmo.StartTransforming();
+                duplicate = gizmo.CurrentNode;
+                Assert.AreNotSame(original, duplicate);
+                gizmo.ApplyDelta(new Vector3(1, 0, 0), Quaternion.Identity, Vector3.Zero);
+
+                Assert.IsTrue(gizmo.CancelTransforming());
+                Assert.IsFalse(duplicate.Active);
+                Assert.AreEqual(InteractionState.Inactive, gizmo.State);
+                Assert.AreEqual(0, owner.Undo.UndoOperationsStack.HistoryCount);
+                Assert.AreEqual(new Vector3(2, 3, 4), original.Transform.Translation);
+            }
+            finally
+            {
+                gizmo.Destroy();
+                duplicate?.OnDispose();
+                original.OnDispose();
+            }
+        }
+
+        [Test]
+        public void TestNoOpCommitDoesNotAddUndo()
+        {
+            var owner = new TestGizmoOwner();
+            var node = new TestNode(Guid.NewGuid());
+            var gizmo = new TestGizmo(owner, node);
+
+            try
+            {
+                gizmo.StartTransforming(false);
+                gizmo.EndTransforming();
+                Assert.AreEqual(InteractionState.Inactive, gizmo.State);
+                Assert.AreEqual(0, owner.Undo.UndoOperationsStack.HistoryCount);
+            }
+            finally
+            {
+                gizmo.Destroy();
+                node.OnDispose();
+            }
+        }
+
+        [Test]
+        public void TestScalePreviewDoesNotProduceSingularScale()
+        {
+            var owner = new TestGizmoOwner();
+            var node = new TestNode(Guid.NewGuid())
+            {
+                Transform = new Transform(Vector3.Zero, Quaternion.Identity, new Float3(2, -3, 4))
+            };
+            var gizmo = new TestGizmo(owner, node);
+
+            try
+            {
+                gizmo.StartTransforming(false);
+                gizmo.ApplyDelta(Vector3.Zero, Quaternion.Identity, new Vector3(-1));
+                Assert.AreEqual(new Float3(0.0001f, -0.0001f, 0.0001f), node.Transform.Scale);
+            }
+            finally
+            {
+                gizmo.Destroy();
+                node.OnDispose();
+            }
+        }
+
+        [Test]
+        public void TestTransformActionReacquiresRecreatedNodeOnRedo()
+        {
+            var id = Guid.NewGuid();
+            var original = new TestNode(id)
+            {
+                Transform = new Transform(new Vector3(2, 0, 0))
+            };
+            var before = new List<Transform> { original.Transform };
+            original.Transform = new Transform(new Vector3(12, 0, 0));
+            var bounds = BoundingBox.Empty;
+            var action = new TransformObjectsAction(new List<SceneGraphNode> { original }, before, ref bounds, false);
+
+            original.Active = false;
+            var recreated = new TestNode(id)
+            {
+                Transform = new Transform(new Vector3(-4, 0, 0))
+            };
+
+            try
+            {
+                action.Do();
+                Assert.AreEqual(new Vector3(12, 0, 0), recreated.Transform.Translation);
+                action.Undo();
+                Assert.AreEqual(new Vector3(2, 0, 0), recreated.Transform.Translation);
+            }
+            finally
+            {
+                action.Dispose();
+                recreated.OnDispose();
+                original.OnDispose();
+            }
+        }
+
+        private sealed class TestGizmo : TransformGizmoBase
+        {
+            private TestNode _node;
+
+            public TestGizmo(IGizmoOwner owner, TestNode node)
+            : base(owner)
+            {
+                _node = node;
+            }
+
+            public void ApplyDelta(Vector3 translation, Quaternion rotation, Vector3 scale)
+            {
+                ApplyInteractionDelta(ref translation, ref rotation, ref scale);
+            }
+
+            public TestNode CurrentNode => _node;
+
+            protected override int SelectionCount => 1;
+
+            protected override SceneGraphNode GetSelectedObject(int index)
+            {
+                return _node;
+            }
+
+            protected override Transform GetSelectedTransform(int index)
+            {
+                return _node.Transform;
+            }
+
+            protected override void GetSelectedObjectsBounds(out BoundingBox bounds, out bool navigationDirty)
+            {
+                bounds = BoundingBox.Empty;
+                navigationDirty = false;
+            }
+
+            protected override bool IsSelected(SceneGraphNode obj)
+            {
+                return obj == _node;
+            }
+
+            protected override bool UsesOriginAuthoritativePreview => true;
+
+            protected override void OnDuplicate()
+            {
+                var duplicate = new TestNode(Guid.NewGuid())
+                {
+                    Transform = _node.Transform
+                };
+                _node = duplicate;
+                RegisterDuplicatedObjects(new[] { duplicate }, new TestDuplicateUndoAction(duplicate));
+            }
+
+            protected override void OnApplyTransformation(ref Vector3 translationDelta, ref Quaternion rotationDelta, ref Vector3 scaleDelta)
+            {
+                var transform = _node.Transform;
+                transform.Translation += translationDelta;
+                transform.Scale = ApplyScaleDelta(transform.Scale, scaleDelta);
+                _node.Transform = transform;
+            }
+
+            protected override void OnEndTransforming()
+            {
+                base.OnEndTransforming();
+                Owner.Undo.AddAction(new TestUndoAction());
+            }
+        }
+
+        private sealed class TestUndoAction : IUndoAction
+        {
+            public string ActionString => "Transform gizmo test";
+
+            public void Do()
+            {
+            }
+
+            public void Undo()
+            {
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class TestDuplicateUndoAction : IUndoAction
+        {
+            private readonly TestNode _node;
+
+            public TestDuplicateUndoAction(TestNode node)
+            {
+                _node = node;
+            }
+
+            public string ActionString => "Duplicate test node";
+
+            public void Do()
+            {
+                _node.Active = true;
+            }
+
+            public void Undo()
+            {
+                _node.Active = false;
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class TestNode : SceneGraphNode
+        {
+            public TestNode(Guid id)
+            : base(id)
+            {
+            }
+
+            public bool Active = true;
+
+            public override string Name => "Transform gizmo test node";
+            public override SceneNode ParentScene => null;
+            public override Transform Transform { get; set; }
+            public override bool IsActive => Active;
+            public override bool IsActiveInHierarchy => Active;
+            public override int OrderInParent { get; set; }
+        }
+
+        private sealed class TestGizmoOwner : IGizmoOwner
+        {
+            public TestGizmoOwner()
+            {
+                Undo = new Undo();
+                Gizmos = new GizmosCollection(this);
+            }
+
+            public GizmosCollection Gizmos { get; }
+            public Undo Undo { get; }
+            public bool LeftMouseButtonDown { get; set; } = true;
+            public bool UseDuplicateValue { get; set; }
+
+            public FlaxEditor.Viewport.EditorViewport Viewport => null;
+            public SceneRenderTask RenderTask => null;
+            public bool IsLeftMouseButtonDown => LeftMouseButtonDown;
+            public bool IsRightMouseButtonDown => false;
+            public bool IsMiddleMouseButtonDown => false;
+            public bool IsAltKeyDown => false;
+            public bool IsControlDown => false;
+            public bool IsShiftDown => false;
+            public bool SnapToGround => false;
+            public bool SnapToVertex => false;
+            public Float3 ViewDirection => Float3.Forward;
+            public Vector3 ViewPosition => Vector3.Zero;
+            public Quaternion ViewOrientation => Quaternion.Identity;
+            public float ViewFarPlane => 10000.0f;
+            public Ray MouseRay => new Ray(Vector3.Zero, Vector3.Forward);
+            public Float2 MouseDelta => Float2.Zero;
+            public bool UseSnapping => false;
+            public bool UseDuplicate => UseDuplicateValue;
+            public SceneGraph.RootNode SceneGraphRoot => null;
+
+            public bool TryDuplicateForTransform(out List<SceneGraphNode> createdObjects, out IUndoAction undoAction)
+            {
+                createdObjects = null;
+                undoAction = null;
+                return false;
+            }
+
+            public void Select(List<SceneGraphNode> nodes, bool recordUndo = true)
+            {
+            }
+
+            public void Spawn(Actor actor)
+            {
+            }
+
+            public void OpenContextMenu()
+            {
+            }
+        }
+    }
+}
+#endif
