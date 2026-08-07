@@ -452,6 +452,8 @@ namespace FlaxEditor.Modules
         private ToolStripButton _toolStripPlay;
         private ToolStripButton _toolStripPause;
         private ToolStripButton _toolStripStep;
+        private ToolStripButton _toolStripMultiplayer;
+        private ContextMenu _toolStripContextMenu;
 
         /// <summary>
         /// The main menu control.
@@ -554,7 +556,8 @@ namespace FlaxEditor.Modules
                 return;
 
             var state = Editor.StateMachine.CurrentState;
-            var canEnterPlayMode = state.CanEnterPlayMode && Level.IsAnySceneLoaded;
+            var isMultiplayerReplica = Editor.MultiplayerPlayMode.IsReplica;
+            var canEnterPlayMode = state.CanEnterPlayMode && Level.IsAnySceneLoaded && Editor.MultiplayerPlayMode.AreReplicasReady;
             var isPlayMode = Editor.StateMachine.IsPlayMode;
             var isDuringBreakpointHang = Editor.Simulation.IsDuringBreakpointHang;
 
@@ -563,6 +566,12 @@ namespace FlaxEditor.Modules
             var play = _toolStripPlay;
             var pause = _toolStripPause;
             var step = _toolStripStep;
+            var multiplayer = _toolStripMultiplayer;
+            if (multiplayer != null)
+            {
+                multiplayer.Checked = Editor.MultiplayerPlayMode.IsActive;
+                multiplayer.Enabled = multiplayer.Visible && !isMultiplayerReplica;
+            }
             play.Enabled = canEnterPlayMode;
             if (isDuringBreakpointHang)
             {
@@ -579,17 +588,17 @@ namespace FlaxEditor.Modules
                 play.Checked = false;
                 play.Icon = Editor.Icons.Stop64;
                 play.Glyph = ToolStripGlyph.Stop;
-                pause.Enabled = true;
+                pause.Enabled = !isMultiplayerReplica;
                 pause.Checked = Editor.StateMachine.PlayingState.IsPaused;
                 pause.AutoCheck = false;
-                step.Enabled = true;
+                step.Enabled = !isMultiplayerReplica;
             }
             else
             {
                 play.Checked = Editor.Simulation.IsPlayModeRequested;
                 play.Icon = Editor.Icons.Play64;
                 play.Glyph = ToolStripGlyph.Play;
-                pause.Enabled = canEnterPlayMode;
+                pause.Enabled = canEnterPlayMode && !isMultiplayerReplica;
                 pause.AutoCheck = true;
                 step.Enabled = false;
             }
@@ -1222,8 +1231,99 @@ namespace FlaxEditor.Modules
 
             _toolStripPause = ToolStrip.AddGlyphButton(ToolStripGlyph.Pause, ToolStripAnchor.Center, "Flax.Pause", Editor.Simulation.RequestResumeOrPause).LinkTooltip("Pause/Resume game", ref inputOptions.Pause);
             _toolStripStep = ToolStrip.AddGlyphButton(ToolStripGlyph.Step, ToolStripAnchor.Center, "Flax.Step", Editor.Simulation.RequestPlayOneFrame).LinkTooltip("Step one frame in game", ref inputOptions.StepFrame);
+            ToolStrip.SetItemGroup(_toolStripPlay, _toolStripPause, _toolStripStep);
+            _toolStripMultiplayer = ToolStrip.AddButton("Multiplayer");
+            ToolStrip.SetItemPlacement(_toolStripMultiplayer, ToolStripAnchor.Center, -1, "Flax.Multiplayer");
+            _toolStripMultiplayer.Clicked += () => _toolStripMultiplayer.ContextMenu?.Show(_toolStripMultiplayer, new Float2(0, _toolStripMultiplayer.Height));
+            _toolStripMultiplayer.LinkTooltip("Multiplayer Play Mode");
+            _toolStripMultiplayer.CustomizationLabel = "Multiplayer";
+            RebuildMultiplayerContextMenu();
+
+            _toolStripContextMenu = CreateToolStripContextMenu();
+            ToolStrip.SecondaryClicked = location => _toolStripContextMenu.Show(ToolStrip, location);
+            Editor.Options.OptionsChanged += options => RebuildMultiplayerContextMenu();
 
             UpdateToolstrip();
+        }
+
+        private ContextMenu CreateToolStripContextMenu()
+        {
+            var menu = new ContextMenu
+            {
+                MinimumWidth = 170,
+            };
+            var playPause = menu.AddButton("Play / Pause", button => SetPlayControlsVisible(button.Checked));
+            playPause.AutoCheck = true;
+            playPause.CloseMenuOnClick = false;
+            var multiplayer = menu.AddButton("Multiplayer", button => ToolStrip.SetItemVisible(_toolStripMultiplayer, button.Checked));
+            multiplayer.AutoCheck = true;
+            multiplayer.CloseMenuOnClick = false;
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                playPause.Checked = _toolStripPlay.Visible && _toolStripPause.Visible && _toolStripStep.Visible;
+                multiplayer.Checked = _toolStripMultiplayer.Visible;
+            };
+            return menu;
+        }
+
+        private void SetPlayControlsVisible(bool visible)
+        {
+            ToolStrip.SetItemVisible(_toolStripPlay, visible, false);
+            ToolStrip.SetItemVisible(_toolStripPause, visible, false);
+            ToolStrip.SetItemVisible(_toolStripStep, visible);
+        }
+
+        private void RebuildMultiplayerContextMenu()
+        {
+            if (_toolStripMultiplayer == null)
+                return;
+
+            var menu = new ContextMenu
+            {
+                MinimumWidth = 170,
+            };
+            var firstMenu = menu.AddChildMenu("First");
+            firstMenu.Enabled = !Editor.MultiplayerPlayMode.IsReplica;
+            var firstTagsMenu = firstMenu.ContextMenu.AddChildMenu("Tags");
+            AddMultiplayerTagButtons(firstTagsMenu.ContextMenu, Editor.MultiplayerPlayMode.PrimaryHasTag, Editor.MultiplayerPlayMode.SetPrimaryTag);
+
+            string[] labels = { "Second", "Third", "Fourth" };
+            for (int i = 0; i < MultiplayerPlayModeModule.MaxReplicaCount; i++)
+            {
+                var replicaIndex = i;
+                var replicaMenu = menu.AddChildMenu(labels[i]);
+                replicaMenu.Enabled = !Editor.MultiplayerPlayMode.IsReplica;
+                var enabled = replicaMenu.ContextMenu.AddButton("Enabled", button => Editor.MultiplayerPlayMode.SetReplicaEnabled(replicaIndex, button.Checked));
+                enabled.AutoCheck = true;
+                enabled.CloseMenuOnClick = false;
+                enabled.Checked = Editor.MultiplayerPlayMode.IsReplicaEnabled(replicaIndex);
+
+                var tagsMenu = replicaMenu.ContextMenu.AddChildMenu("Tags");
+                AddMultiplayerTagButtons(tagsMenu.ContextMenu, tag => Editor.MultiplayerPlayMode.ReplicaHasTag(replicaIndex, tag), (tag, enabled) => Editor.MultiplayerPlayMode.SetReplicaTag(replicaIndex, tag, enabled));
+            }
+            _toolStripMultiplayer.ContextMenu?.Hide();
+            _toolStripMultiplayer.ContextMenu = menu;
+        }
+
+        private void AddMultiplayerTagButtons(ContextMenu menu, Func<string, bool> isChecked, Action<string, bool> setChecked)
+        {
+            var tags = Editor.MultiplayerPlayMode.AvailableTags;
+            if (tags.Count == 0)
+            {
+                menu.AddButton("No tags configured").Enabled = false;
+                return;
+            }
+
+            for (int i = 0; i < tags.Count; i++)
+            {
+                var tag = tags[i];
+                var tagButton = menu.AddButton(tag, button => setChecked(tag, button.Checked));
+                tagButton.AutoCheck = true;
+                tagButton.CloseMenuOnClick = false;
+                tagButton.Checked = isChecked(tag);
+            }
         }
 
         private void InitStatusBar(RootControl mainWindow)
@@ -1328,11 +1428,13 @@ namespace FlaxEditor.Modules
             var c = (ContextMenu)control;
 
             bool hasOpenedScene = Level.IsAnySceneLoaded;
+            bool canEditProject = !Editor.MultiplayerPlayMode.IsReplica;
 
-            _menuFileSaveScenes.Enabled = hasOpenedScene;
-            _menuFileCloseScenes.Enabled = hasOpenedScene;
-            _menuFileReloadScenes.Enabled = hasOpenedScene;
-            _menuFileGenerateScriptsProjectFiles.Enabled = !Editor.ProgressReporting.GenerateScriptsProjectFiles.IsActive;
+            _menuFileSaveScenes.Enabled = canEditProject && hasOpenedScene;
+            _menuFileSaveAll.Enabled = canEditProject;
+            _menuFileCloseScenes.Enabled = canEditProject && hasOpenedScene;
+            _menuFileReloadScenes.Enabled = canEditProject && hasOpenedScene;
+            _menuFileGenerateScriptsProjectFiles.Enabled = canEditProject && !Editor.ProgressReporting.GenerateScriptsProjectFiles.IsActive;
 
             c.PerformLayout();
         }
@@ -1392,12 +1494,13 @@ namespace FlaxEditor.Modules
 
             var c = (ContextMenu)control;
             var isPlayMode = Editor.StateMachine.IsPlayMode;
-            var canPlay = Level.IsAnySceneLoaded;
+            var isMultiplayerReplica = Editor.MultiplayerPlayMode.IsReplica;
+            var canPlay = Level.IsAnySceneLoaded && Editor.MultiplayerPlayMode.AreReplicasReady;
 
-            _menuGamePlayGame.Enabled = !isPlayMode && canPlay;
-            _menuGamePlayCurrentScenes.Enabled = !isPlayMode && canPlay;
-            _menuGameStop.Enabled = isPlayMode && canPlay;
-            _menuGamePause.Enabled = isPlayMode && canPlay;
+            _menuGamePlayGame.Enabled = !isMultiplayerReplica && !isPlayMode && canPlay;
+            _menuGamePlayCurrentScenes.Enabled = !isMultiplayerReplica && !isPlayMode && canPlay;
+            _menuGameStop.Enabled = !isMultiplayerReplica && isPlayMode && canPlay;
+            _menuGamePause.Enabled = !isMultiplayerReplica && isPlayMode && canPlay;
 
             c.PerformLayout();
         }

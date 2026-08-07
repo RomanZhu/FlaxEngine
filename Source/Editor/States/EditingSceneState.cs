@@ -16,25 +16,28 @@ namespace FlaxEditor.States
         internal string AutoSaveStatus;
 
         /// <inheritdoc />
-        public override bool CanUseToolbox => true;
+        public override bool CanUseToolbox => !Editor.MultiplayerPlayMode.IsReplica;
 
         /// <inheritdoc />
-        public override bool CanUseUndoRedo => true;
+        public override bool CanUseUndoRedo => !Editor.MultiplayerPlayMode.IsReplica;
 
         /// <inheritdoc />
-        public override bool CanChangeScene => true;
+        public override bool CanChangeScene => !Editor.MultiplayerPlayMode.IsReplica;
 
         /// <inheritdoc />
-        public override bool CanEditScene => true;
+        public override bool CanEditScene => !Editor.MultiplayerPlayMode.IsReplica;
 
         /// <inheritdoc />
-        public override bool CanEnterPlayMode => true;
+        public override bool CanEditContent => !Editor.MultiplayerPlayMode.IsReplica;
 
         /// <inheritdoc />
-        public override bool CanReloadScripts => true;
+        public override bool CanEnterPlayMode => !Editor.MultiplayerPlayMode.IsReplica;
 
         /// <inheritdoc />
-        public override string Status => AutoSaveStatus;
+        public override bool CanReloadScripts => !Editor.MultiplayerPlayMode.IsReplica;
+
+        /// <inheritdoc />
+        public override string Status => Editor.MultiplayerPlayMode.IsReplica ? "Multiplayer replica (read-only)" : AutoSaveStatus;
 
         internal EditingSceneState(Editor editor)
         : base(editor)

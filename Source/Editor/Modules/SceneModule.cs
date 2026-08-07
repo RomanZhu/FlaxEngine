@@ -244,6 +244,8 @@ namespace FlaxEditor.Modules
         /// <param name="scene">Scene to save.</param>
         public void SaveScene(SceneNode scene)
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
             if (!scene.IsEdited)
                 return;
 
@@ -258,6 +260,8 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void SaveScenes()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
             if (!IsEdited())
                 return;
 
@@ -692,7 +696,8 @@ namespace FlaxEditor.Modules
 
         private void ProcessPendingSceneDiskChanges()
         {
-            if (!Editor.StateMachine.CurrentState.CanChangeScene ||
+            if ((!Editor.StateMachine.CurrentState.CanChangeScene && !Editor.MultiplayerPlayMode.IsReplica) ||
+                (Editor.MultiplayerPlayMode.IsReplica && !Editor.StateMachine.IsEditMode) ||
                 Level.IsAnyActionPending)
             {
                 return;
@@ -729,6 +734,12 @@ namespace FlaxEditor.Modules
                 var scene = FindLoadedSceneByPath(scenePath);
                 if (scene == null)
                     continue;
+
+                if (Editor.MultiplayerPlayMode.IsReplica)
+                {
+                    ReloadSceneFromDisk(scene);
+                    continue;
+                }
 
                 var result = MessageBox.Show(
                                              string.Format("Scene '{0}' has changed on disk. Reload it?\n\nUnsaved changes in the loaded scene will be lost.", scene.Name),

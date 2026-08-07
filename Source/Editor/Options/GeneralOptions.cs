@@ -1,5 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using System;
 using System.ComponentModel;
 using FlaxEngine;
 
@@ -245,6 +246,35 @@ namespace FlaxEditor.Options
         [DefaultValue(true)]
         [EditorDisplay("Auto Save", "Auto Save Content"), EditorOrder(804), Tooltip("Enables or disables auto saving content")]
         public bool AutoSaveContent { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets the available multiplayer play mode tags.
+        /// </summary>
+        [EditorDisplay("Multiplayer Play Mode", "Tags"), EditorOrder(900), Tooltip("Defines tags that can be assigned to multiplayer instances from the toolbar.")]
+        public string[] MultiplayerPlayModeTags { get; set; } = { "Server", "Client" };
+
+        /// <summary>
+        /// Gets or sets the tags assigned to the primary multiplayer instance.
+        /// </summary>
+        [HideInEditor]
+        public string[] MultiplayerPlayModePrimaryTags { get; set; } = { "Server" };
+
+        /// <summary>
+        /// Gets or sets which of the three multiplayer replicas are enabled.
+        /// </summary>
+        [HideInEditor]
+        public bool[] MultiplayerPlayModeReplicasEnabled { get; set; } = { false, false, false };
+
+        /// <summary>
+        /// Gets or sets the tags assigned to each multiplayer replica.
+        /// </summary>
+        [HideInEditor]
+        public string[][] MultiplayerPlayModeReplicaTags { get; set; } =
+        {
+            new[] { "Client" },
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+        };
 
         /// <summary>
         /// Gets or sets a value indicating whether enable editor analytics service.

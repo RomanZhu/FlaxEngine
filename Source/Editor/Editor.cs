@@ -177,6 +177,11 @@ namespace FlaxEditor
         public OptionsModule Options;
 
         /// <summary>
+        /// The multiplayer play mode manager.
+        /// </summary>
+        public MultiplayerPlayModeModule MultiplayerPlayMode;
+
+        /// <summary>
         /// The editor per-project cache manager.
         /// </summary>
         public ProjectCacheModule ProjectCache;
@@ -288,6 +293,7 @@ namespace FlaxEditor
             // Create common editor modules
             Profiler.BeginEvent("Modules");
             RegisterModule(Options = new OptionsModule(this));
+            RegisterModule(MultiplayerPlayMode = new MultiplayerPlayModeModule(this));
             RegisterModule(ProjectCache = new ProjectCacheModule(this));
             RegisterModule(Scene = new SceneModule(this));
             RegisterModule(Windows = new WindowsModule(this));
@@ -533,7 +539,7 @@ namespace FlaxEditor
         {
             string msg = null;
             var options = Options.Options.General;
-            var canSave = StateMachine.IsEditMode && options.EnableAutoSave;
+            var canSave = StateMachine.IsEditMode && !MultiplayerPlayMode.IsReplica && options.EnableAutoSave;
             if (canSave)
             {
                 var timeSinceLastSave = Time.UnscaledGameTime - _lastAutoSaveTimer;
@@ -850,6 +856,8 @@ namespace FlaxEditor
         /// </summary>
         public void SaveAll()
         {
+            if (MultiplayerPlayMode.IsReplica)
+                return;
             Windows.SaveCurrentLayout();
             Scene.SaveScenes();
             SaveContent();
@@ -861,6 +869,8 @@ namespace FlaxEditor
         /// </summary>
         public void SaveContent(bool autoSave = false)
         {
+            if (MultiplayerPlayMode.IsReplica)
+                return;
             for (int i = 0; i < Windows.Windows.Count; i++)
             {
                 if (Windows.Windows[i] is AssetEditorWindow win)
