@@ -316,9 +316,6 @@ namespace FlaxEditor.Gizmo
         private TransformSpace? _queuedTransformSpace;
         private PivotType? _queuedPivot;
         private bool _applyingQueuedSettings;
-        private bool _pointerWarpPending;
-        private Float2 _pointerWarpTarget;
-        private int _pointerWarpFramesRemaining;
 
         /// <summary>
         /// Gets the explicit transaction state.
@@ -539,8 +536,15 @@ namespace FlaxEditor.Gizmo
                 _interactionResult = new InteractionResult(translation, rotation, scale, GetCurrentTransforms(), null);
                 if (!SetInteractionState(InteractionState.Dragging))
                     return false;
-                _interactionAnchor = CreateInteractionAnchor();
-                ResetSolverAnchorState();
+                // Preserve the click-time anchor and solver state when the first
+                // meaningful delta promotes an armed interaction into a drag.
+                // Replacing it here would make the next anchored solve discard
+                // that first delta and jump back toward the transaction origin.
+                if (_interactionAnchor == null)
+                {
+                    _interactionAnchor = CreateInteractionAnchor();
+                    ResetSolverAnchorState();
+                }
                 ApplyOriginAuthoritativePreview();
                 UpdateFeedbackModel();
                 return true;
@@ -886,7 +890,7 @@ namespace FlaxEditor.Gizmo
             var anchor = new InteractionAnchor(_interactionResult, pointerPosition, Owner.MouseRay, Owner.ViewPosition, Owner.ViewOrientation, fallbackPlane, _latchedHandle);
             _anchorTranslationDelta = Vector3.Zero;
             _anchorRotationDelta = Quaternion.Identity;
-            _anchorScaleDelta = _interactionResult.Scale - Vector3.One;
+            _anchorScaleDelta = Vector3.Zero;
             return anchor;
         }
 
@@ -1030,8 +1034,6 @@ namespace FlaxEditor.Gizmo
             _latchedHandle = SemanticHandle.None;
             _pressedFeedbackTime = 0.0f;
             _lastGeometrySnap = false;
-            _pointerWarpPending = false;
-            _pointerWarpFramesRemaining = 0;
             _startTransforms.Clear();
             _activeAxis = Axis.None;
             try
@@ -1078,6 +1080,17 @@ namespace FlaxEditor.Gizmo
             _rotationSnapDelta = 0.0f;
             if (!preserveRotationTotal)
                 _rotationAccumulatedAngle = 0.0f;
+            _rotationAnchorAccumulatedAngle = _rotationAccumulatedAngle;
+            _rotationPreviousWrappedAngle = 0.0f;
+            _rotationUnwrappedAngle = 0.0f;
+            _rotationSolverInitialized = false;
+            _rotationAnchorPointLocal = Vector3.Zero;
+            _rotationSolverBasis = Quaternion.Identity;
+            _rotationSolverAxisWorld = Float3.Zero;
+            _rotationSolverScreenScale = 0.0f;
+            _rotationScreenDragDirection = Float2.Zero;
+            _rotationRadiansPerPixel = 0.0f;
+            _rotationScreenDragValid = false;
             _isDrawingRotationDrag = false;
         }
 
@@ -1268,41 +1281,7 @@ namespace FlaxEditor.Gizmo
             _pressedFeedbackTime = FeedbackPressedDuration;
             if (!CaptureTransactionOrigin())
                 return;
-            WarpTranslationPointerToPivot();
             SetInteractionState(InteractionState.Armed);
-        }
-
-        private void WarpTranslationPointerToPivot()
-        {
-            if (_activeMode != Mode.Translate || Owner?.Viewport?.RootWindow == null)
-                return;
-            var viewport = Owner.Viewport;
-            viewport.ProjectPoint(Position, out var target);
-            if (target.X < 0.0f || target.Y < 0.0f || target.X > viewport.Width || target.Y > viewport.Height)
-                return;
-            _pointerWarpTarget = target;
-            _pointerWarpPending = true;
-            _pointerWarpFramesRemaining = 4;
-            viewport.RootWindow.MousePosition = viewport.PointToWindow(target);
-        }
-
-        private bool ConsumePointerWarpFrame()
-        {
-            if (!_pointerWarpPending)
-                return false;
-            if (!Owner.IsLeftMouseButtonDown)
-            {
-                _pointerWarpPending = false;
-                _pointerWarpFramesRemaining = 0;
-                return false;
-            }
-
-            _pointerWarpFramesRemaining--;
-            if ((Owner.Viewport.ViewMousePosition - _pointerWarpTarget).LengthSquared <= 4.0f || _pointerWarpFramesRemaining <= 0)
-                _pointerWarpPending = false;
-            _lastIntersectionPosition = _intersectPosition = Vector3.Zero;
-            _tDelta = Vector3.Zero;
-            return true;
         }
 
         private bool IsCameraClutchActive => Owner.IsMiddleMouseButtonDown || Owner.IsRightMouseButtonDown;

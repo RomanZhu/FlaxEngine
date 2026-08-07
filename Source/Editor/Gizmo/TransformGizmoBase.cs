@@ -50,6 +50,17 @@ namespace FlaxEditor.Gizmo
         private Quaternion _rotationGizmoDelta = Quaternion.Identity;
         private float _rotationSnapDelta;
         private float _rotationAccumulatedAngle;
+        private float _rotationAnchorAccumulatedAngle;
+        private float _rotationPreviousWrappedAngle;
+        private float _rotationUnwrappedAngle;
+        private bool _rotationSolverInitialized;
+        private Vector3 _rotationAnchorPointLocal;
+        private Quaternion _rotationSolverBasis = Quaternion.Identity;
+        private Float3 _rotationSolverAxisWorld;
+        private float _rotationSolverScreenScale;
+        private Float2 _rotationScreenDragDirection;
+        private float _rotationRadiansPerPixel;
+        private bool _rotationScreenDragValid;
         private bool _isDrawingRotationDrag;
         private Vector3 _rotationDragStartPointWorld;
         private Vector3 _rotationDragCurrentPointWorld;
@@ -318,6 +329,19 @@ namespace FlaxEditor.Gizmo
         private void UpdateTranslateScale()
         {
             bool isScaling = _activeMode == Mode.Scale;
+            if (isScaling)
+            {
+                UpdateScaleFromAnchor();
+                return;
+            }
+            if (UpdateTranslationFromAnchor())
+                return;
+            if (!IsGeometrySnapActive)
+            {
+                _translationDelta = Vector3.Zero;
+                return;
+            }
+
             bool geometrySnapSolved = false;
             Vector3 delta = Vector3.Zero;
             Ray ray = Owner.MouseRay;
@@ -548,6 +572,225 @@ namespace FlaxEditor.Gizmo
             }
         }
 
+        private bool UpdateTranslationFromAnchor()
+        {
+            var anchor = InteractionAnchor;
+            var origin = TransactionOrigin;
+            if (anchor == null || origin == null || Owner?.Viewport == null || IsGeometrySnapActive)
+                return false;
+
+            Ray currentRay = Owner.MouseRay;
+            Vector3 rawDelta;
+            Quaternion basis = origin.InitialBasis;
+            Vector3 anchorPivot = origin.PivotPosition + anchor.Result.Translation;
+            switch (_activeAxis)
+            {
+            case Axis.X:
+            case Axis.Y:
+            case Axis.Z:
+            {
+                Vector3 axisLocal = _activeAxis == Axis.X ? Vector3.UnitX : (_activeAxis == Axis.Y ? Vector3.UnitY : Vector3.UnitZ);
+                Vector3 axisWorld = axisLocal * basis;
+                // Solve ordinary axis motion in projected screen space. The
+                // pointer coordinate is continuous across desktop wraps, so
+                // crossing an edge cannot swap the closest-ray branch or flip
+                // the translation direction. Retain closest-line math only for
+                // axes whose projection is too small to measure reliably.
+                if (TryGetProjectedAxis(anchorPivot, axisWorld, out var screenDirection, out Real worldUnitsPerPixel))
+                {
+                    float pixels = Float2.Dot(Owner.Viewport.ContinuousViewMousePosition - anchor.PointerPosition, screenDirection);
+                    rawDelta = axisWorld * (pixels * worldUnitsPerPixel);
+                }
+                else if (!TrySolveAxisTranslation(anchor.PointerRay, currentRay, anchorPivot, axisWorld, out rawDelta))
+                {
+                    return false;
+                }
+                break;
+            }
+            case Axis.XY:
+            case Axis.YZ:
+            case Axis.ZX:
+            {
+                Vector3 normalLocal = _activeAxis == Axis.XY ? Vector3.UnitZ : (_activeAxis == Axis.YZ ? Vector3.UnitX : Vector3.UnitY);
+                Vector3 normalWorld = normalLocal * basis;
+                var plane = new Plane(anchorPivot, normalWorld);
+                if (!TrySolvePlaneTranslation(anchor.PointerRay, currentRay, plane, out rawDelta))
+                    return false;
+                Vector3 localDelta = rawDelta * Quaternion.Invert(basis);
+                if (_activeAxis == Axis.XY)
+                    localDelta.Z = 0.0f;
+                else if (_activeAxis == Axis.YZ)
+                    localDelta.X = 0.0f;
+                else
+                    localDelta.Y = 0.0f;
+                rawDelta = localDelta * basis;
+                break;
+            }
+            case Axis.Center:
+            {
+                if (!TrySolvePlaneTranslation(anchor.PointerRay, currentRay, anchor.FallbackPlane, out rawDelta))
+                    return false;
+                break;
+            }
+            default:
+                return false;
+            }
+
+            if (Owner.IsAltKeyDown)
+                rawDelta *= PrecisionScaleGain;
+            Vector3 desired = anchor.Result.Translation + rawDelta;
+            if (rawDelta.LengthSquared > 0.00000001f)
+                desired = SnapTranslationTotal(desired, origin);
+            _translationDelta = desired - InteractionResult.Translation;
+            _intersectPosition = origin.PivotPosition + desired;
+            return IsFiniteMath(_translationDelta);
+        }
+
+        private bool TryGetProjectedAxis(Vector3 pivot, Vector3 axisWorld, out Float2 screenDirection, out Real worldUnitsPerPixel)
+        {
+            Owner.Viewport.ProjectPoint(pivot, out var start);
+            Owner.Viewport.ProjectPoint(pivot + axisWorld * _screenScale, out var end);
+            screenDirection = end - start;
+            float length = screenDirection.Length;
+            if (length < 0.0001f || _screenScale <= Mathf.Epsilon)
+            {
+                worldUnitsPerPixel = 0.0f;
+                return false;
+            }
+            screenDirection /= length;
+            worldUnitsPerPixel = _screenScale / length;
+            return true;
+        }
+
+        private Vector3 SnapTranslationTotal(Vector3 desired, TransactionOrigin origin)
+        {
+            if (!TranslationSnapEnable && !Owner.UseSnapping)
+                return desired;
+            float step = Mathf.Abs(TranslationSnapValue);
+            if (step < Mathf.Epsilon)
+                return desired;
+
+            Quaternion basis = origin.InitialBasis;
+            GetActiveAxisComponents(out bool useX, out bool useY, out bool useZ);
+            if (origin.InitialTransformSpace == TransformSpace.World)
+            {
+                Vector3 target = origin.OriginalTransforms[0].Translation + desired;
+                if (useX)
+                    target.X = Mathr.Round(target.X / step) * step;
+                if (useY)
+                    target.Y = Mathr.Round(target.Y / step) * step;
+                if (useZ)
+                    target.Z = Mathr.Round(target.Z / step) * step;
+                desired = target - origin.OriginalTransforms[0].Translation;
+            }
+            else
+            {
+                Vector3 local = desired * Quaternion.Invert(basis);
+                if (useX)
+                    local.X = Mathr.Round(local.X / step) * step;
+                if (useY)
+                    local.Y = Mathr.Round(local.Y / step) * step;
+                if (useZ)
+                    local.Z = Mathr.Round(local.Z / step) * step;
+                desired = local * basis;
+            }
+            return desired;
+        }
+
+        private void GetActiveAxisComponents(out bool x, out bool y, out bool z)
+        {
+            x = _activeAxis == Axis.X || _activeAxis == Axis.XY || _activeAxis == Axis.ZX || _activeAxis == Axis.Center;
+            y = _activeAxis == Axis.Y || _activeAxis == Axis.XY || _activeAxis == Axis.YZ || _activeAxis == Axis.Center;
+            z = _activeAxis == Axis.Z || _activeAxis == Axis.YZ || _activeAxis == Axis.ZX || _activeAxis == Axis.Center;
+        }
+
+        private void UpdateScaleFromAnchor()
+        {
+            var anchor = InteractionAnchor;
+            var origin = TransactionOrigin;
+            if (anchor == null || origin == null || Owner?.Viewport == null)
+                return;
+
+            Float2 pointerDelta = Owner.Viewport.ContinuousViewMousePosition - anchor.PointerPosition;
+            float gain = Owner.IsAltKeyDown ? PrecisionScaleGain : 1.0f;
+            Vector3 relativeFactors = Vector3.One;
+            Vector3 pivot = origin.PivotPosition;
+            Quaternion basis = origin.InitialBasis;
+
+            if (_activeAxis == Axis.Center)
+            {
+                Float2 uniformDirection = new Float2(1.0f, -1.0f);
+                uniformDirection.Normalize();
+                float factor = SolvePointerScaleFactor(Float2.Dot(pointerDelta, uniformDirection), gain);
+                relativeFactors = new Vector3(factor);
+            }
+            else if (_activeAxis == Axis.X || _activeAxis == Axis.Y || _activeAxis == Axis.Z)
+            {
+                Vector3 axisLocal = _activeAxis == Axis.X ? Vector3.UnitX : (_activeAxis == Axis.Y ? Vector3.UnitY : Vector3.UnitZ);
+                Vector3 axisWorld = axisLocal * basis;
+                if (!TryGetProjectedAxis(pivot, axisWorld, out var direction, out _))
+                    return;
+                float factor = SolvePointerScaleFactor(Float2.Dot(pointerDelta, direction), gain);
+                if (_activeAxis == Axis.X)
+                    relativeFactors.X = factor;
+                else if (_activeAxis == Axis.Y)
+                    relativeFactors.Y = factor;
+                else
+                    relativeFactors.Z = factor;
+            }
+            else if (_activeAxis == Axis.XY || _activeAxis == Axis.YZ || _activeAxis == Axis.ZX)
+            {
+                Vector3 firstLocal = _activeAxis == Axis.YZ ? Vector3.UnitY : Vector3.UnitX;
+                Vector3 secondLocal = _activeAxis == Axis.XY ? Vector3.UnitY : Vector3.UnitZ;
+                if (!TryGetProjectedAxis(pivot, firstLocal * basis, out var firstDirection, out _) ||
+                    !TryGetProjectedAxis(pivot, secondLocal * basis, out var secondDirection, out _))
+                    return;
+                float determinant = firstDirection.X * secondDirection.Y - firstDirection.Y * secondDirection.X;
+                if (Mathf.Abs(determinant) < 0.0001f)
+                    return;
+                float firstPixels = (pointerDelta.X * secondDirection.Y - pointerDelta.Y * secondDirection.X) / determinant;
+                float secondPixels = (firstDirection.X * pointerDelta.Y - firstDirection.Y * pointerDelta.X) / determinant;
+                float firstFactor = SolvePointerScaleFactor(firstPixels, gain);
+                float secondFactor = SolvePointerScaleFactor(secondPixels, gain);
+                if (_activeAxis == Axis.XY)
+                {
+                    relativeFactors.X = firstFactor;
+                    relativeFactors.Y = secondFactor;
+                }
+                else if (_activeAxis == Axis.YZ)
+                {
+                    relativeFactors.Y = firstFactor;
+                    relativeFactors.Z = secondFactor;
+                }
+                else
+                {
+                    relativeFactors.X = firstFactor;
+                    relativeFactors.Z = secondFactor;
+                }
+            }
+            else
+            {
+                return;
+            }
+
+            Vector3 desired = MultiplyScaleFactors(anchor.Result.Scale, relativeFactors);
+            if (pointerDelta.LengthSquared > 0.00000001f && (ScaleSnapEnabled || Owner.UseSnapping))
+            {
+                float step = Mathf.Abs(ScaleSnapValue);
+                if (step > Mathf.Epsilon)
+                {
+                    GetActiveAxisComponents(out bool useX, out bool useY, out bool useZ);
+                    if (useX)
+                        desired.X = Mathr.Max(Mathr.Round(desired.X / step) * step, 0.0001f);
+                    if (useY)
+                        desired.Y = Mathr.Max(Mathr.Round(desired.Y / step) * step, 0.0001f);
+                    if (useZ)
+                        desired.Z = Mathr.Max(Mathr.Round(desired.Z / step) * step, 0.0001f);
+                }
+            }
+            _scaleDelta = desired - InteractionResult.Scale;
+        }
+
         private bool IsGeometrySnapActive => _activeMode == Mode.Translate && _activeAxis == Axis.Center && Owner != null && Owner.IsShiftDown;
 
         private bool TrySolveGeometrySnap(ref Matrix invRotationMatrix, out Vector3 delta)
@@ -774,7 +1017,12 @@ namespace FlaxEditor.Gizmo
         {
             var transform = _gizmoWorld;
             if (_transactionOrigin != null)
+            {
+                transform.Translation = _transactionOrigin.PivotPosition;
                 transform.Orientation = _transactionOrigin.InitialBasis;
+                if (_rotationSolverInitialized && _rotationSolverScreenScale > Mathf.Epsilon)
+                    transform.Scale = new Float3(_rotationSolverScreenScale);
+            }
             return transform;
         }
 
@@ -790,17 +1038,24 @@ namespace FlaxEditor.Gizmo
 
         private void UpdateRotateTrackball()
         {
+            var anchor = InteractionAnchor;
+            if (anchor == null)
+                return;
             var trackballTransform = GetRotationTrackballTransform();
-            if (!_isDrawingRotationDrag)
+            if (!_rotationSolverInitialized)
             {
                 if (!GetRotateTrackballPointLocal(out var startPoint))
                     startPoint = GetRotateToViewLocal(ref trackballTransform) * _rotationTrackballRadiusRaw;
+                _rotationAnchorPointLocal = Vector3.Normalize(startPoint);
+                _rotationSolverBasis = trackballTransform.Orientation;
+                _rotationSolverScreenScale = _screenScale;
+                _rotationAnchorAccumulatedAngle = _rotationAccumulatedAngle;
+                _rotationSolverInitialized = true;
                 StartRotationDrag(startPoint, ref trackballTransform);
                 _rotationDelta = Quaternion.Identity;
                 return;
             }
 
-            Vector3 previousPointWorld = _rotationDragMousePointWorld;
             if (!GetRotateTrackballPointLocal(out var currentPointLocal))
             {
                 _rotationDelta = Quaternion.Identity;
@@ -809,47 +1064,19 @@ namespace FlaxEditor.Gizmo
 
             _rotationDragMousePointWorld = trackballTransform.LocalToWorld(currentPointLocal);
             _rotationDragCurrentPointWorld = _rotationDragMousePointWorld;
-            trackballTransform.WorldToLocal(ref previousPointWorld, out var previousPointLocal);
-            if (previousPointLocal.LengthSquared < 0.0001f || currentPointLocal.LengthSquared < 0.0001f)
-            {
-                _rotationDelta = Quaternion.Identity;
-                return;
-            }
-            previousPointLocal.Normalize();
-            currentPointLocal.Normalize();
-            Vector3 axisLocal = Vector3.Cross(previousPointLocal, currentPointLocal);
-            float sin = (float)axisLocal.Length;
-            float cos = Mathf.Clamp((float)Vector3.Dot(previousPointLocal, currentPointLocal), -1.0f, 1.0f);
-            float delta = (float)System.Math.Atan2(sin, cos);
-            if (delta <= Mathf.Epsilon || axisLocal.LengthSquared < 0.0001f)
-            {
-                _rotationDelta = Quaternion.Identity;
-                _rotationDragCurrentPointWorld = _rotationDragMousePointWorld;
-                return;
-            }
-            axisLocal.Normalize();
-            Vector3 axisWorld = axisLocal * trackballTransform.Orientation;
-            Float3 axis = axisWorld;
-            axis.Normalize();
-
-            if (RotationSnapEnabled || Owner.UseSnapping)
-            {
-                float snapValue = RotationSnapValue * Mathf.DegreesToRadians;
-                _rotationSnapDelta += delta;
-
-                float snapped = Mathf.Round(_rotationSnapDelta / snapValue) * snapValue;
-                _rotationSnapDelta -= snapped;
-                delta = snapped;
-                if (Mathf.IsZero(delta))
-                {
-                    _rotationDelta = Quaternion.Identity;
-                    return;
-                }
-            }
-
-            _rotationAccumulatedAngle += delta;
-            Quaternion.RotationAxis(ref axis, delta, out _rotationDelta);
-            AccumulateRotationGizmoDelta();
+            float snap = RotationSnapEnabled || Owner.UseSnapping
+                ? Mathf.Abs(RotationSnapValue) * Mathf.DegreesToRadians
+                : 0.0f;
+            float gain = Owner.IsAltKeyDown ? PrecisionScaleGain : 1.0f;
+            Quaternion relative = SolveArcballRotation(_rotationAnchorPointLocal, currentPointLocal, _rotationSolverBasis, snap, gain);
+            Vector3 anchorNormalized = Vector3.Normalize(_rotationAnchorPointLocal);
+            Vector3 currentNormalized = Vector3.Normalize(currentPointLocal);
+            float solvedAngle = (float)Math.Acos(Mathf.Clamp((float)Vector3.Dot(anchorNormalized, currentNormalized), -1.0f, 1.0f));
+            solvedAngle *= gain;
+            if (snap > Mathf.Epsilon)
+                solvedAngle = Mathf.Round(solvedAngle / snap) * snap;
+            _rotationAccumulatedAngle = _rotationAnchorAccumulatedAngle + solvedAngle;
+            SetDesiredRotation(relative * anchor.Result.Rotation);
         }
 
         private static bool TryGetRotationAxisLocal(Axis axis, out Vector3 axisLocal)
@@ -1045,66 +1272,126 @@ namespace FlaxEditor.Gizmo
                 UpdateRotateTrackball();
                 return;
             }
+            var anchor = InteractionAnchor;
+            if (anchor == null)
+                return;
+
+            var solverTransform = GetRotationTrackballTransform();
+            Vector3 axisLocal;
+            Vector3 currentPointLocal;
             if (_activeAxis == Axis.Screen)
             {
-                UpdateRotateScreen();
-                return;
+                axisLocal = GetRotateToViewLocal(ref solverTransform);
+                if (!GetRotateScreenRingPointLocal(out currentPointLocal))
+                    return;
+            }
+            else
+            {
+                if (!TryGetRotationAxisLocal(_activeAxis, out axisLocal) || !GetRotateRingPointLocal(_activeAxis, out currentPointLocal))
+                    return;
             }
 
-            if (!UpdateRotateRing(out var dir, out var delta))
+            currentPointLocal.Normalize();
+            if (!_rotationSolverInitialized)
             {
+                _rotationAnchorPointLocal = currentPointLocal;
+                _rotationPreviousWrappedAngle = 0.0f;
+                _rotationUnwrappedAngle = 0.0f;
+                _rotationAnchorAccumulatedAngle = _rotationAccumulatedAngle;
+                _rotationSolverBasis = solverTransform.Orientation;
+                _rotationSolverScreenScale = _screenScale;
+                Vector3 axisWorld = axisLocal * _rotationSolverBasis;
+                _rotationSolverAxisWorld = axisWorld;
+                _rotationSolverAxisWorld.Normalize();
+                float visualRadius = _activeAxis == Axis.Screen ? _rotationScreenRingRadiusRaw : RotateRadiusRaw;
+                _rotationScreenDragValid = TryInitializeRotationScreenDrag(ref solverTransform, currentPointLocal, axisLocal, visualRadius);
+                _rotationSolverInitialized = true;
+                StartRotationDrag(currentPointLocal * visualRadius, ref solverTransform);
                 _rotationDelta = Quaternion.Identity;
                 return;
             }
 
+            float gain = Owner.IsAltKeyDown ? PrecisionScaleGain : 1.0f;
+            float solvedAngle;
+            if (_rotationScreenDragValid)
+            {
+                Float2 pointerDelta = Owner.Viewport.ContinuousViewMousePosition - anchor.PointerPosition;
+                _rotationUnwrappedAngle = Float2.Dot(pointerDelta, _rotationScreenDragDirection) * _rotationRadiansPerPixel;
+                solvedAngle = _rotationUnwrappedAngle * gain;
+            }
+            else
+            {
+                float wrapped = (float)GetSignedAngleFromAnchor(_rotationAnchorPointLocal, currentPointLocal, axisLocal);
+                _rotationUnwrappedAngle = UnwrapAngle(_rotationUnwrappedAngle, _rotationPreviousWrappedAngle, wrapped);
+                _rotationPreviousWrappedAngle = wrapped;
+                solvedAngle = _rotationUnwrappedAngle * gain;
+            }
             if (RotationSnapEnabled || Owner.UseSnapping)
             {
-                float snapValue = RotationSnapValue * Mathf.DegreesToRadians;
-
-                float absoluteDelta = 0.0f;
-                if (ActiveTransformSpace == TransformSpace.World && (AbsoluteSnapEnabled || RotationSnapEnabled))
-                {
-                    // Remove delta to offset world-space grid into the local-space grid
-                    float currentAngle = 0.0f;
-                    switch (_activeAxis)
-                    {
-                        case Axis.X: currentAngle = GetSelectedTransform(0).Orientation.EulerAngles.X; break;
-                        case Axis.Y: currentAngle = GetSelectedTransform(0).Orientation.EulerAngles.Y; break;
-                        case Axis.Z: currentAngle = GetSelectedTransform(0).Orientation.EulerAngles.Z; break;
-                    }
-                    absoluteDelta = currentAngle - (Mathf.Round(currentAngle / RotationSnapValue) * RotationSnapValue);
-                }
-
-                _rotationSnapDelta += delta;
-
-                float snapped = Mathf.Round(_rotationSnapDelta / snapValue) * snapValue;
-                _rotationSnapDelta -= snapped;
-
-                delta = snapped;
-                delta -= absoluteDelta * Mathf.DegreesToRadians;
+                float snap = Mathf.Abs(RotationSnapValue) * Mathf.DegreesToRadians;
+                if (snap > Mathf.Epsilon)
+                    solvedAngle = Mathf.Round(solvedAngle / snap) * snap;
             }
 
-            switch (_activeAxis)
+            _rotationAccumulatedAngle = _rotationAnchorAccumulatedAngle + solvedAngle;
+            Quaternion.RotationAxis(ref _rotationSolverAxisWorld, solvedAngle, out var relative);
+            SetDesiredRotation(relative * anchor.Result.Rotation);
+            float currentVisualRadius = _activeAxis == Axis.Screen ? _rotationScreenRingRadiusRaw : RotateRadiusRaw;
+            Vector3 visualPointLocal = currentPointLocal;
+            if (_rotationScreenDragValid)
             {
-            case Axis.X:
-            case Axis.Y:
-            case Axis.Z:
-            {
-                _rotationAccumulatedAngle += delta;
-                Quaternion.RotationAxis(ref dir, delta, out _rotationDelta);
-                UpdateRotationDragPoint();
-                AccumulateRotationGizmoDelta();
-                break;
+                Float3 visualAxis = axisLocal;
+                visualAxis.Normalize();
+                Quaternion.RotationAxis(ref visualAxis, solvedAngle, out var visualRotation);
+                Vector3 anchorPoint = _rotationAnchorPointLocal;
+                Vector3.Transform(ref anchorPoint, ref visualRotation, out visualPointLocal);
             }
+            _rotationDragMousePointWorld = solverTransform.LocalToWorld(visualPointLocal * currentVisualRadius);
+            _rotationDragCurrentPointWorld = _rotationDragMousePointWorld;
+        }
 
-            default:
-                _rotationDelta = Quaternion.Identity;
-                break;
-            }
+        private bool TryInitializeRotationScreenDrag(ref Transform transform, Vector3 pointLocal, Vector3 axisLocal, float radius)
+        {
+            _rotationScreenDragDirection = Float2.Zero;
+            _rotationRadiansPerPixel = 0.0f;
+            if (pointLocal.LengthSquared < 0.0001f || axisLocal.LengthSquared < 0.0001f)
+                return false;
+
+            pointLocal.Normalize();
+            axisLocal.Normalize();
+            Vector3 tangentLocal = Vector3.Cross(axisLocal, pointLocal);
+            if (tangentLocal.LengthSquared < 0.0001f)
+                return false;
+            tangentLocal.Normalize();
+
+            const float sampleAngle = 0.05f;
+            Vector3 nextPointLocal = pointLocal * (float)Math.Cos(sampleAngle) + tangentLocal * (float)Math.Sin(sampleAngle);
+            if (!TryProjectGizmoPoint(transform.LocalToWorld(pointLocal * radius), out var startScreen) ||
+                !TryProjectGizmoPoint(transform.LocalToWorld(nextPointLocal * radius), out var nextScreen))
+                return false;
+
+            Float2 screenStep = nextScreen - startScreen;
+            float length = screenStep.Length;
+            if (length < 0.01f)
+                return false;
+            _rotationScreenDragDirection = screenStep / length;
+            _rotationRadiansPerPixel = sampleAngle / length;
+            return true;
+        }
+
+        private void SetDesiredRotation(Quaternion desired)
+        {
+            Quaternion.Normalize(ref desired, out var normalizedDesired);
+            Quaternion inverseCurrent = Quaternion.Invert(InteractionResult.Rotation);
+            _rotationDelta = normalizedDesired * inverseCurrent;
+            Quaternion.Normalize(ref _rotationDelta, out var normalizedDelta);
+            _rotationDelta = normalizedDelta;
+            if (_activeTransformSpace == TransformSpace.World)
+                _rotationGizmoDelta = normalizedDesired;
         }
 
         /// <inheritdoc />
-        public override bool IsControllingMouse => HasActiveTransaction && Owner.IsLeftMouseButtonDown;
+        public override bool IsControllingMouse => _interactionState != InteractionState.Clutched && Owner.IsLeftMouseButtonDown && (HasActiveTransaction || _activeAxis != Axis.None);
 
         /// <inheritdoc />
         public override void Update(float dt)
@@ -1159,14 +1446,22 @@ namespace FlaxEditor.Gizmo
                 return;
             }
 
-            if (!HasActiveTransaction && isLeftMouseButtonPressed && _activeAxis != Axis.None)
-                ArmInteraction();
-
-            if (ConsumePointerWarpFrame())
+            if (!HasActiveTransaction && isLeftMouseButtonPressed)
             {
-                UpdateGizmoPosition();
+                // Rebuild projected motor targets on the press frame. Cached
+                // targets from the previous update can noticeably diverge from
+                // the visible handle after a large bounds change or at a large
+                // world-space distance.
                 UpdateMatrices();
-                return;
+                SelectAxis();
+                if (_activeAxis != Axis.None)
+                    ArmInteraction();
+            }
+
+            if (_interactionState == InteractionState.Armed && _interactionAnchor == null)
+            {
+                _interactionAnchor = CreateInteractionAnchor();
+                ResetSolverAnchorState();
             }
 
             bool snapToVertex = Owner.SnapToVertex;
@@ -1333,9 +1628,6 @@ namespace FlaxEditor.Gizmo
                         anyValid = true;
                         scaleDelta = _scaleDelta;
                         _scaleDelta = Vector3.Zero;
-
-                        if (ActiveAxis == Axis.Center)
-                            scaleDelta = new Vector3(scaleDelta.X);
                     }
 
                     // Apply transformation (but to the parents, not whole selection pool)

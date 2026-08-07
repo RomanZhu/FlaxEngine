@@ -2227,11 +2227,21 @@ namespace FlaxEditor.Viewport
                 // Get input buttons and keys (skip if viewport has no focus or mouse is over a child control)
                 var wasViewportControllingMouse = _isViewportControllingMouse;
                 var isViewportControllingMouse = canUseInput && IsControllingMouse;
+                bool wasCameraControllingMouse = _isControllingMouse;
                 if (isViewportControllingMouse != _isViewportControllingMouse)
                 {
                     _isViewportControllingMouse = isViewportControllingMouse;
                     if (isViewportControllingMouse)
                     {
+                        // Transfer an Alt+LMB camera capture to the gizmo before
+                        // starting its wrapped capture. Otherwise the native
+                        // window remains in the camera's non-wrapping mode.
+                        if (wasCameraControllingMouse)
+                        {
+                            OnControlMouseEnd(window);
+                            wasCameraControllingMouse = false;
+                            _isControllingMouse = false;
+                        }
                         _mouseCaptureStartPos = _viewMousePos;
                         _isMouseScreenWrapActive = UseMouseScreenWrap;
                         StartMouseCapture(_isMouseScreenWrapActive);
@@ -2273,8 +2283,13 @@ namespace FlaxEditor.Viewport
                 }
 
                 // Track controlling mouse state change
-                bool wasControllingMouse = _prevInput.IsControllingMouse;
-                _isControllingMouse = _input.IsControllingMouse;
+                // A gizmo or another viewport tool owns its mouse capture while
+                // IsControllingMouse is true. In particular, Alt is precision
+                // during a gizmo drag and must not also start Alt+LMB camera
+                // orbit, replace screen-wrap capture, or end that capture when
+                // Alt is released.
+                bool wasControllingMouse = wasCameraControllingMouse;
+                _isControllingMouse = !isViewportControllingMouse && _input.IsControllingMouse;
 
                 // Simulate holding mouse right down for trackpad users
                 if ((_prevInput.IsMouseRightDown && !_input.IsMouseRightDown) || win.GetKeyDown(KeyboardKeys.Escape))

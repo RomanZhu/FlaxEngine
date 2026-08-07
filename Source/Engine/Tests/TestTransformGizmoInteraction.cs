@@ -36,6 +36,46 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestPureTransformMathIsSymmetricAndAnchorBased()
+        {
+            Assert.AreEqual(2.0f, TransformGizmoBase.SolveExponentialScaleFactor(120.0f, TransformGizmoBase.ScalePixelsPerDoubling), 0.00001f);
+            Assert.AreEqual(0.5f, TransformGizmoBase.SolveExponentialScaleFactor(-120.0f, TransformGizmoBase.ScalePixelsPerDoubling), 0.00001f);
+            Assert.AreEqual(2.0f, TransformGizmoBase.SolvePointerScaleFactor(1200.0f), 0.00001f);
+            Assert.AreEqual(0.5f, TransformGizmoBase.SolvePointerScaleFactor(-120.0f), 0.00001f);
+            Assert.AreEqual(1.0f, TransformGizmoBase.SolvePointerScaleFactor(0.0f), 0.00001f);
+            float halfDragFactor = TransformGizmoBase.SolveExponentialScaleFactor(60.0f, TransformGizmoBase.ScalePixelsPerDoubling);
+            Assert.AreEqual(2.0f, halfDragFactor * halfDragFactor, 0.00001f);
+            Assert.Greater(TransformGizmoBase.SolveExponentialScaleFactor(-100000.0f, TransformGizmoBase.ScalePixelsPerDoubling), 0.0f);
+
+            var anchorRay = new Ray(new Vector3(0, 0, -10), Vector3.Forward);
+            var currentRay = new Ray(new Vector3(2, 0, -10), Vector3.Forward);
+            Assert.IsTrue(TransformGizmoBase.TrySolveAxisTranslation(anchorRay, currentRay, Vector3.Zero, Vector3.UnitX, out var axisDelta));
+            Assert.AreEqual(new Vector3(2, 0, 0), axisDelta);
+
+            currentRay = new Ray(new Vector3(2, 3, -10), Vector3.Forward);
+            var plane = new Plane(Vector3.Zero, Vector3.Forward);
+            Assert.IsTrue(TransformGizmoBase.TrySolvePlaneTranslation(anchorRay, currentRay, plane, out var planeDelta));
+            Assert.AreEqual(new Vector3(2, 3, 0), planeDelta);
+
+            float previous = 170.0f * Mathf.DegreesToRadians;
+            float current = -170.0f * Mathf.DegreesToRadians;
+            float unwrapped = TransformGizmoBase.UnwrapAngle(previous, previous, current);
+            Assert.AreEqual(190.0f, unwrapped * Mathf.RadiansToDegrees, 0.0001f);
+
+            Quaternion arcball = TransformGizmoBase.SolveArcballRotation(Vector3.UnitX, Vector3.UnitY, Quaternion.Identity);
+            Vector3 rotated = Vector3.UnitX * arcball;
+            Assert.AreEqual(0.0f, (float)rotated.X, 0.0001f);
+            Assert.AreEqual(1.0f, (float)rotated.Y, 0.0001f);
+
+            Quaternion oppositeArcball = TransformGizmoBase.SolveArcballRotation(Vector3.UnitX, -Vector3.UnitX, Quaternion.Identity);
+            Vector3 oppositeRotated = Vector3.UnitX * oppositeArcball;
+            Assert.AreEqual(-1.0f, (float)oppositeRotated.X, 0.0001f);
+
+            Vector3 scaledPosition = TransformGizmoBase.ScalePositionAroundPivot(new Vector3(3, 2, 0), new Vector3(1, 0, 0), Quaternion.Identity, new Vector3(2, 0.5f, 1));
+            Assert.AreEqual(new Vector3(5, 1, 0), scaledPosition);
+        }
+
+        [Test]
         public void TestOriginPreviewScaleAndReanchorAreDeterministic()
         {
             var owner = new TestGizmoOwner();

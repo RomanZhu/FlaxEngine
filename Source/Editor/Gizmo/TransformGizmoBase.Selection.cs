@@ -124,6 +124,7 @@ namespace FlaxEditor.Gizmo
 
         private bool GetRotateRingPointLocal(Axis axis, out Vector3 point)
         {
+            var transform = GetRotationTrackballTransform();
             Vector3 normal;
             switch (axis)
             {
@@ -141,23 +142,23 @@ namespace FlaxEditor.Gizmo
                 return false;
             }
 
-            Ray localRay = GetLocalMouseRay();
+            Ray localRay = GetLocalMouseRay(ref transform);
             var plane = new Plane(Vector3.Zero, normal);
             if (!plane.Intersects(ref localRay, out Real distance))
-                return GetRotateRingPointFromScreenLocal(normal, out point);
+                return GetRotateRingPointFromScreenLocal(ref transform, normal, out point);
 
             point = localRay.GetPoint(distance);
             point = Vector3.ProjectOnPlane(point, normal);
             if (point.LengthSquared < 0.0001f)
-                return GetRotateRingPointFromScreenLocal(normal, out point);
+                return GetRotateRingPointFromScreenLocal(ref transform, normal, out point);
 
             point = Vector3.Normalize(point) * RotateRadiusRaw;
             return true;
         }
 
-        private bool GetRotateRingPointFromScreenLocal(Vector3 normal, out Vector3 point)
+        private bool GetRotateRingPointFromScreenLocal(ref Transform transform, Vector3 normal, out Vector3 point)
         {
-            Vector3 tangentU = GetRotateFrontDirectionLocal(normal);
+            Vector3 tangentU = GetRotateFrontDirectionLocal(ref transform, normal);
             Vector3 tangentV = Vector3.Cross(normal, tangentU);
             if (tangentV.LengthSquared < 0.0001f)
             {
@@ -166,9 +167,9 @@ namespace FlaxEditor.Gizmo
             }
             tangentV.Normalize();
 
-            Owner.Viewport.ProjectPoint(Position, out var centerScreen);
-            Owner.Viewport.ProjectPoint(_gizmoWorld.LocalToWorld(tangentU * RotateRadiusRaw), out var tangentUScreenPoint);
-            Owner.Viewport.ProjectPoint(_gizmoWorld.LocalToWorld(tangentV * RotateRadiusRaw), out var tangentVScreenPoint);
+            Owner.Viewport.ProjectPoint(transform.Translation, out var centerScreen);
+            Owner.Viewport.ProjectPoint(transform.LocalToWorld(tangentU * RotateRadiusRaw), out var tangentUScreenPoint);
+            Owner.Viewport.ProjectPoint(transform.LocalToWorld(tangentV * RotateRadiusRaw), out var tangentVScreenPoint);
 
             Float2 tangentUScreen = tangentUScreenPoint - centerScreen;
             Float2 tangentVScreen = tangentVScreenPoint - centerScreen;
@@ -193,12 +194,13 @@ namespace FlaxEditor.Gizmo
 
         private bool GetRotateScreenRingPointLocal(out Vector3 point)
         {
-            Ray localRay = GetLocalMouseRay();
-            Vector3 normal = GetRotateToViewLocal();
+            var transform = GetRotationTrackballTransform();
+            Ray localRay = GetLocalMouseRay(ref transform);
+            Vector3 normal = GetRotateToViewLocal(ref transform);
             var plane = new Plane(Vector3.Zero, normal);
             if (!plane.Intersects(ref localRay, out Real distance))
             {
-                point = Vector3.ProjectOnPlane(GetRotateFrontDirectionLocal(Vector3.UnitY), normal);
+                point = Vector3.ProjectOnPlane(GetRotateFrontDirectionLocal(ref transform, Vector3.UnitY), normal);
                 if (point.LengthSquared < 0.0001f)
                     point = Vector3.ProjectOnPlane(Vector3.UnitX, normal);
                 point.Normalize();
