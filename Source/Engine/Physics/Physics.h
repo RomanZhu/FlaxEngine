@@ -37,6 +37,11 @@ API_CLASS(Static) class FLAXENGINE_API Physics
     /// </summary>
     API_FUNCTION() static void DeleteScene(PhysicsScene* scene);
 
+    /// <summary>
+    /// Starts a new rigidbody interpolation synchronization step.
+    /// </summary>
+    static void BeginRigidBodyInterpolationSync();
+
 public:
     /// <summary>
     /// The automatic simulation feature. True if perform physics simulation after on fixed update by auto, otherwise user should do it.
@@ -88,6 +93,11 @@ public:
     /// Called during main engine loop to collect physic simulation results and apply them as well as fire collision events.
     /// </summary>
     API_FUNCTION() static void CollectResults();
+
+    /// <summary>
+    /// Called during main engine loop before drawing to smooth interpolated rigidbody transforms.
+    /// </summary>
+    static void UpdateInterpolatedRigidBodies();
 
     /// <summary>
     /// Checks if physical simulation is running.

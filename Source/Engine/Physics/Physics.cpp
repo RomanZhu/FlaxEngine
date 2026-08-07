@@ -238,10 +238,18 @@ void Physics::Simulate(float dt)
 
 void Physics::CollectResults()
 {
+    bool interpolationSyncStarted = false;
     for (PhysicsScene* scene : Scenes)
     {
-        if (scene->GetAutoSimulation())
+        if (scene->GetAutoSimulation() && scene->IsDuringSimulation())
+        {
+            if (!interpolationSyncStarted)
+            {
+                BeginRigidBodyInterpolationSync();
+                interpolationSyncStarted = true;
+            }
             scene->CollectResults();
+        }
     }
 }
 

@@ -231,6 +231,7 @@ void Engine::OnLoop()
     // Draw frame
     if (Time::OnBeginDraw(time))
     {
+        Physics::UpdateInterpolatedRigidBodies();
         OnDraw();
         Time::OnEndDraw();
     }

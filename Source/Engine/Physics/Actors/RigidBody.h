@@ -18,9 +18,13 @@ API_CLASS(Attributes="ActorContextMenu(\"New/Physics/Rigid Body\"), ActorToolbox
 class FLAXENGINE_API RigidBody : public Actor, public IPhysicsActor
 {
     DECLARE_SCENE_OBJECT(RigidBody);
+    friend class Physics;
 protected:
     void* _actor;
     Float3 _cachedScale;
+    Transform _previousPhysicsTransform;
+    Transform _currentPhysicsTransform;
+    uint64 _interpolationSyncFrame;
 
     float _mass;
     float _linearDamping;
@@ -29,6 +33,7 @@ protected:
     float _massScale;
     Float3 _centerOfMassOffset;
     RigidbodyConstraints _constraints;
+    RigidbodyInterpolation _interpolation;
 
     uint32 _enableSimulation : 1;
     uint32 _isKinematic : 1;
@@ -38,6 +43,7 @@ protected:
     uint32 _updateMassWhenScaleChanges : 1;
     uint32 _overrideMass : 1;
     uint32 _isUpdatingTransform : 1;
+    uint32 _hasPhysicsTransformHistory : 1;
 
 public:
     /// <summary>
@@ -138,6 +144,20 @@ public:
     /// If object should start awake, or if it should initially be sleeping.
     /// </summary>
     API_PROPERTY() void SetStartAwake(bool value);
+
+    /// <summary>
+    /// Gets the visual smoothing mode used between fixed physics simulation updates.
+    /// </summary>
+    API_PROPERTY(Attributes="EditorOrder(55), DefaultValue(RigidbodyInterpolation.None), EditorDisplay(\"Rigid Body\")")
+    FORCE_INLINE RigidbodyInterpolation GetInterpolation() const
+    {
+        return _interpolation;
+    }
+
+    /// <summary>
+    /// Sets the visual smoothing mode used between fixed physics simulation updates.
+    /// </summary>
+    API_PROPERTY() void SetInterpolation(RigidbodyInterpolation value);
 
     /// <summary>
     /// If true, it will update mass when actor scale changes.
@@ -476,6 +496,33 @@ public:
     /// </summary>
     void UpdateScale();
 
+private:
+    /// <summary>
+    /// Resets the interpolation pose history to the specified transform.
+    /// </summary>
+    void ResetInterpolationHistory(const Transform& transform);
+
+    /// <summary>
+    /// Applies a physics-driven transform without writing it back into the physics backend.
+    /// </summary>
+    void ApplyPhysicsTransform(const Transform& transform);
+
+    /// <summary>
+    /// Reads the current backend physics pose.
+    /// </summary>
+    bool ReadPhysicsTransform(Transform& transform) const;
+
+    /// <summary>
+    /// Applies the interpolated visual transform for rendering.
+    /// </summary>
+    void ApplyInterpolatedPhysicsTransform(float alpha);
+
+    /// <summary>
+    /// Updates this body registration in the interpolation update list.
+    /// </summary>
+    void UpdateInterpolationRegistration();
+
+public:
     bool HasPendingPhysicsColliders() const;
 
     template<typename ColliderType = Collider, typename AllocationType = HeapAllocation>
