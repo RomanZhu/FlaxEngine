@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using FlaxEngine;
 
 namespace FlaxEditor.Gizmo
@@ -184,6 +185,157 @@ namespace FlaxEditor.Gizmo
         {
             return !left.Equals(right);
         }
+    }
+
+    /// <summary>
+    /// Identifies the screen-space primitive used to acquire a semantic handle.
+    /// </summary>
+    public enum SemanticTargetKind
+    {
+        /// <summary>
+        /// No target.
+        /// </summary>
+        None,
+
+        /// <summary>
+        /// A projected axis segment and its cap envelope.
+        /// </summary>
+        AxisSegment,
+
+        /// <summary>
+        /// A projected plane quadrilateral.
+        /// </summary>
+        PlaneQuadrilateral,
+
+        /// <summary>
+        /// A circular center target.
+        /// </summary>
+        CenterCircle,
+
+        /// <summary>
+        /// The free-rotation trackball interior.
+        /// </summary>
+        TrackballCircle,
+
+        /// <summary>
+        /// A projected axis rotation arc or ellipse.
+        /// </summary>
+        AxisRing,
+
+        /// <summary>
+        /// A screen-facing rotation ring.
+        /// </summary>
+        ScreenRing,
+
+    }
+
+    /// <summary>
+    /// Describes a cached screen-space motor target independently of render mesh geometry.
+    /// </summary>
+    public readonly struct SemanticTarget
+    {
+        /// <summary>
+        /// Initializes a semantic target.
+        /// </summary>
+        internal SemanticTarget(SemanticHandle handle, SemanticTargetKind kind, Float2 start, Float2 end, Float2 center, Float2 point0, Float2 point1, Float2 point2, Float2 point3, IReadOnlyList<Float2> points, float motorRadius, float depth, float startDepth, float endDepth, IReadOnlyList<float> pointDepths, bool isAvailable)
+        {
+            Handle = handle;
+            Kind = kind;
+            Start = start;
+            End = end;
+            Center = center;
+            Point0 = point0;
+            Point1 = point1;
+            Point2 = point2;
+            Point3 = point3;
+            Points = points ?? Array.Empty<Float2>();
+            MotorRadius = motorRadius;
+            Depth = depth;
+            StartDepth = startDepth;
+            EndDepth = endDepth;
+            PointDepths = pointDepths ?? Array.Empty<float>();
+            IsAvailable = isAvailable;
+        }
+
+        /// <summary>
+        /// Gets the semantic handle represented by this target.
+        /// </summary>
+        public SemanticHandle Handle { get; }
+
+        /// <summary>
+        /// Gets the target primitive kind.
+        /// </summary>
+        public SemanticTargetKind Kind { get; }
+
+        /// <summary>
+        /// Gets the start of a projected segment.
+        /// </summary>
+        public Float2 Start { get; }
+
+        /// <summary>
+        /// Gets the end of a projected segment.
+        /// </summary>
+        public Float2 End { get; }
+
+        /// <summary>
+        /// Gets the target center.
+        /// </summary>
+        public Float2 Center { get; }
+
+        /// <summary>
+        /// Gets the first projected quadrilateral point.
+        /// </summary>
+        public Float2 Point0 { get; }
+
+        /// <summary>
+        /// Gets the second projected quadrilateral point.
+        /// </summary>
+        public Float2 Point1 { get; }
+
+        /// <summary>
+        /// Gets the third projected quadrilateral point.
+        /// </summary>
+        public Float2 Point2 { get; }
+
+        /// <summary>
+        /// Gets the fourth projected quadrilateral point.
+        /// </summary>
+        public Float2 Point3 { get; }
+
+        /// <summary>
+        /// Gets projected points for polygon and polyline targets.
+        /// </summary>
+        public IReadOnlyList<Float2> Points { get; }
+
+        /// <summary>
+        /// Gets the motor-target radius in viewport pixels.
+        /// </summary>
+        public float MotorRadius { get; }
+
+        /// <summary>
+        /// Gets the representative forward depth used for display metadata and fallback arbitration.
+        /// </summary>
+        public float Depth { get; }
+
+        /// <summary>
+        /// Gets the forward depth at the start of a segment target.
+        /// </summary>
+        public float StartDepth { get; }
+
+        /// <summary>
+        /// Gets the forward depth at the end of a segment target.
+        /// </summary>
+        public float EndDepth { get; }
+
+        /// <summary>
+        /// Gets per-point forward depths for polygon and polyline targets.
+        /// </summary>
+        public IReadOnlyList<float> PointDepths { get; }
+
+        /// <summary>
+        /// Gets a value indicating whether this target may currently be acquired.
+        /// </summary>
+        public bool IsAvailable { get; }
     }
 
     public partial class TransformGizmoBase

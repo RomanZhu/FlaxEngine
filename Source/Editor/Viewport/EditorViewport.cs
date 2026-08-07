@@ -213,9 +213,10 @@ namespace FlaxEditor.Viewport
 
         // Input
         internal bool _disableInputUpdate;
-        private bool _isControllingMouse, _isViewportControllingMouse, _wasVirtualMouseRightDown, _isVirtualMouseRightDown;
+        private bool _isControllingMouse, _isViewportControllingMouse, _isMouseScreenWrapActive, _wasVirtualMouseRightDown, _isVirtualMouseRightDown;
         private bool _hasAltRightMouseZoomGesture;
         private Float2 _startPos;
+        private Float2 _mouseCaptureStartPos;
 #if !PLATFORM_SDL
         private Float2 _mouseDeltaLast;
         private int _deltaFilteringStep;
@@ -372,6 +373,28 @@ namespace FlaxEditor.Viewport
         /// Gets the current mouse position in the viewport UI space.
         /// </summary>
         public Float2 ViewMousePosition => _viewMousePos;
+
+        /// <summary>
+        /// Gets the continuous mouse position in viewport UI space while screen-edge wrapping is active.
+        /// Unlike <see cref="ViewMousePosition"/>, this position includes the accumulated tracking offset
+        /// and can extend outside the viewport or desktop bounds.
+        /// </summary>
+        public Float2 ContinuousViewMousePosition
+        {
+            get
+            {
+                var root = Root;
+                if (!_isMouseScreenWrapActive || root == null)
+                    return _viewMousePos;
+#if PLATFORM_SDL
+                // SDL reports the entire captured motion in TrackingMouseOffset.
+                return _mouseCaptureStartPos + root.TrackingMouseOffset;
+#else
+                // Native desktop backends report only the displacement introduced by edge wraps.
+                return _viewMousePos + root.TrackingMouseOffset;
+#endif
+            }
+        }
 
         /// <summary>
         /// Gets the mouse movement position delta (user press and move).
@@ -1652,6 +1675,11 @@ namespace FlaxEditor.Viewport
         protected virtual bool IsControllingMouse => false;
 
         /// <summary>
+        /// Gets a value indicating whether controlling-mouse capture should loop across screen edges.
+        /// </summary>
+        protected virtual bool UseMouseScreenWrap => false;
+
+        /// <summary>
         /// Orients the viewport.
         /// </summary>
         /// <param name="orientation">The orientation.</param>
@@ -1983,7 +2011,10 @@ namespace FlaxEditor.Viewport
             get
             {
                 if (IsMouseOver || IsControllingMouse || _isViewportControllingMouse)
-                    return ConvertMouseToRay(ref _viewMousePos);
+                {
+                    var mousePosition = ContinuousViewMousePosition;
+                    return ConvertMouseToRay(ref mousePosition);
+                }
                 return new Ray(Vector3.Maximum, Vector3.Up);
             }
         }
@@ -2087,7 +2118,7 @@ namespace FlaxEditor.Viewport
 
         private void ResetMouseDeltaState()
         {
-            _startPos = _viewMousePos;
+            _startPos = ContinuousViewMousePosition;
             _mouseDelta = Float2.Zero;
             _mouseDeltaLast = Float2.Zero;
             _deltaFilteringStep = 0;
@@ -2200,9 +2231,17 @@ namespace FlaxEditor.Viewport
                 {
                     _isViewportControllingMouse = isViewportControllingMouse;
                     if (isViewportControllingMouse)
-                        StartMouseCapture();
+                    {
+                        _mouseCaptureStartPos = _viewMousePos;
+                        _isMouseScreenWrapActive = UseMouseScreenWrap;
+                        StartMouseCapture(_isMouseScreenWrapActive);
+                        ResetMouseDeltaState();
+                    }
                     else
+                    {
                         EndMouseCapture();
+                        _isMouseScreenWrapActive = false;
+                    }
                 }
                 var useViewportMouseInput = isViewportControllingMouse || wasViewportControllingMouse;
                 
@@ -2452,9 +2491,10 @@ namespace FlaxEditor.Viewport
                 if (_input.IsMouseLeftDown || _input.IsMouseRightDown || _isVirtualMouseRightDown)
                 {
                     // Calculate smooth mouse delta not dependant on viewport size
-                    var offset = _viewMousePos - _startPos;
+                    var mousePosition = ContinuousViewMousePosition;
+                    var offset = mousePosition - _startPos;
                     _mouseDelta = offset;
-                    _startPos = _viewMousePos;
+                    _startPos = mousePosition;
                 }
                 else
                 {

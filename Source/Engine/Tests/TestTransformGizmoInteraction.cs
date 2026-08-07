@@ -14,6 +14,28 @@ namespace FlaxEditor.Tests
     public class TestTransformGizmoInteraction
     {
         [Test]
+        public void TestProjectionSizingUsesForwardDepthAndDpiParity()
+        {
+            Assert.IsTrue(TransformGizmoBase.TryCalculateProjectionSizing(false, 10.0f, 60.0f, 1.0f, 1000.0f, 1.0f, 96.0f, 0.1f, out var perspectivePixelSize, out var perspectiveRadius));
+            Assert.IsTrue(TransformGizmoBase.TryCalculateProjectionSizing(false, 10.0f, 60.0f, 1.0f, 1000.0f, 2.0f, 96.0f, 0.1f, out var highDpiPixelSize, out var highDpiRadius));
+            Assert.AreEqual(perspectivePixelSize * 0.5f, highDpiPixelSize, 0.00001f);
+            Assert.AreEqual(perspectiveRadius, highDpiRadius, 0.00001f);
+
+            Assert.IsTrue(TransformGizmoBase.TryCalculateProjectionSizing(false, 20.0f, 60.0f, 1.0f, 1000.0f, 1.0f, 96.0f, 0.1f, out _, out var fartherRadius));
+            Assert.AreEqual(perspectiveRadius * 2.0f, fartherRadius, 0.00001f);
+
+            Assert.IsTrue(TransformGizmoBase.TryCalculateProjectionSizing(false, 0.001f, 60.0f, 1.0f, 1000.0f, 1.0f, 96.0f, 0.1f, out _, out var nearClampedRadius));
+            Assert.IsTrue(TransformGizmoBase.TryCalculateProjectionSizing(false, 0.1f, 60.0f, 1.0f, 1000.0f, 1.0f, 96.0f, 0.1f, out _, out var nearPlaneRadius));
+            Assert.AreEqual(nearPlaneRadius, nearClampedRadius, 0.00001f);
+            Assert.IsFalse(TransformGizmoBase.TryCalculateProjectionSizing(false, -1.0f, 60.0f, 1.0f, 1000.0f, 1.0f, 96.0f, 0.1f, out _, out _));
+
+            Assert.IsFalse(TransformGizmoBase.TryCalculateProjectionSizing(true, -100.0f, 60.0f, 0.02f, 1000.0f, 2.0f, 96.0f, 0.1f, out _, out _));
+            Assert.IsTrue(TransformGizmoBase.TryCalculateProjectionSizing(true, 10.0f, 60.0f, 0.02f, 1000.0f, 2.0f, 96.0f, 0.1f, out _, out var orthographicRadius));
+            Assert.IsTrue(TransformGizmoBase.TryCalculateProjectionSizing(true, 100.0f, 60.0f, 0.02f, 1000.0f, 2.0f, 96.0f, 0.1f, out _, out var orthographicFarRadius));
+            Assert.AreEqual(orthographicRadius, orthographicFarRadius, 0.00001f);
+        }
+
+        [Test]
         public void TestOriginPreviewScaleAndReanchorAreDeterministic()
         {
             var owner = new TestGizmoOwner();

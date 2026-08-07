@@ -172,7 +172,7 @@ namespace FlaxEditor.Gizmo
 
             Float2 tangentUScreen = tangentUScreenPoint - centerScreen;
             Float2 tangentVScreen = tangentVScreenPoint - centerScreen;
-            Float2 mouseScreen = Owner.Viewport.ViewMousePosition - centerScreen;
+            Float2 mouseScreen = Owner.Viewport.ContinuousViewMousePosition - centerScreen;
             float determinant = tangentUScreen.X * tangentVScreen.Y - tangentUScreen.Y * tangentVScreen.X;
             if (Mathf.Abs(determinant) < 0.0001f || mouseScreen.LengthSquared < 0.0001f)
             {
@@ -251,7 +251,7 @@ namespace FlaxEditor.Gizmo
 
             const float shaftAcquisitionRadius = 8.0f;
             const float headAcquisitionRadius = 10.0f;
-            Float2 cursor = Owner.Viewport.ViewMousePosition;
+            Float2 cursor = Owner.Viewport.ContinuousViewMousePosition;
             float shaftDistanceSquared = DistancePointToSegmentSquared(cursor, screenStart, screenHeadBase, out var shaftAmount);
             float headDistanceSquared = DistancePointToSegmentSquared(cursor, screenHeadBase, screenEnd, out var headAmount);
             bool hitsShaft = shaftDistanceSquared <= shaftAcquisitionRadius * shaftAcquisitionRadius;
@@ -291,7 +291,7 @@ namespace FlaxEditor.Gizmo
                 !TryProjectGizmoPoint(world3, out var screen3))
                 return false;
 
-            Float2 cursor = Owner.Viewport.ViewMousePosition;
+            Float2 cursor = Owner.Viewport.ContinuousViewMousePosition;
             bool contains = IsPointInScreenTriangle(cursor, screen0, screen1, screen3) ||
                             IsPointInScreenTriangle(cursor, screen0, screen3, screen2);
             if (!contains)
@@ -336,7 +336,7 @@ namespace FlaxEditor.Gizmo
             if (!TryProjectGizmoPoint(Position, out var center))
                 return false;
             const float acquisitionRadius = 12.0f;
-            if ((Owner.Viewport.ViewMousePosition - center).LengthSquared > acquisitionRadius * acquisitionRadius)
+            if ((Owner.Viewport.ContinuousViewMousePosition - center).LengthSquared > acquisitionRadius * acquisitionRadius)
                 return false;
             depth = Vector3.Dot(Position - Owner.ViewPosition, (Vector3)Owner.ViewDirection);
             return depth >= 0.0f;
@@ -403,57 +403,10 @@ namespace FlaxEditor.Gizmo
                 return;
             }
 
-            // Get mouse ray
-            Ray localRay = GetLocalMouseRay();
-
-            // Find gizmo collisions with mouse
-            Real closestIntersection = Real.MaxValue;
-            Real intersection;
-            _activeAxis = Axis.None;
-            switch (_activeMode)
-            {
-            case Mode.Translate:
-            {
-                SelectTranslateScaleHandle(ref localRay);
-                break;
-            }
-            case Mode.Rotate:
-            {
-                // Circles
-                if (IntersectsRotateCircle(Vector3.UnitX, ref localRay, out intersection) && intersection < closestIntersection)
-                {
-                    _activeAxis = Axis.X;
-                    closestIntersection = intersection;
-                }
-                if (IntersectsRotateCircle(Vector3.UnitY, ref localRay, out intersection) && intersection < closestIntersection)
-                {
-                    _activeAxis = Axis.Y;
-                    closestIntersection = intersection;
-                }
-                if (IntersectsRotateCircle(Vector3.UnitZ, ref localRay, out intersection) && intersection < closestIntersection)
-                {
-                    _activeAxis = Axis.Z;
-                    closestIntersection = intersection;
-                }
-                if (IntersectsRotateScreenRing(ref localRay, out intersection) && intersection < closestIntersection)
-                {
-                    _activeAxis = Axis.Screen;
-                    closestIntersection = intersection;
-                }
-                if (_activeAxis == Axis.None && IntersectsRotateTrackball(ref localRay, out intersection))
-                {
-                    _activeAxis = Axis.Center;
-                    closestIntersection = intersection;
-                }
-
-                break;
-            }
-            case Mode.Scale:
-            {
-                SelectTranslateScaleHandle(ref localRay);
-                break;
-            }
-            }
+            // Acquisition is intentionally based on cached projected semantic
+            // targets. The selected handle is then consumed by the existing
+            // world-space solvers during the active transaction.
+            SelectSemanticAxis();
         }
     }
 }

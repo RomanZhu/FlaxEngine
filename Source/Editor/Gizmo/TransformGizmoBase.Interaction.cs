@@ -882,7 +882,7 @@ namespace FlaxEditor.Gizmo
         {
             var viewDirection = (Vector3)Owner.ViewDirection;
             var fallbackPlane = new Plane(Position, -viewDirection);
-            var pointerPosition = Owner.Viewport != null ? Owner.Viewport.ViewMousePosition : default;
+            var pointerPosition = Owner.Viewport != null ? Owner.Viewport.ContinuousViewMousePosition : default;
             var anchor = new InteractionAnchor(_interactionResult, pointerPosition, Owner.MouseRay, Owner.ViewPosition, Owner.ViewOrientation, fallbackPlane, _latchedHandle);
             _anchorTranslationDelta = Vector3.Zero;
             _anchorRotationDelta = Quaternion.Identity;

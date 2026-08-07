@@ -184,30 +184,25 @@ namespace FlaxEditor.Gizmo
         {
             // Check there is no need to perform update
             if (SelectionCount == 0)
+            {
+                _gizmoProjectionValid = false;
+                _semanticTargets.Clear();
+                _hoveredHandle = SemanticHandle.None;
+                _hoveredTarget = default;
+                _hoveredTargetScore = float.MaxValue;
+                _hasHoveredTarget = false;
                 return;
+            }
 
             // Set positions of the gizmo
             UpdateGizmoPosition();
 
-            // Scale gizmo to fit on-screen
+            // Scale the authored gizmo basis from the active projection. This uses
+            // forward depth for perspective views and keeps the logical-to-physical
+            // DPI conversion in the projection helper.
             Vector3 position = Position;
-            if (Owner.Viewport.UseOrthographicProjection)
-            {
-                //[hack] this is far form ideal the View Position is in wrong location, any think using the View Position will have problem
-                //the camera system needs rewrite the to be a camera on springarm, similar how the ArcBallCamera is handled
-                //the ortho projection cannot exist with fps camera because there is no
-                // - focus point to calculate correct View Position with Orthographic Scale as a reference and Orthographic Scale from View Position
-                // with make the camera jump
-                // - and deaph so w and s movment in orto mode moves the cliping plane now
-                float gizmoSize = Editor.Instance.Options.Options.Visual.GizmoSize;
-                _screenScale = gizmoSize * (50 * Owner.Viewport.OrthographicScale);
-            }
-            else
-            {
-                Vector3 vLength = Owner.ViewPosition - position;
-                float gizmoSize = Editor.Instance.Options.Options.Visual.GizmoSize;
-                _screenScale = (float)(vLength.Length / GizmoScaleFactor * gizmoSize);
-            }
+            _gizmoProjectionValid = TryGetGizmoWorldRadius(position, out var gizmoWorldRadius);
+            _screenScale = _gizmoProjectionValid ? gizmoWorldRadius / GizmoGeometryRadiusRaw : 0.0f;
 
             // Setup world
             Quaternion orientation = GetSelectedTransform(0).Orientation;
@@ -216,6 +211,8 @@ namespace FlaxEditor.Gizmo
             {
                 _gizmoWorld.Orientation = Quaternion.Identity;
             }
+
+            RebuildSemanticTargets();
         }
 
         private bool TrySolveAxisDrag(ref Ray worldRay, ref Matrix rotationMatrix, Vector3 axisLocal, out Vector3 deltaLocal)
@@ -596,7 +593,7 @@ namespace FlaxEditor.Gizmo
             // icons, generic actor bounds, and enclosing helper volumes.
             Real closestScreenDistance = Real.MaxValue;
             Real closestRayDistance = Real.MaxValue;
-            TryFindClosestGeometrySnapPoint(Owner.SceneGraphRoot, ref rayCast, excludedRoots, Owner.Viewport, Owner.Viewport.ViewMousePosition, ref closestScreenDistance, ref closestRayDistance, ref targetNode, ref target);
+            TryFindClosestGeometrySnapPoint(Owner.SceneGraphRoot, ref rayCast, excludedRoots, Owner.Viewport, Owner.Viewport.ContinuousViewMousePosition, ref closestScreenDistance, ref closestRayDistance, ref targetNode, ref target);
             return targetNode != null;
         }
 
@@ -1182,7 +1179,7 @@ namespace FlaxEditor.Gizmo
             bool skipVertexSnapSelection = cancelVertexSnapPivot;
             if (_isVertexSnapDragPending)
             {
-                var mouseDelta = Owner.Viewport.ViewMousePosition - _vertexSnapDragStartMousePosition;
+                var mouseDelta = Owner.Viewport.ContinuousViewMousePosition - _vertexSnapDragStartMousePosition;
                 if (!isLeftBtnDown || mouseDelta.LengthSquared >= VertexSnapDragStartDistanceSquared)
                     _isVertexSnapDragPending = false;
             }
@@ -1224,7 +1221,7 @@ namespace FlaxEditor.Gizmo
                         if (selectedSourceOnPress)
                         {
                             _isVertexSnapDragPending = true;
-                            _vertexSnapDragStartMousePosition = Owner.Viewport.ViewMousePosition;
+                            _vertexSnapDragStartMousePosition = Owner.Viewport.ContinuousViewMousePosition;
                         }
                         if (_activeAxis == Axis.None && selectedSourceOnPress)
                             _activeAxis = Axis.Center;
@@ -1423,7 +1420,7 @@ namespace FlaxEditor.Gizmo
             var closestRayDistance = Real.MaxValue;
             SceneGraphNode closestObject = null;
             Vector3 closestPoint = Vector3.Zero;
-            var mousePosition = Owner.Viewport.ViewMousePosition;
+            var mousePosition = Owner.Viewport.ContinuousViewMousePosition;
             for (int i = 0; i < SelectionCount; i++)
             {
                 TryFindClosestVertexSnapPoint(GetSelectedObject(i), ref ray, null, Owner.Viewport, mousePosition, ref closestScreenDistance, ref closestRayDistance, ref closestObject, ref closestPoint);
@@ -1514,7 +1511,7 @@ namespace FlaxEditor.Gizmo
             var closestRayDistance = Real.MaxValue;
             SceneGraphNode hit = null;
             Vector3 pointSnapped = Vector3.Zero;
-            TryFindClosestVertexSnapPoint(Owner.SceneGraphRoot, ref rayCast, excludeObjects, Owner.Viewport, Owner.Viewport.ViewMousePosition, ref closestScreenDistance, ref closestRayDistance, ref hit, ref pointSnapped);
+            TryFindClosestVertexSnapPoint(Owner.SceneGraphRoot, ref rayCast, excludeObjects, Owner.Viewport, Owner.Viewport.ContinuousViewMousePosition, ref closestScreenDistance, ref closestRayDistance, ref hit, ref pointSnapped);
             if (hit != null)
             {
                 _vertexSnapObjectTo = hit;

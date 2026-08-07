@@ -119,6 +119,9 @@ namespace FlaxEditor.Viewport
         protected override bool IsControllingMouse => Gizmos.Active?.IsControllingMouse ?? false;
 
         /// <inheritdoc />
+        protected override bool UseMouseScreenWrap => Gizmos.Active?.IsControllingMouse ?? false;
+
+        /// <inheritdoc />
         protected override void AddUpdateCallbacks(RootControl root)
         {
             base.AddUpdateCallbacks(root);

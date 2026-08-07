@@ -8,9 +8,25 @@ namespace FlaxEditor.Gizmo
     public partial class TransformGizmoBase
     {
         /// <summary>
-        /// Scale of the gizmo itself
+        /// Default projected radius of the transform gizmo in logical viewport pixels.
         /// </summary>
-        private const float GizmoScaleFactor = 24;
+        private const float GizmoRadiusPixels = 96.0f;
+
+        /// <summary>
+        /// Scale used to convert the unit editor primitive meshes into gizmo-space units.
+        /// </summary>
+        private const float GizmoModelsScale2RealGizmoSize = 0.075f;
+
+        /// <summary>
+        /// Legacy perspective scale factor used by the vertex-snap point marker.
+        /// </summary>
+        private const float VertexSnapPointScaleFactor = 24.0f;
+
+        /// <summary>
+        /// Radius of the authored gizmo basis used to convert the projected radius to
+        /// the scale stored in <see cref="_gizmoWorld"/>.
+        /// </summary>
+        private const float GizmoGeometryRadiusRaw = AxisLength;
 
         /// <summary>
         /// The length of each axis (outwards)
@@ -31,6 +47,41 @@ namespace FlaxEditor.Gizmo
         /// Size of the cube cap used by scale axes.
         /// </summary>
         private const float AxisScaleCubeSize = 0.50f;
+
+        /// <summary>
+        /// Width of an axis motor target in viewport pixels.
+        /// </summary>
+        private const float AxisMotorTargetWidthPixels = 16.0f;
+
+        /// <summary>
+        /// Width of an arrow or cube cap motor envelope in viewport pixels.
+        /// </summary>
+        private const float CapMotorTargetWidthPixels = 20.0f;
+
+        /// <summary>
+        /// Expansion around the visible plane handle used for acquisition.
+        /// </summary>
+        private const float PlaneMotorExpansionPixels = 6.0f;
+
+        /// <summary>
+        /// Diameter of the center handle motor target in viewport pixels.
+        /// </summary>
+        private const float CenterMotorTargetSizePixels = 24.0f;
+
+        /// <summary>
+        /// Width of the rotation-ring motor band in viewport pixels.
+        /// </summary>
+        private const float RingMotorTargetWidthPixels = 16.0f;
+
+        /// <summary>
+        /// Additional retention margin used by hover hysteresis.
+        /// </summary>
+        private const float HoverRetentionExpansionPixels = 6.0f;
+
+        /// <summary>
+        /// Minimum physical depth used when a perspective pivot is close to the camera.
+        /// </summary>
+        private const float MinimumProjectionDepth = 0.01f;
 
         private const float RotateRadiusRaw = 3.2f;
         private const float RotateTrackballSensitivity = 1.0f / 60.0f;

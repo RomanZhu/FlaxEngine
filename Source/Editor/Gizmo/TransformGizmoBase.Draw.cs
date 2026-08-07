@@ -777,12 +777,12 @@ namespace FlaxEditor.Gizmo
             if (viewport.Width < Mathf.Epsilon || viewport.Height < Mathf.Epsilon)
                 return false;
 
-            if (!viewport.UseOrthographicProjection)
-            {
-                var toPoint = worldPosition - Owner.ViewPosition;
-                if (Vector3.Dot(toPoint, (Vector3)Owner.ViewDirection) <= 0.0f)
-                    return false;
-            }
+            if (!_gizmoProjectionValid)
+                return false;
+
+            var toPoint = worldPosition - Owner.ViewPosition;
+            if (Vector3.Dot(toPoint, (Vector3)Owner.ViewDirection) <= 0.0f)
+                return false;
 
             viewport.ProjectPoint(worldPosition, out screenPosition);
             return true;
@@ -867,7 +867,7 @@ namespace FlaxEditor.Gizmo
                 return gizmoSize * (50 * Owner.Viewport.OrthographicScale);
 
             Vector3 vLength = Owner.ViewPosition - worldPosition;
-            return (float)(vLength.Length / GizmoScaleFactor * gizmoSize);
+            return (float)(vLength.Length / VertexSnapPointScaleFactor * gizmoSize);
         }
 
         private void DrawVertexSnapPointHighlight(ref RenderContext renderContext, Mesh sphereMesh, Vector3 worldPosition, MaterialBase material, sbyte sortOrder)
@@ -971,7 +971,7 @@ namespace FlaxEditor.Gizmo
         /// <inheritdoc />
         public override void Draw(ref RenderContext renderContext)
         {
-            if (!_isActive || !IsActive)
+            if (!_isActive || !IsActive || !_gizmoProjectionValid)
                 return;
             if (!_modelCube || !_modelCube.IsLoaded)
                 return;
@@ -991,11 +991,10 @@ namespace FlaxEditor.Gizmo
             renderContext.View.GetWorldMatrix(ref _gizmoWorld, out Matrix world);
 
             const sbyte sortOrder = 100; // Draw after any other editor shapes
-            const float gizmoModelsScale2RealGizmoSize = 0.075f;
             Mesh cubeMesh = _modelCube.LODs[0].Meshes[0];
             Mesh sphereMesh = _modelSphere.LODs[0].Meshes[0];
 
-            Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m3);
+            Matrix.Scaling(GizmoModelsScale2RealGizmoSize, out m3);
             Matrix.Multiply(ref m3, ref world, out m1);
 
             switch (_activeMode)
@@ -1059,7 +1058,7 @@ namespace FlaxEditor.Gizmo
                     // Center sphere
                     if (_vertexSnapObject == null && ShouldDrawFeedbackHandle(Axis.Center))
                     {
-                        Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
+                        Matrix.Scaling(GizmoModelsScale2RealGizmoSize, out m2);
                         Matrix.Multiply(ref m2, ref m1, out m3);
                         DrawGizmoMesh(ref renderContext, sphereMesh, isCenter ? _materialAxisFocus : _materialSphere, ref m3, sortOrder);
                     }
@@ -1156,7 +1155,7 @@ namespace FlaxEditor.Gizmo
                 // Center box
                 if (_vertexSnapObject == null && ShouldDrawFeedbackHandle(Axis.Center))
                 {
-                    Matrix.Scaling(gizmoModelsScale2RealGizmoSize, out m2);
+                    Matrix.Scaling(GizmoModelsScale2RealGizmoSize, out m2);
                     Matrix.Multiply(ref m2, ref m1, out m3);
                     DrawGizmoMesh(ref renderContext, sphereMesh, isCenter ? _materialAxisFocus : _materialSphere, ref m3, sortOrder);
                 }
