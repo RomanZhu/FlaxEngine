@@ -1913,9 +1913,6 @@ void PhysicsBackend::StartSimulateScene(void* scene, float dt)
     auto scenePhysX = (ScenePhysX*)scene;
     const auto& settings = *PhysicsSettings::Get();
 
-    // Clamp delta
-    dt = Math::Clamp(dt, 0.0f, settings.MaxDeltaTime);
-
     // Prepare util objects
     if (scenePhysX->ScratchMemory == nullptr)
     {

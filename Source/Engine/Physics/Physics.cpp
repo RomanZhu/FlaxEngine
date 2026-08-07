@@ -7,7 +7,6 @@
 #include "PhysicsSettings.h"
 #include "PhysicsStatistics.h"
 #include "Colliders/Collider.h"
-#include "Engine/Engine/Time.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Profiler/ProfilerMemory.h"
@@ -37,7 +36,6 @@ PhysicsService PhysicsServiceInstance;
 
 void PhysicsSettings::Apply()
 {
-    Time::_physicsMaxDeltaTime = MaxDeltaTime;
     Platform::MemoryCopy(Physics::LayerMasks, LayerMasks, sizeof(LayerMasks));
     Physics::SetGravity(DefaultGravity);
     Physics::SetBounceThresholdVelocity(BounceThresholdVelocity);
@@ -65,7 +63,6 @@ void PhysicsSettings::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE(DisableCCD);
     SERIALIZE(BroadPhaseType);
     SERIALIZE(SolverType);
-    SERIALIZE(MaxDeltaTime);
     SERIALIZE(EnableSubstepping);
     SERIALIZE(SubstepDeltaTime);
     SERIALIZE(MaxSubsteps);
@@ -91,7 +88,6 @@ void PhysicsSettings::Deserialize(DeserializeStream& stream, ISerializeModifier*
     DESERIALIZE(DisableCCD);
     DESERIALIZE(BroadPhaseType);
     DESERIALIZE(SolverType);
-    DESERIALIZE(MaxDeltaTime);
     DESERIALIZE(EnableSubstepping);
     DESERIALIZE(SubstepDeltaTime);
     DESERIALIZE(MaxSubsteps);

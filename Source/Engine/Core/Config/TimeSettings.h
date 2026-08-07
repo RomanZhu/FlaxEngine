@@ -20,7 +20,7 @@ public:
     float UpdateFPS = 60.0f;
 
     /// <summary>
-    /// The target amount of the physics simulation updates per second (also fixed updates frequency).
+    /// The target amount of fixed physics simulation updates per second.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(2), Limit(0, 1000), EditorDisplay(\"General\", \"Physics FPS\")")
     float PhysicsFPS = 60.0f;
@@ -42,6 +42,12 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(20), Limit(0.1f, 1000.0f, 0.01f), EditorDisplay(\"General\")")
     float MaxUpdateDeltaTime = 0.1f;
+
+    /// <summary>
+    /// The maximum fixed-update time that can be consumed after a hitch.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(21), Limit(0.001f, 1000.0f, 0.01f), EditorDisplay(\"General\")")
+    float MaxPhysicsCatchUpTime = 0.3f;
 
     /// <summary>
     /// Limits maximum game framerate when application window loses focus. Use 0 to disable this feature.

@@ -221,7 +221,7 @@ void Engine::OnLoop()
     }
 
     // Start physics simulation
-    if (Time::OnBeginPhysics(time))
+    while (Time::OnBeginPhysics(time))
     {
         OnFixedUpdate();
         OnLateFixedUpdate();

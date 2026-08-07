@@ -107,12 +107,6 @@ public:
     PhysicsSolverType SolverType = PhysicsSolverType::ProjectedGaussSeidelIterativeSolver;
 
     /// <summary>
-    /// The maximum allowed delta time (in seconds) for the physics simulation step.
-    /// </summary>
-    API_FIELD(Attributes="EditorOrder(1000), EditorDisplay(\"Framerate\")")
-    float MaxDeltaTime = 0.1f;
-
-    /// <summary>
     /// Whether to substep the physics simulation.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(1005), EditorDisplay(\"Framerate\")")

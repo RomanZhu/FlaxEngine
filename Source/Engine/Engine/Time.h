@@ -5,7 +5,6 @@
 #include "Engine/Core/Types/TimeSpan.h"
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Scripting/ScriptingType.h"
-#include "Engine/Core/Collections/SamplesBuffer.h"
 
 /// <summary>
 /// Game ticking and timing system.
@@ -85,24 +84,44 @@ public:
     };
 
     /// <summary>
-    /// Ticking method that tries to use fixed steps policy as much as possible (if not running slowly).
+    /// Ticking method that consumes fixed steps from an accumulated elapsed time.
     /// </summary>
     class FixedStepTickData : public TickData
     {
     public:
         /// <summary>
-        /// The last few ticks delta times. Used to check if can use fixed steps or whenever is running slowly so should use normal stepping.
+        /// The accumulated elapsed time waiting to be consumed by fixed steps.
         /// </summary>
-        SamplesBuffer<double, 4> Samples;
+        double AccumulatedTime = 0.0;
+
+        /// <summary>
+        /// The fixed timestep in seconds.
+        /// </summary>
+        double FixedDeltaTime = 1.0 / 60.0;
+
+        /// <summary>
+        /// The maximum accumulated fixed time in seconds.
+        /// </summary>
+        double MaxCatchUpTime = 0.1;
+
+        /// <summary>
+        /// The amount of fixed steps left to consume.
+        /// </summary>
+        int32 PendingSteps = 0;
+
+        /// <summary>
+        /// The last engine-loop time sampled into the accumulator.
+        /// </summary>
+        double LastUpdateTime = 0.0;
 
     public:
         // [TickData]
-        bool OnTickBegin(double time, float targetFps, float maxDeltaTime) override;
+        void OnReset(float targetFps, double currentTime) override;
+        bool OnTickBegin(double time, float targetFps, float maxCatchUpTime) override;
     };
 
 private:
     static bool _gamePaused;
-    static float _physicsMaxDeltaTime;
 
 public:
     /// <summary>
@@ -116,7 +135,7 @@ public:
     API_FIELD() static float UpdateFPS;
 
     /// <summary>
-    /// The target amount of the physics simulation updates per second (also fixed updates frequency).
+    /// The target amount of fixed physics simulation updates per second.
     /// </summary>
     API_FIELD() static float PhysicsFPS;
 
@@ -199,6 +218,11 @@ public:
     /// Gets timeScale-independent time in seconds it took to complete the last frame.
     /// </summary>
     API_PROPERTY() static float GetUnscaledDeltaTime();
+
+    /// <summary>
+    /// Gets the fixed timestep in seconds, based on <see cref="PhysicsFPS"/>.
+    /// </summary>
+    API_PROPERTY() static float GetFixedDeltaTime();
 
     /// <summary>
     /// Gets timeScale-independent time at the beginning of this frame. This is the time in seconds since the start of the game.
