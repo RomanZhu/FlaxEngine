@@ -75,6 +75,10 @@ namespace FlaxEditor.Gizmo
             if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
                 hit = actorChildNode.ParentNode;
 
+            // Scene roots are hierarchy/navigation objects, never viewport pick targets.
+            if (hit is SceneNode)
+                return null;
+
             if (hit is ActorNode hitActorNode && !hitActorNode.Actor)
                 return null;
             if (hit is ActorChildNode hitChildNode && hitChildNode.ParentNode is ActorNode hitChildActorNode && !hitChildActorNode.Actor)
@@ -107,6 +111,9 @@ namespace FlaxEditor.Gizmo
             }
             for (var node = directTarget; node != null; node = node.ParentNode)
             {
+                // Do not allow an object's ancestry to promote a viewport hit to its Scene root.
+                if (node is SceneNode)
+                    break;
                 if (node is ActorNode actorNode && !actorNode.Actor)
                     break;
                 _pickAncestry.Add(node);
