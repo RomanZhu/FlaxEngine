@@ -256,7 +256,7 @@ namespace FlaxEditor.Windows.Assets
 
             public override void UpdateFPS()
             {
-                Time.UpdateFPS = Time.DrawFPS = _popup.Options.FrameRate;
+                Time.UpdateFPS = _popup.Options.FrameRate;
                 Time.PhysicsFPS = 0;
             }
         }
@@ -372,7 +372,7 @@ namespace FlaxEditor.Windows.Assets
                 _wasTickEnabled = Level.TickEnabled;
                 Time.GamePaused = false;
                 Time.SetFixedDeltaTime(true, _dt);
-                Time.UpdateFPS = Time.DrawFPS = _options.FrameRate;
+                Time.UpdateFPS = _options.FrameRate;
                 if (!Editor.IsPlayMode)
                 {
                     // Don't simulate physics and don't tick game when rendering at edit time

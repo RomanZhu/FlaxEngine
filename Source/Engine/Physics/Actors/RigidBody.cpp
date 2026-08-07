@@ -2,15 +2,56 @@
 
 #include "RigidBody.h"
 #include "Engine/Core/Log.h"
+#include "Engine/Core/Math/Math.h"
 #include "Engine/Physics/Colliders/Collider.h"
+#include "Engine/Physics/Physics.h"
 #include "Engine/Physics/PhysicsBackend.h"
 #include "Engine/Physics/PhysicsScene.h"
+#include "Engine/Engine/Time.h"
 #include "Engine/Serialization/Serialization.h"
+
+namespace
+{
+    Array<RigidBody*> InterpolatedRigidBodies;
+    uint64 RigidBodyInterpolationSyncFrame = 0;
+
+    void RegisterInterpolatedRigidBody(RigidBody* body)
+    {
+        if (!InterpolatedRigidBodies.Contains(body))
+            InterpolatedRigidBodies.Add(body);
+    }
+
+    void UnregisterInterpolatedRigidBody(RigidBody* body)
+    {
+        InterpolatedRigidBodies.Remove(body);
+    }
+}
+
+void Physics::BeginRigidBodyInterpolationSync()
+{
+    RigidBodyInterpolationSyncFrame++;
+}
+
+void Physics::UpdateInterpolatedRigidBodies()
+{
+    if (InterpolatedRigidBodies.IsEmpty())
+        return;
+
+    float alpha = 1.0f;
+    if (Time::Physics.FixedDeltaTime > ZeroToleranceDouble)
+        alpha = (float)Math::Saturate(Time::Physics.AccumulatedTime / Time::Physics.FixedDeltaTime);
+
+    for (int32 i = 0; i < InterpolatedRigidBodies.Count(); i++)
+        InterpolatedRigidBodies[i]->ApplyInterpolatedPhysicsTransform(alpha);
+}
 
 RigidBody::RigidBody(const SpawnParams& params)
     : Actor(params)
     , _actor(nullptr)
     , _cachedScale(1.0f)
+    , _previousPhysicsTransform(Transform::Identity)
+    , _currentPhysicsTransform(Transform::Identity)
+    , _interpolationSyncFrame(0)
     , _mass(1.0f)
     , _linearDamping(0.01f)
     , _angularDamping(0.05f)
@@ -18,6 +59,7 @@ RigidBody::RigidBody(const SpawnParams& params)
     , _massScale(1.0f)
     , _centerOfMassOffset(Float3::Zero)
     , _constraints(RigidbodyConstraints::None)
+    , _interpolation(RigidbodyInterpolation::None)
     , _enableSimulation(true)
     , _isKinematic(false)
     , _useCCD(false)
@@ -26,6 +68,7 @@ RigidBody::RigidBody(const SpawnParams& params)
     , _updateMassWhenScaleChanges(false)
     , _overrideMass(false)
     , _isUpdatingTransform(false)
+    , _hasPhysicsTransformHistory(false)
 {
 }
 
@@ -93,6 +136,15 @@ void RigidBody::SetEnableGravity(bool value)
 void RigidBody::SetStartAwake(bool value)
 {
     _startAwake = value;
+}
+
+void RigidBody::SetInterpolation(RigidbodyInterpolation value)
+{
+    if (value == _interpolation)
+        return;
+    _interpolation = value;
+    ResetInterpolationHistory(_transform);
+    UpdateInterpolationRegistration();
 }
 
 void RigidBody::SetUpdateMassWhenScaleChanges(bool value)
@@ -434,6 +486,67 @@ void RigidBody::UpdateScale()
         UpdateMass();
 }
 
+void RigidBody::ResetInterpolationHistory(const Transform& transform)
+{
+    _previousPhysicsTransform = transform;
+    _currentPhysicsTransform = transform;
+    _interpolationSyncFrame = RigidBodyInterpolationSyncFrame;
+    _hasPhysicsTransformHistory = true;
+}
+
+void RigidBody::ApplyPhysicsTransform(const Transform& transform)
+{
+    ASSERT(!_isUpdatingTransform);
+    _isUpdatingTransform = true;
+    if (_parent)
+        _parent->GetTransform().WorldToLocal(transform, _localTransform);
+    else
+        _localTransform = transform;
+    OnTransformChanged();
+    _isUpdatingTransform = false;
+}
+
+bool RigidBody::ReadPhysicsTransform(Transform& transform) const
+{
+    transform = _transform;
+    PhysicsBackend::GetRigidActorPose(_actor, transform.Translation, transform.Orientation);
+    if (transform.Translation.IsNanOrInfinity() || transform.Orientation.IsNanOrInfinity())
+    {
+        LOG(Error, "GetRigidActorPose retuned NaN/Inf transformation");
+        return false;
+    }
+    return true;
+}
+
+void RigidBody::ApplyInterpolatedPhysicsTransform(float alpha)
+{
+    if (_interpolation != RigidbodyInterpolation::Interpolate || !_actor || !_hasPhysicsTransformHistory || !IsActiveInHierarchy())
+        return;
+
+    if (_interpolationSyncFrame != RigidBodyInterpolationSyncFrame)
+    {
+        Transform transform;
+        if (ReadPhysicsTransform(transform))
+        {
+            ResetInterpolationHistory(transform);
+            ApplyPhysicsTransform(transform);
+        }
+        return;
+    }
+
+    Transform transform;
+    Transform::Lerp(_previousPhysicsTransform, _currentPhysicsTransform, alpha, transform);
+    ApplyPhysicsTransform(transform);
+}
+
+void RigidBody::UpdateInterpolationRegistration()
+{
+    if (_actor && _interpolation == RigidbodyInterpolation::Interpolate)
+        RegisterInterpolatedRigidBody(this);
+    else
+        UnregisterInterpolatedRigidBody(this);
+}
+
 void RigidBody::Serialize(SerializeStream& stream, const void* otherObj)
 {
     // Base
@@ -450,6 +563,7 @@ void RigidBody::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_MEMBER(CenterOfMassOffset, _centerOfMassOffset);
     SERIALIZE_MEMBER(MassScale, _massScale);
     SERIALIZE_MEMBER(Constraints, _constraints);
+    SERIALIZE_MEMBER(Interpolation, _interpolation);
 
     SERIALIZE_BIT_MEMBER(EnableSimulation, _enableSimulation);
     SERIALIZE_BIT_MEMBER(IsKinematic, _isKinematic);
@@ -473,6 +587,7 @@ void RigidBody::Deserialize(DeserializeStream& stream, ISerializeModifier* modif
     DESERIALIZE_MEMBER(CenterOfMassOffset, _centerOfMassOffset);
     DESERIALIZE_MEMBER(MassScale, _massScale);
     DESERIALIZE_MEMBER(Constraints, _constraints);
+    DESERIALIZE_MEMBER(Interpolation, _interpolation);
 
     DESERIALIZE_BIT_MEMBER(EnableSimulation, _enableSimulation);
     DESERIALIZE_BIT_MEMBER(IsKinematic, _isKinematic);
@@ -489,26 +604,24 @@ void* RigidBody::GetPhysicsActor() const
 
 void RigidBody::OnActiveTransformChanged()
 {
-    // Change actor transform (but with locking)
-    ASSERT(!_isUpdatingTransform);
-    _isUpdatingTransform = true;
-    Transform transform = _transform;
-    PhysicsBackend::GetRigidActorPose(_actor, transform.Translation, transform.Orientation);
-    if (transform.Translation.IsNanOrInfinity() || transform.Orientation.IsNanOrInfinity())
+    Transform transform;
+    if (!ReadPhysicsTransform(transform))
     {
-        LOG(Error, "GetRigidActorPose retuned NaN/Inf transformation");
         transform = _transform;
     }
-    if (_parent)
+
+    if (_hasPhysicsTransformHistory)
     {
-        _parent->GetTransform().WorldToLocal(transform, _localTransform);
+        _previousPhysicsTransform = _currentPhysicsTransform;
+        _currentPhysicsTransform = transform;
+        _interpolationSyncFrame = RigidBodyInterpolationSyncFrame;
     }
     else
     {
-        _localTransform = transform;
+        ResetInterpolationHistory(transform);
     }
-    OnTransformChanged();
-    _isUpdatingTransform = false;
+
+    ApplyPhysicsTransform(transform);
 }
 
 void RigidBody::BeginPlay(SceneBeginData* data)
@@ -569,6 +682,8 @@ void RigidBody::BeginPlay(SceneBeginData* data)
 
     // Update cached data
     UpdateBounds();
+    ResetInterpolationHistory(_transform);
+    UpdateInterpolationRegistration();
 
     // Base
     Actor::BeginPlay(data);
@@ -578,6 +693,9 @@ void RigidBody::EndPlay()
 {
     // Base
     Actor::EndPlay();
+
+    UnregisterInterpolatedRigidBody(this);
+    _hasPhysicsTransformHistory = false;
 
     if (_actor)
     {
@@ -611,6 +729,7 @@ void RigidBody::OnTransformChanged()
         const bool kinematic = GetIsKinematic() && GetEnableSimulation();
         PhysicsBackend::SetRigidActorPose(_actor, _transform.Translation, _transform.Orientation, kinematic, true);
         UpdateScale();
+        ResetInterpolationHistory(_transform);
     }
 
     UpdateBounds();

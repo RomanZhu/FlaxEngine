@@ -14,22 +14,16 @@ API_CLASS(sealed, Namespace="FlaxEditor.Content.Settings") class FLAXENGINE_API 
 
 public:
     /// <summary>
-    /// The target amount of the game logic updates per second (script updates frequency).
+    /// The target amount of game logic updates and rendered frames per second.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(1), Limit(0, 1000), EditorDisplay(\"General\", \"Update FPS\")")
     float UpdateFPS = 60.0f;
 
     /// <summary>
-    /// The target amount of the physics simulation updates per second (also fixed updates frequency).
+    /// The target amount of fixed physics simulation updates per second.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(2), Limit(0, 1000), EditorDisplay(\"General\", \"Physics FPS\")")
     float PhysicsFPS = 60.0f;
-
-    /// <summary>
-    /// The target amount of the frames rendered per second (actual game FPS).
-    /// </summary>
-    API_FIELD(Attributes="EditorOrder(3), Limit(0, 1000), EditorDisplay(\"General\", \"Draw FPS\")")
-    float DrawFPS = 60.0f;
 
     /// <summary>
     /// The game time scale factor. Default is 1.
@@ -42,6 +36,12 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(20), Limit(0.1f, 1000.0f, 0.01f), EditorDisplay(\"General\")")
     float MaxUpdateDeltaTime = 0.1f;
+
+    /// <summary>
+    /// The maximum fixed-update time that can be consumed after a hitch.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(21), Limit(0.001f, 1000.0f, 0.01f), EditorDisplay(\"General\")")
+    float MaxPhysicsCatchUpTime = 0.3f;
 
     /// <summary>
     /// Limits maximum game framerate when application window loses focus. Use 0 to disable this feature.

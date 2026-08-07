@@ -302,6 +302,19 @@ namespace FlaxEditor.Modules
                     title = Path.GetFileNameWithoutExtension(Editor.GameProject?.ProjectPath);
                 if (string.IsNullOrEmpty(title))
                     title = "Flax Editor";
+                if (Editor.MultiplayerPlayMode.IsActive)
+                {
+                    if (Editor.MultiplayerPlayMode.IsReplica)
+                    {
+                        var tags = Editor.MultiplayerPlayMode.InstanceTags;
+                        var label = tags.Length != 0 ? string.Join(", ", tags) : $"Player {Editor.MultiplayerPlayMode.InstanceIndex + 1}";
+                        title += $" [{label} - Read Only]";
+                    }
+                    else
+                    {
+                        title += " [Multiplayer]";
+                    }
+                }
                 mainWindow.Title = title;
             }
         }
@@ -878,7 +891,8 @@ namespace FlaxEditor.Modules
         {
             Assert.IsNull(MainWindow);
 
-            _windowsLayoutPath = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "WindowsLayout.xml");
+            var layoutName = Editor.MultiplayerPlayMode.IsReplica ? $"WindowsLayout-MPPM-{Editor.MultiplayerPlayMode.InstanceIndex}.xml" : "WindowsLayout.xml";
+            _windowsLayoutPath = StringUtils.CombinePaths(Globals.ProjectCacheFolder, layoutName);
 
             if (!Editor.IsHeadlessMode)
             {

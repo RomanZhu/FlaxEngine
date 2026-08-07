@@ -89,7 +89,7 @@ namespace FlaxEditor.States
         }
 
         /// <summary>
-        /// Updates the Time settings for Update/FixedUpdate/Draw frequency. Can be overriden per-state.
+        /// Updates the Time settings for Update/Draw and FixedUpdate frequency. Can be overridden per-state.
         /// </summary>
         public virtual void UpdateFPS()
         {
@@ -98,20 +98,17 @@ namespace FlaxEditor.States
             if (!Platform.HasFocus)
             {
                 // Drop performance if app has no focus
-                Time.DrawFPS = generalOptions.EditorFPSWhenNotFocused;
                 Time.UpdateFPS = generalOptions.EditorFPSWhenNotFocused;
             }
             else if (editorFps < 1)
             {
                 // Unlimited power!!!
-                Time.DrawFPS = 0;
                 Time.UpdateFPS = 0;
             }
             else
             {
                 // Custom or default value but just don't go too low
                 editorFps = Mathf.Max(editorFps, 10);
-                Time.DrawFPS = editorFps;
                 Time.UpdateFPS = editorFps;
             }
 

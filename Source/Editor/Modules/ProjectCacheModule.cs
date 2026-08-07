@@ -35,7 +35,8 @@ namespace FlaxEditor.Modules
             // After editor options but before the others
             InitOrder = -900;
 
-            _cachePath = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ProjectCache.dat");
+            var cacheName = editor.MultiplayerPlayMode.IsReplica ? $"ProjectCache-MPPM-{editor.MultiplayerPlayMode.InstanceIndex}.dat" : "ProjectCache.dat";
+            _cachePath = StringUtils.CombinePaths(Globals.ProjectCacheFolder, cacheName);
             _isDirty = true;
         }
 

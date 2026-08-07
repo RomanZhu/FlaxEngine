@@ -60,4 +60,5 @@ public class FlaxGame : EngineTarget
         var configurationName = options.Configuration.ToString();
         options.OutputFolder = Path.Combine(Globals.EngineRoot, "Source", "Platforms", platformName, "Binaries", "Game", architectureName, configurationName);
     }
+
 }

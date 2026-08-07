@@ -17,6 +17,7 @@ namespace FlaxEditor.Modules
     {
         private bool _isPlayModeRequested;
         private bool _isPlayModeStopRequested;
+        private bool _isMultiplayerRequest;
         private bool _stepFrame;
         private bool _updateOrFixedUpdateWasCalled;
         private long _breakpointHangFlag;
@@ -76,6 +77,8 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void DelegatePlayOrStopPlayInEditor()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
             switch (Editor.Options.Options.Interface.PlayButtonAction)
             {
             case Options.InterfaceOptions.PlayAction.PlayGame:
@@ -97,6 +100,23 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestStartPlayScenes()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
+            if (!Editor.MultiplayerPlayMode.AreReplicasReady)
+            {
+                Editor.LogWarning("[Multiplayer Play Mode] Cannot start until all configured replicas are connected.");
+                return;
+            }
+            RequestStartPlayScenes(false);
+        }
+
+        internal void RequestStartPlayScenesFromMultiplayer()
+        {
+            RequestStartPlayScenes(true);
+        }
+
+        private void RequestStartPlayScenes(bool multiplayerRequest)
+        {
             if (Editor.StateMachine.IsEditMode)
             {
                 // Show Game window if hidden
@@ -105,8 +125,9 @@ namespace FlaxEditor.Modules
 
                 Editor.Log("[PlayMode] Start");
 
-                if (Editor.Options.Options.General.AutoReloadScriptsOnMainWindowFocus)
+                if (!multiplayerRequest && Editor.Options.Options.General.AutoReloadScriptsOnMainWindowFocus)
                     ScriptsBuilder.CheckForCompile();
+                _isMultiplayerRequest = multiplayerRequest;
                 _isPlayModeRequested = true;
                 Editor.UI.UpdateToolstrip();
             }
@@ -132,8 +153,13 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestStartPlayGame()
         {
-            if (!Editor.StateMachine.IsEditMode)
+            if (Editor.MultiplayerPlayMode.IsReplica || !Editor.StateMachine.IsEditMode)
                 return;
+            if (!Editor.MultiplayerPlayMode.AreReplicasReady)
+            {
+                Editor.LogWarning("[Multiplayer Play Mode] Cannot start until all configured replicas are connected.");
+                return;
+            }
 
             // Show Game window if hidden
             if (Editor.Windows.GameWin.IsHidden)
@@ -185,12 +211,25 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestStopPlay()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
+            RequestStopPlay(false);
+        }
+
+        internal void RequestStopPlayFromMultiplayer()
+        {
+            RequestStopPlay(true);
+        }
+
+        private void RequestStopPlay(bool multiplayerRequest)
+        {
             if (Editor.StateMachine.IsPlayMode)
             {
                 Editor.Log("[PlayMode] Stop");
 
                 if (IsDuringBreakpointHang)
                     StopBreakpointHang();
+                _isMultiplayerRequest = multiplayerRequest;
                 _isPlayModeStopRequested = true;
                 Editor.UI.UpdateToolstrip();
             }
@@ -212,6 +251,8 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestResumeOrPause()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
             if (Editor.StateMachine.PlayingState.IsPaused)
                 Editor.Simulation.RequestResumePlay();
 
@@ -224,6 +265,8 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestPausePlay()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
             if (Editor.StateMachine.IsPlayMode && !Editor.StateMachine.PlayingState.IsPaused)
             {
                 Editor.Log("[PlayMode] Pause");
@@ -239,6 +282,8 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestResumePlay()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
             if (Editor.StateMachine.IsPlayMode && Editor.StateMachine.PlayingState.IsPaused)
             {
                 Editor.Log("[PlayMode] Resume");
@@ -254,6 +299,8 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestPlayOneFrame()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+                return;
             if (Editor.StateMachine.IsPlayMode && Editor.StateMachine.PlayingState.IsPaused)
             {
                 Editor.Log("[PlayMode] Step one frame");
@@ -266,6 +313,14 @@ namespace FlaxEditor.Modules
                 // Update
                 Editor.UI.UpdateToolstrip();
             }
+        }
+
+        internal void SetPausedFromMultiplayer(bool paused)
+        {
+            if (!Editor.StateMachine.IsPlayMode || Editor.StateMachine.PlayingState.IsPaused == paused)
+                return;
+            Editor.StateMachine.PlayingState.IsPaused = paused;
+            Editor.UI.UpdateToolstrip();
         }
 
         /// <inheritdoc />
@@ -356,7 +411,7 @@ namespace FlaxEditor.Modules
         public override void OnUpdate()
         {
             // Check if can enter playing in editor mode
-            if (Editor.StateMachine.CurrentState.CanEnterPlayMode)
+            if (Editor.StateMachine.CurrentState.CanEnterPlayMode || _isMultiplayerRequest)
             {
                 // Check if play mode has been requested
                 if (_isPlayModeRequested)
@@ -366,6 +421,7 @@ namespace FlaxEditor.Modules
                     {
                         // Clear flag
                         _isPlayModeRequested = false;
+                        _isMultiplayerRequest = false;
 
                         // Enter play mode
                         var shouldPlayModeStartWithStep = Editor.UI.IsPauseButtonChecked;
@@ -381,6 +437,7 @@ namespace FlaxEditor.Modules
                 {
                     // Clear flag
                     _isPlayModeStopRequested = false;
+                    _isMultiplayerRequest = false;
 
                     // Exit play mode
                     Editor.StateMachine.GoToState<EditingSceneState>();
@@ -407,6 +464,7 @@ namespace FlaxEditor.Modules
                 // Clear flags
                 _isPlayModeRequested = false;
                 _isPlayModeStopRequested = false;
+                _isMultiplayerRequest = false;
                 _stepFrame = false;
                 _updateOrFixedUpdateWasCalled = false;
             }

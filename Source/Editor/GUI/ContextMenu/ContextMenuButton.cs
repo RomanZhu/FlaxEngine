@@ -110,10 +110,15 @@ namespace FlaxEditor.GUI.ContextMenu
         {
             if (CloseMenuOnClick)
             {
-                // Close topmost context menu
-                ParentContextMenu?.TopmostCM.HideWithReason("button clicked: " + Text);
+                InvokeAfterMenuClosed(this, _ => InvokeClickHandlers(), "button clicked: " + Text);
+                return;
             }
 
+            InvokeClickHandlers();
+        }
+
+        private void InvokeClickHandlers()
+        {
             // Auto check logic
             if (AutoCheck)
                 Checked = !Checked;
@@ -134,7 +139,7 @@ namespace FlaxEditor.GUI.ContextMenu
             ButtonClicked += button => InvokeAfterMenuClosed(button, clicked);
         }
 
-        private static void InvokeAfterMenuClosed(ContextMenuButton button, Action<ContextMenuButton> clicked)
+        private static void InvokeAfterMenuClosed(ContextMenuButton button, Action<ContextMenuButton> clicked, string hideReason = null)
         {
             var contextMenu = button?.ParentContextMenu?.TopmostCM;
             if (contextMenu == null || !contextMenu.Visible)
@@ -143,7 +148,10 @@ namespace FlaxEditor.GUI.ContextMenu
                 return;
             }
 
-            contextMenu.Hide();
+            if (hideReason != null)
+                contextMenu.HideWithReason(hideReason);
+            else
+                contextMenu.Hide();
             InvokeWhenClosed();
 
             void InvokeWhenClosed()

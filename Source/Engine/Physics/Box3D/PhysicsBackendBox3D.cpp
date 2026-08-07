@@ -1171,7 +1171,6 @@ void PhysicsBackend::StartSimulateScene(void* scene, float dt)
     PROFILE_CPU();
     auto sceneBox3D = (SceneBox3D*)scene;
 
-    dt = Math::Clamp(dt, 0.0f, sceneBox3D->Settings.MaxDeltaTime);
     sceneBox3D->LastDeltaTime = dt;
 
     for (auto& action : sceneBox3D->Actions)

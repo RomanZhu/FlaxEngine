@@ -109,14 +109,14 @@ public:
     }
 
     /// <summary>
-    /// Called every fixed framerate frame if object is enabled.
+    /// Called every fixed timestep tick if object is enabled.
     /// </summary>
     API_FUNCTION(Attributes="NoAnimate") virtual void OnFixedUpdate()
     {
     }
 
     /// <summary>
-    /// Called every fixed framerate frame (after FixedUpdate) if object is enabled.
+    /// Called every fixed timestep tick (after FixedUpdate) if object is enabled.
     /// </summary>
     API_FUNCTION(Attributes="NoAnimate") virtual void OnLateFixedUpdate()
     {

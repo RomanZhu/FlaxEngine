@@ -53,6 +53,7 @@ namespace FlaxEditor.GUI
             new List<Control>(),
         };
         private readonly Dictionary<Control, string> _itemIds = new Dictionary<Control, string>();
+        private readonly Dictionary<Control, ItemGroup> _itemGroups = new Dictionary<Control, ItemGroup>();
         private readonly Dictionary<string, SavedPlacement> _savedPlacements = new Dictionary<string, SavedPlacement>();
         private readonly HashSet<string> _hiddenItemIds = new HashSet<string>();
         private Control _draggedItem;
@@ -67,6 +68,16 @@ namespace FlaxEditor.GUI
             public int Index;
         }
 
+        private sealed class ItemGroup
+        {
+            public readonly Control[] Items;
+
+            public ItemGroup(Control[] items)
+            {
+                Items = items;
+            }
+        }
+
         /// <summary>
         /// Event fired when button gets clicked with the primary mouse button.
         /// </summary>
@@ -76,6 +87,11 @@ namespace FlaxEditor.GUI
         /// Event fired when button gets clicked with the secondary mouse button.
         /// </summary>
         public Action<ToolStripButton> SecondaryButtonClicked;
+
+        /// <summary>
+        /// Event fired when the strip background is clicked with the secondary mouse button.
+        /// </summary>
+        public Action<Float2> SecondaryClicked;
 
         /// <summary>
         /// Event fired after the user rearranges items with Ctrl+drag.
@@ -384,6 +400,52 @@ namespace FlaxEditor.GUI
         }
 
         /// <summary>
+        /// Groups items into one fixed-order layout and drag unit.
+        /// </summary>
+        /// <param name="controls">Items in their fixed display order.</param>
+        public void SetItemGroup(params Control[] controls)
+        {
+            if (controls == null || controls.Length < 2)
+                throw new ArgumentException("Tool strip groups require at least two items.", nameof(controls));
+
+            for (int i = 0; i < controls.Length; i++)
+            {
+                if (controls[i] == null || controls[i].Parent != this)
+                    throw new ArgumentException("Tool strip group items must be children of this tool strip.", nameof(controls));
+                if (Array.IndexOf(controls, controls[i]) != i)
+                    throw new ArgumentException("Tool strip group items must be unique.", nameof(controls));
+            }
+
+            var anchor = GetItemAnchor(controls[0]);
+            var anchorItems = _anchorItems[(int)anchor];
+            var firstIndex = anchorItems.IndexOf(controls[0]);
+            var insertIndex = 0;
+            for (int i = 0; i < firstIndex; i++)
+            {
+                if (Array.IndexOf(controls, anchorItems[i]) == -1)
+                    insertIndex++;
+            }
+
+            for (int i = 0; i < controls.Length; i++)
+            {
+                if (_itemGroups.TryGetValue(controls[i], out var oldGroup))
+                {
+                    for (int j = 0; j < oldGroup.Items.Length; j++)
+                        _itemGroups.Remove(oldGroup.Items[j]);
+                }
+                RemoveFromPlacement(controls[i]);
+            }
+
+            var group = new ItemGroup((Control[])controls.Clone());
+            for (int i = 0; i < group.Items.Length; i++)
+            {
+                _itemGroups[group.Items[i]] = group;
+                anchorItems.Insert(insertIndex + i, group.Items[i]);
+            }
+            PerformLayout();
+        }
+
+        /// <summary>
         /// Captures stable item identifiers and their current anchor/order.
         /// </summary>
         /// <returns>A compact toolbar layout string.</returns>
@@ -618,27 +680,40 @@ namespace FlaxEditor.GUI
         private float MeasureGroup(List<Control> items)
         {
             float width = 0.0f;
-            int visibleCount = 0;
+            Control previous = null;
             for (int i = 0; i < items.Count; i++)
             {
                 if (!items[i].Visible)
                     continue;
+                if (previous != null && !AreGrouped(previous, items[i]))
+                    width += _itemsMargin.Width;
                 width += items[i].Width;
-                visibleCount++;
+                previous = items[i];
             }
-            return width + Mathf.Max(0, visibleCount - 1) * _itemsMargin.Width;
+            return width;
         }
 
         private void LayoutGroup(List<Control> items, float x, float height)
         {
+            Control previous = null;
             for (int i = 0; i < items.Count; i++)
             {
                 var control = items[i];
                 if (!control.Visible)
                     continue;
+                if (previous != null && !AreGrouped(previous, control))
+                    x += _itemsMargin.Width;
                 control.Bounds = new Rectangle(x, _itemsMargin.Top, control.Width, height);
-                x += control.Width + _itemsMargin.Width;
+                x += control.Width;
+                previous = control;
             }
+        }
+
+        private bool AreGrouped(Control first, Control second)
+        {
+            return _itemGroups.TryGetValue(first, out var firstGroup) &&
+                   _itemGroups.TryGetValue(second, out var secondGroup) &&
+                   ReferenceEquals(firstGroup, secondGroup);
         }
 
         /// <inheritdoc />
@@ -656,22 +731,34 @@ namespace FlaxEditor.GUI
                 return;
 
             var style = Style.Current;
+            var drawnGroups = new HashSet<ItemGroup>();
             for (int anchor = 0; anchor < _anchorItems.Length; anchor++)
             {
                 var items = _anchorItems[anchor];
-                Control first = null;
-                Control last = null;
                 for (int i = 0; i < items.Count; i++)
                 {
-                    if (!items[i].Visible)
+                    var item = items[i];
+                    if (!item.Visible)
                         continue;
-                    first ??= items[i];
-                    last = items[i];
+                    var first = item;
+                    var last = item;
+                    if (_itemGroups.TryGetValue(item, out var group))
+                    {
+                        if (!drawnGroups.Add(group))
+                            continue;
+                        for (int j = 0; j < group.Items.Length; j++)
+                        {
+                            if (!group.Items[j].Visible)
+                                continue;
+                            if (group.Items[j].Left < first.Left)
+                                first = group.Items[j];
+                            if (group.Items[j].Right > last.Right)
+                                last = group.Items[j];
+                        }
+                    }
+                    var frame = new Rectangle(first.Left - 2.0f, first.Top - 1.0f, last.Right - first.Left + 4.0f, first.Height + 2.0f);
+                    StyleRendering.DrawRoundedRectangle(frame, style.BackgroundNormal, style.BorderNormal.AlphaMultiplied(0.72f), 1.0f, style.GetToolStripGroupCornerRadius());
                 }
-                if (first == null)
-                    continue;
-                var groupRect = new Rectangle(first.Left - 2.0f, first.Top - 1.0f, last.Right - first.Left + 4.0f, first.Height + 2.0f);
-                StyleRendering.DrawRoundedRectangle(groupRect, style.BackgroundNormal, style.BorderNormal.AlphaMultiplied(0.72f), 1.0f, style.GetToolStripGroupCornerRadius());
             }
         }
 
@@ -681,7 +768,7 @@ namespace FlaxEditor.GUI
             if (base.OnMouseDown(location, button))
                 return true;
 
-            if (button == MouseButton.Right && UseItemContextMenu)
+            if (button == MouseButton.Right && (UseItemContextMenu || SecondaryClicked != null))
             {
                 Focus();
                 return true;
@@ -701,6 +788,11 @@ namespace FlaxEditor.GUI
                 ShowItemContextMenu(null, location);
                 return true;
             }
+            if (button == MouseButton.Right && SecondaryClicked != null)
+            {
+                SecondaryClicked(location);
+                return true;
+            }
 
             return false;
         }
@@ -711,23 +803,51 @@ namespace FlaxEditor.GUI
                 return;
 
             _draggedItem = control;
+            var draggedItems = GetItemUnit(control);
             float normalizedX = Width > 0.0f ? location.X / Width : 0.5f;
             _dragTargetAnchor = normalizedX < 0.33f ? ToolStripAnchor.Left : normalizedX > 0.67f ? ToolStripAnchor.Right : ToolStripAnchor.Center;
             var items = _anchorItems[(int)_dragTargetAnchor];
-            _dragTargetIndex = 0;
-            _dragPreviewX = location.X;
+            var candidates = new List<Control>(items.Count);
             for (int i = 0; i < items.Count; i++)
             {
-                var item = items[i];
-                if (item == control || !item.Visible)
-                    continue;
-                if (location.X < item.X + item.Width * 0.5f)
+                if (Array.IndexOf(draggedItems, items[i]) == -1)
+                    candidates.Add(items[i]);
+            }
+            _dragTargetIndex = 0;
+            _dragPreviewX = location.X;
+            for (int i = 0; i < candidates.Count;)
+            {
+                var item = candidates[i];
+                var unit = GetItemUnit(item);
+                var unitCount = 1;
+                Control firstVisible = item.Visible ? item : null;
+                Control lastVisible = firstVisible;
+                if (unit.Length > 1)
                 {
-                    _dragPreviewX = item.X - _itemsMargin.Width * 0.5f;
-                    return;
+                    unitCount = 0;
+                    while (i + unitCount < candidates.Count && Array.IndexOf(unit, candidates[i + unitCount]) != -1)
+                    {
+                        var unitItem = candidates[i + unitCount];
+                        if (unitItem.Visible)
+                        {
+                            firstVisible ??= unitItem;
+                            lastVisible = unitItem;
+                        }
+                        unitCount++;
+                    }
                 }
-                _dragTargetIndex++;
-                _dragPreviewX = item.Right + _itemsMargin.Width * 0.5f;
+                if (firstVisible != null)
+                {
+                    if (location.X < (firstVisible.Left + lastVisible.Right) * 0.5f)
+                    {
+                        _dragTargetIndex = i;
+                        _dragPreviewX = firstVisible.Left - _itemsMargin.Width * 0.5f;
+                        return;
+                    }
+                    _dragTargetIndex = i + unitCount;
+                    _dragPreviewX = lastVisible.Right + _itemsMargin.Width * 0.5f;
+                }
+                i += unitCount;
             }
         }
 
@@ -738,21 +858,24 @@ namespace FlaxEditor.GUI
 
             if (commit && _dragTargetIndex >= 0)
             {
-                var oldAnchor = GetItemAnchor(control);
-                var oldItems = _anchorItems[(int)oldAnchor];
-                int oldIndex = oldItems.IndexOf(control);
-                oldItems.Remove(control);
+                var draggedItems = GetItemUnit(control);
+                for (int i = 0; i < draggedItems.Length; i++)
+                    RemoveFromPlacement(draggedItems[i]);
                 var targetItems = _anchorItems[(int)_dragTargetAnchor];
                 int targetIndex = Mathf.Clamp(_dragTargetIndex, 0, targetItems.Count);
-                if (oldAnchor == _dragTargetAnchor && oldIndex >= 0 && oldIndex < _dragTargetIndex)
-                    targetIndex = Mathf.Max(0, targetIndex - 1);
-                targetItems.Insert(targetIndex, control);
+                for (int i = 0; i < draggedItems.Length; i++)
+                    targetItems.Insert(targetIndex + i, draggedItems[i]);
                 LayoutChanged?.Invoke();
                 PerformLayout();
             }
 
             _draggedItem = null;
             _dragTargetIndex = -1;
+        }
+
+        private Control[] GetItemUnit(Control control)
+        {
+            return _itemGroups.TryGetValue(control, out var group) ? group.Items : new[] { control };
         }
 
         /// <inheritdoc />

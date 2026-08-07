@@ -15,6 +15,12 @@ namespace
     bool FixedDeltaTimeEnable;
     float FixedDeltaTimeValue;
     float MaxUpdateDeltaTime = 0.1f;
+    float MaxPhysicsCatchUpTime = 0.3f;
+
+    double GetFixedStep(float fps)
+    {
+        return fps > ZeroTolerance ? 1.0 / fps : 0.0;
+    }
 #if USE_EDITOR
     constexpr bool _gamePausedUnfocsed = false;
     #define GetFps(fps) fps
@@ -32,11 +38,9 @@ namespace
 }
 
 bool Time::_gamePaused = false;
-float Time::_physicsMaxDeltaTime = 0.1f;
 DateTime Time::StartupTime;
 float Time::UpdateFPS = 60.0f;
 float Time::PhysicsFPS = 60.0f;
-float Time::DrawFPS = 60.0f;
 float Time::TimeScale = 1.0f;
 Time::TickData Time::Update;
 Time::FixedStepTickData Time::Physics;
@@ -66,9 +70,9 @@ void TimeSettings::Apply()
 {
     Time::UpdateFPS = UpdateFPS;
     Time::PhysicsFPS = PhysicsFPS;
-    Time::DrawFPS = DrawFPS;
     Time::TimeScale = TimeScale;
     ::MaxUpdateDeltaTime = MaxUpdateDeltaTime;
+    ::MaxPhysicsCatchUpTime = MaxPhysicsCatchUpTime;
 #if !USE_EDITOR
     ::UnfocusedMaxFPS = UnfocusedMaxFPS;
     ::UnfocusedPause = UnfocusedPause;
@@ -144,48 +148,57 @@ void Time::TickData::Advance(double time, double deltaTime)
     TicksCount++;
 }
 
-bool Time::FixedStepTickData::OnTickBegin(double time, float targetFps, float maxDeltaTime)
+void Time::FixedStepTickData::OnReset(float targetFps, double currentTime)
 {
-    // Check if can perform a tick
-    double deltaTime, minDeltaTime;
-    if (FixedDeltaTimeEnable)
+    FixedDeltaTime = GetFixedStep(targetFps);
+    AccumulatedTime = 0.0;
+    PendingSteps = 0;
+    LastUpdateTime = currentTime;
+    DeltaTime = TimeSpan::FromSeconds(FixedDeltaTime * (double)TimeScale);
+    UnscaledDeltaTime = TimeSpan::FromSeconds(FixedDeltaTime);
+    LastBegin = currentTime;
+    LastEnd = currentTime;
+    LastLength = 0.0;
+    NextBegin = FixedDeltaTime > ZeroToleranceDouble ? currentTime + FixedDeltaTime : 0.0;
+}
+
+bool Time::FixedStepTickData::OnTickBegin(double time, float targetFps, float maxCatchUpTime)
+{
+    FixedDeltaTime = GetFixedStep(targetFps);
+    if (FixedDeltaTime <= ZeroToleranceDouble)
     {
-        deltaTime = (double)FixedDeltaTimeValue;
-        minDeltaTime = deltaTime;
+        AccumulatedTime = 0.0;
+        PendingSteps = 0;
+        LastUpdateTime = time;
+        NextBegin = 0.0;
+        return false;
     }
-    else
+
+    MaxCatchUpTime = Math::Max((double)maxCatchUpTime, FixedDeltaTime);
+    if (PendingSteps <= 0)
     {
-        if (time < NextBegin)
+        const double elapsedTime = Math::Max(time - LastUpdateTime, 0.0);
+        LastUpdateTime = time;
+        if (_gamePaused || _gamePausedUnfocsed || TimeScale <= ZeroTolerance)
+        {
+            AccumulatedTime = 0.0;
+            NextBegin = time + FixedDeltaTime;
             return false;
-
-        minDeltaTime = targetFps > ZeroTolerance ? 1.0 / targetFps : 0.0;
-        deltaTime = Math::Max((time - LastBegin), 0.0);
-        if (deltaTime > maxDeltaTime)
-        {
-            deltaTime = (double)maxDeltaTime;
-            NextBegin = time;
         }
 
-        if (targetFps > ZeroTolerance)
+        AccumulatedTime = Math::Min(AccumulatedTime + elapsedTime, MaxCatchUpTime);
+        PendingSteps = (int32)((AccumulatedTime + ZeroToleranceDouble) / FixedDeltaTime);
+        if (PendingSteps <= 0)
         {
-            int skip = (int)(1 + (time - NextBegin) * targetFps);
-            NextBegin += (1.0 / targetFps) * skip;
+            NextBegin = time + Math::Max(FixedDeltaTime - AccumulatedTime, 0.0);
+            return false;
         }
     }
-    Samples.Add(deltaTime);
 
-    // Check if last few ticks were not taking too long so it's running slowly
-    const bool isRunningSlowly = Samples.Average() > 1.5 * minDeltaTime;
-    if (!isRunningSlowly)
-    {
-        // Make steps fixed size
-        const double diff = deltaTime - minDeltaTime;
-        time -= diff;
-        deltaTime = minDeltaTime;
-    }
-
-    // Update data
-    Advance(time, deltaTime);
+    PendingSteps--;
+    AccumulatedTime = Math::Max(AccumulatedTime - FixedDeltaTime, 0.0);
+    NextBegin = PendingSteps > 0 ? time : time + Math::Max(FixedDeltaTime - AccumulatedTime, 0.0);
+    Advance(Platform::GetTimeSeconds(), FixedDeltaTime);
 
     return true;
 }
@@ -194,15 +207,12 @@ double Time::GetNextTick()
 {
     const double nextUpdate = Time::Update.NextBegin;
     const double nextPhysics = Time::Physics.NextBegin;
-    const double nextDraw = Time::Draw.NextBegin;
 
     double nextTick = MAX_double;
     if (UpdateFPS > ZeroTolerance && nextUpdate < nextTick)
         nextTick = nextUpdate;
     if (PhysicsFPS > ZeroTolerance && nextPhysics < nextTick)
         nextTick = nextPhysics;
-    if (DrawFPS > ZeroTolerance && nextDraw < nextTick)
-        nextTick = nextDraw;
 
     if (nextTick == MAX_double)
         return 0.0;
@@ -221,7 +231,7 @@ void Time::SetGamePaused(bool value)
     const double time = Platform::GetTimeSeconds();
     Update.OnReset(UpdateFPS, time);
     Physics.OnReset(PhysicsFPS, time);
-    Draw.OnReset(DrawFPS, time);
+    Draw.OnReset(UpdateFPS, time);
 }
 
 float Time::GetDeltaTime()
@@ -240,6 +250,11 @@ float Time::GetUnscaledDeltaTime()
 {
     auto* data = Current ? Current : &Update;
     return data->UnscaledDeltaTime.GetTotalSeconds();
+}
+
+float Time::GetFixedDeltaTime()
+{
+    return (float)GetFixedStep(GetFps(PhysicsFPS));
 }
 
 float Time::GetUnscaledGameTime()
@@ -265,7 +280,7 @@ void Time::Synchronize(bool resetTotalTime)
     const double time = Platform::GetTimeSeconds();
     Update.Synchronize(UpdateFPS, time, resetTotalTime);
     Physics.Synchronize(PhysicsFPS, time, resetTotalTime);
-    Draw.Synchronize(DrawFPS, time, resetTotalTime);
+    Draw.Synchronize(UpdateFPS, time, resetTotalTime);
 }
 
 bool Time::OnBeginUpdate(double time)
@@ -282,7 +297,7 @@ bool Time::OnBeginUpdate(double time)
             const double time = Platform::GetTimeSeconds();
             Update.OnReset(UpdateFPS, time);
             Physics.OnReset(PhysicsFPS, time);
-            Draw.OnReset(DrawFPS, time);
+            Draw.OnReset(UpdateFPS, time);
         }
     }
 #endif
@@ -297,7 +312,7 @@ bool Time::OnBeginUpdate(double time)
 
 bool Time::OnBeginPhysics(double time)
 {
-    if (Physics.OnTickBegin(time, GetFps(PhysicsFPS), _physicsMaxDeltaTime))
+    if (Physics.OnTickBegin(time, GetFps(PhysicsFPS), MaxPhysicsCatchUpTime))
     {
         Current = &Physics;
         return true;
@@ -305,14 +320,16 @@ bool Time::OnBeginPhysics(double time)
     return false;
 }
 
-bool Time::OnBeginDraw(double time)
+void Time::OnBeginDraw()
 {
-    if (Draw.OnTickBegin(time, GetFps(DrawFPS), 1.0f))
-    {
-        Current = &Draw;
-        return true;
-    }
-    return false;
+    Draw.LastBegin = Update.LastBegin;
+    Draw.NextBegin = Update.NextBegin;
+    Draw.DeltaTime = Update.DeltaTime;
+    Draw.Time = Update.Time;
+    Draw.UnscaledDeltaTime = Update.UnscaledDeltaTime;
+    Draw.UnscaledTime = Update.UnscaledTime;
+    Draw.TicksCount = Update.TicksCount;
+    Current = &Draw;
 }
 
 void Time::OnEndUpdate()

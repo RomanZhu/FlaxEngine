@@ -131,6 +131,22 @@ API_ENUM(Attributes="Flags") enum class RigidbodyConstraints
 DECLARE_ENUM_OPERATORS(RigidbodyConstraints);
 
 /// <summary>
+/// Dynamic rigidbody visual smoothing mode used between fixed physics simulation updates.
+/// </summary>
+API_ENUM() enum class RigidbodyInterpolation
+{
+    /// <summary>
+    /// Do not smooth rigidbody movement between physics updates.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    /// Smooth rigidbody movement by interpolating between the previous and current physics poses.
+    /// </summary>
+    Interpolate = 1,
+};
+
+/// <summary>
 /// Raycast hit result data.
 /// </summary>
 API_STRUCT(NoDefault) struct RayCastHit
