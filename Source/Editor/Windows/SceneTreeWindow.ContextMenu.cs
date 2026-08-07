@@ -60,60 +60,67 @@ namespace FlaxEditor.Windows
             b = contextMenu.AddButton("Duplicate", inputOptions.Duplicate, Editor.SceneEditing.Duplicate);
             b.Enabled = hasSthSelected && (firstSelection != null ? firstSelection.CanDuplicate : true);
 
-            if (isSingleActorSelected && firstSelection?.Actor is not Scene)
+            bool canConvertSelection = canEditScene && hasSthSelected && Editor.SceneEditing.Selection.All(x => x is ActorNode actorNode && actorNode.Actor && actorNode.Actor is not Scene);
+            if (canConvertSelection)
             {
                 var convertMenu = contextMenu.AddChildMenu("Convert");
                 convertMenu.ContextMenu.AutoSort = true;
-                foreach (var actorType in Editor.CodeEditing.Actors.Get())
-                {
-                    if (actorType.IsAbstract)
-                        continue;
-                    ActorContextMenuAttribute attribute = null;
-                    foreach (var e in actorType.GetAttributes(false))
-                    {
-                        if (e is ActorContextMenuAttribute actorContextMenuAttribute)
-                        {
-                            attribute = actorContextMenuAttribute;
-                            break;
-                        }
-                    }
-                    if (attribute == null)
-                        continue;
-                    var parts = attribute.Path.Split('/');
-                    ContextMenuChildMenu childCM = convertMenu;
-                    bool mainCM = true;
-                    for (int i = 0; i < parts.Length; i++)
-                    {
-                        var part = parts[i].Trim();
-                        if (i == parts.Length - 1)
-                        {
-                            if (mainCM)
-                            {
-                                convertMenu.ContextMenu.AddButton(part, () => Editor.SceneEditing.Convert(actorType.Type));
-                                mainCM = false;
-                            }
-                            else
-                            {
-                                childCM.ContextMenu.AddButton(part, () => Editor.SceneEditing.Convert(actorType.Type));
-                                childCM.ContextMenu.AutoSort = true;
-                            }
-                        }
-                        else
-                        {
-                            // Remove new path for converting menu
-                            if (parts[i] == "New")
-                                continue;
+                if (Editor.SceneEditing.SelectionCount > 1 || firstSelection.Actor.GetType() != typeof(GroupActor))
+                    convertMenu.ContextMenu.AddButton("Group", Editor.SceneEditing.MakeSelectionGroup);
 
-                            if (mainCM)
+                if (isSingleActorSelected)
+                {
+                    foreach (var actorType in Editor.CodeEditing.Actors.Get())
+                    {
+                        if (actorType.IsAbstract || actorType.Type == typeof(GroupActor))
+                            continue;
+                        ActorContextMenuAttribute attribute = null;
+                        foreach (var e in actorType.GetAttributes(false))
+                        {
+                            if (e is ActorContextMenuAttribute actorContextMenuAttribute)
                             {
-                                childCM = convertMenu.ContextMenu.GetOrAddChildMenu(part);
-                                childCM.ContextMenu.AutoSort = true;
-                                mainCM = false;
+                                attribute = actorContextMenuAttribute;
+                                break;
+                            }
+                        }
+                        if (attribute == null)
+                            continue;
+                        var parts = attribute.Path.Split('/');
+                        ContextMenuChildMenu childCM = convertMenu;
+                        bool mainCM = true;
+                        for (int i = 0; i < parts.Length; i++)
+                        {
+                            var part = parts[i].Trim();
+                            if (i == parts.Length - 1)
+                            {
+                                if (mainCM)
+                                {
+                                    convertMenu.ContextMenu.AddButton(part, () => Editor.SceneEditing.Convert(actorType.Type));
+                                    mainCM = false;
+                                }
+                                else
+                                {
+                                    childCM.ContextMenu.AddButton(part, () => Editor.SceneEditing.Convert(actorType.Type));
+                                    childCM.ContextMenu.AutoSort = true;
+                                }
                             }
                             else
                             {
-                                childCM = childCM.ContextMenu.GetOrAddChildMenu(part);
-                                childCM.ContextMenu.AutoSort = true;
+                                // Remove new path for converting menu
+                                if (parts[i] == "New")
+                                    continue;
+
+                                if (mainCM)
+                                {
+                                    childCM = convertMenu.ContextMenu.GetOrAddChildMenu(part);
+                                    childCM.ContextMenu.AutoSort = true;
+                                    mainCM = false;
+                                }
+                                else
+                                {
+                                    childCM = childCM.ContextMenu.GetOrAddChildMenu(part);
+                                    childCM.ContextMenu.AutoSort = true;
+                                }
                             }
                         }
                     }
@@ -136,8 +143,8 @@ namespace FlaxEditor.Windows
 
             contextMenu.AddSeparator();
 
-            b = contextMenu.AddButton("Parent to new Actor", inputOptions.GroupSelectedActors, Editor.SceneEditing.CreateParentForSelectedActors);
-            b.Enabled = canEditScene && hasSthSelected && firstSelection?.Actor is not Scene;
+            b = contextMenu.AddButton("Group", inputOptions.GroupSelectedActors, Editor.SceneEditing.CreateParentForSelectedActors);
+            b.Enabled = canEditScene && (!hasSthSelected || firstSelection?.Actor is not Scene);
 
             b = contextMenu.AddButton("Create Prefab", Editor.Prefabs.CreatePrefab);
             b.Enabled = isSingleActorSelected &&

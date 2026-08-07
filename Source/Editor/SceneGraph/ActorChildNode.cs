@@ -24,6 +24,11 @@ namespace FlaxEditor.SceneGraph
         /// </summary>
         public virtual bool CanBeSelectedDirectly => false;
 
+        /// <inheritdoc />
+        public override ViewportSelectionRelationship ViewportSelection => CanBeSelectedDirectly
+            ? ViewportSelectionRelationship.DirectTarget
+            : ViewportSelectionRelationship.SelectionProxy;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="ActorChildNode"/> class.
         /// </summary>

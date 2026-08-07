@@ -17,6 +17,43 @@ using FlaxEngine;
 namespace FlaxEditor.SceneGraph
 {
     /// <summary>
+    /// Describes how a scene graph node participates in viewport selection.
+    /// </summary>
+    [Flags, HideInEditor]
+    public enum ViewportSelectionRelationship
+    {
+        /// <summary>
+        /// The node is a normal direct selection target.
+        /// </summary>
+        DirectTarget = 0,
+
+        /// <summary>
+        /// The node establishes a user-authored semantic selection boundary.
+        /// </summary>
+        SemanticBoundary = 1,
+
+        /// <summary>
+        /// The node owns descendants that should initially be edited as part of the runtime object.
+        /// </summary>
+        RuntimeOwner = 2,
+
+        /// <summary>
+        /// The node requires its nearest selectable actor ancestor to appear before it in the drill chain.
+        /// </summary>
+        SelectionProxy = 4,
+
+        /// <summary>
+        /// The node does not normally add a level to a descendant's selection chain.
+        /// </summary>
+        Transparent = 8,
+
+        /// <summary>
+        /// The node is a prefab instance selection boundary.
+        /// </summary>
+        PrefabBoundary = 16,
+    }
+
+    /// <summary>
     /// Base class for all leaf node objects which belong to scene graph used by the Editor.
     /// Scene Graph is directional graph without cyclic references. It's a tree.
     /// A <see cref="SceneModule"/> class is responsible for Scene Graph management.
@@ -99,6 +136,11 @@ namespace FlaxEditor.SceneGraph
         /// Gets a value indicating whether this node can be transformed by the user.
         /// </summary>
         public virtual bool CanTransform => true;
+
+        /// <summary>
+        /// Gets the relationship used to resolve this node during viewport selection.
+        /// </summary>
+        public virtual ViewportSelectionRelationship ViewportSelection => ViewportSelectionRelationship.DirectTarget;
 
         /// <summary>
         /// Gets a value indicating whether this <see cref="SceneGraphNode"/> is active.

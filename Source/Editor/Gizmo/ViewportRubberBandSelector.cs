@@ -197,10 +197,15 @@ public sealed class ViewportRubberBandSelector
             var points = node.GetActorSelectionPoints();
             if (LoopOverPoints(points, ref adjustedRect, ref projection))
             {
-                if (a.HasPrefabLink && _owner is not PrefabWindowViewport)
-                    hits.Add(_owner.SceneGraphRoot.Find(a.GetPrefabRoot()));
+                SceneGraphNode hit;
+                if (_owner.Gizmos.Active is TransformGizmo transformGizmo)
+                    hit = transformGizmo.ResolveSelectionTarget(node, _owner.Viewport.Task.View.Mode, _owner is not PrefabWindowViewport);
+                else if (a.HasPrefabLink && _owner is not PrefabWindowViewport)
+                    hit = _owner.SceneGraphRoot.Find(a.GetPrefabRoot());
                 else
-                    hits.Add(node);
+                    hit = node;
+                if (hit != null && !hits.Contains(hit))
+                    hits.Add(hit);
             }
         }
 

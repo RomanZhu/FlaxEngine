@@ -95,6 +95,29 @@ namespace FlaxEditor.SceneGraph
         /// </summary>
         public virtual bool AffectsNavigation => false;
 
+        /// <inheritdoc />
+        public override ViewportSelectionRelationship ViewportSelection
+        {
+            get
+            {
+                if (!_actor)
+                    return ViewportSelectionRelationship.Transparent;
+
+                var result = ViewportSelectionRelationship.DirectTarget;
+                if (_actor is GroupActor)
+                    result |= ViewportSelectionRelationship.SemanticBoundary;
+                if (_actor is RigidBody or CharacterController or Ragdoll)
+                    result |= ViewportSelectionRelationship.RuntimeOwner;
+                else if (_actor is Collider)
+                    result |= ViewportSelectionRelationship.SelectionProxy;
+                if (_actor is EmptyActor && _actor.GetType() == typeof(EmptyActor))
+                    result |= ViewportSelectionRelationship.Transparent;
+                if (_actor.HasPrefabLink && _actor.IsPrefabRoot)
+                    result |= ViewportSelectionRelationship.PrefabBoundary;
+                return result;
+            }
+        }
+
         /// <summary>
         /// Gets a value indicating whether this actor affects navigation or any of its children (recursive).
         /// </summary>

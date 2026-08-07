@@ -1,5 +1,11 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+#if USE_LARGE_WORLDS
+using Real = System.Double;
+#else
+using Real = System.Single;
+#endif
+
 using System;
 using System.Collections.Generic;
 using Object = FlaxEngine.Object;
@@ -46,8 +52,10 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayPivotButton;
         private ToolStripButton _overlayAbsoluteSnapButton;
         private readonly List<SceneGraphNode> _sceneTreeHoverSelection = new List<SceneGraphNode>(1);
+        private readonly List<SceneGraphNode> _viewportPrimaryHoverSelection = new List<SceneGraphNode>(1);
         private ActorNode _sceneTreeHoveredActor;
         private ActorNode _editorViewportHoveredActor;
+        private bool _editorViewportHoverIsLeafTarget;
         private ToolStripButton _overlayTranslateSnapButton;
         private ToolStripButton _overlayRotateSnapButton;
         private ToolStripButton _overlayScaleSnapButton;
@@ -56,6 +64,7 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayScaleSnapValueButton;
         private SelectionOutline _customSelectionOutline;
         private bool _middleMouseRecenterCandidate;
+        private bool _suppressNextSelectionPick;
 
         /// <summary>
         /// The editor sprites rendering effect.
@@ -179,6 +188,11 @@ namespace FlaxEditor.Viewport
         public SelectionOutline SceneTreeHoverOutline;
 
         /// <summary>
+        /// The primary viewport hover outline postFx.
+        /// </summary>
+        public SelectionOutline ViewportHoverOutline;
+
+        /// <summary>
         /// The editor primitives postFx.
         /// </summary>
         public EditorPrimitives EditorPrimitives;
@@ -260,10 +274,18 @@ namespace FlaxEditor.Viewport
             SelectionOutline = Object.New<SelectionOutline>();
             SelectionOutline.SelectionGetter = () => TransformGizmo.SelectedParents;
             Task.AddCustomPostFx(SelectionOutline);
+            ViewportHoverOutline = Object.New<SelectionOutline>();
+            ViewportHoverOutline.UseEditorOptions = false;
+            ViewportHoverOutline.ShowSelectionOutline = true;
+            ViewportHoverOutline.Order = SelectionOutline.Order + 1;
+            ViewportHoverOutline.SelectionOutlineColor0 = new Color(0.12f, 0.55f, 1.0f, 1.0f);
+            ViewportHoverOutline.SelectionOutlineColor1 = new Color(0.05f, 0.32f, 0.72f, 1.0f);
+            ViewportHoverOutline.SelectionGetter = GetViewportPrimaryHoverSelection;
+            Task.AddCustomPostFx(ViewportHoverOutline);
             SceneTreeHoverOutline = Object.New<SelectionOutline>();
             SceneTreeHoverOutline.UseEditorOptions = false;
             SceneTreeHoverOutline.ShowSelectionOutline = true;
-            SceneTreeHoverOutline.Order = SelectionOutline.Order + 1;
+            SceneTreeHoverOutline.Order = SelectionOutline.Order + 2;
             SceneTreeHoverOutline.SelectionOutlineColor0 = new Color(0.56f, 0.56f, 0.56f, 1.0f);
             SceneTreeHoverOutline.SelectionOutlineColor1 = new Color(0.36f, 0.36f, 0.36f, 1.0f);
             SceneTreeHoverOutline.SelectionGetter = GetSceneTreeHoverSelection;
@@ -838,6 +860,7 @@ namespace FlaxEditor.Viewport
                 // Render selection outline
                 var selectionOutline = _customSelectionOutline ?? SelectionOutline;
                 RenderSelectionOutline(context, ref renderContext, task, selectionOutline);
+                RenderSelectionOutline(context, ref renderContext, task, ViewportHoverOutline);
                 RenderSelectionOutline(context, ref renderContext, task, SceneTreeHoverOutline);
             }
         }
@@ -1012,21 +1035,34 @@ namespace FlaxEditor.Viewport
             if (_editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport && actorNode != null && actorNode.Actor)
                 _sceneTreeHoverSelection.Add(actorNode);
             actorNode = _editorViewportHoveredActor;
-            if (_editor.Options.Options.Interface.HighlightViewportObjectHover && actorNode != null && actorNode.Actor && !_sceneTreeHoverSelection.Contains(actorNode))
+            if (_editorViewportHoverIsLeafTarget && _editor.Options.Options.Interface.HighlightViewportObjectHover && actorNode != null && actorNode.Actor && !_sceneTreeHoverSelection.Contains(actorNode))
                 _sceneTreeHoverSelection.Add(actorNode);
 
             return _sceneTreeHoverSelection;
         }
 
-        private ActorNode GetActorNodeUnderMouse()
+        private List<SceneGraphNode> GetViewportPrimaryHoverSelection()
         {
+            _viewportPrimaryHoverSelection.Clear();
+            if (!SelectionOutline || !SelectionOutline.ShowSelectionOutline || _editorViewportHoverIsLeafTarget)
+                return _viewportPrimaryHoverSelection;
+
+            var actorNode = _editorViewportHoveredActor;
+            if (_editor.Options.Options.Interface.HighlightViewportObjectHover && actorNode != null && actorNode.Actor)
+                _viewportPrimaryHoverSelection.Add(actorNode);
+            return _viewportPrimaryHoverSelection;
+        }
+
+        private ActorNode GetActorNodeUnderMouse(out bool isLeafTarget)
+        {
+            isLeafTarget = false;
             if (_gameViewActive || _characterControllerModeActive || IsControllingMouse || IsLeftMouseButtonDown || IsRightMouseButtonDown || IsAltKeyDown || _directionGizmo.IsMouseOver || !ContainsPoint(ref _viewMousePos))
                 return null;
 
             var ray = ConvertMouseToRay(ref _viewMousePos);
             var view = new Ray(ViewPosition, ViewDirection);
             var renderView = Task.View;
-            var hit = TransformGizmo.GetPickTarget(ref ray, ref view, renderView.Flags, renderView.Mode);
+            var hit = TransformGizmo.GetHoverTarget(ref ray, ref view, renderView.Flags, renderView.Mode, out isLeafTarget);
             if (hit is ActorChildNode actorChildNode)
                 return actorChildNode.ParentNode as ActorNode;
             return hit as ActorNode;
@@ -1040,20 +1076,22 @@ namespace FlaxEditor.Viewport
                 return;
             }
 
-            var actorNode = GetActorNodeUnderMouse();
-            if (_editorViewportHoveredActor == actorNode)
+            var actorNode = GetActorNodeUnderMouse(out var isLeafTarget);
+            if (_editorViewportHoveredActor == actorNode && _editorViewportHoverIsLeafTarget == isLeafTarget)
                 return;
 
             _editorViewportHoveredActor = actorNode;
+            _editorViewportHoverIsLeafTarget = isLeafTarget;
             _editor.Windows.SceneWin?.SetViewportHoveredActor(actorNode);
         }
 
         private void ClearSceneTreeHoverFromEditorViewport()
         {
-            if (_editorViewportHoveredActor == null)
+            if (_editorViewportHoveredActor == null && !_editorViewportHoverIsLeafTarget)
                 return;
 
             _editorViewportHoveredActor = null;
+            _editorViewportHoverIsLeafTarget = false;
             _editor.Windows.SceneWin?.SetViewportHoveredActor(null);
         }
 
@@ -1315,6 +1353,11 @@ namespace FlaxEditor.Viewport
             var rubberBandHandled = _rubberBandSelector.ReleaseRubberBandSelection();
             if (Gizmos.Active is TransformGizmoBase transformGizmo && transformGizmo.ConsumeSelectionRelease())
                 return;
+            if (_suppressNextSelectionPick)
+            {
+                _suppressNextSelectionPick = false;
+                return;
+            }
 
             // Skip if was controlling mouse or mouse is not over the area
             var containsViewMouse = ContainsPoint(ref _viewMousePos);
@@ -1336,6 +1379,26 @@ namespace FlaxEditor.Viewport
             Focus();
 
             base.OnLeftMouseButtonUp();
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
+        {
+            if (base.OnMouseDoubleClick(location, button))
+                return true;
+            if (button != MouseButton.Left || _gameViewActive || _characterControllerModeActive || IsControllingMouse || IsAltKeyDown || _directionGizmo.IsMouseOver || !ContainsPoint(ref location))
+                return false;
+
+            var ray = ConvertMouseToRay(ref location);
+            var view = new Ray(ViewPosition, ViewDirection);
+            var renderView = Task.View;
+            if (!TransformGizmo.TryDrillPick(ref ray, ref view, renderView.Flags, renderView.Mode, out var target))
+                return false;
+
+            _editor.SceneEditing.Select(target);
+            _suppressNextSelectionPick = true;
+            Focus();
+            return true;
         }
 
         /// <inheritdoc />
@@ -1402,6 +1465,29 @@ namespace FlaxEditor.Viewport
 
             fpsCamera.RecenterView(ray.GetPoint(distance));
             _mouseDelta = Float2.Zero;
+        }
+
+        /// <summary>
+        /// Gets the world-space point under the current viewport cursor.
+        /// </summary>
+        public Vector3 GetWorldPointUnderCursor()
+        {
+            var ray = MouseRay;
+            var view = new Ray(ViewPosition, ViewDirection);
+            if (SceneGraphRoot != null)
+            {
+                var flags = SceneGraphNode.RayCastData.FlagTypes.SkipColliders |
+                            SceneGraphNode.RayCastData.FlagTypes.SkipEditorPrimitives |
+                            SceneGraphNode.RayCastData.FlagTypes.SkipTriggers;
+                var hit = SceneGraphRoot.RayCast(ref ray, ref view, out var distance, flags);
+                if (hit != null && distance > NearPlane && distance < FarPlane)
+                    return ray.GetPoint(distance);
+            }
+
+            var gridPlane = new Plane(Vector3.Zero, Vector3.Up);
+            if (Grid.Enabled && CollisionsHelper.RayIntersectsPlane(ref ray, ref gridPlane, out Real gridDistance) && gridDistance > NearPlane && gridDistance < 4000.0f)
+                return ray.GetPoint(gridDistance);
+            return ray.GetPoint(100.0f);
         }
 
         /// <inheritdoc />
@@ -1475,6 +1561,16 @@ namespace FlaxEditor.Viewport
 
             if (ProcessCharacterControllerModeShortcut(key))
                 return true;
+
+            if (key == KeyboardKeys.Escape &&
+                Gizmos.Active == TransformGizmo &&
+                !TransformGizmo.HasActiveTransaction &&
+                TransformGizmo.ActiveAxis == TransformGizmoBase.Axis.None &&
+                TransformGizmo.TryExitSelectionScope(out var scope))
+            {
+                _editor.SceneEditing.Select(scope);
+                return true;
+            }
 
             return base.OnKeyDown(key);
         }
@@ -1623,12 +1719,14 @@ namespace FlaxEditor.Viewport
             if (Task)
             {
                 Task.RemoveCustomPostFx(SelectionOutline);
+                Task.RemoveCustomPostFx(ViewportHoverOutline);
                 Task.RemoveCustomPostFx(SceneTreeHoverOutline);
                 Task.RemoveCustomPostFx(EditorPrimitives);
                 Task.RemoveCustomPostFx(_editorSpritesRenderer);
                 Task.RemoveCustomPostFx(_customSelectionOutline);
             }
             Object.Destroy(ref SelectionOutline);
+            Object.Destroy(ref ViewportHoverOutline);
             Object.Destroy(ref SceneTreeHoverOutline);
             Object.Destroy(ref EditorPrimitives);
             Object.Destroy(ref _editorSpritesRenderer);

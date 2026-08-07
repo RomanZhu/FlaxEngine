@@ -25,6 +25,7 @@ class ModelInstanceActor;
 class StaticModel;
 class Camera;
 class EmptyActor;
+class GroupActor;
 class DirectionalLight;
 class PointLight;
 class Skybox;

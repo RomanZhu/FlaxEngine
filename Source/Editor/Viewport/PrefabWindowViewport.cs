@@ -71,6 +71,7 @@ namespace FlaxEditor.Viewport
 
         private PrefabUIEditorRoot _uiRoot;
         private bool _showUI = false;
+        private bool _suppressNextSelectionPick;
 
         private int _defaultScaleActiveIndex = -1;
         private int _customScaleActiveIndex = -1;
@@ -564,6 +565,11 @@ namespace FlaxEditor.Viewport
         {
             if (TransformGizmo.ConsumeSelectionRelease())
                 return;
+            if (_suppressNextSelectionPick)
+            {
+                _suppressNextSelectionPick = false;
+                return;
+            }
 
             // Skip if was controlling mouse or mouse is not over the area
             if (_prevInput.IsControllingMouse || !Bounds.Contains(ref _viewMousePos))
@@ -585,34 +591,11 @@ namespace FlaxEditor.Viewport
             var ray = MouseRay;
             var view = new Ray(ViewPosition, ViewDirection);
             var hit = _window.Graph.Root.RayCast(ref ray, ref view, out _, SceneGraphNode.RayCastData.FlagTypes.SkipColliders);
+            hit = TransformGizmo.ResolveSelectionTarget(hit, Task.View.Mode, false);
 
             // Update selection
             if (hit != null)
             {
-                // For child actor nodes (mesh, link or sth) we need to select it's owning actor node first or any other child node (but not a child actor)
-                if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
-                {
-                    var parentNode = actorChildNode.ParentNode;
-                    bool canChildBeSelected = _window.Selection.Contains(parentNode);
-                    if (!canChildBeSelected)
-                    {
-                        for (int i = 0; i < parentNode.ChildNodes.Count; i++)
-                        {
-                            if (_window.Selection.Contains(parentNode.ChildNodes[i]))
-                            {
-                                canChildBeSelected = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!canChildBeSelected)
-                    {
-                        // Select parent
-                        hit = parentNode;
-                    }
-                }
-
                 bool addRemove = Root.GetKey(KeyboardKeys.Shift);
                 bool isSelected = _window.Selection.Contains(hit);
 
@@ -640,11 +623,40 @@ namespace FlaxEditor.Viewport
         }
 
         /// <inheritdoc />
+        public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
+        {
+            if (base.OnMouseDoubleClick(location, button))
+                return true;
+            if (button != MouseButton.Left || ShowUI || IsControllingMouse || !ContainsPoint(ref location) || !TransformGizmo.IsActive)
+                return false;
+
+            var ray = ConvertMouseToRay(ref location);
+            var view = new Ray(ViewPosition, ViewDirection);
+            var renderView = Task.View;
+            if (!TransformGizmo.TryDrillPick(ref ray, ref view, renderView.Flags, renderView.Mode, out var target, false))
+                return false;
+
+            _window.Select(target);
+            _suppressNextSelectionPick = true;
+            Focus();
+            return true;
+        }
+
+        /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
             var input = Editor.Instance.Options.Options.Input;
             if (input.Undo.Process(this, key) && TransformGizmo.TryCancelPointerInteractionForUndo())
                 return true;
+            if (key == KeyboardKeys.Escape &&
+                TransformGizmo.IsActive &&
+                !TransformGizmo.HasActiveTransaction &&
+                TransformGizmo.ActiveAxis == TransformGizmoBase.Axis.None &&
+                TransformGizmo.TryExitSelectionScope(out var scope))
+            {
+                _window.Select(scope);
+                return true;
+            }
             return base.OnKeyDown(key);
         }
 
@@ -659,33 +671,10 @@ namespace FlaxEditor.Viewport
                 var ray = MouseRay;
                 var view = new Ray(ViewPosition, ViewDirection);
                 var hit = _window.Graph.Root.RayCast(ref ray, ref view, out _, SceneGraphNode.RayCastData.FlagTypes.SkipColliders);
+                hit = TransformGizmo.ResolveSelectionTarget(hit, Task.View.Mode, false);
 
                 if (hit != null)
                 {
-                    // For child actor nodes (mesh, link or sth) we need to select it's owning actor node first or any other child node (but not a child actor)
-                    if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
-                    {
-                        var parentNode = actorChildNode.ParentNode;
-                        bool canChildBeSelected = _window.Selection.Contains(parentNode);
-                        if (!canChildBeSelected)
-                        {
-                            for (int i = 0; i < parentNode.ChildNodes.Count; i++)
-                            {
-                                if (_window.Selection.Contains(parentNode.ChildNodes[i]))
-                                {
-                                    canChildBeSelected = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!canChildBeSelected)
-                        {
-                            // Select parent
-                            hit = parentNode;
-                        }
-                    }
-
                     bool isSelected = _window.Selection.Contains(hit);
                     if (!isSelected)
                         _window.Select(hit);

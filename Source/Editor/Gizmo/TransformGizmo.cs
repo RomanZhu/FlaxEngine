@@ -9,6 +9,7 @@ using Real = System.Single;
 using System;
 using System.Collections.Generic;
 using FlaxEditor.SceneGraph;
+using FlaxEditor.SceneGraph.Actors;
 using FlaxEngine;
 
 namespace FlaxEditor.Gizmo
@@ -31,6 +32,9 @@ namespace FlaxEditor.Gizmo
 
         private readonly List<SceneGraphNode> _selection = new List<SceneGraphNode>();
         private readonly List<SceneGraphNode> _selectionParents = new List<SceneGraphNode>();
+        private readonly List<SceneGraphNode> _selectionScopes = new List<SceneGraphNode>();
+        private readonly List<SceneGraphNode> _pickAncestry = new List<SceneGraphNode>();
+        private readonly List<SceneGraphNode> _pickSelectionChain = new List<SceneGraphNode>();
 
         /// <summary>
         /// The event to apply objects transformation.
@@ -61,39 +65,181 @@ namespace FlaxEditor.Gizmo
         {
         }
 
-        /// <summary>
-        /// Helper function, recursively finds the Prefab Root of node or null.
-        /// </summary>
-        /// <param name="node">The node from which to start.</param>
-        /// <returns>The prefab root or null.</returns>
-        public ActorNode GetPrefabRootInParent(ActorNode node)
+        private static bool HasSelectionRelationship(SceneGraphNode node, ViewportSelectionRelationship relationship)
         {
-            if (!node.HasPrefabLink)
+            return (node.ViewportSelection & relationship) != 0;
+        }
+
+        private static SceneGraphNode ResolveRawSelectionTarget(SceneGraphNode hit)
+        {
+            if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
+                hit = actorChildNode.ParentNode;
+
+            if (hit is ActorNode hitActorNode && !hitActorNode.Actor)
                 return null;
-            if (node.Actor.IsPrefabRoot)
-                return node;
-            if (node.ParentNode is ActorNode parAct)
-                return GetPrefabRootInParent(parAct);
-            return null;
+            if (hit is ActorChildNode hitChildNode && hitChildNode.ParentNode is ActorNode hitChildActorNode && !hitChildActorNode.Actor)
+                return null;
+
+            return hit;
+        }
+
+        private void BuildSelectionChain(SceneGraphNode rawHit, ViewMode viewMode, bool includePrefabBoundaries)
+        {
+            _pickSelectionChain.Clear();
+            _pickAncestry.Clear();
+
+            var directTarget = ResolveRawSelectionTarget(rawHit);
+            SceneGraphNode requiredParent = null;
+            if (directTarget != null && HasSelectionRelationship(directTarget, ViewportSelectionRelationship.SelectionProxy))
+            {
+                for (var parent = directTarget.ParentNode; parent != null; parent = parent.ParentNode)
+                {
+                    if (parent is not ActorNode parentActorNode)
+                        continue;
+                    if (!parentActorNode.Actor)
+                        break;
+                    if (parent is not SceneNode && !HasSelectionRelationship(parent, ViewportSelectionRelationship.SelectionProxy))
+                    {
+                        requiredParent = parent;
+                        break;
+                    }
+                }
+            }
+            for (var node = directTarget; node != null; node = node.ParentNode)
+            {
+                if (node is ActorNode actorNode && !actorNode.Actor)
+                    break;
+                _pickAncestry.Add(node);
+            }
+
+            for (int i = _pickAncestry.Count - 1; i >= 0; i--)
+            {
+                var node = _pickAncestry[i];
+                var relationship = node.ViewportSelection;
+                bool isBoundary = (relationship & (ViewportSelectionRelationship.SemanticBoundary | ViewportSelectionRelationship.RuntimeOwner)) != 0;
+                bool isPrefabBoundary = includePrefabBoundaries && (relationship & ViewportSelectionRelationship.PrefabBoundary) != 0;
+                if (node == directTarget || node == requiredParent || isBoundary || isPrefabBoundary)
+                    _pickSelectionChain.Add(node);
+            }
+        }
+
+        private int FindActiveScopeIndex()
+        {
+            int result = -1;
+            for (int i = 0; i < _selectionScopes.Count; i++)
+                result = Mathf.Max(result, _pickSelectionChain.IndexOf(_selectionScopes[i]));
+            return result;
+        }
+
+        private void RemoveScopesOutsideCurrentChain()
+        {
+            for (int i = 0; i < _selectionScopes.Count; i++)
+            {
+                if (_pickSelectionChain.Contains(_selectionScopes[i]))
+                    continue;
+                _selectionScopes.RemoveRange(i, _selectionScopes.Count - i);
+                break;
+            }
+        }
+
+        private SceneGraphNode ResolveSelectionChainTarget()
+        {
+            if (_pickSelectionChain.Count == 0)
+                return null;
+            int scopeIndex = FindActiveScopeIndex();
+            return _pickSelectionChain[Mathf.Min(scopeIndex + 1, _pickSelectionChain.Count - 1)];
         }
 
         /// <summary>
-        /// Recursively walks up from the node up to ceiling node(inclusive) or selection(exclusive).
+        /// Resolves a raw scene graph hit through viewport selection relationships.
         /// </summary>
-        /// <param name="node">The node from which to start</param>
-        /// <param name="ceiling">The ceiling(inclusive)</param>
-        /// <returns>The node to select.</returns>
-        public ActorNode WalkUpAndFindActorNodeBeforeSelection(ActorNode node, ActorNode ceiling)
+        /// <param name="rawHit">The raw hit node.</param>
+        /// <param name="viewMode">The viewport view mode.</param>
+        /// <param name="includePrefabBoundaries">True to include prefab instance roots as selection boundaries.</param>
+        /// <returns>The node to select, or null.</returns>
+        internal SceneGraphNode ResolveSelectionTarget(SceneGraphNode rawHit, ViewMode viewMode, bool includePrefabBoundaries = true)
         {
-            if (node == ceiling || _selection.Contains(node))
-                return node;
-            if (node.ParentNode is ActorNode parentNode)
+            if (rawHit == null)
+                return null;
+            BuildSelectionChain(rawHit, viewMode, includePrefabBoundaries);
+            RemoveScopesOutsideCurrentChain();
+            return ResolveSelectionChainTarget();
+        }
+
+        /// <summary>
+        /// Resolves the target to preview while hovering a raw viewport hit.
+        /// </summary>
+        internal SceneGraphNode ResolveHoverTarget(SceneGraphNode rawHit, ViewMode viewMode, IList<SceneGraphNode> selection, bool includePrefabBoundaries = true)
+        {
+            return ResolveHoverTarget(rawHit, viewMode, selection, out _, includePrefabBoundaries);
+        }
+
+        /// <summary>
+        /// Resolves the target to preview while hovering a raw viewport hit.
+        /// </summary>
+        internal SceneGraphNode ResolveHoverTarget(SceneGraphNode rawHit, ViewMode viewMode, IList<SceneGraphNode> selection, out bool isLeafTarget, bool includePrefabBoundaries = true)
+        {
+            isLeafTarget = false;
+            if (rawHit == null)
+                return null;
+            BuildSelectionChain(rawHit, viewMode, includePrefabBoundaries);
+            var target = ResolveSelectionChainTarget();
+            int targetIndex = _pickSelectionChain.IndexOf(target);
+            if (selection != null && selection.Count == 1 && selection[0] == target)
             {
-                if (_selection.Contains(node.ParentNode))
-                    return node;
-                return WalkUpAndFindActorNodeBeforeSelection(parentNode, ceiling);
+                if (targetIndex + 1 < _pickSelectionChain.Count)
+                {
+                    target = _pickSelectionChain[++targetIndex];
+                }
+                else
+                {
+                    return null;
+                }
             }
-            return node;
+            isLeafTarget = targetIndex >= 0 && targetIndex == _pickSelectionChain.Count - 1;
+            return target;
+        }
+
+        /// <summary>
+        /// Enters the currently selected relationship scope and gets the next target in the hit chain.
+        /// </summary>
+        internal bool TryGetDrillTarget(SceneGraphNode rawHit, ViewMode viewMode, IList<SceneGraphNode> selection, out SceneGraphNode target, bool includePrefabBoundaries = true)
+        {
+            target = null;
+            if (rawHit == null || selection == null || selection.Count != 1)
+                return false;
+
+            BuildSelectionChain(rawHit, viewMode, includePrefabBoundaries);
+            int selectedIndex = _pickSelectionChain.IndexOf(selection[0]);
+            if (selectedIndex < 0 || selectedIndex + 1 >= _pickSelectionChain.Count)
+                return false;
+
+            for (int i = _selectionScopes.Count - 1; i >= 0; i--)
+            {
+                int scopeIndex = _pickSelectionChain.IndexOf(_selectionScopes[i]);
+                if (scopeIndex < 0 || scopeIndex >= selectedIndex)
+                    _selectionScopes.RemoveAt(i);
+            }
+            _selectionScopes.Add(selection[0]);
+            target = _pickSelectionChain[selectedIndex + 1];
+            return true;
+        }
+
+        /// <summary>
+        /// Exits the deepest active relationship scope.
+        /// </summary>
+        internal bool TryExitSelectionScope(out SceneGraphNode target)
+        {
+            while (_selectionScopes.Count != 0)
+            {
+                int index = _selectionScopes.Count - 1;
+                target = _selectionScopes[index];
+                _selectionScopes.RemoveAt(index);
+                if (target != null)
+                    return true;
+            }
+            target = null;
+            return false;
         }
 
         /// <inheritdoc />
@@ -206,70 +352,64 @@ namespace FlaxEditor.Gizmo
         /// <returns>The node that would be selected, or null if nothing was hit.</returns>
         internal SceneGraphNode GetPickTarget(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode)
         {
+            var hit = GetRawPickTarget(ref ray, ref view, viewFlags, viewMode);
+            return ResolveSelectionTarget(hit, viewMode);
+        }
+
+        /// <summary>
+        /// Gets the scene graph node that should be previewed by a hover at the given ray.
+        /// </summary>
+        internal SceneGraphNode GetHoverTarget(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode)
+        {
+            return GetHoverTarget(ref ray, ref view, viewFlags, viewMode, out _);
+        }
+
+        /// <summary>
+        /// Gets the scene graph node that should be previewed by a hover at the given ray.
+        /// </summary>
+        internal SceneGraphNode GetHoverTarget(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode, out bool isLeafTarget)
+        {
+            var hit = GetRawPickTarget(ref ray, ref view, viewFlags, viewMode);
+            return ResolveHoverTarget(hit, viewMode, _selection, out isLeafTarget);
+        }
+
+        /// <summary>
+        /// Tries to enter the current viewport selection scope at the given ray.
+        /// </summary>
+        internal bool TryDrillPick(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode, out SceneGraphNode target, bool includePrefabBoundaries = true)
+        {
+            var hit = GetRawPickTarget(ref ray, ref view, viewFlags, viewMode);
+            return TryGetDrillTarget(hit, viewMode, _selection, out target, includePrefabBoundaries);
+        }
+
+        private SceneGraphNode GetRawPickTarget(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode)
+        {
             bool selectColliders = (viewFlags & ViewFlags.PhysicsDebug) == ViewFlags.PhysicsDebug || viewMode == ViewMode.PhysicsColliders;
             SceneGraphNode.RayCastData.FlagTypes rayCastFlags = SceneGraphNode.RayCastData.FlagTypes.None;
             if (!selectColliders)
                 rayCastFlags |= SceneGraphNode.RayCastData.FlagTypes.SkipColliders;
-            var hit = Editor.Instance.Scene.Root.RayCast(ref ray, ref view, out _, rayCastFlags);
-            if (hit == null)
+            var root = Owner?.SceneGraphRoot;
+            if (root == null)
                 return null;
 
-            var sceneEditing = Editor.Instance.SceneEditing;
-
-            // For child actor nodes (mesh, link or sth) we need to select it's owning actor node first or any other child node (but not a child actor)
-            if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
+            var hit = root.RayCast(ref ray, ref view, out _, rayCastFlags);
+            if (hit != null && _selection.Count == 1)
             {
-                var parentNode = actorChildNode.ParentNode;
-                bool canChildBeSelected = sceneEditing.Selection.Contains(parentNode);
-                if (!canChildBeSelected)
+                var selected = _selection[0];
+                bool selectedIsValid = selected != null && (selected is not ActorNode selectedActorNode || selectedActorNode.Actor);
+                if (selectedIsValid && (hit == selected || selected.ContainsInHierarchy(hit)))
                 {
-                    for (int i = 0; i < parentNode.ChildNodes.Count; i++)
+                    var rayCastData = new SceneGraphNode.RayCastData
                     {
-                        if (sceneEditing.Selection.Contains(parentNode.ChildNodes[i]))
-                        {
-                            canChildBeSelected = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (canChildBeSelected && sceneEditing.Selection.Count > 1)
-                {
-                    // Don't select child node if multiple nodes are selected
-                    canChildBeSelected = false;
-                }
-
-                if (!canChildBeSelected)
-                {
-                    // Select parent
-                    hit = parentNode;
+                        Ray = ray,
+                        View = view,
+                        Flags = rayCastFlags & ~SceneGraphNode.RayCastData.FlagTypes.SkipColliders,
+                    };
+                    var childHit = selected.RayCastChildren(ref rayCastData, out _, out _);
+                    if (childHit != null)
+                        hit = childHit;
                 }
             }
-
-            // Select prefab root and then go down until you find the actual item in which case select the prefab root again
-            if (hit is ActorNode actorNode)
-            {
-                ActorNode prefabRoot = GetPrefabRootInParent(actorNode);
-                if (prefabRoot != null && actorNode != prefabRoot)
-                {
-                    bool isPrefabInSelection = false;
-                    foreach (var e in sceneEditing.Selection)
-                    {
-                        if (e is ActorNode ae && GetPrefabRootInParent(ae) == prefabRoot)
-                        {
-                            isPrefabInSelection = true;
-                            break;
-                        }
-                    }
-
-                    // Skip selecting prefab root if we already had object from that prefab selected
-                    if (!isPrefabInSelection)
-                    {
-                        hit = WalkUpAndFindActorNodeBeforeSelection(actorNode, prefabRoot);
-                    }
-                }
-            }
-
             return hit;
         }
 
@@ -281,6 +421,13 @@ namespace FlaxEditor.Gizmo
             // the one intentional exception.
             if (HasActiveTransaction && !IsExpectingTransactionSelectionChange)
                 CancelTransforming();
+
+            if (_selectionScopes.Count != 0)
+            {
+                var scope = _selectionScopes[_selectionScopes.Count - 1];
+                if (newSelection.Count != 1 || (newSelection[0] != scope && !scope.ContainsInHierarchy(newSelection[0])))
+                    _selectionScopes.Clear();
+            }
 
             // Prepare collections
             _selection.Clear();

@@ -406,13 +406,24 @@ namespace FlaxEditor.Modules
         /// <param name="to">The type to convert in.</param>
         public void Convert(Type to)
         {
-            if (!Editor.SceneEditing.HasSthSelected || !(Editor.SceneEditing.Selection[0] is ActorNode))
+            if (!HasSthSelected || Selection[0] is not ActorNode oldNode)
+                return;
+            Convert(oldNode, to);
+        }
+
+        /// <summary>
+        /// Converts the specified actor to another type.
+        /// </summary>
+        /// <param name="oldNode">The actor node to convert.</param>
+        /// <param name="to">The target actor type.</param>
+        public void Convert(ActorNode oldNode, Type to)
+        {
+            if (oldNode == null || !oldNode.Actor || oldNode.Actor.GetType() == to)
                 return;
             if (Level.IsAnySceneLoaded == false)
                 throw new InvalidOperationException("Cannot spawn actor when no scene is loaded.");
 
             var actionList = new IUndoAction[4];
-            var oldNode = (ActorNode)Editor.SceneEditing.Selection[0];
             var old = oldNode.Actor;
             var actor = (Actor)FlaxEngine.Object.New(to);
             var parent = old.Parent;
@@ -596,49 +607,110 @@ namespace FlaxEditor.Modules
         }
 
         /// <summary>
+        /// Converts or wraps the current selection into a group, depending on the selected actor types.
+        /// </summary>
+        public void MakeSelectionGroup()
+        {
+            if (Selection.Count == 1 && Selection[0] is ActorNode actorNode && actorNode.Actor)
+            {
+                var actorType = actorNode.Actor.GetType();
+                if (actorType == typeof(GroupActor))
+                    return;
+                if (actorType == typeof(EmptyActor))
+                {
+                    Convert(actorNode, typeof(GroupActor));
+                    return;
+                }
+            }
+
+            CreateParentForSelectedActors();
+        }
+
+        /// <summary>
         /// Create parent for selected actors.
         /// </summary>
         public void CreateParentForSelectedActors()
         {
-            List<SceneGraphNode> selection = Editor.SceneEditing.Selection;
-            // Get Actors but skip scene node
-            var actors = selection.Where(x => x is ActorNode and not SceneNode).Select(x => ((ActorNode)x).Actor);
-            var actorsCount = actors.Count();
-            if (actorsCount == 0)
+            if (!Level.IsAnySceneLoaded)
                 return;
+
+            var nodes = Selection.Where(x => x is ActorNode and not SceneNode).Cast<ActorNode>().ToList().BuildNodesParents();
+            if (nodes.Count == 0)
+            {
+                var scenes = Level.Scenes;
+                if (scenes.Length == 0)
+                    return;
+                var emptyGroup = new GroupActor
+                {
+                    Name = "Group",
+                    Position = Editor.Windows.EditWin.Viewport.GetWorldPointUnderCursor(),
+                };
+                Spawn(emptyGroup, scenes[scenes.Length - 1], -1, false);
+                SelectAndRenameGroup(emptyGroup);
+                return;
+            }
+
+            var actors = nodes.Select(x => x.Actor).ToList();
+            var commonParent = FindLowestCommonActorParent(actors);
+            if (commonParent == null)
+                return;
+
+            var bounds = BoundingBox.Empty;
             Vector3 center = Vector3.Zero;
             foreach (var actor in actors)
-                center += actor.Position;
-            center /= actorsCount;
-            Actor parent = new EmptyActor
             {
+                bounds = BoundingBox.Merge(bounds, actor.EditorBoxChildren);
+                center += actor.Position;
+            }
+            center = bounds != BoundingBox.Empty ? bounds.Center : center / actors.Count;
+
+            int groupOrder = int.MaxValue;
+            for (int i = 0; i < actors.Count; i++)
+            {
+                var child = actors[i];
+                while (child.Parent != commonParent)
+                    child = child.Parent;
+                groupOrder = Math.Min(groupOrder, child.OrderInParent);
+            }
+
+            var group = new GroupActor
+            {
+                Name = "Group",
                 Position = center,
             };
-            Editor.SceneEditing.Spawn(parent, null, -1, false);
+            Spawn(group, commonParent, groupOrder, false);
             using (new UndoMultiBlock(Undo, actors, "Reparent actors"))
             {
-                for (int i = 0; i < selection.Count; i++)
-                {
-                    if (selection[i] is ActorNode node)
-                    {
-                        if (node.ParentNode != node.ParentScene) // If parent node is not a scene
-                        {
-                            if (selection.Contains(node.ParentNode))
-                            {
-                                continue; // If parent and child nodes selected together, don't touch child nodes
-                            }
-
-                            // Put created node as child of the Parent Node of node
-                            int parentOrder = node.Actor.OrderInParent;
-                            parent.SetParent(node.Actor.Parent, true, true);
-                            parent.OrderInParent = parentOrder;
-                        }
-                        node.Actor.SetParent(parent, true, false);
-                    }
-                }
+                for (int i = 0; i < actors.Count; i++)
+                    actors[i].SetParent(group, true, false);
             }
-            Editor.SceneEditing.Select(parent);
-            Editor.Scene.GetActorNode(parent).TreeNode.StartRenaming(Editor.Windows.SceneWin, Editor.Windows.SceneWin.SceneTreePanel);
+            SelectAndRenameGroup(group);
+        }
+
+        private void SelectAndRenameGroup(GroupActor group)
+        {
+            Select(group);
+            var node = Editor.Scene.GetActorNode(group);
+            if (node != null)
+                node.TreeNode.StartRenaming(Editor.Windows.SceneWin, Editor.Windows.SceneWin.SceneTreePanel);
+        }
+
+        private static Actor FindLowestCommonActorParent(List<Actor> actors)
+        {
+            for (var candidate = actors[0].Parent; candidate != null; candidate = candidate.Parent)
+            {
+                bool containsAll = true;
+                for (int i = 1; i < actors.Count && containsAll; i++)
+                {
+                    var parent = actors[i].Parent;
+                    while (parent != null && parent != candidate)
+                        parent = parent.Parent;
+                    containsAll = parent == candidate;
+                }
+                if (containsAll)
+                    return candidate;
+            }
+            return null;
         }
 
         /// <summary>
