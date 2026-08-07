@@ -303,6 +303,7 @@ namespace FlaxEditor
             RegisterModule(CodeDocs = new CodeDocsModule(this));
             RegisterModule(ProgressReporting = new ProgressReportingModule(this));
             RegisterModule(ContentFinding = new ContentFindingModule(this));
+            RegisterModule(new CliBridgeModule(this));
             Profiler.EndEvent();
 
             StateMachine = new EditorStateMachine(this);

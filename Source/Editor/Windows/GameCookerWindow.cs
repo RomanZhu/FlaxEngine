@@ -844,6 +844,7 @@ namespace FlaxEditor.Windows
         private string _postBuildAction;
         private BuildPreset[] _data;
         private bool _isDataDirty, _exitOnBuildEnd, _lastBuildFailed;
+        private Action<bool> _buildQueueEnded;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="GameCookerWindow"/> class.
@@ -922,9 +923,30 @@ namespace FlaxEditor.Windows
             }
         }
 
-        internal void ExitOnBuildQueueEnd()
+        internal void ExitOnBuildQueueEnd(Action<bool> callback = null)
         {
             _exitOnBuildEnd = true;
+            _lastBuildFailed = false;
+            _buildQueueEnded = callback;
+        }
+
+        private void FinishBuildQueue(bool failed)
+        {
+            _exitOnBuildEnd = false;
+            try
+            {
+                _buildQueueEnded?.Invoke(failed);
+            }
+            catch (Exception ex)
+            {
+                Editor.LogError(ex.ToString());
+                failed = true;
+            }
+            finally
+            {
+                _buildQueueEnded = null;
+            }
+            Engine.RequestExit(failed ? 1 : 0);
         }
 
         /// <summary>
@@ -966,6 +988,17 @@ namespace FlaxEditor.Windows
         /// <param name="target">The target.</param>
         public void Build(BuildPreset preset, BuildTarget target)
         {
+            Build(preset, target, BuildOptions.None);
+        }
+
+        /// <summary>
+        /// Builds the target with additional build options.
+        /// </summary>
+        /// <param name="preset">The build preset.</param>
+        /// <param name="target">The build target.</param>
+        /// <param name="options">The additional build options.</param>
+        internal void Build(BuildPreset preset, BuildTarget target, BuildOptions options)
+        {
             if (target == null)
                 throw new ArgumentNullException(nameof(target));
 
@@ -974,6 +1007,7 @@ namespace FlaxEditor.Windows
             {
                 PresetName = preset.Name,
                 Target = target.DeepClone(),
+                Options = options,
             });
         }
 
@@ -1302,16 +1336,10 @@ namespace FlaxEditor.Windows
 
                     bool failed = GameCooker.Build(target.Platform, target.Mode, target.Output, item.Options, target.CustomDefines, item.PresetName, target.Name);
                     if (failed && _exitOnBuildEnd)
-                    {
-                        _exitOnBuildEnd = false;
-                        Engine.RequestExit(1);
-                    }
+                        FinishBuildQueue(true);
                 }
                 else if (_exitOnBuildEnd)
-                {
-                    _exitOnBuildEnd = false;
-                    Engine.RequestExit(_lastBuildFailed ? 1 : 0);
-                }
+                    FinishBuildQueue(_lastBuildFailed);
             }
         }
 

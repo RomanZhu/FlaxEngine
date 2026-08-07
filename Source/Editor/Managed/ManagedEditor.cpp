@@ -209,7 +209,9 @@ void ManagedEditor::Init()
         flags |= StartupFlags::SkipCompile;
     if (CommandLine::Options.NewProject.IsTrue())
         flags |= StartupFlags::NewProject;
-    if (CommandLine::Options.Exit.IsTrue())
+    // Typed CLI requests own their lifetime. Keeping -exit available as an old-Editor
+    // compatibility fallback prevents an unsupported request from hanging forever.
+    if (CommandLine::Options.Exit.IsTrue() && !CommandLine::Options.CliRequest.HasValue())
         flags |= StartupFlags::Exit;
     args[0] = &flags;
     Guid sceneId;
@@ -251,8 +253,23 @@ void ManagedEditor::Init()
         }
     }
 
-    // Call building if need to (based on CL)
-    if (CommandLine::Options.Build.HasValue())
+    // Execute a typed CLI request if present, otherwise use the legacy build command
+    if (CommandLine::Options.CliRequest.HasValue())
+    {
+        const auto cliRequestMethod = GetClass()->GetMethod("CliRequestCommand", 1);
+        if (cliRequestMethod == nullptr)
+        {
+            LOG(Fatal, "Missing CLI request method!");
+        }
+        args[0] = MUtils::ToString(CommandLine::Options.CliRequest.GetValue());
+        exception = nullptr;
+        cliRequestMethod->Invoke(GetManagedInstance(), args, &exception);
+        if (exception)
+        {
+            LOG(Fatal, "CLI request failed!");
+        }
+    }
+    else if (CommandLine::Options.Build.HasValue())
     {
         const auto buildCommandMethod = GetClass()->GetMethod("BuildCommand", 1);
         if (buildCommandMethod == nullptr)
@@ -260,6 +277,7 @@ void ManagedEditor::Init()
             LOG(Fatal, "Missing build command method!");
         }
         args[0] = MUtils::ToString(CommandLine::Options.Build.GetValue());
+        exception = nullptr;
         buildCommandMethod->Invoke(GetManagedInstance(), args, &exception);
         if (exception)
         {

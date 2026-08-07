@@ -179,6 +179,11 @@ public:
         Nullable<String> Build;
 
         /// <summary>
+        /// The versioned one-shot CLI request file (-cliRequest !absolute-json-path!).
+        /// </summary>
+        Nullable<String> CliRequest;
+
+        /// <summary>
         /// -skipcompile (skips the scripts compilation on editor startup, useful when launching engine from IDE)
         /// </summary>
         Nullable<bool> SkipCompile;
