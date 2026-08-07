@@ -183,8 +183,7 @@ namespace FlaxEditor.Windows
                 }
                 else
                 {
-                    b = cm.AddButton("Rename");
-                    b.DeferClickUntilMenuClosed(_ => Rename(item));
+                    b = cm.AddButton("Rename", () => Rename(item));
                 }
 
                 // Custom options
@@ -319,13 +318,13 @@ namespace FlaxEditor.Windows
                         {
                             if (mainCM)
                             {
-                                var b = CreateDeferredNewItemButton(menu, part, button => NewItem(p));
+                                var b = CreateNewItemButton(menu, part, button => NewItem(p));
                                 b.Enabled = canCreate;
                                 mainCM = false;
                             }
                             else if (childCM != null)
                             {
-                                var b = CreateDeferredNewItemButton(childCM.ContextMenu, part, button => NewItem(p));
+                                var b = CreateNewItemButton(childCM.ContextMenu, part, button => NewItem(p));
                                 b.Enabled = canCreate;
                                 childCM.ContextMenu.AutoSort = true;
                             }
@@ -351,11 +350,9 @@ namespace FlaxEditor.Windows
             }
         }
 
-        internal static ContextMenuButton CreateDeferredNewItemButton(ContextMenu menu, string text, Action<ContextMenuButton> clicked)
+        internal static ContextMenuButton CreateNewItemButton(ContextMenu menu, string text, Action<ContextMenuButton> clicked)
         {
-            var button = menu.AddButton(text);
-            button.DeferClickUntilMenuClosed(clicked);
-            return button;
+            return menu.AddButton(text, clicked);
         }
 
         private void OnExpandAllClicked(ContextMenuButton button)
