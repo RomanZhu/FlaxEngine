@@ -173,6 +173,8 @@ namespace FlaxEngine
 #if FLAX_EDITOR
             FlaxEditor.ScriptsBuilder.ScriptsReloadBegin += OnScriptsReloadBegin;
             FlaxEditor.ScriptsBuilder.ScriptsReloadEnd += OnScriptsReloadEnd;
+#elif FLAX_GAME && (BUILD_DEBUG || BUILD_DEVELOPMENT)
+            CliPlayerBridge.Initialize();
 #endif
 
             OnLocalizationChanged();

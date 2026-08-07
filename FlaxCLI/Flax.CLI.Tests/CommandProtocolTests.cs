@@ -26,7 +26,7 @@ public sealed class CommandProtocolTests
                 Name = "example.port",
                 Arguments = new JsonObject
                 {
-                    ["manifest"] = "Conversion/unity-scene.json",
+                    ["manifest"] = "Conversion/legacy-scene.json",
                     ["dry-run"] = true,
                 },
                 Confirm = true,
@@ -61,10 +61,10 @@ public sealed class CommandProtocolTests
     public void TypedOptionsSupportJsonFlagsValuesAndRepeatedArrays()
     {
         var arguments = CommandDispatcher.ParseCommandArguments(
-            "{\"manifest\":\"Conversion/unity-scene.json\"}",
+            "{\"manifest\":\"Conversion/legacy-scene.json\"}",
             ["--dry-run", "--layer", "Ground", "--layer=Gameplay", "--count", "21405"]);
 
-        Assert.That(arguments["manifest"]!.GetValue<string>(), Is.EqualTo("Conversion/unity-scene.json"));
+        Assert.That(arguments["manifest"]!.GetValue<string>(), Is.EqualTo("Conversion/legacy-scene.json"));
         Assert.That(arguments["dry-run"]!.GetValue<bool>(), Is.True);
         Assert.That(arguments["count"]!.GetValue<int>(), Is.EqualTo(21405));
         Assert.That(arguments["layer"]!.AsArray().Select(x => x!.GetValue<string>()), Is.EqualTo(new[] { "Ground", "Gameplay" }));

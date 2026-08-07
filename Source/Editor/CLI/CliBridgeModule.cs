@@ -13,6 +13,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using FlaxEditor.Modules;
+using FlaxEditor.SceneGraph;
+using FlaxEditor.SceneGraph.Actors;
 using FlaxEngine;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -191,7 +193,7 @@ namespace FlaxEditor
         /// <inheritdoc />
         public override void OnUpdate()
         {
-            if (_shutdown.IsCancellationRequested)
+            if (_shutdown.IsCancellationRequested || string.IsNullOrEmpty(_manifestPath))
                 return;
 
             var timer = Stopwatch.StartNew();
@@ -469,12 +471,57 @@ namespace FlaxEditor
                 case "editor.step":
                     Editor.Simulation.RequestPlayOneFrame();
                     return Success(request.RequestId, new { requested = "step", status = GetStatus() });
+                case "player.status":
+                    return Success(request.RequestId, GetStatus());
+                case "player.pause":
+                    Editor.Simulation.RequestPausePlay();
+                    return Success(request.RequestId, new { requested = "pause", status = GetStatus() });
+                case "player.resume":
+                    Editor.Simulation.RequestResumePlay();
+                    return Success(request.RequestId, new { requested = "resume", status = GetStatus() });
+                case "player.step":
+                    Editor.Simulation.RequestPlayOneFrame();
+                    return Success(request.RequestId, new { requested = "step", status = GetStatus() });
+                case "player.quit":
+                    Editor.Simulation.RequestStopPlay();
+                    return Success(request.RequestId, new { requested = "quit", status = GetStatus() });
+                case "runtime.input.key":
+                    return Success(request.RequestId, InjectKey(request.Arguments));
+                case "runtime.input.pointer":
+                    return Success(request.RequestId, InjectPointer(request.Arguments));
+                case "runtime.input.reset":
+                    return Success(request.RequestId, ResetInput());
+                case "runtime.input.gamepad":
+                case "runtime.input.action":
+                    throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0004", "This bridge supports raw keyboard and mouse injection; gamepad/action synthesis is not exposed by the current Flax input ABI.");
                 case "editor.focus":
                     Editor.Windows.MainWindow?.Focus();
                     return Success(request.RequestId, new { focused = Editor.Windows.MainWindow != null });
                 case "editor.saveAll":
                     Editor.SaveAll();
                     return Success(request.RequestId, new { saved = true });
+                case "editor.close":
+                {
+                    var save = request.Arguments?["save"]?.Value<bool>() ?? true;
+                    if (save)
+                    {
+                        if (Level.SaveAllScenes())
+                            throw new InvalidOperationException("Failed to save one or more scenes before Editor shutdown.");
+                        Editor.Instance.SaveContent();
+                    }
+                    else
+                    {
+                        foreach (var scene in Level.Scenes)
+                        {
+                            var node = Editor.Instance.Scene.GetActorNode(scene) as SceneNode;
+                            if (node != null)
+                                node.IsEdited = false;
+                        }
+                        Editor.Instance.Undo.MarkScenesSaved();
+                    }
+                    Engine.RequestExit(0);
+                    return Success(request.RequestId, new { requested = true, saved = save, discarded = !save });
+                }
                 case "editor.recompile":
                 {
                     var requested = !ScriptsBuilder.IsCompiling;
@@ -484,6 +531,35 @@ namespace FlaxEditor
                 }
                 case "console":
                     return Success(request.RequestId, ReadLogs(request.Arguments));
+                case "console.clear":
+                    return Success(request.RequestId, ClearLogs());
+                case "performance":
+                    return Success(request.RequestId, GetPerformance());
+                case "selection.get":
+                    return Success(request.RequestId, GetSelection());
+                case "selection.set":
+                    return Success(request.RequestId, SetSelection(request.Arguments));
+                case "selection.clear":
+                    Editor.SceneEditing.Deselect(false);
+                    return Success(request.RequestId, GetSelection());
+                case "capture.viewport":
+                {
+                    var path = ResolveCapturePath(request.Arguments);
+                    var viewport = Editor.Instance.Windows.EditWin?.Viewport;
+                    if (viewport == null)
+                        throw new InvalidOperationException("The Editor scene viewport is unavailable in headless mode.");
+                    viewport.TakeScreenshot(path);
+                    return Success(request.RequestId, new { requested = true, source = "viewport", path });
+                }
+                case "capture.game":
+                {
+                    var path = ResolveCapturePath(request.Arguments);
+                    var game = Editor.Instance.Windows.GameWin;
+                    if (game == null)
+                        throw new InvalidOperationException("The Editor game viewport is unavailable.");
+                    game.TakeScreenshot(path);
+                    return Success(request.RequestId, new { requested = true, source = "game", path });
+                }
                 default:
                     throw new CliCommandProtocolException("FLX-BRIDGE-ACTION-0002", $"Unsupported live Editor action '{request.Action}'.");
                 }
@@ -611,6 +687,181 @@ namespace FlaxEditor
             };
         }
 
+        private static object InjectKey(JObject arguments)
+        {
+            if (Input.Keyboard == null)
+                throw new InvalidOperationException("The runtime keyboard device is unavailable.");
+            var name = arguments?["key"]?.Value<string>();
+            if (!Enum.TryParse(name, true, out KeyboardKeys key))
+                throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", $"Unknown keyboard key '{name}'.");
+            var state = arguments?["state"]?.Value<string>()?.ToLowerInvariant() ?? "press";
+            if (state is "down" or "press") Input.Keyboard.OnKeyDown(key);
+            if (state is "up" or "press") Input.Keyboard.OnKeyUp(key);
+            if (state is not ("down" or "up" or "press"))
+                throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "Keyboard input state must be down, up, or press.");
+            return new { injected = true, device = "keyboard", key = key.ToString(), state };
+        }
+
+        private static object ResetInput()
+        {
+            var releasedKeys = 0;
+            var releasedButtons = 0;
+            if (Input.Keyboard != null)
+            {
+                foreach (var key in Enum.GetValues<KeyboardKeys>())
+                {
+                    if (key is KeyboardKeys.None or KeyboardKeys.MAX)
+                        continue;
+                    Input.Keyboard.OnKeyUp(key);
+                    releasedKeys++;
+                }
+            }
+            if (Input.Mouse != null)
+            {
+                var position = Input.MousePosition;
+                foreach (var button in Enum.GetValues<MouseButton>())
+                {
+                    if (button is MouseButton.None or MouseButton.MAX)
+                        continue;
+                    Input.Mouse.OnMouseUp(position, button);
+                    releasedButtons++;
+                }
+            }
+            return new { reset = true, releasedKeys, releasedButtons };
+        }
+
+        private static object InjectPointer(JObject arguments)
+        {
+            if (Input.Mouse == null)
+                throw new InvalidOperationException("The runtime mouse device is unavailable.");
+            var position = new Float2(arguments?["x"]?.Value<float>() ?? Input.MousePosition.X, arguments?["y"]?.Value<float>() ?? Input.MousePosition.Y);
+            var state = arguments?["state"]?.Value<string>()?.ToLowerInvariant() ?? "move";
+            if (state == "move") Input.Mouse.OnMouseMove(position);
+            else if (state == "wheel") Input.Mouse.OnMouseWheel(position, arguments?["delta"]?.Value<float>() ?? 0.0f);
+            else
+            {
+                if (!Enum.TryParse(arguments?["button"]?.Value<string>(), true, out MouseButton button))
+                    throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "Pointer button is required for button down/up/press.");
+                if (state is "down" or "press") Input.Mouse.OnMouseDown(position, button);
+                if (state is "up" or "press") Input.Mouse.OnMouseUp(position, button);
+            }
+            if (state is not ("move" or "wheel" or "down" or "up" or "press"))
+                throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "Pointer state must be move, wheel, down, up, or press.");
+            return new { injected = true, device = "pointer", x = position.X, y = position.Y, state };
+        }
+
+        private object GetPerformance()
+        {
+            var stats = ProfilingTools.Stats;
+            var actorCount = 0;
+            var scriptCount = 0;
+            var pending = new Stack<Actor>();
+            foreach (var scene in Level.Scenes)
+            {
+                for (var i = 0; i < scene.ChildrenCount; i++)
+                    pending.Push(scene.GetChild(i));
+            }
+            while (pending.Count != 0)
+            {
+                var actor = pending.Pop();
+                actorCount++;
+                scriptCount += actor.ScriptsCount;
+                for (var i = 0; i < actor.ChildrenCount; i++)
+                    pending.Push(actor.GetChild(i));
+            }
+
+            return new
+            {
+                timestampUtc = DateTime.UtcNow,
+                profilerEnabled = ProfilingTools.Enabled,
+                frame = new
+                {
+                    fps = stats.FPS,
+                    updateTimeMs = stats.UpdateTimeMs,
+                    physicsTimeMs = stats.PhysicsTimeMs,
+                    drawCpuTimeMs = stats.DrawCPUTimeMs,
+                    drawGpuTimeMs = stats.DrawGPUTimeMs,
+                },
+                memory = new
+                {
+                    processPhysicalBytes = stats.ProcessMemory.UsedPhysicalMemory,
+                    processVirtualBytes = stats.ProcessMemory.UsedVirtualMemory,
+                    systemPhysicalUsedBytes = stats.MemoryCPU.UsedPhysicalMemory,
+                    systemPhysicalTotalBytes = stats.MemoryCPU.TotalPhysicalMemory,
+                    gpuUsedBytes = stats.MemoryGPU.Used,
+                    gpuTotalBytes = stats.MemoryGPU.Total,
+                },
+                rendering = new
+                {
+                    drawCalls = stats.DrawStats.DrawCalls,
+                    dispatchCalls = stats.DrawStats.DispatchCalls,
+                    vertices = stats.DrawStats.Vertices,
+                    triangles = stats.DrawStats.Triangles,
+                    pipelineStateChanges = stats.DrawStats.PipelineStateChanges,
+                },
+                scene = new
+                {
+                    loadedScenes = Level.ScenesCount,
+                    actors = actorCount,
+                    scripts = scriptCount,
+                },
+            };
+        }
+
+        private object GetSelection()
+        {
+            var actors = Editor.SceneEditing.Selection
+                .OfType<ActorNode>()
+                .Select(x => DescribeActor(x.Actor))
+                .ToArray();
+            return new
+            {
+                count = actors.Length,
+                actors,
+                unsupportedNodes = Editor.SceneEditing.SelectionCount - actors.Length,
+            };
+        }
+
+        private object SetSelection(JObject arguments)
+        {
+            var values = arguments?["actors"] as JArray ?? throw new CliCommandProtocolException("FLX-BRIDGE-REQUEST-0002", "selection.set requires an actors array.");
+            var additive = arguments?["additive"]?.Value<bool>() ?? false;
+            var nodes = new List<SceneGraphNode>(values.Count);
+            var seen = new HashSet<Guid>();
+            foreach (var value in values)
+            {
+                if (!Guid.TryParse(value.Value<string>(), out var actorId) || !seen.Add(actorId))
+                    throw new CliCommandProtocolException("FLX-BRIDGE-REQUEST-0002", $"Selection Actor ID '{value}' is invalid or duplicated.");
+                var actor = FlaxEngine.Object.Find<Actor>(ref actorId);
+                var node = actor == null ? null : Editor.Scene.GetActorNode(actor);
+                if (actor == null || !actor.HasScene || node == null)
+                    throw new CliCommandProtocolException("FLX-BRIDGE-REQUEST-0002", $"Selection Actor '{actorId}' was not found in a loaded scene.");
+                nodes.Add(node);
+            }
+            Editor.SceneEditing.Select(nodes, additive, false);
+            return GetSelection();
+        }
+
+        private static object DescribeActor(Actor actor)
+        {
+            return new
+            {
+                sceneId = actor.Scene?.ID ?? Guid.Empty,
+                actorId = actor.ID,
+                path = GetActorPath(actor),
+                type = actor.TypeName,
+                name = actor.Name,
+            };
+        }
+
+        private static string GetActorPath(Actor actor)
+        {
+            var names = new Stack<string>();
+            for (var current = actor; current != null; current = current.Parent)
+                names.Push(current.Name);
+            return "/" + string.Join("/", names);
+        }
+
         private string GetStateName()
         {
             if (ScriptsBuilder.IsCompiling)
@@ -637,6 +888,16 @@ namespace FlaxEditor
                     oldestCursor = _logs.Count == 0 ? 0L : _logs[0].Cursor,
                     latestCursor = _logCursor,
                 };
+            }
+        }
+
+        private object ClearLogs()
+        {
+            lock (_logsLocker)
+            {
+                var cleared = _logs.Count;
+                _logs.Clear();
+                return new { cleared, latestCursor = _logCursor };
             }
         }
 
@@ -689,14 +950,44 @@ namespace FlaxEditor
             };
             var temporaryPath = _manifestPath + ".tmp";
             File.WriteAllText(temporaryPath, JsonConvert.SerializeObject(manifest, Formatting.Indented), new UTF8Encoding(false));
-            File.Move(temporaryPath, _manifestPath, true);
+            if (File.Exists(_manifestPath))
+            {
+                try
+                {
+                    File.Replace(temporaryPath, _manifestPath, null);
+                }
+                catch (Exception)
+                {
+                    // Some bundled runtimes reject a null backup path even though
+                    // the API contract permits it, and their overwrite overloads
+                    // have the same issue. Use only the basic file operations on
+                    // that compatibility path.
+                    File.Delete(_manifestPath);
+                    File.Move(temporaryPath, _manifestPath);
+                }
+            }
+            else
+                File.Move(temporaryPath, _manifestPath);
             RestrictUnixPath(_manifestPath, false);
             _publishedState = GetStateName();
         }
 
         private static string[] GetCapabilities()
         {
-            return new[] { "commands", "playMode", "console", "saveAll", "focus", "recompile" };
+            return new[] { "commands", "authoring", "settings", "bake", "eval", "evalCSharp", "visject", "player", "runtimeInput", "playMode", "playtest", "console", "saveAll", "close", "focus", "recompile", "performance", "selection", "capture" };
+        }
+
+        private static string ResolveCapturePath(JObject arguments)
+        {
+            var requested = arguments["path"]?.Value<string>();
+            if (string.IsNullOrWhiteSpace(requested))
+                throw new ArgumentException("Capture requires an output path.");
+            var root = Path.GetFullPath(Globals.ProjectFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var path = Path.GetFullPath(requested, root);
+            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Capture output must remain under the project root.");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            return path;
         }
 
         private static CliBridgeResponse Success(string requestId, object data)

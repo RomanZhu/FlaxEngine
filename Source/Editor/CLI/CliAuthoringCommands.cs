@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using FlaxEditor.Actions;
+using FlaxEditor.Content.Settings;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEditor.Scripting;
@@ -121,7 +122,7 @@ namespace FlaxEditor
             var outputPath = ResolveAuthoringPath(path, ".scene", true);
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
             Editor.Instance.Scene.CreateSceneFile(outputPath);
-            Editor.Instance.ContentDatabase.RefreshFolder(Editor.Instance.ContentDatabase.Find(Path.GetDirectoryName(outputPath)), false);
+            RefreshCreatedContent(outputPath);
 
             Guid sceneId = Guid.Empty;
             if (FlaxEngine.Content.GetAssetInfo(outputPath, out var info))
@@ -143,6 +144,28 @@ namespace FlaxEditor
             return new { sceneId = id, additive, requested = true, autoSavedSceneIds, saved = autoSavedSceneIds.Length != 0, dirty = Editor.Instance.Scene.IsEdited() };
         }
 
+        [CliCommand("scenes.close", Description = "Save pending changes and close one or all loaded scenes without prompting.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object CloseScenes([CliOption("scene", Description = "Optional loaded scene ID. Omit to close all loaded scenes.")] Guid? scene = null)
+        {
+            var targets = scene.HasValue ? new[] { RequireScene(scene.Value) } : Level.Scenes;
+            var targetIds = targets.Select(x => x.ID).ToArray();
+            var autoSavedSceneIds = SaveEditedScenes();
+            if (scene.HasValue)
+                Editor.Instance.Scene.CloseScene(targets[0]);
+            else
+                Editor.Instance.Scene.CloseAllScenes();
+            return new { sceneIds = targetIds, requested = targetIds.Length != 0, autoSavedSceneIds, saved = autoSavedSceneIds.Length != 0 };
+        }
+
+        [CliCommand("scenes.reload", Description = "Save pending changes and reload all loaded scenes from disk without prompting.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object ReloadScenes()
+        {
+            var sceneIds = Level.Scenes.Select(x => x.ID).ToArray();
+            var autoSavedSceneIds = SaveEditedScenes();
+            Editor.Instance.Scene.ReloadScenes();
+            return new { sceneIds, requested = sceneIds.Length != 0, autoSavedSceneIds, saved = autoSavedSceneIds.Length != 0 };
+        }
+
         [CliCommand("scenes.save", Description = "Save one or all loaded scenes.", Access = CliCommandAccess.MutatesProject)]
         public static object SaveScenes([CliOption("scene", Description = "Optional loaded scene ID.")] Guid? scene = null)
         {
@@ -154,6 +177,112 @@ namespace FlaxEditor
             }
             var changed = SaveEditedScenes();
             return new { sceneIds = changed, saved = changed.Length != 0, dirty = Editor.Instance.Scene.IsEdited() };
+        }
+
+        [CliCommand("scenes.dirty", Description = "List loaded scenes with unsaved changes.", Access = CliCommandAccess.ReadOnly)]
+        public static object DirtyScenes()
+        {
+            var scenes = Level.Scenes.Where(x => Editor.Instance.Scene.IsEdited(x)).Select(DescribeScene).ToArray();
+            return new { any = scenes.Length != 0, count = scenes.Length, scenes };
+        }
+
+        [CliCommand("scenes.active.get", Description = "Get the primary loaded scene used as the default authoring target.", Access = CliCommandAccess.ReadOnly)]
+        public static object GetActiveScene()
+        {
+            var scene = Level.ScenesCount == 0 ? null : Level.GetScene(0);
+            return new
+            {
+                semantics = "The first loaded Flax scene is the primary authoring scene and the default parent for newly created Actors.",
+                scene = scene == null ? null : DescribeScene(scene),
+            };
+        }
+
+        [CliCommand("scenes.active.set", Description = "Make a loaded scene the primary authoring scene by restoring the loaded set with that scene first.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object SetActiveScene([CliOption("scene", Description = "Loaded scene ID.", Required = true)] Guid scene)
+        {
+            var target = RequireScene(scene);
+            var before = Level.Scenes.Select(x => x.ID).ToArray();
+            if (before[0] == scene)
+                return new { changed = false, scene = DescribeScene(target), loadedSceneIds = before, savedSceneIds = Array.Empty<Guid>() };
+
+            var savedSceneIds = SaveEditedScenes();
+            var ordered = new[] { scene }.Concat(before.Where(x => x != scene)).ToArray();
+            if (Level.UnloadAllScenes())
+                throw new InvalidOperationException("Failed to unload the current scene set while changing the primary scene.");
+            foreach (var id in ordered)
+            {
+                if (Level.LoadScene(id))
+                    throw new InvalidOperationException($"Failed to restore scene '{id}' while changing the primary scene.");
+            }
+            return new { changed = true, scene = DescribeScene(Level.GetScene(0)), loadedSceneIds = ordered, savedSceneIds };
+        }
+
+        [CliCommand("scenes.build-list.list", Description = "List the cooked startup scene followed by additional cooked scenes.", Access = CliCommandAccess.ReadOnly)]
+        public static object ListBuildScenes()
+        {
+            return DescribeBuildScenes();
+        }
+
+        [CliCommand("scenes.build-list.add", Description = "Add a scene to the cooked scene roots or make it the startup scene.", Access = CliCommandAccess.MutatesProject)]
+        public static object AddBuildScene([CliOption("scene", Description = "Scene ID or Content-relative path.", Required = true)] string scene, [CliOption("startup", Description = "Promote this scene to the startup slot.")] bool startup = false)
+        {
+            var id = ResolveAssetId(scene, ".scene");
+            var game = GameSettings.Load();
+            var build = GameSettings.Load<BuildSettings>() ?? new BuildSettings();
+            var additional = (build.AdditionalScenes ?? Array.Empty<SceneReference>()).Where(x => x.ID != id).ToList();
+            var changed = false;
+
+            if (startup || game.FirstScene.ID == Guid.Empty)
+            {
+                if (game.FirstScene.ID != id)
+                {
+                    if (game.FirstScene.ID != Guid.Empty)
+                        additional.Insert(0, new SceneReference(game.FirstScene.ID));
+                    game.FirstScene = new SceneReference(id);
+                    changed = true;
+                }
+            }
+            else if (game.FirstScene.ID != id && !(build.AdditionalScenes ?? Array.Empty<SceneReference>()).Any(x => x.ID == id))
+            {
+                additional.Add(new SceneReference(id));
+                changed = true;
+            }
+
+            build.AdditionalScenes = additional.Distinct().ToArray();
+            if (changed)
+            {
+                SaveSettings(game);
+                SaveSettings(build);
+            }
+            return new { changed, buildList = DescribeBuildScenes() };
+        }
+
+        [CliCommand("scenes.build-list.remove", Description = "Remove a cooked scene. Removing the startup scene promotes the first additional scene when available.", Access = CliCommandAccess.MutatesProject)]
+        public static object RemoveBuildScene([CliOption("scene", Description = "Scene ID or Content-relative path.", Required = true)] string scene)
+        {
+            var id = ResolveAssetId(scene, ".scene");
+            var game = GameSettings.Load();
+            var build = GameSettings.Load<BuildSettings>() ?? new BuildSettings();
+            var additional = (build.AdditionalScenes ?? Array.Empty<SceneReference>()).Where(x => x.ID != id).ToList();
+            var changed = additional.Count != (build.AdditionalScenes?.Length ?? 0);
+            Guid promoted = Guid.Empty;
+
+            if (game.FirstScene.ID == id)
+            {
+                promoted = additional.Count == 0 ? Guid.Empty : additional[0].ID;
+                if (additional.Count != 0)
+                    additional.RemoveAt(0);
+                game.FirstScene = new SceneReference(promoted);
+                changed = true;
+            }
+
+            build.AdditionalScenes = additional.ToArray();
+            if (changed)
+            {
+                SaveSettings(game);
+                SaveSettings(build);
+            }
+            return new { changed, promotedStartupSceneId = promoted, buildList = DescribeBuildScenes() };
         }
 
         [CliCommand("scenes.hierarchy", Description = "Return the loaded scene Actor hierarchy.", Access = CliCommandAccess.ReadOnly)]
@@ -758,7 +887,7 @@ namespace FlaxEditor
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
             if (PrefabManager.CreatePrefab(value, outputPath, true))
                 throw new InvalidOperationException($"Failed to create Prefab '{outputPath}'.");
-            Editor.Instance.ContentDatabase.RefreshFolder(Editor.Instance.ContentDatabase.Find(Path.GetDirectoryName(outputPath)), false);
+            RefreshCreatedContent(outputPath);
             FlaxEngine.Content.GetAssetInfo(outputPath, out var info);
             SaveSceneIfEdited(value.Scene);
             return new { prefabId = info.ID, path = outputPath, actor = DescribeActor(value), saved = true, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
@@ -783,7 +912,7 @@ namespace FlaxEditor
             {
                 Object.Destroy(ref root);
             }
-            Editor.Instance.ContentDatabase.RefreshFolder(Editor.Instance.ContentDatabase.Find(Path.GetDirectoryName(outputPath)), false);
+            RefreshCreatedContent(outputPath);
             FlaxEngine.Content.GetAssetInfo(outputPath, out var info);
             return new { prefabId = info.ID, sourcePrefabId = prefabId, path = outputPath, saved = true, dirty = false };
         }
@@ -962,6 +1091,25 @@ namespace FlaxEditor
             return result;
         }
 
+        private static void RefreshCreatedContent(string path)
+        {
+            var database = Editor.Instance.ContentDatabase;
+            var folder = database.Find(Path.GetDirectoryName(path));
+            if (folder != null)
+            {
+                database.RefreshFolder(folder, false);
+                return;
+            }
+
+            // A command may create a nested directory that the content tree has not
+            // observed yet. Refresh the project Content root recursively so both the
+            // new directory and its asset are registered before resolving the ID.
+            var contentRoot = database.Find(Globals.ProjectContentFolder);
+            if (contentRoot == null)
+                throw new InvalidOperationException("The project Content folder is not available in the content database.");
+            database.RefreshFolder(contentRoot, true);
+        }
+
         private static string GetAuthoringRoot(string contentRoot)
         {
             var result = contentRoot;
@@ -1040,6 +1188,43 @@ namespace FlaxEditor
         {
             FlaxEngine.Content.GetAssetInfo(scene.ID, out var info);
             return new { id = scene.ID, name = scene.Name, path = info.Path, dirty = Editor.Instance.Scene.IsEdited(scene), actorCount = EnumerateActors(scene).Count() - 1 };
+        }
+
+        private static object DescribeBuildScenes()
+        {
+            var game = GameSettings.Load();
+            var build = GameSettings.Load<BuildSettings>() ?? new BuildSettings();
+            var entries = new List<object>();
+            var seen = new HashSet<Guid>();
+            if (game.FirstScene.ID != Guid.Empty)
+            {
+                entries.Add(DescribeBuildScene(game.FirstScene.ID, 0, true));
+                seen.Add(game.FirstScene.ID);
+            }
+            foreach (var reference in build.AdditionalScenes ?? Array.Empty<SceneReference>())
+            {
+                if (reference.ID != Guid.Empty && seen.Add(reference.ID))
+                    entries.Add(DescribeBuildScene(reference.ID, entries.Count, false));
+            }
+            return new
+            {
+                semantics = "GameSettings.FirstScene is the required startup scene. BuildSettings.AdditionalScenes are extra cooked roots in their persisted order.",
+                startupSceneId = game.FirstScene.ID,
+                count = entries.Count,
+                scenes = entries.ToArray(),
+            };
+        }
+
+        private static object DescribeBuildScene(Guid id, int index, bool startup)
+        {
+            FlaxEngine.Content.GetAssetInfo(id, out var info);
+            return new { index, id, path = info.Path, name = Path.GetFileNameWithoutExtension(info.Path), startup, valid = info.ID != Guid.Empty };
+        }
+
+        private static void SaveSettings<T>(T settings) where T : FlaxEditor.Content.Settings.SettingsBase
+        {
+            if (GameSettings.Save(settings))
+                throw new IOException($"Failed to save {typeof(T).Name}. See the Editor log for details.");
         }
 
         private static object DescribeActor(Actor actor)

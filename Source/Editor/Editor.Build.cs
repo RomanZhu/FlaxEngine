@@ -45,6 +45,8 @@ public class Editor : EditorModule
         options.ScriptingAPI.SystemReferences.Add("System.IO.Pipes");
         options.ScriptingAPI.SystemReferences.Add("System.Net.Sockets");
         options.ScriptingAPI.SystemReferences.Add("System.Text.Encoding.Extensions");
+        options.ScriptingAPI.FileReferences.Add(Path.Combine(Globals.EngineRoot, "Source", "Platforms", "DotNet", "Microsoft.CodeAnalysis.dll"));
+        options.ScriptingAPI.FileReferences.Add(Path.Combine(Globals.EngineRoot, "Source", "Platforms", "DotNet", "Microsoft.CodeAnalysis.CSharp.dll"));
         if (Profiler.Use(options))
             options.ScriptingAPI.Defines.Add("USE_PROFILER");
 

@@ -52,9 +52,11 @@ internal sealed class EditorBridgeClient(AppPaths paths)
         return result.OrderBy(x => x.ProjectPath, ProjectRegistry.PathComparer).ThenBy(x => x.Pid).ToArray();
     }
 
-    public EditorInstanceManifest? Select(string? projectPath, string? selector, bool required)
+    public EditorInstanceManifest? Select(string? projectPath, string? selector, bool required, string? kind = null)
     {
         var candidates = Discover().AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(kind))
+            candidates = candidates.Where(x => string.Equals(x.Kind, kind, StringComparison.OrdinalIgnoreCase));
         if (!string.IsNullOrWhiteSpace(projectPath))
         {
             var canonicalProject = Path.GetFullPath(projectPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -74,14 +76,14 @@ internal sealed class EditorBridgeClient(AppPaths paths)
         {
             if (!required)
                 return null;
-            throw new CliException(ExitCode.ContextRequired, "FLX-BRIDGE-NOTFOUND-0004", "No compatible running Flax Editor instance matched the request.", new { project = projectPath, instance = selector });
+            throw new CliException(ExitCode.ContextRequired, "FLX-BRIDGE-NOTFOUND-0004", $"No compatible running Flax {kind ?? "Editor"} instance matched the request.", new { project = projectPath, instance = selector, kind });
         }
         throw new CliException(ExitCode.ContextRequired, "FLX-BRIDGE-AMBIGUOUS-0004", "More than one running Flax Editor instance matched the request. Select one with --instance.", new { candidates = matches.Select(View).ToArray() });
     }
 
     public async Task<EditorBridgeInvocation> InvokeAsync(EditorInstanceManifest instance, string action, string? name, JsonObject? arguments, bool confirm, CommandContext context)
     {
-        RequireCapability(instance, action);
+        RequireCapability(instance, action, name);
         if (!IsUnderRuntimeDirectory(instance.TokenPath))
             throw new CliException(ExitCode.Authorization, "FLX-BRIDGE-AUTH-0003", "The Editor bridge token path is outside the Flax CLI runtime directory.");
         string token;
@@ -274,16 +276,26 @@ internal sealed class EditorBridgeClient(AppPaths paths)
         return false;
     }
 
-    private static void RequireCapability(EditorInstanceManifest instance, string action)
+    private static void RequireCapability(EditorInstanceManifest instance, string action, string? name)
     {
         var capability = action switch
         {
-            "commands.list" or "commands.info" or "command.invoke" => "commands",
+            "commands.list" or "commands.info" => "commands",
+            "command.invoke" when name != null && (name.StartsWith("visject.", StringComparison.OrdinalIgnoreCase) || name.StartsWith("material.graph.", StringComparison.OrdinalIgnoreCase) || name.StartsWith("animation.graph.", StringComparison.OrdinalIgnoreCase)) => "visject",
+            "command.invoke" when name != null && name.StartsWith("dev.eval-csharp", StringComparison.OrdinalIgnoreCase) => "evalCSharp",
+            "command.invoke" => "commands",
             "editor.play" or "editor.pause" or "editor.resume" or "editor.stop" or "editor.step" => "playMode",
             "editor.focus" => "focus",
             "editor.saveAll" => "saveAll",
+            "editor.close" => "close",
             "editor.recompile" => "recompile",
-            "console" => "console",
+            "console" or "console.clear" => "console",
+            "performance" => "performance",
+            "selection.get" or "selection.set" or "selection.clear" => "selection",
+            "capture.viewport" or "capture.game" => "capture",
+            "player.status" or "player.pause" or "player.resume" or "player.step" or "player.quit" => "player",
+            "runtime.input.key" or "runtime.input.pointer" or "runtime.input.gamepad" or "runtime.input.action" or "runtime.input.reset" => "runtimeInput",
+            "eval-csharp" or "dev.eval-csharp" => "evalCSharp",
             _ => null,
         };
         if (capability != null && !instance.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase))

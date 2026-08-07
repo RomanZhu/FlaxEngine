@@ -148,7 +148,7 @@ public:
     /// Called when mouse cursor gets moved by the application. Invalidates the previous cached mouse position to prevent mouse jitter when locking the cursor programmatically.
     /// </summary>
     /// <param name="newPosition">The new mouse position.</param>
-    void OnMouseMoved(const Float2& newPosition);
+    API_FUNCTION() void OnMouseMoved(const Float2& newPosition);
 
     /// <summary>
     /// Called when mouse button goes down.
@@ -156,7 +156,7 @@ public:
     /// <param name="position">The mouse position.</param>
     /// <param name="button">The button.</param>
     /// <param name="target">The target window to receive this event, otherwise input system will pick the window automatically.</param>
-    void OnMouseDown(const Float2& position, const MouseButton button, Window* target = nullptr);
+    API_FUNCTION() void OnMouseDown(const Float2& position, const MouseButton button, Window* target = nullptr);
 
     /// <summary>
     /// Called when mouse button goes up.
@@ -164,7 +164,7 @@ public:
     /// <param name="position">The mouse position.</param>
     /// <param name="button">The button.</param>
     /// <param name="target">The target window to receive this event, otherwise input system will pick the window automatically.</param>
-    void OnMouseUp(const Float2& position, const MouseButton button, Window* target = nullptr);
+    API_FUNCTION() void OnMouseUp(const Float2& position, const MouseButton button, Window* target = nullptr);
 
     /// <summary>
     /// Called when mouse double clicks.
@@ -179,7 +179,7 @@ public:
     /// </summary>
     /// <param name="position">The mouse position.</param>
     /// <param name="target">The target window to receive this event, otherwise input system will pick the window automatically.</param>
-    void OnMouseMove(const Float2& position, Window* target = nullptr);
+    API_FUNCTION() void OnMouseMove(const Float2& position, Window* target = nullptr);
 
     /// <summary>
     /// Called when mouse moves in relative mode.
@@ -200,7 +200,7 @@ public:
     /// <param name="position">The mouse position.</param>
     /// <param name="delta">The normalized delta (range [-1;1]).</param>
     /// <param name="target">The target window to receive this event, otherwise input system will pick the window automatically.</param>
-    void OnMouseWheel(const Float2& position, float delta, Window* target = nullptr);
+    API_FUNCTION() void OnMouseWheel(const Float2& position, float delta, Window* target = nullptr);
 
 public:
     // [InputDevice]

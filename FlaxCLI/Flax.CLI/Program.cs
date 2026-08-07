@@ -2,6 +2,7 @@
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Flax.CLI.Adapters;
 using Flax.CLI.Commands;
 using Flax.CLI.Core;
@@ -37,7 +38,7 @@ try
     var engines = new EngineRegistry(paths);
     var projects = new ProjectRegistry(paths);
     var resolver = new ContextResolver(engines, config);
-    var dispatcher = new CommandDispatcher(paths, engines, projects, config, resolver, new FlaxBuildAdapter(processes), new EditorAdapter(processes), new EditorBridgeClient(paths));
+    var dispatcher = new CommandDispatcher(paths, engines, projects, config, resolver, new FlaxBuildAdapter(processes), new TestAdapter(processes), new EditorAdapter(processes), new EditorBridgeClient(paths));
     result = await dispatcher.ExecuteAsync(new CommandContext { Options = options, CancellationToken = cancellation.Token, Stopwatch = stopwatch });
 }
 catch (OperationCanceledException)
@@ -68,7 +69,13 @@ if (options.Trace && appPaths != null)
         result.Warnings.Add(new CliMessage("FLX-TRACE-W001", "The diagnostic trace could not be written.", new { exception = ex.Message }));
     }
 }
-new OutputWriter(Console.Out, Console.Error).Write(commandName, result, options, stopwatch.Elapsed, requestId);
+// MCP owns stdout for the lifetime of its JSON-RPC session. Do not append the
+// normal CLI envelope after stdin closes, or MCP clients would see a spurious
+// non-JSON-RPC message.
+if (!string.Equals(commandName, "mcp", StringComparison.OrdinalIgnoreCase))
+    new OutputWriter(Console.Out, Console.Error).Write(commandName, result, options, stopwatch.Elapsed, requestId);
+else if (result.ExitCode != ExitCode.Success)
+    Console.Error.WriteLine(JsonSerializer.Serialize(result, JsonSupport.Options));
 return (int)result.ExitCode;
 
 static void ApplyDefaults(GlobalOptions options, ConfigStore config)

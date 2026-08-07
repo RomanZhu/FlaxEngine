@@ -7,6 +7,7 @@ internal static class CommandLine
     public static GlobalOptions Parse(string[] args)
     {
         var result = new GlobalOptions();
+        result.OriginalArgs.AddRange(args);
         for (var index = 0; index < args.Length; index++)
         {
             var token = args[index];

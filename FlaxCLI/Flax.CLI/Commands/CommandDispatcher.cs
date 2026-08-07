@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -18,9 +19,13 @@ internal sealed class CommandDispatcher(
     ConfigStore config,
     ContextResolver resolver,
     FlaxBuildAdapter buildAdapter,
+    TestAdapter testAdapter,
     EditorAdapter editorAdapter,
     EditorBridgeClient bridgeClient)
 {
+    private readonly JobStore _jobs = new(paths);
+    private readonly SignedFeedService _feeds = new();
+
     public async Task<CliResult> ExecuteAsync(CommandContext context)
     {
         if (context.Options.Version)
@@ -42,7 +47,7 @@ internal sealed class CommandDispatcher(
             "help" => CliResult.Ok(Help(args.Positional())),
             "engines" => Engines(args),
             "engine" => Engine(args, context),
-            "projects" => Projects(args),
+            "projects" => Projects(args, context),
             "open" => Open(args, context, false),
             "play" => Open(args, context, true),
             "generate" => await Generate(args, context),
@@ -52,17 +57,29 @@ internal sealed class CommandDispatcher(
             "assets" or "asset" => await Assets(args, context),
             "authoring-root" => AuthoringRoot(args, context),
             "doctor" => Doctor(args, context),
+            "diagnose" => Diagnose(args, context),
             "logs" => Logs(args, context),
             "env" => EnvironmentInfo(args, context),
             "config" => Config(args, context),
             "status" => Status(args, context),
             "editor" => await Editor(args, context),
             "console" => await ConsoleLogs(args, context),
+            "performance" => await Performance(args, context),
+            "selection" => await Selection(args, context),
+            "capture" => await Capture(args, context),
+            "playtest" => await Playtest(args, context),
+            "mcp" => await Mcp(args, context),
             "commands" => await Commands(args, context),
             "command" => await Command(args, context),
-            "scenes" or "actors" or "prefabs" => await Authoring(command, args, context),
-            "install" or "uninstall" or "releases" or "platforms" or "templates" or "new" or "upgrade" => Deferred(command),
-            "test" => CliResult.Fail(ExitCode.ContextRequired, "FLX-TEST-0004", "No project test adapter is registered."),
+            "jobs" => await Jobs(args, context),
+            "feeds" => Feeds(args, context),
+            "player" => await Player(args, context),
+            "runtime" => await Runtime(args, context),
+            "scenes" or "actors" or "prefabs" or "settings" or "bake" or "dev" or "visject" => await Authoring(command, args, context),
+            "templates" => Templates(args),
+            "new" => CreateProject(args, context),
+            "test" => await Tests(args, context),
+            "install" or "uninstall" or "releases" or "platforms" or "upgrade" => Deferred(command),
             "completion" => Completion(args),
             _ => throw CommandLine.Usage($"Unknown command '{command}'. Run 'flax help' for the command list."),
         };
@@ -133,11 +150,13 @@ internal sealed class CommandDispatcher(
         }
     }
 
-    private CliResult Projects(CommandArguments args)
+    private CliResult Projects(CommandArguments args, CommandContext context)
     {
         var subcommand = args.Positional()?.ToLowerInvariant() ?? "list";
         switch (subcommand)
         {
+        case "create":
+            return CreateProject(args, context);
         case "list":
             args.Complete();
             return CliResult.Ok(projects.List().Select(x => ProjectViewSafe(x)).ToArray());
@@ -164,6 +183,78 @@ internal sealed class CommandDispatcher(
             return CliResult.Ok(new { project = sizeProject.Root, bytes });
         default:
             throw CommandLine.Usage($"Unknown projects subcommand '{subcommand}'.");
+        }
+    }
+
+    private CliResult CreateProject(CommandArguments args, CommandContext context)
+    {
+        var pathOption = args.Option("--path");
+        var nameOption = args.Option("--name");
+        var template = args.Option("--template") ?? "empty";
+        var minVersion = args.Option("--min-engine-version");
+        var input = pathOption ?? args.Positional() ?? throw CommandLine.Usage("projects create requires a project path.");
+        args.Complete();
+        if (!template.Equals("empty", StringComparison.OrdinalIgnoreCase))
+            throw new CliException(ExitCode.ContextRequired, "FLX-TEMPLATE-0004", $"Template '{template}' is not installed locally. Signed template feeds remain deferred.");
+
+        var root = Path.GetFullPath(input);
+        if (File.Exists(root))
+            throw new CliException(ExitCode.ContextRequired, "FLX-PROJECT-0004", $"Project path '{root}' is a file.");
+        if (Directory.Exists(root))
+        {
+            if (Directory.EnumerateFileSystemEntries(root).Any())
+                throw new CliException(ExitCode.ContextRequired, "FLX-PROJECT-0004", $"Project directory '{root}' is not empty.");
+        }
+        else
+        {
+            Directory.CreateDirectory(root);
+        }
+
+        var name = string.IsNullOrWhiteSpace(nameOption) ? new DirectoryInfo(root).Name : nameOption.Trim();
+        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            throw new CliException(ExitCode.Usage, "FLX-CLI-0002", $"Project name '{name}' contains invalid file-name characters.");
+        if (!SemanticVersion.TryParse(minVersion, out var parsedVersion))
+            parsedVersion = new SemanticVersion(1, 0, 0);
+        var projectFile = Path.Combine(root, name + ".flaxproj");
+        var projectJson = new JsonObject
+        {
+            ["Name"] = name,
+            ["Version"] = new JsonObject { ["Major"] = 1, ["Minor"] = 0, ["Revision"] = 0, ["Build"] = 0 },
+            ["Company"] = string.Empty,
+            ["Copyright"] = string.Empty,
+            ["References"] = new JsonArray(new JsonObject { ["Name"] = "$(EnginePath)/Flax.flaxproj" }),
+            ["MinEngineVersion"] = parsedVersion.ToString(),
+        };
+        File.WriteAllText(projectFile, projectJson.ToJsonString(new JsonSerializerOptions(JsonSupport.Options) { WriteIndented = true }) + Environment.NewLine);
+        Directory.CreateDirectory(Path.Combine(root, "Content"));
+        Directory.CreateDirectory(Path.Combine(root, "Source"));
+        Directory.CreateDirectory(Path.Combine(root, ".flax"));
+        var project = ProjectContext.Find(projectFile);
+        projects.Add(project.Root);
+        return CliResult.Ok(new { created = true, template = "empty", project = ProjectView(project) });
+    }
+
+    private static CliResult Templates(CommandArguments args)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "list";
+        switch (action)
+        {
+        case "list":
+            args.Complete();
+            return CliResult.Ok(new
+            {
+                source = "local",
+                feedBacked = false,
+                templates = new[] { new { id = "empty", name = "Empty Flax project", installed = true, source = "flax-cli" } },
+            });
+        case "info":
+            var id = args.Positional() ?? throw CommandLine.Usage("templates info requires a template ID.");
+            args.Complete();
+            if (!id.Equals("empty", StringComparison.OrdinalIgnoreCase))
+                throw new CliException(ExitCode.ContextRequired, "FLX-TEMPLATE-0004", $"Template '{id}' is not installed locally.");
+            return CliResult.Ok(new { id = "empty", name = "Empty Flax project", supports = new[] { "windows", "linux", "mac" }, feedBacked = false });
+        default:
+            throw CommandLine.Usage($"Unknown templates subcommand '{action}'.");
         }
     }
 
@@ -216,6 +307,11 @@ internal sealed class CommandDispatcher(
 
     private async Task<CliResult> Compile(CommandArguments args, CommandContext context, bool clean)
     {
+        if (args.Flag("--detach"))
+        {
+            var detachedProject = TryFindProject(context.Options.Project);
+            return CliResult.Ok(new { operation = clean ? "clean" : "compile", detached = true, job = _jobs.Start(detachedProject, context.Options.OriginalArgs, detachedProject?.Root ?? Environment.CurrentDirectory) });
+        }
         var targets = args.Options("--target");
         var configuration = args.Option("--configuration");
         var platform = args.Option("--platform");
@@ -230,6 +326,11 @@ internal sealed class CommandDispatcher(
 
     private async Task<CliResult> Build(CommandArguments args, CommandContext context)
     {
+        if (args.Flag("--detach"))
+        {
+            var detachedProject = TryFindProject(context.Options.Project);
+            return CliResult.Ok(new { operation = "build", detached = true, job = _jobs.Start(detachedProject, context.Options.OriginalArgs, detachedProject?.Root ?? Environment.CurrentDirectory) });
+        }
         var preset = args.Option("--preset") ?? "Development";
         var target = args.Option("--target") ?? throw CommandLine.Usage("build requires --target <platform>.");
         var output = args.Option("--output");
@@ -382,6 +483,11 @@ internal sealed class CommandDispatcher(
 
     private async Task<CliResult> Command(CommandArguments args, CommandContext context)
     {
+        if (args.Flag("--detach"))
+        {
+            var project = TryFindProject(context.Options.Project);
+            return CliResult.Ok(new { operation = "command", detached = true, job = _jobs.Start(project, context.Options.OriginalArgs, project?.Root ?? Environment.CurrentDirectory) });
+        }
         var name = args.Positional() ?? throw CommandLine.Usage("command requires a command name.");
         var rawArguments = args.Option("--arguments");
         var inputPath = args.Option("--input");
@@ -415,10 +521,37 @@ internal sealed class CommandDispatcher(
     private async Task<CliResult> Authoring(string group, CommandArguments args, CommandContext context)
     {
         var action = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"{group} requires a subcommand.");
-        if ((group == "actors" && action == "component") || (group == "scenes" && action == "build-list"))
+        if ((group == "actors" && action == "component") || (group == "scenes" && (action == "build-list" || action == "active")))
         {
             var nested = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"{group} {action} requires a subcommand.");
             action += "." + nested;
+        }
+        else if (group == "bake")
+        {
+            if (action == "status")
+            {
+                var statusArgs = new List<string> { AuthoringCommandName(group, action) };
+                statusArgs.AddRange(args.TakeRemaining());
+                return await Command(new CommandArguments(statusArgs), context);
+            }
+            var nested = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage("bake requires an operation group.");
+            action += "." + nested;
+            if (nested is "lighting" or "navmesh" or "probes" or "csg" or "scenes" or "sdf")
+            {
+                var operation = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"bake {nested} requires an operation.");
+                action += "." + operation;
+            }
+        }
+        else if (group == "visject")
+        {
+            // `groups`, `asset`, and `node` have a second verb. `validate`,
+            // `connect`, and `disconnect` are complete command names and must
+            // leave their first option (for example --asset) untouched.
+            if (action is "groups" or "asset" or "node")
+            {
+                var nested = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"visject {action} requires an operation.");
+                action += "." + nested;
+            }
         }
         var commandArgs = new List<string> { AuthoringCommandName(group, action) };
         commandArgs.AddRange(args.TakeRemaining());
@@ -436,7 +569,7 @@ internal sealed class CommandDispatcher(
         var projectPath = ResolveOptionalProject(context.Options.Project);
         if (!oneShot)
         {
-            var instance = bridgeClient.Select(projectPath, instanceSelector, liveOnly || instanceSelector != null);
+            var instance = bridgeClient.Select(projectPath, instanceSelector, liveOnly || instanceSelector != null, kind: "editor");
             if (instance != null)
             {
                 var action = options.Action switch
@@ -476,6 +609,15 @@ internal sealed class CommandDispatcher(
     {
         var action = args.Positional()?.ToLowerInvariant() ?? "status";
         var instanceSelector = args.Option("--instance");
+        JsonObject? actionArguments = null;
+        if (action is "close" or "exit")
+        {
+            var save = args.Flag("--save");
+            var discard = args.Flag("--discard");
+            if (save == discard)
+                throw CommandLine.Usage("editor close requires exactly one of --save or --discard.");
+            actionArguments = new JsonObject { ["save"] = save };
+        }
         args.Complete();
         if (context.Options.PassThrough.Count != 0)
             throw CommandLine.Usage("editor commands do not accept arguments after '--'.");
@@ -490,10 +632,11 @@ internal sealed class CommandDispatcher(
             "focus" => "editor.focus",
             "save-all" or "save" => "editor.saveAll",
             "recompile" => "editor.recompile",
+            "close" or "exit" => "editor.close",
             _ => throw CommandLine.Usage($"Unknown editor subcommand '{action}'."),
         };
-        var instance = bridgeClient.Select(ResolveOptionalProject(context.Options.Project), instanceSelector, required: true)!;
-        return BridgeResult(await bridgeClient.InvokeAsync(instance, bridgeAction, null, null, false, context), bridgeAction);
+        var instance = bridgeClient.Select(ResolveOptionalProject(context.Options.Project), instanceSelector, required: true, kind: "editor")!;
+        return BridgeResult(await bridgeClient.InvokeAsync(instance, bridgeAction, null, actionArguments, false, context), bridgeAction);
     }
 
     private async Task<CliResult> ConsoleLogs(CommandArguments args, CommandContext context)
@@ -502,9 +645,14 @@ internal sealed class CommandDispatcher(
         var cursorText = args.Option("--cursor");
         var limitText = args.Option("--limit");
         var level = args.Option("--level");
+        var action = args.Positional()?.ToLowerInvariant() ?? "read";
         args.Complete();
         if (context.Options.PassThrough.Count != 0)
             throw CommandLine.Usage("console does not accept arguments after '--'.");
+        if (action is not ("read" or "clear"))
+            throw CommandLine.Usage($"Unknown console subcommand '{action}'.");
+        if (action == "clear" && (cursorText != null || limitText != null || level != null))
+            throw CommandLine.Usage("console clear does not accept --cursor, --limit, or --level.");
         if (cursorText != null && (!long.TryParse(cursorText, out var cursor) || cursor < 0))
             throw CommandLine.Usage("console --cursor must be a non-negative integer.");
         if (limitText != null && (!int.TryParse(limitText, out var limit) || limit < 1 || limit > 1000))
@@ -516,8 +664,339 @@ internal sealed class CommandDispatcher(
             arguments["limit"] = int.Parse(limitText);
         if (level != null)
             arguments["level"] = level;
+        var instance = bridgeClient.Select(ResolveOptionalProject(context.Options.Project), instanceSelector, required: true, kind: "editor")!;
+        var bridgeAction = action == "clear" ? "console.clear" : "console";
+        return BridgeResult(await bridgeClient.InvokeAsync(instance, bridgeAction, null, arguments, false, context), bridgeAction);
+    }
+
+    private async Task<CliResult> Performance(CommandArguments args, CommandContext context)
+    {
+        var instanceSelector = args.Option("--instance");
+        args.Complete();
+        if (context.Options.PassThrough.Count != 0)
+            throw CommandLine.Usage("performance does not accept arguments after '--'.");
         var instance = bridgeClient.Select(ResolveOptionalProject(context.Options.Project), instanceSelector, required: true)!;
-        return BridgeResult(await bridgeClient.InvokeAsync(instance, "console", null, arguments, false, context), "console");
+        return BridgeResult(await bridgeClient.InvokeAsync(instance, "performance", null, null, false, context), "performance");
+    }
+
+    private async Task<CliResult> Selection(CommandArguments args, CommandContext context)
+    {
+        var instanceSelector = args.Option("--instance");
+        var actorIds = args.Options("--actor");
+        var additive = args.Flag("--additive");
+        var action = args.Positional()?.ToLowerInvariant() ?? "get";
+        args.Complete();
+        if (context.Options.PassThrough.Count != 0)
+            throw CommandLine.Usage("selection does not accept arguments after '--'.");
+        if (action is not ("get" or "set" or "clear"))
+            throw CommandLine.Usage($"Unknown selection subcommand '{action}'.");
+        if (action == "set" && actorIds.Count == 0)
+            throw CommandLine.Usage("selection set requires at least one --actor <id>.");
+        if (action != "set" && (actorIds.Count != 0 || additive))
+            throw CommandLine.Usage("--actor and --additive are only valid with selection set.");
+        foreach (var actorId in actorIds)
+        {
+            if (!Guid.TryParse(actorId, out _))
+                throw CommandLine.Usage($"selection actor '{actorId}' is not a GUID.");
+        }
+        var arguments = new JsonObject();
+        if (action == "set")
+        {
+            arguments["actors"] = new JsonArray(actorIds.Select(x => JsonValue.Create(x)).ToArray());
+            arguments["additive"] = additive;
+        }
+        var bridgeAction = $"selection.{action}";
+        var instance = bridgeClient.Select(ResolveOptionalProject(context.Options.Project), instanceSelector, required: true, kind: "editor")!;
+        return BridgeResult(await bridgeClient.InvokeAsync(instance, bridgeAction, null, arguments, false, context), bridgeAction);
+    }
+
+    private async Task<CliResult> Capture(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "viewport";
+        var output = args.Option("--to") ?? throw CommandLine.Usage("capture requires --to <project-relative-or-absolute-path>.");
+        var instanceSelector = args.Option("--instance");
+        args.Complete();
+        if (context.Options.PassThrough.Count != 0)
+            throw CommandLine.Usage("capture does not accept arguments after '--'.");
+        if (action is not ("viewport" or "game"))
+            throw CommandLine.Usage("capture supports viewport or game.");
+        var project = FindProject(null, context.Options.Project);
+        var path = Path.GetFullPath(output, project.Root);
+        var root = project.Root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw CommandLine.Usage("Capture output must remain under the selected project root.");
+        if (string.IsNullOrWhiteSpace(Path.GetExtension(path)))
+            path += ".png";
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var instance = bridgeClient.Select(project.Root, instanceSelector, required: true, kind: "editor")!;
+        var bridgeAction = $"capture.{action}";
+        var arguments = new JsonObject { ["path"] = path };
+        return BridgeResult(await bridgeClient.InvokeAsync(instance, bridgeAction, null, arguments, false, context), bridgeAction);
+    }
+
+    private async Task<CliResult> Player(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "status";
+        var instanceSelector = args.Option("--instance");
+        // The Editor bridge owns the embedded Player while play mode is active.
+        // A standalone development Player publishes its own compatible manifest.
+        var instance = bridgeClient.Select(ResolveOptionalProject(context.Options.Project), instanceSelector, true);
+        string bridgeAction;
+        var arguments = new JsonObject();
+        switch (action)
+        {
+        case "status": bridgeAction = "player.status"; break;
+        case "pause": bridgeAction = "player.pause"; break;
+        case "resume": bridgeAction = "player.resume"; break;
+        case "step": bridgeAction = "player.step"; break;
+        case "quit" or "close": bridgeAction = "player.quit"; break;
+        case "input":
+            var inputKind = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage("player input requires key, pointer, gamepad, action, or reset.");
+            bridgeAction = inputKind switch { "key" => "runtime.input.key", "pointer" or "mouse" => "runtime.input.pointer", "gamepad" => "runtime.input.gamepad", "action" => "runtime.input.action", "reset" => "runtime.input.reset", _ => throw CommandLine.Usage($"Unknown player input kind '{inputKind}'.") };
+            // Reuse the typed option parser so both `--name=value` and
+            // `--name value` forms preserve booleans, numbers, and arrays.
+            arguments = ParseCommandArguments(null, args.TakeRemaining());
+            break;
+        default: throw CommandLine.Usage($"Unknown player subcommand '{action}'.");
+        }
+        args.Complete();
+        return BridgeResult(await bridgeClient.InvokeAsync(instance!, bridgeAction, null, arguments, action is "quit" or "close", context), bridgeAction);
+    }
+
+    private Task<CliResult> Runtime(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage("runtime currently supports the input subcommand.");
+        if (action != "input")
+            throw CommandLine.Usage("runtime currently supports the input subcommand.");
+        var forwarded = new List<string> { "input" };
+        forwarded.AddRange(args.TakeRemaining());
+        return Player(new CommandArguments(forwarded), context);
+    }
+
+    private async Task<CliResult> Jobs(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "list";
+        if (action == "worker")
+        {
+            var recordPath = args.Option("--record") ?? throw CommandLine.Usage("jobs worker requires --record <path>.");
+            args.Complete();
+            var exitCode = await _jobs.RunWorkerAsync(Path.GetFullPath(recordPath), context.Options.PassThrough, context.CancellationToken).ConfigureAwait(false);
+            return CliResult.Ok(new { worker = true, exitCode });
+        }
+        ProjectContext? project = null;
+        try { project = FindProject(null, context.Options.Project); } catch (CliException) when (context.Options.Project == null) { }
+        switch (action)
+        {
+        case "list": args.Complete(); return CliResult.Ok(_jobs.List(project));
+        case "info" or "status":
+            var infoId = args.Positional() ?? throw CommandLine.Usage($"jobs {action} requires a job id.");
+            args.Complete(); return CliResult.Ok(_jobs.Require(infoId, project));
+        case "cancel":
+            var cancelId = args.Positional() ?? throw CommandLine.Usage("jobs cancel requires a job id.");
+            var yes = args.Flag("--yes"); args.Complete();
+            if (!yes) throw new CliException(ExitCode.Authorization, "FLX-JOB-CONFIRM-0004", "Cancelling a detached job requires --yes.");
+            return CliResult.Ok(_jobs.Cancel(_jobs.Require(cancelId, project)));
+        case "wait":
+            var waitId = args.Positional() ?? throw CommandLine.Usage("jobs wait requires a job id.");
+            var timeoutText = args.Option("--timeout-seconds"); args.Complete();
+            var timeout = double.TryParse(timeoutText, out var parsed) && parsed > 0 ? TimeSpan.FromSeconds(Math.Min(parsed, 86400)) : context.Options.Timeout ?? TimeSpan.FromMinutes(30);
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                var record = _jobs.Require(waitId, project);
+                if (record.State is "succeeded" or "failed" or "cancelled") return CliResult.Ok(record);
+                Thread.Sleep(100);
+            }
+            throw new CliException(ExitCode.OperationFailed, "FLX-JOB-TIMEOUT-0006", $"Detached job '{waitId}' did not finish before the timeout.");
+        case "prune":
+            var ageText = args.Option("--older-than-hours"); args.Complete();
+            var hours = double.TryParse(ageText, out var age) && age >= 0 ? age : 168;
+            _jobs.Prune(project, TimeSpan.FromHours(hours)); return CliResult.Ok(new { pruned = true, olderThanHours = hours });
+        default: throw CommandLine.Usage($"Unknown jobs subcommand '{action}'.");
+        }
+    }
+
+    private CliResult Feeds(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "verify";
+        var manifestPath = args.Option("--manifest") ?? throw CommandLine.Usage("feeds requires --manifest <file>.");
+        var manifest = _feeds.ReadManifest(Path.GetFullPath(manifestPath));
+        var signature = args.Option("--signature") ?? throw CommandLine.Usage($"feeds {action} requires --signature <file>.");
+        var publicKey = args.Option("--public-key") ?? throw CommandLine.Usage($"feeds {action} requires --public-key <file>.");
+        var verification = _feeds.Verify(manifest, Path.GetFullPath(signature), Path.GetFullPath(publicKey));
+        if (!verification.Valid) throw new CliException(ExitCode.Authorization, "FLX-FEED-SIGNATURE-0003", "The signed feed manifest could not be verified.", verification);
+        switch (action)
+        {
+        case "verify": args.Complete(); return CliResult.Ok(new { verified = true, manifest = Path.GetFullPath(manifestPath), verification });
+        case "list": args.Complete(); return CliResult.Ok(new { verified = true, entries = manifest["entries"] ?? new JsonArray(), verification });
+        case "install":
+            var entry = args.Option("--id") ?? throw CommandLine.Usage("feeds install requires --id <entry>.");
+            var destination = args.Option("--to") ?? throw CommandLine.Usage("feeds install requires --to <directory>.");
+            var confirm = args.Flag("--yes"); args.Complete();
+            _feeds.Install(manifest, entry, Path.GetFullPath(destination), confirm);
+            return CliResult.Ok(new { installed = true, entry, destination = Path.GetFullPath(destination), verification });
+        default: throw CommandLine.Usage($"Unknown feeds subcommand '{action}'.");
+        }
+    }
+
+    private async Task<CliResult> Playtest(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "status";
+        var instanceSelector = args.Option("--instance");
+        var projectPath = ResolveOptionalProject(context.Options.Project);
+        var instance = bridgeClient.Select(projectPath, instanceSelector, required: true, kind: "editor")!;
+
+        if (action == "capture")
+        {
+            var source = args.Positional()?.ToLowerInvariant() ?? "game";
+            var output = args.Option("--to") ?? throw CommandLine.Usage("playtest capture requires --to <project-relative-or-absolute-path>.");
+            args.Complete();
+            if (context.Options.PassThrough.Count != 0)
+                throw CommandLine.Usage("playtest capture does not accept arguments after '--'.");
+            if (source is not ("viewport" or "game"))
+                throw CommandLine.Usage("playtest capture supports viewport or game.");
+            var project = FindProject(null, context.Options.Project);
+            var path = Path.GetFullPath(output, project.Root);
+            var root = project.Root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw CommandLine.Usage("Capture output must remain under the selected project root.");
+            if (string.IsNullOrWhiteSpace(Path.GetExtension(path)))
+                path += ".png";
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            return BridgeResult(await bridgeClient.InvokeAsync(instance, "capture." + source, null, new JsonObject { ["path"] = path }, false, context), "capture." + source);
+        }
+
+        if (action is "find" or "assert" or "wait")
+        {
+            var arguments = new JsonObject();
+            var actor = args.Option("--actor");
+            var name = args.Option("--name");
+            var type = args.Option("--type");
+            var active = args.Option("--active");
+            var limit = args.Option("--limit");
+            var timeoutSeconds = args.Option("--timeout-seconds");
+            var exists = args.Option("--exists");
+            if (actor != null)
+            {
+                if (!Guid.TryParse(actor, out _))
+                    throw CommandLine.Usage("playtest --actor must be a GUID.");
+                arguments["actor"] = actor;
+            }
+            if (name != null) arguments["name"] = name;
+            if (type != null) arguments["type"] = type;
+            if (active != null)
+            {
+                if (!bool.TryParse(active, out var activeValue))
+                    throw CommandLine.Usage("playtest --active must be true or false.");
+                arguments["active"] = activeValue;
+            }
+            if (limit != null)
+            {
+                if (!int.TryParse(limit, out var limitValue))
+                    throw CommandLine.Usage("playtest --limit must be an integer.");
+                arguments["limit"] = limitValue;
+            }
+            if (timeoutSeconds != null)
+            {
+                if (!double.TryParse(timeoutSeconds, out var timeoutValue))
+                    throw CommandLine.Usage("playtest --timeout-seconds must be a number.");
+                arguments["timeoutSeconds"] = timeoutValue;
+            }
+            if (exists != null)
+            {
+                if (!bool.TryParse(exists, out var existsValue))
+                    throw CommandLine.Usage("playtest --exists must be true or false.");
+                arguments["exists"] = existsValue;
+            }
+            args.Complete();
+            if (context.Options.PassThrough.Count != 0)
+                throw CommandLine.Usage("playtest observation commands do not accept arguments after '--'.");
+            return await ExecuteEditorCommand(new EditorCommandRequestOptions
+            {
+                Action = "invoke",
+                Name = "playtest." + action,
+                Arguments = arguments,
+            }, context, instanceSelector, liveOnly: true, oneShot: false);
+        }
+
+        if (action is not ("status" or "begin" or "start" or "pause" or "resume" or "step" or "end" or "stop"))
+            throw CommandLine.Usage("playtest supports status, begin, pause, resume, step, find, assert, wait, capture, and end.");
+
+        var scene = args.Option("--scene");
+        args.Complete();
+        if (context.Options.PassThrough.Count != 0)
+            throw CommandLine.Usage("playtest control commands do not accept arguments after '--'.");
+
+        if (action is "begin" or "start")
+        {
+            if (scene == null)
+            {
+                var current = await bridgeClient.InvokeAsync(instance, "editor.status", null, null, false, context);
+                if (current.Response.TryGetProperty("data", out var currentData) && currentData.TryGetProperty("loadedScenes", out var loaded) && loaded.GetInt32() == 0)
+                {
+                    var build = await bridgeClient.InvokeAsync(instance, "command.invoke", "scenes.build-list.list", new JsonObject(), false, context);
+                    var buildResult = BridgeResult(build, "scenes.build-list.list");
+                    if (buildResult.ExitCode != ExitCode.Success)
+                        return buildResult;
+                    if (buildResult.Data is JsonElement buildData && buildData.TryGetProperty("startupSceneId", out var startup) && startup.ValueKind == JsonValueKind.String && Guid.TryParse(startup.GetString(), out var startupId) && startupId != Guid.Empty)
+                        scene = startupId.ToString();
+                    else
+                        throw new CliException(ExitCode.ContextRequired, "FLX-PLAYTEST-SCENE-0004", "No scene is loaded and the project has no startup scene in its build list.");
+                }
+            }
+            if (scene != null)
+            {
+                var opened = await bridgeClient.InvokeAsync(instance, "command.invoke", "scenes.open", new JsonObject { ["scene"] = scene }, false, context);
+                var openedResult = BridgeResult(opened, "scenes.open");
+                if (openedResult.ExitCode != ExitCode.Success)
+                    return openedResult;
+            }
+            var started = await bridgeClient.InvokeAsync(instance, "editor.play", null, null, false, context);
+            return await AwaitPlayState(instance, started, expected: true, context);
+        }
+
+        if (action is "end" or "stop")
+        {
+            var stopped = await bridgeClient.InvokeAsync(instance, "editor.stop", null, null, false, context);
+            return await AwaitPlayState(instance, stopped, expected: false, context);
+        }
+
+        var bridgeAction = action switch
+        {
+            "status" => "editor.status",
+            "pause" => "editor.pause",
+            "resume" => "editor.resume",
+            "step" => "editor.step",
+            _ => throw new InvalidOperationException(),
+        };
+        return BridgeResult(await bridgeClient.InvokeAsync(instance, bridgeAction, null, null, false, context), bridgeAction);
+    }
+
+    private async Task<CliResult> Mcp(CommandArguments args, CommandContext context)
+    {
+        var instance = args.Option("--instance");
+        args.Complete();
+        if (context.Options.PassThrough.Count != 0)
+            throw CommandLine.Usage("mcp does not accept arguments after '--'.");
+        return await new McpServer(this, context, instance).RunAsync();
+    }
+
+    private async Task<CliResult> AwaitPlayState(EditorInstanceManifest instance, EditorBridgeInvocation requested, bool expected, CommandContext context)
+    {
+        var initial = BridgeResult(requested, expected ? "editor.play" : "editor.stop");
+        if (initial.ExitCode != ExitCode.Success)
+            return initial;
+        var timeout = context.Options.Timeout ?? TimeSpan.FromSeconds(10);
+        var started = Stopwatch.StartNew();
+        while (started.Elapsed < timeout)
+        {
+            var status = await bridgeClient.InvokeAsync(instance, "editor.status", null, null, false, context);
+            if (status.Response.TryGetProperty("data", out var data) && data.TryGetProperty("playMode", out var playMode) &&
+                (playMode.ValueKind == JsonValueKind.True || playMode.ValueKind == JsonValueKind.False) && playMode.GetBoolean() == expected)
+                return BridgeResult(status, "editor.status");
+            await Task.Delay(50, context.CancellationToken);
+        }
+        return initial;
     }
 
     private static CliResult BridgeResult(EditorBridgeInvocation invocation, string action)
@@ -705,6 +1184,101 @@ internal sealed class CommandDispatcher(
         return CliResult.Ok(files.Distinct(ProjectRegistry.PathComparer).Select(x => new { path = x, size = new FileInfo(x).Length, modified = File.GetLastWriteTimeUtc(x) }).ToArray());
     }
 
+    private CliResult Diagnose(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "status";
+        if (action == "status")
+        {
+            args.Complete();
+            return Doctor(new CommandArguments(Array.Empty<string>()), context);
+        }
+        if (action != "bundle")
+            throw CommandLine.Usage("diagnose supports status or bundle.");
+
+        var output = args.Option("--to") ?? throw CommandLine.Usage("diagnose bundle requires --to <project-relative-zip-path>.");
+        var project = FindProject(null, context.Options.Project);
+        args.Complete();
+        if (context.Options.PassThrough.Count != 0)
+            throw CommandLine.Usage("diagnose bundle does not accept arguments after '--'.");
+        var bundlePath = Path.GetFullPath(output, project.Root);
+        var root = project.Root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!bundlePath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw CommandLine.Usage("Diagnostic bundle output must remain under the selected project root.");
+        if (!string.Equals(Path.GetExtension(bundlePath), ".zip", StringComparison.OrdinalIgnoreCase))
+            bundlePath += ".zip";
+        if (File.Exists(bundlePath))
+            throw new CliException(ExitCode.ContextRequired, "FLX-DIAGNOSE-0004", $"Diagnostic bundle '{bundlePath}' already exists.");
+        Directory.CreateDirectory(Path.GetDirectoryName(bundlePath)!);
+
+        var logFiles = new List<string>();
+        foreach (var directory in new[] { Path.Combine(project.Root, "Logs"), Path.Combine(project.Root, "Cache"), paths.LauncherDirectory })
+        {
+            if (!Directory.Exists(directory))
+                continue;
+            logFiles.AddRange(Directory.EnumerateFiles(directory, "*.log", SearchOption.TopDirectoryOnly));
+        }
+        var manifest = new
+        {
+            schemaVersion = 1,
+            createdUtc = DateTime.UtcNow,
+            project = project.Root,
+            projectFile = project.ProjectFile,
+            engine = context.Options.Engine,
+            files = logFiles.Distinct(ProjectRegistry.PathComparer).Select(Path.GetFileName).Where(x => x != null).ToArray(),
+            redacted = true,
+        };
+        using (var archive = ZipFile.Open(bundlePath, ZipArchiveMode.Create))
+        {
+            var manifestEntry = archive.CreateEntry("manifest.json", CompressionLevel.Optimal);
+            using (var writer = new StreamWriter(manifestEntry.Open()))
+                writer.Write(JsonSerializer.Serialize(manifest, JsonSupport.Options));
+            foreach (var file in logFiles.Distinct(ProjectRegistry.PathComparer))
+            {
+                var entryName = "logs/" + Path.GetFileName(file);
+                var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+                using var writer = new StreamWriter(entry.Open());
+                writer.Write(RedactDiagnosticText(File.ReadAllText(file)));
+            }
+        }
+        return CliResult.Ok(new { path = bundlePath, files = logFiles.Count + 1, redacted = true });
+    }
+
+    private static string RedactDiagnosticText(string value)
+    {
+        var lines = value.Split(["\r\n", "\n"], StringSplitOptions.None);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var lower = lines[i].ToLowerInvariant();
+            if (lower.Contains("token") || lower.Contains("password") || lower.Contains("secret") || lower.Contains("apikey") || lower.Contains("api-key"))
+                lines[i] = "[REDACTED DIAGNOSTIC LINE]";
+        }
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private async Task<CliResult> Tests(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "list";
+        ProjectContext? project = null;
+        if (!string.IsNullOrWhiteSpace(context.Options.Project))
+            project = FindProject(null, context.Options.Project);
+        var engine = resolver.Resolve(project, context.Options.Engine);
+        switch (action)
+        {
+        case "list":
+            args.Complete();
+            return CliResult.Ok(new { engine = EngineView(engine), project = project?.Root, tests = testAdapter.List(engine, project) });
+        case "run":
+            var kind = args.Option("--kind") ?? args.Positional() ?? "native";
+            var path = args.Option("--path");
+            var filter = args.Option("--filter");
+            args.Complete();
+            var process = await testAdapter.RunAsync(engine, project, kind, path, filter, context.Options.PassThrough, context);
+            return ChildResult("test", engine, process, new { kind, path, filter, project = project?.Root });
+        default:
+            throw CommandLine.Usage($"Unknown test subcommand '{action}'.");
+        }
+    }
+
     private CliResult EnvironmentInfo(CommandArguments args, CommandContext context)
     {
         args.Complete();
@@ -781,8 +1355,8 @@ internal sealed class CommandDispatcher(
         args.Complete();
         return shell switch
         {
-            "powershell" or "pwsh" => CliResult.Ok("Register-ArgumentCompleter -Native -CommandName flax -ScriptBlock { param($wordToComplete) 'engines','engine','projects','open','play','generate','compile','build','assets','scenes','actors','prefabs','commands','command','editor','console','doctor','logs','env','config','status' | Where-Object { $_ -like \"$wordToComplete*\" } | ForEach-Object { $_ } }"),
-            "bash" => CliResult.Ok("complete -W 'engines engine projects open play generate compile build assets scenes actors prefabs commands command editor console doctor logs env config status' flax"),
+            "powershell" or "pwsh" => CliResult.Ok("Register-ArgumentCompleter -Native -CommandName flax -ScriptBlock { param($wordToComplete) 'engines','engine','projects','templates','new','open','play','generate','compile','build','assets','scenes','actors','prefabs','settings','bake','dev','visject','jobs','feeds','player','runtime','commands','command','editor','console','performance','selection','capture','playtest','mcp','test','doctor','diagnose','logs','env','config','status','completion' | Where-Object { $_ -like \"$wordToComplete*\" } | ForEach-Object { $_ } }"),
+            "bash" => CliResult.Ok("complete -W 'engines engine projects templates new open play generate compile build assets scenes actors prefabs settings bake dev visject jobs feeds player runtime commands command editor console performance selection capture playtest mcp test doctor diagnose logs env config status completion' flax"),
             _ => throw CommandLine.Usage($"Unsupported completion shell '{shell}'."),
         };
     }
@@ -843,6 +1417,12 @@ internal sealed class CommandDispatcher(
 
     private static ProjectContext FindProject(string? positional, string? global) => ProjectContext.Find(positional ?? global ?? Environment.GetEnvironmentVariable("FLAX_PROJECT"));
 
+    private static ProjectContext? TryFindProject(string? global)
+    {
+        try { return FindProject(null, global); }
+        catch (CliException) when (global == null) { return null; }
+    }
+
     private static string? ResolveOptionalProject(string? global)
     {
         try
@@ -869,17 +1449,34 @@ internal sealed class CommandDispatcher(
     {
         "engines" => "flax engines <list|add|remove|default|info> [arguments]",
         "engine" => "flax engine <pin|unpin> [selector] [--project path]",
-        "projects" => "flax projects <list|add|remove|info|size> [path]",
+        "projects" => "flax projects <list|add|create|remove|info|size> [path]",
+        "templates" => "flax templates <list|info> [template-id]",
+        "new" => "flax new <path> [--name <name>] [--template empty]",
         "generate" => "flax generate [project] [--ide rider|vscode|vs2022|vs2026] [--build-arg value]",
         "compile" => "flax compile [project] [--target name] [--configuration value] [--platform value] [--arch value]",
         "build" => "flax build [project] --preset name --target platform [--output path] [--define value] [--clean] [--run]",
         "assets" or "asset" => AssetsHelp,
         "authoring-root" => "flax authoring-root <get|set> [path] [--project path]",
         "scenes" or "actors" or "prefabs" => AuthoringHelp,
+        "settings" => SettingsHelp,
+        "bake" => BakeHelp,
+        "dev" => DevHelp,
         "commands" => "flax commands <list|info> [name] [--project path]",
         "command" => CommandHelp,
-        "editor" => "flax editor <status|play|pause|resume|stop|step|focus|save-all|recompile> [--project path] [--instance id|pid]",
-        "console" => "flax console [--project path] [--instance id|pid] [--cursor number] [--limit 1..1000] [--level value]",
+        "editor" => "flax editor <status|play|pause|resume|stop|step|focus|save-all|recompile|close> [--save|--discard] [--project path] [--instance id|pid]",
+        "console" => "flax console [read|clear] [--project path] [--instance id|pid] [--cursor number] [--limit 1..1000] [--level value]",
+        "performance" => "flax performance [--project path] [--instance id|pid]",
+        "selection" => "flax selection <get|set|clear> [--actor id ...] [--additive] [--project path] [--instance id|pid]",
+        "capture" => "flax capture <viewport|game> --to <project-relative-or-absolute-path> [--project path] [--instance id|pid]",
+        "playtest" => "flax playtest <status|begin|pause|resume|step|find|assert|wait|capture|end> [options] [--project path] [--instance id|pid]",
+        "player" => "flax player <status|pause|resume|step|quit|input> [--project path] [--instance id|pid]\nflax player input <key|pointer|reset> --name value [--state down|up|press]",
+        "runtime" => "flax runtime input <key|pointer|reset> --name value [--state down|up|press] [--project path] [--instance id|pid]",
+        "jobs" => "flax jobs <list|info|status|wait|cancel|prune> [job-id] [--project path] [--yes]",
+        "feeds" => "flax feeds <verify|list|install> --manifest path --signature path --public-key path [--id entry --to directory --yes]",
+        "visject" => "flax visject groups list | asset inspect --asset path [--kind material|animation] | validate | node add|remove|set | connect|disconnect",
+        "mcp" => "flax mcp [--project path] [--instance id|pid]",
+        "test" => "flax test <list|run> [native|managed|build] [--kind kind] [--path path] [--filter value]",
+        "diagnose" => "flax diagnose <status|bundle> [--to project-relative-zip-path] [--project path]",
         _ => HelpText,
     };
 
@@ -914,12 +1511,44 @@ Typed project commands prefer a matching running Editor and fall back to a one-s
 """;
 
     private const string AuthoringHelp = """
-flax scenes <list|create|open|save|hierarchy> [options]
+flax scenes <list|create|open|close|reload|save|dirty|hierarchy|active|build-list> [options]
 flax actors <find|get|create|create-batch|delete|rename|transform|parent|active|tag|layer> [options]
 flax actors component <add|remove|get|set> [options]
 flax prefabs <create|instantiate|variant|apply|revert|unpack|save> [options]
+flax settings <list|get|schema|diff|set> [options]
+flax bake <lighting|navmesh|probes|csg|scenes|sdf> <start|cancel|clear> [options]
 
 Use flax commands info <dotted-name> for each command's typed option schema.
+""";
+
+    private const string SettingsHelp = """
+flax settings list
+flax settings get --group <group from settings list>
+flax settings schema --group <group>
+flax settings diff --group <group> --values <json-object>
+flax settings set --group <group> --values <json-object> [--dry-run]
+""";
+
+    private const string BakeHelp = """
+flax bake status
+flax bake lighting start|cancel|clear
+flax bake navmesh start|clear
+flax bake probes start
+flax bake csg start
+flax bake scenes start|cancel
+flax bake sdf start
+""";
+
+    private const string DevHelp = """
+flax dev unlock-eval [--expires-seconds 120]
+flax dev eval --code <expression>
+flax dev eval-file --path <project-relative-file>
+flax dev unlock-csharp [--expires-seconds 60]
+flax dev eval-csharp --code <statements-or-expression> --token <unlock-token>
+flax dev eval-csharp-file --path <project-relative-file> --token <unlock-token>
+
+The expression evaluator is bounded and read-only. Arbitrary C# is an explicit,
+audited in-process development capability and is not a sandbox.
 """;
 
     private const string HelpText = """
@@ -930,16 +1559,28 @@ Usage: flax [global options] <command> [arguments] [options]
 Local engine commands:
   engines list|add|remove|default|info
   engine pin|unpin
-  projects list|add|remove|info|size
+  projects list|add|create|remove|info|size
+  templates list|info, new <path>
   open, play, generate, compile, clean, build
   assets list|types|info|create|mkdir|import|duplicate|move|rename|delete|reimport|export|get|set|save
   authoring-root get|set
-  scenes list|create|open|save|hierarchy
+  scenes list|create|open|close|reload|save|dirty|hierarchy|active|build-list
   actors find|get|create|create-batch|delete|rename|transform|parent|active|tag|layer|component
   prefabs create|instantiate|variant|apply|revert|unpack|save
+  settings list|get|schema|diff|set
+  bake status, lighting|navmesh|probes|csg|scenes|sdf start|cancel|clear
+  dev unlock-eval|eval|eval-file|unlock-csharp|eval-csharp|eval-csharp-file
+  visject groups|asset|validate|node|connect|disconnect
+  player status|pause|resume|step|quit|input
+  runtime input key|pointer|reset (alias for Player virtual input)
+  jobs list|info|status|wait|cancel|prune [--detach on long-running commands]
+  feeds verify|list|install (signed local manifests and archives)
   commands list|info, command <name>
-  editor status|play|pause|resume|stop|step|focus|save-all|recompile, console
-  doctor, logs, env, config, status, completion
+  editor status|play|pause|resume|stop|step|focus|save-all|recompile|close, console, performance, selection, capture
+  playtest status|begin|pause|resume|step|find|assert|wait|capture|end
+  mcp (stdio MCP server)
+  test list|run
+  doctor, diagnose status|bundle, logs, env, config, status, completion
 
 Global options:
   --project <path>       Select the project context

@@ -57,7 +57,7 @@ public:
     /// <summary>
     /// Clears the data.
     /// </summary>
-    void ClearData();
+    API_FUNCTION() void ClearData();
 
     /// <summary>
     /// Gets the navmesh runtime object that matches with properties.

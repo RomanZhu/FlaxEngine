@@ -117,8 +117,10 @@ public sealed class EditorBridgeClientTests
         Assert.That(File.ReadAllText(externalToken), Is.EqualTo("do-not-touch"));
     }
 
-    [Test]
-    public void InvocationRejectsAnUnadvertisedCapabilityBeforeConnecting()
+    [TestCase("console")]
+    [TestCase("performance")]
+    [TestCase("selection.get")]
+    public void InvocationRejectsAnUnadvertisedCapabilityBeforeConnecting(string action)
     {
         var manifest = new EditorInstanceManifest
         {
@@ -140,7 +142,7 @@ public sealed class EditorBridgeClientTests
             Stopwatch = Stopwatch.StartNew(),
         };
 
-        var error = Assert.ThrowsAsync<CliException>(() => new EditorBridgeClient(_paths).InvokeAsync(manifest, "console", null, null, false, context));
+        var error = Assert.ThrowsAsync<CliException>(() => new EditorBridgeClient(_paths).InvokeAsync(manifest, action, null, null, false, context));
 
         Assert.That(error!.Code, Is.EqualTo("FLX-BRIDGE-CAPABILITY-0004"));
     }

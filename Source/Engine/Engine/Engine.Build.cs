@@ -14,6 +14,14 @@ public class Engine : EngineModule
     {
         base.Setup(options);
 
+        if (!options.Target.IsEditor && options.Configuration != TargetConfiguration.Release)
+        {
+            // Local development Player bridge transport and manifest encoding.
+            options.ScriptingAPI.SystemReferences.Add("System.IO.Pipes");
+            options.ScriptingAPI.SystemReferences.Add("System.Diagnostics.Process");
+            options.ScriptingAPI.SystemReferences.Add("System.Text.Encoding.Extensions");
+        }
+
         options.PublicDependencies.Add("AI");
         options.PublicDependencies.Add("Animations");
         options.PublicDependencies.Add("Audio");

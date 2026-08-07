@@ -81,14 +81,14 @@ public:
     /// </summary>
     /// <param name="key">The keyboard key.</param>
     /// <param name="target">The target window to receive this event, otherwise input system will pick the window automatically.</param>
-    void OnKeyUp(KeyboardKeys key, Window* target = nullptr);
+    API_FUNCTION() void OnKeyUp(KeyboardKeys key, Window* target = nullptr);
 
     /// <summary>
     /// Called when key goes down.
     /// </summary>
     /// <param name="key">The keyboard key.</param>
     /// <param name="target">The target window to receive this event, otherwise input system will pick the window automatically.</param>
-    void OnKeyDown(KeyboardKeys key, Window* target = nullptr);
+    API_FUNCTION() void OnKeyDown(KeyboardKeys key, Window* target = nullptr);
 
 public:
     // [InputDevice]

@@ -67,4 +67,6 @@ internal sealed class GlobalOptions
     public TimeSpan GracefulShutdownTimeout { get; set; } = TimeSpan.FromSeconds(10);
     public List<string> CommandTokens { get; } = [];
     public List<string> PassThrough { get; } = [];
+    /// <summary>Original process arguments. Used by durable detached jobs to reproduce a request exactly.</summary>
+    public List<string> OriginalArgs { get; } = [];
 }
