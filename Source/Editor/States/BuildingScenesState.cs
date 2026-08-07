@@ -341,7 +341,6 @@ namespace FlaxEditor.States
         /// <inheritdoc />
         public override void UpdateFPS()
         {
-            Time.DrawFPS = 0;
             Time.UpdateFPS = 0;
             Time.PhysicsFPS = 30;
         }

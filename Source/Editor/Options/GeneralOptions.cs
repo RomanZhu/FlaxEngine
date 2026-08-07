@@ -115,10 +115,10 @@ namespace FlaxEditor.Options
         public int NavigationHistoryActionsCapacity { get; set; } = 200;
 
         /// <summary>
-        /// Gets or sets a limit for the editor draw/update frames per second rate (FPS). Use higher values if you need more responsive interface or lower values to use less device power. Value 0 disables any limits.
+        /// Gets or sets a limit for the editor frame rate (FPS). Use higher values if you need more responsive interface or lower values to use less device power. Value 0 disables any limits.
         /// </summary>
         [DefaultValue(60.0f), Limit(0, 666)]
-        [EditorDisplay("General", "Editor FPS"), EditorOrder(110), Tooltip("Limit for the editor draw/update frames per second rate (FPS). Use higher values if you need more responsive interface or lower values to use less device power. Value 0 disables any limits.")]
+        [EditorDisplay("General", "Editor FPS"), EditorOrder(110), Tooltip("Limit for the editor frame rate (FPS). Use higher values if you need more responsive interface or lower values to use less device power. Value 0 disables any limits.")]
         public float EditorFPS { get; set; } = 60.0f;
 
         /// <summary>

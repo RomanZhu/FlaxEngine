@@ -14,7 +14,7 @@ API_CLASS(sealed, Namespace="FlaxEditor.Content.Settings") class FLAXENGINE_API 
 
 public:
     /// <summary>
-    /// The target amount of the game logic updates per second (script updates frequency).
+    /// The target amount of game logic updates and rendered frames per second.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(1), Limit(0, 1000), EditorDisplay(\"General\", \"Update FPS\")")
     float UpdateFPS = 60.0f;
@@ -24,12 +24,6 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(2), Limit(0, 1000), EditorDisplay(\"General\", \"Physics FPS\")")
     float PhysicsFPS = 60.0f;
-
-    /// <summary>
-    /// The target amount of the frames rendered per second (actual game FPS).
-    /// </summary>
-    API_FIELD(Attributes="EditorOrder(3), Limit(0, 1000), EditorDisplay(\"General\", \"Draw FPS\")")
-    float DrawFPS = 60.0f;
 
     /// <summary>
     /// The game time scale factor. Default is 1.

@@ -41,7 +41,6 @@ bool Time::_gamePaused = false;
 DateTime Time::StartupTime;
 float Time::UpdateFPS = 60.0f;
 float Time::PhysicsFPS = 60.0f;
-float Time::DrawFPS = 60.0f;
 float Time::TimeScale = 1.0f;
 Time::TickData Time::Update;
 Time::FixedStepTickData Time::Physics;
@@ -71,7 +70,6 @@ void TimeSettings::Apply()
 {
     Time::UpdateFPS = UpdateFPS;
     Time::PhysicsFPS = PhysicsFPS;
-    Time::DrawFPS = DrawFPS;
     Time::TimeScale = TimeScale;
     ::MaxUpdateDeltaTime = MaxUpdateDeltaTime;
     ::MaxPhysicsCatchUpTime = MaxPhysicsCatchUpTime;
@@ -209,15 +207,12 @@ double Time::GetNextTick()
 {
     const double nextUpdate = Time::Update.NextBegin;
     const double nextPhysics = Time::Physics.NextBegin;
-    const double nextDraw = Time::Draw.NextBegin;
 
     double nextTick = MAX_double;
     if (UpdateFPS > ZeroTolerance && nextUpdate < nextTick)
         nextTick = nextUpdate;
     if (PhysicsFPS > ZeroTolerance && nextPhysics < nextTick)
         nextTick = nextPhysics;
-    if (DrawFPS > ZeroTolerance && nextDraw < nextTick)
-        nextTick = nextDraw;
 
     if (nextTick == MAX_double)
         return 0.0;
@@ -236,7 +231,7 @@ void Time::SetGamePaused(bool value)
     const double time = Platform::GetTimeSeconds();
     Update.OnReset(UpdateFPS, time);
     Physics.OnReset(PhysicsFPS, time);
-    Draw.OnReset(DrawFPS, time);
+    Draw.OnReset(UpdateFPS, time);
 }
 
 float Time::GetDeltaTime()
@@ -285,7 +280,7 @@ void Time::Synchronize(bool resetTotalTime)
     const double time = Platform::GetTimeSeconds();
     Update.Synchronize(UpdateFPS, time, resetTotalTime);
     Physics.Synchronize(PhysicsFPS, time, resetTotalTime);
-    Draw.Synchronize(DrawFPS, time, resetTotalTime);
+    Draw.Synchronize(UpdateFPS, time, resetTotalTime);
 }
 
 bool Time::OnBeginUpdate(double time)
@@ -302,7 +297,7 @@ bool Time::OnBeginUpdate(double time)
             const double time = Platform::GetTimeSeconds();
             Update.OnReset(UpdateFPS, time);
             Physics.OnReset(PhysicsFPS, time);
-            Draw.OnReset(DrawFPS, time);
+            Draw.OnReset(UpdateFPS, time);
         }
     }
 #endif
@@ -325,14 +320,16 @@ bool Time::OnBeginPhysics(double time)
     return false;
 }
 
-bool Time::OnBeginDraw(double time)
+void Time::OnBeginDraw()
 {
-    if (Draw.OnTickBegin(time, GetFps(DrawFPS), 1.0f))
-    {
-        Current = &Draw;
-        return true;
-    }
-    return false;
+    Draw.LastBegin = Update.LastBegin;
+    Draw.NextBegin = Update.NextBegin;
+    Draw.DeltaTime = Update.DeltaTime;
+    Draw.Time = Update.Time;
+    Draw.UnscaledDeltaTime = Update.UnscaledDeltaTime;
+    Draw.UnscaledTime = Update.UnscaledTime;
+    Draw.TicksCount = Update.TicksCount;
+    Current = &Draw;
 }
 
 void Time::OnEndUpdate()

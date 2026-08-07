@@ -20,7 +20,7 @@ API_CLASS(Static, Attributes="DebugCommand") class FLAXENGINE_API Time
 public:
     /// <summary>
     /// Engine subsystem updating data.
-    /// Used to invoke game logic updates, physics updates and rendering with possibly different frequencies.
+    /// Used to invoke game logic updates, physics updates and rendering.
     /// </summary>
     class FLAXENGINE_API TickData
     {
@@ -130,7 +130,7 @@ public:
     API_FIELD(ReadOnly) static DateTime StartupTime;
 
     /// <summary>
-    /// The target amount of the game logic updates per second (script updates frequency).
+    /// The target amount of game logic updates and rendered frames per second.
     /// </summary>
     API_FIELD() static float UpdateFPS;
 
@@ -138,14 +138,6 @@ public:
     /// The target amount of fixed physics simulation updates per second.
     /// </summary>
     API_FIELD() static float PhysicsFPS;
-
-    /// <summary>
-    /// The target amount of the frames rendered per second (target game FPS).
-    /// </summary>
-    /// <remarks>
-    /// To get the actual game FPS use <see cref="Engine.FramesPerSecond"/>
-    /// </remarks>
-    API_FIELD() static float DrawFPS;
 
     /// <summary>
     /// The game time scale factor. Default is 1.
@@ -235,10 +227,10 @@ public:
     API_PROPERTY() static float GetTimeSinceStartup();
 
     /// <summary>
-    /// Sets the fixed FPS for game logic updates (draw and update).
+    /// Sets the fixed FPS for frame updates.
     /// </summary>
     /// <param name="enable">True if enable this feature, otherwise false.</param>
-    /// <param name="value">The fixed draw/update rate for the time.</param>
+    /// <param name="value">The fixed frame update rate for the time.</param>
     API_FUNCTION() static void SetFixedDeltaTime(bool enable, float value);
 
     /// <summary>
@@ -252,7 +244,7 @@ private:
 
     static bool OnBeginUpdate(double time);
     static bool OnBeginPhysics(double time);
-    static bool OnBeginDraw(double time);
+    static void OnBeginDraw();
 
     static void OnEndUpdate();
     static void OnEndPhysics();

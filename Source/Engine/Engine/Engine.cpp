@@ -211,15 +211,6 @@ void Engine::OnLoop()
 #endif
     }
 
-    // Update game logic
-    if (Time::OnBeginUpdate(time))
-    {
-        OnUpdate();
-        OnLateUpdate();
-        Time::OnEndUpdate();
-        EngineIdleTime = 0;
-    }
-
     // Start physics simulation
     while (Time::OnBeginPhysics(time))
     {
@@ -228,12 +219,18 @@ void Engine::OnLoop()
         Time::OnEndPhysics();
     }
 
-    // Draw frame
-    if (Time::OnBeginDraw(time))
+    // Update game logic and draw frame
+    if (Time::OnBeginUpdate(time))
     {
         Physics::UpdateInterpolatedRigidBodies();
+        OnUpdate();
+        OnLateUpdate();
+        Time::OnEndUpdate();
+
+        Time::OnBeginDraw();
         OnDraw();
         Time::OnEndDraw();
+        EngineIdleTime = 0;
     }
 }
 
