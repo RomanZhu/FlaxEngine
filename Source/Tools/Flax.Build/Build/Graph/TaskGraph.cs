@@ -83,7 +83,7 @@ namespace Flax.Build.Graph
             if (Platform.BuildPlatform.Target == TargetPlatform.Windows)
             {
                 task.CommandPath = "xcopy";
-                task.CommandArguments = string.Format("/y \"{0}\" \"{1}\"", srcFile.Replace('/', '\\'), outputPath.Replace('/', '\\'));
+                task.CommandArguments = string.Format("/d /y \"{0}\" \"{1}\"", srcFile.Replace('/', '\\'), outputPath.Replace('/', '\\'));
             }
             else
             {

@@ -205,6 +205,13 @@ DEFINE_INTERNAL_CALL(void) ScriptingInternal_FlushRemovedObjects()
     ObjectsRemovalService::Flush();
 }
 
+#if USE_EDITOR
+DEFINE_INTERNAL_CALL(void) ScriptingInternal_Reload()
+{
+    Scripting::Reload();
+}
+#endif
+
 #endif
 
 void registerFlaxEngineInternalCalls()
@@ -232,6 +239,9 @@ public:
         ADD_INTERNAL_CALL("FlaxEngine.Scripting::HasGameModulesLoaded", &ScriptingInternal_HasGameModulesLoaded);
         ADD_INTERNAL_CALL("FlaxEngine.Scripting::IsTypeFromGameScripts", &ScriptingInternal_IsTypeFromGameScripts);
         ADD_INTERNAL_CALL("FlaxEngine.Scripting::FlushRemovedObjects", &ScriptingInternal_FlushRemovedObjects);
+#if USE_EDITOR
+        ADD_INTERNAL_CALL("FlaxEngine.Scripting::Reload", &ScriptingInternal_Reload);
+#endif
 
         // Profiler API
         ADD_INTERNAL_CALL("FlaxEngine.Profiler::BeginEvent", &ProfilerInternal_BeginEvent);

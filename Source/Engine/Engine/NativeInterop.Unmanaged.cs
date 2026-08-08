@@ -908,7 +908,7 @@ namespace FlaxEngine.Interop
                 if (File.Exists(pdbPath))
                 {
                     // Load including debug symbols
-                    using FileStream pdbStream = new FileStream(Path.ChangeExtension(assemblyPath, "pdb"), FileMode.Open);
+                    using FileStream pdbStream = new FileStream(pdbPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                     assembly = scriptingAssemblyLoadContext.LoadFromStream(stream, pdbStream);
                 }
                 else

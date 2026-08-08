@@ -32,6 +32,7 @@ namespace FlaxEditor.Modules
             public readonly TcpClient Client;
             public readonly StreamWriter Writer;
             public volatile string SceneState;
+            public volatile string ReloadToken;
 
             public ReplicaConnection(int index, TcpClient client, StreamWriter writer)
             {
@@ -84,6 +85,7 @@ namespace FlaxEditor.Modules
         private bool[] _replicaEnabled = new bool[MaxReplicaCount];
         private string[][] _replicaTags = new string[MaxReplicaCount][];
         private string _session;
+        private string _scriptsReloadToken;
         private string _lastSceneState;
         private Guid[] _requestedScenes;
         private bool? _requestedPlayState;
@@ -91,6 +93,8 @@ namespace FlaxEditor.Modules
         private bool _enabled;
         private bool _initialized;
         private bool _restartRequested;
+        private bool _scriptsReloadRequested;
+        private bool _scriptsReloadInProgress;
         private bool _sceneSyncPending;
         private volatile bool _connectionsChanged;
         private volatile bool _stopping;
@@ -163,7 +167,7 @@ namespace FlaxEditor.Modules
                 {
                     foreach (var connection in _connections.Values)
                     {
-                        if (string.Equals(connection.SceneState, sceneState, StringComparison.Ordinal))
+                        if (connection.ReloadToken == null && string.Equals(connection.SceneState, sceneState, StringComparison.Ordinal))
                             count++;
                     }
                 }
@@ -191,6 +195,8 @@ namespace FlaxEditor.Modules
                             continue;
                         var index = i + 1;
                         if (!_connections.ContainsKey(index))
+                            return false;
+                        if (_connections[index].ReloadToken != null)
                             return false;
                         if (!string.Equals(_connections[index].SceneState, sceneState, StringComparison.Ordinal))
                             return false;
@@ -406,6 +412,31 @@ namespace FlaxEditor.Modules
             _restartRequested = _initialized;
         }
 
+        private void OnScriptsReloadBegin()
+        {
+            if (_listener == null)
+                return;
+            _scriptsReloadToken = Guid.NewGuid().ToString("N");
+            lock (_connectionsLock)
+            {
+                foreach (var connection in _connections.Values)
+                {
+                    connection.SceneState = null;
+                    connection.ReloadToken = _scriptsReloadToken;
+                }
+            }
+            _connectionsChanged = true;
+            Broadcast("RELOAD|" + _scriptsReloadToken);
+        }
+
+        private void OnScriptsReloadEnd()
+        {
+            if (_listener == null)
+                return;
+            _lastSceneState = null;
+            _connectionsChanged = true;
+        }
+
         /// <inheritdoc />
         public override void OnInit()
         {
@@ -413,6 +444,8 @@ namespace FlaxEditor.Modules
             {
                 ApplyOptions();
                 Editor.Options.OptionsChanged += OnOptionsChanged;
+                ScriptsBuilder.ScriptsReloadBegin += OnScriptsReloadBegin;
+                ScriptsBuilder.ScriptsReloadEnd += OnScriptsReloadEnd;
             }
         }
 
@@ -512,6 +545,7 @@ namespace FlaxEditor.Modules
                 }
 
                 connection = new ReplicaConnection(index, client, writer);
+                connection.ReloadToken = _scriptsReloadToken;
                 lock (_connectionsLock)
                 {
                     if (_connections.TryGetValue(index, out var previous))
@@ -526,8 +560,26 @@ namespace FlaxEditor.Modules
                 {
                     if (message.StartsWith("READY|", StringComparison.Ordinal))
                     {
-                        connection.SceneState = message.Substring(6);
-                        _connectionsChanged = true;
+                        if (connection.ReloadToken == null)
+                        {
+                            connection.SceneState = message.Substring(6);
+                            _connectionsChanged = true;
+                        }
+                    }
+                    else if (message.StartsWith("RELOADED|", StringComparison.Ordinal))
+                    {
+                        var payload = message.Substring(9);
+                        var separator = payload.IndexOf('|');
+                        if (separator != -1)
+                        {
+                            var token = payload.Substring(0, separator);
+                            if (string.Equals(connection.ReloadToken, token, StringComparison.Ordinal))
+                            {
+                                connection.ReloadToken = null;
+                                connection.SceneState = payload.Substring(separator + 1);
+                                _connectionsChanged = true;
+                            }
+                        }
                     }
                 }
             }
@@ -600,6 +652,8 @@ namespace FlaxEditor.Modules
 
         private void SendCurrentState(ReplicaConnection connection)
         {
+            if (!string.IsNullOrEmpty(connection.ReloadToken))
+                connection.Send("RELOAD|" + connection.ReloadToken);
             connection.Send("SCENES|" + GetSceneState());
             connection.Send(Editor.StateMachine.IsPlayMode ? "PLAY|START" : "PLAY|STOP");
             if (Editor.StateMachine.IsPlayMode)
@@ -705,6 +759,10 @@ namespace FlaxEditor.Modules
             case "PAUSE":
                 _requestedPauseState = value == "1";
                 break;
+            case "RELOAD":
+                _scriptsReloadRequested = true;
+                _scriptsReloadToken = value;
+                break;
             case "CLOSE":
                 _exitRequested = true;
                 break;
@@ -733,6 +791,31 @@ namespace FlaxEditor.Modules
                 Engine.RequestExit(0);
                 return;
             }
+
+            if (_scriptsReloadRequested && Editor.StateMachine.IsPlayMode)
+            {
+                _requestedPlayState = null;
+                Editor.Simulation.RequestStopPlayFromMultiplayer();
+                return;
+            }
+
+            if (_scriptsReloadRequested && !_scriptsReloadInProgress && Editor.StateMachine.IsEditMode && !Level.IsAnyActionPending)
+            {
+                _scriptsReloadRequested = false;
+                _scriptsReloadInProgress = true;
+                FlaxEngine.Scripting.Reload();
+            }
+
+            if (_scriptsReloadInProgress && Editor.StateMachine.IsEditMode && !Level.IsAnyActionPending)
+            {
+                _scriptsReloadInProgress = false;
+                var token = _scriptsReloadToken;
+                _scriptsReloadToken = null;
+                SendToPrimary(!string.IsNullOrEmpty(token) ? "RELOADED|" + token + "|" + GetSceneState() : "READY|" + GetSceneState());
+            }
+
+            if (_scriptsReloadRequested || _scriptsReloadInProgress)
+                return;
 
             if (_sceneSyncPending && Editor.StateMachine.IsEditMode && !Level.IsAnyActionPending)
             {
@@ -809,6 +892,9 @@ namespace FlaxEditor.Modules
                 }
             }
 
+            if (_scriptsReloadToken != null && AreReplicasReady)
+                _scriptsReloadToken = null;
+
             if (_connectionsChanged)
             {
                 _connectionsChanged = false;
@@ -840,7 +926,11 @@ namespace FlaxEditor.Modules
             if (IsReplica)
                 Editor.Windows.WindowAdded -= DisableAssetEditing;
             if (!IsReplica)
+            {
                 Editor.Options.OptionsChanged -= OnOptionsChanged;
+                ScriptsBuilder.ScriptsReloadBegin -= OnScriptsReloadBegin;
+                ScriptsBuilder.ScriptsReloadEnd -= OnScriptsReloadEnd;
+            }
             _stopping = true;
             if (_listener != null)
                 StopPrimarySession();

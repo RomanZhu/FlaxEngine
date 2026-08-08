@@ -415,6 +415,11 @@ namespace FlaxEngine
         /// </summary>
         [LibraryImport("FlaxEngine", EntryPoint = "ScriptingInternal_FlushRemovedObjects", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         public static partial void FlushRemovedObjects();
+
+#if FLAX_EDITOR
+        [LibraryImport("FlaxEngine", EntryPoint = "ScriptingInternal_Reload", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        internal static partial void Reload();
+#endif
     }
 
     /// <summary>
