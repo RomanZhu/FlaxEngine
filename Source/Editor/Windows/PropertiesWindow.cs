@@ -455,6 +455,9 @@ namespace FlaxEditor.Windows
             Presenter.AfterLayout += OnPresenterAfterLayout;
             Presenter.Modified += OnPresenterModified;
             ApplyPropertiesPanelStyle(Presenter);
+            InputActions.Bindings.Insert(0, new FlaxEditor.Options.InputActionsContainer.Binding(
+                options => options.Save,
+                SaveContentSelection));
 
             _scrollingPanel.VScrollBar.ValueChanged += OnScrollValueChanged;
             Editor.SceneEditing.SelectionChanged += OnSceneSelectionChanged;
@@ -918,7 +921,10 @@ namespace FlaxEditor.Windows
                 }
                 if (asset is JsonAsset jsonAsset)
                 {
-                    return GetJsonAssetObject(jsonAsset);
+                    var jsonObject = GetJsonAssetObject(jsonAsset);
+                    if (!ReferenceEquals(jsonObject, jsonAsset))
+                        state = new JsonAssetContentAssetState(jsonAsset, jsonObject);
+                    return jsonObject;
                 }
             }
 
@@ -931,6 +937,13 @@ namespace FlaxEditor.Windows
                 return;
             _contentAssetState.Dispose();
             _contentAssetState = null;
+        }
+
+        private void SaveContentSelection()
+        {
+            if (_showContentSelection && _contentAssetState is JsonAssetContentAssetState jsonAssetState)
+                jsonAssetState.SaveChanges();
+            Editor.Instance.SaveAll();
         }
 
         /// <inheritdoc />
@@ -953,6 +966,8 @@ namespace FlaxEditor.Windows
                 materialState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
             else if (_showContentSelection && _contentAssetState is ParticleAssetPropertiesProxy particleState)
                 particleState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
+            else if (_showContentSelection && _contentAssetState is JsonAssetContentAssetState jsonAssetState)
+                jsonAssetState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
 
             base.Update(deltaTime);
         }
@@ -979,6 +994,10 @@ namespace FlaxEditor.Windows
                 {
                     _isApplyingContentAssetChanges = false;
                 }
+            }
+            else if (_contentAssetState is JsonAssetContentAssetState jsonAssetState)
+            {
+                jsonAssetState.RequestSave();
             }
         }
 
@@ -1735,6 +1754,69 @@ namespace FlaxEditor.Windows
                 var instance = Instance;
                 Instance = null;
                 FlaxEngine.Object.Destroy(instance);
+            }
+        }
+
+        private sealed class JsonAssetContentAssetState : IDisposable
+        {
+            private const float JsonAssetSaveDelay = 0.15f;
+
+            private readonly JsonAsset _asset;
+            private readonly object _instance;
+            private bool _hasPendingSave;
+            private float _pendingSaveDelay;
+
+            public JsonAssetContentAssetState(JsonAsset asset, object instance)
+            {
+                _asset = asset;
+                _instance = instance;
+            }
+
+            public void RequestSave()
+            {
+                _hasPendingSave = true;
+                _pendingSaveDelay = JsonAssetSaveDelay;
+            }
+
+            public void UpdateDeferredSave(float deltaTime, bool isDragging)
+            {
+                if (!_hasPendingSave)
+                    return;
+
+                if (isDragging)
+                {
+                    _pendingSaveDelay = JsonAssetSaveDelay;
+                    return;
+                }
+
+                _pendingSaveDelay -= deltaTime;
+                if (_pendingSaveDelay <= 0.0f)
+                    SavePendingChanges();
+            }
+
+            public void SavePendingChanges()
+            {
+                if (!_hasPendingSave)
+                    return;
+
+                _hasPendingSave = false;
+                SaveChanges();
+            }
+
+            public void SaveChanges()
+            {
+                _hasPendingSave = false;
+                if (_asset == null || !_asset.IsLoaded)
+                    return;
+
+                _asset.SetInstance(_instance);
+                if (Editor.SaveJsonAsset(_asset.Path, _instance))
+                    Editor.LogError("Cannot save asset.");
+            }
+
+            public void Dispose()
+            {
+                SavePendingChanges();
             }
         }
 
