@@ -122,7 +122,7 @@ All asset operations resolve through Flax's content database and asset proxies r
 
 ### Typed command registry
 
-**Status:** Implemented in source
+**Status:** Available through one-shot and live Editor execution
 
 | Capability | Commands/API |
 | --- | --- |
@@ -139,7 +139,7 @@ The same registry is used by one-shot and live execution. It is the future sourc
 
 ### Running Editor bridge
 
-**Status:** Partial, implemented in source
+**Status:** Available for the Development Editor; Player/runtime groups are capability-gated
 
 | Capability | Current command |
 | --- | --- |
@@ -148,20 +148,40 @@ The same registry is used by one-shot and live execution. It is the future sourc
 | Play controls | `flax editor play\|pause\|resume\|stop\|step` |
 | Focus | `flax editor focus` |
 | Save | `flax editor save-all` |
+| Explicit shutdown policy | `flax editor close --save\|--discard` |
 | Script compile | `flax editor recompile` |
-| Structured console read | `flax console` |
+| Structured console read/clear | `flax console`, `flax console clear` |
+| Performance snapshot | `flax performance` |
+| Actor selection | `flax selection get\|set\|clear` |
 | Typed live invocation | `flax command`, with `--instance` and `--live-only` |
+| Development Player control | `flax player status\|pause\|resume\|step\|quit` |
+| Virtual runtime input and diagnostics | `flax player input key\|pointer\|inspect\|reset` |
+| Durable detached work | `--detach` on `compile`, `build`, and `command`; `flax jobs ...` |
+| Signed local feeds | `flax feeds verify\|list\|install` |
+| Arbitrary C# (opt-in) | `flax dev unlock-csharp`, `dev eval-csharp`, `dev eval-csharp-file` |
+| Visject graphs | `flax visject groups\|asset\|validate\|node\|connect\|disconnect` |
 
 Windows uses a current-user named pipe. Linux and macOS use a user-owned Unix domain socket. The manifest and authentication token are validated before connection.
 
+The rebuilt Development Editor advertises the capability groups `authoring`,
+`settings`, `bake`, `eval`, `evalCSharp`, `visject`, `player`, `runtimeInput`,
+`playtest`, and `close` in addition to the core bridge controls. A standalone
+Development Player publishes the compatible `player`, `runtimeInput`,
+`playtest`, `performance`, and `close` subset when it starts successfully.
+Clients must negotiate these manifest capabilities before invoking their
+commands. Missing capability is a deterministic `FLX-BRIDGE-CAPABILITY-0004`,
+not a silent fallback.
+
 ### Scene, Actor, Script component, and Prefab authoring
 
-**Status:** Implemented in source
+**Status:** Partial, core scene/Actor/active-scene/build-list slice integration-validated
 
 | Area | Commands |
 | --- | --- |
 | Authoring root | `flax authoring-root get\|set` |
-| Scenes | `flax scenes list\|create\|open\|save\|hierarchy` |
+| Scenes | `flax scenes list\|create\|open\|close\|reload\|save\|dirty\|hierarchy` |
+| Active authoring scene | `flax scenes active get\|set` |
+| Cook/build scene list | `flax scenes build-list list\|add\|remove` |
 | Actor queries | `flax actors find\|get` |
 | Actor lifecycle | `flax actors create\|create-batch\|delete\|rename` |
 | Actor state | `flax actors transform\|parent\|active\|tag\|layer` |
@@ -169,6 +189,8 @@ Windows uses a current-user named pipe. Linux and macOS use a user-owned Unix do
 | Prefabs | `flax prefabs create\|instantiate\|variant\|apply\|revert\|unpack\|save` |
 
 Actor identity contains scene ID, Actor ID, hierarchy path, type, and name. Core scene mutations save affected scenes synchronously. Non-additive scene transitions save only genuinely dirty scenes and never invoke an interactive save prompt.
+
+Integration validation on August 7, 2026 used a newly created sample project and a rebuilt Development Editor. One-shot catalog discovery, `cli.ping`, and scene creation succeeded; the visible Editor then registered an authenticated bridge, opened two scenes, reordered the primary authoring scene, created and saved an Actor, and returned a hierarchy containing that Actor. The same run validated build-list persistence, settings get/schema/diff/dry-run, every bake operation and status route, guarded eval/eval-file, performance capability negotiation, Actor selection, dirty-state inspection, scene reload, viewport/game capture, deterministic playtest begin/find/wait/assert/end, stdio MCP initialize/tools/list/tools/call, local project creation, and both explicit close policies. `editor close --save` and `editor close --discard` exited dirty scenes without the native save modal. Component and Prefab commands remain source-implemented pending equivalent end-to-end scenarios.
 
 ## Target capability catalog
 
@@ -183,7 +205,7 @@ Actor identity contains scene ID, Actor ID, hierarchy path, type, and name. Core
 | `capabilities` | Report transport, Editor/Player state, platform, build, permissions, and feature versions. |
 | `instances list\|info` | Enumerate Editors and Players without guessing among matches. |
 | `events list\|subscribe` | Discover and stream supported event types. |
-| `mcp serve\|configure` | Project the same command registry as MCP tools/resources. |
+| `mcp` | Run a stdio JSON-RPC MCP facade over the same typed command registry; client configuration remains deferred. |
 
 Schemas must represent nested DTO properties, nullable “omitted means unchanged” channels, typed handles, enums, arrays, defaults, validation constraints, destructive access, dry-run support, execution location, and artifact types.
 
@@ -216,11 +238,10 @@ Target controls:
 
 | Target commands | Status |
 | --- | --- |
-| `scenes list\|create\|open\|save\|hierarchy` | Implemented in source |
-| `scenes close\|reload` | Planned |
-| `scenes active get\|set` | Planned; define Flax multi-scene semantics first |
-| `scenes build-list list\|add\|remove` | Planned; requires a stable Flax persistence contract |
-| `scenes dirty` | Planned |
+| `scenes list\|create\|open\|close\|reload\|save\|dirty\|hierarchy` | Available; create/open/close/reload/dirty/hierarchy integration-validated |
+| `scenes active get\|set` | Available; Adapted to Flax: the first loaded scene is the primary authoring scene and `set` reloads it first while preserving the remaining loaded scenes |
+| `scenes build-list list\|add\|remove` | Available; Adapted to Flax `GameSettings.FirstScene` plus ordered `BuildSettings.AdditionalScenes` |
+| `scenes dirty` | Available; reports only genuinely edited loaded scenes |
 | `scenes diff\|validate\|fix` | Planned |
 | `scenes external-actors status\|convert` | Planned Flax-specific extension |
 
@@ -230,13 +251,13 @@ Target controls:
 
 | Target commands | Status |
 | --- | --- |
-| `actors find\|get\|create\|create-batch\|delete\|rename` | Implemented in source |
-| `actors transform\|parent\|active\|tag\|layer` | Implemented in source |
+| `actors find\|get\|create\|create-batch\|delete\|rename` | Available; create integration-validated |
+| `actors transform\|parent\|active\|tag\|layer` | Available; broader integration coverage pending |
 | `actors component add\|remove\|get\|set` | Implemented in source for Script components |
 | `actors duplicate\|move-to-scene` | Planned |
 | `actors properties get\|set\|schema` | Planned generalized reflected properties |
 | `actors references\|dependencies` | Planned |
-| `selection get\|set\|clear` | Planned live-Editor surface |
+| `selection get\|set\|clear` | Available and live integration-validated |
 | `search actors\|assets\|code\|references` | Planned unified search |
 
 Flax should expose Actors and Scripts honestly. It should not rename every Flax Script an abstract “component” internally merely for Unity vocabulary parity.
@@ -273,27 +294,34 @@ Importer schemas should cover models, textures, audio, animation, skeletons, fon
 
 ### 7. Materials, shaders, and rendering assets
 
-**Target status:** Planned
+**Target status:** Visject material graph slice implemented and integration-validated; shader metadata remains planned
 
-Target surface:
+Available compatible surface:
 
-- `materials get\|set\|create\|validate`;
-- `materials parameters list\|get\|set`;
+- `visject groups list` discovers Flax node groups and archetypes;
+- `visject asset inspect --asset <path> --kind material` loads a native `MaterialSurface`;
+- `visject validate` loads and validates a graph without mutation;
+- `visject node add\|remove\|set` edits nodes and serialized values;
+- `visject connect\|disconnect` edits native box connections;
+- `materials get\|set\|create\|validate` remains a possible higher-level facade;
 - `shaders list\|info\|metadata\|recompile`;
-- `material-graphs create\|get\|node add\|remove\|connect\|disconnect\|set`;
+- `material-graphs` aliases may be added after a stable product schema exists;
 - `textures inspect\|convert\|compress` where Editor APIs are stable;
 - renderer and post-process settings inspection.
 
-Flax Material Graph and shader metadata must use Flax's actual graph model rather than copying Unity Shader Graph schemas.
+The implemented graph routes use Flax's actual node archetypes, boxes, values,
+and native surface serializer rather than copying Unity Shader Graph schemas.
 
 ### 8. Animation, Animation Graph, and sequence authoring
 
-**Target status:** Planned, adapted from Unity
+**Target status:** Animation Graph Visject slice implemented and integration-validated; clip/sequence authoring remains planned
 
-Target surface:
+Available compatible surface:
 
+- `visject asset inspect --kind animation` and `visject validate`;
+- `visject node add\|remove\|set` and `visject connect\|disconnect` on Animation Graph assets;
 - animation clip create/get and curve set/remove;
-- Animation Graph create/inspect/edit/validate;
+- Animation Graph create/inspect/edit/validate higher-level wrappers;
 - state machine, transition, parameter, and blend-space editing using Flax node types;
 - skeleton, animation event, retarget, and root-motion settings;
 - Scene Animation create/inspect/track/clip/key editing;
@@ -303,23 +331,32 @@ Unity Animator Controller and Timeline names are reference concepts, not Flax sc
 
 ### 9. Visject and specialized asset authoring
 
-**Target status:** Planned; Flax-specific advantage
+**Target status:** Core Material and Animation Graph routes implemented; other Visject assets planned
 
-The same graph transaction model should support:
+The implemented graph transaction model supports Material and Animation Graph
+assets:
 
 - Animation Graph;
 - Material Graph;
+- discovered groups/archetypes, node values, boxes, connections, validation, and persistence;
+
+The same model should extend to:
+
 - Particle Emitters and Particle Systems;
 - Behavior Trees;
 - Visual Scripts;
 - Scene Animation;
 - other Visject-backed plugin assets.
 
-Generic operations should include graph schema discovery, nodes, boxes/pins, connections, values, parameters, validation, layout metadata, compilation, and diffing. Specialized commands may wrap common high-level patterns without replacing the generic graph API.
+Generic operations currently include graph schema discovery, nodes, boxes/pins,
+connections, values, validation, and native serialization. Layout metadata,
+compilation, graph diffing, and additional Visject asset types remain follow-up
+work. Specialized commands may wrap common high-level patterns without
+replacing the generic graph API.
 
 ### 10. Project and engine settings
 
-**Target status:** Planned
+**Target status:** Available for the reflected stable groups; platform-specific groups remain capability-gated
 
 Target typed settings include:
 
@@ -336,6 +373,21 @@ Target typed settings include:
 - platform settings when the installed platform package exposes them.
 
 Each settings group needs `get`, `set`, `schema`, `diff`, and dry-run behavior. Omitted fields remain unchanged.
+
+The current stable groups are `game`, `time`, `audio`, `layers`, `physics`, `input`,
+`graphics`, `network`, `navigation`, `localization`, `build`, and `streaming`.
+`flax settings list` reports the reflected Flax settings type and asset path. `set`
+validates public writable fields, applies a partial patch through the Editor-owned
+settings object, and saves the correct settings asset; `--dry-run` returns the same
+before/after diff without writing. Complex patches should use `flax command ...
+--input <file.json>` (or the equivalent typed group command) to avoid shell JSON
+quoting differences.
+
+When the installed API exposes them, `settings.list` also advertises concrete
+platform groups (`platform.windows`, `platform.uwp`, `platform.linux`,
+`platform.android`, `platform.web`, `platform.mac`, `platform.ios`, and
+`platform.gdk`). These are runtime-discovered rather than hard-coded requirements,
+so a minimal Editor can omit unavailable platform packages honestly.
 
 ### 11. Builds, compilation, and target switching
 
@@ -355,7 +407,7 @@ Each settings group needs `get`, `set`, `schema`, `diff`, and dry-run behavior. 
 
 ### 12. Baking and derived scene data
 
-**Target status:** Planned
+**Target status:** Adapted; core Editor bake operations are available and capability-gated
 
 Every long-running operation needs `start`, `status`, `wait`, `cancel`, and `clear` where supported:
 
@@ -369,6 +421,22 @@ Every long-running operation needs `start`, `status`, `wait`, `cancel`, and `cle
 
 Collision rebuild is a first-class Flax requirement for deterministic template playtests.
 
+The implemented Flax surface is:
+
+| Operation | Commands | Notes |
+| --- | --- | --- |
+| Aggregate state | `flax bake status` | Reports active/status/progress for scenes, lighting, NavMesh, probes, CSG, and SDF. |
+| Static lighting | `flax bake lighting start\|cancel\|clear` | Uses Flax lightmap bake APIs and saves clear operations. |
+| NavMesh | `flax bake navmesh start\|clear` | Uses the Navigation builder and clears native NavMesh data. |
+| Environment probes | `flax bake probes start` | Uses active Environment Probes and CaptureScene sky lights. |
+| CSG | `flax bake csg start` | Uses the Editor CSG build path. |
+| Scene data | `flax bake scenes start\|cancel` | Uses the Editor scene build state machine. |
+| Mesh SDF | `flax bake sdf start` | Uses the Editor SDF build path. |
+
+The Editor rejects overlapping scene-data operations with a structured busy error;
+device/quality choices remain the native Flax Editor/project settings rather than
+Unity lightmapper options.
+
 ### 13. Editor lifecycle, UI, navigation, and observability
 
 **Target status:** Partial
@@ -377,11 +445,12 @@ Target surface:
 
 - Editor status/focus/play/pause/resume/stop/step;
 - save-all and dirty-resource inspection;
-- selection and content-browser navigation;
+- explicit non-interactive shutdown: `flax editor close --save` or `flax editor close --discard`;
+- Actor selection is available; content-browser navigation remains planned;
 - invoke a registered menu action by stable ID;
 - structured console read/follow/clear;
 - compile/domain-reload status;
-- performance statistics and profiler samples;
+- live performance statistics are available; bounded profiler samples remain planned;
 - editor window and viewport enumeration;
 - health checks and support bundles.
 
@@ -389,7 +458,7 @@ UI automation should be the fallback for UI-only behavior, not the primary way t
 
 ### 14. Capture and evidence
 
-**Target status:** Planned
+**Target status:** Adapted; viewport and game PNG capture are available through the authenticated Editor bridge
 
 Target commands:
 
@@ -400,11 +469,14 @@ Target commands:
 - `capture runtime-ui`;
 - frame sequences and bounded video capture where supported.
 
-Results should return dimensions, format, timestamp/frame, source instance, saved path, and optionally bounded inline image data for MCP.
+The implemented core is `flax capture viewport|game --to <project-relative-path>`. Paths are
+confined beneath the selected project root and the Editor owns the screenshot operation.
+Editor-window/UI-element, sequences/video, dimensions metadata, and bounded inline image
+data for MCP remain capability-gated follow-up work.
 
 ### 15. Tests, assertions, and deterministic playtesting
 
-**Target status:** Planned
+**Target status:** Partial; deterministic live-Editor playtest observation is available
 
 Target surface:
 
@@ -418,13 +490,19 @@ Target surface:
 - assert structured conditions and return reproducible failures;
 - restore time scale, focus, cursor, and input state after a run.
 
+The compatible core is `flax playtest begin|end|status|find|wait|assert|capture`.
+`begin` opens the persisted startup scene when no scene is loaded, waits for the real
+play-mode transition, and `find`/`wait`/`assert` operate on runtime Actor IDs, names,
+types, and active state. Raw keyboard/pointer/gamepad injection, collision/event
+instrumentation, durable test jobs, and Player-side control remain explicit gaps.
+
 ### 16. Development Player bridge
 
-**Target status:** Planned
+**Target status:** Development Editor embedded-Player control is available; standalone Player bridge is implemented in Development builds and requires a valid running Player for integration
 
 A development Player should expose the same registry subset through authenticated local IPC. It must be compiled out or disabled in shipping builds unless a product explicitly supplies a hardened remote-development policy.
 
-Target capabilities:
+Available compatible capabilities:
 
 - runtime discovery and status;
 - logs and event streams;
@@ -433,27 +511,44 @@ Target capabilities:
 - time scale, frame rate, pause, step, and quit;
 - capture and performance counters;
 - typed game-specific commands;
-- jobs and cancellation;
-- optional managed hot reload and eval under explicit development policy.
+- pause, resume, single-step, quit, and performance status;
+- raw virtual keyboard and pointer input;
+- optional managed eval under explicit development policy;
+- durable jobs remain owned by the standalone CLI and survive Player disconnects.
+
+The standalone bridge is compiled under `FLAX_GAME`, uses authenticated local
+named-pipe discovery on Windows, and is disabled from shipping builds. The
+sample project used for this integration pass is not a cooked standalone
+runtime, so its direct Player launch cannot publish a manifest; the FlaxGame
+target itself builds successfully and the embedded Editor Player path is
+smoke-tested.
 
 ### 17. Runtime input
 
-**Target status:** Planned Flax extension
+**Target status:** Raw keyboard and absolute/relative pointer injection plus runtime input diagnostics are available through the Development Editor/Player bridge; gamepad/action synthesis remains unsupported
 
-Target commands:
+Available commands:
 
 - `runtime input key` with down/up/press and frame duration;
-- `runtime input pointer` with move/button/scroll;
-- `runtime input gamepad` with buttons/axes;
-- `runtime input action` for project-defined input actions;
+- `runtime input pointer` with absolute move, relative mouse deltas, button, and scroll;
+- `runtime input inspect` with optional repeated `--key`, `--axis`, and `--action` samples;
+- `runtime input gamepad` with buttons/axes (reserved; returns unsupported);
+- `runtime input action` for project-defined input actions (reserved; returns unsupported);
 - `runtime input reset` to guarantee cleanup;
 - input recording/replay with deterministic timestamps or frames.
 
-Input must be injected below gameplay bindings but above platform hardware where possible, so tests exercise the real Flax input stack without moving the user's physical cursor.
+Keyboard and pointer events are injected through Flax's `Keyboard` and `Mouse`
+device APIs, below gameplay bindings and without moving the user's physical
+cursor. Relative pointer injection queues Flax's relative mouse-move event so
+mouse-look axes receive a delta rather than only an absolute cursor position.
+The probe also exposes mapping names/details and sampled device/virtual-input
+state, allowing a failure to be classified as unavailable device, missing
+mapping, absent event state, or a later gameplay-script issue. The bridge exposes
+virtual input only; it does not claim OS-level raw hardware control.
 
 ### 18. Logs, events, performance, and tracing
 
-**Target status:** Partial
+**Target status:** Partial; live Editor snapshots available
 
 Target surface:
 
@@ -461,10 +556,15 @@ Target surface:
 - follow/stream with severity, category, object handle, and stack trace filters;
 - structured engine events;
 - job progress events;
-- frame CPU/GPU/memory/render/physics statistics;
+- frame CPU/GPU/memory/render/physics statistics through `flax performance`;
 - bounded profiler captures;
 - command audit and transaction logs;
 - redacted support bundles.
+
+`flax diagnose status` reuses the health checks and `flax diagnose bundle --to
+<project-relative.zip>` creates a project-confined, redacted ZIP containing a
+manifest and available local log files. Cursor-based follow and rich event
+streams remain future work.
 
 ### 19. Managed hot reload
 
@@ -487,9 +587,18 @@ Hot reload is not the same as ordinary `editor recompile`: it aims to change sel
 
 ### 20. Eval and open-world automation
 
-**Target status:** Proposed opt-in development capability; excluded from the default trusted surface
+**Target status:** Opt-in; guarded expression evaluation and explicit arbitrary C# execution are available in Development Editor builds
 
 Eval is the escape hatch that prevents the fixed catalog from becoming the limit of what an agent can do. A client can discover ordinary typed commands first, then use live C# for a missing operation instead of waiting for a new built-in tool.
+
+Flax exposes the bounded `flax dev unlock-eval`, `flax dev eval --code`, and
+`flax dev eval-file --path` flow on a live authenticated Development Editor. It
+also exposes `flax dev unlock-csharp`, `flax dev eval-csharp --code`, and
+`flax dev eval-csharp-file --path`. The latter compiles a short-lived in-memory
+assembly with the loaded Flax references, runs it synchronously in-process,
+records a source hash in `.flax/cli-csharp-eval.audit.log`, and requires a
+short-lived unlock token. It is arbitrary code execution with Editor
+privileges, not a sandbox or a replacement for typed mutating commands.
 
 The installed Unity Pipeline implementation:
 
@@ -512,11 +621,12 @@ Recommended Flax tiers:
 | Transaction script | A constrained, declarative batch of registered commands | Enabled |
 | File script | `flax dev run-script <file.cs>` under allowed roots | Disabled until explicitly enabled |
 | Raw eval | `flax dev eval --code ...` | Disabled; session-scoped unlock required |
+| Arbitrary C# | `flax dev eval-csharp --code ...` | Disabled; explicit token and Development capability required |
 
 Required Flax eval controls:
 
 - development Editor or development Player only;
-- not advertised unless enabled by project and current session policy;
+- advertised only as a locked opt-in capability group; invocation still requires project/session policy and an explicit unlock;
 - live authenticated bridge only by default, never an unnoticed shipping endpoint;
 - explicit `flax dev unlock-eval` with expiration and visible Editor/Player indication;
 - audit source hash, caller/instance, duration, result, and touched transaction resources;
@@ -533,7 +643,7 @@ Eval should fill long-tail holes, prototype future commands, and diagnose unusua
 
 ### 21. Packages, plugins, projects, templates, and distribution
 
-**Target status:** Mixed; package/feed operations deferred
+**Target status:** Mixed; local project/template operations and signed local feed verification/install are available, remote distribution remains deferred
 
 Target surface:
 
@@ -543,11 +653,28 @@ Target surface:
 - engine release and platform package list/install/update/remove;
 - offline caches, signatures, hashes, and provenance.
 
-Local engine/project registry operations exist. Remote release and package mutation must wait for stable signed Flax feed and plugin contracts.
+Local engine/project registry operations exist. Remote release and package mutation
+must wait for stable Flax service and plugin contracts. The compatible local feed
+surface is:
+
+- `flax feeds verify --manifest <file> --signature <detached-signature> --public-key <RSA-PEM>`;
+- `flax feeds list` after successful verification;
+- `flax feeds install --id <entry> --to <directory> --yes` after verification.
+
+Manifests are canonicalized recursively and verified with RSA-SHA256. Archive
+SHA-256 entries are checked before extraction, ZIP traversal is rejected, and
+installing always requires `--yes`. Network transport, feed discovery, key
+rotation, and remote package resolution remain deferred.
+
+The compatible local lifecycle is deliberately small and safe: `flax projects create`
+and `flax new` create an empty project only in a missing or empty directory,
+`flax templates list|info` reports the built-in empty template, and existing content
+is never overwritten. Feed-backed engine/platform install, package resolution, and
+template authoring remain deferred.
 
 ### 22. MCP and agent integration
 
-**Target status:** Planned
+**Target status:** Adapted; stdio MCP is available over the typed command registry
 
 MCP must be a generated facade over the registry:
 
@@ -559,6 +686,12 @@ MCP must be a generated facade over the registry:
 - large images and artifacts use bounded resources rather than giant JSON payloads.
 
 An agent should need only a small orientation skill: discover capabilities, inspect a schema, invoke it, and use eval only when the catalog has a genuine hole.
+
+The current implementation supports MCP `initialize`, `ping`, `tools/list`, and
+`tools/call` over stdin/stdout. A generic `flax_command` tool is always available;
+when a project is selected, each valid typed command is also projected as
+`flax.command.<dotted-name>`. MCP sessions do not append a normal CLI envelope and
+closing stdin does not close the Editor or alter detached state.
 
 ## Unity Pipeline 0.4.0-exp.1 source-registration inventory
 

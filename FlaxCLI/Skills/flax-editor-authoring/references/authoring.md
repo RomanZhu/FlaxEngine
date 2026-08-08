@@ -89,7 +89,9 @@ the discovered node archetypes, and save through the native asset serializer.
 flax player status --project <project> --json
 flax player pause --project <project> --json
 flax player input key --key A --state press --project <project> --json
-flax player input pointer --x 640 --y 360 --wheel 1 --project <project> --json
+flax player input pointer --state move --x 640 --y 360 --project <project> --json
+flax player input pointer --state relative --dx 12 --dy -4 --project <project> --json
+flax player input inspect --key W --axis "Mouse X" --axis "Mouse Y" --project <project> --json
 flax player input reset --project <project> --json
 flax player quit --project <project> --json
 ```
@@ -99,8 +101,10 @@ runtime subsystem rather than Player control.
 
 The same authenticated actions work against the Editor's embedded Player and a
 valid standalone Development Player manifest. Key/pointer events are injected
-into Flax's input devices without moving the user's cursor. Gamepad and action
-map injection currently returns a stable unsupported error.
+into Flax's input devices without moving the user's cursor. Relative pointer
+events feed Flax's mouse-delta path; `input inspect` reports device availability,
+input mappings, and requested virtual-input samples. Gamepad and action-map
+injection currently returns a stable unsupported error.
 
 ## Durable detached work and save-aware shutdown
 

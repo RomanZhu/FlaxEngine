@@ -74,7 +74,9 @@ flax visject groups list --project F:\Games\Example --json
 flax visject asset inspect --asset Materials\Player.flax --kind material --project F:\Games\Example --json
 flax player status --project F:\Games\Example --json
 flax player input key --key A --state press --project F:\Games\Example --json
-flax player input pointer --x 640 --y 360 --buttons 0 --project F:\Games\Example --json
+flax player input pointer --state move --x 640 --y 360 --project F:\Games\Example --json
+flax player input pointer --state relative --dx 12 --dy -4 --project F:\Games\Example --json
+flax player input inspect --key W --axis "Mouse X" --axis "Mouse Y" --project F:\Games\Example --json
 flax jobs list --project F:\Games\Example --json
 flax compile F:\Games\Example --target ExampleEditor --detach --json
 flax jobs wait <job-id> --project F:\Games\Example --json
@@ -163,8 +165,11 @@ opens the persisted startup scene when necessary and waits for play mode,
 `find`/`wait`/`assert` query runtime Actors by stable ID/name/type/active state,
 and `capture` writes project-confined evidence. `flax player input key|pointer`
 injects virtual events through Flax's input devices without moving the user's
-OS cursor. Gamepad and project action synthesis return a deterministic
-unsupported error until Flax exposes a stable ABI.
+OS cursor; pointer `--state relative --dx ... --dy ...` feeds the same relative
+mouse-delta path used by look axes. `flax player input inspect` reports device
+availability, cursor state, mappings, active state, and requested key/axis/action
+samples. Gamepad and project action synthesis remain deterministic unsupported
+operations until Flax exposes a stable synthesis ABI.
 
 MCP clients can launch `flax mcp --project <path> --engine <path>` as a stdio
 server. It supports `initialize`, `ping`, `tools/list`, and `tools/call`; the

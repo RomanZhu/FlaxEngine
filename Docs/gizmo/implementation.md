@@ -74,16 +74,16 @@ All packages begin as `☐`. Update the status, owner, date, evidence, and devia
 | P2-01 | Projection-derived constant-pixel sizing | Phase 2 | ◐ | H01 | Perspective/orthographic/DPI parity |
 | P2-02 | Screen-space semantic target generation | Phase 2 | ◐ | P2-01 | Targets independent of mesh geometry |
 | P2-03 | Hit arbitration, hysteresis, overlap cycling | Phase 2 | ◐ | P2-02 | Stable acquisition |
-| P3-01 | Multiplicative scale core | Phase 3 | ☐ | P0-02, W01 | Exponential factor mapping |
-| P3-02 | Group, individual, and bounds-cage scaling | Phase 3 | ☐ | P3-01 | Correct pivot/position policy |
-| P3-03 | Zero crossing and mirror policy | Phase 3 | ☐ | P3-01, P1-02 | Safe default and explicit warning |
-| P4-01 | Anchor-based translation solvers | Phase 4 | ☐ | P0-02, W01 | Frame-rate-independent move |
-| P4-02 | Stable ring rotation and true arcball | Phase 4 | ☐ | P0-02, W01 | Unwrapped normalized rotation |
+| P3-01 | Multiplicative scale core | Phase 3 | ☑ | P0-02, W01 | Exponential factor mapping |
+| P3-02 | Group, individual, and bounds-cage scaling | Phase 3 | ◐ | P3-01 | Axis/plane/uniform and group pivot done; cage pending |
+| P3-03 | Zero crossing and mirror policy | Phase 3 | ◐ | P3-01, P1-02 | Safe default done; explicit mirroring UX pending |
+| P4-01 | Anchor-based translation solvers | Phase 4 | ☑ | P0-02, W01 | Frame-rate-independent move |
+| P4-02 | Stable ring rotation and true arcball | Phase 4 | ☑ | P0-02, W01 | Unwrapped normalized rotation |
 | P4-03 | Modifier re-anchoring and camera clutch | Phase 4 | ☑ | P4-01, P4-02, P3-01 | No jumps on semantic change |
 | P4-04 | Keyboard constraints and inline numeric entry | Phase 4 | ☐ | P4-03, P1-02 | Exact values in one transaction |
 | P5-01 | Total-result grid and angle snapping | Phase 5 | ☐ | P4-03 | Update-rate-independent snap |
 | P5-02 | Sticky semantic scene snapping | Phase 5 | ☐ | P5-01, P2-03 | Stable target identity |
-| P5-03 | Spaces, pivots, hierarchy, multi-selection | Phase 5 | ☐ | P4-01, P4-02, P3-02 | Explicit group/individual behavior |
+| P5-03 | Spaces, pivots, hierarchy, multi-selection | Phase 5 | ◐ | P4-01, P4-02, P3-02 | Existing spaces/pivots and group behavior done; expanded policies pending |
 | P5-04 | Settings, actions, and input presets | Phase 5 | ☐ | P4-04, P5-03 | Rebindable and persisted |
 | R01 | Reliability and performance hardening | Hardening | ☐ | P0-03 through P5-04 | Failure-safe and profiled |
 | V01 | Automated verification | Validation | ☐ | W01 through R01 | Deterministic test coverage |
