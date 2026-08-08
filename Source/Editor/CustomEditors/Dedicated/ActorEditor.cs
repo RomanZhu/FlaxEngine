@@ -100,7 +100,6 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     {
                         group.Panel.TooltipText = Surface.SurfaceUtils.GetVisualScriptTypeDescription(TypeUtils.GetObjectType(actor));
                     }
-                    AddGroupSelectionBoundaryToggle(group, actor);
                     AddSourcePrefabReference(group, sourcePrefab);
                     var settingsButton = group.AddSettingsButton();
                     settingsButton.Clicked += OnSettingsButtonClicked;
@@ -109,58 +108,6 @@ namespace FlaxEditor.CustomEditors.Dedicated
             }
 
             AddScriptsEditor(layout);
-        }
-
-        private void AddGroupSelectionBoundaryToggle(GroupElement group, Actor actor)
-        {
-            if (Values.Count == 0)
-                return;
-
-            if (actor)
-            {
-                if (!actor.HasScene)
-                    return;
-
-                var actorType = actor.GetType();
-                if (actorType == typeof(EmptyActor) || actorType == typeof(GroupActor))
-                {
-                    bool isGroup = actorType == typeof(GroupActor);
-                    var conversionCheckBox = group.Checkbox("Group", "Treats this actor and its descendants as one semantic viewport selection boundary.").CheckBox;
-                    conversionCheckBox.Checked = isGroup;
-                    conversionCheckBox.StateChanged += box =>
-                    {
-                        if (box.Checked == isGroup || !actor)
-                            return;
-
-                        var actorNode = Editor.Instance.Scene.GetActorNode(actor) as ActorNode;
-                        if (actorNode == null)
-                        {
-                            box.Checked = isGroup;
-                            return;
-                        }
-
-                        Editor.Instance.SceneEditing.Convert(actorNode, box.Checked ? typeof(GroupActor) : typeof(EmptyActor));
-                    };
-                    return;
-                }
-            }
-            else
-            {
-                for (int i = 0; i < Values.Count; i++)
-                {
-                    if (Values[i] is not Actor selectedActor || !selectedActor || !selectedActor.HasScene)
-                        return;
-                }
-            }
-
-            var groupCheckBox = group.Checkbox("Group", "Creates a Group parent for the selected actors.").CheckBox;
-            groupCheckBox.Checked = false;
-            groupCheckBox.StateChanged += box =>
-            {
-                if (!box.Checked)
-                    return;
-                Editor.Instance.SceneEditing.MakeSelectionGroup();
-            };
         }
 
         private void AddScriptsEditor(LayoutElementsContainer layout)
