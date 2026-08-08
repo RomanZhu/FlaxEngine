@@ -280,10 +280,11 @@ internal sealed class EditorBridgeClient(AppPaths paths)
     {
         var capability = action switch
         {
-            "commands.list" or "commands.info" => "commands",
+            "commands.list" or "commands.info" or "generators.list" or "generators.info" => "commands",
             "command.invoke" when name != null && (name.StartsWith("visject.", StringComparison.OrdinalIgnoreCase) || name.StartsWith("material.graph.", StringComparison.OrdinalIgnoreCase) || name.StartsWith("animation.graph.", StringComparison.OrdinalIgnoreCase)) => "visject",
             "command.invoke" when name != null && name.StartsWith("dev.eval-csharp", StringComparison.OrdinalIgnoreCase) => "evalCSharp",
             "command.invoke" => "commands",
+            "generator.invoke" => "commands",
             "editor.play" or "editor.pause" or "editor.resume" or "editor.stop" or "editor.step" => "playMode",
             "editor.focus" => "focus",
             "editor.saveAll" => "saveAll",
@@ -294,7 +295,7 @@ internal sealed class EditorBridgeClient(AppPaths paths)
             "selection.get" or "selection.set" or "selection.clear" => "selection",
             "capture.viewport" or "capture.game" => "capture",
             "player.status" or "player.pause" or "player.resume" or "player.step" or "player.quit" => "player",
-            "runtime.input.key" or "runtime.input.pointer" or "runtime.input.gamepad" or "runtime.input.action" or "runtime.input.reset" => "runtimeInput",
+            "runtime.input.key" or "runtime.input.pointer" or "runtime.input.gamepad" or "runtime.input.action" or "runtime.input.reset" or "runtime.input.inspect" => "runtimeInput",
             "eval-csharp" or "dev.eval-csharp" => "evalCSharp",
             _ => null,
         };

@@ -162,6 +162,24 @@ internal sealed class McpServer(CommandDispatcher dispatcher, CommandContext par
                     ["additionalProperties"] = false,
                 },
             },
+            new JsonObject
+            {
+                ["name"] = "flax_generator",
+                ["description"] = "Invoke a registered project-owned Flax generator. Destructive generators require confirm=true.",
+                ["inputSchema"] = new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["generator"] = new JsonObject { ["type"] = "string", ["description"] = "Dotted project generator name." },
+                        ["arguments"] = new JsonObject { ["type"] = "object", ["additionalProperties"] = true },
+                        ["dryRun"] = new JsonObject { ["type"] = "boolean", ["default"] = false },
+                        ["confirm"] = new JsonObject { ["type"] = "boolean", ["default"] = false },
+                    },
+                    ["required"] = new JsonArray("generator"),
+                    ["additionalProperties"] = false,
+                },
+            },
         };
 
         try
@@ -182,6 +200,34 @@ internal sealed class McpServer(CommandDispatcher dispatcher, CommandContext par
                         ["description"] = descriptor.TryGetProperty("description", out var description) && description.ValueKind == JsonValueKind.String
                             ? description.GetString()
                             : "Invoke the Flax typed command '" + name + "'.",
+                        ["inputSchema"] = DescribeInputSchema(descriptor),
+                    });
+                }
+            }
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The generic tool remains available when no project or Editor is present.
+        }
+
+        try
+        {
+            var listed = await ExecuteNestedAsync(["generators", "list"], cancellationToken);
+            if (listed.ExitCode == ExitCode.Success && listed.Data is JsonElement element && element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var descriptor in element.EnumerateArray())
+                {
+                    if (!descriptor.TryGetProperty("name", out var nameElement) || nameElement.ValueKind != JsonValueKind.String)
+                        continue;
+                    var name = nameElement.GetString();
+                    if (string.IsNullOrWhiteSpace(name))
+                        continue;
+                    tools.Add(new JsonObject
+                    {
+                        ["name"] = "flax.generator." + name,
+                        ["description"] = descriptor.TryGetProperty("description", out var description) && description.ValueKind == JsonValueKind.String
+                            ? description.GetString()
+                            : "Invoke the Flax project generator '" + name + "'.",
                         ["inputSchema"] = DescribeInputSchema(descriptor),
                     });
                 }
@@ -219,14 +265,37 @@ internal sealed class McpServer(CommandDispatcher dispatcher, CommandContext par
             return;
         }
 
-        const string prefix = "flax.command.";
-        if (!tool.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        if (tool.Equals("flax_generator", StringComparison.OrdinalIgnoreCase))
         {
-            await WriteErrorAsync(id, -32602, $"Unknown MCP tool '{tool}'.");
+            var generator = arguments["generator"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(generator))
+            {
+                await WriteErrorAsync(id, -32602, "flax_generator requires arguments.generator.");
+                return;
+            }
+            var dryRun = arguments["dryRun"]?.GetValue<bool>() ?? false;
+            arguments = arguments["arguments"] as JsonObject ?? new JsonObject();
+            await InvokeGeneratorToolAsync(id, generator, arguments, dryRun, confirm, cancellationToken);
             return;
         }
-        arguments.Remove("confirm");
-        await InvokeToolAsync(id, tool[prefix.Length..], arguments, confirm, cancellationToken);
+
+        const string commandPrefix = "flax.command.";
+        if (tool.StartsWith(commandPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            arguments.Remove("confirm");
+            await InvokeToolAsync(id, tool[commandPrefix.Length..], arguments, confirm, cancellationToken);
+            return;
+        }
+
+        const string generatorPrefix = "flax.generator.";
+        if (tool.StartsWith(generatorPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            arguments.Remove("confirm");
+            await InvokeGeneratorToolAsync(id, tool[generatorPrefix.Length..], arguments, false, confirm, cancellationToken);
+            return;
+        }
+
+        await WriteErrorAsync(id, -32602, $"Unknown MCP tool '{tool}'.");
     }
 
     private async Task InvokeToolAsync(JsonNode? id, string command, JsonObject arguments, bool confirm, CancellationToken cancellationToken)
@@ -234,6 +303,21 @@ internal sealed class McpServer(CommandDispatcher dispatcher, CommandContext par
         var tokens = new List<string> { "command", command, "--arguments", arguments.ToJsonString(JsonSupport.Options) };
         if (confirm)
             tokens.Add("--yes");
+        await InvokeNestedToolAsync(id, tokens, cancellationToken);
+    }
+
+    private async Task InvokeGeneratorToolAsync(JsonNode? id, string generator, JsonObject arguments, bool dryRun, bool confirm, CancellationToken cancellationToken)
+    {
+        var tokens = new List<string> { "generators", "run", generator, "--arguments", arguments.ToJsonString(JsonSupport.Options) };
+        if (dryRun)
+            tokens.Add("--dry-run");
+        if (confirm)
+            tokens.Add("--yes");
+        await InvokeNestedToolAsync(id, tokens, cancellationToken);
+    }
+
+    private async Task InvokeNestedToolAsync(JsonNode? id, List<string> tokens, CancellationToken cancellationToken)
+    {
         if (!string.IsNullOrWhiteSpace(_instanceSelector))
         {
             tokens.Add("--instance");

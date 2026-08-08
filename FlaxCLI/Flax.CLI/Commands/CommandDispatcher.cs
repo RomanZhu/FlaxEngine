@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Flax.CLI.Adapters;
 using Flax.CLI.Core;
 using Flax.CLI.Protocol;
@@ -71,6 +72,7 @@ internal sealed class CommandDispatcher(
             "mcp" => await Mcp(args, context),
             "commands" => await Commands(args, context),
             "command" => await Command(args, context),
+            "generators" or "generator" => await Generators(args, context),
             "jobs" => await Jobs(args, context),
             "feeds" => Feeds(args, context),
             "player" => await Player(args, context),
@@ -215,6 +217,18 @@ internal sealed class CommandDispatcher(
             throw new CliException(ExitCode.Usage, "FLX-CLI-0002", $"Project name '{name}' contains invalid file-name characters.");
         if (!SemanticVersion.TryParse(minVersion, out var parsedVersion))
             parsedVersion = new SemanticVersion(1, 0, 0);
+        var projectFile = CreateEmptyProjectScaffold(root, name, parsedVersion);
+        var project = ProjectContext.Find(projectFile);
+        projects.Add(project.Root);
+        return CliResult.Ok(new { created = true, template = "empty", project = ProjectView(project) });
+    }
+
+    internal static string CreateEmptyProjectScaffold(string root, string name, SemanticVersion minimumEngineVersion)
+    {
+        var codeName = GetProjectCodeName(name);
+        var gameTarget = codeName + "Target";
+        var editorTarget = codeName + "EditorTarget";
+        var editorModule = codeName + "Editor";
         var projectFile = Path.Combine(root, name + ".flaxproj");
         var projectJson = new JsonObject
         {
@@ -223,15 +237,91 @@ internal sealed class CommandDispatcher(
             ["Company"] = string.Empty,
             ["Copyright"] = string.Empty,
             ["References"] = new JsonArray(new JsonObject { ["Name"] = "$(EnginePath)/Flax.flaxproj" }),
-            ["MinEngineVersion"] = parsedVersion.ToString(),
+            ["GameTarget"] = gameTarget,
+            ["EditorTarget"] = editorTarget,
+            ["MinEngineVersion"] = minimumEngineVersion.ToString(),
         };
         File.WriteAllText(projectFile, projectJson.ToJsonString(new JsonSerializerOptions(JsonSupport.Options) { WriteIndented = true }) + Environment.NewLine);
         Directory.CreateDirectory(Path.Combine(root, "Content"));
-        Directory.CreateDirectory(Path.Combine(root, "Source"));
+        var source = Path.Combine(root, "Source");
+        var module = Path.Combine(source, codeName);
+        var editorModulePath = Path.Combine(source, editorModule);
+        Directory.CreateDirectory(module);
+        Directory.CreateDirectory(editorModulePath);
         Directory.CreateDirectory(Path.Combine(root, ".flax"));
-        var project = ProjectContext.Find(projectFile);
-        projects.Add(project.Root);
-        return CliResult.Ok(new { created = true, template = "empty", project = ProjectView(project) });
+
+        WriteSourceFile(Path.Combine(source, gameTarget + ".Build.cs"),
+            "using Flax.Build;",
+            "",
+            $"public class {gameTarget} : GameProjectTarget",
+            "{",
+            "    public override void Init()",
+            "    {",
+            "        base.Init();",
+            $"        Modules.Add(\"{codeName}\");",
+            "    }",
+            "}");
+        WriteSourceFile(Path.Combine(source, editorTarget + ".Build.cs"),
+            "using Flax.Build;",
+            "",
+            $"public class {editorTarget} : GameProjectEditorTarget",
+            "{",
+            "    public override void Init()",
+            "    {",
+            "        base.Init();",
+            $"        Modules.Add(\"{codeName}\");",
+            $"        Modules.Add(\"{editorModule}\");",
+            "    }",
+            "}");
+        WriteSourceFile(Path.Combine(module, codeName + ".Build.cs"),
+            "using Flax.Build;",
+            "using Flax.Build.NativeCpp;",
+            "",
+            $"public class {codeName} : GameModule",
+            "{",
+            "    public override void Init()",
+            "    {",
+            "        base.Init();",
+            "        BuildNativeCode = false;",
+            "    }",
+            "",
+            "    public override void Setup(BuildOptions options)",
+            "    {",
+            "        base.Setup(options);",
+            "        options.ScriptingAPI.IgnoreMissingDocumentationWarnings = true;",
+            "    }",
+            "}");
+        WriteSourceFile(Path.Combine(editorModulePath, editorModule + ".Build.cs"),
+            "using Flax.Build;",
+            "using Flax.Build.NativeCpp;",
+            "",
+            $"public class {editorModule} : GameEditorModule",
+            "{",
+            "    public override void Init()",
+            "    {",
+            "        base.Init();",
+            "        BuildNativeCode = false;",
+            "    }",
+            "",
+            "    public override void Setup(BuildOptions options)",
+            "    {",
+            "        base.Setup(options);",
+            "        options.ScriptingAPI.IgnoreMissingDocumentationWarnings = true;",
+            "    }",
+            "}");
+        return projectFile;
+    }
+
+    internal static string GetProjectCodeName(string name)
+    {
+        var characters = name.Select(character => char.IsLetterOrDigit(character) || character == '_' ? character : '_').ToArray();
+        var result = characters.Length == 0 ? "Game" : new string(characters);
+        return char.IsLetter(result[0]) || result[0] == '_' ? result : "_" + result;
+    }
+
+    private static void WriteSourceFile(string path, params string[] lines)
+    {
+        File.WriteAllText(path, string.Join(Environment.NewLine, lines) + Environment.NewLine);
     }
 
     private static CliResult Templates(CommandArguments args)
@@ -518,10 +608,69 @@ internal sealed class CommandDispatcher(
         return await ExecuteEditorCommand(options, context, instance, liveOnly, oneShot);
     }
 
+    private async Task<CliResult> Generators(CommandArguments args, CommandContext context)
+    {
+        var action = args.Positional()?.ToLowerInvariant() ?? "list";
+        if (action is "list" or "info")
+        {
+            var instance = args.Option("--instance");
+            var liveOnly = args.Flag("--live-only");
+            var oneShot = args.Flag("--one-shot");
+            var options = new EditorCommandRequestOptions
+            {
+                Action = action == "list" ? "generator-list" : "generator-info",
+                Name = action == "info" ? args.Positional() ?? throw CommandLine.Usage("generators info requires a generator name.") : null,
+            };
+            args.Complete();
+            if (context.Options.PassThrough.Count != 0)
+                throw CommandLine.Usage("generators list/info do not accept arguments after '--'.");
+            return await ExecuteEditorCommand(options, context, instance, liveOnly, oneShot);
+        }
+        if (action != "run")
+            throw CommandLine.Usage($"Unknown generators subcommand '{action}'.");
+
+        if (args.Flag("--detach"))
+        {
+            var project = TryFindProject(context.Options.Project);
+            return CliResult.Ok(new { operation = "generator", detached = true, job = _jobs.Start(project, context.Options.OriginalArgs, project?.Root ?? Environment.CurrentDirectory) });
+        }
+
+        var name = args.Positional() ?? throw CommandLine.Usage("generators run requires a generator name.");
+        var rawArguments = args.Option("--arguments");
+        var inputPath = args.Option("--input");
+        var dryRun = args.Flag("--dry-run");
+        var confirm = args.Flag("--yes");
+        var instanceSelector = args.Option("--instance");
+        var requireLive = args.Flag("--live-only");
+        var requireOneShot = args.Flag("--one-shot");
+        if (rawArguments != null && inputPath != null)
+            throw CommandLine.Usage("generators run accepts either --arguments or --input, not both.");
+        if (inputPath != null)
+        {
+            inputPath = Path.GetFullPath(inputPath);
+            if (!File.Exists(inputPath))
+                throw new CliException(ExitCode.ContextRequired, "FLX-GENERATOR-INPUT-0004", $"Generator input file '{inputPath}' does not exist.");
+            rawArguments = File.ReadAllText(inputPath);
+        }
+
+        var remaining = args.TakeRemaining();
+        remaining.AddRange(context.Options.PassThrough);
+        var arguments = ParseCommandArguments(rawArguments, remaining);
+        if (dryRun)
+            arguments["dry-run"] = true;
+        return await ExecuteEditorCommand(new EditorCommandRequestOptions
+        {
+            Action = "generator-invoke",
+            Name = name,
+            Arguments = arguments,
+            Confirm = confirm,
+        }, context, instanceSelector, requireLive, requireOneShot);
+    }
+
     private async Task<CliResult> Authoring(string group, CommandArguments args, CommandContext context)
     {
         var action = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"{group} requires a subcommand.");
-        if ((group == "actors" && action == "component") || (group == "scenes" && (action == "build-list" || action == "active")))
+        if ((group == "actors" && (action == "component" || action == "primitive" || action == "property")) || (group == "scenes" && (action == "build-list" || action == "active")))
         {
             var nested = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"{group} {action} requires a subcommand.");
             action += "." + nested;
@@ -577,6 +726,9 @@ internal sealed class CommandDispatcher(
                     "list" => "commands.list",
                     "info" => "commands.info",
                     "invoke" => "command.invoke",
+                    "generator-list" => "generators.list",
+                    "generator-info" => "generators.info",
+                    "generator-invoke" => "generator.invoke",
                     _ => throw CommandLine.Usage($"Unsupported typed command action '{options.Action}'."),
                 };
                 var liveInvocation = await bridgeClient.InvokeAsync(instance, action, options.Name, options.Arguments, options.Confirm, context);
@@ -751,8 +903,8 @@ internal sealed class CommandDispatcher(
         case "step": bridgeAction = "player.step"; break;
         case "quit" or "close": bridgeAction = "player.quit"; break;
         case "input":
-            var inputKind = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage("player input requires key, pointer, gamepad, action, or reset.");
-            bridgeAction = inputKind switch { "key" => "runtime.input.key", "pointer" or "mouse" => "runtime.input.pointer", "gamepad" => "runtime.input.gamepad", "action" => "runtime.input.action", "reset" => "runtime.input.reset", _ => throw CommandLine.Usage($"Unknown player input kind '{inputKind}'.") };
+            var inputKind = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage("player input requires key, pointer, inspect, gamepad, action, or reset.");
+            bridgeAction = inputKind switch { "key" => "runtime.input.key", "pointer" or "mouse" => "runtime.input.pointer", "inspect" or "sample" => "runtime.input.inspect", "gamepad" => "runtime.input.gamepad", "action" => "runtime.input.action", "reset" => "runtime.input.reset", _ => throw CommandLine.Usage($"Unknown player input kind '{inputKind}'.") };
             // Reuse the typed option parser so both `--name=value` and
             // `--name value` forms preserve booleans, numbers, and arrays.
             arguments = ParseCommandArguments(null, args.TakeRemaining());
@@ -1105,6 +1257,24 @@ internal sealed class CommandDispatcher(
         }
         catch (JsonException)
         {
+            // PowerShell can remove the quotes around JSON object property names
+            // when forwarding native command arguments. Accept that common shape
+            // so values such as {X:0,Y:20,Z:0} remain usable at the terminal.
+            if (value.StartsWith('{') || value.StartsWith('['))
+            {
+                var normalized = Regex.Replace(
+                    value,
+                    @"(?<=[{,])\s*(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*:",
+                    match => $"\"{match.Groups["name"].Value}\":");
+                try
+                {
+                    return JsonNode.Parse(normalized);
+                }
+                catch (JsonException)
+                {
+                    // Preserve the original value when it is not relaxed JSON.
+                }
+            }
             return JsonValue.Create(value);
         }
     }
@@ -1355,8 +1525,8 @@ internal sealed class CommandDispatcher(
         args.Complete();
         return shell switch
         {
-            "powershell" or "pwsh" => CliResult.Ok("Register-ArgumentCompleter -Native -CommandName flax -ScriptBlock { param($wordToComplete) 'engines','engine','projects','templates','new','open','play','generate','compile','build','assets','scenes','actors','prefabs','settings','bake','dev','visject','jobs','feeds','player','runtime','commands','command','editor','console','performance','selection','capture','playtest','mcp','test','doctor','diagnose','logs','env','config','status','completion' | Where-Object { $_ -like \"$wordToComplete*\" } | ForEach-Object { $_ } }"),
-            "bash" => CliResult.Ok("complete -W 'engines engine projects templates new open play generate compile build assets scenes actors prefabs settings bake dev visject jobs feeds player runtime commands command editor console performance selection capture playtest mcp test doctor diagnose logs env config status completion' flax"),
+            "powershell" or "pwsh" => CliResult.Ok("Register-ArgumentCompleter -Native -CommandName flax -ScriptBlock { param($wordToComplete) 'engines','engine','projects','templates','new','open','play','generate','compile','build','assets','scenes','actors','prefabs','settings','bake','dev','visject','jobs','feeds','player','runtime','commands','command','generators','editor','console','performance','selection','capture','playtest','mcp','test','doctor','diagnose','logs','env','config','status','completion' | Where-Object { $_ -like \"$wordToComplete*\" } | ForEach-Object { $_ } }"),
+            "bash" => CliResult.Ok("complete -W 'engines engine projects templates new open play generate compile build assets scenes actors prefabs settings bake dev visject jobs feeds player runtime commands command generators editor console performance selection capture playtest mcp test doctor diagnose logs env config status completion' flax"),
             _ => throw CommandLine.Usage($"Unsupported completion shell '{shell}'."),
         };
     }
@@ -1463,14 +1633,15 @@ internal sealed class CommandDispatcher(
         "dev" => DevHelp,
         "commands" => "flax commands <list|info> [name] [--project path]",
         "command" => CommandHelp,
+        "generators" or "generator" => GeneratorHelp,
         "editor" => "flax editor <status|play|pause|resume|stop|step|focus|save-all|recompile|close> [--save|--discard] [--project path] [--instance id|pid]",
         "console" => "flax console [read|clear] [--project path] [--instance id|pid] [--cursor number] [--limit 1..1000] [--level value]",
         "performance" => "flax performance [--project path] [--instance id|pid]",
         "selection" => "flax selection <get|set|clear> [--actor id ...] [--additive] [--project path] [--instance id|pid]",
         "capture" => "flax capture <viewport|game> --to <project-relative-or-absolute-path> [--project path] [--instance id|pid]",
         "playtest" => "flax playtest <status|begin|pause|resume|step|find|assert|wait|capture|end> [options] [--project path] [--instance id|pid]",
-        "player" => "flax player <status|pause|resume|step|quit|input> [--project path] [--instance id|pid]\nflax player input <key|pointer|reset> --name value [--state down|up|press]",
-        "runtime" => "flax runtime input <key|pointer|reset> --name value [--state down|up|press] [--project path] [--instance id|pid]",
+        "player" => "flax player <status|pause|resume|step|quit|input> [--project path] [--instance id|pid]\nflax player input key --key W [--state down|up|press]\nflax player input pointer --state move --x 100 --y 100\nflax player input pointer --state relative --dx 12 --dy -4\nflax player input inspect [--key W] [--axis \"Mouse X\"] [--action Jump]",
+        "runtime" => "flax runtime input <key|pointer|inspect|reset> [options] [--project path] [--instance id|pid]",
         "jobs" => "flax jobs <list|info|status|wait|cancel|prune> [job-id] [--project path] [--yes]",
         "feeds" => "flax feeds <verify|list|install> --manifest path --signature path --public-key path [--id entry --to directory --yes]",
         "visject" => "flax visject groups list | asset inspect --asset path [--kind material|animation] | validate | node add|remove|set | connect|disconnect",
@@ -1510,13 +1681,26 @@ flax command <name> [--project path] [--instance id|pid] -- --option value [--fl
 Typed project commands prefer a matching running Editor and fall back to a one-shot headless Editor. Repeated options become JSON arrays.
 """;
 
+    private const string GeneratorHelp = """
+flax generators list [--project path] [--instance id|pid] [--live-only|--one-shot]
+flax generators info <name> [--project path] [--instance id|pid] [--live-only|--one-shot]
+flax generators run <name> [--project path] [--instance id|pid] [--live-only|--one-shot] [--arguments <json> | --input <file.json>] [--dry-run] [--yes] [--detach]
+flax generators run <name> [--project path] -- --option value [--flag]
+
+Project-owned generators are public static methods marked with [CliGenerator]. Their typed schemas, dry-run support, access level, and automatic save behavior are discoverable before invocation.
+""";
+
     private const string AuthoringHelp = """
 flax scenes <list|create|open|close|reload|save|dirty|hierarchy|active|build-list> [options]
 flax actors <find|get|create|create-batch|delete|rename|transform|parent|active|tag|layer> [options]
 flax actors component <add|remove|get|set> [options]
+flax actors primitive <list|create> [--shape cube|sphere|plane|cylinder|cone|capsule] [options]
+flax actors property <list|get|set> [options]
 flax prefabs <create|instantiate|variant|apply|revert|unpack|save> [options]
 flax settings <list|get|schema|diff|set> [options]
 flax bake <lighting|navmesh|probes|csg|scenes|sdf> <start|cancel|clear> [options]
+
+Live scene mutations remain dirty in the Editor. Persist them explicitly with `flax scenes save` or `flax editor save-all`.
 
 Use flax commands info <dotted-name> for each command's typed option schema.
 """;
@@ -1572,10 +1756,11 @@ Local engine commands:
   dev unlock-eval|eval|eval-file|unlock-csharp|eval-csharp|eval-csharp-file
   visject groups|asset|validate|node|connect|disconnect
   player status|pause|resume|step|quit|input
-  runtime input key|pointer|reset (alias for Player virtual input)
+  runtime input key|pointer|inspect|reset (alias for Player virtual input)
   jobs list|info|status|wait|cancel|prune [--detach on long-running commands]
   feeds verify|list|install (signed local manifests and archives)
   commands list|info, command <name>
+  generators list|info|run
   editor status|play|pause|resume|stop|step|focus|save-all|recompile|close, console, performance, selection, capture
   playtest status|begin|pause|resume|step|find|assert|wait|capture|end
   mcp (stdio MCP server)

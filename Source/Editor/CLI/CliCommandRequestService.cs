@@ -36,10 +36,31 @@ namespace FlaxEditor
     }
 
     /// <summary>
+    /// Controls how a project-owned CLI generator persists successful changes.
+    /// </summary>
+    public enum CliGeneratorSaveMode
+    {
+        /// <summary>
+        /// The generator owns all persistence.
+        /// </summary>
+        None,
+
+        /// <summary>
+        /// Save all loaded scenes after the generator succeeds.
+        /// </summary>
+        Scenes,
+
+        /// <summary>
+        /// Save all scenes and content after the generator succeeds.
+        /// </summary>
+        All,
+    }
+
+    /// <summary>
     /// Registers a public static method as a typed Flax CLI command.
     /// </summary>
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
-    public sealed class CliCommandAttribute : Attribute
+    public class CliCommandAttribute : Attribute
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="CliCommandAttribute"/> class.
@@ -84,6 +105,38 @@ namespace FlaxEditor
         /// Gets or sets whether the command requires play mode.
         /// </summary>
         public bool RequiresPlayMode { get; set; }
+    }
+
+    /// <summary>
+    /// Registers a public static method as a discoverable project-owned generator.
+    /// </summary>
+    /// <remarks>
+    /// Generators contain project-specific authoring logic. Use <see cref="CliOptionAttribute"/>
+    /// parameters for their typed inputs. When <see cref="SupportsDryRun"/> is enabled the method
+    /// must expose an optional boolean <c>dry-run</c> option and must avoid mutations when it is true.
+    /// </remarks>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+    public sealed class CliGeneratorAttribute : CliCommandAttribute
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="CliGeneratorAttribute"/> class.
+        /// </summary>
+        /// <param name="name">The unique lowercase dotted generator name.</param>
+        public CliGeneratorAttribute(string name)
+        : base(name)
+        {
+            Access = CliCommandAccess.MutatesProject;
+        }
+
+        /// <summary>
+        /// Gets or sets whether the generator supports the conventional optional boolean <c>dry-run</c> option.
+        /// </summary>
+        public bool SupportsDryRun { get; set; }
+
+        /// <summary>
+        /// Gets or sets how successful non-dry-run changes are persisted.
+        /// </summary>
+        public CliGeneratorSaveMode SaveMode { get; set; } = CliGeneratorSaveMode.All;
     }
 
     /// <summary>
@@ -339,20 +392,36 @@ namespace FlaxEditor
     {
         private readonly CliCommandOperation _operation;
         private readonly CliCommandResult _result;
+        private readonly Action<CliCommandResult> _onCompleted;
+        private bool _completionApplied;
 
-        public CliCommandInvocation(CliCommandResult result)
+        public CliCommandInvocation(CliCommandResult result, Action<CliCommandResult> onCompleted = null)
         {
             _result = result;
+            _onCompleted = onCompleted;
         }
 
-        public CliCommandInvocation(CliCommandOperation operation)
+        public CliCommandInvocation(CliCommandOperation operation, Action<CliCommandResult> onCompleted = null)
         {
             _operation = operation ?? throw new ArgumentNullException(nameof(operation));
+            _onCompleted = onCompleted;
         }
 
         public bool IsCompleted => _operation == null || _operation.IsCompleted;
 
-        public CliCommandResult Result => _operation == null ? _result : _operation.Result;
+        public CliCommandResult Result
+        {
+            get
+            {
+                var result = _operation == null ? _result : _operation.Result;
+                if (IsCompleted && !_completionApplied)
+                {
+                    _completionApplied = true;
+                    _onCompleted?.Invoke(result);
+                }
+                return result;
+            }
+        }
 
         public void Update(TimeSpan timeBudget)
         {
@@ -418,11 +487,22 @@ namespace FlaxEditor
             return commands;
         }
 
+        public static CliRegisteredCommand[] DiscoverCommands()
+        {
+            return Discover().Where(x => !(x.Attribute is CliGeneratorAttribute)).ToArray();
+        }
+
+        public static CliRegisteredCommand[] DiscoverGenerators()
+        {
+            return Discover().Where(x => x.Attribute is CliGeneratorAttribute).ToArray();
+        }
+
         public static object Describe(CliRegisteredCommand command)
         {
             return new
             {
                 name = command.Attribute.Name,
+                kind = command.Attribute is CliGeneratorAttribute ? "generator" : "command",
                 description = command.Attribute.Description,
                 version = command.Attribute.Version,
                 access = GetAccessName(command.Attribute.Access),
@@ -437,6 +517,13 @@ namespace FlaxEditor
                 },
                 parameters = command.Parameters.Where(x => !x.IsContext).Select(DescribeParameter).ToArray(),
                 returns = DescribeType(command.Method.ReturnType),
+                generator = command.Attribute is CliGeneratorAttribute generator
+                    ? new
+                    {
+                        supportsDryRun = generator.SupportsDryRun,
+                        saveMode = GetSaveModeName(generator.SaveMode),
+                    }
+                    : null,
             };
         }
 
@@ -447,6 +534,22 @@ namespace FlaxEditor
             var command = commands.FirstOrDefault(x => string.Equals(x.Attribute.Name, name, StringComparison.OrdinalIgnoreCase));
             if (command == null)
                 throw new CliCommandProtocolException("FLX-COMMAND-NOTFOUND-0004", $"CLI command '{name}' is not registered in the project.");
+            return command;
+        }
+
+        public static CliRegisteredCommand RequireCommand(CliRegisteredCommand[] commands, string name)
+        {
+            var command = Require(commands, name);
+            if (command.Attribute is CliGeneratorAttribute)
+                throw new CliCommandProtocolException("FLX-COMMAND-NOTFOUND-0004", $"'{name}' is a generator. Invoke it through the generators surface.");
+            return command;
+        }
+
+        public static CliRegisteredCommand RequireGenerator(CliRegisteredCommand[] commands, string name)
+        {
+            var command = Require(commands, name);
+            if (!(command.Attribute is CliGeneratorAttribute))
+                throw new CliCommandProtocolException("FLX-GENERATOR-NOTFOUND-0004", $"'{name}' is a command, not a project generator.");
             return command;
         }
 
@@ -529,9 +632,10 @@ namespace FlaxEditor
                 throw new CliCommandProtocolException("FLX-COMMAND-0006", ex.Message);
             }
 
+            var completion = CreateCompletion(command, values);
             if (value is CliCommandOperation operation)
-                return new CliCommandInvocation(operation);
-            return new CliCommandInvocation(value as CliCommandResult ?? CliCommandResult.Success(value));
+                return new CliCommandInvocation(operation, completion);
+            return new CliCommandInvocation(value as CliCommandResult ?? CliCommandResult.Success(value), completion);
         }
 
         private static CliRegisteredCommand Validate(MethodInfo method, CliCommandAttribute attribute)
@@ -574,7 +678,57 @@ namespace FlaxEditor
             if (contextCount > 1)
                 throw new CliCommandProtocolException("FLX-COMMAND-CATALOG-0006", $"CLI command '{attribute.Name}' accepts more than one CliCommandContext parameter.");
 
+            if (attribute is CliGeneratorAttribute generator)
+            {
+                if (generator.Access == CliCommandAccess.ReadOnly)
+                    throw new CliCommandProtocolException("FLX-COMMAND-CATALOG-0006", $"CLI generator '{attribute.Name}' must use mutates-project or destructive access.");
+                if (generator.SupportsDryRun)
+                {
+                    var dryRun = registered.FirstOrDefault(x => !x.IsContext && NormalizeName(x.Name) == "dryrun");
+                    if (dryRun == null || dryRun.Parameter.ParameterType != typeof(bool) || !dryRun.Parameter.HasDefaultValue || !Equals(dryRun.Parameter.DefaultValue, false))
+                        throw new CliCommandProtocolException("FLX-COMMAND-CATALOG-0006", $"CLI generator '{attribute.Name}' declares dry-run support but does not expose an optional boolean 'dry-run' parameter defaulting to false.");
+                }
+            }
+
             return new CliRegisteredCommand { Attribute = attribute, Method = method, Parameters = registered };
+        }
+
+        private static Action<CliCommandResult> CreateCompletion(CliRegisteredCommand command, object[] values)
+        {
+            if (!(command.Attribute is CliGeneratorAttribute generator))
+                return null;
+
+            var dryRun = false;
+            if (generator.SupportsDryRun)
+            {
+                for (var i = 0; i < command.Parameters.Length; i++)
+                {
+                    if (!command.Parameters[i].IsContext && NormalizeName(command.Parameters[i].Name) == "dryrun")
+                    {
+                        dryRun = (bool)values[i];
+                        break;
+                    }
+                }
+            }
+            return result =>
+            {
+                if (result == null || !result.Succeeded || dryRun)
+                    return;
+                switch (generator.SaveMode)
+                {
+                case CliGeneratorSaveMode.None:
+                    break;
+                case CliGeneratorSaveMode.Scenes:
+                    if (Level.SaveAllScenes())
+                        throw new InvalidOperationException($"Generator '{generator.Name}' succeeded but one or more scenes failed to save.");
+                    break;
+                case CliGeneratorSaveMode.All:
+                    Editor.Instance.SaveAll();
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+                }
+            };
         }
 
         private static object DescribeParameter(CliRegisteredParameter parameter)
@@ -667,6 +821,21 @@ namespace FlaxEditor
             }
         }
 
+        private static string GetSaveModeName(CliGeneratorSaveMode saveMode)
+        {
+            switch (saveMode)
+            {
+            case CliGeneratorSaveMode.None:
+                return "none";
+            case CliGeneratorSaveMode.Scenes:
+                return "scenes";
+            case CliGeneratorSaveMode.All:
+                return "all";
+            default:
+                throw new ArgumentOutOfRangeException(nameof(saveMode));
+            }
+        }
+
         private static Type[] GetLoadableTypes(Assembly assembly)
         {
             try
@@ -695,13 +864,22 @@ namespace FlaxEditor
                 switch (options.Action)
                 {
                 case "list":
-                    CompleteCommand(commands.Select(CliCommandRegistry.Describe).ToArray(), true, Array.Empty<CliCommandMessage>(), Array.Empty<CliCommandMessage>());
+                    CompleteCommand(commands.Where(x => !(x.Attribute is CliGeneratorAttribute)).Select(CliCommandRegistry.Describe).ToArray(), true, Array.Empty<CliCommandMessage>(), Array.Empty<CliCommandMessage>());
                     break;
                 case "info":
-                    CompleteCommand(CliCommandRegistry.Describe(CliCommandRegistry.Require(commands, options.Name)), true, Array.Empty<CliCommandMessage>(), Array.Empty<CliCommandMessage>());
+                    CompleteCommand(CliCommandRegistry.Describe(CliCommandRegistry.RequireCommand(commands, options.Name)), true, Array.Empty<CliCommandMessage>(), Array.Empty<CliCommandMessage>());
                     break;
                 case "invoke":
-                    InvokeCommand(commands, options);
+                    InvokeCommand(commands, options, false);
+                    break;
+                case "generator-list":
+                    CompleteCommand(commands.Where(x => x.Attribute is CliGeneratorAttribute).Select(CliCommandRegistry.Describe).ToArray(), true, Array.Empty<CliCommandMessage>(), Array.Empty<CliCommandMessage>());
+                    break;
+                case "generator-info":
+                    CompleteCommand(CliCommandRegistry.Describe(CliCommandRegistry.RequireGenerator(commands, options.Name)), true, Array.Empty<CliCommandMessage>(), Array.Empty<CliCommandMessage>());
+                    break;
+                case "generator-invoke":
+                    InvokeCommand(commands, options, true);
                     break;
                 default:
                     throw new CliCommandProtocolException("FLX-COMMAND-ACTION-0002", $"Unsupported command action '{options.Action}'.");
@@ -719,7 +897,7 @@ namespace FlaxEditor
             }
         }
 
-        private void InvokeCommand(CliRegisteredCommand[] commands, CliCommandOptions options)
+        private void InvokeCommand(CliRegisteredCommand[] commands, CliCommandOptions options, bool generator)
         {
             var warnings = new List<CliCommandMessage>();
             var context = new CliCommandContext(
@@ -732,7 +910,9 @@ namespace FlaxEditor
                     warnings.Add(warning);
                     TryWriteEvent(new { type = "diagnostic", requestId = _request.RequestId, severity = "warning", code = warning.Code, message = warning.Message, details = warning.Details });
                 });
-            var command = CliCommandRegistry.Require(commands, options.Name);
+            var command = generator
+                ? CliCommandRegistry.RequireGenerator(commands, options.Name)
+                : CliCommandRegistry.RequireCommand(commands, options.Name);
             TryWriteEvent(new { type = "phase", requestId = _request.RequestId, name = command.Attribute.Name });
             var result = CliCommandRegistry.Invoke(command, options.Arguments, options.Confirm, context);
             warnings.AddRange(result.Warnings);

@@ -45,6 +45,8 @@ namespace FlaxEditor
 
     internal static class CliAuthoringCommands
     {
+        private static readonly string[] PrimitiveNames = { "Cube", "Sphere", "Plane", "Cylinder", "Cone", "Capsule" };
+
         [CliCommand("scenes.list", Description = "List loaded scenes.", Access = CliCommandAccess.ReadOnly)]
         public static CliCommandOperation ListScenes(CliCommandContext context = null)
         {
@@ -129,7 +131,7 @@ namespace FlaxEditor
                 sceneId = info.ID;
             if (open && sceneId != Guid.Empty)
             {
-                SaveEditedScenes();
+                EnsureScenesClean("open the new scene");
                 Editor.Instance.Scene.OpenScene(sceneId);
             }
             return new { path = outputPath, sceneId, opened = open && sceneId != Guid.Empty, saved = true, dirty = false };
@@ -139,31 +141,35 @@ namespace FlaxEditor
         public static object OpenScene([CliOption("scene", Description = "Scene ID or Content-relative path.", Required = true)] string scene, [CliOption("additive")] bool additive = false)
         {
             var id = ResolveAssetId(scene, ".scene");
-            var autoSavedSceneIds = additive ? Array.Empty<Guid>() : SaveEditedScenes();
+            if (!additive)
+                EnsureScenesClean("open another scene");
+            var autoSavedSceneIds = Array.Empty<Guid>();
             Editor.Instance.Scene.OpenScene(id, additive);
-            return new { sceneId = id, additive, requested = true, autoSavedSceneIds, saved = autoSavedSceneIds.Length != 0, dirty = Editor.Instance.Scene.IsEdited() };
+            return new { sceneId = id, additive, requested = true, autoSavedSceneIds, saved = false, dirty = Editor.Instance.Scene.IsEdited() };
         }
 
-        [CliCommand("scenes.close", Description = "Save pending changes and close one or all loaded scenes without prompting.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        [CliCommand("scenes.close", Description = "Close one or all loaded scenes, refusing to discard unsaved changes.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
         public static object CloseScenes([CliOption("scene", Description = "Optional loaded scene ID. Omit to close all loaded scenes.")] Guid? scene = null)
         {
             var targets = scene.HasValue ? new[] { RequireScene(scene.Value) } : Level.Scenes;
             var targetIds = targets.Select(x => x.ID).ToArray();
-            var autoSavedSceneIds = SaveEditedScenes();
+            EnsureScenesClean("close scenes");
+            var autoSavedSceneIds = Array.Empty<Guid>();
             if (scene.HasValue)
                 Editor.Instance.Scene.CloseScene(targets[0]);
             else
                 Editor.Instance.Scene.CloseAllScenes();
-            return new { sceneIds = targetIds, requested = targetIds.Length != 0, autoSavedSceneIds, saved = autoSavedSceneIds.Length != 0 };
+            return new { sceneIds = targetIds, requested = targetIds.Length != 0, autoSavedSceneIds, saved = false };
         }
 
-        [CliCommand("scenes.reload", Description = "Save pending changes and reload all loaded scenes from disk without prompting.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        [CliCommand("scenes.reload", Description = "Reload all loaded scenes from disk, refusing to discard unsaved changes.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
         public static object ReloadScenes()
         {
             var sceneIds = Level.Scenes.Select(x => x.ID).ToArray();
-            var autoSavedSceneIds = SaveEditedScenes();
+            EnsureScenesClean("reload scenes");
+            var autoSavedSceneIds = Array.Empty<Guid>();
             Editor.Instance.Scene.ReloadScenes();
-            return new { sceneIds, requested = sceneIds.Length != 0, autoSavedSceneIds, saved = autoSavedSceneIds.Length != 0 };
+            return new { sceneIds, requested = sceneIds.Length != 0, autoSavedSceneIds, saved = false };
         }
 
         [CliCommand("scenes.save", Description = "Save one or all loaded scenes.", Access = CliCommandAccess.MutatesProject)]
@@ -205,7 +211,8 @@ namespace FlaxEditor
             if (before[0] == scene)
                 return new { changed = false, scene = DescribeScene(target), loadedSceneIds = before, savedSceneIds = Array.Empty<Guid>() };
 
-            var savedSceneIds = SaveEditedScenes();
+            EnsureScenesClean("change the active scene");
+            var savedSceneIds = Array.Empty<Guid>();
             var ordered = new[] { scene }.Concat(before.Where(x => x != scene)).ToArray();
             if (Level.UnloadAllScenes())
                 throw new InvalidOperationException("Failed to unload the current scene set while changing the primary scene.");
@@ -534,206 +541,46 @@ namespace FlaxEditor
             if (nodes.Count != created.Count)
                 throw new InvalidOperationException("One or more created Actors are missing from the Editor scene graph.");
             undo.AddAction(new DeleteActorsAction(nodes, true));
-            var saved = SaveActorScenes(created);
-            return new { actors = created.Select(DescribeActor).ToArray(), saved, dirty = created.Any(x => Editor.Instance.Scene.IsEdited(x.Scene)) };
+            return new { actors = created.Select(DescribeActor).ToArray(), saved = false, dirty = created.Any(x => Editor.Instance.Scene.IsEdited(x.Scene)) };
         }
 
-        [CliCommand("actors.spawn-layout", Description = "Spawn model or Prefab instances using a ring, grid, line, or stack layout.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
-        public static object SpawnLayout(
-            [CliOption("count", Required = true)] int count,
-            [CliOption("center-x", Required = true)] float centerX,
-            [CliOption("center-y", Required = true)] float centerY,
-            [CliOption("center-z", Required = true)] float centerZ,
-            [CliOption("layout")] string layout = "ring",
-            [CliOption("plane")] string plane = "xz",
-            [CliOption("radius")] float radius = 300.0f,
-            [CliOption("spacing")] float spacing = 150.0f,
-            [CliOption("columns")] int columns = 0,
-            [CliOption("vertical-offset")] float verticalOffset = 0.0f,
-            [CliOption("size")] float size = 100.0f,
-            [CliOption("model")] string model = null,
-            [CliOption("prefab")] string prefab = null,
-            [CliOption("physics")] string physics = "none",
-            [CliOption("collider")] string collider = "none",
-            [CliOption("name-prefix")] string namePrefix = "Spawned",
-            [CliOption("parent")] Guid? parent = null)
+        [CliCommand("actors.primitive.list", Description = "List the built-in Editor primitive models and their native bounds.", Access = CliCommandAccess.ReadOnly)]
+        public static object ListPrimitives()
         {
-            if (count < 1 || count > 1000)
-                throw new ArgumentOutOfRangeException(nameof(count), "Spawn count must be between 1 and 1000.");
-            if (radius < 0.0f)
-                throw new ArgumentOutOfRangeException(nameof(radius));
-            if (spacing < 0.0f)
-                throw new ArgumentOutOfRangeException(nameof(spacing));
-            if (size <= 0.0f)
-                throw new ArgumentOutOfRangeException(nameof(size));
-            if (columns < 0)
-                throw new ArgumentOutOfRangeException(nameof(columns));
-            if (string.IsNullOrWhiteSpace(model) == string.IsNullOrWhiteSpace(prefab))
-                throw new ArgumentException("Specify exactly one of --model or --prefab.");
-            if (string.IsNullOrWhiteSpace(namePrefix))
-                throw new ArgumentException("Name prefix cannot be empty.", nameof(namePrefix));
+            return PrimitiveNames.Select(name => DescribePrimitive(name, LoadPrimitive(name))).ToArray();
+        }
 
-            var center = new Vector3(centerX, centerY, centerZ);
-            layout = layout?.Trim().ToLowerInvariant();
-            plane = plane?.Trim().ToLowerInvariant();
-            physics = physics?.Trim().ToLowerInvariant();
-            collider = collider?.Trim().ToLowerInvariant();
-            if (layout != "ring" && layout != "grid" && layout != "line" && layout != "stack")
-                throw new ArgumentException("Layout must be ring, grid, line, or stack.", nameof(layout));
-            if (plane != "xy" && plane != "xz" && plane != "yz")
-                throw new ArgumentException("Plane must be xy, xz, or yz.", nameof(plane));
-            if (physics != "none" && physics != "static" && physics != "dynamic")
-                throw new ArgumentException("Physics must be none, static, or dynamic.", nameof(physics));
-            if (collider != "none" && collider != "box" && collider != "sphere")
-                throw new ArgumentException("Collider must be none, box, or sphere.", nameof(collider));
-            if (physics == "none" && collider != "none")
-                throw new ArgumentException("A collider requires static or dynamic physics.");
-
-            Model modelAsset = null;
-            Prefab prefabAsset = null;
-            if (!string.IsNullOrWhiteSpace(model))
+        [CliCommand("actors.primitive.create", Description = "Create a StaticModel Actor using a built-in Editor primitive without copying an asset.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object CreatePrimitive(
+            [CliOption("shape", Description = "Cube, Sphere, Plane, Cylinder, Cone, or Capsule.", Required = true)] string shape,
+            [CliOption("name")] string name = null,
+            [CliOption("parent")] Guid? parent = null,
+            [CliOption("position")] Vector3? position = null,
+            [CliOption("rotation")] Float3? rotation = null,
+            [CliOption("scale")] Float3? scale = null)
+        {
+            var primitiveName = RequirePrimitiveName(shape);
+            var model = LoadPrimitive(primitiveName);
+            var actor = new StaticModel
             {
-                var modelId = ResolveAssetId(model, ".flax");
-                modelAsset = FlaxEngine.Content.Load<Model>(modelId) ?? throw new InvalidOperationException($"Cannot load Model '{model}'.");
-                if (modelAsset.WaitForLoaded())
-                    throw new InvalidOperationException($"Failed to load Model '{model}'.");
-            }
-            else
-            {
-                var prefabId = ResolveAssetId(prefab, ".prefab");
-                prefabAsset = FlaxEngine.Content.Load<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
-                if (prefabAsset.WaitForLoaded())
-                    throw new InvalidOperationException($"Failed to load Prefab '{prefab}'.");
-            }
-
-            var spawnParent = parent.HasValue ? RequireActor(parent.Value) : Level.GetScene(0);
-            var created = new List<Actor>(count);
-            try
-            {
-                for (var i = 0; i < count; i++)
-                {
-                    var offset = LayoutOffset(layout, plane, i, count, radius, spacing, columns);
-                    var position = center + offset + new Vector3(0.0f, verticalOffset, 0.0f);
-                    Actor root;
-                    if (prefabAsset != null)
-                    {
-                        root = PrefabManager.SpawnPrefab(prefabAsset, null) ?? throw new InvalidOperationException("Failed to instantiate the Prefab.");
-                        root.Name = $"{namePrefix} {i + 1}";
-                        Editor.Instance.SceneEditing.Spawn(root, spawnParent, -1, false);
-                    }
-                    else if (physics == "dynamic")
-                    {
-                        var body = new RigidBody
-                        {
-                            Name = $"{namePrefix} {i + 1}",
-                            StaticFlags = StaticFlags.None,
-                        };
-                        Editor.Instance.SceneEditing.Spawn(body, spawnParent, -1, false);
-                        var visual = new StaticModel
-                        {
-                            Name = "Model",
-                            Model = modelAsset,
-                            LocalScale = Float3.One * (size / 100.0f),
-                        };
-                        Editor.Instance.SceneEditing.Spawn(visual, body, -1, false);
-                        SpawnCollider(collider, size, body);
-                        root = body;
-                    }
-                    else
-                    {
-                        var visual = new StaticModel
-                        {
-                            Name = $"{namePrefix} {i + 1}",
-                            Model = modelAsset,
-                            LocalScale = Float3.One * (size / 100.0f),
-                        };
-                        Editor.Instance.SceneEditing.Spawn(visual, spawnParent, -1, false);
-                        if (physics == "static")
-                            SpawnCollider(collider, size, visual);
-                        root = visual;
-                    }
-                    root.LocalPosition = position;
-                    created.Add(root);
-                }
-            }
-            catch
-            {
-                for (var i = created.Count - 1; i >= 0; i--)
-                {
-                    var createdActor = created[i];
-                    Object.Destroy(ref createdActor);
-                }
-                throw;
-            }
-
-            var nodes = created.Select(x => Editor.Instance.Scene.GetActorNode(x)).Where(x => x != null).Cast<SceneGraphNode>().ToList();
-            if (nodes.Count != created.Count)
-                throw new InvalidOperationException("One or more spawned Actors are missing from the Editor scene graph.");
-            var saved = SaveActorScenes(created);
+                Name = string.IsNullOrWhiteSpace(name) ? primitiveName : name,
+                Model = model,
+            };
+            if (position.HasValue) actor.LocalPosition = position.Value;
+            if (rotation.HasValue) actor.LocalEulerAngles = rotation.Value;
+            if (scale.HasValue) actor.LocalScale = scale.Value;
+            var actorParent = parent.HasValue ? RequireActor(parent.Value) : Level.GetScene(0);
+            Editor.Instance.SceneEditing.Spawn(actor, actorParent, -1, false);
             return new
             {
-                layout,
-                actors = created.Select(x => new
-                {
-                    actor = DescribeActor(x),
-                    position = new { x = x.LocalPosition.X, y = x.LocalPosition.Y, z = x.LocalPosition.Z },
-                }).ToArray(),
-                saved,
-                dirty = created.Any(x => Editor.Instance.Scene.IsEdited(x.Scene)),
+                actor = DescribeActor(actor),
+                primitive = DescribePrimitive(primitiveName, model),
+                saved = false,
+                dirty = Editor.Instance.Scene.IsEdited(actor.Scene),
             };
         }
 
-        private static Vector3 LayoutOffset(string layout, string plane, int index, int count, float radius, float spacing, int columns)
-        {
-            if (layout == "stack")
-                return new Vector3(0.0f, (index - (count - 1) * 0.5f) * spacing, 0.0f);
 
-            float first;
-            float second;
-            if (layout == "ring")
-            {
-                var angle = Math.PI * 2.0 * index / count;
-                first = (float)Math.Cos(angle) * radius;
-                second = (float)Math.Sin(angle) * radius;
-            }
-            else if (layout == "grid")
-            {
-                var columnCount = columns > 0 ? columns : (int)Math.Ceiling(Math.Sqrt(count));
-                var rowCount = (int)Math.Ceiling((double)count / columnCount);
-                var column = index % columnCount;
-                var row = index / columnCount;
-                first = (column - (columnCount - 1) * 0.5f) * spacing;
-                second = (row - (rowCount - 1) * 0.5f) * spacing;
-            }
-            else
-            {
-                first = (index - (count - 1) * 0.5f) * spacing;
-                second = 0.0f;
-            }
-
-            switch (plane)
-            {
-            case "xy": return new Vector3(first, second, 0.0f);
-            case "yz": return new Vector3(0.0f, first, second);
-            default: return new Vector3(first, 0.0f, second);
-            }
-        }
-
-        private static void SpawnCollider(string collider, float size, Actor parent)
-        {
-            if (collider == "box")
-            {
-                var box = new BoxCollider { Name = "Box Collider" };
-                Editor.Instance.SceneEditing.Spawn(box, parent, -1, false);
-                box.Size = new Float3(size);
-            }
-            else if (collider == "sphere")
-            {
-                var sphere = new SphereCollider { Name = "Sphere Collider" };
-                Editor.Instance.SceneEditing.Spawn(sphere, parent, -1, false);
-                sphere.Radius = size * 0.5f;
-            }
-        }
 
         [CliCommand("actors.delete", Description = "Delete an Actor hierarchy with undo.", Access = CliCommandAccess.Destructive, RequiresScene = true)]
         public static object DeleteActor([CliOption("actor", Required = true)] Guid actor)
@@ -747,8 +594,7 @@ namespace FlaxEditor
             var action = new DeleteActorsAction(node.BuildAllNodes().Where(x => x.CanDelete).ToList());
             action.Do();
             Editor.Instance.Undo.AddAction(action);
-            var saved = SaveSceneIfEdited(scene);
-            return new { actor = handle, deleted = true, saved, dirty = Editor.Instance.Scene.IsEdited(scene) };
+            return new { actor = handle, deleted = true, saved = false, dirty = Editor.Instance.Scene.IsEdited(scene) };
         }
 
         [CliCommand("actors.rename", Description = "Rename an Actor with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -790,8 +636,7 @@ namespace FlaxEditor
             var action = new ParentActorsAction(new SceneObject[] { value }, newParent, order, worldPositionStays);
             action.Do();
             Editor.Instance.Undo.AddAction(action);
-            var saved = SaveActorScenes(new[] { value, oldScene });
-            return new { actor = DescribeActor(value), saved, dirty = Editor.Instance.Scene.IsEdited(value.Scene) || Editor.Instance.Scene.IsEdited(oldScene) };
+            return new { actor = DescribeActor(value), saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) || Editor.Instance.Scene.IsEdited(oldScene) };
         }
 
         [CliCommand("actors.active", Description = "Set Actor active state with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -827,6 +672,50 @@ namespace FlaxEditor
             return MutationResult(value);
         }
 
+        [CliCommand("actors.property.list", Description = "List direct public Actor fields and properties.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
+        public static object ListActorProperties([CliOption("actor", Required = true)] Guid actor)
+        {
+            var value = RequireActor(actor);
+            var properties = value.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .Where(x => x.CanRead && x.GetIndexParameters().Length == 0)
+                .Select(x => new { name = x.Name, type = x.PropertyType.FullName, writable = x.CanWrite })
+                .Concat(value.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public)
+                    .Select(x => new { name = x.Name, type = x.FieldType.FullName, writable = !x.IsInitOnly && !x.IsLiteral }))
+                .OrderBy(x => x.name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return new { actor = DescribeActor(value), properties };
+        }
+
+        [CliCommand("actors.property.get", Description = "Get one direct public Actor field or property.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
+        public static object GetActorProperty([CliOption("actor", Required = true)] Guid actor, [CliOption("property", Required = true)] string property)
+        {
+            var value = RequireActor(actor);
+            var member = RequirePublicMember(value, property, false);
+            var memberType = GetMemberType(member);
+            return new { actor = DescribeActor(value), property = member.Name, type = memberType.FullName, value = SerializeMemberValue(GetMemberValue(member, value), memberType) };
+        }
+
+        [CliCommand("actors.property.set", Description = "Set one direct public Actor field or property with undo, including Actor and asset references.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object SetActorProperty([CliOption("actor", Required = true)] Guid actor, [CliOption("property", Required = true)] string property, [CliOption("value", Required = true)] JToken value)
+        {
+            var actorValue = RequireActor(actor);
+            var member = RequirePublicMember(actorValue, property, true);
+            var memberType = GetMemberType(member);
+            var converted = ConvertMemberValue(value, memberType);
+            using (new UndoBlock(Editor.Instance.Undo, actorValue, "Set actor property"))
+                SetMemberValue(member, actorValue, converted);
+            MarkEdited(actorValue);
+            return new
+            {
+                actor = DescribeActor(actorValue),
+                property = member.Name,
+                type = memberType.FullName,
+                value = SerializeMemberValue(GetMemberValue(member, actorValue), memberType),
+                saved = false,
+                dirty = Editor.Instance.Scene.IsEdited(actorValue.Scene),
+            };
+        }
+
         [CliCommand("actors.component.add", Description = "Add a Script component to an Actor with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
         public static object AddComponent([CliOption("actor", Required = true)] Guid actor, [CliOption("type", Required = true)] string type)
         {
@@ -838,8 +727,7 @@ namespace FlaxEditor
             action.Do();
             Editor.Instance.Undo.AddAction(action);
             var script = value.Scripts.LastOrDefault(x => string.Equals(x.TypeName, scriptType.TypeName, StringComparison.Ordinal));
-            var saved = SaveSceneIfEdited(value.Scene);
-            return new { actor = DescribeActor(value), component = DescribeScript(script), saved, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
+            return new { actor = DescribeActor(value), component = DescribeScript(script), saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
         }
 
         [CliCommand("actors.component.remove", Description = "Remove a Script component with undo.", Access = CliCommandAccess.Destructive, RequiresScene = true)]
@@ -851,32 +739,30 @@ namespace FlaxEditor
             var action = AddRemoveScript.Remove(script);
             action.Do();
             Editor.Instance.Undo.AddAction(action);
-            var saved = SaveSceneIfEdited(value.Scene);
-            return new { actor = DescribeActor(value), component = description, deleted = true, saved, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
+            return new { actor = DescribeActor(value), component = description, deleted = true, saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
         }
 
-        [CliCommand("actors.component.get", Description = "Get a Script component or one public property.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
+        [CliCommand("actors.component.get", Description = "Get a Script component or one public field or property.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
         public static object GetComponent([CliOption("actor", Required = true)] Guid actor, [CliOption("component", Required = true)] Guid component, [CliOption("property")] string property = null)
         {
             var script = RequireScript(RequireActor(actor), component);
             if (string.IsNullOrWhiteSpace(property))
-                return new { component = DescribeScript(script), properties = JObject.FromObject(script, JsonSerializer.Create(FlaxJsonSerializer.Settings)) };
-            var member = RequireWritableProperty(script, property, false);
-            return new { component = DescribeScript(script), property = member.Name, value = JToken.FromObject(member.GetValue(script), JsonSerializer.Create(FlaxJsonSerializer.Settings)) };
+                return new { component = DescribeScript(script), properties = JToken.Parse(FlaxJsonSerializer.Serialize(script)) };
+            var member = RequirePublicMember(script, property, false);
+            return new { component = DescribeScript(script), property = member.Name, value = SerializeMemberValue(GetMemberValue(member, script), GetMemberType(member)) };
         }
 
-        [CliCommand("actors.component.set", Description = "Set one public Script property with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        [CliCommand("actors.component.set", Description = "Set one public Script field or property with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
         public static object SetComponent([CliOption("actor", Required = true)] Guid actor, [CliOption("component", Required = true)] Guid component, [CliOption("property", Required = true)] string property, [CliOption("value", Required = true)] JToken value)
         {
             var actorValue = RequireActor(actor);
             var script = RequireScript(actorValue, component);
-            var member = RequireWritableProperty(script, property, true);
-            var converted = value.ToObject(member.PropertyType, JsonSerializer.Create(FlaxJsonSerializer.Settings));
+            var member = RequirePublicMember(script, property, true);
+            var converted = ConvertMemberValue(value, GetMemberType(member));
             using (new UndoBlock(Editor.Instance.Undo, script, "Set component property"))
-                member.SetValue(script, converted);
+                SetMemberValue(member, script, converted);
             MarkEdited(actorValue);
-            var saved = SaveSceneIfEdited(actorValue.Scene);
-            return new { actor = DescribeActor(actorValue), component = DescribeScript(script), property = member.Name, value, saved, dirty = Editor.Instance.Scene.IsEdited(actorValue.Scene) };
+            return new { actor = DescribeActor(actorValue), component = DescribeScript(script), property = member.Name, value, saved = false, dirty = Editor.Instance.Scene.IsEdited(actorValue.Scene) };
         }
 
         [CliCommand("prefabs.create", Description = "Create a Prefab from an Actor and link the Actor to it.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -889,8 +775,7 @@ namespace FlaxEditor
                 throw new InvalidOperationException($"Failed to create Prefab '{outputPath}'.");
             RefreshCreatedContent(outputPath);
             FlaxEngine.Content.GetAssetInfo(outputPath, out var info);
-            SaveSceneIfEdited(value.Scene);
-            return new { prefabId = info.ID, path = outputPath, actor = DescribeActor(value), saved = true, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
+            return new { prefabId = info.ID, path = outputPath, actor = DescribeActor(value), assetSaved = true, sceneSaved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
         }
 
         [CliCommand("prefabs.variant", Description = "Create a Prefab variant from an existing Prefab.", Access = CliCommandAccess.MutatesProject)]
@@ -928,8 +813,7 @@ namespace FlaxEditor
             if (position.HasValue)
                 instance.LocalPosition = position.Value;
             Editor.Instance.SceneEditing.Spawn(instance, parent.HasValue ? RequireActor(parent.Value) : Level.GetScene(0), -1, false);
-            var saved = SaveSceneIfEdited(instance.Scene);
-            return new { prefabId, actor = DescribeActor(instance), saved, dirty = Editor.Instance.Scene.IsEdited(instance.Scene) };
+            return new { prefabId, actor = DescribeActor(instance), saved = false, dirty = Editor.Instance.Scene.IsEdited(instance.Scene) };
         }
 
         [CliCommand("prefabs.apply", Description = "Apply all changes from a linked Prefab instance.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -937,8 +821,7 @@ namespace FlaxEditor
         {
             var value = RequireActor(actor);
             Editor.Instance.Prefabs.ApplyAll(value);
-            SaveEditedScenes();
-            return new { prefabId = value.PrefabID, actor = DescribeActor(value), saved = true, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
+            return new { prefabId = value.PrefabID, actor = DescribeActor(value), assetSaved = true, sceneSaved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
         }
 
         [CliCommand("prefabs.save", Description = "Save a linked Prefab instance by applying all changes.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -985,8 +868,7 @@ namespace FlaxEditor
             }
             var replacementNode = Editor.Instance.Scene.GetActorNode(replacement) ?? throw new InvalidOperationException("The replacement Actor is missing from the Editor scene graph.");
             undo.AddAction(new MultiUndoAction(new IUndoAction[] { removeOld, new DeleteActorsAction(replacementNode, true) }, "Revert Prefab"));
-            var saved = SaveSceneIfEdited(replacement.Scene);
-            return new { prefabId, removedActorId = actor, actor = DescribeActor(replacement), saved, dirty = Editor.Instance.Scene.IsEdited(replacement.Scene) };
+            return new { prefabId, removedActorId = actor, actor = DescribeActor(replacement), saved = false, dirty = Editor.Instance.Scene.IsEdited(replacement.Scene) };
         }
 
         [CliCommand("prefabs.unpack", Description = "Break the Prefab link for an Actor hierarchy with undo.", Access = CliCommandAccess.Destructive, RequiresScene = true)]
@@ -1000,8 +882,7 @@ namespace FlaxEditor
             action.Do();
             Editor.Instance.Undo.AddAction(action);
             MarkEdited(value);
-            var saved = SaveSceneIfEdited(value.Scene);
-            return new { prefabId, actor = DescribeActor(value), unpacked = true, saved, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
+            return new { prefabId, actor = DescribeActor(value), unpacked = true, saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
         }
 
         private static Actor CreateActor(CliActorCreateOptions options)
@@ -1059,14 +940,128 @@ namespace FlaxEditor
             throw new KeyNotFoundException($"Script component '{id}' is not attached to Actor '{actor.ID}'.");
         }
 
-        private static PropertyInfo RequireWritableProperty(object target, string name, bool writable)
+        private static string RequirePrimitiveName(string shape)
+        {
+            if (string.IsNullOrWhiteSpace(shape))
+                throw new ArgumentException("A primitive shape is required.", nameof(shape));
+            var result = PrimitiveNames.FirstOrDefault(x => string.Equals(x, shape.Trim(), StringComparison.OrdinalIgnoreCase));
+            return result ?? throw new ArgumentException($"Unknown primitive '{shape}'. Expected one of: {string.Join(", ", PrimitiveNames)}.", nameof(shape));
+        }
+
+        private static Model LoadPrimitive(string name)
+        {
+            var path = StringUtils.CombinePaths(Globals.EngineContentFolder, $"Editor/Primitives/{name}.flax");
+            var model = FlaxEngine.Content.Load<Model>(path) ?? throw new FileNotFoundException($"Built-in primitive '{name}' was not found.", path);
+            if (model.WaitForLoaded())
+                throw new InvalidOperationException($"Failed to load built-in primitive '{name}'.");
+            return model;
+        }
+
+        private static object DescribePrimitive(string name, Model model)
+        {
+            var bounds = model.GetBox();
+            return new
+            {
+                shape = name.ToLowerInvariant(),
+                modelId = model.ID,
+                uri = $"engine://Editor/Primitives/{name}.flax",
+                bounds = new
+                {
+                    minimum = new { x = bounds.Minimum.X, y = bounds.Minimum.Y, z = bounds.Minimum.Z },
+                    maximum = new { x = bounds.Maximum.X, y = bounds.Maximum.Y, z = bounds.Maximum.Z },
+                    size = new { x = bounds.Size.X, y = bounds.Size.Y, z = bounds.Size.Z },
+                },
+            };
+        }
+
+        private static MemberInfo RequirePublicMember(object target, string name, bool writable)
         {
             if (string.IsNullOrWhiteSpace(name) || name.Contains(".") || name.Contains("[") || name.Contains("]"))
-                throw new ArgumentException("Phase 5 component properties currently require a direct public property name.", nameof(name));
+                throw new ArgumentException("Component members require a direct public field or property name.", nameof(name));
             var property = target.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
-            if (property == null || !property.CanRead || (writable && !property.CanWrite) || property.GetIndexParameters().Length != 0)
-                throw new ArgumentException($"Property '{name}' is not a {(writable ? "writable " : string.Empty)}public property on '{target.GetType().FullName}'.", nameof(name));
-            return property;
+            if (property != null && property.CanRead && (!writable || property.CanWrite) && property.GetIndexParameters().Length == 0)
+                return property;
+            var field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+            if (field != null && (!writable || (!field.IsInitOnly && !field.IsLiteral)))
+                return field;
+            throw new ArgumentException($"Member '{name}' is not a {(writable ? "writable " : string.Empty)}public field or property on '{target.GetType().FullName}'.", nameof(name));
+        }
+
+        private static Type GetMemberType(MemberInfo member)
+        {
+            return member is PropertyInfo property ? property.PropertyType : ((FieldInfo)member).FieldType;
+        }
+
+        private static object GetMemberValue(MemberInfo member, object target)
+        {
+            return member is PropertyInfo property ? property.GetValue(target) : ((FieldInfo)member).GetValue(target);
+        }
+
+        private static void SetMemberValue(MemberInfo member, object target, object value)
+        {
+            if (member is PropertyInfo property)
+                property.SetValue(target, value);
+            else
+                ((FieldInfo)member).SetValue(target, value);
+        }
+
+        private static JToken SerializeMemberValue(object value, Type type)
+        {
+            if (value == null)
+                return JValue.CreateNull();
+            if (value is Object flaxObject)
+                return new JValue(flaxObject.ID.ToString());
+            return JToken.Parse(FlaxJsonSerializer.Serialize(value, type));
+        }
+
+        private static object ConvertMemberValue(JToken value, Type type)
+        {
+            if (typeof(Object).IsAssignableFrom(type))
+            {
+                if (value.Type == JTokenType.Null)
+                    return null;
+                if (value.Type != JTokenType.String)
+                    throw new ArgumentException($"A '{type.FullName}' reference requires an object GUID, asset URI, or null.", nameof(value));
+                var reference = value.Value<string>();
+                Object result;
+                if (Guid.TryParse(reference, out var id))
+                {
+                    result = typeof(Asset).IsAssignableFrom(type)
+                        ? FlaxEngine.Content.LoadAsync(id, type)
+                        : Object.Find(ref id, type, true);
+                }
+                else if (typeof(Asset).IsAssignableFrom(type))
+                {
+                    var path = ResolveAssetReference(reference);
+                    result = FlaxEngine.Content.LoadAsync(path, type);
+                }
+                else
+                {
+                    throw new ArgumentException($"A '{type.FullName}' object reference requires a GUID string or null.", nameof(value));
+                }
+                if (result == null)
+                    throw new KeyNotFoundException($"Reference '{reference}' was not found or is not assignable to '{type.FullName}'.");
+                if (result is Asset asset && asset.WaitForLoaded())
+                    throw new InvalidOperationException($"Asset reference '{reference}' failed to load.");
+                return result;
+            }
+            return value.ToObject(type, JsonSerializer.Create(FlaxJsonSerializer.Settings));
+        }
+
+        private static string ResolveAssetReference(string reference)
+        {
+            if (string.IsNullOrWhiteSpace(reference))
+                throw new ArgumentException("An asset reference cannot be empty.", nameof(reference));
+            if (reference.StartsWith("engine://", StringComparison.OrdinalIgnoreCase))
+                return StringUtils.CombinePaths(Globals.EngineContentFolder, reference.Substring("engine://".Length));
+            if (reference.StartsWith("project://", StringComparison.OrdinalIgnoreCase))
+                return StringUtils.CombinePaths(Globals.ProjectContentFolder, reference.Substring("project://".Length));
+            if (reference.StartsWith("primitive:", StringComparison.OrdinalIgnoreCase))
+            {
+                var primitive = RequirePrimitiveName(reference.Substring("primitive:".Length));
+                return StringUtils.CombinePaths(Globals.EngineContentFolder, $"Editor/Primitives/{primitive}.flax");
+            }
+            throw new ArgumentException("Asset references must use a GUID, engine:// URI, project:// URI, or primitive:<shape> alias.", nameof(reference));
         }
 
         private static string ResolveAuthoringPath(string path, string extension, bool requireNew)
@@ -1267,16 +1262,7 @@ namespace FlaxEditor
 
         private static object MutationResult(Actor actor)
         {
-            var saved = SaveSceneIfEdited(actor.Scene);
-            return new { actor = DescribeActor(actor), saved, dirty = Editor.Instance.Scene.IsEdited(actor.Scene) };
-        }
-
-        private static bool SaveActorScenes(IEnumerable<Actor> actors)
-        {
-            var saved = false;
-            foreach (var scene in actors.Where(x => x != null).Select(x => x.Scene).Where(x => x != null).Distinct())
-                saved |= SaveSceneIfEdited(scene);
-            return saved;
+            return new { actor = DescribeActor(actor), saved = false, dirty = Editor.Instance.Scene.IsEdited(actor.Scene) };
         }
 
         private static Guid[] SaveEditedScenes()
@@ -1287,6 +1273,13 @@ namespace FlaxEditor
             foreach (var scene in edited)
                 SaveSceneSynchronously(scene);
             return edited.Select(x => x.ID).ToArray();
+        }
+
+        private static void EnsureScenesClean(string operation)
+        {
+            var edited = Level.Scenes.Where(x => Editor.Instance.Scene.IsEdited(x)).Select(x => x.ID).ToArray();
+            if (edited.Length != 0)
+                throw new InvalidOperationException($"Cannot {operation} while loaded scenes have unsaved changes ({string.Join(", ", edited)}). Run 'flax scenes save' or 'flax editor save-all' first.");
         }
 
         private static bool SaveSceneIfEdited(Scene scene)

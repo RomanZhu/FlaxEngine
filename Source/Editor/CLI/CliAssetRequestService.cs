@@ -320,8 +320,26 @@ namespace FlaxEditor
         private ContentItem RequireItem(string path)
         {
             path = RequireProjectContentPath(path);
-            return Editor.Instance.ContentDatabase.Find(path)
-                   ?? throw new FileNotFoundException($"Content item '{path}' was not found.", path);
+            var database = Editor.Instance.ContentDatabase;
+            var item = database.Find(path);
+            if (item == null && (File.Exists(path) || Directory.Exists(path)))
+            {
+                var parentPath = System.IO.Path.GetDirectoryName(path);
+                ContentFolder parent = null;
+                while (!string.IsNullOrEmpty(parentPath))
+                {
+                    parent = database.Find(parentPath) as ContentFolder;
+                    if (parent != null || PathEquals(parentPath, Globals.ProjectContentFolder))
+                        break;
+                    parentPath = System.IO.Path.GetDirectoryName(parentPath);
+                }
+                if (parent != null)
+                {
+                    database.RefreshFolder(parent, true);
+                    item = database.Find(path);
+                }
+            }
+            return item ?? throw new FileNotFoundException($"Content item '{path}' was not found.", path);
         }
 
         private ContentFolder RequireFolder(string path)

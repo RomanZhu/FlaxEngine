@@ -86,6 +86,7 @@ namespace FlaxEngine
             case "runtime.input.key": return InjectKey(request.Arguments);
             case "runtime.input.pointer": return InjectPointer(request.Arguments);
             case "runtime.input.reset": return ResetInput();
+            case "runtime.input.inspect": return CliInputProbe.Capture(request.Arguments);
             case "runtime.input.gamepad": case "runtime.input.action": throw new InvalidOperationException("Only raw keyboard and mouse injection is supported by the stable Player input ABI.");
             case "performance": return new { timestampUtc = DateTime.UtcNow, frame = new { deltaTime = Time.DeltaTime, timeScale = Time.TimeScale } };
             default: throw new InvalidOperationException("Unsupported Player bridge action '" + request.Action + "'.");
@@ -184,10 +185,16 @@ namespace FlaxEngine
         private static object InjectPointer(Newtonsoft.Json.Linq.JObject arguments)
         {
             if (Input.Mouse == null) throw new InvalidOperationException("The runtime mouse is unavailable.");
-            var position = new Float2(FloatArg(arguments, "x", Input.MousePosition.X), FloatArg(arguments, "y", Input.MousePosition.Y));
             var state = (StringArg(arguments, "state") ?? "move").ToLowerInvariant();
-            if (state is not ("move" or "wheel" or "down" or "up" or "press"))
-                throw new ArgumentException("Pointer state must be move, wheel, down, up, or press.");
+            if (state is not ("move" or "relative" or "wheel" or "down" or "up" or "press"))
+                throw new ArgumentException("Pointer state must be move, relative, wheel, down, up, or press.");
+            if (state == "relative")
+            {
+                var relative = new Float2(FloatArg(arguments, "dx", 0.0f), FloatArg(arguments, "dy", 0.0f));
+                Input.Mouse.OnMouseMoveRelative(relative);
+                return new { injected = true, device = "pointer", mode = "relative", dx = relative.X, dy = relative.Y, state };
+            }
+            var position = new Float2(FloatArg(arguments, "x", Input.MousePosition.X), FloatArg(arguments, "y", Input.MousePosition.Y));
             if (state == "move") Input.Mouse.OnMouseMove(position);
             else if (state == "wheel") Input.Mouse.OnMouseWheel(position, FloatArg(arguments, "delta", 0.0f));
             else

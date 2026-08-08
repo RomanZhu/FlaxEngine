@@ -186,7 +186,7 @@ public:
     /// </summary>
     /// <param name="positionRelative">The mouse position change.</param>
     /// <param name="target">The target window to receive this event, otherwise input system will pick the window automatically.</param>
-    void OnMouseMoveRelative(const Float2& positionRelative, Window* target = nullptr);
+    API_FUNCTION() void OnMouseMoveRelative(const Float2& positionRelative, Window* target = nullptr);
 
     /// <summary>
     /// Called when mouse leaves the input source area.

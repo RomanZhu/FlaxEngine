@@ -178,7 +178,7 @@ internal sealed class EditorAdapter(ProcessCoordinator processes)
         var arguments = new List<string>
         {
             "-project", project.ProjectFile,
-            "-headless", "-mute", "-null", "-std",
+            "-headless", "-mute", "-null",
             "-cliRequest", requestPath,
             "-build", $"{preset}.{target}",
         };
@@ -193,7 +193,7 @@ internal sealed class EditorAdapter(ProcessCoordinator processes)
         var arguments = new List<string>
         {
             "-project", project.ProjectFile,
-            "-headless", "-mute", "-null", "-std", "-exit",
+            "-headless", "-mute", "-null", "-exit",
             "-cliRequest", requestPath,
         };
         arguments.AddRange(passThrough);
@@ -205,7 +205,7 @@ internal sealed class EditorAdapter(ProcessCoordinator processes)
         return
         [
             "-project", project.ProjectFile,
-            "-headless", "-mute", "-null", "-std", "-exit",
+            "-headless", "-mute", "-null", "-exit",
             "-cliRequest", requestPath,
         ];
     }

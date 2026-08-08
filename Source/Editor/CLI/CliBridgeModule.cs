@@ -448,14 +448,23 @@ namespace FlaxEditor
                 case "editor.status":
                     return Success(request.RequestId, GetStatus());
                 case "commands.list":
-                    return Success(request.RequestId, CliCommandRegistry.Discover().Select(CliCommandRegistry.Describe).ToArray());
+                    return Success(request.RequestId, CliCommandRegistry.DiscoverCommands().Select(CliCommandRegistry.Describe).ToArray());
                 case "commands.info":
                 {
                     var commands = CliCommandRegistry.Discover();
-                    return Success(request.RequestId, CliCommandRegistry.Describe(CliCommandRegistry.Require(commands, request.Name)));
+                    return Success(request.RequestId, CliCommandRegistry.Describe(CliCommandRegistry.RequireCommand(commands, request.Name)));
                 }
                 case "command.invoke":
                     throw new InvalidOperationException("Command invocations must be scheduled through the cooperative bridge path.");
+                case "generators.list":
+                    return Success(request.RequestId, CliCommandRegistry.DiscoverGenerators().Select(CliCommandRegistry.Describe).ToArray());
+                case "generators.info":
+                {
+                    var generators = CliCommandRegistry.Discover();
+                    return Success(request.RequestId, CliCommandRegistry.Describe(CliCommandRegistry.RequireGenerator(generators, request.Name)));
+                }
+                case "generator.invoke":
+                    throw new InvalidOperationException("Generator invocations must be scheduled through the cooperative bridge path.");
                 case "editor.play":
                     Editor.Simulation.RequestStartPlayScenes();
                     return Success(request.RequestId, new { requested = "play", status = GetStatus() });
@@ -491,6 +500,8 @@ namespace FlaxEditor
                     return Success(request.RequestId, InjectPointer(request.Arguments));
                 case "runtime.input.reset":
                     return Success(request.RequestId, ResetInput());
+                case "runtime.input.inspect":
+                    return Success(request.RequestId, CliInputProbe.Capture(request.Arguments));
                 case "runtime.input.gamepad":
                 case "runtime.input.action":
                     throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0004", "This bridge supports raw keyboard and mouse injection; gamepad/action synthesis is not exposed by the current Flax input ABI.");
@@ -577,7 +588,9 @@ namespace FlaxEditor
 
         private void StartRequest(CliBridgePendingRequest pending)
         {
-            if (!string.Equals(pending.Request.Action, "command.invoke", StringComparison.Ordinal))
+            var isCommand = string.Equals(pending.Request.Action, "command.invoke", StringComparison.Ordinal);
+            var isGenerator = string.Equals(pending.Request.Action, "generator.invoke", StringComparison.Ordinal);
+            if (!isCommand && !isGenerator)
             {
                 pending.Completion.TrySetResult(ExecuteRequest(pending.Request, pending.CancellationToken));
                 return;
@@ -608,7 +621,9 @@ namespace FlaxEditor
                         warnings.Add(warning);
                 });
             var commands = CliCommandRegistry.Discover();
-            var command = CliCommandRegistry.Require(commands, pending.Request.Name);
+            var command = isGenerator
+                ? CliCommandRegistry.RequireGenerator(commands, pending.Request.Name)
+                : CliCommandRegistry.RequireCommand(commands, pending.Request.Name);
             var invocation = CliCommandRegistry.BeginInvoke(command, pending.Request.Arguments, pending.Request.Confirm, context);
             _activeCommand = new CliBridgeActiveCommand
             {
@@ -694,11 +709,13 @@ namespace FlaxEditor
             var name = arguments?["key"]?.Value<string>();
             if (!Enum.TryParse(name, true, out KeyboardKeys key))
                 throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", $"Unknown keyboard key '{name}'.");
+            if (key is KeyboardKeys.None or KeyboardKeys.MAX)
+                throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "The keyboard key cannot be None or MAX.");
             var state = arguments?["state"]?.Value<string>()?.ToLowerInvariant() ?? "press";
-            if (state is "down" or "press") Input.Keyboard.OnKeyDown(key);
-            if (state is "up" or "press") Input.Keyboard.OnKeyUp(key);
             if (state is not ("down" or "up" or "press"))
                 throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "Keyboard input state must be down, up, or press.");
+            if (state is "down" or "press") Input.Keyboard.OnKeyDown(key);
+            if (state is "up" or "press") Input.Keyboard.OnKeyUp(key);
             return new { injected = true, device = "keyboard", key = key.ToString(), state };
         }
 
@@ -734,19 +751,27 @@ namespace FlaxEditor
         {
             if (Input.Mouse == null)
                 throw new InvalidOperationException("The runtime mouse device is unavailable.");
-            var position = new Float2(arguments?["x"]?.Value<float>() ?? Input.MousePosition.X, arguments?["y"]?.Value<float>() ?? Input.MousePosition.Y);
             var state = arguments?["state"]?.Value<string>()?.ToLowerInvariant() ?? "move";
+            if (state is not ("move" or "relative" or "wheel" or "down" or "up" or "press"))
+                throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "Pointer state must be move, relative, wheel, down, up, or press.");
+            if (state == "relative")
+            {
+                var relative = new Float2(arguments?["dx"]?.Value<float>() ?? 0.0f, arguments?["dy"]?.Value<float>() ?? 0.0f);
+                Input.Mouse.OnMouseMoveRelative(relative);
+                return new { injected = true, device = "pointer", mode = "relative", dx = relative.X, dy = relative.Y, state };
+            }
+            var position = new Float2(arguments?["x"]?.Value<float>() ?? Input.MousePosition.X, arguments?["y"]?.Value<float>() ?? Input.MousePosition.Y);
             if (state == "move") Input.Mouse.OnMouseMove(position);
             else if (state == "wheel") Input.Mouse.OnMouseWheel(position, arguments?["delta"]?.Value<float>() ?? 0.0f);
             else
             {
                 if (!Enum.TryParse(arguments?["button"]?.Value<string>(), true, out MouseButton button))
                     throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "Pointer button is required for button down/up/press.");
+                if (button is MouseButton.None or MouseButton.MAX)
+                    throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "The pointer button cannot be None or MAX.");
                 if (state is "down" or "press") Input.Mouse.OnMouseDown(position, button);
                 if (state is "up" or "press") Input.Mouse.OnMouseUp(position, button);
             }
-            if (state is not ("move" or "wheel" or "down" or "up" or "press"))
-                throw new CliCommandProtocolException("FLX-RUNTIME-INPUT-0002", "Pointer state must be move, wheel, down, up, or press.");
             return new { injected = true, device = "pointer", x = position.X, y = position.Y, state };
         }
 
