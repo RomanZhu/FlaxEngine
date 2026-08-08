@@ -26,6 +26,14 @@ This repository contains the engine, editor, tooling, shaders, tests, assets, an
 
 ## Windows Setup And Build
 
+## Local Build Safety
+
+- Builds may be run when they are necessary to implement or validate the user's current request. Prefer the narrowest relevant build target and avoid unnecessary rebuilds.
+- Before an engine build that can overwrite engine or Editor binaries, check whether `FlaxEditor.exe` is running. If it is, close it gracefully and wait for the process to exit before starting the build; if it does not close cleanly, stop and ask before force-terminating it. This shutdown rule does not apply to game-project builds, project script compilation, or Editor hot-recompile.
+- A successful build is required before every `git push`. Use the narrowest relevant build target for the changes, or the editor target when the affected scope is broader.
+- Do not run `GenerateProjectFiles.bat` unless project files need to be regenerated. Build commands such as `Development\Scripts\Windows\CallBuildTool.bat -build`, `Flax.Build.exe -build`, or Visual Studio builds may be used when required by the current task; apply the Editor shutdown rule above when the selected target writes engine or Editor binaries.
+- Prefer non-writing checks such as code inspection, focused searches, or syntax-only/temp-output checks that do not overwrite editor binaries. If a validation command might write to `Binaries/`, ask the user first.
+
 Use these commands from the repo root.
 
 Generate project files:
@@ -124,6 +132,7 @@ If a change is localized, prefer the narrowest possible target build and only ru
 ## Agent Guidance
 
 - Treat `.github/workflows/tests.yml` as the source of truth for CI-backed validation.
+- Never stage or commit files under `Docs/`. Leave all `Docs/` changes uncommitted, including documentation created or updated as part of the current task.
 - Do not assume generated artifacts already exist in the repo.
 - Avoid broad style-only rewrites.
 - Avoid touching `Source/ThirdParty/` unless explicitly requested.

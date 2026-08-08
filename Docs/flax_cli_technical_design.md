@@ -71,13 +71,14 @@ Local verification is product research, not a compatibility promise. Flax comman
 | 0. Contracts and standalone host | Complete | Stable command grammar, result model, exit codes, process isolation, configuration, and diagnostics. |
 | 1. Local engines, projects, launch, and compilation | Complete | Pin any Flax project to a custom engine, open/play it, and compile targets deterministically. |
 | 2. Typed one-shot builds and assets | Complete | Run Game Cooker and create or manipulate assets through the Editor content database with structured results. |
-| 3. Typed project commands | **Implemented in source** | Reusable one-shot command registry, schema discovery, argument binding, structured results, and CLI routing. |
-| 4. Running Editor and Player bridge | **Partial — active** | Authenticated running-Editor discovery, typed commands, status/control, and console access are implemented in source; Player transport and the remaining live tools are next. |
-| 5. Full scene, Actor, Prefab, and specialized asset authoring | **In progress** | Core scenes, Actors, Script components, Prefabs, authoring-root safety, and deterministic saves are implemented in source; specialized assets remain. |
-| 6. Deterministic runtime playtesting | Planned | Start play mode, drive input, observe collisions/events, capture evidence, assert results, and stop. |
-| 7. MCP and warm automation shell | Planned | Expose the same typed catalog to Codex and other agents without inventing a second API. |
-| 8. Managed distribution, projects, and templates | Deferred | Install/update engines and platforms and provide full project/template lifecycle once feeds are defined. |
-| 9. Tests, diagnostics, and ecosystem completion | Planned | Async test adapters, support bundles, richer logs, cache operations, and optional account/cloud integrations. |
+| 3. Typed project commands | Complete | Reusable one-shot command registry, schema discovery, argument binding, structured results, and CLI routing are integration-validated. |
+| 4. Running Editor and Player bridge | **Partial — active** | Authenticated Editor and Development Player transports, status/control, virtual keyboard/mouse input, console, performance, Actor selection, explicit close policies, settings, bakes, guarded/arbitrary eval, and viewport/game capture are implemented; standalone Player requires a valid running Development Player and inline images remain. |
+| 5. Full scene, Actor, Prefab, and specialized asset authoring | **In progress** | Core scene lifecycle, active-scene/build-list semantics, editable settings, bake operations, Script components, Prefab routes, and native Material/Animation Visject graph operations are implemented; broader specialized asset schemas remain. |
+| 6. Deterministic runtime playtesting | **Partial — active** | Live begin/end barriers, runtime Actor find, cooperative waits, structured assertions, evidence capture, Player control, and virtual keyboard/mouse input are implemented; gamepad/action injection and collision/event instrumentation remain project-specific. |
+| 7. MCP and warm automation shell | **Partial — active** | `flax mcp` provides a stdio JSON-RPC facade and projects the typed registry; client configuration and a persistent warm shell remain. |
+| 8. Managed distribution, projects, and templates | **Partial — local-first** | Safe local empty-project creation/template discovery plus signed local manifest verification/archive install are implemented; remote feed discovery, key rotation, and managed update remain deferred. |
+| 9. Tests, diagnostics, and ecosystem completion | **Partial — local adapters** | Native/managed/build test discovery and bounded process execution are implemented; durable detached process jobs now provide status/wait/cancel/log persistence, while richer test adapters and log following remain. |
+| 10. Compatibility hardening and integration matrix | **Active** | Rebuild-gated smoke tests, capability/status contracts, save/discard shutdown policy, path confinement, and synchronized Codex skills are the release gate for the compatible surface. |
 
 ---
 
@@ -224,7 +225,7 @@ Editor startup integration also touches the existing command-line bootstrap and 
 - Project-controlled terminal text must not inject terminal control sequences.
 - Traces must redact secrets, tokens, proxy credentials, and sensitive environment values.
 - Destructive commands require explicit confirmation in non-interactive use.
-- No general C# `eval` or `eval_file` command is part of the default trusted Flax surface. A future development-only eval tier may be enabled explicitly under the capability catalog's audit and session-unlock policy.
+- No arbitrary C# `eval` or `eval_file` command is part of the default trusted Flax surface. The current development-only tier is advertised as a locked opt-in capability, then requires a session unlock; it is expression-only with project-root confinement for `eval-file`, is not a sandbox, and cannot mutate through open-world code.
 - Release downloads, when implemented, require signed metadata, hashes, safe extraction, and staging.
 
 Unity Pipeline exposes `eval` and `eval_file` as open-world automation escape hatches. Flax prioritizes typed commands, but the capability catalog now specifies a deliberately opt-in development eval tier so agents can fill genuine catalog holes without presenting arbitrary execution as an ordinary safe command.
@@ -432,7 +433,7 @@ Unity’s connected tools are generally live. Flax’s Phase 2 asset and Game Co
 
 ## Phase 3 — Typed project commands
 
-**Status:** **Implemented in source; Editor integration validation pending**
+**Status:** Complete
 
 The reusable engine/CLI phase is implemented in source:
 
@@ -442,7 +443,7 @@ The reusable engine/CLI phase is implemented in source:
 - `flax commands list|info` and `flax command <name>`;
 - JSON files/objects, schema-style options, repeated option arrays, progress, warnings, structured failures, and destructive-command confirmation.
 
-The remaining work is integration validation after the Editor is rebuilt. Project-specific commands belong to project code or plugins and are consumers of this API, not FlaxCLI phases.
+Rebuilt-Editor integration was validated on August 7, 2026 against a new sample project. Catalog discovery and `cli.ping` both completed through a one-shot headless Editor, and the same registry was then exercised through an authenticated running Editor. Project-specific commands belong to project code or plugins and are consumers of this API, not FlaxCLI phases.
 
 ### Goal
 
@@ -570,20 +571,26 @@ The Editor loads the project and scripts, builds the command catalog, validates 
 
 ### Goal
 
-Discover compatible running Flax Editor and Player instances and execute the Phase 3 command catalog without launching a new Editor for every operation. The running-Editor slice is implemented in source; Player registration and the remaining live capabilities are not.
+Discover compatible running Flax Editor and Player instances and execute the Phase 3 command catalog without launching a new Editor for every operation. The running-Editor slice is implemented and integration-validated; Player registration and the remaining live capabilities are not.
 
 ### Implemented running-Editor slice
 
 - A non-headless Editor starts a per-instance local bridge module.
 - Windows uses a current-user-only named pipe; Linux and macOS use a user-owned Unix domain socket.
 - Each instance publishes a versioned manifest plus a random 256-bit token in the CLI runtime directory.
-- The Editor refreshes the manifest atomically when it moves between ready, compiling, playing, and paused states.
+- The Editor refreshes the manifest atomically when the bundled runtime supports replacement, with a guarded basic-rename fallback for runtimes whose overwrite APIs are broken.
 - The CLI validates protocol version, PID, process start time, token path, project match, and selector ambiguity.
 - Stale descriptors are pruned only from the owned runtime directory.
 - `flax status` reports bridged instances and labels legacy process-only Editors separately.
 - `flax commands list|info` and `flax command` prefer a matching live Editor, with `--live-only`, `--one-shot`, and `--instance` for deterministic routing.
 - `flax editor status|play|pause|resume|stop|step|focus|save-all|recompile` runs on the Editor main thread.
-- `flax console` reads a bounded in-memory console buffer using monotonically increasing cursors.
+- `flax console` reads or clears a bounded in-memory console buffer using monotonically increasing cursors.
+- `flax performance` returns a capability-gated live snapshot of frame timings, CPU/GPU memory, render counters, and loaded scene/Actor/Script counts.
+- `flax selection get|set|clear` reads or changes the running Editor Actor selection using stable IDs without touching scene persistence.
+- `flax editor close --save|--discard` resolves dirty scenes explicitly before requesting Editor exit, so automation never triggers the native save-confirmation modal.
+- `flax settings`, `flax bake`, and `flax dev` route the typed settings, derived-data, and guarded-eval catalogs through the same authenticated bridge.
+- `flax capture viewport|game --to <path>` captures Editor-owned PNG evidence under the selected project root.
+- `flax playtest begin|end|status|find|wait|assert|capture` provides deterministic live-Editor control and runtime Actor observation.
 - Live typed commands receive a connection timeout cancellation token and return structured data, warnings, errors, and buffered progress events.
 - The Editor admits at most one request per frame, advances one cooperative command with a 3 ms frame budget, bounds the pending queue and buffered command events, and keeps all scene/asset/Undo access on the Editor thread.
 
@@ -628,7 +635,7 @@ Representative manifest:
   "endpoint": "flax-cli-18432-9d2f",
   "tokenPath": ".../editor-18432-9d2f.token",
   "state": "ready",
-  "capabilities": ["commands", "playMode", "console", "saveAll", "focus", "recompile"]
+  "capabilities": ["commands", "authoring", "settings", "bake", "eval", "playMode", "playtest", "console", "saveAll", "close", "focus", "recompile", "performance", "selection", "capture"]
 }
 ```
 
@@ -642,10 +649,15 @@ Representative manifest:
 | `flax editor status` | Implemented | Report edit/play/paused/compiling state. |
 | `flax editor play\|pause\|resume\|stop\|step\|focus` | Implemented | Control play mode and focus. |
 | `flax editor save-all` | Implemented | Save dirty scenes and assets. |
-| `flax console [--level <level>] [--cursor <cursor>]` | Implemented | Read structured console entries. |
+| `flax editor close --save\|--discard` | Implemented | Apply an explicit dirty-scene policy and exit without a modal prompt. |
+| `flax console [read\|clear] [--level <level>] [--cursor <cursor>]` | Implemented | Read or clear structured console entries. |
 | `flax editor recompile` | Implemented | Queue script compilation. |
-| `flax capture game\|viewport --to <path>` | Planned | Capture game or scene view. |
-| `flax performance` | Planned | Read frame, CPU, memory, render, and scene counters. |
+| `flax capture game\|viewport --to <path>` | Implemented | Capture game or scene view to a project-confined PNG path. |
+| `flax performance` | Implemented | Read a live frame, CPU/GPU memory, render, and scene snapshot. |
+| `flax selection get\|set\|clear` | Implemented | Read or update the live Editor Actor selection by stable ID. |
+| `flax settings <list\|get\|schema\|diff\|set>` | Implemented | Read and patch stable Flax settings groups; `--dry-run` never saves. |
+| `flax bake ...` | Implemented | Start/status/cancel/clear supported native scene-data bake operations. |
+| `flax dev unlock-eval\|eval\|eval-file` | Implemented, opt-in | Guarded expression diagnostics only; arbitrary C# is rejected. |
 
 Selection options should mirror Unity’s useful concepts after local re-verification:
 
@@ -682,25 +694,27 @@ Job records include owner instance, operation, timestamps, progress, diagnostics
 
 ### Acceptance
 
-- `flax status --json` reports authenticated Editor instances and their capabilities; Player support remains an explicit incomplete item.
+- `flax status --json` reports authenticated Editor and Development Player instances and their capabilities.
 - A live `flax command example.validate` avoids launching a second Editor.
 - Multiple matching instances cause a deterministic selection error.
 - Console polling uses cursors and does not duplicate entries.
 - An older Editor advertises reduced capabilities and is never sent an unsupported request.
 
-Remaining acceptance for Phase 4 completion:
+Remaining acceptance for the broader Phase 4 surface:
 
-- Player processes can opt into the same authenticated discovery/command protocol.
-- Capture and performance actions are implemented and capability-gated.
-- Long-running actions can detach into durable jobs with status, wait, and cancellation.
+- A valid standalone Development Player must be exercised on a cooked/sample runtime; the embedded Editor Player path is already validated.
+- Player capture and bounded inline image data remain capability-gated; Editor viewport/game capture and capability negotiation are complete.
+- Long-running actions detach into durable jobs with status, wait, cancellation, and persisted stdout/stderr logs.
 - Progress can stream incrementally rather than only being returned in the final response.
 - Captures can return a saved path and, for MCP, bounded inline image data.
+
+Live integration on August 7, 2026 validated capability negotiation and structured `flax performance` output, then selected, inspected, and cleared an Actor through `flax selection` using its stable ID. The same rebuilt Editor accepted active-scene reordering, build-list reads, settings diff/dry-run, all bake routes, guarded eval, viewport/game capture, deterministic playtest begin/find/wait/assert/end, and both `editor close --save` and `editor close --discard` with dirty scenes and no modal prompt.
 
 ---
 
 ## Phase 5 — Full scene, Actor, Prefab, and specialized asset authoring
 
-**Status:** In progress — core scene, Actor, component, Prefab, and authoring-root commands are implemented in source; specialized assets, build-list/active-scene semantics, settings, and bake operations remain planned.
+**Status:** In progress — core scene and Actor commands, active-scene/build-list semantics, editable settings, bake operations, component/Prefab routes, and Material/Animation Visject graph authoring are implemented; broader specialized assets and deeper component/Prefab scenarios remain.
 
 ### Goal
 
@@ -709,12 +723,17 @@ Provide broad Flax-native authoring coverage comparable to the installed Unity P
 ### Implemented core slice
 
 - Direct CLI groups route through the shared typed-command protocol: `flax scenes`, `flax actors`, and `flax prefabs`. They therefore use the same one-shot and authenticated live-Editor transports as `flax command`.
-- Scene list/create/open/save/hierarchy, all listed core Actor operations, Script component add/remove/get/set, and Prefab create/instantiate/variant/apply/revert/unpack/save are registered typed commands.
+- Scene list/create/open/close/reload/save/dirty/hierarchy, all listed core Actor operations, Script component add/remove/get/set, and Prefab create/instantiate/variant/apply/revert/unpack/save are registered typed commands.
 - Actor results use scene ID, Actor ID, hierarchy path, runtime type, and name handles. Mutations report saved/dirty state.
 - Destructive Actor, component, and Prefab operations inherit the registry's `--yes` enforcement. Actor batch creation validates the whole request before mutation and records one undo action.
 - `flax authoring-root get|set` persists a project-scoped root in `.flax/cli.json`. Editor-side path resolution confines authoring paths to that root and rejects traversal through filesystem links.
 - Successful CLI scene mutations save their affected scenes synchronously before returning. Non-additive CLI scene transitions synchronously save only scenes already marked dirty, then open the requested scene without invoking Flax's interactive save-confirmation path; clean scenes are not rewritten.
-- This slice has CLI unit coverage and source inspection validation. It still requires the design's rebuilt-Editor integration validation before Phase 5 acceptance can be marked complete.
+- `scenes active get|set` maps to Flax's first-loaded-scene authoring semantics; `set` saves edited scenes, unloads, and reloads the requested scene first while preserving the remaining scene order.
+- `scenes build-list list|add|remove` edits `GameSettings.FirstScene` and ordered `BuildSettings.AdditionalScenes`, rather than pretending Flax has Unity's single ordered build-settings list.
+- `settings list|get|schema|diff|set` edits Editor-owned settings assets through reflected writable fields. Patches are partial and `--dry-run` returns a before/after plan without saving.
+- `bake status` and the native Flax lighting, NavMesh, probes, CSG, scene-build, and SDF operations are exposed with structured active/progress state; overlapping scene-data starts are rejected.
+- `visject groups list`, `visject asset inspect|validate`, node add/remove/set, and connect/disconnect use native `MaterialSurface` and `AnimGraphSurface` serializers. Node archetypes/default values are discovered from the running Editor rather than copied from Unity schemas.
+- Rebuilt-Editor integration on August 7, 2026 created and opened scenes in a new sample project, reordered the active authoring scene, persisted a build-list change, edited settings, ran every bake route, evaluated guarded expressions, and returned the persisted hierarchy. Dirty scenes were then closed through explicit save and discard policies without a native prompt. Component and Prefab workflows still require equivalent integration scenarios before Phase 5 acceptance can be marked complete.
 
 ### Scene commands
 
@@ -723,8 +742,10 @@ Provide broad Flax-native authoring coverage comparable to the installed Unity P
 | `scenes list` | `list_open_scenes` |
 | `scenes create` | `create_scene` |
 | `scenes open` | `open_scene` |
+| `scenes close` / `scenes reload` | close/reload scene workflows |
 | `scenes active` | `set_active_scene` |
 | `scenes save` | `save_scene` / `save_all` |
+| `scenes dirty` | dirty scene inspection |
 | `scenes hierarchy` | `get_scene_hierarchy` |
 | `scenes build-list add\|remove\|list` | `add_scene_to_build` / `remove_scene_from_build` / build settings |
 
@@ -740,6 +761,7 @@ Provide broad Flax-native authoring coverage comparable to the installed Unity P
 | `actors parent` | `set_parent` |
 | `actors active` | `set_active` |
 | `actors tag` / `actors layer` | `set_tag` / `set_layer` |
+| `selection get` / `selection set` / `selection clear` | live Editor selection tools |
 | `actors component add\|remove` | `add_component` / `remove_component` |
 | `actors component get\|set` | `get_component_properties` / `set_component_properties` |
 
@@ -817,7 +839,7 @@ Unity Pipeline’s verified authoring tools influenced these mandatory rules:
 
 ## Phase 6 — Deterministic runtime playtesting
 
-**Status:** Planned
+**Status:** **Partial — active development**
 
 ### Goal
 
@@ -832,18 +854,20 @@ Flax therefore should not pretend input injection is inherited Unity parity. It 
 ### Public surface
 
 ```text
+flax playtest status --project .
 flax playtest begin --project . [--scene Content/game.scene]
-flax playtest find --name "Cube 4"
-flax playtest input key W --duration 1.5s
-flax playtest input mouse --dx 120 --dy -10
-flax playtest input button Fire --press
-flax playtest move --actor <handle> --forward 3m
-flax playtest look-at --actor <handle>
-flax playtest wait --condition <typed-condition> --timeout 5s
-flax playtest raycast --from camera --through crosshair
-flax playtest capture --to Artifacts/playtest.png
+flax playtest find --name "Cube 4" --project .
+flax playtest wait --name "Player" --timeout-seconds 5 --project .
+flax playtest assert --name "Player" --active true --project .
+flax playtest capture game --to Artifacts/playtest.png --project .
 flax playtest end
 ```
+
+The implemented core uses the authenticated Editor bridge. `begin` opens the
+persisted `GameSettings.FirstScene` when no scene is loaded, waits for the actual
+play-mode transition, and returns the live status. `find`, `wait`, and `assert`
+operate on runtime Actor IDs, exact names, type names, and active state. `capture`
+uses the same project-confined viewport/game screenshot route as Phase 4.
 
 Raw key/mouse input is useful for end-to-end coverage, but semantic project commands are more deterministic. A game may register commands such as `game.player.move` or `fps.fire` while the built-in playtest layer observes shared engine state.
 
@@ -891,16 +915,15 @@ A screenshot that merely appears aimed at the cube is not proof. The final resul
 
 ### Acceptance
 
-- A script can enter play mode, walk, look, shoot, observe a typed hit, capture evidence, and stop without desktop computer-use automation.
+- A script can enter play mode, observe a typed runtime Actor, capture evidence, and stop without desktop computer-use automation.
 - The FPS Cube 4 scenario returns `hit: true|false` with the observed Actor ID and evidence.
-- Cancellation cannot leave keys/buttons held.
-- Repeated tests produce a replayable input/event record.
+- Raw keyboard/pointer/gamepad injection, collision/event instrumentation, and replay records remain project-specific follow-up work; the built-in layer does not claim to provide them.
 
 ---
 
 ## Phase 7 — MCP and warm automation shell
 
-**Status:** Planned
+**Status:** **Partial — active development**
 
 ### Goal
 
@@ -912,9 +935,14 @@ Expose the Phase 3–6 typed command catalog to agents and long-lived automation
 flax mcp
 flax mcp --project .
 flax mcp --instance <id>
-flax mcp configure codex
-flax mcp configure --list
 ```
+
+The compatible implementation supports MCP `initialize`, `ping`, `tools/list`,
+and `tools/call` over stdin/stdout. It always exposes a generic `flax_command`
+tool and, when a project is available, projects each valid typed command as
+`flax.command.<dotted-name>` with a schema derived from `flax commands list`.
+Client-specific `configure` commands are intentionally deferred until their
+configuration-file contracts are verified.
 
 The installed Unity CLI verifies this product shape: `unity mcp` runs a stdio MCP server, and `unity mcp configure --list` currently includes Codex, Claude Desktop/Code, Cursor, VS Code, Copilot CLI, Windsurf, Cline, and other clients.
 
@@ -953,7 +981,7 @@ A long-lived `flax shell --format ndjson` can reuse discovery, authentication, s
 
 ### Acceptance
 
-- Codex can configure and launch `flax mcp` through the CLI.
+- Codex-compatible clients can launch `flax mcp` through the CLI and use the stdio session.
 - MCP discovery exposes the same schemas and permissions as `flax commands list`.
 - An `example.validate` result is equivalent across CLI JSON, live bridge, and MCP.
 - No MCP-only mutation bypasses CLI safety rules.
@@ -963,7 +991,7 @@ A long-lived `flax shell --format ndjson` can reuse discovery, authentication, s
 
 ## Phase 8 — Managed distribution, project lifecycle, and templates
 
-**Status:** Deferred pending feed and ownership contracts
+**Status:** **Partial — local-first; signed local feed verification/install available, remote feeds deferred**
 
 ### Goal
 
@@ -996,6 +1024,26 @@ Unity CLI references to inspect at implementation time include `install`, `insta
 - optional project link/unlink only if Flax gains a corresponding service.
 
 The current installed `unity projects --help` exposes all of those concepts, including create/new distinctions and registry export/import. Flax must check their detailed help before deciding whether both `create` and `new` add value.
+
+The compatible local subset is implemented:
+
+- `flax projects create <path> [--name <name>] [--template empty]`;
+- `flax new <path> [--name <name>] [--template empty]`;
+- `flax templates list` and `flax templates info empty`.
+
+Creation is refused for a non-empty directory and writes only the project file,
+`Content`, `Source`, and `.flax` directories. It never overwrites existing content.
+
+Signed local feed operations are also implemented:
+
+- `flax feeds verify --manifest <file> --signature <file> --public-key <RSA-PEM>`;
+- `flax feeds list` after verification;
+- `flax feeds install --id <entry> --to <directory> --yes`.
+
+The manifest is recursively canonicalized and verified with RSA-SHA256. Entry
+archive hashes are checked before extraction, ZIP traversal is rejected, and
+installation uses a staging directory. Network discovery, key rotation, and
+remote engine/package update ownership remain open product decisions.
 
 ### Planned template commands
 
@@ -1054,11 +1102,14 @@ These are real blockers. Unity CLI may guide user experience, but it cannot answ
 - Project/template commands never overwrite existing content without confirmation.
 - Launcher and CLI show consistent engine/project state.
 
+The remaining acceptance items are explicitly feed-gated. Local creation and the
+built-in empty template are covered by the phase 10 integration matrix.
+
 ---
 
 ## Phase 9 — Tests, diagnostics, and ecosystem completion
 
-**Status:** Planned
+**Status:** **Partial — local adapters**
 
 ### Goal
 
@@ -1066,14 +1117,20 @@ Complete the control plane around the core authoring/runtime features and make f
 
 ### Test adapters
 
-Planned surface:
+Compatible local surface:
 
 ```text
 flax test list
-flax test run [filter] [--detach]
-flax test status <jobId>
-flax test cancel <jobId>
+flax test run [native|managed|build] [--kind kind] [--path path] [--filter value]
 ```
+
+The compatible local adapter implements `flax test list` and bounded
+`flax test run`. It discovers native `FlaxTests`, Flax.Build tests, managed
+engine tests, and project test targets under the selected engine/project roots,
+and executes only an explicitly selected, existing target. Compile/build/typed
+command requests can now detach into persistent process-backed jobs with
+status, wait, cancellation, and stdout/stderr log paths; a richer test-specific
+queue and progress event stream remain future work.
 
 Unity Pipeline exposes `list_tests`, `run_tests`, `test_status`, and cancellation. Flax adopts the async job shape but must define adapters because Flax does not have one universal user-project test framework.
 
@@ -1087,7 +1144,8 @@ Adapters may include:
 
 ### Diagnostics and logs
 
-- `doctor` grows scoped checks and opt-in repairs.
+- `doctor` and `diagnose status` provide scoped health checks.
+- `diagnose bundle --to <project-relative.zip>` creates a confined, redacted ZIP with a manifest and available local logs.
 - `logs` gains source filters, cursors, tail/follow, levels, and time ranges.
 - `diagnose bundle` creates a redacted support archive.
 - `env` reports resolved tools/SDKs without dumping secrets.
@@ -1109,10 +1167,55 @@ Local engine/project/build/authoring commands must remain account-independent.
 
 ### Acceptance
 
-- Test runs can be queued, observed, cancelled, and reported in CI JSON.
+- Test targets can be discovered and run with structured CI JSON; durable
+  process-backed status/cancel is available for detached compile/build/command
+  workflows, while a test-native queue remains future work.
 - Support bundles are deterministic and redact known secret classes.
 - Log following uses cursors and bounded memory.
 - Optional network/account features cannot break offline local commands.
+
+---
+
+## Phase 10 — Compatibility hardening and integration matrix
+
+**Status:** Active release gate
+
+Phase 10 is the cross-cutting hardening phase for the compatible local surface. It
+does not expand unsupported Unity concepts into unsafe guesses; it proves that
+every implemented route has a stable result contract, capability negotiation,
+path confinement, and a repeatable Editor lifecycle.
+
+### Required matrix
+
+| Area | Required checks |
+| --- | --- |
+| CLI host | build, unit tests, help/completion, JSON/NDJSON result envelopes, exit codes |
+| Editor bridge | status/discovery, stale-instance rejection, typed catalog, instance selection, console/performance, capture |
+| Player/runtime | Development Player discovery when valid, player control, virtual keyboard/mouse input, capability rejection for unsupported gamepad/action routes |
+| Scene authoring | active scene get/set, build-list list/add/remove, dirty/save/reload/close, no native modal |
+| Settings and bakes | list/get/schema/diff/dry-run/set plus every supported bake start/status/cancel/clear route |
+| Jobs/feeds/eval/graphs | detached job start/list/wait/cancel, signed feed verification/install guards, C# unlock/audit, Visject groups/inspect/validate |
+| Playtest | startup-scene begin barrier, find/wait/assert, capture evidence, graceful end |
+| MCP | initialize, notification handling, tools/list projection, tools/call equivalence, stdin-close behavior |
+| Local lifecycle | empty-project creation, template list/info, refusal to overwrite non-empty directories |
+| Test adapters | discover targets, confined execution, structured process output and timeout behavior |
+| Skills/docs | validate and synchronize installed `flax-cli` and `flax-editor-authoring` skills |
+
+Before rebuilding `FlaxEditor`, the automation protocol must choose
+`flax editor close --save` or `flax editor close --discard` and verify process
+exit. Direct process termination is not a valid phase 10 step because it can
+recreate the native “Save before closing?” prompt.
+
+### Explicit compatibility boundary
+
+The following remain honest, capability-gated gaps rather than silently degraded
+commands: standalone Player integration until a valid Development Player/cooked
+runtime is available, collision and gameplay-event instrumentation without
+project support, editor-window/UI-element/video capture, progress event
+streaming, remote signed release/platform feeds, package resolution,
+client-specific MCP configuration, and generalized Visject support beyond
+Material and Animation Graph assets. Arbitrary C# is implemented only as an
+explicit, audited Development capability and is never treated as a sandbox.
 
 ---
 
@@ -1229,7 +1332,7 @@ Repository build/test commands remain governed by `AGENTS.md` and CI. Documentat
 2. **Done in source:** add `operation: "command"` to the one-shot Editor request service.
 3. **Done in source:** implement `flax commands list/info` and `flax command` with one-shot and live routing.
 4. Validate the one-shot command service against a rebuilt Editor.
-5. Complete the Phase 4 running-Editor bridge with Player registration, streaming progress, and live capture/performance capabilities.
+5. Complete the Phase 4 running-Editor bridge with Player registration, streaming progress, and live capture capabilities; live performance snapshots are done in source.
 6. **Done in source:** add the Phase 5 core scene/Actor/component/Prefab commands and project-scoped authoring root.
 7. Add deterministic Phase 6 input and observation primitives.
 8. Expose the stable registry through Phase 7 MCP.

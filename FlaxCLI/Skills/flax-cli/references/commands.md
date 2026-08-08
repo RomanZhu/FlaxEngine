@@ -19,7 +19,7 @@ Use `flax` directly when a published executable is installed.
 - Evidence/playtest: `capture viewport|game`, `playtest status|begin|pause|resume|step|find|wait|assert|capture|end`
 - Durable jobs: `jobs list|info|status|wait|cancel|prune`; add `--detach` to `compile`, `build`, or `command`
 - Signed local feeds: `feeds verify|list|install --manifest <file> --signature <file> --public-key <RSA-PEM>`
-- Development Player: `player status|pause|resume|step|quit|input`; `runtime input` is an alias. Input supports virtual `key`, `pointer`, and `reset`
+- Development Player: `player status|pause|resume|step|quit|input`; `runtime input` is an alias. Input supports virtual `key`, absolute/relative `pointer`, `inspect`, and `reset`
 - Visject: `visject groups list`, `asset inspect`, `validate`, `node add|remove|set`, `connect`, `disconnect`
 - Agent bridge: `mcp` (stdio `initialize`, `ping`, `tools/list`, `tools/call`)
 - Diagnostics: `diagnose status|bundle --to <project-relative.zip>`
@@ -40,7 +40,7 @@ assuming remote services.
 - Diagnostics: `dev unlock-eval`, then `dev eval` or `dev eval-file` in the same live Editor. Eval is bounded expression-only and cannot mutate project state.
 - Arbitrary C#: `dev unlock-csharp`, then `dev eval-csharp` or `dev eval-csharp-file` with the returned token. This is audited, in-process development code, not a sandbox.
 - Visject graphs: `visject groups list`, `asset inspect|validate`, node add/remove/set, and connect/disconnect for Material and Animation Graph assets.
-- Player/runtime: `player status|pause|resume|step|quit` and virtual keyboard/mouse `player input`; gamepad/action synthesis is unsupported.
+- Player/runtime: `player status|pause|resume|step|quit` and virtual keyboard/mouse `player input`; use pointer `--state relative --dx ... --dy ...` for mouse-look deltas and `input inspect` for device/mapping/state diagnostics. Gamepad/action synthesis is unsupported.
 - Authoring: `authoring-root`, `scenes`, `actors`, `prefabs`
 
 The stable settings groups are `game`, `time`, `audio`, `layers`, `physics`,

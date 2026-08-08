@@ -53,15 +53,15 @@ World, local, and custom axes are supported. The outer ring captures camera dire
 
 ## Multiplicative scale
 
-Scale is a ratio and uses a symmetric exponential mapping:
+Scale is a ratio and uses an anchor-based exponential mapping. Testing showed that a symmetric 120-pixel response made positive growth explode near a screen edge, while the shrink response felt correct. The applied pointer mapping therefore keeps 120 pixels per halving when shrinking and uses 1,200 pixels per doubling when growing:
 
 ```text
 projectedDeltaPx = dot(cursor - anchorCursor, projectedHandleDirection)
-factor = exp(projectedDeltaPx * ln(2) / pixelsPerDoubling)
-pixelsPerDoubling = 120 px by default
+gain = projectedDeltaPx > 0 ? 0.1 : 1.0
+factor = exp(projectedDeltaPx * gain * ln(2) / 120)
 ```
 
-Dragging 120 px doubles scale and dragging back halves it. Precision changes `pixelsPerDoubling` after re-anchoring.
+Dragging 1,200 px in the growth direction doubles scale; dragging 120 px in the shrink direction halves it. Returning to the anchor still produces exactly factor one. Precision applies another 0.1 gain after re-anchoring.
 
 | Operation | Factors | Position behavior |
 | --- | --- | --- |
@@ -101,17 +101,28 @@ The measurement basis used by feedback must be explicit: active local size, aggr
 
 ## Implementation checklist
 
-- [ ] W01: extract pure math helpers and establish deterministic test seams.
-- [ ] P3-01: replace additive scale with exponential multiplicative factor mapping.
-- [ ] P3-02: implement axis/plane/uniform, group/individual, bounds-face, and bounds-corner policy while preserving the TRS-only, no-skew scale decision.
-- [ ] P3-03: enforce zero-crossing default and explicit mirroring warning.
-- [ ] P4-01: implement closest-axis and frozen-plane translation with degeneracy fallback.
-- [ ] P4-02: implement stable ring rotation, unwrap, quaternion normalization, and arcball.
-- [ ] P4-03: make camera/modifier changes re-anchor with no result jump.
-- [ ] P5-03: implement spaces, pivots, hierarchy filtering, and explicit multi-selection behavior; keep toolbar state, rendered/picked scale basis, and solver basis consistent.
+- [x] W01: extract pure math helpers and establish deterministic test seams.
+- [x] P3-01: replace additive scale with exponential multiplicative factor mapping.
+- [ ] P3-02: axis/plane/uniform factors and group-pivot position scaling are implemented; individual bounds-face and bounds-corner cage policy remains.
+- [ ] P3-03: ordinary pointer scaling cannot cross numerical zero; explicit mirroring controls and handedness warning remain.
+- [x] P4-01: implement closest-axis and frozen-plane translation with degeneracy fallback.
+- [x] P4-02: implement stable ring rotation, unwrap, quaternion normalization, and arcball.
+- [x] P4-03: make camera/modifier changes re-anchor with no result jump.
+- [ ] P5-03: existing World/Local spaces, existing pivots, top-level hierarchy filtering, and shared-pivot group behavior are explicit; Parent/View/Custom spaces and additional pivot policies remain.
+
+## Implemented core slice
+
+- Translation is solved from the replaceable interaction anchor. Axis movement uses closest-line math with a screen-projected degeneracy fallback; plane and center movement use frozen anchor planes.
+- Ring rotation uses an anchor angle with unwrap for multiple revolutions. Trackball rotation uses an anchor-based virtual arcball, including the antipodal case.
+- Axis, plane, and uniform scaling use the tuned exponential mapping: 1,200 pixels per positive doubling and 120 pixels per negative halving. Scale snapping acts on total factors and leaves inactive components untouched.
+- Shared-pivot scaling updates top-level selected-object positions in the captured gizmo basis. Actor transforms remain TRS-only.
+- The Armed-to-Dragging transition preserves the click-time anchor, and modifier/camera re-anchors preserve the current result.
+- Pointer interaction starts where the handle was grabbed; it does not warp the cursor to the pivot. Continuous wrapped pointer coordinates remain symmetric when crossing and returning over viewport edges.
 
 ## Completion evidence
 
-Use pointer replays at 30/60/120/240 FPS, ten full rotations, precision/snap/camera transitions, scale-toward-zero, group/individual selection, parent-child selection, and rotated-bounds measurements. Cross-check `INV-02`, `INV-03`, `INV-05`, `INV-06`, and `INV-07` in the [implementation index](implementation.md).
+Pure tests cover exponential scale symmetry and composition, positive minimum factors, axis and plane translation, ring unwrap, regular and antipodal arcball rotation, and basis-aware group-pivot scaling. They have not been executed in this pass because local build/test execution requires explicit authorization.
+
+Manual pointer replays at 30/60/120/240 FPS, ten full rotations, precision/snap/camera transitions, scale-toward-zero, group/individual selection, parent-child selection, and rotated-bounds measurements remain required. Cross-check `INV-02`, `INV-03`, `INV-05`, `INV-06`, and `INV-07` in the [implementation index](implementation.md).
 
 Return to the behavior source: [`Flax_3D_Transform_Gizmo_Redesign_Specification.md`](Flax_3D_Transform_Gizmo_Redesign_Specification.md).

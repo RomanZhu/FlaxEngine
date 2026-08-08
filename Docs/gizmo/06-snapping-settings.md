@@ -22,7 +22,7 @@ Direct translation and rotation remain linear; application-level acceleration is
 
 | Control | Default |
 | --- | --- |
-| Precision modifier | 0.1× translation/rotation gain; 10× pixels per scale doubling |
+| Precision modifier | 0.1× translation/rotation and scale-pointer gain |
 | Fine precision chord | Optional 0.01× |
 | Snap modifier | Temporary use of current snap step |
 | Mouse wheel during free move | Camera depth or snap-candidate cycling, context-dependent |
@@ -35,7 +35,7 @@ Typing during a drag opens an inline numeric field in the cursor HUD. Axis trans
 | --- | --- |
 | Appearance | Radius, line thickness, opacity, occluded opacity, brightness, labels, plane opacity |
 | Acquisition | Hit-target scale, hover hysteresis, overlap cycling |
-| Manipulation | Scale pixels-per-doubling, precision factor, negative-scale policy, free-move depth gain |
+| Manipulation | Positive/negative scale response, precision factor, negative-scale policy, free-move depth gain |
 | Feedback | Cursor HUD, world labels, dimensions, result value, snap target text, decimal/unit mode |
 | Behavior | Default space, pivot, group/individual mode, camera clutch, focus-loss policy |
 | Input | Bindings and editor presets |
