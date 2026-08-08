@@ -27,14 +27,18 @@ namespace
     }
 }
 
-void Physics::BeginRigidBodyInterpolationSync()
+bool Physics::BeginRigidBodyInterpolationSync()
 {
+    if (Physics::GetSimulationMode() != PhysicsSimulationMode::FixedUpdate || InterpolatedRigidBodies.IsEmpty())
+        return false;
+
     RigidBodyInterpolationSyncFrame++;
+    return true;
 }
 
 void Physics::UpdateInterpolatedRigidBodies()
 {
-    if (InterpolatedRigidBodies.IsEmpty())
+    if (Physics::GetSimulationMode() != PhysicsSimulationMode::FixedUpdate || InterpolatedRigidBodies.IsEmpty())
         return;
 
     float alpha = 1.0f;

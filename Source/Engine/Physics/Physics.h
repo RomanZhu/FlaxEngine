@@ -40,13 +40,23 @@ API_CLASS(Static) class FLAXENGINE_API Physics
     /// <summary>
     /// Starts a new rigidbody interpolation synchronization step.
     /// </summary>
-    static void BeginRigidBodyInterpolationSync();
+    static bool BeginRigidBodyInterpolationSync();
 
 public:
     /// <summary>
     /// The automatic simulation feature. True if perform physics simulation after on fixed update by auto, otherwise user should do it.
     /// </summary>
     API_PROPERTY() static bool GetAutoSimulation();
+
+    /// <summary>
+    /// Controls how the engine schedules physics simulation.
+    /// </summary>
+    API_PROPERTY() static PhysicsSimulationMode GetSimulationMode();
+
+    /// <summary>
+    /// Controls how the engine schedules physics simulation.
+    /// </summary>
+    API_PROPERTY() static void SetSimulationMode(PhysicsSimulationMode value);
 
     /// <summary>
     /// Gets the current gravity force.

@@ -222,7 +222,8 @@ void Engine::OnLoop()
     // Update game logic and draw frame
     if (Time::OnBeginUpdate(time))
     {
-        Physics::UpdateInterpolatedRigidBodies();
+        if (Physics::GetSimulationMode() == PhysicsSimulationMode::FixedUpdate)
+            Physics::UpdateInterpolatedRigidBodies();
         OnUpdate();
         OnLateUpdate();
         Time::OnEndUpdate();
@@ -313,7 +314,7 @@ void Engine::OnFixedUpdate()
     // Update services
     EngineService::OnFixedUpdate();
 
-    if (!Time::GetGamePaused())
+    if (!Time::GetGamePaused() && Physics::GetSimulationMode() == PhysicsSimulationMode::FixedUpdate)
     {
         const float dt = Time::Physics.DeltaTime.GetTotalSeconds();
         Physics::Simulate(dt);
@@ -328,7 +329,8 @@ void Engine::OnLateFixedUpdate()
     PROFILE_CPU_NAMED("Late Fixed Update");
 
     // Collect physics simulation results (does nothing if Simulate hasn't been called in the previous loop step)
-    Physics::CollectResults();
+    if (Physics::GetSimulationMode() == PhysicsSimulationMode::FixedUpdate)
+        Physics::CollectResults();
 
     // Call event
     LateFixedUpdate();

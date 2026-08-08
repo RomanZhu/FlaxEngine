@@ -65,6 +65,12 @@ public:
     Vector3 DefaultGravity = Vector3(0, -981.0f, 0);
 
     /// <summary>
+    /// Controls how the engine schedules physics simulation.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(10), EditorDisplay(\"Simulation\")")
+    PhysicsSimulationMode SimulationMode = PhysicsSimulationMode::FixedUpdate;
+
+    /// <summary>
     /// Minimum relative velocity required for an object to bounce. A typical value for simulation stability is about 0.2 * gravity
     /// </summary>
     API_FIELD(Attributes="EditorOrder(30), EditorDisplay(\"Simulation\")")

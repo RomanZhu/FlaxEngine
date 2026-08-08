@@ -47,6 +47,27 @@ API_ENUM() enum class PhysicsCombineMode
 };
 
 /// <summary>
+/// Controls how the engine schedules physics simulation.
+/// </summary>
+API_ENUM() enum class PhysicsSimulationMode
+{
+    /// <summary>
+    /// Physics simulation is disabled.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    /// Physics is simulated automatically during the fixed update loop.
+    /// </summary>
+    FixedUpdate = 1,
+
+    /// <summary>
+    /// Physics is simulated only when scripts explicitly call simulation APIs.
+    /// </summary>
+    Script = 2,
+};
+
+/// <summary>
 /// Force mode type determines the exact operation that is carried out when applying the force on a rigidbody.
 /// </summary>
 API_ENUM() enum class ForceMode

@@ -169,6 +169,7 @@ namespace FlaxEditor.States
         private void SetupEditorEnvOptions()
         {
             Time.TimeScale = 1.0f;
+            Physics.SimulationMode = PhysicsSimulationMode.FixedUpdate;
             Physics.DefaultScene.AutoSimulation = true;
             Screen.CursorVisible = true;
             Screen.CursorLock = CursorLockMode.None;

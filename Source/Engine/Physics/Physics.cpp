@@ -16,6 +16,7 @@
 PhysicsScene* Physics::DefaultScene = nullptr;
 Array<PhysicsScene*> Physics::Scenes;
 uint32 Physics::LayerMasks[32];
+static PhysicsSimulationMode PhysicsSimulationModeInternal = PhysicsSimulationMode::FixedUpdate;
 
 class PhysicsService : public EngineService
 {
@@ -40,6 +41,7 @@ void PhysicsSettings::Apply()
     Physics::SetGravity(DefaultGravity);
     Physics::SetBounceThresholdVelocity(BounceThresholdVelocity);
     Physics::SetEnableCCD(!DisableCCD);
+    Physics::SetSimulationMode(SimulationMode);
     PhysicsBackend::ApplySettings(*this);
 }
 
@@ -56,6 +58,7 @@ void PhysicsSettings::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_GET_OTHER_OBJ(PhysicsSettings);
 
     SERIALIZE(DefaultGravity);
+    SERIALIZE(SimulationMode);
     SERIALIZE(TriangleMeshTriangleMinAreaThreshold);
     SERIALIZE(BounceThresholdVelocity);
     SERIALIZE(FrictionCombineMode);
@@ -81,6 +84,7 @@ void PhysicsSettings::Serialize(SerializeStream& stream, const void* otherObj)
 void PhysicsSettings::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
 {
     DESERIALIZE(DefaultGravity);
+    DESERIALIZE(SimulationMode);
     DESERIALIZE(TriangleMeshTriangleMinAreaThreshold);
     DESERIALIZE(BounceThresholdVelocity);
     DESERIALIZE(FrictionCombineMode);
@@ -191,7 +195,17 @@ void Physics::DeleteScene(PhysicsScene* scene)
 
 bool Physics::GetAutoSimulation()
 {
-    return !DefaultScene || DefaultScene->GetAutoSimulation();
+    return PhysicsSimulationModeInternal == PhysicsSimulationMode::FixedUpdate && (!DefaultScene || DefaultScene->GetAutoSimulation());
+}
+
+PhysicsSimulationMode Physics::GetSimulationMode()
+{
+    return PhysicsSimulationModeInternal;
+}
+
+void Physics::SetSimulationMode(PhysicsSimulationMode value)
+{
+    PhysicsSimulationModeInternal = value;
 }
 
 Vector3 Physics::GetGravity()
@@ -229,6 +243,9 @@ void Physics::SetBounceThresholdVelocity(const float value)
 
 void Physics::Simulate(float dt)
 {
+    if (PhysicsSimulationModeInternal == PhysicsSimulationMode::None)
+        return;
+
     for (PhysicsScene* scene : Scenes)
     {
         if (scene->GetAutoSimulation())
@@ -241,12 +258,11 @@ void Physics::CollectResults()
     bool interpolationSyncStarted = false;
     for (PhysicsScene* scene : Scenes)
     {
-        if (scene->GetAutoSimulation() && scene->IsDuringSimulation())
+        if (scene->IsDuringSimulation())
         {
             if (!interpolationSyncStarted)
             {
-                BeginRigidBodyInterpolationSync();
-                interpolationSyncStarted = true;
+                interpolationSyncStarted = BeginRigidBodyInterpolationSync();
             }
             scene->CollectResults();
         }
@@ -522,6 +538,9 @@ bool PhysicsScene::Init(const StringView& name, const PhysicsSettings& settings)
 
 void PhysicsScene::Simulate(float dt)
 {
+    if (Physics::GetSimulationMode() == PhysicsSimulationMode::None)
+        return;
+
     ASSERT(IsInMainThread() && !_isDuringSimulation);
     _isDuringSimulation = true;
     PhysicsBackend::StartSimulateScene(_scene, dt);
