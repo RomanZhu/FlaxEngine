@@ -32,6 +32,7 @@ namespace FlaxEditor.Windows
         private Panel _sceneTreePanel;
         private bool _isUpdatingSelection;
         private bool _blockSceneTreeScroll = false;
+        private bool _isSearchFilterUpdatePending;
 
         private DragAssets _dragAssets;
         private DragActorType _dragActorType;
@@ -531,9 +532,13 @@ namespace FlaxEditor.Windows
         private void OnSearchBoxTextChanged()
         {
             // Skip events during setup or init stuff
-            if (IsLayoutLocked)
+            if (IsLayoutLocked || _tree == null || _searchBox == null)
+            {
+                _isSearchFilterUpdatePending = true;
                 return;
+            }
 
+            _isSearchFilterUpdatePending = false;
             ClearSelectionOverflowInputState();
             PerformLayout();
             _tree.LockChildrenRecursive();
@@ -792,6 +797,21 @@ namespace FlaxEditor.Windows
         public override void OnInit()
         {
             Editor.SceneEditing.SelectionChanged += OnSelectionChanged;
+            Editor.Scene.SceneGraphChanged += OnSceneGraphChanged;
+        }
+
+        /// <inheritdoc />
+        public override void OnUpdate()
+        {
+            base.OnUpdate();
+
+            if (_isSearchFilterUpdatePending && !IsLayoutLocked)
+                OnSearchBoxTextChanged();
+        }
+
+        private void OnSceneGraphChanged()
+        {
+            _isSearchFilterUpdatePending = true;
         }
 
         private void OnSelectionChanged()
@@ -1197,6 +1217,8 @@ namespace FlaxEditor.Windows
             _tree = null;
             _searchBox = null;
             Editor.Options.OptionsChanged -= OnOptionsChanged;
+            Editor.SceneEditing.SelectionChanged -= OnSelectionChanged;
+            Editor.Scene.SceneGraphChanged -= OnSceneGraphChanged;
             ScriptsBuilder.ScriptsReloadEnd -= OnSearchBoxTextChanged;
 
             base.OnDestroy();

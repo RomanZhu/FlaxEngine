@@ -70,6 +70,11 @@ namespace FlaxEditor.Modules
         /// </summary>
         public event Action<ActorNode> ActorRemoved;
 
+        /// <summary>
+        /// Occurs when the editor scene graph changes.
+        /// </summary>
+        public event Action SceneGraphChanged;
+
         internal SceneModule(Editor editor)
         : base(editor)
         {
@@ -851,11 +856,13 @@ namespace FlaxEditor.Modules
             sceneNode.ParentNode = Root;
             rootNode.SortChildren();
             rootNode.IsLayoutLocked = false;
+            treeNode.UnlockChildrenRecursive();
             rootNode.Parent.PerformLayout();
 
             var endTime = DateTime.UtcNow;
             var milliseconds = (int)(endTime - startTime).TotalMilliseconds;
             Editor.Log($"Created graph for scene \'{scene.Name}\' in {milliseconds} ms");
+            SceneGraphChanged?.Invoke();
         }
 
         private void OnSceneUnloading(Scene scene, Guid sceneId)
@@ -888,6 +895,7 @@ namespace FlaxEditor.Modules
                     Editor.SceneEditing.Select(newSelection);
                 }
                 node.Dispose();
+                SceneGraphChanged?.Invoke();
             }
         }
 
@@ -918,6 +926,7 @@ namespace FlaxEditor.Modules
             if (node != null)
             {
                 node.ParentNode = parentNode;
+                SceneGraphChanged?.Invoke();
             }
         }
 
@@ -927,6 +936,7 @@ namespace FlaxEditor.Modules
             if (node != null)
             {
                 OnActorDeleted(node);
+                SceneGraphChanged?.Invoke();
             }
         }
 
@@ -984,6 +994,7 @@ namespace FlaxEditor.Modules
                 // Remove node (user may unlink actor from the scene but not destroy the actor)
                 node.Dispose();
             }
+            SceneGraphChanged?.Invoke();
         }
 
         private void OnActorOrderInParentChanged(Actor actor)
@@ -995,7 +1006,11 @@ namespace FlaxEditor.Modules
         private void OnActorNameChanged(Actor actor)
         {
             ActorNode node = GetActorNode(actor);
-            node?.TreeNode.UpdateText();
+            if (node != null)
+            {
+                node.TreeNode.UpdateText();
+                SceneGraphChanged?.Invoke();
+            }
         }
 
         private void OnActorActiveChanged(Actor actor)
@@ -1043,6 +1058,7 @@ namespace FlaxEditor.Modules
                     node.ChildNodes[i].Dispose();
                 }
                 node.ChildNodes.Clear();
+                SceneGraphChanged?.Invoke();
             }
         }
 
