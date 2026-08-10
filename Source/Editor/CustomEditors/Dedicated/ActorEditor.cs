@@ -325,6 +325,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
             /// </summary>
             public Script PrefabObject;
 
+            /// <summary>
+            /// The prefab instance actor that should own the restored script.
+            /// </summary>
+            public Actor ParentActor;
+
             /// <inheritdoc />
             public override void Initialize(LayoutElementsContainer layout)
             {
@@ -409,7 +414,8 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     {
                         var dummy = new RemovedScriptDummy
                         {
-                            PrefabObject = prefabObjectScript
+                            PrefabObject = prefabObjectScript,
+                            ParentActor = FindEditedActor(editor),
                         };
                         var child = CreateDiffNode(dummy);
                         if (result == null)
@@ -458,6 +464,16 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 return null;
 
             return result;
+        }
+
+        private static Actor FindEditedActor(CustomEditor editor)
+        {
+            for (var current = editor; current != null; current = current.ParentEditor)
+            {
+                if (current.Values.Count > 0 && current.Values[0] is Actor actor)
+                    return actor;
+            }
+            return null;
         }
 
         private TreeNode CreateDiffTree(Actor actor, CustomEditorPresenter presenter, LayoutElementsContainer layout)
@@ -575,13 +591,15 @@ namespace FlaxEditor.CustomEditors.Dedicated
             {
                 Editor.Log("Reverting removed script changes to prefab (adding it)");
 
-                var actor = (Actor)Values[0];
-                var restored = actor.AddScript(removed.PrefabObject.GetType());
-                var prefabId = actor.PrefabID;
-                var prefabObjectId = restored.PrefabObjectID;
-                Script.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(restored), ref prefabId, ref prefabObjectId);
-                string data = JsonSerializer.Serialize(removed.PrefabObject);
-                JsonSerializer.Deserialize(restored, data);
+                var actor = removed.ParentActor;
+                if (!actor)
+                {
+                    Editor.LogWarning("Cannot restore removed prefab script because its instance actor is missing.");
+                    return;
+                }
+                var restored = RestoreRemovedPrefabScript(actor, removed.PrefabObject);
+                if (!restored)
+                    return;
 
                 var action = AddRemoveScript.Added(restored);
                 Presenter.Undo?.AddAction(action);
@@ -647,6 +665,26 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 editor.RevertToReferenceValue();
                 editor.RefreshInternal();
             }
+        }
+
+        private static Script RestoreRemovedPrefabScript(Actor actor, Script prefabObject)
+        {
+            if (!actor || !prefabObject)
+                return null;
+
+            var restored = actor.AddScript(prefabObject.GetType());
+            if (!restored)
+            {
+                Editor.LogWarning("Cannot restore removed prefab script because its type could not be instantiated.");
+                return null;
+            }
+            string data = JsonSerializer.Serialize(prefabObject);
+            JsonSerializer.Deserialize(restored, data);
+            restored.Parent = actor;
+            var prefabId = prefabObject.PrefabID;
+            var prefabObjectId = prefabObject.PrefabObjectID;
+            Script.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(restored), ref prefabId, ref prefabObjectId);
+            return restored;
         }
     }
 }
