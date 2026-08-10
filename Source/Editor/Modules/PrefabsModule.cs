@@ -271,7 +271,17 @@ namespace FlaxEditor.Modules
             }
 
             // Call backend
-            var failed = PrefabManager.Internal_ApplyAll(FlaxEngine.Object.GetUnmanagedPtr(instance));
+            var contentDatabase = Editor.ContentDatabase;
+            contentDatabase.BeginAssetSave(prefab.Path);
+            bool failed = true;
+            try
+            {
+                failed = PrefabManager.Internal_ApplyAll(FlaxEngine.Object.GetUnmanagedPtr(instance));
+            }
+            finally
+            {
+                contentDatabase.EndAssetSave(prefab.Path, !failed);
+            }
             if (prefabRoot != null)
             {
                 prefabRoot.LocalTransform = originalTransform;
@@ -306,7 +316,17 @@ namespace FlaxEditor.Modules
             PrefabApplying?.Invoke(prefab, instanceRoot);
 
             // Call backend
-            var failed = PrefabManager.ApplyAddedObject(instanceRoot, addedObject);
+            var contentDatabase = Editor.ContentDatabase;
+            contentDatabase.BeginAssetSave(prefab.Path);
+            bool failed = true;
+            try
+            {
+                failed = PrefabManager.ApplyAddedObject(instanceRoot, addedObject);
+            }
+            finally
+            {
+                contentDatabase.EndAssetSave(prefab.Path, !failed);
+            }
             if (failed)
                 throw new Exception("Failed to apply the prefab change. See log to learn more.");
 
