@@ -140,6 +140,11 @@ their affected scenes synchronously. Before a non-additive `scenes open`, the
 CLI saves any genuinely dirty loaded scenes and then transitions without a
 “save changes?” dialog; clean scenes are neither prompted for nor rewritten.
 
+Editors launched by `flax open` or `flax play` run in CLI automation mode. If a
+loaded scene changes on disk during that session, the Editor reloads it
+automatically instead of displaying the modal "Scene changed on disk" prompt.
+Editors launched normally retain the interactive prompt.
+
 Before shutting down a live Editor, choose an explicit dirty-scene policy:
 
 ```powershell

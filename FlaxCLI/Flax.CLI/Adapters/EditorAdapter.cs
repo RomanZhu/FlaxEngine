@@ -15,11 +15,17 @@ internal sealed class EditorAdapter(ProcessCoordinator processes)
 
     public ProcessResult Open(EngineInfo engine, ProjectContext project, bool play, IReadOnlyList<string> passThrough)
     {
-        var arguments = new List<string> { "-project", project.ProjectFile };
+        var arguments = CreateOpenArguments(project, play, passThrough);
+        return processes.StartDetached(RequireEditor(engine), arguments, project.Root);
+    }
+
+    internal static List<string> CreateOpenArguments(ProjectContext project, bool play, IReadOnlyList<string> passThrough)
+    {
+        var arguments = new List<string> { "-project", project.ProjectFile, "-climode" };
         if (play)
             arguments.Add("-play");
         arguments.AddRange(passThrough);
-        return processes.StartDetached(RequireEditor(engine), arguments, project.Root);
+        return arguments;
     }
 
     public async Task<BuildInvocationResult> BuildAsync(EngineInfo engine, ProjectContext project, string preset, string target, string? outputPath, IReadOnlyList<string> customDefines, bool clean, bool runAfterBuild, IReadOnlyList<string> passThrough, CommandContext context)

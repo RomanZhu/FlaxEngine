@@ -184,6 +184,11 @@ public:
         Nullable<String> CliRequest;
 
         /// <summary>
+        /// -climode (marks an Editor session as controlled by Flax CLI automation)
+        /// </summary>
+        Nullable<bool> CliMode;
+
+        /// <summary>
         /// -skipcompile (skips the scripts compilation on editor startup, useful when launching engine from IDE)
         /// </summary>
         Nullable<bool> SkipCompile;

@@ -740,7 +740,7 @@ namespace FlaxEditor.Modules
                 if (scene == null)
                     continue;
 
-                if (Editor.MultiplayerPlayMode.IsReplica)
+                if (Editor.IsCliMode || Editor.MultiplayerPlayMode.IsReplica)
                 {
                     ReloadSceneFromDisk(scene);
                     continue;

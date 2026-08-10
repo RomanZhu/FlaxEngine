@@ -177,6 +177,7 @@ bool CommandLine::Parse(const Char* cmdLine)
     PARSE_BOOL_SWITCH("-genprojectfiles ", GenProjectFiles);
     PARSE_ARG_SWITCH("-build ", Build);
     PARSE_ARG_SWITCH("-clirequest ", CliRequest);
+    PARSE_BOOL_SWITCH("-climode ", CliMode);
     PARSE_BOOL_SWITCH("-skipcompile ", SkipCompile);
     PARSE_BOOL_SWITCH("-shaderdebug ", ShaderDebug);
     PARSE_BOOL_SWITCH("-exit ", Exit);

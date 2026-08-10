@@ -28,6 +28,7 @@ API_CLASS(Namespace="FlaxEditor", Name="Editor", NoSpawn, NoConstructor) class F
         SkipCompile = 2,
         NewProject = 4,
         Exit = 8,
+        CliMode = 16,
     };
 
     struct InternalOptions

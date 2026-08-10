@@ -34,6 +34,7 @@ namespace FlaxEditor.Windows
 
         private readonly Dictionary<Guid, float> _actorScrollValues = new Dictionary<Guid, float>();
         private readonly List<Asset> _waitingForContentAssets = new List<Asset>();
+        private bool _discardContentAssetChanges;
         private readonly List<PinnedTab> _pinnedTabs = new List<PinnedTab>();
         private readonly ScriptingObjectEditor _contentAssetEditor = new ScriptingObjectEditor();
         private IDisposable _contentAssetState;
@@ -463,6 +464,7 @@ namespace FlaxEditor.Windows
             Editor.SceneEditing.SelectionChanged += OnSceneSelectionChanged;
             Editor.Windows.ContentWin.SelectionChanged += OnContentSelectionChanged;
             Editor.ContentDatabase.ItemRemoved += OnContentItemRemoved;
+            FlaxEngine.Content.AssetReloading += OnAssetReloading;
             UpdateTabsBarVisibility();
         }
 
@@ -711,6 +713,20 @@ namespace FlaxEditor.Windows
             }
         }
 
+        private void OnAssetReloading(Asset asset)
+        {
+            if (!_showContentSelection || asset == null || !ContentSelectionContainsAsset(asset.ID))
+                return;
+            if (Editor.ContentDatabase.IsAssetSaveInProgress(asset.Path))
+                return;
+
+            // Keep displaying the current properties until the replacement data is ready. Once loaded,
+            // rebuild the selection from the asset and discard any deferred save owned by the stale proxy.
+            _discardContentAssetChanges = true;
+            _waitingForContentAssets.Clear();
+            _waitingForContentAssets.Add(asset);
+        }
+
         private Guid[] GetSelectedContentAssetIds()
         {
             var selection = Editor.Windows.ContentWin.Selection;
@@ -934,7 +950,20 @@ namespace FlaxEditor.Windows
         private void ClearContentAssetState()
         {
             if (_contentAssetState == null)
+            {
+                _discardContentAssetChanges = false;
                 return;
+            }
+            if (_discardContentAssetChanges)
+            {
+                if (_contentAssetState is MaterialAssetPropertiesProxy materialState)
+                    materialState.DiscardPendingChanges();
+                else if (_contentAssetState is ParticleAssetPropertiesProxy particleState)
+                    particleState.DiscardPendingChanges();
+                else if (_contentAssetState is JsonAssetContentAssetState jsonAssetState)
+                    jsonAssetState.DiscardPendingChanges();
+                _discardContentAssetChanges = false;
+            }
             _contentAssetState.Dispose();
             _contentAssetState = null;
         }
@@ -1351,6 +1380,11 @@ namespace FlaxEditor.Windows
                     Editor.LogError("Cannot save asset.");
             }
 
+            public void DiscardPendingChanges()
+            {
+                _hasPendingSave = false;
+            }
+
             public void Dispose()
             {
                 SavePendingChanges();
@@ -1535,6 +1569,12 @@ namespace FlaxEditor.Windows
                     SavePendingParticleSystemChanges(rebuildLayout);
                 if (_hasPendingParticleEmitterSave)
                     SavePendingEmitterSurfaceChanges(rebuildLayout);
+            }
+
+            public void DiscardPendingChanges()
+            {
+                _hasPendingParticleSystemSave = false;
+                _hasPendingParticleEmitterSave = false;
             }
 
             public void SavePendingParticleSystemChanges(bool rebuildLayout = true)
@@ -1803,6 +1843,11 @@ namespace FlaxEditor.Windows
                 SaveChanges();
             }
 
+            public void DiscardPendingChanges()
+            {
+                _hasPendingSave = false;
+            }
+
             public void SaveChanges()
             {
                 _hasPendingSave = false;
@@ -1828,6 +1873,7 @@ namespace FlaxEditor.Windows
                 Editor.Windows.ContentWin.SelectionChanged -= OnContentSelectionChanged;
             if (Editor.ContentDatabase != null)
                 Editor.ContentDatabase.ItemRemoved -= OnContentItemRemoved;
+            FlaxEngine.Content.AssetReloading -= OnAssetReloading;
             Presenter.Modified -= OnPresenterModified;
             ClearContentAssetState();
 

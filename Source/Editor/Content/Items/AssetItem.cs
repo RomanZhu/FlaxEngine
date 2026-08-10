@@ -110,6 +110,14 @@ namespace FlaxEditor.Content
         }
 
         /// <summary>
+        /// Notifies content item owners that the loaded asset is being refreshed from disk.
+        /// </summary>
+        internal void NotifyReloaded()
+        {
+            OnReimport();
+        }
+
+        /// <summary>
         /// Determines whether asset is of the specified type (included inheritance checks).
         /// </summary>
         /// <typeparam name="T">The type to check.</typeparam>

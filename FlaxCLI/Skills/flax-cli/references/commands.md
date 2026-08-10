@@ -57,6 +57,10 @@ Development Player starts and publishes its local manifest.
 
 Typed commands support `--one-shot`, `--live-only`, and `--instance`. Editor control commands are inherently live and do not accept a redundant `--live-only` option.
 
+Editors started by `flax open` or `flax play` run in CLI automation mode. Loaded
+scenes changed on disk are reloaded automatically in this mode, without the
+interactive scene-reload prompt that can block automation.
+
 To shut down a live Editor without a modal prompt, choose one explicit policy:
 
 ```powershell

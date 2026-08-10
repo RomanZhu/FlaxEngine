@@ -150,6 +150,7 @@ Use `assets` for content lifecycle operations. Use `commands list`, `commands in
 - Authoring paths are confined to project Content and the configured authoring root.
 - Successful scene mutations save affected scenes synchronously.
 - Non-additive scene transitions save genuinely dirty scenes without an interactive prompt.
+- Editors launched by `flax open` or `flax play` automatically reload loaded scenes changed on disk instead of showing a modal reload prompt.
 - Actor identity includes scene ID, Actor ID, hierarchy path, type, and name.
 - Destructive commands require verified targets and `--yes`.
 - Before closing a live Editor, use exactly one of `editor close --save` or

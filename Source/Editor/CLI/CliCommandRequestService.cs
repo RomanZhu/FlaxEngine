@@ -591,13 +591,21 @@ namespace FlaxEditor
                 if (property != null)
                 {
                     consumed.Add(property.Name);
+                    var parameterType = parameter.Parameter.ParameterType;
+                    var isBooleanParameter = parameterType == typeof(bool) || Nullable.GetUnderlyingType(parameterType) == typeof(bool);
+                    if (property.Value.Type == JTokenType.Boolean && property.Value.Value<bool>() && !isBooleanParameter)
+                    {
+                        throw new CliCommandProtocolException(
+                            "FLX-COMMAND-ARGUMENT-0002",
+                            $"Argument '{property.Name}' requires a value. Valueless --{property.Name} syntax is only valid for Boolean parameters.");
+                    }
                     try
                     {
-                        values[i] = JsonConvert.DeserializeObject(property.Value.ToString(Formatting.None), parameter.Parameter.ParameterType, FlaxJsonSerializer.Settings);
+                        values[i] = JsonConvert.DeserializeObject(property.Value.ToString(Formatting.None), parameterType, FlaxJsonSerializer.Settings);
                     }
                     catch (Exception ex)
                     {
-                        throw new CliCommandProtocolException("FLX-COMMAND-ARGUMENT-0002", $"Argument '{property.Name}' cannot be converted to '{parameter.Parameter.ParameterType.FullName}': {ex.Message}");
+                        throw new CliCommandProtocolException("FLX-COMMAND-ARGUMENT-0002", $"Argument '{property.Name}' cannot be converted to '{parameterType.FullName}': {ex.Message}");
                     }
                 }
                 else if (parameter.Parameter.HasDefaultValue)

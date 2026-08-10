@@ -24,7 +24,28 @@ namespace FlaxEditor.Modules
         private bool _rebuildInitFlag;
         private int _itemsCreated;
         private int _itemsDeleted;
+        private const double AssetDiskChangeQuietPeriodSeconds = 0.5;
+        private const double SelfAuthoredAssetDiskChangeLifetimeSeconds = 5.0;
         private readonly HashSet<MainContentFolderTreeNode> _dirtyNodes = new HashSet<MainContentFolderTreeNode>();
+        private readonly object _assetDiskChangesLock = new object();
+        private readonly HashSet<string> _pendingAssetDiskChanges = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _assetsBeingSaved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, AssetDiskWrite> _selfAuthoredAssetDiskChanges = new Dictionary<string, AssetDiskWrite>(StringComparer.OrdinalIgnoreCase);
+        private DateTime _lastAssetDiskChangeTime;
+
+        private readonly struct AssetDiskWrite
+        {
+            public readonly DateTime LastWriteTimeUtc;
+            public readonly long Length;
+            public readonly DateTime ExpiresAtUtc;
+
+            public AssetDiskWrite(DateTime lastWriteTimeUtc, long length, DateTime expiresAtUtc)
+            {
+                LastWriteTimeUtc = lastWriteTimeUtc;
+                Length = length;
+                ExpiresAtUtc = expiresAtUtc;
+            }
+        }
 
         /// <summary>
         /// The project directory.
@@ -1417,7 +1438,120 @@ namespace FlaxEditor.Modules
                 }
                 break;
             }
+            case WatcherChangeTypes.Changed:
+            {
+                var path = StringUtils.NormalizePath(e.FullPath);
+                var now = DateTime.UtcNow;
+                FileInfo fileInfo = null;
+                try
+                {
+                    if (File.Exists(path))
+                        fileInfo = new FileInfo(path);
+                }
+                catch
+                {
+                    // The file can still be locked or replaced while its watcher event is being delivered.
+                }
+                lock (_assetDiskChangesLock)
+                {
+                    if (_selfAuthoredAssetDiskChanges.TryGetValue(path, out var write))
+                    {
+                        if (now <= write.ExpiresAtUtc && fileInfo != null && fileInfo.LastWriteTimeUtc == write.LastWriteTimeUtc && fileInfo.Length == write.Length)
+                            break;
+                        _selfAuthoredAssetDiskChanges.Remove(path);
+                    }
+                    _pendingAssetDiskChanges.Add(path);
+                    _lastAssetDiskChangeTime = now;
+                }
+                break;
             }
+            }
+        }
+
+        internal void BeginAssetSave(string path)
+        {
+            path = StringUtils.NormalizePath(path);
+            lock (_assetDiskChangesLock)
+                _assetsBeingSaved.Add(path);
+        }
+
+        internal bool IsAssetSaveInProgress(string path)
+        {
+            path = StringUtils.NormalizePath(path);
+            lock (_assetDiskChangesLock)
+                return _assetsBeingSaved.Contains(path);
+        }
+
+        internal void EndAssetSave(string path, bool succeeded)
+        {
+            path = StringUtils.NormalizePath(path);
+            lock (_assetDiskChangesLock)
+                _assetsBeingSaved.Remove(path);
+            if (!succeeded)
+                return;
+
+            try
+            {
+                var fileInfo = new FileInfo(path);
+                var now = DateTime.UtcNow;
+                var write = new AssetDiskWrite(fileInfo.LastWriteTimeUtc, fileInfo.Length, now.AddSeconds(SelfAuthoredAssetDiskChangeLifetimeSeconds));
+                lock (_assetDiskChangesLock)
+                {
+                    // A watcher event can race the save completion. Remove anything queued during the write,
+                    // then ignore trailing notifications only while the file still matches this exact save.
+                    _pendingAssetDiskChanges.Remove(path);
+                    _selfAuthoredAssetDiskChanges[path] = write;
+                }
+            }
+            catch
+            {
+                // A failed or immediately replaced file will flow through the normal external-change path.
+            }
+        }
+
+        private void ProcessPendingAssetDiskChanges()
+        {
+            // Importing assets produces its own file watcher notifications and refreshes
+            // the affected content items through OnImportFileDone.
+            if (Editor.ContentImporting.IsImporting)
+                return;
+
+            var now = DateTime.UtcNow;
+            var readyPaths = new List<string>();
+            lock (_assetDiskChangesLock)
+            {
+                if (_selfAuthoredAssetDiskChanges.Count != 0)
+                {
+                    var expiredPaths = _selfAuthoredAssetDiskChanges.Where(x => now > x.Value.ExpiresAtUtc).Select(x => x.Key).ToArray();
+                    for (int i = 0; i < expiredPaths.Length; i++)
+                        _selfAuthoredAssetDiskChanges.Remove(expiredPaths[i]);
+                }
+                // Wait until filesystem notifications stop, then process the whole deduplicated burst.
+                if (_pendingAssetDiskChanges.Count == 0 || (now - _lastAssetDiskChangeTime).TotalSeconds < AssetDiskChangeQuietPeriodSeconds)
+                    return;
+
+                readyPaths.AddRange(_pendingAssetDiskChanges);
+                _pendingAssetDiskChanges.Clear();
+            }
+
+            bool workspaceModified = false;
+            for (int i = 0; i < readyPaths.Count; i++)
+            {
+                var item = Find(readyPaths[i]) as AssetItem;
+                if (item == null || item.ItemType == ContentItemType.Scene)
+                    continue;
+
+                var asset = FlaxEngine.Content.GetAsset(item.ID);
+                if (asset == null || (!asset.IsLoaded && !asset.LastLoadFailed))
+                    continue;
+
+                Editor.Log("Reloading asset changed on disk: " + item.Path);
+                item.Reload();
+                item.NotifyReloaded();
+                workspaceModified = true;
+            }
+            if (workspaceModified && _enableEvents)
+                WorkspaceModified?.Invoke();
         }
 
         private void OnScriptsReload()
@@ -1469,6 +1603,8 @@ namespace FlaxEditor.Modules
         /// <inheritdoc />
         public override void OnUpdate()
         {
+            ProcessPendingAssetDiskChanges();
+
             // Update all dirty content tree nodes
             lock (_dirtyNodes)
             {
@@ -1498,6 +1634,12 @@ namespace FlaxEditor.Modules
 
             // Disable events
             _enableEvents = false;
+            lock (_assetDiskChangesLock)
+            {
+                _pendingAssetDiskChanges.Clear();
+                _assetsBeingSaved.Clear();
+                _selfAuthoredAssetDiskChanges.Clear();
+            }
 
             // Cleanup
             Proxy.ForEach(x => x.Dispose());

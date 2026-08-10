@@ -209,6 +209,8 @@ void ManagedEditor::Init()
         flags |= StartupFlags::SkipCompile;
     if (CommandLine::Options.NewProject.IsTrue())
         flags |= StartupFlags::NewProject;
+    if (CommandLine::Options.CliMode.IsTrue() || CommandLine::Options.CliRequest.HasValue())
+        flags |= StartupFlags::CliMode;
     // Typed CLI requests own their lifetime. Keeping -exit available as an old-Editor
     // compatibility fallback prevents an unsupported request from hanging forever.
     if (CommandLine::Options.Exit.IsTrue() && !CommandLine::Options.CliRequest.HasValue())

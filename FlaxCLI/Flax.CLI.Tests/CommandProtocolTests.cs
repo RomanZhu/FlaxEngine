@@ -13,6 +13,19 @@ namespace Flax.CLI.Tests;
 [TestFixture]
 public sealed class CommandProtocolTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public void OpenedEditorsRunInCliMode(bool play)
+    {
+        var project = new ProjectContext("D:/Game", "D:/Game/Game.flaxproj", "Game", default, null);
+
+        var arguments = EditorAdapter.CreateOpenArguments(project, play, ["--custom"]);
+
+        Assert.That(arguments, Does.Contain("-climode"));
+        Assert.That(arguments.Contains("-play"), Is.EqualTo(play));
+        Assert.That(arguments[^1], Is.EqualTo("--custom"));
+    }
+
     [Test]
     public void RequestUsesTheVersionedCommandContract()
     {
@@ -112,6 +125,15 @@ public sealed class CommandProtocolTests
         Assert.That(position["X"]!.GetValue<int>(), Is.Zero);
         Assert.That(position["Y"]!.GetValue<int>(), Is.EqualTo(20));
         Assert.That(position["Z"]!.GetValue<int>(), Is.Zero);
+    }
+
+    [TestCase("e1349060-c672-4d6d-a5af-e69b5529d59d")]
+    [TestCase("01234567-89ab-cdef-0123-456789abcdef")]
+    public void TypedOptionsPreserveBareGuidsAsStrings(string guid)
+    {
+        var arguments = CommandDispatcher.ParseCommandArguments(null, ["--parent", guid]);
+
+        Assert.That(arguments["parent"]!.GetValue<string>(), Is.EqualTo(guid));
     }
 
     [Test]

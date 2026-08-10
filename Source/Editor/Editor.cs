@@ -51,7 +51,7 @@ namespace FlaxEditor
         }
 
         private readonly List<EditorModule> _modules = new List<EditorModule>(16);
-        private bool _isAfterInit, _areModulesInited, _areModulesAfterInitEnd, _isHeadlessMode, _autoExit;
+        private bool _isAfterInit, _areModulesInited, _areModulesAfterInitEnd, _isHeadlessMode, _isCliMode, _autoExit;
         private string _projectToOpen;
         private bool _projectIsNew;
         private float _lastAutoSaveTimer, _autoExitTimeout = 0.1f;
@@ -212,6 +212,11 @@ namespace FlaxEditor
         public bool IsHeadlessMode => _isHeadlessMode;
 
         /// <summary>
+        /// Gets a value indicating whether this Editor session was opened for Flax CLI automation. Automation-aware workflows use this mode to avoid modal prompts.
+        /// </summary>
+        public bool IsCliMode => _isCliMode;
+
+        /// <summary>
         /// Gets a value indicating whether Editor instance is initialized.
         /// </summary>
         public bool IsInitialized => _areModulesAfterInitEnd;
@@ -275,6 +280,7 @@ namespace FlaxEditor
         {
             Log("Setting up C# Editor...");
             _isHeadlessMode = flags.HasFlag(StartupFlags.Headless);
+            _isCliMode = flags.HasFlag(StartupFlags.CliMode);
             _autoExit = flags.HasFlag(StartupFlags.Exit);
             _startupSceneCmdLine = startupScene;
 
@@ -323,6 +329,8 @@ namespace FlaxEditor
             Log("Editor init");
             if (_isHeadlessMode)
                 Log("Running in headless mode");
+            if (_isCliMode)
+                Log("Running in CLI automation mode");
 
             // Note: we don't sort modules before Init (optimized)
             _modules.Sort((a, b) => a.InitOrder - b.InitOrder);
@@ -1069,7 +1077,18 @@ namespace FlaxEditor
             if (obj == null)
                 throw new ArgumentNullException();
             string str = JsonSerializer.Serialize(obj);
-            return Internal_SaveJsonAsset(outputPath, str, obj.GetType().FullName);
+            var contentDatabase = Instance?.ContentDatabase;
+            contentDatabase?.BeginAssetSave(outputPath);
+            bool failed = true;
+            try
+            {
+                failed = Internal_SaveJsonAsset(outputPath, str, obj.GetType().FullName);
+                return failed;
+            }
+            finally
+            {
+                contentDatabase?.EndAssetSave(outputPath, !failed);
+            }
         }
 
         /// <summary>
