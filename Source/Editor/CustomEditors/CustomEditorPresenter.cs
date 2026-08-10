@@ -358,6 +358,67 @@ namespace FlaxEditor.CustomEditors
         private bool _initialized;
         private bool _readOnly;
 
+        private sealed class LayoutFocusState
+        {
+            public readonly List<int> Path = new List<int>();
+            public readonly List<Type> Types = new List<Type>();
+            public bool IsNavigationFocus;
+            public bool? IsTextEditing;
+        }
+
+        internal static object CaptureLayoutFocus(ContainerControl container)
+        {
+            var focused = container?.RootWindow?.FocusedControl;
+            if (focused == null)
+                return null;
+
+            var state = new LayoutFocusState
+            {
+                IsNavigationFocus = focused.IsNavFocused,
+                IsTextEditing = focused is TextBoxBase textBox ? textBox.IsEditing : null,
+            };
+            for (var current = focused; current != container; current = current.Parent)
+            {
+                var parent = current.Parent;
+                if (parent == null)
+                    return null;
+                state.Path.Insert(0, current.IndexInParent);
+                state.Types.Insert(0, current.GetType());
+            }
+            return state;
+        }
+
+        internal static void RestoreLayoutFocus(ContainerControl container, object value)
+        {
+            if (!(value is LayoutFocusState state))
+                return;
+
+            Control control = container;
+            for (int i = 0; i < state.Path.Count; i++)
+            {
+                if (!(control is ContainerControl parent))
+                    return;
+                int index = state.Path[i];
+                if (index < 0 || index >= parent.ChildrenCount)
+                    return;
+                control = parent.GetChild(index);
+                if (control.GetType() != state.Types[i])
+                    return;
+            }
+
+            if (!control.Visible || !control.Enabled)
+                return;
+            if (state.IsNavigationFocus)
+                control.NavigationFocus();
+            else
+                control.Focus();
+
+            // Focusing a replacement text box begins a new edit. Preserve the submitted state
+            // so another Enter activates editing just like it does when the control survives.
+            if (state.IsTextEditing == false && control is TextBoxBase textBox && textBox.IsEditing)
+                textBox.OnSubmit();
+        }
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CustomEditorPresenter"/> class.
         /// </summary>
@@ -438,6 +499,7 @@ namespace FlaxEditor.CustomEditors
             // Clear layout
             var panel = Panel.Parent as Panel;
             var parentScrollV = panel?.VScrollBar?.Value ?? -1;
+            var focusState = CaptureLayoutFocus(Panel);
             Panel.IsLayoutLocked = true;
             Panel.DisposeChildren();
 
@@ -454,6 +516,7 @@ namespace FlaxEditor.CustomEditors
                 panel.VScrollBar.Value = parentScrollV;
             if (_readOnly)
                 UpdateReadOnly();
+            RestoreLayoutFocus(Panel, focusState);
         }
 
         /// <summary>

@@ -831,10 +831,18 @@ namespace FlaxEditor.Windows
             // Check if was creating new element
             if (_newElement != null)
             {
+                var parentFolder = _newElement.ParentFolder;
+
                 // Destroy mock control
                 _newElement.ParentFolder = null;
                 _newElement.Dispose();
                 _newElement = null;
+
+                if (_showAllContentInTree && parentFolder?.Node != null)
+                {
+                    RefreshView();
+                    _tree.Select(parentFolder.Node);
+                }
             }
         }
 
@@ -1227,6 +1235,24 @@ namespace FlaxEditor.Windows
                     Tag = created,
                 };
                 RefreshView();
+                if (_showAllContentInTree)
+                {
+                    // The mock item is not part of the content database yet, so the regular
+                    // tree refresh can omit it when the Other filter is hidden. Add a
+                    // temporary node for the rename popup only when one wasn't generated.
+                    var parentNode = parentFolder.Node;
+                    parentNode.Expand(true);
+                    if (FindTreeItemNode(parentNode, _newElement) == null)
+                    {
+                        new ContentItemTreeNode(_newElement)
+                        {
+                            Parent = parentNode,
+                        };
+                    }
+                    parentNode.SortChildren();
+                    _tree.PerformLayout(true);
+                    _contentTreePanel.PerformLayout(true);
+                }
                 Rename(_newElement);
             }
             else

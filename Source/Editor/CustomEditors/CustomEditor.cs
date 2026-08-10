@@ -202,6 +202,7 @@ namespace FlaxEditor.CustomEditors
             var control = layout.ContainerControl;
             var parent = _parent;
             var parentScrollV = (_presenter?.Panel.Parent as Panel)?.VScrollBar?.Value ?? -1;
+            var focusState = CustomEditorPresenter.CaptureLayoutFocus(control);
 
             control.IsLayoutLocked = true;
             control.DisposeChildren();
@@ -218,6 +219,7 @@ namespace FlaxEditor.CustomEditors
             // Restore scroll value
             if (parentScrollV > -1 && _presenter != null && _presenter.Panel.Parent is Panel panel && panel.VScrollBar != null)
                 panel.VScrollBar.Value = parentScrollV;
+            CustomEditorPresenter.RestoreLayoutFocus(control, focusState);
             _isRebuilding = false;
         }
 
