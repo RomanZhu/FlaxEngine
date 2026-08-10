@@ -9,6 +9,26 @@ namespace FlaxEditor.GUI.Input
     public class SearchBox : TextBox
     {
         private const float BackgroundValueOffset = -6.0f;
+        private const float ClearButtonSize = 16.0f;
+        private const float ClearButtonMargin = 2.0f;
+        private const float ClearGlyphSize = 10.0f;
+
+        private sealed class SearchClearButton : Button
+        {
+            /// <inheritdoc />
+            public override void DrawSelf()
+            {
+                base.DrawSelf();
+
+                var center = Size * 0.5f;
+                var extent = ClearGlyphSize * 0.5f;
+                var color = IsMouseOver || IsPressed ? TextColorHighlighted : TextColor;
+                if (!VisuallyEnabledInHierarchy)
+                    color *= 0.5f;
+                Render2D.DrawLine(center - new Float2(extent), center + new Float2(extent), color, 1.5f);
+                Render2D.DrawLine(center + new Float2(-extent, extent), center + new Float2(extent, -extent), color, 1.5f);
+            }
+        }
 
         /// <summary>
         /// A button that clears the search bar.
@@ -40,26 +60,26 @@ namespace FlaxEditor.GUI.Input
             BorderSelectedColor = style.BorderSelected;
             WatermarkTextColor = style.ForegroundGrey;
 
-            ClearSearchButton = new Button
+            ClearSearchButton = new SearchClearButton
             {
                 Parent = this,
-                Width = 12.0f,
-                Height = 12.0f,
-                AnchorPreset = AnchorPresets.TopRight,
+                Width = ClearButtonSize,
+                Height = ClearButtonSize,
+                AnchorPreset = AnchorPresets.TopLeft,
                 Text = "",
                 TooltipText = "Cancel Search.",
                 HasBorder = false,
-                BackgroundColor = TextColor,
+                BackgroundColor = Color.Transparent,
                 BorderColor = Color.Transparent,
-                BackgroundColorHighlighted = style.ForegroundGrey,
+                BackgroundColorHighlighted = Color.Transparent,
                 BorderColorHighlighted = Color.Transparent,
-                BackgroundColorSelected = style.ForegroundGrey,
+                BackgroundColorSelected = Color.Transparent,
                 BorderColorSelected = Color.Transparent,
-                BackgroundBrush = new SpriteBrush(Editor.Instance.Icons.Cross12),
+                TextColor = style.ForegroundGrey,
+                TextColorHighlighted = style.Foreground,
                 Visible = false,
             };
-            ClearSearchButton.LocalY = (Height - ClearSearchButton.Height) * 0.5f;
-            ClearSearchButton.LocalX -= 4;
+            UpdateClearButtonBounds();
             ClearSearchButton.Clicked += Clear;
             ClearSearchButton.HoverBegin += () =>
             {
@@ -84,8 +104,16 @@ namespace FlaxEditor.GUI.Input
             base.PerformLayout(force);
             if (ClearSearchButton == null)
                 return;
-            ClearSearchButton.LocalX = -4.0f;
-            ClearSearchButton.LocalY = (Height - ClearSearchButton.Height) * 0.5f;
+            UpdateClearButtonBounds();
+        }
+
+        private void UpdateClearButtonBounds()
+        {
+            ClearSearchButton.Bounds = new Rectangle(
+                Width - ClearSearchButton.Width - ClearButtonMargin,
+                (Height - ClearSearchButton.Height) * 0.5f,
+                ClearSearchButton.Width,
+                ClearSearchButton.Height);
         }
     }
 }

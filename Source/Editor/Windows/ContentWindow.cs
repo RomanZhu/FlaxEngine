@@ -282,8 +282,7 @@ namespace FlaxEditor.Windows
                 TooltipText = "Search content. Use t: to filter by asset type.",
             };
             _itemsSearchBox = _foldersSearchBox;
-            _foldersSearchBox.TextChanged += OnFoldersSearchBoxTextChanged;
-            _foldersSearchBox.TextChanged += UpdateItemsSearch;
+            _foldersSearchBox.TextChanged += OnContentSearchBoxTextChanged;
             var contentSearchBox = (ContentSearchBox)_foldersSearchBox;
             contentSearchBox.SearchFocused += ShowSearchHints;
             contentSearchBox.SearchSubmitted += OnSearchSubmitted;
@@ -1579,8 +1578,11 @@ namespace FlaxEditor.Windows
             _root.LockChildrenRecursive();
             RemoveTreeAssetNodes(_root);
             AddTreeAssetNodes(_root);
+            var query = _foldersSearchBox?.Text;
+            _root.UpdateFilter(query);
             _root.UnlockChildrenRecursive();
-            _tree.PerformLayout();
+            _tree.PerformLayout(true);
+            _contentTreePanel.PerformLayout(true);
         }
 
         private void UpdateTreeItemNames(ContentFolderTreeNode node)

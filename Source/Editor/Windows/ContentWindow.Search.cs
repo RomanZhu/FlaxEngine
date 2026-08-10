@@ -44,7 +44,11 @@ namespace FlaxEditor.Windows
                 }
                 if (key == KeyboardKeys.Return)
                 {
-                    SearchSubmitted?.Invoke();
+                    var wasEditing = IsEditing;
+                    if (!base.OnKeyDown(key))
+                        return false;
+                    if (wasEditing)
+                        SearchSubmitted?.Invoke();
                     return true;
                 }
                 return base.OnKeyDown(key);
@@ -300,6 +304,45 @@ namespace FlaxEditor.Windows
             }
         }
 
+        private void OnContentSearchBoxTextChanged()
+        {
+            if (IsLayoutLocked)
+                return;
+
+            OnFoldersSearchBoxTextChanged();
+            if (_showAllContentInTree)
+            {
+                if (string.IsNullOrWhiteSpace(_foldersSearchBox.Text))
+                    ResetTreeSearch();
+                return;
+            }
+            UpdateItemsSearch();
+        }
+
+        private void ResetTreeSearch()
+        {
+            if (_root == null)
+                return;
+
+            RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
+
+            var wasSuppressed = _suppressExpandedStateSave;
+            try
+            {
+                _suppressExpandedStateSave = true;
+                _root.Expand(true);
+                Editor.ContentDatabase.Game?.Expand(true);
+            }
+            finally
+            {
+                _suppressExpandedStateSave = wasSuppressed;
+            }
+            ApplyExpandedFolders();
+
+            _tree.PerformLayout(true);
+            _contentTreePanel.PerformLayout(true);
+        }
+
         private void OnFoldersSearchBoxTextChanged()
         {
             // Skip events during setup or init stuff
@@ -320,6 +363,8 @@ namespace FlaxEditor.Windows
 
             _suppressExpandedStateSave = false;
             root.UnlockChildrenRecursive();
+            _tree.PerformLayout(true);
+            _contentTreePanel.PerformLayout(true);
             PerformLayout();
             PerformLayout();
         }
@@ -505,7 +550,10 @@ namespace FlaxEditor.Windows
                 return;
             if (_showAllContentInTree)
             {
-                RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
+                if (string.IsNullOrWhiteSpace(_itemsSearchBox.Text))
+                    ResetTreeSearch();
+                else
+                    RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
                 return;
             }
 
