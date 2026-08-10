@@ -10,6 +10,7 @@ using FlaxEditor.CustomEditors.Dedicated;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.Elements;
 using FlaxEditor.CustomEditors.GUI;
+using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Input;
 using FlaxEditor.GUI.Tabs;
 using FlaxEditor.GUI.Timeline;
@@ -662,6 +663,24 @@ namespace FlaxEditor.Windows
             var pinned = _pinnedTabs.FirstOrDefault(x => SelectionsMatch(x.Selection, Presenter.Selection));
             if (pinned != null)
                 ClosePinnedTab((PropertiesTab)pinned.Tab);
+        }
+
+        /// <inheritdoc />
+        public override void OnShowContextMenu(ContextMenu menu)
+        {
+            base.OnShowContextMenu(menu);
+
+            bool isPinned = IsSelectionPinned();
+            var pin = menu.AddButton(isPinned ? "Unpin" : "Pin");
+            pin.Enabled = isPinned || CanPinSelection();
+            pin.ButtonClicked += button =>
+            {
+                if (isPinned)
+                    UnpinSelection();
+                else
+                    PinSelection();
+            };
+            menu.AddSeparator();
         }
 
         private void ClosePinnedTab(PropertiesTab tab)

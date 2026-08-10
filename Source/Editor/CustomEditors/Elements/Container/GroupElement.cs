@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -19,6 +20,8 @@ namespace FlaxEditor.CustomEditors.Elements
         private const float MinimumGroupValueOffset = 1.0f;
         private const float MinimumGroupPadding = 4.0f;
         private const float NestedGroupIndent = 12.0f;
+
+        private readonly List<Control> _headerActions = new List<Control>();
 
         /// <summary>
         /// The drop panel.
@@ -47,7 +50,23 @@ namespace FlaxEditor.CustomEditors.Elements
         public GroupElement()
         {
             Panel.HeaderTextMargin = new Margin(0, 4, 0, 0);
+            Panel.HeaderInputHitTest = IsHeaderInputLocation;
             ApplyHierarchyStyle(0);
+        }
+
+        private bool IsHeaderInputLocation(Float2 location)
+        {
+            if (location.X < 0.0f || location.X > Panel.Width || location.Y < 0.0f || location.Y > Panel.HeaderHeight)
+                return false;
+
+            for (int i = 0; i < _headerActions.Count; i++)
+            {
+                var action = _headerActions[i];
+                if (action.Visible && Panel.IntersectsChildContent(action, location, out _))
+                    return false;
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -100,7 +119,7 @@ namespace FlaxEditor.CustomEditors.Elements
             var iconSize = Mathf.Min(Mathf.Max(0.0f, style.GetPropertyIconSize()), Mathf.Max(0.0f, settingsButtonSize - 2.0f));
             var iconMargin = Mathf.Max(1.0f, (settingsButtonSize - iconSize) * 0.5f);
             Panel.HeaderTextMargin = Panel.HeaderTextMargin with { Right = settingsButtonSize + Utilities.Constants.UIMargin };
-            return new Image
+            var result = new Image
             {
                 TooltipText = tooltipText,
                 AutoFocus = true,
@@ -112,6 +131,8 @@ namespace FlaxEditor.CustomEditors.Elements
                 Margin = new Margin(iconMargin),
                 Brush = new SpriteBrush(sprite),
             };
+            _headerActions.Add(result);
+            return result;
         }
 
         /// <inheritdoc />
