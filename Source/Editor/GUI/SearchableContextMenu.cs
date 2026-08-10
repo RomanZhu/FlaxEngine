@@ -37,8 +37,14 @@ namespace FlaxEditor.GUI
                     Navigation?.Invoke(Root.GetKey(KeyboardKeys.Shift) ? -1 : 1);
                     return true;
                 case KeyboardKeys.Return:
-                    Submitted?.Invoke();
+                {
+                    var wasEditing = IsEditing;
+                    if (!base.OnKeyDown(key))
+                        return false;
+                    if (wasEditing)
+                        Submitted?.Invoke();
                     return true;
+                }
                 case KeyboardKeys.Escape:
                     Canceled?.Invoke();
                     return true;

@@ -1279,8 +1279,11 @@ namespace FlaxEngine.GUI
         /// <inheritdoc />
         public override void OnSubmit()
         {
-            OnEditEnd();
-            if (IsNavFocused)
+            if (_isEditing)
+            {
+                OnEditEnd();
+            }
+            else if (!IsReadOnly)
             {
                 OnEditBegin();
                 SelectAll();
@@ -1334,6 +1337,8 @@ namespace FlaxEngine.GUI
             if (button == MouseButton.Left && _isSelectable)
             {
                 Focus();
+                if (!IsReadOnly)
+                    OnEditBegin();
                 OnSelectingBegin();
 
                 // Calculate char index under the mouse location
@@ -1414,7 +1419,7 @@ namespace FlaxEngine.GUI
         {
             if (base.OnCharInput(c))
                 return true;
-            if (IsReadOnly)
+            if (IsReadOnly || !_isEditing)
                 return false;
             Insert(c);
             return true;
@@ -1434,6 +1439,18 @@ namespace FlaxEngine.GUI
             bool shiftDown = window.GetKey(KeyboardKeys.Shift);
             bool ctrDown = window.GetKey(KeyboardKeys.Control);
             KeyDown?.Invoke(key);
+
+            // A submitted text box keeps focus but stops editing. Pressing Enter again resumes editing.
+            if (!_isEditing)
+            {
+                if (key == KeyboardKeys.Return && !IsReadOnly)
+                {
+                    OnEditBegin();
+                    SelectAll();
+                    return true;
+                }
+                return base.OnKeyDown(key);
+            }
 
             // Handle controls that have bindings
 #if FLAX_EDITOR
@@ -1618,13 +1635,11 @@ namespace FlaxEngine.GUI
                     Insert('\n');
                     ScrollToCaret();
                 }
-                else if (!IsNavFocused)
-                {
-                    // End editing
-                    RemoveFocus();
-                }
                 else
-                    return false;
+                {
+                    // Commit the value but retain focus so Enter can resume editing
+                    OnEditEnd();
+                }
                 return true;
             case KeyboardKeys.Home:
                 if (shiftDown)

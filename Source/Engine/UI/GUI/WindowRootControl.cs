@@ -339,6 +339,13 @@ namespace FlaxEngine.GUI
             if (base.OnKeyDown(key))
                 return true;
 
+            // Activate focused controls from the keyboard (buttons, checkboxes, pickers, etc.).
+            if (key == KeyboardKeys.Return && FocusedControl != null)
+            {
+                SubmitFocused();
+                return true;
+            }
+
             var unhandledKeyDown = UnhandledKeyDown;
             if (unhandledKeyDown == null)
                 return false;

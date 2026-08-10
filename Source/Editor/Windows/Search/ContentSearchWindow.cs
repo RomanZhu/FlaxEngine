@@ -359,7 +359,6 @@ namespace FlaxEngine.Windows.Search
         private void OnSearchBoxEditEnd(TextBoxBase searchBox)
         {
             Search();
-            Focus();
         }
 
         private void Cancel()
