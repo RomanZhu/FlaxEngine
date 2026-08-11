@@ -704,12 +704,13 @@ namespace FlaxEditor.CustomEditors.Dedicated
         /// </summary>
         public sealed class ScriptsContainer : ListValueContainer
         {
-            private readonly Guid _prefabObjectId;
+            private readonly Guid[] _prefabObjectIds;
+            private Guid _referencePrefabObjectId;
 
             /// <summary>
             /// Gets the prefab object identifier used by the container scripts. Empty if there is no valid linkage to the prefab object.
             /// </summary>
-            public Guid PrefabObjectId => _prefabObjectId;
+            public Guid PrefabObjectId => _referencePrefabObjectId;
 
             /// <summary>
             /// Initializes a new instance of the <see cref="ScriptsContainer"/> class.
@@ -729,7 +730,21 @@ namespace FlaxEditor.CustomEditors.Dedicated
 
                 if (values.HasReferenceValue && Count > 0 && this[0] is Script script && script.HasPrefabLink)
                 {
-                    _prefabObjectId = script.PrefabObjectID;
+                    var prefabObjectIds = new List<Guid> { script.PrefabObjectID };
+                    var prefabId = script.PrefabID;
+                    var prefabObjectId = script.PrefabObjectID;
+                    var visited = new HashSet<Guid>();
+                    while (prefabId != Guid.Empty && prefabObjectId != Guid.Empty && visited.Add(prefabId))
+                    {
+                        var prefab = FlaxEngine.Content.Load<Prefab>(prefabId);
+                        var currentObjectId = prefabObjectId;
+                        if (!prefab || prefab.WaitForLoaded() || !prefab.GetNestedObject(ref currentObjectId, out var parentPrefabId, out var parentObjectId))
+                            break;
+                        prefabId = parentPrefabId;
+                        prefabObjectId = parentObjectId;
+                        prefabObjectIds.Add(prefabObjectId);
+                    }
+                    _prefabObjectIds = prefabObjectIds.ToArray();
                     RefreshReferenceValue(values.ReferenceValue);
                 }
             }
@@ -740,17 +755,23 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 // Clear
                 _referenceValue = null;
                 _hasReferenceValue = false;
+                _referencePrefabObjectId = Guid.Empty;
 
-                if (instanceValue is IList v)
+                if (instanceValue is IList v && _prefabObjectIds != null)
                 {
-                    // Get the reference value if script with the given link id exists in the reference values collection
-                    for (int i = 0; i < v.Count; i++)
+                    // Prefer the current prefab object id, then walk towards inherited prefab object ids.
+                    for (int objectIdIndex = 0; objectIdIndex < _prefabObjectIds.Length; objectIdIndex++)
                     {
-                        if (v[i] is Script script && script.PrefabObjectID == _prefabObjectId)
+                        var prefabObjectId = _prefabObjectIds[objectIdIndex];
+                        for (int i = 0; i < v.Count; i++)
                         {
-                            _referenceValue = script;
-                            _hasReferenceValue = true;
-                            break;
+                            if (v[i] is Script script && script.PrefabObjectID == prefabObjectId)
+                            {
+                                _referenceValue = script;
+                                _hasReferenceValue = true;
+                                _referencePrefabObjectId = prefabObjectId;
+                                return;
+                            }
                         }
                     }
                 }

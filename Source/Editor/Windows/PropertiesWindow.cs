@@ -612,6 +612,20 @@ namespace FlaxEditor.Windows
             return Presenter.Selection.Count != 0 && _contentAssetState == null;
         }
 
+        internal bool TryGetInspectedPrefab(Actor instance, out Prefab prefab)
+        {
+            if (_showContentSelection &&
+                _contentAssetState is PrefabContentAssetState state &&
+                state.Instance == instance)
+            {
+                prefab = state.Asset;
+                return prefab != null;
+            }
+
+            prefab = null;
+            return false;
+        }
+
         /// <summary>
         /// Pins the current selection in a separate properties tab.
         /// </summary>
@@ -754,10 +768,11 @@ namespace FlaxEditor.Windows
             if (_showContentSelection && ContentSelectionContainsAsset(assetItem.ID))
             {
                 _waitingForContentAssets.Clear();
+                if (_contentAssetState != null)
+                    Presenter.Deselect();
                 ClearContentAssetState();
                 Presenter.OverrideEditor = null;
                 undoRecordObjects = Array.Empty<object>();
-                Presenter.Deselect();
                 UpdateSelectionTabTitle();
             }
 
@@ -852,6 +867,8 @@ namespace FlaxEditor.Windows
         private void SelectSceneObjects()
         {
             _waitingForContentAssets.Clear();
+            if (_contentAssetState != null)
+                Presenter.Deselect();
             ClearContentAssetState();
             Presenter.OverrideEditor = null;
 
@@ -896,6 +913,8 @@ namespace FlaxEditor.Windows
         private void SelectContentObjects(bool forceRebuild = false)
         {
             _waitingForContentAssets.Clear();
+            if (_contentAssetState != null)
+                Presenter.Deselect();
             ClearContentAssetState();
 
             var objects = new List<object>();
@@ -1893,10 +1912,13 @@ namespace FlaxEditor.Windows
 
         private sealed class PrefabContentAssetState : IDisposable
         {
+            public Prefab Asset { get; }
+
             public Actor Instance { get; private set; }
 
             public PrefabContentAssetState(Prefab prefab)
             {
+                Asset = prefab;
                 Instance = PrefabManager.SpawnPrefab(prefab, null);
             }
 
@@ -1994,6 +2016,8 @@ namespace FlaxEditor.Windows
                 Editor.ContentDatabase.ItemRemoved -= OnContentItemRemoved;
             FlaxEngine.Content.AssetReloading -= OnAssetReloading;
             Presenter.Modified -= OnPresenterModified;
+            if (_contentAssetState != null)
+                Presenter.Deselect();
             ClearContentAssetState();
 
             base.OnDestroy();
