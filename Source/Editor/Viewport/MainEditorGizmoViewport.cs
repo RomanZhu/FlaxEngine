@@ -412,6 +412,7 @@ namespace FlaxEditor.Viewport
             InputActions.Add(options => options.RotateSelection, RotateSelection);
             InputActions.Add(options => options.Delete, _editor.SceneEditing.Delete);
             InputActions.Add(options => options.ToggleNavMeshVisibility, () => ShowNavigation = !ShowNavigation);
+            InputActions.Add(options => options.OpenAddObjectMenu, ShowAddObjectMenuAtCursor);
 
             // View modes
             InputActions.Add(options => options.ToggleCharacterControllerMode, ToggleCharacterControllerMode);
@@ -1800,6 +1801,12 @@ namespace FlaxEditor.Viewport
             else
                 ToggleCharacterControllerMode();
             return true;
+        }
+
+        private void ShowAddObjectMenuAtCursor()
+        {
+            var location = PointFromScreen(FlaxEngine.Input.MouseScreenPosition);
+            _editor.Windows.SceneWin.ShowAddObjectMenu(this, location, actor => DragHandlers.PlaceActorAtCursor(actor, location));
         }
 
         /// <inheritdoc />

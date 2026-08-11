@@ -138,13 +138,15 @@ namespace FlaxEditor.Viewport
             }
         }
 
-        private void GetHitLocation(ref Float2 location, out SceneGraphNode hit, out Vector3 hitLocation, out Vector3 hitNormal)
+        private void GetHitLocation(ref Float2 location, out SceneGraphNode hit, out Vector3 hitLocation, out Vector3 hitNormal, bool includeColliders = false)
         {
             // Get mouse ray and try to hit any object
             var ray = _viewport.ConvertMouseToRay(ref location);
             var view = new Ray(_viewport.ViewPosition, _viewport.ViewDirection);
             var gridPlane = new Plane(Vector3.Zero, Vector3.Up);
-            var flags = SceneGraphNode.RayCastData.FlagTypes.SkipColliders | SceneGraphNode.RayCastData.FlagTypes.SkipEditorPrimitives;
+            var flags = SceneGraphNode.RayCastData.FlagTypes.SkipEditorPrimitives | SceneGraphNode.RayCastData.FlagTypes.SkipTriggers;
+            if (!includeColliders)
+                flags |= SceneGraphNode.RayCastData.FlagTypes.SkipColliders;
             hit = _owner.SceneGraphRoot.RayCast(ref ray, ref view, out var closest, out var normal, flags);
             var girdGizmo = _owner.Gizmos.Get<GridGizmo>();
             if (hit != null)
@@ -167,17 +169,37 @@ namespace FlaxEditor.Viewport
             }
         }
 
-        private Vector3 PostProcessSpawnedActorLocation(Actor actor, ref Vector3 hitLocation)
+        private Vector3 PostProcessSpawnedActorLocation(Actor actor, ref Vector3 hitLocation, ref Vector3 hitNormal)
         {
             // Refresh actor position to ensure that cached bounds are valid
             actor.Position = Vector3.One;
             actor.Position = Vector3.Zero;
 
-            // Place the object
-            //var location = hitLocation - (box.Size.Length * 0.5f) * ViewDirection;
+            // Place the actor with the lowest point of its selection bounds touching the hit surface.
+            var surfaceNormal = hitNormal;
+            if (surfaceNormal.LengthSquared > Mathf.Epsilon)
+                surfaceNormal.Normalize();
+            else
+                surfaceNormal = Vector3.Up;
             var editorBounds = actor.EditorBoxChildren;
-            var bottomToCenter = actor.Position.Y - editorBounds.Minimum.Y;
-            var location = hitLocation + new Vector3(0, bottomToCenter, 0);
+            var location = hitLocation;
+            var boundsValid = editorBounds.Minimum.X <= editorBounds.Maximum.X &&
+                              editorBounds.Minimum.Y <= editorBounds.Maximum.Y &&
+                              editorBounds.Minimum.Z <= editorBounds.Maximum.Z;
+            var boundsOffset = Vector3.Zero;
+            if (boundsValid)
+            {
+                var corners = editorBounds.GetCorners();
+                var minProjection = Vector3.Dot(corners[0] - actor.Position, surfaceNormal);
+                for (int i = 1; i < corners.Length; i++)
+                {
+                    var projection = Vector3.Dot(corners[i] - actor.Position, surfaceNormal);
+                    if (projection < minProjection)
+                        minProjection = projection;
+                }
+                boundsOffset = surfaceNormal * minProjection;
+                location -= boundsOffset;
+            }
 
             // Apply grid snapping if enabled
             var transformGizmo = _owner.Gizmos.Get<TransformGizmo>();
@@ -190,12 +212,25 @@ namespace FlaxEditor.Viewport
                                        (int)(location.Z / snapValue) * snapValue);
             }
 
+            // Snapping may move the actor through the surface, so restore exact bounds contact.
+            if (boundsValid)
+            {
+                var surfaceDistance = Vector3.Dot(location - hitLocation + boundsOffset, surfaceNormal);
+                location -= surfaceNormal * surfaceDistance;
+            }
+
             return location;
+        }
+
+        internal void PlaceActorAtCursor(Actor actor, Float2 location)
+        {
+            GetHitLocation(ref location, out _, out var hitLocation, out var hitNormal, true);
+            actor.Position = PostProcessSpawnedActorLocation(actor, ref hitLocation, ref hitNormal);
         }
 
         private void Spawn(Actor actor, ref Vector3 hitLocation, ref Vector3 hitNormal)
         {
-            actor.Position = PostProcessSpawnedActorLocation(actor, ref hitLocation);
+            actor.Position = PostProcessSpawnedActorLocation(actor, ref hitLocation, ref hitNormal);
             _owner.Spawn(actor);
             _viewport.Focus();
 

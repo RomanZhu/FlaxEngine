@@ -14,6 +14,9 @@ namespace FlaxEditor.GUI
     /// </summary>
     internal sealed class ActorCreationContextMenu : SearchableContextMenu
     {
+        /// <inheritdoc />
+        protected override float SubmenuAimDelay => float.PositiveInfinity;
+
         public enum EntryKind
         {
             Actor,
@@ -41,6 +44,26 @@ namespace FlaxEditor.GUI
             ("Capsule", "Primitives/Capsule.flax"),
         };
 
+        private static readonly string[] CategoryOrder =
+        {
+            "Primitives",
+            "CSG Brushes",
+            null,
+            "Lights",
+            "Physics",
+            "Visuals",
+            null,
+            "Audio",
+            "Animation",
+            "Navigation",
+            null,
+            "UI",
+            "GUI",
+            null,
+            "Actors",
+            "Other",
+        };
+
         public ActorCreationContextMenu(Editor editor, Action<Entry> created)
         : base(BuildMenu(editor, created), "New")
         {
@@ -49,6 +72,37 @@ namespace FlaxEditor.GUI
         private static LegacyContextMenu BuildMenu(Editor editor, Action<Entry> created)
         {
             var menu = new LegacyContextMenu();
+            var actorTypes = editor.CodeEditing.Actors.Get();
+
+            // Match the familiar Add menu flow: the generic empty object is always first.
+            bool hasEmptyActor = false;
+            foreach (var actorType in actorTypes)
+            {
+                if (actorType.Type != typeof(EmptyActor))
+                    continue;
+                AddEntry(menu, created, new Entry
+                {
+                    Name = "Empty Actor",
+                    Category = string.Empty,
+                    SearchTerms = $"Empty Actor {actorType.Name} {actorType.TypeName} actor entity object empty",
+                    Kind = EntryKind.Actor,
+                    ScriptType = actorType,
+                });
+                hasEmptyActor = true;
+                break;
+            }
+            if (hasEmptyActor)
+                menu.AddSeparator();
+
+            // Pre-create the built-in groups to keep their root order stable.
+            foreach (var category in CategoryOrder)
+            {
+                if (category == null)
+                    menu.AddSeparator();
+                else
+                    menu.GetOrAddChildMenu(category);
+            }
+
             foreach (var primitive in Primitives)
             {
                 AddEntry(menu, created, new Entry
@@ -61,26 +115,39 @@ namespace FlaxEditor.GUI
                 });
             }
 
-            AddTypes(menu, created, editor.CodeEditing.Actors.Get(), EntryKind.Actor, "Actors");
+            AddTypes(menu, created, actorTypes, EntryKind.Actor, "Actors");
             AddTypes(menu, created, editor.CodeEditing.Controls.Get(), EntryKind.Control, "GUI");
+            SortSubmenus(menu);
             return menu;
+        }
+
+        private static void SortSubmenus(LegacyContextMenu menu)
+        {
+            foreach (var item in menu.Items)
+            {
+                if (item is ContextMenuChildMenu childMenu)
+                {
+                    SortSubmenus(childMenu.ContextMenu);
+                    childMenu.ContextMenu.SortButtons(true);
+                }
+            }
         }
 
         private static void AddTypes(LegacyContextMenu menu, Action<Entry> created, IEnumerable<ScriptType> types, EntryKind kind, string fallbackCategory)
         {
             foreach (var type in types)
             {
-                if (type.IsAbstract)
+                if (type.IsAbstract || (kind == EntryKind.Actor && type.Type == typeof(EmptyActor)))
                     continue;
 
                 ActorToolboxAttribute toolbox = null;
+                ActorContextMenuAttribute contextMenu = null;
                 foreach (var attribute in type.GetAttributes(false))
                 {
                     if (attribute is ActorToolboxAttribute actorToolbox)
-                    {
                         toolbox = actorToolbox;
-                        break;
-                    }
+                    else if (attribute is ActorContextMenuAttribute actorContextMenu)
+                        contextMenu = actorContextMenu;
                 }
 
                 var name = toolbox != null && !string.IsNullOrWhiteSpace(toolbox.Name)
@@ -89,6 +156,10 @@ namespace FlaxEditor.GUI
                 var category = toolbox != null && !string.IsNullOrWhiteSpace(toolbox.Group)
                     ? toolbox.Group.Trim()
                     : fallbackCategory;
+                if (kind == EntryKind.Actor && contextMenu != null && !string.IsNullOrWhiteSpace(contextMenu.Path))
+                    ApplyContextMenuPath(contextMenu.Path, ref category, ref name);
+                if (kind == EntryKind.Actor && type.Type != null && typeof(BoxBrush).IsAssignableFrom(type.Type))
+                    category = "CSG Brushes";
                 AddEntry(menu, created, new Entry
                 {
                     Name = name,
@@ -98,6 +169,24 @@ namespace FlaxEditor.GUI
                     ScriptType = type,
                 });
             }
+        }
+
+        private static void ApplyContextMenuPath(string path, ref string category, ref string name)
+        {
+            var parts = path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            int first = parts.Length > 0 && string.Equals(parts[0].Trim(), "New", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            if (first >= parts.Length)
+                return;
+
+            name = parts[parts.Length - 1].Trim();
+            int categoryCount = parts.Length - first - 1;
+            if (categoryCount <= 0)
+                return;
+
+            var categories = new string[categoryCount];
+            for (int i = 0; i < categoryCount; i++)
+                categories[i] = parts[first + i].Trim();
+            category = string.Join("/", categories);
         }
 
         private static void AddEntry(LegacyContextMenu root, Action<Entry> created, Entry entry)

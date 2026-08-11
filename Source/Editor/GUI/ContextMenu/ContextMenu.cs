@@ -18,12 +18,17 @@ namespace FlaxEditor.GUI.ContextMenu
     {
         private const float ScrollIndicatorArea = 8.0f;
         private const int ScrollIndicatorRows = 4;
-        private const float SubmenuAimDelay = 0.14f;
+        private const float DefaultSubmenuAimDelay = 0.14f;
 
         private ContextMenuItem _pendingAimItem;
         private float _pendingAimUntil;
         private bool _hasScrollIndicators;
         private readonly Dictionary<ContextMenuButton, int> _accessKeyIndices = new Dictionary<ContextMenuButton, int>();
+
+        /// <summary>
+        /// Gets the time allowed to cross the submenu aim triangle before a hovered sibling opens.
+        /// </summary>
+        protected virtual float SubmenuAimDelay => DefaultSubmenuAimDelay;
 
         /// <summary>
         /// The items container.
@@ -183,9 +188,9 @@ namespace FlaxEditor.GUI.ContextMenu
         internal bool OnItemMouseEnter(ContextMenuItem item, Float2 screenLocation)
         {
             _pendingAimItem = null;
-            if (item is ContextMenuChildMenu childMenu && childMenu.ContextMenu.HasChildren)
-                return false;
 
+            // Submenu rows must use the same aim guard as leaf rows. Otherwise menus made
+            // primarily of categories replace the open submenu while crossing the corridor.
             if (HasChildCMOpened && IsPointerInsideSubmenuAim(screenLocation))
             {
                 _pendingAimItem = item;

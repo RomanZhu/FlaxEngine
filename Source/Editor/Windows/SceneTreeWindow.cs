@@ -168,6 +168,7 @@ namespace FlaxEditor.Windows
             InputActions.Add(options => options.FocusSelection, () => Editor.Windows.EditWin.Viewport.FocusSelection());
             InputActions.Add(options => options.LockFocusSelection, () => Editor.Windows.EditWin.Viewport.LockFocusSelection());
             InputActions.Add(options => options.Rename, RenameSelection);
+            InputActions.Add(options => options.OpenAddObjectMenu, () => ShowAddObjectMenu(this, PointFromScreen(FlaxEngine.Input.MouseScreenPosition)));
         }
 
         private static void ApplyHeaderButtonStyle(Button button)
@@ -566,8 +567,16 @@ namespace FlaxEditor.Windows
 
         private void ShowNewMenu()
         {
-            var menu = new ActorCreationContextMenu(Editor, Spawn);
-            menu.Show(_newButton.Parent, _newButton.BottomLeft);
+            ShowAddObjectMenu(_newButton.Parent, _newButton.BottomLeft);
+        }
+
+        internal void ShowAddObjectMenu(Control parent, Float2 location, Action<Actor> placeActor = null)
+        {
+            if (!Editor.StateMachine.CurrentState.CanEditScene || !Level.IsAnySceneLoaded)
+                return;
+
+            var menu = new ActorCreationContextMenu(Editor, entry => Spawn(entry, placeActor));
+            menu.Show(parent, location);
         }
 
         private void ShowViewMenu()
@@ -683,7 +692,7 @@ namespace FlaxEditor.Windows
             }
         }
 
-        private void Spawn(ActorCreationContextMenu.Entry entry)
+        private void Spawn(ActorCreationContextMenu.Entry entry, Action<Actor> placeActor)
         {
             Actor actor;
             switch (entry.Kind)
@@ -710,7 +719,8 @@ namespace FlaxEditor.Windows
             if (actor == null)
                 return;
 
-            Spawn(actor, entry.Name);
+            placeActor?.Invoke(actor);
+            Spawn(actor, entry.Name, placeActor != null);
         }
 
         private void Spawn(Type type)
@@ -718,7 +728,7 @@ namespace FlaxEditor.Windows
             Spawn((Actor)FlaxEngine.Object.New(type), type.Name);
         }
 
-        private void Spawn(Actor actor, string displayName)
+        private void Spawn(Actor actor, string displayName, bool preserveWorldPosition = false)
         {
             if (actor == null)
                 return;
@@ -737,8 +747,11 @@ namespace FlaxEditor.Windows
             }
             if (parentActor != null)
             {
-                // Use the same location
-                actor.Transform = parentActor.Transform;
+                if (!preserveWorldPosition)
+                {
+                    // Use the same location
+                    actor.Transform = parentActor.Transform;
+                }
 
                 // Rename actor to identify it easily
                 actor.Name = Utilities.Utils.IncrementNameNumber(displayName, x => parentActor.GetChild(x) == null);

@@ -926,6 +926,7 @@ namespace FlaxEditor.Modules
                 // Link for main window events
                 MainWindow.Closing += MainWindow_OnClosing;
                 MainWindow.Closed += MainWindow_OnClosed;
+                MainWindow.KeyDown += MainWindow_OnKeyDown;
                 MainWindow.MouseDown += OnNavigationMouseDown;
                 MainWindow.MouseUp += OnNavigationMouseUp;
                 MainWindow.GUI.UnhandledKeyDown += MainWindow_OnUnhandledKeyDown;
@@ -1187,6 +1188,7 @@ namespace FlaxEditor.Modules
             Editor.Log("Main window is closed");
             if (MainWindow != null)
             {
+                MainWindow.KeyDown -= MainWindow_OnKeyDown;
                 MainWindow.MouseDown -= OnNavigationMouseDown;
                 MainWindow.MouseUp -= OnNavigationMouseUp;
                 MainWindow.GUI.UnhandledKeyDown -= MainWindow_OnUnhandledKeyDown;
@@ -1671,6 +1673,7 @@ namespace FlaxEditor.Modules
             Editor.StateMachine.StateChanged -= OnEditorStateChanged;
             if (MainWindow != null)
             {
+                MainWindow.KeyDown -= MainWindow_OnKeyDown;
                 MainWindow.MouseDown -= OnNavigationMouseDown;
                 MainWindow.MouseUp -= OnNavigationMouseUp;
                 MainWindow.GUI.UnhandledKeyDown -= MainWindow_OnUnhandledKeyDown;
@@ -1694,6 +1697,26 @@ namespace FlaxEditor.Modules
         }
 
         #region Window Events
+
+        private void MainWindow_OnKeyDown(KeyboardKeys key)
+        {
+            var mainWindow = MainWindow;
+            var viewport = EditWin?.Viewport;
+            if (!mainWindow ||
+                viewport == null ||
+                viewport.ContainsFocus ||
+                !viewport.EnabledInHierarchy ||
+                !viewport.VisibleInHierarchy ||
+                viewport.RootWindow?.Window != mainWindow ||
+                !Editor.Options.Options.Input.OpenAddObjectMenu.Process(mainWindow, key))
+            {
+                return;
+            }
+
+            var mousePosition = viewport.PointFromScreen(FlaxEngine.Input.MouseScreenPosition);
+            if (viewport.ContainsPoint(ref mousePosition))
+                viewport.Focus();
+        }
 
         private bool MainWindow_OnUnhandledKeyDown(KeyboardKeys key)
         {

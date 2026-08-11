@@ -227,6 +227,10 @@ namespace FlaxEditor.Options
         [EditorDisplay("Scene"), EditorOrder(574)]
         public InputBinding GroupSelectedActors = new InputBinding(KeyboardKeys.G, KeyboardKeys.Control);
 
+        [DefaultValue(typeof(InputBinding), "Shift+A")]
+        [EditorDisplay("Scene", "Open Add Object Menu"), EditorOrder(575)]
+        public InputBinding OpenAddObjectMenu = new InputBinding(KeyboardKeys.A, KeyboardKeys.Shift);
+
         #endregion
 
         #region Tools
