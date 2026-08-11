@@ -2,7 +2,6 @@
 
 using System;
 using System.Collections.Generic;
-using FlaxEditor.GUI;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.GUI.Tree;
 using FlaxEditor.SceneGraph;
@@ -145,16 +144,7 @@ public class ContentFolderTreeNode : TreeNode
         if (!_folder.CanRename)
             return;
 
-        // Start renaming the folder
-        Editor.Instance.Windows.ContentWin.ScrollingOnTreeView(false);
-        var dialog = RenamePopup.Show(this, TextRect, _folder.ShortName, false);
-        dialog.Tag = _folder;
-        dialog.Renamed += popup =>
-        {
-            Editor.Instance.Windows.ContentWin.Rename((ContentFolder)popup.Tag, popup.Text);
-            Editor.Instance.Windows.ContentWin.ScrollingOnTreeView(true);
-        };
-        dialog.Closed += popup => { Editor.Instance.Windows.ContentWin.ScrollingOnTreeView(true); };
+        Editor.Instance.Windows.ContentWin.Rename(_folder);
     }
 
     /// <summary>

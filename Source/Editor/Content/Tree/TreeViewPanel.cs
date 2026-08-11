@@ -51,9 +51,9 @@ public class TreeViewPanel : Panel
         {
             var node = selection[0];
             if (node is ContentItemTreeNode contentNode)
-            {
                 Editor.Instance.Windows.ContentWin.Rename(contentNode.Item);
-            }
+            else if (node is ContentFolderTreeNode folderNode)
+                Editor.Instance.Windows.ContentWin.Rename(folderNode.Folder);
         }
     }
 
