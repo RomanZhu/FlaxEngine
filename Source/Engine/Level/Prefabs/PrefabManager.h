@@ -116,6 +116,8 @@ API_CLASS(Static) class FLAXENGINE_API PrefabManager
         bool WithSync = true;
         // True if linked spawned prefab objects with the source prefab, otherwise links will be valid only for nested prefab objects.
         bool WithLink = true;
+        // True if missing inherited objects are expected to be removed by prefab synchronization.
+        bool SuppressMissingPrefabObjectWarnings = false;
     };
 
     /// <summary>

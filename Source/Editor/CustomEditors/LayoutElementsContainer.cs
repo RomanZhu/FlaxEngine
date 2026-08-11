@@ -87,18 +87,21 @@ namespace FlaxEditor.CustomEditors
             var linkedEditor = (CustomEditor)groupPanel.Tag;
             var menu = new ContextMenu();
 
-            if (linkedEditor.CanApplyAddedPrefabObject)
-                menu.AddButton("Apply Changes", linkedEditor.ApplyAddedPrefabObject);
-            if ((linkedEditor.Presenter.Features & FeatureFlags.UsePrefab) != 0)
-                linkedEditor.AddApplyToPrefabButtons(menu);
-            var revertToPrefab = menu.AddButton("Revert to Prefab", linkedEditor.RevertToReferenceValue);
-            revertToPrefab.Enabled = linkedEditor.CanRevertReferenceValue;
-            var resetToDefault = menu.AddButton("Reset to default", linkedEditor.RevertToDefaultValue);
-            resetToDefault.Enabled = linkedEditor.CanRevertDefaultValue;
-            menu.AddSeparator();
-            menu.AddButton("Copy", linkedEditor.Copy);
-            var paste = menu.AddButton("Paste", linkedEditor.Paste);
-            paste.Enabled = linkedEditor.CanPaste;
+            if (element.UseDefaultContextMenu)
+            {
+                if (linkedEditor.CanApplyAddedPrefabObject)
+                    menu.AddButton("Apply Changes", linkedEditor.ApplyAddedPrefabObject);
+                if ((linkedEditor.Presenter.Features & FeatureFlags.UsePrefab) != 0)
+                    linkedEditor.AddApplyToPrefabButtons(menu);
+                var revertToPrefab = menu.AddButton("Revert to Prefab", linkedEditor.RevertToReferenceValue);
+                revertToPrefab.Enabled = linkedEditor.CanRevertReferenceValue;
+                var resetToDefault = menu.AddButton("Reset to default", linkedEditor.RevertToDefaultValue);
+                resetToDefault.Enabled = linkedEditor.CanRevertDefaultValue;
+                menu.AddSeparator();
+                menu.AddButton("Copy", linkedEditor.Copy);
+                var paste = menu.AddButton("Paste", linkedEditor.Paste);
+                paste.Enabled = linkedEditor.CanPaste;
+            }
             element.SetupContextMenu?.Invoke(menu, groupPanel);
 
             menu.Show(groupPanel, location);

@@ -45,6 +45,11 @@ namespace FlaxEditor.CustomEditors.Elements
         public Action<ContextMenu, DropPanel> SetupContextMenu;
 
         /// <summary>
+        /// Gets or sets whether the standard linked-editor actions are added to the context menu.
+        /// </summary>
+        public bool UseDefaultContextMenu = true;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="GroupElement"/> class.
         /// </summary>
         public GroupElement()

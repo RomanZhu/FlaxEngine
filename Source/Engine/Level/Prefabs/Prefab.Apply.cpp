@@ -1019,7 +1019,7 @@ bool Prefab::Resave()
     return false;
 }
 
-bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPrefab, PrefabInstancesData& prefabInstancesData, SceneObject* objectToApply)
+bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPrefab, PrefabInstancesData& prefabInstancesData, SceneObject* objectToApply, bool suppressMissingPrefabObjectWarnings)
 {
     PROFILE_CPU_NAMED("Prefab.Apply");
     ScopeLock lock(Locker);
@@ -1195,14 +1195,17 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
         auto& data = *Data;
         sceneObjects->Resize(ObjectsCount + newPrefabInstanceIdToDataIndex.Count());
         SceneObjectsFactory::Context context(modifier.Value);
+        context.SuppressMissingPrefabObjectWarnings = suppressMissingPrefabObjectWarnings;
         for (int32 i = 0; i < ObjectsCount; i++)
         {
-            SceneObject* obj = SceneObjectsFactory::Spawn(context, data[i]);
+            bool missingPrefabObject;
+            SceneObject* obj = SceneObjectsFactory::Spawn(context, data[i], &missingPrefabObject);
             sceneObjects->At(i) = obj;
             if (!obj)
             {
                 // This may happen if nested prefab has missing or invalid object but it still exists in this prefab (need to skip it)
-                SceneObjectsFactory::HandleObjectDeserializationError(data[i]);
+                if (!missingPrefabObject || !context.SuppressMissingPrefabObjectWarnings)
+                    SceneObjectsFactory::HandleObjectDeserializationError(data[i]);
                 continue;
             }
             obj->RegisterObject();
@@ -1214,12 +1217,14 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
         for (auto i = newPrefabInstanceIdToDataIndex.Begin(); i.IsNotEnd(); ++i)
         {
             const int32 dataIndex = i->Value;
-            SceneObject* obj = SceneObjectsFactory::Spawn(context, diffDataDocument[dataIndex]);
+            bool missingPrefabObject;
+            SceneObject* obj = SceneObjectsFactory::Spawn(context, diffDataDocument[dataIndex], &missingPrefabObject);
             sceneObjects->At(newPrefabInstanceIdToDataIndexStart + newPrefabInstanceIdToDataIndexCounter++) = obj;
             if (!obj)
             {
                 // This should not happen but who knows
-                SceneObjectsFactory::HandleObjectDeserializationError(diffDataDocument[dataIndex]);
+                if (!missingPrefabObject || !context.SuppressMissingPrefabObjectWarnings)
+                    SceneObjectsFactory::HandleObjectDeserializationError(diffDataDocument[dataIndex]);
                 continue;
             }
             obj->RegisterObject();
@@ -1587,14 +1592,19 @@ bool Prefab::SyncChangesInternal(PrefabInstancesData& prefabInstancesData)
     {
         ScopeLock lock(Locker);
         _isCreatingDefaultInstance = true;
-        _defaultInstance = PrefabManager::SpawnPrefab(this, nullptr, &ObjectsCache, true);
+        PrefabManager::SpawnOptions options;
+        options.ObjectsCache = &ObjectsCache;
+        options.SuppressMissingPrefabObjectWarnings = true;
+        _defaultInstance = PrefabManager::SpawnPrefab(this, options);
         _isCreatingDefaultInstance = false;
     }
 
     // Instantiate prefab instance from prefab (default spawning logic)
     // Note: it will get any added or removed objects from the nested prefabs
     // TODO: try to optimize by using recreated default instance to ApplyAllInternal (will need special path there if apply is done with default instance to unlink it instead of destroying)
-    const auto targetActor = PrefabManager::SpawnPrefab(this, nullptr, nullptr, true);
+    PrefabManager::SpawnOptions options;
+    options.SuppressMissingPrefabObjectWarnings = true;
+    const auto targetActor = PrefabManager::SpawnPrefab(this, options);
     if (targetActor == nullptr)
     {
         LOG(Warning, "Failed to instantiate default prefab instance from changes synchronization.");
@@ -1605,7 +1615,7 @@ bool Prefab::SyncChangesInternal(PrefabInstancesData& prefabInstancesData)
     AutoActorCleanup cleanupDefaultInstance(targetActor);
 
     // Apply changes
-    return ApplyAllInternal(targetActor, false, prefabInstancesData);
+    return ApplyAllInternal(targetActor, false, prefabInstancesData, nullptr, true);
 }
 
 void Prefab::SyncNestedPrefabs(const NestedPrefabsList& allPrefabs, Array<PrefabInstancesData>& allPrefabsInstancesData, HashSet<Guid>& synced) const

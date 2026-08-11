@@ -123,8 +123,11 @@ void SceneObjectsFactory::Context::SetupIdsMapping(const SceneObject* obj, ISeri
     }
 }
 
-SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::DeserializeStream& stream)
+SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::DeserializeStream& stream, bool* missingPrefabObject)
 {
+    if (missingPrefabObject)
+        *missingPrefabObject = false;
+
     // Get object id
     Guid id = JsonTools::GetGuid(stream, "ID");
     ISerializeModifier* modifier = context.GetModifier();
@@ -165,7 +168,10 @@ SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::D
         const ISerializable::DeserializeStream* prefabData;
         if (!prefab->ObjectsDataCache.TryGet(prefabObjectId, prefabData))
         {
-            LOG(Warning, "Missing object {1} data in prefab {0}.", prefab->ToString(), prefabObjectId);
+            if (missingPrefabObject)
+                *missingPrefabObject = true;
+            if (!context.SuppressMissingPrefabObjectWarnings)
+                LOG(Warning, "Missing object {1} data in prefab {0}.", prefab->ToString(), prefabObjectId);
             return nullptr;
         }
 
@@ -173,7 +179,7 @@ SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::D
         modifier->IdsMapping[prefabObjectId] = id;
 
         // Create prefab instance (recursive prefab loading to support nested prefabs)
-        obj = Spawn(context, *prefabData);
+        obj = Spawn(context, *prefabData, missingPrefabObject);
     }
     else
     {

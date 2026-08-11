@@ -39,6 +39,7 @@ public:
     {
         ISerializeModifier* Modifier;
         bool Async = false;
+        bool SuppressMissingPrefabObjectWarnings = false;
         Array<PrefabInstance> Instances;
         Dictionary<Guid, int32> ObjectToInstance;
         CriticalSection Locker;
@@ -59,7 +60,8 @@ public:
     /// </summary>
     /// <param name="context">The serialization context.</param>
     /// <param name="stream">The serialized data stream.</param>
-    static SceneObject* Spawn(Context& context, const ISerializable::DeserializeStream& stream);
+    /// <param name="missingPrefabObject">Optional output set when the source prefab no longer contains the linked object.</param>
+    static SceneObject* Spawn(Context& context, const ISerializable::DeserializeStream& stream, bool* missingPrefabObject = nullptr);
 
     /// <summary>
     /// Deserializes the scene object from the specified data value.
