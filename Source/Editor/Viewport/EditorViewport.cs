@@ -2663,6 +2663,7 @@ namespace FlaxEditor.Viewport
 
         private void LogGizmoFocusDebug(string point, KeyboardKeys key = KeyboardKeys.None)
         {
+            /* Temporarily disabled to keep gizmo focus diagnostics out of the log.
             var root = Root;
             var focusedControl = root?.FocusedControl;
             Editor.Log(string.Format(
@@ -2678,6 +2679,7 @@ namespace FlaxEditor.Viewport
                 root?.GetKey(KeyboardKeys.Shift) ?? false,
                 root?.GetKey(KeyboardKeys.Alt) ?? false,
                 _input.IsMouseRightDown));
+            */
         }
 
         /// <inheritdoc />

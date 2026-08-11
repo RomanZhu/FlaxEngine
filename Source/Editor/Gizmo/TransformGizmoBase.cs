@@ -980,6 +980,7 @@ namespace FlaxEditor.Gizmo
 
         private void LogGizmoFocusDebug(string point, IUndoAction action)
         {
+            /* Temporarily disabled to keep gizmo focus diagnostics out of the log.
             var viewport = Owner?.Viewport;
             var root = viewport?.Root;
             var focusedControl = root?.FocusedControl;
@@ -997,6 +998,7 @@ namespace FlaxEditor.Gizmo
                 root?.GetKey(KeyboardKeys.Control) ?? false,
                 root?.GetKey(KeyboardKeys.Shift) ?? false,
                 root?.GetKey(KeyboardKeys.Alt) ?? false));
+            */
         }
 
         private void StartRotationDrag(Vector3 startPoint)

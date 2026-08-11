@@ -42,7 +42,7 @@ namespace FlaxEditor.Modules
         private bool _suppressWindowNavigation;
 
         private static readonly bool LogFocusRecovery = false;
-        private static readonly bool LogWindowNavigation = true;
+        // private static readonly bool LogWindowNavigation = true;
 
         private struct WindowRestoreData
         {
@@ -1573,8 +1573,10 @@ namespace FlaxEditor.Modules
 
         private void LogWindowNavigationDebug(string message)
         {
+            /* Temporarily disabled to keep window history diagnostics out of the log.
             if (LogWindowNavigation)
                 Editor.Log("[WindowHistory] " + message);
+            */
         }
 
         private static string DescribeWindowNavigationContext(WindowNavigationContext context)
@@ -1760,6 +1762,7 @@ namespace FlaxEditor.Modules
 
         private void LogGizmoFocusDebug(string point, KeyboardKeys key)
         {
+            /* Temporarily disabled to keep gizmo focus diagnostics out of the log.
             var mainWindow = MainWindow;
             Editor.Log(string.Format(
                 "[GizmoFocusDebug] WindowsModule {0}; Key={1}; Focused={2}; AppFocus={3}; MainWindowFocus={4}; Ctrl={5}; Shift={6}; Alt={7}",
@@ -1771,6 +1774,7 @@ namespace FlaxEditor.Modules
                 mainWindow && mainWindow.GetKey(KeyboardKeys.Control),
                 mainWindow && mainWindow.GetKey(KeyboardKeys.Shift),
                 mainWindow && mainWindow.GetKey(KeyboardKeys.Alt)));
+            */
         }
 
         internal void OnNavigationMouseDown(ref Float2 mousePosition, MouseButton button, ref bool handled)

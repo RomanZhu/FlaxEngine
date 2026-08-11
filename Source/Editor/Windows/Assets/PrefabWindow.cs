@@ -339,6 +339,7 @@ namespace FlaxEditor.Windows.Assets
 
         private void LogGizmoFocusDebug(string point, IUndoAction action)
         {
+            /* Temporarily disabled to keep gizmo focus diagnostics out of the log.
             var root = Root;
             var focusedControl = root?.FocusedControl;
             Editor.Log(string.Format(
@@ -355,6 +356,7 @@ namespace FlaxEditor.Windows.Assets
                 root?.GetKey(KeyboardKeys.Alt) ?? false,
                 _viewport.TransformGizmo.State,
                 _viewport.TransformGizmo.HasActiveTransaction));
+            */
         }
 
         /// <summary>

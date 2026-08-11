@@ -819,7 +819,9 @@ namespace FlaxEditor
 
         private static void LogUndoHistory(string message)
         {
+            /* Temporarily disabled to keep undo history diagnostics out of the log.
             Editor.Log("[UndoHistory] " + message);
+            */
         }
 
         private static string DescribeOwner(object owner)
