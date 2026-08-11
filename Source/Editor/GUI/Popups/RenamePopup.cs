@@ -15,6 +15,7 @@ namespace FlaxEditor.GUI
     {
         private string _startValue;
         private TextBox _inputField;
+        private bool _renamed;
 
         /// <summary>
         /// Occurs when renaming is done.
@@ -144,15 +145,31 @@ namespace FlaxEditor.GUI
             return rename;
         }
 
-        private void OnEnd()
+        private void TryRename()
         {
             var text = Text;
-            if (text != _startValue && IsInputValid)
+            if (!_renamed && text != _startValue && IsInputValid)
             {
+                _renamed = true;
                 Renamed?.Invoke(this);
             }
+        }
+
+        private void OnEnd()
+        {
+            TryRename();
 
             Hide();
+        }
+
+        /// <inheritdoc />
+        public override void Hide()
+        {
+            // An outside click can hide the popup before Update gets a chance to process it.
+            if (FlaxEngine.Input.GetMouseButtonDown(MouseButton.Left))
+                TryRename();
+
+            base.Hide();
         }
 
         /// <inheritdoc />
