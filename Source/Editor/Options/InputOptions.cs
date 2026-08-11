@@ -327,13 +327,73 @@ namespace FlaxEditor.Options
         [EditorDisplay("Gizmo"), EditorOrder(1030)]
         public InputBinding ScaleMode = new InputBinding(KeyboardKeys.R);
 
-        [DefaultValue(typeof(InputBinding), "Alpha4")]
+        [DefaultValue(typeof(InputBinding), "T")]
         [EditorDisplay("Gizmo"), EditorOrder(1040)]
+        public InputBinding BoundsMode = new InputBinding(KeyboardKeys.T);
+
+        [DefaultValue(typeof(InputBinding), "Alpha4")]
+        [EditorDisplay("Gizmo"), EditorOrder(1050)]
         public InputBinding ToggleTransformSpace = new InputBinding(KeyboardKeys.Alpha4);
 
         [DefaultValue(typeof(InputBinding), "Z")]
-        [EditorDisplay("Gizmo"), EditorOrder(1050)]
+        [EditorDisplay("Gizmo"), EditorOrder(1060)]
         public InputBinding TogglePivot = new InputBinding(KeyboardKeys.Z);
+
+        #endregion
+
+        #region CSG Authoring
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Select / Place Tool"), EditorOrder(1100)]
+        public InputBinding CSGSelectPlaceTool = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Draw Tool"), EditorOrder(1110)]
+        public InputBinding CSGDrawTool = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Edit Tool"), EditorOrder(1120)]
+        public InputBinding CSGEditTool = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Surface Tool"), EditorOrder(1130)]
+        public InputBinding CSGSurfaceTool = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Pick Working Plane"), EditorOrder(1140)]
+        public InputBinding CSGPickWorkingPlane = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Toggle Working Plane Lock"), EditorOrder(1150)]
+        public InputBinding CSGToggleWorkingPlaneLock = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Reset Working Plane"), EditorOrder(1160)]
+        public InputBinding CSGResetWorkingPlane = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Snap Override"), EditorOrder(1170)]
+        public InputBinding CSGSnapOverride = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Square Constraint"), EditorOrder(1180)]
+        public InputBinding CSGSquareConstraint = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Symmetric Constraint"), EditorOrder(1190)]
+        public InputBinding CSGSymmetricConstraint = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Duplicate Modifier"), EditorOrder(1200)]
+        public InputBinding CSGDuplicateModifier = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "Return")]
+        [EditorDisplay("CSG Authoring", "Commit Interaction"), EditorOrder(1210)]
+        public InputBinding CSGCommit = new InputBinding(KeyboardKeys.Return);
+
+        [DefaultValue(typeof(InputBinding), "Escape")]
+        [EditorDisplay("CSG Authoring", "Cancel Interaction"), EditorOrder(1220)]
+        public InputBinding CSGCancel = new InputBinding(KeyboardKeys.Escape);
 
         #endregion
 

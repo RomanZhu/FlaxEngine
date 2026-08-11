@@ -640,6 +640,8 @@ namespace FlaxEditor.Gizmo
 
         private static bool TryGetFeedbackAxisLocal(Axis axis, out Vector3 direction)
         {
+            if (TryGetBoundsFace(axis, out _, out _, out direction))
+                return true;
             switch (axis)
             {
             case Axis.X:
@@ -670,6 +672,7 @@ namespace FlaxEditor.Gizmo
             case Mode.Rotate:
                 return RotationSnapEnabled || Owner.UseSnapping;
             case Mode.Scale:
+            case Mode.Bounds:
                 return ScaleSnapEnabled || Owner.UseSnapping;
             default:
                 return false;
@@ -688,6 +691,7 @@ namespace FlaxEditor.Gizmo
                 value = RotationSnapValue;
                 break;
             case Mode.Scale:
+            case Mode.Bounds:
                 value = ScaleSnapValue;
                 break;
             default:
@@ -707,6 +711,7 @@ namespace FlaxEditor.Gizmo
             case Mode.Rotate:
                 return AbsoluteSnapEnabled || RotationSnapEnabled;
             case Mode.Scale:
+            case Mode.Bounds:
                 return AbsoluteSnapEnabled || ScaleSnapEnabled;
             default:
                 return false;
@@ -737,7 +742,7 @@ namespace FlaxEditor.Gizmo
             var origin = _transactionOrigin != null ? _transactionOrigin.PivotPosition : pivot - result.Translation;
             bool hasMoved = mode == Mode.Translate
                 ? result.Translation.LengthSquared > 0.000001f
-                : mode == Mode.Scale && (result.Scale - Vector3.One).LengthSquared > 0.000001f;
+                : (mode == Mode.Scale || mode == Mode.Bounds) && (result.Scale - Vector3.One).LengthSquared > 0.000001f;
             if (hasMoved && !IsGeometrySnapActive)
                 markers.Add(new FeedbackWorldMarker(origin, Color.White, 4.0f, false, "Origin"));
             if (axis == Axis.None)
@@ -753,6 +758,7 @@ namespace FlaxEditor.Gizmo
                     basis = FeedbackMeasurementBasis.SignedRotation;
                     break;
                 case Mode.Scale:
+                case Mode.Bounds:
                     rows.Add(new FeedbackHudRow("Scale", FormatFactor((float)result.Scale.X, snapStep)));
                     basis = FeedbackMeasurementBasis.ScaleFactor;
                     break;
@@ -807,6 +813,7 @@ namespace FlaxEditor.Gizmo
                 break;
 
             case Mode.Scale:
+            case Mode.Bounds:
                 var factor = result.Scale;
                 string factorText;
                 if (axis == Axis.Center)
@@ -902,6 +909,12 @@ namespace FlaxEditor.Gizmo
                 return new Color(0.1f, 0.4f, 1.0f, 1.0f);
             if (axis == Axis.YZ)
                 return new Color(0.2f, 1.0f, 0.1f, 1.0f);
+            if (axis == Axis.XNegative || axis == Axis.XPositive)
+                return new Color(1.0f, 0.05f, 0.05f, 1.0f);
+            if (axis == Axis.YNegative || axis == Axis.YPositive)
+                return new Color(0.2f, 1.0f, 0.1f, 1.0f);
+            if (axis == Axis.ZNegative || axis == Axis.ZPositive)
+                return new Color(0.1f, 0.4f, 1.0f, 1.0f);
             if ((axis & Axis.X) == Axis.X)
                 return new Color(1.0f, 0.05f, 0.05f, 1.0f);
             if ((axis & Axis.Y) == Axis.Y)
@@ -913,7 +926,7 @@ namespace FlaxEditor.Gizmo
 
         private string GetFeedbackWarning(Mode mode, InteractionResult result)
         {
-            if (mode != Mode.Scale)
+            if (mode != Mode.Scale && mode != Mode.Bounds)
                 return string.Empty;
             var scale = result.Scale;
             if (Mathf.Abs(scale.X) <= 0.00011f || Mathf.Abs(scale.Y) <= 0.00011f || Mathf.Abs(scale.Z) <= 0.00011f)
@@ -972,7 +985,7 @@ namespace FlaxEditor.Gizmo
 
         private static string FormatFeedbackStep(Mode mode, float step)
         {
-            return mode == Mode.Rotate ? EditorUtils.FormatFloat(step, FlaxEngine.Utils.ValueCategory.Angle) : mode == Mode.Scale ? FormatFactor(step, step) : FormatDistance(step, step);
+            return mode == Mode.Rotate ? EditorUtils.FormatFloat(step, FlaxEngine.Utils.ValueCategory.Angle) : (mode == Mode.Scale || mode == Mode.Bounds) ? FormatFactor(step, step) : FormatDistance(step, step);
         }
 
         private void DrawFeedbackOverlay()

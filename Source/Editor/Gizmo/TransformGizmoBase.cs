@@ -167,7 +167,11 @@ namespace FlaxEditor.Gizmo
             var position = Vector3.Zero;
 
             // Get gizmo pivot
-            switch (_activePivotType)
+            if (_activeMode == Mode.Bounds)
+            {
+                position = GetSelectionCenter();
+            }
+            else switch (_activePivotType)
             {
             case PivotType.ObjectCenter:
                 if (SelectionCount > 0)
@@ -218,7 +222,7 @@ namespace FlaxEditor.Gizmo
             // Setup world
             Quaternion orientation = GetSelectedTransform(0).Orientation;
             _gizmoWorld = new Transform(position, orientation, new Float3(_screenScale));
-            if (_activeTransformSpace == TransformSpace.World)
+            if (_activeTransformSpace == TransformSpace.World || _activeMode == Mode.Bounds)
             {
                 _gizmoWorld.Orientation = Quaternion.Identity;
             }
@@ -1537,6 +1541,9 @@ namespace FlaxEditor.Gizmo
                         break;
                     case Mode.Scale:
                         UpdateTranslateScale();
+                        break;
+                    case Mode.Bounds:
+                        UpdateBoundsResize();
                         break;
                     case Mode.Rotate:
                         UpdateRotate();

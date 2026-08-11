@@ -17,6 +17,7 @@ using FlaxEditor.GUI.Input;
 using FlaxEditor.Options;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Scripting;
+using FlaxEditor.Tools.CSG;
 using FlaxEditor.Viewport.Cameras;
 using FlaxEditor.Viewport.Modes;
 using FlaxEditor.Viewport.Widgets;
@@ -48,6 +49,7 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayTranslateModeButton;
         private ToolStripButton _overlayRotateModeButton;
         private ToolStripButton _overlayScaleModeButton;
+        private ToolStripButton _overlayBoundsModeButton;
         private ToolStripButton _overlayTransformSpaceButton;
         private ToolStripButton _overlayPivotButton;
         private ToolStripButton _overlayAbsoluteSnapButton;
@@ -62,6 +64,16 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayTranslateSnapValueButton;
         private ToolStripButton _overlayRotateSnapValueButton;
         private ToolStripButton _overlayScaleSnapValueButton;
+        private ToolStripButton _overlayCSGSelectPlaceButton;
+        private ToolStripButton _overlayCSGDrawButton;
+        private ToolStripButton _overlayCSGEditButton;
+        private ToolStripButton _overlayCSGSurfaceButton;
+        private ToolStripButton _overlayCSGClipButton;
+        private ToolStripButton _overlayCSGOperationButton;
+        private ToolStripButton _overlayCSGPlaneButton;
+        private ToolStripButton _overlayCSGSnapButton;
+        private ToolStripButton _overlayCSGSnapValueButton;
+        private ToolStripButton _overlayCSGVisibilityButton;
         private SelectionOutline _customSelectionOutline;
         private bool _middleMouseRecenterCandidate;
         private bool _suppressNextSelectionPick;
@@ -247,6 +259,11 @@ namespace FlaxEditor.Viewport
         public Tools.Foliage.EditFoliageGizmoMode EditFoliageGizmo;
 
         /// <summary>
+        /// The CSG authoring gizmo mode.
+        /// </summary>
+        public CSGAuthoringGizmoMode CSGAuthoringMode;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="MainEditorGizmoViewport"/> class.
         /// </summary>
         /// <param name="editor">Editor instance.</param>
@@ -367,6 +384,7 @@ namespace FlaxEditor.Viewport
             {
                 // Add default modes used by the editor
                 Gizmos.AddMode(new TransformGizmoMode());
+                Gizmos.AddMode(CSGAuthoringMode = new CSGAuthoringGizmoMode());
                 Gizmos.AddMode(new NoGizmoMode());
                 Gizmos.AddMode(SculptTerrainGizmo = new Tools.Terrain.SculptTerrainGizmoMode());
                 Gizmos.AddMode(PaintTerrainGizmo = new Tools.Terrain.PaintTerrainGizmoMode());
@@ -374,10 +392,15 @@ namespace FlaxEditor.Viewport
                 Gizmos.AddMode(PaintFoliageGizmo = new Tools.Foliage.PaintFoliageGizmoMode());
                 Gizmos.AddMode(EditFoliageGizmo = new Tools.Foliage.EditFoliageGizmoMode());
 
-                // Activate transform mode first
-                Gizmos.SetActiveMode<TransformGizmoMode>();
+                // Restore the explicit Object/CSG authoring context without inferring it from selection.
+                if (_editor.ProjectCache.TryGetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, out string context) &&
+                    string.Equals(context, CSGAuthoringGizmoMode.ContextCacheValue, StringComparison.Ordinal))
+                    Gizmos.SetActiveMode<CSGAuthoringGizmoMode>();
+                else
+                    Gizmos.SetActiveMode<TransformGizmoMode>();
             }
-            Gizmos.ActiveModeChanged += _ => UpdateViewportToolStrip();
+            Gizmos.ActiveModeChanged += OnActiveGizmoModeChanged;
+            CSGAuthoringMode.Controller.Changed += UpdateViewportToolStrip;
             TransformGizmo.ModeChanged += UpdateViewportToolStrip;
             TransformGizmo.TransformSpaceChanged += UpdateViewportToolStrip;
             TransformGizmo.PivotChanged += UpdateViewportToolStrip;
@@ -396,7 +419,23 @@ namespace FlaxEditor.Viewport
 
             editor.Options.OptionsChanged += OnEditorOptionsChanged;
             editor.PlayModeBeginning += OnPlayModeBeginning;
+            Level.SceneLoaded += OnSceneContextChanged;
+            Level.SceneUnloading += OnSceneContextChanged;
             OnEditorOptionsChanged(editor.Options.Options);
+        }
+
+        private void OnActiveGizmoModeChanged(EditorGizmoMode mode)
+        {
+            if (mode is CSGAuthoringGizmoMode)
+                _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, CSGAuthoringGizmoMode.ContextCacheValue);
+            else if (mode is TransformGizmoMode)
+                _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, "Object");
+            UpdateViewportToolStrip();
+        }
+
+        private void OnSceneContextChanged(Scene scene, Guid sceneId)
+        {
+            Gizmos.ActiveMode?.TryCancel(EditorGizmoModeCancelReason.SceneChanged);
         }
 
         private void OnEditorOptionsChanged(EditorOptions options)
@@ -429,6 +468,8 @@ namespace FlaxEditor.Viewport
             _overlayRotateModeButton.LinkTooltip("Rotate gizmo mode.", ref inputOptions.RotateMode);
             _overlayScaleModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.Scale32, ToolStripAnchor.Left, "Flax.Scene.Transform.Scale.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale);
             _overlayScaleModeButton.LinkTooltip("Scale gizmo mode.", ref inputOptions.ScaleMode);
+            _overlayBoundsModeButton = AddViewportToolStripButton(string.Empty, _editor.Icons.VisjectBoxClosed32, ToolStripAnchor.Left, "Flax.Scene.Transform.Bounds.Left", () => TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Bounds);
+            _overlayBoundsModeButton.LinkTooltip("Resize the selection bounds by dragging a face.", ref inputOptions.BoundsMode);
             _overlayTransformSpaceButton = AddViewportToolStripButton("World", _editor.Icons.Globe32, ToolStripAnchor.Left, "Flax.Scene.Transform.Space.Left", () =>
             {
                 TransformGizmo.ToggleTransformSpace();
@@ -477,6 +518,31 @@ namespace FlaxEditor.Viewport
             }), ToolStripAnchor.Left, "Flax.Scene.Transform.ScaleSnapValue.Left");
             _overlayScaleSnapValueButton.LinkTooltip("Scale snapping values.");
 
+            _overlayCSGSelectPlaceButton = AddViewportToolStripButton("Select", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.SelectPlace.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.SelectPlace));
+            _overlayCSGSelectPlaceButton.LinkTooltip("Select brushes or place the chosen primitive.", ref inputOptions.CSGSelectPlaceTool);
+            _overlayCSGDrawButton = AddViewportToolStripButton("Draw", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.Draw.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Draw));
+            _overlayCSGDrawButton.LinkTooltip("Draw a brush footprint and extrusion.", ref inputOptions.CSGDrawTool);
+            _overlayCSGEditButton = AddViewportToolStripButton("Edit", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.Edit.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Edit));
+            _overlayCSGEditButton.LinkTooltip("Edit brush topology.", ref inputOptions.CSGEditTool);
+            _overlayCSGSurfaceButton = AddViewportToolStripButton("Surface", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.Surface.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Surface));
+            _overlayCSGSurfaceButton.LinkTooltip("Edit brush surface properties.", ref inputOptions.CSGSurfaceTool);
+            _overlayCSGClipButton = AddViewportToolStripButton("Clip", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.Clip.Left", null);
+            _overlayCSGClipButton.Enabled = false;
+            _overlayCSGClipButton.LinkTooltip("Clip is planned for a later milestone.");
+            _overlayCSGOperationButton = AddViewportToolStripMenuButton(GetCSGOperationLabel(), SpriteHandle.Invalid, CreateCSGOperationMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Operation.Left");
+            _overlayCSGOperationButton.DrawMenuChevron = true;
+            _overlayCSGOperationButton.LinkTooltip("Operation used by newly authored brushes.");
+            _overlayCSGPlaneButton = AddViewportToolStripMenuButton("Plane", SpriteHandle.Invalid, CreateCSGPlaneMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Plane.Left");
+            _overlayCSGPlaneButton.DrawMenuChevron = true;
+            _overlayCSGPlaneButton.LinkTooltip("Pick, lock, or reset the CSG working plane.");
+            _overlayCSGSnapButton = AddViewportToolStripButton("Snap", _editor.Icons.Grid32, ToolStripAnchor.Left, "Flax.Scene.CSG.Snap.Left", () => CSGAuthoringMode.Controller.SetSnappingEnabled(!CSGAuthoringMode.Controller.SnappingEnabled));
+            _overlayCSGSnapButton.LinkTooltip("Toggle CSG grid snapping.");
+            _overlayCSGSnapValueButton = AddViewportToolStripMenuButton(GetCSGSnapLabel(), SpriteHandle.Invalid, CreateCSGSnapMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.SnapValue.Left");
+            _overlayCSGSnapValueButton.LinkTooltip("CSG linear snap increment.");
+            _overlayCSGVisibilityButton = AddViewportToolStripMenuButton("View", SpriteHandle.Invalid, CreateCSGVisibilityMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Visibility.Left");
+            _overlayCSGVisibilityButton.DrawMenuChevron = true;
+            _overlayCSGVisibilityButton.LinkTooltip("CSG viewport visibility.");
+
             _overlayGridButton = AddViewportToolStripButton("Grid", Editor.Instance.Icons.Grid32, ToolStripAnchor.Right, "Flax.Scene.Grid", () => Grid.Enabled = !Grid.Enabled);
             _overlayGridButton.LinkTooltip("Toggle grid.");
             _overlayNavigationButton = AddViewportToolStripButton("Nav", SpriteHandle.Invalid, ToolStripAnchor.Right, "Flax.Scene.Navigation", () => ShowNavigation = !ShowNavigation);
@@ -494,6 +560,8 @@ namespace FlaxEditor.Viewport
             var menu = new ContextMenu();
             var objectMode = menu.AddButton("Object Mode", () => Gizmos.SetActiveMode<TransformGizmoMode>());
             objectMode.Icon = _editor.Icons.Toolbox96;
+            var csgMode = menu.AddButton("CSG Authoring", () => Gizmos.SetActiveMode<CSGAuthoringGizmoMode>());
+            csgMode.Icon = _editor.Icons.VisjectBoxClosed32;
             var noGizmoMode = menu.AddButton("No Gizmo", () => Gizmos.SetActiveMode<NoGizmoMode>());
             noGizmoMode.Icon = _editor.Icons.Cross12;
             menu.AddSeparator();
@@ -513,12 +581,89 @@ namespace FlaxEditor.Viewport
                 if (!control.Visible)
                     return;
                 objectMode.Checked = Gizmos.ActiveMode is TransformGizmoMode;
+                csgMode.Checked = Gizmos.ActiveMode is CSGAuthoringGizmoMode;
                 noGizmoMode.Checked = Gizmos.ActiveMode is NoGizmoMode;
                 sculptTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.SculptTerrainGizmoMode;
                 paintTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.PaintTerrainGizmoMode;
                 editTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.EditTerrainGizmoMode;
                 paintFoliageMode.Checked = Gizmos.ActiveMode is Tools.Foliage.PaintFoliageGizmoMode;
                 editFoliageMode.Checked = Gizmos.ActiveMode is Tools.Foliage.EditFoliageGizmoMode;
+            };
+            return menu;
+        }
+
+        private ContextMenu CreateCSGOperationMenu()
+        {
+            var menu = new ContextMenu();
+            var additive = menu.AddButton("Additive", () => CSGAuthoringMode.Controller.SetOperation(CSGOperation.Additive));
+            var subtractive = menu.AddButton("Subtractive", () => CSGAuthoringMode.Controller.SetOperation(CSGOperation.Subtractive));
+            var intersecting = menu.AddButton("Intersecting");
+            intersecting.Enabled = false;
+            intersecting.LinkTooltip("Intersecting operations are planned for a later milestone.");
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                additive.Checked = CSGAuthoringMode.Controller.Operation == CSGOperation.Additive;
+                subtractive.Checked = CSGAuthoringMode.Controller.Operation == CSGOperation.Subtractive;
+            };
+            return menu;
+        }
+
+        private ContextMenu CreateCSGPlaneMenu()
+        {
+            var menu = new ContextMenu();
+            var pick = menu.AddButton("Pick from Surface", () => CSGAuthoringMode.Controller.RequestPickWorkingPlane());
+            pick.LinkTooltip("Working-plane picking is routed to the CSG tool and implemented in a later milestone.");
+            var locked = menu.AddButton("Lock Plane", () => CSGAuthoringMode.Controller.SetWorkingPlaneLocked(!CSGAuthoringMode.Controller.WorkingPlaneLocked));
+            locked.CloseMenuOnClick = false;
+            menu.AddButton("Reset Plane", CSGAuthoringMode.Controller.ResetWorkingPlane);
+            menu.VisibleChanged += control =>
+            {
+                if (control.Visible)
+                    locked.Checked = CSGAuthoringMode.Controller.WorkingPlaneLocked;
+            };
+            return menu;
+        }
+
+        private ContextMenu CreateCSGSnapMenu()
+        {
+            var menu = new ContextMenu();
+            var buttons = new List<ContextMenuButton>(CSGToolController.SnapIncrements.Length);
+            foreach (float increment in CSGToolController.SnapIncrements)
+            {
+                var value = increment;
+                var button = menu.AddButton(value.ToString(), () => CSGAuthoringMode.Controller.SetSnapIncrement(value));
+                button.Tag = value;
+                buttons.Add(button);
+            }
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                foreach (var button in buttons)
+                    button.Checked = Mathf.NearEqual((float)button.Tag, CSGAuthoringMode.Controller.SnapIncrement);
+            };
+            return menu;
+        }
+
+        private ContextMenu CreateCSGVisibilityMenu()
+        {
+            var menu = new ContextMenu();
+            var source = menu.AddButton("Source Brushes", () => CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.SourceBrushes));
+            var built = menu.AddButton("Built Geometry", () => CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.BuiltGeometry));
+            var hidden = menu.AddButton("Hidden Brushes", () => CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.HiddenBrushes));
+            source.CloseMenuOnClick = false;
+            built.CloseMenuOnClick = false;
+            hidden.CloseMenuOnClick = false;
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                var visibility = CSGAuthoringMode.Controller.Visibility;
+                source.Checked = (visibility & CSGVisibility.SourceBrushes) != 0;
+                built.Checked = (visibility & CSGVisibility.BuiltGeometry) != 0;
+                hidden.Checked = (visibility & CSGVisibility.HiddenBrushes) != 0;
             };
             return menu;
         }
@@ -659,6 +804,7 @@ namespace FlaxEditor.Viewport
 
         private void OnPlayModeBeginning()
         {
+            Gizmos.ActiveMode?.TryCancel(EditorGizmoModeCancelReason.PlayModeBeginning);
             StopCharacterControllerMode();
         }
 
@@ -957,6 +1103,7 @@ namespace FlaxEditor.Viewport
             _gameViewActive = !_gameViewActive;
 
             TransformGizmo.Visible = !_gameViewActive;
+            CSGAuthoringMode.Gizmo.Visible = !_gameViewActive;
             SelectionOutline.ShowSelectionOutline = !_gameViewActive;
             if (_gameViewActive)
                 ClearSceneTreeHoverFromEditorViewport();
@@ -970,40 +1117,122 @@ namespace FlaxEditor.Viewport
         {
             base.UpdateViewportToolStrip();
             SetViewportToolStripButtonText(_overlayModeButton, GetGizmoModeLabel());
+            bool objectMode = Gizmos.ActiveMode is TransformGizmoMode;
+            bool csgMode = Gizmos.ActiveMode is CSGAuthoringGizmoMode;
             if (_overlaySelectModeButton != null)
+            {
+                _overlaySelectModeButton.Visible = objectMode;
                 _overlaySelectModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Select;
+            }
             if (_overlayTranslateModeButton != null)
+            {
+                _overlayTranslateModeButton.Visible = objectMode;
                 _overlayTranslateModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Translate;
+            }
             if (_overlayRotateModeButton != null)
+            {
+                _overlayRotateModeButton.Visible = objectMode;
                 _overlayRotateModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Rotate;
+            }
             if (_overlayScaleModeButton != null)
+            {
+                _overlayScaleModeButton.Visible = objectMode;
                 _overlayScaleModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Scale;
+            }
+            if (_overlayBoundsModeButton != null)
+            {
+                _overlayBoundsModeButton.Visible = objectMode;
+                _overlayBoundsModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Bounds;
+            }
             if (_overlayTransformSpaceButton != null)
             {
+                _overlayTransformSpaceButton.Visible = objectMode;
                 var isWorld = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
                 _overlayTransformSpaceButton.Checked = isWorld;
                 SetViewportToolStripButtonText(_overlayTransformSpaceButton, isWorld ? "World" : "Local");
             }
             if (_overlayPivotButton != null)
             {
+                _overlayPivotButton.Visible = objectMode;
                 var isObjectPivot = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
                 _overlayPivotButton.Checked = isObjectPivot;
                 SetViewportToolStripButtonText(_overlayPivotButton, isObjectPivot ? "Pivot" : "Center");
             }
             if (_overlayAbsoluteSnapButton != null)
             {
-                _overlayAbsoluteSnapButton.Visible = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
+                _overlayAbsoluteSnapButton.Visible = objectMode && TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
                 _overlayAbsoluteSnapButton.Checked = TransformGizmo.AbsoluteSnapEnabled;
             }
             if (_overlayTranslateSnapButton != null)
+            {
+                _overlayTranslateSnapButton.Visible = objectMode;
                 _overlayTranslateSnapButton.Checked = TransformGizmo.TranslationSnapEnable;
+            }
             if (_overlayRotateSnapButton != null)
+            {
+                _overlayRotateSnapButton.Visible = objectMode;
                 _overlayRotateSnapButton.Checked = TransformGizmo.RotationSnapEnabled;
+            }
             if (_overlayScaleSnapButton != null)
+            {
+                _overlayScaleSnapButton.Visible = objectMode;
                 _overlayScaleSnapButton.Checked = TransformGizmo.ScaleSnapEnabled;
+            }
+            if (_overlayTranslateSnapValueButton != null)
+                _overlayTranslateSnapValueButton.Visible = objectMode;
+            if (_overlayRotateSnapValueButton != null)
+                _overlayRotateSnapValueButton.Visible = objectMode;
+            if (_overlayScaleSnapValueButton != null)
+                _overlayScaleSnapValueButton.Visible = objectMode;
             SetViewportToolStripButtonText(_overlayTranslateSnapValueButton, GetTranslateSnapLabel());
             SetViewportToolStripButtonText(_overlayRotateSnapValueButton, GetRotateSnapLabel());
             SetViewportToolStripButtonText(_overlayScaleSnapValueButton, GetScaleSnapLabel());
+
+            if (_overlayCSGSelectPlaceButton != null)
+            {
+                _overlayCSGSelectPlaceButton.Visible = csgMode;
+                _overlayCSGSelectPlaceButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace;
+            }
+            if (_overlayCSGDrawButton != null)
+            {
+                _overlayCSGDrawButton.Visible = csgMode;
+                _overlayCSGDrawButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.Draw;
+            }
+            if (_overlayCSGEditButton != null)
+            {
+                _overlayCSGEditButton.Visible = csgMode;
+                _overlayCSGEditButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.Edit;
+            }
+            if (_overlayCSGSurfaceButton != null)
+            {
+                _overlayCSGSurfaceButton.Visible = csgMode;
+                _overlayCSGSurfaceButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.Surface;
+            }
+            if (_overlayCSGClipButton != null)
+                _overlayCSGClipButton.Visible = csgMode;
+            if (_overlayCSGOperationButton != null)
+            {
+                _overlayCSGOperationButton.Visible = csgMode;
+                SetViewportToolStripButtonText(_overlayCSGOperationButton, GetCSGOperationLabel());
+            }
+            if (_overlayCSGPlaneButton != null)
+            {
+                _overlayCSGPlaneButton.Visible = csgMode;
+                _overlayCSGPlaneButton.Checked = CSGAuthoringMode.Controller.WorkingPlaneLocked;
+                SetViewportToolStripButtonText(_overlayCSGPlaneButton, CSGAuthoringMode.Controller.WorkingPlaneLocked ? "Plane Lock" : "Plane");
+            }
+            if (_overlayCSGSnapButton != null)
+            {
+                _overlayCSGSnapButton.Visible = csgMode;
+                _overlayCSGSnapButton.Checked = CSGAuthoringMode.Controller.SnappingEnabled;
+            }
+            if (_overlayCSGSnapValueButton != null)
+            {
+                _overlayCSGSnapValueButton.Visible = csgMode;
+                SetViewportToolStripButtonText(_overlayCSGSnapValueButton, GetCSGSnapLabel());
+            }
+            if (_overlayCSGVisibilityButton != null)
+                _overlayCSGVisibilityButton.Visible = csgMode;
             if (_overlayGridButton != null)
                 _overlayGridButton.Checked = Grid.Enabled;
             if (_overlayNavigationButton != null)
@@ -1113,10 +1342,22 @@ namespace FlaxEditor.Viewport
             return TransformGizmo.ScaleSnapValue.ToString();
         }
 
+        private string GetCSGOperationLabel()
+        {
+            return CSGAuthoringMode?.Controller?.Operation == CSGOperation.Subtractive ? "Subtract" : "Add";
+        }
+
+        private string GetCSGSnapLabel()
+        {
+            return CSGAuthoringMode?.Controller?.SnapIncrement.ToString() ?? "10";
+        }
+
         private string GetGizmoModeLabel()
         {
             if (Gizmos.ActiveMode is TransformGizmoMode)
                 return "Object Mode";
+            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode)
+                return "CSG Mode";
             if (Gizmos.ActiveMode is NoGizmoMode)
                 return "No Gizmo";
             if (Gizmos.ActiveMode is Tools.Terrain.SculptTerrainGizmoMode)
@@ -1137,6 +1378,7 @@ namespace FlaxEditor.Viewport
         {
             base.OnLostFocus();
 
+            Gizmos.ActiveMode?.TryCancel(EditorGizmoModeCancelReason.FocusLost);
             ClearSceneTreeHoverFromEditorViewport();
             _rubberBandSelector.StopRubberBand();
         }
@@ -1303,11 +1545,21 @@ namespace FlaxEditor.Viewport
                 return;
             }
 
-            UpdateSceneTreeHoverFromEditorViewport();
+            if (Gizmos.ActiveMode?.OnMouseMove(location) == true)
+            {
+                ClearSceneTreeHoverFromEditorViewport();
+                _rubberBandSelector.StopRubberBand();
+                return;
+            }
+            bool csgMode = Gizmos.ActiveMode is CSGAuthoringGizmoMode;
+            if (csgMode)
+                ClearSceneTreeHoverFromEditorViewport();
+            else
+                UpdateSceneTreeHoverFromEditorViewport();
 
             // Don't allow rubber band selection when gizmo is controlling mouse, vertex painting mode, or cloth painting is enabled
             bool canStart = !(IsControllingMouse || IsRightMouseButtonDown || IsAltKeyDown) &&
-                            Gizmos?.Active is TransformGizmo;
+                            (Gizmos?.Active is TransformGizmo || Gizmos?.Active is IViewportRubberBandSelection);
             _rubberBandSelector.TryCreateRubberBand(canStart, _viewMousePos);
         }
 
@@ -1335,10 +1587,15 @@ namespace FlaxEditor.Viewport
         protected override void OnLeftMouseButtonDown()
         {
             base.OnLeftMouseButtonDown();
+            if (Gizmos.ActiveMode?.OnMouseDown(_viewMousePos, MouseButton.Left) == true)
+            {
+                _rubberBandSelector.StopRubberBand();
+                return;
+            }
             if (Gizmos.Active is TransformGizmoBase transformGizmo)
                 transformGizmo.ResetSelectionReleaseSuppression();
 
-            if (Root.GetMouseButtonDown(MouseButton.Left) && !IsAltKeyDown && !_directionGizmo.IsMouseOver)
+            if ((Gizmos.ActiveMode is TransformGizmoMode || Gizmos.ActiveMode is CSGAuthoringGizmoMode) && Root.GetMouseButtonDown(MouseButton.Left) && !IsAltKeyDown && !_directionGizmo.IsMouseOver)
             {
                 _rubberBandSelector.TryStartingRubberBandSelection(_viewMousePos);
             }
@@ -1347,6 +1604,13 @@ namespace FlaxEditor.Viewport
         /// <inheritdoc />
         protected override void OnLeftMouseButtonUp()
         {
+            if (Gizmos.ActiveMode?.OnMouseUp(_viewMousePos, MouseButton.Left) == true)
+            {
+                _rubberBandSelector.ReleaseRubberBandSelection();
+                Focus();
+                base.OnLeftMouseButtonUp();
+                return;
+            }
             var rubberBandHandled = _rubberBandSelector.ReleaseRubberBandSelection();
             if (Gizmos.Active is TransformGizmoBase transformGizmo && transformGizmo.ConsumeSelectionRelease())
                 return;
@@ -1383,7 +1647,11 @@ namespace FlaxEditor.Viewport
         {
             if (base.OnMouseDoubleClick(location, button))
                 return true;
+            if (Gizmos.ActiveMode?.OnMouseDoubleClick(location, button) == true)
+                return true;
             if (button != MouseButton.Left || _gameViewActive || _characterControllerModeActive || IsControllingMouse || IsAltKeyDown || _directionGizmo.IsMouseOver || !ContainsPoint(ref location))
+                return false;
+            if (Gizmos.ActiveMode is not TransformGizmoMode)
                 return false;
 
             var ray = ConvertMouseToRay(ref location);
@@ -1556,6 +1824,9 @@ namespace FlaxEditor.Viewport
                     return true;
             }
 
+            if (Gizmos.ActiveMode?.OnKeyDown(key) == true)
+                return true;
+
             if (ProcessCharacterControllerModeShortcut(key))
                 return true;
 
@@ -1570,6 +1841,14 @@ namespace FlaxEditor.Viewport
             }
 
             return base.OnKeyDown(key);
+        }
+
+        /// <inheritdoc />
+        public override void OnKeyUp(KeyboardKeys key)
+        {
+            if (Gizmos.ActiveMode?.OnKeyUp(key) == true)
+                return;
+            base.OnKeyUp(key);
         }
 
         /// <inheritdoc />
@@ -1673,7 +1952,12 @@ namespace FlaxEditor.Viewport
 
             ClearSceneTreeHoverFromEditorViewport();
             StopCharacterControllerMode();
+            Gizmos.ActiveModeChanged -= OnActiveGizmoModeChanged;
+            if (CSGAuthoringMode?.Controller != null)
+                CSGAuthoringMode.Controller.Changed -= UpdateViewportToolStrip;
             _editor.PlayModeBeginning -= OnPlayModeBeginning;
+            Level.SceneLoaded -= OnSceneContextChanged;
+            Level.SceneUnloading -= OnSceneContextChanged;
             _debugDrawData.Dispose();
             if (_task != null)
             {

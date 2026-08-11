@@ -213,6 +213,11 @@ namespace FlaxEditor.Gizmo
         CenterCircle,
 
         /// <summary>
+        /// A square cap target.
+        /// </summary>
+        CenterSquare,
+
+        /// <summary>
         /// The free-rotation trackball interior.
         /// </summary>
         TrackballCircle,
@@ -389,6 +394,36 @@ namespace FlaxEditor.Gizmo
             /// Screen-space rotation.
             /// </summary>
             Screen = 16,
+
+            /// <summary>
+            /// The negative X face of the selection bounds.
+            /// </summary>
+            XNegative = 32,
+
+            /// <summary>
+            /// The positive X face of the selection bounds.
+            /// </summary>
+            XPositive = 64,
+
+            /// <summary>
+            /// The negative Y face of the selection bounds.
+            /// </summary>
+            YNegative = 128,
+
+            /// <summary>
+            /// The positive Y face of the selection bounds.
+            /// </summary>
+            YPositive = 256,
+
+            /// <summary>
+            /// The negative Z face of the selection bounds.
+            /// </summary>
+            ZNegative = 512,
+
+            /// <summary>
+            /// The positive Z face of the selection bounds.
+            /// </summary>
+            ZPositive = 1024,
         };
 
         /// <summary>
@@ -414,7 +449,12 @@ namespace FlaxEditor.Gizmo
             /// <summary>
             /// Select object(s) without transform handles.
             /// </summary>
-            Select = 3
+            Select = 3,
+
+            /// <summary>
+            /// Resize the selection bounds by dragging any of its six faces.
+            /// </summary>
+            Bounds = 4
         }
 
         /// <summary>

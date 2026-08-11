@@ -449,6 +449,14 @@ namespace FlaxEditor.Viewport
                 Parent = gizmoMode
             };
             gizmoModeScale.Toggled += _ => transformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale;
+            var gizmoModeBounds = new ViewportWidgetButton(string.Empty, editor.Icons.VisjectBoxClosed32, null, true)
+            {
+                Tag = TransformGizmoBase.Mode.Bounds,
+                TooltipText = $"Selection bounds resize mode ({inputOptions.BoundsMode})",
+                Checked = transformGizmo.ActiveMode == TransformGizmoBase.Mode.Bounds,
+                Parent = gizmoMode
+            };
+            gizmoModeBounds.Toggled += _ => transformGizmo.ActiveMode = TransformGizmoBase.Mode.Bounds;
             gizmoMode.Parent = viewport;
             transformGizmo.ModeChanged += () =>
             {
@@ -457,6 +465,7 @@ namespace FlaxEditor.Viewport
                 gizmoModeTranslate.Checked = mode == TransformGizmoBase.Mode.Translate;
                 gizmoModeRotate.Checked = mode == TransformGizmoBase.Mode.Rotate;
                 gizmoModeScale.Checked = mode == TransformGizmoBase.Mode.Scale;
+                gizmoModeBounds.Checked = mode == TransformGizmoBase.Mode.Bounds;
             };
 
             AddGizmoInputActions(viewport, transformGizmo, useProjectCache, () => transformSpaceToggle.Checked = !transformSpaceToggle.Checked, () => absoluteSnappingWidget.Visible = transformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World);
@@ -497,6 +506,14 @@ namespace FlaxEditor.Viewport
                     return;
 
                 transformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale;
+            });
+            viewport.InputActions.Add(options => options.BoundsMode, () =>
+            {
+                viewport.GetInput(out var input);
+                if (input.IsMouseRightDown)
+                    return;
+
+                transformGizmo.ActiveMode = TransformGizmoBase.Mode.Bounds;
             });
             viewport.InputActions.Add(options => options.ToggleTransformSpace, () =>
             {

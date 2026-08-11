@@ -46,6 +46,7 @@ namespace FlaxEditor.Windows.Assets
         private readonly ToolStripButton _toolStripTranslate;
         private readonly ToolStripButton _toolStripRotate;
         private readonly ToolStripButton _toolStripScale;
+        private readonly ToolStripButton _toolStripBounds;
         private readonly CheckBox _autoSaveCheckBox;
 
         private Undo _undo;
@@ -270,6 +271,7 @@ namespace FlaxEditor.Windows.Assets
             _toolStripTranslate = _toolstrip.AddButton(Editor.Icons.Translate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate).LinkTooltip("Change Gizmo tool mode to Translate", ref inputOptions.TranslateMode);
             _toolStripRotate = _toolstrip.AddButton(Editor.Icons.Rotate32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Rotate).LinkTooltip("Change Gizmo tool mode to Rotate", ref inputOptions.RotateMode);
             _toolStripScale = _toolstrip.AddButton(Editor.Icons.Scale32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Scale).LinkTooltip("Change Gizmo tool mode to Scale", ref inputOptions.ScaleMode);
+            _toolStripBounds = _toolstrip.AddButton(Editor.Icons.VisjectBoxClosed32, () => _viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Bounds).LinkTooltip("Resize selection bounds", ref inputOptions.BoundsMode);
             var autoSavePanel = new ContainerControl
             {
                 Size = new Float2(AutoSaveToolStripWidth, _toolstrip.ItemsHeight),
@@ -590,6 +592,7 @@ namespace FlaxEditor.Windows.Assets
             _toolStripTranslate.Checked = gizmoMode == TransformGizmoBase.Mode.Translate;
             _toolStripRotate.Checked = gizmoMode == TransformGizmoBase.Mode.Rotate;
             _toolStripScale.Checked = gizmoMode == TransformGizmoBase.Mode.Scale;
+            _toolStripBounds.Checked = gizmoMode == TransformGizmoBase.Mode.Bounds;
             //
             if (_autoSaveCheckBox != null)
                 _autoSaveCheckBox.Checked = _autoSave;

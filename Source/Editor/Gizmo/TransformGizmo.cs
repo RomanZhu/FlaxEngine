@@ -505,13 +505,16 @@ namespace FlaxEditor.Gizmo
         protected override void OnApplyInteractionResult(InteractionResult result)
         {
             var origin = TransactionOrigin;
-            if (origin != null && origin.InitialPivot != PivotType.ObjectCenter && result.Scale != Vector3.One)
+            bool isBoundsResize = origin != null && origin.InitialMode == Mode.Bounds && IsBoundsFaceAxis(origin.Handle.Axis);
+            if (origin != null && (origin.InitialPivot != PivotType.ObjectCenter || isBoundsResize) && result.Scale != Vector3.One)
             {
+                Vector3 scalePivot = isBoundsResize ? GetBoundsResizePivot(origin.OriginalBounds, origin.Handle.Axis) : origin.PivotPosition;
+                Quaternion scaleBasis = isBoundsResize ? Quaternion.Identity : origin.InitialBasis;
                 for (int i = 0; i < _selectionParents.Count; i++)
                 {
                     var node = _selectionParents[i];
                     var transform = node.Transform;
-                    transform.Translation = ScalePositionAroundPivot(transform.Translation, origin.PivotPosition, origin.InitialBasis, result.Scale);
+                    transform.Translation = ScalePositionAroundPivot(transform.Translation, scalePivot, scaleBasis, result.Scale);
                     node.Transform = transform;
                 }
             }

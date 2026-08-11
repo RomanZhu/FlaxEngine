@@ -164,6 +164,8 @@ namespace FlaxEditor.Gizmo
 
             if (_activeMode == Mode.Rotate)
                 BuildRotationSemanticTargets();
+            else if (_activeMode == Mode.Bounds)
+                BuildBoundsSemanticTargets();
             else
                 BuildTranslateScaleSemanticTargets();
 
@@ -503,6 +505,16 @@ namespace FlaxEditor.Gizmo
             case SemanticTargetKind.CenterCircle:
             {
                 distance = (cursor - target.Center).Length;
+                if (distance > hitRadius)
+                    return false;
+                score = distance / scoreRadius;
+                priority = 4;
+                return true;
+            }
+            case SemanticTargetKind.CenterSquare:
+            {
+                Float2 offset = cursor - target.Center;
+                distance = Mathf.Max(Mathf.Abs(offset.X), Mathf.Abs(offset.Y));
                 if (distance > hitRadius)
                     return false;
                 score = distance / scoreRadius;

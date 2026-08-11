@@ -73,6 +73,13 @@ namespace FlaxEditor.Tests
 
             Vector3 scaledPosition = TransformGizmoBase.ScalePositionAroundPivot(new Vector3(3, 2, 0), new Vector3(1, 0, 0), Quaternion.Identity, new Vector3(2, 0.5f, 1));
             Assert.AreEqual(new Vector3(5, 1, 0), scaledPosition);
+
+            var bounds = new BoundingBox(Vector3.Zero, new Vector3(10, 20, 30));
+            Assert.AreEqual(new Vector3(0, 10, 15), TransformGizmoBase.GetBoundsResizePivot(bounds, TransformGizmoBase.Axis.XPositive));
+            Assert.AreEqual(new Vector3(10, 10, 15), TransformGizmoBase.GetBoundsResizePivot(bounds, TransformGizmoBase.Axis.XNegative));
+            Assert.AreEqual(1.5f, TransformGizmoBase.SolveBoundsResizeFactor(1.0f, 5.0f, 10.0f, 1.0f), 0.00001f);
+            Assert.AreEqual(1.5f, TransformGizmoBase.SolveBoundsResizeFactor(1.0f, -5.0f, 10.0f, -1.0f), 0.00001f);
+            Assert.AreEqual(0.0001f, TransformGizmoBase.SolveBoundsResizeFactor(1.0f, -20.0f, 10.0f, 1.0f), 0.00001f);
         }
 
         [Test]

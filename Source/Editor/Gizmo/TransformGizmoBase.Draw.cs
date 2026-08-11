@@ -27,6 +27,10 @@ namespace FlaxEditor.Gizmo
         private MaterialInstance _materialAxisZ;
         private MaterialInstance _materialAxisFocus;
         private MaterialInstance _materialAxisBack;
+        private MaterialInstance _materialBoundsConnectorX;
+        private MaterialInstance _materialBoundsConnectorY;
+        private MaterialInstance _materialBoundsConnectorZ;
+        private MaterialInstance _materialBoundsConnectorFocus;
         private MaterialInstance _materialTrackballFocus;
         private MaterialInstance _materialVertexSnapPoint;
         private MaterialInstance _materialVertexSnapTargetPoint;
@@ -100,6 +104,10 @@ namespace FlaxEditor.Gizmo
             _modelRotationScreenRing = CreateTorusSegmentModel(_rotationScreenRingRadiusRaw, _rotationScreenRingThicknessRaw, 0.0f, Mathf.TwoPi, _rotationArcSegments, _rotationTubeSegments);
             _materialAxisBack = _materialAxisX.CreateVirtualInstance();
             _materialAxisBack.SetParameterValue(_colorParamName, new Color(0.42f, 0.42f, 0.42f, 1.0f));
+            _materialBoundsConnectorX = _materialAxisX.CreateVirtualInstance();
+            _materialBoundsConnectorY = _materialAxisY.CreateVirtualInstance();
+            _materialBoundsConnectorZ = _materialAxisZ.CreateVirtualInstance();
+            _materialBoundsConnectorFocus = _materialAxisFocus.CreateVirtualInstance();
             _materialTrackballFocus = _materialAxisFocus.CreateVirtualInstance();
             _materialTrackballFocus.SetParameterValue(_opacityParamName, _rotationTrackballOpacity);
             _materialVertexSnapPoint = _materialAxisFocus.CreateVirtualInstance();
@@ -188,16 +196,17 @@ namespace FlaxEditor.Gizmo
         {
             // Scale uses the same thin shaft as Translate, but terminates in a
             // compact cube so the operation remains identifiable at a glance.
+            // Keep the shaft and cube in separate meshes so specialized modes
+            // can style the connector independently without changing the cap.
             var model = FlaxEngine.Content.CreateVirtualAsset<Model>();
-            model.SetupLODs(new[] { 1 });
+            model.SetupLODs(new[] { 2 });
 
             int sides = _axisRadialSegments;
             int shaftStart = 0;
             int shaftEnd = sides;
             int startCap = sides * 2;
-            int cubeStart = startCap + 1;
-            var vertices = new Float3[cubeStart + 24];
-            var normals = new Float3[vertices.Length];
+            var shaftVertices = new Float3[startCap + 1];
+            var shaftNormals = new Float3[shaftVertices.Length];
             float half = AxisScaleCubeSize * 0.5f;
             float cubeNearZ = -(AxisLength - half);
             float cubeFarZ = -(AxisLength + half);
@@ -208,49 +217,55 @@ namespace FlaxEditor.Gizmo
                 float x = Mathf.Cos(angle);
                 float y = Mathf.Sin(angle);
                 var radial = new Float3(x, y, 0.0f);
-                vertices[shaftStart + i] = new Float3(x * _axisShaftRadiusRaw, y * _axisShaftRadiusRaw, -AxisVisualStart);
-                vertices[shaftEnd + i] = new Float3(x * _axisShaftRadiusRaw, y * _axisShaftRadiusRaw, cubeNearZ);
-                normals[shaftStart + i] = radial;
-                normals[shaftEnd + i] = radial;
+                shaftVertices[shaftStart + i] = new Float3(x * _axisShaftRadiusRaw, y * _axisShaftRadiusRaw, -AxisVisualStart);
+                shaftVertices[shaftEnd + i] = new Float3(x * _axisShaftRadiusRaw, y * _axisShaftRadiusRaw, cubeNearZ);
+                shaftNormals[shaftStart + i] = radial;
+                shaftNormals[shaftEnd + i] = radial;
             }
-            vertices[startCap] = new Float3(0.0f, 0.0f, -AxisVisualStart);
-            normals[startCap] = Float3.Forward;
+            shaftVertices[startCap] = new Float3(0.0f, 0.0f, -AxisVisualStart);
+            shaftNormals[startCap] = Float3.Forward;
 
-            int vertex = cubeStart;
-            AddScaleCubeFace(vertices, normals, ref vertex, new Float3(-half, -half, cubeNearZ), new Float3(half, -half, cubeNearZ), new Float3(half, half, cubeNearZ), new Float3(-half, half, cubeNearZ), Float3.Forward);
-            AddScaleCubeFace(vertices, normals, ref vertex, new Float3(-half, -half, cubeFarZ), new Float3(-half, half, cubeFarZ), new Float3(half, half, cubeFarZ), new Float3(half, -half, cubeFarZ), Float3.Backward);
-            AddScaleCubeFace(vertices, normals, ref vertex, new Float3(half, -half, cubeNearZ), new Float3(half, -half, cubeFarZ), new Float3(half, half, cubeFarZ), new Float3(half, half, cubeNearZ), Float3.Right);
-            AddScaleCubeFace(vertices, normals, ref vertex, new Float3(-half, -half, cubeNearZ), new Float3(-half, half, cubeNearZ), new Float3(-half, half, cubeFarZ), new Float3(-half, -half, cubeFarZ), Float3.Left);
-            AddScaleCubeFace(vertices, normals, ref vertex, new Float3(-half, half, cubeNearZ), new Float3(half, half, cubeNearZ), new Float3(half, half, cubeFarZ), new Float3(-half, half, cubeFarZ), Float3.Up);
-            AddScaleCubeFace(vertices, normals, ref vertex, new Float3(-half, -half, cubeNearZ), new Float3(-half, -half, cubeFarZ), new Float3(half, -half, cubeFarZ), new Float3(half, -half, cubeNearZ), Float3.Down);
+            var cubeVertices = new Float3[24];
+            var cubeNormals = new Float3[cubeVertices.Length];
+            int vertex = 0;
+            AddScaleCubeFace(cubeVertices, cubeNormals, ref vertex, new Float3(-half, -half, cubeNearZ), new Float3(half, -half, cubeNearZ), new Float3(half, half, cubeNearZ), new Float3(-half, half, cubeNearZ), Float3.Forward);
+            AddScaleCubeFace(cubeVertices, cubeNormals, ref vertex, new Float3(-half, -half, cubeFarZ), new Float3(-half, half, cubeFarZ), new Float3(half, half, cubeFarZ), new Float3(half, -half, cubeFarZ), Float3.Backward);
+            AddScaleCubeFace(cubeVertices, cubeNormals, ref vertex, new Float3(half, -half, cubeNearZ), new Float3(half, -half, cubeFarZ), new Float3(half, half, cubeFarZ), new Float3(half, half, cubeNearZ), Float3.Right);
+            AddScaleCubeFace(cubeVertices, cubeNormals, ref vertex, new Float3(-half, -half, cubeNearZ), new Float3(-half, half, cubeNearZ), new Float3(-half, half, cubeFarZ), new Float3(-half, -half, cubeFarZ), Float3.Left);
+            AddScaleCubeFace(cubeVertices, cubeNormals, ref vertex, new Float3(-half, half, cubeNearZ), new Float3(half, half, cubeNearZ), new Float3(half, half, cubeFarZ), new Float3(-half, half, cubeFarZ), Float3.Up);
+            AddScaleCubeFace(cubeVertices, cubeNormals, ref vertex, new Float3(-half, -half, cubeNearZ), new Float3(-half, -half, cubeFarZ), new Float3(half, -half, cubeFarZ), new Float3(half, -half, cubeNearZ), Float3.Down);
 
-            var indices = new int[sides * 9 + 36];
+            var shaftIndices = new int[sides * 9];
             int index = 0;
             for (int i = 0; i < sides; i++)
             {
                 int next = (i + 1) % sides;
-                indices[index++] = shaftStart + i;
-                indices[index++] = shaftEnd + i;
-                indices[index++] = shaftEnd + next;
-                indices[index++] = shaftStart + i;
-                indices[index++] = shaftEnd + next;
-                indices[index++] = shaftStart + next;
-                indices[index++] = startCap;
-                indices[index++] = shaftStart + i;
-                indices[index++] = shaftStart + next;
-            }
-            for (int face = 0; face < 6; face++)
-            {
-                int faceStart = cubeStart + face * 4;
-                indices[index++] = faceStart;
-                indices[index++] = faceStart + 1;
-                indices[index++] = faceStart + 2;
-                indices[index++] = faceStart;
-                indices[index++] = faceStart + 2;
-                indices[index++] = faceStart + 3;
+                shaftIndices[index++] = shaftStart + i;
+                shaftIndices[index++] = shaftEnd + i;
+                shaftIndices[index++] = shaftEnd + next;
+                shaftIndices[index++] = shaftStart + i;
+                shaftIndices[index++] = shaftEnd + next;
+                shaftIndices[index++] = shaftStart + next;
+                shaftIndices[index++] = startCap;
+                shaftIndices[index++] = shaftStart + i;
+                shaftIndices[index++] = shaftStart + next;
             }
 
-            model.LODs[0].Meshes[0].UpdateMesh(vertices, indices, normals);
+            var cubeIndices = new int[36];
+            index = 0;
+            for (int face = 0; face < 6; face++)
+            {
+                int faceStart = face * 4;
+                cubeIndices[index++] = faceStart;
+                cubeIndices[index++] = faceStart + 1;
+                cubeIndices[index++] = faceStart + 2;
+                cubeIndices[index++] = faceStart;
+                cubeIndices[index++] = faceStart + 2;
+                cubeIndices[index++] = faceStart + 3;
+            }
+
+            model.LODs[0].Meshes[0].UpdateMesh(shaftVertices, shaftIndices, shaftNormals);
+            model.LODs[0].Meshes[1].UpdateMesh(cubeVertices, cubeIndices, cubeNormals);
             return model;
         }
 
@@ -373,6 +388,10 @@ namespace FlaxEditor.Gizmo
             _materialAxisY.SetParameterValue(_opacityParamName, opacity);
             _materialAxisZ.SetParameterValue(_opacityParamName, opacity);
             _materialAxisBack.SetParameterValue(_opacityParamName, opacity);
+            _materialBoundsConnectorX.SetParameterValue(_opacityParamName, opacity * 0.5f);
+            _materialBoundsConnectorY.SetParameterValue(_opacityParamName, opacity * 0.5f);
+            _materialBoundsConnectorZ.SetParameterValue(_opacityParamName, opacity * 0.5f);
+            _materialBoundsConnectorFocus.SetParameterValue(_opacityParamName, opacity * 0.5f);
             _materialTrackballFocus.SetParameterValue(_opacityParamName, opacity * _rotationTrackballOpacity);
             _materialVertexSnapPoint.SetParameterValue(_opacityParamName, opacity);
             _materialVertexSnapTargetPoint.SetParameterValue(_opacityParamName, opacity);
@@ -963,6 +982,7 @@ namespace FlaxEditor.Gizmo
         {
             base.Draw();
             DrawVertexSnapEdgeHighlights();
+            DrawBoundsResizeOverlay();
             DrawRotationTrackballOverlay();
             DrawScaleCursorOverlay();
             DrawFeedbackOverlay();
@@ -1108,28 +1128,38 @@ namespace FlaxEditor.Gizmo
             {
                 if (!_modelScaleAxis || !_modelScaleAxis.IsLoaded)
                     break;
-                var scaleAxisMesh = _modelScaleAxis.LODs[0].Meshes[0];
+                var scaleAxisShaftMesh = _modelScaleAxis.LODs[0].Meshes[0];
+                var scaleAxisCubeMesh = _modelScaleAxis.LODs[0].Meshes[1];
 
                 // X axis
                 Matrix.RotationY(-Mathf.PiOverTwo, out m2);
                 Matrix.Multiply(ref m2, ref world, out m3);
                 MaterialInstance xAxisMaterialRotate = (isXAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisX;
                 if (ShouldDrawFeedbackHandle(Axis.X) && !IsScaleCursorHandle(Axis.X) && !IsScalePlaneComponentHandle())
-                    DrawGizmoMesh(ref renderContext, scaleAxisMesh, xAxisMaterialRotate, ref m3, sortOrder);
+                {
+                    DrawGizmoMesh(ref renderContext, scaleAxisShaftMesh, xAxisMaterialRotate, ref m3, sortOrder);
+                    DrawGizmoMesh(ref renderContext, scaleAxisCubeMesh, xAxisMaterialRotate, ref m3, sortOrder);
+                }
 
                 // Y axis
                 Matrix.RotationX(Mathf.PiOverTwo, out m2);
                 Matrix.Multiply(ref m2, ref world, out m3);
                 MaterialInstance yAxisMaterialRotate = (isYAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisY;
                 if (ShouldDrawFeedbackHandle(Axis.Y) && !IsScaleCursorHandle(Axis.Y) && !IsScalePlaneComponentHandle())
-                    DrawGizmoMesh(ref renderContext, scaleAxisMesh, yAxisMaterialRotate, ref m3, sortOrder);
+                {
+                    DrawGizmoMesh(ref renderContext, scaleAxisShaftMesh, yAxisMaterialRotate, ref m3, sortOrder);
+                    DrawGizmoMesh(ref renderContext, scaleAxisCubeMesh, yAxisMaterialRotate, ref m3, sortOrder);
+                }
 
                 // Z axis
                 Matrix.RotationX(Mathf.Pi, out m2);
                 Matrix.Multiply(ref m2, ref world, out m3);
                 MaterialInstance zAxisMaterialRotate = (isZAxis && !_isDisabled) ? _materialAxisFocus : _materialAxisZ;
                 if (ShouldDrawFeedbackHandle(Axis.Z) && !IsScaleCursorHandle(Axis.Z) && !IsScalePlaneComponentHandle())
-                    DrawGizmoMesh(ref renderContext, scaleAxisMesh, zAxisMaterialRotate, ref m3, sortOrder);
+                {
+                    DrawGizmoMesh(ref renderContext, scaleAxisShaftMesh, zAxisMaterialRotate, ref m3, sortOrder);
+                    DrawGizmoMesh(ref renderContext, scaleAxisCubeMesh, zAxisMaterialRotate, ref m3, sortOrder);
+                }
 
                 // XY plane
                 m2 = Matrix.Transformation(new Vector3(boxSize, boxSize * 0.1f, boxSize), Quaternion.RotationX(Mathf.PiOverTwo), new Vector3(boxSize * boxScale, boxSize * boxScale, 0.0f));
@@ -1160,6 +1190,12 @@ namespace FlaxEditor.Gizmo
                     DrawGizmoMesh(ref renderContext, sphereMesh, isCenter ? _materialAxisFocus : _materialSphere, ref m3, sortOrder);
                 }
 
+                break;
+            }
+
+            case Mode.Bounds:
+            {
+                DrawBoundsResizeHandles(ref renderContext, sortOrder);
                 break;
             }
             }
