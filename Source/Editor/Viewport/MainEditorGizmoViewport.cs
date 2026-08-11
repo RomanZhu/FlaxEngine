@@ -207,9 +207,6 @@ namespace FlaxEditor.Viewport
         /// </summary>
         public ViewportDebugDrawData DebugDrawData => _debugDrawData;
 
-        /// <inheritdoc />
-        protected override bool IsControllingMouse => IsCharacterControllerLookActive() || base.IsControllingMouse;
-
         /// <summary>
         /// Gets or sets a value indicating whether show navigation mesh.
         /// </summary>
