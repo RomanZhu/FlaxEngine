@@ -130,7 +130,12 @@ namespace FlaxEditor.Windows
         : base(string.Empty, icon)
         {
             Editor = editor;
-            Selected += tab => Editor.Windows.EditWin.Viewport.Gizmos.SetActiveMode<TransformGizmoMode>();
+            Selected += tab =>
+            {
+                var gizmos = Editor.Windows.EditWin.Viewport.Gizmos;
+                if (gizmos.ActiveMode is not Tools.CSG.CSGAuthoringGizmoMode)
+                    gizmos.SetActiveMode<TransformGizmoMode>();
+            };
             ScriptsBuilder.ScriptsReload += OnScriptsReload;
             ScriptsBuilder.ScriptsReloadEnd += OnScriptsReloadEnd;
 

@@ -120,6 +120,9 @@ namespace FlaxEditor.SceneGraph.Actors
                 }
             }
 
+            /// <inheritdoc />
+            public override CSGViewportSelectionKind CSGViewportSelection => CSGViewportSelectionKind.Face;
+
             /// <summary>
             /// Initializes a new instance of the <see cref="SideLinkNode"/> class.
             /// </summary>
@@ -206,14 +209,32 @@ namespace FlaxEditor.SceneGraph.Actors
         }
 
         /// <inheritdoc />
+        public override CSGViewportSelectionKind CSGViewportSelection => CSGViewportSelectionKind.Brush;
+
+        /// <inheritdoc />
         public override bool RayCastSelf(ref RayCastData ray, out Real distance, out Vector3 normal)
         {
             if (((BoxBrush)_actor).OrientedBox.Intersects(ref ray.Ray))
             {
+                Real closestDistance = Real.MaxValue;
+                Vector3 closestNormal = Vector3.Up;
+                bool hit = false;
                 for (int i = 0; i < ChildNodes.Count; i++)
                 {
-                    if (ChildNodes[i] is SideLinkNode node && node.RayCastSelf(ref ray, out distance, out normal))
-                        return true;
+                    if (ChildNodes[i] is SideLinkNode node &&
+                        node.RayCastSelf(ref ray, out var faceDistance, out var faceNormal) &&
+                        faceDistance >= 0.0f && faceDistance < closestDistance)
+                    {
+                        hit = true;
+                        closestDistance = faceDistance;
+                        closestNormal = faceNormal;
+                    }
+                }
+                if (hit)
+                {
+                    distance = closestDistance;
+                    normal = closestNormal;
+                    return true;
                 }
             }
 

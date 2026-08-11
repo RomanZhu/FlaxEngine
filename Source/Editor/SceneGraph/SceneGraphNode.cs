@@ -54,6 +54,28 @@ namespace FlaxEditor.SceneGraph
     }
 
     /// <summary>
+    /// Describes how a scene graph node participates in CSG authoring selection.
+    /// </summary>
+    [HideInEditor]
+    public enum CSGViewportSelectionKind
+    {
+        /// <summary>
+        /// The node is not directly selectable by CSG tools and is placement-only geometry.
+        /// </summary>
+        None,
+
+        /// <summary>
+        /// The node represents a CSG brush body.
+        /// </summary>
+        Brush,
+
+        /// <summary>
+        /// The node represents a stable CSG face.
+        /// </summary>
+        Face,
+    }
+
+    /// <summary>
     /// Base class for all leaf node objects which belong to scene graph used by the Editor.
     /// Scene Graph is directional graph without cyclic references. It's a tree.
     /// A <see cref="SceneModule"/> class is responsible for Scene Graph management.
@@ -141,6 +163,11 @@ namespace FlaxEditor.SceneGraph
         /// Gets the relationship used to resolve this node during viewport selection.
         /// </summary>
         public virtual ViewportSelectionRelationship ViewportSelection => ViewportSelectionRelationship.DirectTarget;
+
+        /// <summary>
+        /// Gets the node's CSG authoring selection classification.
+        /// </summary>
+        public virtual CSGViewportSelectionKind CSGViewportSelection => CSGViewportSelectionKind.None;
 
         /// <summary>
         /// Gets a value indicating whether this <see cref="SceneGraphNode"/> is active.
@@ -278,6 +305,28 @@ namespace FlaxEditor.SceneGraph
         }
 
         /// <summary>
+        /// Describes a single scene graph ray intersection.
+        /// </summary>
+        [HideInEditor]
+        public struct RayCastHit
+        {
+            /// <summary>
+            /// The intersected node.
+            /// </summary>
+            public SceneGraphNode Node;
+
+            /// <summary>
+            /// The distance from the ray origin.
+            /// </summary>
+            public Real Distance;
+
+            /// <summary>
+            /// The intersection surface normal.
+            /// </summary>
+            public Vector3 Normal;
+        }
+
+        /// <summary>
         /// Performs raycasting over child nodes hierarchy trying to get the closest object hit by the given ray.
         /// </summary>
         /// <param name="ray">The ray casting data.</param>
@@ -358,6 +407,36 @@ namespace FlaxEditor.SceneGraph
             distance = minDistance;
             normal = minDistanceNormal;
             return minTarget;
+        }
+
+        /// <summary>
+        /// Appends every ray intersection in this node hierarchy to a caller-owned buffer.
+        /// </summary>
+        /// <remarks>
+        /// This method does not clear <paramref name="hits"/> or sort the results. Callers can reuse
+        /// a pre-sized list for allocation-free traversal and apply domain-specific ordering later.
+        /// </remarks>
+        /// <param name="ray">The ray casting data.</param>
+        /// <param name="hits">The result buffer.</param>
+        public virtual void RayCastAll(ref RayCastData ray, List<RayCastHit> hits)
+        {
+            if (hits == null)
+                throw new ArgumentNullException(nameof(hits));
+            if (!IsActive)
+                return;
+
+            if (RayMask(ref ray) && RayCastSelf(ref ray, out var distance, out var normal) && distance >= 0.0f)
+            {
+                hits.Add(new RayCastHit
+                {
+                    Node = this,
+                    Distance = distance,
+                    Normal = normal,
+                });
+            }
+
+            for (int i = 0; i < ChildNodes.Count; i++)
+                ChildNodes[i].RayCastAll(ref ray, hits);
         }
 
         private bool RayMask(ref RayCastData ray)

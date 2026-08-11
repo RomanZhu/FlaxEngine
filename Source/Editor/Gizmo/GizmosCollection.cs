@@ -62,6 +62,7 @@ namespace FlaxEditor.Gizmo
                         throw new InvalidOperationException();
                 }
 
+                _activeMode?.TryCancel(EditorGizmoModeCancelReason.ModeChanged);
                 _activeMode?.OnDeactivated();
                 Active = null;
                 _activeMode = value;

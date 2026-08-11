@@ -9,6 +9,22 @@ using FlaxEngine.GUI;
 namespace FlaxEngine.Gizmo;
 
 /// <summary>
+/// Optional contract for gizmos that constrain viewport marquee selection to a custom domain.
+/// </summary>
+public interface IViewportRubberBandSelection
+{
+    /// <summary>
+    /// Gets whether an actor node can participate in the current marquee selection.
+    /// </summary>
+    bool CanSelectWithRubberBand(ActorNode node);
+
+    /// <summary>
+    /// Resolves the scene graph node that should be selected for a marquee hit.
+    /// </summary>
+    SceneGraphNode ResolveRubberBandSelection(ActorNode node);
+}
+
+/// <summary>
 /// Class for adding viewport rubber band selection.
 /// </summary>
 public sealed class ViewportRubberBandSelector
@@ -84,7 +100,23 @@ public sealed class ViewportRubberBandSelector
             if (Mathf.Abs(delta.X) > 0.1f || Mathf.Abs(delta.Y) > 0.1f)
             {
                 _isRubberBandSpanning = true;
-                _rubberBandSelectionBefore = _owner.SceneGraphRoot.SceneContext.Selection.ToArray();
+                var currentSelection = _owner.SceneGraphRoot.SceneContext.Selection;
+                if (_owner.Gizmos.Active is IViewportRubberBandSelection selectionFilter)
+                {
+                    var filteredSelection = new List<SceneGraphNode>(currentSelection.Count);
+                    for (int i = 0; i < currentSelection.Count; i++)
+                    {
+                        var node = currentSelection[i];
+                        var actorNode = node as ActorNode ?? node?.ParentNode as ActorNode;
+                        if (actorNode != null && selectionFilter.CanSelectWithRubberBand(actorNode))
+                            filteredSelection.Add(node);
+                    }
+                    _rubberBandSelectionBefore = filteredSelection.ToArray();
+                }
+                else
+                {
+                    _rubberBandSelectionBefore = currentSelection.ToArray();
+                }
                 _rubberBandRect = new Rectangle(_cachedStartingMousePosition, Float2.Zero);
                 _lastRubberBandRect = Rectangle.Empty;
                 _tryStartRubberBand = false;
@@ -177,6 +209,7 @@ public sealed class ViewportRubberBandSelector
         else
             _hitsCache.Clear();
         var hits = _hitsCache;
+        var selectionFilter = _owner.Gizmos.Active as IViewportRubberBandSelection;
 
         // Process all nodes
         var projection = new ViewportProjection();
@@ -184,7 +217,7 @@ public sealed class ViewportRubberBandSelector
         foreach (var node in nodes)
         {
             // Skip actors that cannot be selected
-            if (!node.CanSelectInViewport)
+            if (!node.CanSelectInViewport || (selectionFilter != null && !selectionFilter.CanSelectWithRubberBand(node)))
                 continue;
             var a = node.Actor;
 
@@ -198,7 +231,9 @@ public sealed class ViewportRubberBandSelector
             if (LoopOverPoints(points, ref adjustedRect, ref projection))
             {
                 SceneGraphNode hit;
-                if (_owner.Gizmos.Active is TransformGizmo transformGizmo)
+                if (selectionFilter != null)
+                    hit = selectionFilter.ResolveRubberBandSelection(node);
+                else if (_owner.Gizmos.Active is TransformGizmo transformGizmo)
                     hit = transformGizmo.ResolveSelectionTarget(node, _owner.Viewport.Task.View.Mode, _owner is not PrefabWindowViewport);
                 else if (a.HasPrefabLink && _owner is not PrefabWindowViewport)
                     hit = _owner.SceneGraphRoot.Find(a.GetPrefabRoot());

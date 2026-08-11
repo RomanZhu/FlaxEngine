@@ -136,6 +136,32 @@ namespace FlaxEditor.SceneGraph
             return result;
         }
 
+        /// <summary>
+        /// Performs raycasting over the complete node hierarchy and writes every intersection to a caller-owned buffer.
+        /// </summary>
+        /// <param name="ray">The ray.</param>
+        /// <param name="view">The camera view ray.</param>
+        /// <param name="hits">The result buffer. Existing entries are cleared.</param>
+        /// <param name="flags">The raycasting flags.</param>
+        /// <returns>The number of intersections.</returns>
+        public int RayCastAll(ref Ray ray, ref Ray view, List<RayCastHit> hits, RayCastData.FlagTypes flags = RayCastData.FlagTypes.None)
+        {
+            if (hits == null)
+                throw new ArgumentNullException(nameof(hits));
+
+            Profiler.BeginEvent("RayCastSceneAll");
+            hits.Clear();
+            var data = new RayCastData
+            {
+                Ray = ray,
+                View = view,
+                Flags = flags,
+            };
+            RayCastAll(ref data, hits);
+            Profiler.EndEvent();
+            return hits.Count;
+        }
+
         internal static Quaternion RaycastNormalRotation(ref Vector3 normal)
         {
             Quaternion rotation;
