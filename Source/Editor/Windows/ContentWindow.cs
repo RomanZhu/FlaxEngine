@@ -1607,6 +1607,7 @@ namespace FlaxEditor.Windows
             var query = _foldersSearchBox?.Text;
             _root.UpdateFilter(query);
             _root.UnlockChildrenRecursive();
+            ApplyTreeViewScale();
             _tree.PerformLayout(true);
             _contentTreePanel.PerformLayout(true);
         }
