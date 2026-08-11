@@ -20,7 +20,7 @@ Use `flax` directly when a published executable is installed.
 - Durable jobs: `jobs list|info|status|wait|cancel|prune`; add `--detach` to `compile`, `build`, or `command`
 - Signed local feeds: `feeds verify|list|install --manifest <file> --signature <file> --public-key <RSA-PEM>`
 - Development Player: `player status|pause|resume|step|quit|input`; `runtime input` is an alias. Input supports virtual `key`, absolute/relative `pointer`, `inspect`, and `reset`
-- Visject: `visject groups list`, `asset inspect`, `validate`, `node add|remove|set`, `connect`, `disconnect`
+- Visject: `visject groups list`, `asset inspect`, `validate`, `node add|remove|set`, `connect`, `disconnect`. Graph mutations require the asset editor window to be closed; saves are rollback-protected and reload-verified.
 - Agent bridge: `mcp` (stdio `initialize`, `ping`, `tools/list`, `tools/call`)
 - Diagnostics: `diagnose status|bundle --to <project-relative.zip>`
 

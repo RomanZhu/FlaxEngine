@@ -361,7 +361,7 @@ namespace FlaxEditor
                 throw new InvalidOperationException("The project Content root cannot be replaced.");
             if (File.Exists(path) || Directory.Exists(path) || Editor.Instance.ContentDatabase.Find(path) != null)
                 throw new IOException($"The destination '{path}' already exists.");
-            return path;
+            return StringUtils.NormalizePath(path);
         }
 
         private static string RequireProjectContentPath(string path)

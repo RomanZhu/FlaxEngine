@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using FlaxEditor.Content;
 using FlaxEditor.Surface;
 using FlaxEditor.Surface.Elements;
 using FlaxEngine;
@@ -110,23 +111,22 @@ namespace FlaxEditor
 
         private static SurfaceState Open(string value, string kind, bool writable)
         {
-            if (!FlaxEngine.Content.GetAssetInfo(ResolvePathOrId(value), out var info) || info.ID == Guid.Empty)
-                throw new FileNotFoundException($"Graph asset '{value}' was not found.");
+            var item = ResolveAssetItem(value, writable);
+            if (writable && Editor.Instance.Windows.FindEditor(item) is FlaxEditor.Windows.Assets.AssetEditorWindow)
+                throw new InvalidOperationException($"Graph asset '{item.Path}' is open in an asset editor. Save or close that editor before mutating it through the CLI.");
             var normalized = (kind ?? string.Empty).Trim().ToLowerInvariant();
-            if (string.IsNullOrEmpty(normalized)) normalized = info.TypeName?.Contains("AnimationGraph", StringComparison.OrdinalIgnoreCase) == true ? "animation" : "material";
-            var owner = new GraphOwner(info.ID, info.Path, normalized, new Undo());
+            if (string.IsNullOrEmpty(normalized)) normalized = item.TypeName?.Contains("AnimationGraph", StringComparison.OrdinalIgnoreCase) == true ? "animation" : "material";
+            var owner = new GraphOwner(item, normalized, new Undo());
             VisjectSurface surface;
             switch (normalized)
             {
             case "material":
-                // Load by the resolved path rather than only by GUID. Imported
-                // engine assets can legitimately retain a source GUID; loading
-                // by ID would then select the engine copy and make project saves
-                // target the wrong (often read-only) asset.
-                owner.Material = FlaxEngine.Content.LoadAsync<Material>(info.Path) ?? throw new InvalidOperationException("The asset is not a Material.");
-                // Keep failed/empty newly-created assets editable: LoadSurface(true)
-                // below can materialize the native default graph before saving.
-                owner.Material.WaitForLoaded();
+                // Resolve and load through the authoritative AssetItem. Loading
+                // the same physical file by differently normalized path strings
+                // can register a duplicate asset and rewrite its on-disk ID.
+                owner.Material = item.LoadAsync() as Material ?? throw new InvalidOperationException("The asset is not a Material.");
+                if (owner.Material.WaitForLoaded())
+                    throw new InvalidOperationException($"Material '{item.Path}' failed to load from disk.");
                 // Newly created materials do not contain a surface chunk yet;
                 // ask the native asset to materialize Flax's default graph.
                 owner.SurfaceData = owner.Material.LoadSurface(true);
@@ -134,8 +134,9 @@ namespace FlaxEditor
                 break;
             case "animation":
             case "animationgraph":
-                owner.Animation = FlaxEngine.Content.LoadAsync<AnimationGraph>(info.Path) ?? throw new InvalidOperationException("The asset is not an AnimationGraph.");
-                owner.Animation.WaitForLoaded();
+                owner.Animation = item.LoadAsync() as AnimationGraph ?? throw new InvalidOperationException("The asset is not an AnimationGraph.");
+                if (owner.Animation.WaitForLoaded())
+                    throw new InvalidOperationException($"Animation Graph '{item.Path}' failed to load from disk.");
                 owner.SurfaceData = owner.Animation.LoadSurface();
                 surface = new AnimGraphSurface(owner, null, owner.Undo);
                 break;
@@ -145,14 +146,75 @@ namespace FlaxEditor
             return new SurfaceState(owner, surface, writable);
         }
 
-        private static string ResolvePathOrId(string value)
+        private static AssetItem ResolveAssetItem(string value, bool writable)
         {
-            if (Guid.TryParse(value, out var id)) return id.ToString();
-            var root = Path.GetFullPath(Globals.ProjectFolder);
-            var path = Path.IsPathRooted(value) ? Path.GetFullPath(value) : Path.GetFullPath(value, root);
-            if (!File.Exists(path) && !path.StartsWith(Path.Combine(root, "Content") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                path = Path.GetFullPath(Path.Combine(root, "Content", value));
-            return path;
+            AssetItem item;
+            if (Guid.TryParse(value, out var id))
+            {
+                item = Editor.Instance.ContentDatabase.FindAsset(id);
+                if (item == null && FlaxEngine.Content.GetAssetInfo(id, out var info) && !string.IsNullOrEmpty(info.Path))
+                    item = FindAssetItem(info.Path);
+            }
+            else
+            {
+                var projectRoot = Path.GetFullPath(Globals.ProjectFolder);
+                var contentRoot = Path.GetFullPath(Globals.ProjectContentFolder);
+                var normalized = value.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+                string path;
+                if (Path.IsPathRooted(normalized))
+                {
+                    path = Path.GetFullPath(normalized);
+                }
+                else if (normalized.Equals("Content", StringComparison.OrdinalIgnoreCase) || normalized.StartsWith("Content" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    path = Path.GetFullPath(normalized, projectRoot);
+                }
+                else
+                {
+                    path = Path.GetFullPath(normalized, contentRoot);
+                }
+                item = FindAssetItem(path);
+            }
+            if (item == null || item.ID == Guid.Empty)
+                throw new FileNotFoundException($"Graph asset '{value}' was not found in the Content database.");
+            if (writable && !IsProjectContentPath(item.Path))
+                throw new InvalidOperationException($"Graph asset mutations are confined to project Content. Resolved path: '{item.Path}'.");
+            return item;
+        }
+
+        private static AssetItem FindAssetItem(string path)
+        {
+            var database = Editor.Instance.ContentDatabase;
+            var item = database.Find(path) as AssetItem;
+            if (item != null)
+                return item;
+            var current = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
+            while (!string.IsNullOrEmpty(current))
+            {
+                var parent = database.Find(current);
+                if (parent != null)
+                {
+                    database.RefreshFolder(parent, true);
+                    break;
+                }
+                current = Path.GetDirectoryName(current);
+            }
+            return database.Find(path) as AssetItem;
+        }
+
+        private static bool IsProjectContentPath(string path)
+        {
+            var root = Path.GetFullPath(Globals.ProjectContentFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            path = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var comparison = Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            return string.Equals(path, root, comparison) || path.StartsWith(root + Path.DirectorySeparatorChar, comparison);
+        }
+
+        private static bool PathEquals(string a, string b)
+        {
+            var comparison = Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            return string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                                 Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), comparison);
         }
 
         private static object[] ParseValues(JToken json)
@@ -222,6 +284,7 @@ namespace FlaxEditor
 
         private sealed class GraphOwner : IVisjectSurfaceOwner
         {
+            public readonly AssetItem Item;
             public readonly Guid AssetId;
             public readonly string Path;
             public readonly string Kind;
@@ -233,15 +296,63 @@ namespace FlaxEditor
             public string SurfaceName => Path;
             public Undo Undo => _undo;
             public VisjectSurfaceContext ParentContext => null;
-            public GraphOwner(Guid id, string path, string kind, Undo undo) { AssetId = id; Path = path; Kind = kind; _undo = undo; }
+            public GraphOwner(AssetItem item, string kind, Undo undo) { Item = item; AssetId = item.ID; Path = item.Path; Kind = kind; _undo = undo; }
             public void OnContextCreated(VisjectSurfaceContext context) { }
             public void OnSurfaceEditedChanged() { }
             public void OnSurfaceGraphEdited() { }
             public void OnSurfaceClose() { }
             public void Save()
             {
-                if (Material != null) { if (Material.SaveSurface(SurfaceData, Material.Info)) throw new IOException("Material surface save failed."); }
-                else if (Animation != null) { if (Animation.SaveSurface(SurfaceData)) throw new IOException("Animation graph surface save failed."); }
+                if (Editor.Instance.ContentEditing.FastTempAssetClone(Path, out var backupPath))
+                    throw new IOException($"Failed to create a rollback copy for graph asset '{Path}'.");
+                try
+                {
+                    if (Material != null)
+                    {
+                        if (Material.SaveSurface(SurfaceData, Material.Info))
+                            throw new IOException("Material surface save failed.");
+                    }
+                    else if (Animation != null)
+                    {
+                        if (Animation.SaveSurface(SurfaceData))
+                            throw new IOException("Animation graph surface save failed.");
+                    }
+                    VerifyPersistedAsset();
+                }
+                catch (Exception ex)
+                {
+                    var rollbackFailed = Editor.Instance.ContentEditing.CloneAssetFile(backupPath, Path, AssetId);
+                    Item.Reload();
+                    var rollbackAsset = Item.LoadAsync();
+                    var rollbackLoadFailed = rollbackAsset == null || rollbackAsset.WaitForLoaded();
+                    if (rollbackFailed || rollbackLoadFailed)
+                        throw new IOException($"Graph save failed and the rollback copy could not be restored for '{Path}'.", ex);
+                    throw new IOException($"Graph save failed persistence validation; the original asset was restored for '{Path}'.", ex);
+                }
+            }
+
+            private void VerifyPersistedAsset()
+            {
+                Item.Reload();
+                var asset = Item.LoadAsync();
+                if (asset == null || asset.WaitForLoaded())
+                    throw new IOException($"Graph asset '{Path}' failed to reload after saving.");
+                if (asset.ID != AssetId)
+                    throw new IOException($"Graph asset '{Path}' changed ID while saving. Expected {AssetId}, loaded {asset.ID}.");
+                if (!PathEquals(asset.Path, Path))
+                    throw new IOException($"Graph asset '{Path}' reloaded from an unexpected path '{asset.Path}'.");
+                if (Material != null)
+                {
+                    Material = asset as Material ?? throw new IOException($"Graph asset '{Path}' reloaded as '{asset.GetType().FullName}' instead of Material.");
+                    SurfaceData = Material.LoadSurface(false);
+                }
+                else
+                {
+                    Animation = asset as AnimationGraph ?? throw new IOException($"Graph asset '{Path}' reloaded as '{asset.GetType().FullName}' instead of AnimationGraph.");
+                    SurfaceData = Animation.LoadSurface();
+                }
+                if (SurfaceData == null || SurfaceData.Length == 0)
+                    throw new IOException($"Graph asset '{Path}' reloaded without persisted surface data.");
             }
         }
 

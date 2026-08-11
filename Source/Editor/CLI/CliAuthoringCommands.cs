@@ -1033,7 +1033,19 @@ namespace FlaxEditor
                 else if (typeof(Asset).IsAssignableFrom(type))
                 {
                     var path = ResolveAssetReference(reference);
-                    result = FlaxEngine.Content.LoadAsync(path, type);
+                    if (Editor.Instance.ContentDatabase.Find(path) is FlaxEditor.Content.AssetItem item)
+                    {
+                        id = item.ID;
+                    }
+                    else if (FlaxEngine.Content.GetAssetInfo(path, out var info) && info.ID != Guid.Empty)
+                    {
+                        id = info.ID;
+                    }
+                    else
+                    {
+                        throw new KeyNotFoundException($"Asset reference '{reference}' was not found in the Content database.");
+                    }
+                    result = FlaxEngine.Content.LoadAsync(id, type);
                 }
                 else
                 {

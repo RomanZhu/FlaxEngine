@@ -135,6 +135,13 @@ asset GUIDs, loaded objects, and import pipeline remain authoritative. Import
 and create operations refresh affected folders before later batch operations
 resolve the generated assets.
 
+Visject commands resolve graph assets through the Editor Content database and
+load them by their registered GUID. Mutations are rejected while the same asset
+is open in an asset editor, create a rollback copy before saving, and reload the
+persisted graph to verify its GUID, path, type, and surface data. Asset move and
+rename destinations use Flax-normalized paths so file-watcher refreshes preserve
+the existing asset GUID.
+
 Project Editor code can register synchronous public static methods with
 `FlaxEditor.CliCommandAttribute`. Parameters are schema-discovered and can use
 `CliOptionAttribute`; an optional `CliCommandContext` reports progress and

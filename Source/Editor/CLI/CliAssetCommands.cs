@@ -694,7 +694,11 @@ namespace FlaxEditor
                     throw new InvalidOperationException("The project Content root cannot be replaced.");
                 if (File.Exists(path) || Directory.Exists(path) || Editor.Instance.ContentDatabase.Find(path) != null)
                     throw new IOException($"The destination '{path}' already exists.");
-                return path;
+                // ContentDatabase stores Flax-normalized paths (drive prefix
+                // followed by forward separators). Passing a Windows-normalized
+                // path into Move/Rename can make the watcher register the same
+                // physical file twice and rewrite the asset ID.
+                return StringUtils.NormalizePath(path);
             }
 
             private static string EnsureAssetExtension(string path)
