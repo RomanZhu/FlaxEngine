@@ -52,6 +52,45 @@ struct PhysicsClothDesc
 };
 
 /// <summary>
+/// Non-owning output sink for overlap queries.
+/// </summary>
+struct PhysicsOverlapResultBuffer
+{
+    using WriteCallback = void (*)(void* context, int32 index, PhysicsColliderActor* collider);
+
+    void* Context;
+    WriteCallback Write;
+    int32 Capacity;
+    int32 Count = 0;
+
+    PhysicsOverlapResultBuffer(void* context, int32 capacity, WriteCallback write)
+        : Context(context)
+        , Write(write)
+        , Capacity(capacity)
+    {
+    }
+
+    explicit PhysicsOverlapResultBuffer(Span<PhysicsColliderActor*> results)
+        : PhysicsOverlapResultBuffer(results.Get(), results.Length(), &WriteNative)
+    {
+    }
+
+    FORCE_INLINE bool Add(PhysicsColliderActor* collider)
+    {
+        if (Count >= Capacity)
+            return false;
+        Write(Context, Count++, collider);
+        return Count < Capacity;
+    }
+
+private:
+    static void WriteNative(void* context, int32 index, PhysicsColliderActor* collider)
+    {
+        ((PhysicsColliderActor**)context)[index] = collider;
+    }
+};
+
+/// <summary>
 /// Interface for the physical simulation backend implementation.
 /// </summary>
 class FLAXENGINE_API PhysicsBackend
@@ -123,18 +162,23 @@ public:
     static bool RayCast(void* scene, const Vector3& origin, const Vector3& direction, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool RayCast(void* scene, const Vector3& origin, const Vector3& direction, RayCastHit& hitInfo, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool RayCastAll(void* scene, const Vector3& origin, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 RayCastNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool BoxCast(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool BoxCast(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, RayCastHit& hitInfo, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool BoxCastAll(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 BoxCastNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool SphereCast(void* scene, const Vector3& center, float radius, const Vector3& direction, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool SphereCast(void* scene, const Vector3& center, float radius, const Vector3& direction, RayCastHit& hitInfo, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool SphereCastAll(void* scene, const Vector3& center, float radius, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 SphereCastNonAlloc(void* scene, const Vector3& center, float radius, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool CapsuleCast(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool CapsuleCast(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, RayCastHit& hitInfo, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool CapsuleCastAll(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 CapsuleCastNonAlloc(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool ConvexCast(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool ConvexCast(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, RayCastHit& hitInfo, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool ConvexCastAll(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 ConvexCastNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool CheckBox(void* scene, const Vector3& center, const Vector3& halfExtents, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);
     static bool CheckSphere(void* scene, const Vector3& center, float radius, uint32 layerMask, bool hitTriggers);
     static bool CheckCapsule(void* scene, const Vector3& center, float radius, float height, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);
@@ -143,6 +187,34 @@ public:
     static bool OverlapSphere(void* scene, const Vector3& center, float radius, Array<PhysicsColliderActor*, HeapAllocation>& results, uint32 layerMask, bool hitTriggers);
     static bool OverlapCapsule(void* scene, const Vector3& center, float radius, float height, Array<PhysicsColliderActor*, HeapAllocation>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);
     static bool OverlapConvex(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Array<PhysicsColliderActor*, HeapAllocation>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);
+    static int32 OverlapBoxNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);
+    static int32 OverlapSphereNonAlloc(void* scene, const Vector3& center, float radius, PhysicsOverlapResultBuffer& results, uint32 layerMask, bool hitTriggers);
+    static int32 OverlapCapsuleNonAlloc(void* scene, const Vector3& center, float radius, float height, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);
+    static int32 OverlapConvexNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);
+
+    static int32 OverlapBoxNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsOverlapResultBuffer buffer(results);
+        return OverlapBoxNonAlloc(scene, center, halfExtents, buffer, rotation, layerMask, hitTriggers);
+    }
+
+    static int32 OverlapSphereNonAlloc(void* scene, const Vector3& center, float radius, Span<PhysicsColliderActor*> results, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsOverlapResultBuffer buffer(results);
+        return OverlapSphereNonAlloc(scene, center, radius, buffer, layerMask, hitTriggers);
+    }
+
+    static int32 OverlapCapsuleNonAlloc(void* scene, const Vector3& center, float radius, float height, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsOverlapResultBuffer buffer(results);
+        return OverlapCapsuleNonAlloc(scene, center, radius, height, buffer, rotation, layerMask, hitTriggers);
+    }
+
+    static int32 OverlapConvexNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsOverlapResultBuffer buffer(results);
+        return OverlapConvexNonAlloc(scene, center, convexMesh, scale, buffer, rotation, layerMask, hitTriggers);
+    }
 
     // Actors
     static ActorFlags GetActorFlags(void* actor);
@@ -163,6 +235,7 @@ public:
     static void SetRigidDynamicActorLinearVelocity(void* actor, const Vector3& value, bool wakeUp);
     static Vector3 GetRigidDynamicActorAngularVelocity(void* actor);
     static void SetRigidDynamicActorAngularVelocity(void* actor, const Vector3& value, bool wakeUp);
+    static Vector3 GetRigidDynamicActorPointVelocity(void* actor, const Vector3& point);
     static Vector3 GetRigidDynamicActorCenterOfMass(void* actor);
     static void AddRigidDynamicActorCenterOfMassOffset(void* actor, const Float3& value);
     static bool GetRigidDynamicActorIsSleeping(void* actor);

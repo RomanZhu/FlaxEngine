@@ -29,6 +29,32 @@ void* Collider::GetPhysicsShape() const
     return _shape;
 }
 
+int32 Collider::GetPhysicsShapesCount() const
+{
+    return _shape ? 1 : 0;
+}
+
+void* Collider::GetPhysicsShape(int32 index) const
+{
+    return index == 0 ? _shape : nullptr;
+}
+
+void Collider::GetPhysicsShapeActorPose(int32 index, const Vector3& position, const Quaternion& rotation, Vector3& shapePosition, Quaternion& shapeRotation) const
+{
+    if (!_shape || !GetAttachedRigidBody())
+    {
+        PhysicsColliderActor::GetPhysicsShapeActorPose(index, position, rotation, shapePosition, shapeRotation);
+        return;
+    }
+
+    Vector3 localPosition;
+    Quaternion localRotation;
+    PhysicsBackend::GetShapeLocalPose(_shape, localPosition, localRotation);
+    shapeRotation = rotation * localRotation.Conjugated();
+    const Vector3 center = position + Vector3::Transform(_center * GetScale(), rotation);
+    shapePosition = center - Vector3::Transform(localPosition, shapeRotation);
+}
+
 void Collider::SetIsTrigger(bool value)
 {
     if (value == _isTrigger || !CanBeTrigger())
@@ -111,14 +137,8 @@ bool Collider::ContainsPoint(const Vector3& point) const
 
 bool Collider::ComputePenetration(const Collider* colliderA, const Collider* colliderB, Vector3& direction, float& distance)
 {
-    direction = Vector3::Zero;
-    distance = 0.0f;
-    CHECK_RETURN(colliderA && colliderB, false);
-    void* shapeA = colliderA->GetPhysicsShape();
-    void* shapeB = colliderB->GetPhysicsShape();
-    if (!shapeA || !shapeB)
-        return false;
-    return PhysicsBackend::ComputeShapesPenetration(shapeA, shapeB, colliderA->GetPosition(), colliderA->GetOrientation(), colliderB->GetPosition(), colliderB->GetOrientation(), direction, distance);
+    return Physics::ComputePenetration(colliderA, colliderA ? colliderA->GetPosition() : Vector3::Zero, colliderA ? colliderA->GetOrientation() : Quaternion::Identity,
+                                       colliderB, colliderB ? colliderB->GetPosition() : Vector3::Zero, colliderB ? colliderB->GetOrientation() : Quaternion::Identity, direction, distance);
 }
 
 bool Collider::IsReadyForPhysics() const

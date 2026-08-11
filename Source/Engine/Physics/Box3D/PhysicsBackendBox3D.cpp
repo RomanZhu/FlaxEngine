@@ -100,6 +100,7 @@ namespace
         Array<JsonAsset*, InlinedAllocation<1>> Materials;
         Array<b3SurfaceMaterial, InlinedAllocation<1>> Surfaces;
         MeshBox3D* HeightFieldOwner = nullptr;
+        b3HeightFieldData* HeightField = nullptr;
         uint32 Mask0 = MAX_uint32;
         uint32 Mask1 = MAX_uint32;
         float ContactOffset = 0.0f;
@@ -228,6 +229,8 @@ namespace
     };
 
     void RecreateJointHandle(JointBox3D* joint);
+    b3HeightFieldData* BuildHeightFieldData(MeshBox3D* heightField);
+    b3HeightFieldData* BuildHeightFieldData(MeshBox3D* heightField, const b3Vec3& scale);
 
     PhysicsCombineMode FrictionCombineMode = PhysicsCombineMode::Average;
     PhysicsCombineMode RestitutionCombineMode = PhysicsCombineMode::Average;
@@ -411,6 +414,11 @@ namespace
         if (IsShapeValid(shape))
             b3DestroyShape(shape->Shape, true);
         shape->Shape = b3_nullShapeId;
+        if (shape->HeightField)
+        {
+            b3DestroyHeightField(shape->HeightField);
+            shape->HeightField = nullptr;
+        }
         if (shape->Compound)
         {
             b3DestroyCompound(shape->Compound);
@@ -525,7 +533,14 @@ namespace
             auto mesh = (MeshBox3D*)shape->Geometry.HeightField.HeightField;
             if (mesh && mesh->HeightField)
             {
-                shape->Shape = b3CreateHeightFieldShape(shape->Actor->Body, &def, mesh->HeightField);
+                const b3Vec3 scale = {
+                    Math::Max(shape->Geometry.HeightField.RowScale, B3_MIN_SCALE),
+                    Math::Max(shape->Geometry.HeightField.HeightScale, B3_MIN_SCALE),
+                    Math::Max(shape->Geometry.HeightField.ColumnScale, B3_MIN_SCALE)
+                };
+                shape->HeightField = BuildHeightFieldData(mesh, scale);
+                if (shape->HeightField)
+                    shape->Shape = b3CreateHeightFieldShape(shape->Actor->Body, &def, shape->HeightField);
                 shape->HeightFieldOwner = mesh;
                 if (!mesh->HeightFieldShapes.Contains(shape))
                     mesh->HeightFieldShapes.Add(shape);
@@ -714,6 +729,104 @@ namespace
         return ReadPenetration(manifold, frameOrientation, fallbackNormal, swapped, direction, distance);
     }
 
+    bool TransformPenetrationShape(PenetrationShapeBox3D& shape, const b3Transform& transform)
+    {
+        if (shape.Type == CollisionShape::Types::Sphere)
+        {
+            shape.Sphere.center = b3TransformPoint(transform, shape.Sphere.center);
+            return true;
+        }
+        if (shape.Type == CollisionShape::Types::Capsule)
+        {
+            shape.Capsule.center1 = b3TransformPoint(transform, shape.Capsule.center1);
+            shape.Capsule.center2 = b3TransformPoint(transform, shape.Capsule.center2);
+            return true;
+        }
+        if (shape.IsHull())
+        {
+            b3HullData* transformed = b3CloneAndTransformHull(shape.Hull, transform, { 1.0f, 1.0f, 1.0f });
+            if (!transformed)
+                return false;
+            if (shape.OwnedHull)
+                b3DestroyHull(shape.OwnedHull);
+            shape.OwnedHull = transformed;
+            shape.Hull = transformed;
+            return true;
+        }
+        return false;
+    }
+
+    struct HeightFieldPenetrationContext
+    {
+        const PenetrationShapeBox3D* Shape = nullptr;
+        Quaternion Orientation = Quaternion::Identity;
+        Vector3 FallbackNormal = Vector3::Up;
+        Vector3 Direction = Vector3::Zero;
+        float Distance = 0.0f;
+    };
+
+    bool HeightFieldPenetrationCallback(b3Vec3 a, b3Vec3 b, b3Vec3 c, int triangleIndex, void* contextPtr)
+    {
+        auto context = (HeightFieldPenetrationContext*)contextPtr;
+        b3LocalManifoldPoint points[32];
+        b3LocalManifold manifold = {};
+        manifold.points = points;
+        const b3Vec3 triangle[3] = { a, b, c };
+        b3SimplexCache simplexCache = {};
+        b3SATCache satCache = {};
+
+        if (context->Shape->Type == CollisionShape::Types::Sphere)
+            b3CollideSphereAndTriangle(&manifold, ARRAY_COUNT(points), &context->Shape->Sphere, triangle);
+        else if (context->Shape->Type == CollisionShape::Types::Capsule)
+            b3CollideCapsuleAndTriangle(&manifold, ARRAY_COUNT(points), &context->Shape->Capsule, triangle, &simplexCache);
+        else if (context->Shape->IsHull())
+            b3CollideHullAndTriangle(&manifold, ARRAY_COUNT(points), context->Shape->Hull, a, b, c, 0, &satCache);
+
+        Vector3 direction;
+        float distance;
+        if (ReadPenetration(manifold, context->Orientation, context->FallbackNormal, true, direction, distance) && distance > context->Distance)
+        {
+            context->Direction = direction;
+            context->Distance = distance;
+        }
+        return true;
+    }
+
+    bool ComputeHeightFieldPenetration(const ShapeBox3D* convexShape, const ShapeBox3D* heightShape,
+                                       const Vector3& convexPosition, const Quaternion& convexOrientation,
+                                       const Vector3& heightPosition, const Quaternion& heightOrientation,
+                                       Vector3& direction, float& distance)
+    {
+        if (!heightShape || !heightShape->HeightField)
+            return false;
+
+        PenetrationShapeBox3D convex;
+        if (!BuildPenetrationShape(convexShape, convex))
+            return false;
+
+        const b3WorldTransform heightWorld = b3MulWorldTransforms(C2BWorldTransform(heightPosition, heightOrientation), C2BTransform(heightShape->LocalPosition, heightShape->LocalRotation));
+        const b3Transform convexToHeight = b3InvMulWorldTransforms(heightWorld, C2BWorldTransform(convexPosition, convexOrientation));
+        if (!TransformPenetrationShape(convex, convexToHeight))
+            return false;
+
+        b3AABB bounds;
+        if (convex.Type == CollisionShape::Types::Sphere)
+            bounds = b3ComputeSphereAABB(&convex.Sphere, b3Transform_identity);
+        else if (convex.Type == CollisionShape::Types::Capsule)
+            bounds = b3ComputeCapsuleAABB(&convex.Capsule, b3Transform_identity);
+        else
+            bounds = b3ComputeHullAABB(convex.Hull, b3Transform_identity);
+
+        HeightFieldPenetrationContext context;
+        context.Shape = &convex;
+        context.Orientation = B2C(heightWorld.q);
+        context.FallbackNormal = convexPosition - heightPosition;
+        b3QueryHeightField(heightShape->HeightField, bounds, HeightFieldPenetrationCallback, &context);
+        direction = context.Direction;
+        distance = context.Distance;
+        return distance > 0.0f;
+    }
+
     void ApplyActorFlags(ActorBox3D* actor)
     {
         if (!actor || B3_IS_NULL(actor->Body) || !b3Body_IsValid(actor->Body))
@@ -860,8 +973,13 @@ namespace
         bool Any = false;
         bool All = false;
         float MaxDistance = 0.0f;
+        Vector3 Center = Vector3::Zero;
+        Vector3 Direction = Vector3::Zero;
         RayCastHit Hit;
         Array<RayCastHit, HeapAllocation>* Results = nullptr;
+        RayCastHit* ResultsBuffer = nullptr;
+        int32 ResultsCapacity = 0;
+        int32 ResultsCount = 0;
     };
 
     bool AcceptQueryShape(const QueryContext& context, b3ShapeId shapeId)
@@ -884,6 +1002,24 @@ namespace
         hit.UV = Float2::Zero;
     }
 
+    bool StoreQueryHit(QueryContext& context, const RayCastHit& hit)
+    {
+        if (context.Results)
+        {
+            context.Results->Add(hit);
+            return true;
+        }
+        if (context.ResultsBuffer)
+        {
+            if (context.ResultsCount >= context.ResultsCapacity)
+                return false;
+            context.ResultsBuffer[context.ResultsCount++] = hit;
+            return context.ResultsCount < context.ResultsCapacity;
+        }
+        context.Hit = hit;
+        return false;
+    }
+
     float QueryCastCallback(b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction, uint64_t userMaterialId, int triangleIndex, int childIndex, void* userContext)
     {
         auto context = (QueryContext*)userContext;
@@ -894,13 +1030,24 @@ namespace
         FillRayHit(hit, shapeId, point, normal, fraction, context->MaxDistance, userMaterialId, triangleIndex);
         if (context->All)
         {
-            context->Results->Add(hit);
-            return 1.0f;
+            return StoreQueryHit(*context, hit) ? 1.0f : 0.0f;
         }
         context->Hit = hit;
         if (context->Any)
             return 0.0f;
         return fraction;
+    }
+
+    bool InitialOverlapCastCallback(b3ShapeId shapeId, void* userContext)
+    {
+        auto context = (QueryContext*)userContext;
+        if (!AcceptQueryShape(*context, shapeId))
+            return true;
+        auto shape = (ShapeBox3D*)b3Shape_GetUserData(shapeId);
+        const uint64 material = shape && shape->Surfaces.HasItems() ? shape->Surfaces[0].userMaterialId : 0;
+        RayCastHit hit;
+        FillRayHit(hit, shapeId, C2BPos(context->Center), C2BVec(-context->Direction), 0.0f, context->MaxDistance, material, -1);
+        return StoreQueryHit(*context, hit);
     }
 
     float CharacterCastCallback(b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction, uint64_t userMaterialId, int triangleIndex, int childIndex, void* userContext)
@@ -915,6 +1062,7 @@ namespace
     {
         bool HitTriggers = true;
         Array<PhysicsColliderActor*, HeapAllocation>* Results = nullptr;
+        PhysicsOverlapResultBuffer* ResultsBuffer = nullptr;
         bool Any = false;
         bool Hit = false;
     };
@@ -932,6 +1080,8 @@ namespace
         context->Hit = true;
         if (context->Results)
             context->Results->Add(collider);
+        else if (context->ResultsBuffer && !context->ResultsBuffer->Add(collider))
+            return false;
         return !context->Any;
     }
 
@@ -968,16 +1118,27 @@ namespace
         proxy.radius = radius;
     }
 
-    bool CastShape(SceneBox3D* scene, const Vector3& center, const b3ShapeProxy& proxy, const Vector3& direction, RayCastHit* hitInfo, Array<RayCastHit, HeapAllocation>* results, float maxDistance, uint32 layerMask, bool hitTriggers)
+    bool CastShape(SceneBox3D* scene, const Vector3& center, const b3ShapeProxy& proxy, const Vector3& direction, RayCastHit* hitInfo, Array<RayCastHit, HeapAllocation>* results, float maxDistance, uint32 layerMask, bool hitTriggers, RayCastHit* resultsBuffer = nullptr, int32 resultsCapacity = 0, int32* resultsCount = nullptr)
     {
         QueryContext context;
         context.HitTriggers = hitTriggers;
         context.MaxDistance = maxDistance;
+        context.Center = center;
+        context.Direction = direction;
         context.Results = results;
-        context.All = results != nullptr;
-        context.Any = hitInfo == nullptr && results == nullptr;
+        context.ResultsBuffer = resultsBuffer;
+        context.ResultsCapacity = resultsCapacity;
+        context.All = results != nullptr || resultsBuffer != nullptr;
+        context.Any = hitInfo == nullptr && !context.All;
 
-        b3World_CastShape(scene->World, C2BPos(center), &proxy, C2BVec(direction * maxDistance), MakeQueryFilter(layerMask), QueryCastCallback, &context);
+        const b3QueryFilter filter = MakeQueryFilter(layerMask);
+        b3World_OverlapShape(scene->World, C2BPos(center), &proxy, filter, InitialOverlapCastCallback, &context);
+        if ((context.All || !context.Hit.Collider) && (!resultsBuffer || context.ResultsCount < resultsCapacity))
+            b3World_CastShape(scene->World, C2BPos(center), &proxy, C2BVec(direction * maxDistance), filter, QueryCastCallback, &context);
+        if (resultsCount)
+            *resultsCount = context.ResultsCount;
+        if (resultsBuffer)
+            return context.ResultsCount != 0;
         if (results)
             return results->HasItems();
         if (context.Any)
@@ -990,12 +1151,13 @@ namespace
         return false;
     }
 
-    bool OverlapShape(SceneBox3D* scene, const Vector3& center, const b3ShapeProxy& proxy, Array<PhysicsColliderActor*, HeapAllocation>* results, uint32 layerMask, bool hitTriggers)
+    bool OverlapShape(SceneBox3D* scene, const Vector3& center, const b3ShapeProxy& proxy, Array<PhysicsColliderActor*, HeapAllocation>* results, uint32 layerMask, bool hitTriggers, PhysicsOverlapResultBuffer* resultsBuffer = nullptr)
     {
         OverlapContext context;
         context.HitTriggers = hitTriggers;
         context.Results = results;
-        context.Any = results == nullptr;
+        context.ResultsBuffer = resultsBuffer;
+        context.Any = results == nullptr && resultsBuffer == nullptr;
         b3World_OverlapShape(scene->World, C2BPos(center), &proxy, MakeQueryFilter(layerMask), OverlapCallback, &context);
         return context.Hit;
     }
@@ -1343,6 +1505,20 @@ bool PhysicsBackend::RayCastAll(void* scene, const Vector3& origin, const Vector
     return results.HasItems();
 }
 
+int32 PhysicsBackend::RayCastNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0)
+        return 0;
+    QueryContext context;
+    context.HitTriggers = hitTriggers;
+    context.MaxDistance = maxDistance;
+    context.All = true;
+    context.ResultsBuffer = results.Get();
+    context.ResultsCapacity = results.Length();
+    b3World_CastRay(((SceneBox3D*)scene)->World, C2BPos(origin), C2BVec(direction * maxDistance), MakeQueryFilter(layerMask), QueryCastCallback, &context);
+    return context.ResultsCount;
+}
+
 bool PhysicsBackend::BoxCast(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     Array<b3Vec3, InlinedAllocation<8>> points;
@@ -1365,6 +1541,18 @@ bool PhysicsBackend::BoxCastAll(void* scene, const Vector3& center, const Vector
     b3ShapeProxy proxy;
     MakeBoxProxy(halfExtents, rotation, points, proxy);
     return CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, &results, maxDistance, layerMask, hitTriggers);
+}
+
+int32 PhysicsBackend::BoxCastNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0)
+        return 0;
+    Array<b3Vec3, InlinedAllocation<8>> points;
+    b3ShapeProxy proxy;
+    MakeBoxProxy(halfExtents, rotation, points, proxy);
+    int32 count = 0;
+    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, results.Get(), results.Length(), &count);
+    return count;
 }
 
 bool PhysicsBackend::SphereCast(void* scene, const Vector3& center, float radius, const Vector3& direction, float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -1391,6 +1579,18 @@ bool PhysicsBackend::SphereCastAll(void* scene, const Vector3& center, float rad
     return CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, &results, maxDistance, layerMask, hitTriggers);
 }
 
+int32 PhysicsBackend::SphereCastNonAlloc(void* scene, const Vector3& center, float radius, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0)
+        return 0;
+    Array<b3Vec3, InlinedAllocation<8>> points;
+    b3ShapeProxy proxy;
+    MakeSphereProxy(radius, points, proxy);
+    int32 count = 0;
+    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, results.Get(), results.Length(), &count);
+    return count;
+}
+
 bool PhysicsBackend::CapsuleCast(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     Array<b3Vec3, InlinedAllocation<8>> points;
@@ -1413,6 +1613,18 @@ bool PhysicsBackend::CapsuleCastAll(void* scene, const Vector3& center, float ra
     b3ShapeProxy proxy;
     MakeCapsuleProxy(radius, height, rotation, points, proxy);
     return CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, &results, maxDistance, layerMask, hitTriggers);
+}
+
+int32 PhysicsBackend::CapsuleCastNonAlloc(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0)
+        return 0;
+    Array<b3Vec3, InlinedAllocation<8>> points;
+    b3ShapeProxy proxy;
+    MakeCapsuleProxy(radius, height, rotation, points, proxy);
+    int32 count = 0;
+    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, results.Get(), results.Length(), &count);
+    return count;
 }
 
 bool PhysicsBackend::ConvexCast(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -1459,6 +1671,28 @@ bool PhysicsBackend::ConvexCastAll(void* scene, const Vector3& center, const Col
     proxy.count = count;
     proxy.radius = 0.0f;
     return CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, &results, maxDistance, layerMask, hitTriggers);
+}
+
+int32 PhysicsBackend::ConvexCastNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0 || !convexMesh || convexMesh->GetOptions().Type != CollisionDataType::ConvexMesh)
+        return 0;
+    auto mesh = (MeshBox3D*)convexMesh->GetConvex();
+    if (!mesh || mesh->Vertices.IsEmpty())
+        return 0;
+
+    Array<b3Vec3, InlinedAllocation<64>> points;
+    const int32 pointCount = Math::Min(mesh->Vertices.Count(), B3_MAX_SHAPE_CAST_POINTS);
+    points.Resize(pointCount, false);
+    for (int32 i = 0; i < pointCount; i++)
+        points[i] = Rotate(rotation, Vector3(mesh->Vertices[i] * Float3((float)scale.X, (float)scale.Y, (float)scale.Z)));
+    b3ShapeProxy proxy;
+    proxy.points = points.Get();
+    proxy.count = pointCount;
+    proxy.radius = 0.0f;
+    int32 count = 0;
+    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, results.Get(), results.Length(), &count);
+    return count;
 }
 
 bool PhysicsBackend::CheckBox(void* scene, const Vector3& center, const Vector3& halfExtents, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
@@ -1533,6 +1767,60 @@ bool PhysicsBackend::OverlapConvex(void* scene, const Vector3& center, const Col
     proxy.count = count;
     proxy.radius = 0.0f;
     return OverlapShape((SceneBox3D*)scene, center, proxy, &results, layerMask, hitTriggers);
+}
+
+int32 PhysicsBackend::OverlapBoxNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Capacity == 0)
+        return 0;
+    Array<b3Vec3, InlinedAllocation<8>> points;
+    b3ShapeProxy proxy;
+    MakeBoxProxy(halfExtents, rotation, points, proxy);
+    OverlapShape((SceneBox3D*)scene, center, proxy, nullptr, layerMask, hitTriggers, &results);
+    return results.Count;
+}
+
+int32 PhysicsBackend::OverlapSphereNonAlloc(void* scene, const Vector3& center, float radius, PhysicsOverlapResultBuffer& results, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Capacity == 0)
+        return 0;
+    Array<b3Vec3, InlinedAllocation<8>> points;
+    b3ShapeProxy proxy;
+    MakeSphereProxy(radius, points, proxy);
+    OverlapShape((SceneBox3D*)scene, center, proxy, nullptr, layerMask, hitTriggers, &results);
+    return results.Count;
+}
+
+int32 PhysicsBackend::OverlapCapsuleNonAlloc(void* scene, const Vector3& center, float radius, float height, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Capacity == 0)
+        return 0;
+    Array<b3Vec3, InlinedAllocation<8>> points;
+    b3ShapeProxy proxy;
+    MakeCapsuleProxy(radius, height, rotation, points, proxy);
+    OverlapShape((SceneBox3D*)scene, center, proxy, nullptr, layerMask, hitTriggers, &results);
+    return results.Count;
+}
+
+int32 PhysicsBackend::OverlapConvexNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Capacity == 0 || !convexMesh || convexMesh->GetOptions().Type != CollisionDataType::ConvexMesh)
+        return 0;
+    auto mesh = (MeshBox3D*)convexMesh->GetConvex();
+    if (!mesh || mesh->Vertices.IsEmpty())
+        return 0;
+
+    Array<b3Vec3, InlinedAllocation<64>> points;
+    const int32 pointCount = Math::Min(mesh->Vertices.Count(), B3_MAX_SHAPE_CAST_POINTS);
+    points.Resize(pointCount, false);
+    for (int32 i = 0; i < pointCount; i++)
+        points[i] = Rotate(rotation, Vector3(mesh->Vertices[i] * Float3((float)scale.X, (float)scale.Y, (float)scale.Z)));
+    b3ShapeProxy proxy;
+    proxy.points = points.Get();
+    proxy.count = pointCount;
+    proxy.radius = 0.0f;
+    OverlapShape((SceneBox3D*)scene, center, proxy, nullptr, layerMask, hitTriggers, &results);
+    return results.Count;
 }
 
 PhysicsBackend::ActorFlags PhysicsBackend::GetActorFlags(void* actor)
@@ -1663,6 +1951,15 @@ void PhysicsBackend::SetRigidDynamicActorAngularVelocity(void* actor, const Vect
     b3Body_SetAngularVelocity(actorBox3D->Body, C2BVec(value));
     if (wakeUp)
         b3Body_SetAwake(actorBox3D->Body, true);
+}
+
+Vector3 PhysicsBackend::GetRigidDynamicActorPointVelocity(void* actor, const Vector3& point)
+{
+    auto actorBox3D = (ActorBox3D*)actor;
+    const Vector3 linear = B2C(b3Body_GetLinearVelocity(actorBox3D->Body));
+    const Vector3 angular = B2C(b3Body_GetAngularVelocity(actorBox3D->Body));
+    const Vector3 centerOfMass = B2C(b3Body_GetWorldCenterOfMass(actorBox3D->Body));
+    return linear + Vector3::Cross(angular, point - centerOfMass);
 }
 
 Vector3 PhysicsBackend::GetRigidDynamicActorCenterOfMass(void* actor)
@@ -1926,9 +2223,21 @@ bool PhysicsBackend::ComputeShapesPenetration(void* shapeA, void* shapeB, const 
     direction = Vector3::Forward;
     distance = 0.0f;
 
+    auto shapeBox3DA = (ShapeBox3D*)shapeA;
+    auto shapeBox3DB = (ShapeBox3D*)shapeB;
+    if (shapeBox3DB && shapeBox3DB->Geometry.Type == CollisionShape::Types::HeightField)
+        return ComputeHeightFieldPenetration(shapeBox3DA, shapeBox3DB, positionA, orientationA, positionB, orientationB, direction, distance);
+    if (shapeBox3DA && shapeBox3DA->Geometry.Type == CollisionShape::Types::HeightField)
+    {
+        if (!ComputeHeightFieldPenetration(shapeBox3DB, shapeBox3DA, positionB, orientationB, positionA, orientationA, direction, distance))
+            return false;
+        direction = -direction;
+        return true;
+    }
+
     PenetrationShapeBox3D localShapeA;
     PenetrationShapeBox3D localShapeB;
-    if (!BuildPenetrationShape((ShapeBox3D*)shapeA, localShapeA) || !BuildPenetrationShape((ShapeBox3D*)shapeB, localShapeB))
+    if (!BuildPenetrationShape(shapeBox3DA, localShapeA) || !BuildPenetrationShape(shapeBox3DB, localShapeB))
         return false;
 
     const b3Transform transformBtoA = b3InvMulWorldTransforms(C2BWorldTransform(positionA, orientationA), C2BWorldTransform(positionB, orientationB));
@@ -2730,6 +3039,11 @@ namespace
 
     b3HeightFieldData* BuildHeightFieldData(MeshBox3D* heightField)
     {
+        return BuildHeightFieldData(heightField, b3Vec3_one);
+    }
+
+    b3HeightFieldData* BuildHeightFieldData(MeshBox3D* heightField, const b3Vec3& scale)
+    {
         if (!heightField || heightField->Columns <= 1 || heightField->Rows <= 1 || heightField->HeightSamples.Count() != heightField->Columns * heightField->Rows)
             return nullptr;
 
@@ -2758,7 +3072,7 @@ namespace
         def.materialIndices = heightField->HeightMaterials.Get();
         def.countX = heightField->Columns;
         def.countZ = heightField->Rows;
-        def.scale = b3Vec3_one;
+        def.scale = scale;
         def.globalMinimumHeight = minHeight;
         def.globalMaximumHeight = maxHeight;
         return b3CreateHeightField(&def);

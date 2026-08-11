@@ -38,6 +38,21 @@ public:
 
 public:
     /// <summary>
+    /// Gets the number of native physics shapes owned by this collider actor.
+    /// </summary>
+    virtual int32 GetPhysicsShapesCount() const;
+
+    /// <summary>
+    /// Gets a native physics shape owned by this collider actor.
+    /// </summary>
+    virtual void* GetPhysicsShape(int32 index) const;
+
+    /// <summary>
+    /// Resolves the native actor pose for a shape from an arbitrary collider actor pose.
+    /// </summary>
+    virtual void GetPhysicsShapeActorPose(int32 index, const Vector3& position, const Quaternion& rotation, Vector3& shapePosition, Quaternion& shapeRotation) const;
+
+    /// <summary>
     /// Gets the attached rigid body.
     /// </summary>
     /// <returns>The rigid body or null.</returns>

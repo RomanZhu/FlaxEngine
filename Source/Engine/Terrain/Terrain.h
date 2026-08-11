@@ -470,6 +470,9 @@ public:
     bool IntersectsItself(const Ray& ray, Real& distance, Vector3& normal) override;
     void Serialize(SerializeStream& stream, const void* otherObj) override;
     void Deserialize(DeserializeStream& stream, ISerializeModifier* modifier) override;
+    int32 GetPhysicsShapesCount() const override;
+    void* GetPhysicsShape(int32 index) const override;
+    void GetPhysicsShapeActorPose(int32 index, const Vector3& position, const Quaternion& rotation, Vector3& shapePosition, Quaternion& shapeRotation) const override;
     RigidBody* GetAttachedRigidBody() const override;
     bool RayCast(const Vector3& origin, const Vector3& direction, float& resultHitDistance, float maxDistance = MAX_float) const final;
     bool RayCast(const Vector3& origin, const Vector3& direction, RayCastHit& hitInfo, float maxDistance = MAX_float) const final;

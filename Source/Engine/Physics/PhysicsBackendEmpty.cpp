@@ -147,6 +147,11 @@ bool PhysicsBackend::RayCastAll(void* scene, const Vector3& origin, const Vector
     return false;
 }
 
+int32 PhysicsBackend::RayCastNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
+}
+
 bool PhysicsBackend::BoxCast(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return false;
@@ -160,6 +165,11 @@ bool PhysicsBackend::BoxCast(void* scene, const Vector3& center, const Vector3& 
 bool PhysicsBackend::BoxCastAll(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Array<RayCastHit>& results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return false;
+}
+
+int32 PhysicsBackend::BoxCastNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
 }
 
 bool PhysicsBackend::SphereCast(void* scene, const Vector3& center, const float radius, const Vector3& direction, const float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -177,6 +187,11 @@ bool PhysicsBackend::SphereCastAll(void* scene, const Vector3& center, const flo
     return false;
 }
 
+int32 PhysicsBackend::SphereCastNonAlloc(void* scene, const Vector3& center, const float radius, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
+}
+
 bool PhysicsBackend::CapsuleCast(void* scene, const Vector3& center, const float radius, const float height, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return false;
@@ -192,6 +207,11 @@ bool PhysicsBackend::CapsuleCastAll(void* scene, const Vector3& center, const fl
     return false;
 }
 
+int32 PhysicsBackend::CapsuleCastNonAlloc(void* scene, const Vector3& center, const float radius, const float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
+}
+
 bool PhysicsBackend::ConvexCast(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return false;
@@ -205,6 +225,11 @@ bool PhysicsBackend::ConvexCast(void* scene, const Vector3& center, const Collis
 bool PhysicsBackend::ConvexCastAll(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Array<RayCastHit>& results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return false;
+}
+
+int32 PhysicsBackend::ConvexCastNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
 }
 
 bool PhysicsBackend::CheckBox(void* scene, const Vector3& center, const Vector3& halfExtents, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
@@ -245,6 +270,26 @@ bool PhysicsBackend::OverlapCapsule(void* scene, const Vector3& center, const fl
 bool PhysicsBackend::OverlapConvex(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Array<PhysicsColliderActor*>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
 {
     return false;
+}
+
+int32 PhysicsBackend::OverlapBoxNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
+}
+
+int32 PhysicsBackend::OverlapSphereNonAlloc(void* scene, const Vector3& center, const float radius, PhysicsOverlapResultBuffer& results, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
+}
+
+int32 PhysicsBackend::OverlapCapsuleNonAlloc(void* scene, const Vector3& center, const float radius, const float height, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
+}
+
+int32 PhysicsBackend::OverlapConvexNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return 0;
 }
 
 PhysicsBackend::ActorFlags PhysicsBackend::GetActorFlags(void* actor)
@@ -327,6 +372,11 @@ Vector3 PhysicsBackend::GetRigidDynamicActorAngularVelocity(void* actor)
 
 void PhysicsBackend::SetRigidDynamicActorAngularVelocity(void* actor, const Vector3& value, bool wakeUp)
 {
+}
+
+Vector3 PhysicsBackend::GetRigidDynamicActorPointVelocity(void* actor, const Vector3& point)
+{
+    return Vector3::Zero;
 }
 
 Vector3 PhysicsBackend::GetRigidDynamicActorCenterOfMass(void* actor)

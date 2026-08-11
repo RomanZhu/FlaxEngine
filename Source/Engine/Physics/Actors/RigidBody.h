@@ -278,6 +278,11 @@ public:
     API_PROPERTY() void SetAngularVelocity(const Vector3& value) const;
 
     /// <summary>
+    /// Gets the rigidbody velocity at a world-space point, including angular velocity.
+    /// </summary>
+    API_FUNCTION() Vector3 GetPointVelocity(const Vector3& point) const;
+
+    /// <summary>
     /// Gets the maximum depenetration velocity when rigidbody moving out of penetrating state.
     /// </summary>
     /// <remarks>This value controls how much velocity the solver can introduce to correct for penetrations in contacts. Using this property can smooth objects moving out of colliding state and prevent unstable motion.</remarks>

@@ -493,6 +493,71 @@ protected:
     }
 };
 
+template<typename HitType>
+class NonAllocCastHitBuffer : public PxHitCallback<HitType>
+{
+    HitType _buffer[32];
+    Span<RayCastHit> _results;
+    Vector3 _sceneOrigin;
+    int32 _count = 0;
+
+    PxAgain processTouches(const HitType* buffer, PxU32 nbHits) override
+    {
+        const int32 count = Math::Min<int32>((int32)nbHits, _results.Length() - _count);
+        for (int32 i = 0; i < count; i++)
+        {
+            P2C(buffer[i], _results[_count++]);
+            _results[_count - 1].Point += _sceneOrigin;
+        }
+        return _count < _results.Length();
+    }
+
+    void finalizeQuery() override
+    {
+        if (this->hasBlock && _count < _results.Length())
+            processTouches(&this->block, 1);
+    }
+
+public:
+    NonAllocCastHitBuffer(Span<RayCastHit> results, const Vector3& sceneOrigin)
+        : PxHitCallback<HitType>(_buffer, ARRAY_COUNT(_buffer))
+        , _results(results)
+        , _sceneOrigin(sceneOrigin)
+    {
+    }
+
+    int32 Count() const
+    {
+        return _count;
+    }
+};
+
+class NonAllocOverlapHitBuffer : public PxHitCallback<PxOverlapHit>
+{
+    PxOverlapHit _buffer[32];
+    PhysicsOverlapResultBuffer& _results;
+
+    PxAgain processTouches(const PxOverlapHit* buffer, PxU32 nbHits) override
+    {
+        const int32 count = Math::Min<int32>((int32)nbHits, _results.Capacity - _results.Count);
+        for (int32 i = 0; i < count; i++)
+            _results.Add(buffer[i].shape ? static_cast<PhysicsColliderActor*>(buffer[i].shape->userData) : nullptr);
+        return _results.Count < _results.Capacity;
+    }
+
+public:
+    explicit NonAllocOverlapHitBuffer(PhysicsOverlapResultBuffer& results)
+        : PxHitCallback<PxOverlapHit>(_buffer, ARRAY_COUNT(_buffer))
+        , _results(results)
+    {
+    }
+
+    int32 Count() const
+    {
+        return _results.Count;
+    }
+};
+
 #define PxHitFlagEmpty (PxHitFlags)0
 #define SCENE_QUERY_FLAGS (PxHitFlag::ePOSITION | PxHitFlag::eNORMAL | PxHitFlag::eFACE_INDEX | PxHitFlag::eUV)
 
@@ -2176,6 +2241,16 @@ bool PhysicsBackend::RayCastAll(void* scene, const Vector3& origin, const Vector
     return true;
 }
 
+int32 PhysicsBackend::RayCastNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocCastHitBuffer<PxRaycastHit> buffer(results, scenePhysX->Origin);
+    scenePhysX->Scene->raycast(C2P(origin - scenePhysX->Origin), C2P(direction), maxDistance, buffer, SCENE_QUERY_FLAGS, filterData, &QueryFilter);
+    return buffer.Count();
+}
+
 bool PhysicsBackend::BoxCast(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     SCENE_QUERY_SETUP_SWEEP_1();
@@ -2204,6 +2279,18 @@ bool PhysicsBackend::BoxCastAll(void* scene, const Vector3& center, const Vector
         return false;
     SCENE_QUERY_COLLECT_ALL();
     return true;
+}
+
+int32 PhysicsBackend::BoxCastNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocCastHitBuffer<PxSweepHit> buffer(results, scenePhysX->Origin);
+    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
+    const PxBoxGeometry geometry(C2P(halfExtents));
+    scenePhysX->Scene->sweep(geometry, pose, C2P(direction), maxDistance, buffer, SCENE_QUERY_FLAGS, filterData, &QueryFilter);
+    return buffer.Count();
 }
 
 bool PhysicsBackend::SphereCast(void* scene, const Vector3& center, const float radius, const Vector3& direction, const float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -2236,6 +2323,18 @@ bool PhysicsBackend::SphereCastAll(void* scene, const Vector3& center, const flo
     return true;
 }
 
+int32 PhysicsBackend::SphereCastNonAlloc(void* scene, const Vector3& center, const float radius, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocCastHitBuffer<PxSweepHit> buffer(results, scenePhysX->Origin);
+    const PxTransform pose(C2P(center - scenePhysX->Origin));
+    const PxSphereGeometry geometry(radius);
+    scenePhysX->Scene->sweep(geometry, pose, C2P(direction), maxDistance, buffer, SCENE_QUERY_FLAGS, filterData, &QueryFilter);
+    return buffer.Count();
+}
+
 bool PhysicsBackend::CapsuleCast(void* scene, const Vector3& center, const float radius, const float height, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     SCENE_QUERY_SETUP_SWEEP_1();
@@ -2264,6 +2363,18 @@ bool PhysicsBackend::CapsuleCastAll(void* scene, const Vector3& center, const fl
         return false;
     SCENE_QUERY_COLLECT_ALL();
     return true;
+}
+
+int32 PhysicsBackend::CapsuleCastNonAlloc(void* scene, const Vector3& center, const float radius, const float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocCastHitBuffer<PxSweepHit> buffer(results, scenePhysX->Origin);
+    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
+    const PxCapsuleGeometry geometry(radius, height * 0.5f);
+    scenePhysX->Scene->sweep(geometry, pose, C2P(direction), maxDistance, buffer, SCENE_QUERY_FLAGS, filterData, &QueryFilter);
+    return buffer.Count();
 }
 
 bool PhysicsBackend::ConvexCast(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -2297,6 +2408,18 @@ bool PhysicsBackend::ConvexCastAll(void* scene, const Vector3& center, const Col
         return false;
     SCENE_QUERY_COLLECT_ALL();
     return true;
+}
+
+int32 PhysicsBackend::ConvexCastNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Length() == 0 || !convexMesh || convexMesh->GetOptions().Type != CollisionDataType::ConvexMesh)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocCastHitBuffer<PxSweepHit> buffer(results, scenePhysX->Origin);
+    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
+    const PxConvexMeshGeometry geometry((PxConvexMesh*)convexMesh->GetConvex(), PxMeshScale(C2P(scale)));
+    scenePhysX->Scene->sweep(geometry, pose, C2P(direction), maxDistance, buffer, SCENE_QUERY_FLAGS, filterData, &QueryFilter);
+    return buffer.Count();
 }
 
 bool PhysicsBackend::CheckBox(void* scene, const Vector3& center, const Vector3& halfExtents, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
@@ -2375,6 +2498,54 @@ bool PhysicsBackend::OverlapConvex(void* scene, const Vector3& center, const Col
         return false;
     SCENE_QUERY_COLLECT_OVERLAP();
     return true;
+}
+
+int32 PhysicsBackend::OverlapBoxNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Capacity == 0)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocOverlapHitBuffer buffer(results);
+    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
+    const PxBoxGeometry geometry(C2P(halfExtents));
+    scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter);
+    return buffer.Count();
+}
+
+int32 PhysicsBackend::OverlapSphereNonAlloc(void* scene, const Vector3& center, const float radius, PhysicsOverlapResultBuffer& results, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Capacity == 0)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocOverlapHitBuffer buffer(results);
+    const PxTransform pose(C2P(center - scenePhysX->Origin));
+    const PxSphereGeometry geometry(radius);
+    scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter);
+    return buffer.Count();
+}
+
+int32 PhysicsBackend::OverlapCapsuleNonAlloc(void* scene, const Vector3& center, const float radius, const float height, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Capacity == 0)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocOverlapHitBuffer buffer(results);
+    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
+    const PxCapsuleGeometry geometry(radius, height * 0.5f);
+    scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter);
+    return buffer.Count();
+}
+
+int32 PhysicsBackend::OverlapConvexNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, PhysicsOverlapResultBuffer& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    if (results.Capacity == 0 || !convexMesh || convexMesh->GetOptions().Type != CollisionDataType::ConvexMesh)
+        return 0;
+    SCENE_QUERY_SETUP(false);
+    NonAllocOverlapHitBuffer buffer(results);
+    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
+    const PxConvexMeshGeometry geometry((PxConvexMesh*)convexMesh->GetConvex(), PxMeshScale(C2P(scale)));
+    scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter);
+    return buffer.Count();
 }
 
 PhysicsBackend::ActorFlags PhysicsBackend::GetActorFlags(void* actor)
@@ -2549,6 +2720,13 @@ void PhysicsBackend::SetRigidDynamicActorAngularVelocity(void* actor, const Vect
 {
     auto actorPhysX = (PxRigidDynamic*)actor;
     actorPhysX->setAngularVelocity(C2P(value), wakeUp);
+}
+
+Vector3 PhysicsBackend::GetRigidDynamicActorPointVelocity(void* actor, const Vector3& point)
+{
+    auto actorPhysX = (PxRigidDynamic*)actor;
+    const Vector3 sceneOrigin = SceneOrigins[actorPhysX->getScene()];
+    return P2C(PxRigidBodyExt::getVelocityAtPos(*actorPhysX, C2P(point - sceneOrigin)));
 }
 
 Vector3 PhysicsBackend::GetRigidDynamicActorCenterOfMass(void* actor)
@@ -2813,8 +2991,8 @@ bool PhysicsBackend::ComputeShapesPenetration(void* shapeA, void* shapeB, const 
 {
     auto shapeAPhysX = (PxShape*)shapeA;
     auto shapeBPhysX = (PxShape*)shapeB;
-    const PxTransform poseA(C2P(positionA), C2P(orientationA));
-    const PxTransform poseB(C2P(positionB), C2P(orientationB));
+    const PxTransform poseA = PxTransform(C2P(positionA), C2P(orientationA)) * shapeAPhysX->getLocalPose();
+    const PxTransform poseB = PxTransform(C2P(positionB), C2P(orientationB)) * shapeBPhysX->getLocalPose();
     PxVec3 dir = C2P(direction);
     const bool result = PxGeometryQuery::computePenetration(dir, distance, shapeAPhysX->getGeometry(), poseA, shapeBPhysX->getGeometry(), poseB);
     direction = P2C(dir);
