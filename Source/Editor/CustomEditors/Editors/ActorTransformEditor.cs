@@ -32,10 +32,34 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <seealso cref="FlaxEditor.CustomEditors.Editors.Vector3Editor" />
         public class PositionEditor : Vector3Editor
         {
+            private Button _roundToGridButton;
+
             /// <inheritdoc />
             public override void Initialize(LayoutElementsContainer layout)
             {
                 base.Initialize(layout);
+
+                if (LinkedLabel != null)
+                {
+                    _roundToGridButton = new Button
+                    {
+                        Parent = LinkedLabel,
+                        Width = 18,
+                        Height = 18,
+                        AnchorPreset = AnchorPresets.MiddleLeft,
+                        TooltipText = "Round world position to the current viewport grid",
+                        BackgroundBrush = new SpriteBrush(Editor.Instance.Icons.Grid32),
+                    };
+                    _roundToGridButton.Clicked += RoundToGrid;
+                    _roundToGridButton.SetColors(FlaxEngine.GUI.Style.Current.Foreground);
+                    _roundToGridButton.BorderColor = _roundToGridButton.BorderColorSelected = _roundToGridButton.BorderColorHighlighted = Color.Transparent;
+                    _roundToGridButton.LocalX += FlaxEngine.GUI.Style.Current.FontMedium.MeasureText(LinkedLabel.Text.Value).X + 10;
+                    LinkedLabel.SetupContextMenu += (label, menu, editor) =>
+                    {
+                        menu.AddSeparator();
+                        menu.AddButton("Round to Grid", RoundToGrid).LinkTooltip("Rounds world position to the current viewport grid");
+                    };
+                }
 
                 // Override colors
                 XElement.ValueBox.BorderSelectedColor = AxisColorX;
@@ -47,6 +71,61 @@ namespace FlaxEditor.CustomEditors.Editors
                 YElement.ValueBox.Category = Utils.ValueCategory.Distance;
                 ZElement.ValueBox.HighlightColor = AxisColorZ;
                 ZElement.ValueBox.Category = Utils.ValueCategory.Distance;
+            }
+
+            internal static Vector3 RoundPositionToGrid(Vector3 position, float step)
+            {
+                if (step <= Mathf.Epsilon)
+                    return position;
+                return Vector3.SnapToGrid(position, new Vector3(step));
+            }
+
+            private void RoundToGrid()
+            {
+                float step = Editor.Instance.MainTransformGizmo.TranslationSnapValue;
+                if (step <= Mathf.Epsilon || Values == null || Values.Count == 0)
+                    return;
+
+                var roundedValues = new object[Values.Count];
+                bool hasMatchingActors = ParentEditor?.Values != null && ParentEditor.Values.Count == Values.Count;
+                for (int i = 0; i < Values.Count; i++)
+                {
+                    Vector3 roundedPosition;
+                    if (hasMatchingActors && ParentEditor.Values[i] is Actor actor)
+                    {
+                        Vector3 worldPosition = RoundPositionToGrid(actor.Position, step);
+                        roundedPosition = actor.Parent != null ? actor.Parent.Transform.WorldToLocal(worldPosition) : worldPosition;
+                    }
+                    else
+                    {
+                        roundedPosition = GetPosition(Values[i]);
+                        roundedPosition = RoundPositionToGrid(roundedPosition, step);
+                    }
+
+                    roundedValues[i] = ConvertPosition(roundedPosition, Values[i]);
+                }
+
+                SetValue(roundedValues.Length == 1 ? roundedValues[0] : roundedValues);
+            }
+
+            private static Vector3 GetPosition(object value)
+            {
+                if (value is Vector3 vector)
+                    return vector;
+                if (value is Float3 floatVector)
+                    return floatVector;
+                if (value is Double3 doubleVector)
+                    return doubleVector;
+                return Vector3.Zero;
+            }
+
+            private static object ConvertPosition(Vector3 position, object source)
+            {
+                if (source is Float3)
+                    return (Float3)position;
+                if (source is Double3)
+                    return (Double3)position;
+                return position;
             }
         }
 

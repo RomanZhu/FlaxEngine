@@ -539,13 +539,10 @@ namespace FlaxEditor.Viewport
 
         internal static readonly float[] TranslateSnapValues =
         {
-            0.1f,
-            0.5f,
-            1.0f,
-            5.0f,
-            10.0f,
+            15.0f,
+            25.0f,
+            50.0f,
             100.0f,
-            1000.0f,
         };
 
         internal static readonly float[] RotateSnapValues =

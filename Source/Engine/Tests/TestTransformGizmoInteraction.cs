@@ -3,6 +3,7 @@
 #if FLAX_TESTS
 using System;
 using System.Collections.Generic;
+using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.Gizmo;
 using FlaxEditor.SceneGraph;
 using FlaxEngine;
@@ -116,6 +117,9 @@ namespace FlaxEditor.Tests
                 new Vector3(25.0f));
             Assert.AreEqual(new Vector3(1.25f), uniform);
             Assert.AreEqual(1.25f, TransformGizmoBase.SnapScaleFactorToGrid(1.24f, 100.0f, 25.0f), 0.00001f);
+
+            Vector3 roundedPosition = ActorTransformEditor.PositionEditor.RoundPositionToGrid(new Vector3(-5147.25534f, 50.0f, -843.796185f), 10.0f);
+            Assert.AreEqual(new Vector3(-5150.0f, 50.0f, -840.0f), roundedPosition);
         }
 
         [Test]
