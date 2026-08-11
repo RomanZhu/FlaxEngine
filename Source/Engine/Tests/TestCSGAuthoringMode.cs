@@ -10,12 +10,16 @@ using Real = System.Single;
 using System;
 using System.Collections.Generic;
 using FlaxEditor.Gizmo;
+using FlaxEditor.Gizmo.Snapping;
 using FlaxEditor.Options;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEditor.Tools.CSG;
 using FlaxEditor.Tools.CSG.HitTesting;
+using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEditor.Tools.CSG.Selection;
+using FlaxEditor.Tools.CSG.Transactions;
+using FlaxEditor.Tools.CSG.WorkingPlane;
 using FlaxEditor.Viewport.Modes;
 using FlaxEngine;
 using NUnit.Framework;
@@ -142,6 +146,100 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestDefaultToolBindingsUseNumberRow()
+        {
+            var input = new InputOptions();
+            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha1), input.CSGSelectPlaceTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha2), input.CSGDrawTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha3), input.CSGEditTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha4), input.CSGSurfaceTool);
+        }
+
+        [Test]
+        public void TestControllerPublishesTransactionLifecycle()
+        {
+            var controller = new CSGToolController();
+            int started = 0;
+            int committed = 0;
+            EditorGizmoModeCancelReason cancelled = default;
+            controller.InteractionStarted += () => started++;
+            controller.InteractionCommitted += () => committed++;
+            controller.InteractionCancelled += reason => cancelled = reason;
+
+            controller.BeginInteraction();
+            Assert.AreEqual(1, started);
+            Assert.IsTrue(controller.TryCommit());
+            Assert.AreEqual(1, committed);
+            controller.BeginInteraction();
+            Assert.IsTrue(controller.TryCancel(EditorGizmoModeCancelReason.FocusLost));
+            Assert.AreEqual(EditorGizmoModeCancelReason.FocusLost, cancelled);
+        }
+
+        [Test]
+        public void TestRebuildQueueCoalescesPreviewAndRejectsStaleCompletion()
+        {
+            var queue = new CSGRebuildQueue { PreviewIntervalSeconds = 0.1 };
+            var sceneId = Guid.NewGuid();
+
+            long first = queue.Request(sceneId, CSGRebuildRequestKind.Preview, true, 50.0f, 0.0, out var dispatch);
+            Assert.AreEqual(first, dispatch.Revision);
+            long second = queue.Request(sceneId, CSGRebuildRequestKind.Preview, true, 50.0f, 0.01, out dispatch);
+            Assert.AreEqual(0, dispatch.Revision);
+            long third = queue.Request(sceneId, CSGRebuildRequestKind.Preview, true, 50.0f, 0.02, out dispatch);
+            Assert.AreEqual(0, dispatch.Revision);
+            Assert.IsFalse(queue.TryDequeue(sceneId, true, 0.09, out dispatch));
+            Assert.IsTrue(queue.TryDequeue(sceneId, true, 0.1, out dispatch));
+            Assert.AreEqual(third, dispatch.Revision);
+            Assert.IsFalse(queue.TryAcknowledge(sceneId, first));
+            Assert.IsTrue(queue.TryAcknowledge(sceneId, third));
+
+            var status = queue.GetStatus(sceneId);
+            Assert.AreEqual(3, status.RequestCount);
+            Assert.AreEqual(2, status.DispatchCount);
+            Assert.AreEqual(CSGRebuildVisualState.UpToDate, status.State);
+            long final = queue.Request(sceneId, CSGRebuildRequestKind.Final, true, 50.0f, 0.11, out dispatch);
+            Assert.AreEqual(final, dispatch.Revision);
+            Assert.AreEqual(0.0f, dispatch.TimeoutMs);
+            long stale = queue.Request(sceneId, CSGRebuildRequestKind.Preview, false, 50.0f, 0.12, out dispatch);
+            Assert.Greater(stale, final);
+            Assert.AreEqual(0, dispatch.Revision);
+            Assert.AreEqual(CSGRebuildVisualState.Stale, queue.GetStatus(sceneId).State);
+        }
+
+        [Test]
+        public void TestTransactionOwnsPerformedActionsUntilCommitOrRollback()
+        {
+            var undo = new Undo();
+            var committedAction = new TestUndoAction();
+            using (var transaction = new CSGTransaction())
+            {
+                transaction.Begin();
+                transaction.RegisterPerformedAction(committedAction);
+                transaction.RecordPreview(0.25, 0);
+                Assert.IsTrue(transaction.Commit(undo));
+                Assert.AreEqual(1, undo.UndoOperationsStack.HistoryCount);
+                Assert.AreEqual(CSGTransactionState.Committed, transaction.Telemetry.State);
+            }
+            undo.PerformUndo();
+            Assert.AreEqual(1, committedAction.UndoCount);
+            undo.PerformRedo();
+            Assert.AreEqual(1, committedAction.DoCount);
+
+            var rolledBackAction = new TestUndoAction();
+            using (var transaction = new CSGTransaction())
+            {
+                transaction.Begin();
+                transaction.RegisterPerformedAction(rolledBackAction);
+                Assert.IsTrue(transaction.Invalidate("FocusLost"));
+                Assert.AreEqual(CSGTransactionState.RolledBack, transaction.Telemetry.State);
+                Assert.AreEqual("FocusLost", transaction.Telemetry.InvalidationReason);
+            }
+            Assert.AreEqual(1, rolledBackAction.UndoCount);
+            Assert.AreEqual(1, rolledBackAction.DisposeCount);
+            undo.Dispose();
+        }
+
+        [Test]
         public void TestAllHitTraversalAppendsEveryHitAndPreservesNearestHit()
         {
             var root = new TestRayNode(Guid.NewGuid(), 5.0f);
@@ -255,7 +353,77 @@ namespace FlaxEditor.Tests
             Assert.AreSame(tiedFirst, hits[0].Node);
             Assert.AreSame(tiedSecond, hits[1].Node);
             Assert.AreSame(far, hits[2].Node);
+            Assert.IsTrue(Vector3.NearEqual(new Vector3(0.0f, 0.0f, 2.0f), hits[0].Point));
             root.Dispose();
+        }
+
+        [Test]
+        public void TestWorkingPlaneBasisIsStableAcrossCoplanarHits()
+        {
+            var normal = new Vector3(0.25f, 0.8f, 0.45f);
+            normal.Normalize();
+            var preferredTangent = Vector3.Right;
+            var pointA = normal * 125.0f;
+            var alongPlane = Vector3.Cross(normal, Vector3.Right);
+            alongPlane.Normalize();
+            var pointB = pointA + alongPlane * 73.0f;
+
+            Assert.IsTrue(CSGWorkingPlaneService.TryDerive(pointA, normal, preferredTangent, 10.0f, 10, Guid.Empty, -1, out var planeA));
+            Assert.IsTrue(CSGWorkingPlaneService.TryDerive(pointB, normal, preferredTangent, 10.0f, 10, Guid.Empty, -1, out var planeB));
+            Assert.IsTrue(Vector3.NearEqual(planeA.Origin, planeB.Origin));
+            Assert.IsTrue(Vector3.NearEqual(planeA.Tangent, planeB.Tangent));
+            Assert.IsTrue(Vector3.NearEqual(planeA.Bitangent, planeB.Bitangent));
+            Assert.AreEqual(0.0f, (float)Vector3.Dot(planeA.Normal, planeA.Tangent), 0.0001f);
+            Assert.AreEqual(0.0f, (float)Vector3.Dot(planeA.Normal, planeA.Bitangent), 0.0001f);
+        }
+
+        [Test]
+        public void TestWorkingPlaneRejectsGrazingHoverAndFreezesTransactionPlane()
+        {
+            var service = new CSGWorkingPlaneService();
+            var grazingRay = new Ray(new Vector3(0.0f, 10.0f, 0.0f), Vector3.Right);
+            Assert.IsFalse(service.TrySetHover(Vector3.Zero, Vector3.Up, Vector3.Right, grazingRay, 10.0f, Guid.Empty, -1));
+
+            var ray = new Ray(new Vector3(0.0f, 10.0f, 0.0f), Vector3.Down);
+            Assert.IsTrue(service.TrySetHover(Vector3.Zero, Vector3.Up, Vector3.Right, ray, 10.0f, Guid.NewGuid(), 2));
+            service.Freeze();
+            var frozen = service.ActivePlane;
+            service.ClearHover();
+            service.SetSpacing(25.0f);
+            Assert.IsTrue(service.IsFrozen);
+            Assert.IsTrue(Vector3.NearEqual(frozen.Origin, service.ActivePlane.Origin));
+            Assert.AreEqual(25.0f, service.ActivePlane.Spacing);
+            service.Unfreeze();
+        }
+
+        [Test]
+        public void TestPlaneGridSnapHandlesNegativeCoordinatesExactly()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            var point = plane.ToWorld(new Float2(-14.9f, 26.1f));
+            var snapped = ViewportSnapService.SnapToGrid(ref plane, point, out var coordinates);
+
+            Assert.AreEqual(-10.0f, coordinates.X, 0.0001f);
+            Assert.AreEqual(30.0f, coordinates.Y, 0.0001f);
+            Assert.IsTrue(Vector3.NearEqual(plane.ToWorld(coordinates), snapped));
+        }
+
+        [Test]
+        public void TestGeometrySnapUsesScreenThresholdAndStableFeaturePriority()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            var candidates = new List<ViewportSnapCandidate>
+            {
+                new ViewportSnapCandidate { Point = Vector3.Right * 20.0f, Kind = ViewportSnapTargetKind.CSGFace, ActorId = Guid.NewGuid(), ComponentIndex = 1, ScreenDistance = 4.0f },
+                new ViewportSnapCandidate { Point = Vector3.Right * 10.0f, Kind = ViewportSnapTargetKind.CSGVertex, ActorId = Guid.NewGuid(), ComponentIndex = 3, ScreenDistance = 4.0f },
+            };
+            var solver = new ViewportSnapService();
+
+            solver.Solve(ref plane, Vector3.Zero, true, 3.0f, candidates, out var gridResult);
+            Assert.AreEqual(ViewportSnapTargetKind.Grid, gridResult.Kind);
+            solver.Solve(ref plane, Vector3.Zero, true, 5.0f, candidates, out var geometryResult);
+            Assert.AreEqual(ViewportSnapTargetKind.CSGVertex, geometryResult.Kind);
+            Assert.IsTrue(Vector3.NearEqual(Vector3.Right * 10.0f, geometryResult.Point));
         }
 
         private sealed class TestMode : EditorGizmoMode
@@ -280,6 +448,30 @@ namespace FlaxEditor.Tests
             {
                 LastCancelReason = reason;
                 return true;
+            }
+        }
+
+        private sealed class TestUndoAction : IUndoAction
+        {
+            public int DoCount;
+            public int UndoCount;
+            public int DisposeCount;
+
+            public string ActionString => "Test CSG action";
+
+            public void Do()
+            {
+                DoCount++;
+            }
+
+            public void Undo()
+            {
+                UndoCount++;
+            }
+
+            public void Dispose()
+            {
+                DisposeCount++;
             }
         }
 

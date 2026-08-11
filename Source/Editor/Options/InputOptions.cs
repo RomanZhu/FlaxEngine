@@ -343,21 +343,21 @@ namespace FlaxEditor.Options
 
         #region CSG Authoring
 
-        [DefaultValue(typeof(InputBinding), "None")]
+        [DefaultValue(typeof(InputBinding), "Alpha1")]
         [EditorDisplay("CSG Authoring", "Select / Place Tool"), EditorOrder(1100)]
-        public InputBinding CSGSelectPlaceTool = new InputBinding(KeyboardKeys.None);
+        public InputBinding CSGSelectPlaceTool = new InputBinding(KeyboardKeys.Alpha1);
 
-        [DefaultValue(typeof(InputBinding), "None")]
+        [DefaultValue(typeof(InputBinding), "Alpha2")]
         [EditorDisplay("CSG Authoring", "Draw Tool"), EditorOrder(1110)]
-        public InputBinding CSGDrawTool = new InputBinding(KeyboardKeys.None);
+        public InputBinding CSGDrawTool = new InputBinding(KeyboardKeys.Alpha2);
 
-        [DefaultValue(typeof(InputBinding), "None")]
+        [DefaultValue(typeof(InputBinding), "Alpha3")]
         [EditorDisplay("CSG Authoring", "Edit Tool"), EditorOrder(1120)]
-        public InputBinding CSGEditTool = new InputBinding(KeyboardKeys.None);
+        public InputBinding CSGEditTool = new InputBinding(KeyboardKeys.Alpha3);
 
-        [DefaultValue(typeof(InputBinding), "None")]
+        [DefaultValue(typeof(InputBinding), "Alpha4")]
         [EditorDisplay("CSG Authoring", "Surface Tool"), EditorOrder(1130)]
-        public InputBinding CSGSurfaceTool = new InputBinding(KeyboardKeys.None);
+        public InputBinding CSGSurfaceTool = new InputBinding(KeyboardKeys.Alpha4);
 
         [DefaultValue(typeof(InputBinding), "None")]
         [EditorDisplay("CSG Authoring", "Pick Working Plane"), EditorOrder(1140)]

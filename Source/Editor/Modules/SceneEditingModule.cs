@@ -7,6 +7,7 @@ using FlaxEditor.Actions;
 using FlaxEditor.History;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
+using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEngine;
 
 namespace FlaxEditor.Modules
@@ -258,11 +259,8 @@ namespace FlaxEditor.Modules
             var actor = node.Actor;
 
             // Auto CSG mesh rebuild
-            if (!isPlayMode && options.General.AutoRebuildCSG)
-            {
-                if (actor is BoxBrush && actor.Scene)
-                    actor.Scene.BuildCSG(options.General.AutoRebuildCSGTimeoutMs);
-            }
+            if (!isPlayMode && actor is BoxBrush && actor.Scene)
+                CSGRebuildScheduler.Shared.RequestExternal(actor.Scene);
 
             // Auto NavMesh rebuild
             if (!isPlayMode && options.General.AutoRebuildNavMesh && actor.Scene && node.AffectsNavigationWithChildren)

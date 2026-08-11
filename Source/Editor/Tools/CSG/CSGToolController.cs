@@ -150,14 +150,39 @@ namespace FlaxEditor.Tools.CSG
         public event Action Changed;
 
         /// <summary>
-        /// Occurs when a future milestone should pick a working plane from the viewport.
+        /// Occurs when a CSG authoring transaction begins.
+        /// </summary>
+        public event Action InteractionStarted;
+
+        /// <summary>
+        /// Occurs when the active CSG authoring transaction commits.
+        /// </summary>
+        public event Action InteractionCommitted;
+
+        /// <summary>
+        /// Occurs when the active CSG authoring transaction is invalidated or cancelled.
+        /// </summary>
+        public event Action<EditorGizmoModeCancelReason> InteractionCancelled;
+
+        /// <summary>
+        /// Occurs when the viewport should pick and lock the hovered working plane.
         /// </summary>
         public event Action PickWorkingPlaneRequested;
 
         /// <summary>
-        /// Occurs when a future milestone should reset the working plane.
+        /// Occurs when the viewport should reset the working plane.
         /// </summary>
         public event Action ResetWorkingPlaneRequested;
+
+        /// <summary>
+        /// Occurs when the working plane should be offset along its normal.
+        /// </summary>
+        public event Action<float> OffsetWorkingPlaneRequested;
+
+        /// <summary>
+        /// Occurs when the working-plane grid basis should rotate around its normal.
+        /// </summary>
+        public event Action<float> RotateWorkingPlaneRequested;
 
         /// <summary>
         /// Gets the active CSG tool.
@@ -272,7 +297,7 @@ namespace FlaxEditor.Tools.CSG
         }
 
         /// <summary>
-        /// Requests working-plane picking from a future authoring implementation.
+        /// Requests working-plane picking from the viewport.
         /// </summary>
         public void RequestPickWorkingPlane()
         {
@@ -280,12 +305,32 @@ namespace FlaxEditor.Tools.CSG
         }
 
         /// <summary>
-        /// Requests working-plane reset from a future authoring implementation and unlocks the plane.
+        /// Requests working-plane reset and unlocks the plane.
         /// </summary>
         public void ResetWorkingPlane()
         {
             SetWorkingPlaneLocked(false);
             ResetWorkingPlaneRequested?.Invoke();
+        }
+
+        /// <summary>
+        /// Requests a working-plane offset in world units.
+        /// </summary>
+        public void OffsetWorkingPlane(float distance)
+        {
+            if (float.IsNaN(distance) || float.IsInfinity(distance) || Mathf.IsZero(distance))
+                return;
+            OffsetWorkingPlaneRequested?.Invoke(distance);
+        }
+
+        /// <summary>
+        /// Requests a working-plane grid rotation in degrees.
+        /// </summary>
+        public void RotateWorkingPlane(float angleDegrees)
+        {
+            if (float.IsNaN(angleDegrees) || float.IsInfinity(angleDegrees) || Mathf.IsZero(angleDegrees))
+                return;
+            RotateWorkingPlaneRequested?.Invoke(angleDegrees);
         }
 
         /// <summary>
@@ -366,6 +411,7 @@ namespace FlaxEditor.Tools.CSG
             if (HasActiveInteraction)
                 return;
             HasActiveInteraction = true;
+            InteractionStarted?.Invoke();
             Changed?.Invoke();
         }
 
@@ -379,6 +425,7 @@ namespace FlaxEditor.Tools.CSG
                 return false;
             HasActiveInteraction = false;
             ClearTransientModifiers();
+            InteractionCommitted?.Invoke();
             Changed?.Invoke();
             return true;
         }
@@ -397,6 +444,7 @@ namespace FlaxEditor.Tools.CSG
             HasActiveInteraction = false;
             LastCancelReason = reason;
             ClearTransientModifiers();
+            InteractionCancelled?.Invoke(reason);
             Changed?.Invoke();
             return true;
         }

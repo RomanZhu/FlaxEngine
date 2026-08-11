@@ -614,10 +614,16 @@ namespace FlaxEditor.Viewport
         {
             var menu = new ContextMenu();
             var pick = menu.AddButton("Pick from Surface", () => CSGAuthoringMode.Controller.RequestPickWorkingPlane());
-            pick.LinkTooltip("Working-plane picking is routed to the CSG tool and implemented in a later milestone.");
+            pick.LinkTooltip("Pick the hovered surface and lock its working plane.");
             var locked = menu.AddButton("Lock Plane", () => CSGAuthoringMode.Controller.SetWorkingPlaneLocked(!CSGAuthoringMode.Controller.WorkingPlaneLocked));
             locked.CloseMenuOnClick = false;
             menu.AddButton("Reset Plane", CSGAuthoringMode.Controller.ResetWorkingPlane);
+            menu.AddSeparator();
+            menu.AddButton("Offset +1 Grid Step", () => CSGAuthoringMode.Controller.OffsetWorkingPlane(CSGAuthoringMode.Controller.SnapIncrement));
+            menu.AddButton("Offset -1 Grid Step", () => CSGAuthoringMode.Controller.OffsetWorkingPlane(-CSGAuthoringMode.Controller.SnapIncrement));
+            menu.AddButton("Rotate +15 Degrees", () => CSGAuthoringMode.Controller.RotateWorkingPlane(15.0f));
+            menu.AddButton("Rotate -15 Degrees", () => CSGAuthoringMode.Controller.RotateWorkingPlane(-15.0f));
+            menu.AddButton("Rotate 90 Degrees", () => CSGAuthoringMode.Controller.RotateWorkingPlane(90.0f));
             menu.VisibleChanged += control =>
             {
                 if (control.Visible)

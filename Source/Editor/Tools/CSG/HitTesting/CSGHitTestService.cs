@@ -71,6 +71,11 @@ namespace FlaxEditor.Tools.CSG.HitTesting
         public Vector3 Normal;
 
         /// <summary>
+        /// World-space intersection point.
+        /// </summary>
+        public Vector3 Point;
+
+        /// <summary>
         /// Gets the node that should be synchronized with the editor selection for the given tool.
         /// </summary>
         public SceneGraphNode SelectionNode => Kind == CSGHitKind.Face ? Node : Brush;
@@ -137,6 +142,7 @@ namespace FlaxEditor.Tools.CSG.HitTesting
                     ComponentIndex = -1,
                     Distance = raw.Distance,
                     Normal = raw.Normal,
+                    Point = ray.Position + ray.Direction * raw.Distance,
                 };
 
                 if (raw.Node.CSGViewportSelection == CSGViewportSelectionKind.Brush)

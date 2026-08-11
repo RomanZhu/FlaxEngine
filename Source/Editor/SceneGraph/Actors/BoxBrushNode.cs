@@ -25,6 +25,18 @@ namespace FlaxEditor.SceneGraph.Actors
         /// <seealso cref="FlaxEditor.SceneGraph.ActorChildNode{T}" />
         public sealed class SideLinkNode : ActorChildNode<BoxBrushNode>
         {
+            private static readonly int[] BoxFaces =
+            {
+                0, 1, 4, 5,
+                2, 3, 6, 7,
+                0, 1, 3, 2,
+                4, 5, 7, 6,
+                0, 3, 4, 7,
+                1, 2, 5, 6,
+            };
+
+            private readonly Vector3[] _boxCorners = new Vector3[8];
+
             private sealed class BrushSurfaceProxy
             {
                 [HideInEditor]
@@ -194,8 +206,20 @@ namespace FlaxEditor.SceneGraph.Actors
             /// <inheritdoc />
             public override void OnDebugDraw(ViewportDebugDrawData data)
             {
-                ParentNode.OnDebugDraw(data);
-                data.HighlightBrushSurface(Brush.Surfaces[Index]);
+                Brush.OrientedBox.GetCorners(_boxCorners);
+                int offset = Index * 4;
+                var v0 = _boxCorners[BoxFaces[offset]];
+                var v1 = _boxCorners[BoxFaces[offset + 1]];
+                var v2 = _boxCorners[BoxFaces[offset + 2]];
+                var v3 = _boxCorners[BoxFaces[offset + 3]];
+                var fill = new Color(1.0f, 0.68f, 0.12f, 0.2f);
+                var outline = new Color(1.0f, 0.82f, 0.18f, 1.0f);
+                DebugDraw.DrawTriangle(v0, v1, v2, fill, 0.0f, true);
+                DebugDraw.DrawTriangle(v1, v3, v2, fill, 0.0f, true);
+                DebugDraw.DrawLine(v0, v1, outline, 0.0f, false);
+                DebugDraw.DrawLine(v1, v3, outline, 0.0f, false);
+                DebugDraw.DrawLine(v3, v2, outline, 0.0f, false);
+                DebugDraw.DrawLine(v2, v0, outline, 0.0f, false);
             }
         }
 
