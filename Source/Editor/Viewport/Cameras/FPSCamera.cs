@@ -22,6 +22,7 @@ namespace FlaxEditor.Viewport.Cameras
         private const float FlyLookInertiaResponse = 55.0f;
         private const float FlyInertiaStopThresholdSq = 0.000001f;
         private const float AltRightMouseZoomMinDistance = 500.0f;
+        private const float MinimumZoomDistance = 100.0f;
         private const float RecenterMinMoveDistanceSq = 0.000001f;
 
         private Transform _startMove;
@@ -156,9 +157,9 @@ namespace FlaxEditor.Viewport.Cameras
             }
             else
             {
-                // calculate the min. distance so that the sphere fits roughly 70% in FOV
-                // clip to far plane as a disappearing big object might be confusing
-                var distance = Mathf.Min(1.4f * sphere.Radius / Mathf.Tan(Mathf.DegreesToRadians * Viewport.FieldOfView / 2), Viewport.FarPlane);
+                // Calculate the distance so that the sphere fits roughly 70% in FOV.
+                // Keep tiny targets usable and clip to the far plane so large objects do not disappear.
+                var distance = Mathf.Clamp(1.4f * sphere.Radius / Mathf.Tan(Mathf.DegreesToRadians * Viewport.FieldOfView / 2), MinimumZoomDistance, Viewport.FarPlane);
                 position = sphere.Center - Vector3.Forward * orientation * distance;
             }
             TargetPoint = sphere.Center;
@@ -368,6 +369,9 @@ namespace FlaxEditor.Viewport.Cameras
                 pitch += mouseDelta.Y;
             }
 
+            // Camera translations should carry the target point, but dolly zoom should not.
+            var positionBeforeZoom = position;
+
             // Zoom in/out with mouse wheel or Alt+RMB horizontal drag
             if (input.IsAltRightMouseZooming)
             {
@@ -385,7 +389,14 @@ namespace FlaxEditor.Viewport.Cameras
             }
             else if (input.IsZooming && !input.IsRotating)
             {
-                position += forward * (Viewport.MouseWheelZoomSpeedFactor * input.MouseWheelDelta * 25.0f);
+                var zoomDelta = Viewport.MouseWheelZoomSpeedFactor * input.MouseWheelDelta * 25.0f;
+                if (zoomDelta > 0.0f)
+                {
+                    var distanceToTarget = (float)Vector3.Dot(TargetPoint - position, forward);
+                    if (distanceToTarget > 0.0f)
+                        zoomDelta = Mathf.Min(zoomDelta, Mathf.Max(distanceToTarget - MinimumZoomDistance, 0.0f));
+                }
+                position += forward * zoomDelta;
             }
 
             // Zoom in and out by changing FOV
@@ -420,9 +431,9 @@ namespace FlaxEditor.Viewport.Cameras
             else
             {
                 if (updateTargetFromView)
-                    TargetPoint = position + Viewport.ViewDirection * targetDistance;
+                    TargetPoint = positionBeforeZoom + Viewport.ViewDirection * targetDistance;
                 else if (!input.IsAltRightMouseZooming)
-                    TargetPoint += position - Viewport.ViewPosition;
+                    TargetPoint += positionBeforeZoom - Viewport.ViewPosition;
                 Viewport.ViewPosition = position;
             }
         }
