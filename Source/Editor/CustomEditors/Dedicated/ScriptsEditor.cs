@@ -433,10 +433,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var multiAction = new MultiUndoAction(actions);
             multiAction.Do();
             var presenter = ScriptsEditor.Presenter;
-            ScriptsEditor.ParentEditor?.RebuildLayout();
             if (presenter != null)
             {
                 presenter.Undo.AddAction(multiAction);
+                presenter.OnModified();
+                ScriptsEditor.ParentEditor?.RebuildLayout();
                 presenter.Control.Focus();
                 
                 // Scroll to bottom of script control where a new script is added. 
@@ -445,6 +446,10 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     var loc = ScriptsEditor.Layout.Control.BottomLeft;
                     p.ScrollViewTo(loc);
                 }
+            }
+            else
+            {
+                ScriptsEditor.ParentEditor?.RebuildLayout();
             }
         }
     }
@@ -661,6 +666,72 @@ namespace FlaxEditor.CustomEditors.Dedicated
             };
         }
 
+        private void AddRemovedScript(Script script, LayoutElementsContainer layout)
+        {
+            var style = FlaxEngine.GUI.Style.Current;
+            var scriptType = TypeUtils.GetObjectType(script);
+            var title = Utilities.Utils.GetPropertyNameUI(scriptType.Name);
+            var group = layout.Group(title);
+            group.Panel.HeaderTextColor = Color.OrangeRed;
+            group.Panel.TooltipText = "Script is removed from this prefab instance.";
+
+            var headerHeight = group.Panel.HeaderHeight;
+            var scriptIconSprite = scriptType.ContentItem?.DefaultThumbnail ?? Editor.Instance.Icons.CSharpScript128;
+            if (!scriptIconSprite.IsValid)
+                scriptIconSprite = Editor.Instance.Icons.CSharpScript128;
+            var scriptIcon = new Image
+            {
+                IsScrollable = false,
+                Color = style.ForegroundDisabled,
+                Parent = group.Panel,
+                Bounds = new Rectangle(headerHeight, 0.5f, headerHeight, headerHeight),
+                Margin = new Margin(2),
+                Brush = new SpriteBrush(scriptIconSprite),
+            };
+            var removedIcon = group.AddHeaderButton("Script is removed from this prefab instance.", 0.0f, Editor.Instance.Icons.CheckBoxIntermediate12);
+            removedIcon.Color = Color.OrangeRed;
+            removedIcon.MouseOverColor = Color.OrangeRed;
+
+            group.Panel.HeaderTextMargin = group.Panel.HeaderTextMargin with
+            {
+                Left = scriptIcon.Right - DropPanel.DropDownIconSize,
+                Right = removedIcon.Width + FlaxEditor.Utilities.Constants.UIMargin,
+            };
+            group.Panel.Close();
+            group.Panel.ArrowImageOpened = null;
+            group.Panel.ArrowImageClosed = null;
+            group.Panel.EnableContainmentLines = false;
+            group.Panel.CanOpenClose = false;
+            group.Panel.MouseButtonRightClicked += (panel, location) =>
+            {
+                var menu = new ContextMenu();
+                CustomEditor.AddApplyRemovedPrefabObjectButtons(menu, script, () => Presenter?.BuildLayoutOnUpdate());
+                menu.AddButton("Revert to Prefab", () => RevertRemovedScript(script));
+                menu.Show(panel, location);
+            };
+        }
+
+        private void RevertRemovedScript(Script prefabScript)
+        {
+            if (!prefabScript || ParentEditor?.Values == null || ParentEditor.Values.Count != 1 || !(ParentEditor.Values[0] is Actor actor))
+                return;
+
+            var restored = actor.AddScript(prefabScript.GetType());
+            if (!restored)
+                return;
+            string data = FlaxEngine.Json.JsonSerializer.Serialize(prefabScript);
+            FlaxEngine.Json.JsonSerializer.Deserialize(restored, data);
+            restored.Parent = actor;
+            var prefabId = prefabScript.PrefabID;
+            var prefabObjectId = prefabScript.PrefabObjectID;
+            Script.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(restored), ref prefabId, ref prefabObjectId);
+            Presenter?.Undo?.AddAction(AddRemoveScript.Added(restored));
+            if (actor.Scene)
+                Editor.Instance.Scene.MarkSceneEdited(actor.Scene);
+            Presenter?.OnModified();
+            Presenter?.BuildLayoutOnUpdate();
+        }
+
         private void MissingSettingsButtonOnClicked(Image image, MouseButton mouseButton)
         {
             if (mouseButton != MouseButton.Left)
@@ -826,6 +897,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
 
             // Scripts
             var elementType = new ScriptType(typeof(Script));
+            var inheritedScripts = new HashSet<Guid>();
             _scriptToggles = new CheckBox[scripts.Length];
             for (int i = 0; i < scripts.Length; i++)
             {
@@ -837,6 +909,9 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 }
 
                 var values = new ScriptsContainer(elementType, i, Values);
+                if (values.HasReferenceValue)
+                    inheritedScripts.Add(values.PrefabObjectId);
+                bool isAddedPrefabOverride = Values.HasReferenceValue && script.Actor.HasPrefabLink && !values.HasReferenceValue;
                 var scriptType = TypeUtils.GetObjectType(script);
                 var editor = CustomEditorsUtil.CreateEditor(scriptType, false);
 
@@ -943,12 +1018,20 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 settingsButton.Tag = script;
                 settingsButton.Clicked += OnSettingsButtonClicked;
                 totalHeaderButtonsOffset += settingsButton.Width + FlaxEditor.Utilities.Constants.UIMargin;
-                group.SetupContextMenu += (menu, panel) =>
+                if (isAddedPrefabOverride)
                 {
-                    menu.Tag = script;
-                    menu.AddSeparator();
-                    AddScriptSettingsContextMenuItems(menu, script);
-                };
+                    group.UseDefaultContextMenu = false;
+                    group.SetupContextMenu += (menu, panel) => AddAddedScriptContextMenuItems(menu, script, editor);
+                }
+                else
+                {
+                    group.SetupContextMenu += (menu, panel) =>
+                    {
+                        menu.Tag = script;
+                        menu.AddSeparator();
+                        AddScriptSettingsContextMenuItems(menu, script);
+                    };
+                }
 
                 // Add script obsolete icon to the group
                 if (scriptType.HasAttribute(typeof(ObsoleteAttribute), false))
@@ -964,8 +1047,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 }
 
                 // Show visual indicator if script only exists in prefab instance and is not part of the prefab
-                bool isPrefabActor = scripts.Any(s => s.Actor.HasPrefabLink);
-                if (isPrefabActor && script.PrefabID == Guid.Empty)
+                if (isAddedPrefabOverride)
                 {
                     var prefabInstanceButton = group.AddHeaderButton("Script only exists in this prefab instance.", totalHeaderButtonsOffset, Editor.Instance.Icons.Add32);
                     prefabInstanceButton.Color = style.BorderSelected;
@@ -1003,6 +1085,16 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 dragBar.CustomControl.Init(i + 1, this);
             }
 
+            if (Values.HasReferenceValue && Values.ReferenceValue is Script[] referenceScripts)
+            {
+                for (int i = 0; i < referenceScripts.Length; i++)
+                {
+                    var referenceScript = referenceScripts[i];
+                    if (referenceScript && !inheritedScripts.Contains(referenceScript.PrefabObjectID))
+                        AddRemovedScript(referenceScript, layout);
+                }
+            }
+
             base.Initialize(layout);
         }
 
@@ -1029,7 +1121,8 @@ namespace FlaxEditor.CustomEditors.Dedicated
 
             var action = ChangeScriptAction.ChangeOrder(script, targetIndex);
             action.Do();
-            Presenter?.Undo.AddAction(action);
+            Presenter?.Undo?.AddAction(action);
+            Presenter?.OnModified();
         }
 
         private void OnScriptToggleCheckChanged(CheckBox box)
@@ -1044,6 +1137,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var action = ChangeScriptAction.ChangeEnabled(script, box.Checked);
             action.Do();
             Presenter?.Undo.AddAction(action);
+            Presenter?.OnModified();
         }
 
         private void OnPrefabInstanceButtonClicked(Image image, MouseButton mouseButton)
@@ -1053,9 +1147,24 @@ namespace FlaxEditor.CustomEditors.Dedicated
 
             var editor = image.Tag as CustomEditor;
             var cm = new ContextMenu();
-            if (editor?.CanApplyAddedPrefabObject ?? false)
-                cm.AddButton("Apply Changes", () => editor.ApplyAddedPrefabObject());
+            if (editor?.Values != null && editor.Values.Count == 1 && editor.Values[0] is SceneObject sceneObject)
+                CustomEditor.AddApplyAddedPrefabObjectButtons(cm, sceneObject, () => Presenter?.BuildLayoutOnUpdate());
             cm.Show(image, image.Size);
+        }
+
+        private void AddAddedScriptContextMenuItems(ContextMenu menu, Script script, CustomEditor editor)
+        {
+            menu.Tag = script;
+            CustomEditor.AddApplyAddedPrefabObjectButtons(menu, script, () => Presenter?.BuildLayoutOnUpdate());
+            menu.AddButton("Revert to Prefab", () => RemoveScript(script));
+            var resetToDefault = menu.AddButton("Reset to default", editor.RevertToDefaultValue);
+            resetToDefault.Enabled = editor.CanRevertDefaultValue;
+            menu.AddSeparator();
+            menu.AddButton("Copy", editor.Copy);
+            var paste = menu.AddButton("Paste", editor.Paste);
+            paste.Enabled = editor.CanPaste;
+            menu.AddSeparator();
+            AddScriptSettingsContextMenuItems(menu, script, false);
         }
 
         private static bool CanApplyAddedScript(Script script)
@@ -1086,9 +1195,9 @@ namespace FlaxEditor.CustomEditors.Dedicated
             cm.Show(image, image.Size);
         }
 
-        private void AddScriptSettingsContextMenuItems(ContextMenu menu, Script script)
+        private void AddScriptSettingsContextMenuItems(ContextMenu menu, Script script, bool includeApply = true)
         {
-            if (CanApplyAddedScript(script))
+            if (includeApply && CanApplyAddedScript(script))
                 menu.AddButton("Apply Changes", OnClickApplyAddedScript);
             menu.AddButton("Remove", OnClickRemove).Icon = Editor.Instance.Icons.Cross12;
             menu.AddButton("Move up", OnClickMoveUp).Enabled = script.OrderInParent > 0;
@@ -1110,9 +1219,19 @@ namespace FlaxEditor.CustomEditors.Dedicated
         private void OnClickRemove(ContextMenuButton button)
         {
             var script = (Script)button.ParentContextMenu.Tag;
+            RemoveScript(script);
+        }
+
+        private void RemoveScript(Script script)
+        {
+            if (!script)
+                return;
             var action = AddRemoveScript.Remove(script);
             action.Do();
-            Presenter.Undo?.AddAction(action);
+            FlaxEngine.Scripting.FlushRemovedObjects();
+            Presenter?.Undo.AddAction(action);
+            Presenter?.OnModified();
+            Presenter?.BuildLayoutOnUpdate();
         }
 
         private void OnClickMoveUp(ContextMenuButton button)
@@ -1121,6 +1240,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var action = ChangeScriptAction.ChangeOrder(script, script.OrderInParent - 1);
             action.Do();
             Presenter.Undo?.AddAction(action);
+            Presenter.OnModified();
         }
 
         private void OnClickMoveDown(ContextMenuButton button)
@@ -1129,6 +1249,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var action = ChangeScriptAction.ChangeOrder(script, script.OrderInParent + 1);
             action.Do();
             Presenter.Undo?.AddAction(action);
+            Presenter.OnModified();
         }
 
         private void OnClickCopyTypeName(ContextMenuButton button)

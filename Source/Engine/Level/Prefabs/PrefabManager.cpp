@@ -157,6 +157,7 @@ Actor* PrefabManager::SpawnPrefab(Prefab* prefab, const SpawnOptions& options)
     }
     auto& data = *prefab->Data;
     SceneObjectsFactory::Context context(modifier.Value);
+    context.SuppressMissingPrefabObjectWarnings = options.SuppressMissingPrefabObjectWarnings;
     LogContextScope logContext(prefabId);
 
     // Deserialize prefab objects
@@ -165,11 +166,12 @@ Actor* PrefabManager::SpawnPrefab(Prefab* prefab, const SpawnOptions& options)
     for (int32 i = 0; i < dataCount; i++)
     {
         auto& stream = data[i];
-        SceneObject* obj = SceneObjectsFactory::Spawn(context, stream);
+        bool missingPrefabObject;
+        SceneObject* obj = SceneObjectsFactory::Spawn(context, stream, &missingPrefabObject);
         sceneObjects->At(i) = obj;
         if (obj)
             obj->RegisterObject();
-        else
+        else if (!missingPrefabObject || !context.SuppressMissingPrefabObjectWarnings)
             SceneObjectsFactory::HandleObjectDeserializationError(stream);
     }
     SceneObjectsFactory::PrefabSyncData prefabSyncData(*sceneObjects.Value, data, modifier.Value);

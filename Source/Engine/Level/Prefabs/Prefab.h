@@ -109,7 +109,7 @@ private:
 #if USE_EDITOR
     typedef Array<class PrefabInstanceData> PrefabInstancesData;
     typedef Array<AssetReference<Prefab>> NestedPrefabsList;
-    bool ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPrefab, PrefabInstancesData& prefabInstancesData, SceneObject* objectToApply = nullptr);
+    bool ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPrefab, PrefabInstancesData& prefabInstancesData, SceneObject* objectToApply = nullptr, bool suppressMissingPrefabObjectWarnings = false);
     bool UpdateInternal(const Array<SceneObject*>& defaultInstanceObjects, rapidjson_flax::StringBuffer& tmpBuffer);
     bool SyncChangesInternal(PrefabInstancesData& prefabInstancesData);
     void SyncNestedPrefabs(const NestedPrefabsList& allPrefabs, Array<PrefabInstancesData>& allPrefabsInstancesData, HashSet<Guid, HeapAllocation>& synced) const;

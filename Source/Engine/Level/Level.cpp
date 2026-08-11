@@ -695,6 +695,7 @@ public:
         , Modifier(Cache::ISerializeModifier.GetUnscoped())
         , Context(Modifier)
     {
+        Context.SuppressMissingPrefabObjectWarnings = true;
     }
 
     ~SceneLoader()
@@ -1734,7 +1735,8 @@ SceneResult SceneLoader::OnSpawn(Args& args)
             PROFILE_MEM(Level);
             i++; // Start from 1. at index [0] was scene
             auto& stream = args.Data[i];
-            auto obj = SceneObjectsFactory::Spawn(Context, stream);
+            bool missingPrefabObject;
+            auto obj = SceneObjectsFactory::Spawn(Context, stream, &missingPrefabObject);
             objects[i] = obj;
             if (obj)
             {
@@ -1746,7 +1748,7 @@ SceneResult SceneLoader::OnSpawn(Args& args)
                     obj->CreateManaged();
 #endif
             }
-            else
+            else if (!missingPrefabObject || !Context.SuppressMissingPrefabObjectWarnings)
                 SceneObjectsFactory::HandleObjectDeserializationError(stream);
         }, dataCount - 1);
         Level::ScenesLock.Lock();
@@ -1756,11 +1758,12 @@ SceneResult SceneLoader::OnSpawn(Args& args)
         for (int32 i = 1; i < dataCount; i++) // start from 1. at index [0] was scene
         {
             auto& stream = args.Data[i];
-            auto obj = SceneObjectsFactory::Spawn(Context, stream);
+            bool missingPrefabObject;
+            auto obj = SceneObjectsFactory::Spawn(Context, stream, &missingPrefabObject);
             objects[i] = obj;
             if (obj)
                 obj->RegisterObject();
-            else
+            else if (!missingPrefabObject || !Context.SuppressMissingPrefabObjectWarnings)
                 SceneObjectsFactory::HandleObjectDeserializationError(stream);
         }
     }

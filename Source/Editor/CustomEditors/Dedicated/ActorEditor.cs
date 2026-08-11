@@ -14,9 +14,7 @@ using FlaxEngine.GUI;
 using FlaxEngine.Json;
 using FlaxEngine.Utilities;
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 
 namespace FlaxEditor.CustomEditors.Dedicated
@@ -321,80 +319,9 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 node.Text = editor.Values[0].ToString();
             }
 
-            AppendDiffValues(node, editor);
             node.Expand(true);
 
             return node;
-        }
-
-        private static void AppendDiffValues(TreeNode node, CustomEditor editor)
-        {
-            if (editor is RemovedScriptDummy or RemovedActorDummy)
-            {
-                AppendDiffValues(node, "present", "<removed>");
-                return;
-            }
-
-            var values = editor.Values;
-            if (values == null || values.Count != 1)
-                return;
-
-            if (values[0] is SceneObject addedObject && values.Info == ScriptMemberInfo.Null)
-            {
-                if (!addedObject.HasPrefabLink)
-                    AppendDiffValues(node, "<missing>", FormatDiffValue(addedObject));
-                return;
-            }
-
-            if (!values.HasReferenceValue || !values.IsReferenceValueModified)
-                return;
-            AppendDiffValues(node, FormatDiffValue(values.ReferenceValue), FormatDiffValue(values[0]));
-        }
-
-        private static void AppendDiffValues(TreeNode node, string previous, string current)
-        {
-            previous ??= "<null>";
-            current ??= "<null>";
-            node.Text += $" — Previous: {TruncateDiffValue(previous)} | Current: {TruncateDiffValue(current)}";
-            node.TooltipText = $"Previous: {previous}\nCurrent: {current}";
-        }
-
-        private static string TruncateDiffValue(string value)
-        {
-            const int maxLength = 64;
-            return value.Length <= maxLength ? value : value.Substring(0, maxLength - 1) + "…";
-        }
-
-        private static string FormatDiffValue(object value)
-        {
-            if (value == null)
-                return "<null>";
-            if (value is string text)
-                return $"\"{text.Replace("\r", string.Empty).Replace("\n", "↵")}\"";
-            if (value is Actor actor)
-                return $"{actor.Name} ({Utilities.Utils.GetPropertyNameUI(actor.GetType().Name)})";
-            if (value is Script script)
-                return $"{Utilities.Utils.GetPropertyNameUI(script.GetType().Name)} on {script.Actor?.Name ?? "<missing actor>"}";
-            if (value is FlaxEngine.Object obj)
-            {
-                var item = Editor.Instance.ContentDatabase.FindAsset(obj.ID);
-                return item?.ShortName ?? obj.ToString();
-            }
-            if (value is IDictionary dictionary)
-                return $"{{{dictionary.Count} item{(dictionary.Count == 1 ? string.Empty : "s")}}}";
-            if (value is IList list)
-            {
-                const int maxItems = 4;
-                var items = new List<string>(Math.Min(list.Count, maxItems));
-                for (int i = 0; i < list.Count && i < maxItems; i++)
-                    items.Add(TruncateDiffValue(FormatDiffValue(list[i])));
-                if (list.Count > maxItems)
-                    items.Add($"… ({list.Count - maxItems} more)");
-                return $"[{string.Join(", ", items)}]";
-            }
-            if (value is IFormattable formattable)
-                return formattable.ToString(null, CultureInfo.InvariantCulture);
-            return value.ToString();
         }
 
         private class RemovedScriptDummy : CustomEditor
@@ -438,6 +365,137 @@ namespace FlaxEditor.CustomEditors.Dedicated
             {
                 // Not used
             }
+        }
+
+        private enum PrefabOverrideKind
+        {
+            Group,
+            Modified,
+            Added,
+            Removed,
+        }
+
+        private sealed class PrefabOverrideEntry
+        {
+            public CustomEditor Editor;
+            public SceneObject Current;
+            public SceneObject Source;
+            public PrefabOverrideKind Kind;
+            public string Title;
+        }
+
+        private static string GetOverrideTitle(SceneObject sceneObject)
+        {
+            var typeName = Utilities.Utils.GetPropertyNameUI(sceneObject.GetType().Name);
+            return sceneObject is Actor actor ? $"{actor.Name} ({typeName})" : $"{typeName} (Script)";
+        }
+
+        private static bool IsSceneOverrideNode(TreeNode node)
+        {
+            if (!(node.Tag is CustomEditor editor))
+                return false;
+            return editor is RemovedScriptDummy or RemovedActorDummy ||
+                   editor.Values != null && editor.Values.Count == 1 && editor.Values[0] is SceneObject;
+        }
+
+        private static bool HasPropertyOverride(TreeNode node)
+        {
+            for (int i = 0; i < node.ChildrenCount; i++)
+            {
+                if (!(node.GetChild(i) is TreeNode child) || IsSceneOverrideNode(child))
+                    continue;
+                if (child.ChildrenCount == 0)
+                    return true;
+                if (HasPropertyOverride(child))
+                    return true;
+            }
+            return false;
+        }
+
+        private static TreeNode CreateOverrideEntryNode(TreeNode diffNode, bool isRoot = false)
+        {
+            var editor = (CustomEditor)diffNode.Tag;
+            var entry = new PrefabOverrideEntry
+            {
+                Editor = editor,
+            };
+
+            if (editor is RemovedScriptDummy removedScript)
+            {
+                entry.Kind = PrefabOverrideKind.Removed;
+                entry.Source = removedScript.PrefabObject;
+            }
+            else if (editor is RemovedActorDummy removedActor)
+            {
+                entry.Kind = PrefabOverrideKind.Removed;
+                entry.Source = removedActor.PrefabObject;
+            }
+            else
+            {
+                entry.Current = editor.Values[0] as SceneObject;
+                entry.Source = editor.Values.ReferenceValue as SceneObject;
+                entry.Kind = entry.Source == null && (!isRoot || !entry.Current.HasPrefabLink)
+                    ? PrefabOverrideKind.Added
+                    : HasPropertyOverride(diffNode) ? PrefabOverrideKind.Modified : PrefabOverrideKind.Group;
+            }
+
+            var sceneObject = entry.Current ?? entry.Source;
+            entry.Title = GetOverrideTitle(sceneObject);
+            var node = new TreeNode(false)
+            {
+                Tag = entry,
+                Text = entry.Title,
+                TooltipText = entry.Kind == PrefabOverrideKind.Group ? null : $"{entry.Kind} prefab component",
+            };
+            switch (entry.Kind)
+            {
+            case PrefabOverrideKind.Modified:
+                node.Text += "  (Modified)";
+                node.TextColor = FlaxEngine.GUI.Style.Current.BorderSelected;
+                break;
+            case PrefabOverrideKind.Added:
+                node.Text += "  (Added)";
+                node.TextColor = new Color(0.45f, 0.85f, 0.45f);
+                break;
+            case PrefabOverrideKind.Removed:
+                node.Text += "  (Removed)";
+                node.TextColor = Color.OrangeRed;
+                break;
+            }
+            node.Expand(true);
+            return node;
+        }
+
+        private static void AddOverrideEntries(TreeNode parent, TreeNode diffNode)
+        {
+            if (IsSceneOverrideNode(diffNode))
+            {
+                var node = CreateOverrideEntryNode(diffNode);
+                parent.AddChild(node);
+                for (int i = 0; i < diffNode.ChildrenCount; i++)
+                {
+                    if (diffNode.GetChild(i) is TreeNode child)
+                        AddOverrideEntries(node, child);
+                }
+                return;
+            }
+
+            for (int i = 0; i < diffNode.ChildrenCount; i++)
+            {
+                if (diffNode.GetChild(i) is TreeNode child)
+                    AddOverrideEntries(parent, child);
+            }
+        }
+
+        private static TreeNode CreateOverridesTree(TreeNode diffRoot)
+        {
+            var root = CreateOverrideEntryNode(diffRoot, true);
+            for (int i = 0; i < diffRoot.ChildrenCount; i++)
+            {
+                if (diffRoot.GetChild(i) is TreeNode child)
+                    AddOverrideEntries(root, child);
+            }
+            return root;
         }
 
         private TreeNode ProcessDiff(CustomEditor editor, bool skipIfNotModified = true)
@@ -560,7 +618,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             return null;
         }
 
-        private TreeNode CreateDiffTree(Actor actor, Actor referenceActor, CustomEditorPresenter presenter, LayoutElementsContainer layout)
+        private TreeNode CreateDiffTree(Actor actor, Actor referenceActor, CustomEditorPresenter presenter, LayoutElementsContainer layout, List<CustomEditor> rootEditors)
         {
             var actorNode = Editor.Instance.Scene.GetActorNode(actor);
             var editableObject = actorNode?.EditableObject ?? actor;
@@ -569,6 +627,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             vc.Add(editableObject);
             var editor = CustomEditorsUtil.CreateEditor(vc, null, false);
             editor.Initialize(presenter, layout, vc);
+            rootEditors.Add(editor);
             if (referenceActor)
             {
                 editor.Values.SetReferenceValue(referenceActor);
@@ -578,7 +637,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             layout.ClearLayout();
             foreach (var child in actor.Children)
             {
-                var childNode = CreateDiffTree(child, FindReferenceActor(child, referenceActor), presenter, layout);
+                var childNode = CreateDiffTree(child, FindReferenceActor(child, referenceActor), presenter, layout, rootEditors);
                 if (childNode == null)
                     continue;
                 if (node == null)
@@ -623,41 +682,153 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var referenceRoot = rootActor == thisActor ? Values.ReferenceValue as Actor : null;
             var presenter = new CustomEditorPresenter(null);
             var layout = new CustomElementsContainer<ContainerControl>();
-            var rootNode = CreateDiffTree(rootActor, referenceRoot, presenter, layout);
+            var diffEditors = new List<CustomEditor>();
+            var diffRoot = CreateDiffTree(rootActor, referenceRoot, presenter, layout, diffEditors);
 
             // Skip if no changes detected
-            if (rootNode == null)
+            if (diffRoot == null)
             {
+                CleanupDiffEditors(diffEditors);
                 var cm1 = new ContextMenu();
                 cm1.AddButton("No changes detected");
                 cm1.Show(target, targetLocation);
                 return;
             }
 
-            // Create context menu
-            var cm = new PrefabDiffContextMenu(620, 320);
+            // Create component-level overrides popup
+            var rootNode = CreateOverridesTree(diffRoot);
+            diffRoot.Dispose();
+            var cm = new PrefabDiffContextMenu();
+            var details = new PrefabOverrideDetailsContextMenu(Presenter.Undo, Presenter.Owner);
             cm.Tree.AddChild(rootNode);
+            cm.Tree.SelectedChanged += (_, selection) => OnDiffSelectionChanged(cm, details, selection);
             cm.Tree.RightClick += OnDiffNodeRightClick;
             cm.Tree.Tag = cm;
             cm.RevertAll += OnDiffRevertAll;
             cm.ApplyAll += OnDiffApplyAll;
+            cm.Closed += () => CleanupDiffEditors(diffEditors);
             cm.Show(target, targetLocation);
+        }
+
+        private static void CleanupDiffEditors(List<CustomEditor> editors)
+        {
+            for (int i = 0; i < editors.Count; i++)
+                editors[i].Cleanup();
+            editors.Clear();
+        }
+
+        private void OnDiffSelectionChanged(PrefabDiffContextMenu diffMenu, PrefabOverrideDetailsContextMenu details, List<TreeNode> selection)
+        {
+            if (selection.Count == 0 || !(selection[selection.Count - 1].Tag is PrefabOverrideEntry entry) || entry.Kind == PrefabOverrideKind.Group)
+            {
+                if (details.IsOpened)
+                    details.Hide();
+                return;
+            }
+
+            if (details.IsOpened)
+                details.Hide();
+
+            Action revert = () =>
+            {
+                RevertDiffEntry(entry, diffMenu);
+            };
+            Action<ContextMenu> setupApply = menu => SetupDiffApplyMenu(menu, entry, diffMenu);
+            switch (entry.Kind)
+            {
+            case PrefabOverrideKind.Modified:
+                details.ShowModified(entry.Title, entry.Source, entry.Current, revert, setupApply);
+                break;
+            case PrefabOverrideKind.Added:
+                details.ShowAdded(entry.Title, entry.Current, revert, setupApply);
+                break;
+            case PrefabOverrideKind.Removed:
+                details.ShowRemoved(entry.Title, entry.Source, revert, setupApply);
+                break;
+            }
+
+            var topLeft = diffMenu.PointToScreen(Float2.Zero);
+            var bottomRight = diffMenu.PointToScreen(diffMenu.Size);
+            var monitor = Platform.GetMonitorBounds(topLeft);
+            float dpiScale = diffMenu.RootWindow?.DpiScale ?? 1.0f;
+            float detailsWidth = details.Width * dpiScale;
+            float detailsHeight = details.Height * dpiScale;
+            float leftSpace = topLeft.X - monitor.Left;
+            float rightSpace = monitor.Right - bottomRight.X;
+            float topSpace = topLeft.Y - monitor.Top;
+            float bottomSpace = monitor.Bottom - bottomRight.Y;
+            bool preferLeft = diffMenu.Direction is ContextMenuDirection.LeftDown or ContextMenuDirection.LeftUp;
+            bool preferUp = diffMenu.Direction is ContextMenuDirection.LeftUp or ContextMenuDirection.RightUp;
+            bool openLeft = leftSpace >= detailsWidth && (rightSpace < detailsWidth || preferLeft) ||
+                            leftSpace < detailsWidth && rightSpace < detailsWidth && leftSpace > rightSpace;
+            bool openUp = topSpace >= detailsHeight && (bottomSpace < detailsHeight || preferUp) ||
+                          topSpace < detailsHeight && bottomSpace < detailsHeight && topSpace > bottomSpace;
+            details.OpenDirection = openLeft
+                ? openUp ? ContextMenuDirection.LeftUp : ContextMenuDirection.LeftDown
+                : openUp ? ContextMenuDirection.RightUp : ContextMenuDirection.RightDown;
+            var location = new Float2(openLeft ? 0.0f : diffMenu.Width, openUp ? diffMenu.Height : 0.0f);
+            diffMenu.ShowChild(details, location, false);
+        }
+
+        private void SetupDiffApplyMenu(ContextMenu menu, PrefabOverrideEntry entry, PrefabDiffContextMenu diffMenu)
+        {
+            switch (entry.Kind)
+            {
+            case PrefabOverrideKind.Modified:
+                entry.Editor.RefreshInternal();
+                entry.Editor.AddApplyToPrefabButtons(menu, diffMenu.Hide);
+                break;
+            case PrefabOverrideKind.Added:
+                CustomEditor.AddApplyAddedPrefabObjectButtons(menu, entry.Current, () =>
+                {
+                    Presenter.BuildLayoutOnUpdate();
+                    diffMenu.Hide();
+                });
+                break;
+            case PrefabOverrideKind.Removed:
+                CustomEditor.AddApplyRemovedPrefabObjectButtons(menu, entry.Source, diffMenu.Hide);
+                break;
+            }
         }
 
         private void OnDiffNodeRightClick(TreeNode node, Float2 location)
         {
             var diffMenu = (PrefabDiffContextMenu)node.ParentTree.Tag;
-            var editor = (CustomEditor)node.Tag;
+            if (!(node.Tag is PrefabOverrideEntry entry) || entry.Kind == PrefabOverrideKind.Group)
+                return;
 
             var menu = new ContextMenu();
-            if (CanDiffApply(editor))
-                menu.AddButton("Apply Changes", () => OnDiffApply(editor));
-            menu.AddButton("Revert", () => OnDiffRevert(editor));
+            SetupDiffApplyMenu(menu, entry, diffMenu);
+            menu.AddButton("Revert", () =>
+            {
+                RevertDiffEntry(entry, diffMenu);
+            });
             menu.AddSeparator();
-            menu.AddButton("Revert All", OnDiffRevertAll);
-            menu.AddButton("Apply All", OnDiffApplyAll);
+            menu.AddButton("Revert All", () =>
+            {
+                OnDiffRevertAll();
+                diffMenu.Hide();
+            });
+            menu.AddButton("Apply All", () =>
+            {
+                OnDiffApplyAll();
+                diffMenu.Hide();
+            });
 
             diffMenu.ShowChild(menu, node.PointToParent(diffMenu, new Float2(location.X, node.HeaderHeight)));
+        }
+
+        private void RevertDiffEntry(PrefabOverrideEntry entry, PrefabDiffContextMenu diffMenu)
+        {
+            if (entry.Kind == PrefabOverrideKind.Modified)
+                entry.Editor.RefreshInternal();
+            if (!OnDiffRevert(entry))
+                return;
+
+            FlaxEngine.Scripting.FlushRemovedObjects();
+            Presenter.OnModified();
+            Presenter.BuildLayoutOnUpdate();
+            diffMenu.Hide();
         }
 
         private void OnDiffRevertAll()
@@ -673,26 +844,6 @@ namespace FlaxEditor.CustomEditors.Dedicated
             Presenter.BuildLayoutOnUpdate();
         }
 
-        private bool CanDiffApply(CustomEditor editor)
-        {
-            return editor?.Values != null &&
-                   editor.Values.Count == 1 &&
-                   editor.Values[0] is SceneObject sceneObject &&
-                   CustomEditor.TryGetAddedPrefabObjectApplyTargets(sceneObject, out _, out _);
-        }
-
-        private void OnDiffApply(CustomEditor editor)
-        {
-            if (!CanDiffApply(editor))
-                return;
-
-            CustomEditor.TryGetAddedPrefabObjectApplyTargets((SceneObject)editor.Values[0], out var prefabRoot, out var objectToApply);
-            Editor.Instance.Prefabs.ApplyAddedObject(prefabRoot, objectToApply);
-
-            // Ensure to refresh the layout
-            Presenter.BuildLayoutOnUpdate();
-        }
-
         private static void GetAllPrefabObjects(List<object> objects, Actor actor)
         {
             objects.Add(actor);
@@ -702,8 +853,10 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 GetAllPrefabObjects(objects, child);
         }
 
-        private void OnDiffRevert(CustomEditor editor)
+        private bool OnDiffRevert(PrefabOverrideEntry entry)
         {
+            var editor = entry.Editor;
+
             // Special case for removed Script from actor
             if (editor is RemovedScriptDummy removed)
             {
@@ -713,16 +866,16 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 if (!actor)
                 {
                     Editor.LogWarning("Cannot restore removed prefab script because its instance actor is missing.");
-                    return;
+                    return false;
                 }
                 var restored = RestoreRemovedPrefabScript(actor, removed.PrefabObject);
                 if (!restored)
-                    return;
+                    return false;
 
                 var action = AddRemoveScript.Added(restored);
                 Presenter.Undo?.AddAction(action);
 
-                return;
+                return true;
             }
 
             // Special case for reverting removed Actors
@@ -738,11 +891,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 JsonSerializer.Deserialize(restored, data);
                 Presenter.Owner.SceneContext.Spawn(restored, parentActor, removedActor.OrderInParent);
                 Actor.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(restored), ref prefabId, ref prefabObjectId);
-                return;
+                return true;
             }
 
             // Special case for new Script added to actor
-            if (editor.Values[0] is Script script && !script.HasPrefabLink)
+            if (entry.Kind == PrefabOverrideKind.Added && entry.Current is Script script)
             {
                 Editor.Log("Reverting added script changes to prefab (removing it)");
 
@@ -750,11 +903,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 action.Do();
                 Presenter.Undo?.AddAction(action);
 
-                return;
+                return true;
             }
             
             // Special case for new Actor added to actor
-            if (editor.Values[0] is Actor a && !a.HasPrefabLink)
+            if (entry.Kind == PrefabOverrideKind.Added && entry.Current is Actor a)
             {
                 Editor.Log("Reverting added actor changes to prefab (removing it)");
 
@@ -763,7 +916,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 context.Select(SceneGraph.SceneGraphFactory.FindNode(a.ID));
                 context.DeleteSelection();
 
-                return;
+                return true;
             }
 
             if (Presenter.Undo != null && Presenter.Undo.Enabled)
@@ -783,6 +936,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 editor.RevertToReferenceValue();
                 editor.RefreshInternal();
             }
+            return true;
         }
 
         private static Script RestoreRemovedPrefabScript(Actor actor, Script prefabObject)

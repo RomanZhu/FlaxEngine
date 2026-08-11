@@ -589,8 +589,9 @@ namespace FlaxEditor.CustomEditors
         /// Adds actions for applying the modified value to its prefab inheritance chain.
         /// </summary>
         /// <param name="menu">The context menu.</param>
+        /// <param name="applied">Optional callback invoked after applying an action.</param>
         /// <returns>True if any actions were added.</returns>
-        public bool AddApplyToPrefabButtons(ContextMenu menu)
+        public bool AddApplyToPrefabButtons(ContextMenu menu, Action applied = null)
         {
             if (!TryGetPrefabApplyData(out var sceneEditor, out var sceneObject, out var properties, out var targets))
                 return false;
@@ -598,7 +599,14 @@ namespace FlaxEditor.CustomEditors
             for (int i = 0; i < targets.Count; i++)
             {
                 var target = targets[i];
-                menu.AddButton($"Apply to Prefab '{target.Name}'", () => ApplyToPrefab(sceneEditor, sceneObject, properties, target));
+                var text = i == targets.Count - 1
+                    ? $"Apply to Prefab '{target.Name}'"
+                    : $"Apply as Override in Prefab '{target.Name}'";
+                menu.AddButton(text, () =>
+                {
+                    ApplyToPrefab(sceneEditor, sceneObject, properties, target);
+                    applied?.Invoke();
+                });
             }
             return true;
         }
@@ -687,6 +695,123 @@ namespace FlaxEditor.CustomEditors
                 objectId = parentObjectId;
             }
             return result;
+        }
+
+        /// <summary>
+        /// Adds actions for applying a removed object to its prefab inheritance chain.
+        /// </summary>
+        internal static bool AddApplyRemovedPrefabObjectButtons(ContextMenu menu, SceneObject removedObject, Action applied = null)
+        {
+            if (!removedObject || !removedObject.HasPrefabLink)
+                return false;
+            var targets = GetPrefabApplyTargets(removedObject);
+            for (int i = 0; i < targets.Count; i++)
+            {
+                var target = targets[i];
+                var text = i == targets.Count - 1
+                    ? $"Apply removal to Prefab '{target.Name}'"
+                    : $"Apply removal as Override in Prefab '{target.Name}'";
+                menu.AddButton(text, () =>
+                {
+                    ApplyRemovedPrefabObject(target);
+                    applied?.Invoke();
+                });
+            }
+            return targets.Count != 0;
+        }
+
+        private static void ApplyRemovedPrefabObject(PrefabApplyTarget target)
+        {
+            var instance = PrefabManager.SpawnPrefab(target.Prefab, null);
+            if (!instance)
+                throw new InvalidOperationException($"Failed to spawn prefab '{target.Name}'.");
+
+            try
+            {
+                var targetObject = FindPrefabObject(instance, target.ObjectId);
+                if (!targetObject || targetObject == instance)
+                    throw new InvalidOperationException($"Prefab '{target.Name}' does not contain a removable target object.");
+                FlaxEngine.Object.Destroy(targetObject);
+                FlaxEngine.Scripting.FlushRemovedObjects();
+                Editor.Instance.Prefabs.ApplyAll(instance);
+            }
+            finally
+            {
+                if (instance)
+                    FlaxEngine.Object.Destroy(instance);
+            }
+        }
+
+        internal static bool AddApplyAddedPrefabObjectButtons(ContextMenu menu, SceneObject addedObject, Action applied = null)
+        {
+            if (!(addedObject is Script sourceScript) || !sourceScript.Actor || !sourceScript.Actor.HasPrefabLink)
+                return false;
+
+            var targets = GetPrefabApplyTargets(sourceScript.Actor);
+            for (int i = targets.Count - 1; i >= 0; i--)
+            {
+                if (sourceScript.HasPrefabLink && targets[i].Prefab.ID == sourceScript.PrefabID)
+                    targets.RemoveAt(i);
+            }
+            for (int i = 0; i < targets.Count; i++)
+            {
+                var target = targets[i];
+                var text = i == targets.Count - 1
+                    ? $"Apply to Prefab '{target.Name}'"
+                    : $"Apply as Override in Prefab '{target.Name}'";
+                menu.AddButton(text, () =>
+                {
+                    ApplyAddedScriptToPrefab(sourceScript, target);
+                    applied?.Invoke();
+                });
+            }
+            return targets.Count != 0;
+        }
+
+        private static void ApplyAddedScriptToPrefab(Script sourceScript, PrefabApplyTarget target)
+        {
+            var instance = PrefabManager.SpawnPrefab(target.Prefab, null);
+            if (!instance)
+                throw new InvalidOperationException($"Failed to spawn prefab '{target.Name}'.");
+
+            try
+            {
+                var targetActor = FindPrefabObject(instance, target.ObjectId) as Actor;
+                if (!targetActor)
+                    throw new InvalidOperationException($"Prefab '{target.Name}' does not contain the script owner.");
+
+                var addedScript = targetActor.AddScript(sourceScript.GetType());
+                if (!addedScript)
+                    throw new InvalidOperationException($"Failed to create script '{sourceScript.TypeName}' in prefab '{target.Name}'.");
+
+                var sourceRoot = FindPrefabInstanceRoot(sourceScript.Actor);
+                if (!sourceRoot)
+                    throw new InvalidOperationException("Failed to find the source prefab instance root.");
+                var sourcePrefabId = sourceScript.Actor.PrefabID;
+                var idReplacements = BuildPrefabObjectIdReplacements(sourceRoot, sourcePrefabId, instance, target.Prefab.ID, out var unmappedObjectIds);
+                var sourceScriptId = JsonSerializer.GetStringID(sourceScript.ID);
+                idReplacements[sourceScriptId] = JsonSerializer.GetStringID(addedScript.ID);
+                unmappedObjectIds.Remove(sourceScriptId);
+
+                var json = JsonSerializer.Serialize(sourceScript);
+                foreach (var objectId in unmappedObjectIds)
+                {
+                    if (json.Contains($"\"{objectId}\""))
+                        throw new InvalidOperationException("The added script references a prefab object that does not exist in the selected parent prefab.");
+                }
+                foreach (var replacement in idReplacements)
+                    json = json.Replace($"\"{replacement.Key}\"", $"\"{replacement.Value}\"");
+                JsonSerializer.Deserialize(addedScript, json);
+                addedScript.Parent = targetActor;
+                addedScript.OrderInParent = sourceScript.OrderInParent;
+
+                Editor.Instance.Prefabs.ApplyAddedObject(instance, addedScript);
+            }
+            finally
+            {
+                if (instance)
+                    FlaxEngine.Object.Destroy(instance);
+            }
         }
 
         private static void ApplyToPrefab(CustomEditor sceneEditor, SceneObject sceneObject, List<CustomEditor> properties, PrefabApplyTarget target)
