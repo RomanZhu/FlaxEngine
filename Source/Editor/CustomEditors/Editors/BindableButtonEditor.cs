@@ -39,7 +39,7 @@ namespace FlaxEditor.CustomEditors.Editors
         /// <inheritdoc />
         public override void Initialize(LayoutElementsContainer layout)
         {
-            Window = layout.Control.RootWindow.Window;
+            Window = layout.Control.RootWindow?.Window;
             var panelElement = layout.CustomContainer<Panel>();
             var panel = panelElement.ContainerControl as Panel;
 

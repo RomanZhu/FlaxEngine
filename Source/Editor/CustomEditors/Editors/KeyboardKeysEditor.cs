@@ -14,13 +14,15 @@ namespace FlaxEditor.CustomEditors.Editors
         public override void Initialize(LayoutElementsContainer layout)
         {
             base.Initialize(layout);
-            Window.KeyUp += OnKeyUp;
+            if (Window != null)
+                Window.KeyUp += OnKeyUp;
         }
 
         /// <inheritdoc />
         protected override void Deinitialize()
         {
-            Window.KeyUp -= OnKeyUp;
+            if (Window != null)
+                Window.KeyUp -= OnKeyUp;
             base.Deinitialize();
         }
 
