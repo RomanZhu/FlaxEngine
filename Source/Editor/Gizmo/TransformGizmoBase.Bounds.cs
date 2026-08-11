@@ -183,8 +183,11 @@ namespace FlaxEditor.Gizmo
 
             Vector3 desired = anchor.Result.Scale;
             Real factor = SolveBoundsResizeFactor(GetComponent(desired, component), displacement, originalExtent, sign);
-            if ((ScaleSnapEnabled || Owner.UseSnapping) && Mathf.Abs(ScaleSnapValue) > Mathf.Epsilon)
-                factor = Mathr.Max(Mathr.Round(factor / ScaleSnapValue) * ScaleSnapValue, 0.0001f);
+            if (ScaleSnapEnabled || Owner.UseSnapping)
+            {
+                Vector3 step = GetLinearSnapStep(origin);
+                factor = SnapScaleFactorToGrid(factor, originalExtent, GetComponent(step, component));
+            }
             SetComponent(ref desired, component, factor);
 
             _scaleDelta = desired - InteractionResult.Scale;

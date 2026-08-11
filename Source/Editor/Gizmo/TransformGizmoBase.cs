@@ -670,42 +670,8 @@ namespace FlaxEditor.Gizmo
         {
             if (!TranslationSnapEnable && !Owner.UseSnapping)
                 return desired;
-            float step = Mathf.Abs(TranslationSnapValue);
-            if (step < Mathf.Epsilon)
-                return desired;
-
-            Quaternion basis = origin.InitialBasis;
-            GetActiveAxisComponents(out bool useX, out bool useY, out bool useZ);
-            if (origin.InitialTransformSpace == TransformSpace.World)
-            {
-                Vector3 target = origin.OriginalTransforms[0].Translation + desired;
-                if (useX)
-                    target.X = Mathr.Round(target.X / step) * step;
-                if (useY)
-                    target.Y = Mathr.Round(target.Y / step) * step;
-                if (useZ)
-                    target.Z = Mathr.Round(target.Z / step) * step;
-                desired = target - origin.OriginalTransforms[0].Translation;
-            }
-            else
-            {
-                Vector3 local = desired * Quaternion.Invert(basis);
-                if (useX)
-                    local.X = Mathr.Round(local.X / step) * step;
-                if (useY)
-                    local.Y = Mathr.Round(local.Y / step) * step;
-                if (useZ)
-                    local.Z = Mathr.Round(local.Z / step) * step;
-                desired = local * basis;
-            }
-            return desired;
-        }
-
-        private void GetActiveAxisComponents(out bool x, out bool y, out bool z)
-        {
-            x = _activeAxis == Axis.X || _activeAxis == Axis.XY || _activeAxis == Axis.ZX || _activeAxis == Axis.Center;
-            y = _activeAxis == Axis.Y || _activeAxis == Axis.XY || _activeAxis == Axis.YZ || _activeAxis == Axis.Center;
-            z = _activeAxis == Axis.Z || _activeAxis == Axis.YZ || _activeAxis == Axis.ZX || _activeAxis == Axis.Center;
+            Vector3 step = GetLinearSnapStep(origin);
+            return SnapTranslationToGrid(desired, origin.PivotPosition, origin.InitialBasis, origin.InitialTransformSpace, _activeAxis, step, AbsoluteSnapEnabled);
         }
 
         private void UpdateScaleFromAnchor()
@@ -779,20 +745,17 @@ namespace FlaxEditor.Gizmo
 
             Vector3 desired = MultiplyScaleFactors(anchor.Result.Scale, relativeFactors);
             if (pointerDelta.LengthSquared > 0.00000001f && (ScaleSnapEnabled || Owner.UseSnapping))
-            {
-                float step = Mathf.Abs(ScaleSnapValue);
-                if (step > Mathf.Epsilon)
-                {
-                    GetActiveAxisComponents(out bool useX, out bool useY, out bool useZ);
-                    if (useX)
-                        desired.X = Mathr.Max(Mathr.Round(desired.X / step) * step, 0.0001f);
-                    if (useY)
-                        desired.Y = Mathr.Max(Mathr.Round(desired.Y / step) * step, 0.0001f);
-                    if (useZ)
-                        desired.Z = Mathr.Max(Mathr.Round(desired.Z / step) * step, 0.0001f);
-                }
-            }
+                desired = SnapScaleFactorsToGrid(desired, origin.OriginalBounds, origin.PivotPosition, basis, _activeAxis, GetLinearSnapStep(origin));
             _scaleDelta = desired - InteractionResult.Scale;
+        }
+
+        private Vector3 GetLinearSnapStep(TransactionOrigin origin)
+        {
+            if (TranslationSnapValue >= 0.0f)
+                return new Vector3(Mathf.Abs(TranslationSnapValue));
+
+            Vector3 size = GetBoundsSizeInBasis(origin.OriginalBounds, origin.PivotPosition, origin.InitialBasis);
+            return new Vector3(Mathr.Abs(size.X), Mathr.Abs(size.Y), Mathr.Abs(size.Z));
         }
 
         private bool IsGeometrySnapActive => _activeMode == Mode.Translate && _activeAxis == Axis.Center && Owner != null && Owner.IsShiftDown;

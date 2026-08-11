@@ -83,6 +83,42 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestTransformSnappingUsesLinearGridUnits()
+        {
+            var step = new Vector3(10.0f);
+            Vector3 relative = TransformGizmoBase.SnapTranslationToGrid(
+                new Vector3(6, 3, 0),
+                new Vector3(3, 0, 0),
+                Quaternion.Identity,
+                TransformGizmoBase.TransformSpace.World,
+                TransformGizmoBase.Axis.X,
+                step,
+                false);
+            Assert.AreEqual(new Vector3(10, 3, 0), relative);
+
+            Vector3 absolute = TransformGizmoBase.SnapTranslationToGrid(
+                new Vector3(6, 3, 0),
+                new Vector3(3, 0, 0),
+                Quaternion.Identity,
+                TransformGizmoBase.TransformSpace.World,
+                TransformGizmoBase.Axis.X,
+                step,
+                true);
+            Assert.AreEqual(new Vector3(7, 3, 0), absolute);
+
+            var bounds = new BoundingBox(new Vector3(-50), new Vector3(50));
+            Vector3 uniform = TransformGizmoBase.SnapScaleFactorsToGrid(
+                new Vector3(1.24f),
+                bounds,
+                Vector3.Zero,
+                Quaternion.Identity,
+                TransformGizmoBase.Axis.Center,
+                new Vector3(25.0f));
+            Assert.AreEqual(new Vector3(1.25f), uniform);
+            Assert.AreEqual(1.25f, TransformGizmoBase.SnapScaleFactorToGrid(1.24f, 100.0f, 25.0f), 0.00001f);
+        }
+
+        [Test]
         public void TestOriginPreviewScaleAndReanchorAreDeterministic()
         {
             var owner = new TestGizmoOwner();

@@ -2,8 +2,10 @@
 
 #if USE_LARGE_WORLDS
 using Real = System.Double;
+using Mathr = FlaxEngine.Mathd;
 #else
 using Real = System.Single;
+using Mathr = FlaxEngine.Mathf;
 #endif
 
 using System;
@@ -102,6 +104,96 @@ namespace FlaxEditor.Gizmo
                 anchorFactors.X * relativeFactors.X,
                 anchorFactors.Y * relativeFactors.Y,
                 anchorFactors.Z * relativeFactors.Z);
+        }
+
+        internal static Vector3 SnapTranslationToGrid(Vector3 desired, Vector3 pivot, Quaternion basis, TransformSpace transformSpace, Axis axis, Vector3 step, bool absolute)
+        {
+            GetAxisComponents(axis, out bool useX, out bool useY, out bool useZ);
+            if (absolute && transformSpace == TransformSpace.World)
+            {
+                Vector3 target = pivot + desired;
+                if (useX && Mathr.Abs(step.X) > Mathf.Epsilon)
+                    target.X = Mathr.Round(target.X / step.X) * step.X;
+                if (useY && Mathr.Abs(step.Y) > Mathf.Epsilon)
+                    target.Y = Mathr.Round(target.Y / step.Y) * step.Y;
+                if (useZ && Mathr.Abs(step.Z) > Mathf.Epsilon)
+                    target.Z = Mathr.Round(target.Z / step.Z) * step.Z;
+                return target - pivot;
+            }
+
+            Vector3 local = desired * Quaternion.Invert(basis);
+            if (useX && Mathr.Abs(step.X) > Mathf.Epsilon)
+                local.X = Mathr.Round(local.X / step.X) * step.X;
+            if (useY && Mathr.Abs(step.Y) > Mathf.Epsilon)
+                local.Y = Mathr.Round(local.Y / step.Y) * step.Y;
+            if (useZ && Mathr.Abs(step.Z) > Mathf.Epsilon)
+                local.Z = Mathr.Round(local.Z / step.Z) * step.Z;
+            return local * basis;
+        }
+
+        internal static Vector3 SnapScaleFactorsToGrid(Vector3 desired, BoundingBox bounds, Vector3 pivot, Quaternion basis, Axis axis, Vector3 step)
+        {
+            Vector3 size = GetBoundsSizeInBasis(bounds, pivot, basis);
+            GetAxisComponents(axis, out bool useX, out bool useY, out bool useZ);
+            if (axis == Axis.Center)
+            {
+                // Uniform scaling cannot independently align every dimension of a
+                // non-cubic selection without distorting it. Use the largest
+                // dimension as the stable world-unit reference and keep one factor.
+                int component = size.Y > size.X ? 1 : 0;
+                if ((component == 0 ? size.X : size.Y) < size.Z)
+                    component = 2;
+                Real extent = component == 0 ? size.X : (component == 1 ? size.Y : size.Z);
+                Real grid = component == 0 ? step.X : (component == 1 ? step.Y : step.Z);
+                Real factor = component == 0 ? desired.X : (component == 1 ? desired.Y : desired.Z);
+                factor = SnapScaleFactorToGrid(factor, extent, grid);
+                return new Vector3(factor);
+            }
+
+            if (useX)
+                desired.X = SnapScaleFactorToGrid(desired.X, size.X, step.X);
+            if (useY)
+                desired.Y = SnapScaleFactorToGrid(desired.Y, size.Y, step.Y);
+            if (useZ)
+                desired.Z = SnapScaleFactorToGrid(desired.Z, size.Z, step.Z);
+            return desired;
+        }
+
+        internal static Real SnapScaleFactorToGrid(Real factor, Real originalSize, Real step)
+        {
+            originalSize = Mathr.Abs(originalSize);
+            step = Mathr.Abs(step);
+            if (originalSize <= Mathf.Epsilon || step <= Mathf.Epsilon)
+                return factor;
+            Real snappedSize = Mathr.Round(originalSize * factor / step) * step;
+            return Mathr.Max(snappedSize, step) / originalSize;
+        }
+
+        private static Vector3 GetBoundsSizeInBasis(BoundingBox bounds, Vector3 pivot, Quaternion basis)
+        {
+            if (!IsValidBounds(ref bounds))
+                return Vector3.Zero;
+            Quaternion inverseBasis = Quaternion.Invert(basis);
+            Vector3 minimum = new Vector3(Real.MaxValue);
+            Vector3 maximum = new Vector3(Real.MinValue);
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 corner = new Vector3(
+                    (i & 1) != 0 ? bounds.Maximum.X : bounds.Minimum.X,
+                    (i & 2) != 0 ? bounds.Maximum.Y : bounds.Minimum.Y,
+                    (i & 4) != 0 ? bounds.Maximum.Z : bounds.Minimum.Z);
+                Vector3 local = (corner - pivot) * inverseBasis;
+                minimum = Vector3.Min(minimum, local);
+                maximum = Vector3.Max(maximum, local);
+            }
+            return maximum - minimum;
+        }
+
+        private static void GetAxisComponents(Axis axis, out bool x, out bool y, out bool z)
+        {
+            x = axis == Axis.X || axis == Axis.XY || axis == Axis.ZX || axis == Axis.Center;
+            y = axis == Axis.Y || axis == Axis.XY || axis == Axis.YZ || axis == Axis.Center;
+            z = axis == Axis.Z || axis == Axis.YZ || axis == Axis.ZX || axis == Axis.Center;
         }
 
         internal static Real GetSignedAngleFromAnchor(Vector3 anchor, Vector3 current, Vector3 axis)

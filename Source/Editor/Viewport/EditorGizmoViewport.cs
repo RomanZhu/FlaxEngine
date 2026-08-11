@@ -241,7 +241,7 @@ namespace FlaxEditor.Viewport
             var enableScaleSnapping = new ViewportWidgetButton(string.Empty, editor.Icons.ScaleSnap32, null, true)
             {
                 Checked = transformGizmo.ScaleSnapEnabled,
-                TooltipText = "Enable scale snapping",
+                TooltipText = "Enable scale snapping to the position grid",
                 Parent = scaleSnappingWidget
             };
             enableScaleSnapping.Toggled += _ =>
@@ -251,23 +251,23 @@ namespace FlaxEditor.Viewport
                     editor.ProjectCache.SetCustomData("ScaleSnapState", transformGizmo.ScaleSnapEnabled);
             };
             var scaleSnappingCM = new ContextMenu();
-            var scaleSnapping = new ViewportWidgetButton(transformGizmo.ScaleSnapValue.ToString(), SpriteHandle.Invalid, scaleSnappingCM)
+            var scaleSnapping = new ViewportWidgetButton(transformGizmo.TranslationSnapValue.ToString(), SpriteHandle.Invalid, scaleSnappingCM)
             {
-                TooltipText = "Scale snapping values"
+                TooltipText = "World-unit position grid used for scale snapping"
             };
-            for (int i = 0; i < ScaleSnapValues.Length; i++)
+            for (int i = 0; i < TranslateSnapValues.Length; i++)
             {
-                var v = ScaleSnapValues[i];
+                var v = TranslateSnapValues[i];
                 var button = scaleSnappingCM.AddButton(v.ToString());
                 button.Tag = v;
             }
             scaleSnappingCM.ButtonClicked += button =>
             {
                 var v = (float)button.Tag;
-                transformGizmo.ScaleSnapValue = v;
+                transformGizmo.TranslationSnapValue = v;
                 scaleSnapping.Text = v.ToString();
                 if (useProjectCache)
-                    editor.ProjectCache.SetCustomData("ScaleSnapValue", transformGizmo.ScaleSnapValue);
+                    editor.ProjectCache.SetCustomData("TranslateSnapValue", transformGizmo.TranslationSnapValue);
             };
             scaleSnappingCM.VisibleChanged += control =>
             {
@@ -279,7 +279,7 @@ namespace FlaxEditor.Viewport
                     if (e is ContextMenuButton b)
                     {
                         var v = (float)b.Tag;
-                        b.Icon = Mathf.Abs(transformGizmo.ScaleSnapValue - v) < 0.001f ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                        b.Icon = Mathf.Abs(transformGizmo.TranslationSnapValue - v) < 0.001f ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
                     }
                 }
             };
@@ -560,17 +560,5 @@ namespace FlaxEditor.Viewport
             90.0f,
         };
 
-        internal static readonly float[] ScaleSnapValues =
-        {
-            0.05f,
-            0.1f,
-            0.25f,
-            0.5f,
-            1.0f,
-            2.0f,
-            4.0f,
-            6.0f,
-            8.0f,
-        };
     }
 }

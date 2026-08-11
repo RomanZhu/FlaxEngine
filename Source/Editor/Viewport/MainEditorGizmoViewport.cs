@@ -511,13 +511,9 @@ namespace FlaxEditor.Viewport
                 TransformGizmo.ScaleSnapEnabled = !TransformGizmo.ScaleSnapEnabled;
                 _editor.ProjectCache.SetCustomData("ScaleSnapState", TransformGizmo.ScaleSnapEnabled);
             });
-            _overlayScaleSnapButton.LinkTooltip("Toggle scale snapping.");
-            _overlayScaleSnapValueButton = AddViewportToolStripMenuButton(GetScaleSnapLabel(), SpriteHandle.Invalid, CreateSnapValueMenu(ScaleSnapValues, () => TransformGizmo.ScaleSnapValue, value =>
-            {
-                TransformGizmo.ScaleSnapValue = value;
-                _editor.ProjectCache.SetCustomData("ScaleSnapValue", TransformGizmo.ScaleSnapValue);
-            }), ToolStripAnchor.Left, "Flax.Scene.Transform.ScaleSnapValue.Left");
-            _overlayScaleSnapValueButton.LinkTooltip("Scale snapping values.");
+            _overlayScaleSnapButton.LinkTooltip("Toggle scale snapping to the position grid.");
+            _overlayScaleSnapValueButton = AddViewportToolStripMenuButton(GetScaleSnapLabel(), SpriteHandle.Invalid, CreateTranslateSnapMenu(), ToolStripAnchor.Left, "Flax.Scene.Transform.ScaleSnapValue.Left");
+            _overlayScaleSnapValueButton.LinkTooltip("World-unit position grid used for scale snapping.");
 
             _overlayCSGSelectPlaceButton = AddViewportToolStripButton("Select", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.SelectPlace.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.SelectPlace));
             _overlayCSGSelectPlaceButton.LinkTooltip("Select brushes or place the chosen primitive.", ref inputOptions.CSGSelectPlaceTool);
@@ -1346,7 +1342,7 @@ namespace FlaxEditor.Viewport
 
         private string GetScaleSnapLabel()
         {
-            return TransformGizmo.ScaleSnapValue.ToString();
+            return GetTranslateSnapLabel();
         }
 
         private string GetCSGOperationLabel()

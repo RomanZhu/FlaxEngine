@@ -692,7 +692,7 @@ namespace FlaxEditor.Gizmo
                 break;
             case Mode.Scale:
             case Mode.Bounds:
-                value = ScaleSnapValue;
+                value = TranslationSnapValue;
                 break;
             default:
                 return 0.0f;
@@ -707,12 +707,12 @@ namespace FlaxEditor.Gizmo
             switch (mode)
             {
             case Mode.Translate:
-                return TranslationSnapEnable || Owner.UseSnapping;
+                return AbsoluteSnapEnabled;
             case Mode.Rotate:
                 return AbsoluteSnapEnabled || RotationSnapEnabled;
             case Mode.Scale:
             case Mode.Bounds:
-                return AbsoluteSnapEnabled || ScaleSnapEnabled;
+                return false;
             default:
                 return false;
             }
@@ -817,21 +817,23 @@ namespace FlaxEditor.Gizmo
                 var factor = result.Scale;
                 string factorText;
                 if (axis == Axis.Center)
-                    factorText = FormatFactor((float)factor.X, snapStep);
+                    factorText = FormatFactor((float)factor.X);
                 else if (TryGetFeedbackPlaneAxes(axis, out var scaleAxisA, out var scaleAxisB))
-                    factorText = scaleAxisA + " " + FormatFactor(GetFeedbackScaleComponent(factor, scaleAxisA), snapStep) + "  " + scaleAxisB + " " + FormatFactor(GetFeedbackScaleComponent(factor, scaleAxisB), snapStep);
+                    factorText = scaleAxisA + " " + FormatFactor(GetFeedbackScaleComponent(factor, scaleAxisA)) + "  " + scaleAxisB + " " + FormatFactor(GetFeedbackScaleComponent(factor, scaleAxisB));
                 else if (TryGetFeedbackAxisLocal(axis, out var scaleLocal))
                 {
                     Vector3 displayedScale = snapStep > Mathf.Epsilon && IsFeedbackAbsoluteSnap(mode) ? (Vector3)GetSelectedTransform(0).Scale : factor;
                     float component = (float)(scaleLocal.X != 0.0f ? displayedScale.X : scaleLocal.Y != 0.0f ? displayedScale.Y : displayedScale.Z);
-                    factorText = FormatFactor(component, snapStep);
+                    factorText = FormatFactor(component);
                 }
                 else
-                    factorText = FormatFactor((float)factor.X, snapStep);
+                    factorText = FormatFactor((float)factor.X);
                 string scaleLabel = IsTranslateAxis(axis) && snapStep > Mathf.Epsilon && IsFeedbackAbsoluteSnap(mode) ? axis + " scale" : axis == Axis.Center ? "Scale" : axis.ToString();
                 rows.Add(new FeedbackHudRow(scaleLabel, factorText));
                 if (!IsPlaneAxis(axis) && IsValidFeedbackBounds(originalBounds) && IsValidFeedbackBounds(currentBounds))
                 {
+                    Vector3 size = currentBounds.Size;
+                    rows.Add(new FeedbackHudRow("Size", FormatDistance((float)size.X, 0.0f) + " × " + FormatDistance((float)size.Y, 0.0f) + " × " + FormatDistance((float)size.Z, 0.0f)));
                     guides.Add(new FeedbackWorldGuide(FeedbackGuideKind.ScaleBounds, currentBounds.Center, currentBounds.Center, Vector3.Zero, Vector3.Zero, 0.0f, 0.0f, activeColor.AlphaMultiplied(0.55f), false));
                     basis = FeedbackMeasurementBasis.ScaleFactor;
                 }

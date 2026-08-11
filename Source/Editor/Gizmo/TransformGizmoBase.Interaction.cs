@@ -809,7 +809,7 @@ namespace FlaxEditor.Gizmo
                     _transactionOrigin = _transactionOrigin.WithCreatedObjects(_createdObjects, _duplicateUndoAction);
 
                 _isTransforming = true;
-                _lastUseSnapping = Owner.UseSnapping;
+                _lastUseSnapping = IsTransformSnappingActive;
                 _lastPrecision = Owner.IsAltKeyDown;
                 _lastGeometrySnap = IsGeometrySnapActive;
                 SetInteractionState(InteractionState.Dragging);
@@ -1286,6 +1286,11 @@ namespace FlaxEditor.Gizmo
 
         private bool IsCameraClutchActive => Owner.IsMiddleMouseButtonDown || Owner.IsRightMouseButtonDown;
 
+        private bool IsTransformSnappingActive => Owner.UseSnapping ||
+                                                  (_activeMode == Mode.Translate && TranslationSnapEnable) ||
+                                                  (_activeMode == Mode.Rotate && RotationSnapEnabled) ||
+                                                  ((_activeMode == Mode.Scale || _activeMode == Mode.Bounds) && ScaleSnapEnabled);
+
         private bool HandleFocusAndClutch()
         {
             if (_focusLost)
@@ -1317,7 +1322,7 @@ namespace FlaxEditor.Gizmo
 
             if (_interactionState == InteractionState.Dragging)
             {
-                bool useSnapping = Owner.UseSnapping;
+                bool useSnapping = IsTransformSnappingActive;
                 bool precision = Owner.IsAltKeyDown;
                 bool geometrySnap = IsGeometrySnapActive;
                 if (useSnapping != _lastUseSnapping || precision != _lastPrecision || geometrySnap != _lastGeometrySnap)

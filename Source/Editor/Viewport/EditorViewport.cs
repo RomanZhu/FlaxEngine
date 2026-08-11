@@ -2077,6 +2077,7 @@ namespace FlaxEditor.Viewport
             CreateProjectionMatrix(out var p);
             CreateViewMatrix(position, out var v);
             Matrix.Multiply(ref v, ref p, out var vp);
+            worldSpaceLocation -= viewOrigin;
             viewport.Project(ref worldSpaceLocation, ref vp, out var projected);
             viewportSpaceLocation = new Float2((float)projected.X, (float)projected.Y);
         }

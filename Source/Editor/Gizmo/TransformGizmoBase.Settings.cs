@@ -122,7 +122,7 @@ namespace FlaxEditor.Gizmo
         public float RotationSnapValue = 30;
 
         /// <summary>
-        /// Scale snap value
+        /// Legacy scale-factor snap value. Scale snapping uses <see cref="TranslationSnapValue"/> as a world-unit grid size.
         /// </summary>
         public float ScaleSnapValue = 1.0f;
 
