@@ -8,6 +8,22 @@ PhysicsColliderActor::PhysicsColliderActor(const SpawnParams& params)
 {
 }
 
+int32 PhysicsColliderActor::GetPhysicsShapesCount() const
+{
+    return 0;
+}
+
+void* PhysicsColliderActor::GetPhysicsShape(int32 index) const
+{
+    return nullptr;
+}
+
+void PhysicsColliderActor::GetPhysicsShapeActorPose(int32 index, const Vector3& position, const Quaternion& rotation, Vector3& shapePosition, Quaternion& shapeRotation) const
+{
+    shapePosition = position;
+    shapeRotation = rotation;
+}
+
 void PhysicsColliderActor::OnCollisionEnter(const Collision& c)
 {
     CollisionEnter(c);

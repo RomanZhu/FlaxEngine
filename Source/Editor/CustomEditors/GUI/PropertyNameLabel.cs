@@ -220,7 +220,10 @@ namespace FlaxEditor.CustomEditors.GUI
                         if (linkedEditor.CanApplyAddedPrefabObject)
                             menu.AddButton("Apply Changes", linkedEditor.ApplyAddedPrefabObject);
                         if ((features & FeatureFlags.UsePrefab) != 0)
+                        {
+                            linkedEditor.AddApplyToPrefabButtons(menu);
                             menu.AddButton("Revert to Prefab", linkedEditor.RevertToReferenceValue).Enabled = linkedEditor.CanRevertReferenceValue;
+                        }
                         if ((features & FeatureFlags.UseDefault) != 0)
                             menu.AddButton("Reset to default", linkedEditor.RevertToDefaultValue).Enabled = linkedEditor.CanRevertDefaultValue;
                         menu.AddSeparator();

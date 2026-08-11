@@ -5,6 +5,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using FlaxEditor.CustomEditors.GUI;
+using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Scripting;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -568,6 +569,279 @@ namespace FlaxEditor.CustomEditors
             if (!Values.HasReferenceValue || !CanEditValue)
                 return;
             RevertDiffToReference();
+        }
+
+        private readonly struct PrefabApplyTarget
+        {
+            public readonly Prefab Prefab;
+            public readonly Guid ObjectId;
+            public readonly string Name;
+
+            public PrefabApplyTarget(Prefab prefab, Guid objectId, string name)
+            {
+                Prefab = prefab;
+                ObjectId = objectId;
+                Name = name;
+            }
+        }
+
+        /// <summary>
+        /// Adds actions for applying the modified value to its prefab inheritance chain.
+        /// </summary>
+        /// <param name="menu">The context menu.</param>
+        /// <returns>True if any actions were added.</returns>
+        public bool AddApplyToPrefabButtons(ContextMenu menu)
+        {
+            if (!TryGetPrefabApplyData(out var sceneEditor, out var sceneObject, out var properties, out var targets))
+                return false;
+
+            for (int i = 0; i < targets.Count; i++)
+            {
+                var target = targets[i];
+                menu.AddButton($"Apply to Prefab '{target.Name}'", () => ApplyToPrefab(sceneEditor, sceneObject, properties, target));
+            }
+            return true;
+        }
+
+        private bool TryGetPrefabApplyData(out CustomEditor sceneEditor, out SceneObject sceneObject, out List<CustomEditor> properties, out List<PrefabApplyTarget> targets)
+        {
+            sceneEditor = this;
+            sceneObject = null;
+            properties = null;
+            targets = null;
+            if (Values == null || Values.Count != 1)
+                return false;
+
+            while (sceneEditor != null && (sceneEditor.Values == null || sceneEditor.Values.Count != 1 || !(sceneEditor.Values[0] is SceneObject)))
+                sceneEditor = sceneEditor.ParentEditor;
+            if (sceneEditor == null || !(sceneEditor.Values[0] is SceneObject sourceObject) || !sourceObject.HasPrefabLink)
+                return false;
+
+            properties = new List<CustomEditor>();
+            if (this == sceneEditor)
+            {
+                for (int i = 0; i < sceneEditor.ChildrenEditors.Count; i++)
+                {
+                    var child = sceneEditor.ChildrenEditors[i];
+                    if (CanApplyPrefabProperty(child))
+                        properties.Add(child);
+                }
+            }
+            else
+            {
+                var property = this;
+                while (property.ParentEditor != sceneEditor)
+                    property = property.ParentEditor;
+                if (CanApplyPrefabProperty(property))
+                    properties.Add(property);
+            }
+            if (properties.Count == 0)
+                return false;
+
+            targets = GetPrefabApplyTargets(sourceObject);
+            if (targets.Count == 0)
+                return false;
+            sceneObject = sourceObject;
+            return true;
+        }
+
+        private static bool CanApplyPrefabProperty(CustomEditor editor)
+        {
+            var values = editor.Values;
+            return values != null &&
+                   values.Count == 1 &&
+                   values.Info != ScriptMemberInfo.Null &&
+                   values.Info.HasSet &&
+                   editor.CanEditValue &&
+                   values.IsReferenceValueModified;
+        }
+
+        private static List<PrefabApplyTarget> GetPrefabApplyTargets(SceneObject sceneObject)
+        {
+            var result = new List<PrefabApplyTarget>();
+            var prefabId = sceneObject.PrefabID;
+            var objectId = sceneObject.PrefabObjectID;
+            var visited = new HashSet<Guid>();
+            while (prefabId != Guid.Empty && objectId != Guid.Empty && visited.Add(prefabId))
+            {
+                var prefab = FlaxEngine.Content.Load<Prefab>(prefabId);
+                if (!prefab || prefab.WaitForLoaded())
+                    break;
+
+                var lookupId = objectId;
+                if (prefab.GetDefaultInstance(ref lookupId) == null)
+                    break;
+
+                var item = Editor.Instance.ContentDatabase.FindAsset(prefabId);
+                var name = item?.ShortName;
+                if (string.IsNullOrEmpty(name) && FlaxEngine.Content.GetAssetInfo(prefabId, out var info))
+                    name = System.IO.Path.GetFileNameWithoutExtension(info.Path);
+                if (string.IsNullOrEmpty(name))
+                    name = prefabId.ToString();
+                result.Add(new PrefabApplyTarget(prefab, objectId, name));
+
+                var currentObjectId = objectId;
+                if (!prefab.GetNestedObject(ref currentObjectId, out var parentPrefabId, out var parentObjectId))
+                    break;
+                prefabId = parentPrefabId;
+                objectId = parentObjectId;
+            }
+            return result;
+        }
+
+        private static void ApplyToPrefab(CustomEditor sceneEditor, SceneObject sceneObject, List<CustomEditor> properties, PrefabApplyTarget target)
+        {
+            var instance = PrefabManager.SpawnPrefab(target.Prefab, null);
+            if (!instance)
+                throw new InvalidOperationException($"Failed to spawn prefab '{target.Name}'.");
+
+            try
+            {
+                var targetObject = FindPrefabObject(instance, target.ObjectId);
+                if (!targetObject)
+                    throw new InvalidOperationException($"Prefab '{target.Name}' does not contain the edited object.");
+
+                var sourceRoot = FindPrefabInstanceRoot(sceneObject);
+                if (!sourceRoot)
+                    throw new InvalidOperationException("Failed to find the source prefab instance root.");
+
+                var idReplacements = BuildPrefabObjectIdReplacements(sourceRoot, sceneObject.PrefabID, instance, target.Prefab.ID, out var unmappedObjectIds);
+                for (int i = 0; i < properties.Count; i++)
+                {
+                    var property = properties[i];
+                    var value = ClonePrefabValue(property.Values[0], property.Values.Info.ValueType.Type, idReplacements, unmappedObjectIds);
+                    property.Values.Info.SetValue(targetObject, value);
+                }
+
+                var referenceEditor = sceneEditor;
+                for (var parent = sceneEditor.ParentEditor; parent != null; parent = parent.ParentEditor)
+                {
+                    if (parent.Values?.HasReferenceValue ?? false)
+                        referenceEditor = parent;
+                }
+                referenceEditor.ClearReferenceValueAll();
+                Editor.Instance.Prefabs.ApplyAll(instance);
+                if (sceneEditor.Presenter?.Owner is FlaxEditor.Windows.Assets.PrefabWindow prefabWindow)
+                    prefabWindow.MarkAsEdited();
+                sceneEditor.Presenter?.BuildLayoutOnUpdate();
+            }
+            finally
+            {
+                if (instance)
+                    FlaxEngine.Object.Destroy(instance);
+            }
+        }
+
+        private static object ClonePrefabValue(object value, Type valueType, Dictionary<string, string> idReplacements, HashSet<string> unmappedObjectIds)
+        {
+            if (value == null)
+                return null;
+            valueType ??= value.GetType();
+            var json = JsonSerializer.Serialize(value, valueType);
+            foreach (var objectId in unmappedObjectIds)
+            {
+                if (json.Contains($"\"{objectId}\""))
+                    throw new InvalidOperationException("The property references a prefab object that does not exist in the selected parent prefab.");
+            }
+            if (value is SceneObject referencedObject && !idReplacements.ContainsKey(JsonSerializer.GetStringID(referencedObject.ID)))
+                throw new InvalidOperationException("The property references a scene object that does not exist in the selected prefab.");
+            foreach (var replacement in idReplacements)
+                json = json.Replace($"\"{replacement.Key}\"", $"\"{replacement.Value}\"");
+            return JsonSerializer.Deserialize(json, valueType);
+        }
+
+        private static Actor FindPrefabInstanceRoot(SceneObject sceneObject)
+        {
+            var actor = sceneObject is Script script ? script.Actor : sceneObject as Actor;
+            if (!actor)
+                return null;
+
+            var prefabId = sceneObject.PrefabID;
+            while (actor.Parent && actor.Parent.PrefabID == prefabId)
+                actor = actor.Parent;
+            return actor;
+        }
+
+        private static SceneObject FindPrefabObject(Actor actor, Guid objectId)
+        {
+            if (actor.PrefabObjectID == objectId)
+                return actor;
+            for (int i = 0; i < actor.ScriptsCount; i++)
+            {
+                var script = actor.GetScript(i);
+                if (script && script.PrefabObjectID == objectId)
+                    return script;
+            }
+            for (int i = 0; i < actor.ChildrenCount; i++)
+            {
+                var result = FindPrefabObject(actor.GetChild(i), objectId);
+                if (result)
+                    return result;
+            }
+            return null;
+        }
+
+        private static void CollectPrefabObjects(Actor actor, List<SceneObject> result)
+        {
+            result.Add(actor);
+            for (int i = 0; i < actor.ScriptsCount; i++)
+            {
+                var script = actor.GetScript(i);
+                if (script)
+                    result.Add(script);
+            }
+            for (int i = 0; i < actor.ChildrenCount; i++)
+                CollectPrefabObjects(actor.GetChild(i), result);
+        }
+
+        private static Dictionary<string, string> BuildPrefabObjectIdReplacements(Actor sourceRoot, Guid sourcePrefabId, Actor targetRoot, Guid targetPrefabId, out HashSet<string> unmappedObjectIds)
+        {
+            var result = new Dictionary<string, string>();
+            unmappedObjectIds = new HashSet<string>();
+            var sourceObjects = new List<SceneObject>();
+            var targetObjects = new List<SceneObject>();
+            CollectPrefabObjects(sourceRoot, sourceObjects);
+            CollectPrefabObjects(targetRoot, targetObjects);
+
+            var targetObjectsByPrefabId = new Dictionary<Guid, SceneObject>();
+            for (int i = 0; i < targetObjects.Count; i++)
+                targetObjectsByPrefabId[targetObjects[i].PrefabObjectID] = targetObjects[i];
+
+            for (int i = 0; i < sourceObjects.Count; i++)
+            {
+                var sourceObject = sourceObjects[i];
+                if (!sourceObject.HasPrefabLink || sourceObject.PrefabID != sourcePrefabId)
+                    continue;
+                var sourceObjectId = JsonSerializer.GetStringID(sourceObject.ID);
+                if (!TryMapPrefabObjectId(sourcePrefabId, sourceObject.PrefabObjectID, targetPrefabId, out var targetObjectId))
+                {
+                    unmappedObjectIds.Add(sourceObjectId);
+                    continue;
+                }
+                if (targetObjectsByPrefabId.TryGetValue(targetObjectId, out var targetObject))
+                {
+                    result[sourceObjectId] = JsonSerializer.GetStringID(targetObject.ID);
+                }
+                else
+                    unmappedObjectIds.Add(sourceObjectId);
+            }
+            return result;
+        }
+
+        private static bool TryMapPrefabObjectId(Guid prefabId, Guid objectId, Guid targetPrefabId, out Guid targetObjectId)
+        {
+            var visited = new HashSet<Guid>();
+            while (prefabId != targetPrefabId && prefabId != Guid.Empty && objectId != Guid.Empty && visited.Add(prefabId))
+            {
+                var prefab = FlaxEngine.Content.Load<Prefab>(prefabId);
+                if (!prefab || prefab.WaitForLoaded())
+                    break;
+                var currentObjectId = objectId;
+                if (!prefab.GetNestedObject(ref currentObjectId, out prefabId, out objectId))
+                    break;
+            }
+            targetObjectId = objectId;
+            return prefabId == targetPrefabId && objectId != Guid.Empty;
         }
 
         /// <summary>

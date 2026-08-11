@@ -3,11 +3,15 @@
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Math/Math.h"
 #include "Engine/Physics/CollisionCooking.h"
+#include "Engine/Physics/CollisionData.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Physics/Actors/IPhysicsActor.h"
 #include "Engine/Physics/Actors/PhysicsColliderActor.h"
 #include "Engine/Physics/Colliders/CharacterController.h"
 #include "Engine/Physics/Joints/D6Joint.h"
 #include "Engine/Physics/PhysicsBackend.h"
+#include "Engine/Physics/Physics.h"
+#include "Engine/Physics/PhysicsScene.h"
 #include "Engine/Physics/PhysicsSettings.h"
 #include "Engine/Physics/Types.h"
 #include "Engine/Graphics/Models/ModelData.h"
@@ -36,6 +40,8 @@ namespace
     class TestPhysicsCollider final : public PhysicsColliderActor
     {
     public:
+        void* Shape = nullptr;
+
         explicit TestPhysicsCollider(const SpawnParams& params)
             : PhysicsColliderActor(params)
         {
@@ -44,6 +50,16 @@ namespace
         RigidBody* GetAttachedRigidBody() const override
         {
             return nullptr;
+        }
+
+        int32 GetPhysicsShapesCount() const override
+        {
+            return Shape ? 1 : 0;
+        }
+
+        void* GetPhysicsShape(int32 index) const override
+        {
+            return index == 0 ? Shape : nullptr;
         }
 
         bool RayCast(const Vector3& origin, const Vector3& direction, float& resultHitDistance, float maxDistance) const override
@@ -80,11 +96,13 @@ TEST_CASE("PhysicsBackend")
     settings.DefaultGravity = Vector3(0.0, -981.0, 0.0);
     settings.DisableCCD = true;
 
-    void* scene = PhysicsBackend::CreateScene(settings);
-    REQUIRE(scene);
+    auto physicsScene = New<PhysicsScene>();
+    REQUIRE(physicsScene);
+    REQUIRE_FALSE(physicsScene->Init(TEXT("PhysicsBackendTest"), settings));
+    void* scene = physicsScene->GetPhysicsScene();
     SCOPE_EXIT
     {
-        PhysicsBackend::DestroyScene(scene);
+        Delete(physicsScene);
     };
 
     TestPhysicsOwner floorOwner;
@@ -116,6 +134,7 @@ TEST_CASE("PhysicsBackend")
     floorGeometry.SetBox(floorHalfExtents);
     void* floorShape = PhysicsBackend::CreateShape(floorCollider, floorGeometry, (JsonAsset*)nullptr, true, false);
     REQUIRE(floorShape);
+    floorCollider->Shape = floorShape;
     SCOPE_EXIT
     {
         PhysicsBackend::DestroyShape(floorShape);
@@ -126,6 +145,7 @@ TEST_CASE("PhysicsBackend")
     sphereGeometry.SetSphere(25.0f);
     void* sphereShape = PhysicsBackend::CreateShape(sphereCollider, sphereGeometry, (JsonAsset*)nullptr, true, false);
     REQUIRE(sphereShape);
+    sphereCollider->Shape = sphereShape;
     SCOPE_EXIT
     {
         PhysicsBackend::DestroyShape(sphereShape);
@@ -224,12 +244,69 @@ TEST_CASE("PhysicsBackend")
     CHECK(hit.Collider == floorCollider);
     CHECK(hit.Distance == Approx(100.0f).margin(0.5f));
 
+    RayCastHit castHits[4] = {};
+    const int32 rayHitCount = PhysicsBackend::RayCastNonAlloc(scene, Vector3(0.0, 300.0, 0.0), Vector3::Down, ToSpan(castHits, ARRAY_COUNT(castHits)), 400.0f, MAX_uint32, true);
+    CHECK(rayHitCount == 2);
+    CHECK(physicsScene->LineCastNonAlloc(Vector3(0.0, 300.0, 0.0), Vector3(0.0, -100.0, 0.0), ToSpan(castHits, ARRAY_COUNT(castHits)), MAX_uint32, true) == 2);
+    CHECK(physicsScene->RayCastNonAlloc(Vector3(0.0, 300.0, 0.0), Vector3::Down, ToSpan(castHits, ARRAY_COUNT(castHits)), 400.0f, MAX_uint32, true) == 2);
+    castHits[1].Distance = 12345.0f;
+    CHECK(PhysicsBackend::RayCastNonAlloc(scene, Vector3(0.0, 300.0, 0.0), Vector3::Down, ToSpan(castHits, 1), 400.0f, MAX_uint32, true) == 1);
+    CHECK(castHits[1].Distance == 12345.0f);
+    CHECK(PhysicsBackend::RayCastNonAlloc(scene, Vector3(0.0, 300.0, 0.0), Vector3::Down, Span<RayCastHit>(), 400.0f, MAX_uint32, true) == 0);
+
+    CHECK(physicsScene->BoxCastNonAlloc(Vector3(0.0, 200.0, 0.0), Vector3(10.0f), Vector3::Down, ToSpan(castHits, ARRAY_COUNT(castHits)), Quaternion::Identity, 100.0f, MAX_uint32, true) >= 1);
+    CHECK(castHits[0].Distance == Approx(0.0f));
+    CHECK(physicsScene->SphereCastNonAlloc(Vector3(0.0, 200.0, 0.0), 10.0f, Vector3::Down, ToSpan(castHits, ARRAY_COUNT(castHits)), 100.0f, MAX_uint32, true) >= 1);
+    CHECK(castHits[0].Distance == Approx(0.0f));
+    CHECK(physicsScene->CapsuleCastNonAlloc(Vector3(0.0, 200.0, 0.0), 10.0f, 20.0f, Vector3::Down, ToSpan(castHits, ARRAY_COUNT(castHits)), Quaternion::Identity, 100.0f, MAX_uint32, true) >= 1);
+    CHECK(castHits[0].Distance == Approx(0.0f));
+
+    PhysicsColliderActor* overlapHits[4] = {};
+    CHECK(PhysicsBackend::OverlapSphereNonAlloc(scene, Vector3(0.0, 100.0, 0.0), 400.0f, ToSpan(overlapHits, 1), MAX_uint32, true) == 1);
+    CHECK(physicsScene->OverlapBoxNonAlloc(Vector3(0.0, 200.0, 0.0), Vector3(30.0f), ToSpan(overlapHits, ARRAY_COUNT(overlapHits)), Quaternion::Identity, MAX_uint32, true) >= 1);
+    CHECK(physicsScene->OverlapSphereNonAlloc(Vector3(0.0, 200.0, 0.0), 30.0f, ToSpan(overlapHits, ARRAY_COUNT(overlapHits)), MAX_uint32, true) >= 1);
+    CHECK(physicsScene->OverlapCapsuleNonAlloc(Vector3(0.0, 200.0, 0.0), 10.0f, 20.0f, ToSpan(overlapHits, ARRAY_COUNT(overlapHits)), Quaternion::Identity, MAX_uint32, true) >= 1);
+
+    PhysicsBackend::SetShapeState(sphereShape, true, true);
+    CHECK(PhysicsBackend::RayCastNonAlloc(scene, Vector3(0.0, 300.0, 0.0), Vector3::Down, ToSpan(castHits, ARRAY_COUNT(castHits)), 400.0f, MAX_uint32, false) == 1);
+    CHECK(PhysicsBackend::RayCastNonAlloc(scene, Vector3(0.0, 300.0, 0.0), Vector3::Down, ToSpan(castHits, ARRAY_COUNT(castHits)), 400.0f, MAX_uint32, true) == 2);
+    CHECK(PhysicsBackend::OverlapSphereNonAlloc(scene, Vector3(0.0, 200.0, 0.0), 30.0f, ToSpan(overlapHits, ARRAY_COUNT(overlapHits)), MAX_uint32, false) == 0);
+    CHECK(PhysicsBackend::OverlapSphereNonAlloc(scene, Vector3(0.0, 200.0, 0.0), 30.0f, ToSpan(overlapHits, ARRAY_COUNT(overlapHits)), MAX_uint32, true) == 1);
+    PhysicsBackend::SetShapeState(sphereShape, true, false);
+
+    PhysicsBackend::SetRigidDynamicActorLinearVelocity(sphereActor, Vector3(10.0f, 0.0f, 0.0f), true);
+    PhysicsBackend::SetRigidDynamicActorAngularVelocity(sphereActor, Vector3(0.0f, 0.0f, 1.0f), true);
+    const Vector3 pointVelocity = PhysicsBackend::GetRigidDynamicActorPointVelocity(sphereActor, Vector3(0.0, 300.0, 0.0));
+    CHECK(pointVelocity.X == Approx(-90.0f).margin(0.5f));
+    CHECK(pointVelocity.Y == Approx(0.0f).margin(0.5f));
+    PhysicsBackend::SetRigidDynamicActorLinearVelocity(sphereActor, Vector3::Zero, true);
+    PhysicsBackend::SetRigidDynamicActorAngularVelocity(sphereActor, Vector3::Zero, true);
+
+    const uint32 layerMask2 = Physics::LayerMasks[2];
+    const uint32 layerMask3 = Physics::LayerMasks[3];
+    Physics::LayerMasks[2] = ~(1u << 3);
+    Physics::LayerMasks[3] = MAX_uint32;
+    CHECK(Physics::GetLayerMask(2) == ~(1u << 3));
+    CHECK(Physics::GetIgnoreLayerCollision(2, 3));
+    Physics::LayerMasks[2] = layerMask2;
+    Physics::LayerMasks[3] = layerMask3;
+
     Vector3 penetrationDirection;
     float penetrationDistance;
     CHECK(PhysicsBackend::ComputeShapesPenetration(sphereShape, floorShape, Vector3(0.0, 10.0, 0.0), Quaternion::Identity, Vector3(0.0, -10.0, 0.0), Quaternion::Identity, penetrationDirection, penetrationDistance));
     CHECK(penetrationDirection.Y > 0.9f);
     CHECK(penetrationDistance == Approx(15.0f).margin(0.75f));
     CHECK_FALSE(PhysicsBackend::ComputeShapesPenetration(sphereShape, floorShape, Vector3(0.0, 100.0, 0.0), Quaternion::Identity, Vector3(0.0, -10.0, 0.0), Quaternion::Identity, penetrationDirection, penetrationDistance));
+    const Vector3 arbitraryFloorPosition(750.0, -10.0, -250.0);
+    const Quaternion arbitraryRotation = Quaternion::Euler(0.0f, 0.0f, 30.0f);
+    const Vector3 arbitraryUp = Vector3::Transform(Vector3::Up, arbitraryRotation);
+    const Vector3 sphereLocalOffset(5.0f, 0.0f, 0.0f);
+    PhysicsBackend::SetShapeLocalPose(sphereShape, sphereLocalOffset, Quaternion::Identity);
+    const Vector3 arbitrarySpherePosition = arbitraryFloorPosition + arbitraryUp * 20.0f - Vector3::Transform(sphereLocalOffset, arbitraryRotation);
+    CHECK(Physics::ComputePenetration(sphereCollider, arbitrarySpherePosition, arbitraryRotation, floorCollider, arbitraryFloorPosition, arbitraryRotation, penetrationDirection, penetrationDistance));
+    CHECK(Vector3::Dot(penetrationDirection, arbitraryUp) > 0.9f);
+    CHECK(penetrationDistance == Approx(15.0f).margin(0.75f));
+    PhysicsBackend::SetShapeLocalPose(sphereShape, Vector3::Zero, Quaternion::Identity);
 
 #if COMPILE_WITH_PHYSICS_COOKING
     PhysicsBackend::HeightFieldSample heightSamples[4] = {};
@@ -250,6 +327,31 @@ TEST_CASE("PhysicsBackend")
     modifiedSample.Height = 7;
     CHECK_FALSE(PhysicsBackend::ModifyHeightField(heightField, 1, 0, 1, 1, &modifiedSample));
     CHECK(PhysicsBackend::GetHeightFieldHeight(heightField, 1, 0) == Approx(7.0f));
+
+#if COMPILE_WITH_BOX3D
+    CollisionShape heightFieldGeometry;
+    heightFieldGeometry.SetHeightField(heightField, 2.0f, 3.0f, 4.0f);
+    TestPhysicsOwner heightFieldOwner;
+    void* heightFieldActor = PhysicsBackend::CreateRigidStaticActor(&heightFieldOwner, Vector3::Zero, Quaternion::Identity, scene);
+    REQUIRE(heightFieldActor);
+    heightFieldOwner.Actor = heightFieldActor;
+    SCOPE_EXIT
+    {
+        PhysicsBackend::DestroyActor(heightFieldActor);
+    };
+    void* heightFieldShape = PhysicsBackend::CreateShape(floorCollider, heightFieldGeometry, (JsonAsset*)nullptr, true, false);
+    REQUIRE(heightFieldShape);
+    SCOPE_EXIT
+    {
+        PhysicsBackend::DestroyShape(heightFieldShape);
+    };
+    PhysicsBackend::AttachShape(heightFieldShape, heightFieldActor);
+    const Vector3 heightFieldPosition(400.0, 0.0, -300.0);
+    const Quaternion heightFieldRotation = Quaternion::Euler(0.0f, 25.0f, 0.0f);
+    const Vector3 heightFieldSpherePosition = heightFieldPosition + Vector3::Transform(Vector3(1.5, 20.0, 2.0), heightFieldRotation);
+    CHECK(PhysicsBackend::ComputeShapesPenetration(sphereShape, heightFieldShape, heightFieldSpherePosition, Quaternion::Identity, heightFieldPosition, heightFieldRotation, penetrationDirection, penetrationDistance));
+    CHECK(penetrationDistance > 0.0f);
+#endif
 #endif
 
     Vector3 startPosition;
@@ -318,6 +420,14 @@ TEST_CASE("PhysicsBackendConvexMesh")
     CHECK(debugIndices.Count() >= 12);
     CHECK(debugIndices.Count() % 3 == 0);
 
+    auto* convexData = Content::CreateVirtualAsset<CollisionData>();
+    REQUIRE(convexData);
+    SCOPE_EXIT
+    {
+        Content::DeleteAsset(convexData);
+    };
+    REQUIRE_FALSE(convexData->CookCollision(CollisionDataType::ConvexMesh, ToSpan(debugVertices), ToSpan(debugIndices), ConvexMeshGenerationFlags::None, 255));
+
     PhysicsSettings settings;
     settings.DefaultGravity = Vector3::Zero;
     settings.DisableCCD = true;
@@ -359,6 +469,14 @@ TEST_CASE("PhysicsBackendConvexMesh")
     RayCastHit hit;
     CHECK(PhysicsBackend::RayCast(scene, Vector3(0.0, 0.0, -150.0), Vector3(0.0, 0.0, 1.0), hit, 300.0f, MAX_uint32, true));
     CHECK(hit.Collider == convexCollider);
+
+    RayCastHit convexCastHits[2] = {};
+    CHECK(PhysicsBackend::ConvexCastNonAlloc(scene, Vector3(0.0, 0.0, -150.0), convexData, Vector3::One, Vector3::Forward, ToSpan(convexCastHits, ARRAY_COUNT(convexCastHits)), Quaternion::Identity, 300.0f, MAX_uint32, true) >= 1);
+    CHECK(PhysicsBackend::ConvexCastNonAlloc(scene, Vector3::Zero, convexData, Vector3::One, Vector3::Forward, ToSpan(convexCastHits, ARRAY_COUNT(convexCastHits)), Quaternion::Identity, 100.0f, MAX_uint32, true) >= 1);
+    CHECK(convexCastHits[0].Distance == Approx(0.0f));
+    PhysicsColliderActor* convexOverlapHits[1] = {};
+    CHECK(PhysicsBackend::OverlapConvexNonAlloc(scene, Vector3::Zero, convexData, Vector3::One, ToSpan(convexOverlapHits, ARRAY_COUNT(convexOverlapHits)), Quaternion::Identity, MAX_uint32, true) == 1);
+    CHECK(convexOverlapHits[0] == convexCollider);
 
     TestPhysicsOwner projectileOwner;
     void* projectileActor = PhysicsBackend::CreateRigidDynamicActor(&projectileOwner, Vector3(0.0, 0.0, -150.0), Quaternion::Identity, scene);

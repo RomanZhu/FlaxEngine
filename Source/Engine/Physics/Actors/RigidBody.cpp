@@ -246,6 +246,11 @@ void RigidBody::SetAngularVelocity(const Vector3& value) const
         PhysicsBackend::SetRigidDynamicActorAngularVelocity(_actor, value, GetStartAwake());
 }
 
+Vector3 RigidBody::GetPointVelocity(const Vector3& point) const
+{
+    return _actor ? PhysicsBackend::GetRigidDynamicActorPointVelocity(_actor, point) : Vector3::Zero;
+}
+
 float RigidBody::GetMaxDepenetrationVelocity() const
 {
     return _actor ? PhysicsBackend::GetRigidDynamicActorMaxDepenetrationVelocity(_actor) : 0;

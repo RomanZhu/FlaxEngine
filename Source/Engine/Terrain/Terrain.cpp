@@ -854,6 +854,22 @@ void Terrain::Deserialize(DeserializeStream& stream, ISerializeModifier* modifie
     }
 }
 
+int32 Terrain::GetPhysicsShapesCount() const
+{
+    return _patches.Count();
+}
+
+void* Terrain::GetPhysicsShape(int32 index) const
+{
+    return _patches.IsValidIndex(index) ? _patches[index]->_physicsShape : nullptr;
+}
+
+void Terrain::GetPhysicsShapeActorPose(int32 index, const Vector3& position, const Quaternion& rotation, Vector3& shapePosition, Quaternion& shapeRotation) const
+{
+    shapeRotation = rotation;
+    shapePosition = _patches.IsValidIndex(index) ? Transform(position, rotation, _transform.Scale).LocalToWorld(_patches[index]->_offset) : position;
+}
+
 RigidBody* Terrain::GetAttachedRigidBody() const
 {
     // Terrains are always static things

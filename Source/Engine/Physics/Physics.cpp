@@ -10,6 +10,7 @@
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Profiler/ProfilerMemory.h"
+#include "Engine/Scripting/ManagedCLR/MCore.h"
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Threading/Threading.h"
 
@@ -17,6 +18,19 @@ PhysicsScene* Physics::DefaultScene = nullptr;
 Array<PhysicsScene*> Physics::Scenes;
 uint32 Physics::LayerMasks[32];
 static PhysicsSimulationMode PhysicsSimulationModeInternal = PhysicsSimulationMode::FixedUpdate;
+
+namespace
+{
+    void WriteManagedOverlapResult(void* context, int32 index, PhysicsColliderActor* collider)
+    {
+        MCore::GC::WriteArrayRef((MArray*)context, collider ? collider->GetOrCreateManagedInstance() : nullptr, index);
+    }
+
+    PhysicsOverlapResultBuffer MakeManagedOverlapBuffer(MArray* results)
+    {
+        return PhysicsOverlapResultBuffer(results, results ? MCore::Array::GetLength(results) : 0, &WriteManagedOverlapResult);
+    }
+}
 
 class PhysicsService : public EngineService
 {
@@ -283,6 +297,51 @@ void Physics::FlushRequests()
     PhysicsBackend::FlushRequests();
 }
 
+uint32 Physics::GetLayerMask(int32 layer)
+{
+    return layer >= 0 && layer < ARRAY_COUNT(LayerMasks) ? LayerMasks[layer] : 0;
+}
+
+bool Physics::GetIgnoreLayerCollision(int32 layer1, int32 layer2)
+{
+    if (layer1 < 0 || layer1 >= ARRAY_COUNT(LayerMasks) || layer2 < 0 || layer2 >= ARRAY_COUNT(LayerMasks))
+        return true;
+    return (LayerMasks[layer1] & (1u << layer2)) == 0 || (LayerMasks[layer2] & (1u << layer1)) == 0;
+}
+
+bool Physics::ComputePenetration(const PhysicsColliderActor* colliderA, const Vector3& positionA, const Quaternion& rotationA, const PhysicsColliderActor* colliderB, const Vector3& positionB, const Quaternion& rotationB, Vector3& direction, float& distance)
+{
+    direction = Vector3::Zero;
+    distance = 0.0f;
+    if (!colliderA || !colliderB || colliderA == colliderB)
+        return false;
+
+    bool result = false;
+    for (int32 i = 0; i < colliderA->GetPhysicsShapesCount(); i++)
+    {
+        void* shapeA = colliderA->GetPhysicsShape(i);
+        Vector3 shapePositionA;
+        Quaternion shapeRotationA;
+        colliderA->GetPhysicsShapeActorPose(i, positionA, rotationA, shapePositionA, shapeRotationA);
+        for (int32 j = 0; shapeA && j < colliderB->GetPhysicsShapesCount(); j++)
+        {
+            void* shapeB = colliderB->GetPhysicsShape(j);
+            Vector3 shapePositionB;
+            Quaternion shapeRotationB;
+            colliderB->GetPhysicsShapeActorPose(j, positionB, rotationB, shapePositionB, shapeRotationB);
+            Vector3 pairDirection;
+            float pairDistance;
+            if (shapeB && PhysicsBackend::ComputeShapesPenetration(shapeA, shapeB, shapePositionA, shapeRotationA, shapePositionB, shapeRotationB, pairDirection, pairDistance) && pairDistance > distance)
+            {
+                direction = pairDirection;
+                distance = pairDistance;
+                result = true;
+            }
+        }
+    }
+    return result;
+}
+
 bool Physics::LineCast(const Vector3& start, const Vector3& end, uint32 layerMask, bool hitTriggers)
 {
     return DefaultScene->LineCast(start, end, layerMask, hitTriggers);
@@ -296,6 +355,11 @@ bool Physics::LineCast(const Vector3& start, const Vector3& end, RayCastHit& hit
 bool Physics::LineCastAll(const Vector3& start, const Vector3& end, Array<RayCastHit>& results, uint32 layerMask, bool hitTriggers)
 {
     return DefaultScene->LineCastAll(start, end, results, layerMask, hitTriggers);
+}
+
+int32 Physics::LineCastNonAlloc(const Vector3& start, const Vector3& end, Span<RayCastHit> results, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->LineCastNonAlloc(start, end, results, layerMask, hitTriggers);
 }
 
 bool Physics::RayCast(const Vector3& origin, const Vector3& direction, const float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -316,6 +380,12 @@ bool Physics::RayCastAll(const Vector3& origin, const Vector3& direction, Array<
     return DefaultScene->RayCastAll(origin, direction, results, maxDistance, layerMask, hitTriggers);
 }
 
+int32 Physics::RayCastNonAlloc(const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return DefaultScene->RayCastNonAlloc(origin, direction, results, maxDistance, layerMask, hitTriggers);
+}
+
 bool Physics::BoxCast(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
@@ -332,6 +402,12 @@ bool Physics::BoxCastAll(const Vector3& center, const Vector3& halfExtents, cons
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
     return DefaultScene->BoxCastAll(center, halfExtents, direction, results, rotation, maxDistance, layerMask, hitTriggers);
+}
+
+int32 Physics::BoxCastNonAlloc(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return DefaultScene->BoxCastNonAlloc(center, halfExtents, direction, results, rotation, maxDistance, layerMask, hitTriggers);
 }
 
 bool Physics::SphereCast(const Vector3& center, const float radius, const Vector3& direction, const float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -352,6 +428,12 @@ bool Physics::SphereCastAll(const Vector3& center, const float radius, const Vec
     return DefaultScene->SphereCastAll(center, radius, direction, results, maxDistance, layerMask, hitTriggers);
 }
 
+int32 Physics::SphereCastNonAlloc(const Vector3& center, const float radius, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return DefaultScene->SphereCastNonAlloc(center, radius, direction, results, maxDistance, layerMask, hitTriggers);
+}
+
 bool Physics::CapsuleCast(const Vector3& center, const float radius, const float height, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
@@ -370,6 +452,12 @@ bool Physics::CapsuleCastAll(const Vector3& center, const float radius, const fl
     return DefaultScene->CapsuleCastAll(center, radius, height, direction, results, rotation, maxDistance, layerMask, hitTriggers);
 }
 
+int32 Physics::CapsuleCastNonAlloc(const Vector3& center, const float radius, const float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return DefaultScene->CapsuleCastNonAlloc(center, radius, height, direction, results, rotation, maxDistance, layerMask, hitTriggers);
+}
+
 bool Physics::ConvexCast(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
@@ -386,6 +474,12 @@ bool Physics::ConvexCastAll(const Vector3& center, const CollisionData* convexMe
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
     return DefaultScene->ConvexCastAll(center, convexMesh, scale, direction, results, rotation, maxDistance, layerMask, hitTriggers);
+}
+
+int32 Physics::ConvexCastNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return DefaultScene->ConvexCastNonAlloc(center, convexMesh, scale, direction, results, rotation, maxDistance, layerMask, hitTriggers);
 }
 
 bool Physics::CheckBox(const Vector3& center, const Vector3& halfExtents, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
@@ -446,6 +540,46 @@ bool Physics::OverlapCapsule(const Vector3& center, const float radius, const fl
 bool Physics::OverlapConvex(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Array<PhysicsColliderActor*>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
 {
     return DefaultScene->OverlapConvex(center, convexMesh, scale, results, rotation, layerMask, hitTriggers);
+}
+
+int32 Physics::OverlapBoxNonAlloc(const Vector3& center, const Vector3& halfExtents, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->OverlapBoxNonAlloc(center, halfExtents, results, rotation, layerMask, hitTriggers);
+}
+
+int32 Physics::OverlapBoxNonAlloc(const Vector3& center, const Vector3& halfExtents, MArray* results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->OverlapBoxNonAlloc(center, halfExtents, results, rotation, layerMask, hitTriggers);
+}
+
+int32 Physics::OverlapSphereNonAlloc(const Vector3& center, const float radius, Span<PhysicsColliderActor*> results, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->OverlapSphereNonAlloc(center, radius, results, layerMask, hitTriggers);
+}
+
+int32 Physics::OverlapSphereNonAlloc(const Vector3& center, const float radius, MArray* results, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->OverlapSphereNonAlloc(center, radius, results, layerMask, hitTriggers);
+}
+
+int32 Physics::OverlapCapsuleNonAlloc(const Vector3& center, const float radius, const float height, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->OverlapCapsuleNonAlloc(center, radius, height, results, rotation, layerMask, hitTriggers);
+}
+
+int32 Physics::OverlapCapsuleNonAlloc(const Vector3& center, const float radius, const float height, MArray* results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->OverlapCapsuleNonAlloc(center, radius, height, results, rotation, layerMask, hitTriggers);
+}
+
+int32 Physics::OverlapConvexNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->OverlapConvexNonAlloc(center, convexMesh, scale, results, rotation, layerMask, hitTriggers);
+}
+
+int32 Physics::OverlapConvexNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, MArray* results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    return DefaultScene->OverlapConvexNonAlloc(center, convexMesh, scale, results, rotation, layerMask, hitTriggers);
 }
 
 PhysicsScene::PhysicsScene(const SpawnParams& params)
@@ -587,6 +721,15 @@ bool PhysicsScene::LineCastAll(const Vector3& start, const Vector3& end, Array<R
     return PhysicsBackend::RayCastAll(_scene, start, directionToEnd, results, (float)distanceToEnd, layerMask, hitTriggers);
 }
 
+int32 PhysicsScene::LineCastNonAlloc(const Vector3& start, const Vector3& end, Span<RayCastHit> results, uint32 layerMask, bool hitTriggers)
+{
+    Vector3 directionToEnd = end - start;
+    const Real distanceToEnd = directionToEnd.Length();
+    if (distanceToEnd >= ZeroTolerance)
+        directionToEnd /= distanceToEnd;
+    return PhysicsBackend::RayCastNonAlloc(_scene, start, directionToEnd, results, (float)distanceToEnd, layerMask, hitTriggers);
+}
+
 bool PhysicsScene::RayCast(const Vector3& origin, const Vector3& direction, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
@@ -603,6 +746,12 @@ bool PhysicsScene::RayCastAll(const Vector3& origin, const Vector3& direction, A
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
     return PhysicsBackend::RayCastAll(_scene, origin, direction, results, maxDistance, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::RayCastNonAlloc(const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return PhysicsBackend::RayCastNonAlloc(_scene, origin, direction, results, maxDistance, layerMask, hitTriggers);
 }
 
 bool PhysicsScene::BoxCast(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -623,6 +772,12 @@ bool PhysicsScene::BoxCastAll(const Vector3& center, const Vector3& halfExtents,
     return PhysicsBackend::BoxCastAll(_scene, center, halfExtents, direction, results, rotation, maxDistance, layerMask, hitTriggers);
 }
 
+int32 PhysicsScene::BoxCastNonAlloc(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return PhysicsBackend::BoxCastNonAlloc(_scene, center, halfExtents, direction, results, rotation, maxDistance, layerMask, hitTriggers);
+}
+
 bool PhysicsScene::SphereCast(const Vector3& center, const float radius, const Vector3& direction, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
@@ -639,6 +794,12 @@ bool PhysicsScene::SphereCastAll(const Vector3& center, const float radius, cons
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
     return PhysicsBackend::SphereCastAll(_scene, center, radius, direction, results, maxDistance, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::SphereCastNonAlloc(const Vector3& center, const float radius, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return PhysicsBackend::SphereCastNonAlloc(_scene, center, radius, direction, results, maxDistance, layerMask, hitTriggers);
 }
 
 bool PhysicsScene::CapsuleCast(const Vector3& center, const float radius, const float height, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -659,6 +820,12 @@ bool PhysicsScene::CapsuleCastAll(const Vector3& center, const float radius, con
     return PhysicsBackend::CapsuleCastAll(_scene, center, radius, height, direction, results, rotation, maxDistance, layerMask, hitTriggers);
 }
 
+int32 PhysicsScene::CapsuleCastNonAlloc(const Vector3& center, const float radius, const float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return PhysicsBackend::CapsuleCastNonAlloc(_scene, center, radius, height, direction, results, rotation, maxDistance, layerMask, hitTriggers);
+}
+
 bool PhysicsScene::ConvexCast(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
@@ -675,6 +842,12 @@ bool PhysicsScene::ConvexCastAll(const Vector3& center, const CollisionData* con
 {
     CHECK_RETURN_DEBUG(direction.IsNormalized(), false);
     return PhysicsBackend::ConvexCastAll(_scene, center, convexMesh, scale, direction, results, rotation, maxDistance, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::ConvexCastNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+{
+    CHECK_RETURN_DEBUG(direction.IsNormalized(), 0);
+    return PhysicsBackend::ConvexCastNonAlloc(_scene, center, convexMesh, scale, direction, results, rotation, maxDistance, layerMask, hitTriggers);
 }
 
 bool PhysicsScene::CheckBox(const Vector3& center, const Vector3& halfExtents, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
@@ -779,4 +952,52 @@ bool PhysicsScene::OverlapCapsule(const Vector3& center, const float radius, con
 bool PhysicsScene::OverlapConvex(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Array<PhysicsColliderActor*>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
 {
     return PhysicsBackend::OverlapConvex(_scene, center, convexMesh, scale, results, rotation, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::OverlapBoxNonAlloc(const Vector3& center, const Vector3& halfExtents, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    PhysicsOverlapResultBuffer buffer(results);
+    return PhysicsBackend::OverlapBoxNonAlloc(_scene, center, halfExtents, buffer, rotation, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::OverlapBoxNonAlloc(const Vector3& center, const Vector3& halfExtents, MArray* results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    auto buffer = MakeManagedOverlapBuffer(results);
+    return PhysicsBackend::OverlapBoxNonAlloc(_scene, center, halfExtents, buffer, rotation, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::OverlapSphereNonAlloc(const Vector3& center, const float radius, Span<PhysicsColliderActor*> results, uint32 layerMask, bool hitTriggers)
+{
+    PhysicsOverlapResultBuffer buffer(results);
+    return PhysicsBackend::OverlapSphereNonAlloc(_scene, center, radius, buffer, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::OverlapSphereNonAlloc(const Vector3& center, const float radius, MArray* results, uint32 layerMask, bool hitTriggers)
+{
+    auto buffer = MakeManagedOverlapBuffer(results);
+    return PhysicsBackend::OverlapSphereNonAlloc(_scene, center, radius, buffer, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::OverlapCapsuleNonAlloc(const Vector3& center, const float radius, const float height, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    PhysicsOverlapResultBuffer buffer(results);
+    return PhysicsBackend::OverlapCapsuleNonAlloc(_scene, center, radius, height, buffer, rotation, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::OverlapCapsuleNonAlloc(const Vector3& center, const float radius, const float height, MArray* results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    auto buffer = MakeManagedOverlapBuffer(results);
+    return PhysicsBackend::OverlapCapsuleNonAlloc(_scene, center, radius, height, buffer, rotation, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::OverlapConvexNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Span<PhysicsColliderActor*> results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    PhysicsOverlapResultBuffer buffer(results);
+    return PhysicsBackend::OverlapConvexNonAlloc(_scene, center, convexMesh, scale, buffer, rotation, layerMask, hitTriggers);
+}
+
+int32 PhysicsScene::OverlapConvexNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, MArray* results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
+{
+    auto buffer = MakeManagedOverlapBuffer(results);
+    return PhysicsBackend::OverlapConvexNonAlloc(_scene, center, convexMesh, scale, buffer, rotation, layerMask, hitTriggers);
 }

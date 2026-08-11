@@ -165,6 +165,9 @@ public:
     /// <returns>True if ray hits a matching object, otherwise false.</returns>
     API_FUNCTION() bool LineCastAll(const Vector3& start, const Vector3& end, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
+    /// <summary>Performs a line cast and writes up to the supplied buffer length without allocating.</summary>
+    API_FUNCTION() int32 LineCastNonAlloc(const Vector3& start, const Vector3& end, Span<RayCastHit> results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
     /// <summary>
     /// Performs a raycast against objects in the scene.
     /// </summary>
@@ -199,6 +202,9 @@ public:
     /// <param name="hitTriggers">If set to <c>true</c> triggers will be hit, otherwise will skip them.</param>
     /// <returns>True if ray hits a matching object, otherwise false.</returns>
     API_FUNCTION() bool RayCastAll(const Vector3& origin, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
+    /// <summary>Performs a raycast and writes up to the supplied buffer length without allocating.</summary>
+    API_FUNCTION() int32 RayCastNonAlloc(const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>
     /// Performs a sweep test against objects in the scene using a box geometry.
@@ -241,6 +247,9 @@ public:
     /// <returns>True if box hits a matching object, otherwise false.</returns>
     API_FUNCTION() bool BoxCastAll(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
+    /// <summary>Performs a box cast and writes up to the supplied buffer length without allocating.</summary>
+    API_FUNCTION() int32 BoxCastNonAlloc(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
     /// <summary>
     /// Performs a sweep test against objects in the scene using a sphere geometry.
     /// </summary>
@@ -278,6 +287,9 @@ public:
     /// <param name="hitTriggers">If set to <c>true</c> triggers will be hit, otherwise will skip them.</param>
     /// <returns>True if sphere hits a matching object, otherwise false.</returns>
     API_FUNCTION() bool SphereCastAll(const Vector3& center, float radius, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
+    /// <summary>Performs a sphere cast and writes up to the supplied buffer length without allocating.</summary>
+    API_FUNCTION() int32 SphereCastNonAlloc(const Vector3& center, float radius, const Vector3& direction, Span<RayCastHit> results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>
     /// Performs a sweep test against objects in the scene using a capsule geometry.
@@ -323,6 +335,9 @@ public:
     /// <returns>True if capsule hits a matching object, otherwise false.</returns>
     API_FUNCTION() bool CapsuleCastAll(const Vector3& center, float radius, float height, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
+    /// <summary>Performs a capsule cast and writes up to the supplied buffer length without allocating.</summary>
+    API_FUNCTION() int32 CapsuleCastNonAlloc(const Vector3& center, float radius, float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
     /// <summary>
     /// Performs a sweep test against objects in the scene using a convex mesh.
     /// </summary>
@@ -366,6 +381,9 @@ public:
     /// <param name="hitTriggers">If set to <c>true</c> triggers will be hit, otherwise will skip them.</param>
     /// <returns>True if convex mesh hits a matching object, otherwise false.</returns>
     API_FUNCTION() bool ConvexCastAll(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
+    /// <summary>Performs a convex cast and writes up to the supplied buffer length without allocating.</summary>
+    API_FUNCTION() int32 ConvexCastNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>
     /// Checks whether the given box overlaps with other colliders or not.
@@ -473,6 +491,10 @@ public:
     /// <returns>True if box overlaps any matching object, otherwise false.</returns>
     API_FUNCTION() bool OverlapBox(const Vector3& center, const Vector3& halfExtents, API_PARAM(Out) Array<PhysicsColliderActor*, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
+    /// <summary>Finds box overlaps and writes up to the supplied buffer length without allocating.</summary>
+    int32 OverlapBoxNonAlloc(const Vector3& center, const Vector3& halfExtents, Span<PhysicsColliderActor*> results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    API_FUNCTION(NoProxy) int32 OverlapBoxNonAlloc(const Vector3& center, const Vector3& halfExtents, MArray* results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
     /// <summary>
     /// Finds all colliders touching or inside the given sphere.
     /// </summary>
@@ -483,6 +505,10 @@ public:
     /// <param name="hitTriggers">If set to <c>true</c> triggers will be hit, otherwise will skip them.</param>
     /// <returns>True if sphere overlaps any matching object, otherwise false.</returns>
     API_FUNCTION() bool OverlapSphere(const Vector3& center, float radius, API_PARAM(Out) Array<PhysicsColliderActor*, HeapAllocation>& results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
+    /// <summary>Finds sphere overlaps and writes up to the supplied buffer length without allocating.</summary>
+    int32 OverlapSphereNonAlloc(const Vector3& center, float radius, Span<PhysicsColliderActor*> results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    API_FUNCTION(NoProxy) int32 OverlapSphereNonAlloc(const Vector3& center, float radius, MArray* results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>
     /// Finds all colliders touching or inside the given capsule.
@@ -497,6 +523,10 @@ public:
     /// <returns>True if capsule overlaps any matching object, otherwise false.</returns>
     API_FUNCTION() bool OverlapCapsule(const Vector3& center, float radius, float height, API_PARAM(Out) Array<PhysicsColliderActor*, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
+    /// <summary>Finds capsule overlaps and writes up to the supplied buffer length without allocating.</summary>
+    int32 OverlapCapsuleNonAlloc(const Vector3& center, float radius, float height, Span<PhysicsColliderActor*> results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    API_FUNCTION(NoProxy) int32 OverlapCapsuleNonAlloc(const Vector3& center, float radius, float height, MArray* results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
     /// <summary>
     /// Finds all colliders touching or inside the given convex mesh.
     /// </summary>
@@ -509,4 +539,8 @@ public:
     /// <param name="hitTriggers">If set to <c>true</c> triggers will be hit, otherwise will skip them.</param>
     /// <returns>True if convex mesh overlaps any matching object, otherwise false.</returns>
     API_FUNCTION() bool OverlapConvex(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, API_PARAM(Out) Array<PhysicsColliderActor*, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+
+    /// <summary>Finds convex overlaps and writes up to the supplied buffer length without allocating.</summary>
+    int32 OverlapConvexNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Span<PhysicsColliderActor*> results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    API_FUNCTION(NoProxy) int32 OverlapConvexNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, MArray* results, const Quaternion& rotation = Quaternion::Identity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 };

@@ -38,6 +38,9 @@ public:
     /// Gets the native physics backend object.
     /// </summary>
     void* GetPhysicsShape() const;
+    int32 GetPhysicsShapesCount() const override;
+    void* GetPhysicsShape(int32 index) const override;
+    void GetPhysicsShapeActorPose(int32 index, const Vector3& position, const Quaternion& rotation, Vector3& shapePosition, Quaternion& shapeRotation) const override;
 
     /// <summary>
     /// Gets the 'IsTrigger' flag. A trigger doesn't register a collision with an incoming Rigidbody. Instead, it sends OnTriggerEnter and OnTriggerExit message when a rigidbody enters or exits the trigger volume.
