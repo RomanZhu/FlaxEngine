@@ -320,10 +320,11 @@ float2 Flipbook(float2 uv, float frame, float2 sizeXY, float2 flipXY = 0.0f)
 }
 
 // Calculates the world-position offset to stabilize tiling (eg. via triplanar mapping) due to Large Worlds view origin offset.
-float3 GetLargeWorldsTileOffset(float tileSize)
+float3 GetLargeWorldsTileOffset(float3 tilePeriod)
 {
 #if USE_PER_VIEW_CONSTANTS
-    return LargeWorldsChunkIndex * fmod(LargeWorldsChunkSize, tileSize);
+    float3 chunkPeriod = fmod(float3(LargeWorldsChunkSize, LargeWorldsChunkSize, LargeWorldsChunkSize), tilePeriod);
+    return fmod(LargeWorldsChunkIndex * chunkPeriod, tilePeriod);
 #else
     return float3(0, 0, 0);
 #endif

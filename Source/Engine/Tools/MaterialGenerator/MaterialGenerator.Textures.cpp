@@ -767,7 +767,7 @@ void MaterialGenerator::ProcessGroupTextures(Box* box, Node* node, Value& value)
         {
             // Get world position and normal
             float3 tiling = %SCALE% * 0.001f;
-            float3 position = ((%POSITION%) + GetLargeWorldsTileOffset(1.0f / length(tiling))) * tiling;
+            float3 position = ((%POSITION%)%LARGE_WORLDS_TILE_OFFSET%) * tiling;
             float3 normal = normalize(%NORMAL%);
 
             // Compute triplanar blend weights using power distribution
@@ -789,6 +789,7 @@ void MaterialGenerator::ProcessGroupTextures(Box* box, Node* node, Value& value)
     .Replace(TEXT("%OFFSET%"), offset.Value)
     .Replace(TEXT("%RESULT%"), result.Value)
     .Replace(TEXT("%POSITION%"), local ? TEXT("TransformWorldVectorToLocal(input, input.WorldPosition - GetObjectPosition(input)) / GetObjectScale(input)") : TEXT("input.WorldPosition"))
+    .Replace(TEXT("%LARGE_WORLDS_TILE_OFFSET%"), local ? TEXT("") : TEXT(" + GetLargeWorldsTileOffset(1.0f / max(abs(tiling), 0.000001f))"))
     .Replace(TEXT("%NORMAL%"), local ? TEXT("TransformWorldVectorToLocal(input, input.TBN[2])") : TEXT("input.TBN[2]"))
     .Replace(TEXT("%SAMPLER%"), samplerName)
     .Replace(TEXT("%SAMPLE%"), canUseSample ? TEXT("Sample") : TEXT("SampleLevel"))
@@ -857,7 +858,7 @@ void MaterialGenerator::ProcessGroupTextures(Box* box, Node* node, Value& value)
         {
             // Get world position and normal
             float3 tiling = %SCALE% * 0.001f;
-            float3 position = ((%POSITION%) + GetLargeWorldsTileOffset(1.0f / length(tiling))) * tiling;
+            float3 position = ((%POSITION%)%LARGE_WORLDS_TILE_OFFSET%) * tiling;
             float3 normal = normalize(%NORMAL%);
 
             // Compute triplanar blend weights using power distribution
@@ -896,6 +897,7 @@ void MaterialGenerator::ProcessGroupTextures(Box* box, Node* node, Value& value)
     .Replace(TEXT("%OFFSET%"), offset.Value)
     .Replace(TEXT("%RESULT%"), result.Value)
     .Replace(TEXT("%POSITION%"), local ? TEXT("TransformWorldVectorToLocal(input, input.WorldPosition - GetObjectPosition(input)) / GetObjectScale(input)") : TEXT("input.WorldPosition"))
+    .Replace(TEXT("%LARGE_WORLDS_TILE_OFFSET%"), local ? TEXT("") : TEXT(" + GetLargeWorldsTileOffset(1.0f / max(abs(tiling), 0.000001f))"))
     .Replace(TEXT("%NORMAL%"), local ? TEXT("TransformWorldVectorToLocal(input, input.TBN[2])") : TEXT("input.TBN[2]"))
     .Replace(TEXT("%SAMPLER%"), samplerName)
     .Replace(TEXT("%SAMPLE%"), canUseSample ? TEXT("Sample") : TEXT("SampleLevel"))
