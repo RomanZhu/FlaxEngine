@@ -24,7 +24,18 @@ internal sealed class AssetRequestOptions
     public string? AssetType { get; set; }
     public string? PropertyPath { get; set; }
     public JsonNode? Value { get; set; }
+    public string? BaseMaterial { get; set; }
+    public JsonObject? Parameters { get; set; }
+    public string IfExists { get; set; } = "error";
     public bool Recursive { get; set; }
     public bool Force { get; set; }
     public bool Save { get; set; } = true;
+}
+
+internal sealed class AssetBatchInput
+{
+    public int SchemaVersion { get; set; } = 1;
+    public AssetRequestOptions[] Operations { get; set; } = [];
+    public bool ContinueOnError { get; set; }
+    public bool VerifyReload { get; set; }
 }

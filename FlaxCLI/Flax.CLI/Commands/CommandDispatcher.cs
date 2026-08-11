@@ -455,6 +455,41 @@ internal sealed class CommandDispatcher(
     {
         var subcommand = args.Positional()?.ToLowerInvariant() ?? "list";
         var project = FindProject(null, context.Options.Project);
+        var instance = args.Option("--instance");
+        var liveOnly = args.Flag("--live-only");
+        var oneShot = args.Flag("--one-shot");
+        var verifyReload = args.Flag("--verify-reload");
+        var confirm = args.Flag("--yes");
+
+        if (subcommand == "batch")
+        {
+            var inputPath = Path.GetFullPath(args.Option("--input") ?? args.Positional() ?? throw CommandLine.Usage("assets batch requires --input <manifest.json>."));
+            var continueOnError = args.Flag("--continue-on-error");
+            args.Complete();
+            if (context.Options.PassThrough.Count != 0)
+                throw CommandLine.Usage("assets batch does not accept arguments after '--'.");
+            var batch = ReadAssetBatch(inputPath);
+            if (batch.SchemaVersion != 1)
+                throw CommandLine.Usage($"Unsupported asset batch schema {batch.SchemaVersion}.");
+            if (batch.Operations.Length == 0)
+                throw CommandLine.Usage("The asset batch manifest contains no operations.");
+            foreach (var operation in batch.Operations)
+                NormalizeAssetOperation(project, operation, confirm);
+            var batchArguments = new JsonObject
+            {
+                ["operations"] = JsonSerializer.SerializeToNode(batch.Operations, JsonSupport.Options),
+                ["continue-on-error"] = continueOnError || batch.ContinueOnError,
+                ["verify-reload"] = verifyReload || batch.VerifyReload,
+            };
+            return await ExecuteEditorCommand(new EditorCommandRequestOptions
+            {
+                Action = "invoke",
+                Name = "assets.batch",
+                Arguments = batchArguments,
+                Confirm = confirm,
+            }, context, instance, liveOnly, oneShot);
+        }
+
         var options = new AssetRequestOptions { Action = subcommand };
         switch (subcommand)
         {
@@ -471,9 +506,11 @@ internal sealed class CommandDispatcher(
         case "create":
             options.AssetType = args.Positional() ?? throw CommandLine.Usage("assets create requires an asset type.");
             options.Path = AssetPath(project, args.Positional() ?? throw CommandLine.Usage("assets create requires an output path."));
+            options.IfExists = args.Option("--if-exists") ?? "error";
             break;
         case "mkdir":
             options.Path = AssetPath(project, args.Positional() ?? throw CommandLine.Usage("assets mkdir requires a folder path."));
+            options.IfExists = args.Option("--if-exists") ?? "error";
             break;
         case "import":
             options.Destination = AssetPath(project, args.Option("--to") ?? throw CommandLine.Usage("assets import requires --to <content-folder>."));
@@ -498,7 +535,7 @@ internal sealed class CommandDispatcher(
             break;
         case "delete":
             options.Path = AssetPath(project, args.Positional() ?? throw CommandLine.Usage("assets delete requires an asset path."));
-            options.Force = args.Flag("--yes");
+            options.Force = confirm;
             if (!options.Force)
                 throw CommandLine.Usage("assets delete is destructive and requires --yes.");
             break;
@@ -524,25 +561,81 @@ internal sealed class CommandDispatcher(
             }
             options.Save = !args.Flag("--no-save");
             break;
+        case "refresh":
+            options.Path = AssetPath(project, args.Positional() ?? ".");
+            options.Recursive = args.Flag("--recursive");
+            break;
+        case "verify":
+            options.Path = AssetPath(project, args.Positional() ?? throw CommandLine.Usage("assets verify requires an asset path."));
+            verifyReload = true;
+            break;
+        case "material-instance":
+            options.Path = AssetPath(project, args.Positional() ?? throw CommandLine.Usage("assets material-instance requires an output path."));
+            options.BaseMaterial = AssetPath(project, args.Option("--base-material") ?? throw CommandLine.Usage("assets material-instance requires --base-material <asset>."));
+            options.IfExists = args.Option("--if-exists") ?? "error";
+            options.Save = !args.Flag("--no-save");
+            var rawParameters = args.Option("--parameters");
+            var parametersFile = args.Option("--parameters-file");
+            if (rawParameters != null && parametersFile != null)
+                throw CommandLine.Usage("assets material-instance accepts either --parameters or --parameters-file, not both.");
+            if (parametersFile != null)
+                rawParameters = File.ReadAllText(Path.GetFullPath(parametersFile));
+            if (rawParameters != null)
+            {
+                try
+                {
+                    options.Parameters = JsonNode.Parse(rawParameters) as JsonObject
+                                         ?? throw CommandLine.Usage("Material parameters must be a JSON object.");
+                }
+                catch (JsonException ex)
+                {
+                    throw CommandLine.Usage($"Material parameters are invalid JSON: {ex.Message}");
+                }
+            }
+            break;
         default:
             throw CommandLine.Usage($"Unknown assets subcommand '{subcommand}'.");
         }
         args.Complete();
+        if (context.Options.PassThrough.Count != 0)
+            throw CommandLine.Usage("typed asset commands do not accept arguments after '--'.");
+        NormalizeAssetOperation(project, options, confirm);
+        var commandArguments = new JsonObject
+        {
+            ["operation"] = JsonSerializer.SerializeToNode(options, JsonSupport.Options),
+            ["verify-reload"] = verifyReload,
+        };
+        return await ExecuteAssetOperation(new EditorCommandRequestOptions
+        {
+            Action = "invoke",
+            Name = "assets.execute",
+            Arguments = commandArguments,
+            Confirm = confirm,
+        }, project, options, context, instance, liveOnly, oneShot);
+    }
 
+    private async Task<CliResult> ExecuteAssetOperation(EditorCommandRequestOptions command, ProjectContext project, AssetRequestOptions legacyOptions, CommandContext context, string? instance, bool liveOnly, bool oneShot)
+    {
+        var typed = await ExecuteEditorCommand(command, context, instance, liveOnly, oneShot);
+        if (typed.ExitCode == ExitCode.Success || typed.Errors.Count == 0 || typed.Errors[0].Code != "FLX-COMMAND-NOTFOUND-0004" || liveOnly)
+            return typed;
+
+        // Compatibility for Editors built before assets.execute was added. New
+        // Editors use the live-or-one-shot typed command above; old Editors retain
+        // the original one-shot asset protocol for single operations.
         var engine = resolver.Resolve(project, context.Options.Engine);
-        var invocation = await editorAdapter.AssetAsync(engine, project, options, context.Options.PassThrough, context);
+        var invocation = await editorAdapter.AssetAsync(engine, project, legacyOptions, context.Options.PassThrough, context);
         if (!invocation.Structured || invocation.Result == null)
         {
-            var details = new { operation = "asset", action = subcommand, engine = EngineView(engine), invocation.Process.ProcessId, invocation.Process.ExitCode, stdout = invocation.Process.StandardOutput, stderr = invocation.Process.StandardError };
-            return CliResult.Fail(ExitCode.ContextRequired, "FLX-ASSET-PROTOCOL-0004", "The selected Editor does not support typed asset requests. Rebuild it with the CLI request service.", details);
+            var details = new { operation = "asset", action = legacyOptions.Action, engine = EngineView(engine), invocation.Process.ProcessId, invocation.Process.ExitCode, stdout = invocation.Process.StandardOutput, stderr = invocation.Process.StandardError };
+            return CliResult.Fail(ExitCode.ContextRequired, "FLX-ASSET-PROTOCOL-0004", "The selected Editor supports neither typed asset commands nor the legacy asset request protocol.", details);
         }
-
         var result = invocation.Result.Value;
         var succeeded = result.TryGetProperty("success", out var success) && success.GetBoolean();
         if (!succeeded || invocation.Process.ExitCode != 0)
         {
-            var details = new { operation = "asset", action = subcommand, engine = EngineView(engine), invocation.Process.ProcessId, invocation.Process.ExitCode, result, events = invocation.Events, stdout = invocation.Process.StandardOutput, stderr = invocation.Process.StandardError };
-            return WithEvents(CliResult.Fail(ExitCode.OperationFailed, "FLX-ASSET-0006", $"Asset {subcommand} failed.", details), invocation.Events);
+            var details = new { operation = "asset", action = legacyOptions.Action, engine = EngineView(engine), invocation.Process.ProcessId, invocation.Process.ExitCode, result, events = invocation.Events, stdout = invocation.Process.StandardOutput, stderr = invocation.Process.StandardError };
+            return WithEvents(CliResult.Fail(ExitCode.OperationFailed, "FLX-ASSET-0006", $"Asset {legacyOptions.Action} failed.", details), invocation.Events);
         }
         return WithEvents(CliResult.Ok(result.TryGetProperty("data", out var data) ? data.Clone() : result.Clone()), invocation.Events);
     }
@@ -1605,6 +1698,60 @@ internal sealed class CommandDispatcher(
         }
     }
 
+    internal static AssetBatchInput ReadAssetBatch(string path)
+    {
+        if (!File.Exists(path))
+            throw new CliException(ExitCode.ContextRequired, "FLX-ASSET-BATCH-INPUT-0004", $"Asset batch manifest '{path}' does not exist.");
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(path))
+                       ?? throw CommandLine.Usage("The asset batch manifest is empty.");
+            if (node is JsonArray array)
+            {
+                return new AssetBatchInput
+                {
+                    Operations = JsonSerializer.Deserialize<AssetRequestOptions[]>(array.ToJsonString(), JsonSupport.Options) ?? [],
+                };
+            }
+            if (node is not JsonObject)
+                throw CommandLine.Usage("The asset batch manifest must be a JSON object or operation array.");
+            return JsonSerializer.Deserialize<AssetBatchInput>(node.ToJsonString(), JsonSupport.Options)
+                   ?? throw CommandLine.Usage("The asset batch manifest is empty.");
+        }
+        catch (JsonException ex)
+        {
+            throw CommandLine.Usage($"Asset batch manifest JSON is invalid: {ex.Message}");
+        }
+    }
+
+    internal static void NormalizeAssetOperation(ProjectContext project, AssetRequestOptions operation, bool confirm)
+    {
+        operation.Action = (operation.Action ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(operation.Action))
+            throw CommandLine.Usage("Every asset batch operation requires an action.");
+        if (operation.Path != null)
+            operation.Path = AssetPath(project, operation.Path);
+        if (operation.Destination != null)
+        {
+            operation.Destination = operation.Action == "export"
+                ? Path.GetFullPath(operation.Destination)
+                : AssetPath(project, operation.Destination);
+        }
+        if (operation.Sources != null)
+            operation.Sources = operation.Sources.Select(Path.GetFullPath).ToArray();
+        if (operation.BaseMaterial != null)
+            operation.BaseMaterial = AssetPath(project, operation.BaseMaterial);
+        operation.IfExists = string.IsNullOrWhiteSpace(operation.IfExists) ? "error" : operation.IfExists.Trim().ToLowerInvariant();
+        if (operation.IfExists is not ("error" or "skip" or "update"))
+            throw CommandLine.Usage("Asset operation ifExists must be error, skip, or update.");
+        if (operation.Action == "delete")
+        {
+            if (!confirm)
+                throw CommandLine.Usage("Asset batches containing delete operations require --yes.");
+            operation.Force = true;
+        }
+    }
+
     internal static string AssetPath(ProjectContext project, string path)
     {
         if (Path.IsPathRooted(path))
@@ -1655,8 +1802,8 @@ internal sealed class CommandDispatcher(
 flax assets list [path] [--recursive]
 flax assets types [folder]
 flax assets info <path>
-flax assets create <type> <path>
-flax assets mkdir <path>
+flax assets create <type> <path> [--if-exists error|skip|update]
+flax assets mkdir <path> [--if-exists error|skip|update]
 flax assets import <source...> --to <folder>
 flax assets duplicate <source> <destination>
 flax assets move <source> <destination>
@@ -1668,8 +1815,13 @@ flax assets get <path> <property.path>
 flax assets set <path> <property.path> <json-value> [--no-save]
 flax assets set <path> <property.path> --value <json-value> [--no-save]
 flax assets save <path>
+flax assets refresh [path] [--recursive]
+flax assets verify <path>
+flax assets material-instance <path> --base-material <asset> [--parameters <json> | --parameters-file <path>] [--if-exists error|skip|update]
+flax assets batch --input <manifest.json> [--continue-on-error] [--verify-reload]
 
 Relative asset paths are resolved under the project's Content folder.
+Typed asset commands support --instance, --live-only, and --one-shot.
 """;
 
     private const string CommandHelp = """
@@ -1746,7 +1898,7 @@ Local engine commands:
   projects list|add|create|remove|info|size
   templates list|info, new <path>
   open, play, generate, compile, clean, build
-  assets list|types|info|create|mkdir|import|duplicate|move|rename|delete|reimport|export|get|set|save
+  assets list|types|info|create|mkdir|import|duplicate|move|rename|delete|reimport|export|get|set|save|refresh|verify|material-instance|batch
   authoring-root get|set
   scenes list|create|open|close|reload|save|dirty|hierarchy|active|build-list
   actors find|get|create|create-batch|delete|rename|transform|parent|active|tag|layer|component

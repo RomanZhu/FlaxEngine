@@ -22,6 +22,7 @@ Read [references/commands.md](references/commands.md) when selecting commands or
 - Use local host commands for engine discovery, project registration, generation, compilation, cleaning, and process launch.
 - Use typed one-shot Editor execution for CI or when no Editor should remain open.
 - Use the authenticated live bridge when a matching Editor is already open and repeated operations should avoid startup cost.
+- Use `flax assets batch --input <manifest.json>` for bulk imports, creation, material-instance configuration, refresh, and persistence checks. Add `--verify-reload` when the result must prove that changed assets reload from disk.
 - Never mutate Flax asset, scene, or project state by editing serialized engine files when an Editor-owned CLI operation exists.
 - Use `flax projects create`/`flax new` only for a missing or empty directory; the local empty template never overwrites existing content. Feed-backed install/update and non-empty template migration are not available.
 - Use `flax capture viewport|game --to <project-relative-path>` for Editor-owned PNG evidence. Output is confined below the selected project root.

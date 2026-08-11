@@ -32,7 +32,7 @@ assuming remote services.
 
 ## Editor-owned commands
 
-- Assets: `assets list|types|info|create|mkdir|import|duplicate|move|rename|delete|reimport|export|get|set|save`
+- Assets: `assets list|types|info|create|mkdir|import|duplicate|move|rename|delete|reimport|export|get|set|save|refresh|verify|material-instance|batch`. Asset commands prefer a matching live Editor; use `assets batch --input <manifest.json> --verify-reload` to execute many operations in one Editor session.
 - Typed catalog: `commands list|info`, `command <name>`
 - Live Editor: `editor status|play|pause|resume|stop|step|focus|save-all|recompile|close`, `console`, `performance`, `selection`
 - Project settings: `settings list|get|schema|diff|set` (partial JSON patches; `--dry-run` is available on set)

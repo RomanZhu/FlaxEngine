@@ -51,6 +51,58 @@ public sealed class AssetProtocolTests
         Assert.That(arguments[^1], Is.EqualTo("--custom"));
     }
 
+    [Test]
+    public void BatchContractCarriesMaterialInstanceConfiguration()
+    {
+        var batch = new AssetBatchInput
+        {
+            ContinueOnError = true,
+            VerifyReload = true,
+            Operations =
+            [
+                new AssetRequestOptions
+                {
+                    Action = "material-instance",
+                    Path = "Materials/MI_Test.flax",
+                    BaseMaterial = "Materials/M_Master.flax",
+                    Parameters = new JsonObject { ["Texture"] = "Textures/T_Test.flax" },
+                    IfExists = "update",
+                },
+            ],
+        };
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(batch, JsonSupport.Options));
+        var root = document.RootElement;
+        var operation = root.GetProperty("operations")[0];
+
+        Assert.That(root.GetProperty("schemaVersion").GetInt32(), Is.EqualTo(1));
+        Assert.That(root.GetProperty("continueOnError").GetBoolean(), Is.True);
+        Assert.That(root.GetProperty("verifyReload").GetBoolean(), Is.True);
+        Assert.That(operation.GetProperty("action").GetString(), Is.EqualTo("material-instance"));
+        Assert.That(operation.GetProperty("parameters").GetProperty("Texture").GetString(), Is.EqualTo("Textures/T_Test.flax"));
+        Assert.That(operation.GetProperty("ifExists").GetString(), Is.EqualTo("update"));
+    }
+
+    [Test]
+    public void BatchOperationsResolveContentAndSourcePaths()
+    {
+        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "FlaxCliAssetBatchPathTest"));
+        var project = new ProjectContext(root, Path.Combine(root, "Game.flaxproj"), "Game", default, null);
+        var operation = new AssetRequestOptions
+        {
+            Action = "import",
+            Destination = "Textures/Imported",
+            Sources = ["Source/Texture.png"],
+            IfExists = "skip",
+        };
+
+        CommandDispatcher.NormalizeAssetOperation(project, operation, false);
+
+        Assert.That(operation.Destination, Is.EqualTo(Path.GetFullPath("Content/Textures/Imported", root)));
+        Assert.That(operation.Sources![0], Is.EqualTo(Path.GetFullPath("Source/Texture.png")));
+        Assert.That(operation.IfExists, Is.EqualTo("skip"));
+    }
+
     [TestCase(".", "Content")]
     [TestCase("Materials/Test.flax", "Content/Materials/Test.flax")]
     [TestCase("Content/Scenes/Main.scene", "Content/Scenes/Main.scene")]

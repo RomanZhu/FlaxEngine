@@ -13,7 +13,7 @@ Launcher's `Versions.txt` and `Projects.txt` registries, keeps CLI-only engine
 metadata separately, resolves and pins engines deterministically, launches the
 Editor, invokes Flax.Build out of process, exposes the legacy Game Cooker
 adapter, negotiates versioned one-shot Game Cooker requests with compatible
-Editors, manages project assets through typed one-shot Editor requests,
+Editors, manages project assets through typed live-or-one-shot Editor commands,
 discovers and executes project-defined typed commands through one-shot or authenticated live-Editor requests,
 provides native scene, Actor, Script component, Prefab, and Visject graph authoring
 command groups, discovers compatible running Editors and development Players,
@@ -48,6 +48,7 @@ flax compile F:\Games\Example --target ExampleEditor --configuration Development
 flax assets create Material Materials\Player.flax --project F:\Games\Example
 flax assets import C:\Art\Player.fbx --to Models --project F:\Games\Example
 flax assets set Settings.json Instance.MouseSensitivity 1.25 --project F:\Games\Example
+flax assets batch --input asset-batch.json --verify-reload --project F:\Games\Example
 flax commands list --project F:\Games\Example --json
 flax command example.validate --project F:\Games\Example
 flax command example.port --project F:\Games\Example -- --manifest Conversion\legacy-scene.json --dry-run
@@ -96,10 +97,43 @@ flax diagnose bundle --to Artifacts\diagnostics.zip --project F:\Games\Example -
 
 `flax assets` supports listing and inspecting content, discovering creatable
 types, creating assets and folders, importing, duplicating, moving, renaming,
-guarded deletion, reimporting, exporting, and reading or writing public asset
-property paths. Relative paths are resolved below the project's `Content`
-folder. Mutating operations run inside the selected Editor so the content
-database, asset GUIDs, loaded objects, and import pipeline remain authoritative.
+guarded deletion, reimporting, exporting, reading or writing public asset
+property paths, deterministic content refresh, reload verification, and typed
+material-instance configuration. Relative paths are resolved below the
+project's `Content` folder. Asset commands prefer a matching live Editor and
+fall back to one-shot execution. `assets batch` executes an ordered JSON manifest
+in one Editor session and reports a result for every operation. Use
+`ifExists: error|skip|update` for resumable generation and `--verify-reload` to
+reload changed assets from disk before success is reported.
+
+```json
+{
+  "schemaVersion": 1,
+  "continueOnError": false,
+  "verifyReload": true,
+  "operations": [
+    {
+      "action": "import",
+      "sources": ["C:/Art/DevTextures"],
+      "destination": "Textures/DevTextures/Imported"
+    },
+    {
+      "action": "material-instance",
+      "path": "Materials/DevTextures/Instances/MI_blue_texture1.flax",
+      "baseMaterial": "Materials/DevTextures/M_Dev_Triplanar.flax",
+      "parameters": {
+        "Texture": "Textures/DevTextures/Imported/blue_texture1.flax"
+      },
+      "ifExists": "update"
+    }
+  ]
+}
+```
+
+Mutating operations run inside the selected Editor so the content database,
+asset GUIDs, loaded objects, and import pipeline remain authoritative. Import
+and create operations refresh affected folders before later batch operations
+resolve the generated assets.
 
 Project Editor code can register synchronous public static methods with
 `FlaxEditor.CliCommandAttribute`. Parameters are schema-discovered and can use
