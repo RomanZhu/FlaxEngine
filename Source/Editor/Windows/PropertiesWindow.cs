@@ -71,6 +71,41 @@ namespace FlaxEditor.Windows
         private const float TabMaxWidth = 168.0f;
         private const float TabSelectedLineHeight = 2.0f;
         private const float PropertiesScrollbarWidthReduction = 4.0f;
+        private const int TextPreviewMaxCharacters = 1024 * 1024;
+        private const int TextFileDetectionSampleSize = 4096;
+
+        [CustomEditor(typeof(TextFilePropertiesEditor))]
+        private sealed class TextFilePropertiesProxy
+        {
+            public readonly ContentItem Item;
+            public readonly string Text;
+
+            public TextFilePropertiesProxy(ContentItem item, string text)
+            {
+                Item = item;
+                Text = text;
+            }
+        }
+
+        private sealed class TextFilePropertiesEditor : CustomEditor
+        {
+            public override DisplayStyle Style => DisplayStyle.InlineIntoParent;
+
+            public override void Initialize(LayoutElementsContainer layout)
+            {
+                if (!IsSingleObject || Values[0] is not TextFilePropertiesProxy proxy)
+                {
+                    layout.Label("Multiple text files selected.");
+                    return;
+                }
+
+                var textBox = layout.TextBox(true).TextBox;
+                textBox.Text = proxy.Text;
+                textBox.Height = TextBox.DefaultHeight * 16.0f;
+                textBox.IsReadOnly = true;
+                textBox.IsScrollable = true;
+            }
+        }
 
         private static float PropertiesPanelPadding => Mathf.Max(4.0f, Style.Current.GetPropertyPanelPadding());
 
@@ -528,6 +563,8 @@ namespace FlaxEditor.Windows
                 return TruncateTabTitle($"{selectionCount} Objects");
 
             var selected = Presenter.Selection[0];
+            if (selected is TextFilePropertiesProxy textFile)
+                return TruncateTabTitle(textFile.Item.FileName);
             var actor = selected as Actor;
             if (actor != null && !string.IsNullOrEmpty(actor.Name))
                 return TruncateTabTitle(actor.Name);
@@ -838,18 +875,19 @@ namespace FlaxEditor.Windows
                 return;
 
             var selection = Editor.Windows.ContentWin.Selection;
-            if (!_showContentSelection && !HasAssetSelection(selection))
+            if (!_showContentSelection && !HasInspectableContentSelection(selection))
                 return;
 
             _showContentSelection = true;
             SelectContentObjects();
         }
 
-        private static bool HasAssetSelection(IReadOnlyList<ContentItem> selection)
+        private static bool HasInspectableContentSelection(IReadOnlyList<ContentItem> selection)
         {
             for (int i = 0; i < selection.Count; i++)
             {
-                if (selection[i] is AssetItem)
+                var item = selection[i];
+                if ((item is AssetItem or ScriptItem or ShaderSourceItem) || (item is FileItem && item is not VideoItem))
                     return true;
             }
             return false;
@@ -878,7 +916,11 @@ namespace FlaxEditor.Windows
             for (int i = 0; i < selection.Count; i++)
             {
                 if (selection[i] is not AssetItem assetItem)
+                {
+                    if (TryCreateTextFilePropertiesProxy(selection[i], out var textFile))
+                        objects.Add(textFile);
                     continue;
+                }
 
                 var asset = assetItem.LoadAsync();
                 if (asset == null)
@@ -910,6 +952,64 @@ namespace FlaxEditor.Windows
             UpdateSelectionTabTitle();
             if (forceRebuild)
                 Presenter.BuildLayout();
+        }
+
+        private static bool TryCreateTextFilePropertiesProxy(ContentItem item, out TextFilePropertiesProxy proxy)
+        {
+            proxy = null;
+            bool isText = item is ScriptItem or ShaderSourceItem;
+            if (!isText && (item is not FileItem || item is VideoItem))
+                return false;
+
+            try
+            {
+                using var stream = System.IO.File.Open(item.Path, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete);
+                if (!isText)
+                {
+                    var sample = new byte[Math.Min(stream.Length, TextFileDetectionSampleSize)];
+                    int sampleLength = stream.Read(sample, 0, sample.Length);
+                    if (IsBinaryFileSample(sample, sampleLength))
+                        return false;
+                    isText = true;
+                    stream.Position = 0;
+                }
+
+                using var reader = new System.IO.StreamReader(stream, System.Text.Encoding.UTF8, true, TextFileDetectionSampleSize);
+                var buffer = new char[TextPreviewMaxCharacters + 1];
+                int length = reader.ReadBlock(buffer, 0, buffer.Length);
+                var text = new string(buffer, 0, Math.Min(length, TextPreviewMaxCharacters));
+                if (length > TextPreviewMaxCharacters)
+                    text += $"\r\n\r\n[Preview truncated to the first {TextPreviewMaxCharacters:N0} characters.]";
+                proxy = new TextFilePropertiesProxy(item, text);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                if (!isText)
+                    return false;
+                proxy = new TextFilePropertiesProxy(item, $"Unable to read the file.\r\n\r\n{ex.Message}");
+                return true;
+            }
+        }
+
+        private static bool IsBinaryFileSample(byte[] data, int length)
+        {
+            if (length == 0 ||
+                (length >= 2 && ((data[0] == 0xff && data[1] == 0xfe) || (data[0] == 0xfe && data[1] == 0xff))) ||
+                (length >= 3 && data[0] == 0xef && data[1] == 0xbb && data[2] == 0xbf) ||
+                (length >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0xfe && data[3] == 0xff))
+                return false;
+
+            int controlCharacters = 0;
+            for (int i = 0; i < length; i++)
+            {
+                byte value = data[i];
+                if (value == 0)
+                    return true;
+                if (value < 32 && value != '\t' && value != '\n' && value != '\r' && value != '\f')
+                    controlCharacters++;
+            }
+            return controlCharacters * 20 > length;
         }
 
         private static object GetJsonAssetObject(JsonAsset jsonAsset)
