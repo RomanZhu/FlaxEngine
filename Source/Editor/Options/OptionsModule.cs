@@ -130,12 +130,12 @@ namespace FlaxEditor.Options
                             options.CustomSettings.Add(e.Key, JsonSerializer.Serialize(e.Value()));
                     }
 
-                    bool inputBindingsMigrated = MigrateInputBindings(options.Input);
+                    bool inputOptionsMigrated = MigrateInputOptions(options.Input);
 
                     float prevInterfaceScale = Options.Interface.InterfaceScale;
                     Options = options;
                     OnOptionsChanged();
-                    if (inputBindingsMigrated)
+                    if (inputOptionsMigrated)
                         Save();
 
                     // Scale interface relative to the current value (eg. when using system-provided Dpi Scale)
@@ -153,9 +153,16 @@ namespace FlaxEditor.Options
             }
         }
 
-        private static bool MigrateInputBindings(InputOptions input)
+        private static bool MigrateInputOptions(InputOptions input)
         {
             bool migrated = false;
+
+            if (input.DoubleClickSceneNode == SceneNodeDoubleClick.Expand)
+            {
+                input.DoubleClickSceneNode = SceneNodeDoubleClick.RenameActor;
+                migrated = true;
+            }
+
             if (input.SelectMode == new InputBinding(KeyboardKeys.Q) &&
                 input.TranslateMode == new InputBinding(KeyboardKeys.Q) &&
                 input.RotateMode == new InputBinding(KeyboardKeys.W) &&
