@@ -613,7 +613,7 @@ namespace FlaxEditor.GUI.Input
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
-            if (button == MouseButton.Left && CanUseSliding && SlideRect.Contains(location))
+            if (button == MouseButton.Left && !IsEditing && CanUseSliding && SlideRect.Contains(location))
             {
                 // A click remains a normal text edit; crossing the short drag threshold starts sliding.
                 _isSlidingPending = true;
@@ -644,7 +644,7 @@ namespace FlaxEditor.GUI.Input
 #endif
 
             // Update cursor type so user knows they can slide value
-            if (CanUseSliding && SlideRect.Contains(location) && !_isSliding)
+            if (!IsEditing && CanUseSliding && SlideRect.Contains(location) && !_isSliding)
             {
                 Cursor = CursorType.SizeWE;
                 _cursorChanged = true;
@@ -671,7 +671,7 @@ namespace FlaxEditor.GUI.Input
             }
 
             // Update cursor type so user knows they can slide value
-            if (CanUseSliding && SlideRect.Contains(location) && !_isSliding)
+            if (!IsEditing && CanUseSliding && SlideRect.Contains(location) && !_isSliding)
             {
                 Cursor = CursorType.SizeWE;
                 _cursorChanged = true;
