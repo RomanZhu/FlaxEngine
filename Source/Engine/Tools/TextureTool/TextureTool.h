@@ -143,7 +143,7 @@ public:
     /// </summary>
     /// <param name="path">The file path.</param>
     /// <returns>True if has alpha channel, otherwise false.</returns>
-    static bool HasAlpha(const StringView& path);
+    API_FUNCTION() static bool HasAlpha(const StringView& path);
 #endif
 
     /// <summary>

@@ -296,6 +296,14 @@ namespace FlaxEditor.Modules
 
                     // Import file
                     bool failed = true;
+                    // The importer refreshes content items through ImportFileEnd. Mark the
+                    // output as editor-authored so its filesystem notification does not
+                    // trigger a second, delayed asset reload after the import batch ends.
+                    // A folder import can produce many output paths, so leave it to the
+                    // regular content database refresh path.
+                    bool trackAssetWrite = !System.IO.Directory.Exists(entry.SourceUrl);
+                    if (trackAssetWrite)
+                        Editor.ContentDatabase.BeginAssetSave(entry.ResultUrl);
                     try
                     {
                         ImportFileBegin?.Invoke(entry);
@@ -307,6 +315,9 @@ namespace FlaxEditor.Modules
                     }
                     finally
                     {
+                        if (trackAssetWrite)
+                            Editor.ContentDatabase.EndAssetSave(entry.ResultUrl, !failed);
+
                         if (failed)
                         {
                             Editor.LogWarning("Failed to import " + entry.SourceUrl + " to " + entry.ResultUrl);
