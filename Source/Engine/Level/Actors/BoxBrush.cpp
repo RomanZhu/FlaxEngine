@@ -100,10 +100,13 @@ void BoxBrush::GetSurfaces(CSG::Surface surfaces[6])
     // Calculate final transformation
     const auto transform = _transform.LocalToWorld(Transform(_center, Quaternion::Identity, _size));
 
-    // Set size and scale
-    surfaces[0].D = surfaces[1].D = transform.Scale.X / 2;
-    surfaces[2].D = surfaces[3].D = transform.Scale.Y / 2;
-    surfaces[4].D = surfaces[5].D = transform.Scale.Z / 2;
+    // Expand subtractive input geometry by a tiny build-only tolerance. Keeping
+    // this out of the actor Size and Transform preserves exact grid-authored
+    // values while preventing coplanar cuts from leaving a surface behind.
+    const Real csgOverlap = _mode == CSG::Mode::Subtractive ? 0.01f : 0.0f;
+    surfaces[0].D = surfaces[1].D = transform.Scale.X / 2 + csgOverlap;
+    surfaces[2].D = surfaces[3].D = transform.Scale.Y / 2 + csgOverlap;
+    surfaces[4].D = surfaces[5].D = transform.Scale.Z / 2 + csgOverlap;
 
     // Add rotation
     Matrix rotation;

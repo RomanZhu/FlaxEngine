@@ -10,15 +10,19 @@ using System.Collections.Generic;
 using FlaxEditor.Gizmo;
 using FlaxEditor.Gizmo.Snapping;
 using FlaxEditor.GUI;
+using FlaxEditor.Modules;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEditor.Tools.CSG.HitTesting;
+using FlaxEditor.Tools.CSG.Placement;
 using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEditor.Tools.CSG.Rendering;
 using FlaxEditor.Tools.CSG.Selection;
 using FlaxEditor.Tools.CSG.Snapping;
+using FlaxEditor.Tools.CSG.Tools;
 using FlaxEditor.Tools.CSG.Transactions;
 using FlaxEditor.Tools.CSG.WorkingPlane;
+using FlaxEditor.Viewport.Cameras;
 using FlaxEditor.Viewport.Modes;
 using FlaxEditor.Viewport.Widgets;
 using FlaxEngine;
@@ -46,6 +50,7 @@ namespace FlaxEditor.Tools.CSG
         private readonly CSGWorkingPlaneService _workingPlane = new CSGWorkingPlaneService();
         private readonly ViewportSnapService _snapService = new ViewportSnapService();
         private readonly CSGOverlayRenderer _overlayRenderer = new CSGOverlayRenderer();
+        private readonly CSGBoxDrawTool _boxDrawTool = new CSGBoxDrawTool();
         private readonly CSGTransaction _transaction = new CSGTransaction();
         private readonly List<CSGHit> _hits = new List<CSGHit>(64);
         private readonly List<CSGHit> _selectableHits = new List<CSGHit>(16);
@@ -67,6 +72,10 @@ namespace FlaxEditor.Tools.CSG
         private bool _applyingSelection;
         private bool _hasSnap;
         private ViewportSnapResult _snapResult;
+        private CSGOperation _lastControllerOperation;
+        private CSGOperation? _drawOperationOverride;
+        private bool _boxCreated;
+        private bool _consumeDrawMouseUp;
         private string _planeStatus = "World";
         private string _rebuildStatus = "Build Auto";
         private string _statusText = "CSG Authoring";
@@ -97,6 +106,7 @@ namespace FlaxEditor.Tools.CSG
             _controller.OffsetWorkingPlaneRequested += OnOffsetWorkingPlaneRequested;
             _controller.RotateWorkingPlaneRequested += OnRotateWorkingPlaneRequested;
             _workingPlane.Reset(_controller.SnapIncrement);
+            _lastControllerOperation = _controller.Operation;
         }
 
         /// <inheritdoc />
@@ -139,6 +149,7 @@ namespace FlaxEditor.Tools.CSG
             _workingPlane.Unfreeze();
             _workingPlane.ClearHover();
             _hasSnap = false;
+            _boxDrawTool.Reset();
             ResetDeepSelectionCycle();
             base.OnDeactivated();
         }
@@ -203,21 +214,106 @@ namespace FlaxEditor.Tools.CSG
             Profiler.EndEvent();
         }
 
+        /// <summary>Handles CSG-owned pointer movement before viewport selection behavior.</summary>
+        internal bool OnMouseMove(Float2 location)
+        {
+            return _controller.Tool == CSGTool.Draw && _boxDrawTool.IsInteracting;
+        }
+
+        /// <summary>Begins a footprint or commits the height stage.</summary>
+        internal bool OnMouseDown(Float2 location, MouseButton button)
+        {
+            if (_controller.Tool != CSGTool.Draw || button != MouseButton.Left || Owner.IsAltKeyDown)
+                return false;
+
+            if (_boxDrawTool.Stage == CSGBoxDrawStage.Hover)
+            {
+                var plane = _workingPlane.ActivePlane;
+                AlignDrawPlaneToGrid(ref plane);
+                if (!TryGetDrawPoint(ref plane, out var point) ||
+                    !_boxDrawTool.Begin(ref plane, point, _controller.SquareConstraintActive, false, _controller.SymmetricConstraintActive))
+                    return true;
+                _drawOperationOverride = null;
+                _boxCreated = false;
+                _controller.BeginInteraction();
+                UpdateStatusText();
+                return true;
+            }
+
+            if (_boxDrawTool.Stage == CSGBoxDrawStage.Height)
+                TryCommitBoxDraw(true);
+            return true;
+        }
+
+        /// <summary>Locks the footprint after the initial drag.</summary>
+        internal bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            if (button == MouseButton.Left && _consumeDrawMouseUp)
+            {
+                _consumeDrawMouseUp = false;
+                return true;
+            }
+            if (_controller.Tool != CSGTool.Draw || button != MouseButton.Left || !_boxDrawTool.IsInteracting)
+                return false;
+            if (_boxDrawTool.Stage == CSGBoxDrawStage.Footprint)
+            {
+                var plane = _workingPlane.ActivePlane;
+                AlignDrawPlaneToGrid(ref plane);
+                if (TryGetDrawPoint(ref plane, out var point))
+                    _boxDrawTool.UpdateFootprint(point);
+                _boxDrawTool.CompleteFootprint();
+                UpdateStatusText();
+            }
+            return true;
+        }
+
+        /// <summary>Handles numeric box dimensions before mode shortcut processing.</summary>
+        internal bool OnKeyDown(KeyboardKeys key)
+        {
+            if (_controller.Tool != CSGTool.Draw || !_boxDrawTool.OnKeyDown(key, out bool requestCommit))
+                return false;
+            if (requestCommit)
+                TryCommitBoxDraw();
+            UpdateStatusText();
+            return true;
+        }
+
+        /// <summary>Advances or commits the staged draw interaction.</summary>
+        internal bool TryCommitDrawStage()
+        {
+            if (_controller.Tool != CSGTool.Draw || !_boxDrawTool.IsInteracting)
+                return false;
+            if (_boxDrawTool.Stage == CSGBoxDrawStage.Footprint)
+                _boxDrawTool.CompleteFootprint();
+            else
+                TryCommitBoxDraw();
+            UpdateStatusText();
+            return true;
+        }
+
         /// <inheritdoc />
         public override void Update(float dt)
         {
             if (_modeActive && !_selectionEntered)
                 TryEnterSelectionContext();
             if (!IsActive || !Visible || Owner.SceneGraphRoot == null)
+            {
                 return;
+            }
 
             _actorBuffer.Clear();
             Owner.SceneGraphRoot.GetAllChildActorNodes(_actorBuffer);
             CSGRebuildScheduler.Shared.Update();
             UpdateRebuildStatus();
             UpdateWorkingPlaneAndSnap();
+            UpdateBoxDrawTool();
             var plane = _workingPlane.ActivePlane;
-            _overlayRenderer.Draw(ref plane, Owner.ViewPosition, !_workingPlane.IsLocked && _workingPlane.HasHover, _hasSnap, ref _snapResult);
+            AlignDrawPlaneToGrid(ref plane);
+            bool showSnap = _controller.HasActiveInteraction;
+            var drawSnap = _snapResult;
+            ProjectDrawPointToPlane(ref plane, ref drawSnap.Point);
+            float snapMarkerSize = GetScreenSpaceCursorWorldSize(drawSnap.Point, plane.Spacing);
+            _overlayRenderer.Draw(ref plane, Owner.ViewPosition, !_workingPlane.IsLocked && _workingPlane.HasHover, showSnap && _hasSnap, ref drawSnap, snapMarkerSize);
 
             if ((_controller.Visibility & CSGVisibility.SourceBrushes) != 0)
             {
@@ -235,12 +331,23 @@ namespace FlaxEditor.Tools.CSG
                     var color = subtractive ? new Color(1.0f, 0.12f, 0.1f, 0.95f) : new Color(0.18f, 0.76f, 1.0f, 0.9f);
                     if (hidden)
                         color.A = 0.45f;
+                    var xrayColor = color;
+                    xrayColor.A *= 0.2f;
                     if (subtractive)
-                        DrawDashedWireBox(brush.OrientedBox, color);
+                    {
+                        DrawDashedWireBox(brush.OrientedBox, xrayColor, false);
+                        DrawDashedWireBox(brush.OrientedBox, color, true);
+                    }
                     else
+                    {
+                        DebugDraw.DrawWireBox(brush.OrientedBox, xrayColor, 0.0f, false);
                         DebugDraw.DrawWireBox(brush.OrientedBox, color, 0.0f, true);
+                    }
                     if (selected)
-                        DebugDraw.DrawWireBox(brush.OrientedBox, Color.White, 0.0f, false);
+                    {
+                        DebugDraw.DrawBox(brush.OrientedBox, new Color(1.0f, 0.68f, 0.08f, 0.5f), 0.0f, true);
+                        DebugDraw.DrawWireBox(brush.OrientedBox, Color.White, 0.0f, true);
+                    }
                 }
             }
 
@@ -266,7 +373,7 @@ namespace FlaxEditor.Tools.CSG
                     if (_controller.HasActiveInteraction && hit.Brush != null && IsBrushSelected(hit.Brush))
                         continue;
                     var preferredTangent = GetPreferredSurfaceTangent(ref hit);
-                    if (_workingPlane.TrySetHover(hit.Point, hit.Normal, preferredTangent, pointerRay, _controller.SnapIncrement, hit.Brush?.ID ?? System.Guid.Empty, hit.ComponentIndex))
+                    if (_workingPlane.TrySetHover(hit.Point, hit.Normal, preferredTangent, pointerRay, _controller.SnapIncrement, hit.Brush?.ID ?? System.Guid.Empty, hit.ComponentIndex, true))
                     {
                         found = true;
                         break;
@@ -281,7 +388,9 @@ namespace FlaxEditor.Tools.CSG
             {
                 float threshold = 12.0f * Owner.Viewport.DpiScale;
                 IReadOnlyList<SceneGraphNode> excluded = _controller.HasActiveInteraction ? _selection.CSGSelection : null;
-                CSGSnapProviders.Gather(_actorBuffer, excluded, Owner.Viewport, Owner.Viewport.ContinuousViewMousePosition, threshold, _snapCandidates, _brushCorners);
+                _snapCandidates.Clear();
+                if (_controller.Tool != CSGTool.Draw)
+                    CSGSnapProviders.Gather(_actorBuffer, excluded, Owner.Viewport, ref plane, Owner.Viewport.ContinuousViewMousePosition, threshold, _snapCandidates, _brushCorners);
                 _snapService.Solve(ref plane, point, _controller.EffectiveSnappingEnabled, threshold, _snapCandidates, out _snapResult);
                 _hasSnap = _snapResult.IsSnapped;
             }
@@ -299,6 +408,128 @@ namespace FlaxEditor.Tools.CSG
             }
         }
 
+        private void UpdateBoxDrawTool()
+        {
+            if (_controller.Tool != CSGTool.Draw)
+                return;
+
+            _boxDrawTool.SetModifiers(_controller.SquareConstraintActive, false, _controller.SymmetricConstraintActive);
+            var plane = _workingPlane.ActivePlane;
+            AlignDrawPlaneToGrid(ref plane);
+            float hoverMarkerSize = 0.0f;
+            if (_boxDrawTool.Stage == CSGBoxDrawStage.Hover)
+            {
+                if (TryGetDrawPoint(ref plane, out var point))
+                {
+                    _boxDrawTool.UpdateHover(ref plane, point);
+                    hoverMarkerSize = GetScreenSpaceCursorWorldSize(point, plane.Spacing);
+                }
+            }
+            else if (_boxDrawTool.Stage == CSGBoxDrawStage.Footprint)
+            {
+                if (TryGetDrawPoint(ref plane, out var point))
+                    _boxDrawTool.UpdateFootprint(point);
+            }
+            else
+            {
+                var ray = Owner.MouseRay;
+                _boxDrawTool.UpdateHeight(ref ray, Owner.ViewDirection, _controller.EffectiveSnappingEnabled, _controller.SnapIncrement);
+            }
+            _boxDrawTool.Draw(hoverMarkerSize);
+            UpdateStatusText();
+        }
+
+        private float GetScreenSpaceCursorWorldSize(Vector3 point, float fallbackSpacing)
+        {
+            var viewport = Owner.Viewport;
+            float forwardDepth = (float)Vector3.Dot(point - Owner.ViewPosition, (Vector3)Owner.ViewDirection);
+            float verticalFov = viewport.FieldOfView;
+            if (viewport.ViewportCamera is FPSCamera fpsCamera)
+                verticalFov += fpsCamera.AdditionalZoomFOV;
+            if (TransformGizmoBase.TryCalculateProjectionSizing(
+                    viewport.UseOrthographicProjection,
+                    forwardDepth,
+                    verticalFov,
+                    viewport.OrthographicScale,
+                    viewport.Height,
+                    viewport.DpiScale,
+                    6.0f,
+                    viewport.NearPlane,
+                    out _,
+                    out var halfSize))
+                return halfSize * 2.0f;
+            return Mathf.Clamp(fallbackSpacing * 0.15f, 0.75f, 7.5f);
+        }
+
+        private bool TryGetDrawPoint(ref CSGWorkingPlane plane, out Vector3 point)
+        {
+            if (_hasSnap)
+            {
+                point = _snapResult.Point;
+                ProjectDrawPointToPlane(ref plane, ref point);
+                return true;
+            }
+            var ray = Owner.MouseRay;
+            return CSGWorkingPlaneService.TryIntersect(ref plane, ref ray, out point);
+        }
+
+        private void AlignDrawPlaneToGrid(ref CSGWorkingPlane plane)
+        {
+            if (_controller.Tool == CSGTool.Draw && _controller.EffectiveSnappingEnabled)
+                CSGWorkingPlaneService.AlignAxisAlignedOriginToGrid(ref plane, _controller.SnapIncrement);
+        }
+
+        private static void ProjectDrawPointToPlane(ref CSGWorkingPlane plane, ref Vector3 point)
+        {
+            point += plane.Normal * (float)Vector3.Dot(plane.Origin - point, plane.Normal);
+        }
+
+        private void TryCommitBoxDraw(bool consumeMouseUp = false)
+        {
+            if (!_boxDrawTool.TryGetPlacement(out _))
+                return;
+            if (_controller.TryCommit() && consumeMouseUp)
+                _consumeDrawMouseUp = true;
+        }
+
+        private bool CreateBoxBrush()
+        {
+            if (_boxCreated)
+                return true;
+            if (!_boxDrawTool.TryGetPlacement(out var placement))
+                return false;
+
+            var operation = _drawOperationOverride ?? GetInferredOperation(ref placement);
+            var brush = new BoxBrush
+            {
+                Name = "Box Brush",
+                Transform = new Transform(placement.Center, placement.Orientation),
+                Center = Vector3.Zero,
+                Size = placement.Size,
+                Mode = operation == CSGOperation.Subtractive ? BrushMode.Subtractive : BrushMode.Additive,
+            };
+            var sceneEditing = Editor.Instance?.SceneEditing;
+            if (sceneEditing == null || !sceneEditing.TrySpawnForCSGTransaction(brush, out _, out var action))
+            {
+                FlaxEngine.Object.Destroy(brush);
+                return false;
+            }
+
+            _transaction.Touch(brush);
+            _transaction.RegisterPerformedAction(action);
+            _boxCreated = true;
+            return true;
+        }
+
+        private CSGOperation GetInferredOperation(ref CSGBoxPlacement placement)
+        {
+            if (placement.InferredOperation == CSGBoxOperationInference.Additive)
+                return CSGOperation.Additive;
+            if (placement.InferredOperation == CSGBoxOperationInference.Subtractive)
+                return CSGOperation.Subtractive;
+            return _controller.Operation;
+        }
+
         private Vector3 GetPreferredSurfaceTangent(ref CSGHit hit)
         {
             if (hit.Kind != CSGHitKind.Face || hit.Brush == null)
@@ -308,35 +539,22 @@ namespace FlaxEditor.Tools.CSG
             return transform.LocalToWorldVector(localTangent);
         }
 
-        private void DrawDashedWireBox(OrientedBoundingBox box, Color color)
+        private void DrawDashedWireBox(OrientedBoundingBox box, Color color, bool depthTest)
         {
             box.GetCorners(_brushCorners);
-            var viewport = Owner.Viewport;
-            var viewPosition = Owner.ViewPosition;
-            var viewDirection = (Vector3)Owner.ViewDirection;
-            const float dashLength = 6.0f;
-            const float gapLength = 4.0f;
+            const int dashCount = 6;
+            const float dashFraction = 0.6f;
 
             for (int i = 0; i < BrushBoxEdges.Length; i += 2)
             {
                 var start = _brushCorners[BrushBoxEdges[i]];
                 var end = _brushCorners[BrushBoxEdges[i + 1]];
-                if (Vector3.Dot(start - viewPosition, viewDirection) <= 0.0f ||
-                    Vector3.Dot(end - viewPosition, viewDirection) <= 0.0f)
-                    continue;
-
-                viewport.ProjectPoint(start, out var startScreen);
-                viewport.ProjectPoint(end, out var endScreen);
-                float projectedLength = (endScreen - startScreen).Length;
-                if (projectedLength < 1.0f)
-                    continue;
-
                 var edge = end - start;
-                for (float distance = 0.0f; distance < projectedLength; distance += dashLength + gapLength)
+                for (int dash = 0; dash < dashCount; dash++)
                 {
-                    float dashStart = distance / projectedLength;
-                    float dashEnd = Mathf.Min(distance + dashLength, projectedLength) / projectedLength;
-                    DebugDraw.DrawLine(start + edge * dashStart, start + edge * dashEnd, color, 0.0f, true);
+                    float dashStart = (float)dash / dashCount;
+                    float dashEnd = (dash + dashFraction) / dashCount;
+                    DebugDraw.DrawLine(start + edge * dashStart, start + edge * dashEnd, color, 0.0f, depthTest);
                 }
             }
         }
@@ -536,6 +754,9 @@ namespace FlaxEditor.Tools.CSG
 
         private void OnControllerChanged()
         {
+            if (_boxDrawTool.IsInteracting && _controller.Operation != _lastControllerOperation)
+                _drawOperationOverride = _controller.Operation;
+            _lastControllerOperation = _controller.Operation;
             _workingPlane.SetSpacing(_controller.SnapIncrement);
             _workingPlane.SetLocked(_controller.WorkingPlaneLocked);
             if (_controller.HasActiveInteraction && !_workingPlane.IsFrozen)
@@ -556,16 +777,38 @@ namespace FlaxEditor.Tools.CSG
                     _transactionBrushes.Add(brush);
             }
             _transaction.Begin(_transactionBrushes);
+            _boxCreated = false;
         }
 
         private void OnInteractionCommitted()
         {
-            _transaction.Commit(Editor.Instance?.Undo);
+            try
+            {
+                if (_controller.Tool == CSGTool.Draw && _boxDrawTool.IsInteracting && !CreateBoxBrush())
+                {
+                    _transaction.Rollback("Invalid box placement");
+                    return;
+                }
+                _transaction.Commit(Editor.Instance?.Undo, _controller.Tool == CSGTool.Draw ? "Create CSG Box" : "Edit CSG");
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError("CSG interaction commit failed. " + ex.Message);
+                _transaction.Rollback("Commit failed");
+            }
+            finally
+            {
+                _boxDrawTool.Reset();
+                _drawOperationOverride = null;
+                _consumeDrawMouseUp = false;
+            }
         }
 
         private void OnInteractionCancelled(EditorGizmoModeCancelReason reason)
         {
             _transaction.Invalidate(reason.ToString());
+            _boxDrawTool.Reset();
+            _drawOperationOverride = null;
         }
 
         private void OnPickWorkingPlaneRequested()
@@ -602,9 +845,10 @@ namespace FlaxEditor.Tools.CSG
         {
             string tool = _controller.Tool == CSGTool.SelectPlace ? "Select / Place" : _controller.Tool.ToString();
             string transaction = _transaction.IsActive ? $"  |  Txn Preview {_transaction.Telemetry.TouchedBrushCount}" : string.Empty;
+            string draw = _controller.Tool == CSGTool.Draw ? $"  |  {_boxDrawTool.StatusText}" : string.Empty;
             _statusText = _hasCycle && _selectableHits.Count > 1
-                ? $"CSG {tool}  |  Hit {_cycleIndex + 1}/{_selectableHits.Count}  |  Plane {_planeStatus}  |  {_rebuildStatus}{transaction}"
-                : $"CSG {tool}  |  Plane {_planeStatus}  |  {_rebuildStatus}{transaction}";
+                ? $"CSG {tool}  |  Hit {_cycleIndex + 1}/{_selectableHits.Count}  |  Plane {_planeStatus}  |  {_rebuildStatus}{draw}{transaction}"
+                : $"CSG {tool}  |  Plane {_planeStatus}  |  {_rebuildStatus}{draw}{transaction}";
         }
 
         private void UpdateRebuildStatus()

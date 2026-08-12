@@ -78,6 +78,9 @@ namespace FlaxEditor.Tools.CSG
             if (viewport == null || input == null)
                 return false;
 
+            if (Gizmo?.OnKeyDown(key) == true)
+                return true;
+
             if (input.CSGSelectPlaceTool.Process(viewport, key))
                 return Controller.SetTool(CSGTool.SelectPlace);
             if (input.CSGDrawTool.Process(viewport, key))
@@ -122,10 +125,28 @@ namespace FlaxEditor.Tools.CSG
                 return true;
             }
             if (input.CSGCommit.Process(viewport, key))
-                return Controller.TryCommit();
+                return Gizmo?.TryCommitDrawStage() == true || Controller.TryCommit();
             if (input.CSGCancel.Process(viewport, key))
                 return TryCancel(EditorGizmoModeCancelReason.User);
             return false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseMove(Float2 location)
+        {
+            return Gizmo?.OnMouseMove(location) ?? false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseDown(Float2 location, MouseButton button)
+        {
+            return Gizmo?.OnMouseDown(location, button) ?? false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            return Gizmo?.OnMouseUp(location, button) ?? false;
         }
 
         /// <inheritdoc />

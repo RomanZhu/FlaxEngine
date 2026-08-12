@@ -1630,7 +1630,12 @@ namespace FlaxEditor
 
         internal bool Internal_CanAutoBuildCSG()
         {
-            return StateMachine.CurrentState.CanEditScene;
+            // Transform gizmo previews update brush actors every frame. Rebuilding the
+            // generated model for each preview causes visible asset reload flicker and
+            // wastes most of the CSG work. TransformGizmo requests one final rebuild
+            // for every affected scene when its transaction commits.
+            var transformGizmo = Windows?.EditWin?.Viewport?.TransformGizmo;
+            return StateMachine.CurrentState.CanEditScene && (transformGizmo == null || !transformGizmo.HasActiveCSGTransaction);
         }
 
         internal bool Internal_CanAutoBuildNavMesh()

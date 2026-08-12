@@ -67,7 +67,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
         /// <summary>
         /// Derives and stores a hover plane unless a lock or transaction freeze owns the plane.
         /// </summary>
-        public bool TrySetHover(Vector3 hitPoint, Vector3 hitNormal, Vector3 preferredTangent, Ray pointerRay, float spacing, Guid sourceActorId, int sourceComponentIndex)
+        public bool TrySetHover(Vector3 hitPoint, Vector3 hitNormal, Vector3 preferredTangent, Ray pointerRay, float spacing, Guid sourceActorId, int sourceComponentIndex, bool isSurfaceDerived = false)
         {
             if (_isLocked || _isFrozen)
                 return false;
@@ -78,6 +78,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
                 return false;
             }
 
+            plane.IsSurfaceDerived |= isSurfaceDerived;
             _hoverPlane = plane;
             _hasHover = true;
             return true;
@@ -188,6 +189,22 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
         }
 
         /// <summary>
+        /// Aligns the normal coordinate of an axis-aligned plane to the world grid.
+        /// Arbitrarily oriented surface planes retain their surface-local origin.
+        /// </summary>
+        public static void AlignAxisAlignedOriginToGrid(ref CSGWorkingPlane plane, float spacing)
+        {
+            if (!plane.IsValid || spacing <= 0.0001f)
+                return;
+            var normal = Vector3.Abs(plane.Normal);
+            if (Mathf.Max((float)normal.X, Mathf.Max((float)normal.Y, (float)normal.Z)) < 0.999999f)
+                return;
+            float distance = (float)Vector3.Dot(plane.Origin, plane.Normal);
+            float snappedDistance = Mathf.Round(distance / spacing) * spacing;
+            plane.Origin += plane.Normal * (snappedDistance - distance);
+        }
+
+        /// <summary>
         /// Derives a stable orthonormal grid basis from a plane hit.
         /// </summary>
         public static bool TryDerive(Vector3 hitPoint, Vector3 hitNormal, Vector3 preferredTangent, float spacing, int majorLineInterval, Guid sourceActorId, int sourceComponentIndex, out CSGWorkingPlane plane)
@@ -230,6 +247,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
                 MajorLineInterval = Mathf.Max(majorLineInterval, 1),
                 SourceActorId = sourceActorId,
                 SourceComponentIndex = sourceComponentIndex,
+                IsSurfaceDerived = sourceActorId != Guid.Empty && sourceComponentIndex >= 0,
                 IsValid = true,
             };
             return true;

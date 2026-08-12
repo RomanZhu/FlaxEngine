@@ -17,6 +17,7 @@ using FlaxEditor.GUI.Input;
 using FlaxEditor.GUI.Tabs;
 using FlaxEditor.Options;
 using FlaxEditor.SceneGraph;
+using FlaxEditor.SceneGraph.Actors;
 using FlaxEditor.Scripting;
 using FlaxEditor.Tools.CSG;
 using FlaxEditor.Viewport.Cameras;
@@ -56,6 +57,8 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayAbsoluteSnapButton;
         private readonly List<SceneGraphNode> _sceneTreeHoverSelection = new List<SceneGraphNode>(1);
         private readonly List<SceneGraphNode> _viewportPrimaryHoverSelection = new List<SceneGraphNode>(1);
+        private readonly List<ActorNode> _regularCSGBrushes = new List<ActorNode>(32);
+        private readonly Vector3[] _regularCSGBrushCorners = new Vector3[8];
         private ActorNode _sceneTreeHoveredActor;
         private ActorNode _editorViewportHoveredActor;
         private bool _editorViewportHoverIsLeafTarget;
@@ -515,27 +518,37 @@ namespace FlaxEditor.Viewport
             _overlayScaleSnapValueButton.LinkTooltip("World-unit position grid used for scale snapping.");
 
             _overlayCSGSelectPlaceButton = AddViewportToolStripButton("Select", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.SelectPlace.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.SelectPlace));
+            _overlayCSGSelectPlaceButton.DrawDropdownFrame = true;
             _overlayCSGSelectPlaceButton.LinkTooltip("Select brushes or place the chosen primitive.", ref inputOptions.CSGSelectPlaceTool);
             _overlayCSGDrawButton = AddViewportToolStripButton("Draw", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.Draw.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Draw));
+            _overlayCSGDrawButton.DrawDropdownFrame = true;
             _overlayCSGDrawButton.LinkTooltip("Draw a brush footprint and extrusion.", ref inputOptions.CSGDrawTool);
             _overlayCSGEditButton = AddViewportToolStripButton("Edit", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.Edit.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Edit));
+            _overlayCSGEditButton.DrawDropdownFrame = true;
             _overlayCSGEditButton.LinkTooltip("Edit brush topology.", ref inputOptions.CSGEditTool);
             _overlayCSGSurfaceButton = AddViewportToolStripButton("Surface", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.Surface.Left", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Surface));
+            _overlayCSGSurfaceButton.DrawDropdownFrame = true;
             _overlayCSGSurfaceButton.LinkTooltip("Edit brush surface properties.", ref inputOptions.CSGSurfaceTool);
             _overlayCSGClipButton = AddViewportToolStripButton("Clip", SpriteHandle.Invalid, ToolStripAnchor.Left, "Flax.Scene.CSG.Clip.Left", null);
+            _overlayCSGClipButton.DrawDropdownFrame = true;
             _overlayCSGClipButton.Enabled = false;
             _overlayCSGClipButton.LinkTooltip("Clip is planned for a later milestone.");
             _overlayCSGOperationButton = AddViewportToolStripMenuButton(GetCSGOperationLabel(), SpriteHandle.Invalid, CreateCSGOperationMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Operation.Left");
+            _overlayCSGOperationButton.DrawDropdownFrame = true;
             _overlayCSGOperationButton.DrawMenuChevron = true;
             _overlayCSGOperationButton.LinkTooltip("Operation used by newly authored brushes.");
             _overlayCSGPlaneButton = AddViewportToolStripMenuButton("Plane", SpriteHandle.Invalid, CreateCSGPlaneMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Plane.Left");
+            _overlayCSGPlaneButton.DrawDropdownFrame = true;
             _overlayCSGPlaneButton.DrawMenuChevron = true;
             _overlayCSGPlaneButton.LinkTooltip("Pick, lock, or reset the CSG working plane.");
             _overlayCSGSnapButton = AddViewportToolStripButton("Snap", _editor.Icons.Grid32, ToolStripAnchor.Left, "Flax.Scene.CSG.Snap.Left", () => CSGAuthoringMode.Controller.SetSnappingEnabled(!CSGAuthoringMode.Controller.SnappingEnabled));
+            _overlayCSGSnapButton.DrawDropdownFrame = true;
             _overlayCSGSnapButton.LinkTooltip("Toggle CSG grid snapping.");
             _overlayCSGSnapValueButton = AddViewportToolStripMenuButton(GetCSGSnapLabel(), SpriteHandle.Invalid, CreateCSGSnapMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.SnapValue.Left");
+            _overlayCSGSnapValueButton.DrawDropdownFrame = true;
             _overlayCSGSnapValueButton.LinkTooltip("CSG linear snap increment. Use Ctrl+Mouse Wheel to change it.");
             _overlayCSGVisibilityButton = AddViewportToolStripMenuButton("View", SpriteHandle.Invalid, CreateCSGVisibilityMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Visibility.Left");
+            _overlayCSGVisibilityButton.DrawDropdownFrame = true;
             _overlayCSGVisibilityButton.DrawMenuChevron = true;
             _overlayCSGVisibilityButton.LinkTooltip("CSG viewport visibility.");
 
@@ -946,7 +959,76 @@ namespace FlaxEditor.Viewport
                         selectedParents[i].OnDebugDraw(_debugDrawData);
                 }
             }
+
+            DrawRegularCSGBrushes();
         }
+
+        private void DrawRegularCSGBrushes()
+        {
+            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode || SceneGraphRoot == null)
+                return;
+
+            _regularCSGBrushes.Clear();
+            SceneGraphRoot.GetAllChildActorNodes(_regularCSGBrushes);
+            for (int i = 0; i < _regularCSGBrushes.Count; i++)
+            {
+                if (!(_regularCSGBrushes[i] is BoxBrushNode node) || !node.IsActiveInHierarchy)
+                    continue;
+
+                var brush = (BoxBrush)node.Actor;
+                bool subtractive = brush.Mode == BrushMode.Subtractive;
+                bool hovered = node == _editorViewportHoveredActor || node == _sceneTreeHoveredActor;
+                bool selected = TransformGizmo.Selection.Contains(node);
+                var color = subtractive
+                    ? new Color(1.0f, 0.12f, 0.1f, hovered || selected ? 1.0f : 0.72f)
+                    : new Color(0.18f, 0.76f, 1.0f, hovered || selected ? 1.0f : 0.58f);
+                var xrayColor = color;
+                xrayColor.A *= 0.2f;
+
+                if (subtractive)
+                {
+                    DrawDashedCSGWireBox(brush.OrientedBox, xrayColor, false);
+                    DrawDashedCSGWireBox(brush.OrientedBox, color, true);
+                }
+                else
+                {
+                    DebugDraw.DrawWireBox(brush.OrientedBox, xrayColor, 0.0f, false);
+                    DebugDraw.DrawWireBox(brush.OrientedBox, color, 0.0f, true);
+                }
+                if (selected)
+                    DebugDraw.DrawBox(brush.OrientedBox, new Color(1.0f, 0.68f, 0.08f, 0.5f), 0.0f, true);
+                else if (hovered)
+                    DebugDraw.DrawBox(brush.OrientedBox, new Color(color.R, color.G, color.B, 0.22f), 0.0f, true);
+                if (hovered || selected)
+                    DebugDraw.DrawWireBox(brush.OrientedBox, Color.White, 0.0f, true);
+            }
+        }
+
+        private void DrawDashedCSGWireBox(OrientedBoundingBox box, Color color, bool depthTest)
+        {
+            box.GetCorners(_regularCSGBrushCorners);
+            const int dashCount = 6;
+            const float dashFraction = 0.6f;
+            for (int i = 0; i < CSGBoxEdges.Length; i += 2)
+            {
+                var start = _regularCSGBrushCorners[CSGBoxEdges[i]];
+                var end = _regularCSGBrushCorners[CSGBoxEdges[i + 1]];
+                var edge = end - start;
+                for (int dash = 0; dash < dashCount; dash++)
+                {
+                    float from = (float)dash / dashCount;
+                    float to = (dash + dashFraction) / dashCount;
+                    DebugDraw.DrawLine(start + edge * from, start + edge * to, color, 0.0f, depthTest);
+                }
+            }
+        }
+
+        private static readonly int[] CSGBoxEdges =
+        {
+            0, 1, 1, 2, 2, 3, 3, 0,
+            4, 5, 5, 6, 6, 7, 7, 4,
+            0, 4, 1, 5, 2, 6, 3, 7,
+        };
 
         private void OnCollectDrawCalls(ref RenderContext renderContext)
         {
@@ -1193,21 +1275,25 @@ namespace FlaxEditor.Viewport
             if (_overlayCSGSelectPlaceButton != null)
             {
                 _overlayCSGSelectPlaceButton.Visible = csgMode;
+                _overlayCSGSelectPlaceButton.Enabled = csgMode;
                 _overlayCSGSelectPlaceButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace;
             }
             if (_overlayCSGDrawButton != null)
             {
                 _overlayCSGDrawButton.Visible = csgMode;
+                _overlayCSGDrawButton.Enabled = csgMode;
                 _overlayCSGDrawButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.Draw;
             }
             if (_overlayCSGEditButton != null)
             {
                 _overlayCSGEditButton.Visible = csgMode;
+                _overlayCSGEditButton.Enabled = csgMode;
                 _overlayCSGEditButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.Edit;
             }
             if (_overlayCSGSurfaceButton != null)
             {
                 _overlayCSGSurfaceButton.Visible = csgMode;
+                _overlayCSGSurfaceButton.Enabled = csgMode;
                 _overlayCSGSurfaceButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.Surface;
             }
             if (_overlayCSGClipButton != null)
@@ -1215,26 +1301,33 @@ namespace FlaxEditor.Viewport
             if (_overlayCSGOperationButton != null)
             {
                 _overlayCSGOperationButton.Visible = csgMode;
+                _overlayCSGOperationButton.Enabled = csgMode;
                 SetViewportToolStripButtonText(_overlayCSGOperationButton, GetCSGOperationLabel());
             }
             if (_overlayCSGPlaneButton != null)
             {
                 _overlayCSGPlaneButton.Visible = csgMode;
+                _overlayCSGPlaneButton.Enabled = csgMode;
                 _overlayCSGPlaneButton.Checked = CSGAuthoringMode.Controller.WorkingPlaneLocked;
                 SetViewportToolStripButtonText(_overlayCSGPlaneButton, CSGAuthoringMode.Controller.WorkingPlaneLocked ? "Plane Lock" : "Plane");
             }
             if (_overlayCSGSnapButton != null)
             {
                 _overlayCSGSnapButton.Visible = csgMode;
+                _overlayCSGSnapButton.Enabled = csgMode;
                 _overlayCSGSnapButton.Checked = CSGAuthoringMode.Controller.SnappingEnabled;
             }
             if (_overlayCSGSnapValueButton != null)
             {
                 _overlayCSGSnapValueButton.Visible = csgMode;
+                _overlayCSGSnapValueButton.Enabled = csgMode;
                 SetViewportToolStripButtonText(_overlayCSGSnapValueButton, GetCSGSnapLabel());
             }
             if (_overlayCSGVisibilityButton != null)
+            {
                 _overlayCSGVisibilityButton.Visible = csgMode;
+                _overlayCSGVisibilityButton.Enabled = csgMode;
+            }
             if (_overlayGridButton != null)
                 _overlayGridButton.Checked = Grid.Enabled;
             if (_overlayNavigationButton != null)
@@ -1284,7 +1377,7 @@ namespace FlaxEditor.Viewport
         private ActorNode GetActorNodeUnderMouse(out bool isLeafTarget)
         {
             isLeafTarget = false;
-            if (_gameViewActive || _characterControllerModeActive || IsControllingMouse || IsLeftMouseButtonDown || IsRightMouseButtonDown || IsAltKeyDown || _directionGizmo.IsMouseOver || !ContainsPoint(ref _viewMousePos))
+            if (_gameViewActive || IsControllingMouse || IsLeftMouseButtonDown || IsRightMouseButtonDown || IsAltKeyDown || _directionGizmo.IsMouseOver || !ContainsPoint(ref _viewMousePos))
                 return null;
 
             var ray = ConvertMouseToRay(ref _viewMousePos);
@@ -1657,7 +1750,7 @@ namespace FlaxEditor.Viewport
                 return true;
             if (Gizmos.ActiveMode?.OnMouseDoubleClick(location, button) == true)
                 return true;
-            if (button != MouseButton.Left || _gameViewActive || _characterControllerModeActive || IsControllingMouse || IsAltKeyDown || _directionGizmo.IsMouseOver || !ContainsPoint(ref location))
+            if (button != MouseButton.Left || _gameViewActive || IsControllingMouse || IsAltKeyDown || _directionGizmo.IsMouseOver || !ContainsPoint(ref location))
                 return false;
             if (Gizmos.ActiveMode is not TransformGizmoMode)
                 return false;
@@ -1681,7 +1774,6 @@ namespace FlaxEditor.Viewport
                 ContainsPoint(ref _viewMousePos) &&
                 !_directionGizmo.IsMouseOver &&
                 !_gameViewActive &&
-                !_characterControllerModeActive &&
                 !IsCharacterControllerLookActive() &&
                 Gizmos.Active is TransformGizmo transformGizmo &&
                 transformGizmo.ActiveAxis == TransformGizmoBase.Axis.None)

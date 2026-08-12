@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
+using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEngine;
 
 namespace FlaxEditor.Gizmo
@@ -36,6 +37,21 @@ namespace FlaxEditor.Gizmo
         private readonly List<SceneGraphNode> _pickAncestry = new List<SceneGraphNode>();
         private readonly List<SceneGraphNode> _pickSelectionChain = new List<SceneGraphNode>();
         private readonly List<ActorNode> _brushPickNodes = new List<ActorNode>(32);
+
+        internal bool HasActiveCSGTransaction
+        {
+            get
+            {
+                if (!HasActiveTransaction)
+                    return false;
+                for (int i = 0; i < TransactionObjects.Count; i++)
+                {
+                    if (TransactionObjects[i] is ActorNode actorNode && ContainsBoxBrush(actorNode.Actor))
+                        return true;
+                }
+                return false;
+            }
+        }
 
         /// <summary>
         /// The event to apply objects transformation.
@@ -455,7 +471,7 @@ namespace FlaxEditor.Gizmo
                 bool tied = closest != null && Math.Abs((double)(distance - closestDistance)) <= tieTolerance;
                 bool stableTieWinner = tied && (node.OrderInParent < closest.OrderInParent ||
                                                  (node.OrderInParent == closest.OrderInParent && node.ID.CompareTo(closest.ID) < 0));
-                if (closer || stableTieWinner)
+                if (nearer || stableTieWinner)
                 {
                     closest = node;
                     closestDistance = distance;
@@ -582,6 +598,34 @@ namespace FlaxEditor.Gizmo
             var selection = new List<SceneGraphNode>(TransactionObjects);
             var action = new TransformObjectsAction(selection, _startTransforms, ref _startBounds, _navigationDirty);
             AddTransformUndoAction(action);
+
+            // Native brush modification callbacks are suppressed while this
+            // transaction is active. Rebuild each affected scene once from the
+            // committed transforms so the generated model stays visible while
+            // dragging instead of being repeatedly reloaded.
+            var csgScenes = new List<Scene>();
+            for (int i = 0; i < TransactionObjects.Count; i++)
+            {
+                if (!(TransactionObjects[i] is ActorNode actorNode) || !ContainsBoxBrush(actorNode.Actor))
+                    continue;
+                var scene = actorNode.Actor.Scene;
+                if (scene != null && !csgScenes.Contains(scene))
+                    csgScenes.Add(scene);
+            }
+            for (int i = 0; i < csgScenes.Count; i++)
+                CSGRebuildScheduler.Shared.RequestFinal(csgScenes[i]);
+        }
+
+        private static bool ContainsBoxBrush(Actor actor)
+        {
+            if (actor is BoxBrush)
+                return true;
+            for (int i = 0; i < actor.ChildrenCount; i++)
+            {
+                if (ContainsBoxBrush(actor.GetChild(i)))
+                    return true;
+            }
+            return false;
         }
 
         /// <inheritdoc />

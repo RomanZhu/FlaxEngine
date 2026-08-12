@@ -16,7 +16,7 @@ namespace FlaxEditor.Tools.CSG.Rendering
         /// <summary>
         /// Draws the arbitrary-orientation working grid and optional snap marker.
         /// </summary>
-        public void Draw(ref CSGWorkingPlane plane, Vector3 viewPosition, bool isHoverPreview, bool hasSnap, ref ViewportSnapResult snap)
+        public void Draw(ref CSGWorkingPlane plane, Vector3 viewPosition, bool isHoverPreview, bool hasSnap, ref ViewportSnapResult snap, float snapMarkerSize)
         {
             if (!plane.IsValid)
                 return;
@@ -28,10 +28,10 @@ namespace FlaxEditor.Tools.CSG.Rendering
             float baseAlpha = (isHoverPreview ? 0.48f : 0.72f) * Mathf.Lerp(0.3f, 1.0f, distanceFade);
             float bias = Mathf.Max(0.08f, spacing * 0.008f);
             var origin = plane.Origin + plane.Normal * bias;
-            var minor = new Color(0.28f, 0.68f, 0.9f, baseAlpha * 0.36f);
-            var major = new Color(0.35f, 0.8f, 1.0f, baseAlpha * 0.78f);
-            var tangentAxis = new Color(0.95f, 0.28f, 0.22f, baseAlpha);
-            var bitangentAxis = new Color(0.2f, 0.55f, 1.0f, baseAlpha);
+            var minor = new Color(0.32f, 0.32f, 0.32f, baseAlpha * 0.68f);
+            var major = new Color(0.16f, 0.16f, 0.16f, baseAlpha * 0.9f);
+            var tangentAxis = new Color(0.08f, 0.08f, 0.08f, baseAlpha);
+            var bitangentAxis = tangentAxis;
 
             for (int i = -GridHalfCells; i <= GridHalfCells; i++)
             {
@@ -48,19 +48,20 @@ namespace FlaxEditor.Tools.CSG.Rendering
 
             DebugDraw.DrawLine(origin, origin + plane.Normal * spacing * 2.0f, new Color(0.38f, 1.0f, 0.42f, baseAlpha), 0.0f, false);
             if (hasSnap)
-                DrawSnapMarker(ref plane, ref snap, spacing);
+                DrawSnapMarker(ref plane, ref snap, spacing, snapMarkerSize);
         }
 
-        private static void DrawSnapMarker(ref CSGWorkingPlane plane, ref ViewportSnapResult snap, float spacing)
+        private static void DrawSnapMarker(ref CSGWorkingPlane plane, ref ViewportSnapResult snap, float spacing, float snapMarkerSize)
         {
-            float radius = Mathf.Clamp(spacing * 0.22f, 1.5f, 15.0f);
+            float size = snapMarkerSize > Mathf.Epsilon ? snapMarkerSize : Mathf.Clamp(spacing * 0.15f, 0.75f, 7.5f);
             var point = snap.Point + plane.Normal * Mathf.Max(0.12f, spacing * 0.012f);
-            var color = snap.Kind == ViewportSnapTargetKind.Grid
-                ? new Color(1.0f, 0.82f, 0.18f, 1.0f)
-                : new Color(0.35f, 1.0f, 0.52f, 1.0f);
-            DebugDraw.DrawLine(point - plane.Tangent * radius, point + plane.Tangent * radius, color, 0.0f, false);
-            DebugDraw.DrawLine(point - plane.Bitangent * radius, point + plane.Bitangent * radius, color, 0.0f, false);
-            DebugDraw.DrawWireSphere(new BoundingSphere(point, radius * 0.42f), color, 0.0f, false);
+            var color = new Color(1.0f, 0.82f, 0.12f, 1.0f);
+            var cube = new OrientedBoundingBox(new Vector3(-size * 0.5f), new Vector3(size * 0.5f))
+            {
+                Transformation = new Transform(point, Quaternion.LookRotation(-plane.Bitangent, plane.Normal)),
+            };
+            DebugDraw.DrawBox(cube, color, 0.0f, false);
+            DebugDraw.DrawWireBox(cube, new Color(0.55f, 0.38f, 0.02f, 1.0f), 0.0f, false);
         }
     }
 }

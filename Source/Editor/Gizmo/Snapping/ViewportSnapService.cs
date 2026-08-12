@@ -96,9 +96,10 @@ namespace FlaxEditor.Gizmo.Snapping
             if (best >= 0)
             {
                 var candidate = candidates[best];
+                var pointOnPlane = plane.ToWorld(plane.ToPlane(candidate.Point));
                 result.IsSnapped = true;
-                result.Point = candidate.Point;
-                result.PlaneCoordinates = plane.ToPlane(candidate.Point);
+                result.Point = pointOnPlane;
+                result.PlaneCoordinates = plane.ToPlane(pointOnPlane);
                 result.Kind = candidate.Kind;
                 result.ActorId = candidate.ActorId;
                 result.ComponentIndex = candidate.ComponentIndex;

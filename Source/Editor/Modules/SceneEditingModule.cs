@@ -252,14 +252,14 @@ namespace FlaxEditor.Modules
             OnSelectionChanged();
         }
 
-        private void OnDirty(ActorNode node)
+        private void OnDirty(ActorNode node, bool requestCSGRebuild = true)
         {
             var options = Editor.Options.Options;
             var isPlayMode = Editor.StateMachine.IsPlayMode;
             var actor = node.Actor;
 
             // Auto CSG mesh rebuild
-            if (!isPlayMode && actor is BoxBrush && actor.Scene)
+            if (requestCSGRebuild && !isPlayMode && actor is BoxBrush && actor.Scene)
                 CSGRebuildScheduler.Shared.RequestExternal(actor.Scene);
 
             // Auto NavMesh rebuild
@@ -396,6 +396,79 @@ namespace FlaxEditor.Modules
             SpawnEnd?.Invoke();
 
             OnDirty(actorNode);
+        }
+
+        /// <summary>
+        /// Spawns and selects a CSG actor as an already-performed action owned by an authoring transaction.
+        /// The caller must either add the returned action to undo history or undo and dispose it.
+        /// </summary>
+        /// <param name="actor">The initialized CSG actor.</param>
+        /// <param name="actorNode">The spawned scene graph node.</param>
+        /// <param name="undoAction">The already-performed create and selection action.</param>
+        /// <returns>True when the actor was spawned and selected.</returns>
+        internal bool TrySpawnForCSGTransaction(Actor actor, out ActorNode actorNode, out IUndoAction undoAction)
+        {
+            actorNode = null;
+            undoAction = null;
+            if (actor == null || Level.IsAnySceneLoaded == false || Editor.StateMachine.IsPlayMode)
+                return false;
+
+            var before = Selection.ToArray();
+            SpawnBegin?.Invoke();
+            try
+            {
+                var parent = actor.Parent ?? Level.GetScene(0);
+                actor.Name = Utilities.Utils.IncrementNameNumber(actor.Name, x => parent.GetChild(x) == null);
+                Level.SpawnActor(actor);
+                actorNode = Editor.Scene.GetActorNode(actor);
+                if (actorNode == null)
+                    throw new InvalidOperationException("Failed to create scene node for the CSG actor.");
+                actorNode.PostSpawn();
+
+                var createAction = new DeleteActorsAction(actorNode, true);
+                Selection.Clear();
+                Selection.Add(actorNode);
+                OnSelectionChanged();
+                var selectionAction = new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo);
+                undoAction = new MultiUndoAction(new IUndoAction[] { createAction, selectionAction }, "Create CSG Box");
+
+                Editor.Scene.MarkSceneEdited(actor.Scene);
+                OnDirty(actorNode, false);
+                return true;
+            }
+            catch
+            {
+                try
+                {
+                    Selection.Clear();
+                    Selection.AddRange(before);
+                    OnSelectionChanged();
+                }
+                catch (Exception ex)
+                {
+                    Editor.LogError("CSG selection rollback failed. " + ex.Message);
+                }
+                if (actorNode != null)
+                {
+                    try
+                    {
+                        actorNode.Delete();
+                        FlaxEngine.Scripting.FlushRemovedObjects();
+                    }
+                    catch (Exception ex)
+                    {
+                        Editor.LogError("CSG actor spawn rollback failed. " + ex.Message);
+                    }
+                }
+                actorNode = null;
+                undoAction?.Dispose();
+                undoAction = null;
+                throw;
+            }
+            finally
+            {
+                SpawnEnd?.Invoke();
+            }
         }
 
         /// <summary>

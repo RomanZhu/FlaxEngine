@@ -2078,6 +2078,8 @@ namespace FlaxEditor.Viewport
         public void ProjectPoint(Vector3 worldSpaceLocation, out Float2 viewportSpaceLocation)
         {
             viewportSpaceLocation = Float2.Minimum;
+            if (Task == null)
+                return;
             var viewport = new FlaxEngine.Viewport(0, 0, Width, Height);
             if (viewport.Width < Mathf.Epsilon || viewport.Height < Mathf.Epsilon)
                 return;

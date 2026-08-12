@@ -16,8 +16,10 @@ using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEditor.Tools.CSG;
 using FlaxEditor.Tools.CSG.HitTesting;
+using FlaxEditor.Tools.CSG.Placement;
 using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEditor.Tools.CSG.Selection;
+using FlaxEditor.Tools.CSG.Tools;
 using FlaxEditor.Tools.CSG.Transactions;
 using FlaxEditor.Tools.CSG.WorkingPlane;
 using FlaxEditor.Viewport.Modes;
@@ -415,7 +417,7 @@ namespace FlaxEditor.Tests
             var candidates = new List<ViewportSnapCandidate>
             {
                 new ViewportSnapCandidate { Point = Vector3.Right * 20.0f, Kind = ViewportSnapTargetKind.CSGFace, ActorId = Guid.NewGuid(), ComponentIndex = 1, ScreenDistance = 4.0f },
-                new ViewportSnapCandidate { Point = Vector3.Right * 10.0f, Kind = ViewportSnapTargetKind.CSGVertex, ActorId = Guid.NewGuid(), ComponentIndex = 3, ScreenDistance = 4.0f },
+                new ViewportSnapCandidate { Point = new Vector3(10.0f, 30.0f, 0.0f), Kind = ViewportSnapTargetKind.CSGVertex, ActorId = Guid.NewGuid(), ComponentIndex = 3, ScreenDistance = 4.0f },
             };
             var solver = new ViewportSnapService();
 
@@ -424,6 +426,144 @@ namespace FlaxEditor.Tests
             solver.Solve(ref plane, Vector3.Zero, true, 5.0f, candidates, out var geometryResult);
             Assert.AreEqual(ViewportSnapTargetKind.CSGVertex, geometryResult.Kind);
             Assert.IsTrue(Vector3.NearEqual(Vector3.Right * 10.0f, geometryResult.Point));
+        }
+
+        [Test]
+        public void TestBoxPlacementHandlesEveryDragQuadrantWithPositiveSize()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            var endpoints = new[]
+            {
+                new Float2(30.0f, 40.0f),
+                new Float2(-30.0f, 40.0f),
+                new Float2(-30.0f, -40.0f),
+                new Float2(30.0f, -40.0f),
+            };
+
+            for (int i = 0; i < endpoints.Length; i++)
+            {
+                Assert.IsTrue(CSGBoxPlacementSolver.TrySolve(ref plane, Float2.Zero, endpoints[i], 20.0f, false, false, false, out var placement));
+                Assert.AreEqual(30.0f, (float)placement.Size.X, 0.0001f);
+                Assert.AreEqual(20.0f, (float)placement.Size.Y, 0.0001f);
+                Assert.AreEqual(40.0f, (float)placement.Size.Z, 0.0001f);
+                Assert.Greater((float)placement.Size.X, 0.0f);
+                Assert.Greater((float)placement.Size.Y, 0.0f);
+                Assert.Greater((float)placement.Size.Z, 0.0f);
+            }
+        }
+
+        [Test]
+        public void TestBoxPlacementPreservesRotatedPlaneBasisAndSignedHeight()
+        {
+            var normal = new Vector3(0.2f, 0.9f, -0.35f);
+            normal.Normalize();
+            Assert.IsTrue(CSGWorkingPlaneService.TryDerive(normal * 25.0f, normal, Vector3.Right, 5.0f, 10, Guid.NewGuid(), 2, out var plane));
+            Assert.IsTrue(CSGBoxPlacementSolver.TrySolve(ref plane, new Float2(-10.0f, -15.0f), new Float2(20.0f, 25.0f), -12.0f, false, false, false, out var placement));
+
+            var transform = new Transform(placement.Center, placement.Orientation);
+            var localUp = transform.LocalToWorldVector(Vector3.Up);
+            localUp.Normalize();
+            Assert.IsTrue(Vector3.NearEqual(plane.Normal, localUp));
+            Assert.AreEqual(-12.0f, placement.SignedHeight, 0.0001f);
+            Assert.AreEqual(12.0f, (float)placement.Size.Y, 0.0001f);
+            Assert.AreEqual(CSGBoxOperationInference.Subtractive, placement.InferredOperation);
+            var expectedPlaneCenter = plane.ToWorld(new Float2(5.0f, 5.0f));
+            var expectedCenter = expectedPlaneCenter + plane.Normal * -6.0f;
+            Assert.IsTrue(Vector3.NearEqual(expectedCenter, placement.Center));
+        }
+
+        [Test]
+        public void TestGeneratedSurfacePlacementKeepsExactAuthoredDimensions()
+        {
+            var service = new CSGWorkingPlaneService();
+            var ray = new Ray(new Vector3(0.0f, 10.0f, 0.0f), Vector3.Down);
+            Assert.IsTrue(service.TrySetHover(Vector3.Zero, Vector3.Up, Vector3.Right, ray, 10.0f, Guid.Empty, -1, true));
+            var plane = service.ActivePlane;
+            Assert.IsTrue(plane.IsSurfaceDerived);
+            Assert.AreEqual(Guid.Empty, plane.SourceActorId);
+
+            Assert.IsTrue(CSGBoxPlacementSolver.TrySolve(ref plane, Float2.Zero, new Float2(20.0f, 30.0f), -25.0f, false, false, false, out var placement));
+            Assert.AreEqual(25.0f, (float)placement.Size.Y, 0.0001f);
+            Assert.AreEqual(CSGBoxOperationInference.Subtractive, placement.InferredOperation);
+            float positiveExtent = (float)Vector3.Dot(placement.Center, plane.Normal) + (float)placement.Size.Y * 0.5f;
+            Assert.AreEqual(0.0f, positiveExtent, 0.0001f);
+            float negativeExtent = (float)Vector3.Dot(placement.Center, plane.Normal) - (float)placement.Size.Y * 0.5f;
+            Assert.AreEqual(-25.0f, negativeExtent, 0.0001f);
+        }
+
+        [Test]
+        public void TestAxisAlignedSurfacePlaneUsesExactWorldGridCoordinate()
+        {
+            Assert.IsTrue(CSGWorkingPlaneService.TryDerive(new Vector3(0.0f, 498.58435f, 0.0f), Vector3.Up, Vector3.Right, 50.0f, 10, Guid.Empty, -1, out var plane));
+            CSGWorkingPlaneService.AlignAxisAlignedOriginToGrid(ref plane, 50.0f);
+            Assert.AreEqual(500.0f, (float)plane.Origin.Y, 0.0001f);
+
+            Assert.IsTrue(CSGBoxPlacementSolver.TrySolve(ref plane, Float2.Zero, new Float2(400.0f, 100.0f), -200.0f, false, false, false, out var placement));
+            Assert.AreEqual(400.0f, (float)placement.Center.Y, 0.0001f);
+            Assert.AreEqual(200.0f, (float)placement.Size.Y, 0.0001f);
+        }
+
+        [Test]
+        public void TestSlopedSurfacePlaneRetainsSurfaceCoordinate()
+        {
+            var normal = Vector3.Normalize(new Vector3(1.0f, 1.0f, 0.0f));
+            Assert.IsTrue(CSGWorkingPlaneService.TryDerive(new Vector3(17.0f, 23.0f, 0.0f), normal, Vector3.Forward, 50.0f, 10, Guid.Empty, -1, out var plane));
+            var originalOrigin = plane.Origin;
+
+            CSGWorkingPlaneService.AlignAxisAlignedOriginToGrid(ref plane, 50.0f);
+
+            Assert.AreEqual(originalOrigin, plane.Origin);
+        }
+
+        [Test]
+        public void TestBoxPlacementSquareSymmetricAndEpsilonRules()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            Assert.IsTrue(CSGBoxPlacementSolver.TrySolve(ref plane, Float2.Zero, new Float2(20.0f, 50.0f), 15.0f, true, false, true, out var placement));
+            Assert.AreEqual(50.0f, (float)placement.Size.X, 0.0001f);
+            Assert.AreEqual(50.0f, (float)placement.Size.Z, 0.0001f);
+            Assert.AreEqual(30.0f, (float)placement.Size.Y, 0.0001f);
+            Assert.AreEqual(0.0f, (float)Vector3.Dot(placement.Center, plane.Normal), 0.0001f);
+            Assert.AreEqual(CSGBoxOperationInference.None, placement.InferredOperation);
+
+            Assert.IsFalse(CSGBoxPlacementSolver.TrySolve(ref plane, Float2.Zero, new Float2(0.0001f, 10.0f), 10.0f, false, false, false, out _));
+            Assert.IsFalse(CSGBoxPlacementSolver.TrySolve(ref plane, Float2.Zero, new Float2(10.0f), 0.0001f, false, false, false, out _));
+            Assert.AreEqual(-25.0f, CSGBoxPlacementSolver.SnapDimension(-24.9f, 5.0f), 0.0001f);
+        }
+
+        [Test]
+        public void TestBoxHeightProjectionUsesCameraFacingExtrusionPlane()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            var direction = new Vector3(0.0f, 15.0f, 10.0f);
+            direction.Normalize();
+            var ray = new Ray(new Vector3(0.0f, 10.0f, -10.0f), direction);
+            var viewDirection = new Vector3(0.0f, -1.0f, 1.0f);
+            viewDirection.Normalize();
+
+            Assert.IsTrue(CSGBoxPlacementSolver.TrySolveHeight(ref plane, Vector3.Zero, ref ray, viewDirection, out float height));
+            Assert.AreEqual(25.0f, height, 0.0001f);
+        }
+
+        [Test]
+        public void TestBoxDrawToolNumericOverridesProduceExactDimensions()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            var tool = new CSGBoxDrawTool();
+            Assert.IsTrue(tool.Begin(ref plane, Vector3.Zero, false, false, false));
+            tool.UpdateFootprint(plane.ToWorld(new Float2(-30.0f, 40.0f)));
+            Assert.IsTrue(tool.SetNumericOverride(CSGBoxNumericDimension.Width, 125.0f));
+            Assert.IsTrue(tool.SetNumericOverride(CSGBoxNumericDimension.Depth, 75.0f));
+            Assert.IsTrue(tool.CompleteFootprint());
+            Assert.IsTrue(tool.SetNumericOverride(CSGBoxNumericDimension.Height, -35.0f));
+            Assert.IsTrue(tool.TryGetPlacement(out var placement));
+            Assert.AreEqual(125.0f, (float)placement.Size.X, 0.0001f);
+            Assert.AreEqual(35.0f, (float)placement.Size.Y, 0.0001f);
+            Assert.AreEqual(75.0f, (float)placement.Size.Z, 0.0001f);
+
+            tool.Reset();
+            Assert.AreEqual(CSGBoxDrawStage.Hover, tool.Stage);
+            Assert.IsFalse(tool.SetNumericOverride(CSGBoxNumericDimension.Width, 0.0f));
         }
 
         private sealed class TestMode : EditorGizmoMode

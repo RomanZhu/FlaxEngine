@@ -51,6 +51,11 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
         public int SourceComponentIndex;
 
         /// <summary>
+        /// Whether this plane was derived from visible scene surface geometry.
+        /// </summary>
+        public bool IsSurfaceDerived;
+
+        /// <summary>
         /// Whether the plane is explicitly locked.
         /// </summary>
         public bool IsLocked;
@@ -75,6 +80,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
                 MajorLineInterval = Mathf.Max(majorLineInterval, 1),
                 SourceActorId = Guid.Empty,
                 SourceComponentIndex = -1,
+                IsSurfaceDerived = false,
                 IsValid = true,
             };
         }
@@ -110,6 +116,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
                    MajorLineInterval == other.MajorLineInterval &&
                    SourceActorId == other.SourceActorId &&
                    SourceComponentIndex == other.SourceComponentIndex &&
+                   IsSurfaceDerived == other.IsSurfaceDerived &&
                    IsLocked == other.IsLocked;
         }
     }
