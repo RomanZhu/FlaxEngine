@@ -13,9 +13,7 @@
 #include "./Flax/ShadowsCommon.hlsl"
 #include "./Flax/GBufferCommon.hlsl"
 #include "./Flax/LightingCommon.hlsl"
-#if SHADOWS_CSM_DITHERING
 #include "./Flax/Random.hlsl"
-#endif
 
 #if FEATURE_LEVEL >= FEATURE_LEVEL_SM5 || defined(WGSL)
 #define SAMPLE_SHADOW_MAP(shadowMap, shadowUV, sceneDepth) shadowMap.SampleCmpLevelZero(ShadowSamplerLinear, shadowUV, sceneDepth)
