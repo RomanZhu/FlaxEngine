@@ -299,6 +299,22 @@ API_ENUM() enum class PartitionMode
 };
 
 /// <summary>
+/// The transition mode used between the detailed directional-light cascades and the far shadow cascade.
+/// </summary>
+API_ENUM() enum class FarShadowTransitionMode
+{
+    /// <summary>
+    /// Samples both cascades and blends their results. Produces a smooth transition without temporal anti-aliasing at a small sampling cost within the transition band.
+    /// </summary>
+    Fade = 0,
+
+    /// <summary>
+    /// Selects one cascade per pixel using a dither pattern. Uses a single shadow sample but requires temporal anti-aliasing to hide the pattern over wide transitions.
+    /// </summary>
+    Dither = 1,
+};
+
+/// <summary>
 /// Identifies expected GPU resource use during rendering. The usage directly reflects whether a resource is accessible by the CPU and/or the GPU.	
 /// </summary>
 API_ENUM() enum class GPUResourceUsage

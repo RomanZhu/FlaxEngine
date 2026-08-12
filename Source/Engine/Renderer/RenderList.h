@@ -71,8 +71,11 @@ struct RenderDirectionalLightData : RenderLightData
     float Cascade2Spacing;
     float Cascade3Spacing;
     float Cascade4Spacing;
+    float FarShadowsDistance;
+    float FarShadowsTransitionDistance;
 
     PartitionMode PartitionMode;
+    FarShadowTransitionMode FarShadowsTransitionMode;
     int32 CascadeCount;
 
     RenderDirectionalLightData()

@@ -48,6 +48,9 @@ void DirectionalLight::Draw(RenderContext& renderContext)
         data.Cascade2Spacing = Cascade2Spacing;
         data.Cascade3Spacing = Cascade3Spacing;
         data.Cascade4Spacing = Cascade4Spacing;
+        data.FarShadowsDistance = FarShadowsDistance;
+        data.FarShadowsTransitionMode = FarShadowsTransitionMode;
+        data.FarShadowsTransitionDistance = FarShadowsTransitionDistance;
         data.PartitionMode = PartitionMode;
         data.ContactShadowsLength = ContactShadowsLength;
         data.StaticFlags = GetStaticFlags();
@@ -69,6 +72,9 @@ void DirectionalLight::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE(Cascade2Spacing);
     SERIALIZE(Cascade3Spacing);
     SERIALIZE(Cascade4Spacing);
+    SERIALIZE(FarShadowsDistance);
+    SERIALIZE(FarShadowsTransitionMode);
+    SERIALIZE(FarShadowsTransitionDistance);
     SERIALIZE(PartitionMode);
 }
 
@@ -82,6 +88,9 @@ void DirectionalLight::Deserialize(DeserializeStream& stream, ISerializeModifier
     DESERIALIZE(Cascade2Spacing);
     DESERIALIZE(Cascade3Spacing);
     DESERIALIZE(Cascade4Spacing);
+    DESERIALIZE(FarShadowsDistance);
+    DESERIALIZE(FarShadowsTransitionMode);
+    DESERIALIZE(FarShadowsTransitionDistance);
     DESERIALIZE(PartitionMode);
 }
 
