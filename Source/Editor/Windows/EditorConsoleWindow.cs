@@ -636,6 +636,7 @@ namespace FlaxEditor.Windows
         private bool _showLogType;
 
         private List<Entry> _entries = new List<Entry>(1024);
+        private readonly int[] _logTypeCounts = new int[3];
         private bool _isDirty;
         private int _logTypeShowMask = (int)LogType.Info | (int)LogType.Warning | (int)LogType.Error | (int)LogType.Fatal;
         private float _scrollSize = ScrollBar.DefaultSize;
@@ -714,6 +715,7 @@ namespace FlaxEditor.Windows
                 Location = new Float2(toolbarX, 2),
                 AutoCheck = true,
                 Checked = true,
+                Text = "0",
                 UseBlueCheckedStyle = true,
                 TooltipText = "Show info messages",
             };
@@ -726,6 +728,7 @@ namespace FlaxEditor.Windows
                 Location = new Float2(toolbarX, 2),
                 AutoCheck = true,
                 Checked = true,
+                Text = "0",
                 UseBlueCheckedStyle = true,
                 TooltipText = "Show warning messages",
             };
@@ -738,6 +741,7 @@ namespace FlaxEditor.Windows
                 Location = new Float2(toolbarX, 2),
                 AutoCheck = true,
                 Checked = true,
+                Text = "0",
                 UseBlueCheckedStyle = true,
                 TooltipText = "Show error and fatal messages",
             };
@@ -941,6 +945,8 @@ namespace FlaxEditor.Windows
         {
             var style = Style.Current;
             _clearOnPlayButton.Checked = options.Interface.DebugLogClearOnPlay;
+            _logTypeButtons[1].IconColor = options.Visual.LogWarningColor;
+            _logTypeButtons[2].IconColor = options.Visual.LogErrorColor;
             _output.BackgroundColor = style.Background;
             _output.BackgroundSelectedColor = style.Background;
             _output.BorderColor = Color.Transparent;
@@ -1198,6 +1204,20 @@ namespace FlaxEditor.Windows
         private void AddEntry(Entry entry, bool allowPause = true)
         {
             _entries.Add(entry);
+            switch (entry.Kind)
+            {
+            case EntryKind.Info:
+                _logTypeCounts[0]++;
+                break;
+            case EntryKind.Warning:
+                _logTypeCounts[1]++;
+                break;
+            case EntryKind.Error:
+            case EntryKind.Fatal:
+                _logTypeCounts[2]++;
+                break;
+            }
+            UpdateLogTypeCounts();
             _htmlLog.Append(entry.Time, entry.ThreadId, entry.Kind.ToString(), entry.Message, entry.StackTrace);
             _isDirty = true;
 
@@ -1222,7 +1242,25 @@ namespace FlaxEditor.Windows
         public void Clear()
         {
             _entries?.Clear();
+            Array.Clear(_logTypeCounts, 0, _logTypeCounts.Length);
+            UpdateLogTypeCounts();
             Refresh();
+        }
+
+        private void UpdateLogTypeCounts()
+        {
+            bool layoutChanged = false;
+            for (int i = 0; i < _logTypeButtons.Length; i++)
+            {
+                string text = Math.Min(_logTypeCounts[i], 999).ToString();
+                if (_logTypeButtons[i].Text == text)
+                    continue;
+                float previousWidth = _logTypeButtons[i].Width;
+                _logTypeButtons[i].Text = text;
+                layoutChanged |= !Mathf.NearEqual(previousWidth, _logTypeButtons[i].Width);
+            }
+            if (layoutChanged)
+                PerformLayout();
         }
 
         /// <inheritdoc />
