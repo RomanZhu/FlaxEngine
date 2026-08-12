@@ -185,6 +185,26 @@ namespace FlaxEditor.Modules
             return false;
         }
 
+        internal bool TryGetBinaryAssetStorageId(string path, out Guid storageId)
+        {
+            return !Editor.Internal_GetBinaryAssetStorageId(path, out storageId);
+        }
+
+        internal bool RepairBinaryAssetStorageId(string path, Guid currentId, Guid expectedId)
+        {
+            bool failed = true;
+            Editor.ContentDatabase.BeginAssetSave(path);
+            try
+            {
+                failed = Editor.Internal_RepairBinaryAssetStorageId(path, ref currentId, ref expectedId);
+            }
+            finally
+            {
+                Editor.ContentDatabase.EndAssetSave(path, !failed);
+            }
+            return !failed;
+        }
+
         /// <summary>
         /// Duplicates the asset file and changes it's ID.
         /// </summary>

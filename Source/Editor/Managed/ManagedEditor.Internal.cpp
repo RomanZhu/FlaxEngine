@@ -171,6 +171,40 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CloneAssetFile(MString* dstPathObj, MS
     return Content::CloneAssetFile(dstPath, srcPath, *dstId);
 }
 
+DEFINE_INTERNAL_CALL(bool) EditorInternal_GetBinaryAssetStorageId(MString* pathObj, Guid* resultId)
+{
+    String path;
+    MUtils::ToString(pathObj, path);
+    FileSystem::NormalizePath(path);
+
+    FlaxStorage::Entry entry;
+    if (ContentStorageManager::GetAssetEntry(path, entry))
+        return true;
+
+    *resultId = entry.ID;
+    return false;
+}
+
+DEFINE_INTERNAL_CALL(bool) EditorInternal_RepairBinaryAssetStorageId(MString* pathObj, Guid* currentId, Guid* expectedId)
+{
+    String path;
+    MUtils::ToString(pathObj, path);
+    FileSystem::NormalizePath(path);
+
+    auto storage = ContentStorageManager::GetStorage(path);
+    if (!storage || storage->IsReadOnly() || storage->GetEntriesCount() != 1)
+        return true;
+
+    FlaxStorage::Entry entry;
+    storage->GetEntry(0, entry);
+    if (entry.ID != *currentId || !expectedId->IsValid())
+        return true;
+    if (entry.ID == *expectedId)
+        return false;
+
+    return storage->ChangeAssetID(entry, *expectedId);
+}
+
 DEFINE_INTERNAL_CALL(bool) EditorInternal_CreateVisualScript(MString* outputPathObj, MString* baseTypenameObj)
 {
     String outputPath;
