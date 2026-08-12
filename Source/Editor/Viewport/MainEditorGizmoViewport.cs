@@ -446,9 +446,20 @@ namespace FlaxEditor.Viewport
                 _csgTransformGizmoGesture = false;
             }
             if (mode is CSGAuthoringGizmoMode)
+            {
                 _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, CSGAuthoringGizmoMode.ContextCacheValue);
-            else if (mode is TransformGizmoMode)
+
+                // CSG tools live in the viewport toolbar. Keep the Toolbox out of a stale
+                // Terrain/Foliage tab so selecting that tab later always fires its activation
+                // callback and gives the specialized gizmo ownership of the viewport.
+                var toolbox = _editor.Windows.ToolboxWin;
+                if (toolbox?.TabsControl != null && toolbox.Spawn != null && toolbox.TabsControl.SelectedTab != toolbox.Spawn)
+                    toolbox.TabsControl.SelectedTab = toolbox.Spawn;
+            }
+            else
+            {
                 _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, "Object");
+            }
             UpdateViewportToolStrip();
         }
 
