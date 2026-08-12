@@ -152,7 +152,7 @@ namespace FlaxEditor.Gizmo
         {
             _semanticTargets.Clear();
 
-            if (!_gizmoProjectionValid || !_isActive || !IsActive || SelectionCount == 0 || _activeMode == Mode.Select)
+            if (!_gizmoProjectionValid || !_isActive || !IsInteractionActive || SelectionCount == 0 || _activeMode == Mode.Select)
             {
                 _hasHoveredTarget = false;
                 _hoveredHandle = SemanticHandle.None;
@@ -181,7 +181,10 @@ namespace FlaxEditor.Gizmo
             AddPlaneSemanticTarget(Axis.XY);
             AddPlaneSemanticTarget(Axis.ZX);
             AddPlaneSemanticTarget(Axis.YZ);
-            AddCenterSemanticTarget();
+            // A camera-facing free-move center is unsuitable for grid-authored CSG.
+            // CSG keeps the axis and plane motors and provides its own XZ direct drag.
+            if (!IsConstrainedSupplementalTranslation)
+                AddCenterSemanticTarget();
         }
 
         private void AddTranslateScaleAxisTarget(Axis axis)

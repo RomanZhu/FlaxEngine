@@ -160,6 +160,18 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
         }
 
         /// <summary>
+        /// Freezes an explicitly captured plane. Used by thresholded interactions whose
+        /// hover plane may change between pointer-down and transaction start.
+        /// </summary>
+        public void Freeze(ref CSGWorkingPlane plane)
+        {
+            if (_isFrozen || !plane.IsValid)
+                return;
+            _frozenPlane = plane;
+            _isFrozen = true;
+        }
+
+        /// <summary>
         /// Releases a transaction-frozen plane.
         /// </summary>
         public void Unfreeze()

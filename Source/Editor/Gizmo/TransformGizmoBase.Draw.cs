@@ -744,7 +744,8 @@ namespace FlaxEditor.Gizmo
 
         private bool ShouldDrawTranslationDistance()
         {
-            return _isDrawingTranslationDistance &&
+            return !IsConstrainedSupplementalTranslation &&
+                   _isDrawingTranslationDistance &&
                    _activeMode == Mode.Translate &&
                    IsTranslateAxis(_activeAxis) &&
                    Owner.IsLeftMouseButtonDown &&
@@ -906,7 +907,7 @@ namespace FlaxEditor.Gizmo
 
         private void DrawVertexSnapPointHighlights(ref RenderContext renderContext, Mesh sphereMesh, sbyte sortOrder)
         {
-            if (!_isActive || !IsActive)
+            if (!_isActive || !IsInteractionActive)
                 return;
             if (_isVertexSnapTemporaryPivot)
                 return;
@@ -960,7 +961,7 @@ namespace FlaxEditor.Gizmo
 
         private void DrawVertexSnapEdgeHighlights()
         {
-            if (!_isActive || !IsActive || !Owner.SnapToVertex || _vertexSnapObject == null)
+            if (!_isActive || !IsInteractionActive || !Owner.SnapToVertex || _vertexSnapObject == null)
                 return;
 
             var features = Render2D.Features;
@@ -990,7 +991,7 @@ namespace FlaxEditor.Gizmo
         /// <inheritdoc />
         public override void Draw(ref RenderContext renderContext)
         {
-            if (!_isActive || !IsActive || !_gizmoProjectionValid)
+            if (!_isActive || !IsInteractionActive || !_gizmoProjectionValid)
                 return;
             if (!_modelCube || !_modelCube.IsLoaded)
                 return;

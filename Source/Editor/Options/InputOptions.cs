@@ -395,6 +395,10 @@ namespace FlaxEditor.Options
         [EditorDisplay("CSG Authoring", "Duplicate Modifier"), EditorOrder(1200)]
         public InputBinding CSGDuplicateModifier = new InputBinding(KeyboardKeys.None);
 
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Align to Surface Normal Modifier"), EditorOrder(1205)]
+        public InputBinding CSGAlignNormalModifier = new InputBinding(KeyboardKeys.None);
+
         [DefaultValue(typeof(InputBinding), "Return")]
         [EditorDisplay("CSG Authoring", "Commit Interaction"), EditorOrder(1210)]
         public InputBinding CSGCommit = new InputBinding(KeyboardKeys.Return);

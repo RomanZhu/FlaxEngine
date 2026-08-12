@@ -74,6 +74,8 @@ namespace FlaxEditor.Tests
             source.SetSnappingEnabled(false);
             source.SetSnapIncrement(25.0f);
             source.SetVisibility(CSGVisibility.SourceBrushes | CSGVisibility.HiddenBrushes);
+            source.SetRayPlacementAlignment(CSGRayPlacementAlignment.AlignSurfaceUp);
+            source.SetRayPlacementFront(CSGRayPlacementFront.Bottom);
 
             var restored = new CSGToolController();
             restored.ApplyState(source.CaptureState());
@@ -83,6 +85,8 @@ namespace FlaxEditor.Tests
             Assert.IsFalse(restored.SnappingEnabled);
             Assert.AreEqual(25.0f, restored.SnapIncrement);
             Assert.AreEqual(CSGVisibility.SourceBrushes | CSGVisibility.HiddenBrushes, restored.Visibility);
+            Assert.AreEqual(CSGRayPlacementAlignment.AlignSurfaceUp, restored.RayPlacementAlignment);
+            Assert.AreEqual(CSGRayPlacementFront.Bottom, restored.RayPlacementFront);
 
             var unavailable = source.CaptureState();
             unavailable.Tool = CSGTool.Clip;
@@ -242,6 +246,302 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestSelectToolUsesDpiScaledThresholdAndConsumesDuplicateOnce()
+        {
+            Assert.IsFalse(CSGSelectTool.HasExceededDragThreshold(Float2.Zero, new Float2(7.9f, 0.0f), 2.0f));
+            Assert.IsTrue(CSGSelectTool.HasExceededDragThreshold(Float2.Zero, new Float2(8.0f, 0.0f), 2.0f));
+
+            var plane = CSGWorkingPlane.World(10.0f);
+            var brush = new BoxBrush();
+            try
+            {
+                var tool = new CSGSelectTool();
+                Assert.IsTrue(tool.Arm(ref plane, Float2.Zero, Vector3.Zero, new[] { brush }));
+                Assert.IsFalse(tool.TryBeginDrag(new Float2(3.9f, 0.0f), 1.0f));
+                Assert.IsTrue(tool.TryBeginDrag(new Float2(4.0f, 0.0f), 1.0f));
+                Assert.IsTrue(tool.TryConsumeDuplicate(true));
+                Assert.IsFalse(tool.TryConsumeDuplicate(true));
+            }
+            finally
+            {
+                FlaxEngine.Object.Destroy(brush);
+            }
+        }
+
+        [Test]
+        public void TestSelectToolAppliesRigidPlaneDeltaAndPreservesOrientation()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            var firstRotation = Quaternion.Euler(10.0f, 20.0f, 30.0f);
+            var secondRotation = Quaternion.Euler(-15.0f, 35.0f, 5.0f);
+            var first = new Transform(new Vector3(10.0f, 20.0f, 30.0f), firstRotation, new Float3(1.0f, 2.0f, 3.0f));
+            var second = new Transform(new Vector3(-40.0f, 50.0f, 60.0f), secondRotation, new Float3(2.0f, 1.0f, 0.5f));
+            var delta = plane.Tangent * 25.0f + plane.Bitangent * -15.0f;
+
+            var movedFirst = CSGSelectTool.ApplyTranslation(first, delta);
+            var movedSecond = CSGSelectTool.ApplyTranslation(second, delta);
+
+            Assert.IsTrue(Vector3.NearEqual(first.Translation + delta, movedFirst.Translation));
+            Assert.IsTrue(Vector3.NearEqual(second.Translation + delta, movedSecond.Translation));
+            Assert.AreEqual(first.Orientation, movedFirst.Orientation);
+            Assert.AreEqual(second.Orientation, movedSecond.Orientation);
+            Assert.AreEqual(first.Scale, movedFirst.Scale);
+            Assert.AreEqual(second.Scale, movedSecond.Scale);
+            Assert.IsTrue(Vector3.NearEqual(second.Translation - first.Translation, movedSecond.Translation - movedFirst.Translation));
+        }
+
+        [Test]
+        public void TestSelectToolExplicitNormalAlignmentIsOptIn()
+        {
+            var initial = new Transform(Vector3.Zero, Quaternion.Euler(15.0f, 25.0f, 35.0f), new Float3(2.0f, 3.0f, 4.0f));
+            var normal = new Vector3(0.25f, 0.9f, -0.35f);
+            normal.Normalize();
+
+            var preserved = CSGSelectTool.ApplyTranslation(initial, Vector3.Zero);
+            var aligned = CSGSelectTool.AlignToNormal(initial, normal);
+            var pivot = new Vector3(10.0f, -20.0f, 30.0f);
+            var groupRotation = Quaternion.FindBetween(Vector3.Up, normal);
+            var rigid = CSGSelectTool.ApplyRigidTransform(initial, pivot, new Vector3(5.0f, 6.0f, 7.0f), groupRotation);
+
+            Assert.AreEqual(initial.Orientation, preserved.Orientation);
+            Assert.AreEqual(initial.Scale, aligned.Scale);
+            var alignedUp = Vector3.Transform(Vector3.Up, aligned.Orientation);
+            alignedUp.Normalize();
+            Assert.IsTrue(Vector3.NearEqual(normal, alignedUp));
+            Assert.IsTrue(Vector3.NearEqual(
+                pivot + Vector3.Transform(initial.Translation - pivot, groupRotation) + new Vector3(5.0f, 6.0f, 7.0f),
+                rigid.Translation));
+            Assert.AreEqual(initial.Scale, rigid.Scale);
+        }
+
+        [Test]
+        public void TestSelectToolSurfacePlacementAndPlanarRebaseDoNotJump()
+        {
+            var plane = CSGSelectTool.CreateHorizontalDragPlane(10.0f, new Vector3(999.0f, 25.0f, -999.0f));
+            Assert.AreEqual(Vector3.Up, plane.Normal);
+            Assert.AreEqual(Vector3.Right, plane.Tangent);
+            Assert.AreEqual(25.0f, (float)plane.Origin.Y, 0.0001f);
+            var brush = new BoxBrush
+            {
+                Transform = new Transform(new Vector3(10.0f, 25.0f, 30.0f)),
+                Size = new Vector3(20.0f),
+            };
+            try
+            {
+                var tool = new CSGSelectTool();
+                Assert.IsTrue(tool.Arm(ref plane, Float2.Zero, brush.Transform.Translation, new[] { brush }));
+                Assert.IsTrue(tool.TryBeginDrag(new Float2(CSGSelectTool.DragThreshold, 0.0f), 1.0f));
+
+                var surfaceTarget = new Vector3(50.0f, 80.0f, -20.0f);
+                Assert.IsTrue(tool.ApplySurfaceTarget(surfaceTarget, Vector3.Up, false));
+                Assert.IsTrue(Vector3.NearEqual(surfaceTarget + Vector3.Up * 10.0f, brush.Transform.Translation));
+
+                var planarPointer = new Vector3(50.0f, 25.0f, -20.0f);
+                Assert.IsTrue(tool.Rebase(ref plane, planarPointer));
+                Assert.IsTrue(Vector3.NearEqual(surfaceTarget + Vector3.Up * 10.0f, brush.Transform.Translation));
+                Assert.IsTrue(tool.ApplyTarget(new Vector3(65.0f, 25.0f, -5.0f)));
+                Assert.IsTrue(Vector3.NearEqual(new Vector3(65.0f, 90.0f, -5.0f), brush.Transform.Translation));
+            }
+            finally
+            {
+                FlaxEngine.Object.Destroy(brush);
+            }
+        }
+
+        [Test]
+        public void TestSelectToolSnapsGeometryDeltaInsteadOfGrabPoint()
+        {
+            var plane = CSGSelectTool.CreateHorizontalDragPlane(10.0f, new Vector3(37.0f, 20.0f, 43.0f));
+            var gridAlignedCorners = new[]
+            {
+                new Vector3(0.0f, 20.0f, 0.0f),
+                new Vector3(100.0f, 20.0f, 0.0f),
+                new Vector3(0.0f, 20.0f, 100.0f),
+                new Vector3(100.0f, 20.0f, 100.0f),
+            };
+
+            var snapped = CSGSelectTool.SnapDeltaToGrid(new Vector3(13.0f, 0.0f, 17.0f), gridAlignedCorners, 10.0f, ref plane);
+            Assert.IsTrue(Vector3.NearEqual(new Vector3(10.0f, 0.0f, 20.0f), snapped));
+            for (int i = 0; i < gridAlignedCorners.Length; i++)
+            {
+                var moved = gridAlignedCorners[i] + snapped;
+                Assert.AreEqual(0.0f, (float)moved.X % 10.0f, 0.0001f);
+                Assert.AreEqual(0.0f, (float)moved.Z % 10.0f, 0.0001f);
+            }
+
+            // A tiny drag stays put instead of snapping the arbitrary clicked point to a grid line.
+            snapped = CSGSelectTool.SnapDeltaToGrid(new Vector3(2.0f, 0.0f, 3.0f), gridAlignedCorners, 10.0f, ref plane);
+            Assert.IsTrue(Vector3.NearEqual(Vector3.Zero, snapped));
+        }
+
+        [Test]
+        public void TestSurfacePlacementSeatsAndSnapsBrushBoundsInsteadOfPivot()
+        {
+            var plane = CSGSelectTool.CreateHorizontalDragPlane(10.0f, new Vector3(5.0f, 50.0f, 5.0f));
+            var brush = new BoxBrush
+            {
+                Transform = new Transform(new Vector3(5.0f, 50.0f, 5.0f)),
+                Size = new Vector3(40.0f, 20.0f, 60.0f),
+            };
+            try
+            {
+                var tool = new CSGSelectTool();
+                Assert.IsTrue(tool.Arm(ref plane, Float2.Zero, brush.Transform.Translation, new[] { brush }));
+                Assert.IsTrue(tool.TryBeginDrag(new Float2(CSGSelectTool.DragThreshold, 0.0f), 1.0f));
+                Assert.IsTrue(tool.ApplySurfaceTarget(new Vector3(23.0f, 0.0f, 27.0f), Vector3.Up,
+                                                     CSGRayPlacementAlignment.KeepRotation, CSGRayPlacementFront.Top,
+                                                     true, 10.0f, Vector3.Up, Vector3.Forward));
+
+                var corners = new Vector3[8];
+                brush.OrientedBox.GetCorners(corners);
+                float minimumY = float.MaxValue;
+                for (int i = 0; i < corners.Length; i++)
+                {
+                    minimumY = Mathf.Min(minimumY, (float)corners[i].Y);
+                    Assert.AreEqual(0.0f, (float)corners[i].X % 10.0f, 0.0001f);
+                    Assert.AreEqual(0.0f, (float)corners[i].Z % 10.0f, 0.0001f);
+                }
+                Assert.AreEqual(0.0f, minimumY, 0.0001f);
+            }
+            finally
+            {
+                FlaxEngine.Object.Destroy(brush);
+            }
+        }
+
+        [Test]
+        public void TestSurfacePlacementFrontMapsChosenLocalSideToSurfaceNormal()
+        {
+            var normal = new Vector3(1.0f, 1.0f, 0.0f);
+            normal.Normalize();
+            var orientation = CSGSelectTool.CalculateSurfaceOrientation(normal, CSGRayPlacementAlignment.AlignToSurface,
+                                                                        CSGRayPlacementFront.Top, Vector3.Up, Vector3.Forward);
+            var placedTop = Vector3.Transform(Vector3.Up, orientation);
+            placedTop.Normalize();
+            Assert.IsTrue(Vector3.NearEqual(normal, placedTop));
+
+            orientation = CSGSelectTool.CalculateSurfaceOrientation(Vector3.Right, CSGRayPlacementAlignment.AlignSurfaceUp,
+                                                                    CSGRayPlacementFront.Front, Vector3.Up, Vector3.Forward);
+            var placedFront = Vector3.Transform(Vector3.Forward, orientation);
+            placedFront.Normalize();
+            Assert.IsTrue(Vector3.NearEqual(Vector3.Right, placedFront));
+            var placedUp = Vector3.Transform(Vector3.Up, orientation);
+            placedUp.Normalize();
+            Assert.IsTrue(Vector3.NearEqual(Vector3.Up, placedUp));
+        }
+
+        [Test]
+        public void TestBoxFaceEditKeepsOppositeFaceFixed()
+        {
+            var center = new Vector3(10.0f, 20.0f, 30.0f);
+            var size = new Vector3(100.0f, 200.0f, 300.0f);
+            Assert.IsTrue(CSGBoxFaceEditTool.TrySolve(center, size, 0, 50.0f, 0.001f, out var positiveCenter, out var positiveSize));
+            Assert.AreEqual(150.0f, (float)positiveSize.X, 0.0001f);
+            Assert.AreEqual(35.0f, (float)positiveCenter.X, 0.0001f);
+            Assert.AreEqual(-40.0f, (float)(positiveCenter.X - positiveSize.X * 0.5f), 0.0001f);
+
+            Assert.IsTrue(CSGBoxFaceEditTool.TrySolve(center, size, 1, 50.0f, 0.001f, out var negativeCenter, out var negativeSize));
+            Assert.AreEqual(150.0f, (float)negativeSize.X, 0.0001f);
+            Assert.AreEqual(-15.0f, (float)negativeCenter.X, 0.0001f);
+            Assert.AreEqual(60.0f, (float)(negativeCenter.X + negativeSize.X * 0.5f), 0.0001f);
+        }
+
+        [Test]
+        public void TestBoxCornerEditKeepsOppositeCornerFixed()
+        {
+            var center = new Vector3(10.0f, 20.0f, 30.0f);
+            var size = new Vector3(100.0f, 200.0f, 300.0f);
+            var opposite = center - size * 0.5f;
+            Assert.IsTrue(CSGBoxFaceEditTool.TrySolveCorner(center, size, 0, new Vector3(50.0f, 25.0f, 75.0f), 0.001f, out var newCenter, out var newSize));
+            Assert.AreEqual(new Vector3(150.0f, 225.0f, 375.0f), newSize);
+            Assert.IsTrue(Vector3.NearEqual(opposite, newCenter - newSize * 0.5f));
+        }
+
+        [Test]
+        public void TestBoxEdgeEditOffsetsTwoPlanesAndKeepsOppositeExtentsFixed()
+        {
+            var center = new Vector3(10.0f, 20.0f, 30.0f);
+            var size = new Vector3(100.0f, 200.0f, 300.0f);
+            CSGBoxFaceEditTool.GetEdgeSigns(0, out var signs, out int edgeAxis);
+            Assert.AreEqual(2, edgeAxis);
+            Assert.AreEqual(new Vector3(1.0f, 1.0f, 0.0f), signs);
+
+            var oppositeX = center.X - size.X * 0.5f;
+            var oppositeY = center.Y - size.Y * 0.5f;
+            Assert.IsTrue(CSGBoxFaceEditTool.TrySolveEdge(center, size, 0, new Vector3(40.0f, -25.0f, 999.0f), 0.001f, out var newCenter, out var newSize));
+            Assert.AreEqual(140.0f, (float)newSize.X, 0.0001f);
+            Assert.AreEqual(175.0f, (float)newSize.Y, 0.0001f);
+            Assert.AreEqual(300.0f, (float)newSize.Z, 0.0001f);
+            Assert.AreEqual((float)oppositeX, (float)(newCenter.X - newSize.X * 0.5f), 0.0001f);
+            Assert.AreEqual((float)oppositeY, (float)(newCenter.Y - newSize.Y * 0.5f), 0.0001f);
+        }
+
+        [Test]
+        public void TestBoxComponentNodesOffsetGeometryWithoutChangingActorScale()
+        {
+            var actor = new BoxBrush
+            {
+                Center = new Vector3(10.0f, 20.0f, 30.0f),
+                Size = new Vector3(100.0f, 200.0f, 300.0f),
+                Transform = new Transform(new Vector3(1000.0f, 2000.0f, 3000.0f), Quaternion.Euler(10.0f, 25.0f, 5.0f), new Float3(2.0f, 3.0f, 4.0f)),
+            };
+            var brush = new BoxBrushNode(actor);
+            try
+            {
+                var initialScale = actor.Transform.Scale;
+                var positiveFace = (BoxBrushNode.SideLinkNode)brush.ChildNodes[0];
+                var faceTarget = positiveFace.Transform;
+                faceTarget.Translation += actor.Transform.LocalToWorldVector(Vector3.Right * 50.0f);
+                positiveFace.Transform = faceTarget;
+                Assert.AreEqual(initialScale, actor.Transform.Scale);
+                Assert.AreEqual(150.0f, (float)actor.Size.X, 0.0001f);
+                Assert.AreEqual(-40.0f, (float)(actor.Center.X - actor.Size.X * 0.5f), 0.0001f);
+
+                var edge = (BoxBrushNode.EdgeLinkNode)brush.ChildNodes[6];
+                var edgeTarget = edge.Transform;
+                edgeTarget.Translation += actor.Transform.LocalToWorldVector(new Vector3(25.0f, 40.0f, 90.0f));
+                edge.Transform = edgeTarget;
+                Assert.AreEqual(initialScale, actor.Transform.Scale);
+                Assert.AreEqual(175.0f, (float)actor.Size.X, 0.0001f);
+                Assert.AreEqual(240.0f, (float)actor.Size.Y, 0.0001f);
+                Assert.AreEqual(300.0f, (float)actor.Size.Z, 0.0001f);
+
+                var vertex = (BoxBrushNode.VertexLinkNode)brush.ChildNodes[18];
+                var vertexTarget = vertex.Transform;
+                vertexTarget.Translation += actor.Transform.LocalToWorldVector(new Vector3(10.0f, 20.0f, 30.0f));
+                vertex.Transform = vertexTarget;
+                Assert.AreEqual(initialScale, actor.Transform.Scale);
+                Assert.AreEqual(185.0f, (float)actor.Size.X, 0.0001f);
+                Assert.AreEqual(260.0f, (float)actor.Size.Y, 0.0001f);
+                Assert.AreEqual(330.0f, (float)actor.Size.Z, 0.0001f);
+            }
+            finally
+            {
+                brush.Dispose();
+                FlaxEngine.Object.Destroy(actor);
+            }
+        }
+
+        [Test]
+        public void TestCSGSnapProviderExcludesMovingBrushAndItsFaceSelection()
+        {
+            var actor = new BoxBrush();
+            var brush = new BoxBrushNode(actor);
+            try
+            {
+                var face = brush.ChildNodes[0];
+                Assert.IsFalse(CSGSnapProviders.IsExcluded(brush, null));
+                Assert.IsTrue(CSGSnapProviders.IsExcluded(brush, new SceneGraphNode[] { brush }));
+                Assert.IsTrue(CSGSnapProviders.IsExcluded(brush, new[] { face }));
+            }
+            finally
+            {
+                brush.Dispose();
+                FlaxEngine.Object.Destroy(actor);
+            }
+        }
+
+        [Test]
         public void TestAllHitTraversalAppendsEveryHitAndPreservesNearestHit()
         {
             var root = new TestRayNode(Guid.NewGuid(), 5.0f);
@@ -329,6 +629,7 @@ namespace FlaxEditor.Tests
 
             Assert.IsTrue(CSGHitTestService.IsSelectable(CSGTool.SelectPlace, ref brush));
             Assert.IsFalse(CSGHitTestService.IsSelectable(CSGTool.SelectPlace, ref face));
+            Assert.IsTrue(CSGHitTestService.IsSelectable(CSGTool.Edit, ref brush));
             Assert.IsTrue(CSGHitTestService.IsSelectable(CSGTool.Edit, ref face));
             Assert.IsTrue(CSGHitTestService.IsSelectable(CSGTool.Surface, ref face));
             Assert.IsFalse(CSGHitTestService.IsSelectable(CSGTool.Edit, ref placement));
@@ -396,6 +697,22 @@ namespace FlaxEditor.Tests
             Assert.IsTrue(Vector3.NearEqual(frozen.Origin, service.ActivePlane.Origin));
             Assert.AreEqual(25.0f, service.ActivePlane.Spacing);
             service.Unfreeze();
+        }
+
+        [Test]
+        public void TestWorkingPlaneCanFreezeCapturedThresholdAnchorPlane()
+        {
+            var service = new CSGWorkingPlaneService();
+            service.Reset(10.0f);
+            var captured = CSGWorkingPlane.World(25.0f);
+            captured.Origin = new Vector3(0.0f, 125.0f, 0.0f);
+
+            service.Freeze(ref captured);
+            var frozen = service.ActivePlane;
+            Assert.IsTrue(captured.NearlyEquals(ref frozen));
+
+            service.Unfreeze();
+            Assert.IsFalse(service.IsFrozen);
         }
 
         [Test]
@@ -564,6 +881,61 @@ namespace FlaxEditor.Tests
             tool.Reset();
             Assert.AreEqual(CSGBoxDrawStage.Hover, tool.Stage);
             Assert.IsFalse(tool.SetNumericOverride(CSGBoxNumericDimension.Width, 0.0f));
+        }
+
+        [Test]
+        public void TestBoxDrawAdjustmentStageKeepsOppositeCornerAndSupportsEitherHeightDirection()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            var tool = new CSGBoxDrawTool();
+            Assert.IsTrue(tool.Begin(ref plane, Vector3.Zero, false, false, false));
+            tool.UpdateFootprint(plane.ToWorld(new Float2(40.0f, 30.0f)));
+            Assert.IsTrue(tool.CompleteFootprint());
+            Assert.IsFalse(tool.TryGetPlacement(out _));
+            Assert.IsTrue(tool.TryGetAdjustmentFrame(out _, out var zeroOrigin, out var zeroPositiveTip, out var zeroNegativeTip,
+                                                     out _, out _, out _, out _));
+            Assert.AreEqual(10.0f, (float)Vector3.Dot(zeroPositiveTip - zeroOrigin, plane.Normal), 0.0001f);
+            Assert.AreEqual(-10.0f, (float)Vector3.Dot(zeroNegativeTip - zeroOrigin, plane.Normal), 0.0001f);
+            Assert.IsTrue(tool.BeginFootprintAdjustment(2));
+            Assert.IsTrue(tool.UpdateFootprintAdjustment(plane.ToWorld(new Float2(60.0f, 50.0f))));
+            Assert.IsTrue(tool.SetHeightDirection(-1));
+            Assert.IsTrue(tool.TryGetPlacement(out var placement));
+            Assert.AreEqual(60.0f, (float)placement.Size.X, 0.0001f);
+            Assert.AreEqual(50.0f, (float)placement.Size.Z, 0.0001f);
+            Assert.Less(Vector3.Dot(placement.Center, plane.Normal), 0.0f);
+
+            Assert.IsTrue(tool.SetHeightDirection(1));
+            Assert.IsTrue(tool.TryGetPlacement(out placement));
+            Assert.Greater(Vector3.Dot(placement.Center, plane.Normal), 0.0f);
+            Assert.AreEqual(CSGBoxDrawStage.Height, tool.Stage);
+
+            Assert.IsTrue(tool.SetNumericOverride(CSGBoxNumericDimension.Height, 250.0f));
+            Assert.IsTrue(tool.TryGetAdjustmentFrame(out _, out var origin, out var positiveTip, out var negativeTip,
+                                                     out _, out _, out _, out _));
+            Assert.AreEqual(260.0f, (float)Vector3.Dot(positiveTip - origin, plane.Normal), 0.0001f);
+            Assert.AreEqual(-10.0f, (float)Vector3.Dot(negativeTip - origin, plane.Normal), 0.0001f);
+        }
+
+        [Test]
+        public void TestBoxHeightHandleGrabPreservesHeightUntilPointerMoves()
+        {
+            var plane = CSGWorkingPlane.World(10.0f);
+            var tool = new CSGBoxDrawTool();
+            Assert.IsTrue(tool.Begin(ref plane, plane.ToWorld(new Float2(-20.0f, -15.0f)), false, false, false));
+            tool.UpdateFootprint(plane.ToWorld(new Float2(20.0f, 15.0f)));
+            Assert.IsTrue(tool.CompleteFootprint());
+
+            var direction = new Vector3(0.0f, 15.0f, 10.0f);
+            direction.Normalize();
+            var ray = new Ray(new Vector3(0.0f, 10.0f, -10.0f), direction);
+            var viewDirection = new Vector3(0.0f, -1.0f, 1.0f);
+            viewDirection.Normalize();
+
+            Assert.IsTrue(tool.BeginHeightAdjustment(-1, ref ray, viewDirection));
+            Assert.IsTrue(tool.UpdateHeight(ref ray, viewDirection, false, plane.Spacing));
+            Assert.IsTrue(tool.TryGetPlacement(out var placement));
+            Assert.AreEqual(-10.0f, placement.SignedHeight, 0.0001f);
+            tool.EndHeightAdjustment();
         }
 
         private sealed class TestMode : EditorGizmoMode

@@ -70,6 +70,39 @@ namespace FlaxEditor.Gizmo
         private Vector3 _scaleDelta;
         private float _screenScale;
 
+        /// <summary>
+        /// Allows the transform gizmo to remain interactive as a supplemental manipulator
+        /// while another authoring gizmo owns viewport selection and overlays.
+        /// </summary>
+        internal bool SupplementalActive
+        {
+            get => _supplementalActive;
+            set
+            {
+                if (_supplementalActive == value)
+                    return;
+                _supplementalActive = value;
+                if (value)
+                    EndVertexSnapping();
+            }
+        }
+
+        private bool _supplementalActive;
+
+        /// <summary>
+        /// Enables authoring-mode translation snapping without changing the user's regular transform-gizmo settings.
+        /// </summary>
+        internal bool SupplementalTranslationSnapEnabled { get; set; }
+
+        /// <summary>
+        /// Gets or sets the authoring-mode translation grid size in world units.
+        /// </summary>
+        internal float SupplementalTranslationSnapValue { get; set; }
+
+        private bool IsInteractionActive => IsActive || SupplementalActive;
+
+        private bool IsConstrainedSupplementalTranslation => SupplementalActive && _activeMode == Mode.Translate;
+
         private Vector3 _tDelta;
         private Vector3 _translationDelta;
         private Vector3 _translationScaleSnapDelta;
@@ -668,10 +701,16 @@ namespace FlaxEditor.Gizmo
 
         private Vector3 SnapTranslationTotal(Vector3 desired, TransactionOrigin origin)
         {
-            if (!TranslationSnapEnable && !Owner.UseSnapping)
+            bool useSupplementalGrid = IsConstrainedSupplementalTranslation && SupplementalTranslationSnapEnabled;
+            if (!useSupplementalGrid && !TranslationSnapEnable && !Owner.UseSnapping)
                 return desired;
-            Vector3 step = GetLinearSnapStep(origin);
-            return SnapTranslationToGrid(desired, origin.PivotPosition, origin.InitialBasis, origin.InitialTransformSpace, _activeAxis, step, AbsoluteSnapEnabled);
+            Vector3 step = useSupplementalGrid
+                ? new Vector3(Mathf.Abs(SupplementalTranslationSnapValue))
+                : GetLinearSnapStep(origin);
+            // CSG brushes are grid-authored geometry. Snap their movement delta rather than
+            // snapping the selection-center pivot, which may legitimately sit on a half-cell.
+            bool absolute = useSupplementalGrid ? false : AbsoluteSnapEnabled;
+            return SnapTranslationToGrid(desired, origin.PivotPosition, origin.InitialBasis, origin.InitialTransformSpace, _activeAxis, step, absolute);
         }
 
         private void UpdateScaleFromAnchor()
@@ -1379,7 +1418,7 @@ namespace FlaxEditor.Gizmo
             bool isLeftMouseButtonPressed = isLeftBtnDown && !wasLeftBtnDown;
             bool isLeftMouseButtonReleased = !isLeftBtnDown && wasLeftBtnDown;
             _wasLeftMouseButtonDown = isLeftBtnDown;
-            if (!IsActive)
+            if (!IsInteractionActive)
             {
                 if (HasActiveTransaction || _isTransforming)
                     CancelTransforming();
@@ -1433,7 +1472,10 @@ namespace FlaxEditor.Gizmo
                 ResetSolverAnchorState();
             }
 
-            bool snapToVertex = Owner.SnapToVertex;
+            // CSG exposes explicit face, edge and vertex components. The generic temporary
+            // vertex pivot turns those edits back into a camera-plane free move and can pull
+            // an otherwise grid-aligned brush off-grid.
+            bool snapToVertex = Owner.SnapToVertex && !IsConstrainedSupplementalTranslation;
             bool snapToVertexPressed = snapToVertex && !_wasSnapToVertex;
             _wasSnapToVertex = snapToVertex;
             bool cancelVertexSnapPivot = (snapToVertexPressed && _isVertexSnapTemporaryPivot) ||

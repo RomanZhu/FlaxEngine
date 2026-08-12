@@ -75,12 +75,14 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayCSGClipButton;
         private ToolStripButton _overlayCSGOperationButton;
         private ToolStripButton _overlayCSGPlaneButton;
+        private ToolStripButton _overlayCSGPlacementButton;
         private ToolStripButton _overlayCSGSnapButton;
         private ToolStripButton _overlayCSGSnapValueButton;
         private ToolStripButton _overlayCSGVisibilityButton;
         private SelectionOutline _customSelectionOutline;
         private bool _middleMouseRecenterCandidate;
         private bool _suppressNextSelectionPick;
+        private bool _csgTransformGizmoGesture;
 
         /// <summary>
         /// The editor sprites rendering effect.
@@ -541,6 +543,10 @@ namespace FlaxEditor.Viewport
             _overlayCSGPlaneButton.DrawDropdownFrame = true;
             _overlayCSGPlaneButton.DrawMenuChevron = true;
             _overlayCSGPlaneButton.LinkTooltip("Pick, lock, or reset the CSG working plane.");
+            _overlayCSGPlacementButton = AddViewportToolStripMenuButton("Place", SpriteHandle.Invalid, CreateCSGPlacementMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Placement.Left");
+            _overlayCSGPlacementButton.DrawDropdownFrame = true;
+            _overlayCSGPlacementButton.DrawMenuChevron = true;
+            _overlayCSGPlacementButton.LinkTooltip("Configure Shift-drag surface placement alignment and brush front.");
             _overlayCSGSnapButton = AddViewportToolStripButton("Snap", _editor.Icons.Grid32, ToolStripAnchor.Left, "Flax.Scene.CSG.Snap.Left", () => CSGAuthoringMode.Controller.SetSnappingEnabled(!CSGAuthoringMode.Controller.SnappingEnabled));
             _overlayCSGSnapButton.DrawDropdownFrame = true;
             _overlayCSGSnapButton.LinkTooltip("Toggle CSG grid snapping.");
@@ -985,23 +991,50 @@ namespace FlaxEditor.Viewport
                 var xrayColor = color;
                 xrayColor.A *= 0.2f;
 
-                if (subtractive)
-                {
-                    DrawDashedCSGWireBox(brush.OrientedBox, xrayColor, false);
-                    DrawDashedCSGWireBox(brush.OrientedBox, color, true);
-                }
-                else
-                {
-                    DebugDraw.DrawWireBox(brush.OrientedBox, xrayColor, 0.0f, false);
-                    DebugDraw.DrawWireBox(brush.OrientedBox, color, 0.0f, true);
-                }
+                DrawDashedCSGWireBox(brush.OrientedBox, xrayColor, false);
+                DebugDraw.DrawWireBox(brush.OrientedBox, color, 0.0f, true);
                 if (selected)
                     DebugDraw.DrawBox(brush.OrientedBox, new Color(1.0f, 0.68f, 0.08f, 0.5f), 0.0f, true);
                 else if (hovered)
                     DebugDraw.DrawBox(brush.OrientedBox, new Color(color.R, color.G, color.B, 0.22f), 0.0f, true);
                 if (hovered || selected)
+                {
+                    DrawDashedCSGWireBox(brush.OrientedBox, new Color(1.0f, 1.0f, 1.0f, 0.22f), false);
                     DebugDraw.DrawWireBox(brush.OrientedBox, Color.White, 0.0f, true);
+                }
             }
+        }
+
+        private ContextMenu CreateCSGPlacementMenu()
+        {
+            var menu = new ContextMenu();
+            var placementMenu = menu.AddChildMenu("Placement").ContextMenu;
+            var alignToSurface = placementMenu.AddButton("Align to Surface", () => CSGAuthoringMode.Controller.SetRayPlacementAlignment(CSGRayPlacementAlignment.AlignToSurface));
+            var alignSurfaceUp = placementMenu.AddButton("Always Face Up", () => CSGAuthoringMode.Controller.SetRayPlacementAlignment(CSGRayPlacementAlignment.AlignSurfaceUp));
+            var keepRotation = placementMenu.AddButton("Keep Rotation", () => CSGAuthoringMode.Controller.SetRayPlacementAlignment(CSGRayPlacementAlignment.KeepRotation));
+
+            var frontMenu = menu.AddChildMenu("Front").ContextMenu;
+            var fronts = new List<ContextMenuButton>();
+            foreach (CSGRayPlacementFront front in Enum.GetValues(typeof(CSGRayPlacementFront)))
+            {
+                var value = front;
+                var button = frontMenu.AddButton(value.ToString(), () => CSGAuthoringMode.Controller.SetRayPlacementFront(value));
+                button.Tag = value;
+                fronts.Add(button);
+            }
+
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                var controller = CSGAuthoringMode.Controller;
+                alignToSurface.Checked = controller.RayPlacementAlignment == CSGRayPlacementAlignment.AlignToSurface;
+                alignSurfaceUp.Checked = controller.RayPlacementAlignment == CSGRayPlacementAlignment.AlignSurfaceUp;
+                keepRotation.Checked = controller.RayPlacementAlignment == CSGRayPlacementAlignment.KeepRotation;
+                foreach (var button in fronts)
+                    button.Checked = (CSGRayPlacementFront)button.Tag == controller.RayPlacementFront;
+            };
+            return menu;
         }
 
         private void DrawDashedCSGWireBox(OrientedBoundingBox box, Color color, bool depthTest)
@@ -1052,10 +1085,15 @@ namespace FlaxEditor.Viewport
                 }
             }
 
-            // Draw selected objects debug shapes and visuals
-            if (DrawDebugDraw && (renderContext.View.Flags & ViewFlags.DebugDraw) == ViewFlags.DebugDraw)
-            {
+            // CSG authoring feedback is an essential part of the active tool, not optional scene
+            // diagnostics. Keep its grid, cursor, handles, source outlines, and selection bounds
+            // visible even when the viewport's generic Debug Draw view flag is disabled.
+            bool drawSceneDebug = DrawDebugDraw && (renderContext.View.Flags & ViewFlags.DebugDraw) == ViewFlags.DebugDraw;
+            bool drawCSGAuthoring = Gizmos.ActiveMode is CSGAuthoringGizmoMode && CSGAuthoringMode.Gizmo.Visible;
+            if (drawSceneDebug)
                 _debugDrawData.DrawActors(true);
+            if (drawSceneDebug || drawCSGAuthoring)
+            {
                 DebugDraw.Draw(ref renderContext, target.View(), targetDepth.View(), true);
             }
         }
@@ -1188,6 +1226,7 @@ namespace FlaxEditor.Viewport
 
             TransformGizmo.Visible = !_gameViewActive;
             CSGAuthoringMode.Gizmo.Visible = !_gameViewActive;
+            CSGAuthoringMode.Gizmo.RefreshSupplementalTransformGizmo();
             SelectionOutline.ShowSelectionOutline = !_gameViewActive;
             if (_gameViewActive)
                 ClearSceneTreeHoverFromEditorViewport();
@@ -1203,6 +1242,10 @@ namespace FlaxEditor.Viewport
             SetViewportToolStripButtonText(_overlayModeButton, GetGizmoModeLabel());
             bool objectMode = Gizmos.ActiveMode is TransformGizmoMode;
             bool csgMode = Gizmos.ActiveMode is CSGAuthoringGizmoMode;
+            bool csgSelect = csgMode && CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace;
+            bool csgEdit = csgMode && CSGAuthoringMode.Controller.Tool == CSGTool.Edit;
+            bool showTransformTools = objectMode || csgSelect || csgEdit;
+            bool showFullTransformTools = objectMode || csgSelect;
             if (_overlaySelectModeButton != null)
             {
                 _overlaySelectModeButton.Visible = objectMode;
@@ -1210,64 +1253,64 @@ namespace FlaxEditor.Viewport
             }
             if (_overlayTranslateModeButton != null)
             {
-                _overlayTranslateModeButton.Visible = objectMode;
+                _overlayTranslateModeButton.Visible = showTransformTools;
                 _overlayTranslateModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Translate;
             }
             if (_overlayRotateModeButton != null)
             {
-                _overlayRotateModeButton.Visible = objectMode;
+                _overlayRotateModeButton.Visible = showFullTransformTools;
                 _overlayRotateModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Rotate;
             }
             if (_overlayScaleModeButton != null)
             {
-                _overlayScaleModeButton.Visible = objectMode;
+                _overlayScaleModeButton.Visible = showFullTransformTools;
                 _overlayScaleModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Scale;
             }
             if (_overlayBoundsModeButton != null)
             {
-                _overlayBoundsModeButton.Visible = objectMode;
+                _overlayBoundsModeButton.Visible = showFullTransformTools;
                 _overlayBoundsModeButton.Checked = TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Bounds;
             }
             if (_overlayTransformSpaceButton != null)
             {
-                _overlayTransformSpaceButton.Visible = objectMode;
+                _overlayTransformSpaceButton.Visible = showTransformTools;
                 var isWorld = TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
                 _overlayTransformSpaceButton.Checked = isWorld;
                 SetViewportToolStripButtonText(_overlayTransformSpaceButton, isWorld ? "World" : "Local");
             }
             if (_overlayPivotButton != null)
             {
-                _overlayPivotButton.Visible = objectMode;
+                _overlayPivotButton.Visible = showFullTransformTools;
                 var isObjectPivot = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
                 _overlayPivotButton.Checked = isObjectPivot;
                 SetViewportToolStripButtonText(_overlayPivotButton, isObjectPivot ? "Pivot" : "Center");
             }
             if (_overlayAbsoluteSnapButton != null)
             {
-                _overlayAbsoluteSnapButton.Visible = objectMode && TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
+                _overlayAbsoluteSnapButton.Visible = showTransformTools && TransformGizmo.ActiveTransformSpace == TransformGizmoBase.TransformSpace.World;
                 _overlayAbsoluteSnapButton.Checked = TransformGizmo.AbsoluteSnapEnabled;
             }
             if (_overlayTranslateSnapButton != null)
             {
-                _overlayTranslateSnapButton.Visible = objectMode;
+                _overlayTranslateSnapButton.Visible = showTransformTools;
                 _overlayTranslateSnapButton.Checked = TransformGizmo.TranslationSnapEnable;
             }
             if (_overlayRotateSnapButton != null)
             {
-                _overlayRotateSnapButton.Visible = objectMode;
+                _overlayRotateSnapButton.Visible = showFullTransformTools;
                 _overlayRotateSnapButton.Checked = TransformGizmo.RotationSnapEnabled;
             }
             if (_overlayScaleSnapButton != null)
             {
-                _overlayScaleSnapButton.Visible = objectMode;
+                _overlayScaleSnapButton.Visible = showFullTransformTools;
                 _overlayScaleSnapButton.Checked = TransformGizmo.ScaleSnapEnabled;
             }
             if (_overlayTranslateSnapValueButton != null)
-                _overlayTranslateSnapValueButton.Visible = objectMode;
+                _overlayTranslateSnapValueButton.Visible = showTransformTools;
             if (_overlayRotateSnapValueButton != null)
-                _overlayRotateSnapValueButton.Visible = objectMode;
+                _overlayRotateSnapValueButton.Visible = showFullTransformTools;
             if (_overlayScaleSnapValueButton != null)
-                _overlayScaleSnapValueButton.Visible = objectMode;
+                _overlayScaleSnapValueButton.Visible = showFullTransformTools;
             SetViewportToolStripButtonText(_overlayTranslateSnapValueButton, GetTranslateSnapLabel());
             SetViewportToolStripButtonText(_overlayRotateSnapValueButton, GetRotateSnapLabel());
             SetViewportToolStripButtonText(_overlayScaleSnapValueButton, GetScaleSnapLabel());
@@ -1310,6 +1353,11 @@ namespace FlaxEditor.Viewport
                 _overlayCSGPlaneButton.Enabled = csgMode;
                 _overlayCSGPlaneButton.Checked = CSGAuthoringMode.Controller.WorkingPlaneLocked;
                 SetViewportToolStripButtonText(_overlayCSGPlaneButton, CSGAuthoringMode.Controller.WorkingPlaneLocked ? "Plane Lock" : "Plane");
+            }
+            if (_overlayCSGPlacementButton != null)
+            {
+                _overlayCSGPlacementButton.Visible = csgMode;
+                _overlayCSGPlacementButton.Enabled = csgMode;
             }
             if (_overlayCSGSnapButton != null)
             {
@@ -1688,6 +1736,20 @@ namespace FlaxEditor.Viewport
         protected override void OnLeftMouseButtonDown()
         {
             base.OnLeftMouseButtonDown();
+            _csgTransformGizmoGesture = false;
+            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode &&
+                (CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace || CSGAuthoringMode.Controller.Tool == CSGTool.Edit) &&
+                TransformGizmo.ActiveMode != TransformGizmoBase.Mode.Select &&
+                TransformGizmo.HoveredHandle.IsValid)
+            {
+                // The supplemental transform gizmo, rather than the active CSG mode object, owns
+                // this complete pointer gesture. Preserve that ownership until mouse-up so the
+                // viewport cannot pick through the handle before TransformGizmo commits its preview.
+                _csgTransformGizmoGesture = true;
+                TransformGizmo.ResetSelectionReleaseSuppression();
+                _rubberBandSelector.StopRubberBand();
+                return;
+            }
             if (Gizmos.ActiveMode?.OnMouseDown(_viewMousePos, MouseButton.Left) == true)
             {
                 _rubberBandSelector.StopRubberBand();
@@ -1705,8 +1767,32 @@ namespace FlaxEditor.Viewport
         /// <inheritdoc />
         protected override void OnLeftMouseButtonUp()
         {
+            // A CSG component drag owns the whole pointer gesture. The supplemental transform
+            // gizmo can arm its selection-release guard when the component selection changes on
+            // mouse-down. Do not let that guard swallow this release: CSG must commit the preview
+            // before the normal viewport pick can select the brush currently under the cursor.
+            bool csgOwnsRelease = Gizmos.ActiveMode is CSGAuthoringGizmoMode &&
+                                  (CSGAuthoringMode.Gizmo.HasActiveDirectBrushMutation || CSGAuthoringMode.Gizmo.HasArmedSelectDrag);
+            // Honor capture even if a shortcut changed the active mode during the drag.
+            bool csgTransformOwnsRelease = _csgTransformGizmoGesture;
+            _csgTransformGizmoGesture = false;
+            if (csgTransformOwnsRelease)
+            {
+                TransformGizmo.ResetSelectionReleaseSuppression();
+                _rubberBandSelector.ReleaseRubberBandSelection();
+                Focus();
+                base.OnLeftMouseButtonUp();
+                return;
+            }
+            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode && !csgOwnsRelease && TransformGizmo.ConsumeSelectionRelease())
+            {
+                base.OnLeftMouseButtonUp();
+                return;
+            }
             if (Gizmos.ActiveMode?.OnMouseUp(_viewMousePos, MouseButton.Left) == true)
             {
+                if (csgOwnsRelease)
+                    TransformGizmo.ResetSelectionReleaseSuppression();
                 _rubberBandSelector.ReleaseRubberBandSelection();
                 Focus();
                 base.OnLeftMouseButtonUp();

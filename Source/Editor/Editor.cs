@@ -1634,8 +1634,12 @@ namespace FlaxEditor
             // generated model for each preview causes visible asset reload flicker and
             // wastes most of the CSG work. TransformGizmo requests one final rebuild
             // for every affected scene when its transaction commits.
-            var transformGizmo = Windows?.EditWin?.Viewport?.TransformGizmo;
-            return StateMachine.CurrentState.CanEditScene && (transformGizmo == null || !transformGizmo.HasActiveCSGTransaction);
+            var viewport = Windows?.EditWin?.Viewport;
+            var transformGizmo = viewport?.TransformGizmo;
+            var csgAuthoringGizmo = viewport?.CSGAuthoringMode?.Gizmo;
+            return StateMachine.CurrentState.CanEditScene &&
+                   (transformGizmo == null || !transformGizmo.HasActiveCSGTransaction) &&
+                   (csgAuthoringGizmo == null || !csgAuthoringGizmo.HasActiveDirectBrushMutation);
         }
 
         internal bool Internal_CanAutoBuildNavMesh()

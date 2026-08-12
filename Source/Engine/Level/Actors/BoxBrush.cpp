@@ -50,7 +50,18 @@ Array<BrushSurface> BoxBrush::GetSurfaces() const
 void BoxBrush::SetSurfaces(const Array<BrushSurface>& value)
 {
     CHECK(value.Count() == ARRAY_COUNT(Surfaces));
-    Platform::MemoryCopy(Surfaces, value.Get(), sizeof(Surfaces));
+    for (int32 i = 0; i < ARRAY_COUNT(Surfaces); i++)
+    {
+        auto& destination = Surfaces[i];
+        const auto& source = value[i];
+        destination.Brush = this;
+        destination.Index = i;
+        destination.Material = source.Material;
+        destination.TexCoordScale = source.TexCoordScale;
+        destination.TexCoordOffset = source.TexCoordOffset;
+        destination.TexCoordRotation = source.TexCoordRotation;
+        destination.ScaleInLightmap = source.ScaleInLightmap;
+    }
     OnBrushModified();
 }
 
@@ -231,9 +242,41 @@ bool BoxBrush::IntersectsItself(const Ray& ray, Real& distance, Vector3& normal)
 
 #include "Engine/Debug/DebugDraw.h"
 
+namespace
+{
+    void DrawSelectedBrushXRay(const OrientedBoundingBox& box)
+    {
+        static const int32 edges[] =
+        {
+            0, 1, 1, 2, 2, 3, 3, 0,
+            4, 5, 5, 6, 6, 7, 7, 4,
+            0, 4, 1, 5, 2, 6, 3, 7,
+        };
+        constexpr int32 dashCount = 8;
+        constexpr float dashFraction = 0.55f;
+        Vector3 corners[8];
+        box.GetCorners(corners);
+        const Color color(1.0f, 1.0f, 0.0f, 0.22f);
+        for (int32 edgeIndex = 0; edgeIndex < ARRAY_COUNT(edges); edgeIndex += 2)
+        {
+            const Vector3 start = corners[edges[edgeIndex]];
+            const Vector3 edge = corners[edges[edgeIndex + 1]] - start;
+            for (int32 dash = 0; dash < dashCount; dash++)
+            {
+                const float from = static_cast<float>(dash) / dashCount;
+                const float to = (dash + dashFraction) / dashCount;
+                DEBUG_DRAW_LINE(start + edge * from, start + edge * to, color, 0, false);
+            }
+        }
+    }
+}
+
 void BoxBrush::OnDebugDrawSelected()
 {
-    DEBUG_DRAW_WIRE_BOX(_bounds, Color::Yellow, 0, false);
+    // Keep hidden extents readable without drawing solid lines through geometry.
+    // The depth-tested pass covers the x-ray dashes wherever an edge is visible.
+    DrawSelectedBrushXRay(_bounds);
+    DEBUG_DRAW_WIRE_BOX(_bounds, Color::Yellow, 0, true);
 
     // Base
     Actor::OnDebugDrawSelected();

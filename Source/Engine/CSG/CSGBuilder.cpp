@@ -9,6 +9,7 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Types/TimeSpan.h"
 #include "Engine/Graphics/Models/ModelData.h"
+#include "Engine/Graphics/GPUDevice.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Physics/CollisionData.h"
@@ -38,6 +39,7 @@ namespace CSGBuilderImpl
     void onSceneUnloading(Scene* scene, const Guid& sceneId);
     bool buildInner(Scene* scene, BuildData& data);
     void build(Scene* scene);
+    bool updatePreviewModel(Scene* scene, const ModelData& modelData);
     bool generateRawDataAsset(Scene* scene, RawData& meshData, Guid& assetId, const String& assetPath);
 }
 
@@ -250,6 +252,67 @@ struct BuildData
     }
 };
 
+bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData)
+{
+    // Render lists store raw mesh buffer pointers. Exclude rendering while the
+    // inactive preview is rebuilt and published, then keep the old preview alive
+    // as the next cache entry. This is particularly important during the native
+    // drag-and-drop loop, which renders frames from a worker thread.
+    AssetReference<Model> previewModel = scene->CSGData.PreviewModelCache;
+    if (!previewModel)
+        previewModel = Content::CreateVirtualAsset<Model>();
+    if (!previewModel)
+        return true;
+
+    GPUDeviceLock gpuLock(GPUDevice::Instance);
+    Array<int32, FixedAllocation<MODEL_MAX_LODS>> meshesCountPerLod;
+    meshesCountPerLod.Resize(modelData.LODs.Count());
+    for (int32 lodIndex = 0; lodIndex < modelData.LODs.Count(); lodIndex++)
+        meshesCountPerLod[lodIndex] = modelData.LODs[lodIndex].Meshes.Count();
+    if (previewModel->SetupLODs(Span<int32>(meshesCountPerLod.Get(), meshesCountPerLod.Count())))
+        return true;
+
+    previewModel->MinScreenSize = modelData.MinScreenSize;
+    previewModel->SetupMaterialSlots(Math::Max(modelData.Materials.Count(), 1));
+    for (int32 slotIndex = 0; slotIndex < modelData.Materials.Count(); slotIndex++)
+    {
+        const auto& sourceSlot = modelData.Materials[slotIndex];
+        auto& destinationSlot = previewModel->MaterialSlots[slotIndex];
+        destinationSlot.Name = sourceSlot.Name;
+        destinationSlot.ShadowsMode = sourceSlot.ShadowsMode;
+        destinationSlot.Material = Content::LoadAsync<MaterialBase>(sourceSlot.AssetID);
+    }
+
+    for (int32 lodIndex = 0; lodIndex < modelData.LODs.Count(); lodIndex++)
+    {
+        const auto& sourceLod = modelData.LODs[lodIndex];
+        auto& destinationLod = previewModel->LODs[lodIndex];
+        destinationLod.ScreenSize = sourceLod.ScreenSize;
+        for (int32 meshIndex = 0; meshIndex < sourceLod.Meshes.Count(); meshIndex++)
+        {
+            const auto* sourceMesh = sourceLod.Meshes[meshIndex];
+            if (!sourceMesh || sourceMesh->Positions.IsEmpty() || sourceMesh->Indices.IsEmpty() || sourceMesh->Indices.Count() % 3 != 0)
+                return true;
+
+            const int32 vertexCount = sourceMesh->Positions.Count();
+            const Float3* normals = sourceMesh->Normals.Count() == vertexCount ? sourceMesh->Normals.Get() : nullptr;
+            const Float3* tangents = sourceMesh->Tangents.Count() == vertexCount ? sourceMesh->Tangents.Get() : nullptr;
+            const Float2* uvs = sourceMesh->UVs.HasItems() && sourceMesh->UVs[0].Count() == vertexCount ? sourceMesh->UVs[0].Get() : nullptr;
+            auto& destinationMesh = destinationLod.Meshes[meshIndex];
+            destinationMesh.SetMaterialSlotIndex(sourceMesh->MaterialSlotIndex);
+            if (destinationMesh.UpdateMesh(vertexCount, sourceMesh->Indices.Count() / 3, sourceMesh->Positions.Get(), sourceMesh->Indices.Get(), normals, tangents, uvs))
+                return true;
+        }
+    }
+
+    // Publish only after the entire model is ready. The render lock guarantees no
+    // draw list still contains pointers to the model moving into the cache.
+    scene->CSGData.PreviewModelCache = scene->CSGData.PreviewModel;
+    scene->CSGData.PreviewModel = previewModel;
+    scene->CSGData.PostCSGBuild();
+    return false;
+}
+
 bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
 {
     // Setup CSG meshes list and build them
@@ -290,6 +353,15 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 Matrix t;
                 scene->GetWorldToLocalMatrix(t);
                 modelData.TransformBuffer(t);
+            }
+
+            // Keep the viewport on a memory-backed model while the persisted model asset
+            // is rewritten. This mirrors RealtimeCSG's dynamic-mesh update path and avoids
+            // exposing the asset reload/unloaded state to rendering.
+            if (updatePreviewModel(scene, modelData))
+            {
+                LOG(Warning, "Failed to update live CSG preview model");
+                return true;
             }
 
             // Import model data to the asset
@@ -376,17 +448,37 @@ void CSGBuilderImpl::build(Scene* scene)
     BuildData data;
     bool failed = buildInner(scene, data);
 
+    // A failed or transiently invalid edit must not replace the last good result
+    // with empty references. The next successful request will update it.
+    if (failed)
+    {
+        data.meshes.ClearDelete();
+        LOG(Warning, "Failed to build CSG. Preserving the previous result.");
+        return;
+    }
+
     // Link new (or empty) CSG mesh
-    scene->CSGData.Data = Content::LoadAsync<RawDataAsset>(data.outputRawDataAssetId);
-    scene->CSGData.Model = Content::LoadAsync<Model>(data.outputModelAssetId);
-    scene->CSGData.CollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
+    auto outputData = Content::LoadAsync<RawDataAsset>(data.outputRawDataAssetId);
+    auto outputModel = Content::LoadAsync<Model>(data.outputModelAssetId);
+    auto outputCollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
+
+    if (!outputModel)
+    {
+        GPUDeviceLock gpuLock(GPUDevice::Instance);
+        scene->CSGData.PreviewModel = nullptr;
+        scene->CSGData.PreviewModelCache = nullptr;
+    }
+    scene->CSGData.Data = outputData;
+    scene->CSGData.Model = outputModel;
+    scene->CSGData.CollisionData = outputCollisionData;
     // TODO: also set CSGData.InstanceBuffer - lightmap scales for the entries so csg mesh gets better quality in lightmaps
     scene->CSGData.PostCSGBuild();
 
     // End
+    const int32 brushesCount = data.meshes.Count();
     data.meshes.ClearDelete();
     auto endTime = DateTime::Now();
-    LOG(Info, "CSG build in {0} ms! {1} brush(es)", (endTime - startTime).GetTotalMilliseconds(), data.meshes.Count());
+    LOG(Info, "CSG build in {0} ms! {1} brush(es)", (endTime - startTime).GetTotalMilliseconds(), brushesCount);
 }
 
 bool CSGBuilderImpl::generateRawDataAsset(Scene* scene, RawData& meshData, Guid& assetId, const String& assetPath)

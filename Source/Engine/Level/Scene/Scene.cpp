@@ -199,7 +199,7 @@ void Scene::CreateCsgCollider()
     result->SetStaticFlags(StaticFlags::FullyStatic);
     result->SetName(String(CSG_COLLIDER_NAME));
     result->CollisionData = CSGData.CollisionData;
-    result->HideFlags |= HideFlags::DontSelect;
+    result->HideFlags |= HideFlags::FullyHidden;
 
     // Link it
     if (IsDuringPlay())
@@ -221,8 +221,8 @@ void Scene::CreateCsgModel()
     auto result = New<StaticModel>();
     result->SetStaticFlags(StaticFlags::FullyStatic);
     result->SetName(String(CSG_MODEL_NAME));
-    result->Model = CSGData.Model;
-    result->HideFlags |= HideFlags::DontSelect;
+    result->Model = CSGData.GetModelForRendering();
+    result->HideFlags |= HideFlags::FullyHidden;
 
     // Link it
     if (IsDuringPlay())
@@ -269,9 +269,9 @@ void Scene::OnCsgModelChanged()
     if (model)
     {
         // Update the model asset
-        model->Model = CSGData.Model;
+        model->Model = CSGData.GetModelForRendering();
     }
-    else if (CSGData.Model)
+    else if (CSGData.GetModelForRendering())
     {
         // Create model
         CreateCsgModel();
@@ -284,7 +284,13 @@ void Scene::OnCSGBuildEnd()
 {
     if (CSGData.CollisionData && TryGetCsgCollider() == nullptr)
         CreateCsgCollider();
-    if (CSGData.Model && TryGetCsgModel() == nullptr)
+    auto csgModel = TryGetCsgModel();
+    if (csgModel)
+    {
+        csgModel->HideFlags |= HideFlags::FullyHidden;
+        csgModel->Model = CSGData.GetModelForRendering();
+    }
+    else if (CSGData.GetModelForRendering())
         CreateCsgModel();
 }
 
@@ -360,6 +366,8 @@ void Scene::OnDeleteObject()
 {
     // Cleanup
     LightmapsData.UnloadLightmaps();
+    CSGData.PreviewModel = nullptr;
+    CSGData.PreviewModelCache = nullptr;
     CSGData.Model = nullptr;
     CSGData.CollisionData = nullptr;
 
@@ -381,6 +389,45 @@ void Scene::BeginPlay(SceneBeginData* data)
     // Base
     Actor::BeginPlay(data);
 
+    // Generated CSG helpers were serialized by older editor builds. At this point all
+    // child records are loaded, so adopt one helper of each type, repair its asset link,
+    // hide it from future serialization, and remove any accumulated duplicates.
+    StaticModel* csgModel = nullptr;
+    MeshCollider* csgCollider = nullptr;
+    for (int32 i = Children.Count() - 1; i >= 0; i--)
+    {
+        auto* child = Children[i];
+        auto* model = dynamic_cast<StaticModel*>(child);
+        if (model && model->GetName() == CSG_MODEL_NAME)
+        {
+            if (csgModel)
+                model->DeleteObject();
+            else
+                csgModel = model;
+        }
+        else
+        {
+            auto* collider = dynamic_cast<MeshCollider*>(child);
+            if (collider && collider->GetName() == CSG_COLLIDER_NAME)
+            {
+                if (csgCollider)
+                    collider->DeleteObject();
+                else
+                    csgCollider = collider;
+            }
+        }
+    }
+    if (csgModel)
+    {
+        csgModel->HideFlags |= HideFlags::FullyHidden;
+        csgModel->Model = CSGData.GetModelForRendering();
+    }
+    if (csgCollider)
+    {
+        csgCollider->HideFlags |= HideFlags::FullyHidden;
+        csgCollider->CollisionData = CSGData.CollisionData;
+    }
+
     // Check if has CSG collision and create collider if need to (before play mode enter)
     if (CSGData.CollisionData)
     {
@@ -390,7 +437,7 @@ void Scene::BeginPlay(SceneBeginData* data)
     }
 
     // Check if has CSG model and create model if need to (before play mode enter)
-    if (CSGData.Model)
+    if (CSGData.GetModelForRendering())
     {
         const auto model = TryGetCsgModel();
         if (model == nullptr)

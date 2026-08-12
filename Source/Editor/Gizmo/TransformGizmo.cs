@@ -46,7 +46,8 @@ namespace FlaxEditor.Gizmo
                     return false;
                 for (int i = 0; i < TransactionObjects.Count; i++)
                 {
-                    if (TransactionObjects[i] is ActorNode actorNode && ContainsBoxBrush(actorNode.Actor))
+                    var actorNode = GetOwningActorNode(TransactionObjects[i]);
+                    if (actorNode != null && ContainsBoxBrush(actorNode.Actor))
                         return true;
                 }
                 return false;
@@ -606,7 +607,8 @@ namespace FlaxEditor.Gizmo
             var csgScenes = new List<Scene>();
             for (int i = 0; i < TransactionObjects.Count; i++)
             {
-                if (!(TransactionObjects[i] is ActorNode actorNode) || !ContainsBoxBrush(actorNode.Actor))
+                var actorNode = GetOwningActorNode(TransactionObjects[i]);
+                if (actorNode == null || !ContainsBoxBrush(actorNode.Actor))
                     continue;
                 var scene = actorNode.Actor.Scene;
                 if (scene != null && !csgScenes.Contains(scene))
@@ -614,6 +616,16 @@ namespace FlaxEditor.Gizmo
             }
             for (int i = 0; i < csgScenes.Count; i++)
                 CSGRebuildScheduler.Shared.RequestFinal(csgScenes[i]);
+        }
+
+        private static ActorNode GetOwningActorNode(SceneGraphNode node)
+        {
+            for (var current = node; current != null; current = current.ParentNode)
+            {
+                if (current is ActorNode actorNode)
+                    return actorNode;
+            }
+            return null;
         }
 
         private static bool ContainsBoxBrush(Actor actor)
