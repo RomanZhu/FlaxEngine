@@ -1,11 +1,14 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Settings;
 using FlaxEditor.CustomEditors;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Input;
+using FlaxEditor.GUI.Tabs;
 using FlaxEngine;
 using FlaxEngine.GUI;
 using FlaxEngine.Json;
@@ -20,6 +23,82 @@ namespace FlaxEditor.Windows.Assets
     /// <seealso cref="FlaxEditor.Windows.Assets.AssetEditorWindow" />
     public sealed class JsonAssetWindow : AssetEditorWindowBase<JsonAsset>
     {
+        private sealed class GameSettingsGeneral
+        {
+            private readonly GameSettings _settings;
+
+            public GameSettingsGeneral(GameSettings settings)
+            {
+                _settings = settings;
+            }
+
+            [EditorOrder(0), EditorDisplay("General")]
+            public string ProductName
+            {
+                get => _settings.ProductName;
+                set => _settings.ProductName = value;
+            }
+
+            [EditorOrder(10), EditorDisplay("General")]
+            public string CompanyName
+            {
+                get => _settings.CompanyName;
+                set => _settings.CompanyName = value;
+            }
+
+            [EditorOrder(15), EditorDisplay("General")]
+            public string CopyrightNotice
+            {
+                get => _settings.CopyrightNotice;
+                set => _settings.CopyrightNotice = value;
+            }
+
+            [EditorOrder(20), EditorDisplay("General")]
+            public string Version
+            {
+                get => _settings.Version;
+                set => _settings.Version = value;
+            }
+
+            [EditorOrder(30), EditorDisplay("General"), Tooltip("The default icon of the application.")]
+            public Texture Icon
+            {
+                get => _settings.Icon;
+                set => _settings.Icon = value;
+            }
+
+            [EditorOrder(900), EditorDisplay("Startup"), Tooltip("Reference to the first scene to load on a game startup.")]
+            public SceneReference FirstScene
+            {
+                get => _settings.FirstScene;
+                set => _settings.FirstScene = value;
+            }
+
+            [EditorOrder(910), EditorDisplay("Startup", "No Splash Screen"), Tooltip("True if skip showing splash screen image on the game startup.")]
+            public bool NoSplashScreen
+            {
+                get => _settings.NoSplashScreen;
+                set => _settings.NoSplashScreen = value;
+            }
+
+            [EditorOrder(920), EditorDisplay("Startup"), Tooltip("Reference to the splash screen image to show on a game startup.")]
+            public Texture SplashScreen
+            {
+                get => _settings.SplashScreen;
+                set => _settings.SplashScreen = value;
+            }
+
+        }
+
+        private sealed class GameSettingsPage
+        {
+            public Tab Tab;
+            public CustomEditorPresenter Presenter;
+            public JsonAsset Asset;
+            public object Value;
+            public bool EditsMainObject;
+        }
+
         private class ObjectPasteUndo : IUndoAction
         {
             /// <inheritdoc />
@@ -50,8 +129,8 @@ namespace FlaxEditor.Windows.Assets
                 if (!string.IsNullOrEmpty(_newObject))
                 {
                     _window._object = JsonSerializer.Deserialize(_newObject, TypeUtils.GetType(_window.Asset.DataTypeName).Type);
-                    _window._presenter.Select(_window._object);
-                    _window.OnObjectModified();
+                    _window.SelectMainObject();
+                    _window.OnMainObjectModified();
                 }
             }
 
@@ -61,15 +140,15 @@ namespace FlaxEditor.Windows.Assets
                 if (!string.IsNullOrEmpty(_oldObject))
                 {
                     _window._object = JsonSerializer.Deserialize(_oldObject, TypeUtils.GetType(_window.Asset.DataTypeName).Type);
-                    _window._presenter.Select(_window._object);
-                    _window.OnObjectModified();
+                    _window.SelectMainObject();
+                    _window.OnMainObjectModified();
                 }
             }
         }
         
         private const float AutoSavePanelWidth = 96.0f;
         private const float AutoSaveLabelWidth = 70.0f;
-        private const string AutoSaveTooltip = "Automatically saves this settings asset 300 ms after values are applied.";
+        private const string AutoSaveTooltip = "Automatically saves modified settings 300 ms after values are applied.";
 
         private readonly CustomEditorPresenter _presenter;
         private SearchBox _searchBox;
@@ -79,8 +158,15 @@ namespace FlaxEditor.Windows.Assets
         private readonly ToolStripButton _redoButton;
         private readonly Undo _undo;
         private readonly bool _isSettingsAsset;
+        private readonly bool _isGameSettingsAsset;
         private readonly CheckBox _autoSaveCheckBox;
+        private readonly Tabs _gameSettingsTabs;
+        private readonly List<GameSettingsPage> _gameSettingsPages = new List<GameSettingsPage>();
+        private readonly Dictionary<JsonAsset, object> _dirtyGameSettingsAssets = new Dictionary<JsonAsset, object>();
         private object _object;
+        private bool _isMainObjectDirty;
+        private bool _gameSettingsPagesRefreshPending;
+        private int _gameSettingsPagesSignature;
         private bool _isRegisteredForScriptsReload;
         private bool _pendingAutoSave;
         private bool _isAutoSaving;
@@ -99,6 +185,7 @@ namespace FlaxEditor.Windows.Assets
         {
             var inputOptions = Editor.Options.Options.Input;
             _isSettingsAsset = editor.ContentDatabase.GetProxy(item) is SettingsProxy;
+            _isGameSettingsAsset = item is JsonAssetItem jsonAssetItem && jsonAssetItem.TypeName == typeof(GameSettings).FullName;
 
             // Undo
             _undo = new Undo(Editor.Undo, this);
@@ -151,17 +238,41 @@ namespace FlaxEditor.Windows.Assets
                 _autoSaveCheckBox.StateChanged += OnAutoSaveCheckBoxStateChanged;
             }
 
-            _scrollingPanel = new Panel(ScrollBars.Vertical)
+            if (_isGameSettingsAsset)
             {
-                AnchorPreset = AnchorPresets.StretchAll,
-                Offsets = new Margin(0, 0, headerPanel.Bottom, 0),
-                Parent = this,
-            };
+                _gameSettingsTabs = new Tabs
+                {
+                    Orientation = Orientation.Vertical,
+                    AnchorPreset = AnchorPresets.StretchAll,
+                    Offsets = new Margin(0, 0, headerPanel.Bottom, 0),
+                    TabsSize = new Float2(120, 32),
+                    UseScroll = true,
+                    Parent = this,
+                };
+                _gameSettingsTabs.SelectedTabChanged += OnGameSettingsSelectedTabChanged;
+
+                var generalTab = _gameSettingsTabs.AddTab(new Tab("General"));
+                _scrollingPanel = new Panel(ScrollBars.Vertical)
+                {
+                    AnchorPreset = AnchorPresets.StretchAll,
+                    Offsets = Margin.Zero,
+                    Parent = generalTab,
+                };
+            }
+            else
+            {
+                _scrollingPanel = new Panel(ScrollBars.Vertical)
+                {
+                    AnchorPreset = AnchorPresets.StretchAll,
+                    Offsets = new Margin(0, 0, headerPanel.Bottom, 0),
+                    Parent = this,
+                };
+            }
 
             // Properties
             _presenter = new CustomEditorPresenter(_undo, "Loading...");
             _presenter.Panel.Parent = _scrollingPanel;
-            _presenter.Modified += OnObjectModified;
+            _presenter.Modified += OnMainObjectModified;
             _presenter.AfterLayout += OnPresenterAfterLayout;
 
             // Setup input actions
@@ -172,8 +283,253 @@ namespace FlaxEditor.Windows.Assets
         private void OnUndoRedo(IUndoAction action)
         {
             if (!UndoActionMetadata.IsSelectionOnly(action))
+            {
+                if (_isGameSettingsAsset)
+                {
+                    if (_gameSettingsTabs.SelectedTab?.Text == "General")
+                    {
+                        _isMainObjectDirty = true;
+                    }
+                    else
+                    {
+                        foreach (var page in _gameSettingsPages)
+                        {
+                            if (page.Tab == _gameSettingsTabs.SelectedTab)
+                            {
+                                if (page.EditsMainObject)
+                                {
+                                    _isMainObjectDirty = true;
+                                    _gameSettingsPagesRefreshPending = true;
+                                }
+                                else if (page.Asset && page.Value != null)
+                                    _dirtyGameSettingsAssets[page.Asset] = page.Value;
+                                break;
+                            }
+                        }
+                    }
+                }
                 OnObjectModified();
+            }
             UpdateToolstrip();
+        }
+
+        private void OnMainObjectModified()
+        {
+            _isMainObjectDirty = true;
+            OnObjectModified();
+        }
+
+        private void OnGameSettingsPageModified(GameSettingsPage page)
+        {
+            if (page.Asset && page.Value != null)
+                _dirtyGameSettingsAssets[page.Asset] = page.Value;
+            OnObjectModified();
+        }
+
+        private void OnGameSettingsAssignmentsModified()
+        {
+            _gameSettingsPagesRefreshPending = true;
+            OnMainObjectModified();
+        }
+
+        private GameSettingsPage AddGameSettingsPage(string name, JsonAsset asset, bool showIfMissing = true)
+        {
+            if (!asset && !showIfMissing)
+                return null;
+
+            var tab = _gameSettingsTabs.AddTab(new Tab(name));
+            var panel = new Panel(ScrollBars.Vertical)
+            {
+                AnchorPreset = AnchorPresets.StretchAll,
+                Offsets = Margin.Zero,
+                Parent = tab,
+            };
+            var presenter = new CustomEditorPresenter(_undo, asset ? "Loading..." : $"Missing {name} settings asset.");
+            presenter.Panel.Parent = panel;
+
+            var page = new GameSettingsPage
+            {
+                Tab = tab,
+                Presenter = presenter,
+                Asset = asset,
+            };
+            presenter.Modified += () => OnGameSettingsPageModified(page);
+            presenter.AfterLayout += layout =>
+            {
+                if (_gameSettingsTabs.SelectedTab == tab)
+                    ApplySearchFilter();
+            };
+
+            if (asset && !asset.WaitForLoaded())
+            {
+                page.Value = asset.Instance;
+                presenter.Select(page.Value);
+            }
+
+            _gameSettingsPages.Add(page);
+            return page;
+        }
+
+        private GameSettingsPage AddGameSettingsObjectPage(string name, object value, string groupFilter)
+        {
+            var tab = _gameSettingsTabs.AddTab(new Tab(name));
+            var panel = new Panel(ScrollBars.Vertical)
+            {
+                AnchorPreset = AnchorPresets.StretchAll,
+                Offsets = Margin.Zero,
+                Parent = tab,
+            };
+            var presenter = new CustomEditorPresenter(_undo);
+            presenter.Panel.Parent = panel;
+
+            var page = new GameSettingsPage
+            {
+                Tab = tab,
+                Presenter = presenter,
+                Value = value,
+                EditsMainObject = true,
+            };
+            presenter.Modified += OnGameSettingsAssignmentsModified;
+            presenter.AfterLayout += layout =>
+            {
+                if (_gameSettingsTabs.SelectedTab == tab)
+                    ApplySearchFilter();
+            };
+            presenter.Select(value);
+            presenter.ApplyGroupFilter(groupFilter);
+
+            _gameSettingsPages.Add(page);
+            return page;
+        }
+
+        private void ClearGameSettingsPages()
+        {
+            if (_gameSettingsTabs == null)
+                return;
+
+            _gameSettingsTabs.SelectedTabIndex = 0;
+            foreach (var page in _gameSettingsPages)
+            {
+                page.Presenter.Deselect();
+                page.Tab.Dispose();
+            }
+            _gameSettingsPages.Clear();
+        }
+
+        private static int GetGameSettingsPagesSignature(GameSettings settings)
+        {
+            int signature = 17;
+            void AddAsset(JsonAsset asset)
+            {
+                signature = unchecked(signature * 31 + (asset ? asset.ID.GetHashCode() : 0));
+            }
+
+            AddAsset(settings.Time);
+            AddAsset(settings.Audio);
+            AddAsset(settings.LayersAndTags);
+            AddAsset(settings.Physics);
+            AddAsset(settings.Input);
+            AddAsset(settings.Graphics);
+            AddAsset(settings.Network);
+            AddAsset(settings.Navigation);
+            AddAsset(settings.Localization);
+            AddAsset(settings.GameCooking);
+            AddAsset(settings.Streaming);
+            AddAsset(settings.WindowsPlatform);
+            AddAsset(settings.UWPPlatform);
+            AddAsset(settings.LinuxPlatform);
+            AddAsset(settings.PS4Platform);
+            AddAsset(settings.XboxOnePlatform);
+            AddAsset(settings.XboxScarlettPlatform);
+            AddAsset(settings.AndroidPlatform);
+            AddAsset(settings.SwitchPlatform);
+            AddAsset(settings.PS5Platform);
+            AddAsset(settings.MacPlatform);
+            AddAsset(settings.iOSPlatform);
+            AddAsset(settings.WebPlatform);
+
+            if (settings.CustomSettings != null)
+            {
+                foreach (var customSettings in settings.CustomSettings)
+                {
+                    signature = unchecked(signature * 31 + customSettings.Key.GetHashCode());
+                    AddAsset(customSettings.Value);
+                }
+            }
+
+            return signature;
+        }
+
+        private void SetupGameSettingsPages(GameSettings settings, string selectedTabName = null)
+        {
+            ClearGameSettingsPages();
+
+            AddGameSettingsPage("Time", settings.Time);
+            AddGameSettingsPage("Audio", settings.Audio);
+            AddGameSettingsPage("Layers and Tags", settings.LayersAndTags);
+            AddGameSettingsPage("Physics", settings.Physics);
+            AddGameSettingsPage("Input", settings.Input);
+            AddGameSettingsPage("Graphics", settings.Graphics);
+            AddGameSettingsPage("Network", settings.Network);
+            AddGameSettingsPage("Navigation", settings.Navigation);
+            AddGameSettingsPage("Localization", settings.Localization);
+            AddGameSettingsPage("Game Cooking", settings.GameCooking);
+            AddGameSettingsPage("Streaming", settings.Streaming);
+
+            // Keep asset assignment available without duplicating those references on the General page.
+            AddGameSettingsObjectPage("Settings Assets", settings, "Other Settings");
+
+            if (settings.CustomSettings != null)
+            {
+                foreach (var customSettings in settings.CustomSettings)
+                    AddGameSettingsPage("Custom: " + customSettings.Key, customSettings.Value);
+            }
+
+            AddGameSettingsObjectPage("Platform Assets", settings, "Platform Settings");
+            AddGameSettingsPage("Windows", settings.WindowsPlatform, false);
+            AddGameSettingsPage("UWP", settings.UWPPlatform, false);
+            AddGameSettingsPage("Linux", settings.LinuxPlatform, false);
+            AddGameSettingsPage("PlayStation 4", settings.PS4Platform, false);
+            AddGameSettingsPage("Xbox One", settings.XboxOnePlatform, false);
+            AddGameSettingsPage("Xbox Scarlett", settings.XboxScarlettPlatform, false);
+            AddGameSettingsPage("Android", settings.AndroidPlatform, false);
+            AddGameSettingsPage("Switch", settings.SwitchPlatform, false);
+            AddGameSettingsPage("PlayStation 5", settings.PS5Platform, false);
+            AddGameSettingsPage("Mac", settings.MacPlatform, false);
+            AddGameSettingsPage("iOS", settings.iOSPlatform, false);
+            AddGameSettingsPage("Web", settings.WebPlatform, false);
+
+            if (!string.IsNullOrEmpty(selectedTabName))
+            {
+                for (int i = 0; i < _gameSettingsTabs.ChildrenCount; i++)
+                {
+                    if (_gameSettingsTabs.GetChild(i) is Tab tab && tab.Text == selectedTabName)
+                    {
+                        _gameSettingsTabs.SelectedTab = tab;
+                        break;
+                    }
+                }
+            }
+
+            _gameSettingsPagesSignature = GetGameSettingsPagesSignature(settings);
+        }
+
+        private void SelectMainObject()
+        {
+            if (_isGameSettingsAsset && _object is GameSettings settings)
+            {
+                _presenter.Select(new GameSettingsGeneral(settings));
+                SetupGameSettingsPages(settings);
+            }
+            else
+            {
+                _presenter.Select(_object);
+            }
+        }
+
+        private void OnGameSettingsSelectedTabChanged(Tabs tabs)
+        {
+            ApplySearchFilter();
         }
 
         private bool IsAutoSaveEnabled => _isSettingsAsset && _autoSaveCheckBox != null && _autoSaveCheckBox.Checked;
@@ -241,7 +597,34 @@ namespace FlaxEditor.Windows.Assets
             if (_asset.WaitForLoaded())
                 return;
 
-            if (Editor.SaveJsonAsset(_item.Path, _object))
+            var dirtyAssets = _isGameSettingsAsset
+                                  ? new List<KeyValuePair<JsonAsset, object>>(_dirtyGameSettingsAssets)
+                                  : null;
+            bool failed = false;
+            if (!_isGameSettingsAsset || _isMainObjectDirty)
+            {
+                if (Editor.SaveJsonAsset(_item.Path, _object))
+                    failed = true;
+                else
+                    _isMainObjectDirty = false;
+            }
+
+            if (_isGameSettingsAsset)
+            {
+                foreach (var dirtyAsset in dirtyAssets)
+                {
+                    if (!dirtyAsset.Key || dirtyAsset.Value == null || Editor.SaveJsonAsset(dirtyAsset.Key.Path, dirtyAsset.Value))
+                    {
+                        failed = true;
+                    }
+                    else
+                    {
+                        _dirtyGameSettingsAssets.Remove(dirtyAsset.Key);
+                    }
+                }
+            }
+
+            if (failed)
             {
                 Editor.LogError("Cannot save asset.");
                 return;
@@ -264,6 +647,17 @@ namespace FlaxEditor.Windows.Assets
         public override void Update(float deltaTime)
         {
             base.Update(deltaTime);
+
+            if (_isGameSettingsAsset && _object is GameSettings gameSettings)
+            {
+                if (_gameSettingsPagesSignature != GetGameSettingsPagesSignature(gameSettings))
+                    _gameSettingsPagesRefreshPending = true;
+                if (_gameSettingsPagesRefreshPending)
+                {
+                    _gameSettingsPagesRefreshPending = false;
+                    SetupGameSettingsPages(gameSettings, _gameSettingsTabs.SelectedTab?.Text);
+                }
+            }
 
             AutoSaveIfNeeded();
         }
@@ -299,7 +693,7 @@ namespace FlaxEditor.Windows.Assets
                     _presenter.NoSelectionText = string.Format("Missing type '{0}'.", dataTypeName);
                 }
             }
-            _presenter.Select(_object);
+            SelectMainObject();
 
             if (_typeText != null)
                 _typeText.Dispose();
@@ -341,6 +735,9 @@ namespace FlaxEditor.Windows.Assets
             _typeText = typeText;
 
             _undo.Clear();
+            _isMainObjectDirty = false;
+            _gameSettingsPagesRefreshPending = false;
+            _dirtyGameSettingsAssets.Clear();
             ClearEditedFlag();
 
             // Auto-close on scripting reload if json asset is from game scripts (it might be reloaded)
@@ -439,6 +836,10 @@ namespace FlaxEditor.Windows.Assets
         {
             // Refresh the properties (will get new data in OnAssetLoaded)
             _presenter.Deselect();
+            ClearGameSettingsPages();
+            _isMainObjectDirty = false;
+            _gameSettingsPagesRefreshPending = false;
+            _dirtyGameSettingsAssets.Clear();
             ClearEditedFlag();
 
             base.OnItemReimported(item);
@@ -457,6 +858,8 @@ namespace FlaxEditor.Windows.Assets
                 ScriptsBuilder.ScriptsReloadBegin -= OnScriptsReloadBegin;
             }
             _optionsCM?.Dispose();
+            _gameSettingsPages.Clear();
+            _dirtyGameSettingsAssets.Clear();
             _typeText = null;
         }
 
@@ -467,6 +870,22 @@ namespace FlaxEditor.Windows.Assets
 
         private void ApplySearchFilter()
         {
+            // Adding the initial General tab fires SelectedTabChanged before the presenter is created.
+            if (_presenter == null)
+                return;
+
+            if (_gameSettingsTabs != null && _gameSettingsTabs.SelectedTab?.Text != "General")
+            {
+                foreach (var page in _gameSettingsPages)
+                {
+                    if (page.Tab == _gameSettingsTabs.SelectedTab)
+                    {
+                        page.Presenter.ApplySearchFilter(_searchBox.Text);
+                        return;
+                    }
+                }
+            }
+
             _presenter.ApplySearchFilter(_searchBox.Text);
         }
     }

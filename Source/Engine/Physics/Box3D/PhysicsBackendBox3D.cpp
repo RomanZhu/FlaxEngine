@@ -37,6 +37,16 @@
 
 namespace
 {
+    FORCE_INLINE float GetCastDistance(float maxDistance)
+    {
+        // Flax uses MAX_float as the default for an unbounded query. Box3D receives a
+        // displacement vector instead of a scalar distance, and multiplying a direction
+        // by MAX_float makes its broad-phase and height-field math numerically unusable.
+        // Clamp only to Box3D's documented spatial limit; ordinary finite casts retain
+        // their exact requested distance.
+        return Math::Min(maxDistance, B3_HUGE);
+    }
+
     struct SceneBox3D;
     struct ActorBox3D;
     struct ShapeBox3D;
@@ -1120,6 +1130,7 @@ namespace
 
     bool CastShape(SceneBox3D* scene, const Vector3& center, const b3ShapeProxy& proxy, const Vector3& direction, RayCastHit* hitInfo, Array<RayCastHit, HeapAllocation>* results, float maxDistance, uint32 layerMask, bool hitTriggers, RayCastHit* resultsBuffer = nullptr, int32 resultsCapacity = 0, int32* resultsCount = nullptr)
     {
+        maxDistance = GetCastDistance(maxDistance);
         QueryContext context;
         context.HitTriggers = hitTriggers;
         context.MaxDistance = maxDistance;
@@ -1474,6 +1485,7 @@ void PhysicsBackend::GetSceneStatistics(void* scene, PhysicsStatistics& result)
 
 bool PhysicsBackend::RayCast(void* scene, const Vector3& origin, const Vector3& direction, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
+    maxDistance = GetCastDistance(maxDistance);
     QueryContext context;
     context.Any = true;
     context.HitTriggers = hitTriggers;
@@ -1484,6 +1496,7 @@ bool PhysicsBackend::RayCast(void* scene, const Vector3& origin, const Vector3& 
 
 bool PhysicsBackend::RayCast(void* scene, const Vector3& origin, const Vector3& direction, RayCastHit& hitInfo, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
+    maxDistance = GetCastDistance(maxDistance);
     QueryContext context;
     context.HitTriggers = hitTriggers;
     context.MaxDistance = maxDistance;
@@ -1496,6 +1509,7 @@ bool PhysicsBackend::RayCast(void* scene, const Vector3& origin, const Vector3& 
 
 bool PhysicsBackend::RayCastAll(void* scene, const Vector3& origin, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
+    maxDistance = GetCastDistance(maxDistance);
     QueryContext context;
     context.All = true;
     context.HitTriggers = hitTriggers;
@@ -1509,6 +1523,7 @@ int32 PhysicsBackend::RayCastNonAlloc(void* scene, const Vector3& origin, const 
 {
     if (results.Length() == 0)
         return 0;
+    maxDistance = GetCastDistance(maxDistance);
     QueryContext context;
     context.HitTriggers = hitTriggers;
     context.MaxDistance = maxDistance;
@@ -2274,6 +2289,7 @@ bool PhysicsBackend::RayCastShape(void* shape, const Vector3& position, const Qu
     auto shapeBox3D = (ShapeBox3D*)shape;
     if (!IsShapeValid(shapeBox3D))
         return false;
+    maxDistance = GetCastDistance(maxDistance);
     const b3WorldCastOutput hit = b3Shape_RayCast(shapeBox3D->Shape, C2BPos(origin), C2BVec(direction * maxDistance));
     if (!hit.hit)
         return false;

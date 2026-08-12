@@ -106,4 +106,4 @@ GPU_CB_STRUCT(ShaderEnvProbeData {
 #define MIN_ROUGHNESS 0.04f
 
 // Maximum amount of directional light cascades (using CSM technique)
-#define MAX_CSM_CASCADES 4
+#define MAX_CSM_CASCADES 5

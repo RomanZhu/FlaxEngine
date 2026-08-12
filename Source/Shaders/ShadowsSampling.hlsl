@@ -227,7 +227,8 @@ ShadowSample SampleDirectionalLightShadowCascade(LightData light, Buffer<float4>
     result.SurfaceShadow = SampleShadowMapOptimizedPCF(shadowMap, shadowMapUV, shadowPosition.z);
 
     // Increase the sharpness for higher cascades to match the filter radius
-    const float SharpnessScale[MaxNumCascades] = { 1.0f, 1.5f, 3.0f, 3.5f };
+    // Keep the far cascade soft; its job is to preserve broad silhouettes, not fine detail.
+    const float SharpnessScale[MaxNumCascades] = { 1.0f, 1.5f, 3.0f, 3.5f, 1.0f };
     shadow.Sharpness *= SharpnessScale[cascadeIndex];
 
     result.TransmissionShadow = 1;
@@ -273,9 +274,10 @@ ShadowSample SampleDirectionalLightShadow(LightData light, Buffer<float4> shadow
         return result; // No shadow assigned
     ShadowData shadow = LoadShadowsBuffer(shadowsBuffer, light.ShadowsBufferAddress);
 
-    // Create a blend factor which is one before and at the fade plane
+    // Create an eased blend factor from fully shadowed to fully lit across the fade range.
     float viewDepth = gBuffer.ViewPos.z;
-    float fade = saturate((viewDepth - shadow.CascadeSplits[shadow.TilesCount - 1] + shadow.FadeDistance) / shadow.FadeDistance);
+    float lastCascadeSplit = GetShadowCascadeSplit(shadow, shadow.TilesCount - 1);
+    float fade = smoothstep(0.0f, 1.0f, saturate((viewDepth - lastCascadeSplit + shadow.FadeDistance) / shadow.FadeDistance));
     BRANCH
     if (fade >= 1.0)
         return result;
@@ -284,17 +286,32 @@ ShadowSample SampleDirectionalLightShadow(LightData light, Buffer<float4> shadow
     uint cascadeIndex = 0;
     for (uint i = 0; i < shadow.TilesCount - 1; i++)
     {
-        if (viewDepth > shadow.CascadeSplits[i])
+        if (viewDepth > GetShadowCascadeSplit(shadow, i))
             cascadeIndex = i + 1;
     }
+
+    // Transition the detailed fourth cascade into the coarse far cascade. The far cascade projection
+    // is expanded by the same distance on the CPU so either sampling mode is valid throughout this band.
+    bool transitionFarCascade = false;
+    bool fadeFarCascade = false;
+    bool ditherFarCascade = false;
+    float farCascadeBlend = 0.0f;
+    if (shadow.TilesCount == MaxNumCascades && cascadeIndex == MaxNumCascades - 2)
+    {
+        float distanceToFarCascade = GetShadowCascadeSplit(shadow, cascadeIndex) - viewDepth;
+        transitionFarCascade = distanceToFarCascade <= shadow.FarCascadeTransitionDistance;
+        fadeFarCascade = transitionFarCascade && shadow.FarCascadeTransitionMode == FAR_SHADOW_TRANSITION_FADE;
+        ditherFarCascade = transitionFarCascade && shadow.FarCascadeTransitionMode == FAR_SHADOW_TRANSITION_DITHER;
+        farCascadeBlend = saturate(1.0f - distanceToFarCascade / max(shadow.FarCascadeTransitionDistance, 0.0001f));
+    }
 #if SHADOWS_CSM_DITHERING || SHADOWS_CSM_BLENDING
-	float nextSplit = shadow.CascadeSplits[cascadeIndex];
-	float splitSize = cascadeIndex == 0 ? nextSplit : nextSplit - shadow.CascadeSplits[cascadeIndex - 1];
+	float nextSplit = GetShadowCascadeSplit(shadow, cascadeIndex);
+	float splitSize = cascadeIndex == 0 ? nextSplit : max(nextSplit - GetShadowCascadeSplit(shadow, cascadeIndex - 1), 0.0001f);
 	float splitDist = (nextSplit - viewDepth) / splitSize;
 #endif
 #if SHADOWS_CSM_DITHERING && !SHADOWS_CSM_BLENDING
 	const float BlendThreshold = 0.05f;
-    if (splitDist <= BlendThreshold && cascadeIndex != shadow.TilesCount - 1)
+    if (!transitionFarCascade && splitDist <= BlendThreshold && cascadeIndex != shadow.TilesCount - 1)
     {
         // Dither with the next cascade but with screen-space dithering (gets cleaned out by TAA)
         float lerpAmount = 1 - splitDist / BlendThreshold;
@@ -302,6 +319,9 @@ ShadowSample SampleDirectionalLightShadow(LightData light, Buffer<float4> shadow
             cascadeIndex++;
     }
 #endif
+
+    if (ditherFarCascade && step(RandN2(gBuffer.ViewPos.xy + dither).x, farCascadeBlend))
+        cascadeIndex++;
 
     // Sample cascade
     float3 samplePosition = gBuffer.WorldPos;
@@ -311,9 +331,17 @@ ShadowSample SampleDirectionalLightShadow(LightData light, Buffer<float4> shadow
 #endif
     result = SampleDirectionalLightShadowCascade(light, shadowsBuffer, shadowMap, gBuffer, shadow, samplePosition, cascadeIndex);
 
+    BRANCH
+    if (fadeFarCascade)
+    {
+        ShadowSample farResult = SampleDirectionalLightShadowCascade(light, shadowsBuffer, shadowMap, gBuffer, shadow, samplePosition, cascadeIndex + 1);
+        result.SurfaceShadow = lerp(result.SurfaceShadow, farResult.SurfaceShadow, farCascadeBlend);
+        result.TransmissionShadow = lerp(result.TransmissionShadow, farResult.TransmissionShadow, farCascadeBlend);
+    }
+
 #if SHADOWS_CSM_BLENDING
 	const float BlendThreshold = 0.1f;
-    if (splitDist <= BlendThreshold && cascadeIndex != shadow.TilesCount - 1)
+    if (!transitionFarCascade && splitDist <= BlendThreshold && cascadeIndex != shadow.TilesCount - 1)
     {
 	    // Sample the next cascade, and blend between the two results to smooth the transition
         ShadowSample nextResult = SampleDirectionalLightShadowCascade(light, shadowsBuffer, shadowMap, gBuffer, shadow, samplePosition, cascadeIndex + 1);
@@ -322,6 +350,10 @@ ShadowSample SampleDirectionalLightShadow(LightData light, Buffer<float4> shadow
 		result.TransmissionShadow = lerp(nextResult.TransmissionShadow, result.TransmissionShadow, blendAmount);
     }
 #endif
+
+    // Fade the last cascade into unshadowed lighting to hide the end of the shadow range.
+    result.SurfaceShadow = lerp(result.SurfaceShadow, 1.0f, fade);
+    result.TransmissionShadow = lerp(result.TransmissionShadow, 1.0f, fade);
 
     return result;
 }

@@ -11,56 +11,132 @@ namespace FlaxEditor.Tools.CSG.Rendering
     /// </summary>
     public sealed class CSGOverlayRenderer
     {
-        private const int GridHalfCells = 20;
+        private const int MaximumVisibleHalfLines = 160;
 
         /// <summary>
         /// Draws the arbitrary-orientation working grid and optional snap marker.
         /// </summary>
-        public void Draw(ref CSGWorkingPlane plane, Vector3 viewPosition, bool isHoverPreview, bool hasSnap, ref ViewportSnapResult snap)
+        public void Draw(ref CSGWorkingPlane plane, Vector3 viewPosition, Vector3 focusPoint, float requestedHalfExtent, bool isHoverPreview, bool hasSnap, ref ViewportSnapResult snap, float snapMarkerSize)
         {
             if (!plane.IsValid)
                 return;
 
             float spacing = Mathf.Max(plane.Spacing, 0.0001f);
-            float halfExtent = spacing * GridHalfCells;
-            float viewDistance = (float)Vector3.Distance(viewPosition, plane.Origin);
+            float halfExtent = Mathf.Max(requestedHalfExtent, 0.0001f);
+            int halfCells = Mathf.Max(Mathf.FloorToInt(halfExtent / spacing), 0);
+            int lineStride = CalculateLineStride(halfCells);
+            var focusCoordinates = plane.ToPlane(focusPoint);
+            int focusTangentCell = Mathf.RoundToInt(focusCoordinates.X / spacing);
+            int focusBitangentCell = Mathf.RoundToInt(focusCoordinates.Y / spacing);
+            var snappedFocus = plane.ToWorld(new Float2(focusTangentCell * spacing, focusBitangentCell * spacing));
+            float viewDistance = (float)Vector3.Distance(viewPosition, snappedFocus);
             float distanceFade = Mathf.Saturate(1.0f - viewDistance / Mathf.Max(halfExtent * 8.0f, 1000.0f));
-            float baseAlpha = (isHoverPreview ? 0.48f : 0.72f) * Mathf.Lerp(0.3f, 1.0f, distanceFade);
-            float bias = Mathf.Max(0.08f, spacing * 0.008f);
-            var origin = plane.Origin + plane.Normal * bias;
-            var minor = new Color(0.28f, 0.68f, 0.9f, baseAlpha * 0.36f);
-            var major = new Color(0.35f, 0.8f, 1.0f, baseAlpha * 0.78f);
-            var tangentAxis = new Color(0.95f, 0.28f, 0.22f, baseAlpha);
-            var bitangentAxis = new Color(0.2f, 0.55f, 1.0f, baseAlpha);
+            float baseAlpha = (isHoverPreview ? 0.72f : 0.9f) * Mathf.Lerp(0.65f, 1.0f, distanceFade);
+            float bias = Mathf.Max(0.18f, spacing * 0.012f);
+            var origin = snappedFocus + plane.Normal * bias;
+            var minor = new Color(0.32f, 0.72f, 1.0f, baseAlpha * 0.82f);
+            var major = new Color(0.035f, 0.18f, 0.42f, baseAlpha);
+            var tangentAxis = new Color(0.015f, 0.08f, 0.24f, baseAlpha);
+            var bitangentAxis = tangentAxis;
 
-            for (int i = -GridHalfCells; i <= GridHalfCells; i++)
+            int firstTangentCell = Mathf.CeilToInt((float)(focusTangentCell - halfCells) / lineStride) * lineStride;
+            int lastTangentCell = focusTangentCell + halfCells;
+            for (int tangentCell = firstTangentCell; tangentCell <= lastTangentCell; tangentCell += lineStride)
             {
-                float offset = i * spacing;
-                bool axis = i == 0;
-                bool majorLine = !axis && i % plane.MajorLineInterval == 0;
-                var rowColor = axis ? tangentAxis : majorLine ? major : minor;
-                var columnColor = axis ? bitangentAxis : majorLine ? major : minor;
-                var rowCenter = origin + plane.Bitangent * offset;
+                float offset = (tangentCell - focusTangentCell) * spacing;
+                bool columnAxis = tangentCell == 0;
+                bool columnMajor = !columnAxis && tangentCell % plane.MajorLineInterval == 0;
+                var columnColor = columnAxis ? bitangentAxis : columnMajor ? major : minor;
                 var columnCenter = origin + plane.Tangent * offset;
-                DebugDraw.DrawLine(rowCenter - plane.Tangent * halfExtent, rowCenter + plane.Tangent * halfExtent, rowColor, 0.0f, true);
-                DebugDraw.DrawLine(columnCenter - plane.Bitangent * halfExtent, columnCenter + plane.Bitangent * halfExtent, columnColor, 0.0f, true);
+                DebugDraw.DrawLine(columnCenter - plane.Bitangent * halfExtent, columnCenter + plane.Bitangent * halfExtent, columnColor, 0.0f, false);
             }
 
-            DebugDraw.DrawLine(origin, origin + plane.Normal * spacing * 2.0f, new Color(0.38f, 1.0f, 0.42f, baseAlpha), 0.0f, false);
+            int firstBitangentCell = Mathf.CeilToInt((float)(focusBitangentCell - halfCells) / lineStride) * lineStride;
+            int lastBitangentCell = focusBitangentCell + halfCells;
+            for (int bitangentCell = firstBitangentCell; bitangentCell <= lastBitangentCell; bitangentCell += lineStride)
+            {
+                float offset = (bitangentCell - focusBitangentCell) * spacing;
+                bool rowAxis = bitangentCell == 0;
+                bool rowMajor = !rowAxis && bitangentCell % plane.MajorLineInterval == 0;
+                var rowColor = rowAxis ? tangentAxis : rowMajor ? major : minor;
+                var rowCenter = origin + plane.Bitangent * offset;
+                DebugDraw.DrawLine(rowCenter - plane.Tangent * halfExtent, rowCenter + plane.Tangent * halfExtent, rowColor, 0.0f, false);
+            }
+
+            var planeOrigin = plane.Origin + plane.Normal * bias;
+            DebugDraw.DrawLine(planeOrigin, planeOrigin + plane.Normal * spacing * 2.0f, new Color(0.38f, 1.0f, 0.42f, baseAlpha), 0.0f, false);
             if (hasSnap)
-                DrawSnapMarker(ref plane, ref snap, spacing);
+                DrawSnapMarker(ref plane, ref snap, spacing, snapMarkerSize);
         }
 
-        private static void DrawSnapMarker(ref CSGWorkingPlane plane, ref ViewportSnapResult snap, float spacing)
+        /// <summary>
+        /// Draws a stationary neutral grid for a face-axis drag and emphasizes the current snapped step.
+        /// </summary>
+        public void DrawFaceDragGuide(ref CSGWorkingPlane plane, Vector3 currentFaceCenter, float requestedHalfExtent)
         {
-            float radius = Mathf.Clamp(spacing * 0.22f, 1.5f, 15.0f);
+            if (!plane.IsValid)
+                return;
+
+            float spacing = Mathf.Max(plane.Spacing, 0.0001f);
+            float halfExtent = Mathf.Max(requestedHalfExtent, spacing);
+            int halfCells = Mathf.Max(Mathf.FloorToInt(halfExtent / spacing), 1);
+            int lineStride = CalculateLineStride(halfCells);
+            float bias = Mathf.Max(0.18f, spacing * 0.012f);
+            var origin = plane.Origin + plane.Normal * bias;
+            var minor = new Color(0.62f, 0.64f, 0.68f, 0.28f);
+            var major = new Color(0.72f, 0.74f, 0.78f, 0.42f);
+            var axis = new Color(0.84f, 0.85f, 0.88f, 0.5f);
+
+            int firstCell = Mathf.CeilToInt((float)-halfCells / lineStride) * lineStride;
+            for (int cell = firstCell; cell <= halfCells; cell += lineStride)
+            {
+                float offset = cell * spacing;
+                bool isAxis = cell == 0;
+                bool isMajor = !isAxis && cell % plane.MajorLineInterval == 0;
+                var color = isAxis ? axis : isMajor ? major : minor;
+                var columnCenter = origin + plane.Tangent * offset;
+                DebugDraw.DrawLine(columnCenter - plane.Bitangent * halfExtent, columnCenter + plane.Bitangent * halfExtent, color, 0.0f, false);
+                var rowCenter = origin + plane.Bitangent * offset;
+                DebugDraw.DrawLine(rowCenter - plane.Tangent * halfExtent, rowCenter + plane.Tangent * halfExtent, color, 0.0f, false);
+            }
+
+            var coordinates = plane.ToPlane(currentFaceCenter);
+            int activeStep = Mathf.RoundToInt(coordinates.Y / spacing);
+            float activeOffset = activeStep * spacing;
+            if (Mathf.Abs(activeOffset) <= halfExtent)
+            {
+                var activeCenter = origin + plane.Bitangent * activeOffset;
+                var activeColor = new Color(0.92f, 0.93f, 0.96f, 0.72f);
+                DebugDraw.DrawLine(activeCenter - plane.Tangent * halfExtent, activeCenter + plane.Tangent * halfExtent, activeColor, 0.0f, false);
+            }
+        }
+
+        private static int CalculateLineStride(int halfCells)
+        {
+            int stride = 1;
+            while (halfCells / stride > MaximumVisibleHalfLines)
+            {
+                if (stride == 1)
+                    stride = 2;
+                else if (stride == 2)
+                    stride = 5;
+                else
+                    stride *= 2;
+            }
+            return stride;
+        }
+
+        private static void DrawSnapMarker(ref CSGWorkingPlane plane, ref ViewportSnapResult snap, float spacing, float snapMarkerSize)
+        {
+            float size = snapMarkerSize > Mathf.Epsilon ? snapMarkerSize : Mathf.Clamp(spacing * 0.15f, 0.75f, 7.5f);
             var point = snap.Point + plane.Normal * Mathf.Max(0.12f, spacing * 0.012f);
-            var color = snap.Kind == ViewportSnapTargetKind.Grid
-                ? new Color(1.0f, 0.82f, 0.18f, 1.0f)
-                : new Color(0.35f, 1.0f, 0.52f, 1.0f);
-            DebugDraw.DrawLine(point - plane.Tangent * radius, point + plane.Tangent * radius, color, 0.0f, false);
-            DebugDraw.DrawLine(point - plane.Bitangent * radius, point + plane.Bitangent * radius, color, 0.0f, false);
-            DebugDraw.DrawWireSphere(new BoundingSphere(point, radius * 0.42f), color, 0.0f, false);
+            var color = new Color(1.0f, 0.82f, 0.12f, 1.0f);
+            var cube = new OrientedBoundingBox(new Vector3(-size * 0.5f), new Vector3(size * 0.5f))
+            {
+                Transformation = new Transform(point, Quaternion.LookRotation(-plane.Bitangent, plane.Normal)),
+            };
+            DebugDraw.DrawBox(cube, color, 0.0f, false);
+            DebugDraw.DrawWireBox(cube, new Color(0.55f, 0.38f, 0.02f, 1.0f), 0.0f, false);
         }
     }
 }

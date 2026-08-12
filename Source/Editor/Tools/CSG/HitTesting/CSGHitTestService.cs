@@ -30,6 +30,16 @@ namespace FlaxEditor.Tools.CSG.HitTesting
         Face,
 
         /// <summary>
+        /// A stable CSG brush edge.
+        /// </summary>
+        Edge,
+
+        /// <summary>
+        /// A stable CSG brush vertex.
+        /// </summary>
+        Vertex,
+
+        /// <summary>
         /// Non-CSG geometry that can be used for placement or snapping only.
         /// </summary>
         Placement,
@@ -156,6 +166,18 @@ namespace FlaxEditor.Tools.CSG.HitTesting
                     hit.Kind = CSGHitKind.Face;
                     hit.ComponentIndex = raw.Node.OrderInParent;
                 }
+                else if (raw.Node.CSGViewportSelection == CSGViewportSelectionKind.Edge)
+                {
+                    hit.Brush = raw.Node.ParentNode as BoxBrushNode;
+                    hit.Kind = CSGHitKind.Edge;
+                    hit.ComponentIndex = raw.Node.OrderInParent - 6;
+                }
+                else if (raw.Node.CSGViewportSelection == CSGViewportSelectionKind.Vertex)
+                {
+                    hit.Brush = raw.Node.ParentNode as BoxBrushNode;
+                    hit.Kind = CSGHitKind.Vertex;
+                    hit.ComponentIndex = raw.Node.OrderInParent - 18;
+                }
                 results.Add(hit);
             }
             results.Sort(HitComparer.Instance);
@@ -177,7 +199,9 @@ namespace FlaxEditor.Tools.CSG.HitTesting
         /// </summary>
         public static bool IsSelectable(CSGTool tool, ref CSGHit hit)
         {
-            if (tool == CSGTool.Edit || tool == CSGTool.Surface)
+            if (tool == CSGTool.Edit)
+                return hit.Kind == CSGHitKind.Brush || hit.Kind == CSGHitKind.Face || hit.Kind == CSGHitKind.Edge || hit.Kind == CSGHitKind.Vertex;
+            if (tool == CSGTool.Surface)
                 return hit.Kind == CSGHitKind.Face;
             return hit.Kind == CSGHitKind.Brush;
         }

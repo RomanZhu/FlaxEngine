@@ -27,12 +27,15 @@ public:
 
 private:
     AssetReference<Shader> _shader;
+    GPUShaderProgramCS* _csGenerateDensityNoise = nullptr;
     GPUShaderProgramCS* _csInitialize = nullptr;
     ComputeShaderPermutation<2> _csLightScattering;
     GPUShaderProgramCS* _csFinalIntegration = nullptr;
     GPUPipelineStatePermutationsPs<2> _psInjectLight;
     GPUBuffer* _vbCircleRasterize = nullptr;
     GPUBuffer* _ibCircleRasterize = nullptr;
+    GPUTexture* _densityNoiseTexture = nullptr;
+    bool _densityNoiseDirty = true;
     bool _isSupported = false;
 
 public:
@@ -54,9 +57,11 @@ private:
     {
         // TODO: this should reload all Materials that use VolumeParticleMaterialShader
         _psInjectLight.Release();
+        _csGenerateDensityNoise = nullptr;
         _csInitialize = nullptr;
         _csLightScattering.Clear();
         _csFinalIntegration = nullptr;
+        _densityNoiseDirty = true;
         invalidateResources();
     }
 #endif

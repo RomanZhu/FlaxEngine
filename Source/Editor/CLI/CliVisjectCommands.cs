@@ -228,7 +228,26 @@ namespace FlaxEditor
         private static object ParseValue(JToken json)
         {
             if (json == null || json.Type == JTokenType.Null) return null;
-            if (json.Type == JTokenType.String) return JsonConvert.DeserializeObject<object>(json.Value<string>());
+            if (json.Type == JTokenType.String)
+            {
+                var value = json.Value<string>();
+                if (Guid.TryParse(value, out var guid))
+                    return guid;
+                try
+                {
+                    var nested = JToken.Parse(value);
+                    if (nested.Type == JTokenType.String)
+                    {
+                        value = nested.Value<string>();
+                        return Guid.TryParse(value, out guid) ? guid : value;
+                    }
+                    return ParseValue(nested);
+                }
+                catch (JsonReaderException)
+                {
+                    return value;
+                }
+            }
             return json.Type switch
             {
                 JTokenType.Float => json.Value<float>(),

@@ -15,12 +15,15 @@
 #include "Engine/Graphics/Shaders/GPUVertexLayout.h"
 #include "Engine/Content/Assets/CubeTexture.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Core/Math/Mathd.h"
 #include "Engine/Engine/Engine.h"
+#include "Engine/Engine/Time.h"
 #include "Engine/Engine/Units.h"
 
 // Must match shader source
 int32 VolumetricFogGridInjectionGroupSize = 4;
 int32 VolumetricFogIntegrationGroupSize = 8;
+int32 VolumetricFogDensityNoiseSize = 64;
 #define VOLUMETRIC_FOG_GRID_Z_LINEAR 1
 
 GPU_CB_STRUCT(SkyLightData {
@@ -48,11 +51,15 @@ GPU_CB_STRUCT(Data {
     float PhaseG;
 
     Float2 VolumetricFogRange;
-    float Dummy0;
+    float VolumetricFogDistanceFade;
     float InverseSquaredLightDistanceBiasScale;
 
     Float4 FogParameters;
     Float4 GridSliceParameters;
+
+    Float4 DensityNoiseParameters0;
+    Float4 DensityNoiseParameters1;
+    Float4 DensityNoiseOffset;
 
     Matrix PrevWorldToClip;
 
@@ -123,6 +130,7 @@ bool VolumetricFogPass::setupResources()
     CHECK_INVALID_SHADER_PASS_CB_SIZE(shader, 2, PerLight);
 
     // Cache compute shaders
+    _csGenerateDensityNoise = shader->GetCS("CS_GenerateDensityNoise");
     _csInitialize = shader->GetCS("CS_Initialize");
     _csLightScattering.Get(shader, "CS_LightScattering");
     _csFinalIntegration = shader->GetCS("CS_FinalIntegration");
@@ -149,11 +157,13 @@ void VolumetricFogPass::Dispose()
 
     // Cleanup
     _psInjectLight.Delete();
+    _csGenerateDensityNoise = nullptr;
     _csInitialize = nullptr;
     _csLightScattering.Clear();
     _csFinalIntegration = nullptr;
     SAFE_DELETE_GPU_RESOURCE(_vbCircleRasterize);
     SAFE_DELETE_GPU_RESOURCE(_ibCircleRasterize);
+    SAFE_DELETE_GPU_RESOURCE(_densityNoiseTexture);
     _shader = nullptr;
 }
 
@@ -222,8 +232,8 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
     auto& options = fog.VolumetricFog;
 
     // Setup configuration
-    cache.FogJitter = true;
-    cache.HistoryWeight = 0.92f;
+    cache.FogJitter = options.TemporalReprojection && options.HistoryWeight > ZeroTolerance;
+    cache.HistoryWeight = options.TemporalReprojection ? options.HistoryWeight : 0.0f;
     cache.InverseSquaredLightDistanceBiasScale = 1.0f;
     switch (Graphics::VolumetricFogQuality)
     {
@@ -296,6 +306,24 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
     cache.Data.HistoryWeight = cache.HistoryWeight;
     cache.Data.FogParameters = options.FogParameters;
     cache.Data.GridSliceParameters = GetGridSliceParameters(fogStart, fogData.MaxDistance, cache.GridSizeZ);
+    const float densityNoiseInvScale = 1.0f / options.DensityNoiseScale;
+    cache.Data.DensityNoiseParameters0 = Float4(densityNoiseInvScale, options.DensityNoiseLacunarity, options.DensityNoiseGain, options.DensityNoiseInfluence);
+    cache.Data.DensityNoiseParameters1 = Float4(options.DensityNoiseMin, options.DensityNoiseMax, (float)options.DensityNoiseOctaves, options.DensityNoiseEnable ? 1.0f : 0.0f);
+    const double densityNoiseTime = Time::Draw.UnscaledTime.GetTotalSeconds();
+    const float densityNoiseSeed = (float)options.DensityNoiseSeed;
+    const Float3 densityNoiseSeedOffset(
+        Math::Mod(densityNoiseSeed * 0.1031f, 1.0f),
+        Math::Mod(densityNoiseSeed * 0.11369f, 1.0f),
+        Math::Mod(densityNoiseSeed * 0.13787f, 1.0f));
+    const Float3 densityNoiseWindOffset(
+        (float)Math::Mod(options.DensityNoiseVelocity.X * densityNoiseTime * densityNoiseInvScale, 1.0),
+        (float)Math::Mod(options.DensityNoiseVelocity.Y * densityNoiseTime * densityNoiseInvScale, 1.0),
+        (float)Math::Mod(options.DensityNoiseVelocity.Z * densityNoiseTime * densityNoiseInvScale, 1.0));
+    const Float3 densityNoiseOriginOffset(
+        (float)Math::Mod(renderContext.View.Origin.X * densityNoiseInvScale, 1.0),
+        (float)Math::Mod(renderContext.View.Origin.Y * densityNoiseInvScale, 1.0),
+        (float)Math::Mod(renderContext.View.Origin.Z * densityNoiseInvScale, 1.0));
+    cache.Data.DensityNoiseOffset = Float4(densityNoiseSeedOffset + densityNoiseOriginOffset - densityNoiseWindOffset, 0.0f);
     /*static bool log = true;
     if (log)
     {
@@ -311,6 +339,7 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
     cache.Data.InverseSquaredLightDistanceBiasScale = cache.InverseSquaredLightDistanceBiasScale;
     cache.Data.PhaseG = options.ScatteringDistribution;
     cache.Data.VolumetricFogRange = Float2(fogStart, options.Distance);
+    cache.Data.VolumetricFogDistanceFade = options.DistanceFade;
     cache.Data.MissedHistorySamplesCount = Math::Clamp(cache.MissedHistorySamplesCount, 1, (int32)ARRAY_COUNT(cache.Data.FrameJitterOffsets));
     Matrix::Transpose(renderContext.View.PrevViewProjection, cache.Data.PrevWorldToClip);
     cache.Data.SkyLight.VolumetricScatteringIntensity = 0;
@@ -339,6 +368,40 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
     }
 
     // Set constant buffer data
+    if (cache.Data.DensityNoiseParameters1.W > 0.5f)
+    {
+        if (_densityNoiseTexture == nullptr)
+        {
+            _densityNoiseTexture = GPUDevice::Instance->CreateTexture(TEXT("VolumetricFog.DensityNoise"));
+            const auto desc = GPUTextureDescription::New3D(
+                VolumetricFogDensityNoiseSize,
+                VolumetricFogDensityNoiseSize,
+                VolumetricFogDensityNoiseSize,
+                PixelFormat::R16_Float,
+                GPUTextureFlags::ShaderResource | GPUTextureFlags::UnorderedAccess);
+            if (_densityNoiseTexture->Init(desc))
+            {
+                LOG(Warning, "Failed to create the volumetric fog density noise texture.");
+                SAFE_DELETE_GPU_RESOURCE(_densityNoiseTexture);
+                cache.Data.DensityNoiseParameters1.W = 0.0f;
+            }
+            else
+            {
+                _densityNoiseDirty = true;
+            }
+        }
+        if (_densityNoiseTexture && _densityNoiseDirty)
+        {
+            PROFILE_GPU("Generate Density Noise");
+            context->ResetRenderTarget();
+            context->BindUA(0, _densityNoiseTexture->ViewVolume());
+            const int32 groupCount = Math::DivideAndRoundUp(VolumetricFogDensityNoiseSize, VolumetricFogGridInjectionGroupSize);
+            context->Dispatch(_csGenerateDensityNoise, groupCount, groupCount, groupCount);
+            context->ResetUA();
+            _densityNoiseDirty = false;
+        }
+    }
+
     auto cb0 = _shader->GetShader()->GetCB(0);
     context->UpdateCB(cb0, &cache.Data);
 
@@ -523,7 +586,9 @@ void VolumetricFogPass::Render(RenderContext& renderContext)
         context->ResetRenderTarget();
         context->BindUA(0, vBufferA->ViewVolume());
         context->BindUA(1, vBufferB->ViewVolume());
+        context->BindSR(0, _densityNoiseTexture ? _densityNoiseTexture->ViewVolume() : nullptr);
         context->Dispatch(_csInitialize, groupCountX, groupCountY, groupCountZ);
+        context->ResetSR();
         context->ResetUA();
     }
 

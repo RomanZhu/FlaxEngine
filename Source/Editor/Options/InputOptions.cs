@@ -343,6 +343,10 @@ namespace FlaxEditor.Options
         [EditorDisplay("Gizmo"), EditorOrder(1060)]
         public InputBinding TogglePivot = new InputBinding(KeyboardKeys.Z);
 
+        [DefaultValue(typeof(InputBinding), "Tab")]
+        [EditorDisplay("Gizmo", "Toggle Authoring / Object Mode"), EditorOrder(1070)]
+        public InputBinding ToggleContextualAuthoringMode = new InputBinding(KeyboardKeys.Tab);
+
         #endregion
 
         #region CSG Authoring
@@ -390,6 +394,10 @@ namespace FlaxEditor.Options
         [DefaultValue(typeof(InputBinding), "None")]
         [EditorDisplay("CSG Authoring", "Duplicate Modifier"), EditorOrder(1200)]
         public InputBinding CSGDuplicateModifier = new InputBinding(KeyboardKeys.None);
+
+        [DefaultValue(typeof(InputBinding), "None")]
+        [EditorDisplay("CSG Authoring", "Align to Surface Normal Modifier"), EditorOrder(1205)]
+        public InputBinding CSGAlignNormalModifier = new InputBinding(KeyboardKeys.None);
 
         [DefaultValue(typeof(InputBinding), "Return")]
         [EditorDisplay("CSG Authoring", "Commit Interaction"), EditorOrder(1210)]

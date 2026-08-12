@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using FlaxEditor.Content;
 using FlaxEditor.Gizmo;
@@ -40,6 +41,7 @@ namespace FlaxEditor.Viewport
         private readonly DragAssets<DragDropEventArgs> _dragAssets;
         private readonly DragActorType<DragDropEventArgs> _dragActorType;
         private readonly DragScriptItems<DragDropEventArgs> _dragScriptItem;
+        private readonly List<ActorNode> _brushNodes = new List<ActorNode>(32);
 
         private StaticModel _previewStaticModel;
         private int _previewModelEntryIndex;
@@ -119,23 +121,57 @@ namespace FlaxEditor.Viewport
         {
             if (_dragAssets.HasValidDrag && _dragAssets.Objects[0].IsOfType<MaterialBase>())
             {
-                GetHitLocation(ref location, out var hit, out _, out _);
+                GetHitLocation(ref location, out var hit, out var hitLocation, out _);
                 ClearDragEffects();
                 var material = FlaxEngine.Content.LoadAsync<MaterialBase>(_dragAssets.Objects[0].ID);
                 if (material.IsDecal)
                     return;
 
-                if (hit is StaticModelNode staticModelNode)
+                var brushSurfaceNode = ResolveBrushSurface(hit, ref location, hitLocation);
+                if (brushSurfaceNode != null)
+                {
+                    _previewBrushSurface = brushSurfaceNode.Surface;
+                }
+                else if (hit is StaticModelNode staticModelNode)
                 {
                     _previewStaticModel = (StaticModel)staticModelNode.Actor;
                     var ray = _viewport.ConvertMouseToRay(ref location);
                     _previewStaticModel.IntersectsEntry(ref ray, out _, out _, out _previewModelEntryIndex);
                 }
-                else if (hit is BoxBrushNode.SideLinkNode brushSurfaceNode)
+            }
+        }
+
+        private BoxBrushNode.SideLinkNode ResolveBrushSurface(SceneGraphNode hit, ref Float2 location, Vector3 hitLocation)
+        {
+            if (hit is BoxBrushNode.SideLinkNode directSurface)
+                return directSurface;
+
+            var ray = _viewport.ConvertMouseToRay(ref location);
+            double hitDistance = Vector3.Distance(ray.Position, hitLocation);
+            double tolerance = Math.Max(0.01, hitDistance * 0.00001);
+            double closestDistance = double.MaxValue;
+            BoxBrushNode.SideLinkNode closest = null;
+            var rayCastData = new SceneGraphNode.RayCastData { Ray = ray };
+
+            _brushNodes.Clear();
+            _owner.SceneGraphRoot.GetAllChildActorNodes(_brushNodes);
+            for (int actorIndex = 0; actorIndex < _brushNodes.Count; actorIndex++)
+            {
+                if (_brushNodes[actorIndex] is not BoxBrushNode brushNode || !brushNode.IsActiveInHierarchy)
+                    continue;
+                for (int childIndex = 0; childIndex < 6; childIndex++)
                 {
-                    _previewBrushSurface = brushSurfaceNode.Surface;
+                    if (brushNode.ChildNodes[childIndex] is not BoxBrushNode.SideLinkNode surfaceNode ||
+                        !surfaceNode.RayCastSelf(ref rayCastData, out var distance, out _))
+                        continue;
+                    double candidateDistance = distance;
+                    if (candidateDistance < 0.0 || Math.Abs(candidateDistance - hitDistance) > tolerance || candidateDistance >= closestDistance)
+                        continue;
+                    closestDistance = candidateDistance;
+                    closest = surfaceNode;
                 }
             }
+            return closest;
         }
 
         private void GetHitLocation(ref Float2 location, out SceneGraphNode hit, out Vector3 hitLocation, out Vector3 hitNormal, bool includeColliders = false)
@@ -266,6 +302,7 @@ namespace FlaxEditor.Viewport
             if (item.IsOfType<MaterialBase>())
             {
                 var material = FlaxEngine.Content.LoadAsync<MaterialBase>(item.ID);
+                var brushSurfaceNode = ResolveBrushSurface(hit, ref location, hitLocation);
                 if (material && !material.WaitForLoaded(500) && material.IsDecal)
                 {
                     var actor = new Decal
@@ -276,6 +313,15 @@ namespace FlaxEditor.Viewport
                     };
                     Spawn(actor, ref hitLocation, ref hitNormal);
                 }
+                else if (brushSurfaceNode != null)
+                {
+                    using (new UndoBlock(_owner.Undo, brushSurfaceNode.Brush, "Change material"))
+                    {
+                        var surface = brushSurfaceNode.Surface;
+                        surface.Material = material;
+                        brushSurfaceNode.Surface = surface;
+                    }
+                }
                 else if (hit is StaticModelNode staticModelNode)
                 {
                     var staticModel = (StaticModel)staticModelNode.Actor;
@@ -284,15 +330,6 @@ namespace FlaxEditor.Viewport
                     {
                         using (new UndoBlock(_owner.Undo, staticModel, "Change material"))
                             staticModel.SetMaterial(entryIndex, material);
-                    }
-                }
-                else if (hit is BoxBrushNode.SideLinkNode brushSurfaceNode)
-                {
-                    using (new UndoBlock(_owner.Undo, brushSurfaceNode.Brush, "Change material"))
-                    {
-                        var surface = brushSurfaceNode.Surface;
-                        surface.Material = material;
-                        brushSurfaceNode.Surface = surface;
                     }
                 }
                 return;

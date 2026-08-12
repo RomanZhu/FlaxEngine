@@ -153,7 +153,8 @@ namespace FlaxEditor.Tools.CSG.Transactions
                 IUndoAction action = actions.Count == 1 ? actions[0] : new MultiUndoAction(actions, actionString);
                 undo.AddAction(action);
             }
-            RequestRebuilds(true);
+            if (actions.Count != 0)
+                RequestRebuilds(true);
             _telemetry.State = CSGTransactionState.Committed;
             _performedActions.Clear();
             _rollbackCallbacks.Clear();

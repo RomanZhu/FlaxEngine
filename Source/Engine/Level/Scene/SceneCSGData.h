@@ -37,9 +37,20 @@ namespace CSG
         DateTime BuildTime;
 
         /// <summary>
-        /// The model mesh (used for rendering).
+        /// The persisted CSG model mesh.
         /// </summary>
         AssetReference<Model> Model;
+
+        /// <summary>
+        /// The transient model used for live CSG rendering. It is kept separate from the persisted model so asset reloading never interrupts the viewport.
+        /// </summary>
+        AssetReference<::Model> PreviewModel;
+
+        /// <summary>
+        /// The inactive transient model reused by the next live CSG update.
+        /// Preview publication is synchronized with rendering before this is mutated.
+        /// </summary>
+        AssetReference<::Model> PreviewModelCache;
 
         /// <summary>
         /// The CSG mesh raw data.
@@ -72,6 +83,14 @@ namespace CSG
         /// Determines whether this container has CSG data linked.
         /// </summary>
         bool HasData() const;
+
+        /// <summary>
+        /// Gets the model to use for rendering CSG geometry.
+        /// </summary>
+        FORCE_INLINE ::Model* GetModelForRendering() const
+        {
+            return PreviewModel ? PreviewModel.Get() : Model.Get();
+        }
 
     public:
         struct SurfaceData

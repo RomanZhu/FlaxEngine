@@ -73,6 +73,16 @@ namespace FlaxEditor.SceneGraph
         /// The node represents a stable CSG face.
         /// </summary>
         Face,
+
+        /// <summary>
+        /// The node represents a stable CSG edge.
+        /// </summary>
+        Edge,
+
+        /// <summary>
+        /// The node represents a stable CSG vertex.
+        /// </summary>
+        Vertex,
     }
 
     /// <summary>

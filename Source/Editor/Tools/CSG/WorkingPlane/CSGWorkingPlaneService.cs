@@ -67,7 +67,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
         /// <summary>
         /// Derives and stores a hover plane unless a lock or transaction freeze owns the plane.
         /// </summary>
-        public bool TrySetHover(Vector3 hitPoint, Vector3 hitNormal, Vector3 preferredTangent, Ray pointerRay, float spacing, Guid sourceActorId, int sourceComponentIndex)
+        public bool TrySetHover(Vector3 hitPoint, Vector3 hitNormal, Vector3 preferredTangent, Ray pointerRay, float spacing, Guid sourceActorId, int sourceComponentIndex, bool isSurfaceDerived = false)
         {
             if (_isLocked || _isFrozen)
                 return false;
@@ -78,6 +78,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
                 return false;
             }
 
+            plane.IsSurfaceDerived |= isSurfaceDerived;
             _hoverPlane = plane;
             _hasHover = true;
             return true;
@@ -159,6 +160,18 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
         }
 
         /// <summary>
+        /// Freezes an explicitly captured plane. Used by thresholded interactions whose
+        /// hover plane may change between pointer-down and transaction start.
+        /// </summary>
+        public void Freeze(ref CSGWorkingPlane plane)
+        {
+            if (_isFrozen || !plane.IsValid)
+                return;
+            _frozenPlane = plane;
+            _isFrozen = true;
+        }
+
+        /// <summary>
         /// Releases a transaction-frozen plane.
         /// </summary>
         public void Unfreeze()
@@ -185,6 +198,22 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
             }
             point = ray.Position + ray.Direction * distance;
             return true;
+        }
+
+        /// <summary>
+        /// Aligns the normal coordinate of an axis-aligned plane to the world grid.
+        /// Arbitrarily oriented surface planes retain their surface-local origin.
+        /// </summary>
+        public static void AlignAxisAlignedOriginToGrid(ref CSGWorkingPlane plane, float spacing)
+        {
+            if (!plane.IsValid || spacing <= 0.0001f)
+                return;
+            var normal = Vector3.Abs(plane.Normal);
+            if (Mathf.Max((float)normal.X, Mathf.Max((float)normal.Y, (float)normal.Z)) < 0.999999f)
+                return;
+            float distance = (float)Vector3.Dot(plane.Origin, plane.Normal);
+            float snappedDistance = Mathf.Round(distance / spacing) * spacing;
+            plane.Origin += plane.Normal * (snappedDistance - distance);
         }
 
         /// <summary>
@@ -230,6 +259,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
                 MajorLineInterval = Mathf.Max(majorLineInterval, 1),
                 SourceActorId = sourceActorId,
                 SourceComponentIndex = sourceComponentIndex,
+                IsSurfaceDerived = sourceActorId != Guid.Empty && sourceComponentIndex >= 0,
                 IsValid = true,
             };
             return true;

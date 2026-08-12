@@ -403,16 +403,21 @@ namespace FlaxEditor.Gizmo
             _isDisabled = ShouldGizmoBeLocked();
 
             float brightness = _isDisabled ? options.Visual.TransformGizmoBrightnessDisabled : options.Visual.TransformGizmoBrightness;
+            // Custom gizmo materials may bake their final color without exposing the legacy
+            // Brightness parameter. Querying a missing parameter logs every frame, so treat
+            // brightness as an optional material capability.
+            if (_materialAxisX.GetParameter(_brightnessParamName) == null)
+                return;
             var currentValue = _materialAxisX.GetParameterValue(_brightnessParamName);
             if (currentValue is not float currentValueFloat || Mathf.NearEqual(brightness, currentValueFloat))
                 return;
-            _materialAxisX.SetParameterValue(_brightnessParamName, brightness);
-            _materialAxisY.SetParameterValue(_brightnessParamName, brightness);
-            _materialAxisZ.SetParameterValue(_brightnessParamName, brightness);
-            _materialAxisBack.SetParameterValue(_brightnessParamName, brightness);
-            _materialVertexSnapPoint.SetParameterValue(_brightnessParamName, brightness);
-            _materialVertexSnapTargetPoint.SetParameterValue(_brightnessParamName, brightness);
-            _materialVertexSnapPointShadow.SetParameterValue(_brightnessParamName, brightness);
+            _materialAxisX.SetParameterValue(_brightnessParamName, brightness, false);
+            _materialAxisY.SetParameterValue(_brightnessParamName, brightness, false);
+            _materialAxisZ.SetParameterValue(_brightnessParamName, brightness, false);
+            _materialAxisBack.SetParameterValue(_brightnessParamName, brightness, false);
+            _materialVertexSnapPoint.SetParameterValue(_brightnessParamName, brightness, false);
+            _materialVertexSnapTargetPoint.SetParameterValue(_brightnessParamName, brightness, false);
+            _materialVertexSnapPointShadow.SetParameterValue(_brightnessParamName, brightness, false);
         }
 
         private bool ShouldGizmoBeLocked()
@@ -744,7 +749,8 @@ namespace FlaxEditor.Gizmo
 
         private bool ShouldDrawTranslationDistance()
         {
-            return _isDrawingTranslationDistance &&
+            return !IsConstrainedSupplementalTranslation &&
+                   _isDrawingTranslationDistance &&
                    _activeMode == Mode.Translate &&
                    IsTranslateAxis(_activeAxis) &&
                    Owner.IsLeftMouseButtonDown &&
@@ -906,7 +912,7 @@ namespace FlaxEditor.Gizmo
 
         private void DrawVertexSnapPointHighlights(ref RenderContext renderContext, Mesh sphereMesh, sbyte sortOrder)
         {
-            if (!_isActive || !IsActive)
+            if (!_isActive || !IsInteractionActive)
                 return;
             if (_isVertexSnapTemporaryPivot)
                 return;
@@ -960,7 +966,7 @@ namespace FlaxEditor.Gizmo
 
         private void DrawVertexSnapEdgeHighlights()
         {
-            if (!_isActive || !IsActive || !Owner.SnapToVertex || _vertexSnapObject == null)
+            if (!_isActive || !IsInteractionActive || !Owner.SnapToVertex || _vertexSnapObject == null)
                 return;
 
             var features = Render2D.Features;
@@ -990,7 +996,7 @@ namespace FlaxEditor.Gizmo
         /// <inheritdoc />
         public override void Draw(ref RenderContext renderContext)
         {
-            if (!_isActive || !IsActive || !_gizmoProjectionValid)
+            if (!_isActive || !IsInteractionActive || !_gizmoProjectionValid)
                 return;
             if (!_modelCube || !_modelCube.IsLoaded)
                 return;

@@ -17,7 +17,7 @@ namespace FlaxEditor.Tools.CSG
         SelectPlace,
 
         /// <summary>
-        /// Draws a new brush footprint and extrusion.
+        /// Draws a new brush footprint and extrusion, then keeps the created box available for editing.
         /// </summary>
         Draw,
 
@@ -56,6 +56,30 @@ namespace FlaxEditor.Tools.CSG
         /// Keeps the intersection with brush volume. Reserved for a later milestone.
         /// </summary>
         Intersecting,
+    }
+
+    /// <summary>Orientation behavior used while Shift-dragging brushes onto scene surfaces.</summary>
+    public enum CSGRayPlacementAlignment
+    {
+        /// <summary>Rotates the configured source side to follow the complete surface normal.</summary>
+        AlignToSurface,
+
+        /// <summary>Keeps the destination direction horizontal so placed brushes remain consistently upright.</summary>
+        AlignSurfaceUp,
+
+        /// <summary>Moves the brush onto the surface without changing its orientation.</summary>
+        KeepRotation,
+    }
+
+    /// <summary>Local brush side treated as the front during ray placement.</summary>
+    public enum CSGRayPlacementFront
+    {
+        Front,
+        Back,
+        Left,
+        Right,
+        Top,
+        Bottom,
     }
 
     /// <summary>
@@ -116,6 +140,11 @@ namespace FlaxEditor.Tools.CSG
         public bool SnappingEnabled;
 
         /// <summary>
+        /// Whether face edits may snap to aligned faces on other CSG brushes.
+        /// </summary>
+        public bool BrushAlignmentSnappingEnabled;
+
+        /// <summary>
         /// The current linear snap increment.
         /// </summary>
         public float SnapIncrement;
@@ -124,6 +153,12 @@ namespace FlaxEditor.Tools.CSG
         /// The visible CSG categories.
         /// </summary>
         public CSGVisibility Visibility;
+
+        /// <summary>The active ray-placement orientation behavior.</summary>
+        public CSGRayPlacementAlignment RayPlacementAlignment;
+
+        /// <summary>The local brush side used as the ray-placement front.</summary>
+        public CSGRayPlacementFront RayPlacementFront;
     }
 
     /// <summary>
@@ -135,14 +170,17 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>
         /// Supported snap increments in engine units.
         /// </summary>
-        public static readonly float[] SnapIncrements = { 1.0f, 5.0f, 10.0f, 25.0f, 50.0f, 100.0f };
+        public static readonly float[] SnapIncrements = { 5.0f, 15.0f, 25.0f, 50.0f, 100.0f, 200.0f };
 
         private CSGTool _tool = CSGTool.SelectPlace;
         private CSGOperation _operation = CSGOperation.Additive;
         private bool _workingPlaneLocked;
         private bool _snappingEnabled = true;
-        private float _snapIncrement = 10.0f;
+        private bool _brushAlignmentSnappingEnabled;
+        private float _snapIncrement = 15.0f;
         private CSGVisibility _visibility = CSGVisibility.Default;
+        private CSGRayPlacementAlignment _rayPlacementAlignment = CSGRayPlacementAlignment.AlignToSurface;
+        private CSGRayPlacementFront _rayPlacementFront = CSGRayPlacementFront.Top;
 
         /// <summary>
         /// Occurs whenever persistent or transient tool state changes.
@@ -205,6 +243,12 @@ namespace FlaxEditor.Tools.CSG
         public bool SnappingEnabled => _snappingEnabled;
 
         /// <summary>
+        /// Gets whether face edits may snap to aligned faces on other CSG brushes.
+        /// Passive alignment guides remain visible regardless of this setting.
+        /// </summary>
+        public bool BrushAlignmentSnappingEnabled => _brushAlignmentSnappingEnabled;
+
+        /// <summary>
         /// Gets the active snap increment in engine units.
         /// </summary>
         public float SnapIncrement => _snapIncrement;
@@ -213,6 +257,12 @@ namespace FlaxEditor.Tools.CSG
         /// Gets the visible CSG categories.
         /// </summary>
         public CSGVisibility Visibility => _visibility;
+
+        /// <summary>Gets the orientation behavior used for Shift surface placement.</summary>
+        public CSGRayPlacementAlignment RayPlacementAlignment => _rayPlacementAlignment;
+
+        /// <summary>Gets the local side treated as front for Shift surface placement.</summary>
+        public CSGRayPlacementFront RayPlacementFront => _rayPlacementFront;
 
         /// <summary>
         /// Gets a value indicating whether the snapping override key is held.
@@ -238,6 +288,11 @@ namespace FlaxEditor.Tools.CSG
         /// Gets a value indicating whether the duplicate modifier key is held.
         /// </summary>
         public bool DuplicateModifierActive { get; private set; }
+
+        /// <summary>
+        /// Gets a value indicating whether explicit surface-normal alignment is requested.
+        /// </summary>
+        public bool AlignNormalModifierActive { get; private set; }
 
         /// <summary>
         /// Gets a value indicating whether a CSG interaction is active.
@@ -346,13 +401,24 @@ namespace FlaxEditor.Tools.CSG
         }
 
         /// <summary>
+        /// Sets brush-to-brush face alignment snapping.
+        /// </summary>
+        public void SetBrushAlignmentSnappingEnabled(bool value)
+        {
+            if (_brushAlignmentSnappingEnabled == value)
+                return;
+            _brushAlignmentSnappingEnabled = value;
+            Changed?.Invoke();
+        }
+
+        /// <summary>
         /// Sets the linear snap increment.
         /// </summary>
         /// <param name="value">The new positive increment.</param>
         public void SetSnapIncrement(float value)
         {
             if (float.IsNaN(value) || float.IsInfinity(value))
-                value = 10.0f;
+                value = 15.0f;
             value = Mathf.Max(value, 0.0001f);
             if (Mathf.NearEqual(_snapIncrement, value))
                 return;
@@ -383,6 +449,43 @@ namespace FlaxEditor.Tools.CSG
         }
 
         /// <summary>
+        /// Steps to the next larger or smaller supported linear snap increment.
+        /// </summary>
+        /// <param name="direction">Positive to increase, negative to decrease.</param>
+        public void StepSnapIncrement(int direction)
+        {
+            if (direction == 0)
+                return;
+
+            if (direction > 0)
+            {
+                int next = SnapIncrements.Length - 1;
+                for (int i = 0; i < SnapIncrements.Length; i++)
+                {
+                    if (SnapIncrements[i] > _snapIncrement && !Mathf.NearEqual(SnapIncrements[i], _snapIncrement))
+                    {
+                        next = i;
+                        break;
+                    }
+                }
+                SetSnapIncrement(SnapIncrements[next]);
+            }
+            else
+            {
+                int next = 0;
+                for (int i = SnapIncrements.Length - 1; i >= 0; i--)
+                {
+                    if (SnapIncrements[i] < _snapIncrement && !Mathf.NearEqual(SnapIncrements[i], _snapIncrement))
+                    {
+                        next = i;
+                        break;
+                    }
+                }
+                SetSnapIncrement(SnapIncrements[next]);
+            }
+        }
+
+        /// <summary>
         /// Sets the visible CSG categories.
         /// </summary>
         /// <param name="value">The visibility flags.</param>
@@ -391,6 +494,24 @@ namespace FlaxEditor.Tools.CSG
             if (_visibility == value)
                 return;
             _visibility = value;
+            Changed?.Invoke();
+        }
+
+        /// <summary>Sets the orientation behavior used for Shift surface placement.</summary>
+        public void SetRayPlacementAlignment(CSGRayPlacementAlignment value)
+        {
+            if (_rayPlacementAlignment == value)
+                return;
+            _rayPlacementAlignment = value;
+            Changed?.Invoke();
+        }
+
+        /// <summary>Sets the local brush side treated as front for Shift surface placement.</summary>
+        public void SetRayPlacementFront(CSGRayPlacementFront value)
+        {
+            if (_rayPlacementFront == value)
+                return;
+            _rayPlacementFront = value;
             Changed?.Invoke();
         }
 
@@ -437,7 +558,7 @@ namespace FlaxEditor.Tools.CSG
         /// <returns>True if an interaction was cancelled.</returns>
         public bool TryCancel(EditorGizmoModeCancelReason reason)
         {
-            bool changed = HasActiveInteraction || SnapOverrideActive || SquareConstraintActive || SymmetricConstraintActive || DuplicateModifierActive;
+            bool changed = HasActiveInteraction || SnapOverrideActive || SquareConstraintActive || SymmetricConstraintActive || DuplicateModifierActive || AlignNormalModifierActive;
             if (!changed)
                 return false;
 
@@ -452,14 +573,15 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>
         /// Sets transient authoring modifier state.
         /// </summary>
-        public void SetTransientModifiers(bool snapOverride, bool square, bool symmetric, bool duplicate)
+        public void SetTransientModifiers(bool snapOverride, bool square, bool symmetric, bool duplicate, bool alignNormal = false)
         {
-            if (SnapOverrideActive == snapOverride && SquareConstraintActive == square && SymmetricConstraintActive == symmetric && DuplicateModifierActive == duplicate)
+            if (SnapOverrideActive == snapOverride && SquareConstraintActive == square && SymmetricConstraintActive == symmetric && DuplicateModifierActive == duplicate && AlignNormalModifierActive == alignNormal)
                 return;
             SnapOverrideActive = snapOverride;
             SquareConstraintActive = square;
             SymmetricConstraintActive = symmetric;
             DuplicateModifierActive = duplicate;
+            AlignNormalModifierActive = alignNormal;
             Changed?.Invoke();
         }
 
@@ -474,8 +596,11 @@ namespace FlaxEditor.Tools.CSG
                 Operation = Operation,
                 WorkingPlaneLocked = WorkingPlaneLocked,
                 SnappingEnabled = SnappingEnabled,
+                BrushAlignmentSnappingEnabled = BrushAlignmentSnappingEnabled,
                 SnapIncrement = SnapIncrement,
                 Visibility = Visibility,
+                RayPlacementAlignment = RayPlacementAlignment,
+                RayPlacementFront = RayPlacementFront,
             };
         }
 
@@ -500,8 +625,15 @@ namespace FlaxEditor.Tools.CSG
             _operation = state.Operation == CSGOperation.Subtractive ? CSGOperation.Subtractive : CSGOperation.Additive;
             _workingPlaneLocked = state.WorkingPlaneLocked;
             _snappingEnabled = state.SnappingEnabled;
-            _snapIncrement = float.IsNaN(state.SnapIncrement) || float.IsInfinity(state.SnapIncrement) ? 10.0f : Mathf.Max(state.SnapIncrement, 0.0001f);
+            _brushAlignmentSnappingEnabled = state.BrushAlignmentSnappingEnabled;
+            _snapIncrement = float.IsNaN(state.SnapIncrement) || float.IsInfinity(state.SnapIncrement) ? 15.0f : Mathf.Max(state.SnapIncrement, 0.0001f);
             _visibility = state.Visibility & (CSGVisibility.SourceBrushes | CSGVisibility.BuiltGeometry | CSGVisibility.HiddenBrushes);
+            _rayPlacementAlignment = state.RayPlacementAlignment is CSGRayPlacementAlignment.AlignToSurface or CSGRayPlacementAlignment.AlignSurfaceUp or CSGRayPlacementAlignment.KeepRotation
+                ? state.RayPlacementAlignment
+                : CSGRayPlacementAlignment.AlignToSurface;
+            _rayPlacementFront = state.RayPlacementFront is CSGRayPlacementFront.Front or CSGRayPlacementFront.Back or CSGRayPlacementFront.Left or CSGRayPlacementFront.Right or CSGRayPlacementFront.Top or CSGRayPlacementFront.Bottom
+                ? state.RayPlacementFront
+                : CSGRayPlacementFront.Top;
             TryCancel(EditorGizmoModeCancelReason.SceneChanged);
             Changed?.Invoke();
         }
@@ -512,6 +644,7 @@ namespace FlaxEditor.Tools.CSG
             SquareConstraintActive = false;
             SymmetricConstraintActive = false;
             DuplicateModifierActive = false;
+            AlignNormalModifierActive = false;
         }
     }
 }

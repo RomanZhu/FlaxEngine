@@ -6,7 +6,9 @@
 #include "./Flax/Common.hlsl"
 
 // Maximum number of directional light shadows cascaded splits
-#define MaxNumCascades 4
+#define MaxNumCascades 5
+#define FAR_SHADOW_TRANSITION_FADE 0
+#define FAR_SHADOW_TRANSITION_DITHER 1
 
 // Set default macros if not provided
 #ifndef SHADOWS_QUALITY
@@ -23,6 +25,9 @@ struct ShadowData
     float Bias;
     uint TilesCount;
     float4 CascadeSplits;
+    float FarCascadeSplit;
+    float FarCascadeTransitionDistance;
+    uint FarCascadeTransitionMode;
 };
 
 // Shadow projection tile data for the light
@@ -38,6 +43,7 @@ ShadowData LoadShadowsBuffer(Buffer<float4> shadowsBuffer, uint shadowsBufferAdd
     // This must match C++
     float4 vector0 = shadowsBuffer.Load(shadowsBufferAddress + 0);
     float4 vector1 = shadowsBuffer.Load(shadowsBufferAddress + 1);
+    float4 vector2 = shadowsBuffer.Load(shadowsBufferAddress + 2);
     ShadowData shadow;
     uint packed0x = asuint(vector0.x);
     shadow.Sharpness = (packed0x & 0x000000ff) * (10.0f / 255.0f);
@@ -47,14 +53,24 @@ ShadowData LoadShadowsBuffer(Buffer<float4> shadowsBuffer, uint shadowsBufferAdd
     shadow.NormalOffsetScale = vector0.z;
     shadow.Bias = vector0.w;
     shadow.CascadeSplits = vector1;
+    shadow.FarCascadeSplit = vector2.x;
+    shadow.FarCascadeTransitionDistance = vector2.y;
+    shadow.FarCascadeTransitionMode = (uint)vector2.z;
     return shadow;
+}
+
+float GetShadowCascadeSplit(ShadowData shadow, uint cascadeIndex)
+{
+    if (cascadeIndex < MaxNumCascades - 1)
+        return shadow.CascadeSplits[cascadeIndex];
+    return shadow.FarCascadeSplit;
 }
 
 // Loads the shadow tile data of the light in the shadow buffer
 ShadowTileData LoadShadowsBufferTile(Buffer<float4> shadowsBuffer, uint shadowsBufferAddress, uint tileIndex)
 {
     // This must match C++
-    shadowsBufferAddress += tileIndex * 5 + 2;
+    shadowsBufferAddress += tileIndex * 5 + 3;
     ShadowTileData tile;
     tile.ShadowToAtlas = shadowsBuffer.Load(shadowsBufferAddress + 0);
     tile.WorldToShadow[0] = shadowsBuffer.Load(shadowsBufferAddress + 1);

@@ -1630,7 +1630,15 @@ namespace FlaxEditor
 
         internal bool Internal_CanAutoBuildCSG()
         {
-            return StateMachine.CurrentState.CanEditScene;
+            // Interactive CSG tools route live and final builds through the managed scheduler.
+            // Suppress the duplicate native auto-build callback while those transactions are
+            // active; the scheduler throttles live updates and removes native debounce.
+            var viewport = Windows?.EditWin?.Viewport;
+            var transformGizmo = viewport?.TransformGizmo;
+            var csgAuthoringGizmo = viewport?.CSGAuthoringMode?.Gizmo;
+            return StateMachine.CurrentState.CanEditScene &&
+                   (transformGizmo == null || !transformGizmo.HasActiveCSGTransaction) &&
+                   (csgAuthoringGizmo == null || !csgAuthoringGizmo.HasActiveDirectBrushMutation);
         }
 
         internal bool Internal_CanAutoBuildNavMesh()

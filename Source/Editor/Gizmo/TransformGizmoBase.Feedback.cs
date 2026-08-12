@@ -992,7 +992,7 @@ namespace FlaxEditor.Gizmo
 
         private void DrawFeedbackOverlay()
         {
-            if (!_isActive || !IsActive)
+            if (!_isActive || !IsInteractionActive)
                 return;
             var owner = Owner;
             var viewport = owner?.Viewport;
@@ -1016,6 +1016,8 @@ namespace FlaxEditor.Gizmo
 
         private bool ShouldDrawFeedbackHandle(Axis handle)
         {
+            if (!IsSupplementalTranslationHandleAllowed(handle))
+                return false;
             if (!HasActiveTransaction)
                 return true;
 

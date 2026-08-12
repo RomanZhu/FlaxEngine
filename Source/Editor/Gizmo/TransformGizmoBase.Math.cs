@@ -19,6 +19,15 @@ namespace FlaxEditor.Gizmo
         internal const float PrecisionScaleGain = 0.1f;
         internal const float PositiveScaleGain = 0.1f;
 
+        /// <summary>
+        /// Solves pointer movement constrained to a world-space axis.
+        /// </summary>
+        /// <param name="anchorRay">Pointer ray captured at interaction start.</param>
+        /// <param name="currentRay">Current pointer ray.</param>
+        /// <param name="pivot">World-space axis pivot.</param>
+        /// <param name="axis">World-space axis direction.</param>
+        /// <param name="delta">Solved world-space movement along the axis.</param>
+        /// <returns>True when the axis movement could be solved.</returns>
         internal static bool TrySolveAxisTranslation(Ray anchorRay, Ray currentRay, Vector3 pivot, Vector3 axis, out Vector3 delta)
         {
             delta = Vector3.Zero;

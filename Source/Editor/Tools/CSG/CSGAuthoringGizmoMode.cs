@@ -21,8 +21,11 @@ namespace FlaxEditor.Tools.CSG
         private const string OperationCacheKey = "CSGAuthoring.Operation";
         private const string WorkingPlaneLockCacheKey = "CSGAuthoring.WorkingPlaneLocked";
         private const string SnappingCacheKey = "CSGAuthoring.SnappingEnabled";
+        private const string BrushAlignmentSnappingCacheKey = "CSGAuthoring.BrushAlignmentSnappingEnabled";
         private const string SnapIncrementCacheKey = "CSGAuthoring.SnapIncrement";
         private const string VisibilityCacheKey = "CSGAuthoring.Visibility";
+        private const string RayPlacementAlignmentCacheKey = "CSGAuthoring.RayPlacementAlignment";
+        private const string RayPlacementFrontCacheKey = "CSGAuthoring.RayPlacementFront";
 
         /// <summary>
         /// Gets the CSG tool state controller.
@@ -78,6 +81,9 @@ namespace FlaxEditor.Tools.CSG
             if (viewport == null || input == null)
                 return false;
 
+            if (Gizmo?.OnKeyDown(key) == true)
+                return true;
+
             if (input.CSGSelectPlaceTool.Process(viewport, key))
                 return Controller.SetTool(CSGTool.SelectPlace);
             if (input.CSGDrawTool.Process(viewport, key))
@@ -116,16 +122,39 @@ namespace FlaxEditor.Tools.CSG
                 SetTransientModifiers(symmetric: true);
                 return true;
             }
-            if (Controller.HasActiveInteraction && input.CSGDuplicateModifier.Process(viewport, key))
+            if ((Controller.HasActiveInteraction || Gizmo?.HasArmedSelectDrag == true) && input.CSGDuplicateModifier.Process(viewport, key))
             {
                 SetTransientModifiers(duplicate: true);
                 return true;
             }
+            if ((Controller.HasActiveInteraction || Gizmo?.HasArmedSelectDrag == true) && input.CSGAlignNormalModifier.Process(viewport, key))
+            {
+                SetTransientModifiers(alignNormal: true);
+                return true;
+            }
             if (input.CSGCommit.Process(viewport, key))
-                return Controller.TryCommit();
+                return Gizmo?.TryCommitDrawStage() == true || Controller.TryCommit();
             if (input.CSGCancel.Process(viewport, key))
                 return TryCancel(EditorGizmoModeCancelReason.User);
             return false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseMove(Float2 location)
+        {
+            return Gizmo?.OnMouseMove(location) ?? false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseDown(Float2 location, MouseButton button)
+        {
+            return Gizmo?.OnMouseDown(location, button) ?? false;
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseUp(Float2 location, MouseButton button)
+        {
+            return Gizmo?.OnMouseUp(location, button) ?? false;
         }
 
         /// <inheritdoc />
@@ -155,13 +184,20 @@ namespace FlaxEditor.Tools.CSG
                 SetTransientModifiers(duplicate: false);
                 return true;
             }
+            if (key == input.CSGAlignNormalModifier.Key && Controller.AlignNormalModifierActive)
+            {
+                SetTransientModifiers(alignNormal: false);
+                return true;
+            }
             return false;
         }
 
         /// <inheritdoc />
         public override bool TryCancel(EditorGizmoModeCancelReason reason)
         {
-            return Controller?.TryCancel(reason) ?? false;
+            bool armed = Gizmo?.TryCancelArmedSelectDrag() == true;
+            bool active = Controller?.TryCancel(reason) ?? false;
+            return armed || active;
         }
 
         /// <summary>
@@ -188,6 +224,7 @@ namespace FlaxEditor.Tools.CSG
                 new KeyValuePair<string, InputBinding>("Square Constraint", input.CSGSquareConstraint),
                 new KeyValuePair<string, InputBinding>("Symmetric Constraint", input.CSGSymmetricConstraint),
                 new KeyValuePair<string, InputBinding>("Duplicate Modifier", input.CSGDuplicateModifier),
+                new KeyValuePair<string, InputBinding>("Align to Surface Normal Modifier", input.CSGAlignNormalModifier),
                 new KeyValuePair<string, InputBinding>("Commit Interaction", input.CSGCommit),
                 new KeyValuePair<string, InputBinding>("Cancel Interaction", input.CSGCancel),
             };
@@ -205,13 +242,14 @@ namespace FlaxEditor.Tools.CSG
             return result;
         }
 
-        private void SetTransientModifiers(bool? snapOverride = null, bool? square = null, bool? symmetric = null, bool? duplicate = null)
+        private void SetTransientModifiers(bool? snapOverride = null, bool? square = null, bool? symmetric = null, bool? duplicate = null, bool? alignNormal = null)
         {
             Controller.SetTransientModifiers(
                 snapOverride ?? Controller.SnapOverrideActive,
                 square ?? Controller.SquareConstraintActive,
                 symmetric ?? Controller.SymmetricConstraintActive,
-                duplicate ?? Controller.DuplicateModifierActive);
+                duplicate ?? Controller.DuplicateModifierActive,
+                alignNormal ?? Controller.AlignNormalModifierActive);
         }
 
         private void LoadState()
@@ -229,10 +267,16 @@ namespace FlaxEditor.Tools.CSG
                 state.WorkingPlaneLocked = flag;
             if (cache.TryGetCustomData(SnappingCacheKey, out flag))
                 state.SnappingEnabled = flag;
+            if (cache.TryGetCustomData(BrushAlignmentSnappingCacheKey, out flag))
+                state.BrushAlignmentSnappingEnabled = flag;
             if (cache.TryGetCustomData(SnapIncrementCacheKey, out float value))
                 state.SnapIncrement = value;
             if (cache.TryGetCustomData(VisibilityCacheKey, out text) && Enum.TryParse(text, out CSGVisibility visibility))
                 state.Visibility = visibility;
+            if (cache.TryGetCustomData(RayPlacementAlignmentCacheKey, out text) && Enum.TryParse(text, out CSGRayPlacementAlignment alignment))
+                state.RayPlacementAlignment = alignment;
+            if (cache.TryGetCustomData(RayPlacementFrontCacheKey, out text) && Enum.TryParse(text, out CSGRayPlacementFront front))
+                state.RayPlacementFront = front;
             Controller.ApplyState(state);
         }
 
@@ -247,8 +291,11 @@ namespace FlaxEditor.Tools.CSG
             cache.SetCustomData(OperationCacheKey, state.Operation.ToString());
             cache.SetCustomData(WorkingPlaneLockCacheKey, state.WorkingPlaneLocked);
             cache.SetCustomData(SnappingCacheKey, state.SnappingEnabled);
+            cache.SetCustomData(BrushAlignmentSnappingCacheKey, state.BrushAlignmentSnappingEnabled);
             cache.SetCustomData(SnapIncrementCacheKey, state.SnapIncrement);
             cache.SetCustomData(VisibilityCacheKey, state.Visibility.ToString());
+            cache.SetCustomData(RayPlacementAlignmentCacheKey, state.RayPlacementAlignment.ToString());
+            cache.SetCustomData(RayPlacementFrontCacheKey, state.RayPlacementFront.ToString());
         }
 
         private void ReportInputConflicts()

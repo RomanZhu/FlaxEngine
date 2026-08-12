@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
+using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEngine;
 
 namespace FlaxEditor.Gizmo
@@ -35,6 +36,24 @@ namespace FlaxEditor.Gizmo
         private readonly List<SceneGraphNode> _selectionScopes = new List<SceneGraphNode>();
         private readonly List<SceneGraphNode> _pickAncestry = new List<SceneGraphNode>();
         private readonly List<SceneGraphNode> _pickSelectionChain = new List<SceneGraphNode>();
+        private readonly List<ActorNode> _brushPickNodes = new List<ActorNode>(32);
+        private readonly List<Scene> _csgRebuildScenes = new List<Scene>(4);
+
+        internal bool HasActiveCSGTransaction
+        {
+            get
+            {
+                if (!HasActiveTransaction)
+                    return false;
+                for (int i = 0; i < TransactionObjects.Count; i++)
+                {
+                    var actorNode = GetOwningActorNode(TransactionObjects[i]);
+                    if (actorNode != null && ContainsBoxBrush(actorNode.Actor))
+                        return true;
+                }
+                return false;
+            }
+        }
 
         /// <summary>
         /// The event to apply objects transformation.
@@ -399,7 +418,17 @@ namespace FlaxEditor.Gizmo
             if (root == null)
                 return null;
 
-            var hit = root.RayCast(ref ray, ref view, out _, rayCastFlags);
+            var hit = root.RayCast(ref ray, ref view, out var hitDistance, rayCastFlags);
+
+            // Source brushes overlap the generated CSG result. Treat the visible
+            // face of an additive brush as the stable target at the same depth;
+            // subtractive volumes remain wire-only because their interior is a hole.
+            var brushHit = PickBrushSource(root, ref ray, ref view, out var brushDistance, out bool brushWireHit);
+            Real depthTolerance = (Real)Math.Max(0.001, Math.Abs((double)brushDistance) * 0.000001);
+            bool matchesVisibleSurface = hit != null && Math.Abs((double)(brushDistance - hitDistance)) <= depthTolerance;
+            if (brushHit != null && (brushWireHit || matchesVisibleSurface))
+                return brushHit;
+
             if (hit != null && _selection.Count == 1)
             {
                 var selected = _selection[0];
@@ -418,6 +447,40 @@ namespace FlaxEditor.Gizmo
                 }
             }
             return hit;
+        }
+
+        private BoxBrushNode PickBrushSource(ActorNode root, ref Ray ray, ref Ray view, out Real closestDistance, out bool closestIsWireHit)
+        {
+            _brushPickNodes.Clear();
+            root.GetAllChildActorNodes(_brushPickNodes);
+            BoxBrushNode closest = null;
+            closestDistance = Real.MaxValue;
+            closestIsWireHit = false;
+            for (int i = 0; i < _brushPickNodes.Count; i++)
+            {
+                if (!(_brushPickNodes[i] is BoxBrushNode node) || !node.IsActiveInHierarchy)
+                    continue;
+                var brush = (BoxBrush)node.Actor;
+                var box = brush.OrientedBox;
+                bool intersects = brush.Mode == BrushMode.Subtractive
+                    ? Utilities.Utils.RayCastWire(ref box, ref ray, out var distance, ref view.Position)
+                    : box.Intersects(ref ray, out distance);
+                if (!intersects || distance < 0.0f)
+                    continue;
+
+                Real tieTolerance = (Real)Math.Max(0.001, Math.Abs((double)closestDistance) * 0.000001);
+                bool nearer = distance < closestDistance - tieTolerance;
+                bool tied = closest != null && Math.Abs((double)(distance - closestDistance)) <= tieTolerance;
+                bool stableTieWinner = tied && (node.OrderInParent < closest.OrderInParent ||
+                                                 (node.OrderInParent == closest.OrderInParent && node.ID.CompareTo(closest.ID) < 0));
+                if (nearer || stableTieWinner)
+                {
+                    closest = node;
+                    closestDistance = distance;
+                    closestIsWireHit = brush.Mode == BrushMode.Subtractive;
+                }
+            }
+            return closest;
         }
 
         /// <inheritdoc />
@@ -519,6 +582,11 @@ namespace FlaxEditor.Gizmo
                 }
             }
             base.OnApplyInteractionResult(result);
+
+            // Transform the generated CSG result along with its source brushes. The managed
+            // scheduler limits rebuild frequency, while zero native debounce prevents a
+            // continuous translate/rotate/scale drag from postponing every build until release.
+            RequestCSGRebuilds(false);
         }
 
         /// <inheritdoc />
@@ -537,6 +605,54 @@ namespace FlaxEditor.Gizmo
             var selection = new List<SceneGraphNode>(TransactionObjects);
             var action = new TransformObjectsAction(selection, _startTransforms, ref _startBounds, _navigationDirty);
             AddTransformUndoAction(action);
+
+            // Ensure the committed state wins over any queued interactive update.
+            RequestCSGRebuilds(true);
+        }
+
+        private void RequestCSGRebuilds(bool final)
+        {
+            _csgRebuildScenes.Clear();
+            for (int i = 0; i < TransactionObjects.Count; i++)
+            {
+                var actorNode = GetOwningActorNode(TransactionObjects[i]);
+                if (actorNode == null || !ContainsBoxBrush(actorNode.Actor))
+                    continue;
+                var scene = actorNode.Actor.Scene;
+                if (scene != null && !_csgRebuildScenes.Contains(scene))
+                    _csgRebuildScenes.Add(scene);
+            }
+            for (int i = 0; i < _csgRebuildScenes.Count; i++)
+            {
+                if (final)
+                    CSGRebuildScheduler.Shared.RequestFinal(_csgRebuildScenes[i]);
+                else
+                    CSGRebuildScheduler.Shared.RequestPreview(_csgRebuildScenes[i]);
+            }
+            if (!final)
+                CSGRebuildScheduler.Shared.Update();
+        }
+
+        private static ActorNode GetOwningActorNode(SceneGraphNode node)
+        {
+            for (var current = node; current != null; current = current.ParentNode)
+            {
+                if (current is ActorNode actorNode)
+                    return actorNode;
+            }
+            return null;
+        }
+
+        private static bool ContainsBoxBrush(Actor actor)
+        {
+            if (actor is BoxBrush)
+                return true;
+            for (int i = 0; i < actor.ChildrenCount; i++)
+            {
+                if (ContainsBoxBrush(actor.GetChild(i)))
+                    return true;
+            }
+            return false;
         }
 
         /// <inheritdoc />

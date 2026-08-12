@@ -193,6 +193,13 @@ namespace FlaxEditor.Content.Import
                 _settings.Settings.sRGB = true;
             }
 
+            // Preserve non-opaque alpha by default. ColorRGB compression drops
+            // the source alpha channel, which turns masked foliage and decals
+            // into solid cards unless users manually switch every import to
+            // ColorRGBA.
+            if (_settings.Settings.Type == TextureFormatType.ColorRGB && TextureTool.HasAlpha(SourceUrl))
+                _settings.Settings.Type = TextureFormatType.ColorRGBA;
+
             // Try to restore target asset texture import options (useful for fast reimport)
             Editor.TryRestoreImportOptions(ref _settings.Settings, ResultUrl);
         }
