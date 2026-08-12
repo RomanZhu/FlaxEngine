@@ -14,6 +14,7 @@ using FlaxEditor.Gizmo;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Input;
+using FlaxEditor.GUI.Tabs;
 using FlaxEditor.Options;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Scripting;
@@ -1811,6 +1812,71 @@ namespace FlaxEditor.Viewport
             _editor.Windows.SceneWin.ShowAddObjectMenu(this, location, actor => DragHandlers.PlaceActorAtCursor(actor, location));
         }
 
+        private void SelectToolboxTab(Tab tab)
+        {
+            var toolbox = _editor.Windows.ToolboxWin;
+            if (toolbox?.TabsControl == null || tab == null)
+                return;
+
+            // Re-select through Object mode so tabs with activation-only setup run consistently.
+            if (toolbox.TabsControl.SelectedTab == tab && toolbox.Spawn != null)
+                toolbox.TabsControl.SelectedTab = toolbox.Spawn;
+            toolbox.TabsControl.SelectedTab = tab;
+        }
+
+        private void EnterObjectMode()
+        {
+            Gizmos.SetActiveMode<TransformGizmoMode>();
+
+            var toolbox = _editor.Windows.ToolboxWin;
+            if (toolbox?.TabsControl != null && toolbox.Spawn != null)
+                toolbox.TabsControl.SelectedTab = toolbox.Spawn;
+        }
+
+        private void ToggleContextualAuthoringMode()
+        {
+            // Tab always leaves the current authoring context before considering the selection.
+            if (Gizmos.ActiveMode is not TransformGizmoMode)
+            {
+                EnterObjectMode();
+                return;
+            }
+
+            var selection = _editor.SceneEditing.Selection;
+            if (selection.Count == 0)
+                return;
+
+            var node = selection[0];
+            if (node.CSGViewportSelection != CSGViewportSelectionKind.None)
+            {
+                Gizmos.SetActiveMode<CSGAuthoringGizmoMode>();
+
+                // CSG tools live in the viewport toolbar, so leave the Toolbox in Object mode.
+                var toolbox = _editor.Windows.ToolboxWin;
+                if (toolbox?.TabsControl != null && toolbox.Spawn != null)
+                    toolbox.TabsControl.SelectedTab = toolbox.Spawn;
+                return;
+            }
+
+            Actor actor = null;
+            for (var current = node; current != null; current = current.ParentNode)
+            {
+                if (current is ActorNode actorNode)
+                {
+                    actor = actorNode.Actor;
+                    break;
+                }
+            }
+
+            var toolboxWindow = _editor.Windows.ToolboxWin;
+            if (actor is Terrain)
+                SelectToolboxTab(toolboxWindow?.Carve);
+            else if (actor is Foliage)
+                SelectToolboxTab(toolboxWindow?.Foliage);
+            else if (actor is StaticModel)
+                SelectToolboxTab(toolboxWindow?.VertexPaint);
+        }
+
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
@@ -1837,6 +1903,12 @@ namespace FlaxEditor.Viewport
                 bool shortcutModifier = (root?.GetKey(KeyboardKeys.Control) ?? false) || (root?.GetKey(KeyboardKeys.Alt) ?? false);
                 if (IsCharacterControllerLookActive() && !shortcutModifier && (key == KeyboardKeys.Shift || key == KeyboardKeys.Spacebar || IsCharacterControllerMovementKey(key)))
                     return true;
+            }
+
+            if (!_characterControllerModeActive && !_gameViewActive && input.ToggleContextualAuthoringMode.Process(this, key))
+            {
+                ToggleContextualAuthoringMode();
+                return true;
             }
 
             if (Gizmos.ActiveMode?.OnKeyDown(key) == true)

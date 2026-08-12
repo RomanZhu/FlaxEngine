@@ -35,9 +35,6 @@ namespace FlaxEditor.Gizmo
         private bool _hasHoveredTarget;
         private float _hoveredTargetScore = float.MaxValue;
         private bool _gizmoProjectionValid;
-        private SemanticHandle _cycleAnchor = SemanticHandle.None;
-        private Float2 _cycleCursor;
-        private int _cycleIndex = -1;
 
         /// <summary>
         /// Gets the current projected semantic targets.
@@ -604,40 +601,9 @@ namespace FlaxEditor.Gizmo
             _hasHoveredTarget = true;
         }
 
-        private bool TryCycleSemanticTarget()
-        {
-            var root = Owner?.Viewport?.Root;
-            if (HasActiveTransaction || root == null || !root.GetKeyDown(KeyboardKeys.Tab))
-                return false;
-
-            Float2 cursor = Owner.Viewport.ViewMousePosition;
-            var candidates = new List<SemanticCandidate>();
-            for (int i = 0; i < _semanticTargets.Count; i++)
-            {
-                var target = _semanticTargets[i];
-                if (TryEvaluateSemanticTarget(target, cursor, 0.0f, out var score, out var depth, out var priority, out var isCap))
-                    candidates.Add(new SemanticCandidate(i, target, score, depth, priority, isCap));
-            }
-            if (candidates.Count < 2)
-                return false;
-
-            candidates.Sort(CompareSemanticCandidates);
-            int next = 0;
-            if (_cycleAnchor == _hoveredHandle && (_cycleCursor - cursor).LengthSquared < 4.0f)
-                next = (_cycleIndex + 1) % candidates.Count;
-            _cycleIndex = next;
-            _cycleCursor = cursor;
-            _cycleAnchor = candidates[next].Target.Handle;
-            ApplySemanticCandidate(candidates[next]);
-            return true;
-        }
-
         private void SelectSemanticAxis()
         {
             Float2 cursor = Owner.Viewport.ViewMousePosition;
-            if (TryCycleSemanticTarget())
-                return;
-
             bool hasBest = TryGetBestSemanticCandidate(cursor, 0.0f, out var best);
             if (_hasHoveredTarget && TryGetRetainedHoverCandidate(cursor, out var retained))
             {

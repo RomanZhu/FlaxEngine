@@ -343,6 +343,10 @@ namespace FlaxEditor.Options
         [EditorDisplay("Gizmo"), EditorOrder(1060)]
         public InputBinding TogglePivot = new InputBinding(KeyboardKeys.Z);
 
+        [DefaultValue(typeof(InputBinding), "Tab")]
+        [EditorDisplay("Gizmo", "Toggle Authoring / Object Mode"), EditorOrder(1070)]
+        public InputBinding ToggleContextualAuthoringMode = new InputBinding(KeyboardKeys.Tab);
+
         #endregion
 
         #region CSG Authoring
