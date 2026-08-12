@@ -273,9 +273,9 @@ ShadowSample SampleDirectionalLightShadow(LightData light, Buffer<float4> shadow
         return result; // No shadow assigned
     ShadowData shadow = LoadShadowsBuffer(shadowsBuffer, light.ShadowsBufferAddress);
 
-    // Create a blend factor which is one before and at the fade plane
+    // Create an eased blend factor from fully shadowed to fully lit across the fade range.
     float viewDepth = gBuffer.ViewPos.z;
-    float fade = saturate((viewDepth - shadow.CascadeSplits[shadow.TilesCount - 1] + shadow.FadeDistance) / shadow.FadeDistance);
+    float fade = smoothstep(0.0f, 1.0f, saturate((viewDepth - shadow.CascadeSplits[shadow.TilesCount - 1] + shadow.FadeDistance) / shadow.FadeDistance));
     BRANCH
     if (fade >= 1.0)
         return result;
@@ -322,6 +322,10 @@ ShadowSample SampleDirectionalLightShadow(LightData light, Buffer<float4> shadow
 		result.TransmissionShadow = lerp(nextResult.TransmissionShadow, result.TransmissionShadow, blendAmount);
     }
 #endif
+
+    // Fade the last cascade into unshadowed lighting to hide the end of the shadow range.
+    result.SurfaceShadow = lerp(result.SurfaceShadow, 1.0f, fade);
+    result.TransmissionShadow = lerp(result.TransmissionShadow, 1.0f, fade);
 
     return result;
 }
