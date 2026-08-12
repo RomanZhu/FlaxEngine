@@ -46,4 +46,9 @@ public:
     /// <param name="type">The log message type.</param>
     /// <param name="target">Execution target name.</param>
     void Log(const LogType type, const Char* target);
+
+    /// <summary>
+    /// Sends exception to the log with a fallback stack trace for exceptions that were never thrown.
+    /// </summary>
+    void Log(const LogType type, const Char* target, const StringView& fallbackStackTrace, uint64 threadId);
 };

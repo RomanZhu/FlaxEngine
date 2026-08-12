@@ -51,6 +51,11 @@ public:
     /// <param name="exceptionObject">Runtime Exception.</param>
     static void LogException(MObject* exceptionObject);
 
+    /// <summary>
+    /// Enables or disables forwarding the structured native log stream to managed code.
+    /// </summary>
+    static void SetLogMessageReceiver(bool enabled);
+
 public:
     /// <summary>
     /// Gets the managed stack trace.

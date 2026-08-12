@@ -8,6 +8,7 @@
 #include "Engine/Engine/Time.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Platform/CriticalSection.h"
 #include "Engine/Profiler/ProfilerMemory.h"
 #include "Engine/Serialization/FileWriteStream.h"
@@ -35,6 +36,7 @@ namespace
 
 String Log::Logger::LogFilePath;
 Delegate<LogType, const StringView&> Log::Logger::OnMessage;
+Delegate<LogType, const StringView&, const StringView&, uint64> Log::Logger::OnMessageDetailed;
 Delegate<LogType, const StringView&> Log::Logger::OnError;
 
 bool Log::Logger::Init()
@@ -268,6 +270,11 @@ void Log::Logger::ProcessLogMessage(LogType type, const StringView& msg, fmt_fla
 
 void Log::Logger::Write(LogType type, const StringView& msg)
 {
+    Write(type, msg, StringView::Empty, Platform::GetCurrentThreadID());
+}
+
+void Log::Logger::Write(LogType type, const StringView& msg, const StringView& stackTrace, const uint64 threadId)
+{
     if (msg.Length() <= 0)
         return;
     PROFILE_MEM(Engine);
@@ -282,6 +289,7 @@ void Log::Logger::Write(LogType type, const StringView& msg)
 
     // Fire events
     OnMessage(type, msg);
+    OnMessageDetailed(type, msg, stackTrace, threadId);
     if (isError)
     {
         LogTotalErrorsCnt++;

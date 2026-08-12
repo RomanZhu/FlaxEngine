@@ -15,6 +15,15 @@ namespace FlaxEngine
     public delegate void LogDelegate(LogType level, string msg, Object obj, string stackTrace);
 
     /// <summary>
+    /// Delegate for the structured engine log stream. Invoked once per native log record.
+    /// </summary>
+    /// <param name="level">The log level.</param>
+    /// <param name="msg">The message.</param>
+    /// <param name="stackTrace">The optional source stack trace.</param>
+    /// <param name="threadId">The source platform thread ID.</param>
+    public delegate void LogMessageDelegate(LogType level, string msg, string stackTrace, ulong threadId);
+
+    /// <summary>
     /// Info exception delegate.
     /// </summary>
     /// <param name="exception">The exception.</param>
