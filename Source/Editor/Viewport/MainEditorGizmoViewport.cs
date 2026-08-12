@@ -172,8 +172,6 @@ namespace FlaxEditor.Viewport
         private bool _characterControllerModeActive;
         private bool _characterControllerControlMouseActive;
         private bool _characterControllerWasOrthographic;
-        private bool _characterControllerWasTransformGizmoVisible;
-        private bool _characterControllerWasSelectionOutlineShown;
 
         /// <summary>
         /// Drag and drop handlers
@@ -825,14 +823,9 @@ namespace FlaxEditor.Viewport
             if (_characterControllerModeActive || !Level.IsAnySceneLoaded)
                 return;
 
-            if (_gameViewActive)
-                ToggleGameView();
-
             _characterControllerCamera ??= new InSceneCharacterControllerCamera();
             _preCharacterControllerCamera = ViewportCamera;
             _characterControllerWasOrthographic = UseOrthographicProjection;
-            _characterControllerWasTransformGizmoVisible = TransformGizmo.Visible;
-            _characterControllerWasSelectionOutlineShown = SelectionOutline.ShowSelectionOutline;
 
             UseOrthographicProjection = false;
             ViewportCamera = _characterControllerCamera;
@@ -867,8 +860,6 @@ namespace FlaxEditor.Viewport
             _preCharacterControllerCamera = null;
 
             UseOrthographicProjection = _characterControllerWasOrthographic;
-            TransformGizmo.Visible = _characterControllerWasTransformGizmoVisible && !_gameViewActive;
-            SelectionOutline.ShowSelectionOutline = _characterControllerWasSelectionOutlineShown && !_gameViewActive;
             _characterControllerModeActive = false;
             UpdateCharacterControllerModeButtons();
             UpdateViewportToolStrip();
@@ -1094,9 +1085,6 @@ namespace FlaxEditor.Viewport
         /// </summary>
         public void ToggleGameView()
         {
-            if (_characterControllerModeActive)
-                StopCharacterControllerMode();
-
             if (!_gameViewActive)
             {
                 // Cache flags & values
@@ -1802,18 +1790,18 @@ namespace FlaxEditor.Viewport
 
         private bool ProcessCharacterControllerModeShortcut(KeyboardKeys key)
         {
-            if (key != KeyboardKeys.G)
-                return false;
-
-            var root = Root;
-            if ((root?.GetKey(KeyboardKeys.Control) ?? false) || (root?.GetKey(KeyboardKeys.Alt) ?? false))
-                return false;
-
-            if (root?.GetKey(KeyboardKeys.Shift) ?? false)
+            var input = _editor.Options.Options.Input;
+            if (input.ToggleGameView.Process(this, key))
+            {
                 ToggleGameView();
-            else
+                return true;
+            }
+            if (input.ToggleCharacterControllerMode.Process(this, key))
+            {
                 ToggleCharacterControllerMode();
-            return true;
+                return true;
+            }
+            return false;
         }
 
         private void ShowAddObjectMenuAtCursor()
