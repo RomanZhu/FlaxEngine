@@ -1814,6 +1814,14 @@ namespace FlaxEditor
         [return: MarshalAs(UnmanagedType.U1)]
         internal static partial bool Internal_CloneAssetFile(string dstPath, string srcPath, ref Guid dstId);
 
+        [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_GetBinaryAssetStorageId", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static partial bool Internal_GetBinaryAssetStorageId(string path, out Guid resultId);
+
+        [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_RepairBinaryAssetStorageId", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static partial bool Internal_RepairBinaryAssetStorageId(string path, ref Guid currentId, ref Guid expectedId);
+
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_GetAudioClipMetadata", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         internal static partial void Internal_GetAudioClipMetadata(IntPtr obj, out int originalSize, out int importedSize);
 

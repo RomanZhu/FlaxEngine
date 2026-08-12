@@ -59,7 +59,7 @@ DEFINE_INTERNAL_CALL(void) DebugLogHandlerInternal_LogWrite(LogType level, MStri
 #endif
 }
 
-DEFINE_INTERNAL_CALL(void) DebugLogHandlerInternal_Log(LogType level, MString* msgObj, ScriptingObject* obj, MString* stackTrace)
+DEFINE_INTERNAL_CALL(void) DebugLogHandlerInternal_Log(LogType level, MString* msgObj, ScriptingObject* obj, MString* stackTraceObj, uint64 threadId)
 {
 #if LOG_ENABLE
     if (msgObj == nullptr)
@@ -68,16 +68,23 @@ DEFINE_INTERNAL_CALL(void) DebugLogHandlerInternal_Log(LogType level, MString* m
     // Get info
     StringView msg;
     MUtils::ToString(msgObj, msg);
+    StringView stackTrace;
+    MUtils::ToString(stackTraceObj, stackTrace);
     //const String objName = obj ? obj->ToString() : String::Empty;
 
     // Send event
     // TODO: maybe option for build to threat warnings and errors as fatal errors?
     //const String logMessage = String::Format(TEXT("Debug:{1} {2}"), objName, *msg);
-    Log::Logger::Write(level, msg);
+    Log::Logger::Write(level, msg, stackTrace, threadId);
 #endif
 }
 
-DEFINE_INTERNAL_CALL(void) DebugLogHandlerInternal_LogException(MObject* exception, ScriptingObject* obj)
+DEFINE_INTERNAL_CALL(void) DebugLogHandlerInternal_SetLogMessageReceiver(bool enabled)
+{
+    DebugLog::SetLogMessageReceiver(enabled);
+}
+
+DEFINE_INTERNAL_CALL(void) DebugLogHandlerInternal_LogException(MObject* exception, ScriptingObject* obj, MString* fallbackStackTraceObj, uint64 threadId)
 {
 #if USE_CSHARP
     if (exception == nullptr)
@@ -86,10 +93,12 @@ DEFINE_INTERNAL_CALL(void) DebugLogHandlerInternal_LogException(MObject* excepti
     // Get info
     MException ex(exception);
     const String objName = obj ? obj->ToString() : String::Empty;
+    StringView fallbackStackTrace;
+    MUtils::ToString(fallbackStackTraceObj, fallbackStackTrace);
 
     // Print exception including inner exceptions
     // TODO: maybe option for build to threat warnings and errors as fatal errors?
-    ex.Log(LogType::Warning, objName.GetText());
+    ex.Log(LogType::Error, objName.GetText(), fallbackStackTrace, threadId);
 #endif
 }
 
@@ -226,6 +235,7 @@ void registerFlaxEngineInternalCalls()
 #endif
     ADD_INTERNAL_CALL("FlaxEngine.DebugLogHandler::Internal_LogWrite", &DebugLogHandlerInternal_LogWrite);
     ADD_INTERNAL_CALL("FlaxEngine.DebugLogHandler::Internal_Log", &DebugLogHandlerInternal_Log);
+    ADD_INTERNAL_CALL("FlaxEngine.DebugLogHandler::Internal_SetLogMessageReceiver", &DebugLogHandlerInternal_SetLogMessageReceiver);
     ADD_INTERNAL_CALL("FlaxEngine.DebugLogHandler::Internal_LogException", &DebugLogHandlerInternal_LogException);
 #endif
 }

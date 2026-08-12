@@ -37,7 +37,7 @@ namespace FlaxEditor.Windows
         private readonly List<Asset> _waitingForContentAssets = new List<Asset>();
         private bool _discardContentAssetChanges;
         private readonly List<PinnedTab> _pinnedTabs = new List<PinnedTab>();
-        private readonly ScriptingObjectEditor _contentAssetEditor = new ScriptingObjectEditor();
+        private readonly ContentAssetEditor _contentAssetEditor = new ContentAssetEditor();
         private IDisposable _contentAssetState;
         private bool _lockObjects = false;
         private bool _showContentSelection;
@@ -73,6 +73,46 @@ namespace FlaxEditor.Windows
         private const float PropertiesScrollbarWidthReduction = 4.0f;
         private const int TextPreviewMaxCharacters = 1024 * 1024;
         private const int TextFileDetectionSampleSize = 4096;
+
+        private sealed class ContentAssetEditor : ScriptingObjectEditor
+        {
+            public override void Initialize(LayoutElementsContainer layout)
+            {
+                if (IsSingleObject && Values[0] is Asset asset && asset.LastLoadFailed &&
+                    Editor.Instance.ContentEditing.TryGetBinaryAssetStorageId(asset.Path, out var storageId) &&
+                    storageId != asset.ID)
+                {
+                    var registeredId = asset.ID;
+                    var group = layout.Group("Asset ID Mismatch");
+                    group.Panel.Open();
+                    group.Label("The asset cannot load because its file ID differs from the registered ID.").Label.TextColor = Color.Red;
+                    group.Label("Registered ID", registeredId.ToString("N"));
+                    group.Label("File ID", storageId.ToString("N"));
+                    group.Button("Fix Asset ID", "Rewrites the file ID to the registered ID so existing references remain valid.").Button.Clicked += () => RepairAssetId(asset, storageId, registeredId);
+                    return;
+                }
+
+                base.Initialize(layout);
+            }
+
+            private static void RepairAssetId(Asset asset, Guid storageId, Guid registeredId)
+            {
+                var result = MessageBox.Show(
+                    $"Rewrite the file ID from {storageId:N} to {registeredId:N}? Existing references to {registeredId:N} will remain valid.",
+                    "Fix Asset ID", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (result != DialogResult.Yes)
+                    return;
+
+                if (!Editor.Instance.ContentEditing.RepairBinaryAssetStorageId(asset.Path, storageId, registeredId))
+                {
+                    MessageBox.Show("Failed to repair the asset ID. See the output log for details.", "Fix Asset ID", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                Editor.Log($"Repaired asset ID mismatch in '{asset.Path}'.");
+                asset.Reload();
+            }
+        }
 
         [CustomEditor(typeof(TextFilePropertiesEditor))]
         private sealed class TextFilePropertiesProxy

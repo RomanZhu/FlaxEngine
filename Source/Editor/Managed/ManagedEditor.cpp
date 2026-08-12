@@ -143,7 +143,7 @@ void OnVisualScriptingDebugFlow()
     }
 }
 
-void OnLogMessage(LogType type, const StringView& msg);
+void OnLogMessage(LogType type, const StringView& msg, const StringView& stackTrace, uint64 threadId);
 
 ManagedEditor::ManagedEditor()
     : ScriptingObject(SpawnParams(ObjectID, ManagedEditor::TypeInitializer))
@@ -159,7 +159,7 @@ ManagedEditor::ManagedEditor()
     lightmapsBuilder->OnBuildFinished.Bind<OnLightmapsBuildFinished>();
     CSG::Builder::OnBrushModified.Bind<OnBrushModified>();
 #if LOG_ENABLE
-    Log::Logger::OnMessage.Bind<OnLogMessage>();
+    Log::Logger::OnMessageDetailed.Bind<OnLogMessage>();
 #endif
     VisualScripting::DebugFlow.Bind<OnVisualScriptingDebugFlow>();
 }
@@ -177,7 +177,7 @@ ManagedEditor::~ManagedEditor()
     lightmapsBuilder->OnBuildFinished.Unbind<OnLightmapsBuildFinished>();
     CSG::Builder::OnBrushModified.Unbind<OnBrushModified>();
 #if LOG_ENABLE
-    Log::Logger::OnMessage.Unbind<OnLogMessage>();
+    Log::Logger::OnMessageDetailed.Unbind<OnLogMessage>();
 #endif
     VisualScripting::DebugFlow.Unbind<OnVisualScriptingDebugFlow>();
 }

@@ -55,11 +55,19 @@ Guid ManagedEditor::ObjectID(0x91970b4e, 0x99634f61, 0x84723632, 0x54c776af);
 CriticalSection CachedLogDataLocker;
 Array<byte> CachedLogData;
 
-void OnLogMessage(LogType type, const StringView& msg)
+void OnLogMessage(LogType type, const StringView& msg, const StringView& stackTrace, uint64 threadId)
 {
     ScopeLock lock(CachedLogDataLocker);
 
-    CachedLogData.EnsureCapacity(4 + 8 + 4 + msg.Length() * 2);
+    String messageWithStack;
+    StringView outputMessage = msg;
+    if (stackTrace.HasChars())
+    {
+        messageWithStack = String::Format(TEXT("{0}\n{1}"), msg, stackTrace);
+        outputMessage = messageWithStack;
+    }
+
+    CachedLogData.EnsureCapacity(4 + 8 + 4 + outputMessage.Length() * 2);
 
     // Log Type
     int32 buf = (int32)type;
@@ -70,11 +78,11 @@ void OnLogMessage(LogType type, const StringView& msg)
     CachedLogData.Add((byte*)&time.Ticks, 8);
 
     // Message Length
-    buf = msg.Length();
+    buf = outputMessage.Length();
     CachedLogData.Add((byte*)&buf, 4);
 
     // Message
-    CachedLogData.Add((byte*)msg.Get(), msg.Length() * 2);
+    CachedLogData.Add((byte*)outputMessage.Get(), outputMessage.Length() * 2);
 }
 
 DEFINE_INTERNAL_CALL(bool) EditorInternal_IsDevInstance()
@@ -169,6 +177,40 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CloneAssetFile(MString* dstPathObj, MS
 
     // Call util function
     return Content::CloneAssetFile(dstPath, srcPath, *dstId);
+}
+
+DEFINE_INTERNAL_CALL(bool) EditorInternal_GetBinaryAssetStorageId(MString* pathObj, Guid* resultId)
+{
+    String path;
+    MUtils::ToString(pathObj, path);
+    FileSystem::NormalizePath(path);
+
+    FlaxStorage::Entry entry;
+    if (ContentStorageManager::GetAssetEntry(path, entry))
+        return true;
+
+    *resultId = entry.ID;
+    return false;
+}
+
+DEFINE_INTERNAL_CALL(bool) EditorInternal_RepairBinaryAssetStorageId(MString* pathObj, Guid* currentId, Guid* expectedId)
+{
+    String path;
+    MUtils::ToString(pathObj, path);
+    FileSystem::NormalizePath(path);
+
+    auto storage = ContentStorageManager::GetStorage(path);
+    if (!storage || storage->IsReadOnly() || storage->GetEntriesCount() != 1)
+        return true;
+
+    FlaxStorage::Entry entry;
+    storage->GetEntry(0, entry);
+    if (entry.ID != *currentId || !expectedId->IsValid())
+        return true;
+    if (entry.ID == *expectedId)
+        return false;
+
+    return storage->ChangeAssetID(entry, *expectedId);
 }
 
 DEFINE_INTERNAL_CALL(bool) EditorInternal_CreateVisualScript(MString* outputPathObj, MString* baseTypenameObj)

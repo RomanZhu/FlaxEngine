@@ -83,6 +83,11 @@ namespace Log
         static Delegate<LogType, const StringView&> OnMessage;
 
         /// <summary>
+        /// Action fired once for every log message with optional stack trace and source thread ID.
+        /// </summary>
+        static Delegate<LogType, const StringView&, const StringView&, uint64> OnMessageDetailed;
+
+        /// <summary>
         /// Action fired on new log error message.
         /// </summary>
         static Delegate<LogType, const StringView&> OnError;
@@ -157,6 +162,15 @@ namespace Log
         /// <param name="type">The message type.</param>
         /// <param name="msg">The message text.</param>
         static void Write(LogType type, const StringView& msg);
+
+        /// <summary>
+        /// Write a message with source metadata to the log.
+        /// </summary>
+        /// <param name="type">The message type.</param>
+        /// <param name="msg">The message text.</param>
+        /// <param name="stackTrace">The optional source stack trace.</param>
+        /// <param name="threadId">The source platform thread ID.</param>
+        static void Write(LogType type, const StringView& msg, const StringView& stackTrace, uint64 threadId);
 
         /// <summary>
         /// Writes a custom message to the log.

@@ -19,6 +19,15 @@ namespace FlaxEngine
         public static ILogger Logger => _logger;
 
         /// <summary>
+        /// Occurs once for every engine log record, including native and managed messages.
+        /// </summary>
+        public static event LogMessageDelegate LogMessageReceived
+        {
+            add => DebugLogHandler.AddLogMessageReceiver(value);
+            remove => DebugLogHandler.RemoveLogMessageReceiver(value);
+        }
+
+        /// <summary>
         /// Assert a condition and logs a formatted error message to the Flax console on failure.
         /// </summary>
         /// <param name="condition">Condition you expect to be true.</param>
@@ -239,12 +248,6 @@ namespace FlaxEngine
         public static void LogException(Exception exception)
         {
             Logger.LogException(exception, null);
-
-            if (exception.InnerException != null)
-            {
-                LogWarning("Inner exception:");
-                LogException(exception.InnerException);
-            }
         }
 
         /// <summary>
@@ -255,12 +258,6 @@ namespace FlaxEngine
         public static void LogException(Exception exception, Object context)
         {
             Logger.LogException(exception, context);
-
-            if (exception.InnerException != null)
-            {
-                LogWarning("Inner exception:");
-                LogException(exception.InnerException, context);
-            }
         }
 
         /// <summary>

@@ -16,26 +16,36 @@
 namespace Impl
 {
     MMethod* Internal_SendLog = nullptr;
+    MMethod* Internal_SendLogMessage = nullptr;
     MMethod* Internal_SendLogException = nullptr;
     MMethod* Internal_GetStackTrace = nullptr;
     CriticalSection Locker;
+    bool LogMessageReceiverBound = false;
 }
 
 using namespace Impl;
 
+void OnLogMessageDetailed(LogType type, const StringView& message, const StringView& stackTrace, uint64 threadId);
+
 void ClearMethods(MAssembly*)
 {
+    if (LogMessageReceiverBound)
+    {
+        Log::Logger::OnMessageDetailed.Unbind<OnLogMessageDetailed>();
+        LogMessageReceiverBound = false;
+    }
     Internal_SendLog = nullptr;
+    Internal_SendLogMessage = nullptr;
     Internal_SendLogException = nullptr;
     Internal_GetStackTrace = nullptr;
 }
 
 bool CacheMethods()
 {
-    if (Internal_SendLog && Internal_SendLogException && Internal_GetStackTrace)
+    if (Internal_SendLog && Internal_SendLogMessage && Internal_SendLogException && Internal_GetStackTrace)
         return false;
     ScopeLock lock(Locker);
-    if (Internal_SendLog && Internal_SendLogException && Internal_GetStackTrace)
+    if (Internal_SendLog && Internal_SendLogMessage && Internal_SendLogException && Internal_GetStackTrace)
         return false;
 
     auto engine = ((NativeBinaryModule*)GetBinaryModuleFlaxEngine())->Assembly;
@@ -45,8 +55,12 @@ bool CacheMethods()
     if (!debugLogHandlerClass)
         return false;
 
-    Internal_SendLog = debugLogHandlerClass->GetMethod("Internal_SendLog", 3);
+    Internal_SendLog = debugLogHandlerClass->GetMethod("Internal_SendLog", 4);
     if (!Internal_SendLog)
+        return false;
+
+    Internal_SendLogMessage = debugLogHandlerClass->GetMethod("Internal_SendLogMessage", 4);
+    if (!Internal_SendLogMessage)
         return false;
 
     Internal_SendLogException = debugLogHandlerClass->GetMethod("Internal_SendLogException", 1);
@@ -70,6 +84,7 @@ void DebugLog::Log(LogType type, const StringView& message)
     if (CacheMethods())
         return;
 
+    const uint64 threadId = Platform::GetCurrentThreadID();
     auto scriptsDomain = Scripting::GetScriptsDomain();
     MainThreadManagedInvokeAction::ParamsBuilder params;
     params.AddParam(type);
@@ -80,7 +95,41 @@ void DebugLog::Log(LogType type, const StringView& message)
     const String stackTrace = Platform::GetStackTrace(1);
     params.AddParam(stackTrace, scriptsDomain);
 #endif
+    params.AddParam(threadId);
     MainThreadManagedInvokeAction::Invoke(Internal_SendLog, params);
+#endif
+}
+
+void OnLogMessageDetailed(const LogType type, const StringView& message, const StringView& stackTrace, const uint64 threadId)
+{
+#if USE_CSHARP
+    if (CacheMethods())
+        return;
+
+    auto scriptsDomain = Scripting::GetScriptsDomain();
+    MainThreadManagedInvokeAction::ParamsBuilder params;
+    params.AddParam(type);
+    params.AddParam(message, scriptsDomain);
+    params.AddParam(stackTrace, scriptsDomain);
+    params.AddParam(threadId);
+    MainThreadManagedInvokeAction::Invoke(Internal_SendLogMessage, params);
+#endif
+}
+
+void DebugLog::SetLogMessageReceiver(const bool enabled)
+{
+#if USE_CSHARP
+    if (enabled && CacheMethods())
+        return;
+
+    ScopeLock lock(Locker);
+    if (enabled == LogMessageReceiverBound)
+        return;
+    LogMessageReceiverBound = enabled;
+    if (enabled)
+        Log::Logger::OnMessageDetailed.Bind<OnLogMessageDetailed>();
+    else
+        Log::Logger::OnMessageDetailed.Unbind<OnLogMessageDetailed>();
 #endif
 }
 
