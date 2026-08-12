@@ -21,6 +21,7 @@ namespace FlaxEditor.Tools.CSG
         private const string OperationCacheKey = "CSGAuthoring.Operation";
         private const string WorkingPlaneLockCacheKey = "CSGAuthoring.WorkingPlaneLocked";
         private const string SnappingCacheKey = "CSGAuthoring.SnappingEnabled";
+        private const string BrushAlignmentSnappingCacheKey = "CSGAuthoring.BrushAlignmentSnappingEnabled";
         private const string SnapIncrementCacheKey = "CSGAuthoring.SnapIncrement";
         private const string VisibilityCacheKey = "CSGAuthoring.Visibility";
         private const string RayPlacementAlignmentCacheKey = "CSGAuthoring.RayPlacementAlignment";
@@ -266,6 +267,8 @@ namespace FlaxEditor.Tools.CSG
                 state.WorkingPlaneLocked = flag;
             if (cache.TryGetCustomData(SnappingCacheKey, out flag))
                 state.SnappingEnabled = flag;
+            if (cache.TryGetCustomData(BrushAlignmentSnappingCacheKey, out flag))
+                state.BrushAlignmentSnappingEnabled = flag;
             if (cache.TryGetCustomData(SnapIncrementCacheKey, out float value))
                 state.SnapIncrement = value;
             if (cache.TryGetCustomData(VisibilityCacheKey, out text) && Enum.TryParse(text, out CSGVisibility visibility))
@@ -288,6 +291,7 @@ namespace FlaxEditor.Tools.CSG
             cache.SetCustomData(OperationCacheKey, state.Operation.ToString());
             cache.SetCustomData(WorkingPlaneLockCacheKey, state.WorkingPlaneLocked);
             cache.SetCustomData(SnappingCacheKey, state.SnappingEnabled);
+            cache.SetCustomData(BrushAlignmentSnappingCacheKey, state.BrushAlignmentSnappingEnabled);
             cache.SetCustomData(SnapIncrementCacheKey, state.SnapIncrement);
             cache.SetCustomData(VisibilityCacheKey, state.Visibility.ToString());
             cache.SetCustomData(RayPlacementAlignmentCacheKey, state.RayPlacementAlignment.ToString());

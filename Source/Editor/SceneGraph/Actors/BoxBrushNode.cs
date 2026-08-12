@@ -414,23 +414,11 @@ namespace FlaxEditor.SceneGraph.Actors
 
         private static void DrawSelectedBrushBounds(BoxBrush brush)
         {
-            var box = brush.OrientedBox;
-            var corners = box.GetCorners();
-            var xray = new Color(1.0f, 1.0f, 0.0f, 0.22f);
-            const int dashCount = 8;
-            const float dashFraction = 0.55f;
-            for (int edgeIndex = 0; edgeIndex < BoxEdgeCorners.Length; edgeIndex += 2)
-            {
-                var start = corners[BoxEdgeCorners[edgeIndex]];
-                var edge = corners[BoxEdgeCorners[edgeIndex + 1]] - start;
-                for (int dash = 0; dash < dashCount; dash++)
-                {
-                    float from = (float)dash / dashCount;
-                    float to = (dash + dashFraction) / dashCount;
-                    DebugDraw.DrawLine(start + edge * from, start + edge * to, xray, 0.0f, false);
-                }
-            }
-            DebugDraw.DrawWireBox(box, Color.Yellow, 0.0f, true);
+            // Outside of CSG authoring, keep brush selection deliberately subdued. The
+            // authoring gizmo supplies the stronger gray/yellow state hierarchy itself.
+            if (brush.Mode != BrushMode.Subtractive)
+                return;
+            DebugDraw.DrawWireBox(brush.OrientedBox, new Color(0.62f, 0.24f, 0.22f, 0.1f), 0.0f, true);
         }
 
         /// <inheritdoc />

@@ -17,7 +17,7 @@ namespace FlaxEditor.Tools.CSG
         SelectPlace,
 
         /// <summary>
-        /// Draws a new brush footprint and extrusion.
+        /// Draws a new brush footprint and extrusion, then keeps the created box available for editing.
         /// </summary>
         Draw,
 
@@ -140,6 +140,11 @@ namespace FlaxEditor.Tools.CSG
         public bool SnappingEnabled;
 
         /// <summary>
+        /// Whether face edits may snap to aligned faces on other CSG brushes.
+        /// </summary>
+        public bool BrushAlignmentSnappingEnabled;
+
+        /// <summary>
         /// The current linear snap increment.
         /// </summary>
         public float SnapIncrement;
@@ -171,6 +176,7 @@ namespace FlaxEditor.Tools.CSG
         private CSGOperation _operation = CSGOperation.Additive;
         private bool _workingPlaneLocked;
         private bool _snappingEnabled = true;
+        private bool _brushAlignmentSnappingEnabled;
         private float _snapIncrement = 15.0f;
         private CSGVisibility _visibility = CSGVisibility.Default;
         private CSGRayPlacementAlignment _rayPlacementAlignment = CSGRayPlacementAlignment.AlignToSurface;
@@ -235,6 +241,12 @@ namespace FlaxEditor.Tools.CSG
         /// Gets a value indicating whether snapping is enabled.
         /// </summary>
         public bool SnappingEnabled => _snappingEnabled;
+
+        /// <summary>
+        /// Gets whether face edits may snap to aligned faces on other CSG brushes.
+        /// Passive alignment guides remain visible regardless of this setting.
+        /// </summary>
+        public bool BrushAlignmentSnappingEnabled => _brushAlignmentSnappingEnabled;
 
         /// <summary>
         /// Gets the active snap increment in engine units.
@@ -385,6 +397,17 @@ namespace FlaxEditor.Tools.CSG
             if (_snappingEnabled == value)
                 return;
             _snappingEnabled = value;
+            Changed?.Invoke();
+        }
+
+        /// <summary>
+        /// Sets brush-to-brush face alignment snapping.
+        /// </summary>
+        public void SetBrushAlignmentSnappingEnabled(bool value)
+        {
+            if (_brushAlignmentSnappingEnabled == value)
+                return;
+            _brushAlignmentSnappingEnabled = value;
             Changed?.Invoke();
         }
 
@@ -573,6 +596,7 @@ namespace FlaxEditor.Tools.CSG
                 Operation = Operation,
                 WorkingPlaneLocked = WorkingPlaneLocked,
                 SnappingEnabled = SnappingEnabled,
+                BrushAlignmentSnappingEnabled = BrushAlignmentSnappingEnabled,
                 SnapIncrement = SnapIncrement,
                 Visibility = Visibility,
                 RayPlacementAlignment = RayPlacementAlignment,
@@ -601,6 +625,7 @@ namespace FlaxEditor.Tools.CSG
             _operation = state.Operation == CSGOperation.Subtractive ? CSGOperation.Subtractive : CSGOperation.Additive;
             _workingPlaneLocked = state.WorkingPlaneLocked;
             _snappingEnabled = state.SnappingEnabled;
+            _brushAlignmentSnappingEnabled = state.BrushAlignmentSnappingEnabled;
             _snapIncrement = float.IsNaN(state.SnapIncrement) || float.IsInfinity(state.SnapIncrement) ? 15.0f : Mathf.Max(state.SnapIncrement, 0.0001f);
             _visibility = state.Visibility & (CSGVisibility.SourceBrushes | CSGVisibility.BuiltGeometry | CSGVisibility.HiddenBrushes);
             _rayPlacementAlignment = state.RayPlacementAlignment is CSGRayPlacementAlignment.AlignToSurface or CSGRayPlacementAlignment.AlignSurfaceUp or CSGRayPlacementAlignment.KeepRotation

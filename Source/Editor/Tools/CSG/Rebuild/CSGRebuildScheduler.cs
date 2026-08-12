@@ -88,7 +88,8 @@ namespace FlaxEditor.Tools.CSG.Rebuild
         private readonly Dictionary<Guid, Entry> _entries = new Dictionary<Guid, Entry>();
 
         /// <summary>
-        /// Minimum time between managed preview dispatches. Native CSG requests remain debounced too.
+        /// Minimum time between managed preview dispatches. Dispatched previews use no additional
+        /// native debounce so interactive geometry catches up during a continuous drag.
         /// </summary>
         public double PreviewIntervalSeconds { get; set; } = 0.05;
 
@@ -116,15 +117,15 @@ namespace FlaxEditor.Tools.CSG.Rebuild
                 return revision;
             }
 
+            float dispatchTimeout = kind == CSGRebuildRequestKind.External ? Mathf.Max(timeoutMs, 0.0f) : 0.0f;
             if (kind == CSGRebuildRequestKind.Preview && entry.SubmittedRevision != 0 && now < entry.NextPreviewTime)
             {
                 entry.PendingRevision = revision;
-                entry.PendingTimeoutMs = timeoutMs;
+                entry.PendingTimeoutMs = dispatchTimeout;
                 entry.State = CSGRebuildVisualState.Pending;
                 return revision;
             }
 
-            float dispatchTimeout = kind == CSGRebuildRequestKind.Final ? 0.0f : Mathf.Max(timeoutMs, 0.0f);
             Submit(sceneId, entry, revision, dispatchTimeout, now, out dispatch);
             return revision;
         }

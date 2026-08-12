@@ -419,6 +419,16 @@ namespace FlaxEditor.Tools.CSG.Tools
             var p3 = _plane.ToWorld(new Float2(minimum.X, maximum.Y));
             bool validFootprint = HasValidFootprint();
             var color = validFootprint ? new Color(0.15f, 0.85f, 1.0f, 0.95f) : new Color(1.0f, 0.18f, 0.08f, 0.95f);
+            if (Stage == CSGBoxDrawStage.Footprint && validFootprint)
+            {
+                // Give the first draw gesture visual weight before it becomes a volume.
+                // Render slightly above the construction plane so the fill stays stable over
+                // coplanar scene surfaces while the brighter bounds remain easy to read.
+                var offset = _plane.Normal * Mathf.Max(0.08f, _plane.Spacing * 0.006f);
+                var fill = new Color(0.08f, 0.09f, 0.1f, 0.5f);
+                DebugDraw.DrawTriangle(p0 + offset, p1 + offset, p2 + offset, fill, 0.0f, false);
+                DebugDraw.DrawTriangle(p0 + offset, p2 + offset, p3 + offset, fill, 0.0f, false);
+            }
             DebugDraw.DrawLine(p0, p1, color, 0.0f, false);
             DebugDraw.DrawLine(p1, p2, color, 0.0f, false);
             DebugDraw.DrawLine(p2, p3, color, 0.0f, false);

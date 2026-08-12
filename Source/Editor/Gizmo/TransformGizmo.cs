@@ -37,6 +37,7 @@ namespace FlaxEditor.Gizmo
         private readonly List<SceneGraphNode> _pickAncestry = new List<SceneGraphNode>();
         private readonly List<SceneGraphNode> _pickSelectionChain = new List<SceneGraphNode>();
         private readonly List<ActorNode> _brushPickNodes = new List<ActorNode>(32);
+        private readonly List<Scene> _csgRebuildScenes = new List<Scene>(4);
 
         internal bool HasActiveCSGTransaction
         {
@@ -581,6 +582,11 @@ namespace FlaxEditor.Gizmo
                 }
             }
             base.OnApplyInteractionResult(result);
+
+            // Transform the generated CSG result along with its source brushes. The managed
+            // scheduler limits rebuild frequency, while zero native debounce prevents a
+            // continuous translate/rotate/scale drag from postponing every build until release.
+            RequestCSGRebuilds(false);
         }
 
         /// <inheritdoc />
@@ -600,22 +606,31 @@ namespace FlaxEditor.Gizmo
             var action = new TransformObjectsAction(selection, _startTransforms, ref _startBounds, _navigationDirty);
             AddTransformUndoAction(action);
 
-            // Native brush modification callbacks are suppressed while this
-            // transaction is active. Rebuild each affected scene once from the
-            // committed transforms so the generated model stays visible while
-            // dragging instead of being repeatedly reloaded.
-            var csgScenes = new List<Scene>();
+            // Ensure the committed state wins over any queued interactive update.
+            RequestCSGRebuilds(true);
+        }
+
+        private void RequestCSGRebuilds(bool final)
+        {
+            _csgRebuildScenes.Clear();
             for (int i = 0; i < TransactionObjects.Count; i++)
             {
                 var actorNode = GetOwningActorNode(TransactionObjects[i]);
                 if (actorNode == null || !ContainsBoxBrush(actorNode.Actor))
                     continue;
                 var scene = actorNode.Actor.Scene;
-                if (scene != null && !csgScenes.Contains(scene))
-                    csgScenes.Add(scene);
+                if (scene != null && !_csgRebuildScenes.Contains(scene))
+                    _csgRebuildScenes.Add(scene);
             }
-            for (int i = 0; i < csgScenes.Count; i++)
-                CSGRebuildScheduler.Shared.RequestFinal(csgScenes[i]);
+            for (int i = 0; i < _csgRebuildScenes.Count; i++)
+            {
+                if (final)
+                    CSGRebuildScheduler.Shared.RequestFinal(_csgRebuildScenes[i]);
+                else
+                    CSGRebuildScheduler.Shared.RequestPreview(_csgRebuildScenes[i]);
+            }
+            if (!final)
+                CSGRebuildScheduler.Shared.Update();
         }
 
         private static ActorNode GetOwningActorNode(SceneGraphNode node)

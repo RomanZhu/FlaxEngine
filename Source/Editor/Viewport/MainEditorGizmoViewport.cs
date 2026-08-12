@@ -58,7 +58,6 @@ namespace FlaxEditor.Viewport
         private readonly List<SceneGraphNode> _sceneTreeHoverSelection = new List<SceneGraphNode>(1);
         private readonly List<SceneGraphNode> _viewportPrimaryHoverSelection = new List<SceneGraphNode>(1);
         private readonly List<ActorNode> _regularCSGBrushes = new List<ActorNode>(32);
-        private readonly Vector3[] _regularCSGBrushCorners = new Vector3[8];
         private ActorNode _sceneTreeHoveredActor;
         private ActorNode _editorViewportHoveredActor;
         private bool _editorViewportHoverIsLeafTarget;
@@ -577,7 +576,7 @@ namespace FlaxEditor.Viewport
             _overlayCSGSnapButton.LinkTooltip("Toggle CSG grid snapping.");
             _overlayCSGSnapValueButton = AddViewportToolStripMenuButton(GetCSGSnapLabel(), SpriteHandle.Invalid, CreateCSGSnapMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.SnapValue.Left");
             _overlayCSGSnapValueButton.DrawDropdownFrame = true;
-            _overlayCSGSnapValueButton.LinkTooltip("CSG linear snap increment. Use Ctrl+Mouse Wheel to change it.");
+            _overlayCSGSnapValueButton.LinkTooltip("Configure CSG snap modes and linear increment. Use Ctrl+Mouse Wheel to change the increment.");
             _overlayCSGVisibilityButton = AddViewportToolStripMenuButton("View", SpriteHandle.Invalid, CreateCSGVisibilityMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Visibility.Left");
             _overlayCSGVisibilityButton.DrawDropdownFrame = true;
             _overlayCSGVisibilityButton.DrawMenuChevron = true;
@@ -675,6 +674,11 @@ namespace FlaxEditor.Viewport
         private ContextMenu CreateCSGSnapMenu()
         {
             var menu = new ContextMenu();
+            var grid = menu.AddButton("Grid Snapping", () => CSGAuthoringMode.Controller.SetSnappingEnabled(!CSGAuthoringMode.Controller.SnappingEnabled));
+            var brushAlignment = menu.AddButton("Brush Alignment Snapping", () => CSGAuthoringMode.Controller.SetBrushAlignmentSnappingEnabled(!CSGAuthoringMode.Controller.BrushAlignmentSnappingEnabled));
+            grid.CloseMenuOnClick = false;
+            brushAlignment.CloseMenuOnClick = false;
+            menu.AddSeparator();
             var buttons = new List<ContextMenuButton>(CSGToolController.SnapIncrements.Length);
             foreach (float increment in CSGToolController.SnapIncrements)
             {
@@ -687,6 +691,8 @@ namespace FlaxEditor.Viewport
             {
                 if (!control.Visible)
                     return;
+                grid.Checked = CSGAuthoringMode.Controller.SnappingEnabled;
+                brushAlignment.Checked = CSGAuthoringMode.Controller.BrushAlignmentSnappingEnabled;
                 foreach (var button in buttons)
                     button.Checked = Mathf.NearEqual((float)button.Tag, CSGAuthoringMode.Controller.SnapIncrement);
             };
@@ -696,9 +702,31 @@ namespace FlaxEditor.Viewport
         private ContextMenu CreateCSGVisibilityMenu()
         {
             var menu = new ContextMenu();
-            var source = menu.AddButton("Source Brushes", () => CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.SourceBrushes));
-            var built = menu.AddButton("Built Geometry", () => CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.BuiltGeometry));
-            var hidden = menu.AddButton("Hidden Brushes", () => CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.HiddenBrushes));
+            ContextMenuButton source = null;
+            ContextMenuButton built = null;
+            ContextMenuButton hidden = null;
+            Action updateChecks = () =>
+            {
+                var visibility = CSGAuthoringMode.Controller.Visibility;
+                source.Checked = (visibility & CSGVisibility.SourceBrushes) != 0;
+                built.Checked = (visibility & CSGVisibility.BuiltGeometry) != 0;
+                hidden.Checked = (visibility & CSGVisibility.HiddenBrushes) != 0;
+            };
+            source = menu.AddButton("Source Brushes", () =>
+            {
+                CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.SourceBrushes);
+                updateChecks();
+            });
+            built = menu.AddButton("Built Geometry", () =>
+            {
+                CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.BuiltGeometry);
+                updateChecks();
+            });
+            hidden = menu.AddButton("Hidden Brushes", () =>
+            {
+                CSGAuthoringMode.Controller.ToggleVisibility(CSGVisibility.HiddenBrushes);
+                updateChecks();
+            });
             source.CloseMenuOnClick = false;
             built.CloseMenuOnClick = false;
             hidden.CloseMenuOnClick = false;
@@ -706,10 +734,7 @@ namespace FlaxEditor.Viewport
             {
                 if (!control.Visible)
                     return;
-                var visibility = CSGAuthoringMode.Controller.Visibility;
-                source.Checked = (visibility & CSGVisibility.SourceBrushes) != 0;
-                built.Checked = (visibility & CSGVisibility.BuiltGeometry) != 0;
-                hidden.Checked = (visibility & CSGVisibility.HiddenBrushes) != 0;
+                updateChecks();
             };
             return menu;
         }
@@ -993,8 +1018,15 @@ namespace FlaxEditor.Viewport
                 {
                     for (int i = 0; i < selectedParents.Count; i++)
                     {
-                        if (selectedParents[i].IsActiveInHierarchy)
-                            selectedParents[i].OnDebugDraw(_debugDrawData);
+                        var selectedNode = selectedParents[i];
+                        // Brush wireframes are owned by the dedicated CSG render paths below.
+                        // Skipping their normal selection debug pass prevents a second outline
+                        // from competing with the authoring gray/yellow state hierarchy.
+                        if ((selectedNode is BoxBrushNode || selectedNode.ParentNode is BoxBrushNode) &&
+                            selectedNode.IsActiveInHierarchy)
+                            continue;
+                        if (selectedNode.IsActiveInHierarchy)
+                            selectedNode.OnDebugDraw(_debugDrawData);
                     }
                 }
 
@@ -1019,26 +1051,9 @@ namespace FlaxEditor.Viewport
                     continue;
 
                 var brush = (BoxBrush)node.Actor;
-                bool subtractive = brush.Mode == BrushMode.Subtractive;
-                bool hovered = node == _editorViewportHoveredActor || node == _sceneTreeHoveredActor;
-                bool selected = TransformGizmo.Selection.Contains(node);
-                var color = subtractive
-                    ? new Color(1.0f, 0.12f, 0.1f, hovered || selected ? 1.0f : 0.72f)
-                    : new Color(0.18f, 0.76f, 1.0f, hovered || selected ? 1.0f : 0.58f);
-                var xrayColor = color;
-                xrayColor.A *= 0.2f;
-
-                DrawDashedCSGWireBox(brush.OrientedBox, xrayColor, false);
-                DebugDraw.DrawWireBox(brush.OrientedBox, color, 0.0f, true);
-                if (selected)
-                    DebugDraw.DrawBox(brush.OrientedBox, new Color(1.0f, 0.68f, 0.08f, 0.5f), 0.0f, true);
-                else if (hovered)
-                    DebugDraw.DrawBox(brush.OrientedBox, new Color(color.R, color.G, color.B, 0.22f), 0.0f, true);
-                if (hovered || selected)
-                {
-                    DrawDashedCSGWireBox(brush.OrientedBox, new Color(1.0f, 1.0f, 1.0f, 0.22f), false);
-                    DebugDraw.DrawWireBox(brush.OrientedBox, Color.White, 0.0f, true);
-                }
+                if (brush.Mode != BrushMode.Subtractive)
+                    continue;
+                DebugDraw.DrawWireBox(brush.OrientedBox, new Color(0.62f, 0.24f, 0.22f, 0.1f), 0.0f, true);
             }
         }
 
@@ -1073,32 +1088,6 @@ namespace FlaxEditor.Viewport
             };
             return menu;
         }
-
-        private void DrawDashedCSGWireBox(OrientedBoundingBox box, Color color, bool depthTest)
-        {
-            box.GetCorners(_regularCSGBrushCorners);
-            const int dashCount = 6;
-            const float dashFraction = 0.6f;
-            for (int i = 0; i < CSGBoxEdges.Length; i += 2)
-            {
-                var start = _regularCSGBrushCorners[CSGBoxEdges[i]];
-                var end = _regularCSGBrushCorners[CSGBoxEdges[i + 1]];
-                var edge = end - start;
-                for (int dash = 0; dash < dashCount; dash++)
-                {
-                    float from = (float)dash / dashCount;
-                    float to = (dash + dashFraction) / dashCount;
-                    DebugDraw.DrawLine(start + edge * from, start + edge * to, color, 0.0f, depthTest);
-                }
-            }
-        }
-
-        private static readonly int[] CSGBoxEdges =
-        {
-            0, 1, 1, 2, 2, 3, 3, 0,
-            4, 5, 5, 6, 6, 7, 7, 4,
-            0, 4, 1, 5, 2, 6, 3, 7,
-        };
 
         private void OnCollectDrawCalls(ref RenderContext renderContext)
         {

@@ -130,7 +130,7 @@ namespace FlaxEditor.Gizmo
 
         private bool IsTargetAvailable(SemanticHandle handle)
         {
-            return !HasActiveTransaction || handle == _latchedHandle;
+            return IsSupplementalTranslationHandleAllowed(handle.Axis) && (!HasActiveTransaction || handle == _latchedHandle);
         }
 
         private bool TryProjectSemanticWorldPoint(Vector3 worldPosition, out Float2 screenPosition)

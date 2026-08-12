@@ -31,6 +31,9 @@ namespace FlaxEditor.Tools.CSG.Tools
         /// <summary>Gets whether a face resize transaction is active.</summary>
         public bool IsInteracting => _brush != null;
 
+        /// <summary>Gets the brush being edited.</summary>
+        public BoxBrush Brush => _brush;
+
         /// <summary>Gets the selected face index, or -1.</summary>
         public int FaceIndex { get; private set; } = -1;
 
@@ -39,6 +42,21 @@ namespace FlaxEditor.Tools.CSG.Tools
 
         /// <summary>Gets the selected edge index, or -1.</summary>
         public int EdgeIndex => _edgeIndex;
+
+        /// <summary>Gets the active face movement axis in world space.</summary>
+        public Vector3 AxisWorld => _axisWorld;
+
+        /// <summary>Gets the current active face center in world space.</summary>
+        public Vector3 FaceCenter
+        {
+            get
+            {
+                if (_brush == null || FaceIndex < 0)
+                    return _faceCenter;
+                var localAxis = GetAxis(_axis);
+                return _brush.Transform.LocalToWorld(_brush.Center + localAxis * GetComponent(_brush.Size, _axis) * 0.5f * _sign);
+            }
+        }
 
         /// <summary>Gets the current signed face movement in brush-local units.</summary>
         public float Delta { get; private set; }
@@ -127,6 +145,22 @@ namespace FlaxEditor.Tools.CSG.Tools
                 localDelta = Mathf.Round(localDelta / localStep) * localStep;
             }
 
+            return ApplyFaceDelta(localDelta);
+        }
+
+        /// <summary>Moves the active face onto a parallel world-space target plane.</summary>
+        public bool SnapFaceTo(Vector3 targetFacePoint)
+        {
+            if (_brush == null || FaceIndex < 0)
+                return false;
+            float worldDelta = (float)Vector3.Dot(targetFacePoint - _faceCenter, _axisWorld);
+            var localDeltaVector = _brush.Transform.WorldToLocalVector(_axisWorld * worldDelta);
+            float localDelta = (float)Vector3.Dot(localDeltaVector, GetAxis(_axis) * _sign);
+            return ApplyFaceDelta(localDelta);
+        }
+
+        private bool ApplyFaceDelta(float localDelta)
+        {
             float initialSize = GetComponent(_initialSize, _axis);
             float size = Mathf.Max(initialSize + localDelta, 0.001f);
             localDelta = size - initialSize;

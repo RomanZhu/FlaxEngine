@@ -1630,10 +1630,9 @@ namespace FlaxEditor
 
         internal bool Internal_CanAutoBuildCSG()
         {
-            // Transform gizmo previews update brush actors every frame. Rebuilding the
-            // generated model for each preview causes visible asset reload flicker and
-            // wastes most of the CSG work. TransformGizmo requests one final rebuild
-            // for every affected scene when its transaction commits.
+            // Interactive CSG tools route live and final builds through the managed scheduler.
+            // Suppress the duplicate native auto-build callback while those transactions are
+            // active; the scheduler throttles live updates and removes native debounce.
             var viewport = Windows?.EditWin?.Viewport;
             var transformGizmo = viewport?.TransformGizmo;
             var csgAuthoringGizmo = viewport?.CSGAuthoringMode?.Gizmo;

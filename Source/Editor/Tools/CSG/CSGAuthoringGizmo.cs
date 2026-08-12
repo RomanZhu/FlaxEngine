@@ -39,6 +39,11 @@ namespace FlaxEditor.Tools.CSG
     [HideInEditor]
     public sealed class CSGAuthoringGizmo : GizmoBase, IViewportRubberBandSelection
     {
+        // Box edge and vertex manipulation currently resolves back into Center/Size and is
+        // therefore only another form of box resizing. Keep the scaffolding for general
+        // convex-brush authoring, but expose only the unambiguous face handles for now.
+        private static readonly bool ShowBoxEdgeAndVertexHandles = false;
+
         private static readonly int[] BrushBoxEdges =
         {
             0, 1, 1, 2, 2, 3, 3, 0,
@@ -81,11 +86,13 @@ namespace FlaxEditor.Tools.CSG
         private bool _selectionEntered;
         private bool _applyingSelection;
         private bool _hasSnap;
+        private bool _hasWorkingPlanePoint;
         private ViewportSnapResult _snapResult;
         private CSGOperation _lastControllerOperation;
         private CSGOperation? _drawOperationOverride;
         private bool _boxCreated;
         private BoxBrushNode _boxCreatedNode;
+        private BoxBrushNode _drawEditingBrush;
         private bool _consumeDrawMouseUp;
         private bool _selectClickAppliedOnDown;
         private bool _selectRaySnapActive;
@@ -101,6 +108,17 @@ namespace FlaxEditor.Tools.CSG
         private BoxBrushNode _hoveredFaceBrush;
         private SceneGraphNode _activeDirectEditComponent;
         private BoxBrush _activeDirectEditBrush;
+        private BoxBrushNode _faceAlignmentBrush;
+        private int _faceAlignmentFace = -1;
+        private Vector3 _faceAlignmentPoint;
+        private Vector3 _faceAlignmentActiveA;
+        private Vector3 _faceAlignmentActiveB;
+        private Vector3 _faceAlignmentActiveC;
+        private Vector3 _faceAlignmentActiveD;
+        private Vector3 _faceAlignmentActiveCenter;
+        private bool _faceAlignmentActiveValid;
+        private bool _supplementalFaceSpaceForced;
+        private TransformGizmoBase.TransformSpace _supplementalSavedTransformSpace;
         private string _planeStatus = "World";
         private string _rebuildStatus = "Build Auto";
         private string _statusText = "CSG Authoring";
@@ -160,10 +178,13 @@ namespace FlaxEditor.Tools.CSG
         /// <inheritdoc />
         public override void Destroy()
         {
+            _drawEditingBrush = null;
             if (Owner is MainEditorGizmoViewport viewport)
             {
+                RestoreSupplementalTransformSpace(viewport.TransformGizmo);
                 viewport.TransformGizmo.SupplementalActive = false;
                 viewport.TransformGizmo.SupplementalTranslationSnapEnabled = false;
+                viewport.TransformGizmo.SupplementalTranslationAxisMask = TransformGizmoBase.Axis.X | TransformGizmoBase.Axis.Y | TransformGizmoBase.Axis.Z;
             }
             _controller.Changed -= OnControllerChanged;
             _controller.InteractionStarted -= OnInteractionStarted;
@@ -199,8 +220,10 @@ namespace FlaxEditor.Tools.CSG
         {
             if (Owner is MainEditorGizmoViewport viewport)
             {
+                RestoreSupplementalTransformSpace(viewport.TransformGizmo);
                 viewport.TransformGizmo.SupplementalActive = false;
                 viewport.TransformGizmo.SupplementalTranslationSnapEnabled = false;
+                viewport.TransformGizmo.SupplementalTranslationAxisMask = TransformGizmoBase.Axis.X | TransformGizmoBase.Axis.Y | TransformGizmoBase.Axis.Z;
             }
             var root = Owner.SceneGraphRoot;
             if (_selectionEntered && root?.SceneContext != null)
@@ -210,10 +233,12 @@ namespace FlaxEditor.Tools.CSG
             }
             _selectionEntered = false;
             _modeActive = false;
+            UpdateSupplementalTransformGizmo();
             _workingPlane.Unfreeze();
             _workingPlane.ClearHover();
             _hasSnap = false;
             _boxDrawTool.Reset();
+            _drawEditingBrush = null;
             ResetDrawAdjustmentHandles();
             _selectTool.Reset();
             ResetSelectSurfacePlacement();
@@ -236,6 +261,9 @@ namespace FlaxEditor.Tools.CSG
                 _selectClickAppliedOnDown = false;
             }
             _selection.Observe(newSelection);
+            if (_drawEditingBrush != null && !SelectionContainsBrush(newSelection, _drawEditingBrush))
+                _drawEditingBrush = null;
+            UpdateSupplementalTransformGizmo();
             ResetDeepSelectionCycle();
         }
 
@@ -294,7 +322,7 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>Handles CSG-owned pointer movement before viewport selection behavior.</summary>
         internal bool OnMouseMove(Float2 location)
         {
-            if (_controller.Tool == CSGTool.Edit && _faceEditTool.IsInteracting)
+            if ((_controller.Tool == CSGTool.Edit || _controller.Tool == CSGTool.Draw) && _faceEditTool.IsInteracting)
             {
                 UpdateFaceEdit();
                 return true;
@@ -330,7 +358,12 @@ namespace FlaxEditor.Tools.CSG
             if (button != MouseButton.Left || Owner.IsAltKeyDown)
                 return false;
 
-            if (_controller.Tool == CSGTool.SelectPlace || _controller.Tool == CSGTool.Edit)
+            bool brushEditContext = _controller.Tool == CSGTool.Edit || IsDrawBrushEditingContext;
+            // Component handles own overlapping pixels. Otherwise a crossing transform axis can
+            // start a whole-node translation and report the wrong semantic axis for the face.
+            if (brushEditContext && _hoveredFaceHandle >= 0)
+                return BeginFaceEdit();
+            if (_controller.Tool == CSGTool.SelectPlace || brushEditContext)
             {
                 var transform = GetSupplementalTransformGizmo();
                 if (transform != null && transform.ActiveMode != TransformGizmoBase.Mode.Select && transform.HoveredHandle.IsValid)
@@ -345,6 +378,8 @@ namespace FlaxEditor.Tools.CSG
 
             if (_boxDrawTool.Stage == CSGBoxDrawStage.Hover)
             {
+                _drawEditingBrush = null;
+                UpdateSupplementalTransformGizmo();
                 var plane = _workingPlane.ActivePlane;
                 AlignDrawPlaneToGrid(ref plane);
                 if (!TryGetDrawPoint(ref plane, out var point) ||
@@ -385,7 +420,7 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>Locks the footprint after the initial drag.</summary>
         internal bool OnMouseUp(Float2 location, MouseButton button)
         {
-            if (_controller.Tool == CSGTool.Edit && button == MouseButton.Left && _faceEditTool.IsInteracting)
+            if ((_controller.Tool == CSGTool.Edit || _controller.Tool == CSGTool.Draw) && button == MouseButton.Left && _faceEditTool.IsInteracting)
             {
                 UpdateFaceEdit();
                 _controller.TryCommit();
@@ -505,16 +540,31 @@ namespace FlaxEditor.Tools.CSG
                 UpdateBoxDrawTool();
                 var plane = _workingPlane.ActivePlane;
                 AlignDrawPlaneToGrid(ref plane);
-                bool showSnap = _controller.HasActiveInteraction &&
-                                (_controller.Tool != CSGTool.Draw ||
-                                 _boxDrawTool.Stage == CSGBoxDrawStage.Footprint ||
+                bool showSnap = _controller.Tool == CSGTool.Draw &&
+                                !_faceEditTool.IsInteracting &&
+                                _controller.HasActiveInteraction &&
+                                (_boxDrawTool.Stage == CSGBoxDrawStage.Footprint ||
                                  _activeDrawHeightDirection != 0 || _activeDrawCornerHandle >= 0);
                 var drawSnap = _snapResult;
                 ProjectDrawPointToPlane(ref plane, ref drawSnap.Point);
                 float snapMarkerSize = GetScreenSpaceCursorWorldSize(drawSnap.Point, plane.Spacing);
-                _overlayRenderer.Draw(ref plane, Owner.ViewPosition, !_workingPlane.IsLocked && _workingPlane.HasHover, showSnap && _hasSnap, ref drawSnap, snapMarkerSize);
+                if (_faceEditTool.IsInteracting && _faceEditTool.FaceIndex >= 0)
+                {
+                    // Face resizing owns a frozen vertical guide plane. Keep the visible patch
+                    // anchored at mouse-down and only move its emphasized snapped-step line.
+                    float gridHalfExtent = GetWorkingGridHalfExtent(plane.Origin);
+                    _overlayRenderer.DrawFaceDragGuide(ref plane, _faceEditTool.FaceCenter, gridHalfExtent);
+                }
+                else
+                {
+                    var gridFocus = _hasWorkingPlanePoint ? drawSnap.Point : plane.Origin;
+                    float gridHalfExtent = GetWorkingGridHalfExtent(gridFocus);
+                    _overlayRenderer.Draw(ref plane, Owner.ViewPosition, gridFocus, gridHalfExtent, !_workingPlane.IsLocked && _workingPlane.HasHover, showSnap && _hasSnap, ref drawSnap, snapMarkerSize);
+                }
                 DrawSelectDragFeedback();
                 UpdateAndDrawFaceHandles();
+                UpdateAlignmentGuidesForCurrentFrame();
+                DrawFaceAlignmentGuides();
 
                 bool showSourceBrushes = (_controller.Visibility & CSGVisibility.SourceBrushes) != 0;
                 for (int i = 0; i < _actorBuffer.Count; i++)
@@ -529,10 +579,13 @@ namespace FlaxEditor.Tools.CSG
                         continue;
 
                     var brush = (BoxBrush)node.Actor;
-                    if (showSourceBrushes)
+                    if (showSourceBrushes || selected)
                     {
-                        bool subtractive = brush.Mode == BrushMode.Subtractive;
-                        var color = subtractive ? new Color(1.0f, 0.12f, 0.1f, 0.95f) : new Color(0.18f, 0.76f, 1.0f, 0.9f);
+                        var color = selected
+                            ? new Color(1.0f, 0.82f, 0.12f, 1.0f)
+                            : brush.Mode == BrushMode.Subtractive
+                                ? new Color(0.62f, 0.24f, 0.22f, 0.5f)
+                                : new Color(0.58f, 0.6f, 0.64f, 0.72f);
                         if (hidden)
                             color.A = 0.45f;
                         var xrayColor = color;
@@ -544,8 +597,6 @@ namespace FlaxEditor.Tools.CSG
                     {
                         if (IsBrushBodySelected(node))
                             DebugDraw.DrawBox(brush.OrientedBox, new Color(1.0f, 0.68f, 0.08f, 0.5f), 0.0f, true);
-                        DrawDashedWireBox(brush.OrientedBox, new Color(1.0f, 1.0f, 1.0f, 0.22f), false);
-                        DebugDraw.DrawWireBox(brush.OrientedBox, Color.White, 0.0f, true);
                     }
                 }
             }
@@ -613,11 +664,13 @@ namespace FlaxEditor.Tools.CSG
                     CSGSnapProviders.Gather(_actorBuffer, excluded, Owner.Viewport, ref plane, Owner.Viewport.ContinuousViewMousePosition, threshold, _snapCandidates, _brushCorners);
                 _snapService.Solve(ref plane, point, _controller.EffectiveSnappingEnabled, threshold, _snapCandidates, out _snapResult);
                 _hasSnap = _snapResult.IsSnapped;
+                _hasWorkingPlanePoint = true;
             }
             else
             {
                 _snapCandidates.Clear();
                 _hasSnap = false;
+                _hasWorkingPlanePoint = false;
             }
 
             string planeStatus = _workingPlane.IsLocked ? "Locked" : _workingPlane.HasHover ? "Surface" : "World";
@@ -630,7 +683,7 @@ namespace FlaxEditor.Tools.CSG
 
         private void UpdateBoxDrawTool()
         {
-            if (_controller.Tool != CSGTool.Draw)
+            if (_controller.Tool != CSGTool.Draw || IsDrawBrushEditingContext || _faceEditTool.IsInteracting)
                 return;
 
             _boxDrawTool.SetModifiers(_controller.SquareConstraintActive, false, _controller.SymmetricConstraintActive);
@@ -963,7 +1016,7 @@ namespace FlaxEditor.Tools.CSG
 
         private void UpdateAndDrawFaceHandles()
         {
-            if (_controller.Tool != CSGTool.Edit)
+            if (_controller.Tool != CSGTool.Edit && !IsDrawBrushEditingContext)
             {
                 _hoveredFaceHandle = -1;
                 _hoveredEdgeHandle = -1;
@@ -981,7 +1034,6 @@ namespace FlaxEditor.Tools.CSG
             _hoveredCornerHandle = -1;
             _hoveredFaceBrush = null;
 
-            // Prefer the smaller topology domains when handles overlap: vertex, then edge, then face.
             for (int actorIndex = 0; actorIndex < _actorBuffer.Count; actorIndex++)
             {
                 if (_actorBuffer[actorIndex] is not BoxBrushNode brushNode || !IsBrushSelected(brushNode) || brushNode.Actor is not BoxBrush brush)
@@ -1015,6 +1067,8 @@ namespace FlaxEditor.Tools.CSG
                     _hoveredEdgeHandle = _hoveredCornerHandle = -1;
                 }
             }
+            if (!ShowBoxEdgeAndVertexHandles)
+                return;
             for (int edge = 0; edge < 12; edge++)
             {
                 Owner.Viewport.ProjectPoint(GetEdgeCenter(_brushCorners, edge), out var screen);
@@ -1056,6 +1110,8 @@ namespace FlaxEditor.Tools.CSG
                 var color = active ? Color.Yellow : selected ? new Color(1.0f, 0.55f, 0.08f, 1.0f) : new Color(0.35f, 0.78f, 0.32f, 1.0f);
                 DrawEditHandleCube(GetFaceCenter(_brushCorners, face), orientation, markerSize, color);
             }
+            if (!ShowBoxEdgeAndVertexHandles)
+                return;
             for (int edge = 0; edge < 12; edge++)
             {
                 var node = brushNode.ChildNodes[6 + edge];
@@ -1104,6 +1160,8 @@ namespace FlaxEditor.Tools.CSG
                 ResetDirectEditComponents();
                 return false;
             }
+            if (_hoveredFaceHandle >= 0 && TryCreateFaceDragWorkingPlane(brush, _hoveredFaceHandle, out var faceDragPlane))
+                _workingPlane.Freeze(ref faceDragPlane);
             _controller.BeginInteraction();
             UpdateStatusText();
             return true;
@@ -1111,12 +1169,265 @@ namespace FlaxEditor.Tools.CSG
 
         private void UpdateFaceEdit()
         {
-            if (_faceEditTool.Update(Owner.MouseRay, _controller.EffectiveSnappingEnabled, _controller.SnapIncrement))
+            bool changed = _faceEditTool.Update(Owner.MouseRay, _controller.EffectiveSnappingEnabled, _controller.SnapIncrement);
+            ResetFaceAlignment();
+            UpdateFaceAlignmentCandidate(_faceEditTool.Brush, _faceEditTool.FaceIndex);
+            if (_faceAlignmentBrush != null && _controller.BrushAlignmentSnappingEnabled)
+                changed |= _faceEditTool.SnapFaceTo(_faceAlignmentPoint);
+            if (changed)
             {
                 ApplyDirectEditComponentGroup();
                 _transaction.RecordPreview(0.0, 0);
                 UpdateStatusText();
             }
+        }
+
+        private bool TryCreateFaceDragWorkingPlane(BoxBrush brush, int faceIndex, out CSGWorkingPlane plane)
+        {
+            plane = default;
+            if (brush == null || faceIndex < 0 || faceIndex > 5)
+                return false;
+            CSGBoxFaceEditTool.GetFaceAxis(faceIndex, out int axis, out float sign);
+            var localDragAxis = GetBoxAxis(axis) * sign;
+            var dragAxis = brush.Transform.LocalToWorldVector(localDragAxis);
+            if (dragAxis.LengthSquared < 0.000001f)
+                return false;
+            dragAxis.Normalize();
+
+            Vector3 bestTangent = Vector3.Zero;
+            float bestScore = -1.0f;
+            for (int candidateAxis = 0; candidateAxis < 3; candidateAxis++)
+            {
+                if (candidateAxis == axis)
+                    continue;
+                var tangent = brush.Transform.LocalToWorldVector(GetBoxAxis(candidateAxis));
+                tangent -= dragAxis * Vector3.Dot(tangent, dragAxis);
+                if (tangent.LengthSquared < 0.000001f)
+                    continue;
+                tangent.Normalize();
+                var normal = Vector3.Cross(tangent, dragAxis);
+                normal.Normalize();
+                float score = Mathf.Abs((float)Vector3.Dot(normal, (Vector3)Owner.ViewDirection));
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestTangent = tangent;
+                }
+            }
+            if (bestScore < 0.0f)
+                return false;
+
+            var planeNormal = Vector3.Cross(bestTangent, dragAxis);
+            planeNormal.Normalize();
+            if (Vector3.Dot(planeNormal, (Vector3)Owner.ViewDirection) > 0.0f)
+            {
+                planeNormal = -planeNormal;
+                bestTangent = -bestTangent;
+            }
+            plane = new CSGWorkingPlane
+            {
+                Origin = _faceEditTool.FaceCenter,
+                Normal = planeNormal,
+                Tangent = bestTangent,
+                Bitangent = dragAxis,
+                Spacing = Mathf.Max(_controller.SnapIncrement, 0.0001f),
+                MajorLineInterval = 10,
+                SourceActorId = brush.ID,
+                SourceComponentIndex = faceIndex,
+                IsSurfaceDerived = false,
+                IsLocked = false,
+                IsValid = true,
+            };
+            return true;
+        }
+
+        private void UpdateAlignmentGuidesForCurrentFrame()
+        {
+            ResetFaceAlignment();
+            if (_faceEditTool.IsInteracting && _faceEditTool.FaceIndex >= 0 && _faceEditTool.Brush != null)
+            {
+                UpdateFaceAlignmentCandidate(_faceEditTool.Brush, _faceEditTool.FaceIndex);
+                return;
+            }
+
+            if (TryGetTransformFaceAlignmentSource(out var brush, out int faceIndex))
+            {
+                UpdateFaceAlignmentCandidate(brush, faceIndex);
+                return;
+            }
+
+            if (_controller.Tool == CSGTool.Draw && _boxDrawTool.TryGetPlacement(out var placement))
+                UpdateDrawAlignmentCandidate(ref placement);
+        }
+
+        private bool TryGetTransformFaceAlignmentSource(out BoxBrush brush, out int faceIndex)
+        {
+            brush = null;
+            faceIndex = -1;
+            if (Owner is not MainEditorGizmoViewport viewport || !IsSingleFaceSelected(out var face))
+                return false;
+            var transform = viewport.TransformGizmo;
+            if (!transform.HasActiveTransaction ||
+                transform.ActiveMode != TransformGizmoBase.Mode.Translate ||
+                (transform.LatchedHandle.Axis != TransformGizmoBase.Axis.X &&
+                 transform.LatchedHandle.Axis != TransformGizmoBase.Axis.Y &&
+                 transform.LatchedHandle.Axis != TransformGizmoBase.Axis.Z))
+                return false;
+            brush = face.Brush;
+            faceIndex = face.Index;
+            return true;
+        }
+
+        private bool IsSingleFaceSelected(out BoxBrushNode.SideLinkNode face)
+        {
+            face = null;
+            var selection = _selection.CSGSelection;
+            if (selection.Count != 1 || selection[0] is not BoxBrushNode.SideLinkNode selectedFace)
+                return false;
+            face = selectedFace;
+            return true;
+        }
+
+        private void UpdateFaceAlignmentCandidate(BoxBrush activeBrush, int activeFace)
+        {
+            if (activeBrush == null || activeFace < 0 || activeFace > 5)
+                return;
+
+            activeBrush.OrientedBox.GetCorners(_brushCorners);
+            var activeCenter = GetFaceCenter(_brushCorners, activeFace);
+            CaptureActiveAlignmentFace(_brushCorners, activeFace, activeCenter);
+            CSGBoxFaceEditTool.GetFaceAxis(activeFace, out int activeLocalAxis, out float activeSign);
+            var activeAxis = activeBrush.Transform.LocalToWorldVector(GetBoxAxis(activeLocalAxis) * activeSign);
+            if (activeAxis.LengthSquared < 0.000001f)
+                return;
+            activeAxis.Normalize();
+            float threshold = GetFaceAlignmentWorldThreshold(activeCenter, activeAxis);
+            FindFaceAlignmentCandidate(activeBrush, activeCenter, activeAxis, threshold);
+        }
+
+        private void UpdateDrawAlignmentCandidate(ref CSGBoxPlacement placement)
+        {
+            var activeBox = placement.ToOrientedBox();
+            activeBox.GetCorners(_brushCorners);
+            int activeFace = placement.SignedHeight >= 0.0f ? 2 : 3;
+            var activeCenter = GetFaceCenter(_brushCorners, activeFace);
+            CaptureActiveAlignmentFace(_brushCorners, activeFace, activeCenter);
+            var activeAxis = Vector3.Transform(Vector3.Up, placement.Orientation);
+            if (placement.SignedHeight < 0.0f)
+                activeAxis = -activeAxis;
+            if (activeAxis.LengthSquared < 0.000001f)
+                return;
+            activeAxis.Normalize();
+            float threshold = GetFaceAlignmentWorldThreshold(activeCenter, activeAxis);
+            FindFaceAlignmentCandidate(null, activeCenter, activeAxis, threshold);
+        }
+
+        private void FindFaceAlignmentCandidate(BoxBrush activeBrush, Vector3 activeCenter, Vector3 activeAxis, float threshold)
+        {
+            float bestDistance = threshold;
+            for (int actorIndex = 0; actorIndex < _actorBuffer.Count; actorIndex++)
+            {
+                if (_actorBuffer[actorIndex] is not BoxBrushNode node || !node.IsActiveInHierarchy || node.Actor is not BoxBrush brush || brush == activeBrush || (activeBrush != null && IsBrushSelected(node)))
+                    continue;
+                brush.OrientedBox.GetCorners(_brushCorners);
+                for (int face = 0; face < 6; face++)
+                {
+                    CSGBoxFaceEditTool.GetFaceAxis(face, out int axis, out float sign);
+                    var normal = brush.Transform.LocalToWorldVector(GetBoxAxis(axis) * sign);
+                    if (normal.LengthSquared < 0.000001f)
+                        continue;
+                    normal.Normalize();
+                    if (Mathf.Abs((float)Vector3.Dot(normal, activeAxis)) < 0.999f)
+                        continue;
+                    var target = GetFaceCenter(_brushCorners, face);
+                    float distance = Mathf.Abs((float)Vector3.Dot(target - activeCenter, activeAxis));
+                    if (distance > bestDistance)
+                        continue;
+                    bestDistance = distance;
+                    _faceAlignmentBrush = node;
+                    _faceAlignmentFace = face;
+                    _faceAlignmentPoint = target;
+                }
+            }
+        }
+
+        private float GetFaceAlignmentWorldThreshold(Vector3 point, Vector3 axis)
+        {
+            Owner.Viewport.ProjectPoint(point, out var screenPoint);
+            Owner.Viewport.ProjectPoint(point + axis, out var screenAxis);
+            float pixelsPerUnit = (screenAxis - screenPoint).Length;
+            float maxDistance = GetFaceAlignmentFallbackThreshold((float)Vector3.Distance(Owner.ViewPosition, point));
+            if (pixelsPerUnit < 0.0001f)
+                return maxDistance;
+            return GetFaceAlignmentThreshold(10.0f * Owner.Viewport.DpiScale, pixelsPerUnit, maxDistance);
+        }
+
+        /// <summary>Converts camera distance into a bounded fallback guide-acquisition distance.</summary>
+        public static float GetFaceAlignmentFallbackThreshold(float viewDistance)
+        {
+            return Mathf.Clamp(viewDistance * 0.12f, 25.0f, 1000.0f);
+        }
+
+        /// <summary>Converts a screen-space guide threshold into world units without using grid spacing.</summary>
+        public static float GetFaceAlignmentThreshold(float pixelThreshold, float pixelsPerUnit, float fallbackThreshold)
+        {
+            if (pixelsPerUnit < 0.0001f)
+                return fallbackThreshold;
+            return Mathf.Clamp(pixelThreshold / pixelsPerUnit, 0.01f, fallbackThreshold);
+        }
+
+        private void CaptureActiveAlignmentFace(Vector3[] corners, int face, Vector3 center)
+        {
+            int offset = face * 4;
+            _faceAlignmentActiveA = corners[FaceCornerIndices[offset]];
+            _faceAlignmentActiveB = corners[FaceCornerIndices[offset + 1]];
+            _faceAlignmentActiveC = corners[FaceCornerIndices[offset + 2]];
+            _faceAlignmentActiveD = corners[FaceCornerIndices[offset + 3]];
+            _faceAlignmentActiveCenter = center;
+            _faceAlignmentActiveValid = true;
+        }
+
+        private void DrawFaceAlignmentGuides()
+        {
+            if (_faceAlignmentBrush?.Actor is not BoxBrush targetBrush || !_faceAlignmentActiveValid)
+                return;
+
+            var a = _faceAlignmentActiveA;
+            var b = _faceAlignmentActiveB;
+            var c = _faceAlignmentActiveC;
+            var d = _faceAlignmentActiveD;
+            var activeColor = new Color(0.025f, 0.22f, 0.62f, 1.0f);
+            DrawAlignmentPerimeter(a, b, c, d, activeColor);
+
+            targetBrush.OrientedBox.GetCorners(_brushCorners);
+            int targetOffset = _faceAlignmentFace * 4;
+            var t0 = _brushCorners[FaceCornerIndices[targetOffset]];
+            var t1 = _brushCorners[FaceCornerIndices[targetOffset + 1]];
+            var t2 = _brushCorners[FaceCornerIndices[targetOffset + 2]];
+            var t3 = _brushCorners[FaceCornerIndices[targetOffset + 3]];
+            var targetColor = new Color(0.04f, 0.38f, 0.9f, 1.0f);
+            DrawAlignmentPerimeter(t0, t1, t2, t3, targetColor);
+        }
+
+        private static void DrawAlignmentPerimeter(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Color color)
+        {
+            DebugDraw.DrawLine(a, b, color, 0.0f, false);
+            DebugDraw.DrawLine(b, d, color, 0.0f, false);
+            DebugDraw.DrawLine(d, c, color, 0.0f, false);
+            DebugDraw.DrawLine(c, a, color, 0.0f, false);
+        }
+
+        private void ResetFaceAlignment()
+        {
+            _faceAlignmentBrush = null;
+            _faceAlignmentFace = -1;
+            _faceAlignmentPoint = Vector3.Zero;
+            _faceAlignmentActiveValid = false;
+        }
+
+        private static Vector3 GetBoxAxis(int axis)
+        {
+            return axis == 0 ? Vector3.Right : axis == 1 ? Vector3.Up : Vector3.Forward;
         }
 
         private void CaptureDirectEditComponents(SceneGraphNode active, BoxBrush brush)
@@ -1158,6 +1469,7 @@ namespace FlaxEditor.Tools.CSG
             _directEditStartTransforms.Clear();
             _activeDirectEditComponent = null;
             _activeDirectEditBrush = null;
+            ResetFaceAlignment();
         }
 
         private static bool SelectionContains(IReadOnlyList<SceneGraphNode> selection, SceneGraphNode node)
@@ -1165,6 +1477,17 @@ namespace FlaxEditor.Tools.CSG
             for (int i = 0; i < selection.Count; i++)
             {
                 if (selection[i] == node)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool SelectionContainsBrush(IReadOnlyList<SceneGraphNode> selection, BoxBrushNode brush)
+        {
+            for (int i = 0; selection != null && i < selection.Count; i++)
+            {
+                var selectedBrush = selection[i] as BoxBrushNode ?? selection[i]?.ParentNode as BoxBrushNode;
+                if (selectedBrush == brush)
                     return true;
             }
             return false;
@@ -1262,6 +1585,31 @@ namespace FlaxEditor.Tools.CSG
             return Mathf.Clamp(fallbackSpacing * 0.15f, 0.75f, 7.5f);
         }
 
+        private float GetWorkingGridHalfExtent(Vector3 focusPoint)
+        {
+            var viewport = Owner.Viewport;
+            float forwardDepth = (float)Vector3.Dot(focusPoint - Owner.ViewPosition, (Vector3)Owner.ViewDirection);
+            float verticalFov = viewport.FieldOfView;
+            if (viewport.ViewportCamera is FPSCamera fpsCamera)
+                verticalFov += fpsCamera.AdditionalZoomFOV;
+            // Keep the cursor-centered construction patch useful without letting an oblique
+            // working plane turn into a viewport-sized grid wall.
+            float desiredRadius = Mathf.Clamp(Mathf.Min(viewport.Width, viewport.Height) * 0.18f, 110.0f, 200.0f);
+            if (TransformGizmoBase.TryCalculateProjectionSizing(
+                    viewport.UseOrthographicProjection,
+                    forwardDepth,
+                    verticalFov,
+                    viewport.OrthographicScale,
+                    viewport.Height,
+                    viewport.DpiScale,
+                    desiredRadius,
+                    viewport.NearPlane,
+                    out _,
+                    out var halfExtent))
+                return halfExtent;
+            return Mathf.Max((float)Vector3.Distance(Owner.ViewPosition, focusPoint) * 0.35f, 100.0f);
+        }
+
         private bool TryGetDrawPoint(ref CSGWorkingPlane plane, out Vector3 point)
         {
             if (_hasSnap)
@@ -1276,7 +1624,7 @@ namespace FlaxEditor.Tools.CSG
 
         private void AlignDrawPlaneToGrid(ref CSGWorkingPlane plane)
         {
-            if (_controller.Tool == CSGTool.Draw && _controller.EffectiveSnappingEnabled)
+            if (_controller.Tool == CSGTool.Draw && !_faceEditTool.IsInteracting && _controller.EffectiveSnappingEnabled)
                 CSGWorkingPlaneService.AlignAxisAlignedOriginToGrid(ref plane, _controller.SnapIncrement);
         }
 
@@ -1533,7 +1881,7 @@ namespace FlaxEditor.Tools.CSG
                 return;
             }
 
-            if (_controller.Tool != CSGTool.Edit || _hoveredFaceBrush?.Actor is not BoxBrush brush)
+            if ((_controller.Tool != CSGTool.Edit && !IsDrawBrushEditingContext) || _hoveredFaceBrush?.Actor is not BoxBrush brush)
                 return;
             brush.OrientedBox.GetCorners(_brushCorners);
             float sizeX = (float)brush.Transform.LocalToWorldVector(Vector3.Right * brush.Size.X).Length;
@@ -1602,6 +1950,7 @@ namespace FlaxEditor.Tools.CSG
             _applyingSelection = true;
             Owner.Select(_selectionBuffer, recordUndo);
             _applyingSelection = false;
+            UpdateSupplementalTransformGizmo();
         }
 
         private bool TryEnterSelectionContext()
@@ -1678,6 +2027,8 @@ namespace FlaxEditor.Tools.CSG
 
         private void OnControllerChanged()
         {
+            if (_controller.Tool != CSGTool.Draw)
+                _drawEditingBrush = null;
             if (_controller.Tool != CSGTool.SelectPlace && _selectTool.Stage == CSGSelectDragStage.Armed)
             {
                 _selectTool.Reset();
@@ -1704,7 +2055,7 @@ namespace FlaxEditor.Tools.CSG
 
         private TransformGizmo GetSupplementalTransformGizmo()
         {
-            if (!_modeActive || !IsActive || (_controller.Tool != CSGTool.SelectPlace && _controller.Tool != CSGTool.Edit) || Owner is not MainEditorGizmoViewport viewport)
+            if (!_modeActive || !IsActive || (_controller.Tool != CSGTool.SelectPlace && _controller.Tool != CSGTool.Edit && !IsDrawBrushEditingContext) || Owner is not MainEditorGizmoViewport viewport)
                 return null;
             return viewport.TransformGizmo;
         }
@@ -1713,13 +2064,85 @@ namespace FlaxEditor.Tools.CSG
         {
             if (Owner is not MainEditorGizmoViewport viewport)
                 return;
-            bool enabled = _modeActive && IsActive && Visible && (_controller.Tool == CSGTool.SelectPlace || _controller.Tool == CSGTool.Edit);
-            viewport.TransformGizmo.Visible = enabled;
-            viewport.TransformGizmo.SupplementalActive = enabled;
-            viewport.TransformGizmo.SupplementalTranslationSnapEnabled = enabled && _controller.EffectiveSnappingEnabled;
-            viewport.TransformGizmo.SupplementalTranslationSnapValue = _controller.SnapIncrement;
-            if (enabled && (_controller.Tool == CSGTool.Edit || viewport.TransformGizmo.ActiveMode == TransformGizmoBase.Mode.Select))
-                viewport.TransformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate;
+            bool enabled = _modeActive && IsActive && Visible && !_faceEditTool.IsInteracting && (_controller.Tool == CSGTool.SelectPlace || _controller.Tool == CSGTool.Edit || IsDrawBrushEditingContext);
+            var transformGizmo = viewport.TransformGizmo;
+            var allAxes = TransformGizmoBase.Axis.X | TransformGizmoBase.Axis.Y | TransformGizmoBase.Axis.Z;
+            var faceAxis = enabled ? GetSelectedFaceTranslationAxis() : TransformGizmoBase.Axis.None;
+            bool constrainToFace = faceAxis != TransformGizmoBase.Axis.None;
+            transformGizmo.Visible = enabled;
+            transformGizmo.SupplementalActive = enabled;
+            transformGizmo.SupplementalTranslationSnapEnabled = enabled && _controller.EffectiveSnappingEnabled;
+            transformGizmo.SupplementalTranslationSnapValue = _controller.SnapIncrement;
+            transformGizmo.SupplementalTranslationAxisMask = constrainToFace ? faceAxis : allAxes;
+            UpdateSupplementalTransformSpace(transformGizmo, constrainToFace);
+            if (enabled && (_controller.Tool == CSGTool.Edit || transformGizmo.ActiveMode == TransformGizmoBase.Mode.Select))
+                transformGizmo.ActiveMode = TransformGizmoBase.Mode.Translate;
+        }
+
+        private bool IsDrawBrushEditingContext =>
+            _controller.Tool == CSGTool.Draw &&
+            !_boxDrawTool.IsInteracting &&
+            _drawEditingBrush != null &&
+            IsBrushSelected(_drawEditingBrush);
+
+        private TransformGizmoBase.Axis GetSelectedFaceTranslationAxis()
+        {
+            var selection = _selection.CSGSelection;
+            if (selection.Count == 0)
+                return TransformGizmoBase.Axis.None;
+
+            int firstLocalAxis = -1;
+            Vector3 firstWorldNormal = Vector3.Zero;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is not BoxBrushNode.SideLinkNode face)
+                    return TransformGizmoBase.Axis.None;
+                CSGBoxFaceEditTool.GetFaceAxis(face.Index, out int localAxis, out float sign);
+                var worldNormal = face.Brush.Transform.LocalToWorldVector(GetBoxAxis(localAxis) * sign);
+                if (worldNormal.LengthSquared < 0.000001f)
+                    return TransformGizmoBase.Axis.None;
+                worldNormal.Normalize();
+                if (firstLocalAxis < 0)
+                {
+                    firstLocalAxis = localAxis;
+                    firstWorldNormal = worldNormal;
+                }
+                else if (Mathf.Abs((float)Vector3.Dot(firstWorldNormal, worldNormal)) < 0.999f)
+                {
+                    return TransformGizmoBase.Axis.None;
+                }
+            }
+
+            return firstLocalAxis == 0 ? TransformGizmoBase.Axis.X :
+                   firstLocalAxis == 1 ? TransformGizmoBase.Axis.Y : TransformGizmoBase.Axis.Z;
+        }
+
+        private void UpdateSupplementalTransformSpace(TransformGizmo transformGizmo, bool forceLocal)
+        {
+            if (forceLocal)
+            {
+                if (!_supplementalFaceSpaceForced)
+                {
+                    _supplementalSavedTransformSpace = transformGizmo.ActiveTransformSpace;
+                    _supplementalFaceSpaceForced = true;
+                }
+                if (transformGizmo.ActiveTransformSpace != TransformGizmoBase.TransformSpace.Local)
+                    transformGizmo.ActiveTransformSpace = TransformGizmoBase.TransformSpace.Local;
+            }
+            else
+            {
+                RestoreSupplementalTransformSpace(transformGizmo);
+            }
+        }
+
+        private void RestoreSupplementalTransformSpace(TransformGizmo transformGizmo)
+        {
+            if (!_supplementalFaceSpaceForced)
+                return;
+            var saved = _supplementalSavedTransformSpace;
+            _supplementalFaceSpaceForced = false;
+            if (transformGizmo.ActiveTransformSpace != saved)
+                transformGizmo.ActiveTransformSpace = saved;
         }
 
         private void OnInteractionStarted()
@@ -1748,11 +2171,16 @@ namespace FlaxEditor.Tools.CSG
                     return;
                 }
                 string action = _controller.Tool == CSGTool.Draw ? "Create CSG Box" : _controller.Tool == CSGTool.Edit ? "Resize CSG Box" : "Edit CSG";
+                if (!createdBox && _faceEditTool.IsInteracting)
+                    action = "Resize CSG Box";
                 _transaction.Commit(Editor.Instance?.Undo, action);
-                // Extrusion release finalizes the real brush and immediately exposes topology
-                // editing. There is no extra confirmation click between creation and editing.
+                // Keep the finalized brush inside Draw mode as a post-create editing context.
+                // Clicking elsewhere begins the next footprint and exits this context.
                 if (createdBox && _boxCreatedNode != null)
-                    _controller.SetTool(CSGTool.Edit);
+                {
+                    _drawEditingBrush = _boxCreatedNode;
+                    UpdateSupplementalTransformGizmo();
+                }
             }
             catch (System.Exception ex)
             {
@@ -1772,6 +2200,8 @@ namespace FlaxEditor.Tools.CSG
                 _drawOperationOverride = null;
                 _consumeDrawMouseUp = false;
                 _boxCreatedNode = null;
+                UpdateSupplementalTransformGizmo();
+                UpdateStatusText();
             }
         }
 
@@ -1787,6 +2217,8 @@ namespace FlaxEditor.Tools.CSG
             _selectExclusionNodes.Clear();
             _selectClickAppliedOnDown = false;
             _drawOperationOverride = null;
+            UpdateSupplementalTransformGizmo();
+            UpdateStatusText();
         }
 
         private void OnPickWorkingPlaneRequested()
@@ -1823,7 +2255,9 @@ namespace FlaxEditor.Tools.CSG
         {
             string tool = _controller.Tool == CSGTool.SelectPlace ? "Select / Place" : _controller.Tool.ToString();
             string transaction = _transaction.IsActive ? $"  |  Txn Preview {_transaction.Telemetry.TouchedBrushCount}" : string.Empty;
-            string draw = _controller.Tool == CSGTool.Draw ? $"  |  {_boxDrawTool.StatusText}" : string.Empty;
+            string draw = IsDrawBrushEditingContext
+                ? "  |  Box Edit"
+                : _controller.Tool == CSGTool.Draw ? $"  |  {_boxDrawTool.StatusText}" : string.Empty;
             string move = _selectTool.Stage == CSGSelectDragStage.Armed
                 ? "  |  Drag armed (XZ; hold Shift for surface placement)"
                 : _selectTool.Stage == CSGSelectDragStage.Dragging

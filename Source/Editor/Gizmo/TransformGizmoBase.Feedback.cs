@@ -1016,7 +1016,7 @@ namespace FlaxEditor.Gizmo
 
         private bool ShouldDrawFeedbackHandle(Axis handle)
         {
-            if (handle == Axis.Center && IsConstrainedSupplementalTranslation)
+            if (!IsSupplementalTranslationHandleAllowed(handle))
                 return false;
             if (!HasActiveTransaction)
                 return true;

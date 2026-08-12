@@ -99,9 +99,23 @@ namespace FlaxEditor.Gizmo
         /// </summary>
         internal float SupplementalTranslationSnapValue { get; set; }
 
+        /// <summary>
+        /// Limits translation handles while an authoring mode uses the gizmo as a supplemental manipulator.
+        /// </summary>
+        internal Axis SupplementalTranslationAxisMask { get; set; } = Axis.X | Axis.Y | Axis.Z;
+
         private bool IsInteractionActive => IsActive || SupplementalActive;
 
         private bool IsConstrainedSupplementalTranslation => SupplementalActive && _activeMode == Mode.Translate;
+
+        private bool IsSupplementalTranslationHandleAllowed(Axis handle)
+        {
+            if (!IsConstrainedSupplementalTranslation)
+                return true;
+            if (handle == Axis.Center || handle == Axis.Screen)
+                return false;
+            return (handle & SupplementalTranslationAxisMask) == handle;
+        }
 
         private Vector3 _tDelta;
         private Vector3 _translationDelta;

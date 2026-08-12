@@ -72,6 +72,7 @@ namespace FlaxEditor.Tests
             Assert.IsTrue(source.SetOperation(CSGOperation.Subtractive));
             source.SetWorkingPlaneLocked(true);
             source.SetSnappingEnabled(false);
+            source.SetBrushAlignmentSnappingEnabled(true);
             source.SetSnapIncrement(25.0f);
             source.SetVisibility(CSGVisibility.SourceBrushes | CSGVisibility.HiddenBrushes);
             source.SetRayPlacementAlignment(CSGRayPlacementAlignment.AlignSurfaceUp);
@@ -83,6 +84,7 @@ namespace FlaxEditor.Tests
             Assert.AreEqual(CSGOperation.Subtractive, restored.Operation);
             Assert.IsTrue(restored.WorkingPlaneLocked);
             Assert.IsFalse(restored.SnappingEnabled);
+            Assert.IsTrue(restored.BrushAlignmentSnappingEnabled);
             Assert.AreEqual(25.0f, restored.SnapIncrement);
             Assert.AreEqual(CSGVisibility.SourceBrushes | CSGVisibility.HiddenBrushes, restored.Visibility);
             Assert.AreEqual(CSGRayPlacementAlignment.AlignSurfaceUp, restored.RayPlacementAlignment);
@@ -189,6 +191,7 @@ namespace FlaxEditor.Tests
 
             long first = queue.Request(sceneId, CSGRebuildRequestKind.Preview, true, 50.0f, 0.0, out var dispatch);
             Assert.AreEqual(first, dispatch.Revision);
+            Assert.AreEqual(0.0f, dispatch.TimeoutMs);
             long second = queue.Request(sceneId, CSGRebuildRequestKind.Preview, true, 50.0f, 0.01, out dispatch);
             Assert.AreEqual(0, dispatch.Revision);
             long third = queue.Request(sceneId, CSGRebuildRequestKind.Preview, true, 50.0f, 0.02, out dispatch);
@@ -196,6 +199,7 @@ namespace FlaxEditor.Tests
             Assert.IsFalse(queue.TryDequeue(sceneId, true, 0.09, out dispatch));
             Assert.IsTrue(queue.TryDequeue(sceneId, true, 0.1, out dispatch));
             Assert.AreEqual(third, dispatch.Revision);
+            Assert.AreEqual(0.0f, dispatch.TimeoutMs);
             Assert.IsFalse(queue.TryAcknowledge(sceneId, first));
             Assert.IsTrue(queue.TryAcknowledge(sceneId, third));
 
@@ -444,6 +448,40 @@ namespace FlaxEditor.Tests
             Assert.AreEqual(150.0f, (float)negativeSize.X, 0.0001f);
             Assert.AreEqual(-15.0f, (float)negativeCenter.X, 0.0001f);
             Assert.AreEqual(60.0f, (float)(negativeCenter.X + negativeSize.X * 0.5f), 0.0001f);
+        }
+
+        [Test]
+        public void TestBoxFaceEditCanAlignToAnotherWorldSpaceFacePlane()
+        {
+            var brush = new BoxBrush
+            {
+                Center = Vector3.Zero,
+                Size = new Vector3(100.0f),
+                Transform = new Transform(new Vector3(250.0f, 75.0f, -120.0f), Quaternion.Euler(15.0f, 30.0f, 5.0f), new Float3(2.0f, 2.0f, 2.0f)),
+            };
+            try
+            {
+                var tool = new CSGBoxFaceEditTool();
+                Assert.IsTrue(tool.Begin(brush, 2, new Ray(Vector3.Zero, Vector3.Forward)));
+                var target = tool.FaceCenter + tool.AxisWorld * 50.0f;
+                Assert.IsTrue(tool.SnapFaceTo(target));
+                Assert.AreEqual(125.0f, (float)brush.Size.Y, 0.0001f);
+                Assert.AreEqual(12.5f, (float)brush.Center.Y, 0.0001f);
+                Assert.IsTrue(Vector3.NearEqual(target, tool.FaceCenter));
+            }
+            finally
+            {
+                FlaxEngine.Object.Destroy(brush);
+            }
+        }
+
+        [Test]
+        public void TestFaceAlignmentThresholdDoesNotDependOnGridIncrement()
+        {
+            float fallback = CSGAuthoringGizmo.GetFaceAlignmentFallbackThreshold(1000.0f);
+            float threshold = CSGAuthoringGizmo.GetFaceAlignmentThreshold(10.0f, 0.5f, fallback);
+            Assert.AreEqual(120.0f, fallback, 0.0001f);
+            Assert.AreEqual(20.0f, threshold, 0.0001f);
         }
 
         [Test]
