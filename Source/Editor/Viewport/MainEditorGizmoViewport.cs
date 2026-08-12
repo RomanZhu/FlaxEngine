@@ -162,6 +162,7 @@ namespace FlaxEditor.Viewport
         private bool _lockedFocus;
         private double _lockedFocusOffset;
         private readonly ViewportDebugDrawData _debugDrawData = new ViewportDebugDrawData(32);
+        private IntPtr _editorDebugDrawContext;
         private EditorSpritesRenderer _editorSpritesRenderer;
         private ViewportRubberBandSelector _rubberBandSelector;
         private DirectionGizmo _directionGizmo;
@@ -266,6 +267,11 @@ namespace FlaxEditor.Viewport
         /// The CSG authoring gizmo mode.
         /// </summary>
         public CSGAuthoringGizmoMode CSGAuthoringMode;
+
+        private bool IsCSGAuthoringActive =>
+            Gizmos.ActiveMode is CSGAuthoringGizmoMode &&
+            CSGAuthoringMode?.Gizmo != null &&
+            Gizmos.Active == CSGAuthoringMode.Gizmo;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MainEditorGizmoViewport"/> class.
@@ -431,6 +437,14 @@ namespace FlaxEditor.Viewport
 
         private void OnActiveGizmoModeChanged(EditorGizmoMode mode)
         {
+            // CSG can temporarily borrow the shared transform gizmo while its own gizmo owns
+            // the viewport. Never let that supplemental state leak into another editor mode.
+            if (mode is not CSGAuthoringGizmoMode)
+            {
+                TransformGizmo.SupplementalActive = false;
+                TransformGizmo.SupplementalTranslationSnapEnabled = false;
+                _csgTransformGizmoGesture = false;
+            }
             if (mode is CSGAuthoringGizmoMode)
                 _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, CSGAuthoringGizmoMode.ContextCacheValue);
             else if (mode is TransformGizmoMode)
@@ -893,7 +907,7 @@ namespace FlaxEditor.Viewport
                 return true;
             }
 
-            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode &&
+            if (IsCSGAuthoringActive &&
                 (Root?.GetKey(KeyboardKeys.Control) ?? false) &&
                 Mathf.Abs(delta) > Mathf.Epsilon)
             {
@@ -948,30 +962,42 @@ namespace FlaxEditor.Viewport
         {
             _debugDrawData.Clear();
 
-            if (task is SceneRenderTask sceneRenderTask)
-            {
-                // Sync debug view to avoid lag on culling/LODing
-                var view = sceneRenderTask.View;
-                DebugDraw.SetView(ref view);
-            }
+            if (_editorDebugDrawContext == IntPtr.Zero)
+                _editorDebugDrawContext = DebugDraw.AllocateContext();
+            DebugDraw.SetContext(_editorDebugDrawContext);
+            DebugDraw.UpdateContext(_editorDebugDrawContext, 1.0f / Mathf.Max(Engine.FramesPerSecond, 1));
 
-            // Collect selected objects debug shapes and visuals
-            var selectedParents = TransformGizmo.SelectedParents;
-            if (selectedParents.Count > 0)
+            try
             {
-                for (int i = 0; i < selectedParents.Count; i++)
+                if (task is SceneRenderTask sceneRenderTask)
                 {
-                    if (selectedParents[i].IsActiveInHierarchy)
-                        selectedParents[i].OnDebugDraw(_debugDrawData);
+                    // Sync debug view to avoid lag on culling/LODing
+                    var view = sceneRenderTask.View;
+                    DebugDraw.SetView(ref view);
                 }
-            }
 
-            DrawRegularCSGBrushes();
+                // Collect selected objects debug shapes and visuals
+                var selectedParents = TransformGizmo.SelectedParents;
+                if (selectedParents.Count > 0)
+                {
+                    for (int i = 0; i < selectedParents.Count; i++)
+                    {
+                        if (selectedParents[i].IsActiveInHierarchy)
+                            selectedParents[i].OnDebugDraw(_debugDrawData);
+                    }
+                }
+
+                DrawRegularCSGBrushes();
+            }
+            finally
+            {
+                DebugDraw.SetContext(IntPtr.Zero);
+            }
         }
 
         private void DrawRegularCSGBrushes()
         {
-            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode || SceneGraphRoot == null)
+            if (IsCSGAuthoringActive || SceneGraphRoot == null)
                 return;
 
             _regularCSGBrushes.Clear();
@@ -1089,13 +1115,25 @@ namespace FlaxEditor.Viewport
             // diagnostics. Keep its grid, cursor, handles, source outlines, and selection bounds
             // visible even when the viewport's generic Debug Draw view flag is disabled.
             bool drawSceneDebug = DrawDebugDraw && (renderContext.View.Flags & ViewFlags.DebugDraw) == ViewFlags.DebugDraw;
-            bool drawCSGAuthoring = Gizmos.ActiveMode is CSGAuthoringGizmoMode && CSGAuthoringMode.Gizmo.Visible;
-            if (drawSceneDebug)
-                _debugDrawData.DrawActors(true);
-            if (drawSceneDebug || drawCSGAuthoring)
+            bool drawRegularCSG = !IsCSGAuthoringActive && SceneGraphRoot != null;
+            if (_editorDebugDrawContext != IntPtr.Zero && (drawSceneDebug || drawRegularCSG))
             {
-                DebugDraw.Draw(ref renderContext, target.View(), targetDepth.View(), true);
+                DebugDraw.SetContext(_editorDebugDrawContext);
+                try
+                {
+                    if (drawSceneDebug)
+                        _debugDrawData.DrawActors(true);
+                    DebugDraw.Draw(ref renderContext, target.View(), targetDepth.View(), true);
+                }
+                finally
+                {
+                    DebugDraw.SetContext(IntPtr.Zero);
+                }
             }
+            if (IsCSGAuthoringActive && CSGAuthoringMode.Gizmo.Visible)
+                CSGAuthoringMode.Gizmo.DrawDebug(ref renderContext, target, targetDepth);
+            if (drawSceneDebug)
+                DebugDraw.Draw(ref renderContext, target.View(), targetDepth.View(), true);
         }
 
         private void OnPostRender(GPUContext context, ref RenderContext renderContext)
@@ -1241,7 +1279,7 @@ namespace FlaxEditor.Viewport
             base.UpdateViewportToolStrip();
             SetViewportToolStripButtonText(_overlayModeButton, GetGizmoModeLabel());
             bool objectMode = Gizmos.ActiveMode is TransformGizmoMode;
-            bool csgMode = Gizmos.ActiveMode is CSGAuthoringGizmoMode;
+            bool csgMode = IsCSGAuthoringActive;
             bool csgSelect = csgMode && CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace;
             bool csgEdit = csgMode && CSGAuthoringMode.Controller.Tool == CSGTool.Edit;
             bool showTransformTools = objectMode || csgSelect || csgEdit;
@@ -1700,7 +1738,7 @@ namespace FlaxEditor.Viewport
                 _rubberBandSelector.StopRubberBand();
                 return;
             }
-            bool csgMode = Gizmos.ActiveMode is CSGAuthoringGizmoMode;
+            bool csgMode = IsCSGAuthoringActive;
             if (csgMode)
                 ClearSceneTreeHoverFromEditorViewport();
             else
@@ -1737,7 +1775,7 @@ namespace FlaxEditor.Viewport
         {
             base.OnLeftMouseButtonDown();
             _csgTransformGizmoGesture = false;
-            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode &&
+            if (IsCSGAuthoringActive &&
                 (CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace || CSGAuthoringMode.Controller.Tool == CSGTool.Edit) &&
                 TransformGizmo.ActiveMode != TransformGizmoBase.Mode.Select &&
                 TransformGizmo.HoveredHandle.IsValid)
@@ -1758,7 +1796,7 @@ namespace FlaxEditor.Viewport
             if (Gizmos.Active is TransformGizmoBase transformGizmo)
                 transformGizmo.ResetSelectionReleaseSuppression();
 
-            if ((Gizmos.ActiveMode is TransformGizmoMode || Gizmos.ActiveMode is CSGAuthoringGizmoMode) && Root.GetMouseButtonDown(MouseButton.Left) && !IsAltKeyDown && !_directionGizmo.IsMouseOver)
+            if ((Gizmos.ActiveMode is TransformGizmoMode || IsCSGAuthoringActive) && Root.GetMouseButtonDown(MouseButton.Left) && !IsAltKeyDown && !_directionGizmo.IsMouseOver)
             {
                 _rubberBandSelector.TryStartingRubberBandSelection(_viewMousePos);
             }
@@ -1771,7 +1809,7 @@ namespace FlaxEditor.Viewport
             // gizmo can arm its selection-release guard when the component selection changes on
             // mouse-down. Do not let that guard swallow this release: CSG must commit the preview
             // before the normal viewport pick can select the brush currently under the cursor.
-            bool csgOwnsRelease = Gizmos.ActiveMode is CSGAuthoringGizmoMode &&
+            bool csgOwnsRelease = IsCSGAuthoringActive &&
                                   (CSGAuthoringMode.Gizmo.HasActiveDirectBrushMutation || CSGAuthoringMode.Gizmo.HasArmedSelectDrag);
             // Honor capture even if a shortcut changed the active mode during the drag.
             bool csgTransformOwnsRelease = _csgTransformGizmoGesture;
@@ -1784,7 +1822,7 @@ namespace FlaxEditor.Viewport
                 base.OnLeftMouseButtonUp();
                 return;
             }
-            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode && !csgOwnsRelease && TransformGizmo.ConsumeSelectionRelease())
+            if (IsCSGAuthoringActive && !csgOwnsRelease && TransformGizmo.ConsumeSelectionRelease())
             {
                 base.OnLeftMouseButtonUp();
                 return;
@@ -2222,6 +2260,11 @@ namespace FlaxEditor.Viewport
             Level.SceneLoaded -= OnSceneContextChanged;
             Level.SceneUnloading -= OnSceneContextChanged;
             _debugDrawData.Dispose();
+            if (_editorDebugDrawContext != IntPtr.Zero)
+            {
+                DebugDraw.FreeContext(_editorDebugDrawContext);
+                _editorDebugDrawContext = IntPtr.Zero;
+            }
             if (_task != null)
             {
                 // Release if task is not used to save screenshot for project icon

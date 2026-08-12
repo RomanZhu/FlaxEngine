@@ -6,6 +6,7 @@ using Real = System.Double;
 using Real = System.Single;
 #endif
 
+using System;
 using System.Collections.Generic;
 using FlaxEditor.Gizmo;
 using FlaxEditor.Gizmo.Snapping;
@@ -73,6 +74,7 @@ namespace FlaxEditor.Tools.CSG
         private Quaternion _cycleViewOrientation;
         private Matrix _cycleViewProjection;
         private CSGTool _cycleTool;
+        private IntPtr _debugDrawContext;
         private int _cycleIndex;
         private bool _hasCycle;
         private bool _modeActive;
@@ -162,7 +164,6 @@ namespace FlaxEditor.Tools.CSG
             {
                 viewport.TransformGizmo.SupplementalActive = false;
                 viewport.TransformGizmo.SupplementalTranslationSnapEnabled = false;
-                viewport.TransformGizmo.Visible = true;
             }
             _controller.Changed -= OnControllerChanged;
             _controller.InteractionStarted -= OnInteractionStarted;
@@ -173,6 +174,11 @@ namespace FlaxEditor.Tools.CSG
             _controller.OffsetWorkingPlaneRequested -= OnOffsetWorkingPlaneRequested;
             _controller.RotateWorkingPlaneRequested -= OnRotateWorkingPlaneRequested;
             _transaction.Dispose();
+            if (_debugDrawContext != IntPtr.Zero)
+            {
+                DebugDraw.FreeContext(_debugDrawContext);
+                _debugDrawContext = IntPtr.Zero;
+            }
             base.Destroy();
         }
 
@@ -195,9 +201,6 @@ namespace FlaxEditor.Tools.CSG
             {
                 viewport.TransformGizmo.SupplementalActive = false;
                 viewport.TransformGizmo.SupplementalTranslationSnapEnabled = false;
-                // Draw mode hides the shared transform gizmo while CSG owns input. Restore it
-                // before Object mode activates the same instance.
-                viewport.TransformGizmo.Visible = true;
             }
             var root = Owner.SceneGraphRoot;
             if (_selectionEntered && root?.SceneContext != null)
@@ -483,61 +486,89 @@ namespace FlaxEditor.Tools.CSG
                 return;
             }
 
-            _actorBuffer.Clear();
-            Owner.SceneGraphRoot.GetAllChildActorNodes(_actorBuffer);
-            CSGRebuildScheduler.Shared.Update();
-            UpdateRebuildStatus();
-            // Selection changes elsewhere in the viewport can re-enable the regular transform
-            // gizmo, so enforce CSG ownership every frame (including staged Draw).
-            UpdateSupplementalTransformGizmo();
-            UpdateWorkingPlaneAndSnap();
-            UpdateBoxDrawTool();
-            var plane = _workingPlane.ActivePlane;
-            AlignDrawPlaneToGrid(ref plane);
-            bool showSnap = _controller.HasActiveInteraction &&
-                            (_controller.Tool != CSGTool.Draw ||
-                             _boxDrawTool.Stage == CSGBoxDrawStage.Footprint ||
-                             _activeDrawHeightDirection != 0 || _activeDrawCornerHandle >= 0);
-            var drawSnap = _snapResult;
-            ProjectDrawPointToPlane(ref plane, ref drawSnap.Point);
-            float snapMarkerSize = GetScreenSpaceCursorWorldSize(drawSnap.Point, plane.Spacing);
-            _overlayRenderer.Draw(ref plane, Owner.ViewPosition, !_workingPlane.IsLocked && _workingPlane.HasHover, showSnap && _hasSnap, ref drawSnap, snapMarkerSize);
-            DrawSelectDragFeedback();
-            UpdateAndDrawFaceHandles();
-
-            bool showSourceBrushes = (_controller.Visibility & CSGVisibility.SourceBrushes) != 0;
-            for (int i = 0; i < _actorBuffer.Count; i++)
+            if (_debugDrawContext == IntPtr.Zero)
+                _debugDrawContext = DebugDraw.AllocateContext();
+            DebugDraw.SetContext(_debugDrawContext);
+            DebugDraw.UpdateContext(_debugDrawContext, dt);
+            var debugView = Owner.RenderTask.View;
+            DebugDraw.SetView(ref debugView);
+            try
             {
-                if (_actorBuffer[i] is not BoxBrushNode node)
-                    continue;
-                bool selected = IsBrushSelected(node);
-                if (!showSourceBrushes && !selected)
-                    continue;
-                bool hidden = !node.IsActiveInHierarchy;
-                if (hidden && (_controller.Visibility & CSGVisibility.HiddenBrushes) == 0 && !selected)
-                    continue;
+                _actorBuffer.Clear();
+                Owner.SceneGraphRoot.GetAllChildActorNodes(_actorBuffer);
+                CSGRebuildScheduler.Shared.Update();
+                UpdateRebuildStatus();
+                // Selection changes elsewhere in the viewport can re-enable the regular transform
+                // gizmo, so enforce CSG ownership every frame (including staged Draw).
+                UpdateSupplementalTransformGizmo();
+                UpdateWorkingPlaneAndSnap();
+                UpdateBoxDrawTool();
+                var plane = _workingPlane.ActivePlane;
+                AlignDrawPlaneToGrid(ref plane);
+                bool showSnap = _controller.HasActiveInteraction &&
+                                (_controller.Tool != CSGTool.Draw ||
+                                 _boxDrawTool.Stage == CSGBoxDrawStage.Footprint ||
+                                 _activeDrawHeightDirection != 0 || _activeDrawCornerHandle >= 0);
+                var drawSnap = _snapResult;
+                ProjectDrawPointToPlane(ref plane, ref drawSnap.Point);
+                float snapMarkerSize = GetScreenSpaceCursorWorldSize(drawSnap.Point, plane.Spacing);
+                _overlayRenderer.Draw(ref plane, Owner.ViewPosition, !_workingPlane.IsLocked && _workingPlane.HasHover, showSnap && _hasSnap, ref drawSnap, snapMarkerSize);
+                DrawSelectDragFeedback();
+                UpdateAndDrawFaceHandles();
 
-                var brush = (BoxBrush)node.Actor;
-                if (showSourceBrushes)
+                bool showSourceBrushes = (_controller.Visibility & CSGVisibility.SourceBrushes) != 0;
+                for (int i = 0; i < _actorBuffer.Count; i++)
                 {
-                    bool subtractive = brush.Mode == BrushMode.Subtractive;
-                    var color = subtractive ? new Color(1.0f, 0.12f, 0.1f, 0.95f) : new Color(0.18f, 0.76f, 1.0f, 0.9f);
-                    if (hidden)
-                        color.A = 0.45f;
-                    var xrayColor = color;
-                    xrayColor.A *= 0.2f;
-                    DrawDashedWireBox(brush.OrientedBox, xrayColor, false);
-                    DebugDraw.DrawWireBox(brush.OrientedBox, color, 0.0f, true);
-                }
-                if (selected)
-                {
-                    if (IsBrushBodySelected(node))
-                        DebugDraw.DrawBox(brush.OrientedBox, new Color(1.0f, 0.68f, 0.08f, 0.5f), 0.0f, true);
-                    DrawDashedWireBox(brush.OrientedBox, new Color(1.0f, 1.0f, 1.0f, 0.22f), false);
-                    DebugDraw.DrawWireBox(brush.OrientedBox, Color.White, 0.0f, true);
+                    if (_actorBuffer[i] is not BoxBrushNode node)
+                        continue;
+                    bool selected = IsBrushSelected(node);
+                    if (!showSourceBrushes && !selected)
+                        continue;
+                    bool hidden = !node.IsActiveInHierarchy;
+                    if (hidden && (_controller.Visibility & CSGVisibility.HiddenBrushes) == 0 && !selected)
+                        continue;
+
+                    var brush = (BoxBrush)node.Actor;
+                    if (showSourceBrushes)
+                    {
+                        bool subtractive = brush.Mode == BrushMode.Subtractive;
+                        var color = subtractive ? new Color(1.0f, 0.12f, 0.1f, 0.95f) : new Color(0.18f, 0.76f, 1.0f, 0.9f);
+                        if (hidden)
+                            color.A = 0.45f;
+                        var xrayColor = color;
+                        xrayColor.A *= 0.2f;
+                        DrawDashedWireBox(brush.OrientedBox, xrayColor, false);
+                        DebugDraw.DrawWireBox(brush.OrientedBox, color, 0.0f, true);
+                    }
+                    if (selected)
+                    {
+                        if (IsBrushBodySelected(node))
+                            DebugDraw.DrawBox(brush.OrientedBox, new Color(1.0f, 0.68f, 0.08f, 0.5f), 0.0f, true);
+                        DrawDashedWireBox(brush.OrientedBox, new Color(1.0f, 1.0f, 1.0f, 0.22f), false);
+                        DebugDraw.DrawWireBox(brush.OrientedBox, Color.White, 0.0f, true);
+                    }
                 }
             }
+            finally
+            {
+                DebugDraw.SetContext(IntPtr.Zero);
+            }
+        }
 
+        internal void DrawDebug(ref RenderContext renderContext, GPUTexture target, GPUTexture targetDepth)
+        {
+            if (_debugDrawContext == IntPtr.Zero)
+                return;
+
+            DebugDraw.SetContext(_debugDrawContext);
+            try
+            {
+                DebugDraw.Draw(ref renderContext, target.View(), targetDepth.View(), true);
+            }
+            finally
+            {
+                DebugDraw.SetContext(IntPtr.Zero);
+            }
         }
 
         private void UpdateWorkingPlaneAndSnap()
@@ -1673,7 +1704,7 @@ namespace FlaxEditor.Tools.CSG
 
         private TransformGizmo GetSupplementalTransformGizmo()
         {
-            if (!_modeActive || (_controller.Tool != CSGTool.SelectPlace && _controller.Tool != CSGTool.Edit) || Owner is not MainEditorGizmoViewport viewport)
+            if (!_modeActive || !IsActive || (_controller.Tool != CSGTool.SelectPlace && _controller.Tool != CSGTool.Edit) || Owner is not MainEditorGizmoViewport viewport)
                 return null;
             return viewport.TransformGizmo;
         }
@@ -1682,7 +1713,7 @@ namespace FlaxEditor.Tools.CSG
         {
             if (Owner is not MainEditorGizmoViewport viewport)
                 return;
-            bool enabled = _modeActive && Visible && (_controller.Tool == CSGTool.SelectPlace || _controller.Tool == CSGTool.Edit);
+            bool enabled = _modeActive && IsActive && Visible && (_controller.Tool == CSGTool.SelectPlace || _controller.Tool == CSGTool.Edit);
             viewport.TransformGizmo.Visible = enabled;
             viewport.TransformGizmo.SupplementalActive = enabled;
             viewport.TransformGizmo.SupplementalTranslationSnapEnabled = enabled && _controller.EffectiveSnappingEnabled;

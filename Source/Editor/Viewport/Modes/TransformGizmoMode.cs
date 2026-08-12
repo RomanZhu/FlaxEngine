@@ -13,7 +13,11 @@ namespace FlaxEditor.Viewport.Modes
         {
             base.OnActivated();
 
-            Owner.Gizmos.Active = ((MainEditorGizmoViewport)Owner).TransformGizmo;
+            var viewport = (MainEditorGizmoViewport)Owner;
+            viewport.TransformGizmo.SupplementalActive = false;
+            viewport.TransformGizmo.SupplementalTranslationSnapEnabled = false;
+            viewport.TransformGizmo.Visible = true;
+            Owner.Gizmos.Active = viewport.TransformGizmo;
         }
     }
 }
