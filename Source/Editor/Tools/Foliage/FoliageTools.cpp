@@ -56,11 +56,13 @@ struct TIsPODType<GeometryTriangle>
 struct GeometryLookup
 {
     BoundingSphere Brush;
+    Actor* PlacementSurface;
     Array<GeometryTriangle> Triangles;
     Array<Vector3> TerrainCache;
 
-    GeometryLookup(const Vector3& brushPosition, float brushRadius)
+    GeometryLookup(const Vector3& brushPosition, float brushRadius, Actor* placementSurface)
         : Brush(brushPosition, brushRadius)
+        , PlacementSurface(placementSurface)
     {
     }
 
@@ -68,6 +70,8 @@ struct GeometryLookup
     {
         // Early out if object is not intersecting with the foliage brush bounds
         if (!actor->GetIsActive() || !actor->GetBox().Intersects(lookup.Brush))
+            return true;
+        if (lookup.PlacementSurface && actor != lookup.PlacementSurface)
             return true;
 
         const auto brush = lookup.Brush;
@@ -177,15 +181,15 @@ struct FoliagePlacement
     Vector3 Normal; // In world space
 };
 
-void FoliageTools::Paint(Foliage* foliage, Span<int32> foliageTypesIndices, const Vector3& brushPosition, float brushRadius, bool additive, float densityScale)
+void FoliageTools::Paint(Foliage* foliage, Span<int32> foliageTypesIndices, const Vector3& brushPosition, float brushRadius, bool additive, float densityScale, Actor* placementSurface)
 {
     if (additive)
-        Paint(foliage, foliageTypesIndices, brushPosition, brushRadius, densityScale);
+        Paint(foliage, foliageTypesIndices, brushPosition, brushRadius, densityScale, placementSurface);
     else
         Remove(foliage, foliageTypesIndices, brushPosition, brushRadius);
 }
 
-void FoliageTools::Paint(Foliage* foliage, Span<int32> foliageTypesIndices, const Vector3& brushPosition, float brushRadius, float densityScale)
+void FoliageTools::Paint(Foliage* foliage, Span<int32> foliageTypesIndices, const Vector3& brushPosition, float brushRadius, float densityScale, Actor* placementSurface)
 {
     if (foliageTypesIndices.Length() <= 0)
         return;
@@ -193,7 +197,7 @@ void FoliageTools::Paint(Foliage* foliage, Span<int32> foliageTypesIndices, cons
     PROFILE_CPU();
 
     // Prepare
-    GeometryLookup geometry(brushPosition, brushRadius);
+    GeometryLookup geometry(brushPosition, brushRadius, placementSurface);
 
     // Find geometry actors to place foliage on top of them
     {

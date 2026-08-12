@@ -244,6 +244,15 @@ TEST_CASE("PhysicsBackend")
     CHECK(hit.Collider == floorCollider);
     CHECK(hit.Distance == Approx(100.0f).margin(0.5f));
 
+    // MAX_float is the public API default for an unbounded cast. Backends that use a
+    // displacement vector internally must keep this query finite and numerically valid.
+    CHECK(PhysicsBackend::RayCast(scene, Vector3(200.0, 100.0, 0.0), Vector3::Down, hit, MAX_float, MAX_uint32, true));
+    CHECK(hit.Collider == floorCollider);
+    CHECK(hit.Distance == Approx(100.0f).margin(0.5f));
+    float shapeHitDistance;
+    CHECK(PhysicsBackend::RayCastShape(floorShape, Vector3(0.0, -10.0, 0.0), Quaternion::Identity, Vector3(200.0, 100.0, 0.0), Vector3::Down, shapeHitDistance, MAX_float));
+    CHECK(shapeHitDistance == Approx(100.0f).margin(0.5f));
+
     RayCastHit castHits[4] = {};
     const int32 rayHitCount = PhysicsBackend::RayCastNonAlloc(scene, Vector3(0.0, 300.0, 0.0), Vector3::Down, ToSpan(castHits, ARRAY_COUNT(castHits)), 400.0f, MAX_uint32, true);
     CHECK(rayHitCount == 2);

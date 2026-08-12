@@ -6,6 +6,7 @@ using FlaxEditor.Gizmo;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEditor.Tools.Foliage.Undo;
+using FlaxEditor.Tools.Terrain.Brushes;
 using FlaxEngine;
 
 namespace FlaxEditor.Tools.Foliage
@@ -21,6 +22,15 @@ namespace FlaxEditor.Tools.Foliage
         private List<int> _foliageTypesIndices;
         private EditFoliageAction _undoAction;
         private int _paintUpdateCount;
+        private Actor _placementSurface;
+        private readonly CircleBrush _terrainBrush = new CircleBrush();
+        private readonly List<TerrainChunkLocation> _terrainChunks = new List<TerrainChunkLocation>();
+
+        private struct TerrainChunkLocation
+        {
+            public Int2 PatchCoord;
+            public Int2 ChunkCoord;
+        }
 
         /// <summary>
         /// The parent mode.
@@ -76,8 +86,23 @@ namespace FlaxEditor.Tools.Foliage
             if (Mode.HasValidHit)
             {
                 var brushPosition = Mode.CursorPosition;
-                var brushNormal = Mode.CursorNormal;
                 var brushColor = new Color(1.0f, 0.85f, 0.0f); // TODO: expose to editor options
+                if (_placementSurface is FlaxEngine.Terrain terrain)
+                {
+                    _terrainBrush.Size = Mode.CurrentBrush.Size;
+                    var terrainBrushMaterial = _terrainBrush.GetBrushMaterial(ref renderContext, ref brushPosition, ref brushColor);
+                    if (!terrainBrushMaterial)
+                        return;
+
+                    for (int i = 0; i < _terrainChunks.Count; i++)
+                    {
+                        var chunk = _terrainChunks[i];
+                        terrain.DrawChunk(ref renderContext, ref chunk.PatchCoord, ref chunk.ChunkCoord, terrainBrushMaterial, 0);
+                    }
+                    return;
+                }
+
+                var brushNormal = Mode.CursorNormal;
                 var sceneDepth = Owner.RenderTask.Buffers.DepthBuffer;
                 var brushMaterial = Mode.CurrentBrush.GetBrushMaterial(ref brushPosition, ref brushColor, sceneDepth);
                 if (!_brushModel)
@@ -144,8 +169,11 @@ namespace FlaxEditor.Tools.Foliage
                     _foliageTypesIndices.Add(index);
                 }
             }
+            bool additive = !Owner.IsControlDown;
+            if (additive && !_placementSurface)
+                return;
             // TODO: don't call _foliageTypesIndices.ToArray() but reuse allocation
-            FoliageTools.Paint(foliage, _foliageTypesIndices.ToArray(), Mode.CursorPosition, Mode.CurrentBrush.Size * 0.5f, !Owner.IsControlDown, Mode.CurrentBrush.DensityScale);
+            FoliageTools.Paint(foliage, _foliageTypesIndices.ToArray(), Mode.CursorPosition, Mode.CurrentBrush.Size * 0.5f, additive, Mode.CurrentBrush.DensityScale, _placementSurface);
             _paintUpdateCount++;
         }
 
@@ -213,11 +241,17 @@ namespace FlaxEditor.Tools.Foliage
             if (hit != null)
             {
                 var hitLocation = mouseRay.GetPoint(closest);
+                var actorNode = hit as ActorNode ?? hit.ParentNode as ActorNode;
+                var hitActor = actorNode?.Actor;
+                _placementSurface = hitActor is FlaxEngine.Terrain || hitActor is StaticModel || hitActor is TextRender ? hitActor : null;
                 Mode.SetCursor(ref hitLocation, ref hitNormal);
+                UpdateTerrainChunks();
             }
             // No hit
             else
             {
+                _placementSurface = null;
+                _terrainChunks.Clear();
                 Mode.ClearCursor();
             }
 
@@ -227,6 +261,38 @@ namespace FlaxEditor.Tools.Foliage
             else
                 PaintEnd();
             PaintUpdate(dt);
+        }
+
+        private void UpdateTerrainChunks()
+        {
+            _terrainChunks.Clear();
+            if (_placementSurface is not FlaxEngine.Terrain terrain)
+                return;
+
+            float radius = Mode.CurrentBrush.Size * 0.5f;
+            var center = Mode.CursorPosition;
+            var brushBounds = new BoundingBox(
+                new Vector3(center.X - radius, center.Y - radius - 10000.0f, center.Z - radius),
+                new Vector3(center.X + radius, center.Y + radius + 10000.0f, center.Z + radius));
+            for (int patchIndex = 0; patchIndex < terrain.PatchesCount; patchIndex++)
+            {
+                terrain.GetPatchBounds(patchIndex, out var patchBounds);
+                if (!patchBounds.Intersects(ref brushBounds))
+                    continue;
+
+                terrain.GetPatchCoord(patchIndex, out var patchCoord);
+                for (int chunkIndex = 0; chunkIndex < FlaxEngine.Terrain.PatchChunksCount; chunkIndex++)
+                {
+                    terrain.GetChunkBounds(patchIndex, chunkIndex, out var chunkBounds);
+                    if (!chunkBounds.Intersects(ref brushBounds))
+                        continue;
+                    _terrainChunks.Add(new TerrainChunkLocation
+                    {
+                        PatchCoord = patchCoord,
+                        ChunkCoord = new Int2(chunkIndex % FlaxEngine.Terrain.PatchEdgeChunksCount, chunkIndex / FlaxEngine.Terrain.PatchEdgeChunksCount),
+                    });
+                }
+            }
         }
     }
 }
