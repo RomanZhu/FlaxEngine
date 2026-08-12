@@ -135,13 +135,13 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>
         /// Supported snap increments in engine units.
         /// </summary>
-        public static readonly float[] SnapIncrements = { 1.0f, 5.0f, 10.0f, 25.0f, 50.0f, 100.0f };
+        public static readonly float[] SnapIncrements = { 5.0f, 15.0f, 25.0f, 50.0f, 100.0f, 200.0f };
 
         private CSGTool _tool = CSGTool.SelectPlace;
         private CSGOperation _operation = CSGOperation.Additive;
         private bool _workingPlaneLocked;
         private bool _snappingEnabled = true;
-        private float _snapIncrement = 10.0f;
+        private float _snapIncrement = 15.0f;
         private CSGVisibility _visibility = CSGVisibility.Default;
 
         /// <summary>
@@ -352,7 +352,7 @@ namespace FlaxEditor.Tools.CSG
         public void SetSnapIncrement(float value)
         {
             if (float.IsNaN(value) || float.IsInfinity(value))
-                value = 10.0f;
+                value = 15.0f;
             value = Mathf.Max(value, 0.0001f);
             if (Mathf.NearEqual(_snapIncrement, value))
                 return;
@@ -380,6 +380,43 @@ namespace FlaxEditor.Tools.CSG
                 }
             }
             SetSnapIncrement(SnapIncrements[next]);
+        }
+
+        /// <summary>
+        /// Steps to the next larger or smaller supported linear snap increment.
+        /// </summary>
+        /// <param name="direction">Positive to increase, negative to decrease.</param>
+        public void StepSnapIncrement(int direction)
+        {
+            if (direction == 0)
+                return;
+
+            if (direction > 0)
+            {
+                int next = SnapIncrements.Length - 1;
+                for (int i = 0; i < SnapIncrements.Length; i++)
+                {
+                    if (SnapIncrements[i] > _snapIncrement && !Mathf.NearEqual(SnapIncrements[i], _snapIncrement))
+                    {
+                        next = i;
+                        break;
+                    }
+                }
+                SetSnapIncrement(SnapIncrements[next]);
+            }
+            else
+            {
+                int next = 0;
+                for (int i = SnapIncrements.Length - 1; i >= 0; i--)
+                {
+                    if (SnapIncrements[i] < _snapIncrement && !Mathf.NearEqual(SnapIncrements[i], _snapIncrement))
+                    {
+                        next = i;
+                        break;
+                    }
+                }
+                SetSnapIncrement(SnapIncrements[next]);
+            }
         }
 
         /// <summary>
@@ -500,7 +537,7 @@ namespace FlaxEditor.Tools.CSG
             _operation = state.Operation == CSGOperation.Subtractive ? CSGOperation.Subtractive : CSGOperation.Additive;
             _workingPlaneLocked = state.WorkingPlaneLocked;
             _snappingEnabled = state.SnappingEnabled;
-            _snapIncrement = float.IsNaN(state.SnapIncrement) || float.IsInfinity(state.SnapIncrement) ? 10.0f : Mathf.Max(state.SnapIncrement, 0.0001f);
+            _snapIncrement = float.IsNaN(state.SnapIncrement) || float.IsInfinity(state.SnapIncrement) ? 15.0f : Mathf.Max(state.SnapIncrement, 0.0001f);
             _visibility = state.Visibility & (CSGVisibility.SourceBrushes | CSGVisibility.BuiltGeometry | CSGVisibility.HiddenBrushes);
             TryCancel(EditorGizmoModeCancelReason.SceneChanged);
             Changed?.Invoke();

@@ -536,7 +536,7 @@ namespace FlaxEditor.Viewport
             _overlayCSGSnapButton = AddViewportToolStripButton("Snap", _editor.Icons.Grid32, ToolStripAnchor.Left, "Flax.Scene.CSG.Snap.Left", () => CSGAuthoringMode.Controller.SetSnappingEnabled(!CSGAuthoringMode.Controller.SnappingEnabled));
             _overlayCSGSnapButton.LinkTooltip("Toggle CSG grid snapping.");
             _overlayCSGSnapValueButton = AddViewportToolStripMenuButton(GetCSGSnapLabel(), SpriteHandle.Invalid, CreateCSGSnapMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.SnapValue.Left");
-            _overlayCSGSnapValueButton.LinkTooltip("CSG linear snap increment.");
+            _overlayCSGSnapValueButton.LinkTooltip("CSG linear snap increment. Use Ctrl+Mouse Wheel to change it.");
             _overlayCSGVisibilityButton = AddViewportToolStripMenuButton("View", SpriteHandle.Invalid, CreateCSGVisibilityMenu(), ToolStripAnchor.Left, "Flax.Scene.CSG.Visibility.Left");
             _overlayCSGVisibilityButton.DrawMenuChevron = true;
             _overlayCSGVisibilityButton.LinkTooltip("CSG viewport visibility.");
@@ -880,6 +880,16 @@ namespace FlaxEditor.Viewport
             if (_characterControllerModeActive)
             {
                 base.OnMouseWheel(location, delta);
+                return true;
+            }
+
+            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode &&
+                (Root?.GetKey(KeyboardKeys.Control) ?? false) &&
+                Mathf.Abs(delta) > Mathf.Epsilon)
+            {
+                var controller = CSGAuthoringMode.Controller;
+                controller.StepSnapIncrement(delta > 0.0f ? 1 : -1);
+                ShowViewportValueOverlay($"Grid Snap: {controller.SnapIncrement:0.##}");
                 return true;
             }
 
@@ -1353,7 +1363,7 @@ namespace FlaxEditor.Viewport
 
         private string GetCSGSnapLabel()
         {
-            return CSGAuthoringMode?.Controller?.SnapIncrement.ToString() ?? "10";
+            return CSGAuthoringMode?.Controller?.SnapIncrement.ToString() ?? "15";
         }
 
         private string GetGizmoModeLabel()

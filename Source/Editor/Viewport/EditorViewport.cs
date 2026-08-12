@@ -288,15 +288,15 @@ namespace FlaxEditor.Viewport
         private int _speedStep;
         private int _maxSpeedSteps;
         private float _cameraMoveSpeedWheelRemainder;
-        private float _cameraMoveSpeedOverlayHideTime = -1.0f;
-        private string _cameraMoveSpeedOverlayText;
+        private float _viewportValueOverlayHideTime = -1.0f;
+        private string _viewportValueOverlayText;
 
         /// <summary>
         /// The viewport overlay toolstrip height.
         /// </summary>
         protected const float ViewportToolStripHeight = ToolStrip.CompactToolStripHeight;
-        private const float CameraMoveSpeedOverlayDuration = 0.85f;
-        private const float CameraMoveSpeedOverlayFadeDuration = 0.2f;
+        private const float ViewportValueOverlayDuration = 0.85f;
+        private const float ViewportValueOverlayFadeDuration = 0.2f;
         private const float CameraCenterMarkerSize = 9.0f;
         private const float CameraCenterMarkerGap = 3.0f;
 
@@ -678,8 +678,8 @@ namespace FlaxEditor.Viewport
             // Setup options
             {
                 _editor.Options.OptionsChanged += OnEditorOptionsChanged;
-                _editor.PlayModeBeginning += HideCameraMoveSpeedOverlay;
-                _editor.PlayModeEnding += HideCameraMoveSpeedOverlay;
+                _editor.PlayModeBeginning += HideViewportValueOverlay;
+                _editor.PlayModeEnding += HideViewportValueOverlay;
                 SetupViewportOptions();
             }
 
@@ -1755,38 +1755,47 @@ namespace FlaxEditor.Viewport
 
         private void ShowCameraMoveSpeedOverlay()
         {
-            _cameraMoveSpeedOverlayText = string.Format(MovementSpeedTextFormat, _movementSpeed) + "x";
-            _cameraMoveSpeedOverlayHideTime = Time.TimeSinceStartup + CameraMoveSpeedOverlayDuration;
+            ShowViewportValueOverlay(string.Format(MovementSpeedTextFormat, _movementSpeed) + "x");
         }
 
-        private void HideCameraMoveSpeedOverlay()
+        /// <summary>
+        /// Shows a short-lived value overlay in the center of the viewport.
+        /// </summary>
+        /// <param name="text">The text to display.</param>
+        protected void ShowViewportValueOverlay(string text)
         {
-            _cameraMoveSpeedOverlayText = null;
-            _cameraMoveSpeedOverlayHideTime = -1.0f;
+            _viewportValueOverlayText = text;
+            _viewportValueOverlayHideTime = Time.TimeSinceStartup + ViewportValueOverlayDuration;
         }
 
-        private void DrawCameraMoveSpeedOverlay()
+        private void HideViewportValueOverlay()
         {
-            if (string.IsNullOrEmpty(_cameraMoveSpeedOverlayText))
+            _viewportValueOverlayText = null;
+            _viewportValueOverlayHideTime = -1.0f;
+        }
+
+        private void DrawViewportValueOverlay()
+        {
+            if (string.IsNullOrEmpty(_viewportValueOverlayText))
                 return;
 
-            var timeLeft = _cameraMoveSpeedOverlayHideTime - Time.TimeSinceStartup;
+            var timeLeft = _viewportValueOverlayHideTime - Time.TimeSinceStartup;
             if (timeLeft <= 0.0f)
             {
-                HideCameraMoveSpeedOverlay();
+                HideViewportValueOverlay();
                 return;
             }
 
-            var alpha = Mathf.Saturate(timeLeft / CameraMoveSpeedOverlayFadeDuration);
+            var alpha = Mathf.Saturate(timeLeft / ViewportValueOverlayFadeDuration);
             var style = Style.Current;
             var font = style.FontMedium;
-            var textSize = font.MeasureText(_cameraMoveSpeedOverlayText);
+            var textSize = font.MeasureText(_viewportValueOverlayText);
             var width = Mathf.Max(textSize.X + 20.0f, 54.0f);
             var height = 24.0f;
             var bounds = new Rectangle((Width - width) * 0.5f, (Height - height) * 0.5f, width, height);
 
             StyleRendering.DrawRoundedRectangle(bounds, Color.Black.AlphaMultiplied(0.55f * alpha), Color.White.AlphaMultiplied(0.12f * alpha), 1.0f, 6.0f);
-            Render2D.DrawText(font, _cameraMoveSpeedOverlayText, bounds, Color.White.AlphaMultiplied(alpha), TextAlignment.Center, TextAlignment.Center);
+            Render2D.DrawText(font, _viewportValueOverlayText, bounds, Color.White.AlphaMultiplied(alpha), TextAlignment.Center, TextAlignment.Center);
         }
 
         private void DrawCameraCenterOverlay()
@@ -2705,7 +2714,7 @@ namespace FlaxEditor.Viewport
         {
             base.Draw();
             DrawCameraCenterOverlay();
-            DrawCameraMoveSpeedOverlay();
+            DrawViewportValueOverlay();
 
             // Add overlay during debugger breakpoint hang
             if (_editor.Simulation.IsDuringBreakpointHang)
@@ -2735,7 +2744,7 @@ namespace FlaxEditor.Viewport
                     LogGizmoFocusDebug("OnLostFocus next update");
             });
 
-            HideCameraMoveSpeedOverlay();
+            HideViewportValueOverlay();
 
             if (_isControllingMouse)
             {
@@ -2750,8 +2759,8 @@ namespace FlaxEditor.Viewport
         public override void OnDestroy()
         {
             _editor.Options.OptionsChanged -= OnEditorOptionsChanged;
-            _editor.PlayModeBeginning -= HideCameraMoveSpeedOverlay;
-            _editor.PlayModeEnding -= HideCameraMoveSpeedOverlay;
+            _editor.PlayModeBeginning -= HideViewportValueOverlay;
+            _editor.PlayModeEnding -= HideViewportValueOverlay;
 
             base.OnDestroy();
         }
