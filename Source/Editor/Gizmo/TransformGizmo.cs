@@ -35,6 +35,7 @@ namespace FlaxEditor.Gizmo
         private readonly List<SceneGraphNode> _selectionScopes = new List<SceneGraphNode>();
         private readonly List<SceneGraphNode> _pickAncestry = new List<SceneGraphNode>();
         private readonly List<SceneGraphNode> _pickSelectionChain = new List<SceneGraphNode>();
+        private readonly List<ActorNode> _brushPickNodes = new List<ActorNode>(32);
 
         /// <summary>
         /// The event to apply objects transformation.
@@ -399,7 +400,17 @@ namespace FlaxEditor.Gizmo
             if (root == null)
                 return null;
 
-            var hit = root.RayCast(ref ray, ref view, out _, rayCastFlags);
+            var hit = root.RayCast(ref ray, ref view, out var hitDistance, rayCastFlags);
+
+            // Source brushes overlap the generated CSG result. Treat the visible
+            // face of an additive brush as the stable target at the same depth;
+            // subtractive volumes remain wire-only because their interior is a hole.
+            var brushHit = PickBrushSource(root, ref ray, ref view, out var brushDistance, out bool brushWireHit);
+            Real depthTolerance = (Real)Math.Max(0.001, Math.Abs((double)brushDistance) * 0.000001);
+            bool matchesVisibleSurface = hit != null && Math.Abs((double)(brushDistance - hitDistance)) <= depthTolerance;
+            if (brushHit != null && (brushWireHit || matchesVisibleSurface))
+                return brushHit;
+
             if (hit != null && _selection.Count == 1)
             {
                 var selected = _selection[0];
@@ -418,6 +429,40 @@ namespace FlaxEditor.Gizmo
                 }
             }
             return hit;
+        }
+
+        private BoxBrushNode PickBrushSource(ActorNode root, ref Ray ray, ref Ray view, out Real closestDistance, out bool closestIsWireHit)
+        {
+            _brushPickNodes.Clear();
+            root.GetAllChildActorNodes(_brushPickNodes);
+            BoxBrushNode closest = null;
+            closestDistance = Real.MaxValue;
+            closestIsWireHit = false;
+            for (int i = 0; i < _brushPickNodes.Count; i++)
+            {
+                if (!(_brushPickNodes[i] is BoxBrushNode node) || !node.IsActiveInHierarchy)
+                    continue;
+                var brush = (BoxBrush)node.Actor;
+                var box = brush.OrientedBox;
+                bool intersects = brush.Mode == BrushMode.Subtractive
+                    ? Utilities.Utils.RayCastWire(ref box, ref ray, out var distance, ref view.Position)
+                    : box.Intersects(ref ray, out distance);
+                if (!intersects || distance < 0.0f)
+                    continue;
+
+                Real tieTolerance = (Real)Math.Max(0.001, Math.Abs((double)closestDistance) * 0.000001);
+                bool nearer = distance < closestDistance - tieTolerance;
+                bool tied = closest != null && Math.Abs((double)(distance - closestDistance)) <= tieTolerance;
+                bool stableTieWinner = tied && (node.OrderInParent < closest.OrderInParent ||
+                                                 (node.OrderInParent == closest.OrderInParent && node.ID.CompareTo(closest.ID) < 0));
+                if (closer || stableTieWinner)
+                {
+                    closest = node;
+                    closestDistance = distance;
+                    closestIsWireHit = brush.Mode == BrushMode.Subtractive;
+                }
+            }
+            return closest;
         }
 
         /// <inheritdoc />
