@@ -953,7 +953,7 @@ namespace FlaxEditor.CustomEditors
             return result;
         }
 
-        private static bool TryMapPrefabObjectId(Guid prefabId, Guid objectId, Guid targetPrefabId, out Guid targetObjectId)
+        internal static bool TryMapPrefabObjectId(Guid prefabId, Guid objectId, Guid targetPrefabId, out Guid targetObjectId)
         {
             var visited = new HashSet<Guid>();
             while (prefabId != targetPrefabId && prefabId != Guid.Empty && objectId != Guid.Empty && visited.Add(prefabId))
@@ -1241,7 +1241,7 @@ namespace FlaxEditor.CustomEditors
 
         private Actor FindActor(CustomEditor editor)
         {
-            if (editor.Values[0] is Actor actor)
+            if (editor is Dedicated.ActorEditor && editor.Values[0] is Actor actor)
                 return actor;
             if (editor.ParentEditor != null)
                 return FindActor(editor.ParentEditor);
@@ -1250,7 +1250,7 @@ namespace FlaxEditor.CustomEditors
 
         private Actor FindPrefabRoot(CustomEditor editor)
         {
-            if (editor.Values[0] is Actor actor)
+            if (editor is Dedicated.ActorEditor && editor.Values[0] is Actor actor)
                 return FindPrefabRoot(actor);
             if (editor.ParentEditor != null)
                 return FindPrefabRoot(editor.ParentEditor);
