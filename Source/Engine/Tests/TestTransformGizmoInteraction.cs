@@ -81,6 +81,12 @@ namespace FlaxEditor.Tests
             Assert.AreEqual(1.5f, TransformGizmoBase.SolveBoundsResizeFactor(1.0f, 5.0f, 10.0f, 1.0f), 0.00001f);
             Assert.AreEqual(1.5f, TransformGizmoBase.SolveBoundsResizeFactor(1.0f, -5.0f, 10.0f, -1.0f), 0.00001f);
             Assert.AreEqual(0.0001f, TransformGizmoBase.SolveBoundsResizeFactor(1.0f, -20.0f, 10.0f, 1.0f), 0.00001f);
+
+            Quaternion rotated = Quaternion.RotationZ(90.0f * Mathf.DegreesToRadians);
+            Float3 rotatedScale = TransformGizmoBase.ApplyWorldScaleDelta(new Float3(1.0f, 0.25f, 1.0f), rotated, new Vector3(10.0f, 0.0f, 0.0f));
+            Assert.AreEqual(1.0f, rotatedScale.X, 0.0001f);
+            Assert.AreEqual(2.75f, rotatedScale.Y, 0.0001f);
+            Assert.AreEqual(1.0f, rotatedScale.Z, 0.0001f);
         }
 
         [Test]

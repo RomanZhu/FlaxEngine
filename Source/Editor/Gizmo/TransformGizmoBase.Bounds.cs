@@ -8,7 +8,6 @@ using Real = System.Single;
 using Mathr = FlaxEngine.Mathf;
 #endif
 
-using System.Collections.Generic;
 using FlaxEngine;
 
 namespace FlaxEditor.Gizmo
@@ -24,15 +23,6 @@ namespace FlaxEditor.Gizmo
             Axis.ZNegative,
             Axis.ZPositive,
         };
-        private static readonly int[] BoundsEdges =
-        {
-            0, 1, 1, 2, 2, 3, 3, 0,
-            4, 5, 5, 6, 6, 7, 7, 4,
-            0, 4, 1, 5, 2, 6, 3, 7,
-        };
-        private readonly Float2[] _boundsHandleCenters = new Float2[BoundsFaceAxes.Length];
-        private readonly List<Float2> _boundsEdgeGaps = new List<Float2>(BoundsFaceAxes.Length);
-
         internal static bool IsBoundsFaceAxis(Axis axis)
         {
             return axis == Axis.XNegative || axis == Axis.XPositive ||
@@ -229,97 +219,35 @@ namespace FlaxEditor.Gizmo
                 if (!TryGetBoundsFace(axis, out _, out _, out var direction))
                     continue;
 
+                // Point the stem away from the bounds. Keeping the stem outside
+                // prevents opposite face handles from joining across the object.
                 Float3 from = Float3.Backward;
-                Float3 to = direction;
+                Float3 to = -direction;
                 Float3 fallback = Mathf.Abs(Float3.Dot(to, Float3.Up)) > 0.99f ? Float3.Right : Float3.Up;
                 Quaternion orientation = Quaternion.GetRotationFromTo(from, to, fallback);
                 Vector3 faceCenter = GetBoundsFaceCenter(bounds, axis);
                 if (!TryGetGizmoWorldRadius(faceCenter, out float gizmoWorldRadius))
                     continue;
                 float screenScale = gizmoWorldRadius / GizmoGeometryRadiusRaw;
-                Vector3 origin = faceCenter - direction * (screenScale * AxisLength);
-                var transform = new Transform(origin, orientation, new Float3(screenScale));
-                renderContext.View.GetWorldMatrix(ref transform, out var world);
+                float stemWorldLength = gizmoWorldRadius * (BoundsHandleStemPixels / GizmoRadiusPixels);
+
+                // The connector has independent axial scaling so its projected
+                // length is constant while its thickness follows the gizmo size.
+                Vector3 connectorOrigin = faceCenter + direction * stemWorldLength;
+                var connectorTransform = new Transform(connectorOrigin, orientation, new Float3(screenScale, screenScale, stemWorldLength / AxisLength));
+                renderContext.View.GetWorldMatrix(ref connectorTransform, out var connectorWorld);
+
+                // The cube mesh is authored at AxisLength. Give it a separate
+                // full-size transform that keeps its center exactly on the face.
+                Vector3 cubeOrigin = faceCenter + direction * (screenScale * AxisLength);
+                var cubeTransform = new Transform(cubeOrigin, orientation, new Float3(screenScale));
+                renderContext.View.GetWorldMatrix(ref cubeTransform, out var cubeWorld);
 
                 bool focused = !_isDisabled && (_activeAxis == axis || _hoveredHandle.Axis == axis);
                 MaterialInstance material = focused ? _materialAxisFocus : GetBoundsAxisMaterial(axis);
-                DrawGizmoMesh(ref renderContext, connectorMesh, GetBoundsConnectorMaterial(axis), ref world, sortOrder);
-                DrawGizmoMesh(ref renderContext, cubeMesh, material, ref world, sortOrder);
+                DrawGizmoMesh(ref renderContext, connectorMesh, GetBoundsConnectorMaterial(axis), ref connectorWorld, sortOrder);
+                DrawGizmoMesh(ref renderContext, cubeMesh, material, ref cubeWorld, sortOrder);
             }
-        }
-
-        private void DrawBoundsResizeOverlay()
-        {
-            if (!_isActive || !IsActive || _activeMode != Mode.Bounds || SelectionCount == 0)
-                return;
-
-            GetSelectedObjectsBounds(out var bounds, out _);
-            if (!IsValidBounds(ref bounds))
-                return;
-
-            var corners = bounds.GetCorners();
-            var screenCorners = new Float2[corners.Length];
-            for (int i = 0; i < corners.Length; i++)
-            {
-                if (!TryProjectGizmoPoint(corners[i], out screenCorners[i]))
-                    return;
-            }
-
-            for (int i = 0; i < BoundsFaceAxes.Length; i++)
-            {
-                if (!TryProjectGizmoPoint(GetBoundsFaceCenter(bounds, BoundsFaceAxes[i]), out _boundsHandleCenters[i]))
-                    _boundsHandleCenters[i] = new Float2(float.MaxValue);
-            }
-            Color boundsColor = new Color(1.0f, 0.82f, 0.08f, 0.92f);
-            for (int i = 0; i < BoundsEdges.Length; i += 2)
-            {
-                Float2 start = screenCorners[BoundsEdges[i]];
-                Float2 end = screenCorners[BoundsEdges[i + 1]];
-                DrawBoundsEdgeWithHandleGaps(start, end, boundsColor);
-            }
-
-        }
-
-        private void DrawBoundsEdgeWithHandleGaps(Float2 start, Float2 end, Color color)
-        {
-            const float gapRadius = 11.0f;
-            Float2 segment = end - start;
-            float lengthSquared = segment.LengthSquared;
-            if (lengthSquared < 0.0001f)
-                return;
-
-            _boundsEdgeGaps.Clear();
-            for (int i = 0; i < _boundsHandleCenters.Length; i++)
-            {
-                Float2 toCenter = _boundsHandleCenters[i] - start;
-                float centerAmount = Float2.Dot(toCenter, segment) / lengthSquared;
-                if (centerAmount < 0.0f || centerAmount > 1.0f)
-                    continue;
-                Float2 closest = start + segment * centerAmount;
-                float distanceSquared = (_boundsHandleCenters[i] - closest).LengthSquared;
-                if (distanceSquared >= gapRadius * gapRadius)
-                    continue;
-                float halfAmount = Mathf.Sqrt((gapRadius * gapRadius - distanceSquared) / lengthSquared);
-                _boundsEdgeGaps.Add(new Float2(Mathf.Max(0.0f, centerAmount - halfAmount), Mathf.Min(1.0f, centerAmount + halfAmount)));
-            }
-
-            _boundsEdgeGaps.Sort((a, b) => a.X.CompareTo(b.X));
-            float visibleStart = 0.0f;
-            for (int i = 0; i < _boundsEdgeGaps.Count; i++)
-            {
-                Float2 gap = _boundsEdgeGaps[i];
-                if (gap.X > visibleStart)
-                    DrawBoundsEdgeSegment(start + segment * visibleStart, start + segment * gap.X, color);
-                visibleStart = Mathf.Max(visibleStart, gap.Y);
-            }
-            if (visibleStart < 1.0f)
-                DrawBoundsEdgeSegment(start + segment * visibleStart, end, color);
-        }
-
-        private static void DrawBoundsEdgeSegment(Float2 start, Float2 end, Color color)
-        {
-            Render2D.DrawLine(start, end, Color.Black.AlphaMultiplied(0.7f), 3.5f);
-            Render2D.DrawLine(start, end, color, 1.5f);
         }
     }
 }

@@ -262,6 +262,35 @@ namespace FlaxEditor.Gizmo
             return pivot + localOffset * basis;
         }
 
+        /// <summary>
+        /// Applies world-axis scale factors to a rotated transform's local scale.
+        /// </summary>
+        /// <remarks>
+        /// Bounds resize handles are world-aligned, while actor scale is stored in
+        /// local axes. Measure each rotated local basis vector after the requested
+        /// world scaling so axis-aligned rotations map to the correct component.
+        /// </remarks>
+        internal static Float3 ApplyWorldScaleDelta(Float3 currentScale, Quaternion orientation, Vector3 worldScaleDelta)
+        {
+            Vector3 worldFactors = Vector3.One + worldScaleDelta;
+            Vector3 localX = Vector3.UnitX * orientation;
+            Vector3 localY = Vector3.UnitY * orientation;
+            Vector3 localZ = Vector3.UnitZ * orientation;
+            Vector3 localFactors = new Vector3(
+                GetWorldScaledAxisLength(localX, worldFactors),
+                GetWorldScaledAxisLength(localY, worldFactors),
+                GetWorldScaledAxisLength(localZ, worldFactors));
+            return ApplyScaleDelta(currentScale, localFactors - Vector3.One);
+        }
+
+        private static Real GetWorldScaledAxisLength(Vector3 axis, Vector3 factors)
+        {
+            Real x = axis.X * factors.X;
+            Real y = axis.Y * factors.Y;
+            Real z = axis.Z * factors.Z;
+            return Mathr.Sqrt(x * x + y * y + z * z);
+        }
+
         private static bool IsFiniteMath(Vector3 value)
         {
             return !Real.IsNaN(value.X) && !Real.IsInfinity(value.X) &&

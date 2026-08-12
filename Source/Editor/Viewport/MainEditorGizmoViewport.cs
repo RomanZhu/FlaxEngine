@@ -1445,6 +1445,10 @@ namespace FlaxEditor.Viewport
             // scene state.
             bool applyRotation = !rotationDelta.IsIdentity;
             bool useObjCenter = TransformGizmo.ActivePivot == TransformGizmoBase.PivotType.ObjectCenter;
+            var transactionOrigin = TransformGizmo.TransactionOrigin;
+            bool applyWorldBoundsScale = transactionOrigin != null &&
+                                         transactionOrigin.InitialMode == TransformGizmoBase.Mode.Bounds &&
+                                         TransformGizmoBase.IsBoundsFaceAxis(transactionOrigin.Handle.Axis);
             Vector3 gizmoPosition = TransformGizmo.InteractionPivotPosition;
 
             // Transform selected objects
@@ -1478,7 +1482,9 @@ namespace FlaxEditor.Viewport
                 }
 
                 // Apply scale
-                trans.Scale = TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
+                trans.Scale = applyWorldBoundsScale
+                    ? TransformGizmoBase.ApplyWorldScaleDelta(trans.Scale, trans.Orientation, scaleDelta)
+                    : TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
 
                 // Apply translation
                 trans.Translation += translationDelta;

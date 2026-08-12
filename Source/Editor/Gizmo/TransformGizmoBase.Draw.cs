@@ -982,7 +982,6 @@ namespace FlaxEditor.Gizmo
         {
             base.Draw();
             DrawVertexSnapEdgeHighlights();
-            DrawBoundsResizeOverlay();
             DrawRotationTrackballOverlay();
             DrawScaleCursorOverlay();
             DrawFeedbackOverlay();

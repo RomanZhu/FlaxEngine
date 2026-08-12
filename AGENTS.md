@@ -132,6 +132,7 @@ If a change is localized, prefer the narrowest possible target build and only ru
 ## Agent Guidance
 
 - Treat `.github/workflows/tests.yml` as the source of truth for CI-backed validation.
+- Agent-created commits must contain only files under `Source/` and explicitly requested CLI tooling files, except for updates to this `AGENTS.md`. Never stage or commit files under `Content/`.
 - Never stage or commit files under `Docs/`. Leave all `Docs/` changes uncommitted, including documentation created or updated as part of the current task.
 - Do not assume generated artifacts already exist in the repo.
 - Avoid broad style-only rewrites.

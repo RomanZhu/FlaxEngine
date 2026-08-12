@@ -49,6 +49,11 @@ namespace FlaxEditor.Gizmo
         private const float AxisScaleCubeSize = 0.50f;
 
         /// <summary>
+        /// Length of a bounds-resize face connector in logical viewport pixels.
+        /// </summary>
+        private const float BoundsHandleStemPixels = 32.0f;
+
+        /// <summary>
         /// Width of an axis motor target in viewport pixels.
         /// </summary>
         private const float AxisMotorTargetWidthPixels = 16.0f;
