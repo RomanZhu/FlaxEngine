@@ -48,11 +48,15 @@ uint3 GridSizeInt;
 float PhaseG;
 
 float2 VolumetricFogRange;
-float Dummy0;
+float VolumetricFogDistanceFade;
 float InverseSquaredLightDistanceBiasScale;
 
 float4 FogParameters;
 float4 GridSliceParameters;
+
+float4 DensityNoiseParameters0;
+float4 DensityNoiseParameters1;
+float4 DensityNoiseOffset;
 
 float4x4 PrevWorldToClip;
 
@@ -211,16 +215,105 @@ float4 PS_InjectLight(Quad_GS2PS input) : SV_Target0
 	return scattering;
 }
 
-#if defined(_CS_Initialize)
+#define DENSITY_NOISE_TEXTURE_SIZE 64
+#define DENSITY_NOISE_LATTICE_SIZE 8
+
+#if defined(_CS_GenerateDensityNoise)
+
+RWTexture3D<float> RWDensityNoiseTexture : register(u0);
+
+float HashDensityNoise(uint3 cell)
+{
+	uint hash = cell.x * 374761393u + cell.y * 668265263u + cell.z * 2246822519u;
+	hash = (hash ^ (hash >> 13)) * 1274126177u;
+	hash ^= hash >> 16;
+	return (hash & 0x00ffffffu) * (1.0f / 16777215.0f);
+}
+
+float3 GetDensityNoiseGradient(uint3 cell)
+{
+	float3 gradient = float3(
+		HashDensityNoise(cell),
+		HashDensityNoise(cell + uint3(19u, 47u, 101u)),
+		HashDensityNoise(cell + uint3(73u, 29u, 53u))) * 2.0f - 1.0f;
+	return normalize(gradient + 0.0001f);
+}
+
+float PeriodicDensityNoise(float3 position)
+{
+	uint3 cell0 = (uint3)floor(position) % DENSITY_NOISE_LATTICE_SIZE;
+	uint3 cell1 = (cell0 + 1u) % DENSITY_NOISE_LATTICE_SIZE;
+	float3 localPosition = frac(position);
+	float3 weight = localPosition;
+	weight = weight * weight * (3.0f - 2.0f * weight);
+
+	float n000 = dot(GetDensityNoiseGradient(uint3(cell0.x, cell0.y, cell0.z)), localPosition - float3(0, 0, 0));
+	float n100 = dot(GetDensityNoiseGradient(uint3(cell1.x, cell0.y, cell0.z)), localPosition - float3(1, 0, 0));
+	float n010 = dot(GetDensityNoiseGradient(uint3(cell0.x, cell1.y, cell0.z)), localPosition - float3(0, 1, 0));
+	float n110 = dot(GetDensityNoiseGradient(uint3(cell1.x, cell1.y, cell0.z)), localPosition - float3(1, 1, 0));
+	float n001 = dot(GetDensityNoiseGradient(uint3(cell0.x, cell0.y, cell1.z)), localPosition - float3(0, 0, 1));
+	float n101 = dot(GetDensityNoiseGradient(uint3(cell1.x, cell0.y, cell1.z)), localPosition - float3(1, 0, 1));
+	float n011 = dot(GetDensityNoiseGradient(uint3(cell0.x, cell1.y, cell1.z)), localPosition - float3(0, 1, 1));
+	float n111 = dot(GetDensityNoiseGradient(uint3(cell1.x, cell1.y, cell1.z)), localPosition - float3(1, 1, 1));
+
+	float n00 = lerp(n000, n100, weight.x);
+	float n10 = lerp(n010, n110, weight.x);
+	float n01 = lerp(n001, n101, weight.x);
+	float n11 = lerp(n011, n111, weight.x);
+	return saturate(lerp(lerp(n00, n10, weight.y), lerp(n01, n11, weight.y), weight.z) * 0.85f + 0.5f);
+}
+
+META_CS(true, FEATURE_LEVEL_SM5)
+[numthreads(4, 4, 4)]
+void CS_GenerateDensityNoise(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	if (any(DispatchThreadId >= DENSITY_NOISE_TEXTURE_SIZE))
+		return;
+	float3 position = (DispatchThreadId + 0.5f) * ((float)DENSITY_NOISE_LATTICE_SIZE / (float)DENSITY_NOISE_TEXTURE_SIZE);
+	RWDensityNoiseTexture[DispatchThreadId] = PeriodicDensityNoise(position);
+}
+
+#elif defined(_CS_Initialize)
 
 RWTexture3D<float4> RWVBufferA : register(u0);
 RWTexture3D<float4> RWVBufferB : register(u1);
+Texture3D<float> DensityNoiseTexture : register(t0);
+
+float GetDensityNoise(float3 positionWS, float froxelSize)
+{
+	float3 uvw = positionWS * DensityNoiseParameters0.x + DensityNoiseOffset.xyz;
+	float frequency = 1.0f;
+	float amplitude = 1.0f;
+	float value = 0.0f;
+	float weight = 0.0f;
+	int octaveCount = (int)DensityNoiseParameters1.z;
+	[loop]
+	for (int octave = 0; octave < 4; octave++)
+	{
+		if (octave >= octaveCount)
+			break;
+		// Fade detail before it becomes smaller than a froxel. This keeps distant fog stable without relying on temporal AA to hide aliasing.
+		float featureSize = rcp(DensityNoiseParameters0.x * frequency * DENSITY_NOISE_LATTICE_SIZE);
+		float octaveWeight = amplitude * saturate(featureSize / max(froxelSize * 2.0f, 0.0001f));
+		value += DensityNoiseTexture.SampleLevel(SamplerLinearWrap, uvw * frequency, 0) * octaveWeight;
+		weight += octaveWeight;
+		frequency *= DensityNoiseParameters0.y;
+		amplitude *= DensityNoiseParameters0.z;
+	}
+	if (weight < 0.0001f)
+		return 1.0f;
+	value /= weight;
+	value = saturate((value - DensityNoiseParameters1.x) / max(DensityNoiseParameters1.y - DensityNoiseParameters1.x, 0.0001f));
+	return lerp(1.0f, value, DensityNoiseParameters0.w);
+}
 
 META_CS(true, FEATURE_LEVEL_SM5)
 [numthreads(4, 4, 4)]
 void CS_Initialize(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
 	uint3 gridCoordinate = DispatchThreadId;
+	if (any(gridCoordinate >= GridSizeInt))
+		return;
 	float3 positionWS = GetCellPositionWS(gridCoordinate, 0.5f);
 
 	// Unpack the fog parameters (packing done in C++ ExponentialHeightFog::GetVolumetricFogOptions)
@@ -230,16 +323,21 @@ void CS_Initialize(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	// Calculate the global fog density that matches the exponential height fog density
 	float globalDensity = fogDensity * exp2(-fogHeightFalloff * (positionWS.y - fogHeight));
+	if (DensityNoiseParameters1.w > 0.5f)
+	{
+		uint3 neighborCoordinate = min(gridCoordinate + 1u, GridSizeInt - 1u);
+		if (all(neighborCoordinate == gridCoordinate))
+			neighborCoordinate = gridCoordinate - 1u;
+		float froxelSize = length(GetCellPositionWS(neighborCoordinate, 0.5f) - positionWS);
+		globalDensity *= GetDensityNoise(positionWS, froxelSize);
+	}
 	float extinction = max(0.0f, globalDensity * GlobalExtinctionScale * 0.24f);
 
 	float3 scattering = GlobalAlbedo * extinction;
 	float absorption = max(0.0f, extinction - Luminance(scattering));
 
-	if (all(gridCoordinate < GridSizeInt))
-	{
-		RWVBufferA[gridCoordinate] = float4(scattering, absorption);
-		RWVBufferB[gridCoordinate] = float4(GlobalEmissive, 0);
-	}
+	RWVBufferA[gridCoordinate] = float4(scattering, absorption);
+	RWVBufferB[gridCoordinate] = float4(GlobalEmissive, 0);
 }
 
 #elif defined(_CS_LightScattering)
@@ -348,17 +446,22 @@ void CS_FinalIntegration(uint3 DispatchThreadId : SV_DispatchThreadID)
 		uint3 coords = uint3(gridCoordinate.xy, layerIndex);
 		float4 scatteringExtinction = LightScattering[coords];
 		float3 positionWS = GetCellPositionWS(coords, 0.5f);
+
+		// Fade both scattering and extinction so the volumetric medium transitions cleanly into distance fog.
+		if (VolumetricFogDistanceFade > 0.0001f)
+		{
+			float lastLayer = GridSizeInt.z - 1.0f;
+			float fadeStart = lastLayer * (1.0f - VolumetricFogDistanceFade);
+			float distanceFade = 1.0f - saturate((layerIndex - fadeStart) / max(lastLayer - fadeStart, 0.0001f));
+			scatteringExtinction *= distanceFade;
+		}
 		
 		// Ref: "Physically Based and Unified Volumetric Rendering in Frostbite"
 		float stepDistance = length(positionWS - prevPositionWS);
 		float transmittance = exp(-scatteringExtinction.w * stepDistance);
 		float3 scatteringIntegratedOverSlice = (scatteringExtinction.rgb - scatteringExtinction.rgb * transmittance) / max(scatteringExtinction.w, 0.00001f);
 
-        // Apply distance fade
-        float distanceFade = Remap(layerIndex, GridSizeInt.z * 0.8f, GridSizeInt.z - 1, 1, 0);
-        scatteringIntegratedOverSlice *= distanceFade;
-
-        // Accumulate
+		// Accumulate
 		acc.rgb += scatteringIntegratedOverSlice * acc.a;
 		acc.a *= transmittance;
 #if DEBUG_VOXELS

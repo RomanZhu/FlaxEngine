@@ -130,6 +130,85 @@ public:
     API_FIELD(Attributes="EditorOrder(350), DefaultValue(6000.0f), Limit(0), EditorDisplay(\"Volumetric Fog\", \"Distance\")")
     float VolumetricFogDistance = 6000.0f;
 
+    /// <summary>
+    /// Controls the part of the volumetric fog distance used to smoothly fade volumetric scattering and extinction into the regular distance fog. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(360), DefaultValue(0.2f), Limit(0, 1, 0.01f), EditorDisplay(\"Volumetric Fog\", \"Distance Fade\")")
+    float VolumetricFogDistanceFade = 0.2f;
+
+    /// <summary>
+    /// Enables jittered temporal reprojection for volumetric fog. Disable it to use stable cell-center sampling without temporal history.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(370), DefaultValue(true), EditorDisplay(\"Volumetric Fog\", \"Temporal Reprojection\")")
+    bool VolumetricFogTemporalReprojection = true;
+
+    /// <summary>
+    /// Controls how much of the previous frame contributes to volumetric fog when temporal reprojection is enabled. Range: 0-0.99.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(380), DefaultValue(0.92f), Limit(0, 0.99f, 0.01f), EditorDisplay(\"Volumetric Fog\", \"History Weight\")")
+    float VolumetricFogHistoryWeight = 0.92f;
+
+public:
+    /// <summary>
+    /// Enables world-space procedural density variation in the global volumetric fog.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(400), DefaultValue(false), EditorDisplay(\"Volumetric Fog Density\", \"Enable\")")
+    bool VolumetricFogDensityNoiseEnable = false;
+
+    /// <summary>
+    /// Size of the repeating base density formation in world units. Larger values produce broader, smoother fog banks.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(410), DefaultValue(3000.0f), Limit(1), EditorDisplay(\"Volumetric Fog Density\", \"Scale\")")
+    float VolumetricFogDensityNoiseScale = 3000.0f;
+
+    /// <summary>
+    /// Number of density-noise layers. More layers add detail at an increased GPU sampling cost. Range: 1-4.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(420), DefaultValue(4), Limit(1, 4), EditorDisplay(\"Volumetric Fog Density\", \"Octaves\")")
+    int32 VolumetricFogDensityNoiseOctaves = 4;
+
+    /// <summary>
+    /// Frequency multiplier between consecutive density-noise layers. Range: 1-4.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(430), DefaultValue(2.0f), Limit(1, 4, 0.01f), EditorDisplay(\"Volumetric Fog Density\", \"Lacunarity\")")
+    float VolumetricFogDensityNoiseLacunarity = 2.0f;
+
+    /// <summary>
+    /// Amplitude multiplier between consecutive density-noise layers. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(440), DefaultValue(0.35f), Limit(0, 1, 0.01f), EditorDisplay(\"Volumetric Fog Density\", \"Gain\")")
+    float VolumetricFogDensityNoiseGain = 0.35f;
+
+    /// <summary>
+    /// Noise value remapped to zero density. Raising it creates larger clear regions. Must be lower than Maximum.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(450), DefaultValue(0.0f), Limit(0, 1, 0.01f), EditorDisplay(\"Volumetric Fog Density\", \"Minimum\")")
+    float VolumetricFogDensityNoiseMin = 0.0f;
+
+    /// <summary>
+    /// Noise value remapped to full density. Lowering it produces denser, sharper fog banks. Must be greater than Minimum.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(460), DefaultValue(1.0f), Limit(0, 1, 0.01f), EditorDisplay(\"Volumetric Fog Density\", \"Maximum\")")
+    float VolumetricFogDensityNoiseMax = 1.0f;
+
+    /// <summary>
+    /// Blends between uniform height fog and the procedural density field. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(470), DefaultValue(1.0f), Limit(0, 1, 0.01f), EditorDisplay(\"Volumetric Fog Density\", \"Influence\")")
+    float VolumetricFogDensityNoiseInfluence = 1.0f;
+
+    /// <summary>
+    /// World-space velocity used to advect the density field, in world units per second.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(480), DefaultValue(typeof(Float3), \"0,0,0\"), EditorDisplay(\"Volumetric Fog Density\", \"Velocity\")")
+    Float3 VolumetricFogDensityNoiseVelocity = Float3::Zero;
+
+    /// <summary>
+    /// Seed used to offset the procedural density field.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(490), DefaultValue(0), EditorDisplay(\"Volumetric Fog Density\", \"Seed\")")
+    int32 VolumetricFogDensityNoiseSeed = 0;
+
 private:
 #if COMPILE_WITH_DEV_ENV
     void OnShaderReloading(Asset* obj)

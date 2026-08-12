@@ -57,12 +57,25 @@ public:
 struct VolumetricFogOptions
 {
     bool Enable;
+    bool TemporalReprojection;
     float ScatteringDistribution;
+    float HistoryWeight;
     Color Albedo;
     Color Emissive;
     float ExtinctionScale;
     float Distance;
+    float DistanceFade;
     Float4 FogParameters;
+    bool DensityNoiseEnable;
+    int32 DensityNoiseOctaves;
+    int32 DensityNoiseSeed;
+    float DensityNoiseScale;
+    float DensityNoiseLacunarity;
+    float DensityNoiseGain;
+    float DensityNoiseMin;
+    float DensityNoiseMax;
+    float DensityNoiseInfluence;
+    Float3 DensityNoiseVelocity;
 
     bool UseVolumetricFog() const
     {
