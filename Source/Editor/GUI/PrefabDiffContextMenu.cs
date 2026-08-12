@@ -93,8 +93,8 @@ namespace FlaxEditor.GUI
 
         private void OnRevertAllClicked()
         {
-            Hide();
             RevertAll?.Invoke();
+            Hide();
         }
 
         private void OnApplyAllClicked()

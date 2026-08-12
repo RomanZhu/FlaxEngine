@@ -395,7 +395,15 @@ namespace FlaxEditor.CustomEditors.Dedicated
             if (!(node.Tag is CustomEditor editor))
                 return false;
             return editor is RemovedScriptDummy or RemovedActorDummy ||
-                   editor.Values != null && editor.Values.Count == 1 && editor.Values[0] is SceneObject;
+                   IsSceneObjectEditor(editor);
+        }
+
+        private static bool IsSceneObjectEditor(CustomEditor editor)
+        {
+            if (editor.Values == null || editor.Values.Count != 1)
+                return false;
+            return editor is ActorEditor && editor.Values[0] is Actor ||
+                   editor.Values is ScriptsEditor.ScriptsContainer && editor.Values[0] is Script;
         }
 
         private static bool HasPropertyOverride(TreeNode node)
@@ -501,7 +509,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
         private TreeNode ProcessDiff(CustomEditor editor, bool skipIfNotModified = true)
         {
             // Special case for new Script or child actor added to actor
-            if ((editor.Values[0] is Script script && !script.HasPrefabLink) || (editor.Values[0] is Actor a && !a.HasPrefabLink))
+            if (IsSceneObjectEditor(editor) && editor.Values[0] is SceneObject sceneObject && !sceneObject.HasPrefabLink)
                 return CreateDiffNode(editor);
 
             // Skip if no change detected
@@ -702,10 +710,14 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var details = new PrefabOverrideDetailsContextMenu(Presenter.Undo, Presenter.Owner);
             cm.Tree.AddChild(rootNode);
             cm.Tree.SelectedChanged += (_, selection) => OnDiffSelectionChanged(cm, details, selection);
-            cm.Tree.RightClick += OnDiffNodeRightClick;
+            cm.Tree.RightClick += (node, location) => OnDiffNodeRightClick(node, location, diffEditors);
             cm.Tree.Tag = cm;
-            cm.RevertAll += OnDiffRevertAll;
-            cm.ApplyAll += OnDiffApplyAll;
+            cm.RevertAll += () => OnDiffRevertAll(rootNode);
+            cm.ApplyAll += () =>
+            {
+                CleanupDiffEditors(diffEditors);
+                OnDiffApplyAll();
+            };
             cm.Closed += () => CleanupDiffEditors(diffEditors);
             cm.Show(target, targetLocation);
         }
@@ -791,7 +803,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             }
         }
 
-        private void OnDiffNodeRightClick(TreeNode node, Float2 location)
+        private void OnDiffNodeRightClick(TreeNode node, Float2 location, List<CustomEditor> diffEditors)
         {
             var diffMenu = (PrefabDiffContextMenu)node.ParentTree.Tag;
             if (!(node.Tag is PrefabOverrideEntry entry) || entry.Kind == PrefabOverrideKind.Group)
@@ -806,11 +818,12 @@ namespace FlaxEditor.CustomEditors.Dedicated
             menu.AddSeparator();
             menu.AddButton("Revert All", () =>
             {
-                OnDiffRevertAll();
+                OnDiffRevertAll(diffMenu.Tree.GetChild(0) as TreeNode);
                 diffMenu.Hide();
             });
             menu.AddButton("Apply All", () =>
             {
+                CleanupDiffEditors(diffEditors);
                 OnDiffApplyAll();
                 diffMenu.Hide();
             });
@@ -831,9 +844,55 @@ namespace FlaxEditor.CustomEditors.Dedicated
             diffMenu.Hide();
         }
 
-        private void OnDiffRevertAll()
+        private void OnDiffRevertAll(TreeNode rootNode)
         {
-            RevertToReferenceValue();
+            var removed = new List<PrefabOverrideEntry>();
+            var modified = new List<PrefabOverrideEntry>();
+            var added = new List<PrefabOverrideEntry>();
+            CollectOverrideEntries(rootNode, removed, modified, added);
+
+            foreach (var entry in removed)
+                OnDiffRevert(entry);
+            foreach (var entry in modified)
+            {
+                entry.Editor.RefreshInternal();
+                OnDiffRevert(entry);
+            }
+            foreach (var entry in added)
+                OnDiffRevert(entry);
+
+            FlaxEngine.Scripting.FlushRemovedObjects();
+            Presenter.OnModified();
+            Presenter.BuildLayoutOnUpdate();
+        }
+
+        private static void CollectOverrideEntries(TreeNode node, List<PrefabOverrideEntry> removed, List<PrefabOverrideEntry> modified, List<PrefabOverrideEntry> added)
+        {
+            if (node == null)
+                return;
+            if (node.Tag is PrefabOverrideEntry entry)
+            {
+                switch (entry.Kind)
+                {
+                case PrefabOverrideKind.Removed:
+                    removed.Add(entry);
+                    break;
+                case PrefabOverrideKind.Modified:
+                    modified.Add(entry);
+                    break;
+                case PrefabOverrideKind.Added:
+                    added.Add(entry);
+                    if (entry.Current is Actor)
+                        return;
+                    break;
+                }
+            }
+
+            for (int i = 0; i < node.ChildrenCount; i++)
+            {
+                if (node.GetChild(i) is TreeNode child)
+                    CollectOverrideEntries(child, removed, modified, added);
+            }
         }
 
         private void OnDiffApplyAll()
@@ -884,13 +943,23 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 Editor.Log("Reverting removed actor changes to prefab (adding it)");
 
                 var parentActor = removedActor.ParentActor;
-                var restored = parentActor.AddChild(removedActor.PrefabObject.GetType());
-                var prefabId = parentActor.PrefabID;
-                var prefabObjectId = removedActor.PrefabObject.PrefabObjectID;
-                string data = JsonSerializer.Serialize(removedActor.PrefabObject);
-                JsonSerializer.Deserialize(restored, data);
-                Presenter.Owner.SceneContext.Spawn(restored, parentActor, removedActor.OrderInParent);
-                Actor.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(restored), ref prefabId, ref prefabObjectId);
+                if (!parentActor)
+                {
+                    Editor.LogWarning("Cannot restore removed prefab actor because its instance parent is missing.");
+                    return false;
+                }
+                var restored = RestoreRemovedPrefabActor(parentActor, removedActor.PrefabObject, removedActor.OrderInParent);
+                if (!restored)
+                    return false;
+
+                var node = SceneGraphFactory.FindNode(restored.ID);
+                if (node == null)
+                {
+                    Editor.LogWarning("Cannot restore removed prefab actor because its scene graph node is missing.");
+                    return false;
+                }
+                var nodes = node.BuildAllNodes().Where(x => x.CanDelete).ToList();
+                Presenter.Undo?.AddAction(new DeleteActorsAction(nodes, true));
                 return true;
             }
 
@@ -911,10 +980,22 @@ namespace FlaxEditor.CustomEditors.Dedicated
             {
                 Editor.Log("Reverting added actor changes to prefab (removing it)");
 
-                // TODO: Keep previous selection.
-                var context = Presenter.Owner.SceneContext;
-                context.Select(SceneGraph.SceneGraphFactory.FindNode(a.ID));
-                context.DeleteSelection();
+                var node = SceneGraphFactory.FindNode(a.ID);
+                if (node == null)
+                    return false;
+                var nodes = node.BuildAllNodes().Where(x => x.CanDelete).ToList();
+                var context = node.Root?.SceneContext;
+                if (context != null)
+                {
+                    for (int i = 0; i < nodes.Count; i++)
+                    {
+                        if (context.Selection.Contains(nodes[i]))
+                            context.Deselect(nodes[i]);
+                    }
+                }
+                var action = new DeleteActorsAction(nodes);
+                action.Do();
+                Presenter.Undo?.AddAction(action);
 
                 return true;
             }
@@ -937,6 +1018,124 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 editor.RefreshInternal();
             }
             return true;
+        }
+
+        private static Actor RestoreRemovedPrefabActor(Actor parentActor, Actor prefabObject, int orderInParent)
+        {
+            if (!parentActor || !prefabObject)
+                return null;
+
+            var sourceActors = new List<Actor>();
+            CollectActorHierarchy(prefabObject, sourceActors);
+            var data = Actor.ToBytes(sourceActors.ToArray());
+            if (data == null || data.Length == 0)
+            {
+                Editor.LogWarning("Cannot restore removed prefab actor because its hierarchy could not be serialized.");
+                return null;
+            }
+            var serializedIds = Actor.TryGetSerializedObjectsIds(data);
+            if (serializedIds == null)
+            {
+                Editor.LogWarning("Cannot restore removed prefab actor because its hierarchy could not be serialized.");
+                return null;
+            }
+
+            var idsMapping = new Dictionary<Guid, Guid>(serializedIds.Length);
+            for (int i = 0; i < serializedIds.Length; i++)
+                idsMapping[serializedIds[i]] = Guid.NewGuid();
+            AddExistingPrefabObjectMappings(prefabObject, parentActor, idsMapping);
+
+            var restoredActors = Actor.FromBytes(data, idsMapping);
+            if (restoredActors == null)
+            {
+                Editor.LogWarning("Cannot restore removed prefab actor because its hierarchy could not be deserialized.");
+                return null;
+            }
+
+            var restoredId = idsMapping[prefabObject.ID];
+            var restored = FlaxEngine.Object.Find<Actor>(ref restoredId);
+            if (!restored)
+                return null;
+            restored.SetParent(parentActor, false);
+            restored.OrderInParent = orderInParent;
+            LinkRestoredPrefabHierarchy(prefabObject, idsMapping);
+            Editor.Instance.Scene.MarkSceneEdited(restored.Scene);
+            return restored;
+        }
+
+        private static void CollectActorHierarchy(Actor actor, List<Actor> result)
+        {
+            result.Add(actor);
+            for (int i = 0; i < actor.ChildrenCount; i++)
+                CollectActorHierarchy(actor.GetChild(i), result);
+        }
+
+        private static void CollectSceneObjectHierarchy(Actor actor, List<SceneObject> result)
+        {
+            result.Add(actor);
+            for (int i = 0; i < actor.ScriptsCount; i++)
+            {
+                var script = actor.GetScript(i);
+                if (script)
+                    result.Add(script);
+            }
+            for (int i = 0; i < actor.ChildrenCount; i++)
+                CollectSceneObjectHierarchy(actor.GetChild(i), result);
+        }
+
+        private static void AddExistingPrefabObjectMappings(Actor sourceActor, Actor targetActor, Dictionary<Guid, Guid> idsMapping)
+        {
+            var sourceRoot = sourceActor.IsPrefabRoot ? sourceActor : sourceActor.GetPrefabRoot();
+            var targetRoot = targetActor.IsPrefabRoot ? targetActor : targetActor.GetPrefabRoot();
+            if (!sourceRoot || !targetRoot)
+                return;
+
+            var sourceObjects = new List<SceneObject>();
+            var targetObjects = new List<SceneObject>();
+            CollectSceneObjectHierarchy(sourceRoot, sourceObjects);
+            CollectSceneObjectHierarchy(targetRoot, targetObjects);
+            var targetObjectsByPrefabId = new Dictionary<Guid, SceneObject>(targetObjects.Count);
+            for (int i = 0; i < targetObjects.Count; i++)
+            {
+                var targetObject = targetObjects[i];
+                if (targetObject.PrefabObjectID != Guid.Empty)
+                    targetObjectsByPrefabId[targetObject.PrefabObjectID] = targetObject;
+            }
+
+            for (int i = 0; i < sourceObjects.Count; i++)
+            {
+                var sourceObject = sourceObjects[i];
+                if (idsMapping.ContainsKey(sourceObject.ID) || !sourceObject.HasPrefabLink)
+                    continue;
+                if (CustomEditor.TryMapPrefabObjectId(sourceObject.PrefabID, sourceObject.PrefabObjectID, targetRoot.PrefabID, out var targetObjectId) &&
+                    targetObjectsByPrefabId.TryGetValue(targetObjectId, out var targetObject))
+                    idsMapping[sourceObject.ID] = targetObject.ID;
+            }
+        }
+
+        private static void LinkRestoredPrefabHierarchy(Actor sourceActor, Dictionary<Guid, Guid> idsMapping)
+        {
+            LinkRestoredPrefabObject(sourceActor, idsMapping);
+            for (int i = 0; i < sourceActor.ScriptsCount; i++)
+            {
+                var script = sourceActor.GetScript(i);
+                if (script)
+                    LinkRestoredPrefabObject(script, idsMapping);
+            }
+            for (int i = 0; i < sourceActor.ChildrenCount; i++)
+                LinkRestoredPrefabHierarchy(sourceActor.GetChild(i), idsMapping);
+        }
+
+        private static void LinkRestoredPrefabObject(SceneObject sourceObject, Dictionary<Guid, Guid> idsMapping)
+        {
+            if (!idsMapping.TryGetValue(sourceObject.ID, out var restoredId))
+                return;
+            var restored = FlaxEngine.Object.Find<SceneObject>(ref restoredId);
+            if (!restored)
+                return;
+            var prefabId = sourceObject.PrefabID;
+            var prefabObjectId = sourceObject.PrefabObjectID;
+            SceneObject.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(restored), ref prefabId, ref prefabObjectId);
         }
 
         private static Script RestoreRemovedPrefabScript(Actor actor, Script prefabObject)
