@@ -417,6 +417,34 @@ namespace FlaxEditor.Windows
             }
         }
 
+        internal bool OpenTab(string tabName)
+        {
+            if (string.IsNullOrWhiteSpace(tabName) || _tabs == null)
+                return false;
+
+            for (int i = 0; i < _tabs.ChildrenCount; i++)
+            {
+                if (_tabs.GetChild(i) is Tab tab && tab.Text.Equals(tabName, StringComparison.OrdinalIgnoreCase))
+                {
+                    FocusOrShow();
+                    _tabs.SelectedTab = tab;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        internal void GetTabNames(List<string> result)
+        {
+            if (_tabs == null)
+                return;
+            for (int i = 0; i < _tabs.ChildrenCount; i++)
+            {
+                if (_tabs.GetChild(i) is Tab tab)
+                    result.Add(tab.Text);
+            }
+        }
+
         private CustomEditorPresenter GetTabPresenter(Tab tab)
         {
             if (tab == null)

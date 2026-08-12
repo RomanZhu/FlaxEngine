@@ -731,11 +731,11 @@ namespace FlaxEditor.Options
         public InputBinding EditorWindow = new InputBinding(KeyboardKeys.Alpha1, KeyboardKeys.Control);
 
         [DefaultValue(typeof(InputBinding), "None")]
-        [EditorDisplay("Windows"), EditorOrder(3070)]
+        [HideInEditor]
         public InputBinding DebugLogWindow = new InputBinding(KeyboardKeys.None);
 
-        [DefaultValue(typeof(InputBinding), "None")]
-        [EditorDisplay("Windows"), EditorOrder(3080)]
+        [DefaultValue(typeof(InputBinding), "Ctrl+Shift+C")]
+        [EditorDisplay("Windows", "Editor Console"), EditorOrder(3080)]
         public InputBinding OutputLogWindow = new InputBinding(KeyboardKeys.C, KeyboardKeys.Control, KeyboardKeys.Shift);
 
         [DefaultValue(typeof(InputBinding), "None")]

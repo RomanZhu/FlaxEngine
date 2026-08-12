@@ -85,12 +85,12 @@ namespace FlaxEditor.Windows
             InputActions.Add(options => options.DebugLogWindow, () => 
             { 
                 if (InputOptions.WindowShortcutsAvaliable)
-                    Editor.Windows.DebugLogWin.FocusOrShow();
+                    Editor.Windows.EditorConsoleWin.FocusOrShow();
             });
             InputActions.Add(options => options.OutputLogWindow, () => 
             { 
                 if (InputOptions.WindowShortcutsAvaliable)
-                    Editor.Windows.OutputLogWin.FocusOrShow();
+                    Editor.Windows.EditorConsoleWin.FocusOrShow();
             });
             InputActions.Add(options => options.GraphicsQualityWindow, () => 
             { 

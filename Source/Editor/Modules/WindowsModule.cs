@@ -197,14 +197,21 @@ namespace FlaxEditor.Modules
         public SceneTreeWindow SceneWin;
 
         /// <summary>
-        /// The debug log window.
+        /// The editor console window.
         /// </summary>
-        public DebugLogWindow DebugLogWin;
+        public EditorConsoleWindow EditorConsoleWin;
 
         /// <summary>
-        /// The output log window.
+        /// Legacy alias for the editor console window.
         /// </summary>
-        public OutputLogWindow OutputLogWin;
+        [Obsolete("Use EditorConsoleWin instead.")]
+        public EditorConsoleWindow DebugLogWin => EditorConsoleWin;
+
+        /// <summary>
+        /// Legacy alias for the editor console window.
+        /// </summary>
+        [Obsolete("Use EditorConsoleWin instead.")]
+        public EditorConsoleWindow OutputLogWin => EditorConsoleWin;
 
         /// <summary>
         /// The toolbox window.
@@ -410,6 +417,7 @@ namespace FlaxEditor.Modules
 
             XmlDocument doc = new XmlDocument();
             var masterPanel = Editor.UI.MasterPanel;
+            var restoredWindows = new HashSet<EditorWindow>();
 
             try
             {
@@ -444,7 +452,7 @@ namespace FlaxEditor.Modules
                     var masterPanelNode = root["MasterPanel"];
                     if (masterPanelNode != null)
                     {
-                        LoadPanel(masterPanelNode, masterPanel);
+                        LoadPanel(masterPanelNode, masterPanel, restoredWindows);
                     }
 
                     // Load all floating windows structure
@@ -466,7 +474,7 @@ namespace FlaxEditor.Modules
                             LoadWindow(panel.Window.Window, ref bounds, isMaximized, isMinimized);
 
                             // Load structure
-                            LoadPanel(child, panel);
+                            LoadPanel(child, panel, restoredWindows);
 
                             // Check if no child windows loaded (due to file errors or loading problems)
                             if (panel.TabsCount == 0 && panel.ChildPanelsCount == 0)
@@ -558,7 +566,7 @@ namespace FlaxEditor.Modules
             }
         }
 
-        private void LoadPanel(XmlElement node, DockPanel panel)
+        private void LoadPanel(XmlElement node, DockPanel panel, HashSet<EditorWindow> restoredWindows)
         {
             int selectedTab = int.Parse(node.GetAttribute("SelectedTab"), CultureInfo.InvariantCulture);
 
@@ -572,8 +580,13 @@ namespace FlaxEditor.Modules
                         continue;
 
                     var typename = child.GetAttribute("Typename");
+                    if (string.Equals(typename, "::FlaxEditor.Windows.DebugLogWindow", StringComparison.OrdinalIgnoreCase) &&
+                        node.OwnerDocument?.SelectSingleNode("//*[@Typename='::FlaxEditor.Windows.OutputLogWindow']") != null)
+                    {
+                        continue;
+                    }
                     var window = GetWindow(typename);
-                    if (window != null)
+                    if (window != null && restoredWindows.Add(window))
                     {
                         if (child.SelectSingleNode("Data") is XmlElement data)
                         {
@@ -603,7 +616,7 @@ namespace FlaxEditor.Modules
                     float splitterValue = float.Parse(child.GetAttribute("SplitterValue"), CultureInfo.InvariantCulture);
                     var p = panel.CreateChildPanel(state, splitterValue);
 
-                    LoadPanel(child, p);
+                    LoadPanel(child, p, restoredWindows);
 
                     // Check if panel has no docked window (due to loading problems or sth)
                     if (p.TabsCount == 0 && p.ChildPanelsCount == 0)
@@ -855,6 +868,12 @@ namespace FlaxEditor.Modules
         /// <returns>The window or null if failed.</returns>
         private EditorWindow GetWindow(string typename)
         {
+            if (string.Equals(typename, "::FlaxEditor.Windows.DebugLogWindow", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(typename, "::FlaxEditor.Windows.OutputLogWindow", StringComparison.OrdinalIgnoreCase))
+            {
+                return EditorConsoleWin;
+            }
+
             // Try use already opened window
             for (int i = 0; i < Windows.Count; i++)
             {
@@ -938,8 +957,7 @@ namespace FlaxEditor.Modules
             GameWin = new GameWindow(Editor);
             PropertiesWin = new PropertiesWindow(Editor);
             SceneWin = new SceneTreeWindow(Editor);
-            DebugLogWin = new DebugLogWindow(Editor);
-            OutputLogWin = new OutputLogWindow(Editor);
+            EditorConsoleWin = new EditorConsoleWindow(Editor);
             ToolboxWin = new ToolboxWindow(Editor);
             GraphicsQualityWin = new GraphicsQualityWindow(Editor);
             GameCookerWin = new GameCookerWindow(Editor);
@@ -1513,8 +1531,7 @@ namespace FlaxEditor.Modules
                    ReferenceEquals(window, GameWin) ||
                    ReferenceEquals(window, PropertiesWin) ||
                    ReferenceEquals(window, SceneWin) ||
-                   ReferenceEquals(window, DebugLogWin) ||
-                   ReferenceEquals(window, OutputLogWin) ||
+                   ReferenceEquals(window, EditorConsoleWin) ||
                    ReferenceEquals(window, ToolboxWin) ||
                    ReferenceEquals(window, GraphicsQualityWin) ||
                    ReferenceEquals(window, GameCookerWin) ||
