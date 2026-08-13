@@ -96,7 +96,17 @@ float CalculateSubsurfaceOcclusion(float opacity, float sceneDepth, float shadow
 float PostProcessShadow(ShadowData lightShadow, float shadow)
 {
     // Apply shadow fade and sharpness
-    shadow = saturate((shadow - 0.51f) * lightShadow.Sharpness + 0.5f);
+    if (lightShadow.Sharpness < 1.0f)
+    {
+        // Pull only fractional PCF coverage toward the midpoint. The edge mask is
+        // zero at exact 0 and 1, preserving the umbra and fully lit regions.
+        float edgeMask = 4.0f * shadow * (1.0f - shadow);
+        shadow = lerp(shadow, 0.5f, (1.0f - lightShadow.Sharpness) * edgeMask);
+    }
+    else
+    {
+        shadow = saturate((shadow - 0.51f) * lightShadow.Sharpness + 0.5f);
+    }
     shadow = lerp(1.0f, shadow, lightShadow.Fade);
     return shadow;
 }

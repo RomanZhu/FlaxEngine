@@ -1909,6 +1909,11 @@ API_ENUM(Attributes="Flags") enum class AntiAliasingSettingsOverride : int32
     TAA_MotionBlending = 1 << 4,
 
     /// <summary>
+    /// Overrides <see cref="AntiAliasingSettings.TAA_ReactiveColorRejection"/> property.
+    /// </summary>
+    TAA_ReactiveColorRejection = 1 << 9,
+
+    /// <summary>
     /// Overrides <see cref="AntiAliasingSettings.CAS_SharpeningAmount"/> property.
     /// </summary>
     CAS_SharpeningAmount = 1 << 5,
@@ -1931,7 +1936,7 @@ API_ENUM(Attributes="Flags") enum class AntiAliasingSettingsOverride : int32
     /// <summary>
     /// All properties.
     /// </summary>
-    All = Mode | TAA_JitterSpread | TAA_Sharpness | TAA_StationaryBlending | TAA_MotionBlending | CAS_SharpeningAmount | CAS_EdgeSharpening | CAS_MinEdgeThreshold | CAS_OverBlurLimit,
+    All = Mode | TAA_JitterSpread | TAA_Sharpness | TAA_StationaryBlending | TAA_MotionBlending | TAA_ReactiveColorRejection | CAS_SharpeningAmount | CAS_EdgeSharpening | CAS_MinEdgeThreshold | CAS_OverBlurLimit,
 };
 
 /// <summary>
@@ -1978,6 +1983,12 @@ API_STRUCT() struct FLAXENGINE_API AntiAliasingSettings : ISerializable
     /// </summary>
     API_FIELD(Attributes="Limit(0, 0.99f, 0.001f), EditorOrder(4), PostProcessSetting((int)AntiAliasingSettingsOverride.TAA_MotionBlending), EditorDisplay(null, \"TAA Motion Blending\"), VisibleIf(nameof(ShowTAASettings))")
     float TAA_MotionBlending = 0.85f;
+
+    /// <summary>
+    /// Reduces temporal history blending when the current and historical colors have substantially different chromaticity. Increase this to prevent saturated dynamic lighting, such as colored shadow penumbras, from leaving trails. Set to 0 to disable reactive color rejection.
+    /// </summary>
+    API_FIELD(Attributes="Limit(0, 1.0f, 0.001f), EditorOrder(5), PostProcessSetting((int)AntiAliasingSettingsOverride.TAA_ReactiveColorRejection), EditorDisplay(null, \"TAA Reactive Color Rejection\"), VisibleIf(nameof(ShowTAASettings))")
+    float TAA_ReactiveColorRejection = 0.0f;
 
     /// <summary>
     /// The sharpening strength for the Contrast Adaptive Sharpening (CAS) pass. Ignored when using TAA that contains own contrast filter.

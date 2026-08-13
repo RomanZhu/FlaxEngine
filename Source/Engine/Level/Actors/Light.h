@@ -136,9 +136,9 @@ public:
     float ShadowsFadeDistance = 500.0f;
 
     /// <summary>
-    /// TheShadows edges sharpness.
+    /// The shadows edge contrast. Values below 1 soften filtered transitions while preserving fully lit and fully shadowed pixels.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(70), EditorDisplay(\"Shadow\", \"Sharpness\"), Limit(1.0f, 10.0f, 0.001f)")
+    API_FIELD(Attributes="EditorOrder(70), EditorDisplay(\"Shadow\", \"Sharpness\"), Limit(0.0f, 10.0f, 0.001f)")
     float ShadowsSharpness = 1.0f;
 
     /// <summary>

@@ -74,6 +74,11 @@ struct RenderDirectionalLightData : RenderLightData
     float FarShadowsDistance;
     float FarShadowsTransitionDistance;
 
+    Float3 ShadowsPenumbraColor;
+    float ShadowsPenumbraColorStrength;
+    Float2 ShadowsPenumbraColorOffset;
+    bool ShadowsPenumbraColorInsideShadow;
+
     PartitionMode PartitionMode;
     FarShadowTransitionMode FarShadowsTransitionMode;
     int32 CascadeCount;

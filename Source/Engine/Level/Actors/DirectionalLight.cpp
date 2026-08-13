@@ -51,6 +51,10 @@ void DirectionalLight::Draw(RenderContext& renderContext)
         data.FarShadowsDistance = FarShadowsDistance;
         data.FarShadowsTransitionMode = FarShadowsTransitionMode;
         data.FarShadowsTransitionDistance = FarShadowsTransitionDistance;
+        data.ShadowsPenumbraColor = ShadowsPenumbraColor.ToFloat3();
+        data.ShadowsPenumbraColorStrength = ShadowsPenumbraColorStrength * ShadowsPenumbraColor.A;
+        data.ShadowsPenumbraColorOffset = ShadowsPenumbraColorOffset;
+        data.ShadowsPenumbraColorInsideShadow = ShadowsPenumbraColorInsideShadow;
         data.PartitionMode = PartitionMode;
         data.ContactShadowsLength = ContactShadowsLength;
         data.StaticFlags = GetStaticFlags();
@@ -75,6 +79,10 @@ void DirectionalLight::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE(FarShadowsDistance);
     SERIALIZE(FarShadowsTransitionMode);
     SERIALIZE(FarShadowsTransitionDistance);
+    SERIALIZE(ShadowsPenumbraColor);
+    SERIALIZE(ShadowsPenumbraColorStrength);
+    SERIALIZE(ShadowsPenumbraColorOffset);
+    SERIALIZE(ShadowsPenumbraColorInsideShadow);
     SERIALIZE(PartitionMode);
 }
 
@@ -91,6 +99,10 @@ void DirectionalLight::Deserialize(DeserializeStream& stream, ISerializeModifier
     DESERIALIZE(FarShadowsDistance);
     DESERIALIZE(FarShadowsTransitionMode);
     DESERIALIZE(FarShadowsTransitionDistance);
+    DESERIALIZE(ShadowsPenumbraColor);
+    DESERIALIZE(ShadowsPenumbraColorStrength);
+    DESERIALIZE(ShadowsPenumbraColorOffset);
+    DESERIALIZE(ShadowsPenumbraColorInsideShadow);
     DESERIALIZE(PartitionMode);
 }
 

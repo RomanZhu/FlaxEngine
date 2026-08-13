@@ -17,7 +17,7 @@ GPU_CB_STRUCT(Data {
     float Sharpness;
     float StationaryBlending;
     float MotionBlending;
-    float Dummy0;
+    float ReactiveColorRejection;
     Float3 QuantizationError;
     float Dummy1;
     ShaderGBufferData GBuffer;
@@ -124,6 +124,7 @@ void TAA::Render(const RenderContext& renderContext, GPUTexture* input, GPUTextu
     data.Sharpness = settings.TAA_Sharpness;
     data.StationaryBlending = settings.TAA_StationaryBlending * blendStrength;
     data.MotionBlending = settings.TAA_MotionBlending * blendStrength;
+    data.ReactiveColorRejection = settings.TAA_ReactiveColorRejection;
     data.QuantizationError = RenderTools::GetColorQuantizationError(tempDesc.Format);
     GBufferPass::SetInputs(renderContext.View, data.GBuffer);
     const auto cb = _shader->GetShader()->GetCB(0);

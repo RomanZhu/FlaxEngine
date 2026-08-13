@@ -68,6 +68,40 @@ void PS_Directional(Quad_VS2PS input, out float4 output : SV_Target0)
 
 	// Calculate lighting
 	output = GetLighting(gBufferData.ViewPos, Light, gBuffer, shadowMask, false, false);
+
+	// Tint only the fractional visibility produced by the shadow filter. The band
+	// reaches zero in both full shadow and full light, so it cannot outlive the shadow.
+	BRANCH
+	if (Light.ShadowsBufferAddress != 0 && GetDirectionalLightPenumbraColorStrength(Light) > 0.0f)
+	{
+		float penumbraVisibility = saturate(shadowMask.r);
+		float2 penumbraOffset = GetDirectionalLightPenumbraColorOffset(Light);
+		BRANCH
+		if (dot(abs(penumbraOffset), float2(1.0f, 1.0f)) > 0.001f)
+		{
+			float2 shadowMaskSize;
+			Shadow.GetDimensions(shadowMaskSize.x, shadowMaskSize.y);
+			float2 penumbraUV = saturate(input.TexCoord - penumbraOffset / shadowMaskSize);
+			penumbraVisibility = saturate(SAMPLE_RT(Shadow, penumbraUV).r);
+		}
+		float filteredPenumbra = 4.0f * penumbraVisibility * (1.0f - penumbraVisibility);
+		float innerPenumbra = saturate(filteredPenumbra * 2.0f * (1.0f - penumbraVisibility));
+		float outerPenumbra = saturate(filteredPenumbra * 2.0f * penumbraVisibility);
+		bool penumbraInsideShadow = GetDirectionalLightPenumbraColorInsideShadow(Light);
+		float penumbra = penumbraInsideShadow ? innerPenumbra : outerPenumbra;
+		float3 penumbraColor = GetDirectionalLightPenumbraColor(Light);
+		float3 penumbraHue = penumbraColor / max(Luminance(penumbraColor), 1e-4f);
+		float penumbraMax = max(penumbraColor.r, max(penumbraColor.g, penumbraColor.b));
+		float penumbraMin = min(penumbraColor.r, min(penumbraColor.g, penumbraColor.b));
+		float penumbraChroma = saturate((penumbraMax - penumbraMin) / max(penumbraMax, 1e-4f) * 4.0f);
+		float penumbraAmount = penumbra * penumbraChroma * saturate(GetDirectionalLightPenumbraColorStrength(Light));
+		BRANCH
+		if (penumbraAmount > 0.0f)
+		{
+			float3 penumbraTarget = penumbraHue * Luminance(output.rgb);
+			output.rgb = lerp(output.rgb, penumbraTarget, penumbraAmount);
+		}
+	}
 }
 
 // Pixel shader for point light rendering

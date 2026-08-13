@@ -66,6 +66,30 @@ public:
     API_FIELD(Attributes="EditorOrder(72), DefaultValue(2000.0f), VisibleIf(nameof(ShowFarShadowsDistance)), Limit(0, 1000000), EditorDisplay(\"Shadow\", \"Far Shadow Transition Distance\")")
     float FarShadowsTransitionDistance = 2000.0f;
 
+    /// <summary>
+    /// The color tint applied to the filtered transition between fully lit and fully shadowed pixels. White preserves the original light color. This affects deferred shadow-map lighting only.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(110), DefaultValue(typeof(Color), \"0.42,0.36,1,1\"), EditorDisplay(\"Shadow\", \"Penumbra Color\")")
+    ::Color ShadowsPenumbraColor = ::Color(0.42f, 0.36f, 1.0f, 1.0f);
+
+    /// <summary>
+    /// The strength of the shadow penumbra color tint. Set to 0 to disable the effect. This colors the existing filtered shadow transition and does not change its width.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(111), DefaultValue(0.0f), Limit(0.0f, 1.0f, 0.01f), EditorDisplay(\"Shadow\", \"Penumbra Color Strength\")")
+    float ShadowsPenumbraColorStrength = 0.0f;
+
+    /// <summary>
+    /// Screen-space offset of the colored penumbra mask in pixels. Positive X moves it right and positive Y moves it down. This does not move or soften the actual shadow.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(112), Limit(-8.0f, 8.0f, 0.1f), EditorDisplay(\"Shadow\", \"Penumbra Color Offset (Pixels)\")")
+    Float2 ShadowsPenumbraColorOffset = Float2::Zero;
+
+    /// <summary>
+    /// Places the colored fringe inside the shadow rather than on the illuminated side of the shadow edge.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(113), DefaultValue(true), EditorDisplay(\"Shadow\", \"Penumbra Color Inside Shadow\")")
+    bool ShadowsPenumbraColorInsideShadow = true;
+
 public:
     // [LightWithShadow]
     void Draw(RenderContext& renderContext) override;

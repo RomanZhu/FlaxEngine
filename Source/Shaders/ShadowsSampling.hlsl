@@ -221,13 +221,14 @@ ShadowSample SampleDirectionalLightShadowCascade(LightData light, Buffer<float4>
     float4 shadowPosition;
     float2 shadowMapUV = GetLightShadowAtlasUV(shadow, shadowTile, samplePosition, shadowPosition);
 
-    // Sample shadow map
+    // Sample the existing optimized PCF kernel.
     result.SurfaceShadow = SampleShadowMapOptimizedPCF(shadowMap, shadowMapUV, shadowPosition.z);
 
     // Increase the sharpness for higher cascades to match the filter radius
     // Keep the far cascade soft; its job is to preserve broad silhouettes, not fine detail.
     const float SharpnessScale[MaxNumCascades] = { 1.0f, 1.5f, 3.0f, 3.5f, 1.0f };
-    shadow.Sharpness *= SharpnessScale[cascadeIndex];
+    if (shadow.Sharpness >= 1.0f)
+        shadow.Sharpness *= SharpnessScale[cascadeIndex];
 
     result.TransmissionShadow = 1;
 #if defined(USE_GBUFFER_CUSTOM_DATA)

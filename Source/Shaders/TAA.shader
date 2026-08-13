@@ -14,7 +14,7 @@ float2 JitterInv;
 float Sharpness;
 float StationaryBlending;
 float MotionBlending;
-float Dummy0;
+float ReactiveColorRejection;
 float3 QuantizationError;
 float Dummy1;
 GBufferData GBuffer;
@@ -81,6 +81,15 @@ float4 PS(Quad_VS2PS input) : SV_Target0
 	// Calculate history blending factor
 	float motion = saturate(velocityLength * 1000.0f);
 	float blendfactor = lerp(StationaryBlending, MotionBlending, motion);
+
+	// Reject stale history for saturated lighting changes that have no matching
+	// surface motion vector (for example, a colored shadow edge moving away).
+	float currentColorSum = max(current.r + current.g + current.b, 1e-4f);
+	float historyColorSum = max(history.r + history.g + history.b, 1e-4f);
+	float3 currentChromaticity = current.rgb / currentColorSum;
+	float3 historyChromaticity = history.rgb / historyColorSum;
+	float chromaticityChange = saturate(length(currentChromaticity - historyChromaticity) * 2.0f);
+	blendfactor *= 1.0f - chromaticityChange * saturate(ReactiveColorRejection);
 
 	// Perform linear accumulation of the previous samples with a current one
 	float4 color = lerp(current, history, blendfactor);

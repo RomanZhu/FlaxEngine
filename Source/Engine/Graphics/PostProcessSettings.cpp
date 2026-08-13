@@ -203,6 +203,7 @@ void AntiAliasingSettings::BlendWith(AntiAliasingSettings& other, float weight)
     BLEND_FLOAT(TAA_Sharpness);
     BLEND_FLOAT(TAA_StationaryBlending);
     BLEND_FLOAT(TAA_MotionBlending);
+    BLEND_FLOAT(TAA_ReactiveColorRejection);
     BLEND_FLOAT(CAS_SharpeningAmount);
     BLEND_FLOAT(CAS_EdgeSharpening);
     BLEND_FLOAT(CAS_MinEdgeThreshold);

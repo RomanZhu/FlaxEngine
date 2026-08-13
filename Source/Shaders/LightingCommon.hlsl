@@ -43,6 +43,29 @@ struct LightData
     float Dummy0;
 };
 
+// Directional lights don't use Position, FalloffExponent, InverseSquared,
+// Dummy0, or SpotAngles.y, so
+// those fields carry the penumbra options without changing the buffer layout.
+float3 GetDirectionalLightPenumbraColor(LightData lightData)
+{
+    return lightData.Position;
+}
+
+float GetDirectionalLightPenumbraColorStrength(LightData lightData)
+{
+    return lightData.Dummy0;
+}
+
+float2 GetDirectionalLightPenumbraColorOffset(LightData lightData)
+{
+    return float2(lightData.FalloffExponent, lightData.InverseSquared);
+}
+
+bool GetDirectionalLightPenumbraColorInsideShadow(LightData lightData)
+{
+    return lightData.SpotAngles.y > 0.5f;
+}
+
 // Structure that contains information about shadow sampling result
 struct ShadowSample
 {
