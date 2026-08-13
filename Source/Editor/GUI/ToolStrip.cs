@@ -666,13 +666,26 @@ namespace FlaxEditor.GUI
                 return;
             PerformLayout();
             float maxScroll = Mathf.Max(0.0f, _horizontalContentWidth - Width);
-            _horizontalScrollOffset = anchor switch
+            float scrollOffset = anchor switch
             {
-                ToolStripAnchor.Center => maxScroll * 0.5f,
+                ToolStripAnchor.Center => GetCenterAnchorScrollOffset(),
                 ToolStripAnchor.Right => maxScroll,
                 _ => 0.0f,
             };
+            _horizontalScrollOffset = Mathf.Clamp(scrollOffset, 0.0f, maxScroll);
             PerformLayout();
+        }
+
+        private float GetCenterAnchorScrollOffset()
+        {
+            float leftWidth = MeasureGroup(_anchorItems[(int)ToolStripAnchor.Left]);
+            float centerWidth = MeasureGroup(_anchorItems[(int)ToolStripAnchor.Center]);
+            if (centerWidth <= 0.0f)
+                return (_horizontalContentWidth - Width) * 0.5f;
+            float centerX = _itemsMargin.Left + leftWidth;
+            if (leftWidth > 0.0f)
+                centerX += _itemsMargin.Width;
+            return centerX + centerWidth * 0.5f - Width * 0.5f;
         }
 
         private void RemoveFromPlacement(Control control)
@@ -806,25 +819,22 @@ namespace FlaxEditor.GUI
             if ((leftWidth > 0.0f || centerWidth > 0.0f) && rightWidth > 0.0f)
                 packedWidth += zoneSpacing;
             packedWidth += _itemsMargin.Width;
-            // Center remains geometrically centered in the virtual row, while the edge zones
-            // remain flush with their respective virtual edges. The extra width becomes the
-            // scrollable overflow instead of collapsing the three zones into one sequence.
-            float centeredWidth = packedWidth;
-            if (centerWidth > 0.0f)
-            {
-                float flankWidth = Mathf.Max(leftWidth, rightWidth);
-                centeredWidth = Mathf.Max(centeredWidth, centerWidth + flankWidth * 2.0f +
-                                                          (flankWidth > 0.0f ? zoneSpacing * 2.0f : 0.0f) + _itemsMargin.Width);
-            }
-            _horizontalContentWidth = Mathf.Max(Width, Mathf.Max(packedWidth, centeredWidth));
+            _horizontalContentWidth = Mathf.Max(Width, packedWidth);
             float maxScroll = Mathf.Max(0.0f, _horizontalContentWidth - Width);
             _horizontalScrollOffset = Mathf.Clamp(_horizontalScrollOffset, 0.0f, maxScroll);
 
             if (maxScroll > 0.0f)
             {
+                // Once the anchored zones no longer fit, collapse the flexible space between
+                // them and scroll only the actual content. Keeping a virtual centered row here
+                // leaves a large empty span between the center and right zones.
                 float scrolledLeftX = _itemsMargin.Left - _horizontalScrollOffset;
-                float scrolledCenterX = (_horizontalContentWidth - centerWidth) * 0.5f - _horizontalScrollOffset;
-                float scrolledRightX = _horizontalContentWidth - _itemsMargin.Right - rightWidth - _horizontalScrollOffset;
+                float scrolledCenterX = scrolledLeftX + leftWidth;
+                if (leftWidth > 0.0f && centerWidth > 0.0f)
+                    scrolledCenterX += zoneSpacing;
+                float scrolledRightX = scrolledCenterX + centerWidth;
+                if ((leftWidth > 0.0f || centerWidth > 0.0f) && rightWidth > 0.0f)
+                    scrolledRightX += zoneSpacing;
                 LayoutGroup(_anchorItems[(int)ToolStripAnchor.Left], scrolledLeftX, h);
                 LayoutGroup(_anchorItems[(int)ToolStripAnchor.Center], scrolledCenterX, h);
                 LayoutGroup(_anchorItems[(int)ToolStripAnchor.Right], scrolledRightX, h);
