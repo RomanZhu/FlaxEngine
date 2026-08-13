@@ -106,6 +106,7 @@ public:
     int32 ProbeRaysCount = 0;
     int32 ProbesCountTotal = 0;
     Int3 ProbeCounts = Int3::Zero;
+    Vector3 ViewOrigin = Vector3::Zero;
     GPUTexture* ProbesTrace = nullptr; // Probes ray tracing: (RGB: hit radiance, A: hit distance)
     GPUTexture* ProbesData = nullptr; // Probes data: (RGB: probe-space offset, A: state/data)
     GPUTexture* ProbesIrradiance = nullptr; // Probes irradiance (RGB: sRGB color)
@@ -296,6 +297,29 @@ bool DynamicDiffuseGlobalIlluminationPass::Get(const RenderBuffers* buffers, Bin
 
 bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderContext, GPUContext* context, DDGICustomBuffer& ddgiData)
 {
+    // Keep the persistent probe grid and its published previous-frame constants in the
+    // current camera-relative coordinate system before rendering dependencies. The Global
+    // Surface Atlas can sample the previous DDGI result for multi-bounce lighting, so letting
+    // it observe old DDGI coordinates with the new view origin causes a one-frame light flash.
+    if (ddgiData.CascadesCount != 0 && ddgiData.ViewOrigin != renderContext.View.Origin)
+    {
+        const Float3 originDelta = (Float3)(renderContext.View.Origin - ddgiData.ViewOrigin);
+        for (int32 cascadeIndex = 0; cascadeIndex < ddgiData.CascadesCount; cascadeIndex++)
+        {
+            ddgiData.Cascades[cascadeIndex].ProbesOrigin -= originDelta;
+            auto& probesOrigin = ddgiData.Result.Constants.ProbesOriginAndSpacing[cascadeIndex];
+            probesOrigin.X -= originDelta.X;
+            probesOrigin.Y -= originDelta.Y;
+            probesOrigin.Z -= originDelta.Z;
+            auto& blendOrigin = ddgiData.Result.Constants.BlendOrigin[cascadeIndex];
+            blendOrigin.X -= originDelta.X;
+            blendOrigin.Y -= originDelta.Y;
+            blendOrigin.Z -= originDelta.Z;
+        }
+        ddgiData.Result.Constants.ViewPos -= originDelta;
+    }
+    ddgiData.ViewOrigin = renderContext.View.Origin;
+
     // Render Global SDF and Global Surface Atlas for software raytracing
     GlobalSignDistanceFieldPass::BindingData bindingDataSDF;
     if (GlobalSignDistanceFieldPass::Instance()->Render(renderContext, context, bindingDataSDF))
@@ -378,8 +402,9 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
         //viewOrigin = Float3::Zero;
         blendOrigins[cascadeIndex] = viewOrigin;
         const float viewOriginSnapping = cascadeProbesSpacing;
-        viewOrigin = Float3::Floor(viewOrigin / viewOriginSnapping) * viewOriginSnapping;
-        viewOrigins[cascadeIndex] = viewOrigin;
+        const Vector3 viewOriginWorld = renderContext.View.Origin + (Vector3)viewOrigin;
+        const Vector3 viewOriginWorldSnapped = Vector3::Floor(viewOriginWorld / viewOriginSnapping) * viewOriginSnapping;
+        viewOrigins[cascadeIndex] = (Float3)(viewOriginWorldSnapped - renderContext.View.Origin);
     }
 
     // Init buffers

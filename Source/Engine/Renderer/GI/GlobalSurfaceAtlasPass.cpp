@@ -116,7 +116,7 @@ struct GlobalSurfaceAtlasObject
     uint64 LightingUpdateFrame; // Index of the frame to update lighting for this object (calculated when object gets dirty or overriden by dynamic lights)
     Actor* Actor;
     GlobalSurfaceAtlasTile* Tiles[6];
-    Float3 Position;
+    Vector3 Position;
     float Radius;
     mutable bool Dirty;
     bool UseVisibility; // TODO: merge into bit flags
@@ -165,7 +165,8 @@ public:
     Array<void*> DirtyObjectsBuffer;
     Vector4 CullingPosDistance;
     uint64 CurrentFrame;
-    Float3 ViewPosition;
+    Vector3 ViewPosition;
+    Vector3 ViewOrigin;
     float TileTexelsPerWorldUnit;
     float DistanceScalingStart;
     float DistanceScalingEnd;
@@ -291,14 +292,15 @@ public:
 
         // Setup data for rendering
         CurrentFrame = currentFrame;
-        ViewPosition = renderContext.View.Position;
+        ViewPosition = renderContext.View.WorldPosition;
+        ViewOrigin = renderContext.View.Origin;
         TileTexelsPerWorldUnit = 1.0f / METERS_TO_UNITS(0.1f); // Scales the tiles resolution
         DistanceScalingStart = METERS_TO_UNITS(20.0f); // Distance from camera at which the tiles resolution starts to be scaled down
         DistanceScalingEnd = METERS_TO_UNITS(50.0f); // Distance from camera at which the tiles resolution end to be scaled down
         DistanceScaling = 0.2f; // The scale for tiles at distanceScalingEnd and further away
         // TODO: add DetailsScale param to adjust quality of scene details in Global Surface Atlas
         MinObjectRadius = 20.0f; // Skip too small objects
-        CullingPosDistance = Vector4(renderContext.View.Position, distance);
+        CullingPosDistance = Vector4(renderContext.View.WorldPosition, distance);
         AsyncRenderContext = renderContext;
         AsyncRenderContext.View.Pass = DrawPass::GlobalSurfaceAtlas;
 
@@ -352,7 +354,7 @@ public:
             auto& object = Objects[newObject.ActorObject];
             object.Actor = newObject.Actor;
             object.LastFrameUsed = CurrentFrame;
-            object.Position = (Float3)newObject.ActorObjectBounds.Center;
+            object.Position = newObject.ActorObjectBounds.Center;
             object.Radius = (float)newObject.ActorObjectBounds.Radius;
             object.Dirty = true;
             object.UseVisibility = newObject.UseVisibility;
@@ -422,7 +424,8 @@ public:
 
             Matrix3x3 worldToLocalRotation;
             Matrix3x3::RotationQuaternion(object.Bounds.Transformation.Orientation.Conjugated(), worldToLocalRotation);
-            Float3 worldPosition = object.Bounds.Transformation.Translation;
+            const Float3 objectPosition = (Float3)(object.Position - ViewOrigin);
+            const Float3 worldPosition = (Float3)(object.Bounds.Transformation.Translation - ViewOrigin);
             Float3 worldExtents = object.Bounds.Extents * object.Bounds.Transformation.Scale;
 
             // Write to objects buffer (this must match unpacking logic in HLSL)
@@ -430,7 +433,7 @@ public:
             ObjectsListBuffer.Write(objectAddress);
             ObjectsBuffer.Data.EnsureCapacity(ObjectsBuffer.Data.Count() + sizeof(Float4) * (GLOBAL_SURFACE_ATLAS_OBJECT_DATA_STRIDE + 6 * GLOBAL_SURFACE_ATLAS_TILE_DATA_STRIDE));
             auto* objectData = ObjectsBuffer.WriteReserve<Float4>(GLOBAL_SURFACE_ATLAS_OBJECT_DATA_STRIDE);
-            objectData[0] = Float4(object.Position, object.Radius);
+            objectData[0] = Float4(objectPosition, object.Radius);
             objectData[1] = Float4::Zero;
             objectData[2] = Float4(worldToLocalRotation.M11, worldToLocalRotation.M12, worldToLocalRotation.M13, worldPosition.X);
             objectData[3] = Float4(worldToLocalRotation.M21, worldToLocalRotation.M22, worldToLocalRotation.M23, worldPosition.Y);
@@ -461,7 +464,7 @@ public:
                 xAxis.NormalizeFast();
                 yAxis.NormalizeFast();
                 zAxis.NormalizeFast();
-                tile->ViewPosition = object.Bounds.Transformation.LocalToWorld(localSpaceOffset);
+                tile->ViewPosition = (Float3)(object.Bounds.Transformation.LocalToWorld(localSpaceOffset) - ViewOrigin);
                 tile->ViewDirection = zAxis;
 
                 // Create view matrix
@@ -472,6 +475,7 @@ public:
 
                 // Calculate object bounds size in the view
                 OrientedBoundingBox viewBounds(object.Bounds);
+                viewBounds.Transformation.Translation -= ViewOrigin;
                 viewBounds.Transform(tile->ViewMatrix);
                 Float3 viewExtent = viewBounds.Transformation.LocalToWorldVector(viewBounds.Extents);
                 tile->ViewBoundsSize = viewExtent.GetAbsolute() * 2.0f;
@@ -1076,7 +1080,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                     int32 count = 0;
                     for (auto& e : surfaceAtlasData.Objects)
                     {
-                        BoundingSphere objectBounds(e.Value.Bounds.GetCenter(), e.Value.Radius);
+                        BoundingSphere objectBounds(e.Value.Bounds.GetCenter() - surfaceAtlasData.ViewOrigin, e.Value.Radius);
                         if (chunkBounds.Intersects(objectBounds))
                             count++;
                     }
@@ -1172,7 +1176,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                 for (auto& e : surfaceAtlasData.Objects)
                 {
                     auto& object = e.Value;
-                    Float3 lightToObject = object.Bounds.GetCenter() - light.Position;
+                    Float3 lightToObject = (Float3)(object.Bounds.GetCenter() - surfaceAtlasData.ViewOrigin) - light.Position;
                     if (lightToObject.LengthSquared() >= Math::Square(object.Radius + light.Radius))
                         continue;
                     object.LightingUpdateFrame = currentFrame;
@@ -1194,7 +1198,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                 for (auto& e : surfaceAtlasData.Objects)
                 {
                     auto& object = e.Value;
-                    Float3 lightToObject = object.Bounds.GetCenter() - light.Position;
+                    Float3 lightToObject = (Float3)(object.Bounds.GetCenter() - surfaceAtlasData.ViewOrigin) - light.Position;
                     if (lightToObject.LengthSquared() >= Math::Square(object.Radius + light.Radius))
                         continue;
                     object.LightingUpdateFrame = currentFrame;
@@ -1268,7 +1272,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                 const auto& object = e.Value;
                 if (!allLightingDirty && object.LightingUpdateFrame != currentFrame)
                     continue;
-                Float3 lightToObject = object.Bounds.GetCenter() - light.Position;
+                Float3 lightToObject = (Float3)(object.Bounds.GetCenter() - surfaceAtlasData.ViewOrigin) - light.Position;
                 if (lightToObject.LengthSquared() >= Math::Square(object.Radius + light.Radius))
                     continue;
                 for (int32 tileIndex = 0; tileIndex < 6; tileIndex++)
@@ -1302,7 +1306,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                 const auto& object = e.Value;
                 if (!allLightingDirty && object.LightingUpdateFrame != currentFrame)
                     continue;
-                Float3 lightToObject = object.Bounds.GetCenter() - light.Position;
+                Float3 lightToObject = (Float3)(object.Bounds.GetCenter() - surfaceAtlasData.ViewOrigin) - light.Position;
                 if (lightToObject.LengthSquared() >= Math::Square(object.Radius + light.Radius))
                     continue;
                 for (int32 tileIndex = 0; tileIndex < 6; tileIndex++)
@@ -1559,7 +1563,7 @@ void GlobalSurfaceAtlasPass::RasterizeActor(Actor* actor, void* actorObject, con
         object->Actor = actor;
         object->LastFrameUsed = surfaceAtlasData.CurrentFrame;
         object->Bounds = bounds;
-        object->Position = (Float3)actorObjectBounds.Center; // TODO: large worlds
+        object->Position = actorObjectBounds.Center;
         object->Radius = (float)actorObjectBounds.Radius;
         object->Dirty |= dirty;
         object->UseVisibility = useVisibility;

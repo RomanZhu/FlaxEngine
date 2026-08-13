@@ -161,14 +161,13 @@ struct CascadeData
 
     void OnSceneRenderingDirty(const BoundingBox& objectBounds)
     {
-        if (StaticChunks.IsEmpty() || !Bounds.Intersects(objectBounds))
+        if (StaticChunks.IsEmpty() || !CullingBounds.Intersects(objectBounds))
             return;
 
         BoundingBox objectBoundsCascade;
-        const float objectMargin = VoxelSize * GLOBAL_SDF_RASTERIZE_CHUNK_MARGIN;
-        Vector3::Clamp(objectBounds.Minimum - objectMargin, Bounds.Minimum, Bounds.Maximum, objectBoundsCascade.Minimum);
+        Vector3::Clamp(objectBounds.Minimum + OriginMin, Bounds.Minimum, Bounds.Maximum, objectBoundsCascade.Minimum);
         Vector3::Subtract(objectBoundsCascade.Minimum, Bounds.Minimum, objectBoundsCascade.Minimum);
-        Vector3::Clamp(objectBounds.Maximum + objectMargin, Bounds.Minimum, Bounds.Maximum, objectBoundsCascade.Maximum);
+        Vector3::Clamp(objectBounds.Maximum + OriginMax, Bounds.Minimum, Bounds.Maximum, objectBoundsCascade.Maximum);
         Vector3::Subtract(objectBoundsCascade.Maximum, Bounds.Minimum, objectBoundsCascade.Maximum);
         const Int3 objectChunkMin(objectBoundsCascade.Minimum / ChunkSize);
         const Int3 objectChunkMax(objectBoundsCascade.Maximum / ChunkSize);
@@ -245,6 +244,30 @@ public:
     }
 
     const float CascadesDistanceScales[4] = { 1.0f, 2.5f, 5.0f, 10.0f };
+
+    void Rebase(const Vector3& origin)
+    {
+        if (Origin == origin)
+            return;
+
+        WaitForDrawing();
+        ScopeWriteLock lock(Locker);
+        const Vector3 originDelta = origin - Origin;
+        const Float3 originDeltaF = (Float3)originDelta;
+        Origin = origin;
+        for (auto& cascade : Cascades)
+        {
+            cascade.Position -= originDeltaF;
+            cascade.Bounds.Minimum -= originDelta;
+            cascade.Bounds.Maximum -= originDelta;
+            cascade.RasterizeBounds.Minimum -= originDelta;
+            cascade.RasterizeBounds.Maximum -= originDelta;
+            cascade.CullingBounds = cascade.Bounds.MakeOffsetted(Origin);
+            const float objectMargin = cascade.VoxelSize * GLOBAL_SDF_RASTERIZE_CHUNK_MARGIN;
+            cascade.OriginMin = -Origin - objectMargin;
+            cascade.OriginMax = -Origin + objectMargin;
+        }
+    }
 
     void GetOptions(const RenderContext& renderContext, int32& resolution, int32& cascadesCount, int32& resolutionMip, float& distance)
     {
@@ -328,7 +351,9 @@ public:
             const float cascadeVoxelSize = cascadeSize / (float)resolution;
             const float cascadeChunkSize = cascadeVoxelSize * GLOBAL_SDF_RASTERIZE_CHUNK_SIZE;
             static_assert(GLOBAL_SDF_RASTERIZE_CHUNK_SIZE % GLOBAL_SDF_RASTERIZE_MIP_FACTOR == 0, "Adjust chunk size to match the mip factor scale.");
-            const Float3 center = Float3::Floor(viewPosition / cascadeChunkSize) * cascadeChunkSize;
+            const Vector3 viewPositionWorld = Origin + (Vector3)viewPosition;
+            const Vector3 centerWorld = Vector3::Floor(viewPositionWorld / cascadeChunkSize) * cascadeChunkSize;
+            const Float3 center = (Float3)(centerWorld - Origin);
             //const Float3 center = Float3::Zero;
             BoundingBox cascadeBounds(center - cascadeExtent, center + cascadeExtent);
 
@@ -777,8 +802,10 @@ bool GlobalSignDistanceFieldPass::Render(RenderContext& renderContext, GPUContex
     }
     if (sdfData.Origin != renderContext.View.Origin)
     {
-        sdfData.Origin = renderContext.View.Origin;
-        reset = true;
+        if (reset)
+            sdfData.Origin = renderContext.View.Origin;
+        else
+            sdfData.Rebase(renderContext.View.Origin);
     }
     GPUTexture* tmpMip = nullptr;
     if (reset)
