@@ -942,12 +942,6 @@ namespace FlaxEditor
         internal static Func<string> HtmlLogPathProvider;
 
         /// <summary>
-        /// Maximum number of entries retained by the editor console.
-        /// </summary>
-        [EditorCommand("console.Lines", "Maximum number of entries retained by the editor console.")]
-        public static int Lines = 8192;
-
-        /// <summary>
         /// Gets the current editor console HTML log path.
         /// </summary>
         public static string HtmlLogPath => HtmlLogPathProvider?.Invoke();

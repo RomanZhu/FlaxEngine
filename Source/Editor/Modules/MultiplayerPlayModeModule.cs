@@ -74,6 +74,7 @@ namespace FlaxEditor.Modules
         private readonly object _connectionsLock = new object();
         private readonly Dictionary<int, ReplicaConnection> _connections = new Dictionary<int, ReplicaConnection>();
         private readonly ConcurrentQueue<string> _commands = new ConcurrentQueue<string>();
+        private readonly ConcurrentQueue<string> _primaryRequests = new ConcurrentQueue<string>();
         private readonly ConcurrentQueue<ReplicaConnection> _newConnections = new ConcurrentQueue<ReplicaConnection>();
         private readonly string _replicaSession;
         private readonly int _replicaPort;
@@ -96,6 +97,7 @@ namespace FlaxEditor.Modules
         private bool _scriptsReloadRequested;
         private bool _scriptsReloadInProgress;
         private bool _sceneSyncPending;
+        private bool _toolstripRefreshPending;
         private volatile bool _connectionsChanged;
         private volatile bool _stopping;
         private bool _exitRequested;
@@ -581,6 +583,10 @@ namespace FlaxEditor.Modules
                             }
                         }
                     }
+                    else if (message.StartsWith("REQUEST|", StringComparison.Ordinal))
+                    {
+                        _primaryRequests.Enqueue(message.Substring(8));
+                    }
                 }
             }
             catch
@@ -658,6 +664,12 @@ namespace FlaxEditor.Modules
             connection.Send(Editor.StateMachine.IsPlayMode ? "PLAY|START" : "PLAY|STOP");
             if (Editor.StateMachine.IsPlayMode)
                 connection.Send(Editor.StateMachine.PlayingState.IsPaused ? "PAUSE|1" : "PAUSE|0");
+        }
+
+        internal void RequestPrimary(string request)
+        {
+            if (IsReplica)
+                SendToPrimary("REQUEST|" + request);
         }
 
         private void SendToPrimary(string message)
@@ -769,6 +781,43 @@ namespace FlaxEditor.Modules
             }
         }
 
+        private void ProcessPrimaryRequest(string request)
+        {
+            switch (request)
+            {
+            case "PLAY":
+                Editor.Simulation.DelegatePlayOrStopPlayInEditor();
+                break;
+            case "PLAY_GAME":
+                Editor.Simulation.RequestPlayGameOrStopPlay();
+                break;
+            case "PLAY_SCENES":
+                Editor.Simulation.RequestPlayScenesOrStopPlay();
+                break;
+            case "START_GAME":
+                Editor.Simulation.RequestStartPlayGame();
+                break;
+            case "START_SCENES":
+                Editor.Simulation.RequestStartPlayScenes();
+                break;
+            case "STOP":
+                Editor.Simulation.RequestStopPlay();
+                break;
+            case "PAUSE":
+                Editor.Simulation.RequestResumeOrPause();
+                break;
+            case "PAUSE_ON":
+                Editor.Simulation.RequestPausePlay();
+                break;
+            case "PAUSE_OFF":
+                Editor.Simulation.RequestResumePlay();
+                break;
+            case "STEP":
+                Editor.Simulation.RequestPlayOneFrame();
+                break;
+            }
+        }
+
         private bool ScenesMatchRequest()
         {
             if (_requestedScenes == null || Level.ScenesCount != _requestedScenes.Length)
@@ -827,7 +876,14 @@ namespace FlaxEditor.Modules
                         Level.LoadScene(_requestedScenes[i]);
                 }
                 _sceneSyncPending = false;
+                _toolstripRefreshPending = true;
                 SendToPrimary("READY|" + GetSceneState());
+            }
+
+            if (_toolstripRefreshPending && !Level.IsAnyActionPending)
+            {
+                _toolstripRefreshPending = false;
+                Editor.UI.UpdateToolstrip();
             }
 
             if (_requestedPlayState.HasValue)
@@ -866,6 +922,9 @@ namespace FlaxEditor.Modules
                 UpdateReplica();
                 return;
             }
+
+            while (_primaryRequests.TryDequeue(out var request))
+                ProcessPrimaryRequest(request);
 
             if (_restartRequested && Editor.StateMachine.IsEditMode)
             {
