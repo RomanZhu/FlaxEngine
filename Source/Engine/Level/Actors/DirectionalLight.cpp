@@ -55,6 +55,8 @@ void DirectionalLight::Draw(RenderContext& renderContext)
         data.ShadowsPenumbraColorStrength = ShadowsPenumbraColorStrength * ShadowsPenumbraColor.A;
         data.ShadowsPenumbraColorOffset = ShadowsPenumbraColorOffset;
         data.ShadowsPenumbraColorInsideShadow = ShadowsPenumbraColorInsideShadow;
+        data.ShadowsEdgeAAStrength = ShadowsEdgeAAStrength;
+        data.ShadowsEdgeAASampleRadius = ShadowsEdgeAASampleRadius;
         data.PartitionMode = PartitionMode;
         data.ContactShadowsLength = ContactShadowsLength;
         data.StaticFlags = GetStaticFlags();
@@ -83,6 +85,8 @@ void DirectionalLight::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE(ShadowsPenumbraColorStrength);
     SERIALIZE(ShadowsPenumbraColorOffset);
     SERIALIZE(ShadowsPenumbraColorInsideShadow);
+    SERIALIZE(ShadowsEdgeAAStrength);
+    SERIALIZE(ShadowsEdgeAASampleRadius);
     SERIALIZE(PartitionMode);
 }
 
@@ -103,6 +107,8 @@ void DirectionalLight::Deserialize(DeserializeStream& stream, ISerializeModifier
     DESERIALIZE(ShadowsPenumbraColorStrength);
     DESERIALIZE(ShadowsPenumbraColorOffset);
     DESERIALIZE(ShadowsPenumbraColorInsideShadow);
+    DESERIALIZE(ShadowsEdgeAAStrength);
+    DESERIALIZE(ShadowsEdgeAASampleRadius);
     DESERIALIZE(PartitionMode);
 }
 

@@ -107,15 +107,15 @@ void RenderDirectionalLightData::SetShaderData(ShaderLightData& data, bool useSh
     data.SourceLength = 0;
     data.Color = Color;
     data.MinRoughness = Math::Max(MinRoughness, MIN_ROUGHNESS);
-    // Directional lights don't use Position, FalloffExponent, InverseSquared,
+    // Directional lights don't use Position, Radius, FalloffExponent, InverseSquared, RadiusInv,
     // Dummy0, or SpotAngles.Y. Pack the optional settings there to preserve the layout.
     data.Position = ShadowsPenumbraColor;
     data.ShadowsBufferAddress = useShadow ? ShadowsBufferAddress : 0;
     data.Direction = -Direction;
-    data.Radius = 0;
+    data.Radius = ShadowsEdgeAAStrength;
     data.FalloffExponent = ShadowsPenumbraColorOffset.X;
     data.InverseSquared = ShadowsPenumbraColorOffset.Y;
-    data.RadiusInv = 0;
+    data.RadiusInv = ShadowsEdgeAASampleRadius;
     data.Dummy0 = ShadowsPenumbraColorStrength;
 }
 

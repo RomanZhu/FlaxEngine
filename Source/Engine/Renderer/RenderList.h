@@ -78,6 +78,8 @@ struct RenderDirectionalLightData : RenderLightData
     float ShadowsPenumbraColorStrength;
     Float2 ShadowsPenumbraColorOffset;
     bool ShadowsPenumbraColorInsideShadow;
+    float ShadowsEdgeAAStrength;
+    float ShadowsEdgeAASampleRadius;
 
     PartitionMode PartitionMode;
     FarShadowTransitionMode FarShadowsTransitionMode;

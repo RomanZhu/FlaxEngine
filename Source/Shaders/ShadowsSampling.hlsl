@@ -224,6 +224,48 @@ ShadowSample SampleDirectionalLightShadowCascade(LightData light, Buffer<float4>
     // Sample the existing optimized PCF kernel.
     result.SurfaceShadow = SampleShadowMapOptimizedPCF(shadowMap, shadowMapUV, shadowPosition.z);
 
+    // Add an explicit filter to detailed cascades. Taper the atlas-space radius
+    // because a texel covers increasingly more world space in later cascades.
+    float edgeAAStrength = saturate(GetDirectionalLightShadowEdgeAAStrength(light));
+    float sampleRadius = max(GetDirectionalLightShadowEdgeAASampleRadius(light), 0.0f);
+    const float EdgeAARadiusScale[MaxNumCascades] = { 1.0f, 0.5f, 0.25f, 0.125f, 0.0f };
+    sampleRadius *= EdgeAARadiusScale[cascadeIndex];
+    BRANCH
+    if (edgeAAStrength > 0.0f && sampleRadius > 0.0f)
+    {
+        float2 shadowMapSize;
+        shadowMap.GetDimensions(shadowMapSize.x, shadowMapSize.y);
+        float2 shadowTexelSize = 1.0f / shadowMapSize;
+        float2 tileUVMin = shadowTile.ShadowToAtlas.zw + shadowTexelSize * 0.5f;
+        float2 tileUVMax = shadowTile.ShadowToAtlas.zw + shadowTile.ShadowToAtlas.xy - shadowTexelSize * 0.5f;
+
+        // Fill the complete disk instead of sampling only its four extremes. A sparse
+        // cross produces several visibly displaced copies of the shadow silhouette.
+        const float2 EdgeAADisk[12] =
+        {
+            float2(0.204124f, 0.000000f),
+            float2(-0.260699f, 0.238822f),
+            float2(0.039904f, -0.454688f),
+            float2(0.328595f, 0.428593f),
+            float2(-0.603011f, -0.106664f),
+            float2(0.571225f, -0.363367f),
+            float2(-0.191064f, 0.710747f),
+            float2(-0.364379f, -0.701590f),
+            float2(0.790557f, 0.288710f),
+            float2(-0.822442f, 0.339492f),
+            float2(0.396472f, -0.847237f),
+            float2(0.292982f, 0.934074f)
+        };
+        float filteredShadow = result.SurfaceShadow;
+        UNROLL
+        for (uint sampleIndex = 0; sampleIndex < 12; sampleIndex++)
+        {
+            float2 sampleUV = shadowMapUV + EdgeAADisk[sampleIndex] * sampleRadius * shadowTexelSize;
+            filteredShadow += SAMPLE_SHADOW_MAP(shadowMap, clamp(sampleUV, tileUVMin, tileUVMax), shadowPosition.z);
+        }
+        result.SurfaceShadow = lerp(result.SurfaceShadow, filteredShadow * (1.0f / 13.0f), edgeAAStrength);
+    }
+
     // Increase the sharpness for higher cascades to match the filter radius
     // Keep the far cascade soft; its job is to preserve broad silhouettes, not fine detail.
     const float SharpnessScale[MaxNumCascades] = { 1.0f, 1.5f, 3.0f, 3.5f, 1.0f };

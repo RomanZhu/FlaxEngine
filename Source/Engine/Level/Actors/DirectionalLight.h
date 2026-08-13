@@ -90,6 +90,18 @@ public:
     API_FIELD(Attributes="EditorOrder(113), DefaultValue(true), EditorDisplay(\"Shadow\", \"Penumbra Color Inside Shadow\")")
     bool ShadowsPenumbraColorInsideShadow = true;
 
+    /// <summary>
+    /// Strength of the additional disk anti-aliasing filter for detailed directional shadow cascades. Set to 0 to disable it.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(114), DefaultValue(0.0f), Limit(0.0f, 1.0f, 0.01f), EditorDisplay(\"Shadow\", \"Edge AA Strength\")")
+    float ShadowsEdgeAAStrength = 0.0f;
+
+    /// <summary>
+    /// Radius of the anti-aliasing filter in nearest-cascade shadow-map texels. The radius is halved for each subsequent detailed cascade to limit distant blur.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(115), DefaultValue(1.5f), Limit(0.0f, 16.0f, 0.1f), EditorDisplay(\"Shadow\", \"Edge AA Sample Radius\")")
+    float ShadowsEdgeAASampleRadius = 1.5f;
+
 public:
     // [LightWithShadow]
     void Draw(RenderContext& renderContext) override;
