@@ -38,6 +38,9 @@ namespace FlaxEditor.Gizmo
         private readonly List<SceneGraphNode> _pickSelectionChain = new List<SceneGraphNode>();
         private readonly List<ActorNode> _brushPickNodes = new List<ActorNode>(32);
         private readonly List<Scene> _csgRebuildScenes = new List<Scene>(4);
+        private TerrainNode _terrainDisplayPivotNode;
+        private Vector3 _terrainDisplayPivotLocal;
+        private bool _hasTerrainDisplayPivot;
 
         internal bool HasActiveCSGTransaction
         {
@@ -82,6 +85,92 @@ namespace FlaxEditor.Gizmo
         public TransformGizmo(IGizmoOwner owner)
         : base(owner)
         {
+        }
+
+        internal static bool IsProjectedPivotVisible(float forwardDepth, Float2 projectedPosition, float viewportWidth, float viewportHeight, float nearPlane, float farPlane)
+        {
+            return forwardDepth > nearPlane &&
+                   forwardDepth < farPlane &&
+                   projectedPosition.X >= 0.0f && projectedPosition.X <= viewportWidth &&
+                   projectedPosition.Y >= 0.0f && projectedPosition.Y <= viewportHeight;
+        }
+
+        private bool IsPivotVisible(Vector3 pivot)
+        {
+            var viewport = Owner?.Viewport;
+            if (viewport == null || viewport.Width <= Mathf.Epsilon || viewport.Height <= Mathf.Epsilon)
+                return false;
+
+            float forwardDepth = (float)Vector3.Dot(pivot - Owner.ViewPosition, (Vector3)Owner.ViewDirection);
+            viewport.ProjectPoint(pivot, out var projectedPosition);
+            return IsProjectedPivotVisible(forwardDepth, projectedPosition, viewport.Width, viewport.Height, viewport.NearPlane, viewport.FarPlane);
+        }
+
+        private bool TryGetTerrainSurfacePivot(TerrainNode terrainNode, out Vector3 pivot)
+        {
+            pivot = Vector3.Zero;
+            var viewport = Owner?.Viewport;
+            if (viewport == null)
+                return false;
+
+            // Prefer the terrain surface at the center of the current view. This keeps a
+            // very large terrain manipulable without framing its entire bounds first.
+            var ray = viewport.ViewRay;
+            var rayData = new SceneGraphNode.RayCastData
+            {
+                Ray = ray,
+                View = ray,
+                Flags = SceneGraphNode.RayCastData.FlagTypes.SkipEditorPrimitives |
+                        SceneGraphNode.RayCastData.FlagTypes.SkipTriggers,
+            };
+            if (terrainNode.RayCastSelf(ref rayData, out var distance, out _) &&
+                distance > viewport.NearPlane && distance < viewport.FarPlane)
+            {
+                pivot = ray.GetPoint(distance);
+                return true;
+            }
+
+            // Terrain raycasts need collision data. Retain a visible fallback for terrains
+            // whose collision is disabled or still being initialized.
+            var bounds = terrainNode.Actor.EditorBoxChildren;
+            if (bounds.Intersects(ref ray, out distance) && distance >= 0.0f && distance < viewport.FarPlane)
+            {
+                distance = (Real)Math.Max((double)distance, viewport.NearPlane * 2.0);
+                pivot = ray.GetPoint(distance);
+                return true;
+            }
+            return false;
+        }
+
+        /// <inheritdoc />
+        protected override bool TryGetDisplayPivot(Vector3 pivot, out Vector3 displayPivot)
+        {
+            displayPivot = pivot;
+            if (_selectionParents.Count != 1 || _selectionParents[0] is not TerrainNode terrainNode)
+            {
+                _terrainDisplayPivotNode = null;
+                _hasTerrainDisplayPivot = false;
+                return false;
+            }
+
+            // Preserve the normal object/selection-center behavior whenever it is useful.
+            if (IsPivotVisible(pivot))
+                return false;
+
+            if (_hasTerrainDisplayPivot && _terrainDisplayPivotNode == terrainNode)
+            {
+                displayPivot = terrainNode.Transform.LocalToWorld(_terrainDisplayPivotLocal);
+                if (IsPivotVisible(displayPivot))
+                    return true;
+            }
+
+            if (!TryGetTerrainSurfacePivot(terrainNode, out displayPivot))
+                return false;
+
+            _terrainDisplayPivotNode = terrainNode;
+            _terrainDisplayPivotLocal = terrainNode.Transform.WorldToLocal(displayPivot);
+            _hasTerrainDisplayPivot = true;
+            return true;
         }
 
         private static bool HasSelectionRelationship(SceneGraphNode node, ViewportSelectionRelationship relationship)
@@ -491,6 +580,9 @@ namespace FlaxEditor.Gizmo
             // the one intentional exception.
             if (HasActiveTransaction && !IsExpectingTransactionSelectionChange)
                 CancelTransforming();
+
+            _terrainDisplayPivotNode = null;
+            _hasTerrainDisplayPivot = false;
 
             if (_selectionScopes.Count != 0)
             {

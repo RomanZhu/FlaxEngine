@@ -49,7 +49,8 @@ struct TerrainCollisionDataHeaderOld
 
 struct TerrainCollisionDataHeader
 {
-    static constexpr int32 CurrentVersion = 1;
+    // Version 2 invalidates height fields cooked by the former PhysX backend.
+    static constexpr int32 CurrentVersion = 2;
     int32 CheckOldMagicNumber; // Used to detect if loading new header or old one
     int32 Version;
     int32 LOD;
@@ -740,13 +741,43 @@ bool ModifyCollision(TerrainDataUpdateInfo& info, TextureBase::InitData* initDat
     info.GetSplatMaps();
     PROFILE_CPU_NAMED("Terrain.ModifyCollision");
 
+    // Resolve the collision LOD from the live height field. The terrain setting can be
+    // changed after collision creation and older cooked data can use a different LOD.
+    if (heightField == nullptr)
+    {
+        LOG(Warning, "Cannot modify missing terrain collision height field.");
+        return true;
+    }
+    int32 heightFieldRows, heightFieldColumns;
+    PhysicsBackend::GetHeightFieldSize(heightField, heightFieldRows, heightFieldColumns);
+    if (heightFieldRows <= 1 || heightFieldColumns <= 1 || heightFieldRows != heightFieldColumns)
+    {
+        LOG(Warning, "Cannot modify terrain collision height field with invalid dimensions {0}x{1}.", heightFieldColumns, heightFieldRows);
+        return true;
+    }
+    int32 collisionLOD = Math::Clamp<int32>(collisionLod, 0, initData->Mips.Count() - 1);
+    int32 heightFieldChunkSize = ((info.ChunkSize + 1) >> collisionLOD) - 1;
+    int32 heightFieldSize = heightFieldChunkSize * Terrain::ChunksCountEdge + 1;
+    if (heightFieldSize != heightFieldColumns)
+    {
+        for (collisionLOD = 0; collisionLOD < initData->Mips.Count(); collisionLOD++)
+        {
+            heightFieldChunkSize = ((info.ChunkSize + 1) >> collisionLOD) - 1;
+            heightFieldSize = heightFieldChunkSize * Terrain::ChunksCountEdge + 1;
+            if (heightFieldSize == heightFieldColumns)
+                break;
+        }
+        if (collisionLOD == initData->Mips.Count())
+        {
+            LOG(Warning, "Cannot match terrain collision height field size {0} to a terrain LOD.", heightFieldColumns);
+            return true;
+        }
+    }
+
     // Prepare data
     const Vector2 modifiedOffsetRatio((float)modifiedOffset.X / info.HeightmapSize, (float)modifiedOffset.Y / info.HeightmapSize);
     const Vector2 modifiedSizeRatio((float)modifiedSize.X / info.HeightmapSize, (float)modifiedSize.Y / info.HeightmapSize);
-    const int32 collisionLOD = Math::Clamp<int32>(collisionLod, 0, initData->Mips.Count() - 1);
     const int32 collisionLODInv = (int32)Math::Pow(2.0f, (float)collisionLOD);
-    const int32 heightFieldChunkSize = ((info.ChunkSize + 1) >> collisionLOD) - 1;
-    const int32 heightFieldSize = heightFieldChunkSize * Terrain::ChunksCountEdge + 1;
     const Int2 samplesOffset(Vector2::Floor(modifiedOffsetRatio * (float)heightFieldSize));
     Int2 samplesSize(Vector2::Ceil(modifiedSizeRatio * (float)heightFieldSize));
     samplesSize.X = Math::Max(samplesSize.X, 1);
@@ -754,6 +785,7 @@ bool ModifyCollision(TerrainDataUpdateInfo& info, TextureBase::InitData* initDat
     Int2 samplesEnd = samplesOffset + samplesSize;
     samplesEnd.X = Math::Min(samplesEnd.X, heightFieldSize);
     samplesEnd.Y = Math::Min(samplesEnd.Y, heightFieldSize);
+    samplesSize = samplesEnd - samplesOffset;
 
     // Allocate data
     const int32 heightFieldDataLength = samplesSize.X * samplesSize.Y;
@@ -811,7 +843,7 @@ bool ModifyCollision(TerrainDataUpdateInfo& info, TextureBase::InitData* initDat
     // Update height field range
     if (PhysicsBackend::ModifyHeightField(heightField, samplesOffset.Y, samplesOffset.X, samplesSize.Y, samplesSize.X, heightFieldData))
     {
-        LOG(Warning, "Height Field collision modification failed.");
+        LOG(Warning, "Height Field collision modification failed for offset {0} size {1} in {2}x{2} field.", samplesOffset, samplesSize, heightFieldSize);
         return true;
     }
 
@@ -1818,11 +1850,25 @@ bool TerrainPatch::UpdateHeightData(TerrainDataUpdateInfo& info, const Int2& mod
     }
     else
     {
-        ScopeLock lock(_collisionLocker);
-        if (ModifyCollision(info, _dataHeightmap, _terrain->_collisionLod, modifiedOffset, modifiedSize, _physicsHeightField))
-            return true;
-        if (wasHeightChanged)
-            UpdateCollisionScale();
+        if (!HasCollision() || !_physicsHeightField)
+        {
+            // Recover collision that could not be loaded or was cooked by another backend.
+            if (_heightfield->WaitForLoaded())
+            {
+                LOG(Error, "Failed to load patch heightfield data.");
+                return true;
+            }
+            if (CookCollision(info, _dataHeightmap, _terrain->_collisionLod, &_heightfield->Data) || UpdateCollision() || !HasCollision() || !_physicsHeightField)
+                return true;
+        }
+        else
+        {
+            ScopeLock lock(_collisionLocker);
+            if (ModifyCollision(info, _dataHeightmap, _terrain->_collisionLod, modifiedOffset, modifiedSize, _physicsHeightField))
+                return true;
+            if (wasHeightChanged)
+                UpdateCollisionScale();
+        }
     }
 #else
 	// Modify heightfield samples (without cooking collision which is done on a separate async task)
@@ -2144,7 +2190,7 @@ void TerrainPatch::CreateCollision()
     PROFILE_CPU();
     PROFILE_MEM(LevelTerrain);
     ASSERT(!HasCollision());
-    if (CreateHeightField())
+    if (CreateHeightField() || HasCollision())
         return;
     ASSERT(_physicsHeightField);
 
@@ -2192,7 +2238,9 @@ bool TerrainPatch::CreateHeightField()
         // Reset height map
         PROFILE_CPU_NAMED("ResetHeightMap");
         const float* data = GetHeightmapData();
-        return SetupHeightMap(_cachedHeightMap.Count(), data);
+        if (SetupHeightMap(_cachedHeightMap.Count(), data))
+            return true;
+        return _physicsHeightField == nullptr;
     }
 
     // Create heightfield object from the data

@@ -45,6 +45,7 @@ namespace FlaxEditor.Gizmo
 
         private bool _isTransforming;
         private Vector3 _lastIntersectionPosition;
+        private bool _usesDisplayPivotOverride;
 
         private Quaternion _rotationDelta = Quaternion.Identity;
         private Quaternion _rotationGizmoDelta = Quaternion.Identity;
@@ -213,20 +214,33 @@ namespace FlaxEditor.Gizmo
         {
             var position = Vector3.Zero;
 
-            // Get gizmo pivot
-            if (_activeMode == Mode.Bounds)
+            // Keep an adaptive display pivot stable for the whole transaction. Re-evaluating
+            // it after the selected object starts moving would apply the movement twice.
+            if (HasActiveTransaction && _usesDisplayPivotOverride && _transactionOrigin != null)
             {
-                position = GetSelectionCenter();
+                position = _transactionOrigin.PivotPosition;
             }
-            else switch (_activePivotType)
+            else
             {
-            case PivotType.ObjectCenter:
-                if (SelectionCount > 0)
-                    position = GetSelectedTransform(0).Translation;
-                break;
-            case PivotType.SelectionCenter:
-                position = GetSelectionCenter();
-                break;
+                // Get gizmo pivot
+                if (_activeMode == Mode.Bounds)
+                {
+                    position = GetSelectionCenter();
+                }
+                else switch (_activePivotType)
+                {
+                case PivotType.ObjectCenter:
+                    if (SelectionCount > 0)
+                        position = GetSelectedTransform(0).Translation;
+                    break;
+                case PivotType.SelectionCenter:
+                    position = GetSelectionCenter();
+                    break;
+                }
+
+                _usesDisplayPivotOverride = TryGetDisplayPivot(position, out var displayPivot);
+                if (_usesDisplayPivotOverride)
+                    position = displayPivot;
             }
 
             // Apply vertex snapping
@@ -240,6 +254,18 @@ namespace FlaxEditor.Gizmo
             position += _translationDelta;
 
             Position = position;
+        }
+
+        /// <summary>
+        /// Tries to replace an off-screen logical pivot with a more useful display pivot.
+        /// </summary>
+        /// <param name="pivot">The logical gizmo pivot.</param>
+        /// <param name="displayPivot">The display pivot.</param>
+        /// <returns>True when the display pivot should be used.</returns>
+        protected virtual bool TryGetDisplayPivot(Vector3 pivot, out Vector3 displayPivot)
+        {
+            displayPivot = pivot;
+            return false;
         }
 
         private void UpdateMatrices()

@@ -169,6 +169,11 @@ namespace FlaxEditor.Viewport.Widgets
             _autoCheck = autoCheck;
             _forcedTextWidth = textWidth;
 
+            // Text-only buttons start with zero width because the base constructor only
+            // knows about explicitly forced text width. Resolve the actual font width now
+            // so newly created viewport widgets are visible before their first relayout.
+            PerformLayout();
+
             if (_cm != null)
                 _cm.VisibleChanged += CmOnVisibleChanged;
         }

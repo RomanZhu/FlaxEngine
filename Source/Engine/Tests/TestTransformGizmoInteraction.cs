@@ -37,6 +37,15 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestProjectedPivotVisibilityRejectsClippedAndOffscreenPoints()
+        {
+            Assert.IsTrue(TransformGizmo.IsProjectedPivotVisible(100.0f, new Float2(640.0f, 360.0f), 1280.0f, 720.0f, 0.1f, 1000.0f));
+            Assert.IsFalse(TransformGizmo.IsProjectedPivotVisible(-1.0f, new Float2(640.0f, 360.0f), 1280.0f, 720.0f, 0.1f, 1000.0f));
+            Assert.IsFalse(TransformGizmo.IsProjectedPivotVisible(1001.0f, new Float2(640.0f, 360.0f), 1280.0f, 720.0f, 0.1f, 1000.0f));
+            Assert.IsFalse(TransformGizmo.IsProjectedPivotVisible(100.0f, new Float2(1281.0f, 360.0f), 1280.0f, 720.0f, 0.1f, 1000.0f));
+        }
+
+        [Test]
         public void TestPureTransformMathIsSymmetricAndAnchorBased()
         {
             Assert.AreEqual(2.0f, TransformGizmoBase.SolveExponentialScaleFactor(120.0f, TransformGizmoBase.ScalePixelsPerDoubling), 0.00001f);
