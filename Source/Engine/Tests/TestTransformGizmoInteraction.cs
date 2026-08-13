@@ -138,6 +138,15 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestTransformSnapModifierInvertsConfiguredState()
+        {
+            Assert.IsFalse(TransformGizmoBase.ResolveSnapping(false, false));
+            Assert.IsTrue(TransformGizmoBase.ResolveSnapping(false, true));
+            Assert.IsTrue(TransformGizmoBase.ResolveSnapping(true, false));
+            Assert.IsFalse(TransformGizmoBase.ResolveSnapping(true, true));
+        }
+
+        [Test]
         public void TestOriginPreviewScaleAndReanchorAreDeterministic()
         {
             var owner = new TestGizmoOwner();

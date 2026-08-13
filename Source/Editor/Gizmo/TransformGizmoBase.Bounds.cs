@@ -173,7 +173,7 @@ namespace FlaxEditor.Gizmo
 
             Vector3 desired = anchor.Result.Scale;
             Real factor = SolveBoundsResizeFactor(GetComponent(desired, component), displacement, originalExtent, sign);
-            if (ScaleSnapEnabled || Owner.UseSnapping)
+            if (IsScaleSnappingActive)
             {
                 Vector3 step = GetLinearSnapStep(origin);
                 factor = SnapScaleFactorToGrid(factor, originalExtent, GetComponent(step, component));

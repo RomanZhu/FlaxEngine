@@ -348,7 +348,7 @@ namespace FlaxEditor
             {
                 // Calculate transform delta
                 var delta = location - _mouseMovesPos;
-                if (transformGizmo.TranslationSnapEnable || transformGizmo.Owner.UseSnapping)
+                if (transformGizmo.IsTranslationSnappingActive)
                 {
                     _moveSnapDelta += delta;
                     delta = Float2.SnapToGrid(_moveSnapDelta, new Float2(transformGizmo.TranslationSnapValue * ViewScale));

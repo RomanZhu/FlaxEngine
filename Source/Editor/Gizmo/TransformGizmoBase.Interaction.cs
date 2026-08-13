@@ -1286,10 +1286,10 @@ namespace FlaxEditor.Gizmo
 
         private bool IsCameraClutchActive => Owner.IsMiddleMouseButtonDown || Owner.IsRightMouseButtonDown;
 
-        private bool IsTransformSnappingActive => Owner.UseSnapping ||
-                                                  (_activeMode == Mode.Translate && TranslationSnapEnable) ||
-                                                  (_activeMode == Mode.Rotate && RotationSnapEnabled) ||
-                                                  ((_activeMode == Mode.Scale || _activeMode == Mode.Bounds) && ScaleSnapEnabled);
+        private bool IsTransformSnappingActive =>
+            (_activeMode == Mode.Translate && IsTranslationSnappingActive) ||
+            (_activeMode == Mode.Rotate && IsRotationSnappingActive) ||
+            ((_activeMode == Mode.Scale || _activeMode == Mode.Bounds) && IsScaleSnappingActive);
 
         private bool HandleFocusAndClutch()
         {

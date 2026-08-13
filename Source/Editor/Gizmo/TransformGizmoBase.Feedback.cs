@@ -668,12 +668,12 @@ namespace FlaxEditor.Gizmo
             switch (mode)
             {
             case Mode.Translate:
-                return TranslationSnapEnable || Owner.UseSnapping;
+                return IsTranslationSnappingActive;
             case Mode.Rotate:
-                return RotationSnapEnabled || Owner.UseSnapping;
+                return IsRotationSnappingActive;
             case Mode.Scale:
             case Mode.Bounds:
-                return ScaleSnapEnabled || Owner.UseSnapping;
+                return IsScaleSnappingActive;
             default:
                 return false;
             }

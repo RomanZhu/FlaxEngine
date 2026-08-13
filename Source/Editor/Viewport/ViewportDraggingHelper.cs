@@ -239,7 +239,7 @@ namespace FlaxEditor.Viewport
 
             // Apply grid snapping if enabled
             var transformGizmo = _owner.Gizmos.Get<TransformGizmo>();
-            if (transformGizmo != null && (_owner.UseSnapping || transformGizmo.TranslationSnapEnable))
+            if (transformGizmo != null && transformGizmo.IsTranslationSnappingActive)
             {
                 float snapValue = transformGizmo.TranslationSnapValue;
                 location = new Vector3(

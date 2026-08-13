@@ -97,7 +97,7 @@ namespace FlaxEditor.Gizmo
         Float2 MouseDelta { get; }
 
         /// <summary>
-        /// Gets a value indicating whether use grid snapping during gizmo operations.
+        /// Gets a value indicating whether the temporary grid-snapping modifier is active during gizmo operations.
         /// </summary>
         bool UseSnapping { get; }
 

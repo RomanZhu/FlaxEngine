@@ -132,6 +132,32 @@ namespace FlaxEditor.Gizmo
         public float ScaleSnapValue = 1.0f;
 
         /// <summary>
+        /// Resolves a configured snapping state with the temporary snapping modifier.
+        /// </summary>
+        /// <param name="enabled">The configured snapping state.</param>
+        /// <param name="modifier">True while the temporary snapping modifier is held.</param>
+        /// <returns>The effective snapping state.</returns>
+        internal static bool ResolveSnapping(bool enabled, bool modifier)
+        {
+            return enabled != modifier;
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether translation snapping is currently active.
+        /// </summary>
+        internal bool IsTranslationSnappingActive => ResolveSnapping(TranslationSnapEnable, Owner?.UseSnapping ?? false);
+
+        /// <summary>
+        /// Gets a value indicating whether rotation snapping is currently active.
+        /// </summary>
+        internal bool IsRotationSnappingActive => ResolveSnapping(RotationSnapEnabled, Owner?.UseSnapping ?? false);
+
+        /// <summary>
+        /// Gets a value indicating whether scale snapping is currently active.
+        /// </summary>
+        internal bool IsScaleSnappingActive => ResolveSnapping(ScaleSnapEnabled, Owner?.UseSnapping ?? false);
+
+        /// <summary>
         /// Gets or sets the current pivot type.
         /// </summary>
         public PivotType ActivePivot

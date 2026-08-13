@@ -553,7 +553,7 @@ namespace FlaxEditor.Gizmo
                 delta *= 0.01f;
             if (Owner.IsAltKeyDown && !geometrySnapSolved)
                 delta *= 0.5f;
-            if (!geometrySnapSolved && ((isScaling ? ScaleSnapEnabled : TranslationSnapEnable) || Owner.UseSnapping))
+            if (!geometrySnapSolved && (isScaling ? IsScaleSnappingActive : IsTranslationSnappingActive))
             {
                 var snapValue = new Vector3(isScaling ? ScaleSnapValue : TranslationSnapValue);
 
@@ -742,7 +742,7 @@ namespace FlaxEditor.Gizmo
         private Vector3 SnapTranslationTotal(Vector3 desired, TransactionOrigin origin)
         {
             bool useSupplementalGrid = IsConstrainedSupplementalTranslation && SupplementalTranslationSnapEnabled;
-            if (!useSupplementalGrid && !TranslationSnapEnable && !Owner.UseSnapping)
+            if (!useSupplementalGrid && !IsTranslationSnappingActive)
                 return desired;
             Vector3 step = useSupplementalGrid
                 ? new Vector3(Mathf.Abs(SupplementalTranslationSnapValue))
@@ -823,7 +823,7 @@ namespace FlaxEditor.Gizmo
             }
 
             Vector3 desired = MultiplyScaleFactors(anchor.Result.Scale, relativeFactors);
-            if (pointerDelta.LengthSquared > 0.00000001f && (ScaleSnapEnabled || Owner.UseSnapping))
+            if (pointerDelta.LengthSquared > 0.00000001f && IsScaleSnappingActive)
                 desired = SnapScaleFactorsToGrid(desired, origin.OriginalBounds, origin.PivotPosition, basis, _activeAxis, GetLinearSnapStep(origin));
             _scaleDelta = desired - InteractionResult.Scale;
         }
@@ -1112,7 +1112,7 @@ namespace FlaxEditor.Gizmo
 
             _rotationDragMousePointWorld = trackballTransform.LocalToWorld(currentPointLocal);
             _rotationDragCurrentPointWorld = _rotationDragMousePointWorld;
-            float snap = RotationSnapEnabled || Owner.UseSnapping
+            float snap = IsRotationSnappingActive
                 ? Mathf.Abs(RotationSnapValue) * Mathf.DegreesToRadians
                 : 0.0f;
             float gain = Owner.IsAltKeyDown ? PrecisionScaleGain : 1.0f;
@@ -1286,7 +1286,7 @@ namespace FlaxEditor.Gizmo
                 return;
             }
 
-            if (RotationSnapEnabled || Owner.UseSnapping)
+            if (IsRotationSnappingActive)
             {
                 float snapValue = RotationSnapValue * Mathf.DegreesToRadians;
                 _rotationSnapDelta += (float)delta;
@@ -1374,7 +1374,7 @@ namespace FlaxEditor.Gizmo
                 _rotationPreviousWrappedAngle = wrapped;
                 solvedAngle = _rotationUnwrappedAngle * gain;
             }
-            if (RotationSnapEnabled || Owner.UseSnapping)
+            if (IsRotationSnappingActive)
             {
                 float snap = Mathf.Abs(RotationSnapValue) * Mathf.DegreesToRadians;
                 if (snap > Mathf.Epsilon)
