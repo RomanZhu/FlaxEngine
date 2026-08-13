@@ -488,7 +488,10 @@ namespace FlaxEditor.Windows
         {
             writer.WriteAttributeString("GridEnabled", Viewport.Grid.Enabled.ToString());
             writer.WriteAttributeString("ShowFpsCounter", Viewport.ShowFpsCounter.ToString());
+            writer.WriteAttributeString("ShowCameraCenter", Viewport.ShowCameraCenter.ToString());
             writer.WriteAttributeString("ShowNavigation", Viewport.ShowNavigation.ToString());
+            writer.WriteAttributeString("ShowDirectionGizmo", Viewport.ShowDirectionGizmo.ToString());
+            writer.WriteAttributeString("ShowCameraCoordinates", Viewport.ShowCameraCoordinates.ToString());
             writer.WriteAttributeString("UseOrthographicProjection", Viewport.UseOrthographicProjection.ToString());
             writer.WriteAttributeString("NearPlane", Viewport.NearPlane.ToString());
             writer.WriteAttributeString("FarPlane", Viewport.FarPlane.ToString());
@@ -499,6 +502,8 @@ namespace FlaxEditor.Windows
             writer.WriteAttributeString("ResolutionScale", Viewport.ResolutionScale.ToString());
             writer.WriteAttributeString("OrthographicScale", Viewport.OrthographicScale.ToString());
             writer.WriteAttributeString("ViewFlags", ((ulong)Viewport.Task.View.Flags).ToString());
+            writer.WriteAttributeString("DisabledViewFlags", (ViewFlags.DefaultEditor & ~Viewport.Task.View.Flags).ToString());
+            writer.WriteAttributeString("EnabledViewFlags", (Viewport.Task.View.Flags & ~ViewFlags.DefaultEditor).ToString());
             writer.WriteAttributeString("DebugView", ((int)Viewport.Task.ViewMode).ToString());
             writer.WriteAttributeString("LayerMask", Viewport.Task.ViewLayersMask.Mask.ToString());
         }
@@ -513,8 +518,14 @@ namespace FlaxEditor.Windows
                 Viewport.Grid.Enabled = value1;
             if (bool.TryParse(node.GetAttribute("ShowFpsCounter"), out value1))
                 Viewport.ShowFpsCounter = value1;
+            if (bool.TryParse(node.GetAttribute("ShowCameraCenter"), out value1))
+                Viewport.ShowCameraCenter = value1;
             if (bool.TryParse(node.GetAttribute("ShowNavigation"), out value1))
                 Viewport.ShowNavigation = value1;
+            if (bool.TryParse(node.GetAttribute("ShowDirectionGizmo"), out value1))
+                Viewport.ShowDirectionGizmo = value1;
+            if (bool.TryParse(node.GetAttribute("ShowCameraCoordinates"), out value1))
+                Viewport.ShowCameraCoordinates = value1;
             if (bool.TryParse(node.GetAttribute("UseOrthographicProjection"), out value1))
                 Viewport.UseOrthographicProjection = value1;
             if (float.TryParse(node.GetAttribute("NearPlane"), out float value2))
@@ -533,20 +544,39 @@ namespace FlaxEditor.Windows
                 ViewportIconsRenderer.Scale = value2;
             if (float.TryParse(node.GetAttribute("OrthographicScale"), out value2))
                 Viewport.OrthographicScale = value2;
-            if (ulong.TryParse(node.GetAttribute("ViewFlags"), out ulong value3))
+            if (node.HasAttribute("DisabledViewFlags") || node.HasAttribute("EnabledViewFlags"))
+            {
+                var viewFlags = ViewFlags.DefaultEditor;
+                viewFlags &= ~ParseViewFlags(node.GetAttribute("DisabledViewFlags"));
+                viewFlags |= ParseViewFlags(node.GetAttribute("EnabledViewFlags"));
+                Viewport.Task.ViewFlags = viewFlags;
+            }
+            else if (ulong.TryParse(node.GetAttribute("ViewFlags"), out ulong value3))
                 Viewport.Task.ViewFlags = (ViewFlags)value3;
             if (int.TryParse(node.GetAttribute("DebugView"), out int value4))
                 Viewport.Task.ViewMode = (ViewMode)value4;
             if (uint.TryParse(node.GetAttribute("LayerMask"), out uint value5))
                 Viewport.Task.ViewLayersMask = new LayersMask(value5);
             
-            // Reset view flags and view mode if opening with different engine version
-            // (ViewFlags and ViewMode enums could be modified)
+            // View flags are stored as named deviations from the current defaults so local
+            // visibility choices survive engine updates while new flags keep their defaults.
             if (Editor.LastProjectOpenedEngineBuild != Globals.EngineBuildNumber)
-            {
-                Viewport.Task.ViewFlags = ViewFlags.DefaultEditor;
                 Viewport.Task.ViewMode = ViewMode.Default;
+        }
+
+        private static ViewFlags ParseViewFlags(string value)
+        {
+            var result = ViewFlags.None;
+            if (string.IsNullOrEmpty(value))
+                return result;
+
+            var names = value.Split(',');
+            for (int i = 0; i < names.Length; i++)
+            {
+                if (Enum.TryParse(names[i].Trim(), out ViewFlags flag) && (flag & ~ViewFlags.All) == ViewFlags.None)
+                    result |= flag;
             }
+            return result;
         }
 
         /// <inheritdoc />

@@ -37,12 +37,14 @@ namespace FlaxEditor.Viewport
     /// <seealso cref="FlaxEditor.Viewport.EditorGizmoViewport" />
     public class MainEditorGizmoViewport : EditorGizmoViewport, IEditorPrimitivesOwner
     {
+        private const string NoGizmoContextCacheValue = "None";
         private readonly Editor _editor;
         private readonly ContextMenuButton _showGridButton;
         private readonly ContextMenuButton _showNavigationButton;
         private readonly ContextMenuButton _toggleGameViewButton;
         private readonly ContextMenuButton _toggleCharacterControllerModeButton;
         private readonly ContextMenuButton _showDirectionGizmoButton;
+        private readonly ContextMenuButton _showCameraCoordinatesButton;
         private ToolStripButton _overlayGridButton;
         private ToolStripButton _overlayNavigationButton;
         private ToolStripButton _overlayGameViewButton;
@@ -91,6 +93,7 @@ namespace FlaxEditor.Viewport
         private bool _middleMouseRecenterCandidate;
         private bool _suppressNextSelectionPick;
         private bool _csgTransformGizmoGesture;
+        private bool _showCameraCoordinates = true;
 
         /// <summary>
         /// The editor sprites rendering effect.
@@ -382,9 +385,14 @@ namespace FlaxEditor.Viewport
             objectHoverHighlights.Checked = _editor.Options.Options.Interface.HighlightViewportObjectHover;
 
             // Direction gizmo
-            _showDirectionGizmoButton = ViewWidgetButtonMenu.AddButton("Direction Gizmo", () => _directionGizmo.Visible = !_directionGizmo.Visible);
+            _showDirectionGizmoButton = ViewWidgetButtonMenu.AddButton("Direction Gizmo", () => ShowDirectionGizmo = !ShowDirectionGizmo);
             _showDirectionGizmoButton.AutoCheck = true;
             _showDirectionGizmoButton.CloseMenuOnClick = false;
+
+            // Camera coordinates diagnostic
+            _showCameraCoordinatesButton = ViewWidgetButtonMenu.AddButton("Camera Coordinates", () => ShowCameraCoordinates = !ShowCameraCoordinates);
+            _showCameraCoordinatesButton.Checked = _showCameraCoordinates;
+            _showCameraCoordinatesButton.CloseMenuOnClick = false;
             
             // Game View
             ViewWidgetButtonMenu.AddSeparator();
@@ -410,12 +418,20 @@ namespace FlaxEditor.Viewport
                 Gizmos.AddMode(PaintFoliageGizmo = new Tools.Foliage.PaintFoliageGizmoMode());
                 Gizmos.AddMode(EditFoliageGizmo = new Tools.Foliage.EditFoliageGizmoMode());
 
-                // Restore the explicit Object/CSG authoring context without inferring it from selection.
-                if (_editor.ProjectCache.TryGetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, out string context) &&
-                    string.Equals(context, CSGAuthoringGizmoMode.ContextCacheValue, StringComparison.Ordinal))
-                    Gizmos.SetActiveMode<CSGAuthoringGizmoMode>();
+                // Restore the explicit Object/CSG/No Gizmo context without inferring it from selection.
+                if (_editor.ProjectCache.TryGetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, out string context))
+                {
+                    if (string.Equals(context, CSGAuthoringGizmoMode.ContextCacheValue, StringComparison.Ordinal))
+                        Gizmos.SetActiveMode<CSGAuthoringGizmoMode>();
+                    else if (string.Equals(context, NoGizmoContextCacheValue, StringComparison.Ordinal))
+                        Gizmos.SetActiveMode<NoGizmoMode>();
+                    else
+                        Gizmos.SetActiveMode<TransformGizmoMode>();
+                }
                 else
+                {
                     Gizmos.SetActiveMode<TransformGizmoMode>();
+                }
             }
             Gizmos.ActiveModeChanged += OnActiveGizmoModeChanged;
             CSGAuthoringMode.Controller.Changed += UpdateViewportToolStrip;
@@ -466,7 +482,8 @@ namespace FlaxEditor.Viewport
             }
             else
             {
-                _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, "Object");
+                var context = mode is NoGizmoMode ? NoGizmoContextCacheValue : "Object";
+                _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, context);
             }
             UpdateViewportToolStrip();
         }
@@ -478,8 +495,7 @@ namespace FlaxEditor.Viewport
 
         private void OnEditorOptionsChanged(EditorOptions options)
         {
-            _directionGizmo.Visible = options.Viewport.ShowDirectionGizmo;
-            _showDirectionGizmoButton.Checked = _directionGizmo.Visible;
+            ShowDirectionGizmo = options.Viewport.ShowDirectionGizmo;
             _directionGizmo.Size = new Float2(DirectionGizmo.DefaultGizmoSize * options.Viewport.DirectionGizmoScale);
             _directionGizmo.LocalX = -_directionGizmo.Size.X * 0.5f;
             _directionGizmo.LocalY = _directionGizmo.Size.Y * 0.5f + ViewportWidgetsContainer.WidgetsHeight;
@@ -487,6 +503,32 @@ namespace FlaxEditor.Viewport
                 ClearSceneTreeHoverFromEditorViewport();
             if (!options.Interface.HighlightSceneTreeHoverInViewport)
                 SetSceneTreeHoveredActor(null);
+        }
+
+        /// <summary>
+        /// Gets or sets whether the direction gizmo is visible.
+        /// </summary>
+        public bool ShowDirectionGizmo
+        {
+            get => _directionGizmo.Visible;
+            set
+            {
+                _directionGizmo.Visible = value;
+                _showDirectionGizmoButton.Checked = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets whether the camera coordinates are visible.
+        /// </summary>
+        public bool ShowCameraCoordinates
+        {
+            get => _showCameraCoordinates;
+            set
+            {
+                _showCameraCoordinates = value;
+                _showCameraCoordinatesButton.Checked = value;
+            }
         }
 
         private void AddMainViewportToolStripButtons()
@@ -1883,6 +1925,32 @@ namespace FlaxEditor.Viewport
 
             if (IsCharacterControllerLookActive())
                 DrawCharacterControllerReticle();
+
+            if (_showCameraCoordinates)
+                DrawCameraCoordinates();
+        }
+
+        private void DrawCameraCoordinates()
+        {
+            var view = Task.View;
+            var originChanged = view.Origin != view.PrevOrigin;
+            var position = ViewPosition;
+            var relativePosition = view.Position;
+            var text = string.Format(
+                "FRAME {0}{1}\nCAMERA ABS   {2:F3}, {3:F3}, {4:F3}\nCAMERA REL   {5:F3}, {6:F3}, {7:F3}\nORIGIN       {8:F1}, {9:F1}, {10:F1}\nPREV ORIGIN  {11:F1}, {12:F1}, {13:F1}",
+                Engine.FrameCount,
+                originChanged ? "   ORIGIN SWITCH" : string.Empty,
+                position.X, position.Y, position.Z,
+                relativePosition.X, relativePosition.Y, relativePosition.Z,
+                view.Origin.X, view.Origin.Y, view.Origin.Z,
+                view.PrevOrigin.X, view.PrevOrigin.Y, view.PrevOrigin.Z);
+            var bounds = new Rectangle(12.0f, Height - 112.0f, 610.0f, 100.0f);
+            var background = Color.Black.AlphaMultiplied(0.78f);
+            var border = originChanged ? Color.Red : Color.White.AlphaMultiplied(0.35f);
+            var color = originChanged ? Color.Red : Color.White;
+            Render2D.FillRectangle(bounds, background);
+            Render2D.DrawRectangle(bounds, border, originChanged ? 2.0f : 1.0f);
+            Render2D.DrawText(Style.Current.FontMedium, text, new Rectangle(bounds.X + 8.0f, bounds.Y + 5.0f, bounds.Width - 16.0f, bounds.Height - 10.0f), color, TextAlignment.Near, TextAlignment.Near);
         }
 
         private void DrawCharacterControllerReticle()
