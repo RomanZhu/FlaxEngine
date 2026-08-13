@@ -88,6 +88,18 @@ void ExponentialHeightFog::Serialize(SerializeStream& stream, const void* otherO
 
     SERIALIZE(VolumetricFogEnable);
     SERIALIZE(VolumetricFogScatteringDistribution);
+    SERIALIZE(VolumetricFogIndependentScatteringEnable);
+    SERIALIZE(VolumetricFogScatteringIntensity);
+    SERIALIZE(VolumetricFogDualLobePhaseEnable);
+    SERIALIZE(VolumetricFogForwardScatteringWeight);
+    SERIALIZE(VolumetricFogBackwardScatteringDistribution);
+    SERIALIZE(VolumetricFogBackwardScatteringWeight);
+    SERIALIZE(VolumetricFogShadowPresentationEnable);
+    SERIALIZE(VolumetricFogShadowContrast);
+    SERIALIZE(VolumetricFogShadowExtinctionMultiplier);
+    SERIALIZE(VolumetricFogShadowScatteringMultiplier);
+    SERIALIZE(VolumetricFogMinimumAmbientScattering);
+    SERIALIZE(VolumetricFogDirectionalShadowStrength);
     SERIALIZE(VolumetricFogAlbedo);
     SERIALIZE(VolumetricFogEmissive);
     SERIALIZE(VolumetricFogExtinctionScale);
@@ -95,6 +107,18 @@ void ExponentialHeightFog::Serialize(SerializeStream& stream, const void* otherO
     SERIALIZE(VolumetricFogDistanceFade);
     SERIALIZE(VolumetricFogTemporalReprojection);
     SERIALIZE(VolumetricFogHistoryWeight);
+    SERIALIZE(VolumetricFogReactiveHistory);
+    SERIALIZE(VolumetricFogReactiveHistoryVelocityScale);
+    SERIALIZE(VolumetricFogLocalHistoryRejectionEnable);
+    SERIALIZE(VolumetricFogHistoryExtinctionDifferenceThreshold);
+    SERIALIZE(VolumetricFogHistoryNeighborhoodClampStrength);
+    SERIALIZE(VolumetricFogHistoryCameraMotionResponse);
+    SERIALIZE(VolumetricFogMinimumHistoryWeight);
+    SERIALIZE(VolumetricFogSecondLayerEnable);
+    SERIALIZE(VolumetricFogSecondLayerDensity);
+    SERIALIZE(VolumetricFogSecondLayerHeightOffset);
+    SERIALIZE(VolumetricFogSecondLayerHeightFalloff);
+    SERIALIZE(VolumetricFogSecondLayerDensityNoiseInfluence);
     SERIALIZE(VolumetricFogDensityNoiseEnable);
     SERIALIZE(VolumetricFogDensityNoiseScale);
     SERIALIZE(VolumetricFogDensityNoiseOctaves);
@@ -105,6 +129,18 @@ void ExponentialHeightFog::Serialize(SerializeStream& stream, const void* otherO
     SERIALIZE(VolumetricFogDensityNoiseInfluence);
     SERIALIZE(VolumetricFogDensityNoiseVelocity);
     SERIALIZE(VolumetricFogDensityNoiseSeed);
+    SERIALIZE(VolumetricFogDensityNoiseDecorrelateOctaves);
+    SERIALIZE(VolumetricFogDensityNoiseShapingEnable);
+    SERIALIZE(VolumetricFogDensityNoiseInvert);
+    SERIALIZE(VolumetricFogDensityNoiseContrast);
+    SERIALIZE(VolumetricFogDensityNoiseHeightEnable);
+    SERIALIZE(VolumetricFogDensityNoiseHeightFalloff);
+    SERIALIZE(VolumetricFogDensityNoiseHeightMinimumInfluence);
+    SERIALIZE(VolumetricFogNearClarityEnable);
+    SERIALIZE(VolumetricFogNearClarityRadius);
+    SERIALIZE(VolumetricFogNearClarityFadeDistance);
+    SERIALIZE(VolumetricFogNearClarityMinimumDensity);
+    SERIALIZE(VolumetricFogDebug);
 }
 
 void ExponentialHeightFog::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
@@ -126,6 +162,18 @@ void ExponentialHeightFog::Deserialize(DeserializeStream& stream, ISerializeModi
 
     DESERIALIZE(VolumetricFogEnable);
     DESERIALIZE(VolumetricFogScatteringDistribution);
+    DESERIALIZE(VolumetricFogIndependentScatteringEnable);
+    DESERIALIZE(VolumetricFogScatteringIntensity);
+    DESERIALIZE(VolumetricFogDualLobePhaseEnable);
+    DESERIALIZE(VolumetricFogForwardScatteringWeight);
+    DESERIALIZE(VolumetricFogBackwardScatteringDistribution);
+    DESERIALIZE(VolumetricFogBackwardScatteringWeight);
+    DESERIALIZE(VolumetricFogShadowPresentationEnable);
+    DESERIALIZE(VolumetricFogShadowContrast);
+    DESERIALIZE(VolumetricFogShadowExtinctionMultiplier);
+    DESERIALIZE(VolumetricFogShadowScatteringMultiplier);
+    DESERIALIZE(VolumetricFogMinimumAmbientScattering);
+    DESERIALIZE(VolumetricFogDirectionalShadowStrength);
     DESERIALIZE(VolumetricFogAlbedo);
     DESERIALIZE(VolumetricFogEmissive);
     DESERIALIZE(VolumetricFogExtinctionScale);
@@ -133,6 +181,18 @@ void ExponentialHeightFog::Deserialize(DeserializeStream& stream, ISerializeModi
     DESERIALIZE(VolumetricFogDistanceFade);
     DESERIALIZE(VolumetricFogTemporalReprojection);
     DESERIALIZE(VolumetricFogHistoryWeight);
+    DESERIALIZE(VolumetricFogReactiveHistory);
+    DESERIALIZE(VolumetricFogReactiveHistoryVelocityScale);
+    DESERIALIZE(VolumetricFogLocalHistoryRejectionEnable);
+    DESERIALIZE(VolumetricFogHistoryExtinctionDifferenceThreshold);
+    DESERIALIZE(VolumetricFogHistoryNeighborhoodClampStrength);
+    DESERIALIZE(VolumetricFogHistoryCameraMotionResponse);
+    DESERIALIZE(VolumetricFogMinimumHistoryWeight);
+    DESERIALIZE(VolumetricFogSecondLayerEnable);
+    DESERIALIZE(VolumetricFogSecondLayerDensity);
+    DESERIALIZE(VolumetricFogSecondLayerHeightOffset);
+    DESERIALIZE(VolumetricFogSecondLayerHeightFalloff);
+    DESERIALIZE(VolumetricFogSecondLayerDensityNoiseInfluence);
     DESERIALIZE(VolumetricFogDensityNoiseEnable);
     DESERIALIZE(VolumetricFogDensityNoiseScale);
     DESERIALIZE(VolumetricFogDensityNoiseOctaves);
@@ -143,6 +203,18 @@ void ExponentialHeightFog::Deserialize(DeserializeStream& stream, ISerializeModi
     DESERIALIZE(VolumetricFogDensityNoiseInfluence);
     DESERIALIZE(VolumetricFogDensityNoiseVelocity);
     DESERIALIZE(VolumetricFogDensityNoiseSeed);
+    DESERIALIZE(VolumetricFogDensityNoiseDecorrelateOctaves);
+    DESERIALIZE(VolumetricFogDensityNoiseShapingEnable);
+    DESERIALIZE(VolumetricFogDensityNoiseInvert);
+    DESERIALIZE(VolumetricFogDensityNoiseContrast);
+    DESERIALIZE(VolumetricFogDensityNoiseHeightEnable);
+    DESERIALIZE(VolumetricFogDensityNoiseHeightFalloff);
+    DESERIALIZE(VolumetricFogDensityNoiseHeightMinimumInfluence);
+    DESERIALIZE(VolumetricFogNearClarityEnable);
+    DESERIALIZE(VolumetricFogNearClarityRadius);
+    DESERIALIZE(VolumetricFogNearClarityFadeDistance);
+    DESERIALIZE(VolumetricFogNearClarityMinimumDensity);
+    DESERIALIZE(VolumetricFogDebug);
 }
 
 bool ExponentialHeightFog::HasContentLoaded() const
@@ -164,14 +236,40 @@ void ExponentialHeightFog::GetVolumetricFogOptions(VolumetricFogOptions& result)
     result.Enable = VolumetricFogEnable;
     result.TemporalReprojection = VolumetricFogTemporalReprojection;
     result.ScatteringDistribution = VolumetricFogScatteringDistribution;
+    result.ScatteringIntensity = VolumetricFogIndependentScatteringEnable ? Math::Max(VolumetricFogScatteringIntensity, 0.0f) : 1.0f;
+    result.ForwardScatteringWeight = VolumetricFogDualLobePhaseEnable ? Math::Saturate(VolumetricFogForwardScatteringWeight) : 1.0f;
+    result.BackwardScatteringDistribution = Math::Clamp(VolumetricFogBackwardScatteringDistribution, -0.9f, 0.9f);
+    result.BackwardScatteringWeight = VolumetricFogDualLobePhaseEnable ? Math::Saturate(VolumetricFogBackwardScatteringWeight) : 0.0f;
+    result.ShadowPresentationEnable = VolumetricFogShadowPresentationEnable;
+    result.ShadowContrast = VolumetricFogShadowPresentationEnable ? Math::Clamp(VolumetricFogShadowContrast, 0.1f, 8.0f) : 1.0f;
+    result.ShadowExtinctionMultiplier = VolumetricFogShadowPresentationEnable ? Math::Clamp(VolumetricFogShadowExtinctionMultiplier, 0.0f, 8.0f) : 1.0f;
+    result.ShadowScatteringMultiplier = VolumetricFogShadowPresentationEnable ? Math::Clamp(VolumetricFogShadowScatteringMultiplier, 0.0f, 4.0f) : 1.0f;
+    result.MinimumAmbientScattering = VolumetricFogShadowPresentationEnable ? Math::Saturate(VolumetricFogMinimumAmbientScattering) : 0.0f;
+    result.DirectionalShadowStrength = VolumetricFogShadowPresentationEnable ? Math::Saturate(VolumetricFogDirectionalShadowStrength) : 1.0f;
     result.HistoryWeight = Math::Saturate(VolumetricFogHistoryWeight);
+    result.ReactiveHistory = VolumetricFogReactiveHistory;
+    result.ReactiveHistoryVelocityScale = Math::Max(VolumetricFogReactiveHistoryVelocityScale, 1.0f);
+    result.LocalHistoryRejectionEnable = VolumetricFogLocalHistoryRejectionEnable;
+    result.HistoryExtinctionDifferenceThreshold = VolumetricFogLocalHistoryRejectionEnable ? Math::Saturate(VolumetricFogHistoryExtinctionDifferenceThreshold) : 1.0f;
+    result.HistoryNeighborhoodClampStrength = VolumetricFogLocalHistoryRejectionEnable ? Math::Saturate(VolumetricFogHistoryNeighborhoodClampStrength) : 0.0f;
+    result.HistoryCameraMotionResponse = VolumetricFogLocalHistoryRejectionEnable ? Math::Clamp(VolumetricFogHistoryCameraMotionResponse, 0.0f, 4.0f) : 0.0f;
+    result.MinimumHistoryWeight = VolumetricFogLocalHistoryRejectionEnable ? Math::Clamp(VolumetricFogMinimumHistoryWeight, 0.0f, 0.99f) : 0.0f;
     result.Albedo = VolumetricFogAlbedo * FogInscatteringColor;
     result.Emissive = VolumetricFogEmissive * (1.0f / 100.0f);
     result.ExtinctionScale = VolumetricFogExtinctionScale;
     result.Distance = VolumetricFogDistance;
     result.DistanceFade = Math::Saturate(VolumetricFogDistanceFade);
     result.FogParameters = Float4(density, height, heightFalloff, 0.0f);
+    result.FogLayer2Parameters = VolumetricFogSecondLayerEnable
+        ? Float4(
+            Math::Max(VolumetricFogSecondLayerDensity, 0.0f) / 1000.0f,
+            height + VolumetricFogSecondLayerHeightOffset,
+            Math::Max(VolumetricFogSecondLayerHeightFalloff, 0.0001f) / 1000.0f,
+            Math::Saturate(VolumetricFogSecondLayerDensityNoiseInfluence))
+        : Float4::Zero;
     result.DensityNoiseEnable = VolumetricFogDensityNoiseEnable;
+    result.DensityNoiseDecorrelateOctaves = VolumetricFogDensityNoiseDecorrelateOctaves;
+    result.DensityNoiseInvert = VolumetricFogDensityNoiseShapingEnable && VolumetricFogDensityNoiseInvert;
     result.DensityNoiseOctaves = Math::Clamp(VolumetricFogDensityNoiseOctaves, 1, 4);
     result.DensityNoiseSeed = VolumetricFogDensityNoiseSeed;
     result.DensityNoiseScale = Math::Max(VolumetricFogDensityNoiseScale, 1.0f);
@@ -180,7 +278,15 @@ void ExponentialHeightFog::GetVolumetricFogOptions(VolumetricFogOptions& result)
     result.DensityNoiseMin = Math::Saturate(VolumetricFogDensityNoiseMin);
     result.DensityNoiseMax = Math::Max(Math::Saturate(VolumetricFogDensityNoiseMax), result.DensityNoiseMin + 0.0001f);
     result.DensityNoiseInfluence = Math::Saturate(VolumetricFogDensityNoiseInfluence);
+    result.DensityNoiseContrast = VolumetricFogDensityNoiseShapingEnable ? Math::Clamp(VolumetricFogDensityNoiseContrast, 0.01f, 8.0f) : 1.0f;
+    result.DensityNoiseHeightFalloff = VolumetricFogDensityNoiseHeightEnable ? Math::Max(VolumetricFogDensityNoiseHeightFalloff, 0.0f) / 1000.0f : 0.0f;
+    result.DensityNoiseHeightMinimumInfluence = VolumetricFogDensityNoiseHeightEnable ? Math::Saturate(VolumetricFogDensityNoiseHeightMinimumInfluence) : 0.0f;
     result.DensityNoiseVelocity = VolumetricFogDensityNoiseVelocity;
+    result.NearClarityEnable = VolumetricFogNearClarityEnable;
+    result.NearClarityRadius = Math::Max(VolumetricFogNearClarityRadius, 0.0f);
+    result.NearClarityFadeDistance = Math::Max(VolumetricFogNearClarityFadeDistance, 0.001f);
+    result.NearClarityMinimumDensity = Math::Saturate(VolumetricFogNearClarityMinimumDensity);
+    result.DebugMode = VolumetricFogDebug;
 }
 
 void ExponentialHeightFog::GetExponentialHeightFogData(const RenderView& view, ShaderExponentialHeightFogData& result) const

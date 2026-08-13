@@ -15,6 +15,12 @@
 
 // Debug voxels so CS_FinalIntegration will just copy data without modifications
 #define DEBUG_VOXELS 0
+#define VOLUMETRIC_FOG_DEBUG_NONE 0
+#define VOLUMETRIC_FOG_DEBUG_DENSITY 1
+#define VOLUMETRIC_FOG_DEBUG_EXTINCTION 2
+#define VOLUMETRIC_FOG_DEBUG_SCATTERING 3
+#define VOLUMETRIC_FOG_DEBUG_HISTORY_WEIGHT 4
+#define VOLUMETRIC_FOG_DEBUG_FROXEL_GRID 5
 
 #include "./Flax/Common.hlsl"
 #include "./Flax/Math.hlsl"
@@ -52,11 +58,21 @@ float VolumetricFogDistanceFade;
 float InverseSquaredLightDistanceBiasScale;
 
 float4 FogParameters;
+float4 FogLayer2Parameters;
 float4 GridSliceParameters;
 
 float4 DensityNoiseParameters0;
 float4 DensityNoiseParameters1;
-float4 DensityNoiseOffset;
+float4 DensityNoiseOffsets[4];
+float4 DensityNoiseParameters2;
+float4 ScatteringParameters;
+float4 NearClarityParameters;
+float4 ShadowParameters0;
+float4 ShadowParameters1;
+float4 TemporalParameters0;
+float4 TemporalParameters1;
+float4 DebugParameters;
+float4 PreviousOriginDelta;
 
 float4x4 PrevWorldToClip;
 
@@ -87,7 +103,16 @@ float HenyeyGreensteinPhase(float g, float cosTheta)
 
 float GetPhase(float g, float cosTheta)
 {
-	return HenyeyGreensteinPhase(g, cosTheta);
+	float forwardWeight = ScatteringParameters.y;
+	float backwardWeight = ScatteringParameters.w;
+	float weightSum = forwardWeight + backwardWeight;
+	if (weightSum < 0.0001f)
+		return HenyeyGreensteinPhase(0.0f, cosTheta);
+	float phase = HenyeyGreensteinPhase(g, cosTheta) * forwardWeight;
+	BRANCH
+	if (backwardWeight > 0.0001f)
+		phase += HenyeyGreensteinPhase(ScatteringParameters.z, cosTheta) * backwardWeight;
+	return phase / weightSum;
 }
 
 float3 GetCellPositionWS(uint3 gridCoordinate, float3 cellOffset, out float sceneDepth)
@@ -171,7 +196,7 @@ float4 PS_InjectLight(Quad_GS2PS input) : SV_Target0
 		return 0;
         
     // Supersample if history buffer is outside the view
-	float3 historyUV = GetVolumeUV(GetCellPositionWS(gridCoordinate, 0.5f), PrevWorldToClip);
+	float3 historyUV = GetVolumeUV(GetCellPositionWS(gridCoordinate, 0.5f) + PreviousOriginDelta.xyz, PrevWorldToClip);
 	float historyAlpha = HistoryWeight;
 	FLATTEN
 	if (any(historyUV < 0) || any(historyUV > 1))
@@ -281,7 +306,7 @@ Texture3D<float> DensityNoiseTexture : register(t0);
 
 float GetDensityNoise(float3 positionWS, float froxelSize)
 {
-	float3 uvw = positionWS * DensityNoiseParameters0.x + DensityNoiseOffset.xyz;
+	float3 uvw = positionWS * DensityNoiseParameters0.x;
 	float frequency = 1.0f;
 	float amplitude = 1.0f;
 	float value = 0.0f;
@@ -295,16 +320,34 @@ float GetDensityNoise(float3 positionWS, float froxelSize)
 		// Fade detail before it becomes smaller than a froxel. This keeps distant fog stable without relying on temporal AA to hide aliasing.
 		float featureSize = rcp(DensityNoiseParameters0.x * frequency * DENSITY_NOISE_LATTICE_SIZE);
 		float octaveWeight = amplitude * saturate(featureSize / max(froxelSize * 2.0f, 0.0001f));
-		value += DensityNoiseTexture.SampleLevel(SamplerLinearWrap, uvw * frequency, 0) * octaveWeight;
+		value += DensityNoiseTexture.SampleLevel(SamplerLinearWrap, uvw + DensityNoiseOffsets[octave].xyz, 0) * octaveWeight;
 		weight += octaveWeight;
-		frequency *= DensityNoiseParameters0.y;
-		amplitude *= DensityNoiseParameters0.z;
+		if (octave + 1 < octaveCount)
+		{
+			frequency *= DensityNoiseParameters0.y;
+			amplitude *= DensityNoiseParameters0.z;
+			if (DensityNoiseOffsets[0].w > 0.5f)
+			{
+				// Orthonormal rotation plus an irrational-looking offset decorrelates the existing periodic field between octaves.
+				const float3x3 octaveRotation = float3x3(
+					0.00f, 0.80f, 0.60f,
+					-0.80f, 0.36f, -0.48f,
+					-0.60f, -0.48f, 0.64f);
+				uvw = mul(octaveRotation, uvw) * DensityNoiseParameters0.y;
+			}
+			else
+			{
+				uvw *= DensityNoiseParameters0.y;
+			}
+		}
 	}
 	if (weight < 0.0001f)
 		return 1.0f;
 	value /= weight;
 	value = saturate((value - DensityNoiseParameters1.x) / max(DensityNoiseParameters1.y - DensityNoiseParameters1.x, 0.0001f));
-	return lerp(1.0f, value, DensityNoiseParameters0.w);
+	if (DensityNoiseParameters2.y > 0.5f)
+		value = 1.0f - value;
+	return pow(value, DensityNoiseParameters2.x);
 }
 
 META_CS(true, FEATURE_LEVEL_SM5)
@@ -321,15 +364,32 @@ void CS_Initialize(uint3 DispatchThreadId : SV_DispatchThreadID)
 	float fogHeight = FogParameters.y;
 	float fogHeightFalloff = FogParameters.z;
 
-	// Calculate the global fog density that matches the exponential height fog density
-	float globalDensity = fogDensity * exp2(-fogHeightFalloff * (positionWS.y - fogHeight));
+	// Calculate the global fog density that matches the exponential height fog density.
+	float layer1Density = fogDensity * exp2(clamp(-fogHeightFalloff * (positionWS.y - fogHeight), -125.0f, 126.0f));
+	float layer2Density = 0.0f;
+	BRANCH
+	if (FogLayer2Parameters.x > 0.0f)
+		layer2Density = FogLayer2Parameters.x * exp2(clamp(-FogLayer2Parameters.z * (positionWS.y - FogLayer2Parameters.y), -125.0f, 126.0f));
 	if (DensityNoiseParameters1.w > 0.5f)
 	{
 		uint3 neighborCoordinate = min(gridCoordinate + 1u, GridSizeInt - 1u);
 		if (all(neighborCoordinate == gridCoordinate))
 			neighborCoordinate = gridCoordinate - 1u;
 		float froxelSize = length(GetCellPositionWS(neighborCoordinate, 0.5f) - positionWS);
-		globalDensity *= GetDensityNoise(positionWS, froxelSize);
+		float densityNoise = GetDensityNoise(positionWS, froxelSize);
+		float heightInfluence = lerp(
+			DensityNoiseParameters2.w,
+			1.0f,
+			exp2(-DensityNoiseParameters2.z * max(positionWS.y - fogHeight, 0.0f)));
+		layer1Density *= lerp(1.0f, densityNoise, DensityNoiseParameters0.w * heightInfluence);
+		layer2Density *= lerp(1.0f, densityNoise, FogLayer2Parameters.w);
+	}
+	float globalDensity = layer1Density + layer2Density;
+	if (NearClarityParameters.x > 0.5f)
+	{
+		float distanceToCamera = distance(positionWS, GBuffer.ViewPos);
+		float clarity = smoothstep(NearClarityParameters.y, NearClarityParameters.y + NearClarityParameters.z, distanceToCamera);
+		globalDensity *= lerp(NearClarityParameters.w, 1.0f, clarity);
 	}
 	float extinction = max(0.0f, globalDensity * GlobalExtinctionScale * 0.24f);
 
@@ -358,6 +418,14 @@ Texture2D<float4> ProbesIrradiance : register(t8);
 TextureCube SkyLightImage : register(t6);
 #endif
 
+float GetMaterialExtinction(int3 coordinate)
+{
+	int3 maxCoordinate = int3(GridSizeInt) - 1;
+	uint3 clampedCoordinate = (uint3)clamp(coordinate, int3(0, 0, 0), maxCoordinate);
+	float4 material = VBufferA[clampedCoordinate];
+	return material.w + Luminance(material.xyz);
+}
+
 META_CS(true, FEATURE_LEVEL_SM5)
 META_PERMUTATION_1(USE_DDGI=0)
 META_PERMUTATION_1(USE_DDGI=1)
@@ -369,14 +437,20 @@ void CS_LightScattering(uint3 DispatchThreadId : SV_DispatchThreadID)
 		return;
         
     // Supersample if history buffer is outside the view
-	float3 historyUV = GetVolumeUV(GetCellPositionWS(gridCoordinate, 0.5f), PrevWorldToClip);
+	float3 historyUV = GetVolumeUV(GetCellPositionWS(gridCoordinate, 0.5f) + PreviousOriginDelta.xyz, PrevWorldToClip);
 	float historyAlpha = HistoryWeight;
 	FLATTEN
 	if (any(historyUV < 0) || any(historyUV > 1))
 		historyAlpha = 0;
+	// Most debug modes display current froxel data. History Weight executes the temporal
+	// rejection logic and stores the resulting local weight for final visualization.
+	uint debugMode = (uint)DebugParameters.x;
+	if (debugMode != VOLUMETRIC_FOG_DEBUG_NONE && debugMode != VOLUMETRIC_FOG_DEBUG_HISTORY_WEIGHT)
+		historyAlpha = 0;
 	uint samplesCount = historyAlpha < 0.01f ? MissedHistorySamplesCount : 1;
     
 	float3 lightScattering = 0;
+	float directionalShadowVisibility = 0.0f;
 	for (uint sampleIndex = 0; sampleIndex < samplesCount; sampleIndex++)
 	{
 		float3 cellOffset = FrameJitterOffsets[sampleIndex].xyz;
@@ -388,7 +462,11 @@ void CS_LightScattering(uint3 DispatchThreadId : SV_DispatchThreadID)
 		// Directional light
         {
             float shadow = SampleDirectionalLightShadow(DirectionalLight, ShadowsBuffer, ShadowMap, positionWS, cameraVectorLength).SurfaceShadow;
-			lightScattering += DirectionalLight.Color * (8 * shadow * GetPhase(PhaseG, dot(DirectionalLight.Direction, cameraVectorNormalized)));
+			shadow = pow(saturate(shadow), ShadowParameters0.x);
+			shadow = lerp(1.0f, shadow, ShadowParameters1.x);
+			directionalShadowVisibility += shadow;
+			float directionalVisibility = max(shadow, ShadowParameters0.w);
+			lightScattering += DirectionalLight.Color * (8 * directionalVisibility * GetPhase(PhaseG, dot(DirectionalLight.Direction, cameraVectorNormalized)));
 		}
 
 #if USE_DDGI
@@ -405,21 +483,91 @@ void CS_LightScattering(uint3 DispatchThreadId : SV_DispatchThreadID)
 #endif
 	}
 	lightScattering /= (float)samplesCount;
+	directionalShadowVisibility = saturate(directionalShadowVisibility / (float)samplesCount);
 
 	// Apply scattering from the point and spot lights
 	lightScattering += LocalShadowedLightScattering[gridCoordinate].rgb;
+	lightScattering *= lerp(ShadowParameters0.z, 1.0f, directionalShadowVisibility);
 
 	float4 materialScatteringAndAbsorption = VBufferA[gridCoordinate];
 	float extinction = materialScatteringAndAbsorption.w + Luminance(materialScatteringAndAbsorption.xyz);
+	extinction *= lerp(ShadowParameters0.y, 1.0f, directionalShadowVisibility);
 	float3 materialEmissive = VBufferB[gridCoordinate].xyz;
-	float4 scatteringAndExtinction = float4(lightScattering * materialScatteringAndAbsorption.xyz + materialEmissive, extinction);
+	float4 scatteringAndExtinction = float4(lightScattering * materialScatteringAndAbsorption.xyz * ScatteringParameters.x + materialEmissive, extinction);
 
 	BRANCH
 	if (historyAlpha > 0)
 	{
 		float4 historyScatteringAndExtinction = LightScatteringHistory.SampleLevel(SamplerLinearClamp, historyUV, 0);
+		BRANCH
+		if (TemporalParameters1.x > 0.5f)
+		{
+			float stability = 1.0f;
+
+			// Reject history when current and reprojected medium extinction disagree. The
+			// relative comparison behaves consistently across thin and dense fog presets.
+			float extinctionDifference = abs(historyScatteringAndExtinction.w - scatteringAndExtinction.w);
+			float extinctionReference = max(max(historyScatteringAndExtinction.w, scatteringAndExtinction.w), 0.000001f);
+			float relativeExtinctionDifference = extinctionDifference / extinctionReference;
+			float extinctionStability = 1.0f - saturate(
+				(relativeExtinctionDifference - TemporalParameters0.x) /
+				max(1.0f - TemporalParameters0.x, 0.0001f));
+			stability = min(stability, extinctionStability);
+
+			// Reprojection displacement captures camera rotation, translation, and close-range
+			// disocclusion without relying on scene TAA motion vectors.
+			float2 currentVolumeUV = (gridCoordinate.xy + 0.5f) / GridSize.xy;
+			float reprojectionMotion = length(historyUV.xy - currentVolumeUV);
+			float cameraMotionStability = exp2(-reprojectionMotion * TemporalParameters0.z * 16.0f);
+			stability = min(stability, cameraMotionStability);
+
+			BRANCH
+			if (TemporalParameters0.y > 0.0001f)
+			{
+				// Clamp history to the current six-neighbor extinction envelope. The envelope
+				// includes the possible artistic shadow-extinction range without resampling shadows.
+				int3 coordinate = int3(gridCoordinate);
+				float neighborhoodMin = scatteringAndExtinction.w;
+				float neighborhoodMax = scatteringAndExtinction.w;
+				float neighborExtinction = GetMaterialExtinction(coordinate + int3(-1, 0, 0));
+				neighborhoodMin = min(neighborhoodMin, neighborExtinction);
+				neighborhoodMax = max(neighborhoodMax, neighborExtinction);
+				neighborExtinction = GetMaterialExtinction(coordinate + int3(1, 0, 0));
+				neighborhoodMin = min(neighborhoodMin, neighborExtinction);
+				neighborhoodMax = max(neighborhoodMax, neighborExtinction);
+				neighborExtinction = GetMaterialExtinction(coordinate + int3(0, -1, 0));
+				neighborhoodMin = min(neighborhoodMin, neighborExtinction);
+				neighborhoodMax = max(neighborhoodMax, neighborExtinction);
+				neighborExtinction = GetMaterialExtinction(coordinate + int3(0, 1, 0));
+				neighborhoodMin = min(neighborhoodMin, neighborExtinction);
+				neighborhoodMax = max(neighborhoodMax, neighborExtinction);
+				neighborExtinction = GetMaterialExtinction(coordinate + int3(0, 0, -1));
+				neighborhoodMin = min(neighborhoodMin, neighborExtinction);
+				neighborhoodMax = max(neighborhoodMax, neighborExtinction);
+				neighborExtinction = GetMaterialExtinction(coordinate + int3(0, 0, 1));
+				neighborhoodMin = min(neighborhoodMin, neighborExtinction);
+				neighborhoodMax = max(neighborhoodMax, neighborExtinction);
+
+				float shadowExtinctionMin = min(ShadowParameters0.y, 1.0f);
+				float shadowExtinctionMax = max(ShadowParameters0.y, 1.0f);
+				neighborhoodMin *= shadowExtinctionMin;
+				neighborhoodMax *= shadowExtinctionMax;
+				float clampedHistoryExtinction = clamp(historyScatteringAndExtinction.w, neighborhoodMin, neighborhoodMax);
+				float clampDifference = abs(historyScatteringAndExtinction.w - clampedHistoryExtinction) / extinctionReference;
+				stability = min(stability, 1.0f - saturate(clampDifference * TemporalParameters0.y));
+
+				float historyExtinctionScale = clampedHistoryExtinction / max(historyScatteringAndExtinction.w, 0.000001f);
+				float4 clampedHistory = float4(historyScatteringAndExtinction.rgb * historyExtinctionScale, clampedHistoryExtinction);
+				historyScatteringAndExtinction = lerp(historyScatteringAndExtinction, clampedHistory, TemporalParameters0.y);
+			}
+
+			float minimumHistoryWeight = min(TemporalParameters0.w, historyAlpha);
+			historyAlpha = lerp(minimumHistoryWeight, historyAlpha, saturate(stability));
+		}
 		scatteringAndExtinction = lerp(scatteringAndExtinction, historyScatteringAndExtinction, historyAlpha);
 	}
+	if (debugMode == VOLUMETRIC_FOG_DEBUG_HISTORY_WEIGHT)
+		scatteringAndExtinction.rgb = historyAlpha;
 
 	scatteringAndExtinction = select(or(isnan(scatteringAndExtinction), isinf(scatteringAndExtinction)), 0, scatteringAndExtinction);
 	RWLightScattering[gridCoordinate] = max(scatteringAndExtinction, 0);
@@ -446,6 +594,42 @@ void CS_FinalIntegration(uint3 DispatchThreadId : SV_DispatchThreadID)
 		uint3 coords = uint3(gridCoordinate.xy, layerIndex);
 		float4 scatteringExtinction = LightScattering[coords];
 		float3 positionWS = GetCellPositionWS(coords, 0.5f);
+
+		uint debugMode = (uint)DebugParameters.x;
+		BRANCH
+		if (debugMode != VOLUMETRIC_FOG_DEBUG_NONE)
+		{
+			float3 debugColor = 0.0f;
+			if (debugMode == VOLUMETRIC_FOG_DEBUG_DENSITY)
+			{
+				float density = scatteringExtinction.w / max(GlobalExtinctionScale * 0.24f, 0.000001f);
+				float referenceDensity = max(FogParameters.x + FogLayer2Parameters.x, 0.000001f);
+				debugColor = saturate(density / referenceDensity);
+			}
+			else if (debugMode == VOLUMETRIC_FOG_DEBUG_EXTINCTION)
+			{
+				debugColor = 1.0f - exp(-scatteringExtinction.w * VolumetricFogRange.y);
+			}
+			else if (debugMode == VOLUMETRIC_FOG_DEBUG_SCATTERING)
+			{
+				// Scattering is stored as a small per-world-unit coefficient. Preview its accumulated
+				// contribution over the fog range so useful values do not appear nearly black.
+				debugColor = 1.0f - exp(-scatteringExtinction.rgb * max(VolumetricFogRange.y, 1.0f));
+			}
+			else if (debugMode == VOLUMETRIC_FOG_DEBUG_HISTORY_WEIGHT)
+			{
+				debugColor = scatteringExtinction.rgb;
+			}
+			else if (debugMode == VOLUMETRIC_FOG_DEBUG_FROXEL_GRID)
+			{
+				uint checker = (coords.x ^ coords.y ^ coords.z) & 1u;
+				float depth = (coords.z + 0.5f) / GridSize.z;
+				debugColor = checker != 0u ? float3(0.1f, 0.8f, depth) : float3(0.02f, 0.08f, depth * 0.5f);
+			}
+			RWIntegratedLightScattering[coords] = float4(debugColor, 0.0f);
+			prevPositionWS = positionWS;
+			continue;
+		}
 
 		// Fade both scattering and extinction so the volumetric medium transitions cleanly into distance fog.
 		if (VolumetricFogDistanceFade > 0.0001f)

@@ -52,6 +52,25 @@ public:
 };
 
 /// <summary>
+/// Volumetric fog development visualization mode.
+/// </summary>
+API_ENUM() enum class VolumetricFogDebugMode
+{
+    /// <summary>Disables volumetric fog visualization.</summary>
+    None,
+    /// <summary>Displays the local medium density.</summary>
+    Density,
+    /// <summary>Displays the local extinction coefficient.</summary>
+    Extinction,
+    /// <summary>Displays the local in-scattered light.</summary>
+    Scattering,
+    /// <summary>Displays the effective temporal history weight.</summary>
+    HistoryWeight,
+    /// <summary>Displays a checker pattern aligned to the froxel grid.</summary>
+    FroxelGrid,
+};
+
+/// <summary>
 /// Volumetric fog feature settings
 /// </summary>
 struct VolumetricFogOptions
@@ -59,14 +78,34 @@ struct VolumetricFogOptions
     bool Enable;
     bool TemporalReprojection;
     float ScatteringDistribution;
+    float ScatteringIntensity;
+    float ForwardScatteringWeight;
+    float BackwardScatteringDistribution;
+    float BackwardScatteringWeight;
+    bool ShadowPresentationEnable;
+    float ShadowContrast;
+    float ShadowExtinctionMultiplier;
+    float ShadowScatteringMultiplier;
+    float MinimumAmbientScattering;
+    float DirectionalShadowStrength;
     float HistoryWeight;
+    bool ReactiveHistory;
+    float ReactiveHistoryVelocityScale;
+    bool LocalHistoryRejectionEnable;
+    float HistoryExtinctionDifferenceThreshold;
+    float HistoryNeighborhoodClampStrength;
+    float HistoryCameraMotionResponse;
+    float MinimumHistoryWeight;
     Color Albedo;
     Color Emissive;
     float ExtinctionScale;
     float Distance;
     float DistanceFade;
     Float4 FogParameters;
+    Float4 FogLayer2Parameters;
     bool DensityNoiseEnable;
+    bool DensityNoiseDecorrelateOctaves;
+    bool DensityNoiseInvert;
     int32 DensityNoiseOctaves;
     int32 DensityNoiseSeed;
     float DensityNoiseScale;
@@ -75,7 +114,15 @@ struct VolumetricFogOptions
     float DensityNoiseMin;
     float DensityNoiseMax;
     float DensityNoiseInfluence;
+    float DensityNoiseContrast;
+    float DensityNoiseHeightFalloff;
+    float DensityNoiseHeightMinimumInfluence;
     Float3 DensityNoiseVelocity;
+    bool NearClarityEnable;
+    float NearClarityRadius;
+    float NearClarityFadeDistance;
+    float NearClarityMinimumDensity;
+    VolumetricFogDebugMode DebugMode;
 
     bool UseVolumetricFog() const
     {

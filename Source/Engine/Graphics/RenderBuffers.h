@@ -90,6 +90,7 @@ public:
     struct
     {
         float MaxDistance;
+        int32 DebugMode = 0;
     } VolumetricFogData;
 
     // Helper target for the temporal SSR.

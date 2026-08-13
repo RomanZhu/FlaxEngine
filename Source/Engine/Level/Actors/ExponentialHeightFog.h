@@ -100,8 +100,81 @@ public:
     /// A distribution value of 0 scatters equally in all directions, while 0.9 scatters predominantly in the light direction.
     /// In order to have visible volumetric fog light shafts from the side, the distribution will need to be closer to 0. Range: -0.9-0.9.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(310), DefaultValue(0.2f), Limit(-0.9f, 0.9f, 0.001f), EditorDisplay(\"Volumetric Fog\", \"Scattering Distribution\")")
+    API_FIELD(Attributes="EditorOrder(310), DefaultValue(0.2f), Limit(-0.9f, 0.9f, 0.001f), EditorDisplay(\"Volumetric Fog\", \"Forward Scattering Distribution\")")
     float VolumetricFogScatteringDistribution = 0.2f;
+
+    /// <summary>
+    /// Enables independent control of scattered light without changing fog extinction.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(311), DefaultValue(false), EditorDisplay(\"Volumetric Fog\", \"Independent Scattering\")")
+    bool VolumetricFogIndependentScatteringEnable = false;
+
+    /// <summary>
+    /// Scales light scattered by the volumetric medium independently of extinction. Values above one strengthen light shafts without making the fog more opaque.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(312), DefaultValue(1.0f), Limit(0, 10, 0.01f), VisibleIf(nameof(VolumetricFogIndependentScatteringEnable)), EditorDisplay(\"Volumetric Fog\", \"Scattering Intensity\")")
+    float VolumetricFogScatteringIntensity = 1.0f;
+
+    /// <summary>
+    /// Enables blending of independently controlled forward and backward phase-function lobes.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(313), DefaultValue(false), EditorDisplay(\"Volumetric Fog\", \"Dual-Lobe Phase Function\")")
+    bool VolumetricFogDualLobePhaseEnable = false;
+
+    /// <summary>
+    /// Relative contribution of the forward scattering lobe.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(314), DefaultValue(1.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogDualLobePhaseEnable)), EditorDisplay(\"Volumetric Fog\", \"Forward Scattering Weight\")")
+    float VolumetricFogForwardScatteringWeight = 1.0f;
+
+    /// <summary>
+    /// Controls the distribution of the secondary backward scattering lobe. Range: -0.9-0.9.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(315), DefaultValue(-0.2f), Limit(-0.9f, 0.9f, 0.001f), VisibleIf(nameof(VolumetricFogDualLobePhaseEnable)), EditorDisplay(\"Volumetric Fog\", \"Backward Scattering Distribution\")")
+    float VolumetricFogBackwardScatteringDistribution = -0.2f;
+
+    /// <summary>
+    /// Relative contribution of the backward scattering lobe. A value of zero preserves the legacy single-lobe phase function.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(316), DefaultValue(0.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogDualLobePhaseEnable)), EditorDisplay(\"Volumetric Fog\", \"Backward Scattering Weight\")")
+    float VolumetricFogBackwardScatteringWeight = 0.0f;
+
+public:
+    /// <summary>
+    /// Enables artistic presentation controls for directional-light volumetric shadows without changing the base fog density.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(317), DefaultValue(false), EditorDisplay(\"Volumetric Fog Shadows\", \"Enable\")")
+    bool VolumetricFogShadowPresentationEnable = false;
+
+    /// <summary>
+    /// Shapes the directional volumetric shadow transition. Values above one produce darker, more prominent partial shadows.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(318), DefaultValue(1.0f), Limit(0.1f, 8, 0.01f), VisibleIf(nameof(VolumetricFogShadowPresentationEnable)), EditorDisplay(\"Volumetric Fog Shadows\", \"Contrast\")")
+    float VolumetricFogShadowContrast = 1.0f;
+
+    /// <summary>
+    /// Scales extinction in fully shadowed fog. Values above one make shadowed regions more obscuring without thickening illuminated fog.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(319), DefaultValue(1.0f), Limit(0, 8, 0.01f), VisibleIf(nameof(VolumetricFogShadowPresentationEnable)), EditorDisplay(\"Volumetric Fog Shadows\", \"Shadow Extinction Multiplier\")")
+    float VolumetricFogShadowExtinctionMultiplier = 1.0f;
+
+    /// <summary>
+    /// Scales accumulated lighting in fog regions shadowed by the directional light. Lower values reduce ambient and local-light fill without increasing fog opacity.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(320), DefaultValue(1.0f), Limit(0, 4, 0.01f), VisibleIf(nameof(VolumetricFogShadowPresentationEnable)), EditorDisplay(\"Volumetric Fog Shadows\", \"Shadow Scattering Multiplier\")")
+    float VolumetricFogShadowScatteringMultiplier = 1.0f;
+
+    /// <summary>
+    /// Minimum directional-light visibility retained in volumetric shadow. Raise it to prevent shadowed fog from becoming completely black.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(321), DefaultValue(0.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogShadowPresentationEnable)), EditorDisplay(\"Volumetric Fog Shadows\", \"Minimum Ambient Scattering\")")
+    float VolumetricFogMinimumAmbientScattering = 0.0f;
+
+    /// <summary>
+    /// Blends between unshadowed directional fog lighting and the sampled volumetric shadow. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(322), DefaultValue(1.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogShadowPresentationEnable)), EditorDisplay(\"Volumetric Fog Shadows\", \"Directional Shadow Strength\")")
+    float VolumetricFogDirectionalShadowStrength = 1.0f;
 
     /// <summary>
     /// The height fog particle reflectiveness used by volumetric fog.
@@ -147,6 +220,80 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(380), DefaultValue(0.92f), Limit(0, 0.99f, 0.01f), EditorDisplay(\"Volumetric Fog\", \"History Weight\")")
     float VolumetricFogHistoryWeight = 0.92f;
+
+    /// <summary>
+    /// Reduces temporal history as the procedural density field moves faster to limit motion trails.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(381), DefaultValue(false), EditorDisplay(\"Volumetric Fog\", \"Reactive History\")")
+    bool VolumetricFogReactiveHistory = false;
+
+    /// <summary>
+    /// Density-field speed in world units per second that halves the temporal history weight.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(382), DefaultValue(1000.0f), Limit(1), VisibleIf(nameof(VolumetricFogReactiveHistory)), EditorDisplay(\"Volumetric Fog\", \"Reactive History Velocity Scale\")")
+    float VolumetricFogReactiveHistoryVelocityScale = 1000.0f;
+
+public:
+    /// <summary>
+    /// Enables per-froxel temporal rejection for changed extinction, neighborhood mismatch, and camera motion.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(383), DefaultValue(false), EditorDisplay(\"Volumetric Fog Temporal Stability\", \"Local History Rejection\")")
+    bool VolumetricFogLocalHistoryRejectionEnable = false;
+
+    /// <summary>
+    /// Relative current-versus-history extinction difference that begins reducing temporal history. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(384), DefaultValue(0.1f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogLocalHistoryRejectionEnable)), EditorDisplay(\"Volumetric Fog Temporal Stability\", \"Extinction Difference Threshold\")")
+    float VolumetricFogHistoryExtinctionDifferenceThreshold = 0.1f;
+
+    /// <summary>
+    /// Clamps reprojected extinction to the current six-froxel neighborhood. Zero disables neighborhood sampling; one applies the full clamp. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(385), DefaultValue(1.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogLocalHistoryRejectionEnable)), EditorDisplay(\"Volumetric Fog Temporal Stability\", \"Neighborhood Clamp Strength\")")
+    float VolumetricFogHistoryNeighborhoodClampStrength = 1.0f;
+
+    /// <summary>
+    /// Reduces history when reprojection moves across the screen due to camera rotation or translation. Zero disables camera-motion response.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(386), DefaultValue(1.0f), Limit(0, 4, 0.01f), VisibleIf(nameof(VolumetricFogLocalHistoryRejectionEnable)), EditorDisplay(\"Volumetric Fog Temporal Stability\", \"Camera Motion Response\")")
+    float VolumetricFogHistoryCameraMotionResponse = 1.0f;
+
+    /// <summary>
+    /// Minimum history weight retained after local rejection. Keep at zero to allow complete rejection in changed or disoccluded fog. Range: 0-0.99.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(387), DefaultValue(0.0f), Limit(0, 0.99f, 0.01f), VisibleIf(nameof(VolumetricFogLocalHistoryRejectionEnable)), EditorDisplay(\"Volumetric Fog Temporal Stability\", \"Minimum History Weight\")")
+    float VolumetricFogMinimumHistoryWeight = 0.0f;
+
+public:
+    /// <summary>
+    /// Enables a second analytical exponential density layer for independent ground mist or atmospheric haze.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(390), DefaultValue(false), EditorDisplay(\"Volumetric Fog Layer 2\", \"Enable\")")
+    bool VolumetricFogSecondLayerEnable = false;
+
+    /// <summary>
+    /// Density of the second volumetric layer.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(391), DefaultValue(0.01f), Limit(0, 100, 0.001f), VisibleIf(nameof(VolumetricFogSecondLayerEnable)), EditorDisplay(\"Volumetric Fog Layer 2\", \"Density\")")
+    float VolumetricFogSecondLayerDensity = 0.01f;
+
+    /// <summary>
+    /// Base-height offset of the second layer relative to this Actor, in world units.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(392), DefaultValue(0.0f), VisibleIf(nameof(VolumetricFogSecondLayerEnable)), EditorDisplay(\"Volumetric Fog Layer 2\", \"Height Offset\")")
+    float VolumetricFogSecondLayerHeightOffset = 0.0f;
+
+    /// <summary>
+    /// Height falloff of the second layer. Smaller values produce a broader transition.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(393), DefaultValue(0.05f), Limit(0.0001f, 10, 0.001f), VisibleIf(nameof(VolumetricFogSecondLayerEnable)), EditorDisplay(\"Volumetric Fog Layer 2\", \"Height Falloff\")")
+    float VolumetricFogSecondLayerHeightFalloff = 0.05f;
+
+    /// <summary>
+    /// Blends the second layer between uniform density and the existing procedural density field. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(394), DefaultValue(0.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogSecondLayerEnable)), EditorDisplay(\"Volumetric Fog Layer 2\", \"Density Noise Influence\")")
+    float VolumetricFogSecondLayerDensityNoiseInfluence = 0.0f;
 
 public:
     /// <summary>
@@ -208,6 +355,80 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(490), DefaultValue(0), EditorDisplay(\"Volumetric Fog Density\", \"Seed\")")
     int32 VolumetricFogDensityNoiseSeed = 0;
+
+    /// <summary>
+    /// Rotates and offsets successive density-noise octaves to reduce aligned and repeating formations.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(500), DefaultValue(true), EditorDisplay(\"Volumetric Fog Density\", \"Decorrelate Octaves\")")
+    bool VolumetricFogDensityNoiseDecorrelateOctaves = true;
+
+    /// <summary>
+    /// Enables inversion and contrast shaping of the remapped density-noise field.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(505), DefaultValue(false), EditorDisplay(\"Volumetric Fog Density\", \"Density Shaping\")")
+    bool VolumetricFogDensityNoiseShapingEnable = false;
+
+    /// <summary>
+    /// Inverts the remapped density-noise field to create hollow or complementary formations.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(510), DefaultValue(false), VisibleIf(nameof(VolumetricFogDensityNoiseShapingEnable)), EditorDisplay(\"Volumetric Fog Density\", \"Invert\")")
+    bool VolumetricFogDensityNoiseInvert = false;
+
+    /// <summary>
+    /// Applies a power curve to the remapped density field. Values above one sharpen dense formations; values below one broaden them.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(520), DefaultValue(1.0f), Limit(0.01f, 8, 0.01f), VisibleIf(nameof(VolumetricFogDensityNoiseShapingEnable)), EditorDisplay(\"Volumetric Fog Density\", \"Contrast\")")
+    float VolumetricFogDensityNoiseContrast = 1.0f;
+
+    /// <summary>
+    /// Enables altitude-based attenuation of procedural density variation.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(525), DefaultValue(false), EditorDisplay(\"Volumetric Fog Density\", \"Height-Dependent Noise\")")
+    bool VolumetricFogDensityNoiseHeightEnable = false;
+
+    /// <summary>
+    /// Fades procedural variation above the fog Actor height. Zero disables the height-dependent fade.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(530), DefaultValue(0.0f), Limit(0, 10, 0.001f), VisibleIf(nameof(VolumetricFogDensityNoiseHeightEnable)), EditorDisplay(\"Volumetric Fog Density\", \"Height Falloff\")")
+    float VolumetricFogDensityNoiseHeightFalloff = 0.0f;
+
+    /// <summary>
+    /// Minimum procedural density influence retained high above the fog Actor. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(540), DefaultValue(0.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogDensityNoiseHeightEnable)), EditorDisplay(\"Volumetric Fog Density\", \"Minimum Height Influence\")")
+    float VolumetricFogDensityNoiseHeightMinimumInfluence = 0.0f;
+
+public:
+    /// <summary>
+    /// Enables smooth density attenuation around the camera for close-range readability.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(600), DefaultValue(false), EditorDisplay(\"Volumetric Fog Clarity\", \"Enable\")")
+    bool VolumetricFogNearClarityEnable = false;
+
+    /// <summary>
+    /// Radius around the camera over which the minimum retained density is used.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(610), DefaultValue(200.0f), Limit(0), VisibleIf(nameof(VolumetricFogNearClarityEnable)), EditorDisplay(\"Volumetric Fog Clarity\", \"Clear Radius\")")
+    float VolumetricFogNearClarityRadius = 200.0f;
+
+    /// <summary>
+    /// Distance over which density fades from the clear radius back to full strength.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(620), DefaultValue(500.0f), Limit(0.001f), VisibleIf(nameof(VolumetricFogNearClarityEnable)), EditorDisplay(\"Volumetric Fog Clarity\", \"Fade Distance\")")
+    float VolumetricFogNearClarityFadeDistance = 500.0f;
+
+    /// <summary>
+    /// Fraction of density retained inside the clear radius. Range: 0-1.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(630), DefaultValue(0.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogNearClarityEnable)), EditorDisplay(\"Volumetric Fog Clarity\", \"Minimum Density\")")
+    float VolumetricFogNearClarityMinimumDensity = 0.0f;
+
+public:
+    /// <summary>
+    /// Development visualization for inspecting volumetric fog density, lighting, history, and froxel resolution.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(700), DefaultValue(VolumetricFogDebugMode.None), EditorDisplay(\"Volumetric Fog Debug\", \"Mode\")")
+    VolumetricFogDebugMode VolumetricFogDebug = VolumetricFogDebugMode::None;
 
 private:
 #if COMPILE_WITH_DEV_ENV

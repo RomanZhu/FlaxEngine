@@ -55,11 +55,21 @@ GPU_CB_STRUCT(Data {
     float InverseSquaredLightDistanceBiasScale;
 
     Float4 FogParameters;
+    Float4 FogLayer2Parameters;
     Float4 GridSliceParameters;
 
     Float4 DensityNoiseParameters0;
     Float4 DensityNoiseParameters1;
-    Float4 DensityNoiseOffset;
+    Float4 DensityNoiseOffsets[4];
+    Float4 DensityNoiseParameters2;
+    Float4 ScatteringParameters;
+    Float4 NearClarityParameters;
+    Float4 ShadowParameters0;
+    Float4 ShadowParameters1;
+    Float4 TemporalParameters0;
+    Float4 TemporalParameters1;
+    Float4 DebugParameters;
+    Float4 PreviousOriginDelta;
 
     Matrix PrevWorldToClip;
 
@@ -234,6 +244,11 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
     // Setup configuration
     cache.FogJitter = options.TemporalReprojection && options.HistoryWeight > ZeroTolerance;
     cache.HistoryWeight = options.TemporalReprojection ? options.HistoryWeight : 0.0f;
+    if (options.ReactiveHistory && options.DensityNoiseEnable)
+    {
+        const float densityVelocity = options.DensityNoiseVelocity.Length();
+        cache.HistoryWeight *= Math::Exp2(-densityVelocity / options.ReactiveHistoryVelocityScale);
+    }
     cache.InverseSquaredLightDistanceBiasScale = 1.0f;
     switch (Graphics::VolumetricFogQuality)
     {
@@ -260,6 +275,13 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
     }
     auto& fogData = renderContext.Buffers->VolumetricFogData;
     fogData.MaxDistance = options.Distance;
+    if (fogData.DebugMode == (int32)VolumetricFogDebugMode::HistoryWeight && options.DebugMode != VolumetricFogDebugMode::HistoryWeight)
+    {
+        // History Weight visualization encodes the local weight into the temporary scattering
+        // output. Discard preserved history when leaving the mode rather than blending stale data.
+        cache.HistoryWeight = 0.0f;
+    }
+    fogData.DebugMode = (int32)options.DebugMode;
 
     // Reduce Z resolution when fog range is smaller than reference
     float referenceRangeScaleZ = METERS_TO_UNITS(60);
@@ -286,7 +308,6 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
         (float)Math::DivideAndRoundUp(height, cache.GridPixelSize),
         (float)cache.GridSizeZ);
     if (renderContext.Task->IsCameraCut ||
-        renderContext.View.IsOriginTeleport() ||
         (renderContext.Buffers->VolumetricFog && renderContext.Buffers->VolumetricFog->Size3() != cache.GridSize) ||
         Engine::FrameCount - renderContext.Buffers->LastFrameVolumetricFog > 4)
     {
@@ -305,25 +326,83 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
     cache.Data.GridSizeIntZ = (uint32)cache.GridSize.Z;
     cache.Data.HistoryWeight = cache.HistoryWeight;
     cache.Data.FogParameters = options.FogParameters;
+    cache.Data.FogLayer2Parameters = options.FogLayer2Parameters;
+    // Froxel world positions are reconstructed relative to the current large-world render origin.
+    cache.Data.FogParameters.Y -= (float)renderContext.View.Origin.Y;
+    cache.Data.FogLayer2Parameters.Y -= (float)renderContext.View.Origin.Y;
     cache.Data.GridSliceParameters = GetGridSliceParameters(fogStart, fogData.MaxDistance, cache.GridSizeZ);
     const float densityNoiseInvScale = 1.0f / options.DensityNoiseScale;
     cache.Data.DensityNoiseParameters0 = Float4(densityNoiseInvScale, options.DensityNoiseLacunarity, options.DensityNoiseGain, options.DensityNoiseInfluence);
     cache.Data.DensityNoiseParameters1 = Float4(options.DensityNoiseMin, options.DensityNoiseMax, (float)options.DensityNoiseOctaves, options.DensityNoiseEnable ? 1.0f : 0.0f);
     const double densityNoiseTime = Time::Draw.UnscaledTime.GetTotalSeconds();
-    const float densityNoiseSeed = (float)options.DensityNoiseSeed;
-    const Float3 densityNoiseSeedOffset(
-        Math::Mod(densityNoiseSeed * 0.1031f, 1.0f),
-        Math::Mod(densityNoiseSeed * 0.11369f, 1.0f),
-        Math::Mod(densityNoiseSeed * 0.13787f, 1.0f));
-    const Float3 densityNoiseWindOffset(
-        (float)Math::Mod(options.DensityNoiseVelocity.X * densityNoiseTime * densityNoiseInvScale, 1.0),
-        (float)Math::Mod(options.DensityNoiseVelocity.Y * densityNoiseTime * densityNoiseInvScale, 1.0),
-        (float)Math::Mod(options.DensityNoiseVelocity.Z * densityNoiseTime * densityNoiseInvScale, 1.0));
-    const Float3 densityNoiseOriginOffset(
-        (float)Math::Mod(renderContext.View.Origin.X * densityNoiseInvScale, 1.0),
-        (float)Math::Mod(renderContext.View.Origin.Y * densityNoiseInvScale, 1.0),
-        (float)Math::Mod(renderContext.View.Origin.Z * densityNoiseInvScale, 1.0));
-    cache.Data.DensityNoiseOffset = Float4(densityNoiseSeedOffset + densityNoiseOriginOffset - densityNoiseWindOffset, 0.0f);
+    const double densityNoiseSeed = options.DensityNoiseSeed;
+    double densityNoiseOffsetX = densityNoiseSeed * 0.1031 + renderContext.View.Origin.X * densityNoiseInvScale - options.DensityNoiseVelocity.X * densityNoiseTime * densityNoiseInvScale;
+    double densityNoiseOffsetY = densityNoiseSeed * 0.11369 + renderContext.View.Origin.Y * densityNoiseInvScale - options.DensityNoiseVelocity.Y * densityNoiseTime * densityNoiseInvScale;
+    double densityNoiseOffsetZ = densityNoiseSeed * 0.13787 + renderContext.View.Origin.Z * densityNoiseInvScale - options.DensityNoiseVelocity.Z * densityNoiseTime * densityNoiseInvScale;
+    for (int32 octave = 0; octave < 4; octave++)
+    {
+        // Preserve the complete large-world offset while deriving each octave, then wrap only the
+        // final sample coordinate. Wrapping before the octave rotation makes integer noise periods
+        // turn into non-integer offsets and causes a visible jump whenever the render origin moves.
+        cache.Data.DensityNoiseOffsets[octave] = Float4(
+            (float)Math::Mod(densityNoiseOffsetX, 1.0),
+            (float)Math::Mod(densityNoiseOffsetY, 1.0),
+            (float)Math::Mod(densityNoiseOffsetZ, 1.0),
+            octave == 0 && options.DensityNoiseDecorrelateOctaves ? 1.0f : 0.0f);
+        if (options.DensityNoiseDecorrelateOctaves)
+        {
+            const double previousOffsetX = densityNoiseOffsetX;
+            const double previousOffsetY = densityNoiseOffsetY;
+            const double previousOffsetZ = densityNoiseOffsetZ;
+            densityNoiseOffsetX = (previousOffsetY * 0.80 + previousOffsetZ * 0.60) * options.DensityNoiseLacunarity + 0.37;
+            densityNoiseOffsetY = (previousOffsetX * -0.80 + previousOffsetY * 0.36 + previousOffsetZ * -0.48) * options.DensityNoiseLacunarity + 0.61;
+            densityNoiseOffsetZ = (previousOffsetX * -0.60 + previousOffsetY * -0.48 + previousOffsetZ * 0.64) * options.DensityNoiseLacunarity + 0.83;
+        }
+        else
+        {
+            densityNoiseOffsetX *= options.DensityNoiseLacunarity;
+            densityNoiseOffsetY *= options.DensityNoiseLacunarity;
+            densityNoiseOffsetZ *= options.DensityNoiseLacunarity;
+        }
+    }
+    cache.Data.DensityNoiseParameters2 = Float4(
+        options.DensityNoiseContrast,
+        options.DensityNoiseInvert ? 1.0f : 0.0f,
+        options.DensityNoiseHeightFalloff,
+        options.DensityNoiseHeightMinimumInfluence);
+    cache.Data.ScatteringParameters = Float4(
+        options.ScatteringIntensity,
+        options.ForwardScatteringWeight,
+        options.BackwardScatteringDistribution,
+        options.BackwardScatteringWeight);
+    cache.Data.NearClarityParameters = Float4(
+        options.NearClarityEnable ? 1.0f : 0.0f,
+        options.NearClarityRadius,
+        options.NearClarityFadeDistance,
+        options.NearClarityMinimumDensity);
+    cache.Data.ShadowParameters0 = Float4(
+        options.ShadowContrast,
+        options.ShadowExtinctionMultiplier,
+        options.ShadowScatteringMultiplier,
+        options.MinimumAmbientScattering);
+    cache.Data.ShadowParameters1 = Float4(
+        options.DirectionalShadowStrength,
+        options.ShadowPresentationEnable ? 1.0f : 0.0f,
+        0.0f,
+        0.0f);
+    cache.Data.TemporalParameters0 = Float4(
+        options.HistoryExtinctionDifferenceThreshold,
+        options.HistoryNeighborhoodClampStrength,
+        options.HistoryCameraMotionResponse,
+        options.MinimumHistoryWeight);
+    cache.Data.TemporalParameters1 = Float4(
+        options.LocalHistoryRejectionEnable ? 1.0f : 0.0f,
+        0.0f,
+        0.0f,
+        0.0f);
+    cache.Data.DebugParameters = Float4((float)options.DebugMode, 0.0f, 0.0f, 0.0f);
+    const Vector3 previousOriginDelta = renderContext.View.Origin - renderContext.View.PrevOrigin;
+    cache.Data.PreviousOriginDelta = Float4((Float3)previousOriginDelta, 0.0f);
     /*static bool log = true;
     if (log)
     {
@@ -754,9 +833,14 @@ void VolumetricFogPass::Render(RenderContext& renderContext)
     RenderTargetPool::Release(vBufferA);
     RenderTargetPool::Release(vBufferB);
 
-    // Update the temporal history buffer
-    RenderTargetPool::Release(renderContext.Buffers->VolumetricFogHistory);
-    renderContext.Buffers->VolumetricFogHistory = lightScattering;
+    // Update the temporal history buffer. History Weight debug visualization writes diagnostic
+    // values into RGB, so preserve the last normal history instead of contaminating it.
+    const bool preserveTemporalHistory = renderContext.Buffers->VolumetricFogData.DebugMode == (int32)VolumetricFogDebugMode::HistoryWeight;
+    if (!preserveTemporalHistory)
+    {
+        RenderTargetPool::Release(renderContext.Buffers->VolumetricFogHistory);
+        renderContext.Buffers->VolumetricFogHistory = lightScattering;
+    }
 
     // Get buffer for the integrated light scattering (try to reuse the previous frame if it's valid)
     GPUTexture* integratedLightScattering = renderContext.Buffers->VolumetricFog;
@@ -791,6 +875,8 @@ void VolumetricFogPass::Render(RenderContext& renderContext)
     context->ResetUA();
     context->ResetSR();
     context->ResetRenderTarget();
+    if (preserveTemporalHistory)
+        RenderTargetPool::Release(lightScattering);
     auto viewport = renderContext.Task->GetViewport();
     context->SetViewportAndScissors(viewport);
 }
