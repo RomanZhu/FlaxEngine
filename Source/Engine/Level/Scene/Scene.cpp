@@ -19,6 +19,7 @@
 #include "Engine/Terrain/Terrain.h"
 #if USE_EDITOR
 #include "Engine/Engine/Globals.h"
+#include "Engine/Graphics/GPUDevice.h"
 #include "Engine/Platform/StringUtils.h"
 #endif
 
@@ -142,6 +143,28 @@ String Scene::GetFilename() const
 String Scene::GetDataFolderPath() const
 {
     return Globals::ProjectContentFolder / TEXT("SceneData") / GetFilename();
+}
+
+Model* Scene::GetCSGModel() const
+{
+    return CSGData.Model.Get();
+}
+
+void Scene::ApplyCSGModelSDF()
+{
+#if COMPILE_WITH_CSG_BUILDER
+    const auto model = CSGData.Model.Get();
+    if (!model || !model->SDF.Texture)
+        return;
+
+    if (CSGData.PreviewModel)
+    {
+        GPUDeviceLock gpuLock(GPUDevice::Instance);
+        CSGData.PreviewModelCache = CSGData.PreviewModel;
+        CSGData.PreviewModel = nullptr;
+    }
+    OnCSGBuildEnd();
+#endif
 }
 
 Array<Guid> Scene::GetAssetReferences() const

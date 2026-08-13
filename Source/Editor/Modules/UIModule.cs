@@ -1068,7 +1068,7 @@ namespace FlaxEditor.Modules
             _menuToolsBuildCSGMesh = cm.AddButton("Build CSG mesh", inputOptions.BuildCSG, Editor.BuildCSG);
             _menuToolsBuildNavMesh = cm.AddButton("Build Nav Mesh", inputOptions.BuildNav, Editor.BuildNavMesh);
             _menuToolsBuildAllMeshesSDF = cm.AddButton("Build all meshes SDF", inputOptions.BuildSDF, Editor.BuildAllMeshesSDF);
-            _menuToolsBuildAllMeshesSDF.LinkTooltip("Generates Sign Distance Field texture for all meshes used in loaded scenes. Use with 'F' key pressed to force rebuild SDF for meshes with existing one.");
+            _menuToolsBuildAllMeshesSDF.LinkTooltip("Generates Sign Distance Field texture for all meshes and CSG geometry used in loaded scenes. Use with 'F' key pressed to force rebuild SDF for meshes with existing one.");
             cm.AddButton("Recook all collision data", CollisionDataProxy.RecookAllCollisionData);
             cm.AddSeparator();
             cm.AddButton("Game Cooker", Editor.Windows.GameCookerWin.FocusOrShow);

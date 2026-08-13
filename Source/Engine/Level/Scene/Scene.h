@@ -106,6 +106,16 @@ public:
     API_PROPERTY() String GetDataFolderPath() const;
 
     /// <summary>
+    /// Gets the persisted model containing the scene CSG geometry.
+    /// </summary>
+    API_PROPERTY(Attributes="HideInEditor") Model* GetCSGModel() const;
+
+    /// <summary>
+    /// Switches CSG rendering from the live preview to the persisted model after its SDF has been built.
+    /// </summary>
+    API_FUNCTION(Attributes="HideInEditor") void ApplyCSGModelSDF();
+
+    /// <summary>
     /// Gets the asset references (scene asset). Supported only in Editor.
     /// </summary>
     /// <seealso cref="Asset.GetReferences"/>

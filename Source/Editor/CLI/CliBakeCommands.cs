@@ -150,7 +150,7 @@ namespace FlaxEditor
             return new { requested = true, operation = "scenes", status = Status() };
         }
 
-        [CliCommand("bake.sdf.start", Description = "Generate SDF data for static models in loaded scenes.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        [CliCommand("bake.sdf.start", Description = "Generate SDF data for static models and CSG geometry in loaded scenes.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
         public static object StartSdf()
         {
             EnsureIdle("sdf");

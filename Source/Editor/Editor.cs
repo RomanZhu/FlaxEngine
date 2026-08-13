@@ -1501,11 +1501,12 @@ namespace FlaxEditor
         }
 
         /// <summary>
-        /// Builds SDF for all static models in the scene.
+        /// Builds SDF for all static models and CSG geometry in the scene.
         /// </summary>
         public void BuildAllMeshesSDF()
         {
             var models = new List<Model>();
+            var csgSceneIds = new List<Guid>();
             var forceRebuild = Input.GetKey(KeyboardKeys.F);
             Scene.ExecuteOnGraph(node =>
             {
@@ -1523,6 +1524,18 @@ namespace FlaxEditor
                 }
                 return true;
             });
+            foreach (var scene in Level.Scenes)
+            {
+                var model = scene.CSGModel;
+                if (model != null &&
+                    !model.IsVirtual &&
+                    (forceRebuild || model.SDF.Texture == null))
+                {
+                    if (!models.Contains(model))
+                        models.Add(model);
+                    csgSceneIds.Add(scene.ID);
+                }
+            }
             Task.Run(() =>
             {
                 for (int i = 0; i < models.Count; i++)
@@ -1541,6 +1554,17 @@ namespace FlaxEditor
                     }
                     if (!model.GenerateSDF(resolutionScale, lodIndex, true, backfacesThreshold, useGPU))
                         model.Save();
+                }
+                if (csgSceneIds.Count != 0)
+                {
+                    FlaxEngine.Scripting.InvokeOnUpdate(() =>
+                    {
+                        foreach (var sceneId in csgSceneIds)
+                        {
+                            var scene = Level.Scenes.FirstOrDefault(x => x.ID == sceneId);
+                            scene?.ApplyCSGModelSDF();
+                        }
+                    });
                 }
             });
         }
