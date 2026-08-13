@@ -112,6 +112,17 @@ struct ShadowAtlasLightTile
         Matrix::Multiply(shadowViewProjection, ClipToUV, m);
         Matrix::Transpose(m, WorldToShadow);
     }
+
+    void Rebase(const Float3& originDelta)
+    {
+        // WorldToShadow is stored transposed. Its columns become the shader matrix rows, so
+        // fold the old-to-new camera-relative translation into the translation row.
+        WorldToShadow.SetColumn4(
+            WorldToShadow.GetColumn4() +
+            WorldToShadow.GetColumn1() * originDelta.X +
+            WorldToShadow.GetColumn2() * originDelta.Y +
+            WorldToShadow.GetColumn3() * originDelta.Z);
+    }
 };
 
 // State for shadow cache sed to invalidate any prerendered shadow depths
@@ -362,6 +373,19 @@ public:
         Lights.Clear();
         ClearDynamic();
         ClearStatic();
+    }
+
+    void Rebase(const Vector3& viewOrigin)
+    {
+        const Float3 originDelta = (Float3)(viewOrigin - ViewOrigin);
+        for (auto& e : Lights)
+        {
+            auto& atlasLight = e.Value;
+            atlasLight.Cache.Position -= originDelta;
+            for (int32 tileIndex = 0; tileIndex < atlasLight.TilesCount; tileIndex++)
+                atlasLight.Tiles[tileIndex].Rebase(originDelta);
+        }
+        ViewOrigin = viewOrigin;
     }
 
     void InitStaticAtlas()
@@ -1247,9 +1271,9 @@ void ShadowsPass::SetupShadows(RenderContext& renderContext, RenderContextBatch&
     }
     if (renderContext.View.Origin != shadows.ViewOrigin)
     {
-        // Large Worlds chunk movement so invalidate cached shadows
-        shadows.Reset();
-        shadows.ViewOrigin = renderContext.View.Origin;
+        // Keep cached shadow projections and atlas depth in the current camera-relative
+        // coordinate system when Large Worlds moves the render origin.
+        shadows.Rebase(renderContext.View.Origin);
     }
     if (shadows.StaticAtlas.Width != 0 && (float)shadows.StaticAtlasPixelsUsed / (shadows.StaticAtlas.Width * shadows.StaticAtlas.Height) < SHADOWS_MAX_STATIC_ATLAS_CAPACITY_TO_DEFRAG)
     {
