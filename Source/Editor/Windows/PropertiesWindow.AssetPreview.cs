@@ -160,10 +160,18 @@ namespace FlaxEditor.Windows
                 preview = new TexturePreview(true) { Asset = texture };
                 break;
             case Model model:
-                preview = new ModelPreview(true) { Model = model };
+                preview = new ModelPreview(true)
+                {
+                    ScaleToFit = false,
+                    Model = model,
+                };
                 break;
             case SkinnedModel skinnedModel:
-                preview = new AnimatedModelPreview(true) { SkinnedModel = skinnedModel };
+                preview = new AnimatedModelPreview(true)
+                {
+                    ScaleToFit = false,
+                    SkinnedModel = skinnedModel,
+                };
                 break;
             case Prefab prefab:
                 preview = new PrefabPreview(true) { Prefab = prefab };
@@ -188,8 +196,10 @@ namespace FlaxEditor.Windows
 
             switch (_assetPreviewControl)
             {
-            case ModelPreview modelPreview:
-                modelPreview.ResetCamera();
+            case ModelPreview modelPreview when modelPreview.Model != null:
+                var modelBounds = modelPreview.Model.GetBox();
+                if (modelBounds != BoundingBox.Empty)
+                    modelPreview.ViewportCamera.SetArcBallView(modelBounds);
                 break;
             case AnimatedModelPreview animatedModelPreview:
                 animatedModelPreview.ViewportCamera.SetArcBallView(animatedModelPreview.GetBounds());

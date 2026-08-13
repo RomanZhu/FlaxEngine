@@ -1712,6 +1712,11 @@ namespace FlaxEditor.Viewport
         protected virtual bool IsControllingMouse => false;
 
         /// <summary>
+        /// Gets a value indicating whether left mouse button drag orbits the camera.
+        /// </summary>
+        protected virtual bool UseLeftMouseButtonForOrbit => false;
+
+        /// <summary>
         /// Gets a value indicating whether controlling-mouse capture should loop across screen edges.
         /// </summary>
         protected virtual bool UseMouseScreenWrap => false;
@@ -2342,7 +2347,8 @@ namespace FlaxEditor.Viewport
                 // orbit, replace screen-wrap capture, or end that capture when
                 // Alt is released.
                 bool wasControllingMouse = wasCameraControllingMouse;
-                _isControllingMouse = !isViewportControllingMouse && _input.IsControllingMouse;
+                _isControllingMouse = !isViewportControllingMouse &&
+                                      (_input.IsControllingMouse || (UseLeftMouseButtonForOrbit && _input.IsMouseLeftDown));
 
                 // Simulate holding mouse right down for trackpad users
                 if ((_prevInput.IsMouseRightDown && !_input.IsMouseRightDown) || win.GetKeyDown(KeyboardKeys.Escape))
@@ -2407,7 +2413,8 @@ namespace FlaxEditor.Viewport
                     _input.IsRotating = !isAltNavigation && !mbDown && rbDown;
                     _input.IsMoving = !isAltNavigation && mbDown && rbDown;
                     _input.IsZooming = wheelZooming || _input.IsAltRightMouseZooming;
-                    _input.IsOrbiting = options.Viewport.UseAltLeftMouseOrbit && isAltDown && lbDown && !mbDown && !rbDown;
+                    _input.IsOrbiting = lbDown && !mbDown && !rbDown &&
+                                        (UseLeftMouseButtonForOrbit || (options.Viewport.UseAltLeftMouseOrbit && isAltDown));
 
                     if ((_input.IsOrbiting && !_prevInput.IsOrbiting) || (_prevInput.IsOrbiting && !_input.IsOrbiting && lbDown))
                     {

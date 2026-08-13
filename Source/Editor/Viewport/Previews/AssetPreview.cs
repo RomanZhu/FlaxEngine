@@ -27,6 +27,9 @@ namespace FlaxEditor.Viewport.Previews
         private bool _editorPrimitivesEnable;
         private EditorPrimitives _editorPrimitives;
 
+        /// <inheritdoc />
+        protected override bool UseLeftMouseButtonForOrbit => true;
+
         /// <summary>
         /// The preview light. Allows to modify rendering settings.
         /// </summary>
