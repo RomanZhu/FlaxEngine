@@ -207,9 +207,9 @@ namespace FlaxEditor.Options
         [EditorDisplay("Scene", "Run cooked game"), EditorOrder(560)]
         public InputBinding RunCookedGame = new InputBinding(KeyboardKeys.None);
 
-        [DefaultValue(typeof(InputBinding), "None")]
+        [DefaultValue(typeof(InputBinding), "Ctrl+Shift+F")]
         [EditorDisplay("Scene", "Move actor to viewport"), EditorOrder(570)]
-        public InputBinding MoveActorToViewport = new InputBinding(KeyboardKeys.None);
+        public InputBinding MoveActorToViewport = new InputBinding(KeyboardKeys.F, KeyboardKeys.Shift, KeyboardKeys.Control);
 
         [DefaultValue(typeof(InputBinding), "None")]
         [EditorDisplay("Scene", "Align actor with viewport"), EditorOrder(571)]
