@@ -13,8 +13,7 @@
 		</Panel>
 		<Panel DockState="9" SplitterValue="0.37" SelectedTab="0">
 			<Window Typename="::FlaxEditor.Windows.ContentWindow" />
-			<Window Typename="::FlaxEditor.Windows.DebugLogWindow" />
-			<Window Typename="::FlaxEditor.Windows.OutputLogWindow" />
+			<Window Typename="::FlaxEditor.Windows.EditorConsoleWindow" />
 		</Panel>
 		<Panel DockState="8" SplitterValue="0.25" SelectedTab="0">
 			<Window Typename="::FlaxEditor.Windows.SceneTreeWindow" />
