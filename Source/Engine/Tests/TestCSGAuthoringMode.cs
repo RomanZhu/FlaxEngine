@@ -277,6 +277,23 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestBoxBrushCanFlipGeneratedNormals()
+        {
+            var brush = new BoxBrush();
+            try
+            {
+                Assert.IsFalse(brush.FlipNormals);
+                brush.FlipNormals = true;
+                Assert.IsTrue(brush.FlipNormals);
+                Assert.AreEqual(BrushMode.Additive, brush.Mode, "Flipping normals must not change the CSG operation.");
+            }
+            finally
+            {
+                FlaxEngine.Object.Destroy(brush);
+            }
+        }
+
+        [Test]
         public void TestSelectToolAppliesRigidPlaneDeltaAndPreservesOrientation()
         {
             var plane = CSGWorkingPlane.World(10.0f);

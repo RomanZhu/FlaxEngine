@@ -309,6 +309,7 @@ void CSG::Mesh::Build(Brush* parentBrush)
     // Setup base brush meta
     BrushMeta meta;
     meta.Mode = mode;
+    meta.FlipNormals = parentBrush->GetBrushFlipNormals();
     meta.StartSurfaceIndex = 0;
     meta.SurfacesCount = surfacesCount;
     meta.Bounds = _bounds;

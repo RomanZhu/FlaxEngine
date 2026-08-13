@@ -175,6 +175,16 @@ namespace CSG
         virtual Mode GetBrushMode() const = 0;
 
         /// <summary>
+        /// Gets whether to flip the generated geometry normals and winding.
+        /// This does not affect the brush solid used for CSG operations.
+        /// </summary>
+        /// <returns>True if generated normals and winding should be flipped.</returns>
+        virtual bool GetBrushFlipNormals() const
+        {
+            return false;
+        }
+
+        /// <summary>
         /// Gets brush surfaces
         /// </summary>
         /// <param name="surfaces">Result list of surfaces</param>

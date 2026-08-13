@@ -34,6 +34,7 @@ namespace CSG
         struct BrushMeta
         {
             Mode Mode;
+            bool FlipNormals;
             int32 StartSurfaceIndex;
             int32 SurfacesCount;
             AABB Bounds;

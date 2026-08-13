@@ -36,6 +36,22 @@ bool CSG::Mesh::Triangulate(RawData& data, Array<MeshVertex>& cacheVB) const
         if (!polygon.Visible || polygon.FirstEdgeIndex == INVALID_INDEX)
             continue;
 
+        // Find the brush that produced this surface. Brush-level normal flipping
+        // affects only the final triangle winding, not the planes used by CSG.
+        int32 brushIndex = 0;
+        for (; brushIndex < _brushesMeta.Count(); brushIndex++)
+        {
+            const auto& brushMeta = _brushesMeta[brushIndex];
+            if (Math::IsInRange(polygon.SurfaceIndex, brushMeta.StartSurfaceIndex, brushMeta.StartSurfaceIndex + brushMeta.SurfacesCount - 1))
+                break;
+        }
+        if (brushIndex == _brushesMeta.Count())
+        {
+            ASSERT_LOW_LAYER(false);
+            return true;
+        }
+        const bool flipNormals = polygon.Inverted != _brushesMeta[brushIndex].FlipNormals;
+
         HalfEdge iterator = _edges[polygon.FirstEdgeIndex];
         firstI = iterator.VertexIndex;
         iterator = _edges[iterator.NextIndex];
@@ -60,7 +76,7 @@ bool CSG::Mesh::Triangulate(RawData& data, Array<MeshVertex>& cacheVB) const
                 Matrix trans, transRotation, finalTrans;
 
                 // Build triangle indices
-                if (polygon.Inverted)
+                if (flipNormals)
                 {
                     triangleIndices[0] = thirdI;
                     triangleIndices[1] = secondI;
@@ -146,21 +162,8 @@ bool CSG::Mesh::Triangulate(RawData& data, Array<MeshVertex>& cacheVB) const
                     cacheVB.Add(rawVertex);
                 }
 
-                // Find brush that produced that surface
-                bool isValid = false;
-                for (int32 brushIndex = 0; brushIndex < _brushesMeta.Count(); brushIndex++)
-                {
-                    auto& brushMeta = _brushesMeta[brushIndex];
-                    if (Math::IsInRange(polygon.SurfaceIndex, brushMeta.StartSurfaceIndex, brushMeta.StartSurfaceIndex + brushMeta.SurfacesCount - 1))
-                    {
-                        // Cache triangle
-                        polygonsPerBrush[brushIndex][polygon.SurfaceIndex].Add(vertexIndex);
-
-                        isValid = true;
-                        break;
-                    }
-                }
-                ASSERT_LOW_LAYER(isValid);
+                // Cache triangle
+                polygonsPerBrush[brushIndex][polygon.SurfaceIndex].Add(vertexIndex);
             }
 
             secondI = thirdI;

@@ -74,6 +74,7 @@ private:
     Vector3 _size;
     OrientedBoundingBox _bounds;
     BrushMode _mode;
+    bool _flipNormals;
 
 public:
     /// <summary>
@@ -112,6 +113,22 @@ public:
     /// </summary>
     /// <param name="value">The value.</param>
     API_PROPERTY() void SetMode(BrushMode value);
+
+    /// <summary>
+    /// Gets whether the generated geometry normals and winding are flipped.
+    /// This does not change how the brush participates in CSG operations.
+    /// </summary>
+    API_PROPERTY(Attributes="EditorOrder(11), DefaultValue(false), EditorDisplay(\"CSG\", \"Flip Normals\")")
+    FORCE_INLINE bool GetFlipNormals() const
+    {
+        return _flipNormals;
+    }
+
+    /// <summary>
+    /// Sets whether the generated geometry normals and winding are flipped.
+    /// </summary>
+    /// <param name="value">True to flip the generated normals and winding.</param>
+    API_PROPERTY() void SetFlipNormals(bool value);
 
     /// <summary>
     /// Gets the brush center (in local space).
@@ -210,6 +227,7 @@ public:
     Guid GetBrushID() const override;
     bool CanUseCSG() const override;
     CSG::Mode GetBrushMode() const override;
+    bool GetBrushFlipNormals() const override;
     void GetSurfaces(Array<CSG::Surface>& surfaces) override;
     int32 GetSurfacesCount() override;
 

@@ -31,6 +31,7 @@ BoxBrush::BoxBrush(const SpawnParams& params)
     , _center(Vector3::Zero)
     , _size(100.0f)
     , _mode(CSG::Mode::Additive)
+    , _flipNormals(false)
 {
     for (uint32 i = 0; i < ARRAY_COUNT(Surfaces); i++)
     {
@@ -70,6 +71,15 @@ void BoxBrush::SetMode(BrushMode value)
     if (_mode != value)
     {
         _mode = value;
+        OnBrushModified();
+    }
+}
+
+void BoxBrush::SetFlipNormals(bool value)
+{
+    if (_flipNormals != value)
+    {
+        _flipNormals = value;
         OnBrushModified();
     }
 }
@@ -185,6 +195,7 @@ void BoxBrush::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_GET_OTHER_OBJ(BoxBrush);
 
     SERIALIZE_MEMBER(Mode, _mode);
+    SERIALIZE_MEMBER(FlipNormals, _flipNormals);
     SERIALIZE_MEMBER(Center, _center);
     SERIALIZE_MEMBER(Size, _size);
     SERIALIZE(ScaleInLightmap);
@@ -204,6 +215,7 @@ void BoxBrush::Deserialize(DeserializeStream& stream, ISerializeModifier* modifi
     Actor::Deserialize(stream, modifier);
 
     DESERIALIZE_MEMBER(Mode, _mode);
+    DESERIALIZE_MEMBER(FlipNormals, _flipNormals);
     DESERIALIZE_MEMBER(Center, _center);
     DESERIALIZE_MEMBER(Size, _size);
     DESERIALIZE(ScaleInLightmap);
@@ -302,6 +314,11 @@ bool BoxBrush::CanUseCSG() const
 CSG::Mode BoxBrush::GetBrushMode() const
 {
     return _mode;
+}
+
+bool BoxBrush::GetBrushFlipNormals() const
+{
+    return _flipNormals;
 }
 
 void BoxBrush::GetSurfaces(Array<CSG::Surface>& surfaces)

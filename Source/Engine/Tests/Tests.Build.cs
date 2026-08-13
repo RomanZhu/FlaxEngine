@@ -20,6 +20,7 @@ public class Tests : EngineModule
     {
         base.Setup(options);
 
+        options.PrivateDependencies.Add("CSG");
         options.PrivateDependencies.Add("ModelTool");
     }
 
