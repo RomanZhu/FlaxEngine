@@ -56,11 +56,16 @@ namespace FlaxEditor.GUI
         private readonly Dictionary<Control, ItemGroup> _itemGroups = new Dictionary<Control, ItemGroup>();
         private readonly Dictionary<string, SavedPlacement> _savedPlacements = new Dictionary<string, SavedPlacement>();
         private readonly HashSet<string> _hiddenItemIds = new HashSet<string>();
+        private readonly HashSet<Control> _externallyManagedVisibility = new HashSet<Control>();
         private Control _draggedItem;
         private ToolStripAnchor _dragTargetAnchor;
         private int _dragTargetIndex = -1;
         private float _dragPreviewX;
         private ToolStripButton _selectedMenuButton;
+        private Orientation _orientation = Orientation.Horizontal;
+        private float _verticalItemHeight = CompactToolStripHeight - 2.0f;
+        private float _horizontalScrollOffset;
+        private float _horizontalContentWidth;
 
         private struct SavedPlacement
         {
@@ -127,6 +132,17 @@ namespace FlaxEditor.GUI
         /// The viewport overlay background color.
         /// </summary>
         public Color OverlayBackgroundColor = new Color(0.06f, 0.06f, 0.06f, 0.5f);
+
+        /// <summary>
+        /// True if an overlay-styled strip should draw its own background and lower border.
+        /// </summary>
+        public bool DrawOverlayBackground = true;
+
+        /// <summary>
+        /// True if this strip should consume wheel input when it has no horizontal overflow.
+        /// Nested strips attached to another toolstrip disable this so the owning row can scroll.
+        /// </summary>
+        public bool ConsumeMouseWheel = true;
 
         /// <summary>
         /// Gets or sets the selected menu button.
@@ -205,9 +221,56 @@ namespace FlaxEditor.GUI
         }
 
         /// <summary>
-        /// Gets the height for the items.
+        /// Gets or sets the item flow orientation.
         /// </summary>
-        public float ItemsHeight => Height - _itemsMargin.Height;
+        public Orientation LayoutOrientation
+        {
+            get => _orientation;
+            set
+            {
+                if (_orientation == value)
+                    return;
+                if (_orientation == Orientation.Horizontal && value == Orientation.Vertical)
+                    _verticalItemHeight = Mathf.Max(1.0f, Height - _itemsMargin.Height);
+                _orientation = value;
+                PerformLayout();
+            }
+        }
+
+        /// <summary>
+        /// Gets the cross-axis size for the items.
+        /// </summary>
+        public float ItemsHeight => _orientation == Orientation.Horizontal ? Height - _itemsMargin.Height : _verticalItemHeight;
+
+        /// <summary>
+        /// Measures the strip using the requested item-flow orientation.
+        /// </summary>
+        public Float2 GetDesiredSize(Orientation orientation)
+        {
+            RegisterUntrackedChildren();
+            if (orientation == Orientation.Horizontal)
+                return Size;
+
+            float width = 0.0f;
+            float height = _itemsMargin.Height;
+            Control previous = null;
+            for (int anchor = 0; anchor < _anchorItems.Length; anchor++)
+            {
+                var items = _anchorItems[anchor];
+                for (int i = 0; i < items.Count; i++)
+                {
+                    var control = items[i];
+                    if (!control.Visible)
+                        continue;
+                    if (previous != null && !AreGrouped(previous, control))
+                        height += _itemsMargin.Height;
+                    width = Mathf.Max(width, control.Width);
+                    height += control.Height;
+                    previous = control;
+                }
+            }
+            return new Float2(width + _itemsMargin.Width, height);
+        }
 
         /// <summary>
         /// Gets the standard item margin for compact header toolstrips.
@@ -231,6 +294,7 @@ namespace FlaxEditor.GUI
         public ToolStrip(float height = 32.0f, float y = 0)
         {
             AutoFocus = false;
+            ClipChildren = true;
             AnchorPreset = AnchorPresets.HorizontalStretchTop;
             BackgroundColor = Style.Current.SecondaryBackground;
             Offsets = new Margin(0, 0, y, height * Editor.Instance.Options.Options.Interface.IconsScale);
@@ -369,13 +433,28 @@ namespace FlaxEditor.GUI
         }
 
         /// <summary>
+        /// Adds a control whose visibility is managed by its owning feature while keeping its
+        /// anchor and order in the toolstrip layout.
+        /// </summary>
+        public T AddContextItem<T>(T control, ToolStripAnchor anchor, string id, int index = -1, bool applySavedPlacement = true)
+            where T : Control
+        {
+            if (control == null)
+                throw new ArgumentNullException(nameof(control));
+            _externallyManagedVisibility.Add(control);
+            control.Parent = this;
+            SetItemPlacement(control, anchor, index, id, applySavedPlacement);
+            return control;
+        }
+
+        /// <summary>
         /// Changes an item's anchor or order within the tool strip.
         /// </summary>
         /// <param name="control">The item.</param>
         /// <param name="anchor">The target placement zone.</param>
         /// <param name="index">Optional insertion index within the zone.</param>
         /// <param name="id">Optional stable item identifier used by saved layouts.</param>
-        public void SetItemPlacement(Control control, ToolStripAnchor anchor, int index = -1, string id = null)
+        public void SetItemPlacement(Control control, ToolStripAnchor anchor, int index = -1, string id = null, bool applySavedPlacement = true, bool notify = false)
         {
             if (control == null || control.Parent != this)
                 throw new ArgumentException("Tool strip items must be children of this tool strip.", nameof(control));
@@ -384,9 +463,12 @@ namespace FlaxEditor.GUI
             if (!string.IsNullOrEmpty(id))
             {
                 _itemIds[control] = id;
-                control.Visible = !_hiddenItemIds.Contains(id);
-                control.Enabled = control.Visible;
-                if (_savedPlacements.TryGetValue(id, out var saved))
+                if (!_externallyManagedVisibility.Contains(control))
+                {
+                    control.Visible = !_hiddenItemIds.Contains(id);
+                    control.Enabled = control.Visible;
+                }
+                if (applySavedPlacement && _savedPlacements.TryGetValue(id, out var saved))
                 {
                     anchor = saved.Anchor;
                     index = saved.Index;
@@ -397,6 +479,21 @@ namespace FlaxEditor.GUI
                 index = items.Count;
             items.Insert(index, control);
             PerformLayout();
+            if (notify)
+                LayoutChanged?.Invoke();
+        }
+
+        /// <summary>Removes an item from this toolstrip without disposing it.</summary>
+        public void RemoveItem(Control control, bool notify = false)
+        {
+            if (control == null)
+                return;
+            RemoveFromPlacement(control);
+            if (control.Parent == this)
+                control.Parent = null;
+            PerformLayout();
+            if (notify)
+                LayoutChanged?.Invoke();
         }
 
         /// <summary>
@@ -458,7 +555,7 @@ namespace FlaxEditor.GUI
                 for (int index = 0; index < items.Count; index++)
                 {
                     if (_itemIds.TryGetValue(items[index], out var id) && !string.IsNullOrEmpty(id))
-                        entries.Add(id + "@" + anchor + "@" + index + (items[index].Visible ? string.Empty : "@h"));
+                        entries.Add(id + "@" + anchor + "@" + index + (items[index].Visible || _externallyManagedVisibility.Contains(items[index]) ? string.Empty : "@h"));
                 }
             }
             return string.Join("|", entries);
@@ -497,8 +594,11 @@ namespace FlaxEditor.GUI
             {
                 var control = controls[i];
                 var id = _itemIds[control];
-                control.Visible = !_hiddenItemIds.Contains(id);
-                control.Enabled = control.Visible;
+                if (!_externallyManagedVisibility.Contains(control))
+                {
+                    control.Visible = !_hiddenItemIds.Contains(id);
+                    control.Enabled = control.Visible;
+                }
                 if (_savedPlacements.TryGetValue(id, out var saved))
                     SetItemPlacement(control, saved.Anchor, saved.Index, id);
             }
@@ -518,7 +618,7 @@ namespace FlaxEditor.GUI
         /// </summary>
         public void SetItemVisible(Control control, bool visible, bool notify = true)
         {
-            if (control == null || !_itemIds.TryGetValue(control, out var id))
+            if (control == null || _externallyManagedVisibility.Contains(control) || !_itemIds.TryGetValue(control, out var id))
                 return;
 
             control.Visible = visible;
@@ -545,6 +645,34 @@ namespace FlaxEditor.GUI
                     return (ToolStripAnchor)i;
             }
             return ToolStripAnchor.Left;
+        }
+
+        /// <summary>Gets the item's zero-based index within its current placement zone.</summary>
+        public int GetItemIndex(Control control)
+        {
+            for (int i = 0; i < _anchorItems.Length; i++)
+            {
+                int index = _anchorItems[i].IndexOf(control);
+                if (index != -1)
+                    return index;
+            }
+            return -1;
+        }
+
+        /// <summary>Scrolls the horizontal overflow so the requested placement zone is aligned in view.</summary>
+        public void ScrollToAnchor(ToolStripAnchor anchor)
+        {
+            if (_orientation != Orientation.Horizontal)
+                return;
+            PerformLayout();
+            float maxScroll = Mathf.Max(0.0f, _horizontalContentWidth - Width);
+            _horizontalScrollOffset = anchor switch
+            {
+                ToolStripAnchor.Center => maxScroll * 0.5f,
+                ToolStripAnchor.Right => maxScroll,
+                _ => 0.0f,
+            };
+            PerformLayout();
         }
 
         private void RemoveFromPlacement(Control control)
@@ -598,6 +726,8 @@ namespace FlaxEditor.GUI
             foreach (var pair in _itemIds)
             {
                 var control = pair.Key;
+                if (_externallyManagedVisibility.Contains(control))
+                    continue;
                 if (control.Visible)
                     continue;
                 hasHidden = true;
@@ -615,7 +745,7 @@ namespace FlaxEditor.GUI
             int result = 0;
             foreach (var pair in _itemIds)
             {
-                if (pair.Key.Visible)
+                if (!_externallyManagedVisibility.Contains(pair.Key) && pair.Key.Visible)
                     result++;
             }
             return result;
@@ -626,6 +756,8 @@ namespace FlaxEditor.GUI
             var controls = new List<Control>(_itemIds.Keys);
             for (int i = 0; i < controls.Count; i++)
             {
+                if (_externallyManagedVisibility.Contains(controls[i]))
+                    continue;
                 controls[i].Visible = true;
                 controls[i].Enabled = true;
             }
@@ -658,10 +790,47 @@ namespace FlaxEditor.GUI
         protected override void PerformLayoutBeforeChildren()
         {
             RegisterUntrackedChildren();
+            if (_orientation == Orientation.Vertical)
+            {
+                LayoutVertical();
+                return;
+            }
             float h = ItemsHeight;
             float leftWidth = MeasureGroup(_anchorItems[(int)ToolStripAnchor.Left]);
             float centerWidth = MeasureGroup(_anchorItems[(int)ToolStripAnchor.Center]);
             float rightWidth = MeasureGroup(_anchorItems[(int)ToolStripAnchor.Right]);
+            float zoneSpacing = _itemsMargin.Width;
+            float packedWidth = leftWidth + centerWidth + rightWidth;
+            if (leftWidth > 0.0f && centerWidth > 0.0f)
+                packedWidth += zoneSpacing;
+            if ((leftWidth > 0.0f || centerWidth > 0.0f) && rightWidth > 0.0f)
+                packedWidth += zoneSpacing;
+            packedWidth += _itemsMargin.Width;
+            // Center remains geometrically centered in the virtual row, while the edge zones
+            // remain flush with their respective virtual edges. The extra width becomes the
+            // scrollable overflow instead of collapsing the three zones into one sequence.
+            float centeredWidth = packedWidth;
+            if (centerWidth > 0.0f)
+            {
+                float flankWidth = Mathf.Max(leftWidth, rightWidth);
+                centeredWidth = Mathf.Max(centeredWidth, centerWidth + flankWidth * 2.0f +
+                                                          (flankWidth > 0.0f ? zoneSpacing * 2.0f : 0.0f) + _itemsMargin.Width);
+            }
+            _horizontalContentWidth = Mathf.Max(Width, Mathf.Max(packedWidth, centeredWidth));
+            float maxScroll = Mathf.Max(0.0f, _horizontalContentWidth - Width);
+            _horizontalScrollOffset = Mathf.Clamp(_horizontalScrollOffset, 0.0f, maxScroll);
+
+            if (maxScroll > 0.0f)
+            {
+                float scrolledLeftX = _itemsMargin.Left - _horizontalScrollOffset;
+                float scrolledCenterX = (_horizontalContentWidth - centerWidth) * 0.5f - _horizontalScrollOffset;
+                float scrolledRightX = _horizontalContentWidth - _itemsMargin.Right - rightWidth - _horizontalScrollOffset;
+                LayoutGroup(_anchorItems[(int)ToolStripAnchor.Left], scrolledLeftX, h);
+                LayoutGroup(_anchorItems[(int)ToolStripAnchor.Center], scrolledCenterX, h);
+                LayoutGroup(_anchorItems[(int)ToolStripAnchor.Right], scrolledRightX, h);
+                return;
+            }
+
             float leftX = _itemsMargin.Left;
             float rightX = Width - _itemsMargin.Right - rightWidth;
             float minimumCenterX = leftX + leftWidth + _itemsMargin.Width;
@@ -675,6 +844,27 @@ namespace FlaxEditor.GUI
             LayoutGroup(_anchorItems[(int)ToolStripAnchor.Left], leftX, h);
             LayoutGroup(_anchorItems[(int)ToolStripAnchor.Center], centerX, h);
             LayoutGroup(_anchorItems[(int)ToolStripAnchor.Right], rightX, h);
+        }
+
+        private void LayoutVertical()
+        {
+            float y = _itemsMargin.Top;
+            Control previous = null;
+            for (int anchor = 0; anchor < _anchorItems.Length; anchor++)
+            {
+                var items = _anchorItems[anchor];
+                for (int i = 0; i < items.Count; i++)
+                {
+                    var control = items[i];
+                    if (!control.Visible)
+                        continue;
+                    if (previous != null && !AreGrouped(previous, control))
+                        y += _itemsMargin.Height;
+                    control.Location = new Float2(_itemsMargin.Left, y);
+                    y += control.Height;
+                    previous = control;
+                }
+            }
         }
 
         private float MeasureGroup(List<Control> items)
@@ -721,8 +911,11 @@ namespace FlaxEditor.GUI
         {
             if (UseOverlayStyle)
             {
-                Render2D.FillRectangle(new Rectangle(Float2.Zero, Size), OverlayBackgroundColor);
-                Render2D.FillRectangle(new Rectangle(0.0f, Height - 1.0f, Width, 1.0f), Color.White.AlphaMultiplied(0.08f));
+                if (DrawOverlayBackground)
+                {
+                    Render2D.FillRectangle(new Rectangle(Float2.Zero, Size), OverlayBackgroundColor);
+                    Render2D.FillRectangle(new Rectangle(0.0f, Height - 1.0f, Width, 1.0f), Color.White.AlphaMultiplied(0.08f));
+                }
                 return;
             }
 
@@ -888,6 +1081,39 @@ namespace FlaxEditor.GUI
                 var preview = new Rectangle(_dragPreviewX - 1.0f, 5.0f, 2.0f, Height - 10.0f);
                 StyleRendering.FillRoundedRectangle(preview, style.BorderSelected.AlphaMultiplied(0.8f), 1.0f);
             }
+            if (_orientation == Orientation.Horizontal && _horizontalContentWidth > Width)
+            {
+                var color = Style.Current.ForegroundViewport.AlphaMultiplied(0.65f);
+                if (_horizontalScrollOffset > 0.5f)
+                {
+                    Render2D.DrawLine(new Float2(7, Height * 0.5f), new Float2(11, Height * 0.5f - 4), color);
+                    Render2D.DrawLine(new Float2(7, Height * 0.5f), new Float2(11, Height * 0.5f + 4), color);
+                }
+                if (_horizontalScrollOffset < _horizontalContentWidth - Width - 0.5f)
+                {
+                    Render2D.DrawLine(new Float2(Width - 7, Height * 0.5f), new Float2(Width - 11, Height * 0.5f - 4), color);
+                    Render2D.DrawLine(new Float2(Width - 7, Height * 0.5f), new Float2(Width - 11, Height * 0.5f + 4), color);
+                }
+            }
+        }
+
+        /// <inheritdoc />
+        public override bool OnMouseWheel(Float2 location, float delta)
+        {
+            if (base.OnMouseWheel(location, delta))
+                return true;
+            if (_orientation == Orientation.Horizontal && _horizontalContentWidth > Width)
+            {
+                float maxScroll = _horizontalContentWidth - Width;
+                float previous = _horizontalScrollOffset;
+                _horizontalScrollOffset = Mathf.Clamp(_horizontalScrollOffset - delta * 72.0f, 0.0f, maxScroll);
+                if (!Mathf.NearEqual(previous, _horizontalScrollOffset))
+                    PerformLayout();
+                return true;
+            }
+            // Viewport toolstrips are UI chrome. Always consume wheel input over them so an
+            // otherwise unhandled event cannot fall through and zoom the scene camera.
+            return UseOverlayStyle && ConsumeMouseWheel;
         }
 
         /// <inheritdoc />

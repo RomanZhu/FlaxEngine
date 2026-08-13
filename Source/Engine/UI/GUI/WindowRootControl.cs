@@ -27,6 +27,11 @@ namespace FlaxEngine.GUI
         public Window Window => _window;
 
         /// <summary>
+        /// Gets the control that currently owns mouse capture, or null if mouse input is not captured.
+        /// </summary>
+        public Control TrackingControl => _trackingControl;
+
+        /// <summary>
         /// Sets the window title.
         /// </summary>
         public string Title

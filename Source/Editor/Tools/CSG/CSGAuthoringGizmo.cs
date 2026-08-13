@@ -118,6 +118,9 @@ namespace FlaxEditor.Tools.CSG
         private Vector3 _faceAlignmentActiveCenter;
         private bool _faceAlignmentActiveValid;
         private bool _supplementalFaceSpaceForced;
+        private bool _surfaceBrushPainting;
+        private Guid _lastPaintBrushId;
+        private int _lastPaintSurfaceIndex = -1;
         private TransformGizmoBase.TransformSpace _supplementalSavedTransformSpace;
         private string _planeStatus = "World";
         private string _rebuildStatus = "Build Auto";
@@ -141,6 +144,8 @@ namespace FlaxEditor.Tools.CSG
             get
             {
                 if (_selectTool.IsInteracting || _faceEditTool.IsInteracting)
+                    return true;
+                if (_surfaceBrushPainting)
                     return true;
                 if (_controller.Tool == CSGTool.Draw)
                 {
@@ -245,6 +250,7 @@ namespace FlaxEditor.Tools.CSG
             _faceEditTool.Reset();
             ResetDirectEditComponents();
             _selectExclusionNodes.Clear();
+            ResetSurfaceBrushStroke();
             ResetDeepSelectionCycle();
             base.OnDeactivated();
         }
@@ -322,6 +328,11 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>Handles CSG-owned pointer movement before viewport selection behavior.</summary>
         internal bool OnMouseMove(Float2 location)
         {
+            if (_controller.Tool == CSGTool.Brush && _surfaceBrushPainting)
+            {
+                PaintBrushSurfaceAtPointer();
+                return true;
+            }
             if ((_controller.Tool == CSGTool.Edit || _controller.Tool == CSGTool.Draw) && _faceEditTool.IsInteracting)
             {
                 UpdateFaceEdit();
@@ -357,6 +368,27 @@ namespace FlaxEditor.Tools.CSG
         {
             if (button != MouseButton.Left || Owner.IsAltKeyDown)
                 return false;
+
+            if (_controller.Tool == CSGTool.Brush)
+            {
+                if (!TryGetBrushSurfaceHit(out var surfaceHit))
+                    return true;
+                if (_controller.BrushMaterialPickArmed)
+                {
+                    var surfaces = ((BoxBrush)surfaceHit.Brush.Actor).Surfaces;
+                    if (surfaceHit.ComponentIndex >= 0 && surfaceHit.ComponentIndex < surfaces.Length)
+                        _controller.SetBrushMaterial(surfaces[surfaceHit.ComponentIndex].Material);
+                    _controller.SetBrushMaterialPickArmed(false);
+                    return true;
+                }
+
+                ResetSurfaceBrushStroke();
+                _surfaceBrushPainting = true;
+                _controller.BeginInteraction();
+                PaintBrushSurface(surfaceHit);
+                UpdateStatusText();
+                return true;
+            }
 
             bool brushEditContext = _controller.Tool == CSGTool.Edit || IsDrawBrushEditingContext;
             // Component handles own overlapping pixels. Otherwise a crossing transform axis can
@@ -420,6 +452,14 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>Locks the footprint after the initial drag.</summary>
         internal bool OnMouseUp(Float2 location, MouseButton button)
         {
+            if (_controller.Tool == CSGTool.Brush && button == MouseButton.Left && _surfaceBrushPainting)
+            {
+                PaintBrushSurfaceAtPointer();
+                _surfaceBrushPainting = false;
+                _controller.TryCommit();
+                ResetSurfaceBrushStroke();
+                return true;
+            }
             if ((_controller.Tool == CSGTool.Edit || _controller.Tool == CSGTool.Draw) && button == MouseButton.Left && _faceEditTool.IsInteracting)
             {
                 UpdateFaceEdit();
@@ -679,6 +719,60 @@ namespace FlaxEditor.Tools.CSG
                 _planeStatus = planeStatus;
                 UpdateStatusText();
             }
+        }
+
+        private bool TryGetBrushSurfaceHit(out CSGHit result)
+        {
+            var ray = Owner.MouseRay;
+            var view = new Ray(Owner.ViewPosition, Owner.ViewDirection);
+            var flags = SceneGraphNode.RayCastData.FlagTypes.SkipColliders |
+                        SceneGraphNode.RayCastData.FlagTypes.SkipEditorPrimitives |
+                        SceneGraphNode.RayCastData.FlagTypes.SkipTriggers;
+            _hitTest.Gather(Owner.SceneGraphRoot, ref ray, ref view, _hits, flags);
+            for (int i = 0; i < _hits.Count; i++)
+            {
+                var hit = _hits[i];
+                if (hit.Kind == CSGHitKind.Face && hit.Brush?.Actor is BoxBrush brush &&
+                    hit.ComponentIndex >= 0 && hit.ComponentIndex < brush.Surfaces.Length)
+                {
+                    result = hit;
+                    return true;
+                }
+            }
+            result = default;
+            return false;
+        }
+
+        private void PaintBrushSurfaceAtPointer()
+        {
+            if (TryGetBrushSurfaceHit(out var hit))
+                PaintBrushSurface(hit);
+        }
+
+        private void PaintBrushSurface(CSGHit hit)
+        {
+            if (!_surfaceBrushPainting || hit.Brush?.Actor is not BoxBrush brush ||
+                (_lastPaintBrushId == brush.ID && _lastPaintSurfaceIndex == hit.ComponentIndex))
+                return;
+            var surfaces = brush.Surfaces;
+            if (hit.ComponentIndex < 0 || hit.ComponentIndex >= surfaces.Length)
+                return;
+            _lastPaintBrushId = brush.ID;
+            _lastPaintSurfaceIndex = hit.ComponentIndex;
+            if (surfaces[hit.ComponentIndex].Material == _controller.BrushMaterial)
+                return;
+            _transaction.Touch(brush);
+            surfaces[hit.ComponentIndex].Material = _controller.BrushMaterial;
+            brush.Surfaces = surfaces;
+            _transaction.RecordPreview(0.0, 0);
+            UpdateStatusText();
+        }
+
+        private void ResetSurfaceBrushStroke()
+        {
+            _surfaceBrushPainting = false;
+            _lastPaintBrushId = Guid.Empty;
+            _lastPaintSurfaceIndex = -1;
         }
 
         private void UpdateBoxDrawTool()
@@ -1862,6 +1956,9 @@ namespace FlaxEditor.Tools.CSG
 
             DrawBoxMeasurements();
 
+            if ((_controller.Visibility & CSGVisibility.StatusText) == 0)
+                return;
+
             var font = Style.Current.FontSmall;
             float width = Mathf.Clamp(font.MeasureText(_statusText).X + 18.0f, 196.0f, Mathf.Max(196.0f, Owner.Viewport.Width - 20.0f));
             var rect = new Rectangle(10.0f, ViewportWidgetsContainer.WidgetsHeight + 14.0f, width, 22.0f);
@@ -2170,7 +2267,7 @@ namespace FlaxEditor.Tools.CSG
                     _transaction.Rollback("Invalid box placement");
                     return;
                 }
-                string action = _controller.Tool == CSGTool.Draw ? "Create CSG Box" : _controller.Tool == CSGTool.Edit ? "Resize CSG Box" : "Edit CSG";
+                string action = _controller.Tool == CSGTool.Draw ? "Create CSG Box" : _controller.Tool == CSGTool.Edit ? "Resize CSG Box" : _controller.Tool == CSGTool.Brush ? "Paint CSG Material" : "Edit CSG";
                 if (!createdBox && _faceEditTool.IsInteracting)
                     action = "Resize CSG Box";
                 _transaction.Commit(Editor.Instance?.Undo, action);
@@ -2196,6 +2293,7 @@ namespace FlaxEditor.Tools.CSG
                 _faceEditTool.Reset();
                 ResetDirectEditComponents();
                 _selectExclusionNodes.Clear();
+                ResetSurfaceBrushStroke();
                 _selectClickAppliedOnDown = false;
                 _drawOperationOverride = null;
                 _consumeDrawMouseUp = false;
@@ -2215,6 +2313,7 @@ namespace FlaxEditor.Tools.CSG
             _faceEditTool.Reset();
             ResetDirectEditComponents();
             _selectExclusionNodes.Clear();
+            ResetSurfaceBrushStroke();
             _selectClickAppliedOnDown = false;
             _drawOperationOverride = null;
             UpdateSupplementalTransformGizmo();
@@ -2272,9 +2371,14 @@ namespace FlaxEditor.Tools.CSG
                         ? $"  |  Edge {_faceEditTool.EdgeIndex + 1}  Offset {_faceEditTool.DeltaVector}"
                         : $"  |  Face {_faceEditTool.FaceIndex + 1}  Offset {_faceEditTool.Delta:0.###}"
                 : string.Empty;
+            string brush = _controller.Tool == CSGTool.Brush
+                ? _controller.BrushMaterialPickArmed
+                    ? "  |  Pick material from a surface"
+                    : _surfaceBrushPainting ? "  |  Painting surfaces" : "  |  Drag to paint surfaces"
+                : string.Empty;
             _statusText = _hasCycle && _selectableHits.Count > 1
-                ? $"CSG {tool}  |  Hit {_cycleIndex + 1}/{_selectableHits.Count}  |  Plane {_planeStatus}  |  {_rebuildStatus}{draw}{move}{resize}{transaction}"
-                : $"CSG {tool}  |  Plane {_planeStatus}  |  {_rebuildStatus}{draw}{move}{resize}{transaction}";
+                ? $"CSG {tool}  |  Hit {_cycleIndex + 1}/{_selectableHits.Count}  |  Plane {_planeStatus}  |  {_rebuildStatus}{draw}{move}{resize}{brush}{transaction}"
+                : $"CSG {tool}  |  Plane {_planeStatus}  |  {_rebuildStatus}{draw}{move}{resize}{brush}{transaction}";
         }
 
         private void UpdateRebuildStatus()

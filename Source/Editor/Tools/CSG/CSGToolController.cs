@@ -32,9 +32,9 @@ namespace FlaxEditor.Tools.CSG
         Surface,
 
         /// <summary>
-        /// Clips brush geometry. Reserved for a later milestone.
+        /// Paints the active material onto brush surfaces.
         /// </summary>
-        Clip,
+        Brush,
     }
 
     /// <summary>
@@ -109,6 +109,11 @@ namespace FlaxEditor.Tools.CSG
         HiddenBrushes = 4,
 
         /// <summary>
+        /// CSG authoring status text overlay.
+        /// </summary>
+        StatusText = 8,
+
+        /// <summary>
         /// Default CSG visualization categories.
         /// </summary>
         Default = SourceBrushes | BuiltGeometry,
@@ -159,6 +164,9 @@ namespace FlaxEditor.Tools.CSG
 
         /// <summary>The local brush side used as the ray-placement front.</summary>
         public CSGRayPlacementFront RayPlacementFront;
+
+        /// <summary>The material painted by the brush tool, or null to use the default CSG material.</summary>
+        public MaterialBase BrushMaterial;
     }
 
     /// <summary>
@@ -181,6 +189,8 @@ namespace FlaxEditor.Tools.CSG
         private CSGVisibility _visibility = CSGVisibility.Default;
         private CSGRayPlacementAlignment _rayPlacementAlignment = CSGRayPlacementAlignment.AlignToSurface;
         private CSGRayPlacementFront _rayPlacementFront = CSGRayPlacementFront.Top;
+        private MaterialBase _brushMaterial;
+        private bool _brushMaterialPickArmed;
 
         /// <summary>
         /// Occurs whenever persistent or transient tool state changes.
@@ -264,6 +274,12 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>Gets the local side treated as front for Shift surface placement.</summary>
         public CSGRayPlacementFront RayPlacementFront => _rayPlacementFront;
 
+        /// <summary>Gets the material painted by the brush tool. Null resolves to the default CSG material.</summary>
+        public MaterialBase BrushMaterial => _brushMaterial;
+
+        /// <summary>Gets whether the material eyedropper will sample the next clicked CSG surface.</summary>
+        public bool BrushMaterialPickArmed => _brushMaterialPickArmed;
+
         /// <summary>
         /// Gets a value indicating whether the snapping override key is held.
         /// </summary>
@@ -311,12 +327,13 @@ namespace FlaxEditor.Tools.CSG
         /// <returns>True if the tool is available in this milestone.</returns>
         public bool SetTool(CSGTool tool)
         {
-            if (tool == CSGTool.Clip)
+            if (tool is not (CSGTool.SelectPlace or CSGTool.Draw or CSGTool.Edit or CSGTool.Surface or CSGTool.Brush))
                 return false;
             if (_tool == tool)
                 return true;
 
             TryCancel(EditorGizmoModeCancelReason.ToolChanged);
+            _brushMaterialPickArmed = false;
             _tool = tool;
             Changed?.Invoke();
             return true;
@@ -515,6 +532,30 @@ namespace FlaxEditor.Tools.CSG
             Changed?.Invoke();
         }
 
+        /// <summary>Sets the material used for subsequent CSG surface brush strokes.</summary>
+        public void SetBrushMaterial(MaterialBase value)
+        {
+            if (_brushMaterial == value)
+                return;
+            _brushMaterial = value;
+            Changed?.Invoke();
+        }
+
+        /// <summary>Resets the CSG surface brush to the engine's default CSG material.</summary>
+        public void ResetBrushMaterial()
+        {
+            SetBrushMaterial(null);
+        }
+
+        /// <summary>Arms or cancels the surface-material eyedropper.</summary>
+        public void SetBrushMaterialPickArmed(bool value)
+        {
+            if (_brushMaterialPickArmed == value)
+                return;
+            _brushMaterialPickArmed = value;
+            Changed?.Invoke();
+        }
+
         /// <summary>
         /// Toggles a CSG visibility category.
         /// </summary>
@@ -601,6 +642,7 @@ namespace FlaxEditor.Tools.CSG
                 Visibility = Visibility,
                 RayPlacementAlignment = RayPlacementAlignment,
                 RayPlacementFront = RayPlacementFront,
+                BrushMaterial = BrushMaterial,
             };
         }
 
@@ -616,6 +658,7 @@ namespace FlaxEditor.Tools.CSG
             case CSGTool.Draw:
             case CSGTool.Edit:
             case CSGTool.Surface:
+            case CSGTool.Brush:
                 _tool = state.Tool;
                 break;
             default:
@@ -627,13 +670,15 @@ namespace FlaxEditor.Tools.CSG
             _snappingEnabled = state.SnappingEnabled;
             _brushAlignmentSnappingEnabled = state.BrushAlignmentSnappingEnabled;
             _snapIncrement = float.IsNaN(state.SnapIncrement) || float.IsInfinity(state.SnapIncrement) ? 15.0f : Mathf.Max(state.SnapIncrement, 0.0001f);
-            _visibility = state.Visibility & (CSGVisibility.SourceBrushes | CSGVisibility.BuiltGeometry | CSGVisibility.HiddenBrushes);
+            _visibility = state.Visibility & (CSGVisibility.SourceBrushes | CSGVisibility.BuiltGeometry | CSGVisibility.HiddenBrushes | CSGVisibility.StatusText);
             _rayPlacementAlignment = state.RayPlacementAlignment is CSGRayPlacementAlignment.AlignToSurface or CSGRayPlacementAlignment.AlignSurfaceUp or CSGRayPlacementAlignment.KeepRotation
                 ? state.RayPlacementAlignment
                 : CSGRayPlacementAlignment.AlignToSurface;
             _rayPlacementFront = state.RayPlacementFront is CSGRayPlacementFront.Front or CSGRayPlacementFront.Back or CSGRayPlacementFront.Left or CSGRayPlacementFront.Right or CSGRayPlacementFront.Top or CSGRayPlacementFront.Bottom
                 ? state.RayPlacementFront
                 : CSGRayPlacementFront.Top;
+            _brushMaterial = state.BrushMaterial;
+            _brushMaterialPickArmed = false;
             TryCancel(EditorGizmoModeCancelReason.SceneChanged);
             Changed?.Invoke();
         }

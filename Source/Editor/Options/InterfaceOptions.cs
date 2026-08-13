@@ -327,6 +327,12 @@ namespace FlaxEditor.Options
         public string SceneViewToolStripLayout { get; set; } = string.Empty;
 
         /// <summary>
+        /// Gets or sets the persisted scene viewport overlay positions, docking, layouts, and visibility.
+        /// </summary>
+        [HideInEditor]
+        public string SceneViewOverlayLayout { get; set; } = string.Empty;
+
+        /// <summary>
         /// Gets or sets the persisted game viewport overlay toolstrip anchor and item order.
         /// </summary>
         [HideInEditor]

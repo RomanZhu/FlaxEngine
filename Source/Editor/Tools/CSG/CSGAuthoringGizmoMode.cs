@@ -26,6 +26,7 @@ namespace FlaxEditor.Tools.CSG
         private const string VisibilityCacheKey = "CSGAuthoring.Visibility";
         private const string RayPlacementAlignmentCacheKey = "CSGAuthoring.RayPlacementAlignment";
         private const string RayPlacementFrontCacheKey = "CSGAuthoring.RayPlacementFront";
+        private const string BrushMaterialCacheKey = "CSGAuthoring.BrushMaterial";
 
         /// <summary>
         /// Gets the CSG tool state controller.
@@ -92,6 +93,8 @@ namespace FlaxEditor.Tools.CSG
                 return Controller.SetTool(CSGTool.Edit);
             if (input.CSGSurfaceTool.Process(viewport, key))
                 return Controller.SetTool(CSGTool.Surface);
+            if (input.CSGBrushTool.Process(viewport, key))
+                return Controller.SetTool(CSGTool.Brush);
             if (input.CSGPickWorkingPlane.Process(viewport, key))
             {
                 Controller.RequestPickWorkingPlane();
@@ -217,6 +220,7 @@ namespace FlaxEditor.Tools.CSG
                 new KeyValuePair<string, InputBinding>("Draw Tool", input.CSGDrawTool),
                 new KeyValuePair<string, InputBinding>("Edit Tool", input.CSGEditTool),
                 new KeyValuePair<string, InputBinding>("Surface Tool", input.CSGSurfaceTool),
+                new KeyValuePair<string, InputBinding>("Brush Tool", input.CSGBrushTool),
                 new KeyValuePair<string, InputBinding>("Pick Working Plane", input.CSGPickWorkingPlane),
                 new KeyValuePair<string, InputBinding>("Toggle Working Plane Lock", input.CSGToggleWorkingPlaneLock),
                 new KeyValuePair<string, InputBinding>("Reset Working Plane", input.CSGResetWorkingPlane),
@@ -277,6 +281,8 @@ namespace FlaxEditor.Tools.CSG
                 state.RayPlacementAlignment = alignment;
             if (cache.TryGetCustomData(RayPlacementFrontCacheKey, out text) && Enum.TryParse(text, out CSGRayPlacementFront front))
                 state.RayPlacementFront = front;
+            if (cache.TryGetCustomData(BrushMaterialCacheKey, out text) && Guid.TryParse(text, out var materialId) && materialId != Guid.Empty)
+                state.BrushMaterial = FlaxEngine.Content.LoadAsync<MaterialBase>(materialId);
             Controller.ApplyState(state);
         }
 
@@ -296,6 +302,7 @@ namespace FlaxEditor.Tools.CSG
             cache.SetCustomData(VisibilityCacheKey, state.Visibility.ToString());
             cache.SetCustomData(RayPlacementAlignmentCacheKey, state.RayPlacementAlignment.ToString());
             cache.SetCustomData(RayPlacementFrontCacheKey, state.RayPlacementFront.ToString());
+            cache.SetCustomData(BrushMaterialCacheKey, state.BrushMaterial != null ? state.BrushMaterial.ID.ToString() : Guid.Empty.ToString());
         }
 
         private void ReportInputConflicts()

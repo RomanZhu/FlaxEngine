@@ -42,11 +42,16 @@ namespace FlaxEditor.Tools.Foliage
         /// <returns>The ready to render material for terrain chunks overlay on top of the terrain.</returns>
         public MaterialInstance GetBrushMaterial(ref Vector3 position, ref Color color, GPUTexture sceneDepth)
         {
+            // A live material graph reload can invalidate the cached virtual instance parameter
+            // layout while leaving the instance object alive. Recreate it before writing values.
+            if (_material && (_material.GetParameter("Color") == null || _material.GetParameter("DepthBuffer") == null))
+                Object.Destroy(ref _material);
             if (!_material)
             {
                 var material = FlaxEngine.Content.LoadAsyncInternal<Material>(EditorAssets.FoliageBrushMaterial);
-                material.WaitForLoaded();
-                _material = material.CreateVirtualInstance();
+                if (material && !material.WaitForLoaded() &&
+                    material.GetParameter("Color") != null && material.GetParameter("DepthBuffer") != null)
+                    _material = material.CreateVirtualInstance();
             }
 
             if (_material)

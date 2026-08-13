@@ -6,10 +6,12 @@ using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.Gizmo;
 using FlaxEditor.GUI.Tabs;
+using FlaxEditor.GUI.Input;
 using FlaxEditor.Modules;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Utilities;
 using FlaxEditor.Viewport.Modes;
+using FlaxEditor.Viewport.Overlays;
 using FlaxEngine;
 using FlaxEngine.GUI;
 using FlaxEngine.Utilities;
@@ -161,6 +163,7 @@ namespace FlaxEditor.Tools
         private readonly ProxyObject _proxy;
         private readonly CustomEditorPresenter _presenter;
         private VertexPaintingGizmoMode _gizmoMode;
+        private ViewportOverlayContainer _viewportOverlay;
         internal MaterialBase[] _cachedMaterials;
         private readonly Editor _editor;
 
@@ -245,8 +248,25 @@ namespace FlaxEditor.Tools
                     Tab = this,
                 };
                 _editor.Windows.EditWin.Viewport.Gizmos.AddMode(_gizmoMode);
+                var overlayContent = new VertexPaintContextOverlay(_gizmoMode);
+                _viewportOverlay = _editor.Windows.EditWin.Viewport.ViewportOverlays.AddOverlay(
+                    "Flax.Scene.Overlays.VertexPaint", "Model Vertex Paint", overlayContent, VertexPaintContextOverlay.PreferredSize,
+                    ViewportOverlayDock.Floating, ViewportOverlayLayoutMode.Panel, new Float2(12, 78));
+                _viewportOverlay.SetContextVisible(false);
+                _gizmoMode.Activated += OnGizmoActivated;
+                _gizmoMode.Deactivated += OnGizmoDeactivated;
             }
             _editor.Windows.EditWin.Viewport.Gizmos.ActiveMode = _gizmoMode;
+        }
+
+        private void OnGizmoActivated()
+        {
+            _viewportOverlay?.SetContextVisible(true);
+        }
+
+        private void OnGizmoDeactivated()
+        {
+            _viewportOverlay?.SetContextVisible(false);
         }
 
         /// <inheritdoc />
@@ -278,6 +298,131 @@ namespace FlaxEditor.Tools
             _editor.SceneEditing.SelectionChanged -= OnSelectionChanged;
 
             base.OnDeselected();
+        }
+    }
+
+    [HideInEditor]
+    sealed class VertexPaintContextOverlay : ContainerControl, IViewportOverlayResponsiveContent
+    {
+        public static readonly Float2 PreferredSize = new Float2(640.0f, 28.0f);
+
+        private readonly VertexPaintingGizmoMode _mode;
+        private readonly Label _sizeLabel;
+        private readonly Label _strengthLabel;
+        private readonly Label _falloffLabel;
+        private readonly Label _colorLabel;
+        private readonly Label _continuousLabel;
+        private readonly FloatValueBox _size;
+        private readonly FloatValueBox _strength;
+        private readonly FloatValueBox _falloff;
+        private readonly ColorValueBox _color;
+        private readonly CheckBox _continuous;
+        private bool _syncing;
+
+        public VertexPaintContextOverlay(VertexPaintingGizmoMode mode)
+        : base(0, 0, PreferredSize.X, PreferredSize.Y)
+        {
+            _mode = mode;
+            _sizeLabel = AddLabel("Size", 6, 5, 28);
+            _size = new FloatValueBox(mode.BrushSize, 36, 3, 78, 0.0001f, 100000.0f, 0.1f) { Parent = this };
+            _strengthLabel = AddLabel("Strength", 122, 5, 48);
+            _strength = new FloatValueBox(mode.BrushStrength, 172, 3, 70, 0.0f, 1.0f, 0.01f) { Parent = this };
+            _falloffLabel = AddLabel("Falloff", 250, 5, 42);
+            _falloff = new FloatValueBox(mode.BrushFalloff, 294, 3, 70, 0.0f, 1.0f, 0.01f) { Parent = this };
+            _colorLabel = AddLabel("Color", 6, 32, 34);
+            _color = new ColorValueBox(mode.PaintColor, 42, 29) { Parent = this, Width = 120 };
+            _continuous = new CheckBox(174, 33, mode.ContinuousPaint) { Parent = this };
+            _continuousLabel = AddLabel("Continuous", 194, 32, 72);
+            _size.ValueChanged += OnValuesChanged;
+            _strength.ValueChanged += OnValuesChanged;
+            _falloff.ValueChanged += OnValuesChanged;
+            _color.ValueChanged += OnValuesChanged;
+            _continuous.StateChanged += OnContinuousChanged;
+        }
+
+        public float GetDesiredHeight(float width)
+        {
+            float x = 6.0f;
+            int rows = 1;
+            var widths = new[] { 108.0f, 120.0f, 114.0f, 156.0f, 88.0f };
+            for (int i = 0; i < widths.Length; i++)
+            {
+                if (x > 6.0f && x + widths[i] > width - 6.0f)
+                {
+                    rows++;
+                    x = 6.0f;
+                }
+                x += widths[i] + 8.0f;
+            }
+            return rows * 26.0f + 2.0f;
+        }
+
+        protected override void PerformLayoutBeforeChildren()
+        {
+            float x = 6.0f;
+            float y = 0.0f;
+            PlaceGroup(_sizeLabel, _size, 28.0f, 78.0f, ref x, ref y);
+            PlaceGroup(_strengthLabel, _strength, 48.0f, 70.0f, ref x, ref y);
+            PlaceGroup(_falloffLabel, _falloff, 42.0f, 70.0f, ref x, ref y);
+            PlaceGroup(_colorLabel, _color, 34.0f, 120.0f, ref x, ref y);
+            const float continuousWidth = 88.0f;
+            if (x > 6.0f && x + continuousWidth > Width - 6.0f)
+            {
+                x = 6.0f;
+                y += 26.0f;
+            }
+            _continuousLabel.Bounds = new Rectangle(x, y + 4.0f, 70.0f, 20.0f);
+            _continuous.Bounds = new Rectangle(x + 74.0f, y + 5.0f, 14.0f, 14.0f);
+            base.PerformLayoutBeforeChildren();
+        }
+
+        private void PlaceGroup(Label label, Control input, float labelWidth, float inputWidth, ref float x, ref float y)
+        {
+            float groupWidth = labelWidth + 2.0f + inputWidth;
+            if (x > 6.0f && x + groupWidth > Width - 6.0f)
+            {
+                x = 6.0f;
+                y += 26.0f;
+            }
+            label.Bounds = new Rectangle(x, y + 4.0f, labelWidth, 20.0f);
+            input.Bounds = new Rectangle(x + labelWidth + 2.0f, y + 2.0f, inputWidth, 22.0f);
+            x += groupWidth + 8.0f;
+        }
+
+        public override void Update(float deltaTime)
+        {
+            _syncing = true;
+            if (!_size.IsFocused)
+                _size.Value = _mode.BrushSize;
+            if (!_strength.IsFocused)
+                _strength.Value = _mode.BrushStrength;
+            if (!_falloff.IsFocused)
+                _falloff.Value = _mode.BrushFalloff;
+            _color.Value = _mode.PaintColor;
+            _continuous.Checked = _mode.ContinuousPaint;
+            _syncing = false;
+            base.Update(deltaTime);
+        }
+
+        private void OnValuesChanged()
+        {
+            if (_syncing)
+                return;
+            _mode.BrushSize = _size.Value;
+            _mode.BrushStrength = _strength.Value;
+            _mode.BrushFalloff = _falloff.Value;
+            _mode.PaintColor = _color.Value;
+        }
+
+        private void OnContinuousChanged(CheckBox box)
+        {
+            if (!_syncing)
+                _mode.ContinuousPaint = box.Checked;
+        }
+
+        private Label AddLabel(string text, float x, float y, float width)
+        {
+            return new Label(x, y, width, 20) { Parent = this, Text = text, HorizontalAlignment = TextAlignment.Near };
         }
     }
 

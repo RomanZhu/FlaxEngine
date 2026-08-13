@@ -23,7 +23,9 @@ using FlaxEditor.Tools.CSG.Tools;
 using FlaxEditor.Tools.CSG.Transactions;
 using FlaxEditor.Tools.CSG.WorkingPlane;
 using FlaxEditor.Viewport.Modes;
+using FlaxEditor.Viewport.Overlays;
 using FlaxEngine;
+using FlaxEngine.GUI;
 using NUnit.Framework;
 
 namespace FlaxEditor.Tests
@@ -91,14 +93,15 @@ namespace FlaxEditor.Tests
             Assert.AreEqual(CSGRayPlacementFront.Bottom, restored.RayPlacementFront);
 
             var unavailable = source.CaptureState();
-            unavailable.Tool = CSGTool.Clip;
+            unavailable.Tool = (CSGTool)999;
             unavailable.Operation = CSGOperation.Intersecting;
             unavailable.SnapIncrement = 0.0f;
             restored.ApplyState(unavailable);
             Assert.AreEqual(CSGTool.SelectPlace, restored.Tool);
             Assert.AreEqual(CSGOperation.Additive, restored.Operation);
             Assert.Greater(restored.SnapIncrement, 0.0f);
-            Assert.IsFalse(restored.SetTool(CSGTool.Clip));
+            Assert.IsTrue(restored.SetTool(CSGTool.Brush));
+            Assert.IsFalse(restored.SetTool((CSGTool)999));
             Assert.IsFalse(restored.SetOperation(CSGOperation.Intersecting));
         }
 
@@ -161,6 +164,7 @@ namespace FlaxEditor.Tests
             Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha2), input.CSGDrawTool);
             Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha3), input.CSGEditTool);
             Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha4), input.CSGSurfaceTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha5), input.CSGBrushTool);
         }
 
         [Test]
@@ -670,6 +674,7 @@ namespace FlaxEditor.Tests
             Assert.IsTrue(CSGHitTestService.IsSelectable(CSGTool.Edit, ref brush));
             Assert.IsTrue(CSGHitTestService.IsSelectable(CSGTool.Edit, ref face));
             Assert.IsTrue(CSGHitTestService.IsSelectable(CSGTool.Surface, ref face));
+            Assert.IsTrue(CSGHitTestService.IsSelectable(CSGTool.Brush, ref face));
             Assert.IsFalse(CSGHitTestService.IsSelectable(CSGTool.Edit, ref placement));
         }
 
@@ -974,6 +979,33 @@ namespace FlaxEditor.Tests
             Assert.IsTrue(tool.TryGetPlacement(out var placement));
             Assert.AreEqual(-10.0f, placement.SignedHeight, 0.0001f);
             tool.EndHeightAdjustment();
+        }
+
+        [Test]
+        public void TestViewportOverlayLayoutRestoresDockPresentationAndVisibility()
+        {
+            var host = new ViewportOverlayHost();
+            host.ApplyLayout("Test.Overlay@8@3@125.5@88.25@0|Test.Toolbar@9@1@340@0@1@220@70");
+            var overlay = host.AddOverlay("Test.Overlay", "Test", new Control(0, 0, 160, 40), new Float2(160, 40));
+            var toolbar = host.AddOverlay("Test.Toolbar", "Toolbar", new Control(0, 0, 220, 28), new Float2(220, 28));
+
+            Assert.AreEqual(ViewportOverlayDock.BottomRight, overlay.Dock);
+            Assert.AreEqual(ViewportOverlayLayoutMode.Collapsed, overlay.LayoutMode);
+            Assert.IsFalse(overlay.UserVisible);
+            StringAssert.Contains("Test.Overlay@8@3@125.5@88.25@0", host.CaptureLayout());
+            Assert.AreEqual(ViewportOverlayDock.Toolbar, toolbar.Dock);
+            Assert.AreEqual(ViewportOverlayLayoutMode.Horizontal, toolbar.LayoutMode);
+            Assert.AreEqual(220.0f, toolbar.Content.Width, 0.001f);
+            Assert.AreEqual(70.0f, toolbar.Content.Height, 0.001f);
+            StringAssert.Contains("Test.Toolbar@9@1@340@0@1@220@70", host.CaptureLayout());
+
+            overlay.UserVisible = true;
+            overlay.SetContextVisible(false);
+            Assert.IsTrue(overlay.UserVisible);
+            Assert.IsFalse(overlay.Visible);
+            overlay.SetContextVisible(true);
+            Assert.IsTrue(overlay.Visible);
+            host.Dispose();
         }
 
         private sealed class TestMode : EditorGizmoMode

@@ -367,6 +367,10 @@ namespace FlaxEditor.Options
         [EditorDisplay("CSG Authoring", "Surface Tool"), EditorOrder(1130)]
         public InputBinding CSGSurfaceTool = new InputBinding(KeyboardKeys.Alpha4);
 
+        [DefaultValue(typeof(InputBinding), "Alpha5")]
+        [EditorDisplay("CSG Authoring", "Brush Tool"), EditorOrder(1135)]
+        public InputBinding CSGBrushTool = new InputBinding(KeyboardKeys.Alpha5);
+
         [DefaultValue(typeof(InputBinding), "None")]
         [EditorDisplay("CSG Authoring", "Pick Working Plane"), EditorOrder(1140)]
         public InputBinding CSGPickWorkingPlane = new InputBinding(KeyboardKeys.None);

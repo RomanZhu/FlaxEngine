@@ -9,6 +9,7 @@ using FlaxEditor.GUI.Docking;
 using FlaxEditor.GUI.Input;
 using FlaxEditor.Options;
 using FlaxEditor.Viewport.Cameras;
+using FlaxEditor.Viewport.Overlays;
 using FlaxEditor.Viewport.Widgets;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -190,6 +191,16 @@ namespace FlaxEditor.Viewport
         /// The editable top overlay toolstrip.
         /// </summary>
         protected ToolStrip _viewportToolStrip;
+
+        /// <summary>
+        /// Movable and dockable overlay host for contextual viewport tools.
+        /// </summary>
+        protected ViewportOverlayHost _viewportOverlays;
+
+        /// <summary>
+        /// Gets the movable and dockable overlay host.
+        /// </summary>
+        public ViewportOverlayHost ViewportOverlays => _viewportOverlays;
 
         /// <summary>
         /// The orthographic mode widget button.
@@ -1163,6 +1174,7 @@ namespace FlaxEditor.Viewport
                 }
 
                 InitViewportToolStrip();
+                InitViewportOverlays();
 
                 #endregion View mode widget
             }
@@ -1242,6 +1254,7 @@ namespace FlaxEditor.Viewport
                 UseItemContextMenu = true,
                 UseOverlayStyle = true,
                 BackgroundColor = Color.Transparent,
+                OverlayBackgroundColor = Style.Current.SecondaryBackground,
             };
             _viewportToolStrip.ApplyLayout(interfaceOptions.SceneViewToolStripLayout);
             _viewportToolStrip.LayoutChanged += () =>
@@ -1273,6 +1286,30 @@ namespace FlaxEditor.Viewport
 
             AddViewportToolStripVisibilityItem(ViewWidgetButtonMenu, "Scene View Toolstrip");
             UpdateBaseViewportToolStrip();
+        }
+
+        private void InitViewportOverlays()
+        {
+            var interfaceOptions = _editor.Options.Options.Interface;
+            _viewportOverlays = new ViewportOverlayHost
+            {
+                Parent = this,
+                PrimaryToolStrip = _viewportToolStrip,
+            };
+            _viewportOverlays.ApplyLayout(interfaceOptions.SceneViewOverlayLayout);
+            _viewportOverlays.LayoutChanged += () =>
+            {
+                _editor.Options.Options.Interface.SceneViewOverlayLayout = _viewportOverlays.CaptureLayout();
+                _editor.Options.SaveOptions();
+            };
+            var menu = ViewWidgetButtonMenu.AddChildMenu("Overlays").ContextMenu;
+            menu.VisibleChanged += control =>
+            {
+                if (!control.Visible)
+                    return;
+                menu.ItemsContainer.DisposeChildren();
+                _viewportOverlays.PopulateMenu(menu);
+            };
         }
 
         /// <summary>
@@ -2270,15 +2307,19 @@ namespace FlaxEditor.Viewport
                 _prevInput = _input;
 #if PLATFORM_SDL
                 bool useMouse = useViewportMouseInput || IsControllingMouse || ContainsPoint(ref _viewMousePos) || _prevInput.IsControllingMouse;
-                var hit = GetChildAt(_viewMousePos, c => c.Visible && !(c is CanvasRootControl) && !(c is UIEditorRoot));
+                var hit = GetChildAt(_viewMousePos, IsViewportInputBlockingControl);
                 if (useViewportMouseInput || _prevInput.IsControllingMouse)
                     hit = null;
 #else
                 bool useMouse = useViewportMouseInput || IsControllingMouse || ContainsPoint(ref _viewMousePos);
-                var hit = GetChildAt(_viewMousePos, c => c.Visible && !(c is CanvasRootControl) && !(c is UIEditorRoot));
+                var hit = GetChildAt(_viewMousePos, IsViewportInputBlockingControl);
                 if (useViewportMouseInput)
                     hit = null;
 #endif
+                // An overlay field can keep mouse capture while the pointer is outside its bounds.
+                // Do not let viewport polling reinterpret that held button as a new scene interaction.
+                if (_viewportOverlays?.OwnsMouseCapture == true)
+                    hit = _viewportOverlays;
                 var shouldGatherInput = canUseInput && (ContainsFocus || useViewportMouseInput) && hit == null;
                 if (shouldGatherInput)
                     _input.Gather(win.Window, useMouse, ref _prevInput);
@@ -2597,6 +2638,32 @@ namespace FlaxEditor.Viewport
             return true;
         }
 
+        private bool IsViewportInputBlockingControl(Control control)
+        {
+            if (!control.Visible || control is CanvasRootControl || control is UIEditorRoot)
+                return false;
+            if (control is ViewportOverlayHost overlayHost)
+            {
+                var location = overlayHost.PointFromParent(this, _viewMousePos);
+                return overlayHost.ContainsInteractiveOverlay(location);
+            }
+            return true;
+        }
+
+        /// <summary>Returns true when the pointer is over viewport toolstrip or overlay UI.</summary>
+        protected bool IsPointerOverViewportOverlayUI(Float2 location)
+        {
+            if (_viewportToolStrip?.Visible == true && _viewportToolStrip.Enabled && _viewportToolStrip.Bounds.Contains(ref location))
+                return true;
+            if (_viewportOverlays?.Visible == true)
+            {
+                var overlayLocation = _viewportOverlays.PointFromParent(this, location);
+                if (_viewportOverlays.ContainsInteractiveOverlay(overlayLocation))
+                    return true;
+            }
+            return false;
+        }
+
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
@@ -2606,9 +2673,12 @@ namespace FlaxEditor.Viewport
         /// <inheritdoc />
         public override bool OnMouseWheel(Float2 location, float delta)
         {
+            // Give viewport UI first refusal. Overlay controls and toolstrips consume the event,
+            // preventing it from also being accumulated as camera zoom input.
+            if (base.OnMouseWheel(location, delta))
+                return true;
             _input.MouseWheelDelta += delta;
-
-            return base.OnMouseWheel(location, delta);
+            return false;
         }
 
         /// <inheritdoc />

@@ -214,6 +214,7 @@ namespace FlaxEditor.Options
                 input.CSGDrawTool = new InputBinding(KeyboardKeys.Alpha2);
                 input.CSGEditTool = new InputBinding(KeyboardKeys.Alpha3);
                 input.CSGSurfaceTool = new InputBinding(KeyboardKeys.Alpha4);
+                input.CSGBrushTool = new InputBinding(KeyboardKeys.Alpha5);
                 migrated = true;
             }
 

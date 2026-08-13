@@ -201,7 +201,7 @@ namespace FlaxEditor.Tools.CSG.HitTesting
         {
             if (tool == CSGTool.Edit)
                 return hit.Kind == CSGHitKind.Brush || hit.Kind == CSGHitKind.Face || hit.Kind == CSGHitKind.Edge || hit.Kind == CSGHitKind.Vertex;
-            if (tool == CSGTool.Surface)
+            if (tool == CSGTool.Surface || tool == CSGTool.Brush)
                 return hit.Kind == CSGHitKind.Face;
             return hit.Kind == CSGHitKind.Brush;
         }
