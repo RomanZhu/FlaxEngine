@@ -35,6 +35,7 @@ namespace FlaxEditor.GUI.Dialogs
         private const float ValueBoxesWidth = 100.0f;
         private const float HSVRGBTextWidth = 15.0f;
         private const float ColorPreviewHeight = 50.0f;
+        private const float RGBByteScale = 255.0f;
         private const int SavedColorsAmount = 10;
 
         private Color _initialValue;
@@ -44,6 +45,7 @@ namespace FlaxEditor.GUI.Dialogs
         private bool _activeEyedropper;
         private bool _canPassLastChangeEvent = true;
         private bool _linear;
+        private bool _useByteRGB = true;
         private ColorValueBox.ColorPickerEvent _onChanged;
         private ColorValueBox.ColorPickerClosedEvent _onClosed;
 
@@ -54,6 +56,7 @@ namespace FlaxEditor.GUI.Dialogs
         private FloatValueBox _cRed;
         private FloatValueBox _cGreen;
         private FloatValueBox _cBlue;
+        private Button _cRGBRange;
         private Tab _hsvTab;
         private Panel _hsvPanel;
         private FloatValueBox _cHue;
@@ -86,9 +89,7 @@ namespace FlaxEditor.GUI.Dialogs
                 _cSelector.Color = _value;
 
                 // RGBA
-                _cRed.Value = _value.R;
-                _cGreen.Value = _value.G;
-                _cBlue.Value = _value.B;
+                UpdateRGBValueBoxes();
                 _cAlpha.Value = _value.A;
 
                 // HSV
@@ -144,7 +145,7 @@ namespace FlaxEditor.GUI.Dialogs
                 Location = new Float2(_cSelector.Right + 30.0f, PickerMargin),
                 TabsTextHorizontalAlignment = TextAlignment.Center,
                 Width = ValueBoxesWidth + HSVRGBTextWidth * 2.0f + ChannelsMargin * 2.0f,
-                Height = (FloatValueBox.DefaultHeight + ChannelsMargin) * 4 + ChannelsMargin,
+                Height = (FloatValueBox.DefaultHeight + ChannelsMargin) * 5 + ChannelsMargin,
                 Parent = this,
             };
             _hsvRGBTabs.TabsSize = new Float2(_hsvRGBTabs.Width * 0.5f, TabHeight);
@@ -169,25 +170,34 @@ namespace FlaxEditor.GUI.Dialogs
             };
 
             // Red
-            _cRed = new FloatValueBox(0, HSVRGBTextWidth + ChannelsMargin, PickerMargin, ValueBoxesWidth, 0, float.MaxValue, 0.001f)
+            _cRed = new FloatValueBox(0, HSVRGBTextWidth + ChannelsMargin, PickerMargin, ValueBoxesWidth, 0, float.MaxValue, 1.0f)
             {
                 Parent = _rgbPanel,
             };
             _cRed.ValueChanged += OnRGBAChanged;
 
             // Green
-            _cGreen = new FloatValueBox(0, _cRed.X, _cRed.Bottom + ChannelsMargin, _cRed.Width, 0, float.MaxValue, 0.001f)
+            _cGreen = new FloatValueBox(0, _cRed.X, _cRed.Bottom + ChannelsMargin, _cRed.Width, 0, float.MaxValue, 1.0f)
             {
                 Parent = _rgbPanel,
             };
             _cGreen.ValueChanged += OnRGBAChanged;
 
             // Blue
-            _cBlue = new FloatValueBox(0, _cRed.X, _cGreen.Bottom + ChannelsMargin, _cRed.Width, 0, float.MaxValue, 0.001f)
+            _cBlue = new FloatValueBox(0, _cRed.X, _cGreen.Bottom + ChannelsMargin, _cRed.Width, 0, float.MaxValue, 1.0f)
             {
                 Parent = _rgbPanel,
             };
             _cBlue.ValueChanged += OnRGBAChanged;
+
+            // RGB display range
+            _cRGBRange = new Button(_cRed.X, _cBlue.Bottom + ChannelsMargin, _cRed.Width, FloatValueBox.DefaultHeight)
+            {
+                Text = "Range: 0-1",
+                TooltipText = "Switch RGB values to the normalized 0-1 range.",
+                Parent = _rgbPanel,
+            };
+            _cRGBRange.Clicked += ToggleRGBRange;
 
             // Hue
             _cHue = new FloatValueBox(0, HSVRGBTextWidth + ChannelsMargin, PickerMargin, ValueBoxesWidth)
@@ -361,7 +371,32 @@ namespace FlaxEditor.GUI.Dialogs
             if (_disableEvents)
                 return;
 
-            SelectedColor = new Color(_cRed.Value, _cGreen.Value, _cBlue.Value, _cAlpha.Value);
+            var scale = _useByteRGB ? RGBByteScale : 1.0f;
+            SelectedColor = new Color(_cRed.Value / scale, _cGreen.Value / scale, _cBlue.Value / scale, _cAlpha.Value);
+        }
+
+        private void ToggleRGBRange()
+        {
+            _useByteRGB = !_useByteRGB;
+            _cRGBRange.Text = _useByteRGB ? "Range: 0-1" : "Range: 0-255";
+            _cRGBRange.TooltipText = _useByteRGB ? "Switch RGB values to the normalized 0-1 range." : "Switch RGB values to the byte 0-255 range.";
+            var slideSpeed = _useByteRGB ? 1.0f : 0.001f;
+            _cRed.SlideSpeed = slideSpeed;
+            _cGreen.SlideSpeed = slideSpeed;
+            _cBlue.SlideSpeed = slideSpeed;
+
+            var disableEvents = _disableEvents;
+            _disableEvents = true;
+            UpdateRGBValueBoxes();
+            _disableEvents = disableEvents;
+        }
+
+        private void UpdateRGBValueBoxes()
+        {
+            var scale = _useByteRGB ? RGBByteScale : 1.0f;
+            _cRed.Value = _value.R * scale;
+            _cGreen.Value = _value.G * scale;
+            _cBlue.Value = _value.B * scale;
         }
 
         private void OnHSVChanged()
