@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Core/ScopeExit.h"
+#include "Engine/Graphics/RenderView.h"
 #include "Engine/Level/Actors/ExponentialHeightFog.h"
 #include <ThirdParty/catch2/catch.hpp>
 
@@ -126,4 +127,27 @@ TEST_CASE("VolumetricFogOptions")
     CHECK(Math::NearEqual(options.NearClarityFadeDistance, 0.001f));
     CHECK(options.NearClarityMinimumDensity == 1.0f);
     CHECK(options.DebugMode == VolumetricFogDebugMode::Density);
+}
+
+TEST_CASE("ExponentialHeightFogLargeWorldOrigin")
+{
+    auto* fog = ExponentialHeightFog::Spawn(ScriptingObject::SpawnParams(Guid::New(), ExponentialHeightFog::TypeInitializer));
+    REQUIRE(fog);
+    SCOPE_EXIT
+    {
+        fog->DeleteObject();
+    };
+
+    fog->SetPosition(Vector3(0.0, 12500.0, 0.0));
+
+    RenderView view;
+    view.Origin = Vector3(0.0, 10000.0, 0.0);
+    view.Position = Float3(0.0f, 2000.0f, 0.0f);
+
+    ShaderExponentialHeightFogData data;
+    fog->GetExponentialHeightFogData(view, data);
+
+    CHECK(data.FogHeight == 2500.0f);
+    const float expectedFogAtViewPosition = data.FogDensity * Math::Pow(2.0f, -data.FogHeightFalloff * (view.Position.Y - data.FogHeight));
+    CHECK(Math::NearEqual(data.FogAtViewPosition, expectedFogAtViewPosition));
 }

@@ -291,7 +291,8 @@ void ExponentialHeightFog::GetVolumetricFogOptions(VolumetricFogOptions& result)
 
 void ExponentialHeightFog::GetExponentialHeightFogData(const RenderView& view, ShaderExponentialHeightFogData& result) const
 {
-    const float height = (float)GetPosition().Y;
+    // Shader world positions are relative to the current large-world render origin.
+    const float height = (float)(GetPosition().Y - view.Origin.Y);
     const float density = FogDensity / 1000.0f;
     const float heightFalloff = FogHeightFalloff / 1000.0f;
     const float viewHeight = view.Position.Y;
