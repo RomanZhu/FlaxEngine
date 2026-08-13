@@ -609,7 +609,7 @@ namespace FlaxEditor.Windows
                     return;
                 Editor.Instance.SceneEditing.Delete();
             });
-            InputActions.Add(options => options.FocusConsoleCommand, () => Editor.Instance.Windows.OutputLogWin.FocusCommand());
+            InputActions.Add(options => options.FocusConsoleCommand, () => Editor.Instance.Windows.EditorConsoleWin.FocusCommand());
         }
 
         private void InitToolStrip()

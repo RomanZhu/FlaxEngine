@@ -1101,8 +1101,7 @@ namespace FlaxEditor.Modules
             cm.AddButton("Properties", inputOptions.PropertiesWindow, Editor.Windows.PropertiesWin.FocusOrShow);
             cm.AddButton("Game", inputOptions.GameWindow, Editor.Windows.GameWin.FocusOrShow);
             cm.AddButton("Editor", inputOptions.EditorWindow, Editor.Windows.EditWin.FocusOrShow);
-            cm.AddButton("Debug Log", inputOptions.DebugLogWindow, Editor.Windows.DebugLogWin.FocusOrShow);
-            cm.AddButton("Output Log", inputOptions.OutputLogWindow, Editor.Windows.OutputLogWin.FocusOrShow);
+            cm.AddButton("Editor Console", inputOptions.OutputLogWindow, Editor.Windows.EditorConsoleWin.FocusOrShow);
             cm.AddButton("Graphics Quality", inputOptions.GraphicsQualityWindow, Editor.Windows.GraphicsQualityWin.FocusOrShow);
             cm.AddButton("Game Cooker", inputOptions.GameCookerWindow, Editor.Windows.GameCookerWin.FocusOrShow);
             cm.AddButton("Profiler", inputOptions.ProfilerWindow, Editor.Windows.ProfilerWin.FocusOrShow);
@@ -1343,7 +1342,7 @@ namespace FlaxEditor.Modules
                 Visible = false,
                 Text = "",
                 Width = 200,
-                TooltipText = "Opens or shows the output log window.",
+                TooltipText = "Opens or shows the editor console.",
                 BackgroundColor = Color.Transparent,
                 BorderColor = Color.Transparent,
                 BackgroundColorHighlighted = Color.Transparent,
@@ -1354,7 +1353,7 @@ namespace FlaxEditor.Modules
             _outputLogButton.LocalY -= 2;
             _outputLogButton.HoverBegin += () => StatusBar.TextColor = GetStatusBarTextColor(Style.Current.BackgroundSelected);
             _outputLogButton.HoverEnd += () => StatusBar.TextColor = GetStatusBarTextColor(StatusBar.StatusColor);
-            _outputLogButton.Clicked += () => { Editor.Windows.OutputLogWin.FocusOrShow(); };
+            _outputLogButton.Clicked += () => { Editor.Windows.EditorConsoleWin.FocusOrShow(); };
 
             // Progress bar with label
             const float progressBarWidth = 120.0f;

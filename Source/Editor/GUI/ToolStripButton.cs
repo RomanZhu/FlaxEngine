@@ -111,6 +111,11 @@ namespace FlaxEditor.GUI
         public bool UseBlueCheckedStyle;
 
         /// <summary>
+        /// Optional icon tint override.
+        /// </summary>
+        public Color? IconColor;
+
+        /// <summary>
         /// The inner margin between button parts.
         /// </summary>
         public int ContentMargin = DefaultMargin;
@@ -295,12 +300,16 @@ namespace FlaxEditor.GUI
             // Draw icon
             if (_glyph != ToolStripGlyph.None)
             {
-                var iconColor = !enabled ? style.ForegroundDisabled : primaryState ? Color.White : checkedState ? style.BorderSelected : style.Foreground;
+                var iconColor = IconColor.HasValue
+                    ? (enabled ? IconColor.Value : IconColor.Value * 0.5f)
+                    : !enabled ? style.ForegroundDisabled : primaryState ? Color.White : checkedState ? style.BorderSelected : style.Foreground;
                 DrawGlyph(_glyph, iconRect, iconColor);
             }
             else if (_icon.IsValid)
             {
-                var iconColor = !enabled ? style.ForegroundDisabled : primaryState ? Color.White : checkedState ? style.BorderSelected : style.Foreground;
+                var iconColor = IconColor.HasValue
+                    ? (enabled ? IconColor.Value : IconColor.Value * 0.5f)
+                    : !enabled ? style.ForegroundDisabled : primaryState ? Color.White : checkedState ? style.BorderSelected : style.Foreground;
                 Render2D.DrawSprite(_icon, iconRect, iconColor);
             }
 

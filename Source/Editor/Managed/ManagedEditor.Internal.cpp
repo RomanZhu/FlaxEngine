@@ -59,15 +59,7 @@ void OnLogMessage(LogType type, const StringView& msg, const StringView& stackTr
 {
     ScopeLock lock(CachedLogDataLocker);
 
-    String messageWithStack;
-    StringView outputMessage = msg;
-    if (stackTrace.HasChars())
-    {
-        messageWithStack = String::Format(TEXT("{0}\n{1}"), msg, stackTrace);
-        outputMessage = messageWithStack;
-    }
-
-    CachedLogData.EnsureCapacity(4 + 8 + 4 + outputMessage.Length() * 2);
+    CachedLogData.EnsureCapacity(4 + 8 + 8 + 4 + msg.Length() * 2 + 4 + stackTrace.Length() * 2);
 
     // Log Type
     int32 buf = (int32)type;
@@ -77,12 +69,22 @@ void OnLogMessage(LogType type, const StringView& msg, const StringView& stackTr
     auto time = DateTime::Now();
     CachedLogData.Add((byte*)&time.Ticks, 8);
 
+    // Thread ID
+    CachedLogData.Add((byte*)&threadId, 8);
+
     // Message Length
-    buf = outputMessage.Length();
+    buf = msg.Length();
     CachedLogData.Add((byte*)&buf, 4);
 
     // Message
-    CachedLogData.Add((byte*)outputMessage.Get(), outputMessage.Length() * 2);
+    CachedLogData.Add((byte*)msg.Get(), msg.Length() * 2);
+
+    // Stack Trace Length
+    buf = stackTrace.Length();
+    CachedLogData.Add((byte*)&buf, 4);
+
+    // Stack Trace
+    CachedLogData.Add((byte*)stackTrace.Get(), stackTrace.Length() * 2);
 }
 
 DEFINE_INTERNAL_CALL(bool) EditorInternal_IsDevInstance()
@@ -108,7 +110,7 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_IsPlayMode()
     return Editor::IsPlayMode;
 }
 
-DEFINE_INTERNAL_CALL(int32) EditorInternal_ReadOutputLogs(MArray** outMessages, MArray** outLogTypes, MArray** outLogTimes, int outArraySize)
+DEFINE_INTERNAL_CALL(int32) EditorInternal_ReadOutputLogs(MArray** outMessages, MArray** outStackTraces, MArray** outLogTypes, MArray** outLogTimes, MArray** outThreadIds, int outArraySize)
 {
     ScopeLock lock(CachedLogDataLocker);
     if (CachedLogData.IsEmpty() || CachedLogData.Get() == nullptr)
@@ -121,12 +123,16 @@ DEFINE_INTERNAL_CALL(int32) EditorInternal_ReadOutputLogs(MArray** outMessages, 
     byte* end = ptr + CachedLogData.Count();
     byte* outLogTypesPtr = MCore::Array::GetAddress<byte>(*outLogTypes);
     int64* outLogTimesPtr = MCore::Array::GetAddress<int64>(*outLogTimes);
+    uint64* outThreadIdsPtr = MCore::Array::GetAddress<uint64>(*outThreadIds);
     while (count < maxCount && ptr != end)
     {
         auto type = (byte)*(int32*)ptr;
         ptr += 4;
 
         auto time = *(int64*)ptr;
+        ptr += 8;
+
+        auto threadId = *(uint64*)ptr;
         ptr += 8;
 
         auto length = *(int32*)ptr;
@@ -137,9 +143,19 @@ DEFINE_INTERNAL_CALL(int32) EditorInternal_ReadOutputLogs(MArray** outMessages, 
 
         auto msgObj = MUtils::ToString(StringView(msg, length));
 
+        length = *(int32*)ptr;
+        ptr += 4;
+
+        auto stackTrace = (Char*)ptr;
+        ptr += length * 2;
+
+        auto stackTraceObj = MUtils::ToString(StringView(stackTrace, length));
+
         MCore::GC::WriteArrayRef(*outMessages, (MObject*)msgObj, count);
+        MCore::GC::WriteArrayRef(*outStackTraces, (MObject*)stackTraceObj, count);
         outLogTypesPtr[count] = type;
         outLogTimesPtr[count] = time;
+        outThreadIdsPtr[count] = threadId;
 
         count++;
     }

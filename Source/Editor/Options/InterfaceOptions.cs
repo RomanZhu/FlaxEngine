@@ -522,69 +522,69 @@ namespace FlaxEditor.Options
         /// Gets or sets the timestamps prefix mode for output log messages.
         /// </summary>
         [DefaultValue(TimestampsFormats.None)]
-        [EditorDisplay("Debug Log"), EditorOrder(350), Tooltip("The timestamps prefix mode for debug log messages.")]
+        [HideInEditor]
         public TimestampsFormats DebugLogTimestampsFormat { get; set; } = TimestampsFormats.None;
 
         /// <summary>
         /// Gets or sets the clear on play for debug log messages.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Debug Log", "Clear on Play"), EditorOrder(360), Tooltip("Clears all log entries on enter playmode.")]
+        [EditorDisplay("Editor Console", "Clear on Play"), EditorOrder(360), Tooltip("Clears editor console entries when entering play mode.")]
         public bool DebugLogClearOnPlay { get; set; } = true;
 
         /// <summary>
         /// Gets or sets the collapse mode for debug log messages.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Debug Log"), EditorOrder(361), Tooltip("Collapses similar or repeating log entries.")]
+        [HideInEditor]
         public bool DebugLogCollapse { get; set; } = true;
 
         /// <summary>
         /// Gets or sets the automatic pause on error for debug log messages.
         /// </summary>
         [DefaultValue(false)]
-        [EditorDisplay("Debug Log", "Pause on Error"), EditorOrder(362), Tooltip("Performs auto pause on error.")]
+        [EditorDisplay("Editor Console", "Pause on Error"), EditorOrder(362), Tooltip("Pauses play mode when the editor console receives an error.")]
         public bool DebugLogPauseOnError { get; set; } = false;
 
         /// <summary>
         /// Gets or sets the automatic pause on error for debug log messages.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Debug Log", "Show error messages"), EditorOrder(370), Tooltip("Shows/hides error messages.")]
+        [HideInEditor]
         public bool DebugLogShowErrorMessages { get; set; } = true;
 
         /// <summary>
         /// Gets or sets the automatic pause on error for debug log messages.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Debug Log", "Show warning messages"), EditorOrder(371), Tooltip("Shows/hides warning messages.")]
+        [HideInEditor]
         public bool DebugLogShowWarningMessages { get; set; } = true;
 
         /// <summary>
         /// Gets or sets the automatic pause on error for debug log messages.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Debug Log", "Show info messages"), EditorOrder(372), Tooltip("Shows/hides info messages.")]
+        [HideInEditor]
         public bool DebugLogShowInfoMessages { get; set; } = true;
 
         /// <summary>
         /// Gets or sets the timestamps prefix mode for output log messages.
         /// </summary>
         [DefaultValue(TimestampsFormats.TimeSinceStartup)]
-        [EditorDisplay("Output Log", "Timestamps Format"), EditorOrder(400), Tooltip("The timestamps prefix mode for output log messages.")]
+        [EditorDisplay("Editor Console", "Timestamps Format"), EditorOrder(400), Tooltip("The timestamp prefix used for editor console entries.")]
         public TimestampsFormats OutputLogTimestampsFormat { get; set; } = TimestampsFormats.TimeSinceStartup;
 
         /// <summary>
         /// Gets or sets the log type prefix mode for output log messages.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Output Log", "Show Log Type"), EditorOrder(410), Tooltip("Determines whether show log type prefix in output log messages.")]
+        [EditorDisplay("Editor Console", "Show Entry Type"), EditorOrder(410), Tooltip("Determines whether to show the entry type prefix.")]
         public bool OutputLogShowLogType { get; set; } = true;
 
         /// <summary>
         /// Gets or sets the output log text font.
         /// </summary>
-        [EditorDisplay("Output Log", "Text Font"), EditorOrder(420), Tooltip("The output log text font.")]
+        [EditorDisplay("Editor Console", "Text Font"), EditorOrder(420), Tooltip("The editor console text font.")]
         public FontReference OutputLogTextFont
         {
             get => _outputLogFont;
@@ -603,14 +603,14 @@ namespace FlaxEditor.Options
         /// Gets or sets the output log text shadow color.
         /// </summary>
         [DefaultValue(typeof(Color), "0,0,0,0.35")]
-        [EditorDisplay("Output Log", "Text Shadow Color"), EditorOrder(440), Tooltip("The output log text shadow color.")]
+        [EditorDisplay("Editor Console", "Text Shadow Color"), EditorOrder(440), Tooltip("The editor console text shadow color.")]
         public Color OutputLogTextShadowColor { get; set; } = new Color(0, 0, 0, 0.35f);
 
         /// <summary>
         /// Gets or sets the output log text shadow offset. Set to 0 to disable this feature.
         /// </summary>
         [DefaultValue(typeof(Float2), "0,1")]
-        [EditorDisplay("Output Log", "Text Shadow Offset"), EditorOrder(445), Tooltip("The output log text shadow offset. Set to 0 to disable this feature.")]
+        [EditorDisplay("Editor Console", "Text Shadow Offset"), EditorOrder(445), Tooltip("The editor console text shadow offset. Set to 0 to disable it.")]
         public Float2 OutputLogTextShadowOffset { get; set; } = new Float2(0, 1);
 
         // [Deprecated in v1.10]
@@ -629,21 +629,21 @@ namespace FlaxEditor.Options
         /// Gets or sets a value indicating whether auto-focus output log window on code compilation error.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Output Log", "Focus Output Log On Compilation Error"), EditorOrder(450), Tooltip("Determines whether auto-focus output log window on code compilation error.")]
+        [EditorDisplay("Editor Console", "Focus On Compilation Error"), EditorOrder(450), Tooltip("Determines whether to focus the editor console on a code compilation error.")]
         public bool FocusOutputLogOnCompilationError { get; set; } = true;
 
         /// <summary>
         /// Gets or sets a value indicating whether auto-focus output log window on game build error.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Output Log", "Focus Output Log On Game Build Error"), EditorOrder(460), Tooltip("Determines whether auto-focus output log window on game build error.")]
+        [EditorDisplay("Editor Console", "Focus On Game Build Error"), EditorOrder(460), Tooltip("Determines whether to focus the editor console on a game build error.")]
         public bool FocusOutputLogOnGameBuildError { get; set; } = true;
 
         /// <summary>
         /// Gets or sets the value for automatic scroll to bottom in output log.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Output Log", "Scroll to bottom"), EditorOrder(470), Tooltip("Scroll the output log view to bottom automatically after new lines are added.")]
+        [EditorDisplay("Editor Console", "Scroll to Bottom"), EditorOrder(470), Tooltip("Scrolls the editor console to the bottom as entries arrive.")]
         public bool OutputLogScrollToBottom { get; set; } = true;
 
         /// <summary>

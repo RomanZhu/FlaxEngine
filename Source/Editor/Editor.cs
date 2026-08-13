@@ -1801,7 +1801,7 @@ namespace FlaxEditor
         }
 
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_ReadOutputLogs", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(FlaxEngine.Interop.StringMarshaller))]
-        internal static partial int Internal_ReadOutputLogs([MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "outCapacity")] ref string[] outMessages, [MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "outCapacity")] ref byte[] outLogTypes, [MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "outCapacity")] ref long[] outLogTimes, int outCapacity);
+        internal static partial int Internal_ReadOutputLogs([MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "outCapacity")] ref string[] outMessages, [MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "outCapacity")] ref string[] outStackTraces, [MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "outCapacity")] ref byte[] outLogTypes, [MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "outCapacity")] ref long[] outLogTimes, [MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "outCapacity")] ref ulong[] outThreadIds, int outCapacity);
 
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_SetPlayMode", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(FlaxEngine.Interop.StringMarshaller))]
         internal static partial void Internal_SetPlayMode([MarshalAs(UnmanagedType.U1)] bool value);

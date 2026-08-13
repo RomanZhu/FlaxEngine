@@ -21,17 +21,27 @@ namespace FlaxEditor.Windows
     /// Editor window used to show engine output logs.
     /// </summary>
     /// <seealso cref="FlaxEditor.Windows.EditorWindow" />
-    public sealed class OutputLogWindow : EditorWindow
+    public sealed class EditorConsoleWindow : EditorWindow
     {
+        private enum EntryKind
+        {
+            Info = 1,
+            Warning = 2,
+            Error = 4,
+            Fatal = 8,
+            Command = 16,
+            Result = 32,
+        }
+
         /// <summary>
         /// The single log message entry.
         /// </summary>
         private struct Entry
         {
             /// <summary>
-            /// The log level.
+            /// The log entry kind.
             /// </summary>
-            public LogType Level;
+            public EntryKind Kind;
 
             /// <summary>
             /// The log time (in UTC local format).
@@ -42,14 +52,17 @@ namespace FlaxEditor.Windows
             /// The message contents.
             /// </summary>
             public string Message;
-        };
 
-        private struct EntryRange
-        {
-            public int EntryIndex;
-            public int StartIndex;
-            public int EndIndex;
-        }
+            /// <summary>
+            /// The optional stack trace.
+            /// </summary>
+            public string StackTrace;
+
+            /// <summary>
+            /// The source thread identifier.
+            /// </summary>
+            public ulong ThreadId;
+        };
 
         private struct TextBlockTag
         {
@@ -73,13 +86,10 @@ namespace FlaxEditor.Windows
             private const float SelectionAutoScrollMinSpeed = 140.0f;
             private const float SelectionAutoScrollMaxSpeed = 560.0f;
 
-            private bool _isSelectingEntryBlocks;
-            private int _entrySelectionAnchor = -1;
-
             /// <summary>
             /// The parent window.
             /// </summary>
-            public OutputLogWindow Window;
+            public EditorConsoleWindow Window;
 
             /// <summary>
             /// The default text style.
@@ -96,17 +106,50 @@ namespace FlaxEditor.Windows
             /// </summary>
             public TextBlockStyle ErrorStyle;
 
+            /// <summary>
+            /// The command text style.
+            /// </summary>
+            public TextBlockStyle CommandStyle;
+
+            /// <summary>
+            /// The command result text style.
+            /// </summary>
+            public TextBlockStyle ResultStyle;
+
             public OutputTextBox()
             {
                 _consumeAllKeyDownEvents = false;
             }
 
-            public bool IsSelectingText => _isSelecting || _isSelectingEntryBlocks;
+            public bool IsSelectingText => _isSelecting;
 
-            public int CharIndexAtSelectionPoint(ref Float2 location)
+            public override int CharIndexAtPoint(ref Float2 location)
             {
                 var clampedLocation = ClampSelectionPoint(location);
-                return CharIndexAtPoint(ref clampedLocation);
+                if (_textBlocks.Count == 0)
+                    return 0;
+
+                float contentY = clampedLocation.Y + _viewOffset.Y;
+                TextBlock previous = default;
+                bool hasPrevious = false;
+                for (int i = 0; i < _textBlocks.Count; i++)
+                {
+                    var block = _textBlocks[i];
+                    if (contentY < block.Bounds.Top)
+                    {
+                        if (!hasPrevious)
+                            return block.Range.StartIndex;
+                        float distanceAbove = contentY - previous.Bounds.Bottom;
+                        float distanceBelow = block.Bounds.Top - contentY;
+                        return distanceAbove <= distanceBelow ? previous.Range.EndIndex : block.Range.StartIndex;
+                    }
+                    if (contentY < block.Bounds.Bottom)
+                        return base.CharIndexAtPoint(ref clampedLocation);
+                    previous = block;
+                    hasPrevious = true;
+                }
+
+                return _text.Length;
             }
 
             /// <inheritdoc />
@@ -140,24 +183,35 @@ namespace FlaxEditor.Windows
             /// <inheritdoc />
             public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
             {
-                if (button == MouseButton.Left && Window != null && Window.SelectEntryBlockAt(ref location, out _entrySelectionAnchor))
+                if (button == MouseButton.Left)
                 {
-                    _isSelectingEntryBlocks = true;
-                    StartMouseCapture();
-                    return true;
+                    int index = CharIndexAtPoint(ref location);
+                    if (GetTextBlock(index, out TextBlock block) && block.Tag is TextBlockTag tag &&
+                        tag.Type == TextBlockTag.Types.CodeLocation && File.Exists(tag.Url))
+                    {
+                        Editor.Instance.CodeEditing.OpenFile(tag.Url, tag.Line);
+                        return true;
+                    }
                 }
 
                 return base.OnMouseDoubleClick(location, button);
             }
 
             /// <inheritdoc />
+            public override bool OnKeyDown(KeyboardKeys key)
+            {
+                if (key == KeyboardKeys.C && HasSelection && Root != null && Root.GetKey(KeyboardKeys.Control))
+                {
+                    Copy();
+                    return true;
+                }
+
+                return base.OnKeyDown(key);
+            }
+
+            /// <inheritdoc />
             public override void OnMouseMove(Float2 location)
             {
-                if (_isSelectingEntryBlocks)
-                {
-                    Window?.ExtendEntryBlockSelection(_entrySelectionAnchor, ref location);
-                    return;
-                }
                 if (_isSelecting)
                 {
                     ExtendTextSelection(ref location);
@@ -177,32 +231,7 @@ namespace FlaxEditor.Windows
 
                 var location = PointFromWindow(Root.MousePosition);
                 if (ScrollDuringSelection(ref location, deltaTime))
-                {
-                    if (_isSelectingEntryBlocks)
-                        Window?.ExtendEntryBlockSelection(_entrySelectionAnchor, ref location);
-                    else if (_isSelecting)
-                        ExtendTextSelection(ref location);
-                }
-            }
-
-            /// <inheritdoc />
-            public override bool OnMouseUp(Float2 location, MouseButton button)
-            {
-                if (_isSelectingEntryBlocks && button == MouseButton.Left)
-                {
-                    _isSelectingEntryBlocks = false;
-                    EndMouseCapture();
-                    return true;
-                }
-
-                return base.OnMouseUp(location, button);
-            }
-
-            /// <inheritdoc />
-            public override void OnEndMouseCapture()
-            {
-                _isSelectingEntryBlocks = false;
-                base.OnEndMouseCapture();
+                    ExtendTextSelection(ref location);
             }
 
             private Float2 ClampSelectionPoint(Float2 location)
@@ -214,7 +243,7 @@ namespace FlaxEditor.Windows
 
             private void ExtendTextSelection(ref Float2 location)
             {
-                int currentIndex = CharIndexAtSelectionPoint(ref location);
+                int currentIndex = CharIndexAtPoint(ref location);
                 SetSelection(_selectionStart, currentIndex, false);
             }
 
@@ -254,6 +283,7 @@ namespace FlaxEditor.Windows
             private sealed class Item : ItemsListContextMenu.Item
             {
                 public CommandLineBox Owner;
+                public string InsertText;
 
                 public Item()
                 {
@@ -326,16 +356,17 @@ namespace FlaxEditor.Windows
                 public override void OnDestroy()
                 {
                     Owner = null;
+                    InsertText = null;
                     base.OnDestroy();
                 }
             }
 
-            private OutputLogWindow _window;
+            private EditorConsoleWindow _window;
             private ItemsListContextMenu _searchPopup;
             private ItemsListContextMenu _historyPopup;
             private bool _isSettingText;
 
-            public CommandLineBox(float x, float y, float width, OutputLogWindow window)
+            public CommandLineBox(float x, float y, float width, EditorConsoleWindow window)
             : base(false, x, y, width)
             {
                 WatermarkText = ">";
@@ -354,7 +385,9 @@ namespace FlaxEditor.Windows
             {
                 if (_searchPopup != null)
                 {
-                    _searchPopup.Hide();
+                    if (RootWindow?.Window != null)
+                        RootWindow.Window.LostFocus -= OnRootWindowLostFocus;
+                    _searchPopup.Dispose();
                     _searchPopup = null;
                 }
             }
@@ -386,15 +419,11 @@ namespace FlaxEditor.Windows
                         Name = command,
                         Owner = this,
                     });
-                    var flags = DebugCommands.GetCommandFlags(command);
-                    if (flags.HasFlag(DebugCommands.CommandFlags.Exec))
-                        lastItem.TintColor = new Color(0.75f, 0.75f, 1.0f, 1.0f);
-                    else if (flags.HasFlag(DebugCommands.CommandFlags.Read) && !flags.HasFlag(DebugCommands.CommandFlags.Write))
-                        lastItem.TintColor = new Color(0.85f, 0.85f, 0.85f, 1.0f);
+                    lastItem.TintColor = Style.Current.Foreground;
                     lastItem.ItemFocused += item =>
                     {
                         // Set command
-                        Set(item.Name);
+                        Set(((Item)item).InsertText ?? item.Name);
                     };
                     maxWidth = Mathf.Max(maxWidth, itemFont.MeasureText(command).X);
                 }
@@ -434,20 +463,60 @@ namespace FlaxEditor.Windows
                 }
             }
 
+            private void ShowSuggestionPopup(IReadOnlyList<EditorCommandSuggestion> suggestions)
+            {
+                HideSearch();
+                _searchPopup = new ItemsListContextMenu(360, 220, false)
+                {
+                    UseVisibilityControl = false,
+                    UseInput = false,
+                };
+
+                ItemsListContextMenu.Item lastItem = null;
+                var itemFont = Style.Current.FontSmall;
+                float maxWidth = 0.0f;
+                for (int i = 0; i < suggestions.Count; i++)
+                {
+                    EditorCommandSuggestion suggestion = suggestions[i];
+                    string label = string.IsNullOrEmpty(suggestion.Detail)
+                        ? suggestion.Display
+                        : suggestion.Display + "    " + suggestion.Detail;
+                    var item = new Item
+                    {
+                        Name = label,
+                        InsertText = suggestion.Text + (suggestion.IsCommand ? " " : string.Empty),
+                        Owner = this,
+                        TintColor = Style.Current.Foreground,
+                    };
+                    _searchPopup.AddItem(lastItem = item);
+                    item.ItemFocused += focused => Set(((Item)focused).InsertText);
+                    maxWidth = Mathf.Max(maxWidth, itemFont.MeasureText(label).X);
+                }
+
+                _searchPopup.ItemClicked += item =>
+                {
+                    Set(((Item)item).InsertText);
+                    HideSearch();
+                    Focus();
+                };
+                float totalHeight = suggestions.Count * lastItem.Height + _searchPopup.ItemsPanel.Margin.Height +
+                                    _searchPopup.ItemsPanel.Spacing * (suggestions.Count - 1);
+                _searchPopup.Height = Mathf.Min(220.0f, totalHeight);
+                _searchPopup.Width = Mathf.Max(_searchPopup.Width, maxWidth + 8.0f + ScrollBar.DefaultSize);
+                _searchPopup.Show(this, Float2.Zero, ContextMenuDirection.RightUp);
+                RootWindow.Window.LostFocus += OnRootWindowLostFocus;
+            }
+
             private void OnRootWindowLostFocus()
             {
                 // Prevent popup from staying active when editor window looses focus
                 HideSearch();
-                if (RootWindow?.Window != null)
-                    RootWindow.Window.LostFocus -= OnRootWindowLostFocus;
             }
 
             /// <inheritdoc />
             public override void OnGotFocus()
             {
-                // Precache debug commands to reduce time-to-interactive
-                DebugCommands.InitAsync();
-
+                EditorConsole.Initialize();
                 base.OnGotFocus();
             }
 
@@ -461,27 +530,14 @@ namespace FlaxEditor.Windows
                     return;
 
                 // Show commands search popup based on current text input
-                var text = Text.Trim();
-                bool isWhitespaceOnly = string.IsNullOrWhiteSpace(Text) && !string.IsNullOrEmpty(Text);
-                if (text.Length != 0 || isWhitespaceOnly)
+                string text = Text ?? string.Empty;
+                if (!string.IsNullOrEmpty(text))
                 {
-                    DebugCommands.Search(text, out var matches);
-                    if (matches.Length != 0 || isWhitespaceOnly)
+                    IReadOnlyList<EditorCommandSuggestion> suggestions = EditorConsole.GetAutoComplete(text);
+                    if (suggestions.Count != 0)
                     {
-                        string[] commands = [];
-                        if (isWhitespaceOnly)
-                            DebugCommands.GetAllCommands(out commands);
-
                         HideHistory();
-                        ShowPopup(ref _searchPopup, isWhitespaceOnly ? commands : matches, text);
-                        
-                        if (isWhitespaceOnly)
-                        {
-                            // Scroll to and select first item for consistent behaviour
-                            var firstItem = _searchPopup.ItemsPanel.Children[0] as Item;
-                            _searchPopup.ScrollToAndHighlightItemByName(firstItem.Name);
-                        }
-
+                        ShowSuggestionPopup(suggestions);
                         return;
                     }
                 }
@@ -501,7 +557,7 @@ namespace FlaxEditor.Windows
                     var command = Text.Trim();
                     if (command.Length == 0)
                         return true;
-                    DebugCommands.Execute(command);
+                    EditorConsole.Execute(command);
                     SetText(string.Empty);
 
                     // Update history buffer
@@ -518,43 +574,11 @@ namespace FlaxEditor.Windows
                 }
                 case KeyboardKeys.Tab:
                 {
-                    // Auto-complete
-                    DebugCommands.Search(Text, out var matches, true);
-                    if (matches.Length == 0)
+                    IReadOnlyList<EditorCommandSuggestion> suggestions = EditorConsole.GetAutoComplete(Text);
+                    if (suggestions.Count != 0)
                     {
-                        // Nothing found
-                    }
-                    else if (matches.Length == 1)
-                    {
-                        // Exact match
-                        Set(matches[0]);
-                    }
-                    else
-                    {
-                        // Find the most common part
-                        Array.Sort(matches);
-                        int minLength = Text.Length;
-                        int maxLength = matches[0].Length;
-                        int sharedLength = minLength + 1;
-                        bool allMatch = true;
-                        for (; allMatch && sharedLength < maxLength; sharedLength++)
-                        {
-                            var shared = matches[0].Substring(0, sharedLength);
-                            for (int i = 1; i < matches.Length; i++)
-                            {
-                                if (!matches[i].StartsWith(shared, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    sharedLength -= 2;
-                                    allMatch = false;
-                                    break;
-                                }
-                            }
-                        }
-                        if (sharedLength > minLength)
-                        {
-                            // Use the largest shared part of all matches
-                            Set(matches[0].Substring(0, sharedLength));
-                        }
+                        EditorCommandSuggestion suggestion = suggestions[0];
+                        Set(suggestion.Text + (suggestion.IsCommand ? " " : string.Empty));
                     }
                     return true;
                 }
@@ -612,17 +636,19 @@ namespace FlaxEditor.Windows
         private bool _showLogType;
 
         private List<Entry> _entries = new List<Entry>(1024);
+        private readonly int[] _logTypeCounts = new int[3];
         private bool _isDirty;
         private int _logTypeShowMask = (int)LogType.Info | (int)LogType.Warning | (int)LogType.Error | (int)LogType.Fatal;
         private float _scrollSize = ScrollBar.DefaultSize;
         private const int OutCapacity = 64;
         private string[] _outMessages = new string[OutCapacity];
+        private string[] _outStackTraces = new string[OutCapacity];
         private byte[] _outLogTypes = new byte[OutCapacity];
         private long[] _outLogTimes = new long[OutCapacity];
+        private ulong[] _outThreadIds = new ulong[OutCapacity];
         private int _textBufferCount;
         private StringBuilder _textBuffer = new StringBuilder();
         private List<TextBlock> _textBlocks = new List<TextBlock>();
-        private List<EntryRange> _entryRanges = new List<EntryRange>(1024);
         private DateTime _startupTime;
         private Regex _compileRegex = new Regex("(?<path>^(?:[a-zA-Z]\\:|\\\\\\\\[ \\-\\.\\w\\.]+\\\\[ \\-\\.\\w.$]+)\\\\(?:[ \\-\\.\\w]+\\\\)*\\w([ \\w.])+)\\((?<line>\\d{1,}),\\d{1,},\\d{1,},\\d{1,}\\): (?<level>error|warning) (?<message>.*)", RegexOptions.Compiled | RegexOptions.Multiline);
         private List<string> _commandHistory;
@@ -633,25 +659,29 @@ namespace FlaxEditor.Windows
 
         private Button _clearButton;
         private Button _viewDropdown;
+        private ToolStripButton _clearOnPlayButton;
+        private readonly ToolStripButton[] _logTypeButtons = new ToolStripButton[3];
+        private ToolStripButton _stackTraceButton;
         private TextBox _searchBox;
         private HScrollBar _hScroll;
         private VScrollBar _vScroll;
         private OutputTextBox _output;
         private CommandLineBox _commandLineBox;
         private ContextMenu _contextMenu;
-        private int _selectedEntryIndex = -1;
         private float _lastOutputWrapWidth = -1.0f;
         private bool _wrapLogLines = true;
+        private bool _showStackTrace;
         private bool _outputSelectionBlockedAutoScroll;
+        private EditorConsoleHtmlLog _htmlLog;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="DebugLogWindow"/> class.
+        /// Initializes a new instance of the <see cref="EditorConsoleWindow"/> class.
         /// </summary>
         /// <param name="editor">The editor.</param>
-        public OutputLogWindow(Editor editor)
+        public EditorConsoleWindow(Editor editor)
         : base(editor, true, ScrollBars.None)
         {
-            Title = "Output Log";
+            Title = "Editor Console";
             Icon = editor.Icons.Info64;
             ClipChildren = false;
             FlaxEditor.Utilities.Utils.SetupCommonInputActions(this);
@@ -659,12 +689,78 @@ namespace FlaxEditor.Windows
             // Setup UI
             _clearButton = new Button(2, 2, 44.0f, TextBoxBase.DefaultHeight)
             {
-                TooltipText = "Clear output log",
+                TooltipText = "Clear editor console",
                 Text = "Clear",
                 Parent = this,
             };
             _clearButton.Clicked += Clear;
-            _searchBox = new SearchBox(false, _clearButton.Right + 2, 2, Width - _clearButton.Right - 46.0f)
+
+            float toolbarX = _clearButton.Right + 2;
+            var clearOnPlayIcon = SpriteHandle.Invalid;
+            _clearOnPlayButton = new ToolStripButton(TextBoxBase.DefaultHeight, ref clearOnPlayIcon)
+            {
+                Parent = this,
+                Location = new Float2(toolbarX, 2),
+                Text = "Clear on Play",
+                AutoCheck = true,
+                UseBlueCheckedStyle = true,
+                TooltipText = "Clear the editor console when entering play mode",
+            };
+            _clearOnPlayButton.Clicked += ToggleClearOnPlay;
+            toolbarX = _clearOnPlayButton.Right + 2;
+            var infoIcon = editor.Icons.Info32;
+            _logTypeButtons[0] = new ToolStripButton(TextBoxBase.DefaultHeight, ref infoIcon)
+            {
+                Parent = this,
+                Location = new Float2(toolbarX, 2),
+                AutoCheck = true,
+                Checked = true,
+                Text = "0",
+                UseBlueCheckedStyle = true,
+                TooltipText = "Show info messages",
+            };
+            _logTypeButtons[0].Clicked += () => ToggleLogTypeShow(LogType.Info);
+            toolbarX = _logTypeButtons[0].Right + 2;
+            var warningIcon = editor.Icons.Warning32;
+            _logTypeButtons[1] = new ToolStripButton(TextBoxBase.DefaultHeight, ref warningIcon)
+            {
+                Parent = this,
+                Location = new Float2(toolbarX, 2),
+                AutoCheck = true,
+                Checked = true,
+                Text = "0",
+                UseBlueCheckedStyle = true,
+                TooltipText = "Show warning messages",
+            };
+            _logTypeButtons[1].Clicked += () => ToggleLogTypeShow(LogType.Warning);
+            toolbarX = _logTypeButtons[1].Right + 2;
+            var errorIcon = editor.Icons.Error32;
+            _logTypeButtons[2] = new ToolStripButton(TextBoxBase.DefaultHeight, ref errorIcon)
+            {
+                Parent = this,
+                Location = new Float2(toolbarX, 2),
+                AutoCheck = true,
+                Checked = true,
+                Text = "0",
+                UseBlueCheckedStyle = true,
+                TooltipText = "Show error and fatal messages",
+            };
+            _logTypeButtons[2].Clicked += () => ToggleLogTypeShow(LogType.Error);
+            toolbarX = _logTypeButtons[2].Right + 2;
+            var stackIcon = SpriteHandle.Invalid;
+            _stackTraceButton = new ToolStripButton(TextBoxBase.DefaultHeight, ref stackIcon)
+            {
+                Parent = this,
+                Location = new Float2(toolbarX, 2),
+                Text = "Stacktrace",
+                AutoCheck = true,
+                UseBlueCheckedStyle = true,
+                TooltipText = "Show full stack traces",
+            };
+            _stackTraceButton.Clicked += ToggleStackTrace;
+            toolbarX = _stackTraceButton.Right + 2;
+
+            _searchBox = new SearchBox(false, toolbarX, 2, Width - toolbarX - 46.0f)
             {
                 Parent = this,
             };
@@ -705,14 +801,17 @@ namespace FlaxEditor.Windows
             _commandLineBox = new CommandLineBox(2, Height - 2 - TextBox.DefaultHeight, Width - 4, this)
             {
                 Parent = this,
+                WatermarkText = "Enter editor command",
             };
 
             // Setup context menu
+            _htmlLog = new EditorConsoleHtmlLog();
             _contextMenu = new ContextMenu();
-            _contextMenu.AddButton("Clear log", Clear);
+            _contextMenu.AddButton("Clear console", Clear);
             _contextMenu.AddButton("Copy selection", _output.Copy);
             _contextMenu.AddButton("Select All", _output.SelectAll);
-            _contextMenu.AddButton(Utilities.Constants.ShowInExplorer, () => FileSystem.ShowFileExplorer(Path.Combine(Globals.ProjectFolder, "Logs")));
+            _contextMenu.AddButton("Open HTML log", _htmlLog.Open);
+            _contextMenu.AddButton(Utilities.Constants.ShowInExplorer, _htmlLog.OpenFolder);
             _contextMenu.AddButton("Scroll to bottom", () => { _vScroll.TargetValue = _vScroll.Maximum; }).Icon = Editor.Icons.ArrowDown12;
 
             // Setup editor options
@@ -723,28 +822,21 @@ namespace FlaxEditor.Windows
 
             GameCooker.Event += OnGameCookerEvent;
             ScriptsBuilder.CompilationFailed += OnScriptsCompilationFailed;
+
+            EditorConsole.MessageWritten += OnEditorConsoleMessage;
+            EditorConsole.ClearRequested += Clear;
+            EditorConsole.OpenRequested += FocusOrShow;
+            EditorConsole.CloseRequested += CloseConsole;
+            EditorConsole.OpenHtmlRequested += _htmlLog.Open;
+            EditorConsole.OpenLogFolderRequested += _htmlLog.OpenFolder;
+            EditorConsole.HtmlLogPathProvider += GetHtmlLogPath;
+            Editor.InitializationEnd += OnEditorInitializationEnd;
+            EditorConsole.Initialize();
         }
 
         private void OnViewButtonClicked()
         {
             var menu = new ContextMenu();
-
-            var infoLogButton = menu.AddButton("Info");
-            infoLogButton.AutoCheck = true;
-            infoLogButton.Checked = (_logTypeShowMask & (int)LogType.Info) != 0;
-            infoLogButton.Clicked += () => ToggleLogTypeShow(LogType.Info);
-
-            var warningLogButton = menu.AddButton("Warning");
-            warningLogButton.AutoCheck = true;
-            warningLogButton.Checked = (_logTypeShowMask & (int)LogType.Warning) != 0;
-            warningLogButton.Clicked += () => ToggleLogTypeShow(LogType.Warning);
-
-            var errorLogButton = menu.AddButton("Error");
-            errorLogButton.AutoCheck = true;
-            errorLogButton.Checked = (_logTypeShowMask & (int)LogType.Error) != 0;
-            errorLogButton.Clicked += () => ToggleLogTypeShow(LogType.Error);
-
-            menu.AddSeparator();
 
             var wrapButton = menu.AddButton("Wrap");
             wrapButton.AutoCheck = true;
@@ -753,7 +845,8 @@ namespace FlaxEditor.Windows
 
             menu.AddSeparator();
 
-            menu.AddButton("Load log file...", LoadLogFile);
+            menu.AddButton("Open HTML log", _htmlLog.Open);
+            menu.AddButton(Utilities.Constants.ShowInExplorer, _htmlLog.OpenFolder);
 
             menu.Show(_viewDropdown.Parent, _viewDropdown.BottomLeft);
         }
@@ -761,7 +854,16 @@ namespace FlaxEditor.Windows
         private void ToggleLogTypeShow(LogType type)
         {
             _logTypeShowMask ^= (int)type;
+            if (type == LogType.Error)
+                _logTypeShowMask ^= (int)LogType.Fatal;
+            UpdateToolbarChecks();
             Refresh();
+        }
+
+        private void ToggleClearOnPlay()
+        {
+            Editor.Options.Options.Interface.DebugLogClearOnPlay = _clearOnPlayButton.Checked;
+            Editor.Options.Apply(Editor.Options.Options);
         }
 
         private void ToggleWrapLogLines()
@@ -769,6 +871,22 @@ namespace FlaxEditor.Windows
             _wrapLogLines = !_wrapLogLines;
             if (_wrapLogLines)
                 _output.TargetViewOffset = new Float2(0.0f, _output.TargetViewOffset.Y);
+            UpdateToolbarChecks();
+            Refresh();
+        }
+
+        private void UpdateToolbarChecks()
+        {
+            _logTypeButtons[0].Checked = (_logTypeShowMask & (int)LogType.Info) != 0;
+            _logTypeButtons[1].Checked = (_logTypeShowMask & (int)LogType.Warning) != 0;
+            _logTypeButtons[2].Checked = (_logTypeShowMask & (int)LogType.Error) != 0;
+            _stackTraceButton.Checked = _showStackTrace;
+        }
+
+        private void ToggleStackTrace()
+        {
+            _showStackTrace = !_showStackTrace;
+            UpdateToolbarChecks();
             Refresh();
         }
 
@@ -826,6 +944,9 @@ namespace FlaxEditor.Windows
         private void OnEditorOptionsChanged(EditorOptions options)
         {
             var style = Style.Current;
+            _clearOnPlayButton.Checked = options.Interface.DebugLogClearOnPlay;
+            _logTypeButtons[1].IconColor = options.Visual.LogWarningColor;
+            _logTypeButtons[2].IconColor = options.Visual.LogErrorColor;
             _output.BackgroundColor = style.Background;
             _output.BackgroundSelectedColor = style.Background;
             _output.BorderColor = Color.Transparent;
@@ -841,7 +962,9 @@ namespace FlaxEditor.Windows
                 selectionBrush != null &&
                 selectionBrush.Color == style.BorderSelected &&
                 _output.WarningStyle.Color == options.Visual.LogWarningColor &&
-                _output.ErrorStyle.Color == options.Visual.LogErrorColor)
+                _output.ErrorStyle.Color == options.Visual.LogErrorColor &&
+                _output.CommandStyle.Color == style.BorderSelected &&
+                _output.ResultStyle.Color == style.ProgressNormal)
                 return;
 
             _output.DefaultStyle = new TextBlockStyle
@@ -857,6 +980,10 @@ namespace FlaxEditor.Windows
             _output.WarningStyle.Color = options.Visual.LogWarningColor;
             _output.ErrorStyle = _output.DefaultStyle;
             _output.ErrorStyle.Color = options.Visual.LogErrorColor;
+            _output.CommandStyle = _output.DefaultStyle;
+            _output.CommandStyle.Color = style.BorderSelected;
+            _output.ResultStyle = _output.DefaultStyle;
+            _output.ResultStyle.Color = style.ProgressNormal;
 
             _timestampsFormats = options.Interface.OutputLogTimestampsFormat;
             _showLogType = options.Interface.OutputLogShowLogType;
@@ -892,7 +1019,6 @@ namespace FlaxEditor.Windows
             _textBufferCount = 0;
             _textBuffer.Clear();
             _textBlocks.Clear();
-            _entryRanges.Clear();
             _lastOutputWrapWidth = -1.0f;
             _isDirty = true;
         }
@@ -904,17 +1030,21 @@ namespace FlaxEditor.Windows
             return message.IndexOf('\r') != -1 ? message.Replace("\r", "") : message;
         }
 
-        private TextBlockStyle GetEntryStyle(LogType level)
+        private TextBlockStyle GetEntryStyle(EntryKind kind)
         {
-            switch (level)
+            switch (kind)
             {
-            case LogType.Info:
+            case EntryKind.Info:
                 return _output.DefaultStyle;
-            case LogType.Warning:
+            case EntryKind.Warning:
                 return _output.WarningStyle;
-            case LogType.Error:
-            case LogType.Fatal:
+            case EntryKind.Error:
+            case EntryKind.Fatal:
                 return _output.ErrorStyle;
+            case EntryKind.Command:
+                return _output.CommandStyle;
+            case EntryKind.Result:
+                return _output.ResultStyle;
             default: throw new ArgumentOutOfRangeException();
             }
         }
@@ -936,7 +1066,7 @@ namespace FlaxEditor.Windows
             }
             if (_showLogType)
             {
-                _textBuffer.AppendFormat("[{0}] ", entry.Level);
+                _textBuffer.AppendFormat("[{0}] ", entry.Kind);
             }
             return _textBuffer.Length;
         }
@@ -944,64 +1074,6 @@ namespace FlaxEditor.Windows
         private float GetOutputWrapWidth()
         {
             return _wrapLogLines ? Mathf.Max(_output != null ? _output.Width : 0.0f, 1.0f) : float.MaxValue;
-        }
-
-        private bool FindEntryRange(int entryIndex, out EntryRange range)
-        {
-            for (int i = 0; i < _entryRanges.Count; i++)
-            {
-                range = _entryRanges[i];
-                if (range.EntryIndex == entryIndex)
-                    return true;
-            }
-
-            range = new EntryRange();
-            return false;
-        }
-
-        private bool FindEntryRangeAt(int charIndex, out EntryRange range)
-        {
-            for (int i = 0; i < _entryRanges.Count; i++)
-            {
-                range = _entryRanges[i];
-                if (charIndex >= range.StartIndex && charIndex <= range.EndIndex)
-                    return true;
-            }
-
-            range = new EntryRange();
-            return false;
-        }
-
-        private void SelectEntryRange(EntryRange from, EntryRange to)
-        {
-            _selectedEntryIndex = to.EntryIndex;
-            _output.Focus();
-            _output.SelectionRange = new TextRange(Mathf.Min(from.StartIndex, to.StartIndex), Mathf.Max(from.EndIndex, to.EndIndex));
-        }
-
-        private bool SelectEntryBlockAt(ref Float2 location, out int entryIndex)
-        {
-            entryIndex = -1;
-            if (_output == null || _output.TextLength == 0 || _entryRanges.Count == 0)
-                return false;
-
-            var hitPos = _output.CharIndexAtSelectionPoint(ref location);
-            if (!FindEntryRangeAt(hitPos, out var range))
-                return false;
-
-            entryIndex = range.EntryIndex;
-            SelectEntryRange(range, range);
-            return true;
-        }
-
-        private void ExtendEntryBlockSelection(int anchorEntryIndex, ref Float2 location)
-        {
-            if (!FindEntryRange(anchorEntryIndex, out var anchor))
-                return;
-
-            var hitPos = _output.CharIndexAtSelectionPoint(ref location);
-            if (FindEntryRangeAt(hitPos, out var target))
-                SelectEntryRange(anchor, target);
         }
 
         private void AddWrappedTextBlocks(string text, int textStartIndex, TextBlockStyle style, ref float y, float wrapWidth, int firstLineParseOffset)
@@ -1074,26 +1146,94 @@ namespace FlaxEditor.Windows
             y = bottom;
         }
 
-        private void AppendVisibleEntry(int entryIndex, ref Entry entry, float wrapWidth)
+        private void AppendVisibleEntry(ref Entry entry, float wrapWidth)
         {
             entry.Message = SanitizeMessage(entry.Message);
+            entry.StackTrace = SanitizeMessage(entry.StackTrace);
 
             var entryStart = _textBuffer.Length;
             var y = _textBlocks.Count == 0 ? 0.0f : _textBlocks[_textBlocks.Count - 1].Bounds.Bottom + EntrySpacing;
-            var style = GetEntryStyle(entry.Level);
+            var style = GetEntryStyle(entry.Kind);
             var messageStart = AppendEntryPrefix(ref entry);
             var prefixLength = messageStart - entryStart;
             _textBuffer.Append(entry.Message);
+            if (!string.IsNullOrWhiteSpace(entry.StackTrace))
+            {
+                _textBuffer.Append('\n');
+                _textBuffer.Append(_showStackTrace ? entry.StackTrace : GetFirstLine(entry.StackTrace));
+            }
             var entryEnd = _textBuffer.Length;
             _textBuffer.Append('\n');
             AddWrappedTextBlocks(_textBuffer.ToString(entryStart, entryEnd - entryStart), entryStart, style, ref y, wrapWidth, prefixLength);
 
-            _entryRanges.Add(new EntryRange
+        }
+
+        private static string GetFirstLine(string text)
+        {
+            int lineEnd = text.IndexOf('\n');
+            return lineEnd >= 0 ? text.Substring(0, lineEnd) : text;
+        }
+
+        private string GetHtmlLogPath()
+        {
+            return _htmlLog.FilePath;
+        }
+
+        private void CloseConsole()
+        {
+            Close();
+        }
+
+        private void OnEditorConsoleMessage(EditorConsoleMessageKind kind, string message)
+        {
+            EntryKind entryKind = kind switch
             {
-                EntryIndex = entryIndex,
-                StartIndex = entryStart,
-                EndIndex = entryEnd,
-            });
+                EditorConsoleMessageKind.Command => EntryKind.Command,
+                EditorConsoleMessageKind.Result => EntryKind.Result,
+                _ => EntryKind.Error,
+            };
+            AddEntry(new Entry
+            {
+                Kind = entryKind,
+                Time = DateTime.Now,
+                Message = message ?? string.Empty,
+                ThreadId = Platform.CurrentThreadID,
+            }, false);
+        }
+
+        private void AddEntry(Entry entry, bool allowPause = true)
+        {
+            _entries.Add(entry);
+            switch (entry.Kind)
+            {
+            case EntryKind.Info:
+                _logTypeCounts[0]++;
+                break;
+            case EntryKind.Warning:
+                _logTypeCounts[1]++;
+                break;
+            case EntryKind.Error:
+            case EntryKind.Fatal:
+                _logTypeCounts[2]++;
+                break;
+            }
+            UpdateLogTypeCounts();
+            _htmlLog.Append(entry.Time, entry.ThreadId, entry.Kind.ToString(), entry.Message, entry.StackTrace);
+            _isDirty = true;
+
+            int maximum = Math.Max(100, EditorConsole.Lines);
+            if (_entries.Count > maximum)
+            {
+                _entries.RemoveRange(0, _entries.Count - maximum);
+                Refresh();
+            }
+
+            if (allowPause && (entry.Kind == EntryKind.Error || entry.Kind == EntryKind.Fatal) &&
+                Editor.Options.Options.Interface.DebugLogPauseOnError &&
+                Editor.StateMachine.CurrentState == Editor.StateMachine.PlayingState)
+            {
+                Editor.Simulation.RequestPausePlay();
+            }
         }
 
         /// <summary>
@@ -1102,82 +1242,25 @@ namespace FlaxEditor.Windows
         public void Clear()
         {
             _entries?.Clear();
-            _selectedEntryIndex = -1;
+            Array.Clear(_logTypeCounts, 0, _logTypeCounts.Length);
+            UpdateLogTypeCounts();
             Refresh();
         }
 
-        /// <summary>
-        /// Loads the log from the file selected by the user with the file pickup dialog.
-        /// </summary>
-        public void LoadLogFile()
+        private void UpdateLogTypeCounts()
         {
-            if (FileSystem.ShowOpenFileDialog(null, Path.Combine(Globals.ProjectFolder, "Logs"), null, false, "Pick a log file to load", out var files))
-                return;
-            if (files != null && files.Length > 0)
+            bool layoutChanged = false;
+            for (int i = 0; i < _logTypeButtons.Length; i++)
             {
-                LoadLogFile(files[0]);
+                string text = Math.Min(_logTypeCounts[i], 999).ToString();
+                if (_logTypeButtons[i].Text == text)
+                    continue;
+                float previousWidth = _logTypeButtons[i].Width;
+                _logTypeButtons[i].Text = text;
+                layoutChanged |= !Mathf.NearEqual(previousWidth, _logTypeButtons[i].Width);
             }
-        }
-
-        /// <summary>
-        /// Loads the log file.
-        /// </summary>
-        /// <param name="path">The path.</param>
-        public void LoadLogFile(string path)
-        {
-            using (var file = File.OpenRead(path))
-            using (var stream = new StreamReader(file))
-            {
-                _entries.Clear();
-                _selectedEntryIndex = -1;
-                var regex = new Regex(@"\[ (\d\d:\d\d:\d\d.\d\d\d) \]\: \[(\w*)\]");
-
-                while (!stream.EndOfStream)
-                {
-                    // Read next line
-                    var line = stream.ReadLine();
-                    if (string.IsNullOrEmpty(line))
-                        continue;
-
-                    // Parse with regex
-                    var match = regex.Match(line);
-                    if (!match.Success || match.Groups.Count != 3)
-                    {
-                        // Try to add the line for multi-line logs
-                        if (_entries.Count != 0 && !line.StartsWith("======"))
-                        {
-                            ref var last = ref CollectionsMarshal.AsSpan(_entries)[_entries.Count - 1];
-                            last.Message += '\n';
-                            last.Message += line;
-                        }
-
-                        continue;
-                    }
-
-                    // Parse log time and type
-                    var time = match.Groups[1].Value;
-                    var level = match.Groups[2].Value;
-                    if (time.Length != 12)
-                        continue;
-                    int hours = int.Parse(time.Substring(0, 2));
-                    int minutes = int.Parse(time.Substring(3, 2));
-                    int seconds = int.Parse(time.Substring(6, 2));
-                    int milliseconds = int.Parse(time.Substring(9, 3));
-                    var timeSinceStartup = new TimeSpan(0, hours, minutes, seconds, milliseconds);
-                    var logType = (LogType)Enum.Parse(typeof(LogType), level);
-
-                    // Add new entry
-                    var e = new Entry
-                    {
-                        Time = _startupTime + timeSinceStartup,
-                        Level = logType,
-                        Message = line.Substring(match.Index + match.Length)
-                    };
-                    _entries.Add(e);
-                }
-
-                Refresh();
-            }
+            if (layoutChanged)
+                PerformLayout();
         }
 
         /// <inheritdoc />
@@ -1188,8 +1271,12 @@ namespace FlaxEditor.Windows
             if (_output != null)
             {
                 _viewDropdown.X = Width - _viewDropdown.Width - 2;
-                _searchBox.X = _clearButton.Right + 2;
-                _searchBox.Width = Mathf.Max(_viewDropdown.X - _searchBox.X - 2, 0.0f);
+                _stackTraceButton.X = _viewDropdown.X - _stackTraceButton.Width - 2;
+                _logTypeButtons[2].X = _stackTraceButton.X - _logTypeButtons[2].Width - 2;
+                _logTypeButtons[1].X = _logTypeButtons[2].X - _logTypeButtons[1].Width - 2;
+                _logTypeButtons[0].X = _logTypeButtons[1].X - _logTypeButtons[0].Width - 2;
+                _searchBox.X = _clearOnPlayButton.Right + 2;
+                _searchBox.Width = Mathf.Max(_logTypeButtons[0].X - _searchBox.X - 2, 0.0f);
                 _commandLineBox.Width = Width - 4;
                 _commandLineBox.Y = Height - 2 - _commandLineBox.Height;
                 var outputBottom = _wrapLogLines ? _commandLineBox.Y - OutputPadding : _commandLineBox.Y - _scrollSize;
@@ -1276,25 +1363,28 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
-            FlaxEngine.Profiler.BeginEvent("OutputLogWindow.Update");
+            FlaxEngine.Profiler.BeginEvent("EditorConsoleWindow.Update");
 
             // Read the incoming log messages
             int logCount;
             do
             {
-                logCount = Editor.Internal_ReadOutputLogs(ref _outMessages, ref _outLogTypes, ref _outLogTimes, OutCapacity);
+                logCount = Editor.Internal_ReadOutputLogs(ref _outMessages, ref _outStackTraces, ref _outLogTypes,
+                    ref _outLogTimes, ref _outThreadIds, OutCapacity);
 
                 for (int i = 0; i < logCount; i++)
                 {
                     var entry = new Entry
                     {
-                        Level = (LogType)_outLogTypes[i],
+                        Kind = (EntryKind)_outLogTypes[i],
                         Time = new DateTime(_outLogTimes[i], DateTimeKind.Utc),
                         Message = _outMessages[i],
+                        StackTrace = _outStackTraces[i],
+                        ThreadId = _outThreadIds[i],
                     };
-                    _entries.Add(entry);
+                    AddEntry(entry);
                     _outMessages[i] = null;
-                    _isDirty = true;
+                    _outStackTraces[i] = null;
                 }
             } while (logCount != 0);
 
@@ -1310,6 +1400,8 @@ namespace FlaxEditor.Windows
                 _output.DefaultStyle.Font.GetFont();
                 _output.WarningStyle.Font.GetFont();
                 _output.ErrorStyle.Font.GetFont();
+                _output.CommandStyle.Font.GetFont();
+                _output.ResultStyle.Font.GetFont();
 
                 // Generate the output log
                 Span<Entry> entries = CollectionsMarshal.AsSpan(_entries);
@@ -1319,21 +1411,28 @@ namespace FlaxEditor.Windows
                 for (int i = _textBufferCount; i < _entries.Count; i++)
                 {
                     ref var entry = ref entries[i];
-                    if (((int)entry.Level & _logTypeShowMask) == 0)
+                    if ((entry.Kind == EntryKind.Info || entry.Kind == EntryKind.Warning ||
+                         entry.Kind == EntryKind.Error || entry.Kind == EntryKind.Fatal) &&
+                        ((int)entry.Kind & _logTypeShowMask) == 0)
                         continue;
 
                     entry.Message = SanitizeMessage(entry.Message);
-                    if (searchQuery.Length != 0 && entry.Message.IndexOf(searchQuery, StringComparison.OrdinalIgnoreCase) == -1)
+                    entry.StackTrace = SanitizeMessage(entry.StackTrace);
+                    if (searchQuery.Length != 0 &&
+                        entry.Message.IndexOf(searchQuery, StringComparison.OrdinalIgnoreCase) == -1 &&
+                        (entry.StackTrace?.IndexOf(searchQuery, StringComparison.OrdinalIgnoreCase) ?? -1) == -1)
                         continue;
 
-                    AppendVisibleEntry(i, ref entry, wrapWidth);
+                    AppendVisibleEntry(ref entry, wrapWidth);
                 }
 
                 // Update the output
                 var cachedScrollValue = _vScroll.Value;
                 var cachedSelection = _output.SelectionRange;
                 var cachedOutputTargetViewOffset = _output.TargetViewOffset;
-                var isBottomScroll = !_outputSelectionBlockedAutoScroll && (_vScroll.Value >= _vScroll.Maximum - (_scrollSize * 2) || wasEmpty);
+                var isBottomScroll = Editor.Options.Options.Interface.OutputLogScrollToBottom &&
+                                     !_outputSelectionBlockedAutoScroll &&
+                                     (_vScroll.Value >= _vScroll.Maximum - (_scrollSize * 2) || wasEmpty);
                 var outputText = _textBuffer.ToString();
                 if (_output.Text.Equals(outputText, StringComparison.Ordinal))
                 {
@@ -1352,26 +1451,28 @@ namespace FlaxEditor.Windows
                 _textBufferCount = _entries.Count;
                 if (!_vScroll.IsThumbClicked)
                     _vScroll.TargetValue = isBottomScroll ? _vScroll.Maximum : cachedScrollValue;
-                if (_selectedEntryIndex != -1)
-                {
-                    if (FindEntryRange(_selectedEntryIndex, out var selectedRange))
-                        _output.SelectionRange = new TextRange(selectedRange.StartIndex, selectedRange.EndIndex);
-                    else
-                    {
-                        _selectedEntryIndex = -1;
-                        _output.Deselect();
-                    }
-                }
-                else
-                {
-                    _output.SelectionRange = cachedSelection;
-                }
+                _output.SelectionRange = cachedSelection;
                 _outputSelectionBlockedAutoScroll = false;
             }
 
             base.Update(deltaTime);
 
             FlaxEngine.Profiler.EndEvent();
+        }
+
+        /// <inheritdoc />
+        public override void OnPlayBeginning()
+        {
+            if (Editor.Options.Options.Interface.DebugLogClearOnPlay)
+                Clear();
+        }
+
+        private void OnEditorInitializationEnd()
+        {
+            Editor.InitializationEnd -= OnEditorInitializationEnd;
+            var panel = ParentDockPanel;
+            if (panel != null && panel.TabsCount == 1 && panel.SelectedTab == null)
+                panel.SelectTab(this, false);
         }
 
         /// <inheritdoc />
@@ -1407,6 +1508,7 @@ namespace FlaxEditor.Windows
         {
             writer.WriteAttributeString("LogTypeShowMask", _logTypeShowMask.ToString());
             writer.WriteAttributeString("WrapLogLines", _wrapLogLines.ToString());
+            writer.WriteAttributeString("ShowStackTrace", _showStackTrace.ToString());
         }
 
         /// <inheritdoc />
@@ -1416,12 +1518,17 @@ namespace FlaxEditor.Windows
                 _logTypeShowMask = value1;
             if (bool.TryParse(node.GetAttribute("WrapLogLines"), out var value2))
                 _wrapLogLines = value2;
+            if (bool.TryParse(node.GetAttribute("ShowStackTrace"), out var value3))
+                _showStackTrace = value3;
+            UpdateToolbarChecks();
         }
 
         /// <inheritdoc />
         public override void OnLayoutDeserialize()
         {
             _wrapLogLines = true;
+            _showStackTrace = false;
+            UpdateToolbarChecks();
         }
 
         /// <inheritdoc />
@@ -1432,23 +1539,34 @@ namespace FlaxEditor.Windows
 
             // Unbind events
             Editor.Options.OptionsChanged -= OnEditorOptionsChanged;
+            Editor.InitializationEnd -= OnEditorInitializationEnd;
             GameCooker.Event -= OnGameCookerEvent;
             ScriptsBuilder.CompilationFailed -= OnScriptsCompilationFailed;
+            EditorConsole.MessageWritten -= OnEditorConsoleMessage;
+            EditorConsole.ClearRequested -= Clear;
+            EditorConsole.OpenRequested -= FocusOrShow;
+            EditorConsole.CloseRequested -= CloseConsole;
+            EditorConsole.OpenHtmlRequested -= _htmlLog.Open;
+            EditorConsole.OpenLogFolderRequested -= _htmlLog.OpenFolder;
+            EditorConsole.HtmlLogPathProvider -= GetHtmlLogPath;
+            EditorConsole.Shutdown();
 
             // Cleanup
             _textBuffer.Clear();
             _textBuffer = null;
             _textBlocks.Clear();
             _textBlocks = null;
-            _entryRanges.Clear();
-            _entryRanges = null;
             _entries.Clear();
             _entries = null;
             _outMessages = null;
+            _outStackTraces = null;
             _outLogTypes = null;
             _outLogTimes = null;
+            _outThreadIds = null;
             _compileRegex = null;
             _commandHistory = null;
+            _htmlLog.Dispose();
+            _htmlLog = null;
 
             // Unlink controls
             _viewDropdown = null;
