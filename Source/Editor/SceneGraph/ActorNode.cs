@@ -527,6 +527,17 @@ namespace FlaxEditor.SceneGraph
         /// <inheritdoc />
         public override void OnDebugDraw(ViewportDebugDrawData data)
         {
+            if (_actor is GroupActor)
+            {
+                var bounds = _actor.EditorBoxChildren;
+                if (bounds.Minimum.X <= bounds.Maximum.X &&
+                    bounds.Minimum.Y <= bounds.Maximum.Y &&
+                    bounds.Minimum.Z <= bounds.Maximum.Z)
+                {
+                    DebugDraw.DrawWireBox(bounds, new Color(1.0f, 0.82f, 0.12f, 0.18f), 0.0f, false);
+                    DebugDraw.DrawWireBox(bounds, new Color(1.0f, 0.82f, 0.12f, 1.0f), 0.0f, true);
+                }
+            }
             data.Add(_actor);
         }
 
