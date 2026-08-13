@@ -29,7 +29,7 @@ namespace FlaxEditor.Windows
     /// </summary>
     /// <seealso cref="FlaxEditor.Windows.EditorWindow" />
     /// <seealso cref="FlaxEditor.Windows.SceneEditorWindow" />
-    public class PropertiesWindow : SceneEditorWindow, IPresenterOwner
+    public partial class PropertiesWindow : SceneEditorWindow, IPresenterOwner
     {
         private IEnumerable<object> undoRecordObjects;
 
@@ -38,6 +38,7 @@ namespace FlaxEditor.Windows
         private bool _discardContentAssetChanges;
         private readonly List<PinnedTab> _pinnedTabs = new List<PinnedTab>();
         private readonly ContentAssetEditor _contentAssetEditor = new ContentAssetEditor();
+        private readonly ActorEditor _contentPrefabActorEditor = new ActorEditor();
         private IDisposable _contentAssetState;
         private bool _lockObjects = false;
         private bool _showContentSelection;
@@ -532,6 +533,7 @@ namespace FlaxEditor.Windows
             Presenter.AfterLayout += OnPresenterAfterLayout;
             Presenter.Modified += OnPresenterModified;
             ApplyPropertiesPanelStyle(Presenter);
+            InitializeAssetPreview();
             InputActions.Bindings.Insert(0, new FlaxEditor.Options.InputActionsContainer.Binding(
                 options => options.Save,
                 SaveContentSelection));
@@ -540,6 +542,8 @@ namespace FlaxEditor.Windows
             Editor.SceneEditing.SelectionChanged += OnSceneSelectionChanged;
             Editor.Windows.ContentWin.SelectionChanged += OnContentSelectionChanged;
             Editor.ContentDatabase.ItemRemoved += OnContentItemRemoved;
+            Editor.Undo.UndoDone += OnUndoRedoContentProperties;
+            Editor.Undo.RedoDone += OnUndoRedoContentProperties;
             FlaxEngine.Content.AssetReloading += OnAssetReloading;
             UpdateTabsBarVisibility();
         }
@@ -600,9 +604,17 @@ namespace FlaxEditor.Windows
             if (selectionCount == 0)
                 return "Selection";
             if (selectionCount > 1)
+            {
+                if (Presenter.Selection[0] is ImportAssetPropertiesProxy)
+                    return TruncateTabTitle($"{selectionCount} Assets");
+                if (_contentAssetState is PrefabContentAssetsState)
+                    return TruncateTabTitle($"{selectionCount} Prefabs");
                 return TruncateTabTitle($"{selectionCount} Objects");
+            }
 
             var selected = Presenter.Selection[0];
+            if (selected is ImportAssetPropertiesProxy importProxy && importProxy.Asset != null && !string.IsNullOrEmpty(importProxy.Asset.Path))
+                return TruncateTabTitle(System.IO.Path.GetFileNameWithoutExtension(importProxy.Asset.Path));
             if (selected is TextFilePropertiesProxy textFile)
                 return TruncateTabTitle(textFile.Item.FileName);
             var actor = selected as Actor;
@@ -660,6 +672,18 @@ namespace FlaxEditor.Windows
             {
                 prefab = state.Asset;
                 return prefab != null;
+            }
+            if (_showContentSelection &&
+                _contentAssetState is ImportAssetPropertiesState importState &&
+                importState.TryGetPrefab(instance, out prefab))
+            {
+                return true;
+            }
+            if (_showContentSelection &&
+                _contentAssetState is PrefabContentAssetsState prefabsState &&
+                prefabsState.TryGetPrefab(instance, out prefab))
+            {
+                return true;
             }
 
             prefab = null;
@@ -813,6 +837,7 @@ namespace FlaxEditor.Windows
                 ClearContentAssetState();
                 Presenter.OverrideEditor = null;
                 undoRecordObjects = Array.Empty<object>();
+                ClearAssetPreview();
                 UpdateSelectionTabTitle();
             }
 
@@ -836,6 +861,7 @@ namespace FlaxEditor.Windows
             _discardContentAssetChanges = true;
             _waitingForContentAssets.Clear();
             _waitingForContentAssets.Add(asset);
+            _assetPreviewAsset = null;
         }
 
         private Guid[] GetSelectedContentAssetIds()
@@ -880,6 +906,8 @@ namespace FlaxEditor.Windows
             {
                 if (selection[i] is Asset asset && asset.ID == assetId)
                     return true;
+                if (selection[i] is ImportAssetPropertiesProxy importProxy && importProxy.Asset != null && importProxy.Asset.ID == assetId)
+                    return true;
                 if (selection[i] is MaterialAssetPropertiesProxy materialProxy && materialProxy.Material != null && materialProxy.Material.ID == assetId)
                     return true;
             }
@@ -911,6 +939,7 @@ namespace FlaxEditor.Windows
                 Presenter.Deselect();
             ClearContentAssetState();
             Presenter.OverrideEditor = null;
+            ClearAssetPreview();
 
             // Update selected objects
             // TODO: use cached collection for less memory allocations
@@ -972,43 +1001,62 @@ namespace FlaxEditor.Windows
                 }
             }
 
-            for (int i = 0; i < selection.Count; i++)
+            if (TryCreateImportAssetPropertiesSelection(selection, out var importAssetState))
             {
-                if (selection[i] is not AssetItem assetItem)
+                _contentAssetState = importAssetState;
+                objects.AddRange(importAssetState.Proxies);
+            }
+            else if (TryCreatePrefabPropertiesSelection(selection, out var prefabAssetsState))
+            {
+                _contentAssetState = prefabAssetsState;
+                objects.AddRange(prefabAssetsState.Instances);
+            }
+            else
+            {
+                for (int i = 0; i < selection.Count; i++)
                 {
-                    if (TryCreateTextFilePropertiesProxy(selection[i], out var textFile))
-                        objects.Add(textFile);
-                    continue;
-                }
+                    if (selection[i] is not AssetItem assetItem)
+                    {
+                        if (TryCreateTextFilePropertiesProxy(selection[i], out var textFile))
+                            objects.Add(textFile);
+                        continue;
+                    }
 
-                var asset = assetItem.LoadAsync();
-                if (asset == null)
-                    continue;
+                    var asset = assetItem.LoadAsync();
+                    if (asset == null)
+                        continue;
 
-                if (!asset.IsLoaded && !asset.LastLoadFailed)
-                    _waitingForContentAssets.Add(asset);
+                    if (!asset.IsLoaded && !asset.LastLoadFailed)
+                        _waitingForContentAssets.Add(asset);
 
-                if (assetItemsCount == 1 && assetItem == singleAssetItem)
-                {
-                    var contentObject = GetContentAssetObject(asset, out _contentAssetState);
-                    objects.Add(contentObject);
-                }
-                else if (asset is JsonAsset jsonAsset && jsonAsset.IsLoaded)
-                {
-                    objects.Add(GetJsonAssetObject(jsonAsset));
-                }
-                else
-                {
-                    objects.Add(asset);
+                    if (assetItemsCount == 1 && assetItem == singleAssetItem)
+                    {
+                        var contentObject = GetContentAssetObject(asset, out _contentAssetState);
+                        objects.Add(contentObject);
+                    }
+                    else if (asset is JsonAsset jsonAsset && jsonAsset.IsLoaded)
+                    {
+                        objects.Add(GetJsonAssetObject(jsonAsset));
+                    }
+                    else
+                    {
+                        objects.Add(asset);
+                    }
                 }
             }
 
-            undoRecordObjects = objects;
-            Presenter.OverrideEditor = objects.Count != 0 && objects.All(x => x is Asset) ? _contentAssetEditor : null;
+            undoRecordObjects = objects.SelectMany(x => x is ImportAssetPropertiesProxy proxy
+                ? proxy.GetUndoObjects()
+                : new[] { x }).Where(x => x != null).Distinct();
+            if (_contentAssetState is PrefabContentAssetsState && objects.Count != 0 && objects.All(x => x is Actor))
+                Presenter.OverrideEditor = _contentPrefabActorEditor;
+            else
+                Presenter.OverrideEditor = objects.Count != 0 && objects.All(x => x is Asset) ? _contentAssetEditor : null;
             if (!forceRebuild && !SelectionsMatch(objects, Presenter.Selection))
                 ResetFilters();
             Presenter.Select(objects);
             UpdateSelectionTabTitle();
+            UpdateAssetPreviewSelection(selection);
             if (forceRebuild)
                 Presenter.BuildLayout();
         }
@@ -1140,6 +1188,8 @@ namespace FlaxEditor.Windows
                     particleState.DiscardPendingChanges();
                 else if (_contentAssetState is JsonAssetContentAssetState jsonAssetState)
                     jsonAssetState.DiscardPendingChanges();
+                else if (_contentAssetState is ImportAssetPropertiesState importAssetState)
+                    importAssetState.DiscardPendingChanges();
                 _discardContentAssetChanges = false;
             }
             _contentAssetState.Dispose();
@@ -1175,6 +1225,8 @@ namespace FlaxEditor.Windows
                 particleState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
             else if (_showContentSelection && _contentAssetState is JsonAssetContentAssetState jsonAssetState)
                 jsonAssetState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
+            else if (_showContentSelection && _contentAssetState is ImportAssetPropertiesState importAssetState)
+                importAssetState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
 
             base.Update(deltaTime);
         }
@@ -1202,10 +1254,40 @@ namespace FlaxEditor.Windows
                     _isApplyingContentAssetChanges = false;
                 }
             }
+            else if (_contentAssetState is ImportAssetPropertiesState importState)
+            {
+                _isApplyingContentAssetChanges = true;
+                try
+                {
+                    importState.ApplyPrefabChanges(Editor);
+                }
+                finally
+                {
+                    _isApplyingContentAssetChanges = false;
+                }
+            }
+            else if (_contentAssetState is PrefabContentAssetsState prefabsState)
+            {
+                _isApplyingContentAssetChanges = true;
+                try
+                {
+                    prefabsState.Apply(Editor);
+                }
+                finally
+                {
+                    _isApplyingContentAssetChanges = false;
+                }
+            }
             else if (_contentAssetState is JsonAssetContentAssetState jsonAssetState)
             {
                 jsonAssetState.RequestSave();
             }
+        }
+
+        private void OnUndoRedoContentProperties(IUndoAction action)
+        {
+            if (_showContentSelection && _contentAssetState is ImportAssetPropertiesState importState)
+                importState.ApplyModelUndoRedo();
         }
 
         private void ApplySearchFilter()
@@ -1336,10 +1418,11 @@ namespace FlaxEditor.Windows
                 _filtersPanel.Offsets = new Margin(0.0f, 0.0f, 0.0f, y);
             }
 
+            var assetPreviewHeight = UpdateAssetPreviewLayout();
             var offsets = _scrollingPanel.Offsets;
-            if (!Mathf.NearEqual(offsets.Top, y))
+            if (!Mathf.NearEqual(offsets.Top, y) || !Mathf.NearEqual(offsets.Bottom, assetPreviewHeight))
             {
-                _scrollingPanel.Offsets = new Margin(0.0f, 0.0f, y, 0.0f);
+                _scrollingPanel.Offsets = new Margin(0.0f, 0.0f, y, assetPreviewHeight);
                 _scrollingPanel.UpdateBounds();
             }
         }
@@ -1381,6 +1464,7 @@ namespace FlaxEditor.Windows
         {
             writer.WriteAttributeString("ScaleLinked", ScaleLinked.ToString());
             writer.WriteAttributeString("UIPivotRelative", UIPivotRelative.ToString());
+            writer.WriteAttributeString("AssetPreviewExpanded", _assetPreviewExpanded.ToString());
         }
 
         /// <inheritdoc />
@@ -1390,6 +1474,12 @@ namespace FlaxEditor.Windows
                 ScaleLinked = value1;
             if (bool.TryParse(node.GetAttribute("UIPivotRelative"), out value1))
                 UIPivotRelative = value1;
+            if (bool.TryParse(node.GetAttribute("AssetPreviewExpanded"), out value1))
+            {
+                _assetPreviewExpanded = value1;
+                UpdateAssetPreviewLayout();
+                LayoutFilterControls();
+            }
         }
 
         /// <inheritdoc />
@@ -2054,8 +2144,11 @@ namespace FlaxEditor.Windows
                 Editor.Windows.ContentWin.SelectionChanged -= OnContentSelectionChanged;
             if (Editor.ContentDatabase != null)
                 Editor.ContentDatabase.ItemRemoved -= OnContentItemRemoved;
+            Editor.Undo.UndoDone -= OnUndoRedoContentProperties;
+            Editor.Undo.RedoDone -= OnUndoRedoContentProperties;
             FlaxEngine.Content.AssetReloading -= OnAssetReloading;
             Presenter.Modified -= OnPresenterModified;
+            DisposeAssetPreviewControl();
             if (_contentAssetState != null)
                 Presenter.Deselect();
             ClearContentAssetState();
