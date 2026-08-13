@@ -1221,13 +1221,6 @@ namespace FlaxEditor.Windows
             _htmlLog.Append(entry.Time, entry.ThreadId, entry.Kind.ToString(), entry.Message, entry.StackTrace);
             _isDirty = true;
 
-            int maximum = Math.Max(100, EditorConsole.Lines);
-            if (_entries.Count > maximum)
-            {
-                _entries.RemoveRange(0, _entries.Count - maximum);
-                Refresh();
-            }
-
             if (allowPause && (entry.Kind == EntryKind.Error || entry.Kind == EntryKind.Fatal) &&
                 Editor.Options.Options.Interface.DebugLogPauseOnError &&
                 Editor.StateMachine.CurrentState == Editor.StateMachine.PlayingState)
