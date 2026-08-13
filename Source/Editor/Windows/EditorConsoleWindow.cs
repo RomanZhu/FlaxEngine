@@ -82,9 +82,30 @@ namespace FlaxEditor.Windows
         /// <seealso cref="FlaxEngine.GUI.RichTextBoxBase" />
         private sealed class OutputTextBox : RichTextBoxBase
         {
+            private enum SelectionMode
+            {
+                Character,
+                Word,
+                Line,
+            }
+
             private const float SelectionAutoScrollEdgeSize = 28.0f;
             private const float SelectionAutoScrollMinSpeed = 140.0f;
             private const float SelectionAutoScrollMaxSpeed = 560.0f;
+            private const double TripleClickTime = 0.5;
+            private const float TripleClickDistanceSquared = 64.0f;
+            private const float MiddleScrollDeadZone = 12.0f;
+            private const float MiddleScrollSpeedScale = 8.0f;
+            private const float MiddleScrollMaxSpeed = 6000.0f;
+
+            private SelectionMode _selectionMode;
+            private int _selectionAnchorStart;
+            private int _selectionAnchorEnd;
+            private DateTime _lastDoubleClickTime;
+            private Float2 _lastDoubleClickLocation;
+            private bool _isMiddleScrolling;
+            private Float2 _middleScrollOrigin;
+            private Float2 _middleScrollRemainder;
 
             /// <summary>
             /// The parent window.
@@ -122,6 +143,8 @@ namespace FlaxEditor.Windows
             }
 
             public bool IsSelectingText => _isSelecting;
+
+            public bool IsMiddleScrolling => _isMiddleScrolling;
 
             public override int CharIndexAtPoint(ref Float2 location)
             {
@@ -192,9 +215,83 @@ namespace FlaxEditor.Windows
                         Editor.Instance.CodeEditing.OpenFile(tag.Url, tag.Line);
                         return true;
                     }
+
+                    _lastDoubleClickTime = DateTime.UtcNow;
+                    _lastDoubleClickLocation = location;
+
+                    bool result = base.OnMouseDoubleClick(location, button);
+                    if (TextLength != 0 && IsSelectable)
+                    {
+                        _selectionMode = SelectionMode.Word;
+                        _selectionAnchorStart = SelectionLeft;
+                        _selectionAnchorEnd = SelectionRight;
+                        OnSelectingBegin();
+                    }
+                    return result;
                 }
 
                 return base.OnMouseDoubleClick(location, button);
+            }
+
+            /// <inheritdoc />
+            public override bool OnMouseDown(Float2 location, MouseButton button)
+            {
+                if (button == MouseButton.Middle &&
+                    (_textSize.Y > Height || (!Window._wrapLogLines && _textSize.X > Width)))
+                {
+                    _isMiddleScrolling = true;
+                    _middleScrollOrigin = location;
+                    _middleScrollRemainder = Float2.Zero;
+                    StartMouseCapture();
+                    Cursor = CursorType.SizeAll;
+                    return true;
+                }
+
+                if (button == MouseButton.Left && IsSelectable && IsTripleClick(location))
+                {
+                    _lastDoubleClickTime = DateTime.MinValue;
+                    Focus();
+                    OnSelectingBegin();
+
+                    int index = CharIndexAtPoint(ref location);
+                    var line = GetLineRange(index);
+                    SetSelection(line.StartIndex, line.EndIndex, false);
+                    _selectionMode = SelectionMode.Line;
+                    _selectionAnchorStart = line.StartIndex;
+                    _selectionAnchorEnd = line.EndIndex;
+
+                    if (Cursor == CursorType.Default && _changeCursor)
+                        Cursor = CursorType.IBeam;
+                    return true;
+                }
+
+                if (button == MouseButton.Left)
+                {
+                    _lastDoubleClickTime = DateTime.MinValue;
+                    _selectionMode = SelectionMode.Character;
+                }
+                return base.OnMouseDown(location, button);
+            }
+
+            /// <inheritdoc />
+            public override bool OnMouseUp(Float2 location, MouseButton button)
+            {
+                if (button == MouseButton.Middle && _isMiddleScrolling)
+                {
+                    EndMouseCapture();
+                    return true;
+                }
+                return base.OnMouseUp(location, button);
+            }
+
+            /// <inheritdoc />
+            public override void OnEndMouseCapture()
+            {
+                _isMiddleScrolling = false;
+                _middleScrollRemainder = Float2.Zero;
+                if (Cursor == CursorType.SizeAll)
+                    Cursor = CursorType.Default;
+                base.OnEndMouseCapture();
             }
 
             /// <inheritdoc />
@@ -212,6 +309,9 @@ namespace FlaxEditor.Windows
             /// <inheritdoc />
             public override void OnMouseMove(Float2 location)
             {
+                if (_isMiddleScrolling)
+                    return;
+
                 if (_isSelecting)
                 {
                     ExtendTextSelection(ref location);
@@ -225,6 +325,18 @@ namespace FlaxEditor.Windows
             public override void Update(float deltaTime)
             {
                 base.Update(deltaTime);
+
+                if (_isMiddleScrolling)
+                {
+                    if (Root == null || !Root.GetMouseButton(MouseButton.Middle))
+                    {
+                        EndMouseCapture();
+                        return;
+                    }
+
+                    ScrollWithMiddleMouse(PointFromWindow(Root.MousePosition), deltaTime);
+                    return;
+                }
 
                 if (!IsSelectingText || Root == null || !Root.GetMouseButton(MouseButton.Left))
                     return;
@@ -244,7 +356,66 @@ namespace FlaxEditor.Windows
             private void ExtendTextSelection(ref Float2 location)
             {
                 int currentIndex = CharIndexAtPoint(ref location);
-                SetSelection(_selectionStart, currentIndex, false);
+                switch (_selectionMode)
+                {
+                case SelectionMode.Word:
+                    ExtendTextSelection(GetWordRange(currentIndex));
+                    break;
+                case SelectionMode.Line:
+                    ExtendTextSelection(GetLineRange(currentIndex));
+                    break;
+                default:
+                    SetSelection(_selectionStart, currentIndex, false);
+                    break;
+                }
+            }
+
+            private void ExtendTextSelection(TextRange currentRange)
+            {
+                if (currentRange.EndIndex <= _selectionAnchorStart)
+                    SetSelection(_selectionAnchorEnd, currentRange.StartIndex, false);
+                else if (currentRange.StartIndex >= _selectionAnchorEnd)
+                    SetSelection(_selectionAnchorStart, currentRange.EndIndex, false);
+                else
+                    SetSelection(_selectionAnchorStart, _selectionAnchorEnd, false);
+            }
+
+            private TextRange GetWordRange(int index)
+            {
+                int textLength = TextLength;
+                if (textLength == 0)
+                    return new TextRange(0, 0);
+
+                index = Mathf.Clamp(index, 0, textLength);
+                int searchIndex = Mathf.Min(index - 2, textLength - 1);
+                int separatorIndex = searchIndex >= 0 ? _text.LastIndexOfAny(Separators, searchIndex) : -1;
+                int left = separatorIndex == -1 ? 0 : separatorIndex + 1;
+                searchIndex = Mathf.Min(index + 1, textLength);
+                separatorIndex = searchIndex < textLength ? _text.IndexOfAny(Separators, searchIndex) : -1;
+                int right = separatorIndex == -1 ? textLength : separatorIndex;
+                return new TextRange(left, right);
+            }
+
+            private TextRange GetLineRange(int index)
+            {
+                int textLength = TextLength;
+                if (textLength == 0)
+                    return new TextRange(0, 0);
+
+                index = Mathf.Clamp(index, 0, textLength);
+                int searchIndex = Mathf.Min(index - 1, textLength - 1);
+                int lineStart = searchIndex >= 0 ? _text.LastIndexOf('\n', searchIndex) + 1 : 0;
+                int lineEnd = _text.IndexOf('\n', Mathf.Min(index, textLength - 1));
+                lineEnd = lineEnd == -1 ? textLength : lineEnd + 1;
+                return new TextRange(lineStart, lineEnd);
+            }
+
+            private bool IsTripleClick(Float2 location)
+            {
+                if (_lastDoubleClickTime == DateTime.MinValue ||
+                    (DateTime.UtcNow - _lastDoubleClickTime).TotalSeconds > TripleClickTime)
+                    return false;
+                return Float2.DistanceSquared(location, _lastDoubleClickLocation) <= TripleClickDistanceSquared;
             }
 
             private bool ScrollDuringSelection(ref Float2 location, float deltaTime)
@@ -272,6 +443,33 @@ namespace FlaxEditor.Windows
                 viewOffset.Y = Mathf.Clamp(viewOffset.Y + direction * speed * deltaTime, 0.0f, maxOffsetY);
                 TargetViewOffset = viewOffset;
                 return !Mathf.NearEqual(previousY, viewOffset.Y);
+            }
+
+            private void ScrollWithMiddleMouse(Float2 location, float deltaTime)
+            {
+                var distance = location - _middleScrollOrigin;
+                var speed = new Float2(GetMiddleScrollSpeed(distance.X), GetMiddleScrollSpeed(distance.Y));
+                if (speed.IsZero)
+                {
+                    _middleScrollRemainder = Float2.Zero;
+                    return;
+                }
+
+                var maxViewOffset = Float2.Max(_textSize - Size, Float2.Zero);
+                if (Window._wrapLogLines)
+                    maxViewOffset.X = 0.0f;
+                var viewOffset = TargetViewOffset + speed * deltaTime + _middleScrollRemainder;
+                viewOffset = Float2.Clamp(viewOffset, Float2.Zero, maxViewOffset);
+                TargetViewOffset = viewOffset;
+                _middleScrollRemainder = viewOffset - TargetViewOffset;
+            }
+
+            private static float GetMiddleScrollSpeed(float distance)
+            {
+                float speed = Mathf.Abs(distance) - MiddleScrollDeadZone;
+                if (speed <= 0.0f)
+                    return 0.0f;
+                return Mathf.Sign(distance) * Mathf.Min(speed * MiddleScrollSpeedScale, MiddleScrollMaxSpeed);
             }
         }
 
@@ -1432,6 +1630,7 @@ namespace FlaxEditor.Windows
                 var cachedOutputTargetViewOffset = _output.TargetViewOffset;
                 var isBottomScroll = Editor.Options.Options.Interface.OutputLogScrollToBottom &&
                                      !_outputSelectionBlockedAutoScroll &&
+                                     !_output.IsMiddleScrolling &&
                                      (_vScroll.Value >= _vScroll.Maximum - (_scrollSize * 2) || wasEmpty);
                 var outputText = _textBuffer.ToString();
                 if (_output.Text.Equals(outputText, StringComparison.Ordinal))
