@@ -78,7 +78,10 @@ namespace FlaxEditor.Modules
         public void DelegatePlayOrStopPlayInEditor()
         {
             if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("PLAY");
                 return;
+            }
             switch (Editor.Options.Options.Interface.PlayButtonAction)
             {
             case Options.InterfaceOptions.PlayAction.PlayGame:
@@ -101,7 +104,10 @@ namespace FlaxEditor.Modules
         public void RequestStartPlayScenes()
         {
             if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("START_SCENES");
                 return;
+            }
             if (!Editor.MultiplayerPlayMode.AreReplicasReady)
             {
                 Editor.LogWarning("[Multiplayer Play Mode] Cannot start until all configured replicas are connected.");
@@ -138,6 +144,11 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestPlayGameOrStopPlay()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("PLAY_GAME");
+                return;
+            }
             if (Editor.StateMachine.IsPlayMode)
             {
                 RequestStopPlay();
@@ -153,7 +164,12 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestStartPlayGame()
         {
-            if (Editor.MultiplayerPlayMode.IsReplica || !Editor.StateMachine.IsEditMode)
+            if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("START_GAME");
+                return;
+            }
+            if (!Editor.StateMachine.IsEditMode)
                 return;
             if (!Editor.MultiplayerPlayMode.AreReplicasReady)
             {
@@ -212,7 +228,10 @@ namespace FlaxEditor.Modules
         public void RequestStopPlay()
         {
             if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("STOP");
                 return;
+            }
             RequestStopPlay(false);
         }
 
@@ -240,6 +259,11 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void RequestPlayScenesOrStopPlay()
         {
+            if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("PLAY_SCENES");
+                return;
+            }
             if (Editor.StateMachine.IsPlayMode)
                 RequestStopPlay();
             else
@@ -252,7 +276,10 @@ namespace FlaxEditor.Modules
         public void RequestResumeOrPause()
         {
             if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("PAUSE");
                 return;
+            }
             if (Editor.StateMachine.PlayingState.IsPaused)
                 Editor.Simulation.RequestResumePlay();
 
@@ -266,7 +293,10 @@ namespace FlaxEditor.Modules
         public void RequestPausePlay()
         {
             if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("PAUSE_ON");
                 return;
+            }
             if (Editor.StateMachine.IsPlayMode && !Editor.StateMachine.PlayingState.IsPaused)
             {
                 Editor.Log("[PlayMode] Pause");
@@ -283,7 +313,10 @@ namespace FlaxEditor.Modules
         public void RequestResumePlay()
         {
             if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("PAUSE_OFF");
                 return;
+            }
             if (Editor.StateMachine.IsPlayMode && Editor.StateMachine.PlayingState.IsPaused)
             {
                 Editor.Log("[PlayMode] Resume");
@@ -300,7 +333,10 @@ namespace FlaxEditor.Modules
         public void RequestPlayOneFrame()
         {
             if (Editor.MultiplayerPlayMode.IsReplica)
+            {
+                Editor.MultiplayerPlayMode.RequestPrimary("STEP");
                 return;
+            }
             if (Editor.StateMachine.IsPlayMode && Editor.StateMachine.PlayingState.IsPaused)
             {
                 Editor.Log("[PlayMode] Step one frame");

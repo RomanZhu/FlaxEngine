@@ -557,7 +557,7 @@ namespace FlaxEditor.Modules
 
             var state = Editor.StateMachine.CurrentState;
             var isMultiplayerReplica = Editor.MultiplayerPlayMode.IsReplica;
-            var canEnterPlayMode = state.CanEnterPlayMode && Level.IsAnySceneLoaded && Editor.MultiplayerPlayMode.AreReplicasReady;
+            var canEnterPlayMode = (state.CanEnterPlayMode || (isMultiplayerReplica && Editor.StateMachine.IsEditMode)) && Level.IsAnySceneLoaded && Editor.MultiplayerPlayMode.AreReplicasReady;
             var isPlayMode = Editor.StateMachine.IsPlayMode;
             var isDuringBreakpointHang = Editor.Simulation.IsDuringBreakpointHang;
 
@@ -588,7 +588,7 @@ namespace FlaxEditor.Modules
                 play.Checked = false;
                 play.Icon = Editor.Icons.Stop64;
                 play.Glyph = ToolStripGlyph.Stop;
-                pause.Enabled = !isMultiplayerReplica;
+                pause.Enabled = true;
                 pause.Checked = Editor.StateMachine.PlayingState.IsPaused;
                 pause.AutoCheck = false;
                 step.Enabled = !isMultiplayerReplica;
@@ -1493,13 +1493,12 @@ namespace FlaxEditor.Modules
 
             var c = (ContextMenu)control;
             var isPlayMode = Editor.StateMachine.IsPlayMode;
-            var isMultiplayerReplica = Editor.MultiplayerPlayMode.IsReplica;
             var canPlay = Level.IsAnySceneLoaded && Editor.MultiplayerPlayMode.AreReplicasReady;
 
-            _menuGamePlayGame.Enabled = !isMultiplayerReplica && !isPlayMode && canPlay;
-            _menuGamePlayCurrentScenes.Enabled = !isMultiplayerReplica && !isPlayMode && canPlay;
-            _menuGameStop.Enabled = !isMultiplayerReplica && isPlayMode && canPlay;
-            _menuGamePause.Enabled = !isMultiplayerReplica && isPlayMode && canPlay;
+            _menuGamePlayGame.Enabled = !isPlayMode && canPlay;
+            _menuGamePlayCurrentScenes.Enabled = !isPlayMode && canPlay;
+            _menuGameStop.Enabled = isPlayMode && canPlay;
+            _menuGamePause.Enabled = isPlayMode && canPlay;
 
             c.PerformLayout();
         }
