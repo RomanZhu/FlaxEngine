@@ -414,11 +414,10 @@ namespace FlaxEditor.SceneGraph.Actors
 
         private static void DrawSelectedBrushBounds(BoxBrush brush)
         {
-            // Outside of CSG authoring, keep brush selection deliberately subdued. The
-            // authoring gizmo supplies the stronger gray/yellow state hierarchy itself.
-            if (brush.Mode != BrushMode.Subtractive)
-                return;
-            DebugDraw.DrawWireBox(brush.OrientedBox, new Color(0.62f, 0.24f, 0.22f, 0.1f), 0.0f, true);
+            // CSG source brushes have no independently rendered geometry for the regular
+            // selection-outline post effect. Draw their oriented bounds explicitly instead.
+            DebugDraw.DrawWireBox(brush.OrientedBox, new Color(1.0f, 0.82f, 0.12f, 0.18f), 0.0f, false);
+            DebugDraw.DrawWireBox(brush.OrientedBox, new Color(1.0f, 0.82f, 0.12f, 1.0f), 0.0f, true);
         }
 
         /// <inheritdoc />

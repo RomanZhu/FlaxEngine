@@ -1221,10 +1221,11 @@ namespace FlaxEditor.Viewport
                     for (int i = 0; i < selectedParents.Count; i++)
                     {
                         var selectedNode = selectedParents[i];
-                        // Brush wireframes are owned by the dedicated CSG render paths below.
-                        // Skipping their normal selection debug pass prevents a second outline
-                        // from competing with the authoring gray/yellow state hierarchy.
-                        if ((selectedNode is BoxBrushNode || selectedNode.ParentNode is BoxBrushNode) &&
+                        // Active CSG authoring owns brush selection rendering. In Object mode the
+                        // normal debug pass must draw it because source brushes have no renderable
+                        // geometry for the post-process selection outline.
+                        if (IsCSGAuthoringActive &&
+                            (selectedNode is BoxBrushNode || selectedNode.ParentNode is BoxBrushNode) &&
                             selectedNode.IsActiveInHierarchy)
                             continue;
                         if (selectedNode.IsActiveInHierarchy)
@@ -1250,6 +1251,20 @@ namespace FlaxEditor.Viewport
             for (int i = 0; i < _regularCSGBrushes.Count; i++)
             {
                 if (!(_regularCSGBrushes[i] is BoxBrushNode node) || !node.IsActiveInHierarchy)
+                    continue;
+
+                bool selected = false;
+                var selectedParents = TransformGizmo.SelectedParents;
+                for (int selectionIndex = 0; selectionIndex < selectedParents.Count; selectionIndex++)
+                {
+                    var selectedNode = selectedParents[selectionIndex];
+                    if (selectedNode == node || selectedNode.ParentNode == node)
+                    {
+                        selected = true;
+                        break;
+                    }
+                }
+                if (selected)
                     continue;
 
                 var brush = (BoxBrush)node.Actor;
