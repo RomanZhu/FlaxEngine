@@ -167,6 +167,27 @@ public:
     };
 
     /// <summary>
+    /// Model LODs that should be excluded during import.
+    /// </summary>
+    API_ENUM(Attributes="Flags") enum class IgnoredModelLODs : uint32
+    {
+        // Import all LODs.
+        None = 0,
+        // Exclude source LOD0.
+        LOD0 = 1 << 0,
+        // Exclude source LOD1.
+        LOD1 = 1 << 1,
+        // Exclude source LOD2.
+        LOD2 = 1 << 2,
+        // Exclude source LOD3.
+        LOD3 = 1 << 3,
+        // Exclude source LOD4.
+        LOD4 = 1 << 4,
+        // Exclude source LOD5.
+        LOD5 = 1 << 5,
+    };
+
+    /// <summary>
     /// Model import options.
     /// </summary>
     API_STRUCT(Attributes="HideInEditor") struct FLAXENGINE_API Options : public ISerializable
@@ -292,6 +313,9 @@ public:
 
     public: // Level Of Detail
 
+        // LODs to exclude from the imported model. Remaining LODs are compacted to preserve a continuous sequence.
+        API_FIELD(Attributes="EditorOrder(1090), EditorDisplay(\"Level Of Detail\", \"Ignored LODs\"), Tooltip(\"Select final LOD indices to exclude during import or reimport. Remaining LODs are compacted into a continuous sequence.\"), VisibleIf(nameof(ShowGeometry))")
+        IgnoredModelLODs IgnoredLODs = IgnoredModelLODs::None;
         // If checked, the importer will generate a sequence of LODs based on the base LOD index.
         API_FIELD(Attributes="EditorOrder(1100), EditorDisplay(\"Level Of Detail\", \"Generate LODs\"), VisibleIf(nameof(ShowGeometry))")
         bool GenerateLODs = false;

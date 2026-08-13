@@ -582,6 +582,7 @@ void ModelTool::Options::Serialize(SerializeStream& stream, const void* otherObj
     SERIALIZE(RootMotion);
     SERIALIZE(RootMotionFlags);
     SERIALIZE(RootNodeName);
+    SERIALIZE(IgnoredLODs);
     SERIALIZE(GenerateLODs);
     SERIALIZE(BaseLOD);
     SERIALIZE(LODCount);
@@ -643,6 +644,7 @@ void ModelTool::Options::Deserialize(DeserializeStream& stream, ISerializeModifi
     DESERIALIZE(RootMotion);
     DESERIALIZE(RootMotionFlags);
     DESERIALIZE(RootNodeName);
+    DESERIALIZE(IgnoredLODs);
     DESERIALIZE(GenerateLODs);
     DESERIALIZE(BaseLOD);
     DESERIALIZE(LODCount);
@@ -2138,6 +2140,38 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
             auto lodEndTime = DateTime::NowUTC();
             LOG(Info, "Generated LODs for {1} meshes in {0} ms", static_cast<int32>((lodEndTime - lodStartTime).GetTotalMilliseconds()), generatedLod);
         }
+    }
+
+    // Exclude selected LODs after importing and generation so this works for both
+    // source-authored and automatically generated levels. Transfer the retained
+    // mesh arrays into a compacted collection while preserving their order.
+    const uint32 ignoredLods = static_cast<uint32>(options.IgnoredLODs);
+    if (ignoredLods != 0 && data.LODs.HasItems())
+    {
+        int32 removedLODs = 0;
+        Array<ModelLodData> filteredLODs;
+        filteredLODs.EnsureCapacity(data.LODs.Count());
+        for (int32 lodIndex = 0; lodIndex < data.LODs.Count(); lodIndex++)
+        {
+            if ((ignoredLods & (1u << lodIndex)) != 0)
+            {
+                removedLODs++;
+                continue;
+            }
+
+            auto& sourceLOD = data.LODs[lodIndex];
+            auto& destinationLOD = filteredLODs.AddOne();
+            destinationLOD.ScreenSize = sourceLOD.ScreenSize;
+            destinationLOD.Meshes.Swap(sourceLOD.Meshes);
+        }
+        if (filteredLODs.IsEmpty())
+        {
+            errorMsg = TEXT("All imported model LODs are ignored. Enable at least one LOD and reimport the asset.");
+            return true;
+        }
+        data.LODs.Swap(filteredLODs);
+        if (removedLODs != 0)
+            LOG(Info, "Ignored {0} model LODs during import", removedLODs);
     }
 
     // Calculate blend shapes vertices ranges
