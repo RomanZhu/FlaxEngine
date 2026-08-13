@@ -9,6 +9,9 @@
 #ifndef SHADOWS_CSM_DITHERING
 #define SHADOWS_CSM_DITHERING 0
 #endif
+#ifndef SHADOWS_EDGE_AA
+#define SHADOWS_EDGE_AA 0
+#endif
 
 #include "./Flax/ShadowsCommon.hlsl"
 #include "./Flax/GBufferCommon.hlsl"
@@ -224,20 +227,33 @@ ShadowSample SampleDirectionalLightShadowCascade(LightData light, Buffer<float4>
     // Sample the existing optimized PCF kernel.
     result.SurfaceShadow = SampleShadowMapOptimizedPCF(shadowMap, shadowMapUV, shadowPosition.z);
 
-    // Add an explicit filter to detailed cascades. Taper the atlas-space radius
-    // because a texel covers increasingly more world space in later cascades.
+    // Add an explicit filter to the selected detailed cascades. This block is enabled
+    // only by the camera shadow-mask pixel shader (not volumetric or compute users).
+#if SHADOWS_EDGE_AA
     float edgeAAStrength = saturate(GetDirectionalLightShadowEdgeAAStrength(light));
-    float sampleRadius = max(GetDirectionalLightShadowEdgeAASampleRadius(light), 0.0f);
-    const float EdgeAARadiusScale[MaxNumCascades] = { 1.0f, 0.5f, 0.25f, 0.125f, 0.0f };
-    sampleRadius *= EdgeAARadiusScale[cascadeIndex];
+    float sampleRadius = max(GetDirectionalLightShadowEdgeAASampleRadius(light, cascadeIndex), 0.0f);
+    uint edgeAACascadeCount = GetDirectionalLightShadowEdgeAACascadeCount(light);
+    float2 receiverFootprintX = ddx(shadowMapUV);
+    float2 receiverFootprintY = ddy(shadowMapUV);
     BRANCH
-    if (edgeAAStrength > 0.0f && sampleRadius > 0.0f)
+    if (cascadeIndex < edgeAACascadeCount && edgeAAStrength > 0.0f && sampleRadius > 0.0f)
     {
         float2 shadowMapSize;
         shadowMap.GetDimensions(shadowMapSize.x, shadowMapSize.y);
         float2 shadowTexelSize = 1.0f / shadowMapSize;
         float2 tileUVMin = shadowTile.ShadowToAtlas.zw + shadowTexelSize * 0.5f;
         float2 tileUVMax = shadowTile.ShadowToAtlas.zw + shadowTile.ShadowToAtlas.xy - shadowTexelSize * 0.5f;
+        uint filterMode = GetDirectionalLightShadowEdgeAAFilterMode(light);
+        float2 receiverBasisX = receiverFootprintX * shadowMapSize;
+        float2 receiverBasisY = receiverFootprintY * shadowMapSize;
+        float receiverBasisLengthX = length(receiverBasisX);
+        float receiverBasisLengthY = length(receiverBasisY);
+        receiverBasisX = receiverBasisLengthX > 1e-4f
+            ? receiverBasisX * (clamp(receiverBasisLengthX, 1.0f, 4.0f) / receiverBasisLengthX)
+            : float2(1.0f, 0.0f);
+        receiverBasisY = receiverBasisLengthY > 1e-4f
+            ? receiverBasisY * (clamp(receiverBasisLengthY, 1.0f, 4.0f) / receiverBasisLengthY)
+            : float2(0.0f, 1.0f);
 
         // Fill the complete disk instead of sampling only its four extremes. A sparse
         // cross produces several visibly displaced copies of the shadow silhouette.
@@ -256,15 +272,42 @@ ShadowSample SampleDirectionalLightShadowCascade(LightData light, Buffer<float4>
             float2(0.396472f, -0.847237f),
             float2(0.292982f, 0.934074f)
         };
+        // Probe four well-separated outer-disk points first. Fully lit and fully
+        // shadowed pixels keep the original result and skip the eight interior taps.
         float filteredShadow = result.SurfaceShadow;
+        float probeMin = result.SurfaceShadow;
+        float probeMax = result.SurfaceShadow;
         UNROLL
-        for (uint sampleIndex = 0; sampleIndex < 12; sampleIndex++)
+        for (uint sampleIndex = 8; sampleIndex < 12; sampleIndex++)
         {
-            float2 sampleUV = shadowMapUV + EdgeAADisk[sampleIndex] * sampleRadius * shadowTexelSize;
-            filteredShadow += SAMPLE_SHADOW_MAP(shadowMap, clamp(sampleUV, tileUVMin, tileUVMax), shadowPosition.z);
+            float2 diskSample = EdgeAADisk[sampleIndex] * sampleRadius;
+            float2 fixedDiskOffset = diskSample * shadowTexelSize;
+            float2 receiverFootprintOffset = (diskSample.x * receiverBasisX + diskSample.y * receiverBasisY) * shadowTexelSize;
+            float2 sampleUV = shadowMapUV + (filterMode == 0U ? fixedDiskOffset : receiverFootprintOffset);
+            float probeShadow = SAMPLE_SHADOW_MAP(shadowMap, clamp(sampleUV, tileUVMin, tileUVMax), shadowPosition.z);
+            filteredShadow += probeShadow;
+            probeMin = min(probeMin, probeShadow);
+            probeMax = max(probeMax, probeShadow);
         }
-        result.SurfaceShadow = lerp(result.SurfaceShadow, filteredShadow * (1.0f / 13.0f), edgeAAStrength);
+
+        bool centerIsFilteredEdge = result.SurfaceShadow > (1.0f / 255.0f) && result.SurfaceShadow < (254.0f / 255.0f);
+        bool diskCrossesEdge = probeMax - probeMin > (1.0f / 255.0f);
+        BRANCH
+        if (centerIsFilteredEdge || diskCrossesEdge)
+        {
+            UNROLL
+            for (uint sampleIndex = 0; sampleIndex < 8; sampleIndex++)
+            {
+                float2 diskSample = EdgeAADisk[sampleIndex] * sampleRadius;
+                float2 fixedDiskOffset = diskSample * shadowTexelSize;
+                float2 receiverFootprintOffset = (diskSample.x * receiverBasisX + diskSample.y * receiverBasisY) * shadowTexelSize;
+                float2 sampleUV = shadowMapUV + (filterMode == 0U ? fixedDiskOffset : receiverFootprintOffset);
+                filteredShadow += SAMPLE_SHADOW_MAP(shadowMap, clamp(sampleUV, tileUVMin, tileUVMax), shadowPosition.z);
+            }
+            result.SurfaceShadow = lerp(result.SurfaceShadow, filteredShadow * (1.0f / 13.0f), edgeAAStrength);
+        }
     }
+#endif
 
     // Increase the sharpness for higher cascades to match the filter radius
     // Keep the far cascade soft; its job is to preserve broad silhouettes, not fine detail.

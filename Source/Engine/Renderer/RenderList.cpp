@@ -101,14 +101,18 @@ bool RenderLightData::CanRenderShadow(const RenderView& view) const
 
 void RenderDirectionalLightData::SetShaderData(ShaderLightData& data, bool useShadow) const
 {
-    data.SpotAngles.X = -2.0f;
-    data.SpotAngles.Y = ShadowsPenumbraColorInsideShadow ? 1.0f : 0.0f;
-    data.SourceRadius = 0;
-    data.SourceLength = 0;
+    const uint32 edgeAASettings =
+        (uint32)Math::Clamp(ShadowsEdgeAACascadeCount, 0, 4) |
+        ((uint32)ShadowsEdgeAAFilterMode << 3) |
+        (ShadowsPenumbraColorInsideShadow ? (1U << 4) : 0U);
+    data.SpotAngles.X = (float)edgeAASettings;
+    data.SpotAngles.Y = ShadowsEdgeAACascade4SampleRadius;
+    data.SourceRadius = ShadowsEdgeAACascade2SampleRadius;
+    data.SourceLength = ShadowsEdgeAACascade3SampleRadius;
     data.Color = Color;
     data.MinRoughness = Math::Max(MinRoughness, MIN_ROUGHNESS);
     // Directional lights don't use Position, Radius, FalloffExponent, InverseSquared, RadiusInv,
-    // Dummy0, or SpotAngles.Y. Pack the optional settings there to preserve the layout.
+    // Dummy0, SourceRadius, SourceLength, or SpotAngles. Pack optional settings there.
     data.Position = ShadowsPenumbraColor;
     data.ShadowsBufferAddress = useShadow ? ShadowsBufferAddress : 0;
     data.Direction = -Direction;

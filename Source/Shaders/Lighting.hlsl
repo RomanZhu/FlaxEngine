@@ -150,7 +150,15 @@ float4 GetLighting(float3 viewPos, LightData lightData, GBufferSample gBuffer, f
     if (shadow.SurfaceShadow + shadow.TransmissionShadow > 0)
     {
         gBuffer.Roughness = max(gBuffer.Roughness, lightData.MinRoughness);
-        float energy = AreaLightSpecular(lightData, gBuffer.Roughness, toLight, L, V, N);
+        // Directional lights reuse the local-light source dimensions for optional
+        // shadow settings, so exclude those packed values from area specular.
+        LightData specularLightData = lightData;
+        if (!isRadial)
+        {
+            specularLightData.SourceRadius = 0.0f;
+            specularLightData.SourceLength = 0.0f;
+        }
+        float energy = AreaLightSpecular(specularLightData, gBuffer.Roughness, toLight, L, V, N);
 
         // Calculate direct lighting
         LightSample lighting = SurfaceShading(gBuffer, energy, L, V, N);

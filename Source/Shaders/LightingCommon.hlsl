@@ -44,7 +44,7 @@ struct LightData
 };
 
 // Directional lights don't use Position, Radius, FalloffExponent, InverseSquared, RadiusInv,
-// Dummy0, or SpotAngles.y, so
+// Dummy0, SourceRadius, SourceLength, or SpotAngles, so
 // those fields carry the penumbra options without changing the buffer layout.
 float3 GetDirectionalLightPenumbraColor(LightData lightData)
 {
@@ -66,14 +66,30 @@ float GetDirectionalLightShadowEdgeAAStrength(LightData lightData)
     return lightData.Radius;
 }
 
-float GetDirectionalLightShadowEdgeAASampleRadius(LightData lightData)
+uint GetDirectionalLightPackedOptions(LightData lightData)
 {
-    return lightData.RadiusInv;
+    return (uint)round(lightData.SpotAngles.x);
+}
+
+uint GetDirectionalLightShadowEdgeAACascadeCount(LightData lightData)
+{
+    return min(GetDirectionalLightPackedOptions(lightData) & 7U, 4U);
+}
+
+uint GetDirectionalLightShadowEdgeAAFilterMode(LightData lightData)
+{
+    return (GetDirectionalLightPackedOptions(lightData) >> 3) & 1U;
+}
+
+float GetDirectionalLightShadowEdgeAASampleRadius(LightData lightData, uint cascadeIndex)
+{
+    float4 radii = float4(lightData.RadiusInv, lightData.SourceRadius, lightData.SourceLength, lightData.SpotAngles.y);
+    return radii[min(cascadeIndex, 3U)];
 }
 
 bool GetDirectionalLightPenumbraColorInsideShadow(LightData lightData)
 {
-    return lightData.SpotAngles.y > 0.5f;
+    return ((GetDirectionalLightPackedOptions(lightData) >> 4) & 1U) != 0U;
 }
 
 // Structure that contains information about shadow sampling result

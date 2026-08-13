@@ -315,6 +315,22 @@ API_ENUM() enum class FarShadowTransitionMode
 };
 
 /// <summary>
+/// Filtering method used by directional shadow edge anti-aliasing.
+/// </summary>
+API_ENUM() enum class DirectionalShadowEdgeAAFilterMode
+{
+    /// <summary>
+    /// Uses a stable circular PCF kernel measured in shadow-map texels.
+    /// </summary>
+    FixedDiskPCF = 0,
+
+    /// <summary>
+    /// Shapes the PCF disk using the receiver pixel footprint in shadow-map space.
+    /// </summary>
+    ReceiverFootprintPCF = 1,
+};
+
+/// <summary>
 /// Identifies expected GPU resource use during rendering. The usage directly reflects whether a resource is accessible by the CPU and/or the GPU.	
 /// </summary>
 API_ENUM() enum class GPUResourceUsage

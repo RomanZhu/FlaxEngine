@@ -57,6 +57,11 @@ void DirectionalLight::Draw(RenderContext& renderContext)
         data.ShadowsPenumbraColorInsideShadow = ShadowsPenumbraColorInsideShadow;
         data.ShadowsEdgeAAStrength = ShadowsEdgeAAStrength;
         data.ShadowsEdgeAASampleRadius = ShadowsEdgeAASampleRadius;
+        data.ShadowsEdgeAACascade2SampleRadius = ShadowsEdgeAACascade2SampleRadius;
+        data.ShadowsEdgeAACascade3SampleRadius = ShadowsEdgeAACascade3SampleRadius;
+        data.ShadowsEdgeAACascade4SampleRadius = ShadowsEdgeAACascade4SampleRadius;
+        data.ShadowsEdgeAACascadeCount = ShadowsEdgeAACascadeCount;
+        data.ShadowsEdgeAAFilterMode = ShadowsEdgeAAFilterMode;
         data.PartitionMode = PartitionMode;
         data.ContactShadowsLength = ContactShadowsLength;
         data.StaticFlags = GetStaticFlags();
@@ -87,6 +92,11 @@ void DirectionalLight::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE(ShadowsPenumbraColorInsideShadow);
     SERIALIZE(ShadowsEdgeAAStrength);
     SERIALIZE(ShadowsEdgeAASampleRadius);
+    SERIALIZE(ShadowsEdgeAACascade2SampleRadius);
+    SERIALIZE(ShadowsEdgeAACascade3SampleRadius);
+    SERIALIZE(ShadowsEdgeAACascade4SampleRadius);
+    SERIALIZE(ShadowsEdgeAACascadeCount);
+    SERIALIZE(ShadowsEdgeAAFilterMode);
     SERIALIZE(PartitionMode);
 }
 
@@ -109,6 +119,11 @@ void DirectionalLight::Deserialize(DeserializeStream& stream, ISerializeModifier
     DESERIALIZE(ShadowsPenumbraColorInsideShadow);
     DESERIALIZE(ShadowsEdgeAAStrength);
     DESERIALIZE(ShadowsEdgeAASampleRadius);
+    DESERIALIZE(ShadowsEdgeAACascade2SampleRadius);
+    DESERIALIZE(ShadowsEdgeAACascade3SampleRadius);
+    DESERIALIZE(ShadowsEdgeAACascade4SampleRadius);
+    DESERIALIZE(ShadowsEdgeAACascadeCount);
+    DESERIALIZE(ShadowsEdgeAAFilterMode);
     DESERIALIZE(PartitionMode);
 }
 

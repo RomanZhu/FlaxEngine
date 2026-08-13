@@ -97,10 +97,40 @@ public:
     float ShadowsEdgeAAStrength = 0.0f;
 
     /// <summary>
-    /// Radius of the anti-aliasing filter in nearest-cascade shadow-map texels. The radius is halved for each subsequent detailed cascade to limit distant blur.
+    /// Cascade 1 radius of the shadow edge anti-aliasing filter.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(115), DefaultValue(1.5f), Limit(0.0f, 16.0f, 0.1f), EditorDisplay(\"Shadow\", \"Edge AA Sample Radius\")")
+    API_FIELD(Attributes="EditorOrder(115), DefaultValue(1.5f), Limit(0.0f, 16.0f, 0.1f), EditorDisplay(\"Shadow\", \"Edge AA Cascade 1 Radius\")")
     float ShadowsEdgeAASampleRadius = 1.5f;
+
+    /// <summary>
+    /// Cascade 2 radius of the shadow edge anti-aliasing filter.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(116), DefaultValue(0.75f), Limit(0.0f, 16.0f, 0.1f), EditorDisplay(\"Shadow\", \"Edge AA Cascade 2 Radius\")")
+    float ShadowsEdgeAACascade2SampleRadius = 0.75f;
+
+    /// <summary>
+    /// Cascade 3 radius of the shadow edge anti-aliasing filter.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(117), DefaultValue(0.375f), Limit(0.0f, 16.0f, 0.1f), EditorDisplay(\"Shadow\", \"Edge AA Cascade 3 Radius\")")
+    float ShadowsEdgeAACascade3SampleRadius = 0.375f;
+
+    /// <summary>
+    /// Cascade 4 radius of the shadow edge anti-aliasing filter.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(118), DefaultValue(0.1875f), Limit(0.0f, 16.0f, 0.1f), EditorDisplay(\"Shadow\", \"Edge AA Cascade 4 Radius\")")
+    float ShadowsEdgeAACascade4SampleRadius = 0.1875f;
+
+    /// <summary>
+    /// Number of closest detailed shadow cascades that use the edge anti-aliasing filter. Set to 0 to disable the filter for every cascade.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(119), DefaultValue(4), Limit(0, 4), EditorDisplay(\"Shadow\", \"Edge AA Cascade Count\")")
+    int32 ShadowsEdgeAACascadeCount = 4;
+
+    /// <summary>
+    /// Filtering method used by directional shadow edge anti-aliasing.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(120), DefaultValue(DirectionalShadowEdgeAAFilterMode.FixedDiskPCF), EditorDisplay(\"Shadow\", \"Edge AA Filter Mode\")")
+    DirectionalShadowEdgeAAFilterMode ShadowsEdgeAAFilterMode = DirectionalShadowEdgeAAFilterMode::FixedDiskPCF;
 
 public:
     // [LightWithShadow]

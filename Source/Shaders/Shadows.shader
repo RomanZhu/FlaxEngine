@@ -2,6 +2,7 @@
 
 #define USE_GBUFFER_CUSTOM_DATA
 #define SHADOWS_CSM_DITHERING 1
+#define SHADOWS_EDGE_AA 1
 
 #include "./Flax/Common.hlsl"
 #include "./Flax/GBuffer.hlsl"
