@@ -17,6 +17,12 @@ namespace FlaxEngine.GUI
         private Control _trackingControl;
 
         /// <summary>
+        /// Occurs before key down input is dispatched to the focused control.
+        /// Return true to consume the input.
+        /// </summary>
+        public event Func<KeyboardKeys, bool> PreviewKeyDown;
+
+        /// <summary>
         /// Occurs when key down input was not handled by any focused control.
         /// </summary>
         public event Func<KeyboardKeys, bool> UnhandledKeyDown;
@@ -341,6 +347,16 @@ namespace FlaxEngine.GUI
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
+            var previewKeyDown = PreviewKeyDown;
+            if (previewKeyDown != null)
+            {
+                foreach (Func<KeyboardKeys, bool> handler in previewKeyDown.GetInvocationList())
+                {
+                    if (handler(key))
+                        return true;
+                }
+            }
+
             if (base.OnKeyDown(key))
                 return true;
 

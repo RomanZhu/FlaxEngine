@@ -9,8 +9,10 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Xml;
 using FlaxEditor.Content;
+using FlaxEditor.GUI;
 using FlaxEditor.GUI.Dialogs;
 using FlaxEditor.History;
+using FlaxEditor.SceneGraph;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEditor.Windows.Profiler;
@@ -33,6 +35,7 @@ namespace FlaxEditor.Modules
         private DateTime _lastLayoutSaveTime;
         private float _projectIconScreenshotTimeout = -1;
         private string _windowsLayoutPath;
+        private readonly Dictionary<WindowRootControl, Func<KeyboardKeys, bool>> _previewKeyDownHandlers = new Dictionary<WindowRootControl, Func<KeyboardKeys, bool>>();
         private WindowNavigationContext _lastNavigationWindowContext;
         private WindowNavigationContext _pendingContentBounceSource;
         private WindowNavigationContext _pendingContentBounceTarget;
@@ -948,6 +951,7 @@ namespace FlaxEditor.Modules
                 MainWindow.KeyDown += MainWindow_OnKeyDown;
                 MainWindow.MouseDown += OnNavigationMouseDown;
                 MainWindow.MouseUp += OnNavigationMouseUp;
+                RegisterPreviewKeyDown(MainWindow.GUI);
                 MainWindow.GUI.UnhandledKeyDown += MainWindow_OnUnhandledKeyDown;
             }
 
@@ -1211,6 +1215,9 @@ namespace FlaxEditor.Modules
                 MainWindow.MouseUp -= OnNavigationMouseUp;
                 MainWindow.GUI.UnhandledKeyDown -= MainWindow_OnUnhandledKeyDown;
             }
+            foreach (var e in _previewKeyDownHandlers)
+                e.Key.PreviewKeyDown -= e.Value;
+            _previewKeyDownHandlers.Clear();
             MainWindow = null;
 
             // Capture project icon screenshot (not in play mode and if editor was used for some time)
@@ -1243,6 +1250,7 @@ namespace FlaxEditor.Modules
             if (window == null || window.IsDisposing || !Windows.Contains(window))
                 return;
 
+            RegisterPreviewKeyDown(window.RootWindow as WindowRootControl);
             _focusedWindows.Remove(window);
             _focusedWindows.Add(window);
             RecordWindowNavigation(window);
@@ -1714,6 +1722,54 @@ namespace FlaxEditor.Modules
         }
 
         #region Window Events
+
+        private void RegisterPreviewKeyDown(WindowRootControl root)
+        {
+            if (root == null || _previewKeyDownHandlers.ContainsKey(root))
+                return;
+
+            bool Handler(KeyboardKeys key) => OnPreviewKeyDown(root, key);
+            _previewKeyDownHandlers.Add(root, Handler);
+            root.PreviewKeyDown += Handler;
+        }
+
+        private bool OnPreviewKeyDown(WindowRootControl root, KeyboardKeys key)
+        {
+            var input = Editor.Options.Options.Input;
+            if (!input.Rename.Process(root.Window, key))
+                return false;
+
+            var selection = Editor.SceneEditing.Selection;
+            ActorNode actorNode = null;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is ActorNode selectedActor && selectedActor.Actor)
+                {
+                    actorNode = selectedActor;
+                    break;
+                }
+            }
+            if (actorNode == null)
+                return false;
+            if (!Editor.StateMachine.CurrentState.CanEditScene || Editor.ProgressReporting.CompileScripts.IsActive)
+                return false;
+
+            // Actor rename is global and takes precedence over focus-local F2 actions.
+            Editor.SceneEditing.Select(actorNode);
+            var actor = actorNode.Actor;
+            var location = root.PointFromScreen(FlaxEngine.Input.MouseScreenPosition);
+            const float renamePopupWidth = 260.0f;
+            const float renamePopupHeight = 24.0f;
+            const float cursorGap = 8.0f;
+            location.Y -= renamePopupHeight + cursorGap;
+            var popup = RenamePopup.Show(root, new Rectangle(location, new Float2(renamePopupWidth, renamePopupHeight)), actor.Name, false);
+            popup.Renamed += renamePopup =>
+            {
+                using (new UndoBlock(actorNode.Root.Undo, actor, "Rename"))
+                    actor.Name = renamePopup.Text.Trim();
+            };
+            return true;
+        }
 
         private void MainWindow_OnKeyDown(KeyboardKeys key)
         {

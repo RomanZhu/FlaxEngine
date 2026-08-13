@@ -177,7 +177,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     {
         if (button == MouseButton.Left)
         {
-            Editor.Instance.Windows.ContentWin.Open(Item);
+            Editor.Instance.Windows.ContentWin.Rename(Item);
             return true;
         }
 

@@ -147,6 +147,18 @@ public class ContentFolderTreeNode : TreeNode
         Editor.Instance.Windows.ContentWin.Rename(_folder);
     }
 
+    /// <inheritdoc />
+    protected override bool OnMouseDoubleClickHeader(ref Float2 location, MouseButton button)
+    {
+        if (button == MouseButton.Left)
+        {
+            StartRenaming();
+            return true;
+        }
+
+        return base.OnMouseDoubleClickHeader(ref location, button);
+    }
+
     /// <summary>
     /// Updates the query search filter.
     /// </summary>
