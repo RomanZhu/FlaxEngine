@@ -82,6 +82,7 @@ namespace FlaxEditor.GUI.Input
         private Float2 _slidingMouseOffset;
         private double _clickStartTime = -1;
         private bool _cursorChanged;
+        private bool _ignoreNextSlidingMouseMove;
         private bool _isSlidingPending;
         private Float2 _mouseClickedPosition;
 
@@ -334,6 +335,7 @@ namespace FlaxEditor.GUI.Input
             OnSelectingEnd();
             _isSliding = true;
             _slidingMouseOffset = Float2.Zero;
+            _ignoreNextSlidingMouseMove = false;
 #if PLATFORM_SDL
             StartMouseCapture(true);
 #else
@@ -361,6 +363,7 @@ namespace FlaxEditor.GUI.Input
             _isSlidingPending = false;
             _isSliding = false;
             _slidingMouseOffset = Float2.Zero;
+            _ignoreNextSlidingMouseMove = false;
             EndEditOnClick = true;
             EndMouseCapture();
             if (_cursorChanged)
@@ -399,6 +402,9 @@ namespace FlaxEditor.GUI.Input
 
             var newLocation = PointFromWindow(newWindowLocation);
             _slidingMouseOffset += location - newLocation;
+            // Setting the cursor position produces another mouse move. Ignore it because
+            // some platforms can report the pre-warp position from the queued event.
+            _ignoreNextSlidingMouseMove = true;
             root.MousePosition = newWindowLocation;
         }
 #endif
@@ -635,6 +641,12 @@ namespace FlaxEditor.GUI.Input
                 BeginSliding();
             if (_isSliding)
             {
+                if (_ignoreNextSlidingMouseMove)
+                {
+                    _ignoreNextSlidingMouseMove = false;
+                    return;
+                }
+
                 // Update sliding in virtual space so cursor wrapping does not break the drag delta.
                 var slideLocation = location + _slidingMouseOffset;
                 ApplySliding(GetSlidingDelta(slideLocation.X - _startSlideLocation.X));
