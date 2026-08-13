@@ -93,6 +93,11 @@ namespace FlaxEditor.Viewport.Widgets
             for (int i = 0; i < _children.Count; i++)
             {
                 var c = _children[i];
+
+                // Measure the child before using its width to size this container. Text-only
+                // widgets can resolve their desired width during layout, and measuring the
+                // container first leaves it at the default width and clips right-aligned items.
+                c.PerformLayout(true);
                 var w = c.Width;
 
                 c.Bounds = new Rectangle(x, 1, w, Height - 2);
