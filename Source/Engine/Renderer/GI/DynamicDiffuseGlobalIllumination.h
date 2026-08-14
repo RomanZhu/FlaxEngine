@@ -34,6 +34,10 @@ public:
         uint32 FixedRayCount;
         uint32 ProbeRayBudget;
         uint32 ActiveTraceBackend;
+        uint32 Algorithm;
+        uint32 Padding0;
+        uint32 Padding1;
+        uint32 Padding2;
         });
 
     // Binding data for the GPU.
@@ -53,6 +57,7 @@ private:
     GPUConstantBuffer* _cb1 = nullptr;
     GPUShaderProgramCS* _csClassify;
     GPUShaderProgramCS* _csUpdateProbesInitArgs;
+    GPUShaderProgramCS* _csUpdateInactiveProbes;
     GPUShaderProgramCS* _csTraceRays[4];
     GPUShaderProgramCS* _csUpdateProbesIrradiance;
     GPUShaderProgramCS* _csUpdateProbesDistance;

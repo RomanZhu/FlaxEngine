@@ -499,7 +499,7 @@ void CS_LightScattering(uint3 DispatchThreadId : SV_DispatchThreadID)
 	// floor for genuinely indirect illumination in shadow.
 	float ddgiShadowVisibility = max(directionalShadowVisibility, ShadowParameters0.w);
 	ddgiShadowVisibility = lerp(1.0f, ddgiShadowVisibility, ShadowParameters1.y);
-	lightScattering += ddgiScattering * ddgiShadowVisibility;
+	lightScattering += ddgiScattering * (DDGI.Algorithm != 0 ? ddgiShadowVisibility : 1.0f);
 #endif
 
 	// Apply scattering from the point and spot lights

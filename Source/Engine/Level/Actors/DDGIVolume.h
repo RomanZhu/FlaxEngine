@@ -49,8 +49,10 @@ API_ENUM() enum class DDGIVolumeBackendOverride
 
 /// <summary>
 /// A placed DDGI quality volume. The first software implementation reuses the
-/// camera-centered clipmap and smoothly applies the selected volume's density,
-/// trace range, priority, and backend policy while the view is inside it.
+/// camera-centered clipmap and applies the selected volume's density, trace
+/// range, priority, and backend policy while the view is inside it. Clipmap
+/// topology changes are discrete because continuously blending probe spacing
+/// or trace range would invalidate probe history every frame.
 /// </summary>
 API_CLASS(Attributes="ActorContextMenu(\"New/Visuals/Lighting & PostFX/DDGI Volume\"), ActorToolbox(\"Visuals\")")
 class FLAXENGINE_API DDGIVolume : public BoxVolume

@@ -398,8 +398,9 @@ void RenderInner(SceneRenderTask* task, RenderContext& renderContext, RenderCont
                     renderContext.List->Settings.AntiAliasing.Mode == AntialiasingMode::TemporalAntialiasing;
         }
         setup.UseTemporalAAJitter = renderContext.List->Settings.AntiAliasing.Mode == AntialiasingMode::TemporalAntialiasing;
+        const auto giMode = renderContext.List->Settings.GlobalIllumination.Mode;
         setup.UseGlobalSurfaceAtlas = renderContext.View.Mode == ViewMode::GlobalSurfaceAtlas ||
-                (EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI) && renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGI);
+                (EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI) && (giMode == GlobalIlluminationMode::DDGI || giMode == GlobalIlluminationMode::DDGIPlus));
         setup.UseGlobalSDF = (graphicsSettings->EnableGlobalSDF && EnumHasAnyFlags(view.Flags, ViewFlags::GlobalSDF)) ||
                 renderContext.View.Mode == ViewMode::GlobalSDF ||
                 setup.UseGlobalSurfaceAtlas;
@@ -644,6 +645,7 @@ void RenderInner(SceneRenderTask* task, RenderContext& renderContext, RenderCont
         switch (renderContext.List->Settings.GlobalIllumination.Mode)
         {
         case GlobalIlluminationMode::DDGI:
+        case GlobalIlluminationMode::DDGIPlus:
             DynamicDiffuseGlobalIlluminationPass::Instance()->Render(renderContext, context, *lightBuffer);
             break;
         }

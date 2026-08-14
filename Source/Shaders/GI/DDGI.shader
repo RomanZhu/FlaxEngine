@@ -75,8 +75,8 @@ float3 GetProbeRayDirection(DDGIData data, uint rayIndex, uint raysCount, uint p
 {
     // The fixed prefix is stable across frames and quality levels. It is used
     // for state classification and never enters the lighting convolution.
-    if (rayIndex < DDGI_FIXED_RAY_COUNT)
-        return GetSphericalFibonacci((float)rayIndex, (float)DDGI_FIXED_RAY_COUNT);
+    if (rayIndex < data.FixedRayCount)
+        return GetSphericalFibonacci((float)rayIndex, (float)data.FixedRayCount);
 
     float4 rotation = RaysRotation;
 
@@ -89,8 +89,8 @@ float3 GetProbeRayDirection(DDGIData data, uint rayIndex, uint raysCount, uint p
     rotation = QuaternionMultiply(rotation, QuaternionFromAxisAngle(randomAxis, randomAngle));
 
     // Random rotation per-ray - relative to the per-frame rays rotation
-    uint lightingRayIndex = rayIndex - DDGI_FIXED_RAY_COUNT;
-    uint lightingRaysCount = max(raysCount - DDGI_FIXED_RAY_COUNT, 1u);
+    uint lightingRayIndex = rayIndex - data.FixedRayCount;
+    uint lightingRaysCount = max(raysCount - data.FixedRayCount, 1u);
     float3 direction = GetSphericalFibonacci((float)lightingRayIndex, (float)lightingRaysCount);
     return normalize(QuaternionRotate(rotation, direction));
 }
@@ -100,7 +100,8 @@ uint GetProbeRaysCount(DDGIData data, float probeAttention)
 {
     //return data.RaysCount;
     probeAttention = saturate((probeAttention - DDGI_PROBE_ATTENTION_MIN) / (DDGI_PROBE_ATTENTION_MAX - DDGI_PROBE_ATTENTION_MIN));
-    return max(DDGI_FIXED_RAY_COUNT + 1u, DDGI_TRACE_RAYS_MIN + (uint)max(probeAttention * (float)(data.RaysCount - DDGI_TRACE_RAYS_MIN), 0.0f));
+    uint minimumRays = data.Algorithm != 0 ? DDGI_TRACE_RAYS_MIN : 16u;
+    return max(data.FixedRayCount + 1u, minimumRays + (uint)max(probeAttention * (float)(data.RaysCount - minimumRays), 0.0f));
 }
 
 #ifdef _CS_Classify
@@ -128,8 +129,10 @@ float3 ClampDDGIProbeOffset(float3 offset, float probesSpacing)
     // clipmap uses uniform spacing, but keeping the normalization explicit
     // makes the bound correct if anisotropic spacing is added later.
     float normalizedLength = length(offset / max(probesSpacing, 1e-6f));
-    if (normalizedLength > 0.45f)
-        offset *= 0.45f / normalizedLength;
+    const float LegacyRelocateLimits[4] = { 0.4f, 0.5f, 0.6f, 0.7f };
+    float normalizedLimit = DDGI.Algorithm != 0 ? 0.45f : LegacyRelocateLimits[CascadeIndex];
+    if (normalizedLength > normalizedLimit)
+        offset *= normalizedLimit / normalizedLength;
     return offset;
 }
 
@@ -141,7 +144,7 @@ bool HasNearbyFixedRayGeometry(float3 probePosition, float probesSpacing)
     {
         GlobalSDFTrace fixedTrace;
         fixedTrace.Init(probePosition, GetSphericalFibonacci((float)fixedRayIndex, (float)DDGI_FIXED_RAY_COUNT), 0.0f, min(DDGI.RayMaxDistance, maxDistance));
-        GlobalSDFHit fixedHit = RayTraceGlobalSDF(GlobalSDF, GlobalSDFTex, GlobalSDFMip, fixedTrace);
+        GlobalSDFHit fixedHit = RayTraceGlobalSDF(GlobalSDF, GlobalSDFTex, GlobalSDFMip, fixedTrace, 0.0f, DDGI.ThinGeometryExpansion);
         if (fixedHit.IsHit() && fixedHit.HitTime <= maxDistance && fixedHit.HitSDF <= GlobalSDF.CascadeVoxelSize[CascadeIndex] * 1.5f)
             return true;
     }
@@ -244,12 +247,13 @@ void CS_Classify(uint3 DispatchThreadId : SV_DispatchThreadID)
     const float ProbesDistanceLimits[4] = { 1.1f, 2.3f, 2.5f, 2.5f };
     float voxelLimit = GlobalSDF.CascadeVoxelSize[CascadeIndex] * 0.8f;
     float distanceLimit = probesSpacing * ProbesDistanceLimits[CascadeIndex];
-    const float relocateLimit = probesSpacing * 0.45f;
+    const float LegacyRelocateLimits[4] = { 0.4f, 0.5f, 0.6f, 0.7f };
+    const float relocateLimit = probesSpacing * (DDGI.Algorithm != 0 ? 0.45f : LegacyRelocateLimits[CascadeIndex]);
     const float insideLimit = GlobalSDF.CascadeVoxelSize[CascadeIndex] * DDGI_FIXED_RAY_INSIDE_THRESHOLD;
     const bool missingSDF = abs(sdf) >= GLOBAL_SDF_WORLD_SIZE * 0.5f;
     const bool insideGeometry = sdf < -insideLimit;
     bool hasFixedBlocker = false;
-    if (!missingSDF && !insideGeometry && sdfDst > voxelLimit)
+    if (DDGI.Algorithm != 0 && !missingSDF && !insideGeometry && sdfDst > voxelLimit)
         hasFixedBlocker = HasNearbyFixedRayGeometry(probePosition, probesSpacing);
 
     if (missingSDF)
@@ -260,7 +264,7 @@ void CS_Classify(uint3 DispatchThreadId : SV_DispatchThreadID)
         probeAttention = 0.0f;
         probeConfirmation = 0;
     }
-    else if (insideGeometry)
+    else if (DDGI.Algorithm != 0 && insideGeometry)
     {
         probeOffset = float3(0, 0, 0);
         probeState = DDGI_PROBE_STATE_INACTIVE_INSIDE;
@@ -280,7 +284,7 @@ void CS_Classify(uint3 DispatchThreadId : SV_DispatchThreadID)
     else
     {
         bool pendingActivation = false;
-        if (IsDDGIProbeInactive(probeStateOld))
+        if (DDGI.Algorithm != 0 && IsDDGIProbeInactive(probeStateOld))
         {
             probeConfirmation = min(probeConfirmation + 1u, DDGI_PROBE_REACTIVATION_CONFIRM_FRAMES);
             pendingActivation = probeConfirmation < DDGI_PROBE_REACTIVATION_CONFIRM_FRAMES;
@@ -399,7 +403,7 @@ void CS_Classify(uint3 DispatchThreadId : SV_DispatchThreadID)
                 float3 diffDir = diff / diffLen;
                 GlobalSDFTrace trace;
                 trace.Init(probeBasePosition + probeOffset, diffDir, 0.0f, diffLen);
-                GlobalSDFHit hit = RayTraceGlobalSDF(GlobalSDF, GlobalSDFTex, GlobalSDFMip, trace);
+                GlobalSDFHit hit = RayTraceGlobalSDF(GlobalSDF, GlobalSDFTex, GlobalSDFMip, trace, 0.0f, DDGI.ThinGeometryExpansion);
                 if (!hit.IsHit())
                     wasRelocated = false;
             }
@@ -467,6 +471,63 @@ void CS_UpdateProbesInitArgs()
 
 #endif
 
+#ifdef _CS_UpdateInactiveProbes
+
+RWTexture2D<snorm float4> RWProbesData : register(u0);
+
+void CheckNearbyProbe(inout uint3 fallbackCoords, inout uint probeState, inout float minDistance, uint3 probeCoords, int3 probeCoordsEnd, int3 offset)
+{
+    uint3 nearbyCoords = (uint3)clamp((int3)probeCoords + offset, int3(0, 0, 0), probeCoordsEnd);
+    uint nearbyIndex = GetDDGIScrollingProbeIndex(DDGI, CascadeIndex, nearbyCoords);
+    float4 nearbyData = RWProbesData[GetDDGIProbeTexelCoords(DDGI, CascadeIndex, nearbyIndex)];
+    float nearbyDist = distance((float3)nearbyCoords, (float3)probeCoords);
+    if (DecodeDDGIProbeState(nearbyData) != DDGI_PROBE_STATE_INACTIVE && nearbyDist < minDistance)
+    {
+        fallbackCoords = nearbyCoords;
+        probeState = DDGI_PROBE_STATE_ACTIVE;
+        minDistance = nearbyDist;
+        return;
+    }
+    nearbyCoords = DDGI_FALLBACK_COORDS_DECODE(nearbyData);
+    nearbyDist = distance((float3)nearbyCoords, (float3)probeCoords);
+    if (DDGI_FALLBACK_COORDS_VALID(nearbyData) && nearbyDist < minDistance)
+    {
+        fallbackCoords = nearbyCoords;
+        probeState = DDGI_PROBE_STATE_ACTIVE;
+        minDistance = nearbyDist;
+    }
+}
+
+// Legacy DDGI jump-flood fallback. DDGI+ deliberately does not use topology-blind probe substitution.
+META_CS(true, FEATURE_LEVEL_SM5)
+[numthreads(DDGI_PROBE_CLASSIFY_GROUP_SIZE, 1, 1)]
+void CS_UpdateInactiveProbes(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint probeIndex = min(DispatchThreadId.x, ProbesCount - 1);
+    uint3 fallbackCoords = uint3(1000, 1000, 1000);
+    uint3 probeCoords = GetDDGIProbeCoords(DDGI, probeIndex);
+    probeIndex = GetDDGIScrollingProbeIndex(DDGI, CascadeIndex, probeCoords);
+    int2 probeDataCoords = GetDDGIProbeTexelCoords(DDGI, CascadeIndex, probeIndex);
+    float4 probeData = RWProbesData[probeDataCoords];
+    uint probeState = DecodeDDGIProbeState(probeData);
+    BRANCH
+    if (probeState == DDGI_PROBE_STATE_INACTIVE)
+    {
+        int3 probeCoordsEnd = (int3)DDGI.ProbesCounts - int3(1, 1, 1);
+        float minDistance = 1e27f;
+        UNROLL for (int z = -1; z <= 1; z++)
+        UNROLL for (int y = -1; y <= 1; y++)
+        UNROLL for (int x = -1; x <= 1; x++)
+            CheckNearbyProbe(fallbackCoords, probeState, minDistance, probeCoords, probeCoordsEnd, int3(x, y, z) * StepSize);
+    }
+    AllMemoryBarrierWithGroupSync();
+    BRANCH
+    if (probeState != DDGI_PROBE_STATE_INACTIVE && DispatchThreadId.x < ProbesCount && fallbackCoords.x != 1000)
+        RWProbesData[probeDataCoords] = EncodeDDGIProbeData(DDGI_FALLBACK_COORDS_ENCODE(fallbackCoords), DDGI_PROBE_STATE_INACTIVE, 0.0f);
+}
+
+#endif
+
 #ifdef _CS_TraceRays
 
 RWTexture2D<float4> RWProbesTrace : register(u0);
@@ -514,28 +575,41 @@ void CS_TraceRays(uint3 DispatchThreadId : SV_DispatchThreadID)
     // Trace ray with Global SDF
     GlobalSDFTrace trace;
     trace.Init(probePosition, probeRayDirection, 0.0f, DDGI.RayMaxDistance);
-    GlobalSDFHit hit = RayTraceGlobalSDF(GlobalSDF, GlobalSDFTex, GlobalSDFMip, trace);
+    GlobalSDFHit hit = RayTraceGlobalSDF(GlobalSDF, GlobalSDFTex, GlobalSDFMip, trace, 0.0f, DDGI.ThinGeometryExpansion);
 
     // Calculate radiance and distance
     float4 radiance;
     if (hit.IsHit())
     {
 #if DDGI_TRACE_NEGATIVE
-        if (hit.HitSDF <= 0.0f && hit.HitTime <= GlobalSDF.CascadeVoxelSize[hit.HitCascade] * DDGI_LIGHTING_RAY_BACKFACE_THRESHOLD)
+        float insideThreshold = DDGI.Algorithm != 0
+            ? GlobalSDF.CascadeVoxelSize[hit.HitCascade] * DDGI_LIGHTING_RAY_BACKFACE_THRESHOLD
+            : GlobalSDF.CascadeVoxelSize[0];
+        if (hit.HitSDF <= 0.0f && hit.HitTime <= insideThreshold)
         {
             // Ray starts inside geometry (mark as negative distance and reduce it's influence during irradiance blending)
-            radiance = float4(0, 0, 0, -max(hit.HitTime, GlobalSDF.CascadeVoxelSize[hit.HitCascade] * DDGI_LIGHTING_RAY_BACKFACE_THRESHOLD));
+            radiance = DDGI.Algorithm != 0
+                ? float4(0, 0, 0, -max(hit.HitTime, insideThreshold))
+                : float4(0, 0, 0, hit.HitTime * -0.25f);
         }
         else
 #endif
         {
             // Sample Global Surface Atlas to get the lighting at the hit location
             float3 hitPosition = hit.GetHitPosition(trace);
+            if (DDGI.Algorithm != 0)
+            {
+                // Visibility uses the expanded hit distance, but Surface Atlas
+                // lighting is stored on the original surface rather than the
+                // dilated SDF shell.
+                float surfaceExpansion = min(max(DDGI.ThinGeometryExpansion, 0.0f), GlobalSDF.CascadeVoxelSize[hit.HitCascade]);
+                hitPosition += probeRayDirection * surfaceExpansion;
+            }
             float surfaceThreshold = GetGlobalSurfaceAtlasThreshold(GlobalSDF, hit);
             float4 surfaceColor = SampleGlobalSurfaceAtlas(GlobalSurfaceAtlas, GlobalSurfaceAtlasChunks, RWGlobalSurfaceAtlasCulledObjects, GlobalSurfaceAtlasObjects, GlobalSurfaceAtlasDepth, GlobalSurfaceAtlasTex, hitPosition, -probeRayDirection, surfaceThreshold);
             // Missing atlas coverage is low-confidence data. Do not let it
             // reinforce either irradiance or distance history.
-            if (surfaceColor.a <= 0.01f)
+            if (DDGI.Algorithm != 0 && surfaceColor.a <= 0.01f)
             {
                 radiance = float4(0, 0, 0, -max(hit.HitTime, GlobalSDF.CascadeVoxelSize[hit.HitCascade] * DDGI_LIGHTING_RAY_BACKFACE_THRESHOLD));
             }
@@ -545,8 +619,12 @@ void CS_TraceRays(uint3 DispatchThreadId : SV_DispatchThreadID)
                 // Dividing by coverage again amplifies low-confidence samples
                 // and can blow the editor view out to white.
                 radiance = float4(surfaceColor.rgb, hit.HitTime);
-                // Optional, bounded software tolerance for thin geometry.
-                radiance.w = max(radiance.w + min(DDGI.ThinGeometryExpansion, GlobalSDF.CascadeVoxelSize[hit.HitCascade]), 0);
+                if (DDGI.Algorithm == 0)
+                {
+                    // Original DDGI distance bias used to compensate for low-resolution Global SDF tracing.
+                    radiance.w = max(radiance.w + GlobalSDF.CascadeVoxelSize[hit.HitCascade] * 0.5f, 0);
+                    radiance.w += DDGI.ProbesOriginAndSpacing[CascadeIndex].w * 0.05f;
+                }
             }
         }
     }
@@ -767,7 +845,7 @@ void CS_UpdateProbes(uint3 GroupThreadId : SV_GroupThreadID, uint3 GroupId : SV_
     LOOP
     // Fixed classification rays are deliberately excluded from both moment
     // convolutions. They are stable state evidence, not lighting samples.
-    for (uint rayIndex = DDGI_FIXED_RAY_COUNT; rayIndex < probeRaysCount; rayIndex++)
+    for (uint rayIndex = DDGI.FixedRayCount; rayIndex < probeRaysCount; rayIndex++)
     {
         float3 rayDirection = CachedProbesTraceDirection[rayIndex];
         float rayWeight = max(dot(octahedralDirection, rayDirection), 0.0f);
@@ -792,7 +870,7 @@ void CS_UpdateProbes(uint3 GroupThreadId : SV_GroupThreadID, uint3 GroupId : SV_
     }
 
     // Normalize results
-    float epsilon = (float)max(probeRaysCount - DDGI_FIXED_RAY_COUNT, 1u) * 1e-9f;
+    float epsilon = (float)max(probeRaysCount - DDGI.FixedRayCount, 1u) * 1e-9f;
     result.rgb *= 1.0f / (2.0f * max(result.a, epsilon));
 
     // Load current probe value
@@ -896,10 +974,11 @@ void CS_UpdateProbes(uint3 GroupThreadId : SV_GroupThreadID, uint3 GroupId : SV_
         if ((probeState & DDGI_PROBE_STATE_MASK) == DDGI_PROBE_STATE_ACTIVATED)
             probeAttention = DDGI_PROBE_ATTENTION_MAX;
 
-        // Keep a newly activated/scrolled probe in warm-up for one complete
-        // update. Sampling ignores ACTIVATED probes, preventing a single bright
-        // ray batch from appearing as a distant flash. The next classification
-        // promotes it to ACTIVE and the second update confirms its history.
+        // Classification marks new probes with HISTORY_INVALID. This update
+        // provides both irradiance and distance history, then clears that bit
+        // while retaining ACTIVATED until the next classification. Sampling
+        // can now use the completed update instead of showing a black hole for
+        // several cascade-scheduling frames.
         probeState = (probeState & DDGI_PROBE_STATE_MASK) == DDGI_PROBE_STATE_ACTIVATED
             ? DDGI_PROBE_STATE_ACTIVATED
             : DDGI_PROBE_STATE_ACTIVE;
@@ -962,14 +1041,18 @@ void PS_IndirectLighting(Quad_VS2PS input, out float4 output : SV_Target0)
     // Reconstruct a conservative geometric normal from the depth-derived
     // world position derivatives. Keep the shading normal for irradiance
     // direction lookup, but use the geometric normal for visibility bias.
-    float3 geometricNormal = normalize(cross(ddx(gBuffer.WorldPos), ddy(gBuffer.WorldPos)));
-    if (dot(geometricNormal, gBuffer.Normal) < 0.0f)
-        geometricNormal = -geometricNormal;
-    if (any(isnan(geometricNormal)) || length(geometricNormal) < 0.5f)
-        geometricNormal = gBuffer.Normal;
+    float3 geometricNormal = gBuffer.Normal;
+    if (DDGI.Algorithm != 0)
+    {
+        geometricNormal = normalize(cross(ddx(gBuffer.WorldPos), ddy(gBuffer.WorldPos)));
+        if (dot(geometricNormal, gBuffer.Normal) < 0.0f)
+            geometricNormal = -geometricNormal;
+        if (any(isnan(geometricNormal)) || length(geometricNormal) < 0.5f)
+            geometricNormal = gBuffer.Normal;
+    }
     // Keep the sample offset deterministic. Using the temporal cascade dither
     // as a position offset made cell selection shimmer in editor views.
-    float3 samplePos = gBuffer.WorldPos + geometricNormal * 0.1f;
+    float3 samplePos = gBuffer.WorldPos + geometricNormal * (DDGI.Algorithm != 0 ? 0.1f : dither * 0.1f + 0.1f);
     float3 irradiance = SampleDDGIIrradianceWithVisibilityNormal(DDGI, ProbesData, ProbeStates, ProbesDistance, ProbesIrradiance, samplePos, gBuffer.Normal, geometricNormal, DDGI_DEFAULT_BIAS, dither);
 
     // Calculate lighting

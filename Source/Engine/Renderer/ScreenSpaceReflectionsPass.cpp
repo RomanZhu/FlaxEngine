@@ -241,7 +241,7 @@ GPUTexture* ScreenSpaceReflectionsPass::Render(RenderContext& renderContext, GPU
     GlobalSurfaceAtlasPass::BindingData bindingDataSurfaceAtlas;
     if (settings.TraceMode == ReflectionsTraceMode::SoftwareTracing &&
         EnumHasAnyFlags(view.Flags, ViewFlags::GI) &&
-        renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGI)
+        (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGI || renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus))
     {
         if (!GlobalSignDistanceFieldPass::Instance()->Render(renderContext, context, bindingDataSDF) &&
             !GlobalSurfaceAtlasPass::Instance()->Render(renderContext, context, bindingDataSurfaceAtlas))

@@ -31,6 +31,13 @@ API_ENUM() enum class GlobalIlluminationMode
     /// The custom GI algorithm - plugged-in externally.
     /// </summary>
     Custom = 2,
+
+    /// <summary>
+    /// Enhanced Dynamic Diffuse Global Illumination with explicit probe states, improved visibility, update budgeting, and local volume/backend policy.
+    /// </summary>
+    API_ENUM(Attributes="EditorDisplay(null, \"DDGI+\")")
+    DDGIPlus = 3,
+
 };
 
 /// <summary>

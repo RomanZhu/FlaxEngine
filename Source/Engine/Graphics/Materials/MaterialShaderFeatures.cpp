@@ -162,6 +162,7 @@ bool GlobalIlluminationFeature::Bind(MaterialShader::BindParameters& params, Spa
         switch (params.RenderContext.List->Settings.GlobalIllumination.Mode)
         {
         case GlobalIlluminationMode::DDGI:
+        case GlobalIlluminationMode::DDGIPlus:
         {
             DynamicDiffuseGlobalIlluminationPass::BindingData bindingDataDDGI;
             if (!DynamicDiffuseGlobalIlluminationPass::Instance()->Get(params.RenderContext.Buffers, bindingDataDDGI))

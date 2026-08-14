@@ -165,7 +165,7 @@ public:
     float DDGINearFieldDistance = 2000.0f;
 
     /// <summary>
-    /// Bounded software hit-distance tolerance used for geometry thinner than the selected SDF voxel size.
+    /// Expands Global SDF surfaces during DDGI+ software ray hit detection to preserve geometry thinner than the selected SDF voxel size. The effective expansion is bounded to one voxel per SDF cascade.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(2123), Limit(0, 1000), ValueCategory(Utils.ValueCategory.Distance), EditorDisplay(\"Global Illumination\")")
     float DDGIThinGeometryExpansion = 0.0f;

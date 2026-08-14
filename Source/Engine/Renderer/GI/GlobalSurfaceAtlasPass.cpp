@@ -1126,6 +1126,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
         data.ViewWorldPos = renderContext.View.Position;
         data.GlobalSDF = bindingDataSDF.Constants;
         data.GlobalSurfaceAtlas = result.Constants;
+        data.DDGI.Algorithm = renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus ? 1 : 0;
 
         // Collect objects to update lighting this frame (dirty objects and dirty lights)
         bool allLightingDirty = false;
@@ -1159,6 +1160,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
             switch (renderContext.List->Settings.GlobalIllumination.Mode)
             {
             case GlobalIlluminationMode::DDGI:
+            case GlobalIlluminationMode::DDGIPlus:
             {
                 DynamicDiffuseGlobalIlluminationPass::BindingData bindingDataDDGI;
                 if (!DynamicDiffuseGlobalIlluminationPass::Instance()->Get(renderContext.Buffers, bindingDataDDGI))
@@ -1418,6 +1420,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
             switch (giSettings.Mode)
             {
             case GlobalIlluminationMode::DDGI:
+            case GlobalIlluminationMode::DDGIPlus:
             {
                 DynamicDiffuseGlobalIlluminationPass::BindingData bindingDataDDGI;
                 // Probe irradiance is stored with the user intensity applied,
@@ -1475,6 +1478,7 @@ void GlobalSurfaceAtlasPass::RenderDebug(RenderContext& renderContext, GPUContex
         switch (renderContext.List->Settings.GlobalIllumination.Mode)
         {
         case GlobalIlluminationMode::DDGI:
+        case GlobalIlluminationMode::DDGIPlus:
             DynamicDiffuseGlobalIlluminationPass::Instance()->Render(renderContext, context, nullptr);
             break;
         }

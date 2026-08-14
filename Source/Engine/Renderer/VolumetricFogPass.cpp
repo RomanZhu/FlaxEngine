@@ -615,6 +615,7 @@ void VolumetricFogPass::Render(RenderContext& renderContext)
         switch (renderContext.List->Settings.GlobalIllumination.Mode)
         {
         case GlobalIlluminationMode::DDGI:
+        case GlobalIlluminationMode::DDGIPlus:
             if (!DynamicDiffuseGlobalIlluminationPass::Instance()->Get(renderContext.Buffers, bindingDataDDGI))
             {
                 cache.Data.DDGI = bindingDataDDGI.Constants;

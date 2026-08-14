@@ -202,6 +202,7 @@ public:
     HashSet<ScriptingTypeHandle> ObjectTypes;
     HashSet<GPUTexture*> SDFTextures;
     GlobalSignDistanceFieldPass::BindingData Result;
+    bool LayoutResetPending = false;
 
     // Async objects drawing cache
     Array<int64, FixedAllocation<1>> AsyncDrawWaitLabels;
@@ -253,7 +254,7 @@ public:
         // DDGI can request a tighter near field independently of its far
         // irradiance range. Non-DDGI users retain the historical layout.
         float nearDistance = distance / CascadesDistanceScales[cascadesCount - 1];
-        if (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGI)
+        if (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus)
         {
             nearDistance = Math::Clamp(GraphicsSettings::Get()->DDGINearFieldDistance, 100.0f, distance);
         }
@@ -310,9 +311,22 @@ public:
         resolutionMip = Math::DivideAndRoundUp(resolution, GLOBAL_SDF_RASTERIZE_MIP_FACTOR);
         auto& giSettings = renderContext.List->Settings.GlobalIllumination;
         distance = GraphicsSettings::Get()->GlobalSDFDistance;
-        if (giSettings.Mode == GlobalIlluminationMode::DDGI)
+        if (giSettings.Mode == GlobalIlluminationMode::DDGI || giSettings.Mode == GlobalIlluminationMode::DDGIPlus)
             distance = Math::Max(distance, giSettings.Distance);
         distance = Math::Min(distance, renderContext.View.Far);
+    }
+
+    bool HasCascadeLayoutChanged(const RenderContext& renderContext, float distance, int32 cascadesCount) const
+    {
+        if (Cascades.Count() != cascadesCount)
+            return false;
+        for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
+        {
+            const float cascadeExtent = GetCascadeExtent(renderContext, distance, cascadesCount, cascadeIndex);
+            if (Math::NotNearEqual(Cascades[cascadeIndex].Extent, cascadeExtent))
+                return true;
+        }
+        return false;
     }
 
     void DrawCascadeActors(const CascadeData& cascade);
@@ -329,6 +343,12 @@ public:
         GetOptions(renderContext, resolution, cascadesCount, resolutionMip, distance);
         if (Cascades.Count() != cascadesCount || Resolution != resolution || Origin != renderContext.View.Origin)
             return; // Not yet initialized
+        const bool layoutReset = !reset && HasCascadeLayoutChanged(renderContext, distance, cascadesCount);
+        if (layoutReset)
+        {
+            reset = true;
+            LayoutResetPending = true;
+        }
         PROFILE_CPU();
 
         // Calculate origin for Global SDF by shifting it towards the view direction to account for better view frustum coverage
@@ -813,6 +833,9 @@ bool GlobalSignDistanceFieldPass::Render(RenderContext& renderContext, GPUContex
         uint64 memoryUsage = sdfData.Texture->GetMemoryUsage() + sdfData.TextureMip->GetMemoryUsage();
         LOG(Info, "Global SDF memory usage: {0} MB", memoryUsage / (1024 * 1024));
     }
+    if (!reset)
+        reset = sdfData.LayoutResetPending || (!sdfData.AsyncDrawWaitLabels.HasItems() && sdfData.HasCascadeLayoutChanged(renderContext, distance, cascadesCount));
+    sdfData.LayoutResetPending = false;
     if (sdfData.Origin != renderContext.View.Origin)
     {
         if (reset)

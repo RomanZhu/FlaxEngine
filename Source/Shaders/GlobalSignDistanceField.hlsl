@@ -260,7 +260,8 @@ float3 SampleGlobalSDFGradient(const GlobalSDFData data, Texture3D<snorm float> 
 
 // Ray traces the Global SDF.
 // cascadeTraceStartBias - scales the trace start position offset (along the trace direction) by cascade voxel size (reduces artifacts on far cascades). Use it for shadow rays to prevent self-occlusion when tracing from object surface that looses quality in far cascades.
-GlobalSDFHit RayTraceGlobalSDF(const GlobalSDFData data, Texture3D<snorm float> tex, Texture3D<snorm float> mip, const GlobalSDFTrace trace, float cascadeTraceStartBias = 0.0f)
+// surfaceExpansion - expands the traced SDF surface in world units, bounded to one voxel in each cascade. This can preserve blockers thinner than the selected Global SDF resolution.
+GlobalSDFHit RayTraceGlobalSDF(const GlobalSDFData data, Texture3D<snorm float> tex, Texture3D<snorm float> mip, const GlobalSDFTrace trace, float cascadeTraceStartBias = 0.0f, float surfaceExpansion = 0.0f)
 {
     GlobalSDFHit hit = (GlobalSDFHit)0;
     hit.HitTime = -1.0f;
@@ -273,6 +274,7 @@ GlobalSDFHit RayTraceGlobalSDF(const GlobalSDFData data, Texture3D<snorm float> 
         float4 cascadePosDistance = data.CascadePosDistance[cascade];
         float voxelSize = data.CascadeVoxelSize[cascade];
         float voxelExtent = voxelSize * 0.5f;
+        float cascadeSurfaceExpansion = min(max(surfaceExpansion, 0.0f), voxelSize);
 
         // Skip until cascade that contains the start location
         if (any(abs(trace.WorldPosition - cascadePosDistance.xyz) > cascadePosDistance.w))
@@ -311,18 +313,23 @@ GlobalSDFHit RayTraceGlobalSDF(const GlobalSDFData data, Texture3D<snorm float> 
                 if (distanceTex < chunkMargin)
                     stepDistance = distanceTex;
 
+                // Trace the expanded isosurface rather than adjusting the
+                // visibility distance after a hit. This makes expansion affect
+                // both hit detection and sphere-tracing step length.
+                float expandedStepDistance = stepDistance - cascadeSurfaceExpansion;
+
                 // Detect surface hit
                 float minSurfaceThickness = voxelExtent * saturate(stepTime / voxelSize);
-                if (stepDistance < minSurfaceThickness)
+                if (expandedStepDistance < minSurfaceThickness)
                 {
                     // Surface hit
-                    hit.HitTime = max(stepTime + stepDistance - minSurfaceThickness, 0.0f);
+                    hit.HitTime = max(stepTime + expandedStepDistance - minSurfaceThickness, 0.0f);
                     hit.HitCascade = cascade;
-                    hit.HitSDF = stepDistance;
+                    hit.HitSDF = expandedStepDistance;
                 }
 
                 // Move forward
-                stepTime += max(stepDistance, voxelSize);
+                stepTime += max(expandedStepDistance, voxelSize);
             }
             hit.StepsCount += step;
         }

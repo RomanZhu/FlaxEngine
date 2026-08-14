@@ -111,6 +111,10 @@ public:
     int32 CascadesCount = 0;
     int32 ProbeRaysCount = 0;
     int32 ProbesCountTotal = 0;
+    int32 Algorithm = -1;
+    float DistanceExponent = -1.0f;
+    float ThinGeometryExpansion = -1.0f;
+    float NearFieldDistance = -1.0f;
     Int3 ProbeCounts = Int3::Zero;
     Vector3 ViewOrigin = Vector3::Zero;
     GPUTexture* ProbesTrace = nullptr; // Probes ray tracing: (RGB: hit radiance, A: hit distance)
@@ -230,6 +234,7 @@ bool DynamicDiffuseGlobalIlluminationPass::setupResources()
         return true;
     _csClassify = shader->GetCS("CS_Classify");
     _csUpdateProbesInitArgs = shader->GetCS("CS_UpdateProbesInitArgs");
+    _csUpdateInactiveProbes = shader->GetCS("CS_UpdateInactiveProbes");
     _csTraceRays[0] = shader->GetCS("CS_TraceRays", 0);
     _csTraceRays[1] = shader->GetCS("CS_TraceRays", 1);
     _csTraceRays[2] = shader->GetCS("CS_TraceRays", 2);
@@ -261,6 +266,7 @@ void DynamicDiffuseGlobalIlluminationPass::OnShaderReloading(Asset* obj)
     LastFrameShaderReload = Engine::FrameCount;
     _csClassify = nullptr;
     _csUpdateProbesInitArgs = nullptr;
+    _csUpdateInactiveProbes = nullptr;
     _csTraceRays[0] = nullptr;
     _csTraceRays[1] = nullptr;
     _csTraceRays[2] = nullptr;
@@ -338,6 +344,10 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
     // Setup options
     auto& settings = renderContext.List->Settings.GlobalIllumination;
     auto* graphicsSettings = GraphicsSettings::Get();
+    const bool isDDGIPlus = settings.Mode == GlobalIlluminationMode::DDGIPlus;
+    const float distanceExponent = isDDGIPlus ? Math::Clamp(graphicsSettings->DDGIDistanceExponent, 1.0f, 100.0f) : 50.0f;
+    const float thinGeometryExpansion = isDDGIPlus ? Math::Clamp(graphicsSettings->DDGIThinGeometryExpansion, 0.0f, 1000.0f) : 0.0f;
+    const float nearFieldDistance = isDDGIPlus ? Math::Clamp(graphicsSettings->DDGINearFieldDistance, 100.0f, 100000.0f) : 0.0f;
     // Select one deterministic local volume policy for the camera-centered
     // clipmap. The resource remains shared with the global clipmap for now,
     // but density, trace range, and backend policy are selected by explicit
@@ -347,6 +357,8 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
     float selectedVolumeInfluence = 0.0f;
     for (SceneRendering* scene : renderContext.List->Scenes)
     {
+        if (!isDDGIPlus)
+            break;
         for (DDGIVolume* volume : scene->DDGIVolumes)
         {
             if (!volume || !volume->Enabled || !renderContext.View.RenderLayersMask.HasLayer(volume->GetLayer()))
@@ -367,14 +379,18 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
         }
     }
 
-    DDGITraceBackend requestedBackend = graphicsSettings->TraceBackend;
+    DDGITraceBackend requestedBackend = isDDGIPlus ? graphicsSettings->TraceBackend : DDGITraceBackend::SoftwareGlobalSDF;
     float probesSpacing = Math::Clamp(graphicsSettings->GIProbesSpacing, 10.0f, 1000.0f); // GI probes placement spacing nearby camera (for closest cascade; gets automatically reduced for further cascades)
     float distance = settings.Distance;
     if (selectedVolume)
     {
-        const float localSpacing = Math::Clamp(selectedVolume->GetProbeSpacing(), 10.0f, 1000.0f);
-        probesSpacing = Math::Lerp(probesSpacing, localSpacing, selectedVolumeInfluence);
-        distance = Math::Lerp(distance, Math::Min(distance, selectedVolume->GetMaxTraceDistance()), selectedVolumeInfluence);
+        // Probe spacing and trace range define the shared clipmap topology.
+        // Blending either value with camera position recreates every probe
+        // resource on every frame inside a volume transition and presents as
+        // full-frame GI flashing. Apply the selected volume as a stable policy;
+        // its influence remains useful for deterministic overlap selection.
+        probesSpacing = Math::Clamp(selectedVolume->GetProbeSpacing(), 10.0f, 1000.0f);
+        distance = Math::Min(distance, selectedVolume->GetMaxTraceDistance());
         if (selectedVolume->BackendOverride == DDGIVolumeBackendOverride::SoftwareGlobalSDF)
             requestedBackend = DDGITraceBackend::SoftwareGlobalSDF;
         else if (selectedVolume->BackendOverride == DDGIVolumeBackendOverride::HardwareRayTracing)
@@ -395,7 +411,7 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
             LOG(Warning, "DDGI hardware ray tracing was requested but is unavailable on this RHI. Falling back to SoftwareGlobalSDF.");
         }
     }
-    if ((!bindingDataSDF.Texture || !bindingDataSDF.TextureMip || !bindingDataSurfaceAtlas.AtlasLighting) && graphicsSettings->DDGIWarnMissingSDF)
+    if (isDDGIPlus && (!bindingDataSDF.Texture || !bindingDataSDF.TextureMip || !bindingDataSurfaceAtlas.AtlasLighting) && graphicsSettings->DDGIWarnMissingSDF)
     {
         static bool warnedMissingSoftwareData = false;
         if (!warnedMissingSoftwareData)
@@ -487,7 +503,7 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
     int32 probesCountTotalX = probesCountCascadeX;
     int32 probesCountTotalY = probesCountCascadeY * cascadesCount;
     bool clear = false;
-    if (ddgiData.CascadesCount != cascadesCount || Math::NotNearEqual(ddgiData.Cascades[0].ProbesSpacing, probesSpacing) || ddgiData.ProbeCounts != probesCounts || ddgiData.ProbeRaysCount != probeRaysCount)
+    if (ddgiData.CascadesCount != cascadesCount || Math::NotNearEqual(ddgiData.Cascades[0].ProbesSpacing, probesSpacing) || ddgiData.ProbeCounts != probesCounts || ddgiData.ProbeRaysCount != probeRaysCount || ddgiData.Algorithm != (int32)isDDGIPlus)
     {
         PROFILE_CPU_NAMED("Init");
         ddgiData.Release();
@@ -495,6 +511,7 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
         ddgiData.ProbeRaysCount = probeRaysCount;
         ddgiData.ProbesCountTotal = probesCountTotal;
         ddgiData.ProbeCounts = probesCounts;
+        ddgiData.Algorithm = (int32)isDDGIPlus;
         for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
         {
             auto& cascade = ddgiData.Cascades[cascadeIndex];
@@ -531,6 +548,23 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
 #endif
 #undef INIT_BUFFER
         LOG(Info, "Dynamic Diffuse Global Illumination probes: {0}, memory usage: {1} MB", probesCountTotal, memUsage / (1024 * 1024));
+        clear = true;
+    }
+    if (Math::NotNearEqual(ddgiData.DistanceExponent, distanceExponent) ||
+        Math::NotNearEqual(ddgiData.ThinGeometryExpansion, thinGeometryExpansion) ||
+        Math::NotNearEqual(ddgiData.NearFieldDistance, nearFieldDistance))
+    {
+        // These settings change the meaning of existing distance moments or
+        // the SDF data they were traced against. Do not blend incompatible
+        // history after a live project-settings edit.
+        ddgiData.DistanceExponent = distanceExponent;
+        ddgiData.ThinGeometryExpansion = thinGeometryExpansion;
+        ddgiData.NearFieldDistance = nearFieldDistance;
+        for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
+        {
+            ddgiData.Cascades[cascadeIndex].PendingUpdate = true;
+            ddgiData.Cascades[cascadeIndex].ProbeUpdateCursor = 0;
+        }
         clear = true;
     }
 #if COMPILE_WITH_DEV_ENV
@@ -621,14 +655,15 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
         ddgiData.Result.Constants.IrradianceGamma = 1.5f;
         ddgiData.Result.Constants.IndirectLightingIntensity = indirectLightingIntensity;
         ddgiData.Result.Constants.FallbackIrradiance = settings.FallbackIrradiance.ToFloat4();
-        ddgiData.Result.Constants.NormalBias = Math::Max(settings.NormalBias, 0.0f);
-        ddgiData.Result.Constants.ViewBias = Math::Max(settings.ViewBias, 0.0f);
-        ddgiData.Result.Constants.DistanceExponent = Math::Clamp(graphicsSettings->DDGIDistanceExponent, 1.0f, 100.0f);
-        ddgiData.Result.Constants.VisibilityFloor = 0.05f;
-        ddgiData.Result.Constants.ThinGeometryExpansion = Math::Clamp(graphicsSettings->DDGIThinGeometryExpansion, 0.0f, 1000.0f);
-        ddgiData.Result.Constants.FixedRayCount = DDGI_FIXED_RAY_COUNT;
-        ddgiData.Result.Constants.ProbeRayBudget = graphicsSettings->DDGIProbeRayBudget;
+        ddgiData.Result.Constants.NormalBias = isDDGIPlus ? Math::Max(settings.NormalBias, 0.0f) : 0.0f;
+        ddgiData.Result.Constants.ViewBias = isDDGIPlus ? Math::Max(settings.ViewBias, 0.0f) : 0.0f;
+        ddgiData.Result.Constants.DistanceExponent = distanceExponent;
+        ddgiData.Result.Constants.VisibilityFloor = isDDGIPlus ? 0.05f : 0.0f;
+        ddgiData.Result.Constants.ThinGeometryExpansion = thinGeometryExpansion;
+        ddgiData.Result.Constants.FixedRayCount = isDDGIPlus ? DDGI_FIXED_RAY_COUNT : 0;
+        ddgiData.Result.Constants.ProbeRayBudget = isDDGIPlus ? graphicsSettings->DDGIProbeRayBudget : 0;
         ddgiData.Result.Constants.ActiveTraceBackend = (uint32)activeTraceBackend;
+        ddgiData.Result.Constants.Algorithm = isDDGIPlus ? 1 : 0;
         ddgiData.Result.ProbesData = ddgiData.ProbesData->View();
         ddgiData.Result.ProbeStates = ddgiData.ProbeStates->View();
         ddgiData.Result.ProbesDistance = ddgiData.ProbesDistance->View();
@@ -670,7 +705,7 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
         int32 scheduledCascades = 0;
         for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
             scheduledCascades += cascadeSkipUpdate[cascadeIndex] ? 0 : 1;
-        const uint32 configuredRayBudget = graphicsSettings->DDGIProbeRayBudget;
+        const uint32 configuredRayBudget = isDDGIPlus ? graphicsSettings->DDGIProbeRayBudget : 0;
         const uint32 perCascadeRayBudget = configuredRayBudget > 0 && scheduledCascades > 0 ? Math::Max((uint32)probeRaysCount, configuredRayBudget / (uint32)scheduledCascades) : 0;
 #if DDGI_DEBUG_STATS
         uint32 zero[4] = {};
@@ -713,6 +748,23 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
                 context->BindSR(0, ddgiData.ActiveProbes->View());
                 context->BindUA(0, ddgiData.UpdateProbesInitArgs->View());
                 context->Dispatch(_csUpdateProbesInitArgs, 1, 1, 1);
+                context->ResetUA();
+            }
+
+            // Update probes in batches so ProbesTrace texture can be smaller
+            if (!isDDGIPlus)
+            {
+                PROFILE_GPU_CPU_NAMED("Update Inactive Probes");
+                context->BindUA(0, ddgiData.Result.ProbesData);
+                Data1 data = {};
+                data.CascadeIndex = cascadeIndex;
+                int32 iterations = Math::CeilToInt(Math::Log2((float)Math::Min(probesCounts.MaxValue(), 8) + 1.0f));
+                for (int32 i = iterations - 1; i >= 0; i--)
+                {
+                    data.StepSize = Math::FloorToInt(Math::Pow(2, (float)i) + 0.5f);
+                    context->UpdateCB(_cb1, &data);
+                    context->Dispatch(_csUpdateInactiveProbes, threadGroupsX, 1, 1);
+                }
                 context->ResetUA();
             }
 
@@ -785,7 +837,8 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
 
                 arg += sizeof(GPUDispatchIndirectArgs);
             }
-            cascade.ProbeUpdateCursor = (cascade.ProbeUpdateCursor + probesPerUpdate) % (uint32)probesCountCascade;
+            if (isDDGIPlus)
+                cascade.ProbeUpdateCursor = (cascade.ProbeUpdateCursor + probesPerUpdate) % (uint32)probesCountCascade;
         }
 
 #if DDGI_DEBUG_STATS
@@ -887,7 +940,8 @@ bool DynamicDiffuseGlobalIlluminationPass::Render(RenderContext& renderContext, 
         context->SetRenderTarget(lightBuffer);
         // Dithered cascade selection relies on temporal accumulation. Editor
         // and other non-temporal views use deterministic smooth blending.
-        const bool smoothCascadeBlending = Graphics::GICascadesBlending || !renderContext.List->Setup.UseTemporalAAJitter;
+        const bool smoothCascadeBlending = Graphics::GICascadesBlending ||
+                (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus && !renderContext.List->Setup.UseTemporalAAJitter);
         context->SetState(_psIndirectLighting[smoothCascadeBlending ? 1 : 0]);
         context->DrawFullscreenTriangle();
     }
