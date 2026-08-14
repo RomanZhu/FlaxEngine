@@ -87,6 +87,13 @@ namespace FlaxEditor.GUI.Dialogs
             return 0.0f;
         }
 
+        /// <summary>
+        /// Fills a rounded rectangle with a vertical color gradient.
+        /// </summary>
+        /// <param name="bounds">The rectangle bounds.</param>
+        /// <param name="topColor">The color at the top edge.</param>
+        /// <param name="bottomColor">The color at the bottom edge.</param>
+        /// <param name="radius">The corner radius.</param>
         protected static void FillRoundedVerticalGradient(Rectangle bounds, Color topColor, Color bottomColor, float radius)
         {
             if (bounds.Width <= 0.0f || bounds.Height <= 0.0f)
@@ -110,6 +117,12 @@ namespace FlaxEditor.GUI.Dialogs
             }
         }
 
+        /// <summary>
+        /// Fills a rounded rectangle with a checkerboard pattern.
+        /// </summary>
+        /// <param name="bounds">The rectangle bounds.</param>
+        /// <param name="radius">The corner radius.</param>
+        /// <param name="cellSize">The size of each checkerboard cell.</param>
         protected static void FillRoundedCheckerboard(Rectangle bounds, float radius, float cellSize)
         {
             if (bounds.Width <= 0.0f || bounds.Height <= 0.0f || cellSize <= 0.0f)

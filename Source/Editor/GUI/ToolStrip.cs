@@ -454,6 +454,8 @@ namespace FlaxEditor.GUI
         /// <param name="anchor">The target placement zone.</param>
         /// <param name="index">Optional insertion index within the zone.</param>
         /// <param name="id">Optional stable item identifier used by saved layouts.</param>
+        /// <param name="applySavedPlacement">Whether to apply the saved placement associated with the item identifier.</param>
+        /// <param name="notify">Whether to notify listeners that the layout has changed.</param>
         public void SetItemPlacement(Control control, ToolStripAnchor anchor, int index = -1, string id = null, bool applySavedPlacement = true, bool notify = false)
         {
             if (control == null || control.Parent != this)

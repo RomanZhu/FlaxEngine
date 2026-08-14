@@ -74,11 +74,22 @@ namespace FlaxEditor.Tools.CSG
     /// <summary>Local brush side treated as the front during ray placement.</summary>
     public enum CSGRayPlacementFront
     {
+        /// <summary>The brush front side.</summary>
         Front,
+
+        /// <summary>The brush back side.</summary>
         Back,
+
+        /// <summary>The brush left side.</summary>
         Left,
+
+        /// <summary>The brush right side.</summary>
         Right,
+
+        /// <summary>The brush top side.</summary>
         Top,
+
+        /// <summary>The brush bottom side.</summary>
         Bottom,
     }
 

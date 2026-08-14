@@ -380,9 +380,9 @@ namespace FlaxEditor
             public readonly GraphOwner Owner = owner;
             public readonly VisjectSurface Surface = surface;
             public readonly bool Writable = writable;
-            public string Kind => owner.Kind;
-            public Guid AssetId => owner.AssetId;
-            public string Path => owner.Path;
+            public string Kind => Owner.Kind;
+            public Guid AssetId => Owner.AssetId;
+            public string Path => Owner.Path;
             public void Save() { if (!Writable) throw new InvalidOperationException("The graph was opened read-only."); if (Surface.Save()) throw new IOException("Visject surface serialization failed."); Owner.Save(); }
             public void Dispose() { Surface.Dispose(); Owner.Undo?.Dispose(); }
         }

@@ -73,13 +73,13 @@ void ForwardShadingFeature::Bind(MaterialShader::BindParameters& params, Span<by
     bool noEnvProbe = true;
     // TODO: optimize env probe searching for a transparent material - use spatial cache for renderer to find it
     const BoundingSphere objectBounds(drawCall.ObjectPosition, drawCall.ObjectRadius);
-    float minDistanceSq = MAX_float;
+    Real minDistanceSq = MAX_Real;
     GPUTexture* envProbeTexture = nullptr;
     for (int32 i = 0; i < cache->EnvironmentProbes.Count(); i++)
     {
         const RenderEnvironmentProbeData& probe = cache->EnvironmentProbes.Get()[i];
-        const float sphereCullDistance = objectBounds.Radius + probe.Radius;
-        const float distanceSq = Float3::DistanceSquared(probe.Position, objectBounds.Center);
+        const Real sphereCullDistance = objectBounds.Radius + probe.Radius;
+        const Real distanceSq = Vector3::DistanceSquared(probe.Position, objectBounds.Center);
         if (distanceSq <= sphereCullDistance * sphereCullDistance && distanceSq < minDistanceSq)
         {
             noEnvProbe = false;
