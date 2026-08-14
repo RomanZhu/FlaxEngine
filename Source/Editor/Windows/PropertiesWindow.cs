@@ -935,8 +935,9 @@ namespace FlaxEditor.Windows
         private void SelectSceneObjects()
         {
             _waitingForContentAssets.Clear();
-            if (_contentAssetState != null)
-                Presenter.Deselect();
+            // OverrideEditor rebuilds immediately when changed. Clear the old selection first so
+            // an asset-specific reflection layout cannot be rebuilt against a scene object.
+            Presenter.Deselect();
             ClearContentAssetState();
             Presenter.OverrideEditor = null;
             ClearAssetPreview();
@@ -1006,8 +1007,9 @@ namespace FlaxEditor.Windows
         private void SelectContentObjects(bool forceRebuild = false)
         {
             _waitingForContentAssets.Clear();
-            if (_contentAssetState != null)
-                Presenter.Deselect();
+            // OverrideEditor rebuilds immediately when changed. Clear the old selection first so
+            // a SceneAsset layout cannot be reused while switching to a prefab Actor instance.
+            Presenter.Deselect();
             ClearContentAssetState();
 
             var objects = new List<object>();

@@ -714,6 +714,32 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(FileSystem::FileExists(GetExternalActorPath(renamedPath, actorId)));
     }
 
+    SECTION("Rename Json asset replaces empty destination file")
+    {
+        const Guid sceneId = ParseGuid("45454545454545454545454545454531");
+        const String scenePath = GetTestScenePath(TEXT("RenameJsonEmptyDestinationSource"));
+        const String renamedPath = GetTestScenePath(TEXT("RenameJsonEmptyDestinationTarget"));
+        CleanupTestSceneFiles(scenePath);
+        CleanupTestSceneFiles(renamedPath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+            CleanupTestSceneFiles(renamedPath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, false);
+        REQUIRE(!File::WriteAllBytes(renamedPath, nullptr, 0));
+        REQUIRE(FileSystem::GetFileSize(scenePath) > 0);
+        REQUIRE(FileSystem::GetFileSize(renamedPath) == 0);
+
+        REQUIRE(!Content::RenameAsset(scenePath, renamedPath));
+
+        CHECK(!FileSystem::FileExists(scenePath));
+        CHECK(FileSystem::GetFileSize(renamedPath) > 0);
+        rapidjson_flax::Document renamedDocument;
+        ParseJsonFile(renamedDocument, renamedPath);
+        CHECK(JsonTools::GetGuid(renamedDocument, "ID") == sceneId);
+    }
+
     SECTION("Rename content folder is atomic and updates loaded assets")
     {
         const Guid sceneId = ParseGuid("45454545454545454545454545454541");

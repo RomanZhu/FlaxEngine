@@ -1373,7 +1373,7 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     bool moveSceneActorsFolder = false;
 
     // Validate the filesystem destination. A failed move from an older Editor can leave a
-    // transient, zero-byte .flax file behind. Remove only that provably empty artifact; invalid
+    // transient, zero-byte asset file behind. Remove only that provably empty artifact; invalid
     // files containing any data are preserved and reported as collisions.
     const bool samePath = FileSystem::AreFilePathsEqual(oldPath, newPath);
     FlaxStorageReference lockedDestinationStorage;
@@ -1390,9 +1390,12 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     FlaxStorageFileState destinationState = samePath ? FlaxStorageFileState::Missing : GetFlaxStorageFileState(newPath);
     if (!samePath && destinationState == FlaxStorageFileState::Invalid)
     {
-        if (GetFlaxStorageFileState(oldPath) != FlaxStorageFileState::Valid)
+        // Json assets such as scenes and prefabs don't use the FlaxStorage magic code. The
+        // recovery only needs to prove that deleting the empty destination cannot discard the
+        // sole copy of the source data.
+        if (!FileSystem::FileExists(oldPath) || FileSystem::GetFileSize(oldPath) == 0)
         {
-            LOG(Error, "Cannot recover invalid destination '{0}' because source asset '{1}' is not valid.", newPath, oldPath);
+            LOG(Error, "Cannot recover invalid destination '{0}' because source asset '{1}' is missing or empty.", newPath, oldPath);
             return true;
         }
 
