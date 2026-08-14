@@ -36,6 +36,7 @@ class Sky;
 class RigidBody;
 class SpotLight;
 class PostFxVolume;
+class DDGIVolume;
 class BoxCollider;
 class SphereCollider;
 class CapsuleCollider;

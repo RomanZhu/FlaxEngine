@@ -14,8 +14,18 @@
 #include "./Flax/Octahedral.hlsl"
 
 #define DDGI_PROBE_STATE_INACTIVE 0
-#define DDGI_PROBE_STATE_ACTIVATED 1
-#define DDGI_PROBE_STATE_ACTIVE 2
+#define DDGI_PROBE_STATE_ACTIVE 1
+#define DDGI_PROBE_STATE_ACTIVATED 2
+#define DDGI_PROBE_STATE_INACTIVE_INSIDE 3
+#define DDGI_PROBE_STATE_INACTIVE_EMPTY 4
+#define DDGI_PROBE_STATE_INACTIVE_OVERLAP 5
+#define DDGI_PROBE_STATE_INACTIVE_INVALID 6
+#define DDGI_PROBE_STATE_INACTIVE_OUTSIDE 7
+#define DDGI_PROBE_STATE_MASK 0x0Fu
+#define DDGI_PROBE_STATE_HISTORY_INVALID 0x80u
+#define DDGI_PROBE_STATE_CONFIRMATION_MASK 0x70u
+#define DDGI_PROBE_STATE_CONFIRMATION_SHIFT 4u
+#define DDGI_PROBE_REACTIVATION_CONFIRM_FRAMES 2u
 #define DDGI_PROBE_ATTENTION_MIN 0.02f // Minimum probe attention value that still makes it active.
 #define DDGI_PROBE_ATTENTION_MAX 0.98f // Maximum probe attention value that still makes it active (but not activated which is 1.0f).
 #define DDGI_PROBE_RESOLUTION_IRRADIANCE 6 // Resolution (in texels) for probe irradiance data (excluding 1px padding on each side)
@@ -26,9 +36,6 @@
 #endif
 #define DDGI_SRGB_BLENDING 1 // Enables blending in sRGB color space, otherwise irradiance blending is done in linear space
 #define DDGI_DEFAULT_BIAS 0.2f // Default value for DDGI sampling bias
-#define DDGI_FALLBACK_COORDS_ENCODE(coord) ((float3)(coord + 1) / 128.0f)
-#define DDGI_FALLBACK_COORDS_DECODE(data) (uint3)(data.xyz * 128.0f - 1)
-#define DDGI_FALLBACK_COORDS_VALID(data) (length(data.xyz) > 0)
 //#define DDGI_DEBUG_CASCADE 0 // Forces a specific cascade to be only in use (for debugging)
 
 // DDGI data for a constant buffer
@@ -46,6 +53,14 @@ struct DDGIData
     float3 ViewPos;
     uint RaysCount;
     float4 FallbackIrradiance;
+    float NormalBias;
+    float ViewBias;
+    float DistanceExponent;
+    float VisibilityFloor;
+    float ThinGeometryExpansion;
+    uint FixedRayCount;
+    uint ProbeRayBudget;
+    uint ActiveTraceBackend;
 };
 
 uint GetDDGIProbeIndex(DDGIData data, uint3 probeCoords)
@@ -108,15 +123,11 @@ float4 LoadDDGIProbeData(DDGIData data, Texture2D<snorm float4> probesData, uint
     return probesData.Load(int3(probeDataCoords, 0));
 }
 
-// Encodes probe probe data
-float4 EncodeDDGIProbeData(float3 offset, uint state, float attention)
+// Encodes probe position and temporal attention. Probe lifecycle state is stored separately.
+float4 EncodeDDGIProbeData(float3 offset, float attention)
 {
     // [0;1] -> [-1;1]
     attention = saturate(attention) * 2.0f - 1.0f;
-    if (state == DDGI_PROBE_STATE_INACTIVE)
-        attention = -1.0f;
-    else if (state == DDGI_PROBE_STATE_ACTIVATED)
-        attention = 1.0f;
     return float4(offset, attention);
 }
 
@@ -131,7 +142,11 @@ float DecodeDDGIProbeAttention(float4 probeData)
     return probeData.w * 0.5f + 0.5f;
 }
 
-// Decodes probe state from the encoded state
+// Compatibility helper for materials that only bind ProbesData (including the
+// editor probe visualization material). The authoritative lifecycle reason is
+// stored in ProbeStates, but inactive and newly activated probes still encode
+// attention as the legacy endpoint values so the lightweight visualization can
+// distinguish their broad state without another texture binding.
 uint DecodeDDGIProbeState(float4 probeData)
 {
     if (probeData.w <= -1.0f)
@@ -139,6 +154,33 @@ uint DecodeDDGIProbeState(float4 probeData)
     if (probeData.w >= 1.0f)
         return DDGI_PROBE_STATE_ACTIVATED;
     return DDGI_PROBE_STATE_ACTIVE;
+}
+
+// Loads the explicit probe lifecycle state.
+uint LoadDDGIProbeState(DDGIData data, Texture2D<uint> probeStates, uint cascadeIndex, uint probeIndex)
+{
+    int2 probeDataCoords = GetDDGIProbeTexelCoords(data, cascadeIndex, probeIndex);
+    return probeStates.Load(int3(probeDataCoords, 0));
+}
+
+bool IsDDGIProbeActive(uint state)
+{
+    state &= DDGI_PROBE_STATE_MASK;
+    return state == DDGI_PROBE_STATE_ACTIVE || state == DDGI_PROBE_STATE_ACTIVATED;
+}
+
+// Newly activated/scrolled probes contain only a single stochastic update.
+// Keep them available to the update pipeline, but do not expose them to
+// lighting until a second update has blended and confirmed their history.
+bool IsDDGIProbeReady(uint state)
+{
+    state &= DDGI_PROBE_STATE_MASK;
+    return state == DDGI_PROBE_STATE_ACTIVE;
+}
+
+bool IsDDGIProbeInactive(uint state)
+{
+    return !IsDDGIProbeActive(state);
 }
 
 // Decodes probe world-space position (XYZ) from the encoded state
@@ -162,12 +204,18 @@ float2 GetDDGIProbeUV(DDGIData data, uint cascadeIndex, uint probeIndex, float2 
     return uv;
 }
 
-float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, uint cascadeIndex, float3 probesOrigin, float3 probesExtent, float probesSpacing, float3 biasedWorldPosition)
+float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float3 visibilityNormal, uint cascadeIndex, float3 probesOrigin, float3 probesExtent, float probesSpacing, float3 biasedWorldPosition, out float volumeVisibility)
 {
     bool invalidCascade = cascadeIndex >= data.CascadesCount;
     cascadeIndex = min(cascadeIndex, data.CascadesCount - 1);
+    float visibilityNormalLength = length(visibilityNormal);
+    visibilityNormal = visibilityNormalLength > 1e-4f ? visibilityNormal / visibilityNormalLength : float3(0, 1, 0);
     uint3 probeCoordsEnd = data.ProbesCounts - uint3(1, 1, 1);
-    uint3 baseProbeCoords = clamp(uint3((worldPosition - probesOrigin + probesExtent) / probesSpacing), uint3(0, 0, 0), probeCoordsEnd);
+    // The biased point determines the base cell. This keeps the eight-corner
+    // interpolation on the same side of a surface as the visibility query.
+    int3 baseProbeCoordsSigned = (int3)floor((biasedWorldPosition - probesOrigin + probesExtent) / probesSpacing);
+    baseProbeCoordsSigned = clamp(baseProbeCoordsSigned, int3(0, 0, 0), (int3)probeCoordsEnd);
+    uint3 baseProbeCoords = (uint3)baseProbeCoordsSigned;
 
     // Get the grid coordinates of the probe nearest the biased world position
     float3 baseProbeWorldPosition = GetDDGIProbeWorldPosition(data, cascadeIndex, baseProbeCoords);
@@ -175,6 +223,8 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
 
     // Loop over the closest probes to accumulate their contributions
     float4 irradiance = float4(0, 0, 0, 0);
+    float visibilitySum = 0.0f;
+    float visibilityWeightSum = 0.0f;
     for (uint i = 0; i < 8; i++)
     {
         uint3 probeCoordsOffset = uint3(i, i >> 1, i >> 2) & 1;
@@ -183,33 +233,25 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
 
         // Load probe position and state
         float4 probeData = LoadDDGIProbeData(data, probesData, cascadeIndex, probeIndex);
-        uint probeState = DecodeDDGIProbeState(probeData);
-        uint useVisibility = true;
-        float minWight = 0.000001f;
-        if (probeState == DDGI_PROBE_STATE_INACTIVE)
-        {
-            // Use fallback probe that is closest to this one
-            uint3 fallbackCoords = DDGI_FALLBACK_COORDS_DECODE(probeData);
-            float fallbackToProbeDist = length((float3)probeCoords - (float3)fallbackCoords);
-            useVisibility = fallbackToProbeDist <= 1.0f; // Skip visibility test that blocks too far probes due to limiting max distance to 1.5 of probe spacing
-            if (fallbackToProbeDist > 2.0f) minWight = 1.0f;
-            probeCoords = fallbackCoords;
-            probeIndex = GetDDGIScrollingProbeIndex(data, cascadeIndex, fallbackCoords);
-            probeData = LoadDDGIProbeData(data, probesData, cascadeIndex, probeIndex);
-            //if (DecodeDDGIProbeState(probeData) == DDGI_PROBE_STATE_INACTIVE) continue;
-        }
+        uint probeState = LoadDDGIProbeState(data, probeStates, cascadeIndex, probeIndex);
+        if (!IsDDGIProbeReady(probeState) || (probeState & DDGI_PROBE_STATE_HISTORY_INVALID) != 0)
+            continue;
 
         // Calculate probe position
         float3 probePosition = baseProbeWorldPosition + (((float3)probeCoords - (float3)baseProbeCoords) * probesSpacing) + probeData.xyz * probesSpacing;
 
         // Calculate the distance and direction from the (biased and non-biased) shading point and the probe
-        float3 worldPosToProbe = normalize(probePosition - worldPosition);
-        float3 biasedPosToProbe = normalize(probePosition - biasedWorldPosition);
-        float biasedPosToProbeDist = length(probePosition - biasedWorldPosition) * 0.95f;
+        float3 worldPosToProbeVector = probePosition - worldPosition;
+        float worldPosToProbeDistance = length(worldPosToProbeVector);
+        float3 worldPosToProbe = worldPosToProbeDistance > 1e-4f ? worldPosToProbeVector / worldPosToProbeDistance : visibilityNormal;
+        float3 biasedPosToProbeVector = probePosition - biasedWorldPosition;
+        float biasedPosToProbeVectorLength = length(biasedPosToProbeVector);
+        float3 biasedPosToProbe = biasedPosToProbeVectorLength > 1e-4f ? biasedPosToProbeVector / biasedPosToProbeVectorLength : visibilityNormal;
+        float biasedPosToProbeDist = length(probePosition - biasedWorldPosition);
 
         // Smooth backface test
-        float weight = Square(dot(worldPosToProbe, worldNormal) * 0.5f + 0.5f);
-        weight = max(weight, 0.1f);
+        float weight = Square(dot(worldPosToProbe, visibilityNormal) * 0.5f + 0.5f);
+        weight = max(weight, data.VisibilityFloor);
 
         // Sample distance texture
         float2 octahedralCoords = GetOctahedralCoords(-biasedPosToProbe);
@@ -217,15 +259,17 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
         float2 probeDistance = probesDistance.SampleLevel(SamplerLinearClamp, uv, 0).rg * 2.0f;
 
         // Visibility weight (Chebyshev)
-        if (biasedPosToProbeDist > probeDistance.x && useVisibility)
+        float visibilityWeight = 1.0f;
+        if (biasedPosToProbeDist > probeDistance.x)
         {
             float variance = abs(Square(probeDistance.x) - probeDistance.y);
-            float visibilityWeight = variance / (variance + Square(biasedPosToProbeDist - probeDistance.x));
-            weight *= max(visibilityWeight * visibilityWeight * visibilityWeight, 0.0f);
+            visibilityWeight = variance / max(variance + Square(biasedPosToProbeDist - probeDistance.x), 1e-6f);
+            weight *= max(visibilityWeight, data.VisibilityFloor);
         }
 
-        // Avoid a weight of zero
-        weight = max(weight, minWight);
+        // Keep a small floor only for valid active probes. Inactive probes do
+        // not participate in the normalization or provide fallback lighting.
+        weight = max(weight, data.VisibilityFloor);
 
         // Adjust weight curve to inject a small portion of light
         const float minWeightThreshold = 0.2f;
@@ -233,7 +277,15 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
 
         // Calculate trilinear weights based on the distance to each probe to smoothly transition between grid of 8 probes
         float3 trilinear = lerp(1.0f - biasAlpha, biasAlpha, (float3)probeCoordsOffset);
-        weight *= saturate(trilinear.x * trilinear.y * trilinear.z * 2.0f);
+        float trilinearWeight = trilinear.x * trilinear.y * trilinear.z;
+        weight *= trilinearWeight;
+
+        // Preserve the unnormalized distance-moment visibility for participating
+        // media. Surface irradiance normalizes probe weights by design, but that
+        // normalization otherwise turns a uniformly occluded fog cell back into
+        // fully lit scattering.
+        visibilitySum += saturate(visibilityWeight) * trilinearWeight;
+        visibilityWeightSum += trilinearWeight;
 
         // Sample irradiance texture
         octahedralCoords = GetOctahedralCoords(worldNormal);
@@ -247,7 +299,8 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
         //probeIrradiance = float3(max(frac(probeData.xyz) * 2, 0.1f));
 
         // Accumulate weighted irradiance
-        irradiance += float4(probeIrradiance * weight, weight);
+        if (weight > 0.0f)
+            irradiance += float4(probeIrradiance * weight, weight);
     }
 
 #if 0
@@ -262,12 +315,11 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
         irradiance = float4(1, 0, 1, 1);
 #endif
 
+    volumeVisibility = visibilityWeightSum > 0.0f ? saturate(visibilitySum / visibilityWeightSum) : 0.0f;
     if (irradiance.a > 0.0f)
     {
-        // Normalize irradiance
-        //irradiance.rgb /= irradiance.a;
-        //irradiance.rgb /= lerp(1, irradiance.a, saturate(irradiance.a * irradiance.a + 0.9f));
-        irradiance.rgb /= invalidCascade ? irradiance.a : lerp(1, irradiance.a, saturate(irradiance.a * irradiance.a + 0.9f));
+        // Normalize only by probes that actually contributed.
+        irradiance.rgb /= max(irradiance.a, 1e-6f);
 #if DDGI_SRGB_BLENDING
         irradiance.rgb *= irradiance.rgb;
 #endif
@@ -276,10 +328,13 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
     return irradiance.rgb;
 }
 
-float3 GetDDGISurfaceBias(float3 viewDir, float probesSpacing, float3 worldNormal, float bias)
+float3 GetDDGISurfaceBias(DDGIData data, float3 viewDir, float probesSpacing, float3 geometricNormal, float bias)
 {
-    // Bias the world-space position to reduce artifacts
-    return (worldNormal * 0.2f + viewDir * 0.8f) * (0.6f * probesSpacing * bias);
+    // Bias the world-space position to reduce artifacts. The actual values
+    // are world-space settings; bias is kept as a compatibility scale for
+    // callers that intentionally request no bias (for example fog).
+    float biasScale = bias / max(DDGI_DEFAULT_BIAS, 1e-6f);
+    return (geometricNormal * data.NormalBias + viewDir * data.ViewBias) * biasScale;
 }
 
 // [Inigo Quilez, https://iquilezles.org/articles/distfunctions/]
@@ -290,14 +345,17 @@ float sdRoundBox(float3 p, float3 b, float r)
 }
 
 // Samples DDGI probes volume at the given world-space position and returns the irradiance.
-// bias - scales the bias vector to the initial sample point to reduce self-shading artifacts
-// dither - randomized per-pixel value in range 0-1, used to smooth dithering for cascades blending
-float3 SampleDDGIIrradiance(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float bias = DDGI_DEFAULT_BIAS, float dither = 0.0f)
+// bias - scales the world-space bias settings (zero disables the bias).
+// dither - randomized per-pixel value in range 0-1, used to smooth dithering for cascades blending.
+float3 SampleDDGIIrradianceInternal(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float3 visibilityNormal, float bias, float dither, out float volumeVisibility)
 {
+    volumeVisibility = 0.0f;
     // Select the highest cascade that contains the sample location
     float probesSpacing = 0, cascadeWeight = 0;
     float3 probesOrigin = (float3)0, probesExtent = (float3)0, biasedWorldPosition = (float3)0;
-    float3 viewDir = normalize(data.ViewPos - worldPosition);
+    float3 viewVector = data.ViewPos - worldPosition;
+    float viewDistance = length(viewVector);
+    float3 viewDir = viewDistance > 1e-4f ? viewVector / viewDistance : worldNormal;
 #if DDGI_CASCADE_BLEND_SMOOTH
     dither = 0.0f;
 #endif
@@ -313,7 +371,7 @@ float3 SampleDDGIIrradiance(DDGIData data, Texture2D<snorm float4> probesData, T
         probesSpacing = data.ProbesOriginAndSpacing[cascadeIndex].w;
         probesOrigin = data.ProbesScrollOffsets[cascadeIndex].xyz * probesSpacing + data.ProbesOriginAndSpacing[cascadeIndex].xyz;
         probesExtent = (data.ProbesCounts - 1) * (probesSpacing * 0.5f);
-        biasedWorldPosition = worldPosition + GetDDGISurfaceBias(viewDir, probesSpacing, worldNormal, bias);
+        biasedWorldPosition = worldPosition + GetDDGISurfaceBias(data, viewDir, probesSpacing, visibilityNormal, bias);
 
         // Calculate cascade blending weight (use input bias to smooth transition)
         float fadeDistance = probesSpacing * DDGI_CASCADE_BLEND_SIZE;
@@ -326,7 +384,7 @@ float3 SampleDDGIIrradiance(DDGIData data, Texture2D<snorm float4> probesData, T
 #endif
 
     // Sample cascade
-    float3 result = SampleDDGIIrradianceCascade(data, probesData, probesDistance, probesIrradiance, worldPosition, worldNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition);
+    float3 result = SampleDDGIIrradianceCascade(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, volumeVisibility);
 
     // Blend with the next cascade (or fallback irradiance outside the volume)
 #if DDGI_CASCADE_BLEND_SMOOTH && !defined(DDGI_DEBUG_CASCADE)
@@ -336,10 +394,12 @@ float3 SampleDDGIIrradiance(DDGIData data, Texture2D<snorm float4> probesData, T
         probesSpacing = data.ProbesOriginAndSpacing[cascadeIndex].w;
         probesOrigin = data.ProbesScrollOffsets[cascadeIndex].xyz * probesSpacing + data.ProbesOriginAndSpacing[cascadeIndex].xyz;
         probesExtent = (data.ProbesCounts - 1) * (probesSpacing * 0.5f);
-        biasedWorldPosition = worldPosition + GetDDGISurfaceBias(viewDir, probesSpacing, worldNormal, bias);
-        float3 resultNext = SampleDDGIIrradianceCascade(data, probesData, probesDistance, probesIrradiance, worldPosition, worldNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition);
+        biasedWorldPosition = worldPosition + GetDDGISurfaceBias(data, viewDir, probesSpacing, visibilityNormal, bias);
+        float volumeVisibilityNext;
+        float3 resultNext = SampleDDGIIrradianceCascade(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, volumeVisibilityNext);
         result *= cascadeWeight;
         result += resultNext * (1 - cascadeWeight);
+        volumeVisibility = lerp(volumeVisibilityNext, volumeVisibility, cascadeWeight);
     }
 #endif
     if (cascadeIndex >= data.CascadesCount)
@@ -347,7 +407,35 @@ float3 SampleDDGIIrradiance(DDGIData data, Texture2D<snorm float4> probesData, T
         // Blend between the last cascade and the fallback irradiance
         float fallbackWeight = (1 - cascadeWeight) * data.FallbackIrradiance.a;
         result = lerp(result, data.FallbackIrradiance.rgb, fallbackWeight);
+        volumeVisibility = lerp(volumeVisibility, 1.0f, fallbackWeight);
     }
 
     return result;
+}
+
+// Default material/fog path. It preserves the public helper signature while
+// using the shading normal as the conservative visibility normal when no
+// screen-space geometric normal is available.
+float3 SampleDDGIIrradiance(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float bias = DDGI_DEFAULT_BIAS, float dither = 0.0f)
+{
+    float volumeVisibility;
+    return SampleDDGIIrradianceInternal(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, worldNormal, bias, dither, volumeVisibility);
+}
+
+// Pixel materials can provide a reconstructed geometric normal for visibility
+// while retaining the shading normal for irradiance direction lookup.
+float3 SampleDDGIIrradianceWithVisibilityNormal(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float3 visibilityNormal, float bias = DDGI_DEFAULT_BIAS, float dither = 0.0f)
+{
+    float volumeVisibility;
+    return SampleDDGIIrradianceInternal(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, bias, dither, volumeVisibility);
+}
+
+// Participating media needs the probe visibility that surface interpolation
+// intentionally normalizes away. The alpha component is the aggregate
+// distance-moment visibility and can be combined with direct-light shadows.
+float4 SampleDDGIVolumetricIrradiance(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 scatteringDirection, float dither = 0.0f)
+{
+    float volumeVisibility;
+    float3 irradiance = SampleDDGIIrradianceInternal(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, scatteringDirection, scatteringDirection, 0.0f, dither, volumeVisibility);
+    return float4(irradiance, volumeVisibility);
 }

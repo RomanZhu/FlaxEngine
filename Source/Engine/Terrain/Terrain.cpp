@@ -594,7 +594,11 @@ bool Terrain::DrawSetup(RenderContext& renderContext)
                 Matrix::Invert(localToWorld, worldToLocal);
                 BoundingBox::Transform(chunk->GetBounds(), worldToLocal, localBounds);
                 BoundingSphere::FromBox(chunk->GetBounds(), chunkSphere);
-                GlobalSurfaceAtlasPass::Instance()->RasterizeActor(this, chunk, chunkSphere, chunk->GetTransform(), localBounds, 1 << 2, false);
+                // Terrain contributes only its top-facing tile to the Surface
+                // Atlas. Keep directional visibility enabled so rays hitting
+                // the heightfield from below cannot sample top-side radiance
+                // and inject it into underground or otherwise occluded probes.
+                GlobalSurfaceAtlasPass::Instance()->RasterizeActor(this, chunk, chunkSphere, chunk->GetTransform(), localBounds, 1 << 2, true);
             }
         }
         return true;

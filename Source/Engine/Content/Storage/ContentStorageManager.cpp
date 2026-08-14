@@ -258,7 +258,9 @@ void ContentStorageManager::OnRenamedFolder(const StringView& oldPath, const Str
     {
         const String oldStoragePath = entry.Second->GetPath();
         StorageMap.Remove(oldStoragePath);
+#if USE_EDITOR
         entry.Second->OnRename(entry.First);
+#endif
         StorageMap.Add(entry.First, entry.Second);
     }
 }

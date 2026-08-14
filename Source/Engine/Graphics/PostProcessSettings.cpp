@@ -34,6 +34,8 @@ void GlobalIlluminationSettings::BlendWith(GlobalIlluminationSettings& other, fl
     BLEND_FLOAT(TemporalResponse);
     BLEND_FLOAT(Distance);
     BLEND_COL(FallbackIrradiance);
+    BLEND_FLOAT(NormalBias);
+    BLEND_FLOAT(ViewBias);
 }
 
 void BloomSettings::BlendWith(BloomSettings& other, float weight)

@@ -10,6 +10,7 @@
 
 class SceneRenderTask;
 class SceneRendering;
+class DDGIVolume;
 class IPhysicsDebug;
 struct PostProcessSettings;
 struct RenderContext;
@@ -105,6 +106,7 @@ public:
     Array<DrawActor> Actors[MAX];
     Array<int32> FreeActors[MAX];
     Array<IPostFxSettingsProvider*> PostFxProviders;
+    Array<DDGIVolume*> DDGIVolumes;
     ReadWriteLock Locker;
 
 private:
@@ -151,6 +153,16 @@ public:
     FORCE_INLINE void RemovePostFxProvider(IPostFxSettingsProvider* obj)
     {
         PostFxProviders.Remove(obj);
+    }
+
+    FORCE_INLINE void AddDDGIVolume(DDGIVolume* obj)
+    {
+        DDGIVolumes.Add(obj);
+    }
+
+    FORCE_INLINE void RemoveDDGIVolume(DDGIVolume* obj)
+    {
+        DDGIVolumes.Remove(obj);
     }
 
 #if USE_EDITOR

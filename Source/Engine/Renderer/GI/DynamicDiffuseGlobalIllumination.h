@@ -26,6 +26,14 @@ public:
         Float3 ViewPos;
         uint32 RaysCount;
         Float4 FallbackIrradiance;
+        float NormalBias;
+        float ViewBias;
+        float DistanceExponent;
+        float VisibilityFloor;
+        float ThinGeometryExpansion;
+        uint32 FixedRayCount;
+        uint32 ProbeRayBudget;
+        uint32 ActiveTraceBackend;
         });
 
     // Binding data for the GPU.
@@ -33,6 +41,7 @@ public:
     {
         ConstantsData Constants;
         GPUTextureView* ProbesData;
+        GPUTextureView* ProbeStates;
         GPUTextureView* ProbesDistance;
         GPUTextureView* ProbesIrradiance;
     };
@@ -44,7 +53,6 @@ private:
     GPUConstantBuffer* _cb1 = nullptr;
     GPUShaderProgramCS* _csClassify;
     GPUShaderProgramCS* _csUpdateProbesInitArgs;
-    GPUShaderProgramCS* _csUpdateInactiveProbes;
     GPUShaderProgramCS* _csTraceRays[4];
     GPUShaderProgramCS* _csUpdateProbesIrradiance;
     GPUShaderProgramCS* _csUpdateProbesDistance;

@@ -508,7 +508,16 @@ ShadowSample SampleSpotLightShadow(LightData light, Buffer<float4> shadowsBuffer
     float3 toLight = light.Position - gBuffer.WorldPos;
     float toLightLength = length(toLight);
     float3 L = toLight / toLightLength;
-    return SampleLocalLightShadow(light, shadowsBuffer, shadowMap, gBuffer, L, toLightLength, 0);
+    uint tileIndex = 0;
+    if (light.ShadowsBufferAddress != 0)
+    {
+        // Very wide spotlights use the numerically stable cube-face projection
+        // path. The spotlight attenuation still clips lighting to its cone.
+        ShadowData shadow = LoadShadowsBuffer(shadowsBuffer, light.ShadowsBufferAddress);
+        if (shadow.TilesCount == 6)
+            tileIndex = GetCubeFaceIndex(-L);
+    }
+    return SampleLocalLightShadow(light, shadowsBuffer, shadowMap, gBuffer, L, toLightLength, tileIndex);
 }
 
 // Samples the shadow for the given point light on the material surface (supports subsurface shadowing)

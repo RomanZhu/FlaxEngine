@@ -27,6 +27,7 @@
 #define SHADOWS_BASE_LIGHT_RESOLUTION(atlasResolution) (atlasResolution / (MAX_CSM_CASCADES - 1)) // Preserve the existing per-cascade resolution; the atlas packer can place the optional far cascade on another row
 #define NormalOffsetScaleTweak METERS_TO_UNITS(1)
 #define LocalLightNearPlane METERS_TO_UNITS(0.1f)
+#define WideSpotLightShadowAngleThreshold 80.0f
 
 GPU_CB_STRUCT(Data {
     ShaderGBufferData GBuffer;
@@ -1122,6 +1123,43 @@ void ShadowsPass::SetupLight(ShadowsCustomBuffer& shadows, RenderContext& render
     if (SetupLight(shadows, renderContext, renderContextBatch, (RenderLocalLightData&)light, atlasLight))
         return;
 
+    // A perspective projection becomes numerically unstable as its FOV approaches
+    // 180 degrees. Use cube faces for very wide spotlights so each shadow projection
+    // remains well-conditioned while the lighting cone itself keeps its full angle.
+    if (atlasLight.TilesNeeded == 6)
+    {
+        atlasLight.TileBorder = 1.0f * (shadows.MaxShadowsQuality + 1);
+        const float borderScale = (float)atlasLight.Resolution / (atlasLight.Resolution + 2 * atlasLight.TileBorder);
+        Matrix borderScaleMatrix;
+        Matrix::Scaling(borderScale, borderScale, 1.0f, borderScaleMatrix);
+
+        atlasLight.ContextIndex = renderContextBatch.Contexts.Count();
+        atlasLight.ContextCount = atlasLight.HasStaticShadowContext ? 12 : 6;
+        renderContextBatch.Contexts.AddDefault(atlasLight.ContextCount);
+
+        int32 contextIndex = 0;
+        for (int32 faceIndex = 0; faceIndex < 6; faceIndex++)
+        {
+            auto& shadowContext = renderContextBatch.Contexts[atlasLight.ContextIndex + contextIndex++];
+            SetupRenderContext(renderContext, shadowContext, &atlasLight);
+            shadowContext.View.SetUpCube(LocalLightNearPlane, light.Radius, light.Position);
+            shadowContext.View.Projection = shadowContext.View.Projection * borderScaleMatrix;
+            shadowContext.View.NonJitteredProjection = shadowContext.View.Projection;
+            Matrix::Invert(shadowContext.View.Projection, shadowContext.View.IP);
+            shadowContext.View.SetFace(faceIndex);
+            const auto shadowMapsSize = (float)atlasLight.Resolution;
+            shadowContext.View.PrepareCache(shadowContext, shadowMapsSize, shadowMapsSize, Float2::Zero, &renderContext.View);
+            atlasLight.Tiles[faceIndex].SetWorldToShadow(shadowContext.View.ViewProjection());
+
+            if (atlasLight.HasStaticShadowContext)
+            {
+                auto& shadowContextStatic = renderContextBatch.Contexts[atlasLight.ContextIndex + contextIndex++];
+                SetupRenderContext(renderContext, shadowContextStatic, &atlasLight, &shadowContext);
+            }
+        }
+        return;
+    }
+
     atlasLight.ContextIndex = renderContextBatch.Contexts.Count();
     atlasLight.ContextCount = atlasLight.HasStaticShadowContext ? 2 : 1;
     renderContextBatch.Contexts.AddDefault(atlasLight.ContextCount);
@@ -1321,7 +1359,7 @@ void ShadowsPass::SetupShadows(RenderContext& renderContext, RenderContextBatch&
             if (renderContext.View.IsOrthographicProjection())
                 atlasLight.TilesNeeded = 1;
         }
-        else if (light->IsPointLight)
+        else if (light->IsPointLight || (light->IsSpotLight && ((const RenderSpotLightData*)light)->OuterConeAngle > WideSpotLightShadowAngleThreshold))
             atlasLight.TilesNeeded = 6;
         else
             atlasLight.TilesNeeded = 1;

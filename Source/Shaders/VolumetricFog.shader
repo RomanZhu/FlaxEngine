@@ -412,8 +412,9 @@ Texture2D<float> ShadowMap : register(t4);
 Buffer<float4> ShadowsBuffer : register(t5);
 #if USE_DDGI
 Texture2D<snorm float4> ProbesData : register(t6);
-Texture2D<float4> ProbesDistance : register(t7);
-Texture2D<float4> ProbesIrradiance : register(t8);
+Texture2D<uint> ProbeStates : register(t7);
+Texture2D<float4> ProbesDistance : register(t8);
+Texture2D<float4> ProbesIrradiance : register(t9);
 #else
 TextureCube SkyLightImage : register(t6);
 #endif
@@ -450,6 +451,9 @@ void CS_LightScattering(uint3 DispatchThreadId : SV_DispatchThreadID)
 	uint samplesCount = historyAlpha < 0.01f ? MissedHistorySamplesCount : 1;
     
 	float3 lightScattering = 0;
+#if USE_DDGI
+	float3 ddgiScattering = 0;
+#endif
 	float directionalShadowVisibility = 0.0f;
 	for (uint sampleIndex = 0; sampleIndex < samplesCount; sampleIndex++)
 	{
@@ -470,8 +474,10 @@ void CS_LightScattering(uint3 DispatchThreadId : SV_DispatchThreadID)
 		}
 
 #if USE_DDGI
-        // Dynamic Diffuse Global Illumination
-        lightScattering += SampleDDGIIrradiance(DDGI, ProbesData, ProbesDistance, ProbesIrradiance, positionWS, cameraVectorNormalized, 0.0f, cellOffset.x);
+        // Dynamic Diffuse Global Illumination. Keep this term separate from
+        // direct and local lighting so volumetric shadows can suppress probe
+        // fill in enclosed regions without incorrectly shadowing local lights.
+        ddgiScattering += SampleDDGIIrradiance(DDGI, ProbesData, ProbeStates, ProbesDistance, ProbesIrradiance, positionWS, cameraVectorNormalized, 0.0f, cellOffset.x);
 #else
 		// Sky light
 		if (SkyLight.VolumetricScatteringIntensity > 0)
@@ -484,6 +490,17 @@ void CS_LightScattering(uint3 DispatchThreadId : SV_DispatchThreadID)
 	}
 	lightScattering /= (float)samplesCount;
 	directionalShadowVisibility = saturate(directionalShadowVisibility / (float)samplesCount);
+
+#if USE_DDGI
+	ddgiScattering /= (float)samplesCount;
+	// Shadow presentation used to be a no-op at its default scattering
+	// multiplier of one. Couple DDGI fog to the sampled directional visibility
+	// when the feature is enabled, while preserving the user-selected ambient
+	// floor for genuinely indirect illumination in shadow.
+	float ddgiShadowVisibility = max(directionalShadowVisibility, ShadowParameters0.w);
+	ddgiShadowVisibility = lerp(1.0f, ddgiShadowVisibility, ShadowParameters1.y);
+	lightScattering += ddgiScattering * ddgiShadowVisibility;
+#endif
 
 	// Apply scattering from the point and spot lights
 	lightScattering += LocalShadowedLightScattering[gridCoordinate].rgb;

@@ -25,7 +25,7 @@ namespace FlaxEditor.CustomEditors.Editors
                     var globalSDFQuality = isGlobalSDFQuality ? value : settings.GlobalSDFQuality;
                     var result = MessageBox.Show(
                         $"This combination can create a very large software ray-tracing workload in a single frame and may trigger the operating system GPU timeout, which terminates the editor.\n\n" +
-                        $"GI quality: {giQuality}\nGlobal SDF quality: {globalSDFQuality}\nProbe spacing: {settings.GIProbesSpacing}\n\n" +
+                        $"GI quality: {giQuality}\nGlobal SDF quality: {globalSDFQuality}\nProbe spacing: {settings.GIProbesSpacing}\nNear SDF range: {settings.DDGINearFieldDistance}\nProbe ray budget: {settings.DDGIProbeRayBudget}\n\n" +
                         "High GI quality or probe spacing in the 200-500 range is recommended. Apply Ultra anyway?",
                         "High global illumination workload", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
                     if (result != DialogResult.OK)

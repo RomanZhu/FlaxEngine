@@ -9,6 +9,22 @@
 class FontAsset;
 
 /// <summary>
+/// Probe-ray tracing backend used by Dynamic Diffuse Global Illumination.
+/// </summary>
+API_ENUM() enum class DDGITraceBackend
+{
+    /// <summary>
+    /// Cross-platform Global SDF and Global Surface Atlas tracing.
+    /// </summary>
+    SoftwareGlobalSDF = 0,
+
+    /// <summary>
+    /// Optional hardware ray tracing backend. Unsupported devices fall back to software tracing.
+    /// </summary>
+    HardwareRayTracing = 1,
+};
+
+/// <summary>
 /// Graphics rendering settings.
 /// </summary>
 API_CLASS(sealed, Namespace="FlaxEditor.Content.Settings", NoConstructor) class FLAXENGINE_API GraphicsSettings : public SettingsBase
@@ -125,10 +141,46 @@ public:
     Quality GIQuality = Quality::High;
 
     /// <summary>
+    /// The requested DDGI probe-ray tracing backend. Software Global SDF tracing is the portable default; hardware ray tracing is opt-in and falls back to software when unavailable.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2110), DefaultValue(DDGITraceBackend.SoftwareGlobalSDF), EditorDisplay(\"Global Illumination\")")
+    DDGITraceBackend TraceBackend = DDGITraceBackend::SoftwareGlobalSDF;
+
+    /// <summary>
     /// The global spacing between Global Illumination probes (in world units). Smaller values improve interior detail at a higher GPU cost. Values around 100-150 are a useful starting point for mixed interiors and exteriors; adjust to 200-500 for mostly outdoor scenes and lower-frequency GI. Changing this value recreates the DDGI probe resources and can change the automatic cascade layout.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(2120), Limit(50, 1000), EditorDisplay(\"Global Illumination\")")
     float GIProbesSpacing = 100;
+
+    /// <summary>
+    /// Maximum number of DDGI probe rays scheduled per view and frame. Zero uses the quality-derived unlimited budget.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2121), Limit(0, 16777216), EditorDisplay(\"Global Illumination\")")
+    uint32 DDGIProbeRayBudget = 262144;
+
+    /// <summary>
+    /// Near-field Global SDF half-extent in world units when DDGI is enabled. The outer SDF cascades still cover the full GI range.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2122), Limit(100, 100000), ValueCategory(Utils.ValueCategory.Distance), EditorDisplay(\"Global Illumination\")")
+    float DDGINearFieldDistance = 2000.0f;
+
+    /// <summary>
+    /// Bounded software hit-distance tolerance used for geometry thinner than the selected SDF voxel size.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2123), Limit(0, 1000), ValueCategory(Utils.ValueCategory.Distance), EditorDisplay(\"Global Illumination\")")
+    float DDGIThinGeometryExpansion = 0.0f;
+
+    /// <summary>
+    /// Logs a diagnostic when the software DDGI path has no valid Global SDF or Surface Atlas coverage.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2124), DefaultValue(true), EditorDisplay(\"Global Illumination\")")
+    bool DDGIWarnMissingSDF = true;
+
+    /// <summary>
+    /// Exponent used by the DDGI distance moment convolution. Higher values preserve depth discontinuities more strongly.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2126), Limit(1, 100), EditorDisplay(\"Global Illumination\")")
+    float DDGIDistanceExponent = 50.0f;
 
     /// <summary>
     /// Enables smooth blending between Global Illumination cascade splits. If disabled, the transition uses dithering intended for temporal anti-aliasing. Smooth blending can expose rounded cascade boundaries when adjacent cascades contain significantly different lighting.

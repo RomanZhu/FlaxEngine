@@ -335,9 +335,19 @@ API_ENUM(Attributes="Flags") enum class GlobalIlluminationSettingsOverride : int
     BounceIntensity = 1 << 5,
 
     /// <summary>
+    /// Overrides <see cref="GlobalIlluminationSettings.NormalBias"/> property.
+    /// </summary>
+    NormalBias = 1 << 6,
+
+    /// <summary>
+    /// Overrides <see cref="GlobalIlluminationSettings.ViewBias"/> property.
+    /// </summary>
+    ViewBias = 1 << 7,
+
+    /// <summary>
     /// All properties.
     /// </summary>
-    All = Mode | Intensity | TemporalResponse | Distance | FallbackIrradiance | BounceIntensity,
+    All = Mode | Intensity | TemporalResponse | Distance | FallbackIrradiance | BounceIntensity | NormalBias | ViewBias,
 };
 
 /// <summary>
@@ -390,6 +400,18 @@ API_STRUCT() struct FLAXENGINE_API GlobalIlluminationSettings : ISerializable
     /// </summary>
     API_FIELD(Attributes="EditorOrder(40), PostProcessSetting((int)GlobalIlluminationSettingsOverride.FallbackIrradiance)")
     Color FallbackIrradiance = Color::Transparent;
+
+    /// <summary>
+    /// World-space normal bias used when sampling DDGI probes. It is applied along the reconstructed geometric normal.
+    /// </summary>
+    API_FIELD(Attributes="Limit(0, 1000), EditorOrder(50), PostProcessSetting((int)GlobalIlluminationSettingsOverride.NormalBias)")
+    float NormalBias = 10.0f;
+
+    /// <summary>
+    /// World-space view bias used when sampling DDGI probes. It is applied toward the camera to avoid surface self-occlusion.
+    /// </summary>
+    API_FIELD(Attributes="Limit(0, 1000), EditorOrder(60), PostProcessSetting((int)GlobalIlluminationSettingsOverride.ViewBias)")
+    float ViewBias = 40.0f;
 
 public:
     /// <summary>

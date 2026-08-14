@@ -134,6 +134,9 @@ struct GlobalSurfaceAtlasLight
 {
     uint64 LastFrameUsed = 0;
     uint64 LastFrameUpdated = 0;
+    Vector3 Position = Vector3::Zero;
+    float Radius = 0.0f;
+    bool IsDirectional = false;
 };
 
 class GlobalSurfaceAtlasCustomBuffer : public RenderBuffers::CustomBuffer, public ISceneRenderingListener
@@ -1126,10 +1129,23 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
 
         // Collect objects to update lighting this frame (dirty objects and dirty lights)
         bool allLightingDirty = false;
+        const auto markLocalLightObjectsDirty = [&surfaceAtlasData, currentFrame](const Vector3& lightPosition, float lightRadius)
+        {
+            if (lightRadius <= ZeroTolerance)
+                return;
+            for (auto& e : surfaceAtlasData.Objects)
+            {
+                auto& object = e.Value;
+                const Vector3 lightToObject = object.Bounds.GetCenter() - lightPosition;
+                if (lightToObject.LengthSquared() < Math::Square(object.Radius + lightRadius))
+                    object.LightingUpdateFrame = currentFrame;
+            }
+        };
         for (auto& light : renderContext.List->DirectionalLights)
         {
             GlobalSurfaceAtlasLight& lightData = surfaceAtlasData.Lights[light.ID];
             lightData.LastFrameUsed = currentFrame;
+            lightData.IsDirectional = true;
             uint32 redrawFramesCount = GLOBAL_SURFACE_ATLAS_DIRTY_FRAMES(light.StaticFlags);
             if (surfaceAtlasData.CurrentFrame - lightData.LastFrameUpdated < (redrawFramesCount + (light.ID.D & redrawFramesCount)))
                 continue;
@@ -1149,6 +1165,7 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                 {
                     GlobalSurfaceAtlasLight& lightData = surfaceAtlasData.Lights[Guid(0, 0, 0, 1)];
                     lightData.LastFrameUsed = currentFrame;
+                    lightData.IsDirectional = true;
                     uint32 redrawFramesCount = 4; // GI Bounce redraw minimum frequency
                     if (surfaceAtlasData.CurrentFrame - lightData.LastFrameUpdated < redrawFramesCount)
                         break;
@@ -1164,45 +1181,96 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
         for (auto& light : renderContext.List->PointLights)
         {
             GlobalSurfaceAtlasLight& lightData = surfaceAtlasData.Lights[light.ID];
+            const bool hadCachedInfluence = lightData.LastFrameUpdated != 0 && !lightData.IsDirectional && lightData.Radius > ZeroTolerance;
+            const Vector3 lightPosition = surfaceAtlasData.ViewOrigin + (Vector3)light.Position;
             lightData.LastFrameUsed = currentFrame;
             uint32 redrawFramesCount = GLOBAL_SURFACE_ATLAS_DIRTY_FRAMES(light.StaticFlags);
             if (surfaceAtlasData.CurrentFrame - lightData.LastFrameUpdated < (redrawFramesCount + (light.ID.D & redrawFramesCount)))
+            {
+                if (allLightingDirty)
+                {
+                    lightData.Position = lightPosition;
+                    lightData.Radius = light.Radius;
+                    lightData.IsDirectional = false;
+                }
                 continue;
+            }
             lightData.LastFrameUpdated = currentFrame;
 
             if (!allLightingDirty)
             {
-                // Mark objects to shade
-                for (auto& e : surfaceAtlasData.Objects)
-                {
-                    auto& object = e.Value;
-                    Float3 lightToObject = (Float3)(object.Bounds.GetCenter() - surfaceAtlasData.ViewOrigin) - light.Position;
-                    if (lightToObject.LengthSquared() >= Math::Square(object.Radius + light.Radius))
-                        continue;
-                    object.LightingUpdateFrame = currentFrame;
-                }
+                // Clear both the previous and current influence. Without the
+                // previous bounds, moving or culled lights leave stale energy
+                // in the persistent atlas that later flashes through DDGI.
+                if (hadCachedInfluence)
+                    markLocalLightObjectsDirty(lightData.Position, lightData.Radius);
+                markLocalLightObjectsDirty(lightPosition, light.Radius);
             }
+            lightData.Position = lightPosition;
+            lightData.Radius = light.Radius;
+            lightData.IsDirectional = false;
         }
         for (auto& light : renderContext.List->SpotLights)
         {
             GlobalSurfaceAtlasLight& lightData = surfaceAtlasData.Lights[light.ID];
+            const bool hadCachedInfluence = lightData.LastFrameUpdated != 0 && !lightData.IsDirectional && lightData.Radius > ZeroTolerance;
+            const Vector3 lightPosition = surfaceAtlasData.ViewOrigin + (Vector3)light.Position;
             lightData.LastFrameUsed = currentFrame;
             uint32 redrawFramesCount = GLOBAL_SURFACE_ATLAS_DIRTY_FRAMES(light.StaticFlags);
             if (surfaceAtlasData.CurrentFrame - lightData.LastFrameUpdated < (redrawFramesCount + (light.ID.D & redrawFramesCount)))
+            {
+                if (allLightingDirty)
+                {
+                    lightData.Position = lightPosition;
+                    lightData.Radius = light.Radius;
+                    lightData.IsDirectional = false;
+                }
                 continue;
+            }
             lightData.LastFrameUpdated = currentFrame;
 
             if (!allLightingDirty)
             {
-                // Mark objects to shade
-                for (auto& e : surfaceAtlasData.Objects)
-                {
-                    auto& object = e.Value;
-                    Float3 lightToObject = (Float3)(object.Bounds.GetCenter() - surfaceAtlasData.ViewOrigin) - light.Position;
-                    if (lightToObject.LengthSquared() >= Math::Square(object.Radius + light.Radius))
-                        continue;
-                    object.LightingUpdateFrame = currentFrame;
-                }
+                if (hadCachedInfluence)
+                    markLocalLightObjectsDirty(lightData.Position, lightData.Radius);
+                markLocalLightObjectsDirty(lightPosition, light.Radius);
+            }
+            lightData.Position = lightPosition;
+            lightData.Radius = light.Radius;
+            lightData.IsDirectional = false;
+        }
+
+        // Removing a light from the render list must remove its contribution
+        // from the persistent atlas in the same frame. This also covers view
+        // distance culling, disabling a light, and deleting it.
+        for (auto it = surfaceAtlasData.Lights.Begin(); it.IsNotEnd(); ++it)
+        {
+            auto& lightData = it->Value;
+            if (lightData.LastFrameUsed == currentFrame)
+                continue;
+            if (lightData.IsDirectional)
+                allLightingDirty = true;
+            else
+                markLocalLightObjectsDirty(lightData.Position, lightData.Radius);
+            surfaceAtlasData.Lights.Remove(it);
+        }
+        if (allLightingDirty)
+        {
+            // A full redraw below uses the current local-light transforms, so
+            // keep the cached influence in sync for future removal/movement.
+            for (auto& light : renderContext.List->PointLights)
+            {
+                auto& lightData = surfaceAtlasData.Lights[light.ID];
+                lightData.Position = surfaceAtlasData.ViewOrigin + (Vector3)light.Position;
+                lightData.Radius = light.Radius;
+                lightData.IsDirectional = false;
+            }
+            for (auto& light : renderContext.List->SpotLights)
+            {
+                auto& lightData = surfaceAtlasData.Lights[light.ID];
+                lightData.Position = surfaceAtlasData.ViewOrigin + (Vector3)light.Position;
+                lightData.Radius = light.Radius;
+                lightData.IsDirectional = false;
             }
         }
 
@@ -1288,7 +1356,10 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
 
             // Draw light
             PROFILE_GPU_CPU_NAMED("Point Light");
-            const bool useShadow = light.CanRenderShadow(renderContext.View);
+            // Surface Atlas lighting uses the Global SDF rather than the
+            // camera-local shadow map. Do not disable GI occlusion when the
+            // light's raster shadow fades with camera distance.
+            const bool useShadow = static_cast<const RenderLightData&>(light).CanRenderShadow(renderContext.View);
             light.SetShaderData(data.Light, useShadow);
             data.Light.ShadowsBufferAddress = useShadow; // Use this to indicate if trace shadow (SDF trace)
             data.Light.Color *= light.IndirectLightingIntensity;
@@ -1312,7 +1383,12 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                 for (int32 tileIndex = 0; tileIndex < 6; tileIndex++)
                 {
                     auto* tile = object.Tiles[tileIndex];
-                    if (!tile || Float3::Dot(tile->ViewDirection, light.Direction) < ZeroTolerance)
+                    // A spotlight is positional, so its surface direction varies
+                    // across every affected object. Culling atlas faces against
+                    // the cone's central direction can reject faces that are
+                    // actually lit. The radial-light shader already performs
+                    // the exact surface-to-light, N dot L, range, and cone tests.
+                    if (!tile)
                         continue;
                     VB_WRITE_TILE(tile);
                 }
@@ -1322,7 +1398,10 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
 
             // Draw light
             PROFILE_GPU_CPU_NAMED("Spot Light");
-            const bool useShadow = light.CanRenderShadow(renderContext.View);
+            // Surface Atlas lighting uses the Global SDF rather than the
+            // camera-local shadow map. Do not disable GI occlusion when the
+            // light's raster shadow fades with camera distance.
+            const bool useShadow = static_cast<const RenderLightData&>(light).CanRenderShadow(renderContext.View);
             light.SetShaderData(data.Light, useShadow);
             data.Light.ShadowsBufferAddress = useShadow; // Use this to indicate if trace shadow (SDF trace)
             data.Light.Color *= light.IndirectLightingIntensity;
@@ -1330,13 +1409,6 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
             context->UpdateCB(_cb0, &data);
             context->SetState(_psDirectLighting1);
             VB_DRAW();
-        }
-
-        // Remove unused lights
-        for (auto it = surfaceAtlasData.Lights.Begin(); it.IsNotEnd(); ++it)
-        {
-            if (it->Value.LastFrameUsed != currentFrame)
-                surfaceAtlasData.Lights.Remove(it);
         }
 
         // Draw indirect light from Global Illumination
@@ -1348,7 +1420,12 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
             case GlobalIlluminationMode::DDGI:
             {
                 DynamicDiffuseGlobalIlluminationPass::BindingData bindingDataDDGI;
-                if (giSettings.BounceIntensity > ZeroTolerance && !DynamicDiffuseGlobalIlluminationPass::Instance()->Get(renderContext.Buffers, bindingDataDDGI))
+                // Probe irradiance is stored with the user intensity applied,
+                // then divided back out below before applying the independent
+                // bounce scale. Never perform that normalization at zero (or a
+                // denormal value): 0 * infinity poisons the Surface Atlas with
+                // NaNs that can feed back into DDGI history for many frames.
+                if (giSettings.BounceIntensity > ZeroTolerance && giSettings.Intensity > ZeroTolerance && !DynamicDiffuseGlobalIlluminationPass::Instance()->Get(renderContext.Buffers, bindingDataDDGI))
                 {
                     _vertexBuffer->Clear();
                     for (const auto& e : surfaceAtlasData.Objects)
@@ -1370,8 +1447,9 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                     data.DDGI = bindingDataDDGI.Constants;
                     data.Light.Radius = giSettings.BounceIntensity / bindingDataDDGI.Constants.IndirectLightingIntensity; // Reuse for smaller CB
                     context->BindSR(5, bindingDataDDGI.ProbesData);
-                    context->BindSR(6, bindingDataDDGI.ProbesDistance);
-                    context->BindSR(7, bindingDataDDGI.ProbesIrradiance);
+                    context->BindSR(6, bindingDataDDGI.ProbeStates);
+                    context->BindSR(7, bindingDataDDGI.ProbesDistance);
+                    context->BindSR(8, bindingDataDDGI.ProbesIrradiance);
                     context->UpdateCB(_cb0, &data);
                     context->SetState(_psIndirectLighting);
                     VB_DRAW();

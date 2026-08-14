@@ -156,6 +156,7 @@ void SceneRendering::Clear()
         e.Clear();
     for (auto& e : FreeActors)
         e.Clear();
+    DDGIVolumes.Clear();
 #if USE_EDITOR
     PhysicsDebug.Clear();
 #endif

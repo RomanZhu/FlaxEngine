@@ -245,6 +245,22 @@ public:
 
     const float CascadesDistanceScales[4] = { 1.0f, 2.5f, 5.0f, 10.0f };
 
+    float GetCascadeExtent(const RenderContext& renderContext, float distance, int32 cascadesCount, int32 cascadeIndex) const
+    {
+        if (cascadesCount <= 1)
+            return distance;
+
+        // DDGI can request a tighter near field independently of its far
+        // irradiance range. Non-DDGI users retain the historical layout.
+        float nearDistance = distance / CascadesDistanceScales[cascadesCount - 1];
+        if (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGI)
+        {
+            nearDistance = Math::Clamp(GraphicsSettings::Get()->DDGINearFieldDistance, 100.0f, distance);
+        }
+        const float cascadeT = (float)cascadeIndex / (float)(cascadesCount - 1);
+        return distance * Math::Pow(nearDistance / distance, 1.0f - cascadeT);
+    }
+
     void Rebase(const Vector3& origin)
     {
         if (Origin == origin)
@@ -316,11 +332,10 @@ public:
         PROFILE_CPU();
 
         // Calculate origin for Global SDF by shifting it towards the view direction to account for better view frustum coverage
-        const float distanceExtent = distance / CascadesDistanceScales[cascadesCount - 1];
         Float3 viewPosition = renderContext.View.Position;
         {
             Float3 viewDirection = renderContext.View.Direction;
-            const float cascade0Distance = distanceExtent * CascadesDistanceScales[0];
+            const float cascade0Distance = GetCascadeExtent(renderContext, distance, cascadesCount, 0);
             const Vector2 viewRayHit = CollisionsHelper::LineHitsBox(viewPosition, viewPosition + viewDirection * (cascade0Distance * 2.0f), viewPosition - cascade0Distance, viewPosition + cascade0Distance);
             const float viewOriginOffset = (float)viewRayHit.Y * cascade0Distance * 0.6f;
             viewPosition += viewDirection * viewOriginOffset;
@@ -346,7 +361,7 @@ public:
             cascade.Dirty = !useCache || RenderTools::ShouldUpdateCascade(FrameIndex, cascadeIndex, cascadesCount, maxCascadeUpdatesPerFrame, updateEveryFrame);
             if (!cascade.Dirty)
                 continue;
-            const float cascadeExtent = distanceExtent * CascadesDistanceScales[cascadeIndex];
+            const float cascadeExtent = GetCascadeExtent(renderContext, distance, cascadesCount, cascadeIndex);
             const float cascadeSize = cascadeExtent * 2;
             const float cascadeVoxelSize = cascadeSize / (float)resolution;
             const float cascadeChunkSize = cascadeVoxelSize * GLOBAL_SDF_RASTERIZE_CHUNK_SIZE;
@@ -754,8 +769,6 @@ bool GlobalSignDistanceFieldPass::Render(RenderContext& renderContext, GPUContex
     int32 resolution, cascadesCount, resolutionMip;
     float distance;
     sdfData.GetOptions(renderContext, resolution, cascadesCount, resolutionMip, distance);
-    const float distanceExtent = distance / sdfData.CascadesDistanceScales[cascadesCount - 1];
-
     // Initialize buffers
     bool reset = false;
     if (sdfData.Cascades.Count() != cascadesCount || sdfData.Resolution != resolution)
@@ -1080,7 +1093,7 @@ bool GlobalSignDistanceFieldPass::Render(RenderContext& renderContext, GPUContex
     for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
     {
         auto& cascade = sdfData.Cascades[cascadeIndex];
-        const float cascadeExtent = distanceExtent * sdfData.CascadesDistanceScales[cascadeIndex];
+        const float cascadeExtent = sdfData.GetCascadeExtent(renderContext, distance, cascadesCount, cascadeIndex);
         result.Constants.CascadePosDistance[cascadeIndex] = Vector4(cascade.Position, cascadeExtent);
         result.Constants.CascadeVoxelSize.Raw[cascadeIndex] = cascade.VoxelSize;
         result.Constants.CascadeMaxDistance.Raw[cascadeIndex] = cascade.MaxDistanceTex;

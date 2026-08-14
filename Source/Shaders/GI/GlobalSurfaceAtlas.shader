@@ -85,8 +85,9 @@ float4 PS_ClearLighting(AtlasVertexOutput input) : SV_Target
 Buffer<float4> GlobalSurfaceAtlasObjects : register(t4);
 #if INDIRECT_LIGHT
 Texture2D<snorm float4> ProbesData : register(t5);
-Texture2D<float4> ProbesDistance : register(t6);
-Texture2D<float4> ProbesIrradiance : register(t7);
+Texture2D<uint> ProbeStates : register(t6);
+Texture2D<float4> ProbesDistance : register(t7);
+Texture2D<float4> ProbesIrradiance : register(t8);
 #else
 Texture3D<snorm float> GlobalSDFTex : register(t5);
 Texture3D<snorm float> GlobalSDFMip : register(t6);
@@ -132,7 +133,12 @@ float4 PS_Lighting(AtlasVertexOutput input) : SV_Target
 
 #if INDIRECT_LIGHT
     // Sample irradiance
-    float3 irradiance = SampleDDGIIrradiance(DDGI, ProbesData, ProbesDistance, ProbesIrradiance, gBuffer.WorldPos, gBuffer.Normal);
+    float3 geometricNormal = normalize(cross(ddx(gBuffer.WorldPos), ddy(gBuffer.WorldPos)));
+    if (dot(geometricNormal, gBuffer.Normal) < 0.0f)
+        geometricNormal = -geometricNormal;
+    if (any(isnan(geometricNormal)) || length(geometricNormal) < 0.5f)
+        geometricNormal = gBuffer.Normal;
+    float3 irradiance = SampleDDGIIrradianceWithVisibilityNormal(DDGI, ProbesData, ProbeStates, ProbesDistance, ProbesIrradiance, gBuffer.WorldPos, gBuffer.Normal, geometricNormal);
     irradiance *= Light.Radius; // Cached BounceIntensity / IndirectLightingIntensity
 
     // Calculate lighting
@@ -166,11 +172,20 @@ float4 PS_Lighting(AtlasVertexOutput input) : SV_Target
 		if (NoL > 0)
 		{
 #if RADIAL_LIGHT
-			// Shot a ray from light to the texel to see if there is any occluder
-			GlobalSDFTrace trace;
-			trace.Init(Light.Position, -L, bias, toLightDst);
-			GlobalSDFHit hit = RayTraceGlobalSDF(GlobalSDF, GlobalSDFTex, GlobalSDFMip, trace, 1.0f);
-			shadowMask = hit.IsHit() && hit.HitTime < toLightDst - bias * 3 ? LightShadowsStrength : 1;
+			// Trace from the receiving surface towards the light. Starting at a
+			// radial light can begin inside or immediately beside SDF geometry,
+			// causing the trace to miss the enclosure and inject light through it.
+			float traceMaxDistance = toLightDst - bias;
+			if (traceMaxDistance > bias)
+			{
+				GlobalSDFTrace trace;
+				trace.Init(gBuffer.WorldPos + gBuffer.Normal * shadowBias, L, bias, traceMaxDistance);
+				// The explicit normal/min-distance bias is sufficient here. A
+				// cascade-sized start bias can jump through the 3 m heightfield SDF
+				// thickness in coarse cascades and expose the opposite terrain side.
+				GlobalSDFHit hit = RayTraceGlobalSDF(GlobalSDF, GlobalSDFTex, GlobalSDFMip, trace, 0.0f);
+				shadowMask = hit.IsHit() ? LightShadowsStrength : 1;
+			}
 #else
 			// Shot a ray from texel into the light to see if there is any occluder
 			GlobalSDFTrace trace;
