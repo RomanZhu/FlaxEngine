@@ -990,6 +990,7 @@ namespace
         RayCastHit* ResultsBuffer = nullptr;
         int32 ResultsCapacity = 0;
         int32 ResultsCount = 0;
+        Array<b3ShapeId, InlinedAllocation<8>> InitialOverlaps;
     };
 
     bool AcceptQueryShape(const QueryContext& context, b3ShapeId shapeId)
@@ -1035,6 +1036,11 @@ namespace
         auto context = (QueryContext*)userContext;
         if (!AcceptQueryShape(*context, shapeId))
             return -1.0f;
+        for (const b3ShapeId overlap : context->InitialOverlaps)
+        {
+            if (B3_ID_EQUALS(shapeId, overlap))
+                return -1.0f;
+        }
 
         RayCastHit hit;
         FillRayHit(hit, shapeId, point, normal, fraction, context->MaxDistance, userMaterialId, triangleIndex);
@@ -1055,6 +1061,7 @@ namespace
             return true;
         auto shape = (ShapeBox3D*)b3Shape_GetUserData(shapeId);
         const uint64 material = shape && shape->Surfaces.HasItems() ? shape->Surfaces[0].userMaterialId : 0;
+        context->InitialOverlaps.Add(shapeId);
         RayCastHit hit;
         FillRayHit(hit, shapeId, C2BPos(context->Center), C2BVec(-context->Direction), 0.0f, context->MaxDistance, material, -1);
         return StoreQueryHit(*context, hit);
@@ -1145,7 +1152,14 @@ namespace
         const b3QueryFilter filter = MakeQueryFilter(layerMask);
         b3World_OverlapShape(scene->World, C2BPos(center), &proxy, filter, InitialOverlapCastCallback, &context);
         if ((context.All || !context.Hit.Collider) && (!resultsBuffer || context.ResultsCount < resultsCapacity))
-            b3World_CastShape(scene->World, C2BPos(center), &proxy, C2BVec(direction * maxDistance), filter, QueryCastCallback, &context);
+        {
+            // Box3D sweeps rounded shapes to radius - linear slop. Compensate that slop,
+            // but retain its cast tolerance so a separated shape never becomes a zero-fraction hit.
+            b3ShapeProxy castProxy = proxy;
+            if (castProxy.radius > B3_LINEAR_SLOP)
+                castProxy.radius += B3_LINEAR_SLOP * 0.75f;
+            b3World_CastShape(scene->World, C2BPos(center), &castProxy, C2BVec(direction * maxDistance), filter, QueryCastCallback, &context);
+        }
         if (resultsCount)
             *resultsCount = context.ResultsCount;
         if (resultsBuffer)

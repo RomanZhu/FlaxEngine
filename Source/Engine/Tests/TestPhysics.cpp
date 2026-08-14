@@ -388,6 +388,105 @@ TEST_CASE("PhysicsBackend")
 #endif
 }
 
+TEST_CASE("PhysicsBackendCapsuleQueryConsistency")
+{
+#if COMPILE_WITH_BOX3D
+    PhysicsSettings settings;
+    void* scene = PhysicsBackend::CreateScene(settings);
+    REQUIRE(scene);
+    SCOPE_EXIT
+    {
+        PhysicsBackend::DestroyScene(scene);
+    };
+
+    TestPhysicsOwner wallOwner;
+    TestPhysicsOwner ballOwner;
+    void* wallActor = PhysicsBackend::CreateRigidStaticActor(&wallOwner, Vector3(0.0, 62.0, 600.0), Quaternion::Identity, scene);
+    void* ballActor = PhysicsBackend::CreateRigidStaticActor(&ballOwner, Vector3(-71.0, 75.0, 523.0), Quaternion::Identity, scene);
+    REQUIRE(wallActor);
+    REQUIRE(ballActor);
+    wallOwner.Actor = wallActor;
+    ballOwner.Actor = ballActor;
+    SCOPE_EXIT
+    {
+        PhysicsBackend::DestroyActor(ballActor);
+        PhysicsBackend::DestroyActor(wallActor);
+    };
+
+    auto wallCollider = CreateTestCollider();
+    auto ballCollider = CreateTestCollider();
+    auto capsuleCollider = CreateTestCollider();
+    REQUIRE(wallCollider);
+    REQUIRE(ballCollider);
+    REQUIRE(capsuleCollider);
+    SCOPE_EXIT
+    {
+        capsuleCollider->DeleteObjectNow();
+        ballCollider->DeleteObjectNow();
+        wallCollider->DeleteObjectNow();
+    };
+
+    CollisionShape wallGeometry;
+    float wallHalfExtents[3] = { 600.0f, 50.0f, 17.5f };
+    wallGeometry.SetBox(wallHalfExtents);
+    CollisionShape ballGeometry;
+    ballGeometry.SetSphere(50.0f);
+    CollisionShape capsuleGeometry;
+    capsuleGeometry.SetCapsule(31.0f, 60.0f);
+
+    void* wallShape = PhysicsBackend::CreateShape(wallCollider, wallGeometry, (JsonAsset*)nullptr, true, false);
+    void* ballShape = PhysicsBackend::CreateShape(ballCollider, ballGeometry, (JsonAsset*)nullptr, true, false);
+    void* capsuleShape = PhysicsBackend::CreateShape(capsuleCollider, capsuleGeometry, (JsonAsset*)nullptr, true, true);
+    REQUIRE(wallShape);
+    REQUIRE(ballShape);
+    REQUIRE(capsuleShape);
+    wallCollider->Shape = wallShape;
+    ballCollider->Shape = ballShape;
+    capsuleCollider->Shape = capsuleShape;
+    SCOPE_EXIT
+    {
+        PhysicsBackend::DestroyShape(capsuleShape);
+        PhysicsBackend::DestroyShape(ballShape);
+        PhysicsBackend::DestroyShape(wallShape);
+    };
+
+    PhysicsBackend::AttachShape(wallShape, wallActor);
+    PhysicsBackend::AttachShape(ballShape, ballActor);
+    PhysicsBackend::AddSceneActor(scene, wallActor);
+    PhysicsBackend::AddSceneActor(scene, ballActor);
+
+    const Quaternion capsuleRotation = Quaternion::Euler(0.0f, 0.0f, 90.0f);
+    PhysicsColliderActor* overlaps[4] = {};
+    RayCastHit casts[4] = {};
+    Vector3 penetrationDirection;
+    float penetrationDistance;
+
+    for (int32 i = 0; i < 256; i++)
+    {
+        const float z = 552.5f + (float)(i % 16) * 0.125f;
+        const Vector3 capsuleCenter(-143.0, 117.0, z);
+        const int32 overlapCount = PhysicsBackend::OverlapCapsuleNonAlloc(scene, capsuleCenter, 31.0f, 120.0f,
+            ToSpan(overlaps, ARRAY_COUNT(overlaps)), capsuleRotation, MAX_uint32, true);
+
+        bool foundWall = false;
+        bool foundBall = false;
+        for (int32 hitIndex = 0; hitIndex < overlapCount; hitIndex++)
+        {
+            foundWall |= overlaps[hitIndex] == wallCollider;
+            foundBall |= overlaps[hitIndex] == ballCollider;
+        }
+        CHECK(foundWall);
+        CHECK(foundBall);
+        CHECK(PhysicsBackend::ComputeShapesPenetration(capsuleShape, wallShape, capsuleCenter, capsuleRotation,
+            Vector3(0.0, 62.0, 600.0), Quaternion::Identity, penetrationDirection, penetrationDistance));
+        CHECK(penetrationDirection.Z < -0.9f);
+        CHECK(penetrationDistance > 0.0f);
+        CHECK(PhysicsBackend::CapsuleCastNonAlloc(scene, capsuleCenter, 31.0f, 120.0f, Vector3::Forward,
+            ToSpan(casts, ARRAY_COUNT(casts)), capsuleRotation, 2.0f, MAX_uint32, true) >= 2);
+    }
+#endif
+}
+
 TEST_CASE("PhysicsBackendConvexMesh")
 {
 #if !COMPILE_WITH_EMPTY_PHYSICS && COMPILE_WITH_PHYSICS_COOKING
