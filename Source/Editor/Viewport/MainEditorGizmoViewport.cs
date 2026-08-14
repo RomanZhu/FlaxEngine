@@ -1479,9 +1479,11 @@ namespace FlaxEditor.Viewport
 
             _gameViewActive = !_gameViewActive;
 
-            TransformGizmo.Visible = !_gameViewActive;
             CSGAuthoringMode.Gizmo.Visible = !_gameViewActive;
-            CSGAuthoringMode.Gizmo.RefreshSupplementalTransformGizmo();
+            if (Gizmos.ActiveMode is CSGAuthoringGizmoMode)
+                CSGAuthoringMode.Gizmo.RefreshSupplementalTransformGizmo();
+            else
+                TransformGizmo.Visible = !_gameViewActive && Gizmos.ActiveMode is TransformGizmoMode;
             SelectionOutline.ShowSelectionOutline = !_gameViewActive;
             if (_gameViewActive)
                 ClearSceneTreeHoverFromEditorViewport();
