@@ -385,7 +385,7 @@ namespace
             return true;
         for (const auto& file : writtenFiles)
         {
-            if (FileSystem::AreFilePathsEqual(file.Item, path))
+            if (FileSystem::AreFilePathsEquivalent(file.Item, path))
                 return true;
         }
         return false;

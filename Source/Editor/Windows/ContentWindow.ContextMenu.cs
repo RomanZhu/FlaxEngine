@@ -355,6 +355,11 @@ namespace FlaxEditor.Windows
             return menu.AddButton(text, clicked);
         }
 
+        internal static ContextMenuButton CreateDeferredNewItemButton(ContextMenu menu, string text, Action<ContextMenuButton> clicked)
+        {
+            return CreateNewItemButton(menu, text, clicked);
+        }
+
         private void OnExpandAllClicked(ContextMenuButton button)
         {
             CurrentViewFolder.Node.ExpandAll();

@@ -210,6 +210,8 @@ public:
             {
                 auto param = &Parameters[i];
                 stream->Read(param->Type);
+                if (stream->HasError())
+                    return true;
                 stream->Read(param->Identifier);
                 stream->Read(param->Name, 97);
                 param->IsPublic = stream->ReadBool();
@@ -230,7 +232,11 @@ public:
                 stream->ReadInt32(&valuesCnt);
                 node->Values.Resize(valuesCnt);
                 for (int32 j = 0; j < valuesCnt; j++)
+                {
                     stream->Read(node->Values[j]);
+                    if (stream->HasError())
+                        return true;
+                }
 
                 // Boxes
                 uint16 boxesCount;
@@ -244,6 +250,8 @@ public:
                     box->Parent = node;
                     box->ID = boxID;
                     stream->Read(box->Type);
+                    if (stream->HasError())
+                        return true;
                     uint16 connectionsCount;
                     stream->ReadUint16(&connectionsCount);
                     box->Connections.Resize(connectionsCount);

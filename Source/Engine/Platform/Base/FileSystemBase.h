@@ -227,6 +227,19 @@ public:
     static void SaveBitmapToFile(byte* data, uint32 width, uint32 height, uint32 bitsPerPixel, const uint32 padding, const String& path);
 
 public:
+    /// <summary>
+    /// Compares normalized path spellings using the platform path case rules. Does not access the filesystem.
+    /// </summary>
+    static bool AreFilePathsEquivalent(const StringView& path1, const StringView& path2);
+
+    /// <summary>
+    /// Checks whether two existing paths identify the same filesystem object.
+    /// </summary>
+    static bool AreFilePathsSame(const StringView& path1, const StringView& path2);
+
+    /// <summary>
+    /// Legacy alias for lexical path equivalence.
+    /// </summary>
     static bool AreFilePathsEqual(const StringView& path1, const StringView& path2);
 
     /// <summary>

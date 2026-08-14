@@ -1835,7 +1835,7 @@ namespace FlaxEditor
 
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_CloneAssetFile", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         [return: MarshalAs(UnmanagedType.U1)]
-        internal static partial bool Internal_CloneAssetFile(string dstPath, string srcPath, ref Guid dstId);
+        internal static partial bool Internal_CloneAssetFile(string dstPath, string srcPath, ref Guid dstId, [MarshalAs(UnmanagedType.U1)] bool overwrite);
 
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_GetBinaryAssetStorageId", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         [return: MarshalAs(UnmanagedType.U1)]

@@ -627,6 +627,7 @@ namespace FlaxEditor.Content.GUI
         {
             bool control = Root.GetKey(KeyboardKeys.Control);
             bool shift = Root.GetKey(KeyboardKeys.Shift);
+            ContentMutationDiagnostics.Log("input.item.click", $"item='{item.Path}'; control={control}; shift={shift}; allowDelayedRename={allowDelayedRename}; selectionBefore={_selection.Count}");
             bool canDelayRename = allowDelayedRename && !control && !shift && item.CanRename && _selection.Count == 1 && _selection[0] == item;
             CancelPendingRename();
 
@@ -665,7 +666,9 @@ namespace FlaxEditor.Content.GUI
             {
                 _pendingRenameItem = item;
                 _pendingRenameTime = Time.UnscaledGameTime + RenameDelay;
+                ContentMutationDiagnostics.Log("rename.delayed-armed", $"item='{item.Path}'; delay={RenameDelay}");
             }
+            ContentMutationDiagnostics.Log("selection.changed-by-click", $"item='{item.Path}'; selectionAfter={_selection.Count}");
         }
 
         /// <summary>
@@ -688,6 +691,8 @@ namespace FlaxEditor.Content.GUI
 
         private void CancelPendingRename()
         {
+            if (_pendingRenameItem != null)
+                ContentMutationDiagnostics.Log("rename.delayed-cancelled", $"item='{_pendingRenameItem.Path}'");
             _pendingRenameItem = null;
             _pendingRenameTime = -1.0f;
         }
@@ -740,7 +745,14 @@ namespace FlaxEditor.Content.GUI
                 var item = _pendingRenameItem;
                 CancelPendingRename();
                 if (ContainsFocus && item.Parent == this && item.CanRename && _selection.Count == 1 && _selection[0] == item)
+                {
+                    ContentMutationDiagnostics.Log("rename.delayed-fired", $"item='{item.Path}'");
                     OnRename?.Invoke(item);
+                }
+                else
+                {
+                    ContentMutationDiagnostics.Log("rename.delayed-rejected", $"item='{item.Path}'; containsFocus={ContainsFocus}; live={item.Parent == this}; canRename={item.CanRename}; selection={_selection.Count}");
+                }
             }
         }
 
@@ -776,6 +788,7 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
+            ContentMutationDiagnostics.Log("input.view.mouse-down", $"button={button}; location={location}; selection={_selection.Count}; containsFocus={ContainsFocus}");
             CancelPendingRename();
 
             if (base.OnMouseDown(location, button))
@@ -808,6 +821,7 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
+            ContentMutationDiagnostics.Log("input.view.mouse-up", $"button={button}; location={location}; rubberBand={_isRubberBandSpanning}; selection={_selection.Count}");
             if (_isRubberBandSpanning && button == MouseButton.Left)
             {
                 _isRubberBandSpanning = false;
@@ -858,6 +872,7 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
+            ContentMutationDiagnostics.Log("input.view.key-down", $"key={key}; selection={_selection.Count}; containsFocus={ContainsFocus}");
             CancelPendingRename();
 
             // Navigate backward
@@ -921,6 +936,7 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         public override bool OnCharInput(char c)
         {
+            ContentMutationDiagnostics.Log("input.view.character", $"character='{ContentMutationDiagnostics.Sanitize(c.ToString())}'; code={(int)c}; selection={_selection.Count}; containsFocus={ContainsFocus}");
             if (base.OnCharInput(c))
                 return true;
 
@@ -1115,6 +1131,20 @@ namespace FlaxEditor.Content.GUI
             Height = y;
 
             base.PerformLayoutBeforeChildren();
+        }
+
+        /// <inheritdoc />
+        public override void OnGotFocus()
+        {
+            ContentMutationDiagnostics.Log("focus.view.gained", $"selection={_selection.Count}");
+            base.OnGotFocus();
+        }
+
+        /// <inheritdoc />
+        public override void OnLostFocus()
+        {
+            ContentMutationDiagnostics.Log("focus.view.lost", $"selection={_selection.Count}; renamePending={_pendingRenameItem != null}");
+            base.OnLostFocus();
         }
 
         /// <inheritdoc />

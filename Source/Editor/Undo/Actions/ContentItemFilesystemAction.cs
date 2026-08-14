@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using FlaxEditor.Content;
 using FlaxEngine;
@@ -14,7 +15,7 @@ namespace FlaxEditor.Actions
     /// Undo action for content item creation and deletion that stages deleted files in the project cache.
     /// </summary>
     [Serializable]
-    internal sealed class ContentItemFilesystemAction : IUndoAction
+    internal sealed class ContentItemFilesystemAction : ITryUndoAction
     {
         private enum Operation
         {
@@ -34,12 +35,14 @@ namespace FlaxEditor.Actions
             public Guid AssetId;
             public string TypeName;
             public long SizeInBytes;
+            public bool IsStaged;
         }
 
         private Editor _editor;
         private Entry[] _entries;
         private readonly Operation _operation;
         private bool _isDeleted;
+        private bool _requiresRecovery;
         private const int FilesystemRetryCount = 12;
         private const int FilesystemRetryDelayMs = 50;
 
@@ -164,31 +167,45 @@ namespace FlaxEditor.Actions
         /// <inheritdoc />
         public void Do()
         {
-            if (_operation == Operation.Delete)
-                StageByPath();
-            else
-                Restore();
+            TryDo();
         }
 
         /// <inheritdoc />
         public void Undo()
         {
-            if (_operation == Operation.Delete)
-                Restore();
-            else
-                StageByPath();
+            TryUndo();
+        }
+
+        /// <inheritdoc />
+        public bool TryDo()
+        {
+            return _operation == Operation.Delete ? StageByPath() : Restore();
+        }
+
+        /// <inheritdoc />
+        public bool TryUndo()
+        {
+            return _operation == Operation.Delete ? Restore() : StageByPath();
         }
 
         /// <inheritdoc />
         public void Dispose()
         {
-            if (_entries != null && _isDeleted)
+            if (_entries != null && _isDeleted && !_requiresRecovery)
             {
                 for (int i = 0; i < _entries.Length; i++)
                 {
                     DeletePath(_entries[i].TrashPath, _entries[i].IsFolder);
                     if (_entries[i].HasSidecarFolder)
                         DeletePath(_entries[i].SidecarTrashPath, true);
+                }
+            }
+            else if (_entries != null && _requiresRecovery)
+            {
+                for (int i = 0; i < _entries.Length; i++)
+                {
+                    if (_entries[i].IsStaged)
+                        Editor.LogError("Content mutation recovery data was preserved at: " + _entries[i].TrashPath);
                 }
             }
             _editor = null;
@@ -227,8 +244,9 @@ namespace FlaxEditor.Actions
         {
             path = StringUtils.NormalizePath(path);
             folderPath = StringUtils.NormalizePath(folderPath).TrimEnd('/');
+            var comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             return path.Length > folderPath.Length &&
-                   path.StartsWith(folderPath, StringComparison.OrdinalIgnoreCase) &&
+                   path.StartsWith(folderPath, comparison) &&
                    path[folderPath.Length] == '/';
         }
 
@@ -298,19 +316,25 @@ namespace FlaxEditor.Actions
             if (_isDeleted)
                 return true;
 
-            var stagedCount = 0;
+            if (!PreflightStage())
+                return false;
+
+            var stagedEntries = new List<int>(_entries.Length);
+            ContentMutationDiagnostics.Log("mutation.stage.begin", $"action='{ActionString}'; entries={_entries.Length}; source=live-items");
             for (int i = 0; i < items.Count; i++)
             {
                 var item = items[i];
                 if (!StageEntry(item, ref _entries[i]))
                 {
-                    Restore(stagedCount);
+                    RollbackStage(stagedEntries);
+                    ContentMutationDiagnostics.Log("mutation.stage.failed", $"action='{ActionString}'; entry={i}; recovery={_requiresRecovery}");
                     return false;
                 }
-                stagedCount++;
+                stagedEntries.Add(i);
             }
 
             _isDeleted = true;
+            ContentMutationDiagnostics.Log("mutation.stage.committed", $"action='{ActionString}'; entries={_entries.Length}");
             return true;
         }
 
@@ -319,50 +343,178 @@ namespace FlaxEditor.Actions
             if (_isDeleted)
                 return true;
 
-            var stagedCount = 0;
+            if (!PreflightStage())
+                return false;
+
+            var stagedEntries = new List<int>(_entries.Length);
+            ContentMutationDiagnostics.Log("mutation.stage.begin", $"action='{ActionString}'; entries={_entries.Length}; source=paths");
             for (int i = 0; i < _entries.Length; i++)
             {
+                if (_entries[i].IsStaged)
+                    continue;
                 var item = _editor.ContentDatabase.Find(_entries[i].OriginalPath);
                 if (!StageEntry(item, ref _entries[i]))
                 {
-                    Restore(stagedCount);
+                    RollbackStage(stagedEntries);
+                    ContentMutationDiagnostics.Log("mutation.stage.failed", $"action='{ActionString}'; entry={i}; recovery={_requiresRecovery}");
                     return false;
                 }
-                stagedCount++;
+                stagedEntries.Add(i);
             }
 
-            _isDeleted = true;
+            _isDeleted = AreAllEntriesStaged();
+            ContentMutationDiagnostics.Log("mutation.stage.committed", $"action='{ActionString}'; entries={_entries.Length}");
             return true;
         }
 
-        private bool Restore(int count = -1)
+        private bool Restore()
         {
-            if (!_isDeleted && count < 0)
+            if (!AnyEntryStaged())
                 return true;
 
-            if (count < 0)
-                count = _entries.Length;
-            for (int i = 0; i < count; i++)
+            if (!PreflightRestore())
+                return false;
+
+            var restoredEntries = new List<int>(_entries.Length);
+            ContentMutationDiagnostics.Log("mutation.restore.begin", $"action='{ActionString}'; entries={_entries.Length}");
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                if (!_entries[i].IsStaged)
+                    continue;
+                if (!RestoreEntry(ref _entries[i]))
+                {
+                    RollbackRestore(restoredEntries);
+                    ContentMutationDiagnostics.Log("mutation.restore.failed", $"action='{ActionString}'; entry={i}; recovery={_requiresRecovery}");
+                    return false;
+                }
+                restoredEntries.Add(i);
+            }
+
+            _isDeleted = false;
+            ContentMutationDiagnostics.Log("mutation.restore.committed", $"action='{ActionString}'; entries={_entries.Length}");
+            return true;
+        }
+
+        private bool PreflightStage()
+        {
+            for (int i = 0; i < _entries.Length; i++)
             {
                 var entry = _entries[i];
-                if (PathExists(entry.OriginalPath, entry.IsFolder))
+                if (entry.IsStaged)
+                    continue;
+                if (!PathExists(entry.OriginalPath, entry.IsFolder))
+                {
+                    Editor.LogWarning("Cannot stage content item because the source is missing: " + entry.OriginalPath);
+                    return false;
+                }
+                if (ContainsReparsePoint(entry.OriginalPath, entry.IsFolder))
+                {
+                    Editor.LogWarning("Cannot stage content item containing a filesystem link or reparse point: " + entry.OriginalPath);
+                    return false;
+                }
+                if (File.Exists(entry.TrashPath) || Directory.Exists(entry.TrashPath))
+                {
+                    Editor.LogWarning("Cannot stage content item because the recovery path already exists: " + entry.TrashPath);
+                    return false;
+                }
+
+                entry.HasSidecarFolder = entry.SidecarOriginalPath != null && Directory.Exists(entry.SidecarOriginalPath);
+                if (entry.HasSidecarFolder && (ContainsReparsePoint(entry.SidecarOriginalPath, true) || File.Exists(entry.SidecarTrashPath) || Directory.Exists(entry.SidecarTrashPath)))
+                {
+                    Editor.LogWarning("Cannot stage scene actors folder because its recovery path is unsafe or already exists: " + entry.SidecarOriginalPath);
+                    return false;
+                }
+                _entries[i] = entry;
+            }
+            return true;
+        }
+
+        private bool PreflightRestore()
+        {
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                var entry = _entries[i];
+                if (!entry.IsStaged)
+                    continue;
+                if (!PathExists(entry.TrashPath, entry.IsFolder))
+                {
+                    Editor.LogWarning("Cannot restore staged content item because recovery data is missing: " + entry.TrashPath);
+                    _requiresRecovery = true;
+                    return false;
+                }
+                if (PathExists(entry.OriginalPath, entry.IsFolder) || File.Exists(entry.OriginalPath) || Directory.Exists(entry.OriginalPath))
                 {
                     Editor.LogWarning("Cannot restore staged content item because the original path already exists: " + entry.OriginalPath);
                     return false;
                 }
-                if (entry.HasSidecarFolder && PathExists(entry.SidecarOriginalPath, true))
+                if (entry.HasSidecarFolder && (!Directory.Exists(entry.SidecarTrashPath) || File.Exists(entry.SidecarOriginalPath) || Directory.Exists(entry.SidecarOriginalPath)))
                 {
-                    Editor.LogWarning("Cannot restore staged scene actors folder because the original path already exists: " + entry.SidecarOriginalPath);
+                    Editor.LogWarning("Cannot restore staged scene actors folder because recovery data is missing or the original path exists: " + entry.SidecarOriginalPath);
                     return false;
                 }
-                if (!MovePath(entry.TrashPath, entry.OriginalPath, entry.IsFolder))
-                    return false;
-                if (entry.HasSidecarFolder && !MovePath(entry.SidecarTrashPath, entry.SidecarOriginalPath, true))
-                    return false;
-                RefreshParent(entry.OriginalPath, true);
+            }
+            return true;
+        }
+
+        private bool RestoreEntry(ref Entry entry)
+        {
+            if (!MovePath(entry.TrashPath, entry.OriginalPath, entry.IsFolder))
+                return false;
+            if (entry.HasSidecarFolder && !MovePath(entry.SidecarTrashPath, entry.SidecarOriginalPath, true))
+            {
+                if (!MovePath(entry.OriginalPath, entry.TrashPath, entry.IsFolder))
+                {
+                    _requiresRecovery = true;
+                    Editor.LogError("Failed to roll back a partial content restore. Recovery data: " + entry.TrashPath);
+                }
+                return false;
             }
 
-            _isDeleted = false;
+            entry.IsStaged = false;
+            RefreshParent(entry.OriginalPath, true);
+            return true;
+        }
+
+        private void RollbackStage(List<int> stagedEntries)
+        {
+            for (int i = stagedEntries.Count - 1; i >= 0; i--)
+            {
+                var index = stagedEntries[i];
+                if (!RestoreEntry(ref _entries[index]))
+                    _requiresRecovery = true;
+            }
+            _isDeleted = AreAllEntriesStaged();
+        }
+
+        private void RollbackRestore(List<int> restoredEntries)
+        {
+            for (int i = restoredEntries.Count - 1; i >= 0; i--)
+            {
+                var index = restoredEntries[i];
+                var item = _editor.ContentDatabase.Find(_entries[index].OriginalPath);
+                if (!StageEntry(item, ref _entries[index]))
+                    _requiresRecovery = true;
+            }
+            _isDeleted = AreAllEntriesStaged();
+        }
+
+        private bool AnyEntryStaged()
+        {
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                if (_entries[i].IsStaged)
+                    return true;
+            }
+            return false;
+        }
+
+        private bool AreAllEntriesStaged()
+        {
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                if (!_entries[i].IsStaged)
+                    return false;
+            }
             return true;
         }
 
@@ -397,29 +549,50 @@ namespace FlaxEditor.Actions
             {
                 if (!DeleteContentItem(item, entry))
                 {
-                    DeletePath(entry.TrashPath, entry.IsFolder);
-                    if (entry.HasSidecarFolder)
-                        DeletePath(entry.SidecarTrashPath, true);
-                    RefreshParent(entry.OriginalPath, true);
+                    RollbackFailedStage(ref entry);
                     return false;
                 }
             }
             else if (!DeletePathWithRetries(entry.OriginalPath, entry.IsFolder, "original content item"))
             {
-                DeletePath(entry.TrashPath, entry.IsFolder);
-                if (entry.HasSidecarFolder)
-                    DeletePath(entry.SidecarTrashPath, true);
-                RefreshParent(entry.OriginalPath, true);
+                RollbackFailedStage(ref entry);
                 return false;
             }
             if (entry.HasSidecarFolder && Directory.Exists(entry.SidecarOriginalPath) && !DeletePathWithRetries(entry.SidecarOriginalPath, true, "original scene actors folder"))
             {
                 Editor.LogWarning("Cannot remove original scene actors folder after staging: " + entry.SidecarOriginalPath);
+                RollbackFailedStage(ref entry);
                 return false;
             }
 
+            entry.IsStaged = true;
             RefreshParent(entry.OriginalPath, true);
             return true;
+        }
+
+        private void RollbackFailedStage(ref Entry entry)
+        {
+            var rollbackSucceeded = true;
+            if (!PathExists(entry.OriginalPath, entry.IsFolder))
+                rollbackSucceeded &= MovePath(entry.TrashPath, entry.OriginalPath, entry.IsFolder);
+            else
+                DeletePath(entry.TrashPath, entry.IsFolder);
+
+            if (entry.HasSidecarFolder)
+            {
+                if (!Directory.Exists(entry.SidecarOriginalPath))
+                    rollbackSucceeded &= MovePath(entry.SidecarTrashPath, entry.SidecarOriginalPath, true);
+                else
+                    DeletePath(entry.SidecarTrashPath, true);
+            }
+
+            if (!rollbackSucceeded)
+            {
+                _requiresRecovery = true;
+                Editor.LogError("Failed to roll back content staging. Recovery data was preserved at: " + entry.TrashPath);
+            }
+            entry.IsStaged = !PathExists(entry.OriginalPath, entry.IsFolder) && PathExists(entry.TrashPath, entry.IsFolder);
+            RefreshParent(entry.OriginalPath, true);
         }
 
         private bool DeleteContentItem(ContentItem item, Entry entry)
@@ -523,11 +696,15 @@ namespace FlaxEditor.Actions
 
         private static void CopyDirectory(string sourcePath, string targetPath)
         {
+            if ((File.GetAttributes(sourcePath) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Cannot stage a folder through a filesystem link or reparse point: " + sourcePath);
             Directory.CreateDirectory(targetPath);
 
             var files = Directory.GetFiles(sourcePath);
             for (int i = 0; i < files.Length; i++)
             {
+                if ((File.GetAttributes(files[i]) & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Cannot stage a file through a filesystem link or reparse point: " + files[i]);
                 var targetFile = Path.Combine(targetPath, Path.GetFileName(files[i]));
                 File.Copy(files[i], targetFile);
             }
@@ -535,6 +712,8 @@ namespace FlaxEditor.Actions
             var folders = Directory.GetDirectories(sourcePath);
             for (int i = 0; i < folders.Length; i++)
             {
+                if ((File.GetAttributes(folders[i]) & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Cannot stage a folder through a filesystem link or reparse point: " + folders[i]);
                 var targetFolder = Path.Combine(targetPath, Path.GetFileName(folders[i]));
                 CopyDirectory(folders[i], targetFolder);
             }
@@ -677,6 +856,38 @@ namespace FlaxEditor.Actions
             return isFolder ? Directory.Exists(path) : File.Exists(path);
         }
 
+        private static bool ContainsReparsePoint(string path, bool isFolder)
+        {
+            try
+            {
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                    return true;
+                if (!isFolder)
+                    return false;
+
+                var pending = new Stack<string>();
+                pending.Push(path);
+                while (pending.Count != 0)
+                {
+                    var folder = pending.Pop();
+                    foreach (var entry in Directory.EnumerateFileSystemEntries(folder))
+                    {
+                        var attributes = File.GetAttributes(entry);
+                        if ((attributes & FileAttributes.ReparsePoint) != 0)
+                            return true;
+                        if ((attributes & FileAttributes.Directory) != 0)
+                            pending.Push(entry);
+                    }
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning(ex);
+                return true;
+            }
+        }
+
         private static long GetPathSize(string path, bool isFolder)
         {
             try
@@ -687,13 +898,29 @@ namespace FlaxEditor.Actions
                         return -1;
 
                     long size = 0;
-                    var files = Directory.GetFiles(path, "*", SearchOption.AllDirectories);
-                    for (int i = 0; i < files.Length; i++)
-                        size += new FileInfo(files[i]).Length;
+                    var pending = new Stack<string>();
+                    pending.Push(path);
+                    while (pending.Count != 0)
+                    {
+                        var folder = pending.Pop();
+                        var folderAttributes = File.GetAttributes(folder);
+                        if ((folderAttributes & FileAttributes.ReparsePoint) != 0)
+                            return -1;
+                        foreach (var entry in Directory.EnumerateFileSystemEntries(folder))
+                        {
+                            var attributes = File.GetAttributes(entry);
+                            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                                return -1;
+                            if ((attributes & FileAttributes.Directory) != 0)
+                                pending.Push(entry);
+                            else
+                                size += new FileInfo(entry).Length;
+                        }
+                    }
                     return size;
                 }
 
-                return File.Exists(path) ? new FileInfo(path).Length : -1;
+                return File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0 ? new FileInfo(path).Length : -1;
             }
             catch (Exception ex)
             {
@@ -708,7 +935,7 @@ namespace FlaxEditor.Actions
     /// Undo action for moving or renaming content items.
     /// </summary>
     [Serializable]
-    internal sealed class MoveContentItemAction : IUndoAction, IUndoActionMetadata
+    internal sealed class MoveContentItemAction : ITryUndoAction, IUndoActionMetadata
     {
         private Editor _editor;
         private readonly string _oldPath;
@@ -757,19 +984,39 @@ namespace FlaxEditor.Actions
         /// <inheritdoc />
         public void Do()
         {
+            TryDo();
+        }
+
+        /// <inheritdoc />
+        public bool TryDo()
+        {
             if (_isMoved)
-                return;
+                return true;
             if (Move(_oldPath, _newPath))
+            {
                 _isMoved = true;
+                return true;
+            }
+            return false;
         }
 
         /// <inheritdoc />
         public void Undo()
         {
+            TryUndo();
+        }
+
+        /// <inheritdoc />
+        public bool TryUndo()
+        {
             if (!_isMoved)
-                return;
+                return true;
             if (Move(_newPath, _oldPath))
+            {
                 _isMoved = false;
+                return true;
+            }
+            return false;
         }
 
         /// <inheritdoc />

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Scripting;
@@ -12,6 +13,51 @@ using FlaxEngine.Utilities;
 
 namespace FlaxEditor.Modules
 {
+    internal enum ContentMutationFailure
+    {
+        None,
+        InvalidSource,
+        DestinationCollision,
+        CopyFailed,
+    }
+
+    internal readonly struct ContentMutationResult
+    {
+        public readonly bool Succeeded;
+        public readonly ContentMutationFailure Failure;
+        public readonly string SourcePath;
+        public readonly string DestinationPath;
+        public readonly string Message;
+        public readonly bool CreatedDestination;
+        public readonly bool RequiresRecovery;
+
+        private ContentMutationResult(bool succeeded, ContentMutationFailure failure, string sourcePath, string destinationPath, string message, bool createdDestination, bool requiresRecovery)
+        {
+            Succeeded = succeeded;
+            Failure = failure;
+            SourcePath = sourcePath;
+            DestinationPath = destinationPath;
+            Message = message;
+            CreatedDestination = createdDestination;
+            RequiresRecovery = requiresRecovery;
+        }
+
+        public static ContentMutationResult Success(string sourcePath, string destinationPath)
+        {
+            return new ContentMutationResult(true, ContentMutationFailure.None, sourcePath, destinationPath, null, true, false);
+        }
+
+        public static ContentMutationResult Prepared(string sourcePath, string destinationPath)
+        {
+            return new ContentMutationResult(true, ContentMutationFailure.None, sourcePath, destinationPath, null, false, false);
+        }
+
+        public static ContentMutationResult Fail(ContentMutationFailure failure, string sourcePath, string destinationPath, string message, bool requiresRecovery = false)
+        {
+            return new ContentMutationResult(false, failure, sourcePath, destinationPath, message, false, requiresRecovery);
+        }
+    }
+
     /// <summary>
     /// Manages assets database and searches for workspace directory changes.
     /// </summary>
@@ -492,6 +538,7 @@ namespace FlaxEditor.Modules
                 throw new ArgumentNullException();
 
             string oldPath = item.Path;
+            ContentMutationDiagnostics.Log("mutation.move.begin", $"source='{oldPath}'; destination='{newPath}'; folder={item.IsFolder}; type={item.GetType().Name}");
             var destinationIsDirectory = Directory.Exists(newPath);
             var destinationIsFile = File.Exists(newPath);
             var recoverableZeroByteDestination = false;
@@ -511,6 +558,7 @@ namespace FlaxEditor.Modules
             if (!oldPath.Equals(newPath, StringComparison.OrdinalIgnoreCase) &&
                 (destinationIsDirectory || (destinationIsFile && !recoverableZeroByteDestination)))
             {
+                ContentMutationDiagnostics.Log("mutation.move.rejected", $"reason=destination-collision; source='{oldPath}'; destination='{newPath}'; directory={destinationIsDirectory}; file={destinationIsFile}");
                 MessageBox.Show("Cannot move item. Target location already exists.");
                 return false;
             }
@@ -520,12 +568,14 @@ namespace FlaxEditor.Modules
             var newParent = Find(newDirPath) as ContentFolder;
             if (newParent == null)
             {
+                ContentMutationDiagnostics.Log("mutation.move.rejected", $"reason=missing-parent; source='{oldPath}'; destination='{newPath}'");
                 MessageBox.Show("Cannot move item. Missing target location.");
                 return false;
             }
 
             if (item is ContentFolder sourceFolder && sourceFolder.Find(newParent))
             {
+                ContentMutationDiagnostics.Log("mutation.move.rejected", $"reason=path-cycle; source='{oldPath}'; destination='{newPath}'");
                 MessageBox.Show("Cannot move a folder into itself or one of its subfolders.");
                 return false;
             }
@@ -592,6 +642,7 @@ namespace FlaxEditor.Modules
                     var folder = (ContentFolder)item;
                     if (FlaxEngine.Content.RenameAssetFolder(oldPath, newPath))
                     {
+                        ContentMutationDiagnostics.Log("mutation.move.failed", $"backend=content-folder; source='{oldPath}'; destination='{newPath}'");
                         MessageBox.Show("Cannot move folder. See the log for details.");
                         return false;
                     }
@@ -605,6 +656,7 @@ namespace FlaxEditor.Modules
                 {
                     if (RenameAsset(item, ref newPath))
                     {
+                        ContentMutationDiagnostics.Log("mutation.move.failed", $"backend={(UseContentBackendForFileOperation(item) ? "content" : "filesystem")}; source='{oldPath}'; destination='{newPath}'");
                         MessageBox.Show("Cannot move item. See the log for details.");
                         return false;
                     }
@@ -619,6 +671,7 @@ namespace FlaxEditor.Modules
 
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
+            ContentMutationDiagnostics.Log("mutation.move.committed", $"source='{oldPath}'; destination='{item.Path}'; folder={item.IsFolder}");
             return true;
         }
 
@@ -627,76 +680,146 @@ namespace FlaxEditor.Modules
         /// </summary>
         /// <param name="item">The item.</param>
         /// <param name="targetPath">The target item path.</param>
-        public void Copy(ContentItem item, string targetPath)
+        /// <returns>The exact copy result.</returns>
+        internal ContentMutationResult Copy(ContentItem item, string targetPath)
         {
+            string sourcePath = item?.Path;
+            ContentMutationDiagnostics.Log("mutation.copy.begin", $"source='{sourcePath}'; destination='{targetPath}'; folder={item?.IsFolder}");
             if (item == null || !item.Exists)
             {
-                MessageBox.Show("Cannot move item. It's missing.");
-                return;
+                ContentMutationDiagnostics.Log("mutation.copy.rejected", $"reason=invalid-source; source='{sourcePath}'; destination='{targetPath}'");
+                return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, sourcePath, targetPath, "The source item is missing.");
             }
 
-            // Perform copy
+            var preflightResult = PreflightCopy(item, targetPath);
+            if (!preflightResult.Succeeded)
             {
-                string sourcePath = item.Path;
+                ContentMutationDiagnostics.Log("mutation.copy.rejected", $"reason={preflightResult.Failure}; source='{sourcePath}'; destination='{targetPath}'; message='{preflightResult.Message}'");
+                return preflightResult;
+            }
 
-                // Special case for folders
+            bool createdRoot = false;
+            var clonedAssets = new List<string>();
+            try
+            {
                 if (item.IsFolder)
                 {
-                    // Cache data
-                    var folder = (ContentFolder)item;
-
-                    // Create new folder if missing
-                    if (!Directory.Exists(targetPath))
-                    {
-                        try
-                        {
-                            Directory.CreateDirectory(targetPath);
-                        }
-                        catch (Exception ex)
-                        {
-                            Editor.LogWarning(ex);
-                            Editor.LogError(string.Format("Cannot copy folder \'{0}\' to \'{1}\'", sourcePath, targetPath));
-                            return;
-                        }
-                    }
-
-                    // Copy all child elements
-                    for (int i = 0; i < folder.Children.Count; i++)
-                    {
-                        var child = folder.Children[i];
-                        var childExtension = Path.GetExtension(child.Path);
-                        var childTargetPath = StringUtils.CombinePaths(targetPath, child.ShortName + childExtension);
-                        Copy(folder.Children[i], childTargetPath);
-                    }
+                    Directory.CreateDirectory(targetPath);
+                    createdRoot = true;
+                    CopyFolderChildren((ContentFolder)item, targetPath, clonedAssets);
                 }
                 else
                 {
-                    // Check if use content pool
-                    if (UseContentBackendForFileOperation(item))
+                    createdRoot = true;
+                    CopyFileItem(item, targetPath, clonedAssets);
+                }
+                ContentMutationDiagnostics.Log("mutation.copy.committed", $"source='{sourcePath}'; destination='{targetPath}'; clonedAssets={clonedAssets.Count}");
+                return ContentMutationResult.Success(sourcePath, targetPath);
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning(ex);
+                Editor.LogError($"Cannot copy content '{sourcePath}' to '{targetPath}'.");
+                bool cleanupFailed = false;
+                try
+                {
+                    for (int i = clonedAssets.Count - 1; i >= 0; i--)
+                        FlaxEngine.Content.DeleteAsset(clonedAssets[i]);
+                    if (Directory.Exists(targetPath))
+                        Directory.Delete(targetPath, true);
+                    else if (File.Exists(targetPath))
+                        File.Delete(targetPath);
+                }
+                catch (Exception cleanupException)
+                {
+                    cleanupFailed = true;
+                    Editor.LogWarning(cleanupException);
+                }
+                ContentMutationDiagnostics.Log("mutation.copy.failed", $"source='{sourcePath}'; destination='{targetPath}'; cleanupFailed={cleanupFailed}; message='{ex.Message}'");
+                return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, sourcePath, targetPath, ex.Message, createdRoot && cleanupFailed);
+            }
+        }
+
+        internal ContentMutationResult PreflightCopy(ContentItem item, string targetPath)
+        {
+            var sourcePath = item?.Path;
+            if (item == null || !item.Exists)
+                return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, sourcePath, targetPath, "The source item is missing.");
+            targetPath = Path.GetFullPath(targetPath);
+            var comparer = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var plannedPaths = new HashSet<string>(comparer);
+            ContentMutationResult failure = default;
+            return PreflightCopyTree(item, targetPath, plannedPaths, comparer, ref failure)
+                ? ContentMutationResult.Prepared(sourcePath, targetPath)
+                : failure;
+        }
+
+        private static bool PreflightCopyTree(ContentItem item, string targetPath, HashSet<string> plannedPaths, StringComparer comparer, ref ContentMutationResult failure)
+        {
+            targetPath = Path.GetFullPath(targetPath);
+            if (!plannedPaths.Add(targetPath) || File.Exists(targetPath) || Directory.Exists(targetPath))
+            {
+                failure = ContentMutationResult.Fail(ContentMutationFailure.DestinationCollision, item.Path, targetPath, "A copy destination is duplicated or already exists.");
+                return false;
+            }
+            if (item is ContentFolder folder)
+            {
+                var indexedSourcePaths = new HashSet<string>(folder.Children.Select(x => Path.GetFullPath(x.Path)), comparer);
+                foreach (var sourceEntry in Directory.EnumerateFileSystemEntries(folder.Path))
+                {
+                    if (!indexedSourcePaths.Contains(Path.GetFullPath(sourceEntry)))
                     {
-                        // Rename asset
-                        // Note: we use content backend because file may be in use or sth, it's safe
-                        if (Editor.ContentEditing.CloneAssetFile(sourcePath, targetPath, Guid.NewGuid()))
-                        {
-                            Editor.LogError(string.Format("Cannot copy asset \'{0}\' to \'{1}\'", sourcePath, targetPath));
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        // Copy file
-                        try
-                        {
-                            File.Copy(sourcePath, targetPath, true);
-                        }
-                        catch (Exception ex)
-                        {
-                            Editor.LogWarning(ex);
-                            Editor.LogError(string.Format("Cannot copy asset \'{0}\' to \'{1}\'", sourcePath, targetPath));
-                            return;
-                        }
+                        failure = ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, item.Path, targetPath, $"The Content database has not indexed source entry '{sourceEntry}'.");
+                        return false;
                     }
                 }
+                for (int i = 0; i < folder.Children.Count; i++)
+                {
+                    var child = folder.Children[i];
+                    if (!child.Exists)
+                    {
+                        failure = ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, child.Path, targetPath, "A source child is missing.");
+                        return false;
+                    }
+                    var childTargetPath = Path.Combine(targetPath, child.FileName);
+                    if (!PreflightCopyTree(child, childTargetPath, plannedPaths, comparer, ref failure))
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        private void CopyFolderChildren(ContentFolder folder, string targetPath, List<string> clonedAssets)
+        {
+            for (int i = 0; i < folder.Children.Count; i++)
+            {
+                var child = folder.Children[i];
+                var childTargetPath = Path.Combine(targetPath, child.FileName);
+                if (File.Exists(childTargetPath) || Directory.Exists(childTargetPath))
+                    throw new IOException($"Copy destination '{childTargetPath}' appeared after preflight.");
+                if (child is ContentFolder childFolder)
+                {
+                    Directory.CreateDirectory(childTargetPath);
+                    CopyFolderChildren(childFolder, childTargetPath, clonedAssets);
+                }
+                else
+                {
+                    CopyFileItem(child, childTargetPath, clonedAssets);
+                }
+            }
+        }
+
+        private void CopyFileItem(ContentItem item, string targetPath, List<string> clonedAssets)
+        {
+            if (UseContentBackendForFileOperation(item))
+            {
+                if (Editor.ContentEditing.CloneAssetFile(item.Path, targetPath, Guid.NewGuid()))
+                    throw new IOException($"The Content backend failed to clone '{item.Path}'.");
+                clonedAssets.Add(targetPath);
+            }
+            else
+            {
+                File.Copy(item.Path, targetPath, false);
             }
         }
 
@@ -709,6 +832,8 @@ namespace FlaxEditor.Modules
         {
             if (item == null)
                 throw new ArgumentNullException();
+
+            ContentMutationDiagnostics.Log("mutation.delete.begin", $"path='{item.Path}'; folder={item.IsFolder}; user={deletedByUser}; type={item.GetType().Name}");
 
             // Fire events
             if (_enableEvents)
@@ -755,6 +880,7 @@ namespace FlaxEditor.Modules
                 // Delete tree node
                 folder.Node.Dispose();
             }
+
             else
             {
                 // Try to remove module if build.cs file is being deleted
@@ -788,6 +914,7 @@ namespace FlaxEditor.Modules
                 item.Dispose();
             }
 
+            ContentMutationDiagnostics.Log("mutation.delete.committed", $"path='{path}'; folder={item.IsFolder}; user={deletedByUser}");
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
         }
@@ -1403,6 +1530,8 @@ namespace FlaxEditor.Modules
             if (_isDuringFastSetup)
                 return;
 
+            ContentMutationDiagnostics.Log("watcher.event", $"change={e.ChangeType}; path='{e.FullPath}'; root='{node?.Path}'");
+
             Editor.Scene.QueueSceneDiskChange(e);
 
             // TODO: maybe we could make it faster! since we have a path so it would be easy to just create or delete given file. but remember about subdirectories
@@ -1439,11 +1568,16 @@ namespace FlaxEditor.Modules
                     if (_selfAuthoredAssetDiskChanges.TryGetValue(path, out var write))
                     {
                         if (now <= write.ExpiresAtUtc && fileInfo != null && fileInfo.LastWriteTimeUtc == write.LastWriteTimeUtc && fileInfo.Length == write.Length)
+                        {
+                            ContentMutationDiagnostics.Log("watcher.self-save-suppressed", $"path='{path}'; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}");
                             break;
+                        }
+                        ContentMutationDiagnostics.Log("watcher.self-save-mismatch", $"path='{path}'; exists={fileInfo != null}; expectedLength={write.Length}; actualLength={fileInfo?.Length}; expectedWriteTime={write.LastWriteTimeUtc:O}; actualWriteTime={fileInfo?.LastWriteTimeUtc:O}");
                         _selfAuthoredAssetDiskChanges.Remove(path);
                     }
                     _pendingAssetDiskChanges.Add(path);
                     _lastAssetDiskChangeTime = now;
+                    ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}; saveInProgress={_assetsBeingSaved.Contains(path)}");
                 }
                 break;
             }
@@ -1455,6 +1589,7 @@ namespace FlaxEditor.Modules
             path = StringUtils.NormalizePath(path);
             lock (_assetDiskChangesLock)
                 _assetsBeingSaved.Add(path);
+            ContentMutationDiagnostics.Log("save.begin", $"path='{path}'");
         }
 
         internal bool IsAssetSaveInProgress(string path)
@@ -1469,6 +1604,7 @@ namespace FlaxEditor.Modules
             path = StringUtils.NormalizePath(path);
             lock (_assetDiskChangesLock)
                 _assetsBeingSaved.Remove(path);
+            ContentMutationDiagnostics.Log("save.end", $"path='{path}'; succeeded={succeeded}");
             if (!succeeded)
                 return;
 
@@ -1484,10 +1620,12 @@ namespace FlaxEditor.Modules
                     _pendingAssetDiskChanges.Remove(path);
                     _selfAuthoredAssetDiskChanges[path] = write;
                 }
+                ContentMutationDiagnostics.Log("save.self-write-recorded", $"path='{path}'; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}; expires={write.ExpiresAtUtc:O}");
             }
             catch
             {
                 // A failed or immediately replaced file will flow through the normal external-change path.
+                ContentMutationDiagnostics.Log("save.self-write-unavailable", $"path='{path}'");
             }
         }
 

@@ -78,6 +78,48 @@ namespace FlaxEditor.Tests
             }
         }
 
+        private sealed class FallibleUndoAction : ITryUndoAction
+        {
+            public string ActionString { get; set; } = "Fallible";
+            public bool AllowDo { get; set; }
+            public bool AllowUndo { get; set; }
+            public bool IsDone { get; private set; } = true;
+            public int DoAttempts { get; private set; }
+            public int UndoAttempts { get; private set; }
+
+            public void Do()
+            {
+                TryDo();
+            }
+
+            public void Undo()
+            {
+                TryUndo();
+            }
+
+            public bool TryDo()
+            {
+                DoAttempts++;
+                if (!AllowDo)
+                    return false;
+                IsDone = true;
+                return true;
+            }
+
+            public bool TryUndo()
+            {
+                UndoAttempts++;
+                if (!AllowUndo)
+                    return false;
+                IsDone = false;
+                return true;
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
         private sealed class MetadataOwner
         {
         }
@@ -193,6 +235,75 @@ namespace FlaxEditor.Tests
             Assert.AreEqual(25, instance.FieldInteger);
             Assert.AreEqual(1, child.UndoOperationsStack.HistoryCount);
             Assert.AreEqual(0, child.UndoOperationsStack.ReverseCount);
+        }
+
+        [Test]
+        public void UndoTestFailedReplayKeepsHistoryAndCanRetry()
+        {
+            var undo = new Undo();
+            var action = new FallibleUndoAction();
+            undo.AddAction(action);
+
+            undo.PerformUndo();
+            Assert.AreEqual(true, action.IsDone);
+            Assert.AreEqual(1, action.UndoAttempts);
+            Assert.AreEqual(1, undo.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(0, undo.UndoOperationsStack.ReverseCount);
+
+            action.AllowUndo = true;
+            undo.PerformUndo();
+            Assert.AreEqual(false, action.IsDone);
+            Assert.AreEqual(0, undo.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, undo.UndoOperationsStack.ReverseCount);
+
+            undo.PerformRedo();
+            Assert.AreEqual(false, action.IsDone);
+            Assert.AreEqual(1, action.DoAttempts);
+            Assert.AreEqual(0, undo.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, undo.UndoOperationsStack.ReverseCount);
+
+            action.AllowDo = true;
+            undo.PerformRedo();
+            Assert.AreEqual(true, action.IsDone);
+            Assert.AreEqual(1, undo.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(0, undo.UndoOperationsStack.ReverseCount);
+        }
+
+        [Test]
+        public void UndoTestLinkedFailureKeepsParentAndChildSynchronized()
+        {
+            var parent = new Undo();
+            var child = new Undo(parent, new object());
+            var action = new FallibleUndoAction();
+            child.AddAction(action);
+
+            parent.PerformUndo();
+            Assert.AreEqual(1, parent.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(0, parent.UndoOperationsStack.ReverseCount);
+            Assert.AreEqual(1, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(0, child.UndoOperationsStack.ReverseCount);
+
+            action.AllowUndo = true;
+            parent.PerformUndo();
+            Assert.AreEqual(0, parent.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, parent.UndoOperationsStack.ReverseCount);
+            Assert.AreEqual(0, child.UndoOperationsStack.HistoryCount);
+            Assert.AreEqual(1, child.UndoOperationsStack.ReverseCount);
+        }
+
+        [Test]
+        public void UndoTestMultiActionRollsBackSuccessfulChildrenOnFailure()
+        {
+            var first = new FallibleUndoAction { AllowUndo = false, AllowDo = true };
+            var second = new FallibleUndoAction { AllowUndo = true, AllowDo = true };
+            var action = new MultiUndoAction(first, second);
+
+            Assert.AreEqual(false, action.TryUndo());
+            Assert.AreEqual(true, first.IsDone);
+            Assert.AreEqual(true, second.IsDone);
+            Assert.AreEqual(1, first.UndoAttempts);
+            Assert.AreEqual(1, second.UndoAttempts);
+            Assert.AreEqual(1, second.DoAttempts);
         }
 
         [Test]

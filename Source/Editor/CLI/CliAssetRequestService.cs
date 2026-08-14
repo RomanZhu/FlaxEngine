@@ -142,12 +142,26 @@ namespace FlaxEditor
             if (string.IsNullOrEmpty(System.IO.Path.GetExtension(requestedPath)))
                 requestedPath += ".flax";
             var path = RequireNewPath(requestedPath);
-            RequireExistingParent(path);
-            if (Editor.CreateAsset(options.AssetType, path))
+            var parent = RequireExistingParent(path);
+            var proxy = Editor.Instance.ContentDatabase.Proxy.FirstOrDefault(x =>
+                x.IsAsset && x.CanCreate(parent) && IsAssetTypeMatch(x, options.AssetType));
+            if (proxy == null)
+                throw new InvalidOperationException($"Asset type '{options.AssetType}' is not available in '{parent.Path}'.");
+            proxy.Create(path, null);
+            if (!File.Exists(path))
                 throw new InvalidOperationException($"Failed to create {options.AssetType} asset '{path}'.");
             Editor.Instance.ContentDatabase.RefreshFolder(Editor.Instance.ContentDatabase.Find(System.IO.Path.GetDirectoryName(path)), false);
             TryWriteEvent(new { type = "artifact", requestId = _request.RequestId, kind = "asset", path });
             CompleteAsset(DescribePath(path, options.AssetType));
+        }
+
+        private static bool IsAssetTypeMatch(ContentProxy proxy, string requestedType)
+        {
+            if (string.Equals(proxy.Name, requestedType, StringComparison.OrdinalIgnoreCase))
+                return true;
+            var proxyName = new string(proxy.Name.Where(char.IsLetterOrDigit).ToArray());
+            var requestedName = new string(requestedType.Where(char.IsLetterOrDigit).ToArray());
+            return string.Equals(proxyName, requestedName, StringComparison.OrdinalIgnoreCase);
         }
 
         private void CreateFolder(CliAssetOptions options)
@@ -226,9 +240,9 @@ namespace FlaxEditor
             var item = RequireItem(options.Path);
             var destination = RequireNewPath(options.Destination);
             RequireExistingParent(destination);
-            Editor.Instance.ContentDatabase.Copy(item, destination);
-            if (!File.Exists(destination) && !Directory.Exists(destination))
-                throw new InvalidOperationException($"Failed to duplicate asset '{item.Path}' to '{destination}'.");
+            var copyResult = Editor.Instance.ContentDatabase.Copy(item, destination);
+            if (!copyResult.Succeeded)
+                throw new InvalidOperationException(copyResult.Message ?? $"Failed to duplicate asset '{item.Path}' to '{destination}'.");
             CompleteAsset(DescribePath(destination, item.TypeDescription));
         }
 

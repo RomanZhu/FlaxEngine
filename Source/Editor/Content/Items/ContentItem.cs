@@ -919,6 +919,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
+            ContentMutationDiagnostics.Log("input.item.mouse-down", $"button={button}; item='{Path}'; location={location}; selected={(Parent as ContentView)?.IsSelected(this)}");
             Focus();
             (Parent as ContentView)?.OnItemMouseDown();
 
@@ -935,6 +936,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
+            ContentMutationDiagnostics.Log("input.item.mouse-up", $"button={button}; item='{Path}'; location={location}; armed={_isMouseDown}");
             if (button == MouseButton.Left && _isMouseDown)
             {
                 // Clear flag
@@ -952,6 +954,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
+            ContentMutationDiagnostics.Log("input.item.double-click", $"button={button}; item='{Path}'; location={location}");
             Focus();
 
             if (button == MouseButton.Left && new Rectangle(Float2.Zero, Size).Contains(location))
@@ -989,13 +992,22 @@ namespace FlaxEditor.Content
                 _isMouseDown = false;
 
                 // Start drag drop
+                ContentMutationDiagnostics.Log("input.item.drag-start", $"item='{Path}'; start={_mouseDownStartPos}; current={location}");
                 DoDrag();
             }
         }
 
         /// <inheritdoc />
+        public override void OnMouseEnter(Float2 location)
+        {
+            ContentMutationDiagnostics.Log("input.item.hover-enter", $"item='{Path}'; location={location}");
+            base.OnMouseEnter(location);
+        }
+
+        /// <inheritdoc />
         public override void OnMouseLeave()
         {
+            ContentMutationDiagnostics.Log("input.item.hover-leave", $"item='{Path}'; armed={_isMouseDown}");
             // Check if start drag and drop
             if (_isMouseDown)
             {
@@ -1007,6 +1019,20 @@ namespace FlaxEditor.Content
             }
 
             base.OnMouseLeave();
+        }
+
+        /// <inheritdoc />
+        public override void OnGotFocus()
+        {
+            ContentMutationDiagnostics.Log("focus.item.gained", $"item='{Path}'; selected={(Parent as ContentView)?.IsSelected(this)}");
+            base.OnGotFocus();
+        }
+
+        /// <inheritdoc />
+        public override void OnLostFocus()
+        {
+            ContentMutationDiagnostics.Log("focus.item.lost", $"item='{Path}'; selected={(Parent as ContentView)?.IsSelected(this)}");
+            base.OnLostFocus();
         }
 
         /// <inheritdoc />

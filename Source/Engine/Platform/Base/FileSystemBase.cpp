@@ -2,6 +2,7 @@
 
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/File.h"
+#include "Engine/Platform/StringUtils.h"
 #include "Engine/Core/Types/Guid.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Types/StringView.h"
@@ -77,7 +78,7 @@ void FileSystemBase::SaveBitmapToFile(byte* data, uint32 width, uint32 height, u
     Delete(file);
 }
 
-bool FileSystemBase::AreFilePathsEqual(const StringView& path1, const StringView& path2)
+bool FileSystemBase::AreFilePathsEquivalent(const StringView& path1, const StringView& path2)
 {
     if (path1.Compare(path2, StringSearchCase::CaseSensitive) == 0)
         return true;
@@ -85,10 +86,22 @@ bool FileSystemBase::AreFilePathsEqual(const StringView& path1, const StringView
     // Normalize file paths
     String filename1(path1);
     String filename2(path2);
-    NormalizePath(filename1);
-    NormalizePath(filename2);
+    StringUtils::PathRemoveRelativeParts(filename1);
+    StringUtils::PathRemoveRelativeParts(filename2);
 
-    return filename1.Compare(filename2, StringSearchCase::IgnoreCase) == 0;
+    return filename1.Compare(filename2, StringSearchCase::CaseSensitive) == 0;
+}
+
+bool FileSystemBase::AreFilePathsSame(const StringView& path1, const StringView& path2)
+{
+    if ((!FileSystem::FileExists(path1) && !FileSystem::DirectoryExists(path1)) || (!FileSystem::FileExists(path2) && !FileSystem::DirectoryExists(path2)))
+        return false;
+    return AreFilePathsEquivalent(path1, path2);
+}
+
+bool FileSystemBase::AreFilePathsEqual(const StringView& path1, const StringView& path2)
+{
+    return AreFilePathsEquivalent(path1, path2);
 }
 
 void FileSystemBase::NormalizePath(String& path)

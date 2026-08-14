@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Xml;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
@@ -82,6 +83,8 @@ namespace FlaxEditor.Windows
         private bool _suppressContentOpenNavigation;
         private readonly HashSet<string> _expandedFolderPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private bool _renameInTree;
+        private RenamePopup _activeRenamePopup;
+        private bool _workspaceRebuildPending;
 
         private RootContentFolderTreeNode _root;
         private readonly List<ContentItem> _treeSelectionCache = new List<ContentItem>();
@@ -760,8 +763,22 @@ namespace FlaxEditor.Windows
         /// <returns>The created renaming popup.</returns>
         public void Rename(ContentItem item)
         {
-            if (!item.CanRename)
+            // Ignore duplicate rename requests (for example, a delayed item-click rename
+            // firing after the keyboard command). Replacing the popup would select all text
+            // again and discard the edit already in progress.
+            if (!CanStartRename(_activeRenamePopup != null))
+            {
+                ContentMutationDiagnostics.Log("rename.begin-rejected", $"reason=already-active; requested='{item?.Path}'; active='{(_activeRenamePopup?.Tag as ContentItem)?.Path}'");
                 return;
+            }
+
+            if (!item.CanRename)
+            {
+                ContentMutationDiagnostics.Log("rename.begin-rejected", $"reason=item-cannot-rename; item='{item.Path}'");
+                return;
+            }
+
+            ContentMutationDiagnostics.Log("rename.begin", $"item='{item.Path}'; inTree={_showAllContentInTree}; selection={_view.Selection.Count}");
 
             // Show element in the view
             Select(item, true);
@@ -803,6 +820,8 @@ namespace FlaxEditor.Windows
                 popup = RenamePopup.Show(item, item.TextRectangle, item.ShortName, true);
             }
             popup.Tag = item;
+            _activeRenamePopup = popup;
+            ContentMutationDiagnostics.Log("rename.popup-focused", $"item='{item.Path}'; inputFocused={popup.InputField.IsFocused}; initial='{ContentMutationDiagnostics.Sanitize(item.ShortName)}'");
             popup.Validate += OnRenameValidate;
             popup.Renamed += renamePopup => Rename((ContentItem)renamePopup.Tag, renamePopup.Text);
             popup.Closed += OnRenameClosed;
@@ -816,11 +835,18 @@ namespace FlaxEditor.Windows
 
         private bool OnRenameValidate(RenamePopup popup, string value)
         {
-            return Editor.ContentEditing.IsValidAssetName((ContentItem)popup.Tag, value, out _);
+            var item = (ContentItem)popup.Tag;
+            var valid = Editor.ContentEditing.IsValidAssetName(item, value, out var hint);
+            ContentMutationDiagnostics.Log("rename.validate", $"item='{item.Path}'; text='{ContentMutationDiagnostics.Sanitize(value)}'; valid={valid}; hint='{ContentMutationDiagnostics.Sanitize(hint)}'");
+            return valid;
         }
 
         private void OnRenameClosed(RenamePopup popup)
         {
+            ContentMutationDiagnostics.Log("rename.popup-closed", $"item='{(popup.Tag as ContentItem)?.Path}'; wasActive={_activeRenamePopup == popup}");
+            if (_activeRenamePopup == popup)
+                _activeRenamePopup = null;
+
             // Restore scrolling in proper view
             if (_renameInTree)
                 ScrollingOnTreeView(true);
@@ -846,6 +872,11 @@ namespace FlaxEditor.Windows
             }
         }
 
+        internal static bool CanStartRename(bool renameActive)
+        {
+            return !renameActive;
+        }
+
         /// <summary>
         /// Renames the specified item.
         /// </summary>
@@ -859,6 +890,7 @@ namespace FlaxEditor.Windows
             // Check if can rename this item
             if (!item.CanRename)
             {
+                ContentMutationDiagnostics.Log("mutation.rename.rejected", $"reason=item-cannot-rename; item='{item.Path}'; requested='{ContentMutationDiagnostics.Sanitize(newShortName)}'");
                 MessageBox.Show("Cannot rename this item.", "Cannot rename", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
@@ -872,9 +904,12 @@ namespace FlaxEditor.Windows
             // Check if name is valid
             if (!Editor.ContentEditing.IsValidAssetName(item, newShortName, out string hint))
             {
+                ContentMutationDiagnostics.Log("mutation.rename.rejected", $"reason=invalid-name; item='{item.Path}'; requested='{ContentMutationDiagnostics.Sanitize(newShortName)}'; hint='{ContentMutationDiagnostics.Sanitize(hint)}'");
                 MessageBox.Show("Given asset name is invalid. " + hint, "Invalid name", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+
+            newShortName = newShortName.Trim();
 
             // Ensure has parent
             if (item.ParentFolder == null)
@@ -883,13 +918,12 @@ namespace FlaxEditor.Windows
                 return;
             }
 
-            newShortName = newShortName.Trim();
-
             // Cache data
             string extension = item.IsFolder ? "" : Path.GetExtension(item.Path);
             var newPath = StringUtils.CombinePaths(item.ParentFolder.Path, newShortName + extension);
             var oldPath = item.Path;
             var wasNewElement = _newElement == item;
+            ContentMutationDiagnostics.Log(wasNewElement ? "mutation.create.begin" : "mutation.rename.begin", $"source='{oldPath}'; destination='{newPath}'");
 
             // Check if was renaming mock element
             // Note: we create `_newElement` and then rename it to create new asset
@@ -898,6 +932,7 @@ namespace FlaxEditor.Windows
             bool lazyCreation = false;
             if (wasNewElement)
             {
+                bool creationSucceeded = false;
                 try
                 {
                     endEvent = (Action<ContentItem>)_newElement.Tag;
@@ -909,11 +944,21 @@ namespace FlaxEditor.Windows
 
                     // When creating item with options dialog deffer processing
                     lazyCreation = !File.Exists(newPath);
+                    creationSucceeded = lazyCreation || File.Exists(newPath) || Directory.Exists(newPath);
                 }
                 catch (Exception ex)
                 {
                     Editor.LogWarning(ex);
                     Editor.LogError("Failed to create asset.");
+                }
+                if (!creationSucceeded)
+                {
+                    ContentMutationDiagnostics.Log("mutation.create.failed", $"destination='{newPath}'; lazy={lazyCreation}");
+                    _newElement.ParentFolder = null;
+                    _newElement.Dispose();
+                    _newElement = null;
+                    RefreshView();
+                    return;
                 }
             }
             else
@@ -923,7 +968,11 @@ namespace FlaxEditor.Windows
 
                 // Rename asset
                 Editor.Log(string.Format("Renaming asset {0} to {1}", item.Path, newShortName));
-                Editor.ContentDatabase.Move(item, newPath);
+                if (!Editor.ContentDatabase.Move(item, newPath))
+                {
+                    ContentMutationDiagnostics.Log("mutation.rename.failed", $"source='{oldPath}'; destination='{newPath}'");
+                    return;
+                }
             }
 
             if (_newElement != null)
@@ -958,6 +1007,7 @@ namespace FlaxEditor.Windows
             var newItem = itemFolder.FindChild(newPath);
             if (newItem == null)
             {
+                ContentMutationDiagnostics.Log(wasNewElement ? "mutation.create.verification-failed" : "mutation.rename.verification-failed", $"source='{oldPath}'; destination='{newPath}'; lazy={lazyCreation}");
                 if (!lazyCreation)
                     Editor.LogWarning("Failed to find the created new item.");
                 return;
@@ -977,6 +1027,7 @@ namespace FlaxEditor.Windows
 
             // Custom post-action
             endEvent?.Invoke(newItem);
+            ContentMutationDiagnostics.Log(wasNewElement ? "mutation.create.committed" : "mutation.rename.committed", $"source='{oldPath}'; destination='{newItem.Path}'; undoRecorded=True");
         }
 
 
@@ -1036,15 +1087,49 @@ namespace FlaxEditor.Windows
             string destinationName;
             if (item.IsFolder)
             {
-                destinationName = Utilities.Utils.IncrementNameNumber(item.ShortName, x => !Directory.Exists(StringUtils.CombinePaths(sourceFolder, x)));
+                destinationName = Utilities.Utils.IncrementNameNumber(item.ShortName, x => !PathExists(StringUtils.CombinePaths(sourceFolder, x)));
             }
             else
             {
                 string extension = Path.GetExtension(sourcePath);
-                destinationName = Utilities.Utils.IncrementNameNumber(item.ShortName, x => !File.Exists(StringUtils.CombinePaths(sourceFolder, x + extension))) + extension;
+                destinationName = Utilities.Utils.IncrementNameNumber(item.ShortName, x => !PathExists(StringUtils.CombinePaths(sourceFolder, x + extension))) + extension;
             }
 
             return StringUtils.NormalizePath(StringUtils.CombinePaths(sourceFolder, destinationName));
+        }
+
+        private static bool PathExists(string path)
+        {
+            return File.Exists(path) || Directory.Exists(path);
+        }
+
+        private static bool PathsEquivalent(string left, string right)
+        {
+            var comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), comparison);
+        }
+
+        private static List<ContentItem> RemoveSelectedDescendants(IReadOnlyList<ContentItem> items)
+        {
+            var result = new List<ContentItem>(items.Count);
+            for (int i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                if (item == null || result.Contains(item))
+                    continue;
+                bool coveredByFolder = false;
+                for (int j = 0; j < items.Count; j++)
+                {
+                    if (i != j && items[j] is ContentFolder folder && folder.Find(item))
+                    {
+                        coveredByFolder = true;
+                        break;
+                    }
+                }
+                if (!coveredByFolder)
+                    result.Add(item);
+            }
+            return result;
         }
 
         /// <summary>
@@ -1061,20 +1146,37 @@ namespace FlaxEditor.Windows
 
             // Clone item
             var targetPath = GetClonedAssetPath(item);
-            Editor.ContentDatabase.Copy(item, targetPath);
+            var copyResult = Editor.ContentDatabase.Copy(item, targetPath);
+            if (!copyResult.Succeeded)
+            {
+                Editor.LogError(copyResult.Message ?? "Failed to duplicate content item.");
+                return;
+            }
 
             // Refresh this folder now and try to find duplicated item
-            Editor.ContentDatabase.RefreshFolder(item.ParentFolder, true);
+            var parentFolder = item.ParentFolder;
+            Editor.ContentDatabase.RefreshFolder(parentFolder, true);
+            ClearItemsSearch();
             RefreshView();
             RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
-            var targetItem = item.ParentFolder.FindChild(targetPath);
+            var targetItem = Editor.ContentDatabase.Find(targetPath) ?? parentFolder.FindChild(targetPath);
 
-            // Start renaming it
+            // Select the duplicate without entering rename mode. Duplication is already a
+            // complete filesystem mutation and must not create an extra focus-sensitive edit.
             if (targetItem != null)
             {
                 Editor.Undo.AddAction(ContentItemFilesystemAction.Create(Editor, targetItem));
-                Select(targetItem);
-                Rename(targetItem);
+                Select(targetItem, true);
+                var visuallySelected = _showAllContentInTree ? Selection.Contains(targetItem) : targetItem.Parent == _view && _view.IsSelected(targetItem);
+                ContentMutationDiagnostics.Log("mutation.duplicate.committed", $"source='{item.Path}'; destination='{targetItem.Path}'; renameStarted=False; selected={visuallySelected}; focused={targetItem.ContainsFocus || _view.ContainsFocus}");
+            }
+            else
+            {
+                // Never leave a stale, invisible source selection active when indexing the
+                // duplicate fails. The file remains on disk and a watcher refresh can recover it.
+                ClearSelection(false);
+                Editor.LogWarning("Duplicated content item was not indexed: " + targetPath);
+                ContentMutationDiagnostics.Log("mutation.duplicate.selection-failed", $"source='{item.Path}'; destination='{targetPath}'; staleSelectionCleared=True");
             }
         }
 
@@ -1097,26 +1199,76 @@ namespace FlaxEditor.Windows
             }
             else
             {
-                // TODO: remove items that depend on different items in the list: use wants to remove `folderA` and `folderA/asset.x`, we should just remove `folderA`
-                var toDuplicate = new List<ContentItem>(items);
+                var toDuplicate = RemoveSelectedDescendants(items);
                 var createdItems = new List<ContentItem>(items.Count);
+                var createdPaths = new List<string>(items.Count);
+                var duplicatePlans = new List<(ContentItem Item, string Destination)>(toDuplicate.Count);
 
-                // Duplicate every item
                 for (int i = 0; i < toDuplicate.Count; i++)
                 {
                     var item = toDuplicate[i];
                     var targetPath = GetClonedAssetPath(item);
-                    Editor.ContentDatabase.Copy(item, targetPath);
+                    var preflightResult = Editor.ContentDatabase.PreflightCopy(item, targetPath);
+                    if (!preflightResult.Succeeded)
+                    {
+                        Editor.LogError(preflightResult.Message ?? "Failed to preflight content duplication.");
+                        return;
+                    }
+                    duplicatePlans.Add((item, targetPath));
+                }
+
+                // Duplicate every item
+                for (int i = 0; i < duplicatePlans.Count; i++)
+                {
+                    var item = duplicatePlans[i].Item;
+                    var targetPath = duplicatePlans[i].Destination;
+                    var copyResult = Editor.ContentDatabase.Copy(item, targetPath);
+                    if (!copyResult.Succeeded)
+                    {
+                        Editor.LogError(copyResult.Message ?? "Failed to duplicate content item.");
+                        for (int j = createdPaths.Count - 1; j >= 0; j--)
+                        {
+                            var createdItem = Editor.ContentDatabase.Find(createdPaths[j]);
+                            if (createdItem != null)
+                                Editor.ContentDatabase.Delete(createdItem, true);
+                            else
+                                Editor.LogError("Cannot roll back an unindexed duplicate. Recovery required at: " + createdPaths[j]);
+                        }
+                        return;
+                    }
+                    createdPaths.Add(targetPath);
                     Editor.ContentDatabase.RefreshFolder(item.ParentFolder, true);
-                    var targetItem = item.ParentFolder.FindChild(targetPath);
+                }
+
+                ClearItemsSearch();
+                RefreshView();
+                RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
+                for (int i = 0; i < createdPaths.Count; i++)
+                {
+                    var targetItem = Editor.ContentDatabase.Find(createdPaths[i]);
                     if (targetItem != null)
                         createdItems.Add(targetItem);
                 }
                 var action = ContentItemFilesystemAction.Create(Editor, createdItems);
                 if (action != null)
                     Editor.Undo.AddAction(action);
-                RefreshView();
-                RunWithContentSelectionHistorySuppressed(RefreshTreeItems);
+
+                if (createdItems.Count != 0)
+                {
+                    RunWithContentSelectionHistorySuppressed(() =>
+                    {
+                        ClearSelection(false);
+                        for (int i = 0; i < createdItems.Count; i++)
+                            Select(createdItems[i], true, i != 0);
+                    });
+                    ContentMutationDiagnostics.Log("mutation.duplicate.batch-committed", $"created={createdItems.Count}; requested={createdPaths.Count}; renameStarted=False; selected={Selection.Count}");
+                }
+                else
+                {
+                    ClearSelection(false);
+                    Editor.LogWarning("Duplicated content items were not indexed. Stale selection was cleared.");
+                    ContentMutationDiagnostics.Log("mutation.duplicate.batch-selection-failed", $"requested={createdPaths.Count}; staleSelectionCleared=True");
+                }
             }
         }
 
@@ -1129,27 +1281,71 @@ namespace FlaxEditor.Windows
         {
             var importFiles = new List<string>();
             var createdItems = new List<ContentItem>();
-            foreach (var sourcePath in files)
+            var items = RemoveSelectedDescendants(files.Select(Editor.ContentDatabase.Find).Where(x => x != null).ToList());
+            var plans = new List<(ContentItem Item, string Destination)>(items.Count);
+            var comparer = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var destinations = new HashSet<string>(comparer);
+            foreach (var item in items)
             {
-                var item = Editor.ContentDatabase.Find(sourcePath);
-                if (item != null)
+                var newPath = StringUtils.NormalizePath(Path.Combine(CurrentViewFolder.Path, item.FileName));
+                if (PathsEquivalent(item.Path, newPath))
                 {
-                    var newPath = StringUtils.NormalizePath(Path.Combine(CurrentViewFolder.Path, item.FileName));
-                    if (sourcePath.Equals(newPath))
-                        newPath = GetClonedAssetPath(item);
                     if (isCutting)
-                        MoveWithUndo(item, newPath);
-                    else
+                        continue;
+                    newPath = GetClonedAssetPath(item);
+                }
+                else if (PathExists(newPath))
+                {
+                    Editor.LogError($"Cannot paste '{item.Path}' because destination '{newPath}' already exists.");
+                    return;
+                }
+                if (!destinations.Add(Path.GetFullPath(newPath)))
+                {
+                    Editor.LogError($"Cannot paste because multiple items target '{newPath}'.");
+                    return;
+                }
+                plans.Add((item, newPath));
+            }
+            if (!isCutting)
+            {
+                foreach (var plan in plans)
+                {
+                    var preflightResult = Editor.ContentDatabase.PreflightCopy(plan.Item, plan.Destination);
+                    if (!preflightResult.Succeeded)
                     {
-                        Editor.ContentDatabase.Copy(item, newPath);
-                        Editor.ContentDatabase.RefreshFolder(CurrentViewFolder, false);
-                        var newItem = CurrentViewFolder.FindChild(newPath);
-                        if (newItem != null)
-                            createdItems.Add(newItem);
+                        Editor.LogError(preflightResult.Message ?? "Failed to preflight content paste.");
+                        return;
                     }
                 }
-                else
+            }
+            foreach (var sourcePath in files)
+            {
+                if (Editor.ContentDatabase.Find(sourcePath) == null)
                     importFiles.Add(sourcePath);
+            }
+            foreach (var plan in plans)
+            {
+                if (isCutting)
+                {
+                    MoveWithUndo(plan.Item, plan.Destination);
+                }
+                else
+                {
+                    var copyResult = Editor.ContentDatabase.Copy(plan.Item, plan.Destination);
+                    if (!copyResult.Succeeded)
+                    {
+                        Editor.LogError(copyResult.Message ?? "Failed to paste content item.");
+                        for (int i = createdItems.Count - 1; i >= 0; i--)
+                            Editor.ContentDatabase.Delete(createdItems[i], true);
+                        Editor.ContentDatabase.RefreshFolder(CurrentViewFolder, true);
+                        RefreshView();
+                        return;
+                    }
+                    Editor.ContentDatabase.RefreshFolder(CurrentViewFolder, false);
+                    var newItem = CurrentViewFolder.FindChild(plan.Destination);
+                    if (newItem != null)
+                        createdItems.Add(newItem);
+                }
             }
             var action = ContentItemFilesystemAction.Create(Editor, createdItems);
             if (action != null)
@@ -1169,10 +1365,19 @@ namespace FlaxEditor.Windows
             do
             {
                 destinationPath = StringUtils.CombinePaths(parentFolder.Path, string.Format("New Folder ({0})", i++));
-            } while (Directory.Exists(destinationPath));
+            } while (PathExists(destinationPath));
 
             // Create new folder
-            Directory.CreateDirectory(destinationPath);
+            try
+            {
+                Directory.CreateDirectory(destinationPath);
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning(ex);
+                MessageBox.Show($"Cannot create folder '{destinationPath}'. {ex.Message}", "Cannot create folder", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
             // Refresh parent folder now and try to find duplicated item
             // Note: we should spawn new items directly, content database should do it to propagate events in a proper way
@@ -1217,13 +1422,13 @@ namespace FlaxEditor.Windows
             // Create asset name
             string extension = '.' + proxy.FileExtension;
             string path = StringUtils.CombinePaths(parentFolderPath, name + extension);
-            if (parentFolder.FindChild(path) != null)
+            if (parentFolder.FindChild(path) != null || PathExists(path))
             {
                 int i = 0;
                 do
                 {
                     path = StringUtils.CombinePaths(parentFolderPath, string.Format("{0} {1}", name, i++) + extension);
-                } while (parentFolder.FindChild(path) != null);
+                } while (parentFolder.FindChild(path) != null || PathExists(path));
             }
 
             if (withRenaming)
@@ -1670,6 +1875,20 @@ namespace FlaxEditor.Windows
             if (!_showAllContentInTree || _root == null)
                 return;
 
+            // Asset tree nodes are destroyed and recreated below. Preserve selection by
+            // stable content path, never by the old node reference. Keeping disposed nodes
+            // in Tree.Selection makes Ctrl+D keep operating while no row is highlighted.
+            var selectedPaths = new List<string>(_tree.Selection.Count);
+            for (int i = 0; i < _tree.Selection.Count; i++)
+            {
+                if (_tree.Selection[i] is ContentItemTreeNode itemNode && itemNode.Item != null)
+                    selectedPaths.Add(itemNode.Item.Path);
+                else if (_tree.Selection[i] is ContentFolderTreeNode folderNode && folderNode.Folder != null)
+                    selectedPaths.Add(folderNode.Folder.Path);
+            }
+            var restoreFocus = _tree.ContainsFocus;
+            _tree.Deselect();
+
             _root.LockChildrenRecursive();
             RemoveTreeAssetNodes(_root);
             AddTreeAssetNodes(_root);
@@ -1679,6 +1898,26 @@ namespace FlaxEditor.Windows
             ApplyTreeViewScale();
             _tree.PerformLayout(true);
             _contentTreePanel.PerformLayout(true);
+
+            if (selectedPaths.Count != 0)
+            {
+                var selectedNodes = new List<TreeNode>(selectedPaths.Count);
+                for (int i = 0; i < selectedPaths.Count; i++)
+                {
+                    var item = Editor.ContentDatabase.Find(selectedPaths[i]);
+                    TreeNode node = null;
+                    if (item is ContentFolder folder)
+                        node = folder.Node;
+                    else if (item?.ParentFolder?.Node != null)
+                        node = FindTreeItemNode(item.ParentFolder.Node, item);
+                    if (node != null && !selectedNodes.Contains(node))
+                        selectedNodes.Add(node);
+                }
+                _tree.Select(selectedNodes);
+                if (restoreFocus && selectedNodes.Count != 0)
+                    selectedNodes[selectedNodes.Count - 1].Focus();
+                ContentMutationDiagnostics.Log("selection.tree-restored", $"requested={selectedPaths.Count}; restored={selectedNodes.Count}; focus={restoreFocus}");
+            }
         }
 
         private void UpdateTreeItemNames(ContentFolderTreeNode node)
@@ -2009,24 +2248,7 @@ namespace FlaxEditor.Windows
             Editor.ContentDatabase.ItemAdded += OnContentDatabaseItemAdded;
             Editor.ContentDatabase.ItemRemoved += OnContentDatabaseItemRemoved;
             Editor.ContentDatabase.WorkspaceRebuilding += () => { _workspaceRebuildLocation = SelectedNode?.Path; };
-            Editor.ContentDatabase.WorkspaceRebuilt += () =>
-            {
-                var selected = Editor.ContentDatabase.Find(_workspaceRebuildLocation);
-                if (selected is ContentFolder selectedFolder)
-                {
-                    RunWithContentSelectionHistorySuppressed(() =>
-                    {
-                        _navigationUnlocked = false;
-                        RefreshView(selectedFolder.Node);
-                        _tree.Select(selectedFolder.Node);
-                        UpdateItemsSearch();
-                        _navigationUnlocked = true;
-                    });
-                    UpdateUI();
-                }
-                else if (_root != null)
-                    RunWithContentSelectionHistorySuppressed(ShowRoot);
-            };
+            Editor.ContentDatabase.WorkspaceRebuilt += OnContentDatabaseWorkspaceRebuilt;
             Editor.ContentImporting.ImportFileBegin += OnImportFileBegin;
             Editor.ContentImporting.ImportFileEnd += OnImportFileEnd;
             Editor.ContentImporting.ImportingQueueBegin += OnImportingQueueBegin;
@@ -2044,6 +2266,32 @@ namespace FlaxEditor.Windows
 
             ScriptsBuilder.ScriptsReloadBegin += OnScriptsReloadBegin;
             ScriptsBuilder.ScriptsReloadEnd += OnScriptsReloadEnd;
+        }
+
+        private void OnContentDatabaseWorkspaceRebuilt()
+        {
+            if (_activeRenamePopup != null)
+            {
+                _workspaceRebuildPending = true;
+                return;
+            }
+
+            _workspaceRebuildPending = false;
+            var selected = Editor.ContentDatabase.Find(_workspaceRebuildLocation);
+            if (selected is ContentFolder selectedFolder)
+            {
+                RunWithContentSelectionHistorySuppressed(() =>
+                {
+                    _navigationUnlocked = false;
+                    RefreshView(selectedFolder.Node);
+                    _tree.Select(selectedFolder.Node);
+                    UpdateItemsSearch();
+                    _navigationUnlocked = true;
+                });
+                UpdateUI();
+            }
+            else if (_root != null)
+                RunWithContentSelectionHistorySuppressed(ShowRoot);
         }
 
         private void OnScriptsReloadBegin()
@@ -2238,13 +2486,23 @@ namespace FlaxEditor.Windows
         public override void Update(float deltaTime)
         {
             // Handle workspace modification events but only once per frame
-            if (_isWorkspaceDirty)
+            if (_workspaceRebuildPending && _activeRenamePopup == null)
+            {
+                OnContentDatabaseWorkspaceRebuilt();
+                _isWorkspaceDirty = false;
+            }
+            else if (ShouldRefreshWorkspace(_isWorkspaceDirty, _activeRenamePopup != null))
             {
                 _isWorkspaceDirty = false;
                 RefreshView();
             }
 
             base.Update(deltaTime);
+        }
+
+        internal static bool ShouldRefreshWorkspace(bool workspaceDirty, bool renameActive)
+        {
+            return workspaceDirty && !renameActive;
         }
 
         /// <inheritdoc />
@@ -2278,6 +2536,11 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
+            if (ContentMutationDiagnostics.Enabled)
+            {
+                var target = GetChildAtRecursive(location);
+                ContentMutationDiagnostics.Log("input.window.mouse-down", $"button={button}; location={location}; target={target?.GetType().Name ?? "<none>"}; renameActive={_activeRenamePopup != null}; viewSelection={_view.Selection.Count}; treeSelection={_tree.Selection.Count}");
+            }
             if (button == MouseButton.Extended1 || button == MouseButton.Extended2)
                 return true;
 
@@ -2287,6 +2550,11 @@ namespace FlaxEditor.Windows
         /// <inheritdoc />
         public override bool OnMouseUp(Float2 location, MouseButton button)
         {
+            if (ContentMutationDiagnostics.Enabled)
+            {
+                var target = GetChildAtRecursive(location);
+                ContentMutationDiagnostics.Log("input.window.mouse-up", $"button={button}; location={location}; target={target?.GetType().Name ?? "<none>"}; renameActive={_activeRenamePopup != null}; viewSelection={_view.Selection.Count}; treeSelection={_tree.Selection.Count}");
+            }
             if (button == MouseButton.Extended1 || button == MouseButton.Extended2)
                 return true;
 

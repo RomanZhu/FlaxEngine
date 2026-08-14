@@ -125,6 +125,11 @@ void ReadStream::Read(VariantType& data)
         ReadInt32(&typeNameLength);
         if (typeNameLength == 0)
             return;
+        if (typeNameLength < 0 || typeNameLength >= STREAM_MAX_STRING_LENGTH)
+        {
+            _hasError = true;
+            return;
+        }
         data.TypeName = static_cast<char*>(Allocator::Allocate(typeNameLength + 1));
         char* ptr = data.TypeName;
         ReadBytes(ptr, typeNameLength);
@@ -139,7 +144,11 @@ void ReadStream::Read(VariantType& data)
     else if (typeNameLength > 0)
     {
         // [Deprecated on 27.08.2020, expires on 27.08.2021]
-        ASSERT(typeNameLength < STREAM_MAX_STRING_LENGTH);
+        if (typeNameLength >= STREAM_MAX_STRING_LENGTH)
+        {
+            _hasError = true;
+            return;
+        }
         Array<Char> chars;
         chars.Resize(typeNameLength + 1);
         Char* ptr = chars.Get();
@@ -268,7 +277,7 @@ void ReadStream::Read(Variant& data)
         }
         else
         {
-            LOG(Error, "Invalid Variant {0) format {1}", data.Type.ToString(), format);
+            LOG(Error, "Invalid Variant {0} format {1}", data.Type.ToString(), format);
         }
         break;
     }

@@ -102,7 +102,7 @@ namespace
     {
         // Case-only renames use an internal temporary path and must not be repeated if the
         // second leg fails. Ordinary moves can safely tolerate brief external file access.
-        const int32 attempts = FileSystem::AreFilePathsEqual(destination, source) ? 1 : 20;
+        const int32 attempts = FileSystem::AreFilePathsEquivalent(destination, source) ? 1 : 20;
 #if PLATFORM_WINDOWS
         uint32 firstError = 0;
         uint32 lastError = 0;
@@ -155,7 +155,7 @@ namespace
 
     bool MoveFolderPathSafely(const StringView& destination, const StringView& source)
     {
-        if (FileSystem::AreFilePathsEqual(destination, source))
+        if (FileSystem::AreFilePathsEquivalent(destination, source))
             return MovePathWithRetry(destination, source);
 
 #if PLATFORM_WINDOWS
@@ -374,30 +374,6 @@ namespace
         const String srcActorsFolder = GetExternalActorsFolderPath(srcPath);
         const String dstSceneActorsFolder = GetSceneActorsFolderPath(dstPath);
         const String dstActorsFolder = dstSceneActorsFolder / ExternalActorsFolderName;
-        if (RemoveEmptySceneActorsFile(dstActorsFolder))
-        {
-            LOG(Error, "Cannot copy external actors scene data because destination already exists: '{0}'.", dstActorsFolder);
-            return true;
-        }
-        if (FileSystem::DirectoryExists(dstActorsFolder))
-        {
-            Array<String> dstActorFiles;
-            if (FileSystem::DirectoryGetFiles(dstActorFiles, dstActorsFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
-            {
-                LOG(Error, "Cannot list external actors destination folder '{0}'.", dstActorsFolder);
-                return true;
-            }
-            if (dstActorFiles.Count() != 0)
-            {
-                LOG(Error, "Cannot copy external actors scene data because destination already exists: '{0}'.", dstActorsFolder);
-                return true;
-            }
-            if (FileSystem::DeleteDirectory(dstActorsFolder))
-            {
-                LOG(Error, "Cannot remove empty external actors destination folder '{0}'.", dstActorsFolder);
-                return true;
-            }
-        }
         if (FileSystem::DirectoryExists(dstActorsFolder) || FileSystem::FileExists(dstActorsFolder))
         {
             LOG(Error, "Cannot copy external actors scene data because destination already exists: '{0}'.", dstActorsFolder);
@@ -478,7 +454,7 @@ namespace
             return false;
 
         const String dstSceneActorsFolder = GetSceneActorsFolderPath(newScenePath);
-        if (FileSystem::AreFilePathsEqual(srcSceneActorsFolder, dstSceneActorsFolder))
+        if (FileSystem::AreFilePathsEquivalent(srcSceneActorsFolder, dstSceneActorsFolder))
             return false;
         if (RemoveEmptySceneActorsFile(dstSceneActorsFolder))
         {
@@ -1375,7 +1351,7 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     // Validate the filesystem destination. A failed move from an older Editor can leave a
     // transient, zero-byte asset file behind. Remove only that provably empty artifact; invalid
     // files containing any data are preserved and reported as collisions.
-    const bool samePath = FileSystem::AreFilePathsEqual(oldPath, newPath);
+    const bool samePath = FileSystem::AreFilePathsEquivalent(oldPath, newPath);
     FlaxStorageReference lockedDestinationStorage;
     if (!samePath && ContentStorageManager::LockFileAccess(newPath, lockedDestinationStorage))
     {
@@ -1448,7 +1424,7 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     {
         const String srcSceneActorsFolder = GetSceneActorsFolderPath(oldPath);
         const String dstSceneActorsFolder = GetSceneActorsFolderPath(newPath);
-        moveSceneActorsFolder = FileSystem::DirectoryExists(srcSceneActorsFolder) && !FileSystem::AreFilePathsEqual(srcSceneActorsFolder, dstSceneActorsFolder);
+        moveSceneActorsFolder = FileSystem::DirectoryExists(srcSceneActorsFolder) && !FileSystem::AreFilePathsEquivalent(srcSceneActorsFolder, dstSceneActorsFolder);
         if (moveSceneActorsFolder && RemoveEmptySceneActorsFile(dstSceneActorsFolder))
         {
             LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
@@ -1527,7 +1503,7 @@ bool Content::RenameAssetFolder(const StringView& oldPath, const StringView& new
 {
     ASSERT(IsInMainThread());
 
-    const bool samePath = FileSystem::AreFilePathsEqual(oldPath, newPath);
+    const bool samePath = FileSystem::AreFilePathsEquivalent(oldPath, newPath);
     const bool destinationIsDirectory = !samePath && FileSystem::DirectoryExists(newPath);
     const bool destinationIsFile = !samePath && FileSystem::FileExists(newPath);
     const bool recoverableZeroByteDestination = destinationIsFile && FileSystem::GetFileSize(newPath) == 0;
@@ -1542,7 +1518,7 @@ bool Content::RenameAssetFolder(const StringView& oldPath, const StringView& new
     const bool moveSceneActorsFolder = oldSceneActorsFolder.HasChars() &&
                                        newSceneActorsFolder.HasChars() &&
                                        FileSystem::DirectoryExists(oldSceneActorsFolder) &&
-                                       !FileSystem::AreFilePathsEqual(oldSceneActorsFolder, newSceneActorsFolder);
+                                       !FileSystem::AreFilePathsEquivalent(oldSceneActorsFolder, newSceneActorsFolder);
     if (moveSceneActorsFolder && (FileSystem::DirectoryExists(newSceneActorsFolder) || FileSystem::FileExists(newSceneActorsFolder)))
     {
         LOG(Error, "Cannot move content folder because the external actors destination already exists: '{0}'.", newSceneActorsFolder);
@@ -1649,23 +1625,24 @@ public:
     StringView dstPath;
     StringView srcPath;
     Guid dstId;
+    bool overwrite;
     bool* output;
 
 protected:
     bool Run() override
     {
-        *output = Content::CloneAssetFile(dstPath, srcPath, dstId);
+        *output = Content::CloneAssetFile(dstPath, srcPath, dstId, overwrite);
         return false;
     }
 };
 
-bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPath, const Guid& dstId)
+bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPath, const Guid& dstId, bool overwrite)
 {
     // Best to run this on the main thread to avoid clone conflicts.
     if (IsInMainThread())
     {
         PROFILE_CPU();
-        ASSERT(FileSystem::AreFilePathsEqual(srcPath, dstPath) == false && dstId.IsValid());
+        ASSERT(FileSystem::AreFilePathsEquivalent(srcPath, dstPath) == false && dstId.IsValid());
 
         LOG(Info, "Cloning asset \'{0}\' to \'{1}\'({2}).", srcPath, dstPath, dstId);
 
@@ -1675,6 +1652,149 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
             LOG(Warning, "Missing source file.");
             return true;
         }
+        const bool destinationExists = FileSystem::FileExists(dstPath);
+        if (destinationExists || FileSystem::DirectoryExists(dstPath))
+        {
+            if (!overwrite || !destinationExists)
+            {
+                LOG(Warning, "Clone destination already exists.");
+                return true;
+            }
+        }
+
+        // Existing assets are replaced from an independently prepared storage file. Never open the
+        // copied bytes through the destination storage before changing the ID: that storage can still
+        // contain the old package layout and repacking it would corrupt assets with different chunks.
+        if (destinationExists)
+        {
+            const String stagingPath = String(dstPath) + TEXT(".replace-stage-") + Guid::New().ToString(Guid::FormatType::N);
+            const String backupPath = String(dstPath) + TEXT(".replace-backup-") + Guid::New().ToString(Guid::FormatType::N);
+            bool preserveBackup = false;
+            SCOPE_EXIT
+            {
+                FileSystem::DeleteFile(stagingPath);
+                if (!preserveBackup)
+                    FileSystem::DeleteFile(backupPath);
+            };
+
+            const bool isJson = JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(srcPath).ToLower());
+            if (isJson && IsSceneAssetPath(srcPath))
+            {
+                rapidjson_flax::Document sourceDocument;
+                if (ReadJsonDocument(srcPath, sourceDocument))
+                    return true;
+                if (IsExternalActorsSceneDocument(sourceDocument))
+                {
+                    LOG(Warning, "Replacing an external-actors scene requires its actor directory transaction and is not supported by CloneAssetFile.");
+                    return true;
+                }
+            }
+
+            // Prepare and validate the complete replacement without touching the destination.
+            if (FileSystem::CopyFile(stagingPath, srcPath))
+            {
+                LOG(Warning, "Cannot copy asset to replacement staging file.");
+                return true;
+            }
+            if (isJson)
+            {
+                if (JsonStorageProxy::ChangeId(stagingPath, dstId))
+                {
+                    LOG(Warning, "Cannot change staged asset ID.");
+                    return true;
+                }
+            }
+            else
+            {
+                auto stagingStorage = ContentStorageManager::GetStorage(stagingPath);
+                if (stagingStorage == nullptr)
+                {
+                    LOG(Warning, "Cannot open replacement staging storage.");
+                    return true;
+                }
+                if (stagingStorage->GetEntriesCount() < 1)
+                {
+                    LOG(Warning, "Replacement staging storage has no entries.");
+                    return true;
+                }
+                FlaxStorage::Entry e;
+                stagingStorage->GetEntry(0, e);
+                if (stagingStorage->ChangeAssetID(e, dstId) || !stagingStorage->HasAsset(dstId))
+                {
+                    LOG(Warning, "Cannot change or verify staged asset ID.");
+                    return true;
+                }
+                if (stagingStorage->CloseFileHandles())
+                {
+                    LOG(Warning, "Cannot close replacement staging storage.");
+                    return true;
+                }
+            }
+
+            // Lock readers, preserve the exact old bytes, then atomically publish the staged file.
+            FlaxStorageReference destinationStorage;
+            if (ContentStorageManager::LockFileAccess(dstPath, destinationStorage))
+                return true;
+            bool destinationStorageLocked = destinationStorage != nullptr;
+            SCOPE_EXIT
+            {
+                if (destinationStorageLocked)
+                    destinationStorage->UnlockFileAccess();
+            };
+            const bool reloadDestinationStorage = destinationStorage && destinationStorage->IsLoaded();
+            if (FileSystem::CopyFile(backupPath, dstPath))
+            {
+                LOG(Warning, "Cannot create replacement backup for asset '{0}'.", dstPath);
+                return true;
+            }
+            if (FileSystem::MoveFile(dstPath, stagingPath, true))
+            {
+                LOG(Warning, "Cannot commit staged replacement for asset '{0}'.", dstPath);
+                return true;
+            }
+
+            // Reload cannot run while the file-access mutation lock is held.
+            if (destinationStorageLocked)
+            {
+                destinationStorage->UnlockFileAccess();
+                destinationStorageLocked = false;
+            }
+
+            bool validationFailed = false;
+            if (!isJson)
+            {
+                auto committedStorage = destinationStorage;
+                if (reloadDestinationStorage)
+                    validationFailed = committedStorage->Reload();
+                else
+                    committedStorage = ContentStorageManager::GetStorage(dstPath);
+                validationFailed |= committedStorage == nullptr || committedStorage->GetEntriesCount() < 1 || !committedStorage->HasAsset(dstId);
+            }
+            if (validationFailed)
+            {
+                LOG(Error, "Replacement validation failed for asset '{0}'. Restoring the original bytes.", dstPath);
+                auto storageToRestore = ContentStorageManager::EnsureAccess(dstPath);
+                if (FileSystem::MoveFile(dstPath, backupPath, true))
+                {
+                    preserveBackup = true;
+                    LOG(Error, "Cannot restore replacement backup '{0}'. The backup has been preserved for manual recovery.", backupPath);
+                    return true;
+                }
+                if (storageToRestore && storageToRestore->IsLoaded() && storageToRestore->Reload())
+                    LOG(Error, "Original asset bytes were restored but its cached storage could not be reloaded: '{0}'.", dstPath);
+                return true;
+            }
+
+            LOG(Info, "Committed and validated asset replacement at '{0}'.", dstPath);
+            return false;
+        }
+
+        bool destinationCreated = false;
+        SCOPE_EXIT
+        {
+            if (!destinationCreated)
+                FileSystem::DeleteFile(dstPath);
+        };
 
         // Special case for json resources
         if (JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(srcPath).ToLower()))
@@ -1685,7 +1805,11 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
                 if (ReadJsonDocument(srcPath, sourceDocument))
                     return true;
                 if (IsExternalActorsSceneDocument(sourceDocument))
-                    return CopyExternalActorsSceneData(dstPath, srcPath, dstId, sourceDocument);
+                {
+                    const bool failed = CopyExternalActorsSceneData(dstPath, srcPath, dstId, sourceDocument);
+                    destinationCreated = !failed;
+                    return failed;
+                }
             }
 
             if (FileSystem::CopyFile(dstPath, srcPath))
@@ -1698,82 +1822,37 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
                 LOG(Warning, "Cannot change asset ID.");
                 return true;
             }
+            destinationCreated = true;
             return false;
         }
 
-        // Check if destination file is missing
-        if (!FileSystem::FileExists(dstPath))
+        // Use quick file copy and remove any partial output on failure.
+        if (FileSystem::CopyFile(dstPath, srcPath))
         {
-            // Use quick file copy
-            if (FileSystem::CopyFile(dstPath, srcPath))
-            {
-                LOG(Warning, "Cannot copy file to destination.");
-                return true;
-            }
-
-            // Change ID
-            auto storage = ContentStorageManager::GetStorage(dstPath);
-            FlaxStorage::Entry e;
-            storage->GetEntry(0, e);
-            if (storage == nullptr || storage->ChangeAssetID(e, dstId))
-            {
-                LOG(Warning, "Cannot change asset ID.");
-                return true;
-            }
+            LOG(Warning, "Cannot copy file to destination.");
+            return true;
         }
-        else
+
+        // Validate storage before reading entry zero.
+        auto storage = ContentStorageManager::GetStorage(dstPath);
+        if (storage == nullptr)
         {
-            // Use temporary file
-            String tmpPath = Globals::TemporaryFolder / Guid::New().ToString(Guid::FormatType::D);
-            if (FileSystem::CopyFile(tmpPath, srcPath))
-            {
-                LOG(Warning, "Cannot copy file.");
-                return true;
-            }
-
-            // Change asset ID
-            {
-                auto storage = ContentStorageManager::GetStorage(tmpPath);
-                if (!storage)
-                {
-                    LOG(Warning, "Cannot change asset ID.");
-                    return true;
-                }
-                FlaxStorage::Entry e;
-                storage->GetEntry(0, e);
-                if (storage->ChangeAssetID(e, dstId))
-                {
-                    LOG(Warning, "Cannot change asset ID.");
-                    return true;
-                }
-            }
-
-            // Unlock destination file
-            ContentStorageManager::EnsureAccess(dstPath);
-
-            // Copy temp file to the destination
-            if (FileSystem::CopyFile(dstPath, tmpPath))
-            {
-                LOG(Warning, "Cannot copy file to destination.");
-                return true;
-            }
-
-            // Cleanup
-            FileSystem::DeleteFile(tmpPath);
-
-            // Reload storage
-            auto storage = ContentStorageManager::GetStorage(dstPath, false);
-            if (storage && storage->IsLoaded())
-            {
-                storage->Reload();
-            }
-            else if (auto dependencies = PendingDependencies.TryGet(dstId))
-            {
-                // Destination storage is not loaded but there are other assets that depend on it so update them
-                for (const auto& e : *dependencies)
-                    e.Item->OnDependencyModified(nullptr);
-            }
+            LOG(Warning, "Cannot open cloned asset storage.");
+            return true;
         }
+        if (storage->GetEntriesCount() < 1)
+        {
+            LOG(Warning, "Cloned asset storage has no entries.");
+            return true;
+        }
+        FlaxStorage::Entry e;
+        storage->GetEntry(0, e);
+        if (storage->ChangeAssetID(e, dstId))
+        {
+            LOG(Warning, "Cannot change asset ID.");
+            return true;
+        }
+        destinationCreated = true;
     }
     else
     {
@@ -1781,6 +1860,7 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
         task->dstId = dstId;
         task->dstPath = dstPath;
         task->srcPath = srcPath;
+        task->overwrite = overwrite;
 
         bool result = false;
         task->output = &result;

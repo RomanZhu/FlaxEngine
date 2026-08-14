@@ -6,6 +6,7 @@
 #include "WindowsFileSystem.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/Window.h"
+#include "Engine/Platform/StringUtils.h"
 #include "Engine/Platform/Windows/ComPtr.h"
 #include "Engine/Platform/CreateProcessSettings.h"
 #include "Engine/Core/Types/StringView.h"
@@ -132,7 +133,7 @@ bool SameFile(HANDLE h1, HANDLE h2)
     return false;
 }
 
-bool WindowsFileSystem::AreFilePathsEqual(const StringView& path1, const StringView& path2)
+bool WindowsFileSystem::AreFilePathsEquivalent(const StringView& path1, const StringView& path2)
 {
     if (path1.Compare(path2, StringSearchCase::CaseSensitive) == 0)
         return true;
@@ -140,18 +141,41 @@ bool WindowsFileSystem::AreFilePathsEqual(const StringView& path1, const StringV
     // Normalize file paths
     String filename1(path1);
     String filename2(path2);
+    StringUtils::PathRemoveRelativeParts(filename1);
+    StringUtils::PathRemoveRelativeParts(filename2);
+
+    return filename1.Compare(filename2, StringSearchCase::IgnoreCase) == 0;
+}
+
+bool WindowsFileSystem::AreFilePathsSame(const StringView& path1, const StringView& path2)
+{
+    String filename1(path1);
+    String filename2(path2);
     NormalizePath(filename1);
     NormalizePath(filename2);
 
-    HANDLE file1 = CreateFileW(*filename1, GENERIC_READ, (DWORD)FileShare::All, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    HANDLE file2 = CreateFileW(*filename2, GENERIC_READ, (DWORD)FileShare::All, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const DWORD shareMode = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    HANDLE file1 = CreateFileW(*filename1, 0, shareMode, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file1 == INVALID_HANDLE_VALUE)
+        return false;
+    HANDLE file2 = CreateFileW(*filename2, 0, shareMode, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file2 == INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(file1);
+        return false;
+    }
 
-    bool result = SameFile(file1, file2);
+    const bool result = SameFile(file1, file2);
 
     CloseHandle(file1);
     CloseHandle(file2);
 
     return result;
+}
+
+bool WindowsFileSystem::AreFilePathsEqual(const StringView& path1, const StringView& path2)
+{
+    return AreFilePathsEquivalent(path1, path2);
 }
 
 void WindowsFileSystem::GetSpecialFolderPath(const SpecialFolder type, String& result)

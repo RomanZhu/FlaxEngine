@@ -103,10 +103,11 @@ namespace FlaxEditor.GUI
 
         private void OnTextChanged()
         {
+            var valid = IsInputValid;
+            LogContentRename("rename.text-changed", $"text='{ContentMutationDiagnostics.Sanitize(_inputField.Text)}'; valid={valid}");
             if (Validate == null)
                 return;
 
-            var valid = IsInputValid;
             var style = Style.Current;
             if (valid)
             {
@@ -150,8 +151,13 @@ namespace FlaxEditor.GUI
             var text = Text;
             if (!_renamed && text != _startValue && IsInputValid)
             {
+                LogContentRename("rename.commit", $"old='{ContentMutationDiagnostics.Sanitize(_startValue)}'; new='{ContentMutationDiagnostics.Sanitize(text)}'");
                 _renamed = true;
                 Renamed?.Invoke(this);
+            }
+            else
+            {
+                LogContentRename("rename.commit-skipped", $"changed={text != _startValue}; alreadyCommitted={_renamed}; valid={IsInputValid}; text='{ContentMutationDiagnostics.Sanitize(text)}'");
             }
         }
 
@@ -169,6 +175,7 @@ namespace FlaxEditor.GUI
             if (FlaxEngine.Input.GetMouseButtonDown(MouseButton.Left))
                 TryRename();
 
+            LogContentRename("rename.hide", $"committed={_renamed}; text='{ContentMutationDiagnostics.Sanitize(Text)}'");
             base.Hide();
         }
 
@@ -178,6 +185,7 @@ namespace FlaxEditor.GUI
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
+            LogContentRename("input.rename.key-down", $"key={key}; text='{ContentMutationDiagnostics.Sanitize(Text)}'");
             // Enter
             if (key == KeyboardKeys.Return)
             {
@@ -208,6 +216,7 @@ namespace FlaxEditor.GUI
         /// <inheritdoc />
         protected override void OnHide()
         {
+            LogContentRename("rename.closed", $"committed={_renamed}; text='{ContentMutationDiagnostics.Sanitize(Text)}'");
             Closed?.Invoke(this);
             Closed = null;
 
@@ -226,6 +235,12 @@ namespace FlaxEditor.GUI
             _inputField = null;
 
             base.OnDestroy();
+        }
+
+        private void LogContentRename(string eventName, string details)
+        {
+            if (Tag is Content.ContentItem item)
+                ContentMutationDiagnostics.Log(eventName, $"item='{item.Path}'; {details}");
         }
     }
 }

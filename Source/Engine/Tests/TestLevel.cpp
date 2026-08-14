@@ -10,10 +10,13 @@
 #include "Engine/Level/Level.h"
 #include "Engine/Level/Tags.h"
 #include "Engine/Serialization/Json.h"
+#include "Engine/Serialization/MemoryReadStream.h"
+#include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Serialization/Serialization.h"
 #if USE_EDITOR
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Cache/AssetsCache.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Level/Actors/EmptyActor.h"
 #include "Engine/Level/Scene/Scene.h"
 #include "Engine/Level/Scene/SceneAsset.h"
@@ -214,6 +217,20 @@ TEST_CASE("Serialization")
         CHECK(value.Y < expectedY + 1e-12);
         CHECK(value.Z > expectedZ - 1e-12);
         CHECK(value.Z < expectedZ + 1e-12);
+    }
+
+    SECTION("Malformed variant type name reports a stream error")
+    {
+        MemoryWriteStream output;
+        output.WriteByte((byte)VariantType::Object);
+        output.WriteInt32(MAX_int32);
+        output.WriteInt32(STREAM_MAX_STRING_LENGTH);
+        MemoryReadStream input(output.GetHandle(), output.GetPosition());
+        VariantType type;
+
+        input.Read(type);
+
+        CHECK(input.HasError());
     }
 }
 
@@ -661,7 +678,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(cloneParentIds.Contains(cloneRootActorId));
     }
 
-    SECTION("Clone external actors scene replaces empty destination actors folder")
+    SECTION("Clone external actors scene rejects empty destination actors folder")
     {
         const Guid sceneId = ParseGuid("99999999999999999999999999999991");
         const Guid actorId = ParseGuid("99999999999999999999999999999992");
@@ -679,12 +696,107 @@ TEST_CASE("ExternalActorsSceneStorage")
         WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
         EnsureDirectory(GetExternalActorsFolder(clonePath));
 
-        REQUIRE(!Content::CloneAssetFile(clonePath, scenePath, cloneSceneId));
+        REQUIRE(Content::CloneAssetFile(clonePath, scenePath, cloneSceneId));
 
-        CHECK(FileSystem::GetFileSize(clonePath) > 0);
-        Array<String> cloneActorFiles;
-        REQUIRE(!FileSystem::DirectoryGetFiles(cloneActorFiles, GetExternalActorsFolder(clonePath), TEXT("*.actor"), DirectorySearchOption::AllDirectories));
-        CHECK(cloneActorFiles.Count() == 1);
+        CHECK(!FileSystem::FileExists(clonePath));
+        CHECK(FileSystem::DirectoryExists(GetExternalActorsFolder(clonePath)));
+    }
+
+    SECTION("Clone malformed binary fails without partial output")
+    {
+        const String sourcePath = Globals::ProjectContentFolder / TEXT("__MalformedCloneSource.flax");
+        const String clonePath = Globals::ProjectContentFolder / TEXT("__MalformedCloneTarget.flax");
+        FileSystem::DeleteFile(sourcePath);
+        FileSystem::DeleteFile(clonePath);
+        SCOPE_EXIT
+        {
+            FileSystem::DeleteFile(sourcePath);
+            FileSystem::DeleteFile(clonePath);
+        };
+        const byte malformed[] = { 'F', 'L', 'A', 'X', 0, 0xff, 0x13 };
+        REQUIRE(!File::WriteAllBytes(sourcePath, malformed, ARRAY_COUNT(malformed)));
+
+        CHECK(Content::CloneAssetFile(clonePath, sourcePath, Guid::New()));
+        CHECK(FileSystem::FileExists(sourcePath));
+        CHECK(!FileSystem::FileExists(clonePath));
+    }
+
+    SECTION("Clone preserves an existing destination")
+    {
+        const Guid sceneId = ParseGuid("99999999999999999999999999999981");
+        const String sourcePath = GetTestScenePath(TEXT("CloneCollisionSource"));
+        const String clonePath = GetTestScenePath(TEXT("CloneCollisionTarget"));
+        CleanupTestSceneFiles(sourcePath);
+        CleanupTestSceneFiles(clonePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(sourcePath);
+            CleanupTestSceneFiles(clonePath);
+        };
+        WriteTestSceneAsset(sourcePath, sceneId, false);
+        const byte destinationBytes[] = { 7, 8, 9, 10 };
+        REQUIRE(!File::WriteAllBytes(clonePath, destinationBytes, ARRAY_COUNT(destinationBytes)));
+
+        CHECK(Content::CloneAssetFile(clonePath, sourcePath, Guid::New()));
+        BytesContainer preservedBytes;
+        REQUIRE(!File::ReadAllBytes(clonePath, preservedBytes));
+        REQUIRE(preservedBytes.Length() == ARRAY_COUNT(destinationBytes));
+        CHECK(Platform::MemoryCompare(preservedBytes.Get(), destinationBytes, ARRAY_COUNT(destinationBytes)) == 0);
+    }
+
+    SECTION("Replace restores an existing destination when cloning fails")
+    {
+        const String sourcePath = Globals::ProjectContentFolder / TEXT("__MalformedReplaceSource.flax");
+        const String destinationPath = Globals::ProjectContentFolder / TEXT("__MalformedReplaceTarget.flax");
+        FileSystem::DeleteFile(sourcePath);
+        FileSystem::DeleteFile(destinationPath);
+        SCOPE_EXIT
+        {
+            FileSystem::DeleteFile(sourcePath);
+            FileSystem::DeleteFile(destinationPath);
+        };
+        const byte malformed[] = { 'F', 'L', 'A', 'X', 0, 0xff, 0x13 };
+        const byte destinationBytes[] = { 7, 8, 9, 10 };
+        REQUIRE(!File::WriteAllBytes(sourcePath, malformed, ARRAY_COUNT(malformed)));
+        REQUIRE(!File::WriteAllBytes(destinationPath, destinationBytes, ARRAY_COUNT(destinationBytes)));
+
+        CHECK(Content::CloneAssetFile(destinationPath, sourcePath, Guid::New(), true));
+        BytesContainer preservedBytes;
+        REQUIRE(!File::ReadAllBytes(destinationPath, preservedBytes));
+        REQUIRE(preservedBytes.Length() == ARRAY_COUNT(destinationBytes));
+        CHECK(Platform::MemoryCompare(preservedBytes.Get(), destinationBytes, ARRAY_COUNT(destinationBytes)) == 0);
+    }
+
+    SECTION("Replace commits a validated staged binary asset and refreshes cached storage")
+    {
+        const String sourcePath = Globals::EngineContentFolder / TEXT("Engine/DefaultMaterial.flax");
+        const String destinationPath = Globals::ProjectContentFolder / TEXT("__ReplaceCachedStorage.flax");
+        const Guid initialId = Guid::New();
+        const Guid replacementId = Guid::New();
+        FileSystem::DeleteFile(destinationPath);
+        SCOPE_EXIT
+        {
+            FileSystem::DeleteFile(destinationPath);
+        };
+
+        REQUIRE(!Content::CloneAssetFile(destinationPath, sourcePath, initialId));
+        auto cachedStorage = ContentStorageManager::GetStorage(destinationPath);
+        REQUIRE(cachedStorage);
+        REQUIRE(cachedStorage->HasAsset(initialId));
+
+        REQUIRE(!Content::CloneAssetFile(destinationPath, sourcePath, replacementId, true));
+        CHECK(cachedStorage->HasAsset(replacementId));
+        CHECK(!cachedStorage->HasAsset(initialId));
+
+        AssetInitData replacedData;
+        REQUIRE(!cachedStorage->LoadAssetHeader(replacementId, replacedData));
+        CHECK(replacedData.Header.ID == replacementId);
+        CHECK(replacedData.Header.TypeName == TEXT("FlaxEngine.Material"));
+        for (int32 i = 0; i < ASSET_FILE_DATA_CHUNKS; i++)
+        {
+            if (replacedData.Header.Chunks[i])
+                REQUIRE(!cachedStorage->LoadAssetChunk(replacedData.Header.Chunks[i]));
+        }
     }
 
     SECTION("Rename external actors scene moves scene actors folder")

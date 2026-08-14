@@ -19,6 +19,8 @@ public:
     /// <returns>True if cannot perform that operation, otherwise false.</returns>
     static bool MoveFileToRecycleBin(const StringView& path);
 
+    static bool AreFilePathsEquivalent(const StringView& path1, const StringView& path2);
+    static bool AreFilePathsSame(const StringView& path1, const StringView& path2);
     static bool AreFilePathsEqual(const StringView& path1, const StringView& path2);
 
 public:

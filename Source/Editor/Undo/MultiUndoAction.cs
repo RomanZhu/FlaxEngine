@@ -13,7 +13,7 @@ namespace FlaxEditor
     /// <seealso cref="FlaxEditor.IUndoAction" />
     [Serializable]
     [HideInEditor]
-    public class MultiUndoAction : IUndoAction, IUndoActionMetadata
+    public class MultiUndoAction : ITryUndoAction, IUndoActionMetadata
     {
         /// <summary>
         /// The child actions.
@@ -80,19 +80,63 @@ namespace FlaxEditor
         /// <inheritdoc />
         public void Do()
         {
-            for (int i = 0; i < Actions.Length; i++)
-            {
-                Actions[i].Do();
-            }
+            TryDo();
         }
 
         /// <inheritdoc />
         public void Undo()
         {
+            TryUndo();
+        }
+
+        /// <inheritdoc />
+        public bool TryDo()
+        {
+            for (int i = 0; i < Actions.Length; i++)
+            {
+                if (TryDo(Actions[i]))
+                    continue;
+                for (int rollback = i - 1; rollback >= 0; rollback--)
+                {
+                    if (!TryUndo(Actions[rollback]))
+                        Editor.LogError("Failed to roll back a partially applied multi-action: " + ActionString);
+                }
+                return false;
+            }
+            return true;
+        }
+
+        /// <inheritdoc />
+        public bool TryUndo()
+        {
             for (int i = Actions.Length - 1; i >= 0; i--)
             {
-                Actions[i].Undo();
+                if (TryUndo(Actions[i]))
+                    continue;
+                for (int rollback = i + 1; rollback < Actions.Length; rollback++)
+                {
+                    if (!TryDo(Actions[rollback]))
+                        Editor.LogError("Failed to roll back a partially undone multi-action: " + ActionString);
+                }
+                return false;
             }
+            return true;
+        }
+
+        private static bool TryDo(IUndoAction action)
+        {
+            if (action is ITryUndoAction tryAction)
+                return tryAction.TryDo();
+            action.Do();
+            return true;
+        }
+
+        private static bool TryUndo(IUndoAction action)
+        {
+            if (action is ITryUndoAction tryAction)
+                return tryAction.TryUndo();
+            action.Undo();
+            return true;
         }
 
         /// <inheritdoc />

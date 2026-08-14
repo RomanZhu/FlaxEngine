@@ -354,7 +354,7 @@ public:
     /// <param name="srcPath">The source path.</param>
     /// <param name="dstId">The destination id.</param>
     /// <returns>True if failed, otherwise false.</returns>
-    static bool CloneAssetFile(const StringView& dstPath, const StringView& srcPath, const Guid& dstId);
+    static bool CloneAssetFile(const StringView& dstPath, const StringView& srcPath, const Guid& dstId, bool overwrite = false);
 
 #endif
 

@@ -80,6 +80,88 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestContentCopyRejectsFileCollisionWithoutChangingBytes()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentCopyTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var sourcePath = Path.Combine(root, "Source.txt");
+                var destinationPath = Path.Combine(root, "Destination.txt");
+                File.WriteAllText(sourcePath, "source");
+                File.WriteAllText(destinationPath, "destination");
+                var database = new ContentDatabaseModule(null);
+
+                var result = database.Copy(new FileItem(sourcePath), destinationPath);
+
+                Assert.IsFalse(result.Succeeded);
+                Assert.AreEqual(ContentMutationFailure.DestinationCollision, result.Failure);
+                Assert.AreEqual("source", File.ReadAllText(sourcePath));
+                Assert.AreEqual("destination", File.ReadAllText(destinationPath));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
+        public void TestContentCopyReturnsCreatedDestinationForPlainFile()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentCopyTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var sourcePath = Path.Combine(root, "Source.txt");
+                var destinationPath = Path.Combine(root, "Destination.txt");
+                File.WriteAllText(sourcePath, "source");
+                var database = new ContentDatabaseModule(null);
+
+                var result = database.Copy(new FileItem(sourcePath), destinationPath);
+
+                Assert.IsTrue(result.Succeeded);
+                Assert.IsTrue(result.CreatedDestination);
+                Assert.AreEqual("source", File.ReadAllText(destinationPath));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
+        public void TestContentCopyRejectsFolderAndCrossTypeCollisions()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentCopyTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var sourceFolderPath = Path.Combine(root, "SourceFolder");
+                var destinationFolderPath = Path.Combine(root, "DestinationFolder");
+                var fileCollisionPath = Path.Combine(root, "FileCollision");
+                Directory.CreateDirectory(sourceFolderPath);
+                Directory.CreateDirectory(destinationFolderPath);
+                File.WriteAllText(Path.Combine(sourceFolderPath, "Source.txt"), "source");
+                File.WriteAllText(Path.Combine(destinationFolderPath, "Existing.txt"), "existing");
+                File.WriteAllText(fileCollisionPath, "existing file");
+                var sourceFolder = new ContentFolder(ContentFolderType.Content, sourceFolderPath, null);
+                var database = new ContentDatabaseModule(null);
+
+                var folderResult = database.Copy(sourceFolder, destinationFolderPath);
+                var crossTypeResult = database.Copy(sourceFolder, fileCollisionPath);
+
+                Assert.IsFalse(folderResult.Succeeded);
+                Assert.IsFalse(crossTypeResult.Succeeded);
+                Assert.AreEqual("existing", File.ReadAllText(Path.Combine(destinationFolderPath, "Existing.txt")));
+                Assert.AreEqual("existing file", File.ReadAllText(fileCollisionPath));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
         public void TestNewItemSurvivesContentRefreshBeforeFileExists()
         {
             var folder = new ContentFolder(ContentFolderType.Content, Path.Combine(Path.GetTempPath(), "FlaxContentFolder"), null);
@@ -93,6 +175,31 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestContentNamesRejectWhitespaceTrailingDotAndCrossTypeCollision()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentNameTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var proxy = new GenericJsonAssetProxy();
+                var item = new NewItem(Path.Combine(root, "Original.json"), proxy, null);
+                var editing = new ContentEditingModule(null);
+                Directory.CreateDirectory(Path.Combine(root, "Collision.json"));
+
+                Assert.IsFalse(editing.IsValidAssetName(item, "   ", out _));
+                Assert.IsFalse(editing.IsValidAssetName(item, "Trailing.", out _));
+                Assert.IsFalse(editing.IsValidAssetName(item, "Trailing ", out _));
+                Assert.IsFalse(editing.IsValidAssetName(item, "Collision", out _));
+                if (OperatingSystem.IsWindows())
+                    Assert.IsFalse(editing.IsValidAssetName(item, "CON", out _));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
         public void TestNewItemContextMenuButtonDefersAutoClose()
         {
             var menu = new ContextMenu();
@@ -103,6 +210,21 @@ namespace FlaxEngine.Tests
             Assert.IsFalse(button.CloseMenuOnClick);
             button.Click();
             Assert.IsTrue(clicked);
+        }
+
+        [Test]
+        public void TestContentWorkspaceRefreshWaitsForRenamePopup()
+        {
+            Assert.IsFalse(ContentWindow.ShouldRefreshWorkspace(false, false));
+            Assert.IsFalse(ContentWindow.ShouldRefreshWorkspace(true, true));
+            Assert.IsTrue(ContentWindow.ShouldRefreshWorkspace(true, false));
+        }
+
+        [Test]
+        public void TestContentRenameRejectsReentrantPopup()
+        {
+            Assert.IsTrue(ContentWindow.CanStartRename(false));
+            Assert.IsFalse(ContentWindow.CanStartRename(true));
         }
 
         [Test]

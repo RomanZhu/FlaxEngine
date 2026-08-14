@@ -182,7 +182,7 @@ DEFINE_INTERNAL_CALL(void) EditorInternal_CloseSplashScreen()
     Editor::CloseSplashScreen();
 }
 
-DEFINE_INTERNAL_CALL(bool) EditorInternal_CloneAssetFile(MString* dstPathObj, MString* srcPathObj, Guid* dstId)
+DEFINE_INTERNAL_CALL(bool) EditorInternal_CloneAssetFile(MString* dstPathObj, MString* srcPathObj, Guid* dstId, bool overwrite)
 {
     // Get normalized paths
     String dstPath, srcPath;
@@ -192,7 +192,7 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CloneAssetFile(MString* dstPathObj, MS
     FileSystem::NormalizePath(srcPath);
 
     // Call util function
-    return Content::CloneAssetFile(dstPath, srcPath, *dstId);
+    return Content::CloneAssetFile(dstPath, srcPath, *dstId, overwrite);
 }
 
 DEFINE_INTERNAL_CALL(bool) EditorInternal_GetBinaryAssetStorageId(MString* pathObj, Guid* resultId)

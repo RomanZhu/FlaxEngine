@@ -18,7 +18,7 @@ namespace FlaxEditor
         /// <summary>
         /// Undo action wrapper used to publish local undo context actions into a parent undo timeline.
         /// </summary>
-        public sealed class LinkedUndoAction : IUndoAction, IUndoActionMetadata
+        public sealed class LinkedUndoAction : ITryUndoAction, IUndoActionMetadata
         {
             private Undo _undo;
             private IUndoAction _action;
@@ -75,13 +75,25 @@ namespace FlaxEditor
             /// <inheritdoc />
             public void Do()
             {
-                _undo?.PerformLinkedRedo(_action);
+                TryDo();
             }
 
             /// <inheritdoc />
             public void Undo()
             {
-                _undo?.PerformLinkedUndo(_action);
+                TryUndo();
+            }
+
+            /// <inheritdoc />
+            public bool TryDo()
+            {
+                return _undo != null && _undo.PerformLinkedRedo(_action);
+            }
+
+            /// <inheritdoc />
+            public bool TryUndo()
+            {
+                return _undo != null && _undo.PerformLinkedUndo(_action);
             }
 
             /// <inheritdoc />
@@ -537,20 +549,28 @@ namespace FlaxEditor
             if (TryPrepareReopenReplay(nextAction, "Undo"))
                 return;
 
-            var action = (IUndoAction)UndoOperationsStack.PopHistory();
+            var action = nextAction;
             _preparedReopenReplayAction = null;
-            LogUndoHistory(string.Format("Undo {0}. UndoCount: {1}, RedoCount: {2}", DescribeAction(action), UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
+            LogUndoHistory(string.Format("Undo attempt {0}. UndoCount: {1}, RedoCount: {2}", DescribeAction(action), UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
             _performingUndoRedoDepth++;
+            bool succeeded;
             try
             {
-                action.Undo();
-                OnUndo(action);
-                LogUndoHistory("Undo applied " + DescribeAction(action));
+                succeeded = TryUndoAction(action);
             }
             finally
             {
                 _performingUndoRedoDepth--;
             }
+            if (!succeeded)
+            {
+                LogUndoHistory("Undo failed; history unchanged " + DescribeAction(action));
+                Editor.LogWarning("Cannot undo '" + action.ActionString + "'. The action remains available to retry.");
+                return;
+            }
+            UndoOperationsStack.PopHistory();
+            OnUndo(action);
+            LogUndoHistory("Undo applied " + DescribeAction(action));
         }
 
         /// <summary>
@@ -580,20 +600,28 @@ namespace FlaxEditor
             if (TryPrepareReopenReplay(nextAction, "Redo"))
                 return;
 
-            var action = (IUndoAction)UndoOperationsStack.PopReverse();
+            var action = nextAction;
             _preparedReopenReplayAction = null;
-            LogUndoHistory(string.Format("Redo {0}. UndoCount: {1}, RedoCount: {2}", DescribeAction(action), UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
+            LogUndoHistory(string.Format("Redo attempt {0}. UndoCount: {1}, RedoCount: {2}", DescribeAction(action), UndoOperationsStack.HistoryCount, UndoOperationsStack.ReverseCount));
             _performingUndoRedoDepth++;
+            bool succeeded;
             try
             {
-                action.Do();
-                OnRedo(action);
-                LogUndoHistory("Redo applied " + DescribeAction(action));
+                succeeded = TryDoAction(action);
             }
             finally
             {
                 _performingUndoRedoDepth--;
             }
+            if (!succeeded)
+            {
+                LogUndoHistory("Redo failed; history unchanged " + DescribeAction(action));
+                Editor.LogWarning("Cannot redo '" + action.ActionString + "'. The action remains available to retry.");
+                return;
+            }
+            UndoOperationsStack.PopReverse();
+            OnRedo(action);
+            LogUndoHistory("Redo applied " + DescribeAction(action));
         }
 
         /// <summary>
@@ -692,17 +720,21 @@ namespace FlaxEditor
             if (action == null || !ReferenceEquals(UndoOperationsStack.PeekHistory(), action))
                 return false;
 
-            var historyAction = (IUndoAction)UndoOperationsStack.PopHistory();
+            var historyAction = action;
             _performingUndoRedoDepth++;
+            bool succeeded;
             try
             {
-                historyAction.Undo();
-                OnUndo(historyAction);
+                succeeded = TryUndoAction(historyAction);
             }
             finally
             {
                 _performingUndoRedoDepth--;
             }
+            if (!succeeded)
+                return false;
+            UndoOperationsStack.PopHistory();
+            OnUndo(historyAction);
             return true;
         }
 
@@ -711,17 +743,37 @@ namespace FlaxEditor
             if (action == null || !ReferenceEquals(UndoOperationsStack.PeekReverse(), action))
                 return false;
 
-            var historyAction = (IUndoAction)UndoOperationsStack.PopReverse();
+            var historyAction = action;
             _performingUndoRedoDepth++;
+            bool succeeded;
             try
             {
-                historyAction.Do();
-                OnRedo(historyAction);
+                succeeded = TryDoAction(historyAction);
             }
             finally
             {
                 _performingUndoRedoDepth--;
             }
+            if (!succeeded)
+                return false;
+            UndoOperationsStack.PopReverse();
+            OnRedo(historyAction);
+            return true;
+        }
+
+        private static bool TryDoAction(IUndoAction action)
+        {
+            if (action is ITryUndoAction tryAction)
+                return tryAction.TryDo();
+            action.Do();
+            return true;
+        }
+
+        private static bool TryUndoAction(IUndoAction action)
+        {
+            if (action is ITryUndoAction tryAction)
+                return tryAction.TryUndo();
+            action.Undo();
             return true;
         }
 
@@ -819,9 +871,7 @@ namespace FlaxEditor
 
         private static void LogUndoHistory(string message)
         {
-            /* Temporarily disabled to keep undo history diagnostics out of the log.
-            Editor.Log("[UndoHistory] " + message);
-            */
+            ContentMutationDiagnostics.Log("undo.history", message);
         }
 
         private static string DescribeOwner(object owner)

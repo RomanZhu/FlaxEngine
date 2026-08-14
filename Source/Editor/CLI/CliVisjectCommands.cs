@@ -340,7 +340,7 @@ namespace FlaxEditor
                 }
                 catch (Exception ex)
                 {
-                    var rollbackFailed = Editor.Instance.ContentEditing.CloneAssetFile(backupPath, Path, AssetId);
+                    var rollbackFailed = Editor.Instance.ContentEditing.CloneAssetFile(backupPath, Path, AssetId, true);
                     Item.Reload();
                     var rollbackAsset = Item.LoadAsync();
                     var rollbackLoadFailed = rollbackAsset == null || rollbackAsset.WaitForLoaded();
