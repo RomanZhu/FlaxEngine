@@ -18,8 +18,9 @@ namespace FlaxEditor.Options
         Expand,
 
         /// <summary>
-        /// Rename the node.
+        /// Legacy serialized value. Focuses the object in the viewport.
         /// </summary>
+        [HideInEditor]
         RenameActor,
 
         /// <summary>
@@ -703,9 +704,9 @@ namespace FlaxEditor.Options
         [EditorDisplay("Interface"), EditorOrder(3520)]
         public InputBinding PreviousTab = new InputBinding(KeyboardKeys.Tab, KeyboardKeys.Control, KeyboardKeys.Shift);
 
-        [DefaultValue(SceneNodeDoubleClick.RenameActor)]
+        [DefaultValue(SceneNodeDoubleClick.FocusActor)]
         [EditorDisplay("Interface"), EditorOrder(3530)]
-        public SceneNodeDoubleClick DoubleClickSceneNode = SceneNodeDoubleClick.RenameActor;
+        public SceneNodeDoubleClick DoubleClickSceneNode = SceneNodeDoubleClick.FocusActor;
 
         #endregion
 

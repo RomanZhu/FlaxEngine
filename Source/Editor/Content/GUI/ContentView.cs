@@ -58,6 +58,8 @@ namespace FlaxEditor.Content.GUI
     [HideInEditor]
     public partial class ContentView : ContainerControl, IContentItemOwner
     {
+        private const float RenameDelay = 1.0f;
+
         private readonly List<ContentItem> _items = new List<ContentItem>(256);
         private readonly List<ContentItem> _selection = new List<ContentItem>();
 
@@ -71,6 +73,8 @@ namespace FlaxEditor.Content.GUI
 
         private bool _validDragOver;
         private DragActors _dragActors;
+        private ContentItem _pendingRenameItem;
+        private float _pendingRenameTime = -1.0f;
 
         #region External Events
 
@@ -213,6 +217,7 @@ namespace FlaxEditor.Content.GUI
                 new InputActionsContainer.Binding(options => options.DeselectAll, DeselectAll),
                 new InputActionsContainer.Binding(options => options.Rename, () =>
                 {
+                    CancelPendingRename();
                     if (HasSelection && _selection[0].CanRename)
                     {
                         if (_selection.Count > 1)
@@ -348,6 +353,7 @@ namespace FlaxEditor.Content.GUI
         /// </summary>
         public void ClearSelection()
         {
+            CancelPendingRename();
             if (_selection.Count == 0)
                 return;
 
@@ -364,6 +370,8 @@ namespace FlaxEditor.Content.GUI
         {
             if (items == null)
                 throw new ArgumentNullException();
+
+            CancelPendingRename();
 
             // Check if nothing to select
             if (items.Count == 0)
@@ -416,6 +424,8 @@ namespace FlaxEditor.Content.GUI
             if (item == null)
                 throw new ArgumentNullException();
 
+            CancelPendingRename();
+
             // Lock layout
             var wasLayoutLocked = IsLayoutLocked;
             IsLayoutLocked = true;
@@ -444,6 +454,8 @@ namespace FlaxEditor.Content.GUI
 
         private void BulkSelectUpdate(bool select = true)
         {
+            CancelPendingRename();
+
             // Lock layout
             var wasLayoutLocked = IsLayoutLocked;
             IsLayoutLocked = true;
@@ -487,6 +499,8 @@ namespace FlaxEditor.Content.GUI
         {
             if (item == null)
                 throw new ArgumentNullException();
+
+            CancelPendingRename();
 
             // Lock layout
             var wasLayoutLocked = IsLayoutLocked;
@@ -608,20 +622,24 @@ namespace FlaxEditor.Content.GUI
         /// Called when user clicks on an item.
         /// </summary>
         /// <param name="item">The item.</param>
-        public void OnItemClick(ContentItem item)
+        /// <param name="allowDelayedRename">Whether the click may start delayed renaming.</param>
+        public void OnItemClick(ContentItem item, bool allowDelayedRename = true)
         {
-            bool isSelected = _selection.Contains(item);
+            bool control = Root.GetKey(KeyboardKeys.Control);
+            bool shift = Root.GetKey(KeyboardKeys.Shift);
+            bool canDelayRename = allowDelayedRename && !control && !shift && item.CanRename && _selection.Count == 1 && _selection[0] == item;
+            CancelPendingRename();
 
             // Add/remove from selection
-            if (Root.GetKey(KeyboardKeys.Control))
+            if (control)
             {
-                if (isSelected)
+                if (_selection.Contains(item))
                     Deselect(item);
                 else
                     Select(item, true);
             }
             // Range select
-            else if (_selection.Count != 0 && Root.GetKey(KeyboardKeys.Shift))
+            else if (_selection.Count != 0 && shift)
             {
                 int min = _selection.Min(x => x.IndexInParent);
                 int max = _selection.Max(x => x.IndexInParent);
@@ -642,27 +660,36 @@ namespace FlaxEditor.Content.GUI
             {
                 Select(item);
             }
+
+            if (canDelayRename && _selection.Count == 1 && _selection[0] == item)
+            {
+                _pendingRenameItem = item;
+                _pendingRenameTime = Time.UnscaledGameTime + RenameDelay;
+            }
         }
 
         /// <summary>
-        /// Called when user double-clicks an item.
+        /// Called when user presses a mouse button over an item.
+        /// </summary>
+        public void OnItemMouseDown()
+        {
+            CancelPendingRename();
+        }
+
+        /// <summary>
+        /// Called when user wants to open item.
         /// </summary>
         /// <param name="item">The item.</param>
         public void OnItemDoubleClick(ContentItem item)
         {
-            if (item.CanRename)
-                OnRename?.Invoke(item);
-            else
-                OnOpen?.Invoke(item);
+            CancelPendingRename();
+            OnOpen?.Invoke(item);
         }
 
-        /// <summary>
-        /// Called when user submits an item with the keyboard.
-        /// </summary>
-        /// <param name="item">The item.</param>
-        public void OnItemSubmit(ContentItem item)
+        private void CancelPendingRename()
         {
-            OnOpen?.Invoke(item);
+            _pendingRenameItem = null;
+            _pendingRenameTime = -1.0f;
         }
 
         #endregion
@@ -672,6 +699,8 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         void IContentItemOwner.OnItemDeleted(ContentItem item)
         {
+            if (_pendingRenameItem == item)
+                CancelPendingRename();
             var selectionChanged = _selection.Remove(item);
             _items.Remove(item);
             if (selectionChanged)
@@ -691,6 +720,8 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         void IContentItemOwner.OnItemDispose(ContentItem item)
         {
+            if (_pendingRenameItem == item)
+                CancelPendingRename();
             var selectionChanged = _selection.Remove(item);
             _items.Remove(item);
             if (selectionChanged)
@@ -698,6 +729,20 @@ namespace FlaxEditor.Content.GUI
         }
 
         #endregion
+
+        /// <inheritdoc />
+        public override void Update(float deltaTime)
+        {
+            base.Update(deltaTime);
+
+            if (_pendingRenameItem != null && Time.UnscaledGameTime >= _pendingRenameTime)
+            {
+                var item = _pendingRenameItem;
+                CancelPendingRename();
+                if (ContainsFocus && item.Parent == this && item.CanRename && _selection.Count == 1 && _selection[0] == item)
+                    OnRename?.Invoke(item);
+            }
+        }
 
         /// <inheritdoc />
         public override void Draw()
@@ -731,6 +776,8 @@ namespace FlaxEditor.Content.GUI
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
+            CancelPendingRename();
+
             if (base.OnMouseDown(location, button))
                 return true;
 
@@ -804,12 +851,15 @@ namespace FlaxEditor.Content.GUI
         /// <param name="wheelDelta">Mouse wheel delta.</param>
         public void Zoom(float wheelDelta)
         {
+            CancelPendingRename();
             ViewScale += wheelDelta * 0.05f;
         }
 
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
+            CancelPendingRename();
+
             // Navigate backward
             if (key == KeyboardKeys.Backspace)
             {
@@ -859,7 +909,7 @@ namespace FlaxEditor.Content.GUI
                     }
                     if (item != null)
                     {
-                        OnItemClick(item);
+                        OnItemClick(item, false);
                         return true;
                     }
                 }

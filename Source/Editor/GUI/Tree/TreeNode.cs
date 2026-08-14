@@ -744,6 +744,13 @@ namespace FlaxEditor.GUI.Tree
         }
 
         /// <summary>
+        /// Called when mouse clicks a header that was already the sole selected node.
+        /// </summary>
+        protected virtual void OnSelectedClickHeader()
+        {
+        }
+
+        /// <summary>
         /// Called when mouse is pressing node header for a long time.
         /// </summary>
         protected virtual void OnLongPress()
@@ -1252,6 +1259,8 @@ namespace FlaxEditor.GUI.Tree
                         // Check if user is pressing control key
                         var tree = ParentTree;
                         var window = tree.Root;
+                        bool wasSoleSelectedNode = tree.Selection.Count == 1 && tree.SelectedNode == this;
+                        bool hasSelectionModifier = window.GetKey(KeyboardKeys.Shift) || window.GetKey(KeyboardKeys.Control);
                         if (window.GetKey(KeyboardKeys.Shift))
                         {
                             // Select range
@@ -1267,6 +1276,8 @@ namespace FlaxEditor.GUI.Tree
                             // Select
                             tree.Select(this);
                         }
+                        if (wasSoleSelectedNode && !hasSelectionModifier)
+                            OnSelectedClickHeader();
                     }
                 }
 

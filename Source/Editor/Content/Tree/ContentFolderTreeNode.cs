@@ -17,9 +17,12 @@ namespace FlaxEditor.Content;
 /// <seealso cref="TreeNode" />
 public class ContentFolderTreeNode : TreeNode
 {
+    private const float RenameDelay = 1.0f;
+
     private DragItems _dragOverItems;
     private DragActors _dragActors;
     private List<Rectangle> _highlights;
+    private float _pendingRenameTime = -1.0f;
 
     /// <summary>
     /// The folder.
@@ -141,6 +144,7 @@ public class ContentFolderTreeNode : TreeNode
     /// </summary>
     public void StartRenaming()
     {
+        _pendingRenameTime = -1.0f;
         if (!_folder.CanRename)
             return;
 
@@ -150,13 +154,28 @@ public class ContentFolderTreeNode : TreeNode
     /// <inheritdoc />
     protected override bool OnMouseDoubleClickHeader(ref Float2 location, MouseButton button)
     {
-        if (button == MouseButton.Left)
-        {
-            StartRenaming();
-            return true;
-        }
-
+        _pendingRenameTime = -1.0f;
         return base.OnMouseDoubleClickHeader(ref location, button);
+    }
+
+    /// <inheritdoc />
+    protected override void OnSelectedClickHeader()
+    {
+        _pendingRenameTime = _folder.CanRename ? Time.UnscaledGameTime + RenameDelay : -1.0f;
+    }
+
+    /// <inheritdoc />
+    public override void Update(float deltaTime)
+    {
+        base.Update(deltaTime);
+
+        if (_pendingRenameTime >= 0.0f && Time.UnscaledGameTime >= _pendingRenameTime)
+        {
+            _pendingRenameTime = -1.0f;
+            var tree = ParentTree;
+            if (tree != null && tree.ContainsFocus && tree.Selection.Count == 1 && tree.SelectedNode == this && _folder.CanRename)
+                StartRenaming();
+        }
     }
 
     /// <summary>
@@ -406,14 +425,6 @@ public class ContentFolderTreeNode : TreeNode
     protected override void DoDragDrop()
     {
         DoDragDrop(DragItems.GetDragData(TreeViewPanel.GetDragItems(this, _folder)));
-    }
-
-    /// <inheritdoc />
-    protected override void OnLongPress()
-    {
-        Select();
-
-        StartRenaming();
     }
 
     /// <inheritdoc />

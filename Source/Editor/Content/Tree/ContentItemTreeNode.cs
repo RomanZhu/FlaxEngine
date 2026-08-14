@@ -17,7 +17,10 @@ namespace FlaxEditor.Content;
 /// </summary>
 public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipPreviewProvider
 {
+    private const float RenameDelay = 1.0f;
+
     private List<Rectangle> _highlights;
+    private float _pendingRenameTime = -1.0f;
 
     /// <summary>
     /// The content item.
@@ -175,13 +178,34 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     /// <inheritdoc />
     protected override bool OnMouseDoubleClickHeader(ref Float2 location, MouseButton button)
     {
+        _pendingRenameTime = -1.0f;
         if (button == MouseButton.Left)
         {
-            Editor.Instance.Windows.ContentWin.Rename(Item);
+            Editor.Instance.Windows.ContentWin.Open(Item);
             return true;
         }
 
         return base.OnMouseDoubleClickHeader(ref location, button);
+    }
+
+    /// <inheritdoc />
+    protected override void OnSelectedClickHeader()
+    {
+        _pendingRenameTime = Item.CanRename ? Time.UnscaledGameTime + RenameDelay : -1.0f;
+    }
+
+    /// <inheritdoc />
+    public override void Update(float deltaTime)
+    {
+        base.Update(deltaTime);
+
+        if (_pendingRenameTime >= 0.0f && Time.UnscaledGameTime >= _pendingRenameTime)
+        {
+            _pendingRenameTime = -1.0f;
+            var tree = ParentTree;
+            if (tree != null && tree.ContainsFocus && tree.Selection.Count == 1 && tree.SelectedNode == this && Item.CanRename)
+                Editor.Instance.Windows.ContentWin.Rename(Item);
+        }
     }
 
     /// <inheritdoc />

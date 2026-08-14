@@ -920,6 +920,7 @@ namespace FlaxEditor.Content
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
             Focus();
+            (Parent as ContentView)?.OnItemMouseDown();
 
             if (button == MouseButton.Left)
             {
@@ -956,7 +957,7 @@ namespace FlaxEditor.Content
             if (button == MouseButton.Left && new Rectangle(Float2.Zero, Size).Contains(location))
             {
                 // The input backend sends a release after the double-click notification.
-                // Disarm the ordinary click first so the double-click action cannot be followed
+                // Disarm the ordinary click first so opening cannot be immediately followed
                 // by a stale selection/click against the newly changed editor hierarchy.
                 _isMouseDown = false;
                 (Parent as ContentView)?.OnItemDoubleClick(this);
@@ -1012,7 +1013,7 @@ namespace FlaxEditor.Content
         public override void OnSubmit()
         {
             // Open
-            (Parent as ContentView).OnItemSubmit(this);
+            (Parent as ContentView).OnItemDoubleClick(this);
 
             base.OnSubmit();
         }

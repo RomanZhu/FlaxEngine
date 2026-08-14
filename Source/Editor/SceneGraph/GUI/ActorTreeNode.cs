@@ -25,6 +25,8 @@ namespace FlaxEditor.SceneGraph.GUI
     /// <seealso cref="TreeNode" />
     public class ActorTreeNode : TreeNode
     {
+        private const float RenameDelay = 1.0f;
+
         private int _orderInParent;
         private DragActors _dragActors;
         private DragScripts _dragScripts;
@@ -40,6 +42,7 @@ namespace FlaxEditor.SceneGraph.GUI
         private string _sceneIconTooltip;
         private string _shownSceneIconTooltip;
         private Rectangle _sceneIconTooltipArea;
+        private float _pendingRenameTime = -1.0f;
 
         private const float SceneIconSpacing = 3.0f;
         private const float SceneIconRightMargin = 4.0f;
@@ -433,6 +436,18 @@ namespace FlaxEditor.SceneGraph.GUI
             }
 
             base.Update(deltaTime);
+
+            if (_pendingRenameTime >= 0.0f && Time.UnscaledGameTime >= _pendingRenameTime)
+            {
+                _pendingRenameTime = -1.0f;
+                var tree = ParentTree;
+                if (tree != null && tree.ContainsFocus && tree.Selection.Count == 1 && tree.SelectedNode == this && actor)
+                {
+                    var sceneContext = this.GetSceneContext();
+                    if (sceneContext.Selection.Count == 1 && sceneContext.Selection[0] == ActorNode)
+                        sceneContext.RenameSelection();
+                }
+            }
         }
 
 
@@ -958,6 +973,8 @@ namespace FlaxEditor.SceneGraph.GUI
         /// </summary>
         public void StartRenaming(EditorWindow window = null, Panel treePanel = null)
         {
+            _pendingRenameTime = -1.0f;
+
             // Block renaming during scripts reload
             if (Editor.Instance.ProgressReporting.CompileScripts.IsActive)
                 return;
@@ -1038,6 +1055,8 @@ namespace FlaxEditor.SceneGraph.GUI
         /// <inheritdoc />
         public override bool OnMouseDown(Float2 location, MouseButton button)
         {
+            _pendingRenameTime = -1.0f;
+
             if (button == MouseButton.Left && TestActiveCheckboxHit(ref location))
             {
                 _activeCheckboxPressed = true;
@@ -1073,6 +1092,20 @@ namespace FlaxEditor.SceneGraph.GUI
         }
 
         /// <inheritdoc />
+        public override bool OnKeyDown(KeyboardKeys key)
+        {
+            _pendingRenameTime = -1.0f;
+            return base.OnKeyDown(key);
+        }
+
+        /// <inheritdoc />
+        public override void OnLostFocus()
+        {
+            _pendingRenameTime = -1.0f;
+            base.OnLostFocus();
+        }
+
+        /// <inheritdoc />
         public override void OnMouseLeave()
         {
             _activeCheckboxPressed = false;
@@ -1082,14 +1115,13 @@ namespace FlaxEditor.SceneGraph.GUI
         /// <inheritdoc />
         protected override bool OnMouseDoubleClickHeader(ref Float2 location, MouseButton button)
         {
+            _pendingRenameTime = -1.0f;
             if (button == MouseButton.Left)
             {
                 var sceneContext = this.GetSceneContext();
                 switch (Editor.Instance.Options.Options.Input.DoubleClickSceneNode)
                 {
                 case SceneNodeDoubleClick.RenameActor:
-                    sceneContext.RenameSelection();
-                    return true;
                 case SceneNodeDoubleClick.FocusActor:
                     sceneContext.FocusSelection();
                     return true;
@@ -1101,6 +1133,12 @@ namespace FlaxEditor.SceneGraph.GUI
                 }
             }
             return base.OnMouseDoubleClickHeader(ref location, button);
+        }
+
+        /// <inheritdoc />
+        protected override void OnSelectedClickHeader()
+        {
+            _pendingRenameTime = Actor ? Time.UnscaledGameTime + RenameDelay : -1.0f;
         }
 
         /// <inheritdoc />

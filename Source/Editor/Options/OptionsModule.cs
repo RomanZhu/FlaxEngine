@@ -157,9 +157,10 @@ namespace FlaxEditor.Options
         {
             bool migrated = false;
 
-            if (input.DoubleClickSceneNode == SceneNodeDoubleClick.Expand)
+            if (input.DoubleClickSceneNode == SceneNodeDoubleClick.Expand ||
+                input.DoubleClickSceneNode == SceneNodeDoubleClick.RenameActor)
             {
-                input.DoubleClickSceneNode = SceneNodeDoubleClick.RenameActor;
+                input.DoubleClickSceneNode = SceneNodeDoubleClick.FocusActor;
                 migrated = true;
             }
 
