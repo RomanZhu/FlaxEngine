@@ -8,6 +8,7 @@
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/TimeSpan.h"
 #include "Engine/Platform/File.h"
+#include "Engine/Platform/FileSystem.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Profiler/ProfilerMemory.h"
 #include "Engine/Serialization/FileWriteStream.h"
@@ -902,14 +903,38 @@ FlaxChunk* FlaxStorage::AllocateChunk()
 bool FlaxStorage::Create(const StringView& path, Span<AssetInitData> assets, bool silentMode, const CustomData* customData)
 {
     PROFILE_CPU();
-    ZoneText(*path, path.Length());
-    LOG(Info, "Creating package at \'{0}\'. Silent Mode: {1}", path, silentMode);
+    String pathNorm(path);
+    ContentStorageManager::FormatPath(pathNorm);
+    const StringView filePath(pathNorm);
+    ZoneText(*filePath, filePath.Length());
+    LOG(Info, "Creating package at \'{0}\'. Silent Mode: {1}", filePath, silentMode);
 
-    // Prepare to have access to the file
-    auto storage = ContentStorageManager::EnsureAccess(path);
+    // Serialize into a sibling file and replace the destination only after the complete asset
+    // has been written. This prevents file watchers and readers from observing a truncated asset.
+    FlaxStorageReference storage;
+    if (ContentStorageManager::LockFileAccess(filePath, storage))
+    {
+        LOG(Error, "Cannot save package at '{0}' because its content storage is still in use.", filePath);
+        return true;
+    }
+    bool storageLocked = storage != nullptr;
+    SCOPE_EXIT
+    {
+        if (storageLocked)
+            storage->UnlockFileAccess();
+    };
+    const bool reloadStorage = storage && storage->IsLoaded();
+    String tempPath(pathNorm);
+    tempPath += TEXT(".tmp-");
+    tempPath += Guid::New().ToString(Guid::FormatType::N);
+    SCOPE_EXIT
+    {
+        if (FileSystem::FileExists(tempPath))
+            FileSystem::DeleteFile(tempPath);
+    };
 
-    // Open file
-    auto stream = FileWriteStream::Open(path);
+    // Open temporary file
+    auto stream = FileWriteStream::Open(tempPath);
     if (stream == nullptr)
         return true;
 
@@ -919,8 +944,24 @@ bool FlaxStorage::Create(const StringView& path, Span<AssetInitData> assets, boo
     // Close file
     Delete(stream);
 
-    // Reload storage container
-    if (storage && storage->IsLoaded())
+    // Commit the completed file. The temporary file is in the destination directory so this is
+    // an atomic same-volume replacement on supported desktop platforms.
+    if (!result && FileSystem::MoveFile(filePath, tempPath, true))
+    {
+        LOG(Error, "Cannot replace package at '{0}' with completed temporary file '{1}'.", filePath, tempPath);
+        result = true;
+    }
+
+    // Let storage reads resume before reloading from the committed (or unchanged) file.
+    if (storageLocked)
+    {
+        storage->UnlockFileAccess();
+        storageLocked = false;
+    }
+
+    // Reload storage container. On failure this also restores chunk file locations that may have
+    // been recalculated while serializing the temporary file.
+    if (reloadStorage)
     {
         if (silentMode)
         {
@@ -1422,7 +1463,8 @@ FileReadStream* FlaxStorage::OpenFile()
         PROFILE_MEM(ContentFiles);
 
         // Open file
-        auto file = File::Open(_path, FileMode::OpenExisting, FileAccess::Read, FileShare::Read);
+        const FileShare shareMode = static_cast<FileShare>(static_cast<uint32>(FileShare::Read) | static_cast<uint32>(FileShare::Delete));
+        auto file = File::Open(_path, FileMode::OpenExisting, FileAccess::Read, shareMode);
         if (file == nullptr)
         {
             LOG(Error, "Cannot open Flax Storage file \'{0}\'.", _path);
@@ -1434,6 +1476,18 @@ FileReadStream* FlaxStorage::OpenFile()
         stream = New<FileReadStream>(file);
     }
     return stream;
+}
+
+void FlaxStorage::LockFileAccess()
+{
+    _fileMutationLocker.Lock();
+    Platform::InterlockedIncrement(&_isUnloadingData);
+}
+
+void FlaxStorage::UnlockFileAccess()
+{
+    Platform::InterlockedDecrement(&_isUnloadingData);
+    _fileMutationLocker.Unlock();
 }
 
 bool FlaxStorage::CloseFileHandles()
@@ -1469,7 +1523,8 @@ bool FlaxStorage::CloseFileHandles()
             }
         }
     }
-    waitTime = 100;
+    // Explicit asset moves should tolerate longer-running thumbnail/streaming reads.
+    waitTime = 1000;
     while (Platform::AtomicRead(&_chunksLock) != 0 && waitTime-- > 0)
         Platform::Sleep(1);
     if (Platform::AtomicRead(&_chunksLock) != 0)

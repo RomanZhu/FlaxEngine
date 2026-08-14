@@ -1303,8 +1303,75 @@ namespace FlaxEditor.Windows
         {
             if (items == null)
                 throw new ArgumentNullException(nameof(items));
+            if (newParent == null)
+                throw new ArgumentNullException(nameof(newParent));
+
+            // A selected folder already moves all of its children. Exclude selected descendants
+            // so a multi-selection does not move them a second time outside the folder.
+            var itemsToMove = new List<ContentItem>(items.Count);
             for (int i = 0; i < items.Count; i++)
-                MoveWithUndo(items[i], newParent);
+            {
+                var item = items[i];
+                if (item == null)
+                    throw new ArgumentNullException(nameof(items));
+                if (item.ParentFolder == newParent || itemsToMove.Contains(item))
+                    continue;
+
+                bool isChildOfSelectedFolder = false;
+                for (int j = 0; j < items.Count; j++)
+                {
+                    if (i != j && items[j] is ContentFolder folder && folder.Find(item))
+                    {
+                        isChildOfSelectedFolder = true;
+                        break;
+                    }
+                }
+                if (!isChildOfSelectedFolder)
+                    itemsToMove.Add(item);
+            }
+
+            var movedItems = new List<ContentItem>(itemsToMove.Count);
+            var oldPaths = new List<string>(itemsToMove.Count);
+            var newPaths = new List<string>(itemsToMove.Count);
+            for (int i = 0; i < itemsToMove.Count; i++)
+            {
+                var item = itemsToMove[i];
+                var oldPath = item.Path;
+                if (!Editor.ContentDatabase.Move(item, newParent))
+                {
+                    // Keep a batch move all-or-nothing. Roll back items already moved if a
+                    // later item fails (for example because an external process owns it).
+                    var rollbackActions = new List<IUndoAction>();
+                    for (int j = movedItems.Count - 1; j >= 0; j--)
+                    {
+                        if (!Editor.ContentDatabase.Move(movedItems[j], oldPaths[j]))
+                        {
+                            Editor.LogError("Failed to roll back content item move from '" + newPaths[j] + "' to '" + oldPaths[j] + "'.");
+                            rollbackActions.Add(new MoveContentItemAction(Editor, oldPaths[j], newPaths[j], "Move " + movedItems[j].FileName));
+                        }
+                    }
+                    if (rollbackActions.Count == 1)
+                        Editor.Undo.AddAction(rollbackActions[0]);
+                    else if (rollbackActions.Count > 1)
+                        Editor.Undo.AddAction(new MultiUndoAction(rollbackActions, "Move " + rollbackActions.Count + " items"));
+                    return;
+                }
+                var newPath = item.Path;
+                if (!oldPath.Equals(newPath, StringComparison.Ordinal))
+                {
+                    movedItems.Add(item);
+                    oldPaths.Add(oldPath);
+                    newPaths.Add(newPath);
+                }
+            }
+
+            var actions = new List<IUndoAction>(movedItems.Count);
+            for (int i = 0; i < movedItems.Count; i++)
+                actions.Add(new MoveContentItemAction(Editor, oldPaths[i], newPaths[i], "Move " + movedItems[i].FileName));
+            if (actions.Count == 1)
+                Editor.Undo.AddAction(actions[0]);
+            else if (actions.Count > 1)
+                Editor.Undo.AddAction(new MultiUndoAction(actions, "Move " + actions.Count + " items"));
         }
 
         /// <summary>
@@ -1321,7 +1388,8 @@ namespace FlaxEditor.Windows
                 return;
 
             var oldPath = item.Path;
-            Editor.ContentDatabase.Move(item, newParent);
+            if (!Editor.ContentDatabase.Move(item, newParent))
+                return;
             var newPath = item.Path;
             if (!oldPath.Equals(newPath, StringComparison.Ordinal))
                 Editor.Undo.AddAction(new MoveContentItemAction(Editor, oldPath, newPath, "Move " + item.FileName));
@@ -1338,7 +1406,8 @@ namespace FlaxEditor.Windows
                 throw new ArgumentNullException();
 
             var oldPath = item.Path;
-            Editor.ContentDatabase.Move(item, newPath);
+            if (!Editor.ContentDatabase.Move(item, newPath))
+                return;
             newPath = StringUtils.NormalizePath(newPath);
             if (Editor.ContentDatabase.Find(newPath) != null && !oldPath.Equals(newPath, StringComparison.Ordinal))
                 Editor.Undo.AddAction(new MoveContentItemAction(Editor, oldPath, newPath, "Move " + item.FileName));

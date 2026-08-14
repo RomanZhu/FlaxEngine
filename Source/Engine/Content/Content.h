@@ -332,6 +332,14 @@ public:
     API_FUNCTION() static bool RenameAsset(const StringView& oldPath, const StringView& newPath);
 
     /// <summary>
+    /// Renames an asset folder as a single filesystem operation and updates loaded asset paths.
+    /// </summary>
+    /// <param name="oldPath">The old folder path.</param>
+    /// <param name="newPath">The new folder path.</param>
+    /// <returns>True if failed, otherwise false.</returns>
+    API_FUNCTION() static bool RenameAssetFolder(const StringView& oldPath, const StringView& newPath);
+
+    /// <summary>
     /// Performs the fast temporary asset clone to the temporary folder.
     /// </summary>
     /// <param name="path">The source path.</param>

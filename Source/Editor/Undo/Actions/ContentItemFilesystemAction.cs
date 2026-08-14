@@ -792,7 +792,8 @@ namespace FlaxEditor.Actions
                 return false;
             }
 
-            _editor.ContentDatabase.Move(item, targetPath);
+            if (!_editor.ContentDatabase.Move(item, targetPath))
+                return false;
             item = _editor.ContentDatabase.Find(targetPath);
             if (item == null)
             {

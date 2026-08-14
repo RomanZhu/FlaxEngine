@@ -298,10 +298,6 @@ bool UnixFileSystem::MoveFile(const StringView& dst, const StringView& src, bool
         return true;
     }
 
-    if (overwrite)
-    {
-        unlink(UnixString(*dst, dst.Length()).Get());
-    }
     if (rename(UnixString(*src, src.Length()).Get(), UnixString(*dst, dst.Length()).Get()) != 0)
     {
         if (errno == EXDEV)

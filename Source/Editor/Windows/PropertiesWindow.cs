@@ -979,6 +979,30 @@ namespace FlaxEditor.Windows
             return false;
         }
 
+        private bool TryCreateMaterialPropertiesSelection(IReadOnlyList<ContentItem> selection, out MaterialContentAssetsState state)
+        {
+            state = null;
+            if (selection.Count == 0)
+                return false;
+
+            var proxies = new List<MaterialAssetPropertiesProxy>(selection.Count);
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is not AssetItem assetItem)
+                    return false;
+
+                var asset = assetItem.LoadAsync();
+                if (asset is not MaterialBase material)
+                    return false;
+                if (!asset.IsLoaded && !asset.LastLoadFailed)
+                    _waitingForContentAssets.Add(asset);
+                proxies.Add(new MaterialAssetPropertiesProxy(material));
+            }
+
+            state = new MaterialContentAssetsState(proxies);
+            return true;
+        }
+
         private void SelectContentObjects(bool forceRebuild = false)
         {
             _waitingForContentAssets.Clear();
@@ -1010,6 +1034,11 @@ namespace FlaxEditor.Windows
             {
                 _contentAssetState = prefabAssetsState;
                 objects.AddRange(prefabAssetsState.Instances);
+            }
+            else if (TryCreateMaterialPropertiesSelection(selection, out var materialAssetsState))
+            {
+                _contentAssetState = materialAssetsState;
+                objects.AddRange(materialAssetsState.Proxies);
             }
             else
             {
@@ -1182,7 +1211,9 @@ namespace FlaxEditor.Windows
             }
             if (_discardContentAssetChanges)
             {
-                if (_contentAssetState is MaterialAssetPropertiesProxy materialState)
+                if (_contentAssetState is MaterialContentAssetsState materialAssetsState)
+                    materialAssetsState.DiscardPendingChanges();
+                else if (_contentAssetState is MaterialAssetPropertiesProxy materialState)
                     materialState.DiscardPendingChanges();
                 else if (_contentAssetState is ParticleAssetPropertiesProxy particleState)
                     particleState.DiscardPendingChanges();
@@ -1200,6 +1231,10 @@ namespace FlaxEditor.Windows
         {
             if (_showContentSelection && _contentAssetState is JsonAssetContentAssetState jsonAssetState)
                 jsonAssetState.SaveChanges();
+            else if (_showContentSelection && _contentAssetState is MaterialContentAssetsState materialAssetsState)
+                materialAssetsState.SavePendingChanges();
+            else if (_showContentSelection && _contentAssetState is MaterialAssetPropertiesProxy materialState)
+                materialState.SavePendingChanges();
             Editor.Instance.SaveAll();
         }
 
@@ -1219,7 +1254,9 @@ namespace FlaxEditor.Windows
                 }
             }
 
-            if (_showContentSelection && _contentAssetState is MaterialAssetPropertiesProxy materialState)
+            if (_showContentSelection && _contentAssetState is MaterialContentAssetsState materialAssetsState)
+                materialAssetsState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
+            else if (_showContentSelection && _contentAssetState is MaterialAssetPropertiesProxy materialState)
                 materialState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
             else if (_showContentSelection && _contentAssetState is ParticleAssetPropertiesProxy particleState)
                 particleState.UpdateDeferredSave(deltaTime, Root?.GetMouseButton(MouseButton.Left) ?? false);
@@ -1644,8 +1681,23 @@ namespace FlaxEditor.Windows
                     return;
 
                 _hasPendingSave = false;
-                if (Material != null && Material.IsLoaded && Material.Save())
-                    Editor.LogError("Cannot save asset.");
+                if (Material == null || !Material.IsLoaded)
+                    return;
+
+                var path = Material.Path;
+                var contentDatabase = Editor.Instance.ContentDatabase;
+                bool failed = true;
+                contentDatabase?.BeginAssetSave(path);
+                try
+                {
+                    failed = Material.Save();
+                    if (failed)
+                        Editor.LogError("Cannot save material asset '" + path + "'.");
+                }
+                finally
+                {
+                    contentDatabase?.EndAssetSave(path, !failed);
+                }
             }
 
             public void DiscardPendingChanges()
@@ -1656,6 +1708,40 @@ namespace FlaxEditor.Windows
             public void Dispose()
             {
                 SavePendingChanges();
+            }
+        }
+
+        private sealed class MaterialContentAssetsState : IDisposable
+        {
+            public readonly List<MaterialAssetPropertiesProxy> Proxies;
+
+            public MaterialContentAssetsState(List<MaterialAssetPropertiesProxy> proxies)
+            {
+                Proxies = proxies;
+            }
+
+            public void UpdateDeferredSave(float deltaTime, bool isDragging)
+            {
+                for (int i = 0; i < Proxies.Count; i++)
+                    Proxies[i].UpdateDeferredSave(deltaTime, isDragging);
+            }
+
+            public void SavePendingChanges()
+            {
+                for (int i = 0; i < Proxies.Count; i++)
+                    Proxies[i].SavePendingChanges();
+            }
+
+            public void DiscardPendingChanges()
+            {
+                for (int i = 0; i < Proxies.Count; i++)
+                    Proxies[i].DiscardPendingChanges();
+            }
+
+            public void Dispose()
+            {
+                for (int i = 0; i < Proxies.Count; i++)
+                    Proxies[i].Dispose();
             }
         }
 
@@ -1690,6 +1776,7 @@ namespace FlaxEditor.Windows
                 var data = SurfaceUtils.InitGraphParameters(parameters, sourceMaterial);
                 var materialInstance = material as MaterialInstance;
                 var baseMaterial = materialInstance != null ? materialInstance.BaseMaterial : null;
+                var materialProxies = Values.Cast<MaterialAssetPropertiesProxy>().ToArray();
                 SurfaceUtils.DisplayGraphParameters(parametersGroup, data,
                                                     MaterialParameterGet,
                                                     MaterialParameterSet,
@@ -1707,9 +1794,16 @@ namespace FlaxEditor.Windows
                                                         label.CheckBox.Tag = parameter;
                                                         label.CheckChanged += nameLabel =>
                                                         {
-                                                            var materialParameter = (MaterialParameter)nameLabel.CheckBox.Tag;
-                                                            materialParameter.IsOverride = nameLabel.CheckBox.Checked;
-                                                            proxy.RequestSave();
+                                                            var sourceParameter = (MaterialParameter)nameLabel.CheckBox.Tag;
+                                                            for (int i = 0; i < materialProxies.Length; i++)
+                                                            {
+                                                                var targetProxy = materialProxies[i];
+                                                                var targetParameter = targetProxy.Material?.GetParameter(sourceParameter.Name);
+                                                                if (targetParameter == null || targetParameter.ParameterType != sourceParameter.ParameterType)
+                                                                    continue;
+                                                                targetParameter.IsOverride = nameLabel.CheckBox.Checked;
+                                                                targetProxy.RequestSave();
+                                                            }
                                                             nameLabel.UpdateStyle();
                                                         };
                                                         itemLayout.Property(label, valueContainer, null, e.Tooltip?.Text);
@@ -1726,13 +1820,20 @@ namespace FlaxEditor.Windows
 
             private static object MaterialParameterGet(object instance, GraphParameter parameter, object tag)
             {
-                return ((MaterialParameter)tag).Value;
+                var proxy = (MaterialAssetPropertiesProxy)instance;
+                var sourceParameter = (MaterialParameter)tag;
+                var targetParameter = proxy.Material?.GetParameter(sourceParameter.Name);
+                return targetParameter != null && targetParameter.ParameterType == sourceParameter.ParameterType ? targetParameter.Value : null;
             }
 
             private static void MaterialParameterSet(object instance, object value, GraphParameter parameter, object tag)
             {
                 var proxy = (MaterialAssetPropertiesProxy)instance;
-                ((MaterialParameter)tag).Value = value;
+                var sourceParameter = (MaterialParameter)tag;
+                var targetParameter = proxy.Material?.GetParameter(sourceParameter.Name);
+                if (targetParameter == null || targetParameter.ParameterType != sourceParameter.ParameterType)
+                    return;
+                targetParameter.Value = value;
                 proxy.RequestSave();
             }
         }

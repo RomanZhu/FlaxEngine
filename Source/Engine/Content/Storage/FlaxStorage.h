@@ -93,6 +93,7 @@ protected:
     intptr _isUnloadingData = 0;
     double _lastRefLostTime;
     CriticalSection _loadLocker;
+    CriticalSection _fileMutationLocker;
 
     // Storage
     ThreadLocal<FileReadStream*> _file;
@@ -417,6 +418,16 @@ public:
     /// Closes the file handles (it can be modified from the outside).
     /// </summary>
     bool CloseFileHandles();
+
+    /// <summary>
+    /// Prevents new chunk/file access while a filesystem mutation is in progress.
+    /// </summary>
+    void LockFileAccess();
+
+    /// <summary>
+    /// Restores chunk/file access after a filesystem mutation.
+    /// </summary>
+    void UnlockFileAccess();
 
     /// <summary>
 	/// Releases storage resources and closes handle to the file.

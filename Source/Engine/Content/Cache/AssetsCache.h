@@ -252,6 +252,13 @@ public:
     /// <param name="newPath">New path</param>
     /// <returns>True if has been deleted, otherwise false</returns>
     bool RenameAsset(const StringView& oldPath, const StringView& newPath);
+
+    /// <summary>
+    /// Renames all assets contained in a folder.
+    /// </summary>
+    /// <param name="oldPath">Old folder path.</param>
+    /// <param name="newPath">New folder path.</param>
+    void RenameFolder(const StringView& oldPath, const StringView& newPath);
 #endif
 
     /// <summary>

@@ -21,6 +21,53 @@ public class TreeViewPanel : Panel
     private List<ContentItem> _cutItems = new List<ContentItem>();
 
     /// <summary>
+    /// Gets the content items that can be moved, copied, or duplicated from the tree selection.
+    /// </summary>
+    /// <param name="tree">The content tree.</param>
+    /// <returns>The selected content items.</returns>
+    public static List<ContentItem> GetSelectedContentItems(Tree tree)
+    {
+        var items = new List<ContentItem>();
+        if (tree == null)
+            return items;
+
+        foreach (var node in tree.Selection)
+        {
+            switch (node)
+            {
+            // In tree-only mode content items are represented by tree nodes and are not
+            // attached to the GUI hierarchy themselves, so ContentItem.CanDrag is false.
+            // The tree node is still a valid drag source (including multi-selection).
+            case ContentItemTreeNode contentNode:
+                items.Add(contentNode.Item);
+                break;
+            case ContentFolderTreeNode folderNode when !folderNode.IsRoot && folderNode.CanDelete && folderNode.Folder.CanDrag:
+                items.Add(folderNode.Folder);
+                break;
+            }
+        }
+        return items;
+    }
+
+    /// <summary>
+    /// Gets the content items to include in a drag operation started by the specified node.
+    /// </summary>
+    /// <param name="node">The node that started the drag operation.</param>
+    /// <param name="item">The content item represented by the node.</param>
+    /// <returns>The content items to drag.</returns>
+    public static List<ContentItem> GetDragItems(TreeNode node, ContentItem item)
+    {
+        var tree = node.ParentTree;
+        if (tree != null && tree.Selection.Contains(node))
+        {
+            var items = GetSelectedContentItems(tree);
+            if (items.Count != 0)
+                return items;
+        }
+        return new List<ContentItem> { item };
+    }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="TreeViewPanel"/> class.
     /// </summary>
     public TreeViewPanel()
@@ -95,16 +142,7 @@ public class TreeViewPanel : Panel
         var selection = ContentTree.Selection;
         if (selection.Count > 0)
         {
-            var items = new List<ContentItem>();
-            foreach (var node in selection)
-            {
-                if (node is ContentItemTreeNode contentNode)
-                {
-                    items.Add(contentNode.Item);
-                }
-            }
-
-            Editor.Instance.Windows.ContentWin.Duplicate(items);
+            Editor.Instance.Windows.ContentWin.Duplicate(GetSelectedContentItems(ContentTree));
         }
     }
     
@@ -119,10 +157,7 @@ public class TreeViewPanel : Panel
         var selection = ContentTree.Selection;
         if (selection.Count == 0)
             return;
-        var filePaths = new List<string>();
-        foreach (var node in selection)
-            if (node is ContentItemTreeNode contentNode)
-                filePaths.Add(contentNode.Item.Path);
+        var filePaths = GetSelectedContentItems(ContentTree).ConvertAll(item => item.Path);
 
         Clipboard.Files = filePaths.ToArray();
         UpdateContentItemCut(false);
@@ -163,12 +198,7 @@ public class TreeViewPanel : Panel
         // Add selection to cut list
         if (cut)
         {
-            var selection = ContentTree.Selection;
-            foreach (var node in selection)
-            {
-                if (node is ContentItemTreeNode contentNode)
-                    _cutItems.Add(contentNode.Item);
-            }
+            _cutItems.AddRange(GetSelectedContentItems(ContentTree));
         }
             
         // Update item with if it is being cut.

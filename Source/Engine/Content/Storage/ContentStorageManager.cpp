@@ -18,6 +18,14 @@ namespace
     Array<FlaxFile*> Files;
     Array<FlaxPackage*> Packages;
     Dictionary<String, FlaxStorage*> StorageMap;
+
+    bool IsPathInFolder(const StringView& path, const StringView& folder)
+    {
+        if (path.Length() <= folder.Length() || !path.StartsWith(folder, StringSearchCase::IgnoreCase))
+            return false;
+        const Char separator = path[folder.Length()];
+        return separator == '/' || separator == '\\';
+    }
 }
 
 class ContentStorageService : public EngineService
@@ -130,6 +138,56 @@ FlaxStorageReference ContentStorageManager::EnsureAccess(const StringView& path)
     return storage;
 }
 
+bool ContentStorageManager::LockFileAccess(const StringView& path, FlaxStorageReference& storage)
+{
+    storage = TryGetStorage(path);
+    if (!storage)
+        return false;
+
+    storage->LockFileAccess();
+    if (storage->IsLoaded() && storage->CloseFileHandles())
+    {
+        LOG(Warning, "Cannot release content storage handle for '{0}'.", path);
+        storage->UnlockFileAccess();
+        storage = nullptr;
+        return true;
+    }
+    return false;
+}
+
+bool ContentStorageManager::LockFolderAccess(const StringView& path, Array<FlaxStorageReference>& storages)
+{
+    storages.Clear();
+    {
+        ScopeLock lock(Locker);
+        for (auto i = StorageMap.Begin(); i.IsNotEnd(); ++i)
+        {
+            if (IsPathInFolder(i->Key, path))
+                storages.Add(FlaxStorageReference(i->Value));
+        }
+    }
+
+    for (auto& storage : storages)
+        storage->LockFileAccess();
+    for (auto& storage : storages)
+    {
+        if (storage && storage->IsLoaded() && storage->CloseFileHandles())
+        {
+            LOG(Warning, "Cannot release content storage handle for '{0}'.", storage->GetPath());
+            UnlockFolderAccess(storages);
+            return true;
+        }
+    }
+    return false;
+}
+
+void ContentStorageManager::UnlockFolderAccess(Array<FlaxStorageReference>& storages)
+{
+    for (auto& storage : storages)
+        storage->UnlockFileAccess();
+    storages.Clear();
+}
+
 uint32 ContentStorageManager::GetMemoryUsage()
 {
     ScopeLock lock(Locker);
@@ -180,6 +238,28 @@ void ContentStorageManager::OnRenamed(const StringView& oldPath, const StringVie
         const auto value = i->Value;
         StorageMap.Remove(i);
         StorageMap.Add(newPath, value);
+    }
+}
+
+void ContentStorageManager::OnRenamedFolder(const StringView& oldPath, const StringView& newPath)
+{
+    ScopeLock lock(Locker);
+    Array<Pair<String, FlaxStorage*>> renamed;
+    for (auto i = StorageMap.Begin(); i.IsNotEnd(); ++i)
+    {
+        if (IsPathInFolder(i->Key, oldPath))
+        {
+            String path(newPath);
+            path += i->Key.Substring(oldPath.Length());
+            renamed.Add(Pair<String, FlaxStorage*>(path, i->Value));
+        }
+    }
+    for (auto& entry : renamed)
+    {
+        const String oldStoragePath = entry.Second->GetPath();
+        StorageMap.Remove(oldStoragePath);
+        entry.Second->OnRename(entry.First);
+        StorageMap.Add(entry.First, entry.Second);
     }
 }
 

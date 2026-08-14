@@ -187,7 +187,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     /// <inheritdoc />
     protected override void DoDragDrop()
     {
-        DoDragDrop(DragItems.GetDragData(Item));
+        DoDragDrop(DragItems.GetDragData(TreeViewPanel.GetDragItems(this, Item)));
     }
 
     /// <inheritdoc />

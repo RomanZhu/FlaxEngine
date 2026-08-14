@@ -405,7 +405,7 @@ public class ContentFolderTreeNode : TreeNode
     /// <inheritdoc />
     protected override void DoDragDrop()
     {
-        DoDragDrop(DragItems.GetDragData(_folder));
+        DoDragDrop(DragItems.GetDragData(TreeViewPanel.GetDragItems(this, _folder)));
     }
 
     /// <inheritdoc />

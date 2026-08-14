@@ -48,6 +48,28 @@ public:
     static FlaxStorageReference EnsureAccess(const StringView& path);
 
     /// <summary>
+    /// Locks a storage file for a filesystem mutation and closes all engine-owned handles.
+    /// </summary>
+    /// <param name="path">The file path.</param>
+    /// <param name="storage">The locked storage, if one exists.</param>
+    /// <returns>True if the storage could not be locked and released, otherwise false.</returns>
+    static bool LockFileAccess(const StringView& path, FlaxStorageReference& storage);
+
+    /// <summary>
+    /// Locks all storage files in a folder for a filesystem mutation.
+    /// </summary>
+    /// <param name="path">The folder path.</param>
+    /// <param name="storages">The locked storage files.</param>
+    /// <returns>True if any storage could not be locked and released, otherwise false.</returns>
+    static bool LockFolderAccess(const StringView& path, Array<FlaxStorageReference>& storages);
+
+    /// <summary>
+    /// Releases storage files locked for a filesystem mutation.
+    /// </summary>
+    /// <param name="storages">The locked storage files.</param>
+    static void UnlockFolderAccess(Array<FlaxStorageReference>& storages);
+
+    /// <summary>
     /// Gets total memory used by chunks (in bytes).
     /// </summary>
     /// <returns>Memory usage in bytes.</returns>
@@ -74,6 +96,13 @@ public:
     /// <param name="oldPath">The old path.</param>
     /// <param name="newPath">The new path.</param>
     static void OnRenamed(const StringView& oldPath, const StringView& newPath);
+
+    /// <summary>
+    /// Updates cached storage paths after a folder has been renamed.
+    /// </summary>
+    /// <param name="oldPath">The old folder path.</param>
+    /// <param name="newPath">The new folder path.</param>
+    static void OnRenamedFolder(const StringView& oldPath, const StringView& newPath);
 
     /// <summary>
     /// Ensures that storage manager is unlocked (by stopping the thread if its locked).

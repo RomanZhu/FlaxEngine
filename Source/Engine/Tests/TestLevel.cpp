@@ -714,6 +714,48 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(FileSystem::FileExists(GetExternalActorPath(renamedPath, actorId)));
     }
 
+    SECTION("Rename content folder is atomic and updates loaded assets")
+    {
+        const Guid sceneId = ParseGuid("45454545454545454545454545454541");
+        const Guid actorId = ParseGuid("45454545454545454545454545454542");
+        const String sourceFolder = Globals::ProjectContentFolder / TEXT("__ContentFolderMoveSource");
+        const String destinationFolder = Globals::ProjectContentFolder / TEXT("__ContentFolderMoveTarget");
+        const String sourceScenePath = sourceFolder / TEXT("Nested/FolderMove.scene");
+        const String destinationScenePath = destinationFolder / TEXT("Nested/FolderMove.scene");
+        FileSystem::DeleteDirectory(sourceFolder);
+        FileSystem::DeleteDirectory(destinationFolder);
+        CleanupTestSceneFiles(sourceScenePath);
+        CleanupTestSceneFiles(destinationScenePath);
+        SceneAsset* sceneAsset = nullptr;
+        SCOPE_EXIT
+        {
+            if (sceneAsset)
+                Content::UnloadAsset(sceneAsset);
+            CleanupTestSceneFiles(sourceScenePath);
+            CleanupTestSceneFiles(destinationScenePath);
+            FileSystem::DeleteDirectory(sourceFolder);
+            FileSystem::DeleteDirectory(destinationFolder);
+        };
+
+        WriteTestSceneAsset(sourceScenePath, sceneId, true);
+        WriteExternalActorFile(sourceScenePath, actorId, sceneId, "Actor", 1024);
+        sceneAsset = Content::Load<SceneAsset>(sourceScenePath);
+        REQUIRE(sceneAsset);
+        REQUIRE(!sceneAsset->WaitForLoaded());
+
+        REQUIRE(!Content::RenameAssetFolder(sourceFolder, destinationFolder));
+
+        CHECK(!FileSystem::DirectoryExists(sourceFolder));
+        CHECK(FileSystem::DirectoryExists(destinationFolder));
+        CHECK(FileSystem::FileExists(destinationScenePath));
+        CHECK(!FileSystem::DirectoryExists(GetSceneActorsFolder(sourceScenePath)));
+        CHECK(FileSystem::FileExists(GetExternalActorPath(destinationScenePath, actorId)));
+        CHECK(sceneAsset->GetPath() == destinationScenePath);
+        AssetInfo info;
+        REQUIRE(Content::GetAssetInfo(sceneId, info));
+        CHECK(info.Path == destinationScenePath);
+    }
+
     SECTION("Rename duplicated external actors scene moves cloned actor folder")
     {
         const Guid sceneId = ParseGuid("88888888888888888888888888888881");

@@ -438,36 +438,12 @@ namespace FlaxEditor.Modules
             string extension = Path.GetExtension(el.Path);
             string newPath = StringUtils.CombinePaths(el.ParentFolder.Path, el.ShortName + extension);
 
-            // Special case for folders
-            if (el.IsFolder)
-            {
-                // Cache data
-                string oldPath = el.Path;
-                var folder = (ContentFolder)el;
-
-                // Create new folder
-                try
-                {
-                    Directory.CreateDirectory(newPath);
-                }
-                catch (Exception ex)
-                {
-                    Editor.LogWarning(ex);
-                    Editor.LogError(string.Format("Cannot move folder \'{0}\' to \'{1}\'", oldPath, newPath));
-                    return;
-                }
-
-                // Change path
-                el.UpdatePath(newPath);
-
-                // Rename all child elements
+            // The whole folder has already been moved on disk and in the native content cache.
+            // Only synchronize the managed content item paths here.
+            el.UpdatePath(newPath);
+            if (el is ContentFolder folder)
                 for (int i = 0; i < folder.Children.Count; i++)
                     UpdateAssetNewNameTree(folder.Children[i]);
-            }
-            else
-            {
-                RenameAsset(el, ref newPath);
-            }
         }
 
         /// <summary>
@@ -475,10 +451,13 @@ namespace FlaxEditor.Modules
         /// </summary>
         /// <param name="items">The items.</param>
         /// <param name="newParent">The new parent.</param>
-        public void Move(List<ContentItem> items, ContentFolder newParent)
+        /// <returns>True if all items were moved, otherwise false.</returns>
+        public bool Move(List<ContentItem> items, ContentFolder newParent)
         {
+            bool result = true;
             for (int i = 0; i < items.Count; i++)
-                Move(items[i], newParent);
+                result &= Move(items[i], newParent);
+            return result;
         }
 
         /// <summary>
@@ -486,18 +465,19 @@ namespace FlaxEditor.Modules
         /// </summary>
         /// <param name="item">The item.</param>
         /// <param name="newParent">The new parent.</param>
-        public void Move(ContentItem item, ContentFolder newParent)
+        /// <returns>True if the item was moved, otherwise false.</returns>
+        public bool Move(ContentItem item, ContentFolder newParent)
         {
             if (newParent == null || item == null)
                 throw new ArgumentNullException();
 
             // Skip nothing to change
             if (item.ParentFolder == newParent)
-                return;
+                return true;
 
             var extension = Path.GetExtension(item.Path);
             var newPath = StringUtils.CombinePaths(newParent.Path, item.ShortName + extension);
-            Move(item, newPath);
+            return Move(item, newPath);
         }
 
         /// <summary>
@@ -505,15 +485,34 @@ namespace FlaxEditor.Modules
         /// </summary>
         /// <param name="item">The item.</param>
         /// <param name="newPath">The new path.</param>
-        public void Move(ContentItem item, string newPath)
+        /// <returns>True if the item was moved, otherwise false.</returns>
+        public bool Move(ContentItem item, string newPath)
         {
             if (item == null || string.IsNullOrEmpty(newPath))
                 throw new ArgumentNullException();
 
-            if (item.IsFolder && Directory.Exists(newPath))
+            string oldPath = item.Path;
+            var destinationIsDirectory = Directory.Exists(newPath);
+            var destinationIsFile = File.Exists(newPath);
+            var recoverableZeroByteDestination = false;
+            if (destinationIsFile && (item.IsFolder || UseContentBackendForFileOperation(item)))
             {
-                MessageBox.Show("Cannot move folder. Target location already exists.");
-                return;
+                try
+                {
+                    // Native content moves validate the source and can atomically replace the
+                    // zero-byte placeholders left by a failed/stale content item.
+                    recoverableZeroByteDestination = new FileInfo(newPath).Length == 0;
+                }
+                catch
+                {
+                    // Treat an inaccessible destination as a real collision.
+                }
+            }
+            if (!oldPath.Equals(newPath, StringComparison.OrdinalIgnoreCase) &&
+                (destinationIsDirectory || (destinationIsFile && !recoverableZeroByteDestination)))
+            {
+                MessageBox.Show("Cannot move item. Target location already exists.");
+                return false;
             }
 
             // Find target parent
@@ -522,7 +521,13 @@ namespace FlaxEditor.Modules
             if (newParent == null)
             {
                 MessageBox.Show("Cannot move item. Missing target location.");
-                return;
+                return false;
+            }
+
+            if (item is ContentFolder sourceFolder && sourceFolder.Find(newParent))
+            {
+                MessageBox.Show("Cannot move a folder into itself or one of its subfolders.");
+                return false;
             }
 
             var projects = Editor.ContentDatabase.Projects;
@@ -549,7 +554,7 @@ namespace FlaxEditor.Modules
                             isFound = true;
                             var result = MessageBox.Show(Editor.Windows.MainWindow, "Moving item from \"Content\" to \"Source\" folder may lose asset database reference.\nDo you want to continue?", "Moving item", MessageBoxButtons.OKCancel);
                             if (result == DialogResult.Cancel)
-                                return;
+                                return false;
                             break;
                         }
                     }
@@ -570,7 +575,7 @@ namespace FlaxEditor.Modules
                             isFound = true;
                             var result = MessageBox.Show(Editor.Windows.MainWindow, "Moving item from \"Source\" to \"Content\" folder may lose asset database reference.\nDo you want to continue?", "Moving item", MessageBoxButtons.OKCancel);
                             if (result == DialogResult.Cancel)
-                                return;
+                                return false;
                             break;
                         }
                     }
@@ -581,51 +586,27 @@ namespace FlaxEditor.Modules
 
             // Perform renaming
             {
-                string oldPath = item.Path;
-
                 // Special case for folders
                 if (item.IsFolder)
                 {
-                    // Cache data
                     var folder = (ContentFolder)item;
-
-                    // Create new folder
-                    try
+                    if (FlaxEngine.Content.RenameAssetFolder(oldPath, newPath))
                     {
-                        Directory.CreateDirectory(newPath);
-                    }
-                    catch (Exception ex)
-                    {
-                        Editor.LogWarning(ex);
-                        Editor.LogError(string.Format("Cannot move folder \'{0}\' to \'{1}\'", oldPath, newPath));
-                        return;
+                        MessageBox.Show("Cannot move folder. See the log for details.");
+                        return false;
                     }
 
-                    // Change path
+                    // Synchronize managed database paths after the atomic filesystem move.
                     item.UpdatePath(newPath);
-
-                    // Rename all child elements
                     for (int i = 0; i < folder.Children.Count; i++)
                         UpdateAssetNewNameTree(folder.Children[i]);
-
-                    // Delete old folder
-                    try
-                    {
-                        Directory.Delete(oldPath, true);
-                    }
-                    catch (Exception ex)
-                    {
-                        Editor.LogWarning(ex);
-                        Editor.LogWarning(string.Format("Cannot remove folder \'{0}\'", oldPath));
-                        return;
-                    }
                 }
                 else
                 {
                     if (RenameAsset(item, ref newPath))
                     {
-                        MessageBox.Show("Cannot rename item.");
-                        return;
+                        MessageBox.Show("Cannot move item. See the log for details.");
+                        return false;
                     }
                 }
 
@@ -638,6 +619,7 @@ namespace FlaxEditor.Modules
 
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
+            return true;
         }
 
         /// <summary>

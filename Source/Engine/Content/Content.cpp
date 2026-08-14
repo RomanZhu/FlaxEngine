@@ -97,6 +97,139 @@ namespace
     TimeSpan LastUnloadCheckTime(0);
     bool IsExiting = false;
 
+#if USE_EDITOR
+    bool MovePathWithRetry(const StringView& destination, const StringView& source)
+    {
+        // Case-only renames use an internal temporary path and must not be repeated if the
+        // second leg fails. Ordinary moves can safely tolerate brief external file access.
+        const int32 attempts = FileSystem::AreFilePathsEqual(destination, source) ? 1 : 20;
+#if PLATFORM_WINDOWS
+        uint32 firstError = 0;
+        uint32 lastError = 0;
+        const String destinationPath(destination);
+        const String sourcePath(source);
+#endif
+        for (int32 attempt = 0; attempt < attempts; attempt++)
+        {
+#if PLATFORM_WINDOWS
+            // Content mutations must be rename-only. MOVEFILE_COPY_ALLOWED can report failure
+            // after copying and leave both paths behind if deleting the source is blocked.
+            if (MoveFileExW(*sourcePath, *destinationPath, MOVEFILE_WRITE_THROUGH) != 0)
+                return false;
+            lastError = (uint32)GetLastError();
+            if (attempt == 0)
+                firstError = lastError;
+            if (lastError == ERROR_ALREADY_EXISTS || lastError == ERROR_FILE_EXISTS)
+                break;
+#else
+            if (!FileSystem::MoveFile(destination, source))
+                return false;
+#endif
+            if (attempt + 1 < attempts)
+                Platform::Sleep(50);
+        }
+#if PLATFORM_WINDOWS
+        LOG(Warning, "Win32 failed to rename '{0}' to '{1}' (first error 0x{2:x}, final error 0x{3:x}).", source, destination, firstError, lastError);
+#endif
+        return true;
+    }
+
+    bool MoveAssetFileSafely(const StringView& destination, const StringView& source)
+    {
+#if PLATFORM_WINDOWS
+        // A stale failed FileItem can synchronously recreate its zero-byte placeholder between
+        // cleanup and rename. Replace only that verified-empty artifact atomically. All valid or
+        // non-empty destinations have already been rejected by RenameAsset.
+        if (FileSystem::FileExists(destination) && FileSystem::GetFileSize(destination) != 0)
+            return true;
+        const String destinationPath(destination);
+        const String sourcePath(source);
+        if (MoveFileExW(*sourcePath, *destinationPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0)
+            return false;
+        LOG(Warning, "Win32 failed to atomically move '{0}' to '{1}' (error 0x{2:x}).", source, destination, (uint32)GetLastError());
+        return true;
+#else
+        return MovePathWithRetry(destination, source);
+#endif
+    }
+
+    bool MoveFolderPathSafely(const StringView& destination, const StringView& source)
+    {
+        if (FileSystem::AreFilePathsEqual(destination, source))
+            return MovePathWithRetry(destination, source);
+
+#if PLATFORM_WINDOWS
+        // A stale content item can recreate a zero-byte file at the folder destination while
+        // the move is being validated. MOVEFILE_REPLACE_EXISTING atomically replaces that
+        // invalid file with the source directory, closing the delete-then-rename race. Never
+        // replace a directory or a file containing data.
+        const int32 attempts = 20;
+        uint32 firstError = 0;
+        uint32 lastError = 0;
+        bool replacedInvalidFile = false;
+        const String destinationPath(destination);
+        const String sourcePath(source);
+        for (int32 attempt = 0; attempt < attempts; attempt++)
+        {
+            const bool destinationIsFile = FileSystem::FileExists(destination);
+            if (FileSystem::DirectoryExists(destination) || (destinationIsFile && FileSystem::GetFileSize(destination) != 0))
+                return true;
+
+            const DWORD flags = MOVEFILE_WRITE_THROUGH | (destinationIsFile ? MOVEFILE_REPLACE_EXISTING : 0);
+            if (MoveFileExW(*sourcePath, *destinationPath, flags) != 0)
+            {
+                if (destinationIsFile)
+                    LOG(Warning, "Replaced invalid zero-byte destination file '{0}' while moving folder.", destination);
+                return false;
+            }
+            lastError = (uint32)GetLastError();
+            if (attempt == 0)
+                firstError = lastError;
+            replacedInvalidFile |= destinationIsFile;
+            if (attempt + 1 < attempts)
+                Platform::Sleep(50);
+        }
+        LOG(Warning, "Win32 failed to move folder '{0}' to '{1}' (first error 0x{2:x}, final error 0x{3:x}, invalid destination observed: {4}).", source, destination, firstError, lastError, replacedInvalidFile);
+        return true;
+#else
+        if (FileSystem::FileExists(destination))
+        {
+            if (FileSystem::GetFileSize(destination) != 0 || FileSystem::DeleteFile(destination))
+                return true;
+            LOG(Warning, "Removed invalid zero-byte destination file '{0}' while moving folder.", destination);
+        }
+        return MovePathWithRetry(destination, source);
+#endif
+    }
+
+    enum class FlaxStorageFileState
+    {
+        Missing,
+        Valid,
+        Invalid,
+        Inaccessible,
+    };
+
+    FlaxStorageFileState GetFlaxStorageFileState(const StringView& path)
+    {
+        if (!FileSystem::FileExists(path))
+            return FlaxStorageFileState::Missing;
+
+        File* file = File::Open(path, FileMode::OpenExisting, FileAccess::Read, FileShare::All);
+        if (file == nullptr)
+            return FileSystem::FileExists(path) ? FlaxStorageFileState::Inaccessible : FlaxStorageFileState::Missing;
+
+        uint32 magicCode = 0;
+        uint32 bytesRead = 0;
+        const bool readFailed = file->Read(&magicCode, sizeof(magicCode), &bytesRead);
+        Delete(file);
+        return !readFailed && bytesRead == sizeof(magicCode) && magicCode == FlaxStorage::MagicCode
+                   ? FlaxStorageFileState::Valid
+                   : FlaxStorageFileState::Invalid;
+    }
+
+#endif
+
 #if ENABLE_ASSETS_DISCOVERY
     DateTime LastWorkspaceDiscovery;
     CriticalSection WorkspaceDiscoveryLocker;
@@ -107,6 +240,20 @@ namespace
     constexpr const Char* SceneActorsFolderName = TEXT("SceneActors");
     constexpr const Char* ExternalActorsFolderName = TEXT("ExternalActors");
     constexpr const Char* ExternalActorExtension = TEXT(".actor");
+
+    String GetSceneActorsFolderForContentFolder(const StringView& contentFolder)
+    {
+        const StringView contentRoot = Globals::ProjectContentFolder;
+        if (contentFolder.Length() <= contentRoot.Length() || !contentFolder.StartsWith(contentRoot, StringSearchCase::IgnoreCase))
+            return String::Empty;
+        const Char separator = contentFolder[contentRoot.Length()];
+        if (separator != '/' && separator != '\\')
+            return String::Empty;
+
+        String relativePath = FileSystem::ConvertAbsolutePathToRelative(Globals::ProjectContentFolder, contentFolder);
+        FileSystem::NormalizePath(relativePath);
+        return Globals::ProjectFolder / SceneActorsFolderName / relativePath;
+    }
 
     bool IsSceneAssetPath(const StringView& path)
     {
@@ -1216,17 +1363,82 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
 {
     ASSERT(IsInMainThread());
 
+    if (oldPath == newPath)
+        return false;
+
     // Cache data
     Asset* oldAsset = GetAsset(oldPath);
     Asset* newAsset = GetAsset(newPath);
     const bool isSceneAsset = IsSceneAssetPath(oldPath);
     bool moveSceneActorsFolder = false;
 
-    // Validate name
+    // Validate the filesystem destination. A failed move from an older Editor can leave a
+    // transient, zero-byte .flax file behind. Remove only that provably empty artifact; invalid
+    // files containing any data are preserved and reported as collisions.
+    const bool samePath = FileSystem::AreFilePathsEqual(oldPath, newPath);
+    FlaxStorageReference lockedDestinationStorage;
+    if (!samePath && ContentStorageManager::LockFileAccess(newPath, lockedDestinationStorage))
+    {
+        LOG(Error, "Cannot release destination asset '{0}' for move.", newPath);
+        return true;
+    }
+    SCOPE_EXIT
+    {
+        if (lockedDestinationStorage)
+            lockedDestinationStorage->UnlockFileAccess();
+    };
+    FlaxStorageFileState destinationState = samePath ? FlaxStorageFileState::Missing : GetFlaxStorageFileState(newPath);
+    if (!samePath && destinationState == FlaxStorageFileState::Invalid)
+    {
+        if (GetFlaxStorageFileState(oldPath) != FlaxStorageFileState::Valid)
+        {
+            LOG(Error, "Cannot recover invalid destination '{0}' because source asset '{1}' is not valid.", newPath, oldPath);
+            return true;
+        }
+
+        if (FileSystem::GetFileSize(newPath) != 0)
+        {
+            LOG(Error, "Cannot replace invalid non-empty destination asset '{0}'. Move it aside manually to preserve its data.", newPath);
+            return true;
+        }
+
+        // Dispose the stale failed asset before removing its placeholder. In particular, this
+        // prevents an editor properties proxy from saving it back while the move is in progress.
+        if (newAsset != nullptr && newAsset != oldAsset && newAsset->LastLoadFailed())
+        {
+            Cache.DeleteAsset(newPath, nullptr);
+            UnloadAsset(newAsset);
+            newAsset = nullptr;
+        }
+
+        const bool cleanupFailed = FileSystem::DeleteFile(newPath);
+        destinationState = GetFlaxStorageFileState(newPath);
+        if (cleanupFailed && destinationState != FlaxStorageFileState::Missing)
+        {
+            LOG(Error, "Cannot remove invalid zero-byte destination asset '{0}'.", newPath);
+            return true;
+        }
+        LOG(Warning, "Removed invalid zero-byte destination asset '{0}' before move.", newPath);
+        destinationState = FlaxStorageFileState::Missing;
+    }
+    if (!samePath && (destinationState != FlaxStorageFileState::Missing || FileSystem::DirectoryExists(newPath)))
+    {
+        LOG(Error, "Cannot move asset '{0}' to '{1}' because the destination already exists.", oldPath, newPath);
+        return true;
+    }
+
+    // Validate name. Ignore a stale failed object after its invalid backing file was removed; it
+    // will be unloaded by the normal missing-file update and must not block the filesystem move.
     if (newAsset != nullptr && newAsset != oldAsset)
     {
-        LOG(Error, "Invalid name '{0}' when trying to rename '{1}'.", newPath, oldPath);
-        return true;
+        if (!newAsset->LastLoadFailed())
+        {
+            LOG(Error, "Invalid name '{0}' when trying to rename '{1}'.", newPath, oldPath);
+            return true;
+        }
+        Cache.DeleteAsset(newPath, nullptr);
+        UnloadAsset(newAsset);
+        newAsset = nullptr;
     }
 
     if (isSceneAsset)
@@ -1264,14 +1476,25 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
         //oldAsset->unload(true);
     }
 
-    // Ensure to unlock file
-    ContentStorageManager::EnsureAccess(oldPath);
+    // Hold exclusive storage access through the rename so background thumbnail/streaming work
+    // cannot reopen the file between releasing its handle and moving it.
+    FlaxStorageReference lockedStorage;
+    if (ContentStorageManager::LockFileAccess(oldPath, lockedStorage))
+    {
+        LOG(Error, "Cannot move asset '{0}' because its content storage is still in use.", oldPath);
+        return true;
+    }
+    SCOPE_EXIT
+    {
+        if (lockedStorage)
+            lockedStorage->UnlockFileAccess();
+    };
 
     if (moveSceneActorsFolder && MoveSceneActorsFolder(oldPath, newPath))
         return true;
 
     // Move file
-    if (FileSystem::MoveFile(newPath, oldPath))
+    if (MoveAssetFileSafely(newPath, oldPath))
     {
         if (moveSceneActorsFolder)
             MoveSceneActorsFolder(newPath, oldPath);
@@ -1294,6 +1517,113 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
         //oldAsset->startLoading();
     }
 
+    return false;
+}
+
+bool Content::RenameAssetFolder(const StringView& oldPath, const StringView& newPath)
+{
+    ASSERT(IsInMainThread());
+
+    const bool samePath = FileSystem::AreFilePathsEqual(oldPath, newPath);
+    const bool destinationIsDirectory = !samePath && FileSystem::DirectoryExists(newPath);
+    const bool destinationIsFile = !samePath && FileSystem::FileExists(newPath);
+    const bool recoverableZeroByteDestination = destinationIsFile && FileSystem::GetFileSize(newPath) == 0;
+    if (!FileSystem::DirectoryExists(oldPath) || destinationIsDirectory || (destinationIsFile && !recoverableZeroByteDestination))
+    {
+        LOG(Error, "Cannot move folder '{0}' to '{1}'. Source is missing or destination already exists.", oldPath, newPath);
+        return true;
+    }
+
+    const String oldSceneActorsFolder = GetSceneActorsFolderForContentFolder(oldPath);
+    const String newSceneActorsFolder = GetSceneActorsFolderForContentFolder(newPath);
+    const bool moveSceneActorsFolder = oldSceneActorsFolder.HasChars() &&
+                                       newSceneActorsFolder.HasChars() &&
+                                       FileSystem::DirectoryExists(oldSceneActorsFolder) &&
+                                       !FileSystem::AreFilePathsEqual(oldSceneActorsFolder, newSceneActorsFolder);
+    if (moveSceneActorsFolder && (FileSystem::DirectoryExists(newSceneActorsFolder) || FileSystem::FileExists(newSceneActorsFolder)))
+    {
+        LOG(Error, "Cannot move content folder because the external actors destination already exists: '{0}'.", newSceneActorsFolder);
+        return true;
+    }
+    const String newSceneActorsParent = moveSceneActorsFolder ? StringUtils::GetDirectoryName(newSceneActorsFolder) : String::Empty;
+    const bool createdSceneActorsParent = moveSceneActorsFolder && !FileSystem::DirectoryExists(newSceneActorsParent);
+    if (createdSceneActorsParent && FileSystem::CreateDirectory(newSceneActorsParent))
+    {
+        LOG(Error, "Cannot create external actors destination parent folder '{0}'.", newSceneActorsParent);
+        return true;
+    }
+    bool folderMoveSucceeded = false;
+    SCOPE_EXIT
+    {
+        if (createdSceneActorsParent && !folderMoveSucceeded)
+            FileSystem::DeleteDirectory(newSceneActorsParent, false);
+    };
+
+    struct LoadedAssetRename
+    {
+        Asset* Instance;
+        String NewPath;
+    };
+    Array<LoadedAssetRename> loadedAssets;
+    {
+        ScopeLock lock(AssetsLocker);
+        for (const auto& entry : Assets)
+        {
+            const StringView path = entry.Value->GetPath();
+            if (path.Length() > oldPath.Length() && path.StartsWith(oldPath, StringSearchCase::IgnoreCase))
+            {
+                const Char separator = path[oldPath.Length()];
+                if (separator == '/' || separator == '\\')
+                {
+                    LoadedAssetRename rename;
+                    rename.Instance = entry.Value;
+                    rename.NewPath = String(newPath) + path.Substring(oldPath.Length());
+                    loadedAssets.Add(rename);
+                }
+            }
+        }
+    }
+
+    for (auto& rename : loadedAssets)
+    {
+        if (rename.Instance->WaitForLoaded())
+        {
+            LOG(Error, "Failed to load asset '{0}' before moving its folder.", rename.Instance->ToString());
+            return true;
+        }
+        rename.Instance->releaseStorage();
+    }
+    Array<FlaxStorageReference> lockedStorages;
+    if (ContentStorageManager::LockFolderAccess(oldPath, lockedStorages))
+    {
+        LOG(Error, "Cannot move folder '{0}' because one or more asset files are still in use.", oldPath);
+        return true;
+    }
+    SCOPE_EXIT { ContentStorageManager::UnlockFolderAccess(lockedStorages); };
+
+    // FileSystem::MoveFile maps to an atomic rename on the same volume and also supports directories.
+    if (MoveFolderPathSafely(newPath, oldPath))
+    {
+        LOG(Error, "Cannot move folder '{0}' to '{1}'.", oldPath, newPath);
+        return true;
+    }
+    if (moveSceneActorsFolder && MovePathWithRetry(newSceneActorsFolder, oldSceneActorsFolder))
+    {
+        LOG(Error, "Cannot move external actors folder '{0}' to '{1}'.", oldSceneActorsFolder, newSceneActorsFolder);
+        if (!MoveFolderPathSafely(oldPath, newPath))
+            return true;
+
+        // The content directory is already at the destination and could not be rolled back.
+        // Keep the database consistent with the filesystem and preserve the old actors folder
+        // for manual recovery instead of reporting a failure against stale managed paths.
+        LOG(Error, "Failed to roll back content folder move from '{0}' to '{1}'. External actors remain at '{2}'.", newPath, oldPath, oldSceneActorsFolder);
+    }
+
+    Cache.RenameFolder(oldPath, newPath);
+    ContentStorageManager::OnRenamedFolder(oldPath, newPath);
+    for (auto& rename : loadedAssets)
+        rename.Instance->onRename(rename.NewPath);
+    folderMoveSucceeded = true;
     return false;
 }
 

@@ -203,7 +203,7 @@ bool Win32FileSystem::SetReadOnly(const StringView& path, bool isReadOnly)
 
 bool Win32FileSystem::MoveFile(const StringView& dst, const StringView& src, bool overwrite)
 {
-    const DWORD flags = MOVEFILE_COPY_ALLOWED | (overwrite ? MOVEFILE_REPLACE_EXISTING : 0);
+    const DWORD flags = overwrite ? MOVEFILE_REPLACE_EXISTING : 0;
     WIN32_INIT_BUFFER(dst, bufferDst);
     WIN32_INIT_BUFFER(src, bufferSrc);
 
@@ -212,10 +212,18 @@ bool Win32FileSystem::MoveFile(const StringView& dst, const StringView& src, boo
     {
         String tmp;
         GetTempFilePath(tmp);
-        return MoveFileExW(bufferSrc, *tmp, MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING) == 0 || MoveFileExW(*tmp, bufferDst, flags) == 0;
+        return MoveFileExW(bufferSrc, *tmp, MOVEFILE_REPLACE_EXISTING) == 0 || MoveFileExW(*tmp, bufferDst, flags) == 0;
     }
 
-    return MoveFileExW(bufferSrc, bufferDst, flags) == 0;
+    if (MoveFileExW(bufferSrc, bufferDst, flags) != 0)
+        return false;
+
+    // MOVEFILE_COPY_ALLOWED can leave both source and destination behind when its copy succeeds
+    // but deleting the source fails (for example due to a sharing violation). Use it only for an
+    // actual cross-volume move, never as part of a normal same-volume rename.
+    if (GetLastError() != ERROR_NOT_SAME_DEVICE)
+        return true;
+    return MoveFileExW(bufferSrc, bufferDst, flags | MOVEFILE_COPY_ALLOWED) == 0;
 }
 
 bool Win32FileSystem::CopyFile(const StringView& dst, const StringView& src)

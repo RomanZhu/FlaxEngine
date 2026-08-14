@@ -583,6 +583,26 @@ bool AssetsCache::RenameAsset(const StringView& oldPath, const StringView& newPa
     return result;
 }
 
+void AssetsCache::RenameFolder(const StringView& oldPath, const StringView& newPath)
+{
+    ASSETS_CACHE_LOCK();
+    for (auto i = _registry.Begin(); i.IsNotEnd(); ++i)
+    {
+        const String& path = i->Value.Info.Path;
+        if (path.Length() > oldPath.Length() && path.StartsWith(oldPath, StringSearchCase::IgnoreCase))
+        {
+            const Char separator = path[oldPath.Length()];
+            if (separator == '/' || separator == '\\')
+            {
+                String renamedPath(newPath);
+                renamedPath += path.Substring(oldPath.Length());
+                i->Value.Info.Path = renamedPath;
+                _isDirty = true;
+            }
+        }
+    }
+}
+
 #endif
 
 AssetsCache::EntryValidation AssetsCache::IsEntryValid(Entry& e)
