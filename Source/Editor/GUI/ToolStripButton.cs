@@ -42,6 +42,8 @@ namespace FlaxEditor.GUI
         Keyboard,
         /// <summary>Debugging.</summary>
         Bug,
+        /// <summary>Power toggle.</summary>
+        Power,
     }
 
     /// <summary>
@@ -410,6 +412,9 @@ namespace FlaxEditor.GUI
             case ToolStripGlyph.Bug:
                 DrawBug(x, y, color);
                 break;
+            case ToolStripGlyph.Power:
+                DrawPower(x, y, color);
+                break;
             }
         }
 
@@ -485,6 +490,18 @@ namespace FlaxEditor.GUI
             Render2D.DrawLine(new Float2(x + 2, y + 8), new Float2(x + 4, y + 7), color);
             Render2D.DrawLine(new Float2(x + 11, y + 4), new Float2(x + 9, y + 5), color);
             Render2D.DrawLine(new Float2(x + 11, y + 8), new Float2(x + 9, y + 7), color);
+        }
+
+        private static void DrawPower(float x, float y, Color color)
+        {
+            Render2D.FillRectangle(new Rectangle(x + 5, y + 1, 2, 6), color);
+            Render2D.DrawLine(new Float2(x + 3, y + 3), new Float2(x + 1, y + 6), color);
+            Render2D.DrawLine(new Float2(x + 1, y + 6), new Float2(x + 2, y + 10), color);
+            Render2D.DrawLine(new Float2(x + 2, y + 10), new Float2(x + 5, y + 11), color);
+            Render2D.DrawLine(new Float2(x + 5, y + 11), new Float2(x + 7, y + 11), color);
+            Render2D.DrawLine(new Float2(x + 7, y + 11), new Float2(x + 10, y + 10), color);
+            Render2D.DrawLine(new Float2(x + 10, y + 10), new Float2(x + 11, y + 6), color);
+            Render2D.DrawLine(new Float2(x + 11, y + 6), new Float2(x + 9, y + 3), color);
         }
 
         /// <inheritdoc />

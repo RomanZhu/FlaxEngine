@@ -453,6 +453,7 @@ namespace FlaxEditor.Modules
         private ToolStripButton _toolStripPause;
         private ToolStripButton _toolStripStep;
         private ToolStripButton _toolStripMultiplayer;
+        private ToolStripButton _toolStripMultiplayerToggle;
         private ContextMenu _toolStripContextMenu;
 
         /// <summary>
@@ -567,10 +568,16 @@ namespace FlaxEditor.Modules
             var pause = _toolStripPause;
             var step = _toolStripStep;
             var multiplayer = _toolStripMultiplayer;
+            var multiplayerToggle = _toolStripMultiplayerToggle;
             if (multiplayer != null)
             {
                 multiplayer.Checked = Editor.MultiplayerPlayMode.IsActive;
                 multiplayer.Enabled = multiplayer.Visible && !isMultiplayerReplica;
+            }
+            if (multiplayerToggle != null)
+            {
+                multiplayerToggle.Checked = Editor.MultiplayerPlayMode.IsActive;
+                multiplayerToggle.Enabled = multiplayerToggle.Visible && !isMultiplayerReplica && Editor.MultiplayerPlayMode.HasConfiguredReplicas;
             }
             play.Enabled = canEnterPlayMode;
             if (isDuringBreakpointHang)
@@ -1236,6 +1243,10 @@ namespace FlaxEditor.Modules
             _toolStripMultiplayer.Clicked += () => _toolStripMultiplayer.ContextMenu?.Show(_toolStripMultiplayer, new Float2(0, _toolStripMultiplayer.Height));
             _toolStripMultiplayer.LinkTooltip("Multiplayer Play Mode");
             _toolStripMultiplayer.CustomizationLabel = "Multiplayer";
+            _toolStripMultiplayerToggle = ToolStrip.AddGlyphButton(ToolStripGlyph.Power, ToolStripAnchor.Center, null, () => Editor.MultiplayerPlayMode.SetEnabled(!Editor.MultiplayerPlayMode.IsActive));
+            _toolStripMultiplayerToggle.Visible = _toolStripMultiplayer.Visible;
+            _toolStripMultiplayerToggle.LinkTooltip("Enable or disable Multiplayer Play Mode");
+            ToolStrip.SetItemGroup(_toolStripMultiplayer, _toolStripMultiplayerToggle);
             RebuildMultiplayerContextMenu();
 
             _toolStripContextMenu = CreateToolStripContextMenu();
@@ -1254,7 +1265,7 @@ namespace FlaxEditor.Modules
             var playPause = menu.AddButton("Play / Pause", button => SetPlayControlsVisible(button.Checked));
             playPause.AutoCheck = true;
             playPause.CloseMenuOnClick = false;
-            var multiplayer = menu.AddButton("Multiplayer", button => ToolStrip.SetItemVisible(_toolStripMultiplayer, button.Checked));
+            var multiplayer = menu.AddButton("Multiplayer", button => SetMultiplayerControlsVisible(button.Checked));
             multiplayer.AutoCheck = true;
             multiplayer.CloseMenuOnClick = false;
             menu.VisibleChanged += control =>
@@ -1262,7 +1273,7 @@ namespace FlaxEditor.Modules
                 if (!control.Visible)
                     return;
                 playPause.Checked = _toolStripPlay.Visible && _toolStripPause.Visible && _toolStripStep.Visible;
-                multiplayer.Checked = _toolStripMultiplayer.Visible;
+                multiplayer.Checked = _toolStripMultiplayer.Visible && _toolStripMultiplayerToggle.Visible;
             };
             return menu;
         }
@@ -1272,6 +1283,15 @@ namespace FlaxEditor.Modules
             ToolStrip.SetItemVisible(_toolStripPlay, visible, false);
             ToolStrip.SetItemVisible(_toolStripPause, visible, false);
             ToolStrip.SetItemVisible(_toolStripStep, visible);
+        }
+
+        private void SetMultiplayerControlsVisible(bool visible)
+        {
+            ToolStrip.SetItemVisible(_toolStripMultiplayer, visible, false);
+            _toolStripMultiplayerToggle.Visible = visible;
+            ToolStrip.PerformLayout();
+            ToolStrip.LayoutChanged?.Invoke();
+            UpdateToolstrip();
         }
 
         private void RebuildMultiplayerContextMenu()

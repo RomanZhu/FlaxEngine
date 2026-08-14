@@ -266,6 +266,12 @@ namespace FlaxEditor.Options
         public bool[] MultiplayerPlayModeReplicasEnabled { get; set; } = { false, false, false };
 
         /// <summary>
+        /// Gets or sets whether multiplayer play mode is enabled without changing its replica configuration.
+        /// </summary>
+        [HideInEditor]
+        public bool MultiplayerPlayModeEnabled { get; set; } = true;
+
+        /// <summary>
         /// Gets or sets the tags assigned to each multiplayer replica.
         /// </summary>
         [HideInEditor]

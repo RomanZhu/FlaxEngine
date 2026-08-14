@@ -91,6 +91,7 @@ namespace FlaxEditor.Modules
         private Guid[] _requestedScenes;
         private bool? _requestedPlayState;
         private bool? _requestedPauseState;
+        private bool _masterEnabled;
         private bool _enabled;
         private bool _initialized;
         private bool _restartRequested;
@@ -112,6 +113,11 @@ namespace FlaxEditor.Modules
         /// Gets a value indicating whether multiplayer play mode is active in this editor.
         /// </summary>
         public bool IsActive => IsReplica || _enabled;
+
+        /// <summary>
+        /// Gets a value indicating whether any multiplayer replica slots are configured.
+        /// </summary>
+        public bool HasConfiguredReplicas => ExpectedReplicaCount != 0;
 
         /// <summary>
         /// Gets the zero-based multiplayer instance index.
@@ -313,7 +319,8 @@ namespace FlaxEditor.Modules
                 _replicaTags[i] = tags.ToArray();
             }
 
-            _enabled = ExpectedReplicaCount != 0;
+            _masterEnabled = options.MultiplayerPlayModeEnabled;
+            _enabled = _masterEnabled && ExpectedReplicaCount != 0;
             InstanceCount = 1 + ExpectedReplicaCount;
             InstanceTags = (string[])_primaryTags.Clone();
             InstanceTag = InstanceTags.Length != 0 ? InstanceTags[0] : string.Empty;
@@ -347,6 +354,14 @@ namespace FlaxEditor.Modules
         public bool ReplicaHasTag(int replicaIndex, string tag)
         {
             return replicaIndex >= 0 && replicaIndex < _replicaTags.Length && Array.IndexOf(_replicaTags[replicaIndex], tag) != -1;
+        }
+
+        internal void SetEnabled(bool enabled)
+        {
+            if (IsReplica || _masterEnabled == enabled)
+                return;
+            _masterEnabled = enabled;
+            SaveToolbarOptions();
         }
 
         internal void SetPrimaryTag(string tag, bool enabled)
@@ -396,6 +411,7 @@ namespace FlaxEditor.Modules
         private void SaveToolbarOptions()
         {
             var options = Editor.Options.Options.General;
+            options.MultiplayerPlayModeEnabled = _masterEnabled;
             options.MultiplayerPlayModePrimaryTags = (string[])_primaryTags.Clone();
             options.MultiplayerPlayModeReplicasEnabled = (bool[])_replicaEnabled.Clone();
             options.MultiplayerPlayModeReplicaTags = new string[MaxReplicaCount][];
@@ -404,6 +420,7 @@ namespace FlaxEditor.Modules
             Editor.Options.SaveOptions();
             ApplyOptions();
             _restartRequested = _initialized;
+            Editor.UI.UpdateToolstrip();
         }
 
         private void OnOptionsChanged(Options.EditorOptions options)
