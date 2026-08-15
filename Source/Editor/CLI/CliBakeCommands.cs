@@ -171,9 +171,11 @@ namespace FlaxEditor
             if (Editor.IsPlayMode)
                 return Array.Empty<Guid>();
             var ids = Level.Scenes.Select(x => x.ID).ToArray();
-            if (Level.SaveAllScenes())
-                throw new InvalidOperationException("Failed to save one or more scenes after the bake operation.");
-            Editor.Instance.Undo.MarkScenesSaved();
+            foreach (var scene in Level.Scenes)
+            {
+                if (Editor.Instance.Scene.IsEdited(scene) && !Editor.Instance.Scene.SaveSceneSynchronously(scene))
+                    throw new InvalidOperationException($"Failed to save scene '{scene.Name}' after the bake operation.");
+            }
             return ids;
         }
 

@@ -404,7 +404,9 @@ namespace FlaxEditor.History
                     DisposeAction(cached[i], HistoryStackDiscardReason.Removed);
                 else
                 {
-                    actions.PushBack(cached[i]);
+                    // ToArray returns oldest-to-newest. Rebuild at the front so
+                    // filtering does not reverse the replay order.
+                    actions.PushFront(cached[i]);
                     AddActionSize(ref sizeInBytes, cached[i]);
                 }
             }

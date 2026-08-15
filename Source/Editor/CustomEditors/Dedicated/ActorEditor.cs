@@ -969,7 +969,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 Editor.Log("Reverting added script changes to prefab (removing it)");
 
                 var action = AddRemoveScript.Remove(script);
-                action.Do();
+                if (!action.TryDo())
+                {
+                    action.Dispose();
+                    return false;
+                }
                 Presenter.Undo?.AddAction(action);
 
                 return true;
@@ -994,7 +998,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     }
                 }
                 var action = new DeleteActorsAction(nodes);
-                action.Do();
+                if (!action.TryDo())
+                {
+                    action.Dispose();
+                    return false;
+                }
                 Presenter.Undo?.AddAction(action);
 
                 return true;

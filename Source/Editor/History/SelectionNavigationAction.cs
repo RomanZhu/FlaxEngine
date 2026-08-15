@@ -11,8 +11,8 @@ namespace FlaxEditor.History
     /// <seealso cref="INavigationHistoryAction" />
     public sealed class SelectionNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
     {
-        private readonly SceneGraphNode[] _before;
-        private readonly SceneGraphNode[] _after;
+        private readonly SceneGraphNodeReference[] _before;
+        private readonly SceneGraphNodeReference[] _after;
         private readonly string[] _contentBefore;
         private readonly string[] _contentAfter;
         private Action<SceneGraphNode[]> _callback;
@@ -36,8 +36,8 @@ namespace FlaxEditor.History
         public SelectionNavigationAction(object owner, SceneGraphNode[] before, SceneGraphNode[] after, Action<SceneGraphNode[]> callback, string[] contentBefore = null, string[] contentAfter = null, Action<string[]> contentSelectionCallback = null)
         {
             Owner = owner ?? throw new ArgumentNullException(nameof(owner));
-            _before = before ?? Array.Empty<SceneGraphNode>();
-            _after = after ?? Array.Empty<SceneGraphNode>();
+            _before = SceneGraphNodeReference.Capture(before);
+            _after = SceneGraphNodeReference.Capture(after);
             _contentBefore = contentBefore ?? Array.Empty<string>();
             _contentAfter = contentAfter ?? Array.Empty<string>();
             _callback = callback ?? throw new ArgumentNullException(nameof(callback));
@@ -59,14 +59,14 @@ namespace FlaxEditor.History
         /// <inheritdoc />
         public void NavigateBack()
         {
-            _callback?.Invoke(_before);
+            _callback?.Invoke(SceneGraphNodeReference.Resolve(_before));
             _contentSelectionCallback?.Invoke(_contentBefore);
         }
 
         /// <inheritdoc />
         public void NavigateForward()
         {
-            _callback?.Invoke(_after);
+            _callback?.Invoke(SceneGraphNodeReference.Resolve(_after));
             _contentSelectionCallback?.Invoke(_contentAfter);
         }
 
@@ -77,13 +77,13 @@ namespace FlaxEditor.History
             _contentSelectionCallback = null;
         }
 
-        private static bool AreSameSelection(SceneGraphNode[] a, SceneGraphNode[] b)
+        private static bool AreSameSelection(SceneGraphNodeReference[] a, SceneGraphNodeReference[] b)
         {
             if (a.Length != b.Length)
                 return false;
             for (int i = 0; i < a.Length; i++)
             {
-                if (a[i]?.ID != b[i]?.ID)
+                if (!a[i].Equals(b[i]))
                     return false;
             }
             return true;

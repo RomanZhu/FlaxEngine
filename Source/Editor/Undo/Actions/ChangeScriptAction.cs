@@ -12,10 +12,13 @@ namespace FlaxEditor.Actions
     /// <seealso cref="FlaxEditor.IUndoAction" />
     /// <seealso cref="FlaxEditor.ISceneEditAction" />
     [Serializable]
-    class ChangeScriptAction : IUndoAction, ISceneEditAction
+    class ChangeScriptAction : ITryUndoAction, ISceneUndoAction
     {
         [Serialize]
         private Guid _scriptId;
+
+        [Serialize]
+        private Guid _sceneId;
 
         [Serialize]
         private bool _enableA;
@@ -32,6 +35,7 @@ namespace FlaxEditor.Actions
         private ChangeScriptAction(Script script, bool enable, int order)
         {
             _scriptId = script.ID;
+            _sceneId = script.Scene?.ID ?? Guid.Empty;
             _enableA = script.Enabled;
             _orderA = script.OrderInParent;
             _enableB = enable;
@@ -64,23 +68,56 @@ namespace FlaxEditor.Actions
         public string ActionString => "Edit script";
 
         /// <inheritdoc />
+        public Guid[] SceneIds => _sceneId != Guid.Empty ? new[] { _sceneId } : Array.Empty<Guid>();
+
+        /// <inheritdoc />
+        public bool SupportsSceneReload => true;
+
+        /// <inheritdoc />
         public void Do()
         {
-            var script = FlaxEngine.Object.Find<Script>(ref _scriptId);
-            if (script == null)
-                return;
-            script.Enabled = _enableB;
-            script.OrderInParent = _orderB;
+            TryDo();
+        }
+
+        /// <inheritdoc />
+        public bool TryDo()
+        {
+            return Apply(_enableB, _orderB);
         }
 
         /// <inheritdoc />
         public void Undo()
         {
+            TryUndo();
+        }
+
+        /// <inheritdoc />
+        public bool TryUndo()
+        {
+            return Apply(_enableA, _orderA);
+        }
+
+        private bool Apply(bool enabled, int order)
+        {
+            if (_sceneId != Guid.Empty && Level.FindScene(_sceneId) == null)
+                return false;
             var script = FlaxEngine.Object.Find<Script>(ref _scriptId);
             if (script == null)
-                return;
-            script.Enabled = _enableA;
-            script.OrderInParent = _orderA;
+                return false;
+            var previousEnabled = script.Enabled;
+            var previousOrder = script.OrderInParent;
+            try
+            {
+                script.Enabled = enabled;
+                script.OrderInParent = order;
+                return script.Enabled == enabled && script.OrderInParent == order;
+            }
+            catch
+            {
+                script.Enabled = previousEnabled;
+                script.OrderInParent = previousOrder;
+                return false;
+            }
         }
 
         /// <inheritdoc />
@@ -91,9 +128,8 @@ namespace FlaxEditor.Actions
         /// <inheritdoc />
         public void MarkSceneEdited(SceneModule sceneModule)
         {
-            var script = FlaxEngine.Object.Find<Script>(ref _scriptId);
-            if (script != null)
-                sceneModule.MarkSceneEdited(script.Scene);
+            if (_sceneId != Guid.Empty)
+                sceneModule.MarkSceneEdited(Level.FindScene(_sceneId));
         }
     }
 }

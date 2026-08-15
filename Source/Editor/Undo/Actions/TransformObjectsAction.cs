@@ -15,7 +15,7 @@ namespace FlaxEditor
     /// </summary>
     /// <seealso cref="FlaxEditor.IUndoAction" />
     [Serializable]
-    public sealed class TransformObjectsAction : UndoActionBase<TransformObjectsAction.DataStorage>, ISceneEditAction
+    public sealed class TransformObjectsAction : UndoActionBase<TransformObjectsAction.DataStorage>, ITryUndoAction, ISceneUndoAction
     {
         /// <summary>
         /// The undo data.
@@ -27,6 +27,11 @@ namespace FlaxEditor
             /// The scene of the selected objects.
             /// </summary>
             public Scene Scene;
+
+            /// <summary>
+            /// Stable owning Scene identity for new history entries.
+            /// </summary>
+            public Guid SceneId;
 
             /// <summary>
             /// The selection pool.
@@ -74,7 +79,8 @@ namespace FlaxEditor
 
             var data = new DataStorage
             {
-                Scene = scene,
+                Scene = null,
+                SceneId = scene?.ID ?? Guid.Empty,
                 // Keep the legacy field available for old history entries,
                 // but do not retain live node references for new actions.
                 Selection = null,
@@ -94,33 +100,55 @@ namespace FlaxEditor
         public override string ActionString => "Transform object(s)";
 
         /// <inheritdoc />
+        public Guid[] SceneIds
+        {
+            get
+            {
+                var data = Data;
+                var sceneId = data.SceneId != Guid.Empty ? data.SceneId : data.Scene?.ID ?? Guid.Empty;
+                return sceneId != Guid.Empty ? new[] { sceneId } : Array.Empty<Guid>();
+            }
+        }
+
+        /// <inheritdoc />
+        public bool SupportsSceneReload => true;
+
+        /// <inheritdoc />
         public override void Do()
+        {
+            TryDo();
+        }
+
+        /// <inheritdoc />
+        public bool TryDo()
         {
             var data = Data;
             var selection = ResolveSelection(ref data);
-            var count = Math.Min(selection.Length, data.After?.Length ?? 0);
-            for (int i = 0; i < count; i++)
-            {
-                var node = selection[i];
-                if (IsNodeUsable(node))
-                    node.Transform = data.After[i];
-            }
+            if (!ValidateReplay(ref data, selection, data.After))
+                return false;
+            if (!ApplyTransforms(selection, data.After))
+                return false;
             InvalidateBounds(ref data);
+            return true;
         }
 
         /// <inheritdoc />
         public override void Undo()
         {
+            TryUndo();
+        }
+
+        /// <inheritdoc />
+        public bool TryUndo()
+        {
             var data = Data;
             var selection = ResolveSelection(ref data);
-            var count = Math.Min(selection.Length, data.Before?.Length ?? 0);
-            for (int i = 0; i < count; i++)
-            {
-                var node = selection[i];
-                if (IsNodeUsable(node))
-                    node.Transform = data.Before[i];
-            }
+            if (!ValidateReplay(ref data, selection, data.Before))
+                return false;
+            if (!ApplyTransforms(selection, data.Before))
+                return false;
             InvalidateBounds(ref data);
+            return true;
         }
 
         private static bool IsNodeUsable(SceneGraphNode node)
@@ -161,8 +189,55 @@ namespace FlaxEditor
                     node = data.Selection[i];
                 selection[i] = node;
             }
-            data.Selection = selection;
             return selection;
+        }
+
+        private static bool ValidateReplay(ref DataStorage data, SceneGraphNode[] selection, Transform[] transforms)
+        {
+            var sceneId = data.SceneId != Guid.Empty ? data.SceneId : data.Scene?.ID ?? Guid.Empty;
+            if (sceneId != Guid.Empty && Level.FindScene(sceneId) == null)
+                return false;
+            if (selection.Length == 0 || transforms == null || selection.Length != transforms.Length)
+                return false;
+            for (int i = 0; i < selection.Length; i++)
+            {
+                if (!IsNodeUsable(selection[i]))
+                    return false;
+                if (sceneId != Guid.Empty && selection[i].ParentScene?.Scene?.ID != sceneId)
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool ApplyTransforms(SceneGraphNode[] selection, Transform[] transforms)
+        {
+            var previous = new Transform[selection.Length];
+            var applied = 0;
+            try
+            {
+                for (int i = 0; i < selection.Length; i++)
+                {
+                    previous[i] = selection[i].Transform;
+                    selection[i].Transform = transforms[i];
+                    applied++;
+                }
+                return true;
+            }
+            catch
+            {
+                for (int i = applied - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        selection[i].Transform = previous[i];
+                    }
+                    catch
+                    {
+                        // The undo executor retains the action for retry; callers receive failure.
+                    }
+                }
+                return false;
+            }
         }
 
         private void InvalidateBounds(ref DataStorage data)
@@ -175,7 +250,8 @@ namespace FlaxEditor
             var options = editor.Options.Options;
 
             // Auto NavMesh rebuild
-            if (!isPlayMode && options.General.AutoRebuildNavMesh && data.Scene != null)
+            var scene = data.SceneId != Guid.Empty ? Level.FindScene(data.SceneId) : data.Scene;
+            if (!isPlayMode && options.General.AutoRebuildNavMesh && scene != null)
             {
                 // Handle simple case where objects were moved just a little and use one navmesh build request to improve performance
                 if (data.BeforeBounds.Intersects(ref data.AfterBounds))
@@ -193,13 +269,9 @@ namespace FlaxEditor
         void ISceneEditAction.MarkSceneEdited(SceneModule sceneModule)
         {
             var data = Data;
-            var selection = ResolveSelection(ref data);
-            for (int i = 0; i < selection.Length; i++)
-            {
-                var node = selection[i];
-                if (node != null)
-                    sceneModule.MarkSceneEdited(node.ParentScene);
-            }
+            var sceneId = data.SceneId != Guid.Empty ? data.SceneId : data.Scene?.ID ?? Guid.Empty;
+            if (sceneId != Guid.Empty)
+                sceneModule.MarkSceneEdited(Level.FindScene(sceneId));
         }
     }
 }

@@ -992,7 +992,7 @@ public:
     /// <param name="output">The output actors.</param>
     /// <param name="modifier">The custom serialization modifier.</param>
     /// <returns>True if fails, otherwise false.</returns>
-    static bool FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeModifier* modifier);
+    static bool FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeModifier* modifier, const Guid* destinationParentId = nullptr);
 
     /// <summary>
     /// Performs actors deserialization from the raw bytes.
@@ -1008,6 +1008,15 @@ public:
     /// <param name="idsMapping">The serialized objects Ids mapping. Can be used to convert the spawned objects ids and references to them.</param>
     /// <returns>The output actors.</returns>
     API_FUNCTION() static Array<Actor*> FromBytes(const Span<byte>& data, const Dictionary<Guid, Guid, HeapAllocation>& idsMapping);
+
+    /// <summary>
+    /// Performs actors deserialization from the raw bytes and attaches serialized root objects to the destination parent during construction.
+    /// </summary>
+    /// <param name="data">The input data.</param>
+    /// <param name="idsMapping">The serialized objects Ids mapping. Can be used to convert the spawned objects ids and references to them.</param>
+    /// <param name="destinationParentId">The destination parent object ID used to remap parent references from outside of the serialized payload.</param>
+    /// <returns>The output actors.</returns>
+    API_FUNCTION() static Array<Actor*> FromBytes(const Span<byte>& data, const Dictionary<Guid, Guid, HeapAllocation>& idsMapping, const Guid& destinationParentId);
 
     /// <summary>
     /// Tries the get serialized objects ids from the raw bytes.

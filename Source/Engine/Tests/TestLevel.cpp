@@ -13,6 +13,7 @@
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Serialization/Serialization.h"
+#include "Engine/Scripting/Scripting.h"
 #if USE_EDITOR
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Cache/AssetsCache.h"
@@ -1123,6 +1124,97 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(!ContainsObject(unifiedData, invalidChildId));
     }
 
+}
+
+TEST_CASE("ActorClipboardPayloadValidation")
+{
+    const Guid actorId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1");
+    EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
+    REQUIRE(actor);
+    actor->SetName(TEXT("Clipboard Actor"));
+
+    Array<Actor*> source;
+    source.Add(actor);
+    Array<byte> valid = Actor::ToBytes(source);
+    REQUIRE(valid.HasItems());
+
+    actor->DeleteObject();
+    ObjectsRemovalService::Flush();
+    REQUIRE(Scripting::TryFindObject<Actor>(actorId) == nullptr);
+
+    SECTION("Every truncated prefix is rejected without constructing an Actor")
+    {
+        for (int32 length = 0; length < valid.Count(); length++)
+        {
+            const auto restored = Actor::FromBytes(Span<byte>(valid.Get(), length));
+            CHECK(restored.IsEmpty());
+            CHECK(Scripting::TryFindObject<Actor>(actorId) == nullptr);
+        }
+    }
+
+    SECTION("Oversized object count is rejected before allocation")
+    {
+        Array<byte> malformed = valid;
+        const int32 oversizedCount = MAX_int32;
+        Platform::MemoryCopy(malformed.Get() + sizeof(int32), &oversizedCount, sizeof(oversizedCount));
+        CHECK(Actor::TryGetSerializedObjectsIds(Span<byte>(malformed.Get(), malformed.Count())).IsEmpty());
+        CHECK(Actor::FromBytes(Span<byte>(malformed.Get(), malformed.Count())).IsEmpty());
+        CHECK(Scripting::TryFindObject<Actor>(actorId) == nullptr);
+    }
+
+    SECTION("Oversized JSON length is rejected before reading past the payload")
+    {
+        Array<byte> malformed = valid;
+        const int32 oversizedJson = MAX_int32;
+        const int32 jsonSizeOffset = sizeof(int32) * 2 + sizeof(Guid);
+        Platform::MemoryCopy(malformed.Get() + jsonSizeOffset, &oversizedJson, sizeof(oversizedJson));
+        CHECK(Actor::FromBytes(Span<byte>(malformed.Get(), malformed.Count())).IsEmpty());
+        CHECK(Scripting::TryFindObject<Actor>(actorId) == nullptr);
+    }
+
+    SECTION("Valid payload still restores the complete Actor")
+    {
+        auto restored = Actor::FromBytes(Span<byte>(valid.Get(), valid.Count()));
+        REQUIRE(restored.Count() == 1);
+        CHECK(restored[0]->GetID() == actorId);
+        restored[0]->DeleteObject();
+        ObjectsRemovalService::Flush();
+    }
+
+    SECTION("External parent references can be redirected during construction")
+    {
+        const Guid sourceParentId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2");
+        const Guid sourceChildId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3");
+        const Guid destinationParentId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb4");
+        const Guid restoredChildId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb5");
+        EmptyActor* sourceParent = EmptyActor::Spawn(ScriptingObject::SpawnParams(sourceParentId, EmptyActor::TypeInitializer));
+        EmptyActor* sourceChild = EmptyActor::Spawn(ScriptingObject::SpawnParams(sourceChildId, EmptyActor::TypeInitializer));
+        REQUIRE(sourceParent);
+        REQUIRE(sourceChild);
+        sourceChild->SetParent(sourceParent);
+
+        Array<Actor*> childSource;
+        childSource.Add(sourceChild);
+        Array<byte> childData = Actor::ToBytes(childSource);
+        REQUIRE(childData.HasItems());
+        sourceChild->DeleteObject();
+        sourceParent->DeleteObject();
+        ObjectsRemovalService::Flush();
+
+        EmptyActor* destinationParent = EmptyActor::Spawn(ScriptingObject::SpawnParams(destinationParentId, EmptyActor::TypeInitializer));
+        REQUIRE(destinationParent);
+        destinationParent->RegisterObject();
+        Dictionary<Guid, Guid> idsMapping;
+        idsMapping.Add(sourceChildId, restoredChildId);
+        auto restored = Actor::FromBytes(Span<byte>(childData.Get(), childData.Count()), idsMapping, destinationParentId);
+        REQUIRE(restored.Count() == 1);
+        CHECK(restored[0]->GetID() == restoredChildId);
+        CHECK(restored[0]->GetParent() == destinationParent);
+
+        restored[0]->DeleteObject();
+        destinationParent->DeleteObject();
+        ObjectsRemovalService::Flush();
+    }
 }
 
 #endif

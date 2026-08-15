@@ -118,16 +118,16 @@ namespace FlaxEditor.Windows
             private ContentWindow _window;
             private readonly string[] _source;
             private readonly string[] _target;
-            private readonly SceneGraphNode[] _sourceSceneSelection;
-            private readonly SceneGraphNode[] _targetSceneSelection;
+            private readonly SceneGraphNodeReference[] _sourceSceneSelection;
+            private readonly SceneGraphNodeReference[] _targetSceneSelection;
 
             public ContentSelectionUndoAction(ContentWindow window, string[] source, string[] target, SceneGraphNode[] sourceSceneSelection, SceneGraphNode[] targetSceneSelection)
             {
                 _window = window;
                 _source = source ?? Array.Empty<string>();
                 _target = target ?? Array.Empty<string>();
-                _sourceSceneSelection = sourceSceneSelection ?? Array.Empty<SceneGraphNode>();
-                _targetSceneSelection = targetSceneSelection ?? Array.Empty<SceneGraphNode>();
+                _sourceSceneSelection = SceneGraphNodeReference.Capture(sourceSceneSelection);
+                _targetSceneSelection = SceneGraphNodeReference.Capture(targetSceneSelection);
             }
 
             public string ActionString => "Content selection change";
@@ -137,8 +137,8 @@ namespace FlaxEditor.Windows
                 return _window == window &&
                        AreSameContentSelection(_source, source) &&
                        AreSameContentSelection(_target, target) &&
-                       AreSameSceneSelection(_sourceSceneSelection, sourceSceneSelection) &&
-                       AreSameSceneSelection(_targetSceneSelection, targetSceneSelection);
+                       AreSameSceneSelection(_sourceSceneSelection, SceneGraphNodeReference.Capture(sourceSceneSelection)) &&
+                       AreSameSceneSelection(_targetSceneSelection, SceneGraphNodeReference.Capture(targetSceneSelection));
             }
 
             public UndoActionInfo ActionInfo => new UndoActionInfo
@@ -168,15 +168,15 @@ namespace FlaxEditor.Windows
                 _window = null;
             }
 
-            private static bool AreSameSceneSelection(SceneGraphNode[] a, SceneGraphNode[] b)
+            private static bool AreSameSceneSelection(SceneGraphNodeReference[] a, SceneGraphNodeReference[] b)
             {
-                a ??= Array.Empty<SceneGraphNode>();
-                b ??= Array.Empty<SceneGraphNode>();
+                a ??= Array.Empty<SceneGraphNodeReference>();
+                b ??= Array.Empty<SceneGraphNodeReference>();
                 if (a.Length != b.Length)
                     return false;
                 for (int i = 0; i < a.Length; i++)
                 {
-                    if (!ReferenceEquals(a[i], b[i]))
+                    if (!a[i].Equals(b[i]))
                         return false;
                 }
                 return true;
@@ -554,7 +554,7 @@ namespace FlaxEditor.Windows
             DoSelectContentItemsFromHistory(paths, paths != null && paths.Length != 0);
         }
 
-        private void RestoreContentSelectionFromUndo(string[] paths, SceneGraphNode[] sceneSelection)
+        private void RestoreContentSelectionFromUndo(string[] paths, SceneGraphNodeReference[] sceneSelection)
         {
             var hasContentSelection = paths != null && paths.Length != 0;
             var hasSceneSelection = sceneSelection != null && sceneSelection.Length != 0;
@@ -562,7 +562,7 @@ namespace FlaxEditor.Windows
             RestoreSceneSelectionFromContentUndo(sceneSelection);
         }
 
-        private void RestoreSceneSelectionFromContentUndo(SceneGraphNode[] sceneSelection)
+        private void RestoreSceneSelectionFromContentUndo(SceneGraphNodeReference[] sceneSelection)
         {
             if (sceneSelection == null || sceneSelection.Length == 0)
             {
@@ -570,12 +570,7 @@ namespace FlaxEditor.Windows
                 return;
             }
 
-            var nodes = new List<SceneGraphNode>(sceneSelection.Length);
-            for (int i = 0; i < sceneSelection.Length; i++)
-            {
-                if (sceneSelection[i] != null)
-                    nodes.Add(sceneSelection[i]);
-            }
+            var nodes = new List<SceneGraphNode>(SceneGraphNodeReference.Resolve(sceneSelection));
             if (nodes.Count != 0)
                 Editor.SceneEditing.Select(nodes, false, false);
             else

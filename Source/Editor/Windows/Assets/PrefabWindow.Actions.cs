@@ -97,8 +97,8 @@ namespace FlaxEditor.Windows.Assets
         /// </summary>
         public void Cut()
         {
-            Copy();
-            Delete();
+            if (TryCopy())
+                Delete();
         }
 
         /// <summary>
@@ -106,22 +106,31 @@ namespace FlaxEditor.Windows.Assets
         /// </summary>
         public void Copy()
         {
+            TryCopy();
+        }
+
+        private bool TryCopy()
+        {
             // Peek things that can be copied (copy all actors)
             var objects = Selection.Where(x => x.CanCopyPaste).ToList().BuildAllNodes().Where(x => x.CanCopyPaste && x is ActorNode).ToList();
             if (objects.Count == 0)
-                return;
+                return false;
 
             // Serialize actors
             var actors = objects.ConvertAll(x => ((ActorNode)x).Actor);
             var data = Actor.ToBytes(actors.ToArray());
-            if (data == null)
+            if (data == null || data.Length == 0)
             {
                 Editor.LogError("Failed to copy actors data.");
-                return;
+                return false;
             }
+            var objectIds = Actor.TryGetSerializedObjectsIds(data);
+            if (objectIds == null || objectIds.Length == 0)
+                return false;
 
             // Copy data
             Clipboard.RawData = data;
+            return true;
         }
 
         /// <summary>
@@ -221,7 +230,12 @@ namespace FlaxEditor.Windows.Assets
             List<ActorNode> nodeParents;
             try
             {
-                pasteAction.Do(out _, out nodeParents);
+                if (!pasteAction.TryDo(out _, out nodeParents))
+                {
+                    Editor.LogError($"[SceneDebug] {pasteAction.LastResult?.ErrorCode} Prefab paste rejected. {pasteAction.LastResult?.Message}");
+                    pasteAction.Dispose();
+                    return false;
+                }
             }
             catch (Exception ex)
             {
@@ -356,7 +370,7 @@ namespace FlaxEditor.Windows.Assets
             internal static CustomPasteActorsAction CustomPaste(PrefabWindow window, byte[] data, Guid pasteParent)
             {
                 var objectIds = Actor.TryGetSerializedObjectsIds(data);
-                if (objectIds == null)
+                if (objectIds == null || objectIds.Length == 0)
                     return null;
 
                 return new CustomPasteActorsAction(window, data, objectIds, ref pasteParent, "Paste actors");
@@ -365,7 +379,7 @@ namespace FlaxEditor.Windows.Assets
             internal static CustomPasteActorsAction CustomDuplicate(PrefabWindow window, byte[] data, Guid pasteParent)
             {
                 var objectIds = Actor.TryGetSerializedObjectsIds(data);
-                if (objectIds == null)
+                if (objectIds == null || objectIds.Length == 0)
                     return null;
 
                 return new CustomPasteActorsAction(window, data, objectIds, ref pasteParent, "Duplicate actors");
@@ -388,7 +402,19 @@ namespace FlaxEditor.Windows.Assets
             /// <inheritdoc />
             public override void Undo()
             {
+                TryUndo();
+            }
+
+            /// <inheritdoc />
+            public override bool TryUndo()
+            {
                 var nodes = _nodeParents.ToArray();
+
+                for (int i = 0; i < nodes.Length; i++)
+                {
+                    if (SceneGraphFactory.FindNode(nodes[i]) == null)
+                        return false;
+                }
 
                 for (int i = 0; i < nodes.Length; i++)
                 {
@@ -408,6 +434,7 @@ namespace FlaxEditor.Windows.Assets
                 }
 
                 _nodeParents.Clear();
+                return true;
             }
 
             /// <inheritdoc />
@@ -447,7 +474,12 @@ namespace FlaxEditor.Windows.Assets
                 action1,
                 action2
             }, action2.ActionString);
-            action.Do();
+            if (!action.TryDo())
+            {
+                action.Dispose();
+                Editor.LogError($"[SceneDebug] {action2.LastResult?.ErrorCode} Prefab delete failed. {action2.LastResult?.Message}");
+                return;
+            }
             Undo.AddAction(action);
 
             _treePanel.PerformLayout();

@@ -198,6 +198,15 @@ namespace FlaxEditor.Modules
         private void SelectionChange(SceneGraphNode[] before, bool recordUndo = true)
         {
             var after = Selection.ToArray();
+            for (int i = after.Length - 1; i >= 0; i--)
+            {
+                var scene = after[i]?.ParentScene?.Scene;
+                if (scene != null)
+                {
+                    Editor.Scene.SetActiveScene(scene);
+                    break;
+                }
+            }
             var contentSelectionBefore = Array.Empty<string>();
             var contentSelectionAfter = Array.Empty<string>();
             Action<string[]> contentSelectionCallback = null;
@@ -354,48 +363,55 @@ namespace FlaxEditor.Modules
         {
             bool isPlayMode = Editor.StateMachine.IsPlayMode;
 
-            if (Level.IsAnySceneLoaded == false)
-                throw new InvalidOperationException("Cannot spawn actor when no scene is loaded.");
+            if (actor == null)
+                throw new ArgumentNullException(nameof(actor));
+            parent ??= Editor.Scene.ActiveScene;
+            if (parent == null || parent.Scene == null || Level.FindScene(parent.Scene.ID) != parent.Scene)
+                throw new InvalidOperationException("Cannot spawn Actor without a loaded explicit destination Scene and parent.");
 
             SpawnBegin?.Invoke();
-
-            // During play in editor mode spawned actors should be dynamic (user can move them)
-            if (isPlayMode)
-                actor.StaticFlags = StaticFlags.None;
-
-            // Add it
-            Level.SpawnActor(actor, parent);
-
-            // Set order if given
-            if (orderInParent != -1)
-                actor.OrderInParent = orderInParent;
-
-            // Peek spawned node
-            var actorNode = Editor.Instance.Scene.GetActorNode(actor);
-            if (actorNode == null)
-                throw new InvalidOperationException("Failed to create scene node for the spawned actor.");
-
-            // Call post spawn action (can possibly setup custom default values)
-            actorNode.PostSpawn();
-
-            // Create undo action
-            IUndoAction action = new DeleteActorsAction(actorNode, true);
-            if (autoSelect)
+            var before = Selection.ToArray();
+            try
             {
-                var before = Selection.ToArray();
-                Selection.Clear();
-                Selection.Add(actorNode);
-                OnSelectionChanged();
-                action = new MultiUndoAction(action, new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
+                // During play in editor mode spawned actors should be dynamic (user can move them)
+                if (isPlayMode)
+                    actor.StaticFlags = StaticFlags.None;
+
+                Level.SpawnActor(actor, parent);
+                if (orderInParent != -1)
+                    actor.OrderInParent = orderInParent;
+
+                var actorNode = Editor.Instance.Scene.GetActorNode(actor);
+                if (actorNode == null)
+                    throw new InvalidOperationException("Failed to create scene node for the spawned actor.");
+                actorNode.PostSpawn();
+
+                IUndoAction action = new DeleteActorsAction(actorNode, true);
+                if (autoSelect)
+                {
+                    Selection.Clear();
+                    Selection.Add(actorNode);
+                    OnSelectionChanged();
+                    action = new MultiUndoAction(action, new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo));
+                }
+                OnDirty(actorNode);
+                Undo.AddAction(action);
             }
-            Undo.AddAction(action);
+            catch
+            {
+                Selection.Clear();
+                Selection.AddRange(before);
+                OnSelectionChanged();
+                if (actor)
+                    FlaxEngine.Object.Destroy(ref actor);
+                FlaxEngine.Scripting.FlushRemovedObjects();
+                throw;
+            }
+            finally
+            {
+                SpawnEnd?.Invoke();
+            }
 
-            // Mark scene as dirty
-            Editor.Scene.MarkSceneEdited(actor.Scene);
-
-            SpawnEnd?.Invoke();
-
-            OnDirty(actorNode);
         }
 
         /// <summary>
@@ -417,9 +433,11 @@ namespace FlaxEditor.Modules
             SpawnBegin?.Invoke();
             try
             {
-                var parent = actor.Parent ?? Level.GetScene(0);
+                var parent = actor.Parent ?? Editor.Scene.ActiveScene;
+                if (parent == null)
+                    throw new InvalidOperationException("Cannot spawn the CSG actor without an explicit active destination Scene.");
                 actor.Name = Utilities.Utils.IncrementNameNumber(actor.Name, x => parent.GetChild(x) == null);
-                Level.SpawnActor(actor);
+                Level.SpawnActor(actor, parent);
                 actorNode = Editor.Scene.GetActorNode(actor);
                 if (actorNode == null)
                     throw new InvalidOperationException("Failed to create scene node for the CSG actor.");
@@ -432,7 +450,6 @@ namespace FlaxEditor.Modules
                 var selectionAction = new SelectionChangeAction(before, Selection.ToArray(), OnSelectionUndo);
                 undoAction = new MultiUndoAction(new IUndoAction[] { createAction, selectionAction }, "Create CSG Box");
 
-                Editor.Scene.MarkSceneEdited(actor.Scene);
                 OnDirty(actorNode, false);
                 return true;
             }
@@ -491,75 +508,119 @@ namespace FlaxEditor.Modules
         {
             if (oldNode == null || !oldNode.Actor || oldNode.Actor.GetType() == to)
                 return;
-            if (Level.IsAnySceneLoaded == false)
-                throw new InvalidOperationException("Cannot spawn actor when no scene is loaded.");
+            if (to == null || !typeof(Actor).IsAssignableFrom(to) || to.IsAbstract)
+                throw new ArgumentException("The conversion target must be a concrete Actor type.", nameof(to));
 
-            var actionList = new IUndoAction[4];
             var old = oldNode.Actor;
-            var actor = (Actor)FlaxEngine.Object.New(to);
             var parent = old.Parent;
+            var scene = old.Scene;
+            if (parent == null || scene == null || Level.FindScene(scene.ID) != scene)
+                throw new InvalidOperationException("Cannot convert an Actor without a loaded explicit Scene and parent.");
+
+            var actor = (Actor)FlaxEngine.Object.New(to);
+            if (actor == null)
+                throw new InvalidOperationException("Failed to construct the target Actor type.");
             var orderInParent = old.OrderInParent;
-
-            // Steps:
-            // - deselect old actor
-            // - destroy old actor
-            // - spawn new actor
-            // - select new actor
-
-            SelectionDeleteBegin?.Invoke();
-
-            actionList[0] = new SelectionChangeAction(Selection.ToArray(), new SceneGraphNode[0], OnSelectionUndo);
-            actionList[0].Do();
-
-            actionList[1] = new DeleteActorsAction(oldNode.BuildAllNodes().Where(x => x.CanDelete).ToList());
-
-            SelectionDeleteEnd?.Invoke();
-
-            SpawnBegin?.Invoke();
-
-            // Copy properties
-            actor.Transform = old.Transform;
-            actor.StaticFlags = old.StaticFlags;
-            actor.HideFlags = old.HideFlags;
-            actor.Layer = old.Layer;
-            actor.Tags = old.Tags;
-            actor.Name = old.Name;
-            actor.IsActive = old.IsActive;
-
-            // Spawn actor
-            Level.SpawnActor(actor, parent);
-            if (parent != null)
-                actor.OrderInParent = orderInParent;
-            if (Editor.StateMachine.IsPlayMode)
-                actor.StaticFlags = StaticFlags.None;
-
-            // Move children
+            var selectionBefore = Selection.ToArray();
             var scripts = old.Scripts;
-            for (var i = scripts.Length - 1; i >= 0; i--)
-                scripts[i].Actor = actor;
             var children = old.Children;
-            for (var i = children.Length - 1; i >= 0; i--)
-                children[i].Parent = actor;
+            var deleteOld = new DeleteActorsAction(oldNode.BuildAllNodes().Where(x => x.CanDelete).ToList());
+            DeleteActorsAction createNew = null;
+            var oldDeleted = false;
+            ActorNode actorNode = null;
+            SelectionDeleteBegin?.Invoke();
+            SpawnBegin?.Invoke();
+            try
+            {
+                // Stage the replacement while the complete original graph remains recoverable.
+                actor.Transform = old.Transform;
+                actor.StaticFlags = old.StaticFlags;
+                actor.HideFlags = old.HideFlags;
+                actor.Layer = old.Layer;
+                actor.Tags = old.Tags;
+                actor.Name = old.Name;
+                actor.IsActive = old.IsActive;
 
-            var actorNode = Editor.Instance.Scene.GetActorNode(actor);
-            if (actorNode == null)
-                throw new InvalidOperationException("Failed to create scene node for the spawned actor.");
-            actorNode.PostConvert(oldNode);
+                Level.SpawnActor(actor, parent);
+                actor.OrderInParent = orderInParent;
+                if (Editor.StateMachine.IsPlayMode)
+                    actor.StaticFlags = StaticFlags.None;
 
-            actorNode.PostSpawn();
-            Editor.Scene.MarkSceneEdited(actor.Scene);
+                for (var i = scripts.Length - 1; i >= 0; i--)
+                    scripts[i].Actor = actor;
+                for (var i = children.Length - 1; i >= 0; i--)
+                    children[i].Parent = actor;
 
-            actionList[1].Do();
-            actionList[2] = new DeleteActorsAction(actorNode.BuildAllNodes().Where(x => x.CanDelete).ToList(), true);
+                actorNode = Editor.Instance.Scene.GetActorNode(actor);
+                if (actorNode == null)
+                    throw new InvalidOperationException("Failed to publish the replacement Actor in the Scene graph.");
+                actorNode.PostConvert(oldNode);
+                actorNode.PostSpawn();
 
-            actionList[3] = new SelectionChangeAction(new SceneGraphNode[0], new SceneGraphNode[] { actorNode }, OnSelectionUndo);
-            actionList[3].Do();
+                // Commit deletion only after the replacement graph is complete.
+                if (!deleteOld.TryDo())
+                    throw new InvalidOperationException("Failed to remove the original Actor. " + deleteOld.LastResult?.Message);
+                oldDeleted = true;
+                createNew = new DeleteActorsAction(actorNode.BuildAllNodes().Where(x => x.CanDelete).ToList(), true);
 
-            Undo.AddAction(new MultiUndoAction(actionList, "Convert actor"));
+                var clearSelection = new SelectionChangeAction(selectionBefore, Array.Empty<SceneGraphNode>(), OnSelectionUndo);
+                var selectNew = new SelectionChangeAction(Array.Empty<SceneGraphNode>(), new SceneGraphNode[] { actorNode }, OnSelectionUndo);
+                clearSelection.Do();
+                selectNew.Do();
 
-            SpawnEnd?.Invoke();
+                Undo.AddAction(new MultiUndoAction(new IUndoAction[]
+                {
+                    clearSelection,
+                    deleteOld,
+                    createNew,
+                    selectNew,
+                }, "Convert actor"));
+                OnDirty(actorNode);
+            }
+            catch
+            {
+                // Reverse staged publication before restoring the original serialized graph.
+                if (oldDeleted)
+                {
+                    if (createNew != null)
+                        createNew.TryUndo();
+                    else if (actor)
+                        FlaxEngine.Object.Destroy(ref actor);
+                    FlaxEngine.Scripting.FlushRemovedObjects();
+                    deleteOld.TryUndo();
+                }
+                else
+                {
+                    for (var i = scripts.Length - 1; i >= 0; i--)
+                    {
+                        if (scripts[i] != null)
+                            scripts[i].Actor = old;
+                    }
+                    for (var i = children.Length - 1; i >= 0; i--)
+                    {
+                        if (children[i] != null)
+                            children[i].Parent = old;
+                    }
+                    if (actor)
+                        FlaxEngine.Object.Destroy(ref actor);
+                    FlaxEngine.Scripting.FlushRemovedObjects();
+                }
 
-            OnDirty(actorNode);
+                Selection.Clear();
+                for (int i = 0; i < selectionBefore.Length; i++)
+                {
+                    var node = SceneGraphFactory.FindNode(selectionBefore[i]?.ID ?? Guid.Empty);
+                    if (node != null)
+                        Selection.Add(node);
+                }
+                OnSelectionChanged();
+                throw;
+            }
+            finally
+            {
+                SelectionDeleteEnd?.Invoke();
+                SpawnEnd?.Invoke();
+            }
         }
 
         /// <summary>
@@ -587,7 +648,14 @@ namespace FlaxEditor.Modules
                 action1,
                 action2
             }, action2.ActionString);
-            action.Do();
+            if (!action.TryDo())
+            {
+                action.Dispose();
+                Editor.LogError($"[SceneDebug] Delete failed. {action2.LastResult?.ErrorCode} {action2.LastResult?.Message}");
+                Editor.UI.AddStatusMessage("Cannot delete Actors: " + (action2.LastResult?.Message ?? "the mutation failed."));
+                SelectionDeleteEnd?.Invoke();
+                return;
+            }
             Undo.AddAction(action);
 
             SelectionDeleteEnd?.Invoke();
@@ -607,10 +675,19 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void Copy()
         {
+            TryCopy();
+        }
+
+        /// <summary>
+        /// Attempts to create a complete Actor clipboard payload.
+        /// </summary>
+        /// <returns>True when a validated non-empty payload was published.</returns>
+        public bool TryCopy()
+        {
             // Peek things that can be copied (copy all actors)
             var objects = Selection.Where(x => x.CanCopyPaste).ToList().BuildAllNodes().Where(x => x.CanCopyPaste && x is ActorNode).ToList();
             if (objects.Count == 0)
-                return;
+                return false;
 
             // Serialize actors
             var actors = objects.ConvertAll(x => ((ActorNode)x).Actor);
@@ -618,11 +695,19 @@ namespace FlaxEditor.Modules
             if (data == null)
             {
                 Editor.LogError("Failed to copy actors data.");
-                return;
+                return false;
+            }
+
+            var objectIds = Actor.TryGetSerializedObjectsIds(data);
+            if (objectIds == null || objectIds.Length == 0)
+            {
+                Editor.LogError("[SceneDebug] InvalidPayload Actor copy rejected because serialization produced an invalid payload.");
+                return false;
             }
 
             // Copy data
             Clipboard.RawData = data;
+            return true;
         }
 
 
@@ -649,19 +734,52 @@ namespace FlaxEditor.Modules
                 pasteTargetActor = actorNode.Actor;
             }
 
+            var destinationScene = pasteTargetActor?.Scene ?? Editor.Scene.ActiveScene;
+            if (destinationScene == null)
+            {
+                Editor.LogError("[SceneDebug] MissingDestination Paste rejected because there is no unambiguous active destination Scene.");
+                Editor.UI.AddStatusMessage("Cannot paste Actors: select a destination in a loaded Scene.");
+                return;
+            }
+
             // Create paste action
-            var pasteAction = PasteActorsAction.Paste(data, pasteTargetActor?.ID ?? Guid.Empty);
+            var pasteAction = PasteActorsAction.Paste(data, destinationScene, pasteTargetActor);
             if (pasteAction != null)
             {
-                pasteAction.Do(out _, out var nodeParents);
+                if (!pasteAction.TryDo(out _, out var nodeParents))
+                {
+                    var result = pasteAction.LastResult;
+                    Editor.LogError($"[SceneDebug] {result?.ErrorCode} Paste {result?.Status} Transaction={result?.TransactionId} {result?.Message}");
+                    Editor.UI.AddStatusMessage("Cannot paste Actors: " + (result?.Message ?? "invalid clipboard payload."));
+                    pasteAction.Dispose();
+                    return;
+                }
 
                 // Select spawned objects (parents only)
                 var selectAction = new SelectionChangeAction(Selection.ToArray(), nodeParents.Cast<SceneGraphNode>().ToArray(), OnSelectionUndo);
-                selectAction.Do();
+                try
+                {
+                    selectAction.Do();
+                }
+                catch (Exception ex)
+                {
+                    if (!pasteAction.TryUndo())
+                        Editor.LogError("[SceneDebug] RollbackFailed Paste selection publication rollback failed.");
+                    pasteAction.Dispose();
+                    Editor.LogError("[SceneDebug] PublicationFailed Paste selection failed. " + ex.Message);
+                    Editor.UI.AddStatusMessage("Cannot paste Actors: selection publication failed.");
+                    return;
+                }
 
                 // Build single compound undo action that pastes the actors and selects the created objects (parents only)
                 Undo.AddAction(new MultiUndoAction(pasteAction, selectAction));
                 OnSelectionChanged();
+            }
+            else
+            {
+                Editor.LogError("[SceneDebug] InvalidPayload Paste rejected because the clipboard does not contain a valid Actor graph.");
+                Editor.UI.AddStatusMessage("Cannot paste Actors: the clipboard payload is invalid.");
+                return;
             }
 
             // Scroll to new selected node while pasting
@@ -673,8 +791,14 @@ namespace FlaxEditor.Modules
         /// </summary>
         public void Cut()
         {
-            Copy();
-            Delete();
+            if (TryCopy())
+            {
+                Delete();
+            }
+            else
+            {
+                Editor.UI.AddStatusMessage("Cannot cut Actors: the clipboard payload could not be created.");
+            }
         }
 
         /// <summary>
@@ -708,15 +832,18 @@ namespace FlaxEditor.Modules
             var nodes = Selection.Where(x => x is ActorNode and not SceneNode).Cast<ActorNode>().ToList().BuildNodesParents();
             if (nodes.Count == 0)
             {
-                var scenes = Level.Scenes;
-                if (scenes.Length == 0)
+                var destinationScene = Editor.Scene.ActiveScene;
+                if (destinationScene == null)
+                {
+                    Editor.UI.AddStatusMessage("Cannot create a group: select an active destination Scene.");
                     return;
+                }
                 var emptyGroup = new GroupActor
                 {
                     Name = "Group",
                     Position = Editor.Windows.EditWin.Viewport.GetWorldPointUnderCursor(),
                 };
-                Spawn(emptyGroup, scenes[scenes.Length - 1], -1, false);
+                Spawn(emptyGroup, destinationScene, -1, false);
                 SelectAndRenameGroup(emptyGroup);
                 return;
             }
@@ -749,13 +876,40 @@ namespace FlaxEditor.Modules
                 Name = "Group",
                 Position = center,
             };
-            Spawn(group, commonParent, groupOrder, false);
-            using (new UndoMultiBlock(Undo, actors, "Reparent actors"))
+            var selectionBefore = Selection.ToArray();
+            DeleteActorsAction createGroup = null;
+            ParentActorsAction parentActors = null;
+            try
             {
-                for (int i = 0; i < actors.Count; i++)
-                    actors[i].SetParent(group, true, false);
+                Level.SpawnActor(group, commonParent);
+                group.OrderInParent = groupOrder;
+                var groupNode = Editor.Scene.GetActorNode(group);
+                if (groupNode == null)
+                    throw new InvalidOperationException("Failed to publish the group in the Scene graph.");
+                groupNode.PostSpawn();
+                createGroup = new DeleteActorsAction(groupNode, true);
+
+                parentActors = new ParentActorsAction(actors.Cast<SceneObject>().ToArray(), group, -1, true);
+                if (!parentActors.TryDo())
+                    throw new InvalidOperationException("Failed to attach Actors to the group. " + parentActors.LastResult?.Message);
+
+                var selectGroup = new SelectionChangeAction(selectionBefore, new SceneGraphNode[] { groupNode }, OnSelectionUndo);
+                selectGroup.Do();
+                Undo.AddAction(new MultiUndoAction(new IUndoAction[] { createGroup, parentActors, selectGroup }, "Group actors"));
+                groupNode.TreeNode.StartRenaming(Editor.Windows.SceneWin, Editor.Windows.SceneWin.SceneTreePanel);
             }
-            SelectAndRenameGroup(group);
+            catch
+            {
+                parentActors?.TryUndo();
+                createGroup?.TryUndo();
+                Selection.Clear();
+                Selection.AddRange(selectionBefore.Where(x => x != null));
+                OnSelectionChanged();
+                if (group)
+                    FlaxEngine.Object.Destroy(ref group);
+                FlaxEngine.Scripting.FlushRemovedObjects();
+                throw;
+            }
         }
 
         private void SelectAndRenameGroup(GroupActor group)

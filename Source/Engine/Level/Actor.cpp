@@ -10,6 +10,7 @@
 #include "Prefabs/Prefab.h"
 #include "Prefabs/PrefabManager.h"
 #include "Engine/Core/Log.h"
+#include "Engine/Core/ObjectsRemovalService.h"
 #include "Engine/Scripting/Script.h"
 #include "Engine/Scripting/ManagedCLR/MClass.h"
 #include "Engine/Threading/Threading.h"
@@ -1876,51 +1877,92 @@ Array<byte> Actor::ToBytes(const Array<Actor*>& actors)
     return data;
 }
 
-bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeModifier* modifier)
+bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeModifier* modifier, const Guid* destinationParentId)
 {
     PROFILE_CPU();
     PROFILE_MEM(Level);
     output.Clear();
     ASSERT(modifier);
-    if (data.Length() <= 0)
+    constexpr int32 MaxClipboardObjects = 1000000;
+    constexpr int32 MaxClipboardJsonBytes = 256 * 1024 * 1024;
+    if (data.Length() < sizeof(int32) * 3)
         return true;
     MemoryReadStream stream(data.Get(), data.Length());
 
     // Header
     int32 engineBuild;
     stream.ReadInt32(&engineBuild);
-    if (engineBuild > FLAXENGINE_VERSION_BUILD || engineBuild < 6165)
+    if (stream.HasError() || engineBuild > FLAXENGINE_VERSION_BUILD || engineBuild < 6165)
     {
         LOG(Warning, "Unsupported actors data version.");
         return true;
     }
 
     // Serialized objects ids (for references mapping)
-#if 0
-    Array<Guid> ids;
-    stream.Read(ids);
-    int32 objectsCount = ids.Count();
-#else
     int32 objectsCount;
     stream.ReadInt32(&objectsCount);
-    stream.Move<Guid>(objectsCount);
-#endif
-    if (objectsCount < 0)
+    if (stream.HasError() || objectsCount <= 0 || objectsCount > MaxClipboardObjects)
+        return true;
+    const uint64 idsSize = static_cast<uint64>(objectsCount) * sizeof(Guid);
+    if (idsSize > stream.GetLength() - stream.GetPosition())
+        return true;
+    const Guid* serializedIds = stream.Move<Guid>(objectsCount);
+    HashSet<Guid> uniqueIds;
+    uniqueIds.EnsureCapacity(objectsCount);
+    for (int32 i = 0; i < objectsCount; i++)
+    {
+        if (!serializedIds[i].IsValid() || !uniqueIds.Add(serializedIds[i]))
+        {
+            LOG(Warning, "Invalid or duplicate object ID in actors data.");
+            return true;
+        }
+    }
+
+    if (stream.GetLength() - stream.GetPosition() < sizeof(int32))
         return true;
 
     // Load objects data (JSON)
     int32 bufferSize;
     stream.ReadInt32(&bufferSize);
+    if (stream.HasError() || bufferSize <= 0 || bufferSize > MaxClipboardJsonBytes || static_cast<uint32>(bufferSize) > stream.GetLength() - stream.GetPosition())
+        return true;
     const char* buffer = (const char*)stream.Move(bufferSize);
     rapidjson_flax::Document document;
     {
         PROFILE_CPU_NAMED("Json.Parse");
         document.Parse(buffer, bufferSize);
     }
-    if (document.HasParseError())
+    if (document.HasParseError() || !document.IsArray() || document.Size() != static_cast<uint32>(objectsCount))
     {
-        Log::JsonParseException(document.GetParseError(), document.GetErrorOffset());
+        if (document.HasParseError())
+            Log::JsonParseException(document.GetParseError(), document.GetErrorOffset());
+        else
+            LOG(Warning, "Actors data object count does not match its JSON payload.");
         return true;
+    }
+    HashSet<Guid> jsonIds;
+    jsonIds.EnsureCapacity(objectsCount);
+    for (int32 i = 0; i < objectsCount; i++)
+    {
+        Guid objectId;
+        if (!document[i].IsObject() || !JsonTools::GetGuidIfValid(objectId, document[i], "ID") || !uniqueIds.Contains(objectId) || !jsonIds.Add(objectId))
+        {
+            LOG(Warning, "Invalid, missing, or duplicate object entry in actors data.");
+            return true;
+        }
+    }
+
+    // Redirect parent references that point outside of the payload before object deserialization.
+    // Scene copy/paste payloads keep the source Scene as the parent of their root actors, which
+    // might already be unloaded by the time they are pasted into another Scene.
+    if (destinationParentId && destinationParentId->IsValid())
+    {
+        for (int32 i = 0; i < objectsCount; i++)
+        {
+            Guid parentId;
+            if (JsonTools::GetGuidIfValid(parentId, document[i], "ParentID") && !uniqueIds.Contains(parentId))
+                modifier->IdsMapping[parentId] = *destinationParentId;
+        }
     }
 
     // Prepare
@@ -1928,6 +1970,7 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
     CollectionPoolCache<ActorsCache::SceneObjectsListType>::ScopeCache sceneObjects = ActorsCache::SceneObjectsListCache.Get();
     sceneObjects->Resize(objectsCount);
     SceneObjectsFactory::Context context(modifier);
+    bool constructionFailed = false;
 
     // Fix root linkage for prefab instances (eg. when user duplicates a sub-prefab actor but not a root one)
     SceneObjectsFactory::PrefabSyncData prefabSyncData(*sceneObjects.Value, document, modifier);
@@ -1965,12 +2008,29 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
         if (obj == nullptr)
         {
             LOG(Warning, "Cannot create object.");
+            constructionFailed = true;
             continue;
         }
         obj->RegisterObject();
         Actor* actor = dynamic_cast<Actor*>(obj);
         if (actor)
             output.Add(actor);
+    }
+    if (constructionFailed)
+    {
+        Scripting::ObjectsLookupIdMapping.Set(nullptr);
+        for (int32 i = sceneObjects->Count() - 1; i >= 0; i--)
+        {
+            auto obj = sceneObjects->At(i);
+            if (obj)
+            {
+                sceneObjects->At(i) = nullptr;
+                obj->DeleteObject();
+            }
+        }
+        output.Clear();
+        ObjectsRemovalService::Flush();
+        return true;
     }
     for (int32 i = 0; i < objectsCount; i++)
     {
@@ -2065,21 +2125,48 @@ Array<Actor*> Actor::FromBytes(const Span<byte>& data, const Dictionary<Guid, Gu
     return output;
 }
 
+Array<Actor*> Actor::FromBytes(const Span<byte>& data, const Dictionary<Guid, Guid>& idsMapping, const Guid& destinationParentId)
+{
+    Array<Actor*> output;
+    auto modifier = Cache::ISerializeModifier.Get();
+    modifier->IdsMapping = idsMapping;
+    FromBytes(data, output, modifier.Value, &destinationParentId);
+    return output;
+}
+
 Array<Guid> Actor::TryGetSerializedObjectsIds(const Span<byte>& data)
 {
     PROFILE_CPU();
     Array<Guid> result;
-    if (data.Length() > 0)
+    if (data.Length() >= sizeof(int32) * 2)
     {
         MemoryReadStream stream(data.Get(), data.Length());
 
         // Header
         int32 engineBuild;
         stream.ReadInt32(&engineBuild);
-        if (engineBuild <= FLAXENGINE_VERSION_BUILD && engineBuild >= 6165)
+        if (!stream.HasError() && engineBuild <= FLAXENGINE_VERSION_BUILD && engineBuild >= 6165)
         {
-            // Serialized objects ids (for references mapping)
-            stream.Read(result);
+            int32 objectsCount;
+            stream.ReadInt32(&objectsCount);
+            const uint64 idsSize = objectsCount > 0 ? static_cast<uint64>(objectsCount) * sizeof(Guid) : 0;
+            if (!stream.HasError() && objectsCount > 0 && objectsCount <= 1000000 && idsSize <= stream.GetLength() - stream.GetPosition())
+            {
+                const Guid* ids = stream.Move<Guid>(objectsCount);
+                HashSet<Guid> uniqueIds;
+                uniqueIds.EnsureCapacity(objectsCount);
+                bool valid = true;
+                for (int32 i = 0; i < objectsCount; i++)
+                {
+                    if (!ids[i].IsValid() || !uniqueIds.Add(ids[i]))
+                    {
+                        valid = false;
+                        break;
+                    }
+                }
+                if (valid)
+                    result.Set(ids, objectsCount);
+            }
         }
     }
 

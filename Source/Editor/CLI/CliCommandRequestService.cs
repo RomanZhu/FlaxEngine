@@ -601,7 +601,14 @@ namespace FlaxEditor
                     }
                     try
                     {
-                        values[i] = JsonConvert.DeserializeObject(property.Value.ToString(Formatting.None), parameterType, FlaxJsonSerializer.Settings);
+                        // Terminal option parsing represents a single occurrence as a
+                        // scalar and repeated occurrences as an array. Normalize the
+                        // single-value form for array parameters so `--actor <id>` and
+                        // `--actor <id> --actor <id>` have the same typed contract.
+                        var argumentValue = parameterType.IsArray && property.Value.Type != JTokenType.Array
+                            ? new JArray(property.Value.DeepClone())
+                            : property.Value;
+                        values[i] = JsonConvert.DeserializeObject(argumentValue.ToString(Formatting.None), parameterType, FlaxJsonSerializer.Settings);
                     }
                     catch (Exception ex)
                     {
@@ -727,8 +734,11 @@ namespace FlaxEditor
                 case CliGeneratorSaveMode.None:
                     break;
                 case CliGeneratorSaveMode.Scenes:
-                    if (Level.SaveAllScenes())
-                        throw new InvalidOperationException($"Generator '{generator.Name}' succeeded but one or more scenes failed to save.");
+                    foreach (var scene in Level.Scenes)
+                    {
+                        if (Editor.Instance.Scene.IsEdited(scene) && !Editor.Instance.Scene.SaveSceneSynchronously(scene))
+                            throw new InvalidOperationException($"Generator '{generator.Name}' succeeded but scene '{scene.Name}' failed to save.");
+                    }
                     break;
                 case CliGeneratorSaveMode.All:
                     Editor.Instance.SaveAll();

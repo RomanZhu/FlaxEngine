@@ -21,12 +21,12 @@ namespace FlaxEditor
             /// <summary>
             /// The 'before' selection.
             /// </summary>
-            public SceneGraphNode[] Before;
+            public SceneGraphNodeReference[] Before;
 
             /// <summary>
             /// The 'after' selection.
             /// </summary>
-            public SceneGraphNode[] After;
+            public SceneGraphNodeReference[] After;
 
             /// <summary>
             /// The content selection before the scene selection change.
@@ -55,8 +55,8 @@ namespace FlaxEditor
         {
             Data = new DataStorage
             {
-                Before = before,
-                After = after,
+                Before = SceneGraphNodeReference.Capture(before),
+                After = SceneGraphNodeReference.Capture(after),
                 ContentBefore = contentBefore ?? Array.Empty<string>(),
                 ContentAfter = contentAfter ?? Array.Empty<string>(),
             };
@@ -72,21 +72,21 @@ namespace FlaxEditor
             var data = Data;
             return _callback == callback &&
                    _contentSelectionCallback == contentSelectionCallback &&
-                   AreSame(data.Before, before) &&
-                   AreSame(data.After, after) &&
+                   AreSame(data.Before, SceneGraphNodeReference.Capture(before)) &&
+                   AreSame(data.After, SceneGraphNodeReference.Capture(after)) &&
                    AreSameContentSelection(data.ContentBefore, contentBefore) &&
                    AreSameContentSelection(data.ContentAfter, contentAfter);
         }
 
-        private static bool AreSame(SceneGraphNode[] a, SceneGraphNode[] b)
+        private static bool AreSame(SceneGraphNodeReference[] a, SceneGraphNodeReference[] b)
         {
-            a ??= Array.Empty<SceneGraphNode>();
-            b ??= Array.Empty<SceneGraphNode>();
+            a ??= Array.Empty<SceneGraphNodeReference>();
+            b ??= Array.Empty<SceneGraphNodeReference>();
             if (a.Length != b.Length)
                 return false;
             for (int i = 0; i < a.Length; i++)
             {
-                if (!ReferenceEquals(a[i], b[i]))
+                if (!a[i].Equals(b[i]))
                     return false;
             }
             return true;
@@ -112,15 +112,15 @@ namespace FlaxEditor
             get
             {
                 var data = Data;
-                var after = data.After ?? Array.Empty<SceneGraphNode>();
-                var target = after.Length == 1 ? after[0] : null;
+                var after = data.After ?? Array.Empty<SceneGraphNodeReference>();
+                SceneGraphNodeReference? target = after.Length == 1 ? after[0] : (SceneGraphNodeReference?)null;
                 return new UndoActionInfo
                 {
                     Operation = ActionString,
-                    TargetType = target != null ? UndoActionTargetType.SceneObject : UndoActionTargetType.Multiple,
-                    TargetName = target != null ? target.Name : "Scene Selection",
-                    TargetId = target?.ID ?? Guid.Empty,
-                    TargetObjectId = target?.ID.ToString("N"),
+                    TargetType = target.HasValue ? UndoActionTargetType.SceneObject : UndoActionTargetType.Multiple,
+                    TargetName = target.HasValue ? target.Value.Name : "Scene Selection",
+                    TargetId = target?.NodeId ?? Guid.Empty,
+                    TargetObjectId = target.HasValue ? target.Value.NodeId.ToString("N") : null,
                     Flags = UndoActionFlags.SelectionOnly,
                     SizeInBytes = 0,
                 };
@@ -131,7 +131,7 @@ namespace FlaxEditor
         public override void Do()
         {
             var data = Data;
-            _callback(data.After);
+            _callback(SceneGraphNodeReference.Resolve(data.After));
             _contentSelectionCallback?.Invoke(data.ContentAfter);
         }
 
@@ -139,7 +139,7 @@ namespace FlaxEditor
         public override void Undo()
         {
             var data = Data;
-            _callback(data.Before);
+            _callback(SceneGraphNodeReference.Resolve(data.Before));
             _contentSelectionCallback?.Invoke(data.ContentBefore);
         }
     }

@@ -2010,10 +2010,25 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
         return true;
     }
 
-    // Save json to file
-    if (File::WriteAllBytes(path, (byte*)buffer.GetString(), (int32)buffer.GetSize()))
+    // Save to a same-directory staging file first. Publishing uses an atomic same-volume
+    // replacement on supported desktop platforms, so a failed write or replacement leaves
+    // the previous scene bytes untouched.
+    String stagingPath(path);
+    stagingPath += TEXT(".tmp-");
+    stagingPath += Guid::New().ToString(Guid::FormatType::N);
+    if (File::WriteAllBytes(stagingPath, (byte*)buffer.GetString(), (int32)buffer.GetSize()))
     {
-        LOG(Error, "Cannot save scene file");
+        LOG(Error, "Cannot write staged scene file '{0}'", stagingPath);
+        if (FileSystem::FileExists(stagingPath))
+            FileSystem::DeleteFile(stagingPath);
+        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+        return true;
+    }
+    if (FileSystem::MoveFile(path, stagingPath, true))
+    {
+        LOG(Error, "Cannot replace scene file '{0}' with completed staging file '{1}'", path, stagingPath);
+        if (FileSystem::FileExists(stagingPath))
+            FileSystem::DeleteFile(stagingPath);
         CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
         return true;
     }

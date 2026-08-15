@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEditor.Modules;
 using FlaxEditor.Scripting;
 using FlaxEngine;
 using FlaxEngine.Utilities;
@@ -13,7 +14,7 @@ namespace FlaxEditor.Actions
     /// </summary>
     /// <seealso cref="IUndoAction" />
     [Serializable]
-    sealed class AddRemoveScript : IUndoAction
+    sealed class AddRemoveScript : ITryUndoAction, ISceneUndoAction
     {
         [Serialize]
         private bool _isAdd;
@@ -35,6 +36,9 @@ namespace FlaxEditor.Actions
 
         [Serialize]
         private Guid _parentId;
+
+        [Serialize]
+        private Guid _sceneId;
 
         [Serialize]
         private int _orderInParent;
@@ -60,6 +64,7 @@ namespace FlaxEditor.Actions
                 Debug.LogException(ex);
             }
             _parentId = script.Actor.ID;
+            _sceneId = script.Actor.Scene?.ID ?? Guid.Empty;
             _orderInParent = script.OrderInParent;
             _enabled = script.Enabled;
         }
@@ -71,6 +76,7 @@ namespace FlaxEditor.Actions
             _scriptTypeName = scriptType.TypeName;
             _scriptData = null;
             _parentId = parentActor.ID;
+            _sceneId = parentActor.Scene?.ID ?? Guid.Empty;
             _orderInParent = -1;
             _enabled = true;
         }
@@ -123,21 +129,33 @@ namespace FlaxEditor.Actions
         public string ActionString => _isAdd ? "Add script" : "Remove script";
 
         /// <inheritdoc />
+        public Guid[] SceneIds => _sceneId != Guid.Empty ? new[] { _sceneId } : Array.Empty<Guid>();
+
+        /// <inheritdoc />
+        public bool SupportsSceneReload => true;
+
+        /// <inheritdoc />
         public void Do()
         {
-            if (_isAdd)
-                DoAdd();
-            else
-                DoRemove();
+            TryDo();
+        }
+
+        /// <inheritdoc />
+        public bool TryDo()
+        {
+            return _isAdd ? TryAdd() : TryRemove();
         }
 
         /// <inheritdoc />
         public void Undo()
         {
-            if (_isAdd)
-                DoRemove();
-            else
-                DoAdd();
+            TryUndo();
+        }
+
+        /// <inheritdoc />
+        public bool TryUndo()
+        {
+            return _isAdd ? TryRemove() : TryAdd();
         }
 
         /// <inheritdoc />
@@ -147,52 +165,60 @@ namespace FlaxEditor.Actions
             _scriptData = null;
         }
 
-        private void DoRemove()
+        private bool TryRemove()
         {
+            if (_sceneId != Guid.Empty && Level.FindScene(_sceneId) == null)
+                return false;
             // Remove script (it could be removed by sth else, just check it)
             var script = Object.Find<Script>(ref _scriptId);
             if (!script)
-            {
-                Editor.LogWarning("Missing script.");
-                return;
-            }
-            if (script.Actor)
-                Editor.Instance.Scene.MarkSceneEdited(script.Scene);
+                return false;
             Object.Destroy(ref script);
+            FlaxEngine.Scripting.FlushRemovedObjects();
+            return Object.Find<Script>(ref _scriptId) == null;
         }
 
-        private void DoAdd()
+        private bool TryAdd()
         {
+            if (_sceneId != Guid.Empty && Level.FindScene(_sceneId) == null)
+                return false;
             // Restore script
             var parentActor = Object.Find<Actor>(ref _parentId);
             if (parentActor == null)
-            {
-                Editor.LogWarning("Missing parent actor.");
-                return;
-            }
+                return false;
             var type = TypeUtils.GetType(_scriptTypeName);
             if (!type)
-            {
-                Editor.LogWarning("Cannot find script type " + _scriptTypeName);
-                return;
-            }
+                return false;
             var script = type.CreateInstance() as Script;
             if (script == null)
+                return false;
+            try
             {
-                Editor.LogWarning("Cannot create script of type " + _scriptTypeName);
-                return;
+                Object.Internal_ChangeID(Object.GetUnmanagedPtr(script), ref _scriptId);
+                if (_scriptData != null)
+                    FlaxEngine.Json.JsonSerializer.Deserialize(script, _scriptData);
+                script.Enabled = _enabled;
+                script.Parent = parentActor;
+                if (_orderInParent != -1)
+                    script.OrderInParent = _orderInParent;
+                _orderInParent = script.OrderInParent;
+                if (_prefabObjectId != Guid.Empty)
+                    SceneObject.Internal_LinkPrefab(Object.GetUnmanagedPtr(script), ref _prefabId, ref _prefabObjectId);
+                return script.Actor == parentActor;
             }
-            Object.Internal_ChangeID(Object.GetUnmanagedPtr(script), ref _scriptId);
-            if (_scriptData != null)
-                FlaxEngine.Json.JsonSerializer.Deserialize(script, _scriptData);
-            script.Enabled = _enabled;
-            script.Parent = parentActor;
-            if (_orderInParent != -1)
-                script.OrderInParent = _orderInParent;
-            _orderInParent = script.OrderInParent; // Ensure order is correct for script that want to use it later
-            if (_prefabObjectId != Guid.Empty)
-                SceneObject.Internal_LinkPrefab(Object.GetUnmanagedPtr(script), ref _prefabId, ref _prefabObjectId);
-            Editor.Instance.Scene.MarkSceneEdited(parentActor.Scene);
+            catch
+            {
+                Object.Destroy(ref script);
+                FlaxEngine.Scripting.FlushRemovedObjects();
+                return false;
+            }
+        }
+
+        /// <inheritdoc />
+        void ISceneEditAction.MarkSceneEdited(SceneModule sceneModule)
+        {
+            if (_sceneId != Guid.Empty)
+                sceneModule.MarkSceneEdited(Level.FindScene(_sceneId));
         }
     }
 }

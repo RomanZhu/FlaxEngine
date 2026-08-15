@@ -77,7 +77,7 @@ internal sealed class CommandDispatcher(
             "feeds" => Feeds(args, context),
             "player" => await Player(args, context),
             "runtime" => await Runtime(args, context),
-            "scenes" or "actors" or "prefabs" or "settings" or "bake" or "dev" or "visject" => await Authoring(command, args, context),
+            "scenes" or "actors" or "prefabs" or "history" or "settings" or "bake" or "dev" or "visject" => await Authoring(command, args, context),
             "templates" => Templates(args),
             "new" => CreateProject(args, context),
             "test" => await Tests(args, context),
@@ -1843,12 +1843,13 @@ Project-owned generators are public static methods marked with [CliGenerator]. T
 """;
 
     private const string AuthoringHelp = """
-flax scenes <list|create|open|close|reload|save|dirty|hierarchy|active|build-list> [options]
-flax actors <find|get|create|create-batch|delete|rename|transform|parent|active|tag|layer> [options]
+flax scenes <list|create|open|close|reload|save|save-fault|mutation-fault|debug|dirty|hierarchy|active|build-list> [options]
+flax actors <find|get|create|create-batch|copy|cut|paste|delete|rename|transform|parent|active|tag|layer> [options]
 flax actors component <add|remove|get|set> [options]
 flax actors primitive <list|create> [--shape cube|sphere|plane|cylinder|cone|capsule] [options]
 flax actors property <list|get|set> [options]
 flax prefabs <create|instantiate|variant|apply|revert|unpack|save> [options]
+flax history <list|undo|redo>
 flax settings <list|get|schema|diff|set> [options]
 flax bake <lighting|navmesh|probes|csg|scenes|sdf> <start|cancel|clear> [options]
 

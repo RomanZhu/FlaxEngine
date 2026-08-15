@@ -149,6 +149,7 @@ public sealed class CommandProtocolTests
     [TestCase("actors", "primitive.create", "actors.primitive.create")]
     [TestCase("actors", "property.set", "actors.property.set")]
     [TestCase("prefabs", "instantiate", "prefabs.instantiate")]
+    [TestCase("history", "undo", "history.undo")]
     public void AuthoringGroupsRouteToTypedCommandNames(string group, string action, string expected)
     {
         Assert.That(CommandDispatcher.AuthoringCommandName(group, action), Is.EqualTo(expected));

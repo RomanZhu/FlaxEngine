@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using FlaxEditor.SceneEditing;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEngine;
@@ -18,6 +19,12 @@ namespace FlaxEditor.Modules
     /// <seealso cref="FlaxEditor.Modules.EditorModule" />
     public sealed class SceneModule : EditorModule
     {
+        private struct PendingSceneSave
+        {
+            public long DirtyGeneration;
+            public int UndoState;
+        }
+
         /// <summary>
         /// The root node for the scene graph created for the loaded scenes and actors hierarchy.
         /// </summary>
@@ -60,6 +67,12 @@ namespace FlaxEditor.Modules
         private readonly object _sceneDiskChangesLock = new object();
         private readonly Dictionary<string, DateTime> _pendingSceneDiskChanges = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, DateTime> _ignoredSceneDiskChanges = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<Guid, long> _sceneDirtyGenerations = new Dictionary<Guid, long>();
+        private readonly Dictionary<Guid, long> _sceneSavedGenerations = new Dictionary<Guid, long>();
+        private readonly Dictionary<Guid, Queue<PendingSceneSave>> _pendingSceneSaveGenerations = new Dictionary<Guid, Queue<PendingSceneSave>>();
+        private readonly HashSet<Guid> _capturedSceneEdits = new HashSet<Guid>();
+        private int _sceneEditCaptureDepth;
+        private Guid _activeSceneId;
         private FileSystemWatcher _sceneActorsWatcher;
         private DateTime _nextSceneActorsWatcherRetry;
         private bool _sceneActorsWatcherError;
@@ -74,6 +87,21 @@ namespace FlaxEditor.Modules
         /// Occurs when the editor scene graph changes.
         /// </summary>
         public event Action SceneGraphChanged;
+
+        /// <summary>
+        /// Gets the Scene selected by the most recent explicit scene interaction.
+        /// Falls back only when exactly one Scene is loaded.
+        /// </summary>
+        public Scene ActiveScene
+        {
+            get
+            {
+                var active = _activeSceneId != Guid.Empty ? Level.FindScene(_activeSceneId) : null;
+                if (active != null)
+                    return active;
+                return Level.ScenesCount == 1 ? Level.GetScene(0) : null;
+            }
+        }
 
         internal SceneModule(Editor editor)
         : base(editor)
@@ -100,9 +128,41 @@ namespace FlaxEditor.Modules
             if (scene == null)
                 return;
 
+            var sceneId = scene.Scene.ID;
+            if (_sceneEditCaptureDepth != 0)
+                _capturedSceneEdits.Add(sceneId);
+            _sceneDirtyGenerations.TryGetValue(sceneId, out var generation);
+            _sceneDirtyGenerations[sceneId] = generation + 1;
+            _activeSceneId = sceneId;
             scene.IsEdited = true;
             if (!SuppressUndoDirtyTracking)
-                Editor.Undo.MarkSceneChangedOutsideUndo();
+                Editor.Undo.MarkSceneChangedOutsideUndo(sceneId);
+        }
+
+        internal void BeginSceneEditCapture()
+        {
+            if (_sceneEditCaptureDepth++ == 0)
+                _capturedSceneEdits.Clear();
+        }
+
+        internal Guid[] EndSceneEditCapture()
+        {
+            if (_sceneEditCaptureDepth == 0 || --_sceneEditCaptureDepth != 0)
+                return Array.Empty<Guid>();
+            var result = new Guid[_capturedSceneEdits.Count];
+            _capturedSceneEdits.CopyTo(result);
+            _capturedSceneEdits.Clear();
+            return result;
+        }
+
+        /// <summary>
+        /// Sets the active Scene from explicit selection or authoring context.
+        /// </summary>
+        /// <param name="scene">The active Scene.</param>
+        public void SetActiveScene(Scene scene)
+        {
+            if (scene != null && Level.FindScene(scene.ID) == scene)
+                _activeSceneId = scene.ID;
         }
 
         /// <summary>
@@ -153,7 +213,12 @@ namespace FlaxEditor.Modules
             foreach (var scene in Root.ChildNodes)
             {
                 if (scene is SceneNode node)
+                {
                     node.IsEdited = false;
+                    var sceneId = node.Scene.ID;
+                    _sceneDirtyGenerations.TryGetValue(sceneId, out var generation);
+                    _sceneSavedGenerations[sceneId] = generation;
+                }
             }
         }
 
@@ -251,13 +316,46 @@ namespace FlaxEditor.Modules
         {
             if (Editor.MultiplayerPlayMode.IsReplica)
                 return;
-            if (!scene.IsEdited)
+            if (scene == null || !scene.IsEdited)
                 return;
 
-            scene.IsEdited = false;
+            QueueSaveCompletion(scene);
+            if (SceneSaveFaults.ShouldFail(scene.Scene))
+            {
+                OnSceneSaveError(scene.Scene, scene.Scene.ID);
+                return;
+            }
             Level.SaveSceneAsync(scene.Scene);
-            if (!IsEdited())
-                Editor.Undo.MarkScenesSaved();
+        }
+
+        /// <summary>
+        /// Saves a Scene synchronously and only marks the captured generation clean after success.
+        /// </summary>
+        /// <param name="scene">Scene to save.</param>
+        /// <returns>True when the save completed successfully.</returns>
+        public bool SaveSceneSynchronously(Scene scene)
+        {
+            if (Editor.MultiplayerPlayMode.IsReplica || scene == null)
+                return false;
+            var node = GetActorNode(scene) as SceneNode;
+            if (node == null)
+                return false;
+            if (!node.IsEdited)
+                return true;
+
+            QueueSaveCompletion(node);
+            if (SceneSaveFaults.ShouldFail(scene))
+            {
+                OnSceneSaveError(scene, scene.ID);
+                return false;
+            }
+            var failed = Level.SaveScene(scene);
+            if (failed)
+            {
+                node.IsEdited = true;
+                return false;
+            }
+            return !node.IsEdited;
         }
 
         /// <summary>
@@ -270,14 +368,54 @@ namespace FlaxEditor.Modules
             if (!IsEdited())
                 return;
 
+            var queued = 0;
             foreach (var scene in Root.ChildNodes)
             {
-                if (scene is SceneNode node)
-                    node.IsEdited = false;
+                if (scene is SceneNode node && node.IsEdited)
+                {
+                    QueueSaveCompletion(node);
+                    if (SceneSaveFaults.ShouldFail(node.Scene))
+                        OnSceneSaveError(node.Scene, node.Scene.ID);
+                    else
+                        Level.SaveSceneAsync(node.Scene);
+                    queued++;
+                }
             }
-            Level.SaveAllScenesAsync();
-            Editor.Undo.MarkScenesSaved();
-            Editor.UI.AddStatusMessage("Saved!");
+            if (queued != 0)
+                Editor.UI.AddStatusMessage("Saving scenes...");
+        }
+
+        private void QueueSaveCompletion(SceneNode scene)
+        {
+            var sceneId = scene.Scene.ID;
+            _sceneDirtyGenerations.TryGetValue(sceneId, out var generation);
+            if (!_pendingSceneSaveGenerations.TryGetValue(sceneId, out var queue))
+            {
+                queue = new Queue<PendingSceneSave>();
+                _pendingSceneSaveGenerations.Add(sceneId, queue);
+            }
+            queue.Enqueue(new PendingSceneSave
+            {
+                DirtyGeneration = generation,
+                UndoState = Editor.Undo.GetSceneState(sceneId),
+            });
+            SceneDebug.Log("SaveRequested", $"Scene={sceneId} DirtyGeneration={generation} Path='{scene.Scene.Path}'");
+        }
+
+        private bool TryTakePendingSave(Guid sceneId, out PendingSceneSave save)
+        {
+            save = default;
+            if (!_pendingSceneSaveGenerations.TryGetValue(sceneId, out var queue) || queue.Count == 0)
+                return false;
+            save = queue.Dequeue();
+            if (queue.Count == 0)
+                _pendingSceneSaveGenerations.Remove(sceneId);
+            return true;
+        }
+
+        private void RemovePendingSave(Guid sceneId)
+        {
+            TryTakePendingSave(sceneId, out _);
         }
 
         /// <summary>
@@ -526,13 +664,22 @@ namespace FlaxEditor.Modules
                                             );
                 if (result == DialogResult.OK || result == DialogResult.Yes)
                 {
-                    // Save and close
-                    SaveScene(scene);
+                    // Save completion is authoritative. Never fall through to unload on failure.
+                    if (!SaveSceneSynchronously(scene.Scene))
+                    {
+                        SceneDebug.Error(SceneMutationErrorCode.SaveFailed, "CloseBlocked", $"Scene={scene.Scene.ID} Path='{scene.Scene.Path}'");
+                        return true;
+                    }
                 }
                 else if (result == DialogResult.Cancel || result == DialogResult.Abort)
                 {
                     // Cancel closing
                     return true;
+                }
+                else
+                {
+                    Editor.Undo.DiscardSceneChanges(scene.Scene.ID);
+                    scene.IsEdited = false;
                 }
             }
 
@@ -560,13 +707,30 @@ namespace FlaxEditor.Modules
                                             );
                 if (result == DialogResult.OK || result == DialogResult.Yes)
                 {
-                    // Save and close
-                    SaveScenes();
+                    // Save completion is authoritative. Never fall through to unload on failure.
+                    var scenesToSave = Level.Scenes.Where(IsEdited).ToArray();
+                    for (int i = 0; i < scenesToSave.Length; i++)
+                    {
+                        if (!SaveSceneSynchronously(scenesToSave[i]))
+                        {
+                            SceneDebug.Error(SceneMutationErrorCode.SaveFailed, "CloseBlocked", $"Scene={scenesToSave[i].ID} Path='{scenesToSave[i].Path}'");
+                            return true;
+                        }
+                    }
                 }
                 else if (result == DialogResult.Cancel || result == DialogResult.Abort)
                 {
                     // Cancel closing
                     return true;
+                }
+                else
+                {
+                    for (int i = 0; i < scenes.Length; i++)
+                    {
+                        Editor.Undo.DiscardSceneChanges(scenes[i].ID);
+                        if (GetActorNode(scenes[i]) is SceneNode node)
+                            node.IsEdited = false;
+                    }
                 }
             }
 
@@ -830,17 +994,44 @@ namespace FlaxEditor.Modules
             IgnoreSceneDiskChangesFromSave(scene);
             EnsureSceneActorsWatcher();
             OnSaveEnd(RootControl.GameRoot);
+
+            if (TryTakePendingSave(sceneId, out var saved))
+            {
+                _sceneDirtyGenerations.TryGetValue(sceneId, out var currentGeneration);
+                _sceneSavedGenerations[sceneId] = saved.DirtyGeneration;
+                Editor.Undo.MarkSceneSaved(sceneId, saved.UndoState);
+                if (currentGeneration == saved.DirtyGeneration && GetActorNode(scene) is SceneNode sceneNode)
+                    sceneNode.IsEdited = false;
+                if (!IsEdited())
+                {
+                    Editor.UI.AddStatusMessage("Saved!");
+                }
+                SceneDebug.Log("SaveCompleted", $"Scene={sceneId} SavedGeneration={saved.DirtyGeneration} CurrentGeneration={currentGeneration} Path='{scene?.Path}'");
+            }
         }
         
         private void OnSceneSaveError(Scene scene, Guid sceneId)
         {
             IgnoreSceneDiskChangesFromSave(scene);
             OnSaveEnd(RootControl.GameRoot);
+            RemovePendingSave(sceneId);
+            if (GetActorNode(scene) is SceneNode sceneNode)
+                sceneNode.IsEdited = true;
+            var path = scene?.Path ?? sceneId.ToString();
+            SceneDebug.Error(SceneMutationErrorCode.SaveFailed, "SaveFailed", $"Scene={sceneId} Path='{path}' DirtyPreserved=true");
+            Editor.UI.AddStatusMessage("Failed to save scene. The scene remains modified.");
         }
 
         private void OnSceneLoaded(Scene scene, Guid sceneId)
         {
             EnsureSceneActorsWatcher();
+
+            _activeSceneId = sceneId;
+            if (!_sceneDirtyGenerations.ContainsKey(sceneId))
+                _sceneDirtyGenerations.Add(sceneId, 0);
+            if (!_sceneSavedGenerations.ContainsKey(sceneId))
+                _sceneSavedGenerations.Add(sceneId, 0);
+            SceneDebug.Log("SceneLoaded", $"Scene={sceneId} Path='{scene?.Path}'");
 
             var startTime = DateTime.UtcNow;
 
@@ -867,6 +1058,12 @@ namespace FlaxEditor.Modules
 
         private void OnSceneUnloading(Scene scene, Guid sceneId)
         {
+            if (_activeSceneId == sceneId)
+                _activeSceneId = Guid.Empty;
+            _pendingSceneSaveGenerations.Remove(sceneId);
+            Editor.Undo.OnSceneUnloading(sceneId);
+            SceneDebug.Log("SceneUnloading", $"Scene={sceneId} Path='{scene?.Path}'");
+
             // Find scene tree node
             var node = Root.FindChildActor(scene);
             if (node != null)

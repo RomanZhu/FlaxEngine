@@ -2,6 +2,8 @@
 
 using System;
 using System.Collections.Generic;
+using FlaxEditor.Modules;
+using FlaxEditor.SceneEditing;
 using FlaxEditor.SceneGraph;
 using FlaxEngine;
 using FlaxEngine.Utilities;
@@ -13,7 +15,7 @@ namespace FlaxEditor.Actions
     /// </summary>
     /// <seealso cref="FlaxEditor.IUndoAction" />
     [Serializable]
-    class DeleteActorsAction : IUndoAction
+    class DeleteActorsAction : ITryUndoAction, ISceneUndoAction
     {
         [Serialize]
         private byte[] _actorsData;
@@ -23,6 +25,12 @@ namespace FlaxEditor.Actions
 
         [Serialize]
         private Guid[] _nodeParentsIDs;
+
+        [Serialize]
+        private Guid[] _nodeParentActorIDs;
+
+        [Serialize]
+        private Guid[] _sceneIDs;
 
         [Serialize]
         private int[] _nodeParentsOrders;
@@ -44,6 +52,20 @@ namespace FlaxEditor.Actions
 
         [Serialize]
         protected List<SceneGraphNode> _nodeParents;
+
+        [NonSerialized]
+        private SceneMutationResult _lastResult;
+
+        /// <summary>
+        /// Gets the most recent structured result.
+        /// </summary>
+        public SceneMutationResult LastResult => _lastResult;
+
+        /// <inheritdoc />
+        public Guid[] SceneIds => _sceneIDs ?? Array.Empty<Guid>();
+
+        /// <inheritdoc />
+        public bool SupportsSceneReload => true;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DeleteActorsAction"/> class.
@@ -105,8 +127,17 @@ namespace FlaxEditor.Actions
             deleteNodes.BuildNodesParents(_nodeParents);
             OnDirtyInit();
             _nodeParentsIDs = new Guid[_nodeParents.Count];
+            _nodeParentActorIDs = new Guid[_nodeParents.Count];
+            _sceneIDs = new Guid[_nodeParents.Count];
             for (int i = 0; i < _nodeParentsIDs.Length; i++)
+            {
                 _nodeParentsIDs[i] = _nodeParents[i].ID;
+                if (_nodeParents[i] is ActorNode actorNode)
+                {
+                    _nodeParentActorIDs[i] = actorNode.Actor.Parent?.ID ?? Guid.Empty;
+                    _sceneIDs[i] = actorNode.Actor.Scene?.ID ?? Guid.Empty;
+                }
+            }
             if (preserveOrder)
             {
                 _nodeParentsOrders = new int[_nodeParents.Count];
@@ -133,19 +164,25 @@ namespace FlaxEditor.Actions
         /// <inheritdoc />
         public void Do()
         {
-            if (_isInverted)
-                Create();
-            else
-                Delete();
+            TryDo();
+        }
+
+        /// <inheritdoc />
+        public bool TryDo()
+        {
+            return _isInverted ? TryCreate(SceneMutationOperation.Restore) : TryDelete(SceneMutationOperation.Delete);
         }
 
         /// <inheritdoc />
         public void Undo()
         {
-            if (_isInverted)
-                Delete();
-            else
-                Create();
+            TryUndo();
+        }
+
+        /// <inheritdoc />
+        public bool TryUndo()
+        {
+            return _isInverted ? TryDelete(SceneMutationOperation.Undo) : TryCreate(SceneMutationOperation.Undo);
         }
 
         /// <inheritdoc />
@@ -153,10 +190,51 @@ namespace FlaxEditor.Actions
         {
             _actorsData = null;
             _nodeParentsIDs = null;
+            _nodeParentActorIDs = null;
+            _sceneIDs = null;
             _nodeParentsOrders = null;
             _prefabIds = null;
             _prefabObjectIds = null;
             _nodeParents.Clear();
+        }
+
+        private bool TryDelete(SceneMutationOperation operation)
+        {
+            var transactionId = Guid.NewGuid();
+            if (_nodeParents.Count == 0)
+            {
+                for (int i = 0; i < _nodeParentsIDs.Length; i++)
+                {
+                    var node = GetNode(_nodeParentsIDs[i]);
+                    if (node == null)
+                    {
+                        _lastResult = SceneMutationResult.Rejected(transactionId, operation, SceneMutationErrorCode.ReplayDependencyMissing, "An Actor required by delete replay is missing.", _sceneIDs);
+                        return false;
+                    }
+                    _nodeParents.Add(node);
+                }
+            }
+
+            for (int i = 0; i < _sceneIDs.Length; i++)
+            {
+                if (_sceneIDs[i] != Guid.Empty && Level.FindScene(_sceneIDs[i]) == null)
+                {
+                    _lastResult = SceneMutationResult.Rejected(transactionId, operation, SceneMutationErrorCode.ReplayDependencyMissing, "A Scene required by delete replay is not loaded.", _sceneIDs);
+                    return false;
+                }
+            }
+
+            try
+            {
+                Delete();
+                _lastResult = SceneMutationResult.Success(transactionId, operation, _sceneIDs, removedObjectIds: _nodeParentsIDs);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _lastResult = SceneMutationResult.Failed(transactionId, operation, SceneMutationErrorCode.PublicationFailed, ex.Message, false, _sceneIDs);
+                return false;
+            }
         }
 
         /// <summary>
@@ -182,7 +260,7 @@ namespace FlaxEditor.Actions
         /// <returns>The scene graph node.</returns>
         protected virtual SceneGraphNode GetNode(Guid id)
         {
-            return SceneGraphFactory.FindNode(id);
+            return SceneGraphFactory.GetNode(id);
         }
 
         /// <summary>
@@ -190,65 +268,148 @@ namespace FlaxEditor.Actions
         /// </summary>
         protected virtual void Create()
         {
-            var nodes = new List<SceneGraphNode>();
+            TryCreate(SceneMutationOperation.Restore);
+        }
 
-            // Restore actors
-            var actors = Actor.FromBytes(_actorsData);
-            if (actors != null)
+        private bool TryCreate(SceneMutationOperation operation)
+        {
+            var transactionId = Guid.NewGuid();
+            Actor[] actors = null;
+            var createdStateNodes = new List<SceneGraphNode>();
+            var destinationParents = new Actor[_nodeParentsIDs.Length];
+
+            // Preflight every replay dependency before allocating any object.
+            for (int i = 0; i < _nodeParentsIDs.Length; i++)
             {
-                nodes.Capacity = Math.Max(nodes.Capacity, actors.Length);
-
-                // Preserve prefab objects linkage
-                for (int i = 0; i < actors.Length; i++)
+                var sceneId = _sceneIDs[i];
+                var scene = sceneId != Guid.Empty ? Level.FindScene(sceneId) : null;
+                if (sceneId != Guid.Empty && scene == null)
                 {
-                    Guid prefabId = _prefabIds[i];
-                    if (prefabId != Guid.Empty)
-                    {
-                        Actor.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(actors[i]), ref prefabId, ref _prefabObjectIds[i]);
-                    }
+                    _lastResult = SceneMutationResult.Rejected(transactionId, operation, SceneMutationErrorCode.ReplayDependencyMissing, "The original Scene must be loaded before deleted Actors can be restored.", _sceneIDs);
+                    return false;
+                }
+
+                var parentId = _nodeParentActorIDs[i];
+                if (parentId == Guid.Empty)
+                {
+                    destinationParents[i] = scene;
+                }
+                else if (scene != null && parentId == scene.ID)
+                {
+                    destinationParents[i] = scene;
+                }
+                else
+                {
+                    destinationParents[i] = FlaxEngine.Object.TryFind<Actor>(ref parentId);
+                }
+                if (destinationParents[i] == null)
+                {
+                    _lastResult = SceneMutationResult.Rejected(transactionId, operation, SceneMutationErrorCode.ReplayDependencyMissing, "The original parent Actor must exist before deleted Actors can be restored.", _sceneIDs);
+                    return false;
                 }
             }
 
-            // Restore nodes state
             if (_nodesData != null)
             {
                 for (int i = 0; i < _nodesData.Count; i++)
                 {
                     var state = _nodesData[i];
                     var type = TypeUtils.GetManagedType(state.TypeName);
-                    if (type == null)
+                    if (type == null || type.GetMethod(state.CreateMethodName) == null)
                     {
-                        Editor.LogError($"Missing type {state.TypeName} for scene graph node undo state restore.");
-                        continue;
-                    }
-                    var method = type.GetMethod(state.CreateMethodName);
-                    if (method == null)
-                    {
-                        Editor.LogError($"Missing method {state.CreateMethodName} from type {state.TypeName} for scene graph node undo state restore.");
-                        continue;
-                    }
-                    var node = method.Invoke(null, new object[] { state });
-                    if (node == null)
-                    {
-                        Editor.LogError($"Failed to restore scene graph node state via method {state.CreateMethodName} from type {state.TypeName}.");
-                        continue;
+                        _lastResult = SceneMutationResult.Rejected(transactionId, operation, SceneMutationErrorCode.MissingType, $"Cannot restore scene graph node type '{state.TypeName}'.", _sceneIDs);
+                        return false;
                     }
                 }
             }
 
-            // Cache parent nodes ids
-            for (int i = 0; i < _nodeParentsIDs.Length; i++)
+            try
             {
-                var foundNode = GetNode(_nodeParentsIDs[i]);
-                if (foundNode is ActorNode node)
+                var nodes = new List<SceneGraphNode>();
+                actors = Actor.FromBytes(_actorsData);
+                if (actors == null || actors.Length != _prefabIds.Length)
+                    throw new InvalidOperationException("The serialized Actor graph could not be restored completely.");
+                nodes.Capacity = Math.Max(nodes.Capacity, actors.Length);
+
+                // Preserve prefab objects linkage.
+                for (int i = 0; i < actors.Length; i++)
                 {
-                    nodes.Add(node);
-                    if (_nodeParentsOrders != null)
-                        node.Actor.OrderInParent = _nodeParentsOrders[i];
+                    Guid prefabId = _prefabIds[i];
+                    if (prefabId != Guid.Empty)
+                        Actor.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(actors[i]), ref prefabId, ref _prefabObjectIds[i]);
                 }
+
+                // Explicitly restore every top-level Actor to its original Scene and parent.
+                for (int i = 0; i < _nodeParentsIDs.Length; i++)
+                {
+                    var id = _nodeParentsIDs[i];
+                    Actor root = null;
+                    for (int j = 0; j < actors.Length; j++)
+                    {
+                        if (actors[j].ID == id)
+                        {
+                            root = actors[j];
+                            break;
+                        }
+                    }
+                    if (root == null)
+                        throw new InvalidOperationException("A serialized top-level Actor is missing from the restored graph.");
+                    root.SetParent(destinationParents[i], false);
+                }
+
+                // Restore custom node state only after all Actor dependencies exist.
+                if (_nodesData != null)
+                {
+                    for (int i = 0; i < _nodesData.Count; i++)
+                    {
+                        var state = _nodesData[i];
+                        var type = TypeUtils.GetManagedType(state.TypeName);
+                        var method = type.GetMethod(state.CreateMethodName);
+                        if (method.Invoke(null, new object[] { state }) is not SceneGraphNode node)
+                            throw new InvalidOperationException($"Failed to restore scene graph node state via method {state.CreateMethodName} from type {state.TypeName}.");
+                        createdStateNodes.Add(node);
+                    }
+                }
+
+                for (int i = 0; i < _nodeParentsIDs.Length; i++)
+                {
+                    var foundNode = GetNode(_nodeParentsIDs[i]);
+                    if (foundNode == null)
+                        throw new InvalidOperationException("A restored Actor is missing from the Scene graph.");
+                    nodes.Add(foundNode);
+                    if (_nodeParentsOrders != null && foundNode is ActorNode actorNode)
+                        actorNode.Actor.OrderInParent = _nodeParentsOrders[i];
+                }
+                nodes.BuildNodesParents(_nodeParents);
+                if (_nodeParents.Count != _nodeParentsIDs.Length)
+                    throw new InvalidOperationException("The restored Scene graph hierarchy does not match the serialized roots.");
+
+                OnDirty();
+                var createdIds = new Guid[actors.Length];
+                for (int i = 0; i < actors.Length; i++)
+                    createdIds[i] = actors[i].ID;
+                _lastResult = SceneMutationResult.Success(transactionId, operation, _sceneIDs, createdIds);
+                return true;
             }
-            nodes.BuildNodesParents(_nodeParents);
-            OnDirty();
+            catch (Exception ex)
+            {
+                for (int i = createdStateNodes.Count - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        createdStateNodes[i].Delete();
+                        createdStateNodes[i].Dispose();
+                    }
+                    catch
+                    {
+                        // Actor rollback below remains authoritative for Actor and Script ownership.
+                    }
+                }
+                var rollbackCompleted = RollbackActors(actors);
+                _nodeParents.Clear();
+                _lastResult = SceneMutationResult.Failed(transactionId, operation, rollbackCompleted ? SceneMutationErrorCode.ConstructionFailed : SceneMutationErrorCode.RollbackFailed, ex.Message, rollbackCompleted, _sceneIDs);
+                return false;
+            }
         }
 
         private void OnDirtyInit()
@@ -272,14 +433,51 @@ namespace FlaxEditor.Actions
             }
         }
 
+        /// <inheritdoc />
+        void ISceneEditAction.MarkSceneEdited(SceneModule sceneModule)
+        {
+            var marked = new HashSet<Guid>();
+            for (int i = 0; i < _sceneIDs.Length; i++)
+            {
+                var sceneId = _sceneIDs[i];
+                if (sceneId != Guid.Empty && marked.Add(sceneId))
+                    sceneModule.MarkSceneEdited(Level.FindScene(sceneId));
+            }
+        }
+
+        private static bool RollbackActors(Actor[] actors)
+        {
+            if (actors == null)
+                return true;
+            try
+            {
+                var ids = new Guid[actors.Length];
+                for (int i = 0; i < actors.Length; i++)
+                    ids[i] = actors[i]?.ID ?? Guid.Empty;
+                for (int i = actors.Length - 1; i >= 0; i--)
+                {
+                    var actor = actors[i];
+                    if (actor != null)
+                        FlaxEngine.Object.Destroy(ref actor);
+                }
+                FlaxEngine.Scripting.FlushRemovedObjects();
+                for (int i = 0; i < ids.Length; i++)
+                {
+                    var id = ids[i];
+                    if (id != Guid.Empty && FlaxEngine.Object.TryFind<Actor>(ref id) != null)
+                        return false;
+                }
+                return true;
+            }
+            catch (Exception rollbackException)
+            {
+                Editor.LogError("[SceneDebug] RollbackFailed Actor restore rollback failed. " + rollbackException.Message);
+                return false;
+            }
+        }
+
         private void OnDirty()
         {
-            // Mark scene as modified
-            foreach (var obj in _nodeParents)
-            {
-                Editor.Instance.Scene.MarkSceneEdited(obj.ParentScene);
-            }
-
             var editor = Editor.Instance;
             if (editor.StateMachine.IsPlayMode)
                 return;

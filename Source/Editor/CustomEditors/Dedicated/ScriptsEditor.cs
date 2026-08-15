@@ -431,7 +431,12 @@ namespace FlaxEditor.CustomEditors.Dedicated
             }
 
             var multiAction = new MultiUndoAction(actions);
-            multiAction.Do();
+            if (!multiAction.TryDo())
+            {
+                multiAction.Dispose();
+                Editor.LogError("Failed to add scripts atomically.");
+                return;
+            }
             var presenter = ScriptsEditor.Presenter;
             if (presenter != null)
             {
@@ -726,8 +731,6 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var prefabObjectId = prefabScript.PrefabObjectID;
             Script.Internal_LinkPrefab(FlaxEngine.Object.GetUnmanagedPtr(restored), ref prefabId, ref prefabObjectId);
             Presenter?.Undo?.AddAction(AddRemoveScript.Added(restored));
-            if (actor.Scene)
-                Editor.Instance.Scene.MarkSceneEdited(actor.Scene);
             Presenter?.OnModified();
             Presenter?.BuildLayoutOnUpdate();
         }
@@ -1120,7 +1123,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 return;
 
             var action = ChangeScriptAction.ChangeOrder(script, targetIndex);
-            action.Do();
+            if (!action.TryDo())
+            {
+                action.Dispose();
+                return;
+            }
             Presenter?.Undo?.AddAction(action);
             Presenter?.OnModified();
         }
@@ -1135,7 +1142,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
                 panel.DrawAsDisabled = !box.Checked;
 
             var action = ChangeScriptAction.ChangeEnabled(script, box.Checked);
-            action.Do();
+            if (!action.TryDo())
+            {
+                action.Dispose();
+                return;
+            }
             Presenter?.Undo.AddAction(action);
             Presenter?.OnModified();
         }
@@ -1227,8 +1238,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
             if (!script)
                 return;
             var action = AddRemoveScript.Remove(script);
-            action.Do();
-            FlaxEngine.Scripting.FlushRemovedObjects();
+            if (!action.TryDo())
+            {
+                action.Dispose();
+                return;
+            }
             Presenter?.Undo.AddAction(action);
             Presenter?.OnModified();
             Presenter?.BuildLayoutOnUpdate();
@@ -1238,7 +1252,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
         {
             var script = (Script)button.ParentContextMenu.Tag;
             var action = ChangeScriptAction.ChangeOrder(script, script.OrderInParent - 1);
-            action.Do();
+            if (!action.TryDo())
+            {
+                action.Dispose();
+                return;
+            }
             Presenter.Undo?.AddAction(action);
             Presenter.OnModified();
         }
@@ -1247,7 +1265,11 @@ namespace FlaxEditor.CustomEditors.Dedicated
         {
             var script = (Script)button.ParentContextMenu.Tag;
             var action = ChangeScriptAction.ChangeOrder(script, script.OrderInParent + 1);
-            action.Do();
+            if (!action.TryDo())
+            {
+                action.Dispose();
+                return;
+            }
             Presenter.Undo?.AddAction(action);
             Presenter.OnModified();
         }

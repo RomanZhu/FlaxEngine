@@ -1283,8 +1283,13 @@ namespace FlaxEditor.SceneGraph.GUI
                     treeNodes[i] = _dragActors.Objects[i].TreeNode;
                 }
                 var action = new ParentActorsAction(objects, newParent, newOrder, worldPositionsStays);
+                if (!action.TryDo())
+                {
+                    Editor.LogError($"[SceneDebug] {action.LastResult?.ErrorCode} Reparent failed. {action.LastResult?.Message}");
+                    action.Dispose();
+                    return DragDropEffect.None;
+                }
                 ActorNode.Root.Undo?.AddAction(action);
-                action.Do();
                 ParentTree.Focus();
                 ParentTree.Select(treeNodes.ToList());
                 result = DragDropEffect.Move;
@@ -1296,8 +1301,13 @@ namespace FlaxEditor.SceneGraph.GUI
                 for (int i = 0; i < objects.Length; i++)
                     objects[i] = _dragScripts.Objects[i];
                 var action = new ParentActorsAction(objects, newParent, newOrder);
+                if (!action.TryDo())
+                {
+                    Editor.LogError($"[SceneDebug] {action.LastResult?.ErrorCode} Script reparent failed. {action.LastResult?.Message}");
+                    action.Dispose();
+                    return DragDropEffect.None;
+                }
                 ActorNode.Root.Undo?.AddAction(action);
-                action.Do();
                 Select();
                 result = DragDropEffect.Move;
             }
@@ -1403,10 +1413,12 @@ namespace FlaxEditor.SceneGraph.GUI
                             Editor.LogWarning("Failed to spawn script of type " + actorType.TypeName);
                             continue;
                         }
-                        IUndoAction action = new AddRemoveScript(true, newParent, scriptType);
+                        var action = new AddRemoveScript(true, newParent, scriptType);
                         Select();
-                        ActorNode.Root.Undo?.AddAction(action);
-                        action.Do();
+                        if (action.TryDo())
+                            ActorNode.Root.Undo?.AddAction(action);
+                        else
+                            action.Dispose();
                     }
                 }
                 result = DragDropEffect.Move;

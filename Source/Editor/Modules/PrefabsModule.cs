@@ -205,19 +205,21 @@ namespace FlaxEditor.Modules
                 if (selection.Count == 1)
                 {
                     var action = BreakPrefabLinkAction.Break(((ActorNode)selection[0]).Actor);
-                    Undo.AddAction(action);
-                    action.Do();
+                    if (action.TryDo())
+                        Undo.AddAction(action);
+                    else
+                        action.Dispose();
                 }
                 else
                 {
                     var actions = new IUndoAction[selection.Count];
                     for (int i = 0; i < selection.Count; i++)
-                    {
-                        var action = BreakPrefabLinkAction.Break(((ActorNode)selection[i]).Actor);
-                        actions[i] = action;
-                        action.Do();
-                    }
-                    Undo.AddAction(new MultiUndoAction(actions));
+                        actions[i] = BreakPrefabLinkAction.Break(((ActorNode)selection[i]).Actor);
+                    var multiAction = new MultiUndoAction(actions);
+                    if (multiAction.TryDo())
+                        Undo.AddAction(multiAction);
+                    else
+                        multiAction.Dispose();
                 }
             }
             else

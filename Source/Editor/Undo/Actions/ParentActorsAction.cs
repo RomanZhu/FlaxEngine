@@ -2,6 +2,8 @@
 
 using System;
 using System.Collections.Generic;
+using FlaxEditor.Modules;
+using FlaxEditor.SceneEditing;
 using FlaxEngine;
 using Object = FlaxEngine.Object;
 
@@ -12,7 +14,7 @@ namespace FlaxEditor.Actions
     /// </summary>
     /// <seealso cref="FlaxEditor.IUndoAction" />
     [Serializable]
-    class ParentActorsAction : IUndoAction
+    class ParentActorsAction : ITryUndoAction, ISceneUndoAction
     {
         private struct Item
         {
@@ -43,6 +45,18 @@ namespace FlaxEditor.Actions
         [Serialize]
         private Guid[] _prefabObjectIds;
 
+        [Serialize]
+        private Guid[] _sceneIDs;
+
+        [NonSerialized]
+        private SceneMutationResult _lastResult;
+
+        public SceneMutationResult LastResult => _lastResult;
+
+        public Guid[] SceneIds => _sceneIDs ?? Array.Empty<Guid>();
+
+        public bool SupportsSceneReload => true;
+
         public ParentActorsAction(SceneObject[] objects, Actor newParent, int newOrder, bool worldPositionsStays = true)
         {
             // Sort source objects to provide deterministic behavior
@@ -53,9 +67,14 @@ namespace FlaxEditor.Actions
             _newParent = newParent.ID;
             _newOrder = newOrder;
             _items = new Item[objects.Length];
+            var sceneIds = new HashSet<Guid>();
+            if (newParent.Scene != null)
+                sceneIds.Add(newParent.Scene.ID);
             for (int i = 0; i < objects.Length; i++)
             {
                 var obj = objects[i];
+                if (obj.Parent?.Scene != null)
+                    sceneIds.Add(obj.Parent.Scene.ID);
                 _items[i] = new Item
                 {
                     ID = obj.ID,
@@ -64,6 +83,8 @@ namespace FlaxEditor.Actions
                     LocalTransform = obj is Actor actor ? actor.LocalTransform : Transform.Identity,
                 };
             }
+            _sceneIDs = new Guid[sceneIds.Count];
+            sceneIds.CopyTo(_sceneIDs);
 
             // Collect all objects that have prefab links so they can be restored on undo
             var prefabs = new List<SceneObject>();
@@ -119,23 +140,44 @@ namespace FlaxEditor.Actions
 
         public void Do()
         {
-            // Perform action
-            var newParent = Object.Find<Actor>(ref _newParent);
-            if (newParent == null)
+            TryDo();
+        }
+
+        public bool TryDo()
+        {
+            var transactionId = Guid.NewGuid();
+            if (!ValidateScenes())
             {
-                Editor.LogError("Missing actor to change objects parent.");
-                return;
+                _lastResult = SceneMutationResult.Rejected(transactionId, SceneMutationOperation.Reparent, SceneMutationErrorCode.ReplayDependencyMissing, "A Scene required by reparent replay is not loaded.", _sceneIDs);
+                return false;
             }
-            var order = _newOrder;
-            var scenes = new HashSet<Scene> { newParent.Scene };
-            for (int i = 0; i < _items.Length; i++)
+            var newParent = Object.Find<Actor>(ref _newParent);
+            if (newParent == null || !TryResolveObjects(out var objects))
             {
-                var item = _items[i];
-                var obj = Object.Find<SceneObject>(ref item.ID);
-                if (obj != null)
+                _lastResult = SceneMutationResult.Rejected(transactionId, SceneMutationOperation.Reparent, SceneMutationErrorCode.ReplayDependencyMissing, "An Actor required by reparent replay is missing.", _sceneIDs);
+                return false;
+            }
+            for (int i = 0; i < objects.Length; i++)
+            {
+                if (objects[i] is not Actor actor)
+                    continue;
+                for (var parent = newParent; parent != null; parent = parent.Parent)
                 {
-                    if (obj.Parent != null)
-                        scenes.Add(obj.Parent.Scene);
+                    if (parent == actor)
+                    {
+                        _lastResult = SceneMutationResult.Rejected(transactionId, SceneMutationOperation.Reparent, SceneMutationErrorCode.MissingDestination, "The requested parent would create a hierarchy cycle.", _sceneIDs);
+                        return false;
+                    }
+                }
+            }
+
+            var previous = CaptureStates(objects);
+            try
+            {
+                var order = _newOrder;
+                for (int i = 0; i < objects.Length; i++)
+                {
+                    var obj = objects[i];
                     if (obj is Actor actor)
                         actor.SetParent(newParent, _worldPositionsStays, true);
                     else
@@ -143,49 +185,140 @@ namespace FlaxEditor.Actions
                     if (order != -1)
                         obj.OrderInParent = order++;
                 }
+                _lastResult = SceneMutationResult.Success(transactionId, SceneMutationOperation.Reparent, _sceneIDs);
+                return true;
             }
-
-            // Prefab links are broken by the C++ backend on actor reparenting
-
-            // Mark scenes as edited
-            Editor.Instance.Scene.MarkSceneEdited(scenes);
+            catch (Exception ex)
+            {
+                var rolledBack = RestoreStates(previous, objects);
+                _lastResult = SceneMutationResult.Failed(transactionId, SceneMutationOperation.Reparent, rolledBack ? SceneMutationErrorCode.PublicationFailed : SceneMutationErrorCode.RollbackFailed, ex.Message, rolledBack, _sceneIDs);
+                return false;
+            }
         }
 
         public void Undo()
         {
-            // Restore state
-            for (int i = 0; i < _items.Length; i++)
+            TryUndo();
+        }
+
+        public bool TryUndo()
+        {
+            var transactionId = Guid.NewGuid();
+            if (!ValidateScenes() || !TryResolveObjects(out var objects) || !TryResolveParents(_items))
             {
-                var item = _items[i];
-                var obj = Object.Find<SceneObject>(ref item.ID);
-                if (obj != null)
-                {
-                    var parent = Object.Find<Actor>(ref item.Parent);
-                    if (parent != null)
-                        obj.Parent = parent;
-                    if (obj is Actor actor)
-                        actor.LocalTransform = item.LocalTransform;
-                }
-            }
-            for (int j = 0; j < _items.Length; j++) // TODO: find a better way ensure the order is properly restored when moving back multiple objects
-            for (int i = 0; i < _items.Length; i++)
-            {
-                var item = _items[i];
-                var obj = Object.Find<SceneObject>(ref item.ID);
-                if (obj != null)
-                    obj.OrderInParent = item.OrderInParent;
+                _lastResult = SceneMutationResult.Rejected(transactionId, SceneMutationOperation.Undo, SceneMutationErrorCode.ReplayDependencyMissing, "The original Scene hierarchy required by reparent undo is unavailable.", _sceneIDs);
+                return false;
             }
 
-            // Restore prefab links (if any was in use)
-            if (_idsForPrefab != null)
+            var previous = CaptureStates(objects);
+            try
             {
-                for (int i = 0; i < _idsForPrefab.Length; i++)
+                if (!RestoreStates(_items, objects))
+                    throw new InvalidOperationException("Failed to restore the original Actor parents.");
+
+                // Restore prefab links (if any was in use).
+                if (_idsForPrefab != null)
                 {
-                    var obj = Object.Find<SceneObject>(ref _idsForPrefab[i]);
-                    if (obj != null && _prefabIds[i] != Guid.Empty)
-                        SceneObject.Internal_LinkPrefab(Object.GetUnmanagedPtr(obj), ref _prefabIds[i], ref _prefabObjectIds[i]);
+                    for (int i = 0; i < _idsForPrefab.Length; i++)
+                    {
+                        var obj = Object.Find<SceneObject>(ref _idsForPrefab[i]);
+                        if (obj == null)
+                            throw new InvalidOperationException("A Prefab-linked object required by reparent undo is missing.");
+                        if (_prefabIds[i] != Guid.Empty)
+                            SceneObject.Internal_LinkPrefab(Object.GetUnmanagedPtr(obj), ref _prefabIds[i], ref _prefabObjectIds[i]);
+                    }
                 }
+                _lastResult = SceneMutationResult.Success(transactionId, SceneMutationOperation.Undo, _sceneIDs);
+                return true;
             }
+            catch (Exception ex)
+            {
+                var rolledBack = RestoreStates(previous, objects);
+                _lastResult = SceneMutationResult.Failed(transactionId, SceneMutationOperation.Undo, rolledBack ? SceneMutationErrorCode.PublicationFailed : SceneMutationErrorCode.RollbackFailed, ex.Message, rolledBack, _sceneIDs);
+                return false;
+            }
+        }
+
+        private bool ValidateScenes()
+        {
+            for (int i = 0; i < _sceneIDs.Length; i++)
+            {
+                if (_sceneIDs[i] != Guid.Empty && Level.FindScene(_sceneIDs[i]) == null)
+                    return false;
+            }
+            return true;
+        }
+
+        private bool TryResolveObjects(out SceneObject[] objects)
+        {
+            objects = new SceneObject[_items.Length];
+            for (int i = 0; i < _items.Length; i++)
+            {
+                var id = _items[i].ID;
+                objects[i] = Object.Find<SceneObject>(ref id);
+                if (objects[i] == null)
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool TryResolveParents(Item[] states)
+        {
+            for (int i = 0; i < states.Length; i++)
+            {
+                var parentId = states[i].Parent;
+                if (parentId != Guid.Empty && Object.Find<Actor>(ref parentId) == null)
+                    return false;
+            }
+            return true;
+        }
+
+        private static Item[] CaptureStates(SceneObject[] objects)
+        {
+            var result = new Item[objects.Length];
+            for (int i = 0; i < objects.Length; i++)
+            {
+                var obj = objects[i];
+                result[i] = new Item
+                {
+                    ID = obj.ID,
+                    Parent = obj.Parent?.ID ?? Guid.Empty,
+                    OrderInParent = obj.OrderInParent,
+                    LocalTransform = obj is Actor actor ? actor.LocalTransform : Transform.Identity,
+                };
+            }
+            return result;
+        }
+
+        private static bool RestoreStates(Item[] states, SceneObject[] objects)
+        {
+            try
+            {
+                for (int i = 0; i < states.Length; i++)
+                {
+                    var parentId = states[i].Parent;
+                    var parent = parentId != Guid.Empty ? Object.Find<Actor>(ref parentId) : null;
+                    if (parentId != Guid.Empty && parent == null)
+                        return false;
+                    objects[i].Parent = parent;
+                    if (objects[i] is Actor actor)
+                        actor.LocalTransform = states[i].LocalTransform;
+                }
+                for (int pass = 0; pass < states.Length; pass++)
+                for (int i = 0; i < states.Length; i++)
+                    objects[i].OrderInParent = states[i].OrderInParent;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        void ISceneEditAction.MarkSceneEdited(SceneModule sceneModule)
+        {
+            for (int i = 0; i < _sceneIDs.Length; i++)
+                sceneModule.MarkSceneEdited(Level.FindScene(_sceneIDs[i]));
         }
 
         public void Dispose()
@@ -194,6 +327,7 @@ namespace FlaxEditor.Actions
             _idsForPrefab = null;
             _prefabIds = null;
             _prefabObjectIds = null;
+            _sceneIDs = null;
         }
     }
 }

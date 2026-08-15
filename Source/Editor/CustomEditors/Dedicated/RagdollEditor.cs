@@ -156,15 +156,20 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var animatedModel = (AnimatedModel)ragdoll.Parent;
 
             // Remove existing bodies
-            var bodies = ragdoll.Children.Where(x => x is RigidBody && x.IsActive);
+            var bodies = ragdoll.Children.Where(x => x is RigidBody && x.IsActive).ToList();
             var actions = new List<IUndoAction>();
             foreach (var body in bodies)
+                actions.Add(new Actions.DeleteActorsAction(body));
+            if (actions.Count != 0)
             {
-                var action = new Actions.DeleteActorsAction(body);
-                action.Do();
-                actions.Add(action);
+                var deleteActions = new MultiUndoAction(actions);
+                if (!deleteActions.TryDo())
+                {
+                    deleteActions.Dispose();
+                    return;
+                }
+                Presenter.Undo?.AddAction(deleteActions);
             }
-            Presenter.Undo?.AddAction(new MultiUndoAction(actions));
 
             // Build ragdoll
             AnimatedModelNode.BuildRagdoll(animatedModel, options, ragdoll);
@@ -186,8 +191,10 @@ namespace FlaxEditor.CustomEditors.Dedicated
             if (body != null)
             {
                 var action = new Actions.DeleteActorsAction(body);
-                action.Do();
-                Presenter.Undo?.AddAction(action);
+                if (action.TryDo())
+                    Presenter.Undo?.AddAction(action);
+                else
+                    action.Dispose();
             }
 
             // Build ragdoll
@@ -225,8 +232,10 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     {
                         // Remove joint that will no longer be valid
                         var action = new Actions.DeleteActorsAction(joint);
-                        action.Do();
-                        Presenter.Undo?.AddAction(action);
+                        if (action.TryDo())
+                            Presenter.Undo?.AddAction(action);
+                        else
+                            action.Dispose();
                     }
                 }
             }
@@ -234,8 +243,10 @@ namespace FlaxEditor.CustomEditors.Dedicated
             // Remove body
             {
                 var action = new Actions.DeleteActorsAction(body);
-                action.Do();
-                Presenter.Undo?.AddAction(action);
+                if (action.TryDo())
+                    Presenter.Undo?.AddAction(action);
+                else
+                    action.Dispose();
             }
         }
 

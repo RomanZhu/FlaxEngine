@@ -5,8 +5,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using FlaxEditor.Actions;
 using FlaxEditor.Content.Settings;
+using FlaxEditor.SceneEditing;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
 using FlaxEditor.Scripting;
@@ -30,7 +32,7 @@ namespace FlaxEditor
         /// <summary>The Actor name.</summary>
         public string Name { get; set; }
 
-        /// <summary>The parent Actor ID. Omit to use the first loaded scene.</summary>
+        /// <summary>The parent Actor ID. Omit to use the explicit active Scene.</summary>
         public Guid? Parent { get; set; }
 
         /// <summary>The local position.</summary>
@@ -46,6 +48,9 @@ namespace FlaxEditor
     internal static class CliAuthoringCommands
     {
         private static readonly string[] PrimitiveNames = { "Cube", "Sphere", "Plane", "Cylinder", "Cone", "Capsule" };
+        private static int _injectedSaveFailures;
+        private static int _injectedMutationFailures;
+        private static string _injectedMutationStage;
 
         [CliCommand("scenes.list", Description = "List loaded scenes.", Access = CliCommandAccess.ReadOnly)]
         public static CliCommandOperation ListScenes(CliCommandContext context = null)
@@ -118,8 +123,56 @@ namespace FlaxEditor
             }
         }
 
+        private sealed class SceneTransitionOperation : CliCommandOperation
+        {
+            private readonly string _description;
+            private readonly Func<bool> _isReady;
+            private readonly Func<object> _createResult;
+            private readonly CliCommandContext _context;
+            private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+            private CliCommandResult _result;
+
+            public SceneTransitionOperation(string description, Func<bool> isReady, Func<object> createResult, CliCommandContext context)
+            {
+                _description = description;
+                _isReady = isReady;
+                _createResult = createResult;
+                _context = context;
+            }
+
+            public override bool IsCompleted => _result != null;
+
+            public override CliCommandResult Result => _result;
+
+            public override void Update(TimeSpan timeBudget)
+            {
+                if (_result != null)
+                    return;
+                _context?.CancellationToken.ThrowIfCancellationRequested();
+                if (_isReady())
+                {
+                    _context?.ReportProgress(_description + " complete", 1.0f);
+                    _result = CliCommandResult.Success(_createResult());
+                }
+                else if (_clock.Elapsed.TotalSeconds >= 30.0)
+                {
+                    _result = CliCommandResult.Failure("FLX-SCENE-LIFECYCLE-0006", "Timed out waiting for " + _description + ".", new { elapsedSeconds = _clock.Elapsed.TotalSeconds });
+                }
+                else
+                {
+                    _context?.ReportProgress("Waiting for " + _description, (float)Math.Min(0.99, _clock.Elapsed.TotalSeconds / 30.0));
+                }
+            }
+
+            public override void Cancel()
+            {
+                if (_result == null)
+                    _result = CliCommandResult.Failure("FLX-SCENE-LIFECYCLE-0005", _description + " was cancelled.");
+            }
+        }
+
         [CliCommand("scenes.create", Description = "Create a scene asset under the project Content root.", Access = CliCommandAccess.MutatesProject)]
-        public static object CreateScene([CliOption("path", Description = "Content-relative scene path.", Required = true)] string path, [CliOption("open", Description = "Open the scene after creating it.")] bool open = false)
+        public static object CreateScene([CliOption("path", Description = "Content-relative scene path.", Required = true)] string path, [CliOption("open", Description = "Open the scene after creating it.")] bool open = false, CliCommandContext context = null)
         {
             var outputPath = ResolveAuthoringPath(path, ".scene", true);
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
@@ -133,23 +186,30 @@ namespace FlaxEditor
             {
                 EnsureScenesClean("open the new scene");
                 Editor.Instance.Scene.OpenScene(sceneId);
+                return new SceneTransitionOperation("opening the new Scene", () => Level.FindScene(sceneId) != null && Editor.Instance.Undo.Enabled, () => new { path = outputPath, sceneId, opened = true, saved = true, dirty = false }, context);
             }
             return new { path = outputPath, sceneId, opened = open && sceneId != Guid.Empty, saved = true, dirty = false };
         }
 
         [CliCommand("scenes.open", Description = "Open a scene asset by ID or Content-relative path.", Access = CliCommandAccess.MutatesProject)]
-        public static object OpenScene([CliOption("scene", Description = "Scene ID or Content-relative path.", Required = true)] string scene, [CliOption("additive")] bool additive = false)
+        public static object OpenScene([CliOption("scene", Description = "Scene ID or Content-relative path.", Required = true)] string scene, [CliOption("additive")] bool additive = false, CliCommandContext context = null)
         {
             var id = ResolveAssetId(scene, ".scene");
             if (!additive)
                 EnsureScenesClean("open another scene");
             var autoSavedSceneIds = Array.Empty<Guid>();
             Editor.Instance.Scene.OpenScene(id, additive);
-            return new { sceneId = id, additive, requested = true, autoSavedSceneIds, saved = false, dirty = Editor.Instance.Scene.IsEdited() };
+            return new SceneTransitionOperation("opening the Scene", () =>
+            {
+                var loaded = Level.FindScene(id) != null;
+                if (!additive)
+                    loaded &= Level.Scenes.Length == 1 && Level.Scenes[0].ID == id;
+                return loaded && Editor.Instance.Undo.Enabled;
+            }, () => new { sceneId = id, additive, requested = true, autoSavedSceneIds, saved = false, dirty = Editor.Instance.Scene.IsEdited() }, context);
         }
 
         [CliCommand("scenes.close", Description = "Close one or all loaded scenes, refusing to discard unsaved changes.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
-        public static object CloseScenes([CliOption("scene", Description = "Optional loaded scene ID. Omit to close all loaded scenes.")] Guid? scene = null)
+        public static object CloseScenes([CliOption("scene", Description = "Optional loaded scene ID. Omit to close all loaded scenes.")] Guid? scene = null, CliCommandContext context = null)
         {
             var targets = scene.HasValue ? new[] { RequireScene(scene.Value) } : Level.Scenes;
             var targetIds = targets.Select(x => x.ID).ToArray();
@@ -159,17 +219,29 @@ namespace FlaxEditor
                 Editor.Instance.Scene.CloseScene(targets[0]);
             else
                 Editor.Instance.Scene.CloseAllScenes();
-            return new { sceneIds = targetIds, requested = targetIds.Length != 0, autoSavedSceneIds, saved = false };
+            return new SceneTransitionOperation("closing the Scene", () => targetIds.All(x => Level.FindScene(x) == null) && Editor.Instance.Undo.Enabled, () => new { sceneIds = targetIds, requested = targetIds.Length != 0, autoSavedSceneIds, saved = false }, context);
         }
 
         [CliCommand("scenes.reload", Description = "Reload all loaded scenes from disk, refusing to discard unsaved changes.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
-        public static object ReloadScenes()
+        public static object ReloadScenes(CliCommandContext context = null)
         {
-            var sceneIds = Level.Scenes.Select(x => x.ID).ToArray();
+            var scenes = Level.Scenes;
+            var sceneIds = scenes.Select(x => x.ID).ToArray();
             EnsureScenesClean("reload scenes");
             var autoSavedSceneIds = Array.Empty<Guid>();
             Editor.Instance.Scene.ReloadScenes();
-            return new { sceneIds, requested = sceneIds.Length != 0, autoSavedSceneIds, saved = false };
+            return new SceneTransitionOperation("reloading the Scenes", () =>
+            {
+                if (!Editor.Instance.Undo.Enabled)
+                    return false;
+                for (int i = 0; i < sceneIds.Length; i++)
+                {
+                    var loaded = Level.FindScene(sceneIds[i]);
+                    if (loaded == null || ReferenceEquals(loaded, scenes[i]))
+                        return false;
+                }
+                return true;
+            }, () => new { sceneIds, requested = sceneIds.Length != 0, autoSavedSceneIds, saved = false }, context);
         }
 
         [CliCommand("scenes.save", Description = "Save one or all loaded scenes.", Access = CliCommandAccess.MutatesProject)]
@@ -185,6 +257,64 @@ namespace FlaxEditor
             return new { sceneIds = changed, saved = changed.Length != 0, dirty = Editor.Instance.Scene.IsEdited() };
         }
 
+        [CliCommand("scenes.save-fault", Description = "Inject a deterministic number of Scene save failures for stability tests; zero disables injection.", Access = CliCommandAccess.MutatesProject)]
+        public static object ConfigureSaveFault([CliOption("count", Required = true)] int count)
+        {
+            if (count < 0 || count > 1000)
+                throw new ArgumentOutOfRangeException(nameof(count));
+            Interlocked.Exchange(ref _injectedSaveFailures, count);
+            SceneSaveFaults.Injector = count == 0
+                ? null
+                : (sceneId, path) =>
+                {
+                    while (true)
+                    {
+                        var remaining = Volatile.Read(ref _injectedSaveFailures);
+                        if (remaining <= 0)
+                            return false;
+                        if (Interlocked.CompareExchange(ref _injectedSaveFailures, remaining - 1, remaining) == remaining)
+                            return true;
+                    }
+                };
+            return new { enabled = count != 0, failuresRemaining = count };
+        }
+
+        [CliCommand("scenes.mutation-fault", Description = "Inject failures at a paste transaction stage for rollback tests; zero disables injection.", Access = CliCommandAccess.MutatesProject)]
+        public static object ConfigureMutationFault([CliOption("count", Required = true)] int count, [CliOption("stage")] string stage = null)
+        {
+            if (count < 0 || count > 1000)
+                throw new ArgumentOutOfRangeException(nameof(count));
+            var validStages = new[] { "Preflight", "Construction", "Attachment", "Publication" };
+            if (count != 0 && !validStages.Any(x => string.Equals(x, stage, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("Mutation fault stage must be Preflight, Construction, Attachment, or Publication.", nameof(stage));
+
+            _injectedMutationStage = count == 0 ? null : validStages.First(x => string.Equals(x, stage, StringComparison.OrdinalIgnoreCase));
+            Interlocked.Exchange(ref _injectedMutationFailures, count);
+            SceneMutationFaults.Injector = count == 0
+                ? null
+                : (transactionId, currentStage) =>
+                {
+                    if (!string.Equals(currentStage, _injectedMutationStage, StringComparison.Ordinal))
+                        return false;
+                    while (true)
+                    {
+                        var remaining = Volatile.Read(ref _injectedMutationFailures);
+                        if (remaining <= 0)
+                            return false;
+                        if (Interlocked.CompareExchange(ref _injectedMutationFailures, remaining - 1, remaining) == remaining)
+                            return true;
+                    }
+                };
+            return new { enabled = count != 0, stage = _injectedMutationStage, failuresRemaining = count };
+        }
+
+        [CliCommand("scenes.debug", Description = "Enable or disable opt-in structured Scene mutation diagnostics for this Editor session.", Access = CliCommandAccess.MutatesProject)]
+        public static object ConfigureSceneDebug([CliOption("enabled", Required = true)] bool enabled)
+        {
+            SceneDebug.Enabled = enabled;
+            return new { enabled };
+        }
+
         [CliCommand("scenes.dirty", Description = "List loaded scenes with unsaved changes.", Access = CliCommandAccess.ReadOnly)]
         public static object DirtyScenes()
         {
@@ -195,33 +325,24 @@ namespace FlaxEditor
         [CliCommand("scenes.active.get", Description = "Get the primary loaded scene used as the default authoring target.", Access = CliCommandAccess.ReadOnly)]
         public static object GetActiveScene()
         {
-            var scene = Level.ScenesCount == 0 ? null : Level.GetScene(0);
+            var scene = Editor.Instance.Scene.ActiveScene;
             return new
             {
-                semantics = "The first loaded Flax scene is the primary authoring scene and the default parent for newly created Actors.",
+                semantics = "The active Scene is selected explicitly by authoring or selection context and is independent of Scene load order.",
                 scene = scene == null ? null : DescribeScene(scene),
             };
         }
 
-        [CliCommand("scenes.active.set", Description = "Make a loaded scene the primary authoring scene by restoring the loaded set with that scene first.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        [CliCommand("scenes.active.set", Description = "Set the explicit active authoring Scene without changing Scene load order.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
         public static object SetActiveScene([CliOption("scene", Description = "Loaded scene ID.", Required = true)] Guid scene)
         {
             var target = RequireScene(scene);
             var before = Level.Scenes.Select(x => x.ID).ToArray();
-            if (before[0] == scene)
+            if (Editor.Instance.Scene.ActiveScene == target)
                 return new { changed = false, scene = DescribeScene(target), loadedSceneIds = before, savedSceneIds = Array.Empty<Guid>() };
 
-            EnsureScenesClean("change the active scene");
-            var savedSceneIds = Array.Empty<Guid>();
-            var ordered = new[] { scene }.Concat(before.Where(x => x != scene)).ToArray();
-            if (Level.UnloadAllScenes())
-                throw new InvalidOperationException("Failed to unload the current scene set while changing the primary scene.");
-            foreach (var id in ordered)
-            {
-                if (Level.LoadScene(id))
-                    throw new InvalidOperationException($"Failed to restore scene '{id}' while changing the primary scene.");
-            }
-            return new { changed = true, scene = DescribeScene(Level.GetScene(0)), loadedSceneIds = ordered, savedSceneIds };
+            Editor.Instance.Scene.SetActiveScene(target);
+            return new { changed = true, scene = DescribeScene(target), loadedSceneIds = before, savedSceneIds = Array.Empty<Guid>() };
         }
 
         [CliCommand("scenes.build-list.list", Description = "List the cooked startup scene followed by additional cooked scenes.", Access = CliCommandAccess.ReadOnly)]
@@ -499,6 +620,112 @@ namespace FlaxEditor
             return DescribeActorDetails(RequireActor(actor));
         }
 
+        [CliCommand("actors.copy", Description = "Copy complete Actor hierarchies to the validated Actor clipboard without changing selection.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
+        public static object CopyActors([CliOption("actor", Required = true)] Guid[] actor)
+        {
+            var nodes = ResolveClipboardNodes(actor);
+            var data = Actor.ToBytes(nodes.SelectMany(x => x.BuildAllNodes()).OfType<ActorNode>().Select(x => x.Actor).ToArray());
+            var objectIds = Actor.TryGetSerializedObjectsIds(data);
+            if (data == null || data.Length == 0 || objectIds == null || objectIds.Length == 0)
+                throw new InvalidOperationException("Actor clipboard serialization produced an invalid payload.");
+            Clipboard.RawData = data;
+            return new { copied = true, roots = nodes.Select(x => x.ID).ToArray(), objectIds, bytes = data.Length };
+        }
+
+        [CliCommand("actors.cut", Description = "Copy complete Actor hierarchies and commit their deletion as one recoverable undo action.", Access = CliCommandAccess.Destructive, RequiresScene = true)]
+        public static object CutActors([CliOption("actor", Required = true)] Guid[] actor)
+        {
+            var nodes = ResolveClipboardNodes(actor);
+            var allNodes = nodes.SelectMany(x => x.BuildAllNodes()).Where(x => x.CanDelete).ToList();
+            var data = Actor.ToBytes(allNodes.OfType<ActorNode>().Select(x => x.Actor).ToArray());
+            var objectIds = Actor.TryGetSerializedObjectsIds(data);
+            if (data == null || data.Length == 0 || objectIds == null || objectIds.Length == 0)
+                throw new InvalidOperationException("Actor cut was rejected because clipboard serialization failed.");
+
+            var action = new DeleteActorsAction(allNodes);
+            Clipboard.RawData = data;
+            if (!action.TryDo())
+                throw new InvalidOperationException($"Actor cut deletion failed: {action.LastResult?.ErrorCode} {action.LastResult?.Message}");
+            Editor.Instance.Undo.AddAction(action);
+            return new { cut = true, roots = nodes.Select(x => x.ID).ToArray(), objectIds, bytes = data.Length, sceneIds = action.SceneIds };
+        }
+
+        [CliCommand("actors.paste", Description = "Paste the Actor clipboard into an explicit loaded Scene and optional parent.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object PasteActors([CliOption("scene", Required = true)] Guid scene, [CliOption("parent")] Guid? parent = null)
+        {
+            var destinationScene = RequireScene(scene);
+            Actor destinationParent = null;
+            if (parent.HasValue)
+            {
+                destinationParent = RequireActor(parent.Value);
+                if (destinationParent.Scene != destinationScene)
+                    throw new InvalidOperationException("The paste parent does not belong to the destination Scene.");
+            }
+
+            var action = PasteActorsAction.Paste(Clipboard.RawData, destinationScene, destinationParent);
+            if (action == null)
+                throw new InvalidOperationException("The clipboard does not contain a valid Actor payload.");
+            if (!action.TryDo(out _, out var roots))
+                throw new InvalidOperationException($"Actor paste failed: {action.LastResult?.ErrorCode} {action.LastResult?.Message}");
+            Editor.Instance.Undo.AddAction(action);
+            var result = action.LastResult;
+            var created = new List<object>(result.CreatedObjectIds.Length);
+            for (int i = 0; i < result.CreatedObjectIds.Length; i++)
+            {
+                var id = result.CreatedObjectIds[i];
+                var value = Object.TryFind<Actor>(ref id);
+                if (value != null)
+                    created.Add(DescribeActor(value));
+            }
+            return new
+            {
+                transactionId = result.TransactionId,
+                status = result.Status.ToString(),
+                errorCode = result.ErrorCode.ToString(),
+                sceneIds = result.SceneIds,
+                rootIds = roots.Select(x => x.ID).ToArray(),
+                createdObjectIds = result.CreatedObjectIds,
+                actors = created.ToArray(),
+                saved = false,
+                dirty = Editor.Instance.Scene.IsEdited(destinationScene),
+            };
+        }
+
+        [CliCommand("history.undo", Description = "Attempt one undo and report whether the history cursor advanced.", Access = CliCommandAccess.MutatesProject)]
+        public static object UndoHistory()
+        {
+            var undo = Editor.Instance.Undo;
+            var undoBefore = undo.GetUndoActions().Length;
+            var redoBefore = undo.GetRedoActions().Length;
+            undo.PerformUndo();
+            var undoAfter = undo.GetUndoActions().Length;
+            var redoAfter = undo.GetRedoActions().Length;
+            return new { applied = undoAfter != undoBefore || redoAfter != redoBefore, undoBefore, undoAfter, redoBefore, redoAfter };
+        }
+
+        [CliCommand("history.list", Description = "List undo and redo actions in replay order.", Access = CliCommandAccess.ReadOnly)]
+        public static object ListHistory()
+        {
+            var undo = Editor.Instance.Undo;
+            return new
+            {
+                undo = undo.GetUndoActions().Select(x => new { action = x.ActionString, type = x.GetType().FullName }).ToArray(),
+                redo = undo.GetRedoActions().Select(x => new { action = x.ActionString, type = x.GetType().FullName }).ToArray(),
+            };
+        }
+
+        [CliCommand("history.redo", Description = "Attempt one redo and report whether the history cursor advanced.", Access = CliCommandAccess.MutatesProject)]
+        public static object RedoHistory()
+        {
+            var undo = Editor.Instance.Undo;
+            var undoBefore = undo.GetUndoActions().Length;
+            var redoBefore = undo.GetRedoActions().Length;
+            undo.PerformRedo();
+            var undoAfter = undo.GetUndoActions().Length;
+            var redoAfter = undo.GetRedoActions().Length;
+            return new { applied = undoAfter != undoBefore || redoAfter != redoBefore, undoBefore, undoAfter, redoBefore, redoAfter };
+        }
+
         [CliCommand("actors.create", Description = "Create an Actor with one undo action.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
         public static object CreateActor([CliOption("type")] string type = "FlaxEngine.EmptyActor", [CliOption("name")] string name = null, [CliOption("parent")] Guid? parent = null, [CliOption("position")] Vector3? position = null, [CliOption("rotation")] Float3? rotation = null, [CliOption("scale")] Float3? scale = null)
         {
@@ -569,7 +796,7 @@ namespace FlaxEditor
             if (position.HasValue) actor.LocalPosition = position.Value;
             if (rotation.HasValue) actor.LocalEulerAngles = rotation.Value;
             if (scale.HasValue) actor.LocalScale = scale.Value;
-            var actorParent = parent.HasValue ? RequireActor(parent.Value) : Level.GetScene(0);
+            var actorParent = parent.HasValue ? RequireActor(parent.Value) : RequireActiveScene();
             Editor.Instance.SceneEditing.Spawn(actor, actorParent, -1, false);
             return new
             {
@@ -592,7 +819,8 @@ namespace FlaxEditor
             var scene = value.Scene;
             var node = Editor.Instance.Scene.GetActorNode(value) ?? throw new InvalidOperationException("The Actor is missing from the Editor scene graph.");
             var action = new DeleteActorsAction(node.BuildAllNodes().Where(x => x.CanDelete).ToList());
-            action.Do();
+            if (!action.TryDo())
+                throw new InvalidOperationException($"Failed to delete Actor: {action.LastResult?.ErrorCode} {action.LastResult?.Message}");
             Editor.Instance.Undo.AddAction(action);
             return new { actor = handle, deleted = true, saved = false, dirty = Editor.Instance.Scene.IsEdited(scene) };
         }
@@ -634,7 +862,8 @@ namespace FlaxEditor
             if (value is Scene || value == newParent || IsDescendant(newParent, value))
                 throw new InvalidOperationException("The requested parent relationship is invalid.");
             var action = new ParentActorsAction(new SceneObject[] { value }, newParent, order, worldPositionStays);
-            action.Do();
+            if (!action.TryDo())
+                throw new InvalidOperationException($"Failed to reparent Actor: {action.LastResult?.ErrorCode} {action.LastResult?.Message}");
             Editor.Instance.Undo.AddAction(action);
             return new { actor = DescribeActor(value), saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) || Editor.Instance.Scene.IsEdited(oldScene) };
         }
@@ -724,7 +953,8 @@ namespace FlaxEditor
             if (!scriptType || !new ScriptType(typeof(Script)).IsAssignableFrom(scriptType) || !scriptType.CanCreateInstance)
                 throw new ArgumentException($"Type '{type}' is not a creatable Script type.", nameof(type));
             var action = AddRemoveScript.Add(value, scriptType);
-            action.Do();
+            if (!action.TryDo())
+                throw new InvalidOperationException("Failed to add the Script without changing history.");
             Editor.Instance.Undo.AddAction(action);
             var script = value.Scripts.LastOrDefault(x => string.Equals(x.TypeName, scriptType.TypeName, StringComparison.Ordinal));
             return new { actor = DescribeActor(value), component = DescribeScript(script), saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
@@ -737,7 +967,8 @@ namespace FlaxEditor
             var script = RequireScript(value, component);
             var description = DescribeScript(script);
             var action = AddRemoveScript.Remove(script);
-            action.Do();
+            if (!action.TryDo())
+                throw new InvalidOperationException("Failed to remove the Script without changing history.");
             Editor.Instance.Undo.AddAction(action);
             return new { actor = DescribeActor(value), component = description, deleted = true, saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
         }
@@ -812,7 +1043,7 @@ namespace FlaxEditor
             var instance = PrefabManager.SpawnPrefab(asset, null) ?? throw new InvalidOperationException("Failed to instantiate the Prefab.");
             if (position.HasValue)
                 instance.LocalPosition = position.Value;
-            Editor.Instance.SceneEditing.Spawn(instance, parent.HasValue ? RequireActor(parent.Value) : Level.GetScene(0), -1, false);
+            Editor.Instance.SceneEditing.Spawn(instance, parent.HasValue ? RequireActor(parent.Value) : RequireActiveScene(), -1, false);
             return new { prefabId, actor = DescribeActor(instance), saved = false, dirty = Editor.Instance.Scene.IsEdited(instance.Scene) };
         }
 
@@ -848,27 +1079,33 @@ namespace FlaxEditor
             replacement.LocalTransform = transform;
             var oldNode = Editor.Instance.Scene.GetActorNode(value) ?? throw new InvalidOperationException("The Actor is missing from the Editor scene graph.");
             var removeOld = new DeleteActorsAction(oldNode);
-            removeOld.Do();
-            var undo = Editor.Instance.Undo;
-            var undoEnabled = undo.Enabled;
-            undo.Enabled = false;
+            DeleteActorsAction createReplacement = null;
             try
             {
-                Editor.Instance.SceneEditing.Spawn(replacement, parent, order, false);
+                Level.SpawnActor(replacement, parent);
+                replacement.OrderInParent = order;
+                var replacementNode = Editor.Instance.Scene.GetActorNode(replacement) ?? throw new InvalidOperationException("The replacement Actor is missing from the Editor scene graph.");
+                replacementNode.PostSpawn();
+                createReplacement = new DeleteActorsAction(replacementNode, true);
+
+                if (!removeOld.TryDo())
+                    throw new InvalidOperationException($"Failed to remove the old Prefab instance: {removeOld.LastResult?.ErrorCode} {removeOld.LastResult?.Message}");
+                replacement.OrderInParent = order;
+
+                Editor.Instance.Undo.AddAction(new MultiUndoAction(new IUndoAction[] { createReplacement, removeOld }, "Revert Prefab"));
+                return new { prefabId, removedActorId = actor, actor = DescribeActor(replacement), saved = false, dirty = Editor.Instance.Scene.IsEdited(replacement.Scene) };
             }
             catch
             {
-                removeOld.Undo();
-                Object.Destroy(ref replacement);
+                if (removeOld.LastResult?.Succeeded == true)
+                    removeOld.TryUndo();
+                if (createReplacement != null)
+                    createReplacement.TryUndo();
+                else if (replacement)
+                    Object.Destroy(ref replacement);
+                FlaxEngine.Scripting.FlushRemovedObjects();
                 throw;
             }
-            finally
-            {
-                undo.Enabled = undoEnabled;
-            }
-            var replacementNode = Editor.Instance.Scene.GetActorNode(replacement) ?? throw new InvalidOperationException("The replacement Actor is missing from the Editor scene graph.");
-            undo.AddAction(new MultiUndoAction(new IUndoAction[] { removeOld, new DeleteActorsAction(replacementNode, true) }, "Revert Prefab"));
-            return new { prefabId, removedActorId = actor, actor = DescribeActor(replacement), saved = false, dirty = Editor.Instance.Scene.IsEdited(replacement.Scene) };
         }
 
         [CliCommand("prefabs.unpack", Description = "Break the Prefab link for an Actor hierarchy with undo.", Access = CliCommandAccess.Destructive, RequiresScene = true)]
@@ -879,7 +1116,8 @@ namespace FlaxEditor
                 throw new InvalidOperationException("The Actor is not linked to a Prefab.");
             var prefabId = value.PrefabID;
             var action = BreakPrefabLinkAction.Break(value);
-            action.Do();
+            if (!action.TryDo())
+                throw new InvalidOperationException("Failed to unpack the Prefab instance without changing history.");
             Editor.Instance.Undo.AddAction(action);
             MarkEdited(value);
             return new { prefabId, actor = DescribeActor(value), unpacked = true, saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
@@ -893,9 +1131,35 @@ namespace FlaxEditor
             if (options.Position.HasValue) actor.LocalPosition = options.Position.Value;
             if (options.Rotation.HasValue) actor.LocalEulerAngles = options.Rotation.Value;
             if (options.Scale.HasValue) actor.LocalScale = options.Scale.Value;
-            var parent = options.Parent.HasValue ? RequireActor(options.Parent.Value) : Level.GetScene(0);
+            var parent = options.Parent.HasValue ? RequireActor(options.Parent.Value) : RequireActiveScene();
             Editor.Instance.SceneEditing.Spawn(actor, parent, -1, false);
             return actor;
+        }
+
+        private static Scene RequireActiveScene()
+        {
+            return Editor.Instance.Scene.ActiveScene ?? throw new InvalidOperationException("No unambiguous active destination Scene is selected. Use scenes.active.set or provide an Actor parent.");
+        }
+
+        private static List<ActorNode> ResolveClipboardNodes(Guid[] actorIds)
+        {
+            if (actorIds == null || actorIds.Length == 0)
+                throw new ArgumentException("At least one Actor ID is required.", nameof(actorIds));
+            var nodes = new List<ActorNode>(actorIds.Length);
+            var unique = new HashSet<Guid>();
+            for (int i = 0; i < actorIds.Length; i++)
+            {
+                if (!unique.Add(actorIds[i]))
+                    continue;
+                var actor = RequireActor(actorIds[i]);
+                if (actor is Scene)
+                    throw new InvalidOperationException("Scene roots cannot be copied or cut as Actors.");
+                var node = Editor.Instance.Scene.GetActorNode(actor) ?? throw new InvalidOperationException($"Actor '{actorIds[i]}' is missing from the Scene graph.");
+                if (!node.CanCopyPaste)
+                    throw new InvalidOperationException($"Actor '{actorIds[i]}' cannot be copied.");
+                nodes.Add(node);
+            }
+            return nodes.BuildNodesParents();
         }
 
         private static void ValidateCreate(CliActorCreateOptions options)
@@ -1304,13 +1568,8 @@ namespace FlaxEditor
 
         private static void SaveSceneSynchronously(Scene scene)
         {
-            if (Level.SaveScene(scene))
+            if (!Editor.Instance.Scene.SaveSceneSynchronously(scene))
                 throw new IOException($"Failed to save scene '{scene.Name}'. See the Editor log for details.");
-            var node = Editor.Instance.Scene.GetActorNode(scene) as SceneNode;
-            if (node != null)
-                node.IsEdited = false;
-            if (!Editor.Instance.Scene.IsEdited())
-                Editor.Instance.Undo.MarkScenesSaved();
         }
 
         private static void MarkEdited(Actor actor)

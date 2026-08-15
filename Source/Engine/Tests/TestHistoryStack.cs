@@ -2,6 +2,7 @@
 
 #if FLAX_TESTS
 using System;
+using System.Linq;
 using FlaxEditor.History;
 using NUnit.Framework;
 using Assert = FlaxEngine.Assertions.Assert;
@@ -183,6 +184,8 @@ namespace FlaxEditor.Tests
 
             Assert.AreEqual(3, stack.HistoryCount);
             Assert.AreEqual(2, stack.ReverseCount);
+            CollectionAssert.AreEqual(new[] { 5, 3, 1 }, stack.GetHistoryActions().Select(x => (int)(HistoryTestObject)x).ToArray());
+            CollectionAssert.AreEqual(new[] { 7, 9 }, stack.GetReverseActions().Select(x => (int)(HistoryTestObject)x).ToArray());
             while (stack.HistoryCount > 0)
                 Assert.AreEqual(1, ((int)(HistoryTestObject)stack.PopHistory()) % 2);
             while (stack.ReverseCount > 0)

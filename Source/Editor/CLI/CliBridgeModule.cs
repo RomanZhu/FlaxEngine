@@ -516,8 +516,11 @@ namespace FlaxEditor
                     var save = request.Arguments?["save"]?.Value<bool>() ?? true;
                     if (save)
                     {
-                        if (Level.SaveAllScenes())
-                            throw new InvalidOperationException("Failed to save one or more scenes before Editor shutdown.");
+                        foreach (var scene in Level.Scenes)
+                        {
+                            if (Editor.Instance.Scene.IsEdited(scene) && !Editor.Instance.Scene.SaveSceneSynchronously(scene))
+                                throw new InvalidOperationException($"Failed to save scene '{scene.Name}' before Editor shutdown. Shutdown was canceled.");
+                        }
                         Editor.Instance.SaveContent();
                     }
                     else

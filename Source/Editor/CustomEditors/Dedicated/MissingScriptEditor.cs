@@ -76,7 +76,12 @@ public class MissingScriptEditor : GenericEditor
         }
 
         var multiAction = new MultiUndoAction(actions);
-        multiAction.Do();
+        if (!multiAction.TryDo())
+        {
+            multiAction.Dispose();
+            Editor.LogError("Failed to replace scripts atomically.");
+            return;
+        }
         var presenter = ParentEditor.Presenter;
         if (presenter != null)
         {
