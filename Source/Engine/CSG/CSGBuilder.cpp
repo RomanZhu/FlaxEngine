@@ -258,19 +258,26 @@ bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData
     // inactive preview is rebuilt and published, then keep the old preview alive
     // as the next cache entry. This is particularly important during the native
     // drag-and-drop loop, which renders frames from a worker thread.
-    AssetReference<Model> previewModel = scene->CSGData.PreviewModelCache;
-    if (!previewModel)
-        previewModel = Content::CreateVirtualAsset<Model>();
-    if (!previewModel)
-        return true;
-
     GPUDeviceLock gpuLock(GPUDevice::Instance);
     Array<int32, FixedAllocation<MODEL_MAX_LODS>> meshesCountPerLod;
     meshesCountPerLod.Resize(modelData.LODs.Count());
     for (int32 lodIndex = 0; lodIndex < modelData.LODs.Count(); lodIndex++)
         meshesCountPerLod[lodIndex] = modelData.LODs[lodIndex].Meshes.Count();
-    if (previewModel->SetupLODs(Span<int32>(meshesCountPerLod.Get(), meshesCountPerLod.Count())))
-        return true;
+
+    // Reinitializing a virtual model with a different mesh topology can relocate
+    // live Mesh objects and invalidate their GPU-resource ownership. Material
+    // changes commonly alter the number of CSG mesh partitions, so only reuse the
+    // inactive preview when its LOD and mesh counts already match exactly.
+    AssetReference<Model> previewModel = scene->CSGData.PreviewModelCache;
+    bool canReusePreview = previewModel && previewModel->LODs.Count() == meshesCountPerLod.Count();
+    for (int32 lodIndex = 0; canReusePreview && lodIndex < meshesCountPerLod.Count(); lodIndex++)
+        canReusePreview = previewModel->LODs[lodIndex].Meshes.Count() == meshesCountPerLod[lodIndex];
+    if (!canReusePreview)
+    {
+        previewModel = Content::CreateVirtualAsset<Model>();
+        if (!previewModel || previewModel->SetupLODs(Span<int32>(meshesCountPerLod.Get(), meshesCountPerLod.Count())))
+            return true;
+    }
 
     previewModel->MinScreenSize = modelData.MinScreenSize;
     previewModel->SetupMaterialSlots(Math::Max(modelData.Materials.Count(), 1));
