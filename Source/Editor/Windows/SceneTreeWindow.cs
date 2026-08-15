@@ -33,6 +33,8 @@ namespace FlaxEditor.Windows
         private bool _isUpdatingSelection;
         private bool _blockSceneTreeScroll = false;
         private bool _isSearchFilterUpdatePending;
+        private readonly Dictionary<Guid, bool> _searchExpansionState = new Dictionary<Guid, bool>();
+        private bool _hasSearchExpansionState;
 
         private DragAssets _dragAssets;
         private DragActorType _dragActorType;
@@ -548,9 +550,34 @@ namespace FlaxEditor.Windows
             // Update tree
             var query = _searchBox.Text;
             var root = Editor.Scene.Root;
+
+            if (!string.IsNullOrWhiteSpace(query) && !_hasSearchExpansionState)
+            {
+                CaptureSceneTreeExpansionState(root);
+                _hasSearchExpansionState = true;
+            }
+
             root.TreeNode.UpdateFilter(query);
 
+            var clearSearch = string.IsNullOrWhiteSpace(query);
+            var restoredSearchExpansionState = false;
+            if (clearSearch && _hasSearchExpansionState)
+            {
+                RestoreSceneTreeExpansionState(root);
+                _searchExpansionState.Clear();
+                _hasSearchExpansionState = false;
+                restoredSearchExpansionState = true;
+            }
+
             _tree.UnlockChildrenRecursive();
+
+            // The scene root is hidden in the tree. Reopen it when clearing a search
+            // that was started before the expansion snapshot was available.
+            if (clearSearch && !restoredSearchExpansionState)
+                root.TreeNode.Expand(true);
+
+            _tree.PerformLayout(true);
+            _sceneTreePanel.PerformLayout(true);
 
             // When keep the selected nodes in a view
             var nodeSelection = _tree.Selection;
@@ -563,6 +590,36 @@ namespace FlaxEditor.Windows
 
             PerformLayout();
             PerformLayout();
+        }
+
+        private void CaptureSceneTreeExpansionState(ActorNode node)
+        {
+            _searchExpansionState[node.ID] = node.TreeNode.IsExpanded;
+            for (int i = 0; i < node.ChildNodes.Count; i++)
+            {
+                if (node.ChildNodes[i] is ActorNode child)
+                    CaptureSceneTreeExpansionState(child);
+            }
+        }
+
+        private void RestoreSceneTreeExpansionState(ActorNode node)
+        {
+            if (_searchExpansionState.TryGetValue(node.ID, out var isExpanded))
+            {
+                node.TreeNode.IsExpanded = isExpanded;
+
+                if (node.Actor != null)
+                {
+                    var id = node.Actor.HasPrefabLink && node.Actor.Scene == null ? node.Actor.PrefabObjectID : node.Actor.ID;
+                    Editor.ProjectCache.SetExpandedActor(ref id, isExpanded);
+                }
+            }
+
+            for (int i = 0; i < node.ChildNodes.Count; i++)
+            {
+                if (node.ChildNodes[i] is ActorNode child)
+                    RestoreSceneTreeExpansionState(child);
+            }
         }
 
         private void ShowNewMenu()
