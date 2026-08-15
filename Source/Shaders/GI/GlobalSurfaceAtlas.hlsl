@@ -187,8 +187,12 @@ float4 SampleGlobalSurfaceAtlas(const GlobalSurfaceAtlasData data, ByteAddressBu
 {
     float4 result = float4(0, 0, 0, 0);
 
-    // Snap to the closest chunk to get culled objects
-    uint3 chunkCoord = (uint3)clamp(floor((worldPosition - data.ViewPos) / data.ChunkSize + (GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION * 0.5f)), 0, GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION - 1);
+    // Snap to the closest chunk to get culled objects. Reject samples outside
+    // the atlas volume instead of aliasing all of them into an edge chunk.
+    float3 chunkPosition = floor((worldPosition - data.ViewPos) / data.ChunkSize + (GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION * 0.5f));
+    if (any(chunkPosition < 0.0f) || any(chunkPosition >= GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION))
+        return result;
+    uint3 chunkCoord = (uint3)chunkPosition;
     uint chunkAddress = (chunkCoord.z * (GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION * GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION) + chunkCoord.y * GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION + chunkCoord.x) * 4;
     uint objectsStart = chunks.Load(chunkAddress);
     if (objectsStart == 0)

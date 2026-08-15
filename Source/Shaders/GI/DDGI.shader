@@ -427,14 +427,15 @@ void CS_Classify(uint3 DispatchThreadId : SV_DispatchThreadID)
         storedProbeState |= DDGI_PROBE_STATE_HISTORY_INVALID;
     RWProbeStates[probeDataCoords] = storedProbeState;
 
-    // Collect only the rotating window allowed by the global ray budget. All
-    // probes are classified every update, so the window cannot strand a state
-    // transition indefinitely.
+    // Collect the rotating window allowed by the global ray budget. Newly
+    // exposed ring-buffer probes bypass the maintenance window so scrolling
+    // cannot leave an invalid slab in front of a fast-moving camera. This is
+    // the same partial-update principle used by RTXGI scrolling volumes.
     uint maxProbes = ProbeUpdateBudget == 0 ? ProbesCount : max(1u, ProbeUpdateBudget / max(DDGI.RaysCount, 1u));
     maxProbes = min(maxProbes, ProbesCount);
     uint windowStart = ProbeWindowStart % max(ProbesCount, 1u);
     uint windowOffset = (gridProbeIndex + ProbesCount - windowStart) % max(ProbesCount, 1u);
-    if (IsDDGIProbeActive(probeState) && (ProbeUpdateBudget == 0 || windowOffset < maxProbes))
+    if (IsDDGIProbeActive(probeState) && (wasScrolled || ProbeUpdateBudget == 0 || windowOffset < maxProbes))
     {
         uint activeProbeIndex;
         RWActiveProbes.InterlockedAdd(0, 1, activeProbeIndex); // Counter at 0
@@ -656,6 +657,7 @@ void CS_TraceRays(uint3 DispatchThreadId : SV_DispatchThreadID)
 #define DDGI_PROBE_RESOLUTION DDGI_PROBE_RESOLUTION_IRRADIANCE
 groupshared float4 CachedProbesTraceRadiance[DDGI_TRACE_RAYS_LIMIT];
 groupshared float OutputInstability[DDGI_PROBE_RESOLUTION * DDGI_PROBE_RESOLUTION];
+groupshared float OutputTraceCoverage[DDGI_PROBE_RESOLUTION * DDGI_PROBE_RESOLUTION];
 #else
 // Update distance
 #define DDGI_PROBE_RESOLUTION DDGI_PROBE_RESOLUTION_DISTANCE
@@ -869,6 +871,16 @@ void CS_UpdateProbes(uint3 GroupThreadId : SV_GroupThreadID, uint3 GroupId : SV_
 #endif
     }
 
+    // Estimate how much of the expected hemisphere weight came from usable
+    // rays. Missing Surface Atlas samples and inside-geometry rays are excluded
+    // above. Their stochastic presence must not be interpreted as a real drop
+    // in scene lighting.
+#if DDGI_PROBE_UPDATE_MODE == 0
+    float expectedRayWeight = max((float)(probeRaysCount - DDGI.FixedRayCount) * 0.25f, 1.0f);
+    float traceCoverage = saturate(result.a / expectedRayWeight);
+    OutputTraceCoverage[GroupIndex] = traceCoverage;
+#endif
+
     // Normalize results
     float epsilon = (float)max(probeRaysCount - DDGI.FixedRayCount, 1u) * 1e-9f;
     result.rgb *= 1.0f / (2.0f * max(result.a, epsilon));
@@ -887,6 +899,15 @@ void CS_UpdateProbes(uint3 GroupThreadId : SV_GroupThreadID, uint3 GroupId : SV_
 #if DDGI_SRGB_BLENDING
     result.rgb = pow(max(result.rgb, 0), 1.0f / DDGI.IrradianceGamma);
 #endif
+
+    // Preserve established history when this update has weak Surface Atlas
+    // evidence. Newly activated probes remain hidden through HISTORY_INVALID
+    // until a later update obtains reliable coverage.
+    if (DDGI.Algorithm != 0 && !wasActivated)
+    {
+        float traceConfidence = smoothstep(0.1f, 0.45f, traceCoverage);
+        result.rgb = lerp(previous.rgb, result.rgb, traceConfidence);
+    }
 #endif
 
     if (wasActivated)
@@ -965,6 +986,11 @@ void CS_UpdateProbes(uint3 GroupThreadId : SV_GroupThreadID, uint3 GroupId : SV_
         instabilityAvg = saturate(instabilityAvg);
         instability = instabilityAvg;
 
+        float traceCoverageAvg = 0.0f;
+        for (uint i = 0; i < DDGI_PROBE_RESOLUTION * DDGI_PROBE_RESOLUTION; i++)
+            traceCoverageAvg += OutputTraceCoverage[i];
+        traceCoverageAvg *= 1.0f / float(DDGI_PROBE_RESOLUTION * DDGI_PROBE_RESOLUTION);
+
         // Calculate probe attention
         float taregAttention = lerp(0.5f, DDGI_PROBE_ATTENTION_MAX, instability); // Use some base level
         if (taregAttention >= probeAttention)
@@ -974,14 +1000,16 @@ void CS_UpdateProbes(uint3 GroupThreadId : SV_GroupThreadID, uint3 GroupId : SV_
         if ((probeState & DDGI_PROBE_STATE_MASK) == DDGI_PROBE_STATE_ACTIVATED)
             probeAttention = DDGI_PROBE_ATTENTION_MAX;
 
-        // Classification marks new probes with HISTORY_INVALID. This update
-        // provides both irradiance and distance history, then clears that bit
-        // while retaining ACTIVATED until the next classification. Sampling
-        // can now use the completed update instead of showing a black hole for
-        // several cascade-scheduling frames.
+        // Classification marks new probes with HISTORY_INVALID. Expose the
+        // completed irradiance and distance history only after the software
+        // trace had enough valid Surface Atlas evidence; otherwise sampling
+        // falls through to a ready outer cascade.
+        const bool traceReliable = DDGI.Algorithm == 0 || traceCoverageAvg >= 0.15f;
         probeState = (probeState & DDGI_PROBE_STATE_MASK) == DDGI_PROBE_STATE_ACTIVATED
             ? DDGI_PROBE_STATE_ACTIVATED
             : DDGI_PROBE_STATE_ACTIVE;
+        if (!traceReliable)
+            probeState |= DDGI_PROBE_STATE_HISTORY_INVALID;
         RWProbeStates[probeDataCoords] = probeState;
         RWProbesData[probeDataCoords] = EncodeDDGIProbeData(probeData.xyz, probeAttention);
     }

@@ -255,77 +255,101 @@ void CS_CullObjects(uint3 DispatchThreadId : SV_DispatchThreadID, uint3 GroupId 
 	float3 groupMin = GlobalSurfaceAtlas.ViewPos + (GroupId * GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE - (GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION * 0.5f)) * GlobalSurfaceAtlas.ChunkSize;
 	float3 groupMax = groupMin + (GlobalSurfaceAtlas.ChunkSize * GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE).xxx;
 
-    // Clear shared memory
-	if (groupIndex == 0)
-	{
-        SharedCulledObjectsCount = 0;
-	}
-	GroupMemoryBarrierWithGroupSync();
-
-    // Shared culling of all objects by all threads for a whole group
-	LOOP
-	for (uint objectIndex = groupIndex; objectIndex < GlobalSurfaceAtlas.ObjectsCount; objectIndex += GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE * GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE * GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE)
-	{
-        uint objectAddress = GlobalSurfaceAtlasObjectsList.Load(objectIndex);
-		float4 objectBounds = LoadGlobalSurfaceAtlasObjectBounds(GlobalSurfaceAtlasObjects, objectAddress);
-		if (BoxIntersectsSphere(groupMin, groupMax, objectBounds.xyz, objectBounds.w))
-		{
-            uint sharedIndex;
-            InterlockedAdd(SharedCulledObjectsCount, 1u, sharedIndex);
-            if (sharedIndex < GLOBAL_SURFACE_ATLAS_SHARED_CULL_SIZE)
-                SharedCulledObjects[sharedIndex] = objectAddress;
-		}
-	}
-	GroupMemoryBarrierWithGroupSync();
-
-    // Cull objects from the shared buffer against active thread's chunk
+    // Count objects per chunk in bounded batches. Previously the shared counter
+    // could exceed the array capacity in dense terrain scenes, causing out-of-
+    // bounds reads and frame-dependent object addresses while moving quickly.
     uint objectsCount = 0;
-	LOOP
-	for (uint i = 0; i < SharedCulledObjectsCount; i++)
-	{
-        uint objectAddress = SharedCulledObjects[i];
-		float4 objectBounds = LoadGlobalSurfaceAtlasObjectBounds(GlobalSurfaceAtlasObjects, objectAddress);
-		if (BoxIntersectsSphere(chunkMin, chunkMax, objectBounds.xyz, objectBounds.w))
-        {
-            objectsCount++;
-        }
-	}
-    if (objectsCount == 0)
-    {
-        // Empty chunk
-        RWGlobalSurfaceAtlasChunks.Store(chunkAddress, 0);
-        return;
-    }
-
-	// Allocate object data size in the buffer
-	uint objectsStart;
-	uint objectsSize = objectsCount + 1; // Include objects count before actual objects data
-	RWGlobalSurfaceAtlasCulledObjects.InterlockedAdd(0u, objectsSize, objectsStart); // Counter at 0
-	if (objectsStart + objectsSize > CulledObjectsCapacity)
-	{
-		// Not enough space in the buffer
-		RWGlobalSurfaceAtlasChunks.Store(chunkAddress, 0);
-		return;
-	}
-
-	// Write object data start
-	RWGlobalSurfaceAtlasChunks.Store(chunkAddress, objectsStart);
-
-	// Write objects count before actual objects indices
-	RWGlobalSurfaceAtlasCulledObjects.Store(objectsStart * 4, objectsCount);
-
-	// Copy objects data in this chunk (cull from the shared buffer)
     LOOP
-	for (uint i = 0; i < SharedCulledObjectsCount; i++)
+    for (uint batchStart = 0; batchStart < GlobalSurfaceAtlas.ObjectsCount; batchStart += GLOBAL_SURFACE_ATLAS_SHARED_CULL_SIZE)
     {
-        uint objectAddress = SharedCulledObjects[i];
-		float4 objectBounds = LoadGlobalSurfaceAtlasObjectBounds(GlobalSurfaceAtlasObjects, objectAddress);
-		if (BoxIntersectsSphere(chunkMin, chunkMax, objectBounds.xyz, objectBounds.w))
+        if (groupIndex == 0)
+            SharedCulledObjectsCount = 0;
+        GroupMemoryBarrierWithGroupSync();
+
+        uint batchEnd = min(batchStart + GLOBAL_SURFACE_ATLAS_SHARED_CULL_SIZE, GlobalSurfaceAtlas.ObjectsCount);
+        LOOP
+        for (uint objectIndex = batchStart + groupIndex; objectIndex < batchEnd; objectIndex += GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE * GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE * GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE)
         {
-            objectsStart++;
-            RWGlobalSurfaceAtlasCulledObjects.Store(objectsStart * 4, objectAddress);
+            uint objectAddress = GlobalSurfaceAtlasObjectsList.Load(objectIndex);
+            float4 objectBounds = LoadGlobalSurfaceAtlasObjectBounds(GlobalSurfaceAtlasObjects, objectAddress);
+            if (BoxIntersectsSphere(groupMin, groupMax, objectBounds.xyz, objectBounds.w))
+            {
+                uint sharedIndex;
+                InterlockedAdd(SharedCulledObjectsCount, 1u, sharedIndex);
+                SharedCulledObjects[sharedIndex] = objectAddress;
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+
+        LOOP
+        for (uint i = 0; i < SharedCulledObjectsCount; i++)
+        {
+            uint objectAddress = SharedCulledObjects[i];
+            float4 objectBounds = LoadGlobalSurfaceAtlasObjectBounds(GlobalSurfaceAtlasObjects, objectAddress);
+            if (BoxIntersectsSphere(chunkMin, chunkMax, objectBounds.xyz, objectBounds.w))
+                objectsCount++;
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    // Allocate object data in the output buffer. Threads with empty or
+    // overflowing chunks must continue participating in the batch barriers.
+    uint objectsStart = 0;
+    bool canWrite = objectsCount != 0;
+    if (canWrite)
+    {
+        uint objectsSize = objectsCount + 1; // Include objects count before actual objects data
+        RWGlobalSurfaceAtlasCulledObjects.InterlockedAdd(0u, objectsSize, objectsStart); // Counter at 0
+        canWrite = objectsStart + objectsSize <= CulledObjectsCapacity;
+        if (canWrite)
+        {
+            RWGlobalSurfaceAtlasChunks.Store(chunkAddress, objectsStart);
+            RWGlobalSurfaceAtlasCulledObjects.Store(objectsStart * 4, objectsCount);
         }
     }
+
+    // Repeat the bounded group culling to copy every matching object.
+    LOOP
+    for (uint batchStart = 0; batchStart < GlobalSurfaceAtlas.ObjectsCount; batchStart += GLOBAL_SURFACE_ATLAS_SHARED_CULL_SIZE)
+    {
+        if (groupIndex == 0)
+            SharedCulledObjectsCount = 0;
+        GroupMemoryBarrierWithGroupSync();
+
+        uint batchEnd = min(batchStart + GLOBAL_SURFACE_ATLAS_SHARED_CULL_SIZE, GlobalSurfaceAtlas.ObjectsCount);
+        LOOP
+        for (uint objectIndex = batchStart + groupIndex; objectIndex < batchEnd; objectIndex += GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE * GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE * GLOBAL_SURFACE_ATLAS_CHUNKS_GROUP_SIZE)
+        {
+            uint objectAddress = GlobalSurfaceAtlasObjectsList.Load(objectIndex);
+            float4 objectBounds = LoadGlobalSurfaceAtlasObjectBounds(GlobalSurfaceAtlasObjects, objectAddress);
+            if (BoxIntersectsSphere(groupMin, groupMax, objectBounds.xyz, objectBounds.w))
+            {
+                uint sharedIndex;
+                InterlockedAdd(SharedCulledObjectsCount, 1u, sharedIndex);
+                SharedCulledObjects[sharedIndex] = objectAddress;
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+
+        if (canWrite)
+        {
+            LOOP
+            for (uint i = 0; i < SharedCulledObjectsCount; i++)
+            {
+                uint objectAddress = SharedCulledObjects[i];
+                float4 objectBounds = LoadGlobalSurfaceAtlasObjectBounds(GlobalSurfaceAtlasObjects, objectAddress);
+                if (BoxIntersectsSphere(chunkMin, chunkMax, objectBounds.xyz, objectBounds.w))
+                {
+                    objectsStart++;
+                    RWGlobalSurfaceAtlasCulledObjects.Store(objectsStart * 4, objectAddress);
+                }
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (!canWrite)
+        RWGlobalSurfaceAtlasChunks.Store(chunkAddress, 0);
 }
 
 #endif

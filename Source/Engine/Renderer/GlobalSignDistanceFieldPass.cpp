@@ -375,12 +375,12 @@ public:
         // Rasterize world geometry into Global SDF
         for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
         {
-            // Reduce frequency of the updates
+            // Reduce frequency of maintenance updates, but never defer a
+            // cascade whose snapped clipmap center changed. DDGI samples all
+            // SDF cascades in the same frame, so staggered camera movement
+            // otherwise presents mutually inconsistent software trace data.
             auto& cascade = Cascades[cascadeIndex];
             cascade.Index = cascadeIndex;
-            cascade.Dirty = !useCache || RenderTools::ShouldUpdateCascade(FrameIndex, cascadeIndex, cascadesCount, maxCascadeUpdatesPerFrame, updateEveryFrame);
-            if (!cascade.Dirty)
-                continue;
             const float cascadeExtent = GetCascadeExtent(renderContext, distance, cascadesCount, cascadeIndex);
             const float cascadeSize = cascadeExtent * 2;
             const float cascadeVoxelSize = cascadeSize / (float)resolution;
@@ -389,6 +389,11 @@ public:
             const Vector3 viewPositionWorld = Origin + (Vector3)viewPosition;
             const Vector3 centerWorld = Vector3::Floor(viewPositionWorld / cascadeChunkSize) * cascadeChunkSize;
             const Float3 center = (Float3)(centerWorld - Origin);
+            const bool centerMoved = !Float3::NearEqual(cascade.Position, center, cascadeVoxelSize);
+            const bool layoutChanged = !Math::NearEqual(cascade.Extent, cascadeExtent);
+            cascade.Dirty = !useCache || centerMoved || layoutChanged || RenderTools::ShouldUpdateCascade(FrameIndex, cascadeIndex, cascadesCount, maxCascadeUpdatesPerFrame, updateEveryFrame);
+            if (!cascade.Dirty)
+                continue;
             //const Float3 center = Float3::Zero;
             BoundingBox cascadeBounds(center - cascadeExtent, center + cascadeExtent);
 
@@ -1127,6 +1132,7 @@ bool GlobalSignDistanceFieldPass::Render(RenderContext& renderContext, GPUContex
         result.Constants.CascadePosDistance[cascadeIndex] = result.Constants.CascadePosDistance[cascadesCount - 1];
         result.Constants.CascadeVoxelSize.Raw[cascadeIndex] = result.Constants.CascadeVoxelSize.Raw[cascadesCount - 1];
         result.Constants.CascadeMaxDistance.Raw[cascadeIndex] = result.Constants.CascadeMaxDistance.Raw[cascadesCount - 1];
+        result.Constants.CascadeMaxDistanceMip.Raw[cascadeIndex] = result.Constants.CascadeMaxDistanceMip.Raw[cascadesCount - 1];
     }
     result.Constants.Resolution = (float)resolution;
     result.Constants.CascadesCount = cascadesCount;

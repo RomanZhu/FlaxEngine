@@ -288,7 +288,7 @@ float3 SampleDDGIIrradianceCascadeLegacy(DDGIData data, Texture2D<snorm float4> 
     return irradiance.rgb;
 }
 
-float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float3 visibilityNormal, uint cascadeIndex, float3 probesOrigin, float3 probesExtent, float probesSpacing, float3 biasedWorldPosition, out float volumeVisibility)
+float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float3 visibilityNormal, uint cascadeIndex, float3 probesOrigin, float3 probesExtent, float probesSpacing, float3 biasedWorldPosition, out float volumeVisibility, out float probeCoverage)
 {
     bool invalidCascade = cascadeIndex >= data.CascadesCount;
     cascadeIndex = min(cascadeIndex, data.CascadesCount - 1);
@@ -399,7 +399,15 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
         irradiance = float4(1, 0, 1, 1);
 #endif
 
-    volumeVisibility = visibilityWeightSum > 0.0f ? saturate(visibilitySum / visibilityWeightSum) : 0.0f;
+    // Track the actual trilinear coverage of ready probes separately from
+    // distance-moment visibility. Renormalizing a partially valid cell to full
+    // strength makes probe activation changes appear as large lighting blocks.
+    probeCoverage = saturate(visibilityWeightSum);
+
+    // A negative value is an internal sentinel meaning that this cascade has no
+    // ready probes at the sample location. The caller uses it to fall through to
+    // a coarser cascade instead of presenting a transient zero-GI hole.
+    volumeVisibility = probeCoverage > 0.0f ? saturate(visibilitySum / visibilityWeightSum) : -1.0f;
     if (irradiance.a > 0.0f)
     {
         // Normalize only by probes that actually contributed.
@@ -412,14 +420,15 @@ float3 SampleDDGIIrradianceCascade(DDGIData data, Texture2D<snorm float4> probes
     return irradiance.rgb;
 }
 
-float3 SampleDDGIIrradianceCascadeSelected(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float3 visibilityNormal, uint cascadeIndex, float3 probesOrigin, float3 probesExtent, float probesSpacing, float3 biasedWorldPosition, out float volumeVisibility)
+float3 SampleDDGIIrradianceCascadeSelected(DDGIData data, Texture2D<snorm float4> probesData, Texture2D<uint> probeStates, Texture2D<float4> probesDistance, Texture2D<float4> probesIrradiance, float3 worldPosition, float3 worldNormal, float3 visibilityNormal, uint cascadeIndex, float3 probesOrigin, float3 probesExtent, float probesSpacing, float3 biasedWorldPosition, out float volumeVisibility, out float probeCoverage)
 {
     if (data.Algorithm == 0)
     {
         volumeVisibility = 1.0f;
+        probeCoverage = 1.0f;
         return SampleDDGIIrradianceCascadeLegacy(data, probesData, probesDistance, probesIrradiance, worldPosition, worldNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition);
     }
-    return SampleDDGIIrradianceCascade(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, volumeVisibility);
+    return SampleDDGIIrradianceCascade(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, volumeVisibility, probeCoverage);
 }
 
 float3 GetDDGISurfaceBias(DDGIData data, float3 viewDir, float probesSpacing, float3 geometricNormal, float bias)
@@ -481,19 +490,58 @@ float3 SampleDDGIIrradianceInternal(DDGIData data, Texture2D<snorm float4> probe
 #endif
 
     // Sample cascade
-    float3 result = SampleDDGIIrradianceCascadeSelected(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, volumeVisibility);
+    float probeCoverage;
+    float3 result = SampleDDGIIrradianceCascadeSelected(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, volumeVisibility, probeCoverage);
+
+    // Probe classification and scrolling can leave a cell with only part of
+    // its eight-corner interpolation ready. Blend by actual trilinear coverage
+    // toward the best ready outer cascade instead of renormalizing the remaining
+    // probes to full strength and switching an entire cell at once.
+    bool usedProbeFallback = false;
+    if (data.Algorithm != 0 && probeCoverage < 0.999f)
+    {
+        float3 fallbackResult = float3(0, 0, 0);
+        float fallbackVisibility = 1.0f;
+        float fallbackCoverageBest = 0.0f;
+        for (uint fallbackCascade = cascadeIndex + 1; fallbackCascade < data.CascadesCount; fallbackCascade++)
+        {
+            probesSpacing = data.ProbesOriginAndSpacing[fallbackCascade].w;
+            probesOrigin = data.ProbesScrollOffsets[fallbackCascade].xyz * probesSpacing + data.ProbesOriginAndSpacing[fallbackCascade].xyz;
+            probesExtent = (data.ProbesCounts - 1) * (probesSpacing * 0.5f);
+            biasedWorldPosition = worldPosition + GetDDGISurfaceBias(data, viewDir, probesSpacing, visibilityNormal, bias);
+            float fallbackVisibilityCandidate;
+            float fallbackCoverage;
+            float3 fallbackCandidate = SampleDDGIIrradianceCascadeSelected(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, fallbackCascade, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, fallbackVisibilityCandidate, fallbackCoverage);
+            if (fallbackCoverage > fallbackCoverageBest)
+            {
+                fallbackResult = fallbackCandidate;
+                fallbackVisibility = fallbackVisibilityCandidate;
+                fallbackCoverageBest = fallbackCoverage;
+            }
+            if (fallbackCoverage >= 0.999f)
+                break;
+        }
+        if (fallbackCoverageBest > 0.0f)
+        {
+            float readyWeight = smoothstep(0.15f, 0.9f, probeCoverage);
+            result = lerp(fallbackResult, result, readyWeight);
+            volumeVisibility = lerp(max(fallbackVisibility, 0.0f), max(volumeVisibility, 0.0f), readyWeight);
+            usedProbeFallback = readyWeight < 0.999f;
+        }
+    }
 
     // Blend with the next cascade (or fallback irradiance outside the volume)
 #if DDGI_CASCADE_BLEND_SMOOTH && !defined(DDGI_DEBUG_CASCADE)
     cascadeIndex++;
-    if (cascadeIndex < data.CascadesCount && cascadeWeight < 0.99f)
+    if (!usedProbeFallback && cascadeIndex < data.CascadesCount && cascadeWeight < 0.99f)
     {
         probesSpacing = data.ProbesOriginAndSpacing[cascadeIndex].w;
         probesOrigin = data.ProbesScrollOffsets[cascadeIndex].xyz * probesSpacing + data.ProbesOriginAndSpacing[cascadeIndex].xyz;
         probesExtent = (data.ProbesCounts - 1) * (probesSpacing * 0.5f);
         biasedWorldPosition = worldPosition + GetDDGISurfaceBias(data, viewDir, probesSpacing, visibilityNormal, bias);
         float volumeVisibilityNext;
-        float3 resultNext = SampleDDGIIrradianceCascadeSelected(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, volumeVisibilityNext);
+        float probeCoverageNext;
+        float3 resultNext = SampleDDGIIrradianceCascadeSelected(data, probesData, probeStates, probesDistance, probesIrradiance, worldPosition, worldNormal, visibilityNormal, cascadeIndex, probesOrigin, probesExtent, probesSpacing, biasedWorldPosition, volumeVisibilityNext, probeCoverageNext);
         result *= cascadeWeight;
         result += resultNext * (1 - cascadeWeight);
         volumeVisibility = lerp(volumeVisibilityNext, volumeVisibility, cascadeWeight);
@@ -507,6 +555,7 @@ float3 SampleDDGIIrradianceInternal(DDGIData data, Texture2D<snorm float4> probe
         volumeVisibility = lerp(volumeVisibility, 1.0f, fallbackWeight);
     }
 
+    volumeVisibility = max(volumeVisibility, 0.0f);
     return result;
 }
 

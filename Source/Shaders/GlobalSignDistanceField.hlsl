@@ -132,10 +132,10 @@ float SampleGlobalSDF(const GlobalSDFData data, Texture3D<snorm float> tex, floa
         float voxelSize = data.CascadeVoxelSize[cascade];
         float chunkMargin = voxelSize * (GLOBAL_SDF_CHUNK_MARGIN_SCALE * GLOBAL_SDF_RASTERIZE_CHUNK_MARGIN);
         float maxDistanceTex = data.CascadeMaxDistanceTex[cascade];
-        float distanceTex = tex.SampleLevel(GLOBAL_SDF_SAMPLER, textureUV, 0);
+        float distanceTex = tex.SampleLevel(GLOBAL_SDF_SAMPLER, textureUV, 0) * maxDistanceTex;
         if (distanceTex < chunkMargin && all(cascadeUV > 0) && all(cascadeUV < 1))
         {
-            distance = distanceTex * maxDistanceTex;
+            distance = distanceTex;
             break;
         }
     }
@@ -157,10 +157,10 @@ float SampleGlobalSDF(const GlobalSDFData data, Texture3D<snorm float> tex, Text
         float chunkSize = voxelSize * GLOBAL_SDF_RASTERIZE_CHUNK_SIZE;
         float chunkMargin = voxelSize * (GLOBAL_SDF_CHUNK_MARGIN_SCALE * GLOBAL_SDF_RASTERIZE_CHUNK_MARGIN);
         float maxDistanceMip = data.CascadeMaxDistanceMip[cascade];
-        float distanceMip = mip.SampleLevel(GLOBAL_SDF_SAMPLER, textureMipUV, 0);
+        float distanceMip = mip.SampleLevel(GLOBAL_SDF_SAMPLER, textureMipUV, 0) * maxDistanceMip;
         if (distanceMip < chunkSize && all(cascadeUV > 0) && all(cascadeUV < 1))
         {
-            distance = distanceMip * maxDistanceMip;
+            distance = distanceMip;
             float maxDistanceTex = data.CascadeMaxDistanceTex[cascade];
             float distanceTex = tex.SampleLevel(GLOBAL_SDF_SAMPLER, textureUV, 0) * maxDistanceTex;
             if (distanceTex < chunkMargin)
@@ -186,7 +186,7 @@ float3 SampleGlobalSDFGradient(const GlobalSDFData data, Texture3D<snorm float> 
         float voxelSize = data.CascadeVoxelSize[cascade];
         float chunkMargin = voxelSize * (GLOBAL_SDF_CHUNK_MARGIN_SCALE * GLOBAL_SDF_RASTERIZE_CHUNK_MARGIN);
         float maxDistanceTex = data.CascadeMaxDistanceTex[cascade];
-        float distanceTex = tex.SampleLevel(GLOBAL_SDF_SAMPLER, textureUV, 0);
+        float distanceTex = tex.SampleLevel(GLOBAL_SDF_SAMPLER, textureUV, 0) * maxDistanceTex;
         if (distanceTex < chunkMargin && all(cascadeUV > 0) && all(cascadeUV < 1))
         {
             float texelOffset = 1.0f / data.Resolution;
@@ -198,7 +198,7 @@ float3 SampleGlobalSDFGradient(const GlobalSDFData data, Texture3D<snorm float> 
             float zp = tex.SampleLevel(GLOBAL_SDF_SAMPLER, float3(textureUV.x, textureUV.y, textureUV.z + texelOffset), 0).x;
             float zn = tex.SampleLevel(GLOBAL_SDF_SAMPLER, float3(textureUV.x, textureUV.y, textureUV.z - texelOffset), 0).x;
             gradient = float3(xp - xn, yp - yn, zp - zn) * maxDistanceTex;
-            distance = distanceTex * maxDistanceTex;
+            distance = distanceTex;
             break;
         }
     }

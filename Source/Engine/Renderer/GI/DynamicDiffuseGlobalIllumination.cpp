@@ -590,11 +590,30 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
     //const uint64 cascadeFrequencies[] = { 1, 1, 1, 1 };
     //const uint64 cascadeFrequencies[] = { 10, 10, 10, 10 };
     bool cascadeSkipUpdate[4];
-    int32 maxCascadesPerFrame = renderContext.View.IsSingleFrame ? cascadesCount : 2;
+    bool cascadeForceUpdate[4];
+    bool hasForcedUpdate = false;
+    for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
+    {
+        auto& cascade = ddgiData.Cascades[cascadeIndex];
+        const Float3 volumeOrigin = cascade.ProbesOrigin + Float3(cascade.ProbeScrollOffsets) * cascade.ProbesSpacing;
+        const Float3 translation = viewOrigins[cascadeIndex] - volumeOrigin;
+        cascadeForceUpdate[cascadeIndex] = Math::Abs(translation.X) >= cascade.ProbesSpacing ||
+                Math::Abs(translation.Y) >= cascade.ProbesSpacing ||
+                Math::Abs(translation.Z) >= cascade.ProbesSpacing;
+        cascade.PendingUpdate |= cascadeForceUpdate[cascadeIndex];
+        hasForcedUpdate |= cascadeForceUpdate[cascadeIndex];
+    }
+    // Cascade lighting must stay temporally coherent across a clipmap scroll.
+    // Updating only the cascade that crossed a probe-cell boundary leaves the
+    // adjacent cascade on an older ray rotation and produces a camera-following
+    // radial band at their blend region. Synchronize every cascade on scroll
+    // frames; normal maintenance updates remain spread across frames.
+    int32 maxCascadesPerFrame = renderContext.View.IsSingleFrame || hasForcedUpdate ? cascadesCount : 2;
     for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
     {
         auto& cascade = ddgiData.Cascades[cascadeIndex];
         cascade.PendingUpdate |= !clear && (ddgiData.LastFrameUsed % cascadeFrequencies[cascadeIndex]) != 0 && GPU_SPREAD_WORKLOAD;
+        cascade.PendingUpdate |= hasForcedUpdate;
         cascadeSkipUpdate[cascadeIndex] = !cascade.PendingUpdate || maxCascadesPerFrame-- <= 0;
     }
 
@@ -938,10 +957,11 @@ bool DynamicDiffuseGlobalIlluminationPass::Render(RenderContext& renderContext, 
         context->BindSR(7, ddgiData.Result.ProbesIrradiance);
         context->SetViewportAndScissors(renderContext.View.ScreenSize.X, renderContext.View.ScreenSize.Y);
         context->SetRenderTarget(lightBuffer);
-        // Dithered cascade selection relies on temporal accumulation. Editor
-        // and other non-temporal views use deterministic smooth blending.
+        // DDGI+ uses deterministic smooth blending. Dithered cascade selection
+        // relies on temporal accumulation, which is rejected during fast camera
+        // motion and exposes large per-cascade irradiance differences as flicker.
         const bool smoothCascadeBlending = Graphics::GICascadesBlending ||
-                (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus && !renderContext.List->Setup.UseTemporalAAJitter);
+                renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus;
         context->SetState(_psIndirectLighting[smoothCascadeBlending ? 1 : 0]);
         context->DrawFullscreenTriangle();
     }

@@ -225,6 +225,14 @@ public:
         resolution = Math::Clamp(graphicsSettings->GlobalSurfaceAtlasResolution, 256, GPU_MAX_TEXTURE_SIZE);
         auto& giSettings = renderContext.List->Settings.GlobalIllumination;
         distance = giSettings.Distance;
+        if (giSettings.Mode == GlobalIlluminationMode::DDGI || giSettings.Mode == GlobalIlluminationMode::DDGIPlus)
+        {
+            // Probe rays originate throughout the camera-centered DDGI volume,
+            // not only at the camera. Cover the volume and its outward traces
+            // so distant probes do not repeatedly gain and lose atlas data as
+            // the camera moves through the scene.
+            distance *= 2.0f;
+        }
     }
 
     void DrawActorsJobSync(int32)
@@ -954,7 +962,9 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
     // Init constants
     result.Constants.ViewPos = renderContext.View.Position;
     result.Constants.Resolution = (float)resolution;
-    result.Constants.ChunkSize = distance / (float)GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION;
+    // Distance is a culling radius. The chunk grid spans both sides of the
+    // camera, so its full width is twice that radius.
+    result.Constants.ChunkSize = (distance * 2.0f) / (float)GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION;
     result.Constants.ObjectsCount = surfaceAtlasData.Objects.Count();
 
     // If we don't know the culled objects buffer capacity then we shouldn't use atlas results as many objects are still missing (see CulledObjectsCounterIndex usage)
