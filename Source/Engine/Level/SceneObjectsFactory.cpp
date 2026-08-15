@@ -484,6 +484,11 @@ void SceneObjectsFactory::SetupPrefabInstances(Context& context, const PrefabSyn
         auto prefab = Content::LoadAsync<Prefab>(prefabId);
         if (!prefab)
             continue;
+        if (prefab->WaitForLoaded())
+        {
+            LOG(Warning, "Failed to load prefab {0} while preparing a deserialized instance.", prefab->ToString());
+            continue;
+        }
 
         // Check if it's parent is in the same prefab
         int32 index;

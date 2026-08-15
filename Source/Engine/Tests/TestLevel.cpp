@@ -1206,12 +1206,14 @@ TEST_CASE("ActorClipboardPayloadValidation")
         destinationParent->RegisterObject();
         Dictionary<Guid, Guid> idsMapping;
         idsMapping.Add(sourceChildId, restoredChildId);
-        auto restored = Actor::FromBytes(Span<byte>(childData.Get(), childData.Count()), idsMapping, destinationParentId);
-        REQUIRE(restored.Count() == 1);
-        CHECK(restored[0]->GetID() == restoredChildId);
-        CHECK(restored[0]->GetParent() == destinationParent);
+        auto restoredIds = Actor::FromBytesToIds(Span<byte>(childData.Get(), childData.Count()), idsMapping, destinationParentId);
+        REQUIRE(restoredIds.Count() == 1);
+        CHECK(restoredIds[0] == restoredChildId);
+        Actor* restored = Scripting::TryFindObject<Actor>(restoredIds[0]);
+        REQUIRE(restored);
+        CHECK(restored->GetParent() == destinationParent);
 
-        restored[0]->DeleteObject();
+        restored->DeleteObject();
         destinationParent->DeleteObject();
         ObjectsRemovalService::Flush();
     }

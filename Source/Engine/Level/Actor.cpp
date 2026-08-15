@@ -1969,6 +1969,7 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
     modifier->EngineBuild = engineBuild;
     CollectionPoolCache<ActorsCache::SceneObjectsListType>::ScopeCache sceneObjects = ActorsCache::SceneObjectsListCache.Get();
     sceneObjects->Resize(objectsCount);
+    sceneObjects->SetAll(nullptr);
     SceneObjectsFactory::Context context(modifier);
     bool constructionFailed = false;
 
@@ -2125,13 +2126,19 @@ Array<Actor*> Actor::FromBytes(const Span<byte>& data, const Dictionary<Guid, Gu
     return output;
 }
 
-Array<Actor*> Actor::FromBytes(const Span<byte>& data, const Dictionary<Guid, Guid>& idsMapping, const Guid& destinationParentId)
+Array<Guid> Actor::FromBytesToIds(const Span<byte>& data, const Dictionary<Guid, Guid>& idsMapping, const Guid& destinationParentId)
 {
-    Array<Actor*> output;
+    Array<Actor*> actors;
     auto modifier = Cache::ISerializeModifier.Get();
     modifier->IdsMapping = idsMapping;
-    FromBytes(data, output, modifier.Value, &destinationParentId);
-    return output;
+    if (FromBytes(data, actors, modifier.Value, destinationParentId.IsValid() ? &destinationParentId : nullptr))
+        return Array<Guid>();
+
+    Array<Guid> result;
+    result.EnsureCapacity(actors.Count());
+    for (Actor* actor : actors)
+        result.Add(actor->GetID());
+    return result;
 }
 
 Array<Guid> Actor::TryGetSerializedObjectsIds(const Span<byte>& data)

@@ -224,11 +224,19 @@ namespace FlaxEditor.Actions
                 if (SceneMutationFaults.ShouldFail(transactionId, "Preflight"))
                     throw new SceneMutationInjectedFaultException("Preflight");
 
-                actors = destinationParent != null
-                    ? Actor.FromBytes(_data, _idsMapping, destinationParent.ID)
-                    : Actor.FromBytes(_data, _idsMapping);
-                if (actors == null || actors.Length == 0)
+                var actorIds = Actor.FromBytesToIds(_data, _idsMapping, destinationParent?.ID ?? Guid.Empty);
+                if (actorIds == null || actorIds.Length == 0)
                     throw new SceneMutationFailureException(SceneMutationErrorCode.ConstructionFailed, "The Actor payload did not construct any Actors.");
+                actors = new Actor[actorIds.Length];
+                bool actorResolutionFailed = false;
+                for (int i = 0; i < actorIds.Length; i++)
+                {
+                    var actorId = actorIds[i];
+                    actors[i] = Object.TryFind<Actor>(ref actorId);
+                    actorResolutionFailed |= actors[i] == null;
+                }
+                if (actorResolutionFailed)
+                    throw new SceneMutationFailureException(SceneMutationErrorCode.ConstructionFailed, "A constructed Actor could not be resolved by its stable identifier.");
                 if (SceneMutationFaults.ShouldFail(transactionId, "Construction"))
                     throw new SceneMutationInjectedFaultException("Construction");
                 SceneDebug.Log("MutationStaged", $"Transaction={transactionId} Actors={actors.Length}");

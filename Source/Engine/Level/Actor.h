@@ -1010,13 +1010,13 @@ public:
     API_FUNCTION() static Array<Actor*> FromBytes(const Span<byte>& data, const Dictionary<Guid, Guid, HeapAllocation>& idsMapping);
 
     /// <summary>
-    /// Performs actors deserialization from the raw bytes and attaches serialized root objects to the destination parent during construction.
+    /// Performs actors deserialization from the raw bytes and returns stable identifiers for the created actors.
     /// </summary>
     /// <param name="data">The input data.</param>
     /// <param name="idsMapping">The serialized objects Ids mapping. Can be used to convert the spawned objects ids and references to them.</param>
     /// <param name="destinationParentId">The destination parent object ID used to remap parent references from outside of the serialized payload.</param>
-    /// <returns>The output actors.</returns>
-    API_FUNCTION() static Array<Actor*> FromBytes(const Span<byte>& data, const Dictionary<Guid, Guid, HeapAllocation>& idsMapping, const Guid& destinationParentId);
+    /// <returns>The identifiers of the created actors, or an empty array if deserialization failed.</returns>
+    API_FUNCTION() static Array<Guid> FromBytesToIds(const Span<byte>& data, const Dictionary<Guid, Guid, HeapAllocation>& idsMapping, const Guid& destinationParentId);
 
     /// <summary>
     /// Tries the get serialized objects ids from the raw bytes.
