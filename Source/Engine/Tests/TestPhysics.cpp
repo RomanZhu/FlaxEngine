@@ -854,7 +854,8 @@ TEST_CASE("PhysicsBackendTriangleMesh")
     REQUIRE(triangleMesh);
     SCOPE_EXIT
     {
-        PhysicsBackend::DestroyObject(triangleMesh);
+        if (triangleMesh)
+            PhysicsBackend::DestroyObject(triangleMesh);
     };
 
     PhysicsSettings settings;
@@ -924,5 +925,15 @@ TEST_CASE("PhysicsBackendTriangleMesh")
     Quaternion endOrientation;
     PhysicsBackend::GetRigidActorPose(sphereActor, endPosition, endOrientation);
     CHECK(endPosition.Y > 10.0);
+#if COMPILE_WITH_BOX3D
+    // Box3D runtime shapes reference the cooked triangle mesh directly. Releasing
+    // collision data while a collider is still attached must remove the runtime
+    // shape before another scene query can reach the freed mesh.
+    const Vector3 rayOrigin(250.0, 100.0, 250.0);
+    CHECK(PhysicsBackend::RayCast(scene, rayOrigin, Vector3::Down, 200.0f, MAX_uint32, true));
+    PhysicsBackend::DestroyObject(triangleMesh);
+    triangleMesh = nullptr;
+    CHECK_FALSE(PhysicsBackend::RayCast(scene, rayOrigin, Vector3::Down, 200.0f, MAX_uint32, true));
+#endif
 #endif
 }

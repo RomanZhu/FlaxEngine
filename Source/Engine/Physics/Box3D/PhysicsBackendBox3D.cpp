@@ -69,20 +69,13 @@ namespace
         Array<float> Heights;
         Array<uint8> HeightMaterials;
         Array<PhysicsBackend::HeightFieldSample> HeightSamples;
+        Array<ShapeBox3D*> Shapes;
         Array<ShapeBox3D*> HeightFieldShapes;
         int32 Rows = 0;
         int32 Columns = 0;
         BoundingBox LocalBounds = BoundingBox::Empty;
 
-        ~MeshBox3D()
-        {
-            if (Hull)
-                b3DestroyHull(Hull);
-            if (Mesh)
-                b3DestroyMesh(Mesh);
-            if (HeightField)
-                b3DestroyHeightField(HeightField);
-        }
+        ~MeshBox3D();
     };
 
     struct ActorBox3D
@@ -416,6 +409,20 @@ namespace
 
     void DestroyRuntimeShape(ShapeBox3D* shape)
     {
+        if (!shape)
+            return;
+        if (shape->Geometry.Type == CollisionShape::Types::ConvexMesh)
+        {
+            auto mesh = (MeshBox3D*)shape->Geometry.ConvexMesh.ConvexMesh;
+            if (mesh)
+                mesh->Shapes.Remove(shape);
+        }
+        else if (shape->Geometry.Type == CollisionShape::Types::TriangleMesh)
+        {
+            auto mesh = (MeshBox3D*)shape->Geometry.TriangleMesh.TriangleMesh;
+            if (mesh)
+                mesh->Shapes.Remove(shape);
+        }
         if (shape->HeightFieldOwner)
         {
             shape->HeightFieldOwner->HeightFieldShapes.Remove(shape);
@@ -434,6 +441,41 @@ namespace
             b3DestroyCompound(shape->Compound);
             shape->Compound = nullptr;
         }
+    }
+
+    MeshBox3D::~MeshBox3D()
+    {
+        // Runtime Box3D shapes reference cooked mesh data directly. Invalidate every
+        // dependent shape before releasing that data (for example during an async
+        // CollisionData reload) so scene queries cannot observe a dangling mesh.
+        while (Shapes.HasItems())
+        {
+            auto shape = Shapes.Last();
+            Shapes.RemoveLast();
+            if (!shape)
+                continue;
+            DestroyRuntimeShape(shape);
+            if (shape->Geometry.Type == CollisionShape::Types::ConvexMesh && shape->Geometry.ConvexMesh.ConvexMesh == this)
+                shape->Geometry.ConvexMesh.ConvexMesh = nullptr;
+            else if (shape->Geometry.Type == CollisionShape::Types::TriangleMesh && shape->Geometry.TriangleMesh.TriangleMesh == this)
+                shape->Geometry.TriangleMesh.TriangleMesh = nullptr;
+        }
+        while (HeightFieldShapes.HasItems())
+        {
+            auto shape = HeightFieldShapes.Last();
+            HeightFieldShapes.RemoveLast();
+            if (!shape)
+                continue;
+            DestroyRuntimeShape(shape);
+            if (shape->Geometry.Type == CollisionShape::Types::HeightField && shape->Geometry.HeightField.HeightField == this)
+                shape->Geometry.HeightField.HeightField = nullptr;
+        }
+        if (Hull)
+            b3DestroyHull(Hull);
+        if (Mesh)
+            b3DestroyMesh(Mesh);
+        if (HeightField)
+            b3DestroyHeightField(HeightField);
     }
 
     b3ShapeDef MakeShapeDef(ShapeBox3D* shape)
@@ -505,6 +547,8 @@ namespace
             {
                 const b3Vec3 scale = { shape->Geometry.ConvexMesh.Scale[0], shape->Geometry.ConvexMesh.Scale[1], shape->Geometry.ConvexMesh.Scale[2] };
                 shape->Shape = b3CreateTransformedHullShape(shape->Actor->Body, &def, mesh->Hull, C2BTransform(shape->LocalPosition, shape->LocalRotation), scale);
+                if (IsShapeValid(shape) && !mesh->Shapes.Contains(shape))
+                    mesh->Shapes.Add(shape);
             }
             break;
         }
@@ -535,6 +579,8 @@ namespace
                     shape->Compound = b3CreateCompound(&compoundDef);
                     shape->Shape = b3CreateCompoundShape(shape->Actor->Body, &def, shape->Compound);
                 }
+                if (IsShapeValid(shape) && !mesh->Shapes.Contains(shape))
+                    mesh->Shapes.Add(shape);
             }
             break;
         }
@@ -2229,6 +2275,8 @@ void PhysicsBackend::SetShapeMaterials(void* shape, Span<JsonAsset*> materials)
 void PhysicsBackend::SetShapeGeometry(void* shape, const CollisionShape& geometry)
 {
     auto shapeBox3D = (ShapeBox3D*)shape;
+    // Unlink using the old geometry before replacing its mesh pointer.
+    DestroyRuntimeShape(shapeBox3D);
     shapeBox3D->Geometry = geometry;
     RecreateRuntimeShape(shapeBox3D);
 }
