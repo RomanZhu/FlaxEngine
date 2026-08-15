@@ -318,6 +318,7 @@ namespace FlaxEditor.Windows.Assets
         {
             if (!IsEdited || _asset == null || _isWaitingForSurfaceLoad)
                 return;
+            using var saveScope = Editor.ContentDatabase.TrackAssetSave(_item.Path);
 
             // Check if surface has been edited
             if (_surface.IsEdited)
@@ -329,6 +330,7 @@ namespace FlaxEditor.Windows.Assets
             ClearEditedFlag();
             OnSurfaceEditedChanged();
             _item.RefreshThumbnail();
+            saveScope.Complete(true);
         }
 
         /// <inheritdoc />

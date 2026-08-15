@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using FlaxEditor.GUI.Drag;
+using FlaxEditor.SceneGraph;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -39,6 +40,7 @@ namespace FlaxEditor.Content
     public class ContentFolder : ContentItem
     {
         private DragItems _dragOverItems;
+        private DragActors _dragActors;
         private bool _validDragOver;
 
         /// <summary>
@@ -254,13 +256,36 @@ namespace FlaxEditor.Content
             return item != this && !item.Find(this);
         }
 
+        private bool ValidateDragActor(ActorNode actor)
+        {
+            return actor.CanCreatePrefab && CanHaveAssets;
+        }
+
+        private void ImportActors(DragActors actors)
+        {
+            foreach (var actorNode in actors.Objects)
+            {
+                if (actors.Objects.Contains(actorNode.ParentNode as ActorNode))
+                    continue;
+                Editor.Instance.Prefabs.CreatePrefab(actorNode.Actor, false, this);
+            }
+        }
+
         /// <inheritdoc />
         public override DragDropEffect OnDragEnter(ref Float2 location, DragData data)
         {
             base.OnDragEnter(ref location, data);
 
             // Check if drop file(s)
-            if (data is DragDataFiles)
+            if (data is DragDataFiles files && Editor.Instance.ContentImporting.PreflightImport(files.Files, this).Succeeded)
+            {
+                _validDragOver = true;
+                return DragDropEffect.Copy;
+            }
+
+            if (_dragActors == null)
+                _dragActors = new DragActors(ValidateDragActor);
+            if (_dragActors.OnDragEnter(data))
             {
                 _validDragOver = true;
                 return DragDropEffect.Copy;
@@ -270,8 +295,8 @@ namespace FlaxEditor.Content
             if (_dragOverItems == null)
                 _dragOverItems = new DragItems(ValidateDragItem);
             _dragOverItems.OnDragEnter(data);
-            _validDragOver = _dragOverItems.HasValidDrag;
-            return _dragOverItems.Effect;
+            _validDragOver = _dragOverItems.HasValidDrag && Editor.Instance.Windows.ContentWin.CanMoveWithPreflight(_dragOverItems.Objects, this);
+            return _validDragOver ? DragDropEffect.Move : DragDropEffect.None;
         }
 
         /// <inheritdoc />
@@ -279,9 +304,13 @@ namespace FlaxEditor.Content
         {
             base.OnDragMove(ref location, data);
 
-            if (data is DragDataFiles)
+            if (data is DragDataFiles files)
+                return Editor.Instance.ContentImporting.PreflightImport(files.Files, this).Succeeded ? DragDropEffect.Copy : DragDropEffect.None;
+            if (_dragActors != null && _dragActors.HasValidDrag)
                 return DragDropEffect.Copy;
-            return _dragOverItems?.Effect ?? DragDropEffect.None;
+            return _dragOverItems != null && _dragOverItems.HasValidDrag && Editor.Instance.Windows.ContentWin.CanMoveWithPreflight(_dragOverItems.Objects, this)
+                ? DragDropEffect.Move
+                : DragDropEffect.None;
         }
 
         /// <inheritdoc />
@@ -290,13 +319,18 @@ namespace FlaxEditor.Content
             var result = base.OnDragDrop(ref location, data);
 
             // Check if drop file(s)
-            if (data is DragDataFiles files)
+            if (data is DragDataFiles files && Editor.Instance.ContentImporting.PreflightImport(files.Files, this).Succeeded)
             {
                 // Import files
                 Editor.Instance.ContentImporting.Import(files.Files, this);
                 result = DragDropEffect.Copy;
             }
-            else if (_dragOverItems.HasValidDrag)
+            else if (_dragActors != null && _dragActors.HasValidDrag)
+            {
+                ImportActors(_dragActors);
+                result = DragDropEffect.Copy;
+            }
+            else if (_dragOverItems != null && _dragOverItems.HasValidDrag && Editor.Instance.Windows.ContentWin.CanMoveWithPreflight(_dragOverItems.Objects, this))
             {
                 // Move items
                 Editor.Instance.Windows.ContentWin.MoveWithUndo(_dragOverItems.Objects, this);
@@ -305,6 +339,7 @@ namespace FlaxEditor.Content
 
             // Clear cache
             _dragOverItems?.OnDragDrop();
+            _dragActors?.OnDragDrop();
             _validDragOver = false;
 
             return result;
@@ -314,6 +349,7 @@ namespace FlaxEditor.Content
         public override void OnDragLeave()
         {
             _dragOverItems?.OnDragLeave();
+            _dragActors?.OnDragLeave();
             _validDragOver = false;
 
             base.OnDragLeave();

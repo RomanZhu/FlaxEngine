@@ -13,51 +13,6 @@ using FlaxEngine.Utilities;
 
 namespace FlaxEditor.Modules
 {
-    internal enum ContentMutationFailure
-    {
-        None,
-        InvalidSource,
-        DestinationCollision,
-        CopyFailed,
-    }
-
-    internal readonly struct ContentMutationResult
-    {
-        public readonly bool Succeeded;
-        public readonly ContentMutationFailure Failure;
-        public readonly string SourcePath;
-        public readonly string DestinationPath;
-        public readonly string Message;
-        public readonly bool CreatedDestination;
-        public readonly bool RequiresRecovery;
-
-        private ContentMutationResult(bool succeeded, ContentMutationFailure failure, string sourcePath, string destinationPath, string message, bool createdDestination, bool requiresRecovery)
-        {
-            Succeeded = succeeded;
-            Failure = failure;
-            SourcePath = sourcePath;
-            DestinationPath = destinationPath;
-            Message = message;
-            CreatedDestination = createdDestination;
-            RequiresRecovery = requiresRecovery;
-        }
-
-        public static ContentMutationResult Success(string sourcePath, string destinationPath)
-        {
-            return new ContentMutationResult(true, ContentMutationFailure.None, sourcePath, destinationPath, null, true, false);
-        }
-
-        public static ContentMutationResult Prepared(string sourcePath, string destinationPath)
-        {
-            return new ContentMutationResult(true, ContentMutationFailure.None, sourcePath, destinationPath, null, false, false);
-        }
-
-        public static ContentMutationResult Fail(ContentMutationFailure failure, string sourcePath, string destinationPath, string message, bool requiresRecovery = false)
-        {
-            return new ContentMutationResult(false, failure, sourcePath, destinationPath, message, false, requiresRecovery);
-        }
-    }
-
     /// <summary>
     /// Manages assets database and searches for workspace directory changes.
     /// </summary>
@@ -75,21 +30,65 @@ namespace FlaxEditor.Modules
         private readonly HashSet<MainContentFolderTreeNode> _dirtyNodes = new HashSet<MainContentFolderTreeNode>();
         private readonly object _assetDiskChangesLock = new object();
         private readonly HashSet<string> _pendingAssetDiskChanges = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private readonly HashSet<string> _assetsBeingSaved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, AssetSaveState> _assetSaves = new Dictionary<string, AssetSaveState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, AssetDiskWrite> _selfAuthoredAssetDiskChanges = new Dictionary<string, AssetDiskWrite>(StringComparer.OrdinalIgnoreCase);
         private DateTime _lastAssetDiskChangeTime;
+        private long _nextAssetSaveGeneration;
+
+        private sealed class AssetSaveState
+        {
+            public readonly long Generation;
+            public int Depth;
+            public bool Failed;
+
+            public AssetSaveState(long generation)
+            {
+                Generation = generation;
+                Depth = 1;
+            }
+        }
+
+        internal sealed class AssetSaveScope : IDisposable
+        {
+            private ContentDatabaseModule _owner;
+            private readonly string _path;
+            private bool _succeeded;
+
+            internal AssetSaveScope(ContentDatabaseModule owner, string path)
+            {
+                _owner = owner;
+                _path = path;
+                owner.BeginAssetSave(path);
+            }
+
+            public void Complete(bool succeeded)
+            {
+                _succeeded = succeeded;
+            }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                if (owner == null)
+                    return;
+                _owner = null;
+                owner.EndAssetSave(_path, _succeeded);
+            }
+        }
 
         private readonly struct AssetDiskWrite
         {
             public readonly DateTime LastWriteTimeUtc;
             public readonly long Length;
             public readonly DateTime ExpiresAtUtc;
+            public readonly long Generation;
 
-            public AssetDiskWrite(DateTime lastWriteTimeUtc, long length, DateTime expiresAtUtc)
+            public AssetDiskWrite(DateTime lastWriteTimeUtc, long length, DateTime expiresAtUtc, long generation)
             {
                 LastWriteTimeUtc = lastWriteTimeUtc;
                 Length = length;
                 ExpiresAtUtc = expiresAtUtc;
+                Generation = generation;
             }
         }
 
@@ -438,47 +437,6 @@ namespace FlaxEditor.Modules
             return null;
         }
 
-        /// <summary>
-        /// Renames a content item
-        /// </summary>
-        /// <param name="el">Content item</param>
-        /// <param name="newPath">New path</param>
-        /// <returns>True if failed, otherwise false</returns>
-        private static bool RenameAsset(ContentItem el, ref string newPath)
-        {
-            string oldPath = el.Path;
-
-            // Check if use content pool
-            if (UseContentBackendForFileOperation(el))
-            {
-                // Rename asset
-                // Note: we use content backend because file may be in use or sth, it's safe
-                if (FlaxEngine.Content.RenameAsset(oldPath, newPath))
-                {
-                    Editor.LogError(string.Format("Cannot rename asset \'{0}\' to \'{1}\'", oldPath, newPath));
-                    return true;
-                }
-            }
-            else
-            {
-                // Rename file
-                try
-                {
-                    File.Move(oldPath, newPath);
-                }
-                catch (Exception ex)
-                {
-                    Editor.LogWarning(ex);
-                    Editor.LogError(string.Format("Cannot rename asset \'{0}\' to \'{1}\'", oldPath, newPath));
-                    return true;
-                }
-            }
-
-            // Change path
-            el.UpdatePath(newPath);
-            return false;
-        }
-
         private static void UpdateAssetNewNameTree(ContentItem el)
         {
             string extension = Path.GetExtension(el.Path);
@@ -492,6 +450,74 @@ namespace FlaxEditor.Modules
                     UpdateAssetNewNameTree(folder.Children[i]);
         }
 
+        internal ContentMutationResult CreatePath(string destinationPath, bool isDirectory, Action create, bool allowDeferred = false)
+        {
+            if (create == null)
+                throw new ArgumentNullException(nameof(create));
+            destinationPath = ContentMutationPathUtils.Normalize(destinationPath);
+            var plan = new ContentMutationPlan(ContentMutationOperationKind.Create);
+            plan.Entries.Add(new ContentMutationEntry(destinationPath, destinationPath, ContentMutationPathRole.Main, isDirectory)
+            {
+                SourceRequired = false,
+            });
+            var step = new ContentMutationStep(
+                "create",
+                new[] { 0 },
+                () =>
+                {
+                    try
+                    {
+                        create();
+                        if (ContentMutationPathUtils.Exists(destinationPath) || allowDeferred)
+                            return ContentMutationResult.Success(null, destinationPath);
+                        return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath, $"Content creation did not produce '{destinationPath}'.");
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        return ContentMutationResult.Fail(ContentMutationFailure.PermissionDenied, null, destinationPath, ex.Message);
+                    }
+                    catch (IOException ex)
+                    {
+                        return ContentMutationResult.Fail(ContentMutationFailure.LockedStorage, null, destinationPath, ex.Message);
+                    }
+                    catch (Exception ex)
+                    {
+                        return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath, ex.Message);
+                    }
+                },
+                () => DeleteCreatedPath(destinationPath),
+                () => allowDeferred && !ContentMutationPathUtils.Exists(destinationPath) ||
+                      (isDirectory ? Directory.Exists(destinationPath) : File.Exists(destinationPath)));
+            var result = new ContentMutationTransaction(plan).Execute(new[] { step });
+            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.create.transaction-committed" : "mutation.create.transaction-failed", $"transaction={plan.Id:N}; destination='{destinationPath}'; directory={isDirectory}; deferred={allowDeferred && !ContentMutationPathUtils.Exists(destinationPath)}; failure={result.Failure}; recovery={result.RequiresRecovery}");
+            return result;
+        }
+
+        private static bool DeleteCreatedPath(string path)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                    Directory.Delete(path, true);
+                else if (File.Exists(path))
+                {
+                    if (FlaxEngine.Content.GetAssetInfo(path, out _))
+                        FlaxEngine.Content.DeleteAsset(path);
+                    if (File.Exists(path))
+                        File.Delete(path);
+                }
+                var sidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(path, false, string.Equals(Path.GetExtension(path), ".scene", StringComparison.OrdinalIgnoreCase));
+                if (sidecar != null && Directory.Exists(sidecar))
+                    Directory.Delete(sidecar, true);
+                return !ContentMutationPathUtils.Exists(path) && (sidecar == null || !Directory.Exists(sidecar));
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning("Failed to roll back created Content path '" + path + "': " + ex.Message);
+                return false;
+            }
+        }
+
         /// <summary>
         /// Moves the specified items to the different location. Handles moving whole directories and single assets.
         /// </summary>
@@ -500,10 +526,22 @@ namespace FlaxEditor.Modules
         /// <returns>True if all items were moved, otherwise false.</returns>
         public bool Move(List<ContentItem> items, ContentFolder newParent)
         {
-            bool result = true;
+            if (items == null || newParent == null)
+                throw new ArgumentNullException();
+            var moves = new List<(ContentItem Item, string Destination)>();
             for (int i = 0; i < items.Count; i++)
-                result &= Move(items[i], newParent);
-            return result;
+            {
+                var item = items[i] ?? throw new ArgumentNullException(nameof(items));
+                if (item.ParentFolder == newParent)
+                    continue;
+                moves.Add((item, StringUtils.CombinePaths(newParent.Path, item.FileName)));
+            }
+            if (!ConfirmWorkspaceMoveIfNeeded(moves))
+                return false;
+            var result = TryMove(moves);
+            if (!result.Succeeded)
+                ShowMoveFailure(result);
+            return result.Succeeded;
         }
 
         /// <summary>
@@ -517,12 +555,10 @@ namespace FlaxEditor.Modules
             if (newParent == null || item == null)
                 throw new ArgumentNullException();
 
-            // Skip nothing to change
             if (item.ParentFolder == newParent)
                 return true;
 
-            var extension = Path.GetExtension(item.Path);
-            var newPath = StringUtils.CombinePaths(newParent.Path, item.ShortName + extension);
+            var newPath = StringUtils.CombinePaths(newParent.Path, item.FileName);
             return Move(item, newPath);
         }
 
@@ -536,143 +572,259 @@ namespace FlaxEditor.Modules
         {
             if (item == null || string.IsNullOrEmpty(newPath))
                 throw new ArgumentNullException();
-
-            string oldPath = item.Path;
-            ContentMutationDiagnostics.Log("mutation.move.begin", $"source='{oldPath}'; destination='{newPath}'; folder={item.IsFolder}; type={item.GetType().Name}");
-            var destinationIsDirectory = Directory.Exists(newPath);
-            var destinationIsFile = File.Exists(newPath);
-            var recoverableZeroByteDestination = false;
-            if (destinationIsFile && (item.IsFolder || UseContentBackendForFileOperation(item)))
-            {
-                try
-                {
-                    // Native content moves validate the source and can atomically replace the
-                    // zero-byte placeholders left by a failed/stale content item.
-                    recoverableZeroByteDestination = new FileInfo(newPath).Length == 0;
-                }
-                catch
-                {
-                    // Treat an inaccessible destination as a real collision.
-                }
-            }
-            if (!oldPath.Equals(newPath, StringComparison.OrdinalIgnoreCase) &&
-                (destinationIsDirectory || (destinationIsFile && !recoverableZeroByteDestination)))
-            {
-                ContentMutationDiagnostics.Log("mutation.move.rejected", $"reason=destination-collision; source='{oldPath}'; destination='{newPath}'; directory={destinationIsDirectory}; file={destinationIsFile}");
-                MessageBox.Show("Cannot move item. Target location already exists.");
+            var moves = new List<(ContentItem Item, string Destination)> { (item, newPath) };
+            if (!ConfirmWorkspaceMoveIfNeeded(moves))
                 return false;
+            var result = TryMove(moves);
+            if (!result.Succeeded)
+                ShowMoveFailure(result);
+            return result.Succeeded;
+        }
+
+        internal ContentMutationResult TryMove(IReadOnlyList<(ContentItem Item, string Destination)> requestedMoves)
+        {
+            if (requestedMoves == null || requestedMoves.Count == 0)
+                return ContentMutationResult.Prepared(null, null);
+
+            var moves = new List<(ContentItem Item, string Source, string Destination, ContentFolder OldParent, ContentFolder NewParent)>();
+            for (int i = 0; i < requestedMoves.Count; i++)
+            {
+                var item = requestedMoves[i].Item;
+                if (item == null)
+                    return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, null, requestedMoves[i].Destination, "The source item is missing.");
+                if (requestedMoves.Any(x => x.Item != item && x.Item is ContentFolder selectedFolder && selectedFolder.Find(item)))
+                    continue;
+                var source = ContentMutationPathUtils.Normalize(item.Path);
+                var destination = ContentMutationPathUtils.Normalize(requestedMoves[i].Destination);
+                if (string.Equals(source, destination, StringComparison.Ordinal))
+                    continue;
+                var newParent = Find(Path.GetDirectoryName(destination)) as ContentFolder;
+                if (newParent == null)
+                    return ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, source, destination, "The target Content folder is missing.");
+                moves.Add((item, source, destination, item.ParentFolder, newParent));
+            }
+            if (moves.Count == 0)
+                return ContentMutationResult.Prepared(requestedMoves[0].Item?.Path, requestedMoves[0].Destination);
+
+            var operation = moves.Count == 1 && moves[0].OldParent == moves[0].NewParent ? ContentMutationOperationKind.Rename : ContentMutationOperationKind.Move;
+            var plan = new ContentMutationPlan(operation);
+            var steps = new List<ContentMutationStep>();
+            for (int i = 0; i < moves.Count; i++)
+                AddMoveSteps(plan, steps, moves[i].Item, moves[i].Source, moves[i].Destination);
+
+            ContentMutationDiagnostics.Log("mutation.move.begin", $"transaction={plan.Id:N}; operation={operation}; items={moves.Count}; entries={plan.Entries.Count}");
+            var transaction = new ContentMutationTransaction(plan);
+            var result = transaction.Execute(steps);
+            if (!result.Succeeded)
+            {
+                ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={plan.Id:N}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
+                return result;
             }
 
-            // Find target parent
-            var newDirPath = Path.GetDirectoryName(newPath);
-            var newParent = Find(newDirPath) as ContentFolder;
-            if (newParent == null)
+            // Reconcile the managed database only after every filesystem/native leg commits.
+            for (int i = 0; i < moves.Count; i++)
             {
-                ContentMutationDiagnostics.Log("mutation.move.rejected", $"reason=missing-parent; source='{oldPath}'; destination='{newPath}'");
-                MessageBox.Show("Cannot move item. Missing target location.");
-                return false;
-            }
-
-            if (item is ContentFolder sourceFolder && sourceFolder.Find(newParent))
-            {
-                ContentMutationDiagnostics.Log("mutation.move.rejected", $"reason=path-cycle; source='{oldPath}'; destination='{newPath}'");
-                MessageBox.Show("Cannot move a folder into itself or one of its subfolders.");
-                return false;
-            }
-
-            var projects = Editor.ContentDatabase.Projects;
-            var contentPaths = new List<string>();
-            var sourcePaths = new List<string>();
-            foreach (var project in projects)
-            {
-                if (project.Content != null)
-                    contentPaths.Add(project.Content.Path);
-                if (project.Source != null)
-                    sourcePaths.Add(project.Source.Path);
-            }
-
-            // Check if moving from content to source folder. Item may lose reference in Asset Database. Warn user.
-            foreach (var contentPath in contentPaths)
-            {
-                if (item.Path.Contains(contentPath, StringComparison.Ordinal))
+                var move = moves[i];
+                if (move.Item is ContentFolder folder)
                 {
-                    bool isFound = false;
-                    foreach (var sourcePath in sourcePaths)
-                    {
-                        if (newParent.Path.Contains(sourcePath, StringComparison.Ordinal))
-                        {
-                            isFound = true;
-                            var result = MessageBox.Show(Editor.Windows.MainWindow, "Moving item from \"Content\" to \"Source\" folder may lose asset database reference.\nDo you want to continue?", "Moving item", MessageBoxButtons.OKCancel);
-                            if (result == DialogResult.Cancel)
-                                return false;
-                            break;
-                        }
-                    }
-                    if (isFound)
-                        break;
-                }
-            }
-            // Check if moving from source to content folder. Item may lose reference in Asset Database. Warn user.
-            foreach (var sourcePath in sourcePaths)
-            {
-                if (item.Path.Contains(sourcePath, StringComparison.Ordinal))
-                {
-                    bool isFound = false;
-                    foreach (var contentPath in contentPaths)
-                    {
-                        if (newParent.Path.Contains(contentPath, StringComparison.Ordinal))
-                        {
-                            isFound = true;
-                            var result = MessageBox.Show(Editor.Windows.MainWindow, "Moving item from \"Source\" to \"Content\" folder may lose asset database reference.\nDo you want to continue?", "Moving item", MessageBoxButtons.OKCancel);
-                            if (result == DialogResult.Cancel)
-                                return false;
-                            break;
-                        }
-                    }
-                    if (isFound)
-                        break;
-                }
-            }
-
-            // Perform renaming
-            {
-                // Special case for folders
-                if (item.IsFolder)
-                {
-                    var folder = (ContentFolder)item;
-                    if (FlaxEngine.Content.RenameAssetFolder(oldPath, newPath))
-                    {
-                        ContentMutationDiagnostics.Log("mutation.move.failed", $"backend=content-folder; source='{oldPath}'; destination='{newPath}'");
-                        MessageBox.Show("Cannot move folder. See the log for details.");
-                        return false;
-                    }
-
-                    // Synchronize managed database paths after the atomic filesystem move.
-                    item.UpdatePath(newPath);
-                    for (int i = 0; i < folder.Children.Count; i++)
-                        UpdateAssetNewNameTree(folder.Children[i]);
+                    move.Item.UpdatePath(move.Destination);
+                    for (int j = 0; j < folder.Children.Count; j++)
+                        UpdateAssetNewNameTree(folder.Children[j]);
                 }
                 else
                 {
-                    if (RenameAsset(item, ref newPath))
-                    {
-                        ContentMutationDiagnostics.Log("mutation.move.failed", $"backend={(UseContentBackendForFileOperation(item) ? "content" : "filesystem")}; source='{oldPath}'; destination='{newPath}'");
-                        MessageBox.Show("Cannot move item. See the log for details.");
-                        return false;
-                    }
+                    move.Item.UpdatePath(move.Destination);
                 }
-
-                if (item.ParentFolder != null)
-                    item.ParentFolder.Node.SortChildren();
+                move.Item.ParentFolder = move.NewParent;
+                move.OldParent?.Node.SortChildren();
+                if (move.NewParent != move.OldParent)
+                    move.NewParent.Node.SortChildren();
             }
-
-            // Link item
-            item.ParentFolder = newParent;
 
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
-            ContentMutationDiagnostics.Log("mutation.move.committed", $"source='{oldPath}'; destination='{item.Path}'; folder={item.IsFolder}");
+            ContentMutationDiagnostics.Log("mutation.move.committed", $"transaction={plan.Id:N}; operation={operation}; items={moves.Count}; entries={plan.Entries.Count}");
+            return result;
+        }
+
+        internal ContentMutationResult PreflightMove(IReadOnlyList<(ContentItem Item, string Destination)> requestedMoves)
+        {
+            if (requestedMoves == null || requestedMoves.Count == 0)
+                return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, null, null, "No Content items were selected for the move.");
+
+            var plan = new ContentMutationPlan(ContentMutationOperationKind.Move);
+            int topLevelCount = 0;
+            for (int i = 0; i < requestedMoves.Count; i++)
+            {
+                var item = requestedMoves[i].Item;
+                if (item == null || !item.Exists)
+                    return ContentMutationResult.Fail(ContentMutationFailure.MissingSource, item?.Path, requestedMoves[i].Destination, "A selected Content item is missing.", transactionId: plan.Id);
+                if (requestedMoves.Any(x => x.Item != item && x.Item is ContentFolder selectedFolder && selectedFolder.Find(item)))
+                    continue;
+                var source = ContentMutationPathUtils.Normalize(item.Path);
+                var destination = ContentMutationPathUtils.Normalize(requestedMoves[i].Destination);
+                if (string.Equals(source, destination, StringComparison.Ordinal))
+                    continue;
+                if (Find(Path.GetDirectoryName(destination)) is not ContentFolder)
+                    return ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, source, destination, "The target Content folder is missing.", transactionId: plan.Id);
+                AddMoveSteps(plan, new List<ContentMutationStep>(), item, source, destination);
+                topLevelCount++;
+            }
+            return topLevelCount == 0
+                ? ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, requestedMoves[0].Item?.Path, requestedMoves[0].Destination, "The selected items are already in the target folder.", transactionId: plan.Id)
+                : plan.Preflight();
+        }
+
+        private static void AddMoveSteps(ContentMutationPlan plan, List<ContentMutationStep> steps, ContentItem item, string sourcePath, string destinationPath)
+        {
+            if (ContentMutationPathUtils.IsCaseOnlyRename(sourcePath, destinationPath))
+            {
+                var temporaryPath = ContentMutationPathUtils.CreateTemporarySibling(sourcePath, "flax-case-rename");
+                var sidecarPath = ContentMutationPathUtils.GetExternalActorsSidecarPath(sourcePath, item.IsFolder, item.ItemType == ContentItemType.Scene);
+                var hasSidecar = sidecarPath != null && Directory.Exists(sidecarPath);
+                var firstIndices = AddMovePlanEntries(plan, item, sourcePath, temporaryPath, false, false, hasSidecar);
+                var secondIndices = AddMovePlanEntries(plan, item, temporaryPath, destinationPath, true, true, hasSidecar);
+                steps.Add(CreateMoveStep(item, "case-rename-stage", firstIndices, sourcePath, temporaryPath, plan));
+                steps.Add(CreateMoveStep(item, "case-rename-commit", secondIndices, temporaryPath, destinationPath, plan));
+            }
+            else
+            {
+                var sidecarPath = ContentMutationPathUtils.GetExternalActorsSidecarPath(sourcePath, item.IsFolder, item.ItemType == ContentItemType.Scene);
+                var indices = AddMovePlanEntries(plan, item, sourcePath, destinationPath, false, false, sidecarPath != null && Directory.Exists(sidecarPath));
+                steps.Add(CreateMoveStep(item, "move", indices, sourcePath, destinationPath, plan));
+            }
+        }
+
+        private static int[] AddMovePlanEntries(ContentMutationPlan plan, ContentItem item, string sourcePath, string destinationPath, bool sourceProduced, bool destinationReleased, bool includeSidecar)
+        {
+            int first = plan.Entries.Count;
+            AddMoveTreeEntries(plan, item, sourcePath, destinationPath, false, sourceProduced, destinationReleased);
+            var sourceSidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(sourcePath, item.IsFolder, item.ItemType == ContentItemType.Scene);
+            if (includeSidecar && sourceSidecar != null)
+            {
+                var destinationSidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(destinationPath, item.IsFolder, item.ItemType == ContentItemType.Scene);
+                plan.Entries.Add(new ContentMutationEntry(sourceSidecar, destinationSidecar, ContentMutationPathRole.ExternalActorSidecar, true)
+                {
+                    SourceProducedByTransaction = sourceProduced,
+                    DestinationReleasedByTransaction = destinationReleased,
+                    DestinationParentProducedByTransaction = true,
+                });
+            }
+            return Enumerable.Range(first, plan.Entries.Count - first).ToArray();
+        }
+
+        private static void AddMoveTreeEntries(ContentMutationPlan plan, ContentItem item, string sourcePath, string destinationPath, bool descendant, bool sourceProduced, bool destinationReleased)
+        {
+            plan.Entries.Add(new ContentMutationEntry(sourcePath, destinationPath, descendant ? ContentMutationPathRole.Descendant : ContentMutationPathRole.Main, item.IsFolder)
+            {
+                SourceProducedByTransaction = sourceProduced,
+                DestinationReleasedByTransaction = destinationReleased,
+                DestinationParentProducedByTransaction = descendant,
+            });
+            if (item is ContentFolder folder)
+            {
+                for (int i = 0; i < folder.Children.Count; i++)
+                {
+                    var child = folder.Children[i];
+                    AddMoveTreeEntries(plan, child, Path.Combine(sourcePath, child.FileName), Path.Combine(destinationPath, child.FileName), true, sourceProduced, destinationReleased);
+                }
+            }
+        }
+
+        private static ContentMutationStep CreateMoveStep(ContentItem item, string name, int[] entryIndices, string sourcePath, string destinationPath, ContentMutationPlan plan)
+        {
+            return new ContentMutationStep(
+                name,
+                entryIndices,
+                () => MoveBackend(item, sourcePath, destinationPath),
+                () => RollbackMoveBackend(item, sourcePath, destinationPath),
+                () => VerifyMoveEntries(plan, entryIndices));
+        }
+
+        private static ContentMutationResult MoveBackend(ContentItem item, string sourcePath, string destinationPath)
+        {
+            try
+            {
+                bool failed;
+                if (item.IsFolder)
+                    failed = FlaxEngine.Content.RenameAssetFolder(sourcePath, destinationPath);
+                else if (UseContentBackendForFileOperation(item))
+                    failed = FlaxEngine.Content.RenameAsset(sourcePath, destinationPath);
+                else
+                {
+                    File.Move(sourcePath, destinationPath);
+                    failed = false;
+                }
+                return failed
+                    ? ContentMutationResult.Fail(ContentMutationFailure.MoveFailed, sourcePath, destinationPath, $"The Content backend failed to move '{sourcePath}'.")
+                    : ContentMutationResult.Success(sourcePath, destinationPath);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return ContentMutationResult.Fail(ContentMutationFailure.PermissionDenied, sourcePath, destinationPath, ex.Message);
+            }
+            catch (IOException ex)
+            {
+                return ContentMutationResult.Fail(ContentMutationFailure.LockedStorage, sourcePath, destinationPath, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return ContentMutationResult.Fail(ContentMutationFailure.MoveFailed, sourcePath, destinationPath, ex.Message);
+            }
+        }
+
+        private static bool RollbackMoveBackend(ContentItem item, string sourcePath, string destinationPath)
+        {
+            if (ContentMutationPathUtils.Exists(sourcePath) && !ContentMutationPathUtils.Exists(destinationPath))
+                return true;
+            if (ContentMutationPathUtils.Exists(sourcePath) || !ContentMutationPathUtils.Exists(destinationPath))
+                return false;
+            return MoveBackend(item, destinationPath, sourcePath).Succeeded;
+        }
+
+        private static bool VerifyMoveEntries(ContentMutationPlan plan, int[] entryIndices)
+        {
+            for (int i = 0; i < entryIndices.Length; i++)
+            {
+                var entry = plan.Entries[entryIndices[i]];
+                if (ContentMutationPathUtils.Exists(entry.SourcePath) || !ContentMutationPathUtils.Exists(entry.DestinationPath))
+                    return false;
+            }
             return true;
+        }
+
+        private bool ConfirmWorkspaceMoveIfNeeded(IReadOnlyList<(ContentItem Item, string Destination)> moves)
+        {
+            bool crossesWorkspaceKind = false;
+            for (int i = 0; i < moves.Count && !crossesWorkspaceKind; i++)
+            {
+                for (int j = 0; j < Projects.Count && !crossesWorkspaceKind; j++)
+                {
+                    var project = Projects[j];
+                    var sourceInContent = project.Content != null && ContentMutationPathUtils.IsWithinRoot(moves[i].Item.Path, project.Content.Path);
+                    var sourceInSource = project.Source != null && ContentMutationPathUtils.IsWithinRoot(moves[i].Item.Path, project.Source.Path);
+                    var destinationInContent = project.Content != null && ContentMutationPathUtils.IsWithinRoot(moves[i].Destination, project.Content.Path);
+                    var destinationInSource = project.Source != null && ContentMutationPathUtils.IsWithinRoot(moves[i].Destination, project.Source.Path);
+                    crossesWorkspaceKind = sourceInContent && destinationInSource || sourceInSource && destinationInContent;
+                }
+            }
+            if (!crossesWorkspaceKind)
+                return true;
+            return MessageBox.Show(Editor.Windows.MainWindow, "Moving items between Content and Source may lose asset database references.\nDo you want to continue?", "Moving item", MessageBoxButtons.OKCancel) == DialogResult.OK;
+        }
+
+        private static void ShowMoveFailure(ContentMutationResult result)
+        {
+            var message = result.RequiresRecovery
+                ? "Cannot move Content item. Recovery data was preserved; see the log for exact paths."
+                : result.Failure == ContentMutationFailure.DestinationCollision
+                    ? "Cannot move Content item because the target already exists."
+                    : result.Failure == ContentMutationFailure.PathCycle
+                        ? "Cannot move a folder into itself or one of its descendants."
+                        : result.Failure == ContentMutationFailure.InvalidDestination
+                            ? "Cannot move Content item because the target folder is missing."
+                            : "Cannot move Content item. See the log for details.";
+            MessageBox.Show(message);
         }
 
         /// <summary>
@@ -691,67 +843,199 @@ namespace FlaxEditor.Modules
                 return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, sourcePath, targetPath, "The source item is missing.");
             }
 
-            var preflightResult = PreflightCopy(item, targetPath);
-            if (!preflightResult.Succeeded)
+            return Copy(new[] { (item, targetPath) });
+        }
+
+        internal ContentMutationResult Copy(IReadOnlyList<(ContentItem Item, string Destination)> requests)
+        {
+            if (requests == null || requests.Count == 0)
+                return ContentMutationResult.Prepared(null, null);
+
+            var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
+            var steps = new List<ContentMutationStep>(requests.Count);
+            for (int i = 0; i < requests.Count; i++)
             {
-                ContentMutationDiagnostics.Log("mutation.copy.rejected", $"reason={preflightResult.Failure}; source='{sourcePath}'; destination='{targetPath}'; message='{preflightResult.Message}'");
-                return preflightResult;
+                var item = requests[i].Item;
+                var targetPath = ContentMutationPathUtils.Normalize(requests[i].Destination);
+                if (item == null || !item.Exists)
+                    return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, item?.Path, targetPath, "The source item is missing.", transactionId: plan.Id);
+
+                var itemPlan = BuildCopyPlan(item, targetPath);
+                var databasePreflight = PreflightCopy(item, targetPath, itemPlan);
+                if (!databasePreflight.Succeeded)
+                {
+                    ContentMutationDiagnostics.Log("mutation.copy.rejected", $"reason={databasePreflight.Failure}; source='{item.Path}'; destination='{targetPath}'; message='{databasePreflight.Message}'");
+                    return databasePreflight;
+                }
+                int firstEntry = plan.Entries.Count;
+                plan.Entries.AddRange(itemPlan.Entries);
+                var entryIndices = Enumerable.Range(firstEntry, itemPlan.Entries.Count).ToArray();
+                var clonedAssets = new List<string>();
+                steps.Add(new ContentMutationStep(
+                    requests.Count == 1 ? "copy" : "copy-" + i,
+                    entryIndices,
+                    () => CommitCopy(item, targetPath, clonedAssets),
+                    () => RollbackCopy(plan, entryIndices, clonedAssets),
+                    () => VerifyCopy(plan, entryIndices)));
             }
 
-            bool createdRoot = false;
-            var clonedAssets = new List<string>();
+            var transaction = new ContentMutationTransaction(plan);
+            var result = transaction.Execute(steps);
+            if (result.Succeeded)
+                ContentMutationDiagnostics.Log("mutation.copy.committed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}");
+            else
+                ContentMutationDiagnostics.Log("mutation.copy.failed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
+            return result;
+        }
+
+        internal ContentMutationResult PreflightCopy(ContentItem item, string targetPath)
+        {
+            return PreflightCopy(item, targetPath, item != null ? BuildCopyPlan(item, targetPath) : null);
+        }
+
+        private ContentMutationResult PreflightCopy(ContentItem item, string targetPath, ContentMutationPlan plan)
+        {
+            var sourcePath = item?.Path;
+            if (item == null || !item.Exists)
+                return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, sourcePath, targetPath, "The source item is missing.");
+            var planResult = plan.Preflight();
+            if (!planResult.Succeeded)
+                return planResult;
+            targetPath = ContentMutationPathUtils.Normalize(targetPath);
+            var comparer = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var plannedPaths = new HashSet<string>(comparer);
+            ContentMutationResult failure = default;
+            return PreflightCopyTree(item, targetPath, plannedPaths, comparer, ref failure)
+                ? ContentMutationResult.Prepared(sourcePath, targetPath, plan.Id)
+                : failure;
+        }
+
+        private static ContentMutationPlan BuildCopyPlan(ContentItem item, string targetPath)
+        {
+            var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
+            targetPath = ContentMutationPathUtils.Normalize(targetPath);
+            AddCopyPlanEntries(plan, item, targetPath, false);
+
+            var sourceSidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(item.Path, item.IsFolder, item.ItemType == ContentItemType.Scene);
+            if (sourceSidecar != null && Directory.Exists(sourceSidecar))
+            {
+                var targetSidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(targetPath, item.IsFolder, item.ItemType == ContentItemType.Scene);
+                plan.Entries.Add(new ContentMutationEntry(sourceSidecar, targetSidecar, ContentMutationPathRole.ExternalActorSidecar, true)
+                {
+                    DestinationParentProducedByTransaction = true,
+                });
+            }
+            return plan;
+        }
+
+        private static void AddCopyPlanEntries(ContentMutationPlan plan, ContentItem item, string targetPath, bool descendant)
+        {
+            var entry = new ContentMutationEntry(item.Path, targetPath, descendant ? ContentMutationPathRole.Descendant : ContentMutationPathRole.Main, item.IsFolder)
+            {
+                DestinationParentProducedByTransaction = descendant,
+            };
+            plan.Entries.Add(entry);
+            if (item is ContentFolder folder)
+            {
+                for (int i = 0; i < folder.Children.Count; i++)
+                {
+                    var child = folder.Children[i];
+                    AddCopyPlanEntries(plan, child, Path.Combine(targetPath, child.FileName), true);
+                }
+            }
+        }
+
+        private ContentMutationResult CommitCopy(ContentItem item, string targetPath, List<string> clonedAssets)
+        {
             try
             {
                 if (item.IsFolder)
                 {
                     Directory.CreateDirectory(targetPath);
-                    createdRoot = true;
                     CopyFolderChildren((ContentFolder)item, targetPath, clonedAssets);
                 }
                 else
                 {
-                    createdRoot = true;
                     CopyFileItem(item, targetPath, clonedAssets);
                 }
-                ContentMutationDiagnostics.Log("mutation.copy.committed", $"source='{sourcePath}'; destination='{targetPath}'; clonedAssets={clonedAssets.Count}");
-                return ContentMutationResult.Success(sourcePath, targetPath);
+                return ContentMutationResult.Success(item.Path, targetPath);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Editor.LogWarning(ex);
+                return ContentMutationResult.Fail(ContentMutationFailure.PermissionDenied, item.Path, targetPath, ex.Message);
+            }
+            catch (IOException ex)
+            {
+                Editor.LogWarning(ex);
+                return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, item.Path, targetPath, ex.Message);
             }
             catch (Exception ex)
             {
                 Editor.LogWarning(ex);
-                Editor.LogError($"Cannot copy content '{sourcePath}' to '{targetPath}'.");
-                bool cleanupFailed = false;
-                try
-                {
-                    for (int i = clonedAssets.Count - 1; i >= 0; i--)
-                        FlaxEngine.Content.DeleteAsset(clonedAssets[i]);
-                    if (Directory.Exists(targetPath))
-                        Directory.Delete(targetPath, true);
-                    else if (File.Exists(targetPath))
-                        File.Delete(targetPath);
-                }
-                catch (Exception cleanupException)
-                {
-                    cleanupFailed = true;
-                    Editor.LogWarning(cleanupException);
-                }
-                ContentMutationDiagnostics.Log("mutation.copy.failed", $"source='{sourcePath}'; destination='{targetPath}'; cleanupFailed={cleanupFailed}; message='{ex.Message}'");
-                return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, sourcePath, targetPath, ex.Message, createdRoot && cleanupFailed);
+                return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, item.Path, targetPath, ex.Message);
             }
         }
 
-        internal ContentMutationResult PreflightCopy(ContentItem item, string targetPath)
+        private static bool VerifyCopy(ContentMutationPlan plan, int[] entryIndices)
         {
-            var sourcePath = item?.Path;
-            if (item == null || !item.Exists)
-                return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, sourcePath, targetPath, "The source item is missing.");
-            targetPath = Path.GetFullPath(targetPath);
-            var comparer = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-            var plannedPaths = new HashSet<string>(comparer);
-            ContentMutationResult failure = default;
-            return PreflightCopyTree(item, targetPath, plannedPaths, comparer, ref failure)
-                ? ContentMutationResult.Prepared(sourcePath, targetPath)
-                : failure;
+            for (int i = 0; i < entryIndices.Length; i++)
+            {
+                var entry = plan.Entries[entryIndices[i]];
+                if (!ContentMutationPathUtils.Exists(entry.DestinationPath))
+                    return false;
+                if (!entry.IsDirectory && entry.SourceWasAsset)
+                {
+                    // Asset cloning assigns a new ID and may rewrite/compress the package, so
+                    // byte length is not an identity invariant. Validate the cloned package
+                    // header and type instead, and make sure the clone did not retain the
+                    // source ID.
+                    if (!FlaxEngine.Content.GetAssetInfo(entry.DestinationPath, out var assetInfo) ||
+                        assetInfo.ID == Guid.Empty ||
+                        assetInfo.ID == entry.SourceAssetId ||
+                        !string.Equals(assetInfo.TypeName, entry.SourceAssetType, StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+                }
+                else if (!entry.IsDirectory && entry.SourceLength >= 0 && new FileInfo(entry.DestinationPath).Length != entry.SourceLength)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool RollbackCopy(ContentMutationPlan plan, int[] entryIndices, List<string> clonedAssets)
+        {
+            bool succeeded = true;
+            for (int i = clonedAssets.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    FlaxEngine.Content.DeleteAsset(clonedAssets[i]);
+                }
+                catch
+                {
+                    succeeded = false;
+                }
+            }
+            for (int i = entryIndices.Length - 1; i >= 0; i--)
+            {
+                var path = plan.Entries[entryIndices[i]].DestinationPath;
+                try
+                {
+                    if (Directory.Exists(path))
+                        Directory.Delete(path, true);
+                    else if (File.Exists(path))
+                        File.Delete(path);
+                }
+                catch
+                {
+                    succeeded = false;
+                }
+            }
+            return succeeded && entryIndices.All(x => !ContentMutationPathUtils.Exists(plan.Entries[x].DestinationPath));
         }
 
         private static bool PreflightCopyTree(ContentItem item, string targetPath, HashSet<string> plannedPaths, StringComparer comparer, ref ContentMutationResult failure)
@@ -928,13 +1212,30 @@ namespace FlaxEditor.Modules
             if (item == null)
                 throw new ArgumentNullException();
 
-            RemoveFromDatabaseInternal(item);
+            RemoveFromDatabaseInternal(item, false);
 
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
         }
 
-        private void RemoveFromDatabaseInternal(ContentItem item)
+        /// <summary>
+        /// Removes an item from the visible Content database while keeping loaded native asset
+        /// instances alive. Undoable deletion uses this after moving the backing data into the
+        /// Editor trash so references held by open assets survive until the history entry is
+        /// restored or permanently discarded.
+        /// </summary>
+        internal void RemoveFromDatabasePreservingAssets(ContentItem item)
+        {
+            if (item == null)
+                throw new ArgumentNullException();
+
+            RemoveFromDatabaseInternal(item, true);
+
+            if (_enableEvents)
+                WorkspaceModified?.Invoke();
+        }
+
+        private void RemoveFromDatabaseInternal(ContentItem item, bool preserveLoadedAssets)
         {
             if (_enableEvents)
                 ItemRemoved?.Invoke(item);
@@ -947,7 +1248,7 @@ namespace FlaxEditor.Modules
                 {
                     var children = folder.Children.ToArray();
                     for (int i = 0; i < children.Length; i++)
-                        RemoveFromDatabaseInternal(children[i]);
+                        RemoveFromDatabaseInternal(children[i], preserveLoadedAssets);
                 }
 
                 item.ParentFolder = null;
@@ -961,11 +1262,14 @@ namespace FlaxEditor.Modules
                 if (item is AssetItem assetItem)
                 {
                     Editor.Windows.CloseAllEditors(assetItem);
-                    var asset = FlaxEngine.Content.GetAsset(assetItem.ID);
-                    if (asset)
+                    if (!preserveLoadedAssets)
                     {
-                        FlaxEngine.Content.UnloadAsset(asset);
-                        FlaxEngine.Scripting.FlushRemovedObjects();
+                        var asset = FlaxEngine.Content.GetAsset(assetItem.ID);
+                        if (asset)
+                        {
+                            FlaxEngine.Content.UnloadAsset(asset);
+                            FlaxEngine.Scripting.FlushRemovedObjects();
+                        }
                     }
                 }
 
@@ -1347,6 +1651,11 @@ namespace FlaxEditor.Modules
         {
             FlaxEngine.Content.AssetDisposing += OnContentAssetDisposing;
 
+            // Recover or surface any mutation that was interrupted before the previous Editor process exited.
+            var recoveryRequired = ContentMutationTransaction.RecoverPendingTransactions();
+            if (recoveryRequired != 0)
+                Editor.LogError($"{recoveryRequired} interrupted Content transaction(s) require manual recovery. See the log for exact paths.");
+
             // Setup content proxies
             Proxy.Add(new TextureProxy());
             Proxy.Add(new ModelProxy());
@@ -1569,15 +1878,16 @@ namespace FlaxEditor.Modules
                     {
                         if (now <= write.ExpiresAtUtc && fileInfo != null && fileInfo.LastWriteTimeUtc == write.LastWriteTimeUtc && fileInfo.Length == write.Length)
                         {
-                            ContentMutationDiagnostics.Log("watcher.self-save-suppressed", $"path='{path}'; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}");
+                            ContentMutationDiagnostics.Log("watcher.self-save-suppressed", $"path='{path}'; generation={write.Generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}");
                             break;
                         }
-                        ContentMutationDiagnostics.Log("watcher.self-save-mismatch", $"path='{path}'; exists={fileInfo != null}; expectedLength={write.Length}; actualLength={fileInfo?.Length}; expectedWriteTime={write.LastWriteTimeUtc:O}; actualWriteTime={fileInfo?.LastWriteTimeUtc:O}");
+                        ContentMutationDiagnostics.Log("watcher.self-save-mismatch", $"path='{path}'; generation={write.Generation}; exists={fileInfo != null}; expectedLength={write.Length}; actualLength={fileInfo?.Length}; expectedWriteTime={write.LastWriteTimeUtc:O}; actualWriteTime={fileInfo?.LastWriteTimeUtc:O}");
                         _selfAuthoredAssetDiskChanges.Remove(path);
                     }
                     _pendingAssetDiskChanges.Add(path);
                     _lastAssetDiskChangeTime = now;
-                    ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}; saveInProgress={_assetsBeingSaved.Contains(path)}");
+                    var saveInProgress = _assetSaves.TryGetValue(path, out var saveState);
+                    ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}; saveInProgress={saveInProgress}; generation={(saveInProgress ? saveState.Generation : 0)}; depth={(saveInProgress ? saveState.Depth : 0)}");
                 }
                 break;
             }
@@ -1587,32 +1897,88 @@ namespace FlaxEditor.Modules
         internal void BeginAssetSave(string path)
         {
             path = StringUtils.NormalizePath(path);
+            long generation;
+            int depth;
             lock (_assetDiskChangesLock)
-                _assetsBeingSaved.Add(path);
-            ContentMutationDiagnostics.Log("save.begin", $"path='{path}'");
+            {
+                if (_assetSaves.TryGetValue(path, out var state))
+                {
+                    state.Depth++;
+                }
+                else
+                {
+                    state = new AssetSaveState(++_nextAssetSaveGeneration);
+                    _assetSaves.Add(path, state);
+                }
+                generation = state.Generation;
+                depth = state.Depth;
+            }
+            ContentMutationDiagnostics.Log("save.begin", $"path='{path}'; generation={generation}; depth={depth}");
+        }
+
+        internal AssetSaveScope TrackAssetSave(string path)
+        {
+            return new AssetSaveScope(this, path);
+        }
+
+        internal bool SaveAsset(Asset asset)
+        {
+            if (asset == null)
+                throw new ArgumentNullException(nameof(asset));
+            using var scope = TrackAssetSave(asset.Path);
+            var failed = asset.Save();
+            scope.Complete(!failed);
+            return failed;
+        }
+
+        internal bool SaveAsset(string path, Func<bool> save)
+        {
+            if (save == null)
+                throw new ArgumentNullException(nameof(save));
+            using var scope = TrackAssetSave(path);
+            var failed = save();
+            scope.Complete(!failed);
+            return failed;
         }
 
         internal bool IsAssetSaveInProgress(string path)
         {
             path = StringUtils.NormalizePath(path);
             lock (_assetDiskChangesLock)
-                return _assetsBeingSaved.Contains(path);
+                return _assetSaves.ContainsKey(path);
         }
 
         internal void EndAssetSave(string path, bool succeeded)
         {
             path = StringUtils.NormalizePath(path);
+            long generation;
+            int depth;
+            bool finalSucceeded;
             lock (_assetDiskChangesLock)
-                _assetsBeingSaved.Remove(path);
-            ContentMutationDiagnostics.Log("save.end", $"path='{path}'; succeeded={succeeded}");
-            if (!succeeded)
+            {
+                if (!_assetSaves.TryGetValue(path, out var state))
+                {
+                    ContentMutationDiagnostics.Log("save.end-unmatched", $"path='{path}'; succeeded={succeeded}");
+                    return;
+                }
+
+                state.Failed |= !succeeded;
+                state.Depth--;
+                generation = state.Generation;
+                depth = state.Depth;
+                finalSucceeded = depth == 0 && !state.Failed;
+                if (depth == 0)
+                    _assetSaves.Remove(path);
+            }
+            ContentMutationDiagnostics.Log("save.end", $"path='{path}'; generation={generation}; depth={depth}; scopeSucceeded={succeeded}; finalSucceeded={finalSucceeded}");
+            if (depth != 0 || !finalSucceeded)
                 return;
 
             try
             {
                 var fileInfo = new FileInfo(path);
                 var now = DateTime.UtcNow;
-                var write = new AssetDiskWrite(fileInfo.LastWriteTimeUtc, fileInfo.Length, now.AddSeconds(SelfAuthoredAssetDiskChangeLifetimeSeconds));
+                var write = new AssetDiskWrite(fileInfo.LastWriteTimeUtc, fileInfo.Length, now.AddSeconds(SelfAuthoredAssetDiskChangeLifetimeSeconds), generation);
                 lock (_assetDiskChangesLock)
                 {
                     // A watcher event can race the save completion. Remove anything queued during the write,
@@ -1620,12 +1986,12 @@ namespace FlaxEditor.Modules
                     _pendingAssetDiskChanges.Remove(path);
                     _selfAuthoredAssetDiskChanges[path] = write;
                 }
-                ContentMutationDiagnostics.Log("save.self-write-recorded", $"path='{path}'; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}; expires={write.ExpiresAtUtc:O}");
+                ContentMutationDiagnostics.Log("save.self-write-recorded", $"path='{path}'; generation={generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}; expires={write.ExpiresAtUtc:O}");
             }
             catch
             {
                 // A failed or immediately replaced file will flow through the normal external-change path.
-                ContentMutationDiagnostics.Log("save.self-write-unavailable", $"path='{path}'");
+                ContentMutationDiagnostics.Log("save.self-write-unavailable", $"path='{path}'; generation={generation}");
             }
         }
 
@@ -1757,7 +2123,7 @@ namespace FlaxEditor.Modules
             lock (_assetDiskChangesLock)
             {
                 _pendingAssetDiskChanges.Clear();
-                _assetsBeingSaved.Clear();
+                _assetSaves.Clear();
                 _selfAuthoredAssetDiskChanges.Clear();
             }
 

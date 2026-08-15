@@ -31,6 +31,11 @@ namespace FlaxEditor.Content.Import
         public bool SkipSettingsDialog;
 
         /// <summary>
+        /// True only for an explicit reimport/replacement request. Normal imports never overwrite.
+        /// </summary>
+        public bool AllowReplace;
+
+        /// <summary>
         /// The custom settings object.
         /// </summary>
         public object Settings;

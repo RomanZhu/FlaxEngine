@@ -96,7 +96,7 @@ namespace FlaxEditor.Content.GUI
         /// <summary>
         /// Called when user wants to paste the files/folders. Bool is for cutting.
         /// </summary>
-        public event Action<string[], bool> OnPaste;
+        public event Func<string[], bool, bool> OnPaste;
 
         /// <summary>
         /// Called when user wants to duplicate the item(s).
@@ -559,8 +559,8 @@ namespace FlaxEditor.Content.GUI
             if (files == null || files.Length == 0)
                 return;
 
-            OnPaste?.Invoke(files, _isCutting);
-            UpdateContentItemCut(false);
+            if (OnPaste?.Invoke(files, _isCutting) != false)
+                UpdateContentItemCut(false);
         }
 
         /// <summary>
@@ -969,7 +969,7 @@ namespace FlaxEditor.Content.GUI
                 return result;
 
             // Check if drop file(s)
-            if (data is DragDataFiles)
+            if (data is DragDataFiles files && Editor.Instance.ContentImporting.PreflightImport(files.Files, Editor.Instance.Windows.ContentWin.CurrentViewFolder).Succeeded)
             {
                 _validDragOver = true;
                 return DragDropEffect.Copy;
@@ -981,7 +981,7 @@ namespace FlaxEditor.Content.GUI
             if (_dragActors.OnDragEnter(data))
             {
                 _validDragOver = true;
-                return DragDropEffect.Move;
+                return DragDropEffect.Copy;
             }
 
             return DragDropEffect.None;
@@ -1000,7 +1000,7 @@ namespace FlaxEditor.Content.GUI
                 if (actors.Objects.Contains(actorNode.ParentNode as ActorNode))
                     continue;
 
-                Editor.Instance.Prefabs.CreatePrefab(actor, false);
+                Editor.Instance.Prefabs.CreatePrefab(actor, false, location);
             }
         }
 
@@ -1012,7 +1012,7 @@ namespace FlaxEditor.Content.GUI
             if (result != DragDropEffect.None)
                 return result;
 
-            if (data is DragDataFiles)
+            if (data is DragDataFiles files && Editor.Instance.ContentImporting.PreflightImport(files.Files, Editor.Instance.Windows.ContentWin.CurrentViewFolder).Succeeded)
             {
                 _validDragOver = true;
                 result = DragDropEffect.Copy;
@@ -1020,7 +1020,7 @@ namespace FlaxEditor.Content.GUI
             else if (_dragActors != null && _dragActors.HasValidDrag)
             {
                 _validDragOver = true;
-                result = DragDropEffect.Move;
+                result = DragDropEffect.Copy;
             }
 
             return result;
@@ -1034,7 +1034,7 @@ namespace FlaxEditor.Content.GUI
                 return result;
 
             // Check if drop file(s)
-            if (data is DragDataFiles files)
+            if (data is DragDataFiles files && Editor.Instance.ContentImporting.PreflightImport(files.Files, Editor.Instance.Windows.ContentWin.CurrentViewFolder).Succeeded)
             {
                 // Import files
                 var currentFolder = Editor.Instance.Windows.ContentWin.CurrentViewFolder;
@@ -1051,7 +1051,7 @@ namespace FlaxEditor.Content.GUI
                     ImportActors(_dragActors, currentFolder);
 
                 _dragActors.OnDragDrop();
-                result = DragDropEffect.Move;
+                result = DragDropEffect.Copy;
             }
 
             // Clear cache

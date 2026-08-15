@@ -565,7 +565,7 @@ namespace FlaxEditor
             if (!succeeded)
             {
                 LogUndoHistory("Undo failed; history unchanged " + DescribeAction(action));
-                Editor.LogWarning("Cannot undo '" + action.ActionString + "'. The action remains available to retry.");
+                LogReplayWarning("Cannot undo '" + action.ActionString + "'. The action remains available to retry.");
                 return;
             }
             UndoOperationsStack.PopHistory();
@@ -616,7 +616,7 @@ namespace FlaxEditor
             if (!succeeded)
             {
                 LogUndoHistory("Redo failed; history unchanged " + DescribeAction(action));
-                Editor.LogWarning("Cannot redo '" + action.ActionString + "'. The action remains available to retry.");
+                LogReplayWarning("Cannot redo '" + action.ActionString + "'. The action remains available to retry.");
                 return;
             }
             UndoOperationsStack.PopReverse();
@@ -872,6 +872,22 @@ namespace FlaxEditor
         private static void LogUndoHistory(string message)
         {
             ContentMutationDiagnostics.Log("undo.history", message);
+        }
+
+        private static void LogReplayWarning(string message)
+        {
+            try
+            {
+                Editor.LogWarning(message);
+            }
+            catch (DllNotFoundException)
+            {
+                Console.Error.WriteLine(message);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                Console.Error.WriteLine(message);
+            }
         }
 
         private static string DescribeOwner(object owner)

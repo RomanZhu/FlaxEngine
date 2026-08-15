@@ -660,6 +660,8 @@ namespace FlaxEditor.Windows.Assets
         /// <returns>True if failed, otherwise false.</returns>
         protected virtual bool SaveToOriginal()
         {
+            using var saveScope = Editor.ContentDatabase.TrackAssetSave(_item.Path);
+
             // Wait until temporary asset file be fully loaded
             if (_asset.WaitForLoaded())
             {
@@ -704,6 +706,7 @@ namespace FlaxEditor.Windows.Assets
             // Refresh thumbnail
             _item.RefreshThumbnail();
 
+            saveScope.Complete(true);
             return false;
         }
 

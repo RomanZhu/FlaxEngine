@@ -335,7 +335,7 @@ namespace FlaxEditor.CustomEditors.Editors
                     settingsObj.Tags.Add(tagName);
                     settingsObj.Tags.Sort();
                     settingsAsset.SetInstance(settingsObj);
-                    settingsAsset.Save();
+                    Editor.Instance.ContentDatabase.SaveAsset(settingsAsset);
 
                     // Reload editor window to reflect new tag
                     assetWindow?.RefreshAsset();

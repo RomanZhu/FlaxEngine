@@ -24,19 +24,28 @@ namespace FlaxEditor.Content.Import
         /// <inheritdoc />
         public override bool Import()
         {
-            if (!Directory.Exists(ResultUrl))
+            if (Directory.Exists(ResultUrl) || File.Exists(ResultUrl))
             {
-                Directory.CreateDirectory(ResultUrl);
-                var parentPath = Path.GetDirectoryName(ResultUrl);
-                var parent = Editor.Instance.ContentDatabase.Find(parentPath);
-                if (parent == null)
-                {
-                    Editor.LogWarning("Failed to find the parent folder for the imported directory.");
-                    return true;
-                }
-                Editor.Instance.ContentDatabase.RefreshFolder(parent, true);
+                Editor.LogWarning("Cannot import folder because the destination already exists: " + ResultUrl);
+                return true;
             }
+            Directory.CreateDirectory(ResultUrl);
+            var parentPath = Path.GetDirectoryName(ResultUrl);
+            var parent = Editor.Instance.ContentDatabase.Find(parentPath);
+            if (parent == null)
+            {
+                Editor.LogWarning("Failed to find the parent folder for the imported directory.");
+                Directory.Delete(ResultUrl, false);
+                return true;
+            }
+            Editor.Instance.ContentDatabase.RefreshFolder(parent, true);
             var target = (ContentFolder)Editor.Instance.ContentDatabase.Find(ResultUrl);
+            if (target == null)
+            {
+                Editor.LogWarning("Failed to index the imported directory: " + ResultUrl);
+                Directory.Delete(ResultUrl, false);
+                return true;
+            }
 
             // Import all sub elements
             var files = Directory.GetFiles(SourceUrl);

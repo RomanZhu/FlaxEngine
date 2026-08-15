@@ -329,7 +329,7 @@ namespace FlaxEditor.Windows.Assets
                 bool failed = true;
                 try
                 {
-                    failed = Task.Run(() => FlaxEditor.Editor.CookMeshCollision(asset.Path, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit)).GetAwaiter().GetResult();
+                    failed = Task.Run(() => window.Editor.ContentDatabase.SaveAsset(asset.Path, () => FlaxEditor.Editor.CookMeshCollision(asset.Path, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit))).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {

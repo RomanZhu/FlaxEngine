@@ -59,30 +59,32 @@ TimeSpan ContentStorageManager::UnusedDataChunksLifetime = TimeSpan::FromSeconds
 
 FlaxStorageReference ContentStorageManager::GetStorage(const StringView& path, bool loadIt)
 {
+    String formattedPath(path);
+    FormatPath(formattedPath);
     Locker.Lock();
 
     // Try fast lookup
     bool wasCached = true;
     FlaxStorage* storage;
-    if (!StorageMap.TryGet(path, storage))
+    if (!StorageMap.TryGet(formattedPath, storage))
     {
         // Detect storage type and create object
-        const bool isPackage = path.EndsWith(StringView(PACKAGE_FILES_EXTENSION));
+        const bool isPackage = formattedPath.EndsWith(StringView(PACKAGE_FILES_EXTENSION));
         if (isPackage)
         {
-            auto package = New<FlaxPackage>(path);
+            auto package = New<FlaxPackage>(formattedPath);
             Packages.Add(package);
             storage = package;
         }
         else
         {
-            auto file = New<FlaxFile>(path);
+            auto file = New<FlaxFile>(formattedPath);
             Files.Add(file);
             storage = file;
         }
 
         // Register storage container
-        StorageMap.Add(path, storage);
+        StorageMap.Add(formattedPath, storage);
         wasCached = false;
     }
 
@@ -99,11 +101,11 @@ FlaxStorageReference ContentStorageManager::GetStorage(const StringView& path, b
         storage->UnlockChunks();
         if (loadFailed)
         {
-            LOG(Error, "Failed to load {0}.", path);
+            LOG(Error, "Failed to load {0}.", formattedPath);
             if (wasCached)
                 return result;
             Locker.Lock();
-            StorageMap.Remove(path);
+            StorageMap.Remove(formattedPath);
             if (storage->IsPackage())
                 Packages.Remove((FlaxPackage*)storage);
             else
@@ -119,9 +121,11 @@ FlaxStorageReference ContentStorageManager::GetStorage(const StringView& path, b
 
 FlaxStorageReference ContentStorageManager::TryGetStorage(const StringView& path)
 {
+    String formattedPath(path);
+    FormatPath(formattedPath);
     ScopeLock lock(Locker);
     FlaxStorage* result = nullptr;
-    StorageMap.TryGet(path, result);
+    StorageMap.TryGet(formattedPath, result);
     return result;
 }
 
@@ -157,12 +161,14 @@ bool ContentStorageManager::LockFileAccess(const StringView& path, FlaxStorageRe
 
 bool ContentStorageManager::LockFolderAccess(const StringView& path, Array<FlaxStorageReference>& storages)
 {
+    String formattedPath(path);
+    FormatPath(formattedPath);
     storages.Clear();
     {
         ScopeLock lock(Locker);
         for (auto i = StorageMap.Begin(); i.IsNotEnd(); ++i)
         {
-            if (IsPathInFolder(i->Key, path))
+            if (IsPathInFolder(i->Key, formattedPath))
                 storages.Add(FlaxStorageReference(i->Value));
         }
     }
@@ -228,29 +234,40 @@ bool ContentStorageManager::GetAssetEntry(const String& path, FlaxStorage::Entry
 
 void ContentStorageManager::OnRenamed(const StringView& oldPath, const StringView& newPath)
 {
+    String formattedOldPath(oldPath);
+    String formattedNewPath(newPath);
+    FormatPath(formattedOldPath);
+    FormatPath(formattedNewPath);
     ScopeLock lock(Locker);
 
     // Update cached path key
-    auto i = StorageMap.Find(oldPath);
+    auto i = StorageMap.Find(formattedOldPath);
     if (i != StorageMap.End())
     {
-        ASSERT(!StorageMap.ContainsKey(newPath));
+        ASSERT(!StorageMap.ContainsKey(formattedNewPath));
         const auto value = i->Value;
         StorageMap.Remove(i);
-        StorageMap.Add(newPath, value);
+#if USE_EDITOR
+        value->OnRename(formattedNewPath);
+#endif
+        StorageMap.Add(formattedNewPath, value);
     }
 }
 
 void ContentStorageManager::OnRenamedFolder(const StringView& oldPath, const StringView& newPath)
 {
+    String formattedOldPath(oldPath);
+    String formattedNewPath(newPath);
+    FormatPath(formattedOldPath);
+    FormatPath(formattedNewPath);
     ScopeLock lock(Locker);
     Array<Pair<String, FlaxStorage*>> renamed;
     for (auto i = StorageMap.Begin(); i.IsNotEnd(); ++i)
     {
-        if (IsPathInFolder(i->Key, oldPath))
+        if (IsPathInFolder(i->Key, formattedOldPath))
         {
-            String path(newPath);
-            path += i->Key.Substring(oldPath.Length());
+            String path(formattedNewPath);
+            path += i->Key.Substring(formattedOldPath.Length());
             renamed.Add(Pair<String, FlaxStorage*>(path, i->Value));
         }
     }
@@ -279,6 +296,7 @@ void ContentStorageManager::FormatPath(String& path)
         // Convert local-project paths into absolute format which is used by Content Storage system
         path = Globals::ProjectFolder / path;
     }
+    FileSystem::NormalizePath(path);
 }
 
 bool ContentStorageManager::IsFlaxStoragePath(const String& path)

@@ -175,8 +175,8 @@ public class TreeViewPanel : Panel
         if (files == null || files.Length == 0)
             return;
 
-        Editor.Instance.Windows.ContentWin.Paste(files, _isCutting);
-        UpdateContentItemCut(false);
+        if (Editor.Instance.Windows.ContentWin.Paste(files, _isCutting))
+            UpdateContentItemCut(false);
     }
 
     /// <summary>

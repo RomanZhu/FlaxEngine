@@ -91,18 +91,30 @@ namespace FlaxEditor.Modules
         /// <param name="prefabWindow">The prefab window that creates it.</param>
         public void CreatePrefab(Actor actor, bool rename, Windows.Assets.PrefabWindow prefabWindow = null)
         {
+            CreatePrefab(actor, rename, Editor.Windows.ContentWin?.CurrentViewFolder, prefabWindow);
+        }
+
+        /// <summary>
+        /// Starts creating a prefab for the given actor in an explicit Content folder.
+        /// </summary>
+        /// <param name="actor">The root prefab actor.</param>
+        /// <param name="rename">Whether to start inline rename.</param>
+        /// <param name="destinationFolder">The exact destination folder.</param>
+        /// <param name="prefabWindow">The prefab window that creates it.</param>
+        public void CreatePrefab(Actor actor, bool rename, ContentFolder destinationFolder, Windows.Assets.PrefabWindow prefabWindow = null)
+        {
             // Skip in invalid states
             if (!Editor.StateMachine.CurrentState.CanEditContent)
                 return;
 
             // Skip if cannot create assets in the given location
-            if (Editor.Windows.ContentWin?.CurrentViewFolder?.CanHaveAssets != true)
+            if (destinationFolder?.CanHaveAssets != true)
                 return;
 
             PrefabCreating?.Invoke(actor);
 
             var proxy = Editor.ContentDatabase.GetProxy<Prefab>();
-            Editor.Windows.ContentWin.NewItem(proxy, actor, contentItem => OnPrefabCreated(contentItem, actor, prefabWindow), actor.Name, rename);
+            Editor.Windows.ContentWin.NewItem(proxy, actor, contentItem => OnPrefabCreated(contentItem, actor, prefabWindow), actor.Name, rename, destinationFolder);
         }
 
         /// <summary>

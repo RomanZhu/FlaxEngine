@@ -17,6 +17,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Content/Assets/Material.h"
 #include "Engine/Level/Actors/EmptyActor.h"
 #include "Engine/Level/Scene/Scene.h"
 #include "Engine/Level/Scene/SceneAsset.h"
@@ -893,6 +894,121 @@ TEST_CASE("ExternalActorsSceneStorage")
         REQUIRE(Content::GetAssetInfo(sceneId, info));
         CHECK(info.Path == destinationScenePath);
     }
+
+    SECTION("Rename failed binary asset preserves raw bytes and identity")
+    {
+        const String templatePath = Globals::EngineContentFolder / TEXT("Engine/DefaultMaterial.flax");
+        const String sourcePath = Globals::ProjectContentFolder / TEXT("__FailedBinaryRenameSource.flax");
+        const String destinationPath = Globals::ProjectContentFolder / TEXT("__FailedBinaryRenameTarget.flax");
+        const Guid assetId = ParseGuid("45454545454545454545454545454550");
+        Content::GetRegistry()->DeleteAsset(sourcePath, nullptr);
+        Content::GetRegistry()->DeleteAsset(destinationPath, nullptr);
+        FileSystem::DeleteFile(sourcePath);
+        FileSystem::DeleteFile(destinationPath);
+        Material* material = nullptr;
+        SCOPE_EXIT
+        {
+            if (material)
+                Content::UnloadAsset(material);
+            Content::GetRegistry()->DeleteAsset(sourcePath, nullptr);
+            Content::GetRegistry()->DeleteAsset(destinationPath, nullptr);
+            FileSystem::DeleteFile(sourcePath);
+            FileSystem::DeleteFile(destinationPath);
+        };
+
+        REQUIRE(!Content::CloneAssetFile(sourcePath, templatePath, assetId));
+        material = Content::Load<Material>(sourcePath);
+        REQUIRE(material);
+        REQUIRE(!material->WaitForLoaded());
+
+        auto storage = ContentStorageManager::GetStorage(sourcePath);
+        REQUIRE(storage);
+        AssetInitData initData;
+        REQUIRE(!storage->LoadAssetHeader(assetId, initData));
+        FlaxChunk* corruptChunk = nullptr;
+        for (int32 i = 0; i < ASSET_FILE_DATA_CHUNKS; i++)
+        {
+            auto* chunk = initData.Header.Chunks[i];
+            if (chunk && chunk->ExistsInFile() && (!corruptChunk || chunk->LocationInFile.Address < corruptChunk->LocationInFile.Address))
+                corruptChunk = chunk;
+        }
+        BytesContainer originalBytes;
+        REQUIRE(!File::ReadAllBytes(sourcePath, originalBytes));
+        REQUIRE(corruptChunk);
+        REQUIRE(corruptChunk->LocationInFile.Address + corruptChunk->LocationInFile.Size <= static_cast<uint32>(originalBytes.Length()));
+        Platform::MemorySet(originalBytes.Get() + corruptChunk->LocationInFile.Address, 0xff, corruptChunk->LocationInFile.Size);
+
+        // Release cached chunk data and every engine-owned file handle before corrupting the
+        // package. Keep the live object so reloading it enters LastLoadFailed with trustworthy
+        // registry identity and storage metadata.
+        for (int32 i = 0; i < ASSET_FILE_DATA_CHUNKS; i++)
+            material->ReleaseChunk(i);
+        storage = ContentStorageManager::EnsureAccess(sourcePath);
+        storage = nullptr;
+
+        REQUIRE(!File::WriteAllBytes(sourcePath, originalBytes.Get(), originalBytes.Length()));
+        material->Reload();
+        REQUIRE(material->WaitForLoaded());
+        REQUIRE(material->LastLoadFailed());
+
+        REQUIRE(!Content::RenameAsset(sourcePath, destinationPath));
+        CHECK(!FileSystem::FileExists(sourcePath));
+        CHECK(FileSystem::FileExists(destinationPath));
+        CHECK(material->GetPath() == destinationPath);
+        AssetInfo info;
+        REQUIRE(Content::GetAssetInfo(assetId, info));
+        CHECK(info.Path == destinationPath);
+        BytesContainer preservedBytes;
+        REQUIRE(!File::ReadAllBytes(destinationPath, preservedBytes));
+        REQUIRE(preservedBytes.Length() == originalBytes.Length());
+        CHECK(Platform::MemoryCompare(preservedBytes.Get(), originalBytes.Get(), originalBytes.Length()) == 0);
+
+        REQUIRE(!Content::RenameAsset(destinationPath, sourcePath));
+        CHECK(FileSystem::FileExists(sourcePath));
+        CHECK(!FileSystem::FileExists(destinationPath));
+        CHECK(material->GetPath() == sourcePath);
+        REQUIRE(Content::GetAssetInfo(assetId, info));
+        CHECK(info.Path == sourcePath);
+    }
+
+#if PLATFORM_WINDOWS
+    SECTION("Rename binary asset preserves identity across separator variants")
+    {
+        const String templatePath = Globals::EngineContentFolder / TEXT("Engine/DefaultMaterial.flax");
+        const String sourcePath = Globals::ProjectContentFolder / TEXT("__SeparatorRenameSource.flax");
+        const String destinationPath = Globals::ProjectContentFolder / TEXT("__SeparatorRenameTarget.flax");
+        const Guid assetId = ParseGuid("45454545454545454545454545454551");
+        FileSystem::DeleteFile(sourcePath);
+        FileSystem::DeleteFile(destinationPath);
+        SCOPE_EXIT
+        {
+            FileSystem::DeleteFile(sourcePath);
+            FileSystem::DeleteFile(destinationPath);
+        };
+
+        REQUIRE(!Content::CloneAssetFile(sourcePath, templatePath, assetId));
+        String sourceWithBackslashes(sourcePath);
+        sourceWithBackslashes.Replace('/', '\\');
+        auto canonicalStorage = ContentStorageManager::GetStorage(sourcePath);
+        auto alternateStorage = ContentStorageManager::GetStorage(sourceWithBackslashes);
+        REQUIRE(canonicalStorage);
+        REQUIRE(alternateStorage);
+        CHECK(canonicalStorage.Get() == alternateStorage.Get());
+
+        AssetInfo info;
+        REQUIRE(Content::GetAssetInfo(sourceWithBackslashes, info));
+        CHECK(info.ID == assetId);
+        REQUIRE(!Content::RenameAsset(sourcePath, destinationPath));
+        REQUIRE(Content::GetAssetInfo(destinationPath, info));
+        CHECK(info.ID == assetId);
+
+        String destinationWithBackslashes(destinationPath);
+        destinationWithBackslashes.Replace('/', '\\');
+        REQUIRE(!Content::RenameAsset(destinationWithBackslashes, sourcePath));
+        REQUIRE(Content::GetAssetInfo(sourcePath, info));
+        CHECK(info.ID == assetId);
+    }
+#endif
 
     SECTION("Rename duplicated external actors scene moves cloned actor folder")
     {

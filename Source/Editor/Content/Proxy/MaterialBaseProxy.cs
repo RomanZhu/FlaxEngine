@@ -64,7 +64,7 @@ namespace FlaxEditor.Content
                 return;
             }
             materialInstance.BaseMaterial = FlaxEngine.Content.LoadAsync<MaterialBase>(materialItem.ID);
-            materialInstance.Save();
+            Editor.Instance.ContentDatabase.SaveAsset(materialInstance);
         }
 
         /// <inheritdoc />

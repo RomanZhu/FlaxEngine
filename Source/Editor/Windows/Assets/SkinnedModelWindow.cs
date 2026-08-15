@@ -698,7 +698,7 @@ namespace FlaxEditor.Windows.Assets
                     tab.Proxy.OnSave();
             }
 
-            if (_asset.Save())
+            if (Editor.ContentDatabase.SaveAsset(_asset))
             {
                 Editor.LogError("Cannot save asset.");
                 return;

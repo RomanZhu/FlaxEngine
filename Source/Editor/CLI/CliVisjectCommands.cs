@@ -324,6 +324,7 @@ namespace FlaxEditor
             {
                 if (Editor.Instance.ContentEditing.FastTempAssetClone(Path, out var backupPath))
                     throw new IOException($"Failed to create a rollback copy for graph asset '{Path}'.");
+                using var saveScope = Editor.Instance.ContentDatabase.TrackAssetSave(Path);
                 try
                 {
                     if (Material != null)
@@ -337,6 +338,7 @@ namespace FlaxEditor
                             throw new IOException("Animation graph surface save failed.");
                     }
                     VerifyPersistedAsset();
+                    saveScope.Complete(true);
                 }
                 catch (Exception ex)
                 {

@@ -309,15 +309,15 @@ public class ContentFolderTreeNode : TreeNode
     private DragDropEffect GetDragEffect(DragData data)
     {
         if (_dragActors != null && _dragActors.HasValidDrag)
-            return DragDropEffect.Move;
-        if (data is DragDataFiles)
+            return DragDropEffect.Copy;
+        if (data is DragDataFiles files)
         {
-            if (_folder.CanHaveAssets)
+            if (_folder.CanHaveAssets && Editor.Instance.ContentImporting.PreflightImport(files.Files, _folder).Succeeded)
                 return DragDropEffect.Copy;
         }
         else
         {
-            if (_dragOverItems != null && _dragOverItems.HasValidDrag)
+            if (_dragOverItems != null && _dragOverItems.HasValidDrag && Editor.Instance.Windows.ContentWin.CanMoveWithPreflight(_dragOverItems.Objects, _folder))
                 return DragDropEffect.Move;
         }
 
@@ -337,14 +337,13 @@ public class ContentFolderTreeNode : TreeNode
 
     private void ImportActors(DragActors actors)
     {
-        Select();
         foreach (var actorNode in actors.Objects)
         {
             var actor = actorNode.Actor;
             if (actors.Objects.Contains(actorNode.ParentNode as ActorNode))
                 continue;
 
-            Editor.Instance.Prefabs.CreatePrefab(actor, false);
+            Editor.Instance.Prefabs.CreatePrefab(actor, false, _folder);
         }
         Editor.Instance.Windows.ContentWin.RefreshView();
     }
@@ -352,13 +351,13 @@ public class ContentFolderTreeNode : TreeNode
     /// <inheritdoc />
     protected override DragDropEffect OnDragEnterHeader(DragData data)
     {
-        if (data is DragDataFiles)
-            return _folder.CanHaveAssets ? DragDropEffect.Copy : DragDropEffect.None;
+        if (data is DragDataFiles files)
+            return _folder.CanHaveAssets && Editor.Instance.ContentImporting.PreflightImport(files.Files, _folder).Succeeded ? DragDropEffect.Copy : DragDropEffect.None;
 
         if (_dragActors == null)
             _dragActors = new DragActors(ValidateDragActors);
         if (_dragActors.OnDragEnter(data))
-            return DragDropEffect.Move;
+            return DragDropEffect.Copy;
 
         if (_dragOverItems == null)
             _dragOverItems = new DragItems(ValidateDragItem);
@@ -370,10 +369,10 @@ public class ContentFolderTreeNode : TreeNode
     /// <inheritdoc />
     protected override DragDropEffect OnDragMoveHeader(DragData data)
     {
-        if (data is DragDataFiles)
-            return _folder.CanHaveAssets ? DragDropEffect.Copy : DragDropEffect.None;
+        if (data is DragDataFiles files)
+            return _folder.CanHaveAssets && Editor.Instance.ContentImporting.PreflightImport(files.Files, _folder).Succeeded ? DragDropEffect.Copy : DragDropEffect.None;
         if (_dragActors != null && _dragActors.HasValidDrag)
-            return DragDropEffect.Move;
+            return DragDropEffect.Copy;
         return GetDragEffect(data);
     }
 
@@ -391,7 +390,7 @@ public class ContentFolderTreeNode : TreeNode
         var result = DragDropEffect.None;
 
         // Check if drop element or files
-        if (data is DragDataFiles files)
+        if (data is DragDataFiles files && Editor.Instance.ContentImporting.PreflightImport(files.Files, _folder).Succeeded)
         {
             // Import files
             Editor.Instance.ContentImporting.Import(files.Files, _folder);
@@ -403,11 +402,11 @@ public class ContentFolderTreeNode : TreeNode
         {
             ImportActors(_dragActors);
             _dragActors.OnDragDrop();
-            result = DragDropEffect.Move;
+            result = DragDropEffect.Copy;
 
             Expand();
         }
-        else if (_dragOverItems != null && _dragOverItems.HasValidDrag)
+        else if (_dragOverItems != null && _dragOverItems.HasValidDrag && Editor.Instance.Windows.ContentWin.CanMoveWithPreflight(_dragOverItems.Objects, _folder))
         {
             // Move items
             Editor.Instance.Windows.ContentWin.MoveWithUndo(_dragOverItems.Objects, _folder);

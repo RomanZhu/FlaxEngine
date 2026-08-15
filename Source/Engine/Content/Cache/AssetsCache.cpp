@@ -22,6 +22,16 @@
 #define ASSETS_CACHE_LOCK()
 #endif
 
+namespace
+{
+    String NormalizeAssetPath(const StringView& path)
+    {
+        String result(path);
+        FileSystem::NormalizePath(result);
+        return result;
+    }
+}
+
 int32 AssetsCache::Size() const
 {
     ASSETS_CACHE_LOCK();
@@ -111,6 +121,7 @@ void AssetsCache::Init()
             // Convert to absolute path
             e.Info.Path = Globals::StartupFolder / e.Info.Path;
         }
+        FileSystem::NormalizePath(e.Info.Path);
 
         // Use only valid entries
         if (IsEntryValid(e) != EntryValidation::Invalid)
@@ -135,6 +146,7 @@ void AssetsCache::Init()
             // Convert to absolute path
             mappedPath = Globals::StartupFolder / mappedPath;
         }
+        FileSystem::NormalizePath(mappedPath);
 
         _pathsMapping.Add(mappedPath, id);
     }
@@ -269,11 +281,12 @@ bool AssetsCache::FindAsset(const StringView& path, AssetInfo& info)
 {
     PROFILE_CPU();
     bool result = false;
+    const String formattedPath = NormalizeAssetPath(path);
     ASSETS_CACHE_LOCK();
 
     // Check if asset has direct mapping to id (used for some cooked assets)
     Guid id;
-    if (_pathsMapping.TryGet(path, id))
+    if (_pathsMapping.TryGet(formattedPath, id))
     {
         return FindAsset(id, info);
     }
@@ -293,7 +306,7 @@ bool AssetsCache::FindAsset(const StringView& path, AssetInfo& info)
     for (auto i = _registry.Begin(); i.IsNotEnd(); ++i)
     {
         auto& e = i->Value;
-        if (e.Info.Path == path)
+        if (e.Info.Path == formattedPath)
         {
             const auto validation = IsEntryValid(e);
             if (validation == EntryValidation::Invalid)
@@ -409,7 +422,7 @@ void AssetsCache::RegisterAssets(FlaxStorage* storage)
         {
 #if PLATFORM_WINDOWS
             // On Windows - if you start your project using a shortcut/VS commandline -project, and using a upper/lower drive letter, it could the cache (case doesn't matter on OS)
-            if (StringUtils::CompareIgnoreCase(storagePath.GetText(), info.Path.GetText()) != 0)
+            if (!FileSystem::AreFilePathsEquivalent(storagePath, info.Path))
             {
                 LOG(Warning, "Founded duplicated asset \'{0}\'. Locations: \'{1}\' and \'{2}\'", e.ID, storagePath, info.Path);
                 duplicatedEntries.Add(i);
@@ -419,7 +432,7 @@ void AssetsCache::RegisterAssets(FlaxStorage* storage)
                 // Remove from registry so we can add it again later with the original ID, so we don't loose relations
                 for (auto j = _registry.Begin(); j.IsNotEnd(); ++j)
                 {
-                    if (StringUtils::CompareIgnoreCase(j->Value.Info.Path.GetText(), storagePath.GetText()) == 0)
+                    if (FileSystem::AreFilePathsEquivalent(j->Value.Info.Path, storagePath))
                         _registry.Remove(j);
                 }
             }
@@ -482,6 +495,7 @@ void AssetsCache::RegisterAssets(const FlaxStorageReference& storage)
 void AssetsCache::RegisterAsset(const Guid& id, const String& typeName, const StringView& path)
 {
     PROFILE_CPU();
+    const String formattedPath = NormalizeAssetPath(path);
     ASSETS_CACHE_LOCK();
 
     // Check if asset has been already added to the registry
@@ -492,9 +506,9 @@ void AssetsCache::RegisterAsset(const Guid& id, const String& typeName, const St
 
         if (e.Info.ID == id)
         {
-            if (e.Info.Path != path)
+            if (e.Info.Path != formattedPath)
             {
-                e.Info.Path = path;
+                e.Info.Path = formattedPath;
                 _isDirty = true;
             }
             if (e.Info.TypeName != typeName)
@@ -506,11 +520,11 @@ void AssetsCache::RegisterAsset(const Guid& id, const String& typeName, const St
             break;
         }
 
-        if (e.Info.Path == path)
+        if (e.Info.Path == formattedPath)
         {
             if (e.Info.ID != id)
             {
-                e.Info.Path = path;
+                e.Info.Path = formattedPath;
                 _isDirty = true;
             }
             if (e.Info.TypeName != typeName)
@@ -525,8 +539,8 @@ void AssetsCache::RegisterAsset(const Guid& id, const String& typeName, const St
 
     if (isMissing)
     {
-        LOG(Info, "Register asset {0}:{1} \'{2}\'", id, typeName, path);
-        _registry.Add(id, Entry(id, typeName, path));
+        LOG(Info, "Register asset {0}:{1} \'{2}\'", id, typeName, formattedPath);
+        _registry.Add(id, Entry(id, typeName, formattedPath));
         _isDirty = true;
     }
 }
@@ -534,10 +548,11 @@ void AssetsCache::RegisterAsset(const Guid& id, const String& typeName, const St
 bool AssetsCache::DeleteAsset(const StringView& path, AssetInfo* info)
 {
     bool result = false;
+    const String formattedPath = NormalizeAssetPath(path);
     ASSETS_CACHE_LOCK();
     for (auto i = _registry.Begin(); i.IsNotEnd(); ++i)
     {
-        if (i->Value.Info.Path == path)
+        if (i->Value.Info.Path == formattedPath)
         {
             if (info)
                 *info = i->Value.Info;
@@ -569,12 +584,14 @@ bool AssetsCache::DeleteAsset(const Guid& id, AssetInfo* info)
 bool AssetsCache::RenameAsset(const StringView& oldPath, const StringView& newPath)
 {
     bool result = false;
+    const String formattedOldPath = NormalizeAssetPath(oldPath);
+    const String formattedNewPath = NormalizeAssetPath(newPath);
     ASSETS_CACHE_LOCK();
     for (auto i = _registry.Begin(); i.IsNotEnd(); ++i)
     {
-        if (i->Value.Info.Path == oldPath)
+        if (i->Value.Info.Path == formattedOldPath)
         {
-            i->Value.Info.Path = newPath;
+            i->Value.Info.Path = formattedNewPath;
             _isDirty = true;
             result = true;
             break;
@@ -585,17 +602,19 @@ bool AssetsCache::RenameAsset(const StringView& oldPath, const StringView& newPa
 
 void AssetsCache::RenameFolder(const StringView& oldPath, const StringView& newPath)
 {
+    const String formattedOldPath = NormalizeAssetPath(oldPath);
+    const String formattedNewPath = NormalizeAssetPath(newPath);
     ASSETS_CACHE_LOCK();
     for (auto i = _registry.Begin(); i.IsNotEnd(); ++i)
     {
         const String& path = i->Value.Info.Path;
-        if (path.Length() > oldPath.Length() && path.StartsWith(oldPath, StringSearchCase::IgnoreCase))
+        if (path.Length() > formattedOldPath.Length() && path.StartsWith(formattedOldPath, StringSearchCase::IgnoreCase))
         {
-            const Char separator = path[oldPath.Length()];
+            const Char separator = path[formattedOldPath.Length()];
             if (separator == '/' || separator == '\\')
             {
-                String renamedPath(newPath);
-                renamedPath += path.Substring(oldPath.Length());
+                String renamedPath(formattedNewPath);
+                renamedPath += path.Substring(formattedOldPath.Length());
                 i->Value.Info.Path = renamedPath;
                 _isDirty = true;
             }

@@ -335,7 +335,7 @@ namespace FlaxEditor.Windows.Assets
             if (!IsEdited)
                 return;
 
-            if (Asset.SaveSprites())
+            if (Editor.ContentDatabase.SaveAsset(_item.Path, Asset.SaveSprites))
             {
                 Editor.LogError("Cannot save asset.");
                 return;

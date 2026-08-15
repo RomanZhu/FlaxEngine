@@ -24,6 +24,11 @@ namespace FlaxEditor.Content.Import
         public string ResultUrl { get; private set; }
 
         /// <summary>
+        /// Gets a value indicating whether this is an explicit replacement operation.
+        /// </summary>
+        public bool AllowReplace { get; }
+
+        /// <summary>
         /// Gets a value indicating whether this entry has settings to modify.
         /// </summary>
         public virtual bool HasSettings => Settings != null;
@@ -51,6 +56,7 @@ namespace FlaxEditor.Content.Import
         {
             SourceUrl = request.InputPath;
             ResultUrl = request.OutputPath;
+            AllowReplace = request.AllowReplace;
         }
 
         /// <summary>
@@ -74,6 +80,12 @@ namespace FlaxEditor.Content.Import
             if (!Directory.Exists(SourceUrl) && !File.Exists(SourceUrl))
                 return true;
 
+            if (!AllowReplace && (Directory.Exists(ResultUrl) || File.Exists(ResultUrl)))
+            {
+                Editor.LogWarning("Cannot import because the destination already exists: " + ResultUrl);
+                return true;
+            }
+
             // Setup output
             string folder = Path.GetDirectoryName(ResultUrl);
             if (folder != null && !Directory.Exists(folder))
@@ -82,12 +94,14 @@ namespace FlaxEditor.Content.Import
             if (Directory.Exists(SourceUrl))
             {
                 // Copy directory
-                Utilities.Utils.DirectoryCopy(SourceUrl, ResultUrl, true);
+                if (Directory.Exists(ResultUrl) || File.Exists(ResultUrl))
+                    return true;
+                Utilities.Utils.DirectoryCopy(SourceUrl, ResultUrl, false);
                 return false;
             }
 
             // Copy file
-            File.Copy(SourceUrl, ResultUrl, true);
+            File.Copy(SourceUrl, ResultUrl, AllowReplace);
             return false;
         }
 

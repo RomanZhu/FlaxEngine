@@ -246,7 +246,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 else
                     entries[newKey] = new[] { string.Empty };
                 table.Entries = entries;
-                table.Save();
+                Editor.Instance.ContentDatabase.SaveAsset(table);
             }
             _valueElement.TextBox.SetTextAsUser(null);
             _idElement.TextBox.SetTextAsUser(newKey);

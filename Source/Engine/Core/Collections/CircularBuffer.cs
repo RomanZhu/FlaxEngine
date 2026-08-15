@@ -449,6 +449,8 @@ namespace FlaxEngine.Collections
             if (currentIndex < 0)
                 currentIndex = Capacity + currentIndex;
             _backItem = currentIndex;
+            if (Capacity == 1)
+                return;
             if (_backItem == _frontItem && IsFull)
                 DecreaseFrontIndex();
         }
@@ -463,6 +465,8 @@ namespace FlaxEngine.Collections
             if (currentIndex < 0)
                 currentIndex = Capacity + currentIndex;
             _frontItem = currentIndex;
+            if (Capacity == 1)
+                return;
             if (_backItem == _frontItem && IsFull)
                 DecreaseBackIndex();
         }
@@ -474,6 +478,8 @@ namespace FlaxEngine.Collections
         private void IncreaseBackIndex()
         {
             _backItem = ++_backItem % Capacity;
+            if (Capacity == 1)
+                return;
             if (_backItem == _frontItem)
                 IncreaseFrontIndex();
         }
@@ -485,6 +491,8 @@ namespace FlaxEngine.Collections
         private void IncreaseFrontIndex()
         {
             _frontItem = ++_frontItem % Capacity;
+            if (Capacity == 1)
+                return;
             if (_backItem == _frontItem)
                 IncreaseBackIndex();
         }

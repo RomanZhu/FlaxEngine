@@ -1553,7 +1553,7 @@ namespace FlaxEditor
                         lodIndex = sdf.LOD;
                     }
                     if (!model.GenerateSDF(resolutionScale, lodIndex, true, backfacesThreshold, useGPU))
-                        model.Save();
+                        ContentDatabase.SaveAsset(model);
                 }
                 if (csgSceneIds.Count != 0)
                 {

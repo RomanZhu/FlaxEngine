@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using FlaxEditor.Actions;
 using FlaxEditor.Content;
 using FlaxEngine;
 using Newtonsoft.Json;
@@ -147,9 +148,9 @@ namespace FlaxEditor
                 x.IsAsset && x.CanCreate(parent) && IsAssetTypeMatch(x, options.AssetType));
             if (proxy == null)
                 throw new InvalidOperationException($"Asset type '{options.AssetType}' is not available in '{parent.Path}'.");
-            proxy.Create(path, null);
-            if (!File.Exists(path))
-                throw new InvalidOperationException($"Failed to create {options.AssetType} asset '{path}'.");
+            var createResult = Editor.Instance.ContentDatabase.CreatePath(path, false, () => proxy.Create(path, null));
+            if (!createResult.Succeeded)
+                throw new InvalidOperationException(createResult.Message ?? $"Failed to create {options.AssetType} asset '{path}'.");
             Editor.Instance.ContentDatabase.RefreshFolder(Editor.Instance.ContentDatabase.Find(System.IO.Path.GetDirectoryName(path)), false);
             TryWriteEvent(new { type = "artifact", requestId = _request.RequestId, kind = "asset", path });
             CompleteAsset(DescribePath(path, options.AssetType));
@@ -168,7 +169,9 @@ namespace FlaxEditor
         {
             var path = RequireNewPath(options.Path);
             var parent = RequireExistingParent(path);
-            Directory.CreateDirectory(path);
+            var createResult = Editor.Instance.ContentDatabase.CreatePath(path, true, () => Directory.CreateDirectory(path));
+            if (!createResult.Succeeded)
+                throw new InvalidOperationException(createResult.Message ?? $"Failed to create folder '{path}'.");
             Editor.Instance.ContentDatabase.RefreshFolder(parent, true);
             CompleteAsset(DescribePath(path, "Folder"));
         }
@@ -186,6 +189,9 @@ namespace FlaxEditor
             }
 
             var importing = Editor.Instance.ContentImporting;
+            var preflight = importing.PreflightImport(sources, target);
+            if (!preflight.Succeeded)
+                throw new InvalidOperationException(preflight.Message ?? $"Asset import preflight failed ({preflight.Failure}).");
             importing.ImportFileEnd += OnAssetImportFileEnd;
             importing.ImportingQueueEnd += OnAssetImportQueueEnd;
             TryWriteEvent(new { type = "phase", requestId = _request.RequestId, name = "Import" });
@@ -249,11 +255,11 @@ namespace FlaxEditor
         private void MoveAsset(CliAssetOptions options)
         {
             var item = RequireItem(options.Path);
-            var destination = RequireNewPath(options.Destination);
+            var destination = RequireMoveDestination(item, options.Destination);
             RequireExistingParent(destination);
-            Editor.Instance.ContentDatabase.Move(item, destination);
-            if (!PathEquals(item.Path, destination))
-                throw new InvalidOperationException($"Failed to move asset to '{destination}'.");
+            var moveResult = Editor.Instance.ContentDatabase.TryMove(new[] { (item, destination) });
+            if (!moveResult.Succeeded)
+                throw new InvalidOperationException(moveResult.Message ?? $"Failed to move asset to '{destination}' ({moveResult.Failure}).");
             CompleteAsset(DescribeAsset(item));
         }
 
@@ -265,7 +271,10 @@ namespace FlaxEditor
             var path = item.Path;
             if (PathEquals(path, Globals.ProjectContentFolder))
                 throw new InvalidOperationException("The project Content root cannot be deleted.");
-            Editor.Instance.ContentDatabase.Delete(item, true);
+            var action = ContentItemFilesystemAction.Delete(Editor.Instance, new List<ContentItem> { item });
+            if (action == null)
+                throw new InvalidOperationException($"Failed to stage asset deletion for '{path}'.");
+            action.Dispose();
             if (File.Exists(path) || Directory.Exists(path))
                 throw new InvalidOperationException($"Failed to delete asset '{path}'.");
             CompleteAsset(new { path, deleted = true });
@@ -308,7 +317,7 @@ namespace FlaxEditor
                 throw new InvalidOperationException("Asset property assignment requires a JSON value.");
             var asset = LoadAsset(options.Path);
             var member = SetMemberPathValue(asset, options.PropertyPath, options.Value);
-            if (options.Save && asset.Save())
+            if (options.Save && Editor.Instance.ContentDatabase.SaveAsset(asset))
                 throw new InvalidOperationException($"Failed to save asset '{options.Path}'.");
             CompleteAsset(new { path = RequireItem(options.Path).Path, property = options.PropertyPath, value = options.Value, valueType = GetMemberType(member).FullName, saved = options.Save });
         }
@@ -316,7 +325,7 @@ namespace FlaxEditor
         private void SaveAsset(CliAssetOptions options)
         {
             var asset = LoadAsset(options.Path);
-            if (asset.Save())
+            if (Editor.Instance.ContentDatabase.SaveAsset(asset))
                 throw new InvalidOperationException($"Failed to save asset '{options.Path}'.");
             CompleteAsset(new { path = RequireItem(options.Path).Path, saved = true });
         }
@@ -376,6 +385,17 @@ namespace FlaxEditor
             if (File.Exists(path) || Directory.Exists(path) || Editor.Instance.ContentDatabase.Find(path) != null)
                 throw new IOException($"The destination '{path}' already exists.");
             return StringUtils.NormalizePath(path);
+        }
+
+        private string RequireMoveDestination(ContentItem item, string path)
+        {
+            var destination = StringUtils.NormalizePath(RequireProjectContentPath(path));
+            var source = StringUtils.NormalizePath(item.Path);
+            if (string.Equals(source, destination, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Content item '{source}' is already at the requested destination.");
+            return ContentMutationPathUtils.IsCaseOnlyRename(source, destination)
+                ? destination
+                : RequireNewPath(destination);
         }
 
         private static string RequireProjectContentPath(string path)

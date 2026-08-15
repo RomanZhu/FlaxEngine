@@ -177,7 +177,7 @@ namespace FlaxEditor.Windows.Assets
                 return;
 
             // Save asset
-            if (Asset.Save())
+            if (Editor.ContentDatabase.SaveAsset(Asset))
             {
                 Editor.LogError("Cannot save asset.");
                 return;

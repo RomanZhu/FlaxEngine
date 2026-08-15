@@ -14,6 +14,7 @@ namespace FlaxEditor.GUI
     public class RenamePopup : ContextMenuBase
     {
         private string _startValue;
+        private string _text;
         private TextBox _inputField;
         private bool _renamed;
 
@@ -54,8 +55,13 @@ namespace FlaxEditor.GUI
         /// </summary>
         public string Text
         {
-            get => _inputField.Text;
-            set => _inputField.Text = value;
+            get => ResolveText(_inputField, _text);
+            set
+            {
+                _text = value;
+                if (_inputField != null)
+                    _inputField.Text = value;
+            }
         }
 
         /// <summary>
@@ -76,6 +82,7 @@ namespace FlaxEditor.GUI
             Size = size;
 
             _startValue = value;
+            _text = value;
 
             _inputField = new TextBox(isMultiline, 0, 0, size.Y);
             _inputField.TextChanged += OnTextChanged;
@@ -85,11 +92,23 @@ namespace FlaxEditor.GUI
             _inputField.Parent = this;
         }
 
-        private bool IsInputValid => !string.IsNullOrWhiteSpace(_inputField.Text) && (_inputField.Text == _startValue || Validate == null || Validate(this, _inputField.Text));
+        private bool IsInputValid
+        {
+            get
+            {
+                var text = Text;
+                return !string.IsNullOrWhiteSpace(text) && (text == _startValue || Validate == null || Validate(this, text));
+            }
+        }
 
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
+            // ContextMenuBase can leave a hidden popup in the current GUI update snapshot for
+            // the remainder of the frame. OnDestroy has already released the input field then.
+            if (!ShouldProcessUpdate(IsDisposing, _inputField != null))
+                return;
+
             var mouseLocation = Root.MousePosition;
             if (!ContainsPoint(ref mouseLocation) && RootWindow.ContainsFocus && Text != _startValue)
             {
@@ -103,6 +122,7 @@ namespace FlaxEditor.GUI
 
         private void OnTextChanged()
         {
+            _text = _inputField.Text;
             var valid = IsInputValid;
             LogContentRename("rename.text-changed", $"text='{ContentMutationDiagnostics.Sanitize(_inputField.Text)}'; valid={valid}");
             if (Validate == null)
@@ -232,6 +252,7 @@ namespace FlaxEditor.GUI
             Renamed = null;
             Closed = null;
             Validate = null;
+            _text = ResolveText(_inputField, _text);
             _inputField = null;
 
             base.OnDestroy();
@@ -241,6 +262,16 @@ namespace FlaxEditor.GUI
         {
             if (Tag is Content.ContentItem item)
                 ContentMutationDiagnostics.Log(eventName, $"item='{item.Path}'; {details}");
+        }
+
+        internal static string ResolveText(TextBox inputField, string cachedText)
+        {
+            return inputField?.Text ?? cachedText;
+        }
+
+        internal static bool ShouldProcessUpdate(bool isDisposing, bool hasInputField)
+        {
+            return !isDisposing && hasInputField;
         }
     }
 }

@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using FlaxEditor.Actions;
 using FlaxEditor.Content;
 using FlaxEngine;
 using Newtonsoft.Json;
@@ -317,9 +318,9 @@ namespace FlaxEditor
                     x.IsAsset && x.CanCreate(parent) && IsAssetTypeMatch(x, options.AssetType));
                 if (proxy == null)
                     throw new InvalidOperationException($"Asset type '{options.AssetType}' is not available in '{parent.Path}'.");
-                proxy.Create(path, null);
-                if (!File.Exists(path))
-                    throw new InvalidOperationException($"Failed to create {options.AssetType} asset '{path}'.");
+                var createResult = Editor.Instance.ContentDatabase.CreatePath(path, false, () => proxy.Create(path, null));
+                if (!createResult.Succeeded)
+                    throw new InvalidOperationException(createResult.Message ?? $"Failed to create {options.AssetType} asset '{path}'.");
                 RefreshPath(path, false);
                 RequireItem(path);
                 TrackVerification(path);
@@ -342,7 +343,9 @@ namespace FlaxEditor
                     return HandleExisting(existing, options.IfExists);
                 var path = RequireNewPath(options.Path);
                 var parent = RequireExistingParent(path);
-                Directory.CreateDirectory(path);
+                var createResult = Editor.Instance.ContentDatabase.CreatePath(path, true, () => Directory.CreateDirectory(path));
+                if (!createResult.Succeeded)
+                    throw new InvalidOperationException(createResult.Message ?? $"Failed to create folder '{path}'.");
                 Editor.Instance.ContentDatabase.RefreshFolder(parent, true);
                 return DescribePath(path, "Folder");
             }
@@ -383,6 +386,9 @@ namespace FlaxEditor
                             if (!File.Exists(source) && !Directory.Exists(source))
                                 throw new FileNotFoundException($"Import source '{source}' does not exist.", source);
                         }
+                        var preflight = importing.PreflightImport(sources, target);
+                        if (!preflight.Succeeded)
+                            throw new InvalidOperationException(preflight.Message ?? $"Asset import preflight failed ({preflight.Failure}).");
                         importing.Import(sources, target, true);
                     }
                 }
@@ -461,11 +467,11 @@ namespace FlaxEditor
             private object MoveAsset(CliAssetOperationOptions options)
             {
                 var item = RequireItem(options.Path);
-                var destination = RequireNewPath(options.Destination);
+                var destination = RequireMoveDestination(item, options.Destination);
                 RequireExistingParent(destination);
-                Editor.Instance.ContentDatabase.Move(item, destination);
-                if (!PathEquals(item.Path, destination))
-                    throw new InvalidOperationException($"Failed to move asset to '{destination}'.");
+                var moveResult = Editor.Instance.ContentDatabase.TryMove(new[] { (item, destination) });
+                if (!moveResult.Succeeded)
+                    throw new InvalidOperationException(moveResult.Message ?? $"Failed to move asset to '{destination}' ({moveResult.Failure}).");
                 TrackVerification(destination);
                 return DescribeAsset(item);
             }
@@ -478,7 +484,10 @@ namespace FlaxEditor
                 var path = item.Path;
                 if (PathEquals(path, Globals.ProjectContentFolder))
                     throw new InvalidOperationException("The project Content root cannot be deleted.");
-                Editor.Instance.ContentDatabase.Delete(item, true);
+                var action = ContentItemFilesystemAction.Delete(Editor.Instance, new List<ContentItem> { item });
+                if (action == null)
+                    throw new InvalidOperationException($"Failed to stage asset deletion for '{path}'.");
+                action.Dispose();
                 if (File.Exists(path) || Directory.Exists(path))
                     throw new InvalidOperationException($"Failed to delete asset '{path}'.");
                 return new { path, deleted = true };
@@ -521,7 +530,7 @@ namespace FlaxEditor
                     throw new InvalidOperationException("Asset property assignment requires a JSON value.");
                 var asset = LoadAsset(options.Path);
                 var member = SetMemberPathValue(asset, options.PropertyPath, options.Value);
-                if (options.Save && asset.Save())
+                if (options.Save && Editor.Instance.ContentDatabase.SaveAsset(asset))
                     throw new InvalidOperationException($"Failed to save asset '{options.Path}'.");
                 if (options.Save)
                     TrackVerification(options.Path);
@@ -531,7 +540,7 @@ namespace FlaxEditor
             private object SaveAsset(CliAssetOperationOptions options)
             {
                 var asset = LoadAsset(options.Path);
-                if (asset.Save())
+                if (Editor.Instance.ContentDatabase.SaveAsset(asset))
                     throw new InvalidOperationException($"Failed to save asset '{options.Path}'.");
                 TrackVerification(options.Path);
                 return new { path = RequireItem(options.Path).Path, saved = true };
@@ -581,7 +590,7 @@ namespace FlaxEditor
                         throw new InvalidOperationException($"Material parameter '{property.Name}' was not found on '{path}'.");
                     instance.SetParameterValue(parameter.Name, ConvertMaterialParameter(parameter, property.Value));
                 }
-                if (options.Save && instance.Save())
+                if (options.Save && Editor.Instance.ContentDatabase.SaveAsset(instance))
                     throw new InvalidOperationException($"Failed to save material instance '{path}'.");
                 if (options.Save)
                     TrackVerification(path);
@@ -715,6 +724,17 @@ namespace FlaxEditor
                 // path into Move/Rename can make the watcher register the same
                 // physical file twice and rewrite the asset ID.
                 return StringUtils.NormalizePath(path);
+            }
+
+            private static string RequireMoveDestination(ContentItem item, string path)
+            {
+                var destination = StringUtils.NormalizePath(RequireProjectContentPath(path));
+                var source = StringUtils.NormalizePath(item.Path);
+                if (string.Equals(source, destination, StringComparison.Ordinal))
+                    throw new InvalidOperationException($"Content item '{source}' is already at the requested destination.");
+                return ContentMutationPathUtils.IsCaseOnlyRename(source, destination)
+                    ? destination
+                    : RequireNewPath(destination);
             }
 
             private static string EnsureAssetExtension(string path)

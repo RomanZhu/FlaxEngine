@@ -417,7 +417,7 @@ namespace FlaxEditor.Windows
                 _hasPendingModelSave = false;
                 for (int i = 0; i < Proxies.Count; i++)
                 {
-                    if (Proxies[i].Asset is ModelBase model && model.IsLoaded && model.Save())
+                    if (Proxies[i].Asset is ModelBase model && model.IsLoaded && FlaxEditor.Editor.Instance.ContentDatabase.SaveAsset(model))
                         Editor.LogError($"Failed to save model asset '{model.Path}'.");
                 }
             }

@@ -432,7 +432,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                         entries[e.Key] = new[] { string.Empty };
                 }
                 table.Entries = entries;
-                table.Save();
+                Editor.Instance.ContentDatabase.SaveAsset(table);
             }
             RebuildLayout();
         }

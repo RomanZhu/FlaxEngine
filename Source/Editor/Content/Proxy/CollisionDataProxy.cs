@@ -253,7 +253,7 @@ namespace FlaxEditor.Content
                 }
                 Task.Run(() =>
                 {
-                    Editor.CookMeshCollision(assetItem.Path, type, model);
+                    Editor.Instance.ContentDatabase.SaveAsset(assetItem.Path, () => Editor.CookMeshCollision(assetItem.Path, type, model));
                     if (created != null)
                         FlaxEngine.Scripting.InvokeOnUpdate(() => created(collisionData));
                 });

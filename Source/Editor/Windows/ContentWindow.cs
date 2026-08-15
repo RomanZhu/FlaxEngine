@@ -940,7 +940,9 @@ namespace FlaxEditor.Windows
                     // Create new asset
                     var proxy = _newElement.Proxy;
                     Editor.Log(string.Format("Creating asset {0} in {1}", proxy.Name, newPath));
-                    proxy.Create(newPath, _newElement.Argument);
+                    var createResult = Editor.ContentDatabase.CreatePath(newPath, false, () => proxy.Create(newPath, _newElement.Argument), true);
+                    if (!createResult.Succeeded)
+                        throw new IOException(createResult.Message ?? "The Content creation transaction failed.");
 
                     // When creating item with options dialog deffer processing
                     lazyCreation = !File.Exists(newPath);
@@ -1078,21 +1080,26 @@ namespace FlaxEditor.Windows
             RefreshView();
         }
 
-        private string GetClonedAssetPath(ContentItem item)
+        private string GetClonedAssetPath(ContentItem item, ISet<string> reservedPaths = null)
         {
             string sourcePath = item.Path;
             string sourceFolder = Path.GetDirectoryName(sourcePath);
+            bool IsAvailable(string path)
+            {
+                path = StringUtils.NormalizePath(path);
+                return !PathExists(path) && (reservedPaths == null || !reservedPaths.Contains(path));
+            }
 
             // Find new name for clone
             string destinationName;
             if (item.IsFolder)
             {
-                destinationName = Utilities.Utils.IncrementNameNumber(item.ShortName, x => !PathExists(StringUtils.CombinePaths(sourceFolder, x)));
+                destinationName = Utilities.Utils.IncrementNameNumber(item.ShortName, x => IsAvailable(StringUtils.CombinePaths(sourceFolder, x)));
             }
             else
             {
                 string extension = Path.GetExtension(sourcePath);
-                destinationName = Utilities.Utils.IncrementNameNumber(item.ShortName, x => !PathExists(StringUtils.CombinePaths(sourceFolder, x + extension))) + extension;
+                destinationName = Utilities.Utils.IncrementNameNumber(item.ShortName, x => IsAvailable(StringUtils.CombinePaths(sourceFolder, x + extension))) + extension;
             }
 
             return StringUtils.NormalizePath(StringUtils.CombinePaths(sourceFolder, destinationName));
@@ -1203,11 +1210,13 @@ namespace FlaxEditor.Windows
                 var createdItems = new List<ContentItem>(items.Count);
                 var createdPaths = new List<string>(items.Count);
                 var duplicatePlans = new List<(ContentItem Item, string Destination)>(toDuplicate.Count);
+                var reservedPaths = new HashSet<string>(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
                 for (int i = 0; i < toDuplicate.Count; i++)
                 {
                     var item = toDuplicate[i];
-                    var targetPath = GetClonedAssetPath(item);
+                    var targetPath = GetClonedAssetPath(item, reservedPaths);
+                    reservedPaths.Add(targetPath);
                     var preflightResult = Editor.ContentDatabase.PreflightCopy(item, targetPath);
                     if (!preflightResult.Succeeded)
                     {
@@ -1217,28 +1226,15 @@ namespace FlaxEditor.Windows
                     duplicatePlans.Add((item, targetPath));
                 }
 
-                // Duplicate every item
-                for (int i = 0; i < duplicatePlans.Count; i++)
+                var copyResult = Editor.ContentDatabase.Copy(duplicatePlans);
+                if (!copyResult.Succeeded)
                 {
-                    var item = duplicatePlans[i].Item;
-                    var targetPath = duplicatePlans[i].Destination;
-                    var copyResult = Editor.ContentDatabase.Copy(item, targetPath);
-                    if (!copyResult.Succeeded)
-                    {
-                        Editor.LogError(copyResult.Message ?? "Failed to duplicate content item.");
-                        for (int j = createdPaths.Count - 1; j >= 0; j--)
-                        {
-                            var createdItem = Editor.ContentDatabase.Find(createdPaths[j]);
-                            if (createdItem != null)
-                                Editor.ContentDatabase.Delete(createdItem, true);
-                            else
-                                Editor.LogError("Cannot roll back an unindexed duplicate. Recovery required at: " + createdPaths[j]);
-                        }
-                        return;
-                    }
-                    createdPaths.Add(targetPath);
-                    Editor.ContentDatabase.RefreshFolder(item.ParentFolder, true);
+                    Editor.LogError(copyResult.Message ?? "Failed to duplicate Content items.");
+                    return;
                 }
+                createdPaths.AddRange(duplicatePlans.Select(x => x.Destination));
+                foreach (var parent in duplicatePlans.Select(x => x.Item.ParentFolder).Distinct())
+                    Editor.ContentDatabase.RefreshFolder(parent, true);
 
                 ClearItemsSearch();
                 RefreshView();
@@ -1277,7 +1273,7 @@ namespace FlaxEditor.Windows
         /// </summary>
         /// <param name="files">The files paths to import.</param>
         /// <param name="isCutting">Whether a cutting action is occuring.</param>
-        public void Paste(string[] files, bool isCutting)
+        public bool Paste(string[] files, bool isCutting)
         {
             var importFiles = new List<string>();
             var createdItems = new List<ContentItem>();
@@ -1292,17 +1288,17 @@ namespace FlaxEditor.Windows
                 {
                     if (isCutting)
                         continue;
-                    newPath = GetClonedAssetPath(item);
+                    newPath = GetClonedAssetPath(item, destinations);
                 }
                 else if (PathExists(newPath))
                 {
                     Editor.LogError($"Cannot paste '{item.Path}' because destination '{newPath}' already exists.");
-                    return;
+                    return false;
                 }
                 if (!destinations.Add(Path.GetFullPath(newPath)))
                 {
                     Editor.LogError($"Cannot paste because multiple items target '{newPath}'.");
-                    return;
+                    return false;
                 }
                 plans.Add((item, newPath));
             }
@@ -1314,7 +1310,7 @@ namespace FlaxEditor.Windows
                     if (!preflightResult.Succeeded)
                     {
                         Editor.LogError(preflightResult.Message ?? "Failed to preflight content paste.");
-                        return;
+                        return false;
                     }
                 }
             }
@@ -1323,26 +1319,32 @@ namespace FlaxEditor.Windows
                 if (Editor.ContentDatabase.Find(sourcePath) == null)
                     importFiles.Add(sourcePath);
             }
-            foreach (var plan in plans)
+            if (isCutting)
             {
-                if (isCutting)
+                var oldPaths = plans.Select(x => x.Item.Path).ToList();
+                var moveResult = Editor.ContentDatabase.TryMove(plans);
+                if (!moveResult.Succeeded)
                 {
-                    MoveWithUndo(plan.Item, plan.Destination);
+                    Editor.LogError(moveResult.Message ?? "Failed to move pasted Content items.");
+                    return false;
                 }
-                else
+                if (plans.Count == 1)
+                    Editor.Undo.AddAction(new MoveContentItemAction(Editor, oldPaths[0], plans[0].Destination, "Move " + plans[0].Item.FileName));
+                else if (plans.Count > 1)
+                    Editor.Undo.AddAction(new MoveContentItemsAction(Editor, oldPaths, plans.Select(x => x.Destination).ToList(), "Move " + plans.Count + " items"));
+            }
+            else if (plans.Count != 0)
+            {
+                var copyResult = Editor.ContentDatabase.Copy(plans);
+                if (!copyResult.Succeeded)
                 {
-                    var copyResult = Editor.ContentDatabase.Copy(plan.Item, plan.Destination);
-                    if (!copyResult.Succeeded)
-                    {
-                        Editor.LogError(copyResult.Message ?? "Failed to paste content item.");
-                        for (int i = createdItems.Count - 1; i >= 0; i--)
-                            Editor.ContentDatabase.Delete(createdItems[i], true);
-                        Editor.ContentDatabase.RefreshFolder(CurrentViewFolder, true);
-                        RefreshView();
-                        return;
-                    }
-                    Editor.ContentDatabase.RefreshFolder(CurrentViewFolder, false);
-                    var newItem = CurrentViewFolder.FindChild(plan.Destination);
+                    Editor.LogError(copyResult.Message ?? "Failed to paste Content items.");
+                    return false;
+                }
+                Editor.ContentDatabase.RefreshFolder(CurrentViewFolder, false);
+                for (int i = 0; i < plans.Count; i++)
+                {
+                    var newItem = Editor.ContentDatabase.Find(plans[i].Destination) ?? CurrentViewFolder.FindChild(plans[i].Destination);
                     if (newItem != null)
                         createdItems.Add(newItem);
                 }
@@ -1351,6 +1353,7 @@ namespace FlaxEditor.Windows
             if (action != null)
                 Editor.Undo.AddAction(action);
             Editor.ContentImporting.Import(importFiles, CurrentViewFolder);
+            return true;
         }
 
         /// <summary>
@@ -1368,14 +1371,11 @@ namespace FlaxEditor.Windows
             } while (PathExists(destinationPath));
 
             // Create new folder
-            try
+            var createResult = Editor.ContentDatabase.CreatePath(destinationPath, true, () => Directory.CreateDirectory(destinationPath));
+            if (!createResult.Succeeded)
             {
-                Directory.CreateDirectory(destinationPath);
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning(ex);
-                MessageBox.Show($"Cannot create folder '{destinationPath}'. {ex.Message}", "Cannot create folder", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Editor.LogWarning(createResult.Message ?? "Folder creation transaction failed.");
+                MessageBox.Show($"Cannot create folder '{destinationPath}'. {createResult.Message}", "Cannot create folder", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
@@ -1400,8 +1400,9 @@ namespace FlaxEditor.Windows
         /// <param name="argument">The argument passed to the proxy for the item creation. In most cases it is null.</param>
         /// <param name="created">The event called when the item is crated by the user. The argument is the new item.</param>
         /// <param name="initialName">The initial item name.</param>
-        /// <param name="withRenaming">True if start initial item renaming by user, or tru to skip it.</param>
-        public void NewItem(ContentProxy proxy, object argument = null, Action<ContentItem> created = null, string initialName = null, bool withRenaming = true)
+        /// <param name="withRenaming">True if start initial item renaming by user, or true to skip it.</param>
+        /// <param name="destinationFolder">Optional explicit destination folder. If null, uses the current view folder.</param>
+        public void NewItem(ContentProxy proxy, object argument = null, Action<ContentItem> created = null, string initialName = null, bool withRenaming = true, ContentFolder destinationFolder = null)
         {
             Assert.IsNull(_newElement);
             if (proxy == null)
@@ -1412,11 +1413,23 @@ namespace FlaxEditor.Windows
             if (!proxy.IsFileNameValid(name) || Utilities.Utils.HasInvalidPathChar(name))
                 name = proxy.NewItemName;
 
-            // If the proxy can not be created in the current folder, then navigate to the content folder
-            if (!proxy.CanCreate(CurrentViewFolder))
-                Navigate(Editor.Instance.ContentDatabase.Game.Content);
-
-            ContentFolder parentFolder = CurrentViewFolder;
+            ContentFolder parentFolder;
+            if (destinationFolder != null)
+            {
+                if (!proxy.CanCreate(destinationFolder))
+                {
+                    Editor.LogWarning("Cannot create Content item in the requested destination: " + destinationFolder.Path);
+                    return;
+                }
+                parentFolder = destinationFolder;
+            }
+            else
+            {
+                // If the proxy can not be created in the current folder, then navigate to the content folder
+                if (!proxy.CanCreate(CurrentViewFolder))
+                    Navigate(Editor.Instance.ContentDatabase.Game.Content);
+                parentFolder = CurrentViewFolder;
+            }
             string parentFolderPath = parentFolder.Path;
 
             // Create asset name
@@ -1463,15 +1476,11 @@ namespace FlaxEditor.Windows
             else
             {
                 // Create new asset
-                try
+                Editor.Log(string.Format("Creating asset {0} in {1}", proxy.Name, path));
+                var createResult = Editor.ContentDatabase.CreatePath(path, false, () => proxy.Create(path, argument), true);
+                if (!createResult.Succeeded)
                 {
-                    Editor.Log(string.Format("Creating asset {0} in {1}", proxy.Name, path));
-                    proxy.Create(path, argument);
-                }
-                catch (Exception ex)
-                {
-                    Editor.LogWarning(ex);
-                    Editor.LogError("Failed to create asset.");
+                    Editor.LogError(createResult.Message ?? "Failed to create asset.");
                     return;
                 }
 
@@ -1535,48 +1544,34 @@ namespace FlaxEditor.Windows
                     itemsToMove.Add(item);
             }
 
-            var movedItems = new List<ContentItem>(itemsToMove.Count);
             var oldPaths = new List<string>(itemsToMove.Count);
             var newPaths = new List<string>(itemsToMove.Count);
             for (int i = 0; i < itemsToMove.Count; i++)
             {
                 var item = itemsToMove[i];
-                var oldPath = item.Path;
-                if (!Editor.ContentDatabase.Move(item, newParent))
-                {
-                    // Keep a batch move all-or-nothing. Roll back items already moved if a
-                    // later item fails (for example because an external process owns it).
-                    var rollbackActions = new List<IUndoAction>();
-                    for (int j = movedItems.Count - 1; j >= 0; j--)
-                    {
-                        if (!Editor.ContentDatabase.Move(movedItems[j], oldPaths[j]))
-                        {
-                            Editor.LogError("Failed to roll back content item move from '" + newPaths[j] + "' to '" + oldPaths[j] + "'.");
-                            rollbackActions.Add(new MoveContentItemAction(Editor, oldPaths[j], newPaths[j], "Move " + movedItems[j].FileName));
-                        }
-                    }
-                    if (rollbackActions.Count == 1)
-                        Editor.Undo.AddAction(rollbackActions[0]);
-                    else if (rollbackActions.Count > 1)
-                        Editor.Undo.AddAction(new MultiUndoAction(rollbackActions, "Move " + rollbackActions.Count + " items"));
-                    return;
-                }
-                var newPath = item.Path;
-                if (!oldPath.Equals(newPath, StringComparison.Ordinal))
-                {
-                    movedItems.Add(item);
-                    oldPaths.Add(oldPath);
-                    newPaths.Add(newPath);
-                }
+                oldPaths.Add(item.Path);
+                newPaths.Add(StringUtils.CombinePaths(newParent.Path, item.FileName));
             }
+            if (oldPaths.Count == 0 || !Editor.ContentDatabase.Move(itemsToMove, newParent))
+                return;
+            Editor.Undo.AddAction(oldPaths.Count == 1
+                ? new MoveContentItemAction(Editor, oldPaths[0], newPaths[0], "Move " + itemsToMove[0].FileName)
+                : new MoveContentItemsAction(Editor, oldPaths, newPaths, "Move " + oldPaths.Count + " items"));
+        }
 
-            var actions = new List<IUndoAction>(movedItems.Count);
-            for (int i = 0; i < movedItems.Count; i++)
-                actions.Add(new MoveContentItemAction(Editor, oldPaths[i], newPaths[i], "Move " + movedItems[i].FileName));
-            if (actions.Count == 1)
-                Editor.Undo.AddAction(actions[0]);
-            else if (actions.Count > 1)
-                Editor.Undo.AddAction(new MultiUndoAction(actions, "Move " + actions.Count + " items"));
+        internal bool CanMoveWithPreflight(IReadOnlyList<ContentItem> items, ContentFolder newParent)
+        {
+            if (items == null || newParent == null || items.Count == 0)
+                return false;
+            var moves = new List<(ContentItem Item, string Destination)>(items.Count);
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (items[i] != null)
+                    moves.Add((items[i], StringUtils.CombinePaths(newParent.Path, items[i].FileName)));
+            }
+            var result = Editor.ContentDatabase.PreflightMove(moves);
+            ContentMutationDiagnostics.Log("mutation.drag-preflight", $"target='{newParent.Path}'; items={moves.Count}; succeeded={result.Succeeded}; failure={result.Failure}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
+            return result.Succeeded;
         }
 
         /// <summary>

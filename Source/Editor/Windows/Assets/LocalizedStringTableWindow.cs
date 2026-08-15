@@ -183,7 +183,7 @@ namespace FlaxEditor.Windows.Assets
             _asset.Locale = _proxy.Locale;
             _asset.FallbackTable = _proxy.FallbackTable;
             _asset.Entries = _proxy.Entries;
-            if (_asset.Save(_item.Path))
+            if (Editor.ContentDatabase.SaveAsset(_item.Path, () => _asset.Save(_item.Path)))
             {
                 Editor.LogError("Cannot save asset.");
                 return;

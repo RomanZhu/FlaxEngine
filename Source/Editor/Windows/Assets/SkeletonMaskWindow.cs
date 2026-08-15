@@ -252,7 +252,7 @@ namespace FlaxEditor.Windows.Assets
                 }
             }
             _asset.MaskedNodes = nodes;
-            if (_asset.Save())
+            if (Editor.ContentDatabase.SaveAsset(_asset))
             {
                 Editor.LogError("Cannot save asset.");
                 return;

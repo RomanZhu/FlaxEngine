@@ -46,14 +46,14 @@ namespace FlaxEditor.Content.GUI
 
         private DragDropEffect GetDragEffect(DragData data)
         {
-            if (data is DragDataFiles)
+            if (data is DragDataFiles files)
             {
-                if (TargetNode.CanHaveAssets)
+                if (TargetNode.CanHaveAssets && Editor.Instance.ContentImporting.PreflightImport(files.Files, TargetNode.Folder).Succeeded)
                     return DragDropEffect.Copy;
             }
             else
             {
-                if (_dragOverItems.HasValidDrag)
+                if (_dragOverItems.HasValidDrag && Editor.Instance.Windows.ContentWin.CanMoveWithPreflight(_dragOverItems.Objects, TargetNode.Folder))
                     return DragDropEffect.Move;
             }
 
@@ -103,13 +103,13 @@ namespace FlaxEditor.Content.GUI
             base.OnDragDrop(ref location, data);
 
             // Check if drop element or files
-            if (data is DragDataFiles files)
+            if (data is DragDataFiles files && Editor.Instance.ContentImporting.PreflightImport(files.Files, TargetNode.Folder).Succeeded)
             {
                 // Import files
                 Editor.Instance.ContentImporting.Import(files.Files, TargetNode.Folder);
                 result = DragDropEffect.Copy;
             }
-            else if (_dragOverItems.HasValidDrag)
+            else if (_dragOverItems.HasValidDrag && Editor.Instance.Windows.ContentWin.CanMoveWithPreflight(_dragOverItems.Objects, TargetNode.Folder))
             {
                 // Move items
                 Editor.Instance.Windows.ContentWin.MoveWithUndo(_dragOverItems.Objects, TargetNode.Folder);

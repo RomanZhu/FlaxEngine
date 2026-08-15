@@ -321,6 +321,22 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void CircularBufferTestSingleItemOverwrite()
+        {
+            var buffer = new CircularBuffer<long>(1);
+            buffer.PushFront(1);
+            buffer.PushFront(2);
+            Assert.AreEqual(1, buffer.Count);
+            Assert.AreEqual(2, buffer.Front());
+            Assert.AreEqual(2, buffer.Back());
+
+            buffer.PushBack(3);
+            Assert.AreEqual(1, buffer.Count);
+            Assert.AreEqual(3, buffer.Front());
+            Assert.AreEqual(3, buffer.Back());
+        }
+
+        [Test]
         public void CircularBufferTestForceSet()
         {
             var buffer = new CircularBuffer<long>(15);

@@ -2,6 +2,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Threading;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Create;
@@ -32,22 +34,50 @@ namespace FlaxEditor.Modules
         /// <summary>
         /// Gets a value indicating whether this instance is importing assets.
         /// </summary>
-        public bool IsImporting => _importBatchSize > 0;
+        public bool IsImporting
+        {
+            get
+            {
+                lock (_requests)
+                    return _importBatchSize > 0;
+            }
+        }
 
         /// <summary>
         /// Gets the importing assets progress.
         /// </summary>
-        public float ImportingProgress => _importBatchSize > 0 ? (float)_importBatchDone / _importBatchSize : 1.0f;
+        public float ImportingProgress
+        {
+            get
+            {
+                lock (_requests)
+                    return _importBatchSize > 0 ? (float)_importBatchDone / _importBatchSize : 1.0f;
+            }
+        }
 
         /// <summary>
         /// Gets the amount of files done in the current import batch.
         /// </summary>
-        public float ImportBatchDone => _importBatchDone;
+        public float ImportBatchDone
+        {
+            get
+            {
+                lock (_requests)
+                    return _importBatchDone;
+            }
+        }
 
         /// <summary>
         /// Gets the size of the current import batch (imported files + files to import left).
         /// </summary>
-        public int ImportBatchSize => _importBatchSize;
+        public int ImportBatchSize
+        {
+            get
+            {
+                lock (_requests)
+                    return _importBatchSize;
+            }
+        }
 
         /// <summary>
         /// Occurs when assets importing starts.
@@ -128,7 +158,7 @@ namespace FlaxEditor.Modules
             {
                 if (GetReimportPath(item.ShortName, ref importPath, skipSettingsDialog))
                     return;
-                Import(importPath, item.Path, true, skipSettingsDialog, settings);
+                Import(importPath, item.Path, true, skipSettingsDialog, settings, true);
             }
         }
 
@@ -168,10 +198,19 @@ namespace FlaxEditor.Modules
             if (files == null)
                 return;
 
+            var filesArray = files as string[] ?? files.ToArray();
+            var preflight = PreflightImport(filesArray, targetLocation);
+            if (!preflight.Succeeded)
+            {
+                Editor.LogWarning(preflight.Message);
+                ContentMutationDiagnostics.Log("mutation.import.rejected", $"target='{targetLocation.Path}'; failure={preflight.Failure}; message='{ContentMutationDiagnostics.Sanitize(preflight.Message)}'");
+                return;
+            }
+
             lock (_requests)
             {
                 bool skipDialog = skipSettingsDialog;
-                foreach (var file in files)
+                foreach (var file in filesArray)
                 {
                     Import(file, targetLocation, skipSettingsDialog, null, ref skipDialog);
                 }
@@ -187,8 +226,66 @@ namespace FlaxEditor.Modules
         /// <param name="settings">Import settings to override. Use null to skip this value.</param>
         public void Import(string file, ContentFolder targetLocation, bool skipSettingsDialog = false, object settings = null)
         {
+            var preflight = PreflightImport(new[] { file }, targetLocation);
+            if (!preflight.Succeeded)
+            {
+                Editor.LogWarning(preflight.Message);
+                return;
+            }
             bool skipDialog = skipSettingsDialog;
             Import(file, targetLocation, skipSettingsDialog, settings, ref skipDialog);
+        }
+
+        internal ContentMutationResult PreflightImport(IEnumerable<string> files, ContentFolder targetLocation)
+        {
+            if (targetLocation == null)
+                return ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, null, null, "The import target folder is missing.");
+            if (files == null)
+                return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, null, targetLocation.Path, "No import sources were provided.");
+
+            var destinations = new HashSet<string>(ContentMutationPathUtils.Comparer);
+            string firstSource = null;
+            string firstDestination = null;
+            foreach (var input in files)
+            {
+                var inputPath = ContentMutationPathUtils.Normalize(input);
+                firstSource ??= inputPath;
+                if (!ContentMutationPathUtils.Exists(inputPath))
+                    return ContentMutationResult.Fail(ContentMutationFailure.MissingSource, inputPath, targetLocation.Path, $"Import source '{inputPath}' does not exist.");
+                var isDirectory = Directory.Exists(inputPath);
+                if (ContentMutationPathUtils.ContainsReparsePoint(inputPath, isDirectory))
+                    return ContentMutationResult.Fail(ContentMutationFailure.UnsupportedLink, inputPath, targetLocation.Path, $"Import source '{inputPath}' contains an unsupported filesystem link.");
+
+                string outputName;
+                if (isDirectory)
+                {
+                    outputName = Path.GetFileName(inputPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                }
+                else
+                {
+                    var extension = Path.GetExtension(inputPath) ?? string.Empty;
+                    var isBuilt = Editor.CanImport(extension, out var outputExtension);
+                    if (isBuilt)
+                    {
+                        if (!targetLocation.CanHaveAssets)
+                            return ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, inputPath, targetLocation.Path, "The target folder cannot contain imported assets.");
+                        extension = "." + outputExtension;
+                    }
+                    else if (!targetLocation.CanHaveScripts && (extension == ".cs" || extension == ".cpp" || extension == ".h" || extension == ".c" || extension == ".hpp"))
+                    {
+                        return ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, inputPath, targetLocation.Path, "The target folder cannot contain source files.");
+                    }
+                    outputName = Path.GetFileNameWithoutExtension(inputPath) + extension;
+                }
+
+                var destination = ContentMutationPathUtils.Normalize(Path.Combine(targetLocation.Path, outputName));
+                firstDestination ??= destination;
+                if (!destinations.Add(destination) || ContentMutationPathUtils.Exists(destination))
+                    return ContentMutationResult.Fail(ContentMutationFailure.DestinationCollision, inputPath, destination, $"Import destination '{destination}' already exists or is duplicated in the batch.");
+            }
+            return destinations.Count == 0
+                ? ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, null, targetLocation.Path, "No import sources were provided.")
+                : ContentMutationResult.Prepared(firstSource, firstDestination);
         }
 
         private void Import(string inputPath, ContentFolder targetLocation, bool skipSettingsDialog, object settings, ref bool skipDialog)
@@ -238,7 +335,7 @@ namespace FlaxEditor.Modules
             var shortName = System.IO.Path.GetFileNameWithoutExtension(inputPath);
             var outputPath = System.IO.Path.Combine(targetLocation.Path, shortName + outputExtension);
 
-            Import(inputPath, outputPath, isBuilt, skipSettingsDialog, settings);
+            Import(inputPath, outputPath, isBuilt, skipSettingsDialog, settings, false);
         }
 
         /// <summary>
@@ -250,7 +347,8 @@ namespace FlaxEditor.Modules
         /// <param name="isInBuilt">True if use in-built importer (engine backend).</param>
         /// <param name="skipSettingsDialog">True if skip any popup dialogs showing for import options adjusting. Can be used when importing files from code.</param>
         /// <param name="settings">Import settings to override. Use null to skip this value.</param>
-        private void Import(string inputPath, string outputPath, bool isInBuilt, bool skipSettingsDialog = false, object settings = null)
+        /// <param name="allowReplace">True only for an explicit reimport that may replace the destination.</param>
+        private void Import(string inputPath, string outputPath, bool isInBuilt, bool skipSettingsDialog = false, object settings = null, bool allowReplace = false)
         {
             inputPath = StringUtils.NormalizePath(inputPath);
             outputPath = StringUtils.NormalizePath(outputPath);
@@ -262,6 +360,7 @@ namespace FlaxEditor.Modules
                     OutputPath = outputPath,
                     IsInBuilt = isInBuilt,
                     SkipSettingsDialog = skipSettingsDialog,
+                    AllowReplace = allowReplace,
                     Settings = settings,
                 });
             }
@@ -290,7 +389,8 @@ namespace FlaxEditor.Modules
                     // Check if begin importing
                     if (!wasLastTickWorking)
                     {
-                        _importBatchDone = 0;
+                        lock (_requests)
+                            _importBatchDone = 0;
                         ImportingQueueBegin?.Invoke();
                     }
 
@@ -307,7 +407,7 @@ namespace FlaxEditor.Modules
                     try
                     {
                         ImportFileBegin?.Invoke(entry);
-                        failed = entry.Execute();
+                        failed = ExecuteImportTransaction(entry);
                     }
                     catch (Exception ex)
                     {
@@ -323,7 +423,8 @@ namespace FlaxEditor.Modules
                             Editor.LogWarning("Failed to import " + entry.SourceUrl + " to " + entry.ResultUrl);
                         }
 
-                        _importBatchDone++;
+                        lock (_requests)
+                            _importBatchDone++;
                         Profiler.BeginEvent("ImportFileEnd");
                         ImportFileEnd?.Invoke(entry, failed);
                         Profiler.EndEvent();
@@ -334,7 +435,8 @@ namespace FlaxEditor.Modules
                     // Check if end importing
                     if (wasLastTickWorking)
                     {
-                        _importBatchDone = _importBatchSize = 0;
+                        lock (_requests)
+                            _importBatchDone = _importBatchSize = 0;
                         ImportingQueueEnd?.Invoke();
                     }
 
@@ -343,6 +445,148 @@ namespace FlaxEditor.Modules
                 }
 
                 wasLastTickWorking = inThisTickWork;
+            }
+        }
+
+        private bool ExecuteImportTransaction(IFileEntryAction entry)
+        {
+            // Folder imports enqueue their descendants and do not have a synchronous commit boundary.
+            if (Directory.Exists(entry.SourceUrl))
+                return entry.Execute();
+
+            var destinationPath = ContentMutationPathUtils.Normalize(entry.ResultUrl);
+            var isCreate = entry is CreateFileEntry;
+            var sourcePath = isCreate ? destinationPath : ContentMutationPathUtils.Normalize(entry.SourceUrl);
+            var destinationExisted = File.Exists(destinationPath);
+            var allowReplace = entry is ImportFileEntry importEntry && importEntry.AllowReplace;
+            if (destinationExisted && !allowReplace)
+            {
+                Editor.LogWarning("Cannot import because the destination already exists: " + destinationPath);
+                return true;
+            }
+
+            var plan = new ContentMutationPlan(isCreate ? ContentMutationOperationKind.Create : ContentMutationOperationKind.ImportOutput);
+            var steps = new List<ContentMutationStep>();
+            var backupRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationBackups", plan.Id.ToString("N"));
+            var backupPath = destinationExisted ? StringUtils.CombinePaths(backupRoot, Path.GetFileName(destinationPath)) : null;
+            var existingItem = destinationExisted ? Editor.ContentDatabase.Find(destinationPath) : null;
+            var existingAssetId = existingItem is AssetItem assetItem ? assetItem.ID : Guid.Empty;
+
+            if (destinationExisted)
+            {
+                Directory.CreateDirectory(backupRoot);
+                var backupEntryIndex = plan.Entries.Count;
+                plan.Entries.Add(new ContentMutationEntry(destinationPath, backupPath, ContentMutationPathRole.ReplacementBackup, false));
+                steps.Add(new ContentMutationStep(
+                    "import-backup",
+                    new[] { backupEntryIndex },
+                    () =>
+                    {
+                        try
+                        {
+                            File.Copy(destinationPath, backupPath, false);
+                            return ContentMutationResult.Success(destinationPath, backupPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, destinationPath, backupPath, ex.Message);
+                        }
+                    },
+                    () => DeleteImportPath(backupPath),
+                    () => File.Exists(backupPath) && new FileInfo(backupPath).Length == new FileInfo(destinationPath).Length));
+            }
+
+            var importEntryIndex = plan.Entries.Count;
+            plan.Entries.Add(new ContentMutationEntry(sourcePath, destinationPath, ContentMutationPathRole.Main, false)
+            {
+                AllowExistingDestination = destinationExisted,
+                SourceRequired = !isCreate,
+            });
+            steps.Add(new ContentMutationStep(
+                "import-output",
+                new[] { importEntryIndex },
+                () => entry.Execute()
+                    ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, sourcePath, destinationPath, "The importer reported a failure.")
+                    : ContentMutationResult.Success(sourcePath, destinationPath),
+                () => destinationExisted
+                    ? RestoreImportBackup(backupPath, destinationPath, existingAssetId, existingItem?.ItemType == ContentItemType.Scene)
+                    : DeleteImportedOutput(destinationPath),
+                () => File.Exists(destinationPath) && new FileInfo(destinationPath).Length > 0));
+
+            var result = new ContentMutationTransaction(plan).Execute(steps);
+            if (result.Succeeded && backupPath != null)
+            {
+                if (!DeleteImportPath(backupPath))
+                {
+                    var cleanupPlan = new ContentMutationPlan(ContentMutationOperationKind.Cleanup);
+                    cleanupPlan.Entries.Add(new ContentMutationEntry(backupPath, destinationPath, ContentMutationPathRole.ReplacementBackup, false));
+                    ContentMutationTransaction.PreserveRecoveryRecord(cleanupPlan, "A committed import left a replacement backup that could not be removed.");
+                }
+            }
+            try
+            {
+                if (Directory.Exists(backupRoot) && !Directory.EnumerateFileSystemEntries(backupRoot).Any())
+                    Directory.Delete(backupRoot, false);
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning("Failed to clean import transaction backup folder: " + ex.Message);
+            }
+            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.import.committed" : "mutation.import.failed", $"transaction={plan.Id:N}; source='{sourcePath}'; destination='{destinationPath}'; replaced={destinationExisted}; failure={result.Failure}; recovery={result.RequiresRecovery}");
+            return !result.Succeeded;
+        }
+
+        private static bool RestoreImportBackup(string backupPath, string destinationPath, Guid assetId, bool isScene)
+        {
+            try
+            {
+                if (assetId != Guid.Empty && !isScene)
+                    return !Editor.Instance.ContentEditing.CloneAssetFile(backupPath, destinationPath, assetId, true);
+
+                var temporaryPath = ContentMutationPathUtils.CreateTemporarySibling(destinationPath, "flax-import-restore");
+                File.Copy(backupPath, temporaryPath, false);
+                if (File.Exists(destinationPath))
+                    File.Replace(temporaryPath, destinationPath, null);
+                else
+                    File.Move(temporaryPath, destinationPath);
+                return File.Exists(destinationPath) && new FileInfo(destinationPath).Length == new FileInfo(backupPath).Length;
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning("Failed to restore import backup: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static bool DeleteImportedOutput(string path)
+        {
+            try
+            {
+                if (FlaxEngine.Content.GetAssetInfo(path, out _))
+                    FlaxEngine.Content.DeleteAsset(path);
+                if (File.Exists(path))
+                    File.Delete(path);
+                return !File.Exists(path);
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning("Failed to remove partial import output: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static bool DeleteImportPath(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+                return !File.Exists(path);
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning("Failed to remove import transaction path: " + ex.Message);
+                return false;
             }
         }
 
@@ -425,12 +669,11 @@ namespace FlaxEditor.Modules
         /// <inheritdoc />
         public override void OnUpdate()
         {
-            // Check if has no requests to process
-            if (_requests.Count == 0)
-                return;
-
             lock (_requests)
             {
+                // Check if has no requests to process
+                if (_requests.Count == 0)
+                    return;
                 try
                 {
                     // Get entries

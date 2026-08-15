@@ -260,6 +260,15 @@ namespace
         return FileSystem::GetExtension(path).ToLower() == TEXT("scene");
     }
 
+    bool IsProjectContentPath(const StringView& path)
+    {
+        const StringView contentRoot = Globals::ProjectContentFolder;
+        if (path.Length() <= contentRoot.Length() || !path.StartsWith(contentRoot, StringSearchCase::IgnoreCase))
+            return false;
+        const Char separator = path[contentRoot.Length()];
+        return separator == '/' || separator == '\\';
+    }
+
     String GetSceneActorsFolderPath(const StringView& scenePath)
     {
         String relativePath = FileSystem::ConvertAbsolutePathToRelative(Globals::ProjectContentFolder, String(scenePath));
@@ -936,15 +945,18 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 {
 #if ENABLE_ASSETS_DISCOVERY
+    String formattedPath(path);
+    FileSystem::NormalizePath(formattedPath);
+
     // Find asset in registry
-    if (Cache.FindAsset(path, info))
+    if (Cache.FindAsset(formattedPath, info))
         return true;
-    if (!FileSystem::FileExists(path))
+    if (!FileSystem::FileExists(formattedPath))
         return false;
     PROFILE_CPU();
     PROFILE_MEM(Content);
 
-    const auto extension = FileSystem::GetExtension(path).ToLower();
+    const auto extension = FileSystem::GetExtension(formattedPath).ToLower();
 
     // Check if it's a binary asset
     if (ContentStorageManager::IsFlaxStorageExtension(extension))
@@ -956,16 +968,16 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 #endif
 
         // Open storage
-        auto storage = ContentStorageManager::GetStorage(path);
+        auto storage = ContentStorageManager::GetStorage(formattedPath);
         if (storage)
         {
 #if BUILD_DEBUG || FLAX_TESTS
-            ASSERT(storage->GetPath() == path);
+            ASSERT(storage->GetPath() == formattedPath);
 #endif
 
             // Register assets from the storage container (will handle duplicated IDs)
             Cache.RegisterAssets(storage);
-            return Cache.FindAsset(path, info);
+            return Cache.FindAsset(formattedPath, info);
         }
     }
     // Check for json resource
@@ -974,11 +986,11 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
         // Check Json storage layer
         Guid jsonId;
         String jsonTypeName;
-        if (JsonStorageProxy::GetAssetInfo(path, jsonId, jsonTypeName))
+        if (JsonStorageProxy::GetAssetInfo(formattedPath, jsonId, jsonTypeName))
         {
             // Register asset
-            Cache.RegisterAsset(jsonId, jsonTypeName, path);
-            return Cache.FindAsset(path, info);
+            Cache.RegisterAsset(jsonId, jsonTypeName, formattedPath);
+            return Cache.FindAsset(formattedPath, info);
         }
     }
 
@@ -1182,10 +1194,12 @@ Asset* Content::GetAsset(const StringView& outputPath)
     if (outputPath.IsEmpty())
         return nullptr;
     PROFILE_CPU();
+    String formattedPath(outputPath);
+    FileSystem::NormalizePath(formattedPath);
     ScopeLock lock(AssetsLocker);
     for (auto i = Assets.Begin(); i.IsNotEnd(); ++i)
     {
-        if (i->Value->GetPath() == outputPath)
+        if (i->Value->GetPath() == formattedPath)
         {
             return i->Value;
         }
@@ -1335,9 +1349,14 @@ void* Content::GetAssetsInternal()
 
 #if USE_EDITOR
 
-bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
+bool Content::RenameAsset(const StringView& oldPathInput, const StringView& newPathInput)
 {
     ASSERT(IsInMainThread());
+
+    String oldPath(oldPathInput);
+    String newPath(newPathInput);
+    ContentStorageManager::FormatPath(oldPath);
+    ContentStorageManager::FormatPath(newPath);
 
     if (oldPath == newPath)
         return false;
@@ -1424,7 +1443,9 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     {
         const String srcSceneActorsFolder = GetSceneActorsFolderPath(oldPath);
         const String dstSceneActorsFolder = GetSceneActorsFolderPath(newPath);
-        moveSceneActorsFolder = FileSystem::DirectoryExists(srcSceneActorsFolder) && !FileSystem::AreFilePathsEquivalent(srcSceneActorsFolder, dstSceneActorsFolder);
+        moveSceneActorsFolder = IsProjectContentPath(oldPath) && IsProjectContentPath(newPath) &&
+                                FileSystem::DirectoryExists(srcSceneActorsFolder) &&
+                                !FileSystem::AreFilePathsEquivalent(srcSceneActorsFolder, dstSceneActorsFolder);
         if (moveSceneActorsFolder && RemoveEmptySceneActorsFile(dstSceneActorsFolder))
         {
             LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
@@ -1440,12 +1461,16 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     // Ensure asset is ready for renaming
     if (oldAsset)
     {
-        // Wait for data loaded
-        if (oldAsset->WaitForLoaded())
+        // Failed assets still own a valid path/cache identity, but waiting for them to load can
+        // never succeed. Release any storage handle and move their raw bytes transactionally.
+        // Valid assets retain the existing wait-before-release behavior.
+        if (!oldAsset->LastLoadFailed() && oldAsset->WaitForLoaded())
         {
             LOG(Error, "Failed to load asset '{0}'.", oldAsset->ToString());
             return true;
         }
+        if (oldAsset->LastLoadFailed())
+            LOG(Warning, "Moving failed asset '{0}' as raw content while preserving its registered identity.", oldAsset->ToString());
 
         // Unload
         // Don't unload asset fully, only release ref to file, don't call OnUnload so managed asset and all refs will remain alive
@@ -1499,9 +1524,14 @@ bool Content::RenameAsset(const StringView& oldPath, const StringView& newPath)
     return false;
 }
 
-bool Content::RenameAssetFolder(const StringView& oldPath, const StringView& newPath)
+bool Content::RenameAssetFolder(const StringView& oldPathInput, const StringView& newPathInput)
 {
     ASSERT(IsInMainThread());
+
+    String oldPath(oldPathInput);
+    String newPath(newPathInput);
+    ContentStorageManager::FormatPath(oldPath);
+    ContentStorageManager::FormatPath(newPath);
 
     const bool samePath = FileSystem::AreFilePathsEquivalent(oldPath, newPath);
     const bool destinationIsDirectory = !samePath && FileSystem::DirectoryExists(newPath);

@@ -1688,18 +1688,9 @@ namespace FlaxEditor.Windows
 
                 var path = Material.Path;
                 var contentDatabase = Editor.Instance.ContentDatabase;
-                bool failed = true;
-                contentDatabase?.BeginAssetSave(path);
-                try
-                {
-                    failed = Material.Save();
-                    if (failed)
-                        Editor.LogError("Cannot save material asset '" + path + "'.");
-                }
-                finally
-                {
-                    contentDatabase?.EndAssetSave(path, !failed);
-                }
+                var failed = contentDatabase != null ? contentDatabase.SaveAsset(Material) : Material.Save();
+                if (failed)
+                    Editor.LogError("Cannot save material asset '" + path + "'.");
             }
 
             public void DiscardPendingChanges()
@@ -1976,7 +1967,7 @@ namespace FlaxEditor.Windows
 
             private void SaveEmitterSurface(bool rebuildLayout)
             {
-                if (_particleEmitter && _emitterSurface != null && _emitterSurface.Save())
+                if (_particleEmitter && _emitterSurface != null && Editor.Instance.ContentDatabase.SaveAsset(_particleEmitter.Path, () => _emitterSurface.Save()))
                     Editor.LogError("Failed to save Particle Emitter surface.");
                 if (rebuildLayout)
                     Editor.Instance.Windows.PropertiesWin.Presenter.BuildLayoutOnUpdate();
