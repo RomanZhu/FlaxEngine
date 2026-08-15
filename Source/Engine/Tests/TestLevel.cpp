@@ -465,11 +465,13 @@ TEST_CASE("ExternalActorsSceneStorage")
         REQUIRE(actor);
         actor->SetName(TEXT("Actor"));
         actor->SetParent(scene);
+        actor->SetExternalOrderInParent(512);
 
         EmptyActor* child = EmptyActor::Spawn(ScriptingObject::SpawnParams(childId, EmptyActor::TypeInitializer));
         REQUIRE(child);
         child->SetName(TEXT("Child"));
         child->SetParent(actor);
+        child->SetExternalOrderInParent(1024);
 
         rapidjson_flax::StringBuffer snapshotBuffer;
         REQUIRE(!Level::SaveSceneToBytes(scene, snapshotBuffer, false));
@@ -481,6 +483,22 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(ContainsObject(snapshotData, sceneId));
         CHECK(ContainsObject(snapshotData, actorId));
         CHECK(ContainsObject(snapshotData, childId));
+        const rapidjson_flax::Value* actorData = nullptr;
+        const rapidjson_flax::Value* childData = nullptr;
+        for (rapidjson::SizeType i = 0; i < snapshotData.Size(); i++)
+        {
+            const Guid id = JsonTools::GetGuid(snapshotData[i], "ID");
+            if (id == actorId)
+                actorData = &snapshotData[i];
+            else if (id == childId)
+                childData = &snapshotData[i];
+        }
+        REQUIRE(actorData);
+        REQUIRE(childData);
+        REQUIRE(actorData->HasMember("OrderInParent"));
+        REQUIRE(childData->HasMember("OrderInParent"));
+        CHECK((*actorData)["OrderInParent"].GetInt64() == 512);
+        CHECK((*childData)["OrderInParent"].GetInt64() == 1024);
         CHECK(!JsonTools::GetBool(snapshotDocument, "ExternalActors", false));
         CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, staleId)));
         CHECK(!FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
