@@ -206,16 +206,28 @@ namespace FlaxEditor.Options
                 migrated = true;
             }
 
-            if (input.CSGSelectPlaceTool == new InputBinding(KeyboardKeys.None) &&
-                input.CSGDrawTool == new InputBinding(KeyboardKeys.None) &&
-                input.CSGEditTool == new InputBinding(KeyboardKeys.None) &&
-                input.CSGSurfaceTool == new InputBinding(KeyboardKeys.None))
+            if (input.CSGSelectPlaceTool == new InputBinding(KeyboardKeys.Alpha1) &&
+                input.CSGDrawTool == new InputBinding(KeyboardKeys.Alpha2) &&
+                input.CSGEditTool == new InputBinding(KeyboardKeys.Alpha3) &&
+                input.CSGSurfaceTool == new InputBinding(KeyboardKeys.Alpha4) &&
+                input.CSGBrushTool == new InputBinding(KeyboardKeys.Alpha5))
             {
-                input.CSGSelectPlaceTool = new InputBinding(KeyboardKeys.Alpha1);
-                input.CSGDrawTool = new InputBinding(KeyboardKeys.Alpha2);
-                input.CSGEditTool = new InputBinding(KeyboardKeys.Alpha3);
-                input.CSGSurfaceTool = new InputBinding(KeyboardKeys.Alpha4);
-                input.CSGBrushTool = new InputBinding(KeyboardKeys.Alpha5);
+                input.CSGSelectPlaceTool = new InputBinding(KeyboardKeys.None);
+                input.CSGDrawTool = new InputBinding(KeyboardKeys.Alpha1);
+                input.CSGEditTool = new InputBinding(KeyboardKeys.None);
+                input.CSGSurfaceTool = new InputBinding(KeyboardKeys.Alpha2);
+                input.CSGBrushTool = new InputBinding(KeyboardKeys.Alpha3);
+                migrated = true;
+            }
+            else if (input.CSGSelectPlaceTool == new InputBinding(KeyboardKeys.None) &&
+                     input.CSGDrawTool == new InputBinding(KeyboardKeys.None) &&
+                     input.CSGEditTool == new InputBinding(KeyboardKeys.None) &&
+                     input.CSGSurfaceTool == new InputBinding(KeyboardKeys.None) &&
+                     input.CSGBrushTool == new InputBinding(KeyboardKeys.None))
+            {
+                input.CSGDrawTool = new InputBinding(KeyboardKeys.Alpha1);
+                input.CSGSurfaceTool = new InputBinding(KeyboardKeys.Alpha2);
+                input.CSGBrushTool = new InputBinding(KeyboardKeys.Alpha3);
                 migrated = true;
             }
 

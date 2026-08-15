@@ -1739,6 +1739,13 @@ namespace FlaxEditor.Modules
             if (!input.Rename.Process(root.Window, key))
                 return false;
 
+            // Actor rename belongs to the main editor viewport. Do not let its root-level
+            // preview shortcut steal F2 from Scene, Content, Game, or any other editor window.
+            // Requiring both focus and hover also prevents a stale focus from opening the
+            // popup over whichever window the cursor has moved into.
+            if (GetFocusedEditorWindow() != EditWin || !EditWin.IsMouseOver)
+                return false;
+
             var selection = Editor.SceneEditing.Selection;
             ActorNode actorNode = null;
             for (int i = 0; i < selection.Count; i++)
@@ -1754,7 +1761,7 @@ namespace FlaxEditor.Modules
             if (!Editor.StateMachine.CurrentState.CanEditScene || Editor.ProgressReporting.CompileScripts.IsActive)
                 return false;
 
-            // Actor rename is global and takes precedence over focus-local F2 actions.
+            // Actor rename takes precedence over focus-local F2 actions in the editor viewport.
             Editor.SceneEditing.Select(actorNode);
             var actor = actorNode.Actor;
             var location = root.PointFromScreen(FlaxEngine.Input.MouseScreenPosition);

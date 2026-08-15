@@ -118,6 +118,11 @@ namespace FlaxEditor.Windows
         public event Action SelectionChanged;
 
         /// <summary>
+        /// Allows a contextual tool to keep one Content selection alongside scene selection.
+        /// </summary>
+        public event Func<ContentItem, bool> SelectionCoexistenceRequested;
+
+        /// <summary>
         /// Gets the selected content items.
         /// </summary>
         public IReadOnlyList<ContentItem> Selection
@@ -436,16 +441,30 @@ namespace FlaxEditor.Windows
 
         private void OnSceneSelectionChanged()
         {
-            if (Editor.SceneEditing.SelectionCount != 0)
+            if (Editor.SceneEditing.SelectionCount != 0 && !ShouldPreserveContentSelection())
                 ClearSelection(false);
         }
 
         private void OnContentViewSelectionChanged()
         {
             RecordContentSelectionNavigation();
-            if (!IsContentSelectionHistorySuppressed)
+            if (!IsContentSelectionHistorySuppressed && !ShouldPreserveContentSelection())
                 ClearSceneSelection();
             SelectionChanged?.Invoke();
+        }
+
+        private bool ShouldPreserveContentSelection()
+        {
+            var callback = SelectionCoexistenceRequested;
+            if (callback == null || Selection.Count != 1)
+                return false;
+            var item = Selection[0];
+            foreach (Func<ContentItem, bool> handler in callback.GetInvocationList())
+            {
+                if (handler(item))
+                    return true;
+            }
+            return false;
         }
 
         private void ClearSceneSelection()

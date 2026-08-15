@@ -352,25 +352,25 @@ namespace FlaxEditor.Options
 
         #region CSG Authoring
 
+        [HideInEditor]
+        [DefaultValue(typeof(InputBinding), "None")]
+        public InputBinding CSGSelectPlaceTool = new InputBinding(KeyboardKeys.None);
+
         [DefaultValue(typeof(InputBinding), "Alpha1")]
-        [EditorDisplay("CSG Authoring", "Select / Place Tool"), EditorOrder(1100)]
-        public InputBinding CSGSelectPlaceTool = new InputBinding(KeyboardKeys.Alpha1);
+        [EditorDisplay("CSG Authoring", "Select / Draw / Edit Tool"), EditorOrder(1100)]
+        public InputBinding CSGDrawTool = new InputBinding(KeyboardKeys.Alpha1);
+
+        [HideInEditor]
+        [DefaultValue(typeof(InputBinding), "None")]
+        public InputBinding CSGEditTool = new InputBinding(KeyboardKeys.None);
 
         [DefaultValue(typeof(InputBinding), "Alpha2")]
-        [EditorDisplay("CSG Authoring", "Draw Tool"), EditorOrder(1110)]
-        public InputBinding CSGDrawTool = new InputBinding(KeyboardKeys.Alpha2);
+        [EditorDisplay("CSG Authoring", "Surface Tool"), EditorOrder(1110)]
+        public InputBinding CSGSurfaceTool = new InputBinding(KeyboardKeys.Alpha2);
 
         [DefaultValue(typeof(InputBinding), "Alpha3")]
-        [EditorDisplay("CSG Authoring", "Edit Tool"), EditorOrder(1120)]
-        public InputBinding CSGEditTool = new InputBinding(KeyboardKeys.Alpha3);
-
-        [DefaultValue(typeof(InputBinding), "Alpha4")]
-        [EditorDisplay("CSG Authoring", "Surface Tool"), EditorOrder(1130)]
-        public InputBinding CSGSurfaceTool = new InputBinding(KeyboardKeys.Alpha4);
-
-        [DefaultValue(typeof(InputBinding), "Alpha5")]
-        [EditorDisplay("CSG Authoring", "Brush Tool"), EditorOrder(1135)]
-        public InputBinding CSGBrushTool = new InputBinding(KeyboardKeys.Alpha5);
+        [EditorDisplay("CSG Authoring", "Brush Tool"), EditorOrder(1120)]
+        public InputBinding CSGBrushTool = new InputBinding(KeyboardKeys.Alpha3);
 
         [DefaultValue(typeof(InputBinding), "None")]
         [EditorDisplay("CSG Authoring", "Pick Working Plane"), EditorOrder(1140)]

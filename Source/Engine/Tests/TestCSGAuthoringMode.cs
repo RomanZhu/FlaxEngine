@@ -70,6 +70,7 @@ namespace FlaxEditor.Tests
         public void TestControllerStateRoundTripsAndUnavailableFeaturesAreSanitized()
         {
             var source = new CSGToolController();
+            Assert.AreEqual(CSGTool.Draw, source.Tool);
             Assert.IsTrue(source.SetTool(CSGTool.Draw));
             Assert.IsTrue(source.SetOperation(CSGOperation.Subtractive));
             source.SetWorkingPlaneLocked(true);
@@ -79,6 +80,7 @@ namespace FlaxEditor.Tests
             source.SetVisibility(CSGVisibility.SourceBrushes | CSGVisibility.HiddenBrushes);
             source.SetRayPlacementAlignment(CSGRayPlacementAlignment.AlignSurfaceUp);
             source.SetRayPlacementFront(CSGRayPlacementFront.Bottom);
+            source.SetBrushMaterialAutoPick(true);
 
             var restored = new CSGToolController();
             restored.ApplyState(source.CaptureState());
@@ -91,13 +93,14 @@ namespace FlaxEditor.Tests
             Assert.AreEqual(CSGVisibility.SourceBrushes | CSGVisibility.HiddenBrushes, restored.Visibility);
             Assert.AreEqual(CSGRayPlacementAlignment.AlignSurfaceUp, restored.RayPlacementAlignment);
             Assert.AreEqual(CSGRayPlacementFront.Bottom, restored.RayPlacementFront);
+            Assert.IsTrue(restored.BrushMaterialAutoPick);
 
             var unavailable = source.CaptureState();
             unavailable.Tool = (CSGTool)999;
             unavailable.Operation = CSGOperation.Intersecting;
             unavailable.SnapIncrement = 0.0f;
             restored.ApplyState(unavailable);
-            Assert.AreEqual(CSGTool.SelectPlace, restored.Tool);
+            Assert.AreEqual(CSGTool.Draw, restored.Tool);
             Assert.AreEqual(CSGOperation.Additive, restored.Operation);
             Assert.Greater(restored.SnapIncrement, 0.0f);
             Assert.IsTrue(restored.SetTool(CSGTool.Brush));
@@ -133,7 +136,7 @@ namespace FlaxEditor.Tests
             }
 
             controller.BeginInteraction();
-            Assert.IsTrue(controller.SetTool(CSGTool.Edit));
+            Assert.IsTrue(controller.SetTool(CSGTool.Surface));
             Assert.IsFalse(controller.HasActiveInteraction);
             Assert.AreEqual(EditorGizmoModeCancelReason.ToolChanged, controller.LastCancelReason);
         }
@@ -154,17 +157,23 @@ namespace FlaxEditor.Tests
 
             input.CSGEditTool = new InputBinding(KeyboardKeys.E);
             Assert.AreEqual(0, CSGAuthoringGizmoMode.FindInputConflicts(input).Count);
+
+            input.CSGSnapOverride = new InputBinding(KeyboardKeys.Control);
+            conflicts = CSGAuthoringGizmoMode.FindInputConflicts(input);
+            Assert.AreEqual(1, conflicts.Count);
+            StringAssert.Contains("temporary Draw", conflicts[0]);
+            StringAssert.Contains("move snap override", conflicts[0]);
         }
 
         [Test]
         public void TestDefaultToolBindingsUseNumberRow()
         {
             var input = new InputOptions();
-            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha1), input.CSGSelectPlaceTool);
-            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha2), input.CSGDrawTool);
-            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha3), input.CSGEditTool);
-            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha4), input.CSGSurfaceTool);
-            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha5), input.CSGBrushTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.None), input.CSGSelectPlaceTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha1), input.CSGDrawTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.None), input.CSGEditTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha2), input.CSGSurfaceTool);
+            Assert.AreEqual(new InputBinding(KeyboardKeys.Alpha3), input.CSGBrushTool);
         }
 
         [Test]
@@ -218,6 +227,19 @@ namespace FlaxEditor.Tests
             Assert.Greater(stale, final);
             Assert.AreEqual(0, dispatch.Revision);
             Assert.AreEqual(CSGRebuildVisualState.Stale, queue.GetStatus(sceneId).State);
+        }
+
+        [Test]
+        public void TestRebuildQueueCanDeferFinalPublishUntilNavigationReleases()
+        {
+            var queue = new CSGRebuildQueue();
+            var sceneId = Guid.NewGuid();
+
+            long revision = queue.Request(sceneId, CSGRebuildRequestKind.Final, true, 50.0f, 1.0, out var dispatch, true);
+            Assert.AreEqual(0, dispatch.Revision);
+            Assert.AreEqual(CSGRebuildVisualState.Pending, queue.GetStatus(sceneId).State);
+            Assert.IsTrue(queue.TryDequeue(sceneId, true, 1.0, out dispatch));
+            Assert.AreEqual(revision, dispatch.Revision);
         }
 
         [Test]
@@ -738,6 +760,21 @@ namespace FlaxEditor.Tests
             Assert.IsTrue(Vector3.NearEqual(planeA.Bitangent, planeB.Bitangent));
             Assert.AreEqual(0.0f, (float)Vector3.Dot(planeA.Normal, planeA.Tangent), 0.0001f);
             Assert.AreEqual(0.0f, (float)Vector3.Dot(planeA.Normal, planeA.Bitangent), 0.0001f);
+        }
+
+        [Test]
+        public void TestCSGSurfaceWorkingPlaneCanUseStableBrushLocalGridOrigin()
+        {
+            var hitPoint = new Vector3(17.0f, 23.0f, 41.0f);
+            var gridOrigin = new Vector3(5.0f, 20.0f, 5.0f);
+            var ray = new Ray(hitPoint + Vector3.Up * 100.0f, Vector3.Down);
+            var service = new CSGWorkingPlaneService();
+            Assert.IsTrue(service.TrySetHover(hitPoint, Vector3.Up, Vector3.Right, ray, 10.0f, Guid.NewGuid(), 2, true, gridOrigin));
+            var plane = service.ActivePlane;
+            Assert.IsTrue(Vector3.NearEqual(new Vector3(5.0f, hitPoint.Y, 5.0f), plane.Origin));
+            var snapped = ViewportSnapService.SnapToGrid(ref plane, hitPoint, out _);
+            Assert.IsTrue(Vector3.NearEqual(new Vector3(15.0f, hitPoint.Y, 45.0f), snapped));
+            Assert.IsTrue(plane.IsSurfaceDerived);
         }
 
         [Test]

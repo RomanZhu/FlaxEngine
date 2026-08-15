@@ -96,7 +96,7 @@ namespace FlaxEditor.Tools.CSG.Rebuild
         /// <summary>
         /// Adds or replaces a scene rebuild request.
         /// </summary>
-        public long Request(Guid sceneId, CSGRebuildRequestKind kind, bool autoRebuild, float timeoutMs, double now, out CSGRebuildDispatch dispatch)
+        public long Request(Guid sceneId, CSGRebuildRequestKind kind, bool autoRebuild, float timeoutMs, double now, out CSGRebuildDispatch dispatch, bool deferDispatch = false)
         {
             dispatch = default;
             if (sceneId == Guid.Empty)
@@ -118,6 +118,13 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             }
 
             float dispatchTimeout = kind == CSGRebuildRequestKind.External ? Mathf.Max(timeoutMs, 0.0f) : 0.0f;
+            if (deferDispatch)
+            {
+                entry.PendingRevision = revision;
+                entry.PendingTimeoutMs = dispatchTimeout;
+                entry.State = CSGRebuildVisualState.Pending;
+                return revision;
+            }
             if (kind == CSGRebuildRequestKind.Preview && entry.SubmittedRevision != 0 && now < entry.NextPreviewTime)
             {
                 entry.PendingRevision = revision;
@@ -202,8 +209,11 @@ namespace FlaxEditor.Tools.CSG.Rebuild
     public sealed class CSGRebuildScheduler
     {
         private readonly Dictionary<Guid, Scene> _scenes = new Dictionary<Guid, Scene>();
+        private readonly Dictionary<Guid, double> _dispatchNotBefore = new Dictionary<Guid, double>();
         private readonly List<Guid> _sceneIds = new List<Guid>(8);
         private readonly CSGRebuildQueue _queue = new CSGRebuildQueue();
+
+        private const double FinalDispatchGraceSeconds = 0.12;
 
         /// <summary>The shared editor scheduler.</summary>
         public static CSGRebuildScheduler Shared { get; } = new CSGRebuildScheduler();
@@ -240,6 +250,10 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             var editor = Editor.Instance;
             if (editor == null)
                 return;
+            // Publishing rebuilt CSG while RMB navigation owns the cursor can break native mouse
+            // capture. Keep the latest revision queued until navigation releases it.
+            if (IsViewportNavigationActive(editor))
+                return;
             bool autoRebuild = editor.Options.Options.General.AutoRebuildCSG && !editor.StateMachine.IsPlayMode;
             double now = GetTime();
             _sceneIds.Clear();
@@ -250,11 +264,17 @@ namespace FlaxEditor.Tools.CSG.Rebuild
                 if (!_scenes.TryGetValue(id, out var scene) || scene == null)
                 {
                     _scenes.Remove(id);
+                    _dispatchNotBefore.Remove(id);
                     _queue.Remove(id);
                     continue;
                 }
+                if (_dispatchNotBefore.TryGetValue(id, out var notBefore) && now < notBefore)
+                    continue;
                 if (_queue.TryDequeue(id, autoRebuild, now, out var dispatch))
+                {
+                    _dispatchNotBefore.Remove(id);
                     Dispatch(ref dispatch);
+                }
             }
         }
 
@@ -283,7 +303,11 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             bool autoRebuild = editor != null && editor.Options.Options.General.AutoRebuildCSG && !editor.StateMachine.IsPlayMode;
             float timeoutMs = editor?.Options.Options.General.AutoRebuildCSGTimeoutMs ?? 50.0f;
             _scenes[scene.ID] = scene;
-            long revision = _queue.Request(scene.ID, kind, autoRebuild, timeoutMs, GetTime(), out var dispatch);
+            double now = GetTime();
+            bool deferDispatch = kind == CSGRebuildRequestKind.Final || IsViewportNavigationActive(editor);
+            if (kind == CSGRebuildRequestKind.Final)
+                _dispatchNotBefore[scene.ID] = now + FinalDispatchGraceSeconds;
+            long revision = _queue.Request(scene.ID, kind, autoRebuild, timeoutMs, now, out var dispatch, deferDispatch);
             if (dispatch.Revision != 0)
                 Dispatch(ref dispatch);
             return revision;
@@ -298,6 +322,13 @@ namespace FlaxEditor.Tools.CSG.Rebuild
         private static double GetTime()
         {
             return (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
+        }
+
+        private static bool IsViewportNavigationActive(Editor editor)
+        {
+            var viewport = editor?.Windows?.EditWin?.Viewport;
+            return viewport != null &&
+                   (viewport.IsRightMouseButtonDown || viewport.IsAltKeyDown);
         }
     }
 }

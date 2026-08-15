@@ -243,6 +243,16 @@ namespace FlaxEditor.Tools.Foliage
             UpdateGizmoMode();
         }
 
+        internal void SelectPaintMode()
+        {
+            _modes.SelectedTab = Paint;
+        }
+
+        internal void SelectEditMode()
+        {
+            _modes.SelectedTab = Edit;
+        }
+
         /// <summary>
         /// Updates the active viewport gizmo mode based on the current mode.
         /// </summary>

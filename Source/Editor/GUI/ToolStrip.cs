@@ -1139,6 +1139,17 @@ namespace FlaxEditor.GUI
         /// <inheritdoc />
         public override bool OnKeyDown(KeyboardKeys key)
         {
+            if (key == KeyboardKeys.Tab)
+            {
+                var root = Root;
+                bool shortcutModifier = (root?.GetKey(KeyboardKeys.Control) ?? false) || (root?.GetKey(KeyboardKeys.Alt) ?? false);
+                if (!shortcutModifier)
+                {
+                    Editor.Instance?.Windows?.EditWin?.Viewport?.CycleContextualAuthoringMode();
+                    return true;
+                }
+            }
+
             if (base.OnKeyDown(key))
                 return true;
 
@@ -1154,6 +1165,13 @@ namespace FlaxEditor.GUI
             if (editorWindow == null)
                 editorWindow = editor.Windows.EditWin; // Fallback to main editor window
             return editorWindow.InputActions.Process(editor, this, key);
+        }
+
+        /// <inheritdoc />
+        protected override bool CanNavigateChild(Control child)
+        {
+            // Toolstrip controls are command chrome, not a keyboard focus traversal group.
+            return false;
         }
     }
 }

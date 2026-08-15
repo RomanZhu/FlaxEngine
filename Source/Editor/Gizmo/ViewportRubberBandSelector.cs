@@ -25,6 +25,17 @@ public interface IViewportRubberBandSelection
 }
 
 /// <summary>
+/// Optional marquee-selection override for component-editing gizmos whose selectable points are
+/// not actor nodes in the scene projection pass.
+/// </summary>
+public interface IViewportRubberBandSelectionOverride
+{
+    /// <summary>Builds the complete preview selection for the current marquee.</summary>
+    /// <returns>True when the override handled selection and actor projection should be skipped.</returns>
+    bool TryResolveRubberBandSelection(Rectangle rectangle, IReadOnlyList<SceneGraphNode> selectionBefore, List<SceneGraphNode> result);
+}
+
+/// <summary>
 /// Class for adding viewport rubber band selection.
 /// </summary>
 public sealed class ViewportRubberBandSelector
@@ -210,6 +221,13 @@ public sealed class ViewportRubberBandSelector
             _hitsCache.Clear();
         var hits = _hitsCache;
         var selectionFilter = _owner.Gizmos.Active as IViewportRubberBandSelection;
+        if (_owner.Gizmos.Active is IViewportRubberBandSelectionOverride selectionOverride &&
+            selectionOverride.TryResolveRubberBandSelection(adjustedRect, _rubberBandSelectionBefore, hits))
+        {
+            _owner.Select(hits, false);
+            Profiler.EndEvent();
+            return;
+        }
 
         // Process all nodes
         var projection = new ViewportProjection();
@@ -245,7 +263,17 @@ public sealed class ViewportRubberBandSelector
         }
 
         // Process selection
-        if (_owner.IsControlDown)
+        if (_owner.IsControlDown && _owner.IsShiftDown && selectionFilter is IViewportRubberBandSelectionOverride)
+        {
+            var newSelection = GetRubberBandSelectionBefore();
+            foreach (var hit in hits)
+            {
+                if (!newSelection.Contains(hit))
+                    newSelection.Add(hit);
+            }
+            _owner.Select(newSelection, false);
+        }
+        else if (_owner.IsControlDown)
         {
             var newSelection = GetRubberBandSelectionBefore();
             for (int i = newSelection.Count - 1; i >= 0; i--)

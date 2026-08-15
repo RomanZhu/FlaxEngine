@@ -194,6 +194,16 @@ namespace FlaxEditor.Tools.Terrain
             UpdateGizmoMode();
         }
 
+        internal void SelectSculptMode()
+        {
+            _modes.SelectedTab = Sculpt;
+        }
+
+        internal void SelectPaintMode()
+        {
+            _modes.SelectedTab = Paint;
+        }
+
         /// <summary>
         /// Updates the active viewport gizmo mode based on the current mode.
         /// </summary>

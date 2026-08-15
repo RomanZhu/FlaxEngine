@@ -312,13 +312,6 @@ namespace FlaxEditor.Tools.CSG.Tools
                     _numericText = _numericText.Substring(0, _numericText.Length - 1);
                 return true;
             }
-            if (key == KeyboardKeys.Tab && Stage == CSGBoxDrawStage.Footprint)
-            {
-                ApplyNumericText();
-                NumericDimension = NumericDimension == CSGBoxNumericDimension.Width ? CSGBoxNumericDimension.Depth : CSGBoxNumericDimension.Width;
-                _numericText = string.Empty;
-                return true;
-            }
             if (key != KeyboardKeys.Return)
                 return false;
 

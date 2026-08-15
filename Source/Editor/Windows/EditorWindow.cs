@@ -317,11 +317,11 @@ namespace FlaxEditor.Windows
                 }
                 break;
             case KeyboardKeys.Tab:
-                if (CanUseNavigation && Root != null)
+                if (Root != null)
                 {
-                    bool shiftDown = Root.GetKey(KeyboardKeys.Shift);
-                    Root.Navigate(shiftDown ? NavDirection.Previous : NavDirection.Next);
-                    return true;
+                    bool shortcutModifier = Root.GetKey(KeyboardKeys.Control) || Root.GetKey(KeyboardKeys.Alt);
+                    if (!shortcutModifier)
+                        return Editor.Windows.EditWin?.Viewport?.CycleContextualAuthoringMode() ?? false;
                 }
                 break;
             }

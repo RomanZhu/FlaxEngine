@@ -178,6 +178,9 @@ namespace FlaxEditor.Tools.CSG
 
         /// <summary>The material painted by the brush tool, or null to use the default CSG material.</summary>
         public MaterialBase BrushMaterial;
+
+        /// <summary>Whether selecting a material in Content updates the surface brush material.</summary>
+        public bool BrushMaterialAutoPick;
     }
 
     /// <summary>
@@ -191,7 +194,7 @@ namespace FlaxEditor.Tools.CSG
         /// </summary>
         public static readonly float[] SnapIncrements = { 5.0f, 15.0f, 25.0f, 50.0f, 100.0f, 200.0f };
 
-        private CSGTool _tool = CSGTool.SelectPlace;
+        private CSGTool _tool = CSGTool.Draw;
         private CSGOperation _operation = CSGOperation.Additive;
         private bool _workingPlaneLocked;
         private bool _snappingEnabled = true;
@@ -202,6 +205,7 @@ namespace FlaxEditor.Tools.CSG
         private CSGRayPlacementFront _rayPlacementFront = CSGRayPlacementFront.Top;
         private MaterialBase _brushMaterial;
         private bool _brushMaterialPickArmed;
+        private bool _brushMaterialAutoPick;
 
         /// <summary>
         /// Occurs whenever persistent or transient tool state changes.
@@ -291,6 +295,9 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>Gets whether the material eyedropper will sample the next clicked CSG surface.</summary>
         public bool BrushMaterialPickArmed => _brushMaterialPickArmed;
 
+        /// <summary>Gets whether Content material selection automatically updates the brush material.</summary>
+        public bool BrushMaterialAutoPick => _brushMaterialAutoPick;
+
         /// <summary>
         /// Gets a value indicating whether the snapping override key is held.
         /// </summary>
@@ -338,7 +345,10 @@ namespace FlaxEditor.Tools.CSG
         /// <returns>True if the tool is available in this milestone.</returns>
         public bool SetTool(CSGTool tool)
         {
-            if (tool is not (CSGTool.SelectPlace or CSGTool.Draw or CSGTool.Edit or CSGTool.Surface or CSGTool.Brush))
+            // Select and Edit are legacy aliases for the unified Draw/Edit workflow.
+            if (tool is CSGTool.SelectPlace or CSGTool.Edit)
+                tool = CSGTool.Draw;
+            if (tool is not (CSGTool.Draw or CSGTool.Surface or CSGTool.Brush))
                 return false;
             if (_tool == tool)
                 return true;
@@ -567,6 +577,15 @@ namespace FlaxEditor.Tools.CSG
             Changed?.Invoke();
         }
 
+        /// <summary>Enables or disables automatic material picking from Content selection.</summary>
+        public void SetBrushMaterialAutoPick(bool value)
+        {
+            if (_brushMaterialAutoPick == value)
+                return;
+            _brushMaterialAutoPick = value;
+            Changed?.Invoke();
+        }
+
         /// <summary>
         /// Toggles a CSG visibility category.
         /// </summary>
@@ -654,6 +673,7 @@ namespace FlaxEditor.Tools.CSG
                 RayPlacementAlignment = RayPlacementAlignment,
                 RayPlacementFront = RayPlacementFront,
                 BrushMaterial = BrushMaterial,
+                BrushMaterialAutoPick = BrushMaterialAutoPick,
             };
         }
 
@@ -668,12 +688,14 @@ namespace FlaxEditor.Tools.CSG
             case CSGTool.SelectPlace:
             case CSGTool.Draw:
             case CSGTool.Edit:
+                _tool = CSGTool.Draw;
+                break;
             case CSGTool.Surface:
             case CSGTool.Brush:
                 _tool = state.Tool;
                 break;
             default:
-                _tool = CSGTool.SelectPlace;
+                _tool = CSGTool.Draw;
                 break;
             }
             _operation = state.Operation == CSGOperation.Subtractive ? CSGOperation.Subtractive : CSGOperation.Additive;
@@ -690,6 +712,7 @@ namespace FlaxEditor.Tools.CSG
                 : CSGRayPlacementFront.Top;
             _brushMaterial = state.BrushMaterial;
             _brushMaterialPickArmed = false;
+            _brushMaterialAutoPick = state.BrushMaterialAutoPick;
             TryCancel(EditorGizmoModeCancelReason.SceneChanged);
             Changed?.Invoke();
         }

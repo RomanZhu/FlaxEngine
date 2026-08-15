@@ -70,9 +70,7 @@ namespace FlaxEditor.Viewport
         private ToolStripButton _overlayTranslateSnapValueButton;
         private ToolStripButton _overlayRotateSnapValueButton;
         private ToolStripButton _overlayScaleSnapValueButton;
-        private ToolStripButton _overlayCSGSelectPlaceButton;
         private ToolStripButton _overlayCSGDrawButton;
-        private ToolStripButton _overlayCSGEditButton;
         private ToolStripButton _overlayCSGSurfaceButton;
         private ToolStripButton _overlayCSGBrushButton;
         private ToolStripButton _overlayCSGOperationButton;
@@ -93,7 +91,8 @@ namespace FlaxEditor.Viewport
         private bool _middleMouseRecenterCandidate;
         private bool _suppressNextSelectionPick;
         private bool _csgTransformGizmoGesture;
-        private bool _showCameraCoordinates = true;
+        private bool _altNavigationGesture;
+        private bool _showCameraCoordinates;
 
         /// <summary>
         /// The editor sprites rendering effect.
@@ -616,15 +615,9 @@ namespace FlaxEditor.Viewport
             _overlayScaleSnapValueButton = AddContextualOverlayMenuButton(transformStrip, GetScaleSnapLabel(), SpriteHandle.Invalid, CreateTranslateSnapMenu(), "Flax.Scene.Transform.ScaleSnapValue");
             _overlayScaleSnapValueButton.LinkTooltip("World-unit position grid used for scale snapping.");
 
-            _overlayCSGSelectPlaceButton = AddContextualOverlayButton(csgToolsStrip, "Select", SpriteHandle.Invalid, "Flax.Scene.CSG.SelectPlace", () => CSGAuthoringMode.Controller.SetTool(CSGTool.SelectPlace));
-            _overlayCSGSelectPlaceButton.DrawDropdownFrame = true;
-            _overlayCSGSelectPlaceButton.LinkTooltip("Select brushes or place the chosen primitive.", ref inputOptions.CSGSelectPlaceTool);
-            _overlayCSGDrawButton = AddContextualOverlayButton(csgToolsStrip, "Draw", SpriteHandle.Invalid, "Flax.Scene.CSG.Draw", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Draw));
+            _overlayCSGDrawButton = AddContextualOverlayButton(csgToolsStrip, "Select/Draw", SpriteHandle.Invalid, "Flax.Scene.CSG.Draw", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Draw));
             _overlayCSGDrawButton.DrawDropdownFrame = true;
-            _overlayCSGDrawButton.LinkTooltip("Draw a brush footprint and extrusion.", ref inputOptions.CSGDrawTool);
-            _overlayCSGEditButton = AddContextualOverlayButton(csgToolsStrip, "Edit", SpriteHandle.Invalid, "Flax.Scene.CSG.Edit", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Edit));
-            _overlayCSGEditButton.DrawDropdownFrame = true;
-            _overlayCSGEditButton.LinkTooltip("Edit brush topology.", ref inputOptions.CSGEditTool);
+            _overlayCSGDrawButton.LinkTooltip("Select and move brushes. Hold Ctrl to draw; double-click a selected brush to edit it.", ref inputOptions.CSGDrawTool);
             _overlayCSGSurfaceButton = AddContextualOverlayButton(csgToolsStrip, "Surface", SpriteHandle.Invalid, "Flax.Scene.CSG.Surface", () => CSGAuthoringMode.Controller.SetTool(CSGTool.Surface));
             _overlayCSGSurfaceButton.DrawDropdownFrame = true;
             _overlayCSGSurfaceButton.LinkTooltip("Edit brush surface properties.", ref inputOptions.CSGSurfaceTool);
@@ -1500,7 +1493,7 @@ namespace FlaxEditor.Viewport
             bool objectMode = Gizmos.ActiveMode is TransformGizmoMode;
             bool csgMode = IsCSGAuthoringActive;
             bool csgSelect = csgMode && CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace;
-            bool csgEdit = csgMode && CSGAuthoringMode.Controller.Tool == CSGTool.Edit;
+            bool csgEdit = csgMode && CSGAuthoringMode.Gizmo.IsEditingContext;
             bool csgBrush = csgMode && CSGAuthoringMode.Controller.Tool == CSGTool.Brush;
             bool terrainSculpt = Gizmos.ActiveMode is Tools.Terrain.SculptTerrainGizmoMode;
             bool terrainPaint = Gizmos.ActiveMode is Tools.Terrain.PaintTerrainGizmoMode;
@@ -1587,23 +1580,11 @@ namespace FlaxEditor.Viewport
             SetViewportToolStripButtonText(_overlayRotateSnapValueButton, GetRotateSnapLabel());
             SetViewportToolStripButtonText(_overlayScaleSnapValueButton, GetScaleSnapLabel());
 
-            if (_overlayCSGSelectPlaceButton != null)
-            {
-                _overlayCSGSelectPlaceButton.Visible = csgMode;
-                _overlayCSGSelectPlaceButton.Enabled = csgMode;
-                _overlayCSGSelectPlaceButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace;
-            }
             if (_overlayCSGDrawButton != null)
             {
                 _overlayCSGDrawButton.Visible = csgMode;
                 _overlayCSGDrawButton.Enabled = csgMode;
                 _overlayCSGDrawButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.Draw;
-            }
-            if (_overlayCSGEditButton != null)
-            {
-                _overlayCSGEditButton.Visible = csgMode;
-                _overlayCSGEditButton.Enabled = csgMode;
-                _overlayCSGEditButton.Checked = CSGAuthoringMode.Controller.Tool == CSGTool.Edit;
             }
             if (_overlayCSGSurfaceButton != null)
             {
@@ -2051,10 +2032,20 @@ namespace FlaxEditor.Viewport
         /// <inheritdoc />
         protected override void OnLeftMouseButtonDown()
         {
-            base.OnLeftMouseButtonDown();
             _csgTransformGizmoGesture = false;
+            _altNavigationGesture = IsAltKeyDown;
+            if (_altNavigationGesture)
+            {
+                // Navigation must claim focus on press. Waiting until release leaves keyboard input
+                // in Content and lets the release fall through to scene/CSG picking.
+                Focus();
+                _rubberBandSelector.StopRubberBand();
+                base.OnLeftMouseButtonDown();
+                return;
+            }
+            base.OnLeftMouseButtonDown();
             if (IsCSGAuthoringActive &&
-                (CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace || CSGAuthoringMode.Controller.Tool == CSGTool.Edit) &&
+                (CSGAuthoringMode.Controller.Tool == CSGTool.SelectPlace || CSGAuthoringMode.Gizmo.IsEditingContext) &&
                 TransformGizmo.ActiveMode != TransformGizmoBase.Mode.Select &&
                 TransformGizmo.HoveredHandle.IsValid)
             {
@@ -2083,6 +2074,15 @@ namespace FlaxEditor.Viewport
         /// <inheritdoc />
         protected override void OnLeftMouseButtonUp()
         {
+            bool altNavigationGesture = _altNavigationGesture;
+            _altNavigationGesture = false;
+            if (altNavigationGesture)
+            {
+                _rubberBandSelector.ReleaseRubberBandSelection();
+                Focus();
+                base.OnLeftMouseButtonUp();
+                return;
+            }
             // A CSG component drag owns the whole pointer gesture. The supplemental transform
             // gizmo can arm its selection-release guard when the component selection changes on
             // mouse-down. Do not let that guard swallow this release: CSG must commit the preview
@@ -2167,6 +2167,16 @@ namespace FlaxEditor.Viewport
             _suppressNextSelectionPick = true;
             Focus();
             return true;
+        }
+
+        /// <inheritdoc />
+        protected override void OnRightMouseButtonDown()
+        {
+            // RMB camera navigation needs viewport focus immediately so WASD belongs to the camera
+            // even when the preceding click selected a material in Content.
+            Focus();
+            _rubberBandSelector.StopRubberBand();
+            base.OnRightMouseButtonDown();
         }
 
         /// <inheritdoc />
@@ -2325,29 +2335,38 @@ namespace FlaxEditor.Viewport
                 toolbox.TabsControl.SelectedTab = toolbox.Spawn;
         }
 
-        private void ToggleContextualAuthoringMode()
+        internal bool CycleContextualAuthoringMode()
         {
-            // Tab always leaves the current authoring context before considering the selection.
-            if (Gizmos.ActiveMode is not TransformGizmoMode)
-            {
-                EnterObjectMode();
-                return;
-            }
+            if (_characterControllerModeActive || _gameViewActive)
+                return false;
 
             var selection = _editor.SceneEditing.Selection;
             if (selection.Count == 0)
-                return;
+            {
+                if (Gizmos.ActiveMode is not TransformGizmoMode)
+                    EnterObjectMode();
+                Focus();
+                return true;
+            }
 
             var node = selection[0];
             if (node.CSGViewportSelection != CSGViewportSelectionKind.None)
             {
-                Gizmos.SetActiveMode<CSGAuthoringGizmoMode>();
+                if (Gizmos.ActiveMode is CSGAuthoringGizmoMode)
+                {
+                    EnterObjectMode();
+                }
+                else
+                {
+                    Gizmos.SetActiveMode<CSGAuthoringGizmoMode>();
 
-                // CSG tools live in the viewport toolbar, so leave the Toolbox in Object mode.
-                var toolbox = _editor.Windows.ToolboxWin;
-                if (toolbox?.TabsControl != null && toolbox.Spawn != null)
-                    toolbox.TabsControl.SelectedTab = toolbox.Spawn;
-                return;
+                    // CSG tools live in the viewport toolbar, so leave the Toolbox in Object mode.
+                    var toolbox = _editor.Windows.ToolboxWin;
+                    if (toolbox?.TabsControl != null && toolbox.Spawn != null)
+                        toolbox.TabsControl.SelectedTab = toolbox.Spawn;
+                }
+                Focus();
+                return true;
             }
 
             Actor actor = null;
@@ -2362,11 +2381,51 @@ namespace FlaxEditor.Viewport
 
             var toolboxWindow = _editor.Windows.ToolboxWin;
             if (actor is Terrain)
-                SelectToolboxTab(toolboxWindow?.Carve);
+            {
+                if (Gizmos.ActiveMode is Tools.Terrain.SculptTerrainGizmoMode)
+                {
+                    toolboxWindow?.Carve?.SelectPaintMode();
+                }
+                else if (Gizmos.ActiveMode is Tools.Terrain.PaintTerrainGizmoMode or Tools.Terrain.EditTerrainGizmoMode)
+                {
+                    EnterObjectMode();
+                }
+                else
+                {
+                    SelectToolboxTab(toolboxWindow?.Carve);
+                    toolboxWindow?.Carve?.SelectSculptMode();
+                }
+            }
             else if (actor is Foliage)
-                SelectToolboxTab(toolboxWindow?.Foliage);
+            {
+                if (Gizmos.ActiveMode is Tools.Foliage.PaintFoliageGizmoMode)
+                {
+                    toolboxWindow?.Foliage?.SelectEditMode();
+                }
+                else if (Gizmos.ActiveMode is Tools.Foliage.EditFoliageGizmoMode)
+                {
+                    EnterObjectMode();
+                }
+                else
+                {
+                    SelectToolboxTab(toolboxWindow?.Foliage);
+                    toolboxWindow?.Foliage?.SelectPaintMode();
+                }
+            }
             else if (actor is StaticModel)
-                SelectToolboxTab(toolboxWindow?.VertexPaint);
+            {
+                if (Gizmos.ActiveMode is TransformGizmoMode)
+                    SelectToolboxTab(toolboxWindow?.VertexPaint);
+                else
+                    EnterObjectMode();
+            }
+            else if (Gizmos.ActiveMode is not TransformGizmoMode)
+            {
+                EnterObjectMode();
+            }
+
+            Focus();
+            return true;
         }
 
         /// <inheritdoc />
@@ -2397,10 +2456,12 @@ namespace FlaxEditor.Viewport
                     return true;
             }
 
-            if (!_characterControllerModeActive && !_gameViewActive && input.ToggleContextualAuthoringMode.Process(this, key))
+            var shortcutRoot = Root;
+            bool tabShortcutModifier = (shortcutRoot?.GetKey(KeyboardKeys.Control) ?? false) || (shortcutRoot?.GetKey(KeyboardKeys.Alt) ?? false);
+            bool contextualAuthoringKey = key == KeyboardKeys.Tab && !tabShortcutModifier;
+            if (!_characterControllerModeActive && !_gameViewActive && (contextualAuthoringKey || input.ToggleContextualAuthoringMode.Process(this, key)))
             {
-                ToggleContextualAuthoringMode();
-                return true;
+                return CycleContextualAuthoringMode();
             }
 
             if (Gizmos.ActiveMode?.OnKeyDown(key) == true)

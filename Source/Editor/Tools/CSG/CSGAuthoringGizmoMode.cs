@@ -27,6 +27,7 @@ namespace FlaxEditor.Tools.CSG
         private const string RayPlacementAlignmentCacheKey = "CSGAuthoring.RayPlacementAlignment";
         private const string RayPlacementFrontCacheKey = "CSGAuthoring.RayPlacementFront";
         private const string BrushMaterialCacheKey = "CSGAuthoring.BrushMaterial";
+        private const string BrushMaterialAutoPickCacheKey = "CSGAuthoring.BrushMaterialAutoPick";
 
         /// <summary>
         /// Gets the CSG tool state controller.
@@ -81,6 +82,12 @@ namespace FlaxEditor.Tools.CSG
             var input = Editor.Instance?.Options.Options.Input;
             if (viewport == null || input == null)
                 return false;
+
+            if (key == KeyboardKeys.Control && Gizmo?.IsMoveInteractionActive == true)
+            {
+                SetTransientModifiers(snapOverride: true);
+                return true;
+            }
 
             if (Gizmo?.OnKeyDown(key) == true)
                 return true;
@@ -161,11 +168,23 @@ namespace FlaxEditor.Tools.CSG
         }
 
         /// <inheritdoc />
+        public override bool OnMouseDoubleClick(Float2 location, MouseButton button)
+        {
+            return Gizmo?.OnMouseDoubleClick(location, button) ?? false;
+        }
+
+        /// <inheritdoc />
         public override bool OnKeyUp(KeyboardKeys key)
         {
             var input = Editor.Instance?.Options.Options.Input;
             if (input == null)
                 return false;
+
+            if (key == KeyboardKeys.Control && Controller.SnapOverrideActive)
+            {
+                SetTransientModifiers(snapOverride: false);
+                return true;
+            }
 
             if (key == input.CSGSnapOverride.Key && Controller.SnapOverrideActive)
             {
@@ -237,6 +256,10 @@ namespace FlaxEditor.Tools.CSG
             {
                 if (bindings[i].Value.Key == KeyboardKeys.None)
                     continue;
+                if (bindings[i].Value.Key == KeyboardKeys.Control)
+                    result.Add($"Ctrl: {bindings[i].Key} conflicts with temporary Draw and the move snap override");
+                if (bindings[i].Value.Key == KeyboardKeys.Shift)
+                    result.Add($"Shift: {bindings[i].Key} conflicts with component-add marquee selection");
                 for (int j = i + 1; j < bindings.Length; j++)
                 {
                     if (bindings[i].Value == bindings[j].Value)
@@ -283,6 +306,8 @@ namespace FlaxEditor.Tools.CSG
                 state.RayPlacementFront = front;
             if (cache.TryGetCustomData(BrushMaterialCacheKey, out text) && Guid.TryParse(text, out var materialId) && materialId != Guid.Empty)
                 state.BrushMaterial = FlaxEngine.Content.LoadAsync<MaterialBase>(materialId);
+            if (cache.TryGetCustomData(BrushMaterialAutoPickCacheKey, out flag))
+                state.BrushMaterialAutoPick = flag;
             Controller.ApplyState(state);
         }
 
@@ -303,6 +328,7 @@ namespace FlaxEditor.Tools.CSG
             cache.SetCustomData(RayPlacementAlignmentCacheKey, state.RayPlacementAlignment.ToString());
             cache.SetCustomData(RayPlacementFrontCacheKey, state.RayPlacementFront.ToString());
             cache.SetCustomData(BrushMaterialCacheKey, state.BrushMaterial != null ? state.BrushMaterial.ID.ToString() : Guid.Empty.ToString());
+            cache.SetCustomData(BrushMaterialAutoPickCacheKey, state.BrushMaterialAutoPick);
         }
 
         private void ReportInputConflicts()

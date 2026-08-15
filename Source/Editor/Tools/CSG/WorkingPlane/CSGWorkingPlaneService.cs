@@ -67,7 +67,7 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
         /// <summary>
         /// Derives and stores a hover plane unless a lock or transaction freeze owns the plane.
         /// </summary>
-        public bool TrySetHover(Vector3 hitPoint, Vector3 hitNormal, Vector3 preferredTangent, Ray pointerRay, float spacing, Guid sourceActorId, int sourceComponentIndex, bool isSurfaceDerived = false)
+        public bool TrySetHover(Vector3 hitPoint, Vector3 hitNormal, Vector3 preferredTangent, Ray pointerRay, float spacing, Guid sourceActorId, int sourceComponentIndex, bool isSurfaceDerived = false, Vector3? gridOrigin = null)
         {
             if (_isLocked || _isFrozen)
                 return false;
@@ -79,6 +79,14 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
             }
 
             plane.IsSurfaceDerived |= isSurfaceDerived;
+            if (gridOrigin.HasValue)
+            {
+                // Keep the grid on the hit plane while anchoring its in-plane lattice to stable
+                // source geometry instead of making the unsnapped cursor collision cell zero.
+                var origin = gridOrigin.Value;
+                origin += plane.Normal * (float)Vector3.Dot(hitPoint - origin, plane.Normal);
+                plane.Origin = origin;
+            }
             _hoverPlane = plane;
             _hasHover = true;
             return true;
@@ -251,7 +259,11 @@ namespace FlaxEditor.Tools.CSG.WorkingPlane
             float planeDistance = (float)Vector3.Dot(hitPoint, normal);
             plane = new CSGWorkingPlane
             {
-                Origin = normal * planeDistance,
+                // CSG faces can be deliberately off the world grid. Anchor their surface-local
+                // grid at the cursor collision so the first authored point is exact and all
+                // subsequent steps are relative to that point. Non-CSG placement geometry keeps
+                // the stable world-projected origin used while hovering across a large surface.
+                Origin = sourceActorId != Guid.Empty ? hitPoint : normal * planeDistance,
                 Normal = normal,
                 Tangent = tangent,
                 Bitangent = bitangent,

@@ -109,16 +109,20 @@ namespace FlaxEditor.Tools.CSG.Transactions
         }
 
         /// <summary>
-        /// Records preview cost and schedules coalesced scene rebuilds for touched brushes.
+        /// Records preview cost and optionally schedules coalesced scene rebuilds for touched brushes.
         /// </summary>
-        public void RecordPreview(double durationMs, long allocatedBytes)
+        /// <param name="durationMs">Preview update duration in milliseconds.</param>
+        /// <param name="allocatedBytes">Managed bytes allocated by the preview update.</param>
+        /// <param name="requestRebuild">Whether to request an interactive scene rebuild.</param>
+        public void RecordPreview(double durationMs, long allocatedBytes, bool requestRebuild = true)
         {
             if (!IsActive)
                 return;
             _telemetry.PreviewUpdateCount++;
             _telemetry.LastPreviewUpdateMs = Math.Max(durationMs, 0.0);
             _telemetry.LastPreviewAllocatedBytes = Math.Max(allocatedBytes, 0);
-            RequestRebuilds(false);
+            if (requestRebuild)
+                RequestRebuilds(false);
         }
 
         /// <summary>

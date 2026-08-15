@@ -292,9 +292,9 @@ namespace FlaxEditor.Options
         /// <summary>
         /// Gets or sets a value that indicates whether the main viewports <see cref="Gizmo.DirectionGizmo"/> is visible.
         /// </summary>
-        [DefaultValue(true)]
+        [DefaultValue(false)]
         [EditorDisplay("Direction Gizmo"), EditorOrder(500), Tooltip("Sets the visibility of the direction gizmo in the main editor viewport.")]
-        public bool ShowDirectionGizmo { get; set; } = true;
+        public bool ShowDirectionGizmo { get; set; } = false;
 
         /// <summary>
         /// Gets or sets a value by which the main viewports <see cref="Gizmo.DirectionGizmo"/> size is multiplied with.
