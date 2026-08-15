@@ -3127,29 +3127,34 @@ namespace
 
         const int32 samplesCount = heightField->Columns * heightField->Rows;
         heightField->Heights.Resize(samplesCount, false);
-        heightField->HeightMaterials.Resize((heightField->Columns - 1) * (heightField->Rows - 1), false);
+        heightField->HeightMaterials.Resize((heightField->Rows - 1) * (heightField->Columns - 1), false);
 
         float minHeight = MAX_float;
         float maxHeight = -MAX_float;
-        for (int32 i = 0; i < samplesCount; i++)
+        for (int32 z = 0; z < heightField->Columns; z++)
+        for (int32 x = 0; x < heightField->Rows; x++)
         {
-            const float h = (float)heightField->HeightSamples[i].Height;
-            heightField->Heights[i] = h;
+            // Flax height fields are row-major in X then Z (the PhysX layout), while
+            // Box3D expects rows in Z then X. Convert at the backend boundary.
+            const int32 sourceIndex = x * heightField->Columns + z;
+            const int32 destinationIndex = z * heightField->Rows + x;
+            const float h = (float)heightField->HeightSamples[sourceIndex].Height;
+            heightField->Heights[destinationIndex] = h;
             minHeight = Math::Min(minHeight, h);
             maxHeight = Math::Max(maxHeight, h);
         }
-        for (int32 z = 0; z < heightField->Rows - 1; z++)
-        for (int32 x = 0; x < heightField->Columns - 1; x++)
+        for (int32 z = 0; z < heightField->Columns - 1; z++)
+        for (int32 x = 0; x < heightField->Rows - 1; x++)
         {
-            const auto& sample = heightField->HeightSamples[z * heightField->Columns + x];
-            heightField->HeightMaterials[z * (heightField->Columns - 1) + x] = sample.MaterialIndex0 == (uint8)PhysicsBackend::HeightFieldMaterial::Hole ? B3_HEIGHT_FIELD_HOLE : sample.MaterialIndex0;
+            const auto& sample = heightField->HeightSamples[x * heightField->Columns + z];
+            heightField->HeightMaterials[z * (heightField->Rows - 1) + x] = sample.MaterialIndex0 == (uint8)PhysicsBackend::HeightFieldMaterial::Hole ? B3_HEIGHT_FIELD_HOLE : sample.MaterialIndex0;
         }
 
         b3HeightFieldDef def = {};
         def.heights = heightField->Heights.Get();
         def.materialIndices = heightField->HeightMaterials.Get();
-        def.countX = heightField->Columns;
-        def.countZ = heightField->Rows;
+        def.countX = heightField->Rows;
+        def.countZ = heightField->Columns;
         def.scale = scale;
         def.globalMinimumHeight = minHeight;
         def.globalMaximumHeight = maxHeight;
@@ -3539,17 +3544,17 @@ void PhysicsBackend::GetHeightFieldSize(void* heightField, int32& rows, int32& c
 float PhysicsBackend::GetHeightFieldHeight(void* heightField, int32 x, int32 z)
 {
     auto mesh = (MeshBox3D*)heightField;
-    if (!mesh || x < 0 || z < 0 || x >= mesh->Columns || z >= mesh->Rows)
+    if (!mesh || x < 0 || z < 0 || x >= mesh->Rows || z >= mesh->Columns)
         return 0.0f;
-    return (float)mesh->HeightSamples[z * mesh->Columns + x].Height;
+    return (float)mesh->HeightSamples[x * mesh->Columns + z].Height;
 }
 
 PhysicsBackend::HeightFieldSample PhysicsBackend::GetHeightFieldSample(void* heightField, int32 x, int32 z)
 {
     auto mesh = (MeshBox3D*)heightField;
-    if (!mesh || x < 0 || z < 0 || x >= mesh->Columns || z >= mesh->Rows)
+    if (!mesh || x < 0 || z < 0 || x >= mesh->Rows || z >= mesh->Columns)
         return HeightFieldSample();
-    return mesh->HeightSamples[z * mesh->Columns + x];
+    return mesh->HeightSamples[x * mesh->Columns + z];
 }
 
 bool PhysicsBackend::ModifyHeightField(void* heightField, int32 startCol, int32 startRow, int32 cols, int32 rows, const HeightFieldSample* data)

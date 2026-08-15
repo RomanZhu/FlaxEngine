@@ -166,7 +166,8 @@ void TerrainPatch::UpdateTransform()
     if (_physicsActor)
     {
         const Transform& terrainTransform = _terrain->_transform;
-        PhysicsBackend::SetRigidActorPose(_physicsActor, terrainTransform.LocalToWorld(_offset), terrainTransform.Orientation);
+        const Vector3 collisionOffset = _offset + Vector3(0.0f, _yOffset, 0.0f);
+        PhysicsBackend::SetRigidActorPose(_physicsActor, terrainTransform.LocalToWorld(collisionOffset), terrainTransform.Orientation);
     }
 
     // Update chunks cache
@@ -2207,11 +2208,11 @@ void TerrainPatch::CreateCollision()
     for (int32 i = 0; i < 8; i++)
         materials[i] = _terrain->GetPhysicalMaterials()[i];
     _physicsShape = PhysicsBackend::CreateShape(_terrain, shape, ToSpan(materials, 8), _terrain->IsActiveInHierarchy(), false);
-    PhysicsBackend::SetShapeLocalPose(_physicsShape, Vector3(0, _yOffset * terrainTransform.Scale.Y, 0), Quaternion::Identity);
 
     // Create static actor
     void* scene = _terrain->GetPhysicsScene()->GetPhysicsScene();
-    _physicsActor = PhysicsBackend::CreateRigidStaticActor(nullptr, terrainTransform.LocalToWorld(_offset), terrainTransform.Orientation, scene);
+    const Vector3 collisionOffset = _offset + Vector3(0.0f, _yOffset, 0.0f);
+    _physicsActor = PhysicsBackend::CreateRigidStaticActor(nullptr, terrainTransform.LocalToWorld(collisionOffset), terrainTransform.Orientation, scene);
     PhysicsBackend::AttachShape(_physicsShape, _physicsActor);
     if (_terrain->IsDuringPlay())
         PhysicsBackend::AddSceneActor(scene, _physicsActor);
@@ -2268,9 +2269,11 @@ void TerrainPatch::UpdateCollisionScale() const
     const float columnScale = Math::Abs(terrainTransform.Scale.Z) * _collisionScaleXZ;
     geometry.SetHeightField(_physicsHeightField, heightScale, rowScale, columnScale);
 
-    // Update shape
+    // Box3D height fields don't support a shape-local pose, so keep the height offset
+    // on the patch actor. This is world-space equivalent for the other backends.
     PhysicsBackend::SetShapeGeometry(_physicsShape, geometry);
-    PhysicsBackend::SetShapeLocalPose(_physicsShape, Vector3(0, _yOffset * terrainTransform.Scale.Y, 0), Quaternion::Identity);
+    const Vector3 collisionOffset = _offset + Vector3(0.0f, _yOffset, 0.0f);
+    PhysicsBackend::SetRigidActorPose(_physicsActor, terrainTransform.LocalToWorld(collisionOffset), terrainTransform.Orientation);
 }
 
 void TerrainPatch::DestroyCollision()

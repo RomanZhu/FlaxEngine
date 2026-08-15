@@ -318,45 +318,66 @@ TEST_CASE("PhysicsBackend")
     PhysicsBackend::SetShapeLocalPose(sphereShape, Vector3::Zero, Quaternion::Identity);
 
 #if COMPILE_WITH_PHYSICS_COOKING
-    PhysicsBackend::HeightFieldSample heightSamples[4] = {};
+    PhysicsBackend::HeightFieldSample heightSamples[6] = {};
     heightSamples[0].Height = 0;
     heightSamples[1].Height = 1;
     heightSamples[2].Height = 2;
     heightSamples[3].Height = 3;
+    heightSamples[4].Height = 4;
+    heightSamples[5].Height = 5;
     MemoryWriteStream heightFieldStream;
-    REQUIRE_FALSE(CollisionCooking::CookHeightField(2, 2, heightSamples, heightFieldStream));
+    REQUIRE_FALSE(CollisionCooking::CookHeightField(3, 2, heightSamples, heightFieldStream));
     void* heightField = PhysicsBackend::CreateHeightField((byte*)heightFieldStream.GetHandle(), heightFieldStream.GetPosition());
     REQUIRE(heightField);
     SCOPE_EXIT
     {
         PhysicsBackend::DestroyObject(heightField);
     };
-    CHECK(PhysicsBackend::GetHeightFieldHeight(heightField, 1, 0) == Approx(1.0f));
+    int32 heightFieldRows, heightFieldColumns;
+    PhysicsBackend::GetHeightFieldSize(heightField, heightFieldRows, heightFieldColumns);
+    CHECK(heightFieldRows == 2);
+    CHECK(heightFieldColumns == 3);
+    CHECK(PhysicsBackend::GetHeightFieldHeight(heightField, 1, 0) == Approx(3.0f));
     PhysicsBackend::HeightFieldSample modifiedSample = {};
     modifiedSample.Height = 7;
     CHECK_FALSE(PhysicsBackend::ModifyHeightField(heightField, 1, 0, 1, 1, &modifiedSample));
-    CHECK(PhysicsBackend::GetHeightFieldHeight(heightField, 1, 0) == Approx(7.0f));
+    CHECK(PhysicsBackend::GetHeightFieldHeight(heightField, 0, 1) == Approx(7.0f));
 
 #if COMPILE_WITH_BOX3D
     CollisionShape heightFieldGeometry;
     heightFieldGeometry.SetHeightField(heightField, 2.0f, 3.0f, 4.0f);
+    const Vector3 heightFieldPosition(400.0, 50.0, -300.0);
+    const Quaternion heightFieldRotation = Quaternion::Euler(0.0f, 25.0f, 0.0f);
     TestPhysicsOwner heightFieldOwner;
-    void* heightFieldActor = PhysicsBackend::CreateRigidStaticActor(&heightFieldOwner, Vector3::Zero, Quaternion::Identity, scene);
+    void* heightFieldActor = PhysicsBackend::CreateRigidStaticActor(&heightFieldOwner, heightFieldPosition, heightFieldRotation, scene);
     REQUIRE(heightFieldActor);
     heightFieldOwner.Actor = heightFieldActor;
     SCOPE_EXIT
     {
         PhysicsBackend::DestroyActor(heightFieldActor);
     };
-    void* heightFieldShape = PhysicsBackend::CreateShape(floorCollider, heightFieldGeometry, (JsonAsset*)nullptr, true, false);
+    auto heightFieldCollider = CreateTestCollider();
+    REQUIRE(heightFieldCollider);
+    SCOPE_EXIT
+    {
+        heightFieldCollider->DeleteObjectNow();
+    };
+    void* heightFieldShape = PhysicsBackend::CreateShape(heightFieldCollider, heightFieldGeometry, (JsonAsset*)nullptr, true, false);
     REQUIRE(heightFieldShape);
     SCOPE_EXIT
     {
         PhysicsBackend::DestroyShape(heightFieldShape);
     };
     PhysicsBackend::AttachShape(heightFieldShape, heightFieldActor);
-    const Vector3 heightFieldPosition(400.0, 0.0, -300.0);
-    const Quaternion heightFieldRotation = Quaternion::Euler(0.0f, 25.0f, 0.0f);
+    CHECK(PhysicsBackend::GetRigidActorShapesCount(heightFieldActor) == 1);
+    PhysicsBackend::AddSceneActor(scene, heightFieldActor);
+
+    RayCastHit heightFieldHit;
+    const Vector3 heightFieldRayOrigin = heightFieldPosition + Vector3::Transform(Vector3(1.5, 100.0, 2.0), heightFieldRotation);
+    const Vector3 heightFieldRayDirection = Vector3::Transform(Vector3::Down, heightFieldRotation);
+    CHECK(PhysicsBackend::RayCast(scene, heightFieldRayOrigin, heightFieldRayDirection, heightFieldHit, 200.0f, MAX_uint32, true));
+    CHECK(heightFieldHit.Collider == heightFieldCollider);
+
     const Vector3 heightFieldSpherePosition = heightFieldPosition + Vector3::Transform(Vector3(1.5, 20.0, 2.0), heightFieldRotation);
     CHECK(PhysicsBackend::ComputeShapesPenetration(sphereShape, heightFieldShape, heightFieldSpherePosition, Quaternion::Identity, heightFieldPosition, heightFieldRotation, penetrationDirection, penetrationDistance));
     CHECK(penetrationDistance > 0.0f);

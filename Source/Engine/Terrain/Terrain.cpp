@@ -871,7 +871,7 @@ void* Terrain::GetPhysicsShape(int32 index) const
 void Terrain::GetPhysicsShapeActorPose(int32 index, const Vector3& position, const Quaternion& rotation, Vector3& shapePosition, Quaternion& shapeRotation) const
 {
     shapeRotation = rotation;
-    shapePosition = _patches.IsValidIndex(index) ? Transform(position, rotation, _transform.Scale).LocalToWorld(_patches[index]->_offset) : position;
+    shapePosition = _patches.IsValidIndex(index) ? Transform(position, rotation, _transform.Scale).LocalToWorld(_patches[index]->_offset + Vector3(0.0f, _patches[index]->_yOffset, 0.0f)) : position;
 }
 
 RigidBody* Terrain::GetAttachedRigidBody() const
