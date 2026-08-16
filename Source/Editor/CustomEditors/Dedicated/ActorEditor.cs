@@ -84,6 +84,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             {
                 if (layout.Children[i] is GroupElement group && group.Panel.HeaderText == "General")
                 {
+                    AddGroupProperty(group);
                     if (actor != null)
                     {
                         group.Panel.TooltipText = Surface.SurfaceUtils.GetVisualScriptTypeDescription(TypeUtils.GetObjectType(actor));
@@ -96,6 +97,32 @@ namespace FlaxEditor.CustomEditors.Dedicated
             }
 
             AddScriptsEditor(layout);
+        }
+
+        private void AddGroupProperty(GroupElement group)
+        {
+            var actors = Values.OfType<Actor>().ToArray();
+            var selection = Editor.Instance.SceneEditing.Selection;
+            if (Presenter.Owner is not FlaxEditor.Windows.PropertiesWindow ||
+                actors.Length == 0 || selection.Count != actors.Length ||
+                selection.Any(x => x is not ActorNode actorNode || !actors.Contains(actorNode.Actor)))
+                return;
+
+            var checkBox = group.Checkbox("Group", "Treat this actor selection as a grouping actor.").CheckBox;
+            bool isGroup = actors.Length == 1 && actors[0].GetType() == typeof(GroupActor);
+            checkBox.State = isGroup ? CheckBoxState.Checked : CheckBoxState.Default;
+            checkBox.StateChanged += box =>
+            {
+                if (box.Checked)
+                {
+                    if (actors.Length == 1 && actors[0] is EmptyActor empty && empty.GetType() == typeof(EmptyActor))
+                        Editor.Instance.SceneEditing.Convert(typeof(GroupActor));
+                    else
+                        Editor.Instance.SceneEditing.MakeSelectionGroup();
+                }
+                else if (actors.Length == 1 && actors[0].GetType() == typeof(GroupActor))
+                    Editor.Instance.SceneEditing.Convert(typeof(EmptyActor));
+            };
         }
 
         private void AddScriptsEditor(LayoutElementsContainer layout)

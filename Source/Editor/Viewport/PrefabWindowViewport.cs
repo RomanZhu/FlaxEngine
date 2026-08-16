@@ -633,7 +633,7 @@ namespace FlaxEditor.Viewport
         {
             if (base.OnMouseDoubleClick(location, button))
                 return true;
-            if (button != MouseButton.Left || ShowUI || IsControllingMouse || !ContainsPoint(ref location) || !TransformGizmo.IsActive)
+            if (button != MouseButton.Left || ShowUI || IsControllingMouse || !ContainsPoint(ref location))
                 return false;
 
             var ray = ConvertMouseToRay(ref location);
