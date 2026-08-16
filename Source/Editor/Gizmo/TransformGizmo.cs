@@ -497,7 +497,10 @@ namespace FlaxEditor.Gizmo
             return TryGetDrillTarget(hit, viewMode, _selection, out target, includePrefabBoundaries);
         }
 
-        private SceneGraphNode GetRawPickTarget(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode)
+        /// <summary>
+        /// Gets the raw scene graph node hit by a viewport pick before applying selection scopes.
+        /// </summary>
+        internal SceneGraphNode GetRawPickTarget(ref Ray ray, ref Ray view, ViewFlags viewFlags, ViewMode viewMode)
         {
             bool selectColliders = (viewFlags & ViewFlags.PhysicsDebug) == ViewFlags.PhysicsDebug || viewMode == ViewMode.PhysicsColliders;
             SceneGraphNode.RayCastData.FlagTypes rayCastFlags = SceneGraphNode.RayCastData.FlagTypes.None;

@@ -261,7 +261,7 @@ namespace FlaxEditor.Tools.Foliage
             switch (_modes.SelectedTabIndex)
             {
             case 0:
-                Editor.Windows.EditWin.Viewport.Gizmos.SetActiveMode<NoGizmoMode>();
+                Editor.Windows.EditWin.Viewport.Gizmos.SetActiveMode<TransformGizmoMode>();
                 break;
             case 1:
                 Editor.Windows.EditWin.Viewport.Gizmos.SetActiveMode<PaintFoliageGizmoMode>();

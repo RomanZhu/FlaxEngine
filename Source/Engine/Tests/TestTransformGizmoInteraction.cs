@@ -138,6 +138,25 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestLockedPlaneScaleFactorIsSymmetricAndCancels()
+        {
+            float factor = TransformGizmoBase.SolvePointerScaleFactor((60.0f + 60.0f) * 0.5f);
+            Assert.AreEqual(factor, TransformGizmoBase.SolvePointerScaleFactor(60.0f), 0.00001f);
+            Assert.AreEqual(1.0f, TransformGizmoBase.SolvePointerScaleFactor((120.0f - 120.0f) * 0.5f), 0.00001f);
+        }
+
+        [Test]
+        public void TestLockedPlaneScaleSnapKeepsAxesEqualAndPerpendicular()
+        {
+            var bounds = new BoundingBox(new Vector3(-5), new Vector3(5, 10, 15));
+            Vector3 snapped = TransformGizmoBase.SnapLockedPlaneScaleFactorsToGrid(
+                new Vector3(1.24f, 1.24f, 1.7f), bounds, Vector3.Zero, Quaternion.Identity,
+                TransformGizmoBase.Axis.XY, new Vector3(2.0f));
+            Assert.AreEqual(snapped.X, snapped.Y, 0.00001f);
+            Assert.AreEqual(1.7f, snapped.Z, 0.00001f);
+        }
+
+        [Test]
         public void TestTransformSnapModifierInvertsConfiguredState()
         {
             Assert.IsFalse(TransformGizmoBase.ResolveSnapping(false, false));

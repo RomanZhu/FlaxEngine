@@ -15,8 +15,6 @@ namespace FlaxEditor.Tools.CSG
     [HideInEditor]
     public sealed class CSGAuthoringGizmoMode : EditorGizmoMode
     {
-        internal const string ContextCacheKey = "SceneEditingContext";
-        internal const string ContextCacheValue = "CSG";
         private const string ToolCacheKey = "CSGAuthoring.Tool";
         private const string OperationCacheKey = "CSGAuthoring.Operation";
         private const string WorkingPlaneLockCacheKey = "CSGAuthoring.WorkingPlaneLocked";

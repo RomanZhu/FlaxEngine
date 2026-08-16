@@ -168,6 +168,23 @@ namespace FlaxEditor.Gizmo
             return desired;
         }
 
+        internal static Vector3 SnapLockedPlaneScaleFactorsToGrid(Vector3 desired, BoundingBox bounds, Vector3 pivot, Quaternion basis, Axis axis, Vector3 step)
+        {
+            Vector3 size = GetBoundsSizeInBasis(bounds, pivot, basis);
+            GetAxisComponents(axis, out bool useX, out bool useY, out bool useZ);
+            int component = useX ? 0 : (useY ? 1 : 2);
+            if (useY && size.Y > (component == 0 ? size.X : size.Z)) component = 1;
+            if (useZ && size.Z > (component == 0 ? size.X : size.Y)) component = 2;
+            Real extent = component == 0 ? size.X : (component == 1 ? size.Y : size.Z);
+            Real grid = component == 0 ? step.X : (component == 1 ? step.Y : step.Z);
+            Real factor = component == 0 ? desired.X : (component == 1 ? desired.Y : desired.Z);
+            factor = SnapScaleFactorToGrid(factor, extent, grid);
+            if (useX) desired.X = factor;
+            if (useY) desired.Y = factor;
+            if (useZ) desired.Z = factor;
+            return desired;
+        }
+
         internal static Real SnapScaleFactorToGrid(Real factor, Real originalSize, Real step)
         {
             originalSize = Mathr.Abs(originalSize);

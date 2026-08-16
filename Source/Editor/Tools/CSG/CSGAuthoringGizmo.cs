@@ -585,14 +585,38 @@ namespace FlaxEditor.Tools.CSG
         /// <summary>Enters a persistent editing context for the complete selected brush set.</summary>
         internal bool OnMouseDoubleClick(Float2 location, MouseButton button)
         {
-            if (button != MouseButton.Left || Owner.IsAltKeyDown || Owner.IsControlDown || _controller.Tool != CSGTool.Draw ||
-                !TryGetBrushSurfaceHit(out var hit) || hit.Brush == null || !IsBrushSelected(hit.Brush))
+            if (button != MouseButton.Left || Owner.IsAltKeyDown || Owner.IsControlDown)
+                return false;
+
+            BoxBrushNode brush = null;
+            if (TryGetBrushSurfaceHit(out var hit) && hit.Brush != null && IsBrushSelected(hit.Brush))
+            {
+                brush = hit.Brush;
+            }
+            else
+            {
+                var selection = _selection.CSGSelection;
+                if (selection.Count == 1 && selection[0] is BoxBrushNode selectedBrush &&
+                    selectedBrush.Actor is BoxBrush { Mode: BrushMode.Subtractive } subtractiveBrush)
+                {
+                    var ray = Owner.Viewport.ConvertMouseToRay(ref location);
+                    if (subtractiveBrush.OrientedBox.Intersects(ref ray))
+                        brush = selectedBrush;
+                }
+            }
+            return brush != null && EnterEditContext(brush);
+        }
+
+        /// <summary>Enters the persistent edit context for a selected brush.</summary>
+        internal bool EnterEditContext(BoxBrushNode brush)
+        {
+            if (brush == null || !TryEnterSelectionContext() || !IsBrushSelected(brush) || !_controller.SetTool(CSGTool.Edit))
                 return false;
             if (_controller.HasActiveInteraction)
                 _controller.TryCancel(EditorGizmoModeCancelReason.User);
             else
                 TryCancelArmedSelectDrag();
-            _drawEditingBrush = hit.Brush;
+            _drawEditingBrush = brush;
             _activeBodyTransformBrush = null;
             _suppressEditBodyActivationUntilMouseUp = true;
             // The second click may already have armed a body drag. Consume its trailing mouse-up

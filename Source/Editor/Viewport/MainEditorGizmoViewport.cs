@@ -37,7 +37,6 @@ namespace FlaxEditor.Viewport
     /// <seealso cref="FlaxEditor.Viewport.EditorGizmoViewport" />
     public class MainEditorGizmoViewport : EditorGizmoViewport, IEditorPrimitivesOwner
     {
-        private const string NoGizmoContextCacheValue = "None";
         private readonly Editor _editor;
         private readonly ContextMenuButton _showGridButton;
         private readonly ContextMenuButton _showNavigationButton;
@@ -410,27 +409,13 @@ namespace FlaxEditor.Viewport
                 // Add default modes used by the editor
                 Gizmos.AddMode(new TransformGizmoMode());
                 Gizmos.AddMode(CSGAuthoringMode = new CSGAuthoringGizmoMode());
-                Gizmos.AddMode(new NoGizmoMode());
                 Gizmos.AddMode(SculptTerrainGizmo = new Tools.Terrain.SculptTerrainGizmoMode());
                 Gizmos.AddMode(PaintTerrainGizmo = new Tools.Terrain.PaintTerrainGizmoMode());
                 Gizmos.AddMode(EditTerrainGizmo = new Tools.Terrain.EditTerrainGizmoMode());
                 Gizmos.AddMode(PaintFoliageGizmo = new Tools.Foliage.PaintFoliageGizmoMode());
                 Gizmos.AddMode(EditFoliageGizmo = new Tools.Foliage.EditFoliageGizmoMode());
 
-                // Restore the explicit Object/CSG/No Gizmo context without inferring it from selection.
-                if (_editor.ProjectCache.TryGetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, out string context))
-                {
-                    if (string.Equals(context, CSGAuthoringGizmoMode.ContextCacheValue, StringComparison.Ordinal))
-                        Gizmos.SetActiveMode<CSGAuthoringGizmoMode>();
-                    else if (string.Equals(context, NoGizmoContextCacheValue, StringComparison.Ordinal))
-                        Gizmos.SetActiveMode<NoGizmoMode>();
-                    else
-                        Gizmos.SetActiveMode<TransformGizmoMode>();
-                }
-                else
-                {
-                    Gizmos.SetActiveMode<TransformGizmoMode>();
-                }
+                Gizmos.SetActiveMode<TransformGizmoMode>();
             }
             Gizmos.ActiveModeChanged += OnActiveGizmoModeChanged;
             CSGAuthoringMode.Controller.Changed += UpdateViewportToolStrip;
@@ -470,19 +455,12 @@ namespace FlaxEditor.Viewport
             }
             if (mode is CSGAuthoringGizmoMode)
             {
-                _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, CSGAuthoringGizmoMode.ContextCacheValue);
-
                 // CSG tools live in the viewport toolbar. Keep the Toolbox out of a stale
                 // Terrain/Foliage tab so selecting that tab later always fires its activation
                 // callback and gives the specialized gizmo ownership of the viewport.
                 var toolbox = _editor.Windows.ToolboxWin;
                 if (toolbox?.TabsControl != null && toolbox.Spawn != null && toolbox.TabsControl.SelectedTab != toolbox.Spawn)
                     toolbox.TabsControl.SelectedTab = toolbox.Spawn;
-            }
-            else
-            {
-                var context = mode is NoGizmoMode ? NoGizmoContextCacheValue : "Object";
-                _editor.ProjectCache.SetCustomData(CSGAuthoringGizmoMode.ContextCacheKey, context);
             }
             UpdateViewportToolStrip();
         }
@@ -711,8 +689,6 @@ namespace FlaxEditor.Viewport
             objectMode.Icon = _editor.Icons.Toolbox96;
             var csgMode = menu.AddButton("CSG Authoring", () => Gizmos.SetActiveMode<CSGAuthoringGizmoMode>());
             csgMode.Icon = _editor.Icons.VisjectBoxClosed32;
-            var noGizmoMode = menu.AddButton("No Gizmo", () => Gizmos.SetActiveMode<NoGizmoMode>());
-            noGizmoMode.Icon = _editor.Icons.Cross12;
             menu.AddSeparator();
             var sculptTerrainMode = menu.AddButton("Sculpt Terrain", () => Gizmos.SetActiveMode<Tools.Terrain.SculptTerrainGizmoMode>());
             sculptTerrainMode.Icon = _editor.Icons.Terrain96;
@@ -731,7 +707,6 @@ namespace FlaxEditor.Viewport
                     return;
                 objectMode.Checked = Gizmos.ActiveMode is TransformGizmoMode;
                 csgMode.Checked = Gizmos.ActiveMode is CSGAuthoringGizmoMode;
-                noGizmoMode.Checked = Gizmos.ActiveMode is NoGizmoMode;
                 sculptTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.SculptTerrainGizmoMode;
                 paintTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.PaintTerrainGizmoMode;
                 editTerrainMode.Checked = Gizmos.ActiveMode is Tools.Terrain.EditTerrainGizmoMode;
@@ -1770,8 +1745,6 @@ namespace FlaxEditor.Viewport
                 return "Object Mode";
             if (Gizmos.ActiveMode is CSGAuthoringGizmoMode)
                 return "CSG Mode";
-            if (Gizmos.ActiveMode is NoGizmoMode)
-                return "No Gizmo";
             if (Gizmos.ActiveMode is Tools.Terrain.SculptTerrainGizmoMode)
                 return "Sculpt Terrain";
             if (Gizmos.ActiveMode is Tools.Terrain.PaintTerrainGizmoMode)
@@ -2154,12 +2127,33 @@ namespace FlaxEditor.Viewport
                 return true;
             if (button != MouseButton.Left || _gameViewActive || IsControllingMouse || IsAltKeyDown || _directionGizmo.IsMouseOver || !ContainsPoint(ref location))
                 return false;
-            if (Gizmos.ActiveMode is not TransformGizmoMode)
-                return false;
-
+            bool objectMode = Gizmos.ActiveMode is TransformGizmoMode;
             var ray = ConvertMouseToRay(ref location);
             var view = new Ray(ViewPosition, ViewDirection);
             var renderView = Task.View;
+            if (objectMode)
+            {
+                var rawRay = ray;
+                var rawView = view;
+                var rawTarget = TransformGizmo.GetRawPickTarget(ref rawRay, ref rawView, renderView.Flags, renderView.Mode);
+                var selectedBrush = _editor.SceneEditing.SelectionCount == 1
+                    ? _editor.SceneEditing.Selection[0] as BoxBrushNode
+                    : null;
+                bool selectedBrushHit = selectedBrush != null &&
+                    (ReferenceEquals(selectedBrush, rawTarget) ||
+                     (selectedBrush.Actor is BoxBrush brush && brush.Mode == BrushMode.Subtractive &&
+                      brush.OrientedBox.Intersects(ref ray)));
+                if (selectedBrushHit)
+                {
+                    Gizmos.SetActiveMode<CSGAuthoringGizmoMode>();
+                    if (CSGAuthoringMode.Gizmo.EnterEditContext(selectedBrush))
+                    {
+                        _suppressNextSelectionPick = true;
+                        Focus();
+                        return true;
+                    }
+                }
+            }
             if (!TransformGizmo.TryDrillPick(ref ray, ref view, renderView.Flags, renderView.Mode, out var target))
                 return false;
 

@@ -801,6 +801,13 @@ namespace FlaxEditor.Gizmo
                 float secondPixels = (firstDirection.X * pointerDelta.Y - firstDirection.Y * pointerDelta.X) / determinant;
                 float firstFactor = SolvePointerScaleFactor(firstPixels, gain);
                 float secondFactor = SolvePointerScaleFactor(secondPixels, gain);
+                if (Owner.IsShiftDown)
+                {
+                    // Average the decomposed pixel components before solving so
+                    // opposing drags cancel and the anchor remains exactly 1.
+                    float factor = SolvePointerScaleFactor((firstPixels + secondPixels) * 0.5f, gain);
+                    firstFactor = secondFactor = factor;
+                }
                 if (_activeAxis == Axis.XY)
                 {
                     relativeFactors.X = firstFactor;
@@ -824,7 +831,9 @@ namespace FlaxEditor.Gizmo
 
             Vector3 desired = MultiplyScaleFactors(anchor.Result.Scale, relativeFactors);
             if (pointerDelta.LengthSquared > 0.00000001f && IsScaleSnappingActive)
-                desired = SnapScaleFactorsToGrid(desired, origin.OriginalBounds, origin.PivotPosition, basis, _activeAxis, GetLinearSnapStep(origin));
+                desired = Owner.IsShiftDown && (_activeAxis == Axis.XY || _activeAxis == Axis.YZ || _activeAxis == Axis.ZX)
+                    ? SnapLockedPlaneScaleFactorsToGrid(desired, origin.OriginalBounds, origin.PivotPosition, basis, _activeAxis, GetLinearSnapStep(origin))
+                    : SnapScaleFactorsToGrid(desired, origin.OriginalBounds, origin.PivotPosition, basis, _activeAxis, GetLinearSnapStep(origin));
             _scaleDelta = desired - InteractionResult.Scale;
         }
 
