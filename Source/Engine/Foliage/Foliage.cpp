@@ -918,35 +918,38 @@ void Foliage::RebuildClusters()
         PROFILE_CPU_NAMED("Init Root");
 
         BoundingBox totalBounds, box;
+        bool hasTotalBounds = false;
 #if FOLIAGE_USE_SINGLE_QUAD_TREE
+        // Calculate total bounds of all instances with a ready foliage type
+        for (auto i = Instances.Begin(); i.IsNotEnd(); ++i)
         {
-            // Calculate total bounds of all instances
-            auto i = Instances.Begin();
-            for (; i.IsNotEnd(); ++i)
+            if (!FoliageTypes[i->Type].IsReady())
+                continue;
+            BoundingBox::FromSphere(i->Bounds, box);
+            if (hasTotalBounds)
             {
-                if (!FoliageTypes[i->Type].IsReady())
-                    continue;
-                BoundingBox::FromSphere(i->Bounds, box);
-                totalBounds = box;
-                break;
-            }
-            ++i;
-            // TODO: inline code and use SIMD
-            for (; i.IsNotEnd(); ++i)
-            {
-                if (!FoliageTypes[i->Type].IsReady())
-                    continue;
-                BoundingBox::FromSphere(i->Bounds, box);
                 BoundingBox::Merge(totalBounds, box, totalBounds);
+            }
+            else
+            {
+                totalBounds = box;
+                hasTotalBounds = true;
             }
         }
 
         // Setup first and topmost cluster
-        Clusters.Resize(1);
-        Root = &Clusters[0];
-        Root->Init(totalBounds);
+        if (hasTotalBounds)
+        {
+            Clusters.Resize(1);
+            Root = &Clusters[0];
+            Root->Init(totalBounds);
+        }
+        else
+        {
+            Root = nullptr;
+            Clusters.Clear();
+        }
 #else
-        bool hasTotalBounds = false;
         for (auto& type : FoliageTypes)
         {
             if (!type.IsReady())
@@ -958,25 +961,28 @@ void Foliage::RebuildClusters()
 
             // Calculate total bounds of all instances of this type
             BoundingBox totalBoundsType;
-            auto i = Instances.Begin();
-            for (; i.IsNotEnd(); ++i)
-            {
-                if (i->Type == type.Index)
-                {
-                    BoundingBox::FromSphere(i->Bounds, box);
-                    totalBoundsType = box;
-                    break;
-                }
-            }
-            ++i;
+            bool hasTypeBounds = false;
             // TODO: inline code and use SIMD
-            for (; i.IsNotEnd(); ++i)
+            for (auto i = Instances.Begin(); i.IsNotEnd(); ++i)
             {
-                if (i->Type == type.Index)
+                if (i->Type != type.Index)
+                    continue;
+                BoundingBox::FromSphere(i->Bounds, box);
+                if (hasTypeBounds)
                 {
-                    BoundingBox::FromSphere(i->Bounds, box);
                     BoundingBox::Merge(totalBoundsType, box, totalBoundsType);
                 }
+                else
+                {
+                    totalBoundsType = box;
+                    hasTypeBounds = true;
+                }
+            }
+            if (!hasTypeBounds)
+            {
+                type.Root = nullptr;
+                type.Clusters.Clear();
+                continue;
             }
 
             // Setup first and topmost cluster
@@ -993,8 +999,15 @@ void Foliage::RebuildClusters()
                 hasTotalBounds = true;
             }
         }
-        ASSERT(hasTotalBounds);
 #endif
+        if (!hasTotalBounds)
+        {
+            _box = BoundingBox(_transform.Translation, _transform.Translation);
+            _sphere = BoundingSphere(_transform.Translation, 0.0f);
+            if (_sceneRenderingKey != -1)
+                GetSceneRendering()->UpdateActor(this, _sceneRenderingKey, ISceneRenderingListener::Bounds);
+            return;
+        }
         ASSERT(!totalBounds.Minimum.IsNanOrInfinity() && !totalBounds.Maximum.IsNanOrInfinity());
         _box = totalBounds;
         BoundingSphere::FromBox(_box, _sphere);

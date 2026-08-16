@@ -34,7 +34,10 @@ void ForwardShadingFeature::Bind(MaterialShader::BindParameters& params, Span<by
     // Set fog input
     data.ExponentialHeightFog = cache->Fog.ExponentialHeightFogData;
     data.VolumetricFogData = cache->Fog.VolumetricFogData;
-    params.GPUContext->BindSR(volumetricFogTextureRegisterIndex, cache->Fog.VolumetricFogTexture);
+    GPUTextureView* volumetricFogTexture = cache->Fog.VolumetricFogTexture;
+    if (volumetricFogTexture == nullptr)
+        data.ExponentialHeightFog.VolumetricFogMaxDistance = -1.0f;
+    params.GPUContext->BindSR(volumetricFogTextureRegisterIndex, volumetricFogTexture);
 
     // Set directional light input
     if (cache->DirectionalLights.HasItems())
