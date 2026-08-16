@@ -22,6 +22,35 @@
 #include "Engine/Content/Deprecated.h"
 #include "Engine/Level/Scripts/ModelPrefab.h"
 
+namespace
+{
+    bool HasPrefabObjectInInstance(const SceneObjectsFactory::Context& context, const Array<SceneObject*>& sceneObjects, const ISerializable::DeserializeStream& objectsData, int32 initialCount, int32 instanceIndex, const Guid& prefabObjectId)
+    {
+        const auto& instance = context.Instances[instanceIndex];
+        Guid objectId;
+        int32 objectInstanceIndex;
+        if (instance.IdsMapping.TryGet(prefabObjectId, objectId) &&
+            context.ObjectToInstance.TryGet(objectId, objectInstanceIndex) &&
+            objectInstanceIndex == instanceIndex)
+        {
+            return true;
+        }
+
+        // Fall back to the serialized objects in this prefab instance (eg. if objects were reordered).
+        for (int32 i = 0; i < initialCount; i++)
+        {
+            if (JsonTools::GetGuid(objectsData[i], "PrefabObjectID") != prefabObjectId)
+                continue;
+            const SceneObject* object = sceneObjects[i];
+            objectId = object ? object->GetID() : JsonTools::GetGuid(objectsData[i], "ID");
+            if (context.ObjectToInstance.TryGet(objectId, objectInstanceIndex) && objectInstanceIndex == instanceIndex)
+                return true;
+        }
+        return false;
+    }
+
+}
+
 #if USE_EDITOR
 
 MissingScript::MissingScript(const SpawnParams& params)
@@ -434,6 +463,15 @@ Actor* SceneObjectsFactory::CreateActor(int32 typeId, const Guid& id)
     return nullptr;
 }
 
+void SceneObjectsFactory::RefreshHierarchyCaches(Actor* actor)
+{
+    Actor* parent = actor->GetParent();
+    actor->_scene = parent ? parent->GetScene() : nullptr;
+    actor->_isActiveInHierarchy = actor->_isActive && (!parent || parent->IsActiveInHierarchy());
+    for (Actor* child : actor->Children)
+        RefreshHierarchyCaches(child);
+}
+
 SceneObjectsFactory::PrefabSyncData::PrefabSyncData(Array<SceneObject*>& sceneObjects, const ISerializable::DeserializeStream& data, ISerializeModifier* modifier)
     : SceneObjects(sceneObjects)
     , Data(data)
@@ -449,6 +487,28 @@ void SceneObjectsFactory::PrefabSyncData::InitNewObjects()
         SceneObject* obj = SceneObjects[InitialCount + i];
         obj->Initialize();
     }
+    RefreshReparentedObjects();
+}
+
+void SceneObjectsFactory::PrefabSyncData::RefreshReparentedObjects()
+{
+    // Existing actors can be serialized before newly inserted prefab ancestors. Refresh their cached
+    // hierarchy state parent-first after those ancestors initialize and establish their own state.
+    for (Actor* actor : ReparentedObjects)
+    {
+        bool hasReparentedAncestor = false;
+        for (Actor* parent = actor->GetParent(); parent; parent = parent->GetParent())
+        {
+            if (ReparentedObjects.Contains(parent))
+            {
+                hasReparentedAncestor = true;
+                break;
+            }
+        }
+        if (!hasReparentedAncestor)
+            SceneObjectsFactory::RefreshHierarchyCaches(actor);
+    }
+    ReparentedObjects.Clear();
 }
 
 void SceneObjectsFactory::SetupPrefabInstances(Context& context, const PrefabSyncData& data)
@@ -638,7 +698,7 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
             // Add any sub-objects that are missing (in case new root was created)
             if (syncNewRoot)
             {
-                SynchronizeNewPrefabInstances(context, data, instance.Prefab, (Actor*)root, prefabRootId, instance.RootIndex, oldRootData);
+                SynchronizeNewPrefabInstances(context, data, instance.Prefab, (Actor*)root, prefabRootId, oldRootData);
             }
         }
     }
@@ -671,7 +731,7 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
             continue;
         }
 
-        SynchronizeNewPrefabInstances(context, data, prefab, actor, actorPrefabObjectId, i, stream);
+        SynchronizeNewPrefabInstances(context, data, prefab, actor, actorPrefabObjectId, stream);
     }
 
     Scripting::ObjectsLookupIdMapping.Set(nullptr);
@@ -733,6 +793,11 @@ void SceneObjectsFactory::SynchronizePrefabInstances(Context& context, PrefabSyn
 
             // Reparent
             obj->SetParent(actualParent, false);
+            if (data.SceneObjects.Find(actualParent) >= data.InitialCount)
+            {
+                if (Actor* reparentedActor = dynamic_cast<Actor*>(obj))
+                    data.ReparentedObjects.AddUnique(reparentedActor);
+            }
         }
 
         // Preserve order in parent (values from prefab are used)
@@ -786,7 +851,7 @@ void SceneObjectsFactory::SynchronizePrefabInstances(Context& context, PrefabSyn
     Scripting::ObjectsLookupIdMapping.Set(nullptr);
 }
 
-void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, PrefabSyncData& data, Prefab* prefab, Actor* actor, const Guid& actorPrefabObjectId, int32 i, const ISerializable::DeserializeStream& stream)
+void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, PrefabSyncData& data, Prefab* prefab, Actor* actor, const Guid& actorPrefabObjectId, const ISerializable::DeserializeStream& stream)
 {
     // Use cached acceleration structure for prefab hierarchy validation
     const auto* hierarchy = prefab->ObjectsHierarchyCache.TryGet(actorPrefabObjectId);
@@ -815,34 +880,12 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
         }
 
         // Use only objects that are missing
-        bool spawned = false;
-        int32 childSearchStart = i + 1; // Objects are serialized with parent followed by its children
         int32 instanceIndex = -1;
         if (context.ObjectToInstance.TryGet(actorId, instanceIndex) && context.Instances[instanceIndex].Prefab == prefab)
         {
-            // Quickly check if that object exists
-            auto& prefabInstance = context.Instances[instanceIndex];
-            Guid id;
-            int32 idInstanceIndex;
-            if (prefabInstance.IdsMapping.TryGet(prefabObjectId, id) && 
-                context.ObjectToInstance.TryGet(id, idInstanceIndex) && 
-                idInstanceIndex == instanceIndex)
+            if (HasPrefabObjectInInstance(context, data.SceneObjects, data.Data, data.InitialCount, instanceIndex, prefabObjectId))
                 continue;
-
-            // Start searching from the beginning of that prefab instance (eg. in case prefab objects were reordered)
-            childSearchStart = Math::Min(childSearchStart, prefabInstance.StatIndex);
         }
-        for (int32 j = childSearchStart; j < data.InitialCount; j++)
-        {
-            if (JsonTools::GetGuid(data.Data[j], "PrefabObjectID") == prefabObjectId)
-            {
-                // This object exists in the saved scene objects list
-                spawned = true;
-                break;
-            }
-        }
-        if (spawned)
-            continue;
 
         // Map prefab object ID to this actor's prefab instance so the new objects get added to it
         context.SetupIdsMapping(actor, data.Modifier);
@@ -857,6 +900,16 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
 void SceneObjectsFactory::SynchronizeNewPrefabInstance(Context& context, PrefabSyncData& data, Prefab* prefab, Actor* actor, const Guid& prefabObjectId, const Guid& nestedInstanceId)
 {
     PROFILE_CPU_NAMED("SynchronizeNewPrefabInstance");
+
+    // A newly inserted parent can have descendants that were already serialized with the old hierarchy.
+    // Reuse objects only from this exact prefab instance and let SynchronizePrefabInstances reparent them.
+    int32 instanceIndex = -1;
+    if (context.ObjectToInstance.TryGet(actor->GetID(), instanceIndex) &&
+        context.Instances[instanceIndex].Prefab == prefab &&
+        HasPrefabObjectInInstance(context, data.SceneObjects, data.Data, data.InitialCount, instanceIndex, prefabObjectId))
+    {
+        return;
+    }
 
     // Get prefab object data from the prefab
     const ISerializable::DeserializeStream* prefabData;
@@ -887,7 +940,6 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstance(Context& context, PrefabS
     newObj.PrefabData = prefabData;
     newObj.PrefabObjectId = prefabObjectId;
     newObj.Id = id;
-    int32 instanceIndex = -1;
     if (context.ObjectToInstance.TryGet(actor->GetID(), instanceIndex) && context.Instances[instanceIndex].Prefab == prefab)
     {
         // Add to the prefab instance IDs mapping

@@ -646,6 +646,44 @@ bool TextureTool::ImportTextureStb(ImageType type, const StringView& path, Textu
 #endif
     }
 
+    // Grayscale-derived alpha needs a storage format with an alpha channel.
+    if (options.AlphaSource == TextureAlphaSource::FromGrayScale && !PixelFormatExtensions::HasAlpha(textureDataSrc->Format))
+    {
+        const PixelFormat alphaFormat = PixelFormatExtensions::IsHDR(textureDataSrc->Format)
+            ? PixelFormat::R32G32B32A32_Float
+            : PixelFormat::R8G8B8A8_UNorm;
+        if (ConvertStb(*textureDataDst, *textureDataSrc, alphaFormat))
+        {
+            errorMsg = TEXT("Cannot convert texture for alpha generation.");
+            return true;
+        }
+        ::Swap(textureDataSrc, textureDataDst);
+    }
+
+    // Generate or discard source alpha before mip generation and compression.
+    if (options.AlphaSource != TextureAlphaSource::InputTextureAlpha && PixelFormatExtensions::HasAlpha(textureDataSrc->Format))
+    {
+        if (Transform(*textureDataSrc, [&](Color& color)
+            {
+                color.A = options.AlphaSource == TextureAlphaSource::FromGrayScale
+                    ? (color.R + color.G + color.B) / 3.0f
+                    : 1.0f;
+            }))
+        {
+            errorMsg = TEXT("Cannot generate texture alpha.");
+            return true;
+        }
+    }
+
+    if (options.AlphaIsTransparency && options.AlphaSource != TextureAlphaSource::None && PixelFormatExtensions::HasAlpha(textureDataSrc->Format))
+    {
+        if (DilateTransparentPixels(*textureDataSrc))
+        {
+            errorMsg = TEXT("Cannot dilate transparent texture colors.");
+            return true;
+        }
+    }
+
     // Import as sRGB data for Linear color space
     if (options.sRGB && !GraphicsSettings::Get()->GammaColorSpace)
     {
@@ -700,7 +738,7 @@ bool TextureTool::ImportTextureStb(ImageType type, const StringView& path, Textu
     }
 
     // Compress mip maps or convert image
-    PixelFormat targetFormat = ToPixelFormat(options.Type, width, height, options.Compress);
+    PixelFormat targetFormat = ToPixelFormat(GetOutputType(options), width, height, options.Compress);
     if (options.sRGB)
         targetFormat = PixelFormatExtensions::TosRGB(targetFormat);
     if (targetFormat != textureDataSrc->Format)

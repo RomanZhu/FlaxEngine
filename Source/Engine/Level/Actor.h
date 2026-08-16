@@ -32,6 +32,7 @@ API_CLASS(Abstract) class FLAXENGINE_API Actor : public SceneObject
     friend SceneRendering;
     friend Prefab;
     friend PrefabInstanceData;
+    friend class SceneObjectsFactory;
 protected:
     uint16 _isActive : 1;
     uint16 _isActiveInHierarchy : 1;

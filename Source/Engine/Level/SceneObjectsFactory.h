@@ -101,6 +101,7 @@ public:
 
         PrefabSyncData(Array<SceneObject*>& sceneObjects, const ISerializable::DeserializeStream& data, ISerializeModifier* modifier);
         void InitNewObjects();
+        void RefreshReparentedObjects();
 
     private:
         struct NewObj
@@ -113,6 +114,7 @@ public:
 
         int32 InitialCount;
         Array<NewObj> NewObjects;
+        Array<Actor*> ReparentedObjects;
     };
 
     /// <summary>
@@ -146,6 +148,7 @@ public:
     static void SynchronizePrefabInstances(Context& context, PrefabSyncData& data);
 
 private:
-    static void SynchronizeNewPrefabInstances(Context& context, PrefabSyncData& data, Prefab* prefab, Actor* actor, const Guid& actorPrefabObjectId, int32 i, const ISerializable::DeserializeStream& stream);
+    static void RefreshHierarchyCaches(Actor* actor);
+    static void SynchronizeNewPrefabInstances(Context& context, PrefabSyncData& data, Prefab* prefab, Actor* actor, const Guid& actorPrefabObjectId, const ISerializable::DeserializeStream& stream);
     static void SynchronizeNewPrefabInstance(Context& context, PrefabSyncData& data, Prefab* prefab, Actor* actor, const Guid& prefabObjectId, const Guid& nestedInstanceId);
 };

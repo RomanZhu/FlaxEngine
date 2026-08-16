@@ -243,6 +243,7 @@ Actor* PrefabManager::SpawnPrefab(Prefab* prefab, const SpawnOptions& options)
         if (obj)
             obj->Initialize();
     }
+    prefabSyncData.RefreshReparentedObjects();
 
     // Delete objects without parent or with invalid linkage to the prefab
     for (int32 i = 0; i < sceneObjects->Count(); i++)
