@@ -19,6 +19,7 @@ using FlaxEditor.Tools.CSG.HitTesting;
 using FlaxEditor.Tools.CSG.Placement;
 using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEditor.Tools.CSG.Selection;
+using FlaxEditor.Tools.CSG.Snapping;
 using FlaxEditor.Tools.CSG.Tools;
 using FlaxEditor.Tools.CSG.Transactions;
 using FlaxEditor.Tools.CSG.WorkingPlane;

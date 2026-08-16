@@ -651,18 +651,37 @@ TEST_CASE("Prefabs")
                                              "]");
         REQUIRE(!prefabInit);
 
-        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(Guid::New(), Scene::TypeInitializer));
+        rapidjson_flax::StringBuffer sceneBuffer;
+        CompactJsonWriter sceneWriter(sceneBuffer);
+        sceneWriter.StartObject();
+        sceneWriter.JKEY("EngineBuild");
+        sceneWriter.Int(FLAXENGINE_VERSION_BUILD);
+        sceneWriter.JKEY("Data");
+        sceneWriter.StartArray();
+        sceneWriter.StartObject();
+        sceneWriter.JKEY("ID");
+        sceneWriter.Guid(Guid::New());
+        sceneWriter.JKEY("TypeName");
+        sceneWriter.String("FlaxEngine.Scene", ARRAY_COUNT("FlaxEngine.Scene") - 1);
+        sceneWriter.EndObject();
+        sceneWriter.EndArray(1);
+        sceneWriter.EndObject();
+        BytesContainer sceneData((const byte*)sceneBuffer.GetString(), (int32)sceneBuffer.GetSize());
+        Scene* scene = Level::LoadSceneFromBytes(sceneData);
         REQUIRE(scene);
-        SCOPE_EXIT{ scene->DeleteObject(); };
-        scene->Initialize();
+        SCOPE_EXIT{ Level::UnloadScene(scene); };
         Actor* instanceA = PrefabManager::SpawnPrefab(prefab);
         Actor* instanceB = PrefabManager::SpawnPrefab(prefab);
         REQUIRE(instanceA);
         REQUIRE(instanceB);
+        ExponentialHeightFog* fogA = ScriptingObject::Cast<ExponentialHeightFog>(instanceA);
+        ExponentialHeightFog* fogB = ScriptingObject::Cast<ExponentialHeightFog>(instanceB);
+        REQUIRE(fogA);
+        REQUIRE(fogB);
         REQUIRE(instanceA->Children.Count() == 1);
         REQUIRE(instanceB->Children.Count() == 1);
-        CHECK(instanceA->As<ExponentialHeightFog>()->DirectionalInscatteringLight == instanceA->Children[0]);
-        CHECK(instanceB->As<ExponentialHeightFog>()->DirectionalInscatteringLight == instanceB->Children[0]);
+        CHECK(fogA->DirectionalInscatteringLight == instanceA->Children[0]);
+        CHECK(fogB->DirectionalInscatteringLight == instanceB->Children[0]);
         instanceA->SetParent(scene);
         instanceB->SetParent(scene);
 
@@ -674,7 +693,7 @@ TEST_CASE("Prefabs")
         REQUIRE(externalLight->GetScene() == scene);
         const Guid externalLightId = externalLight->GetID();
         instanceA->SetName(TEXT("Changed Fog"));
-        instanceA->As<ExponentialHeightFog>()->DirectionalInscatteringLight = externalLight;
+        fogA->DirectionalInscatteringLight = externalLight;
 
         REQUIRE(!PrefabManager::ApplyAll(instanceA));
         const ISerializable::DeserializeStream** rootDataPtr = prefab->ObjectsDataCache.TryGet(rootPrefabObjectId);
@@ -685,7 +704,7 @@ TEST_CASE("Prefabs")
         REQUIRE(defaultFog);
         CHECK(defaultFog->DirectionalInscatteringLight == prefab->GetDefaultInstance(lightPrefabObjectId));
         CHECK(defaultFog->DirectionalInscatteringLight != externalLight);
-        CHECK(instanceA->As<ExponentialHeightFog>()->DirectionalInscatteringLight == externalLight);
+        CHECK(fogA->DirectionalInscatteringLight == externalLight);
         rapidjson_flax::StringBuffer instanceBuffer;
         CompactJsonWriter instanceWriter(instanceBuffer);
         instanceWriter.SceneObject(instanceA);
@@ -694,14 +713,16 @@ TEST_CASE("Prefabs")
         REQUIRE(!instanceDocument.HasParseError());
         CHECK(JsonTools::GetGuid(instanceDocument, "DirectionalInscatteringLight") == externalLightId);
         CHECK(instanceB->GetName() == TEXT("Changed Fog"));
-        CHECK(instanceB->As<ExponentialHeightFog>()->DirectionalInscatteringLight == instanceB->Children[0]);
+        CHECK(fogB->DirectionalInscatteringLight == instanceB->Children[0]);
 
         Actor* instanceC = PrefabManager::SpawnPrefab(prefab);
         REQUIRE(instanceC);
+        ExponentialHeightFog* fogC = ScriptingObject::Cast<ExponentialHeightFog>(instanceC);
+        REQUIRE(fogC);
         instanceC->SetParent(scene);
         REQUIRE(instanceC->Children.Count() == 1);
         CHECK(instanceC->GetName() == TEXT("Changed Fog"));
-        CHECK(instanceC->As<ExponentialHeightFog>()->DirectionalInscatteringLight == instanceC->Children[0]);
+        CHECK(fogC->DirectionalInscatteringLight == instanceC->Children[0]);
     }
     SECTION("Test Applying Prefab With Missing Nested Prefab")
     {
