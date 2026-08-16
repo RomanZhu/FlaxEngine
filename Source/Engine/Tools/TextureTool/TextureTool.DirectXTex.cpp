@@ -85,6 +85,90 @@ namespace
         }
     }
 
+    HRESULT DilateTransparentPixelsDirectXTex(const DirectX::Image* images, size_t imageCount, const DirectX::TexMetadata& metadata, DirectX::ScratchImage& output)
+    {
+        DirectX::ScratchImage floatImage;
+        HRESULT result;
+        if (metadata.format == DXGI_FORMAT_R32G32B32A32_FLOAT)
+        {
+            result = floatImage.Initialize(metadata);
+            if (FAILED(result))
+                return result;
+            for (size_t imageIndex = 0; imageIndex < imageCount; imageIndex++)
+                Platform::MemoryCopy((void*)floatImage.GetImages()[imageIndex].pixels, images[imageIndex].pixels, images[imageIndex].slicePitch);
+        }
+        else
+        {
+            result = DirectX::Convert(images, imageCount, metadata, DXGI_FORMAT_R32G32B32A32_FLOAT, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, floatImage);
+            if (FAILED(result))
+                return result;
+        }
+
+        constexpr int32 neighborOffsets[8][2] =
+        {
+            { -1, -1 }, { 0, -1 }, { 1, -1 },
+            { -1,  0 },             { 1,  0 },
+            { -1,  1 }, { 0,  1 }, { 1,  1 },
+        };
+        for (size_t imageIndex = 0; imageIndex < floatImage.GetImageCount(); imageIndex++)
+        {
+            auto& image = floatImage.GetImages()[imageIndex];
+            const int32 width = static_cast<int32>(image.width);
+            const int32 height = static_cast<int32>(image.height);
+            const int32 pixelCount = width * height;
+            Array<byte> assigned;
+            Array<int32> queue;
+            assigned.Resize(pixelCount);
+            assigned.SetAll(0);
+            queue.EnsureCapacity(pixelCount);
+
+            for (int32 y = 0; y < height; y++)
+            {
+                const auto row = (Float4*)(image.pixels + y * image.rowPitch);
+                for (int32 x = 0; x < width; x++)
+                {
+                    const int32 index = y * width + x;
+                    if (row[x].W > 0.0f)
+                    {
+                        assigned[index] = 1;
+                        queue.Add(index);
+                    }
+                }
+            }
+
+            for (int32 head = 0; head < queue.Count(); head++)
+            {
+                const int32 index = queue[head];
+                const int32 x = index % width;
+                const int32 y = index / width;
+                const auto source = ((Float4*)(image.pixels + y * image.rowPitch))[x];
+                for (const auto& offset : neighborOffsets)
+                {
+                    const int32 neighborX = x + offset[0];
+                    const int32 neighborY = y + offset[1];
+                    if (neighborX < 0 || neighborX >= width || neighborY < 0 || neighborY >= height)
+                        continue;
+                    const int32 neighborIndex = neighborY * width + neighborX;
+                    if (assigned[neighborIndex])
+                        continue;
+                    auto& neighbor = ((Float4*)(image.pixels + neighborY * image.rowPitch))[neighborX];
+                    neighbor.X = source.X;
+                    neighbor.Y = source.Y;
+                    neighbor.Z = source.Z;
+                    assigned[neighborIndex] = 1;
+                    queue.Add(neighborIndex);
+                }
+            }
+        }
+
+        if (metadata.format == DXGI_FORMAT_R32G32B32A32_FLOAT)
+        {
+            output = std::move(floatImage);
+            return S_OK;
+        }
+        return DirectX::Convert(floatImage.GetImages(), floatImage.GetImageCount(), floatImage.GetMetadata(), metadata.format, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, output);
+    }
+
     HRESULT Compress(const DirectX::Image* srcImages, size_t nimages, const DirectX::TexMetadata& metadata, DXGI_FORMAT format, DirectX::TEX_COMPRESS_FLAGS compress, float threshold, DirectX::ScratchImage& cImages)
     {
 #if USE_EDITOR
@@ -704,7 +788,8 @@ bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path
     float alphaThreshold = 0.3f;
     bool isPowerOfTwo = Math::IsPowerOfTwo(width) && Math::IsPowerOfTwo(height);
     DXGI_FORMAT sourceDxgiFormat = currentImage->GetMetadata().format;
-    PixelFormat targetFormat = TextureTool::ToPixelFormat(options.Type, width, height, options.Compress);
+    const TextureFormatType outputType = GetOutputType(options);
+    PixelFormat targetFormat = TextureTool::ToPixelFormat(outputType, width, height, options.Compress);
     if (options.sRGB)
         targetFormat = PixelFormatExtensions::TosRGB(targetFormat);
     if (options.InternalFormat != PixelFormat::Unknown)
@@ -744,6 +829,8 @@ bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path
         !options.InvertAlphaChannel &&
         !options.InvertBlueChannel &&
         !options.ReconstructZChannel &&
+        options.AlphaSource == TextureAlphaSource::InputTextureAlpha &&
+        !options.AlphaIsTransparency &&
         !options.sRGB &&
         options.Compress && 
         options.InternalFormat == PixelFormat::Unknown &&
@@ -791,8 +878,49 @@ bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path
             ((DirectX::Image*)currentImage->GetImages())[i].format = sourceDxgiFormat;
     }
 
+    // Grayscale-derived alpha needs a storage format with an alpha channel.
+    if (!keepAsIs && options.AlphaSource == TextureAlphaSource::FromGrayScale && !DirectX::HasAlpha(sourceDxgiFormat))
+    {
+        auto& tmpImg = GET_TMP_IMG();
+        sourceDxgiFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        result = DirectX::Convert(currentImage->GetImages(), currentImage->GetImageCount(), currentImage->GetMetadata(), sourceDxgiFormat, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, tmpImg);
+        if (FAILED(result))
+        {
+            errorMsg = String::Format(TEXT("Cannot convert texture for alpha generation, error: {0:x}"), static_cast<uint32>(result));
+            return true;
+        }
+        SET_CURRENT_IMG(tmpImg);
+    }
+
+    // Generate or discard source alpha before mip generation and compression.
+    if (!keepAsIs && options.AlphaSource != TextureAlphaSource::InputTextureAlpha && DirectX::HasAlpha(sourceDxgiFormat))
+    {
+        auto& tmpImg = GET_TMP_IMG();
+        result = TransformImage(currentImage->GetImages(), currentImage->GetImageCount(), currentImage->GetMetadata(),
+            [&](DirectX::XMVECTOR* outPixels, const DirectX::XMVECTOR* inPixels, size_t width, size_t y)
+            {
+                const DirectX::XMVECTORU32 selectAlpha = { { { DirectX::XM_SELECT_0, DirectX::XM_SELECT_0, DirectX::XM_SELECT_0, DirectX::XM_SELECT_1 } } };
+                const DirectX::XMVECTOR rgbAverageWeights = DirectX::XMVectorReplicate(1.0f / 3.0f);
+                UNREFERENCED_PARAMETER(y);
+                for (size_t j = 0; j < width; j++)
+                {
+                    const DirectX::XMVECTOR value = inPixels[j];
+                    const DirectX::XMVECTOR alpha = options.AlphaSource == TextureAlphaSource::FromGrayScale
+                        ? DirectX::XMVector3Dot(value, rgbAverageWeights)
+                        : DirectX::g_XMOne;
+                    outPixels[j] = DirectX::XMVectorSelect(value, alpha, selectAlpha);
+                }
+            }, tmpImg);
+        if (FAILED(result))
+        {
+            errorMsg = String::Format(TEXT("Cannot generate texture alpha, error: {0:x}"), static_cast<uint32>(result));
+            return true;
+        }
+        SET_CURRENT_IMG(tmpImg);
+    }
+
     // Remove alpha if source texture has it but output should not, valid for compressed output only (DirectX seams to use alpha to pre-multiply colors because BC1 format has no place for alpha)
-    if (!keepAsIs && DirectX::HasAlpha(sourceDxgiFormat) && options.Type == TextureFormatType::ColorRGB && options.Compress)
+    if (!keepAsIs && DirectX::HasAlpha(sourceDxgiFormat) && outputType == TextureFormatType::ColorRGB && options.Compress)
     {
         auto& tmpImg = GET_TMP_IMG();
         result = TransformImage(currentImage->GetImages(), currentImage->GetImageCount(), currentImage->GetMetadata(),
@@ -969,6 +1097,18 @@ bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path
             return true;
         }
         SET_CURRENT_IMG(timage);
+    }
+
+    if (!keepAsIs && options.AlphaIsTransparency && options.AlphaSource != TextureAlphaSource::None && DirectX::HasAlpha(sourceDxgiFormat))
+    {
+        auto& tmpImg = GET_TMP_IMG();
+        result = DilateTransparentPixelsDirectXTex(currentImage->GetImages(), currentImage->GetImageCount(), currentImage->GetMetadata(), tmpImg);
+        if (FAILED(result))
+        {
+            errorMsg = String::Format(TEXT("Cannot dilate transparent texture colors, error: {0:x}"), static_cast<uint32>(result));
+            return true;
+        }
+        SET_CURRENT_IMG(tmpImg);
     }
 
     // Generate mip maps chain

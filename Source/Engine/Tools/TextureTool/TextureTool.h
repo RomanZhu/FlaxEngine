@@ -19,6 +19,29 @@ API_CLASS(Namespace="FlaxEngine.Tools", Static) class FLAXENGINE_API TextureTool
     DECLARE_SCRIPTING_TYPE_MINIMAL(TextureTool);
 
     /// <summary>
+    /// Selects how the alpha channel is generated when importing a texture.
+    /// </summary>
+    API_ENUM(Attributes="HideInEditor") enum class TextureAlphaSource : byte
+    {
+        /// <summary>
+        /// Do not use an alpha channel.
+        /// </summary>
+        None = 0,
+
+        /// <summary>
+        /// Use alpha from the input texture when available.
+        /// </summary>
+        API_ENUM(Attributes="EditorDisplay(null, \"Input Texture Alpha\")")
+        InputTextureAlpha = 1,
+
+        /// <summary>
+        /// Generate alpha from the average of the input texture RGB channels.
+        /// </summary>
+        API_ENUM(Attributes="EditorDisplay(null, \"From Gray Scale\")")
+        FromGrayScale = 2,
+    };
+
+    /// <summary>
     /// Texture import options.
     /// </summary>
     API_STRUCT(Attributes="HideInEditor") struct FLAXENGINE_API Options : public ISerializable
@@ -48,6 +71,14 @@ API_CLASS(Namespace="FlaxEngine.Tools", Static) class FLAXENGINE_API TextureTool
         // If checked, indicates that input file should be loaded as an sRGB image. Common for color maps and diffuse/albedo textures.
         API_FIELD(Attributes="EditorOrder(50), EditorDisplay(null, \"sRGB\")")
         bool sRGB = false;
+
+        // Selects how the alpha channel is generated. Defaults to input alpha to preserve the existing import behavior.
+        API_FIELD(Attributes="EditorOrder(55), EditorDisplay(null, \"Alpha Source\")")
+        TextureAlphaSource AlphaSource = TextureAlphaSource::InputTextureAlpha;
+
+        // True if RGB colors should be dilated into fully transparent pixels to prevent filtering artifacts on texture edges.
+        API_FIELD(Attributes="EditorOrder(56), EditorDisplay(null, \"Alpha Is Transparency\"), Tooltip(\"Dilates RGB colors into fully transparent pixels to prevent filtering artifacts on texture edges. Alpha values are unchanged.\")")
+        bool AlphaIsTransparency = false;
 
         // True if generate mip maps chain for the texture.
         API_FIELD(Attributes="EditorOrder(60)")
@@ -137,6 +168,11 @@ API_CLASS(Namespace="FlaxEngine.Tools", Static) class FLAXENGINE_API TextureTool
     };
 
 public:
+    /// <summary>
+    /// Resolves the output texture type after applying alpha source settings.
+    /// </summary>
+    static TextureFormatType GetOutputType(const Options& options);
+
 #if USE_EDITOR
     /// <summary>
     /// Checks whenever the given texture file contains alpha channel data with values different from solid fill of 1 (non fully opaque).
@@ -239,6 +275,7 @@ private:
 
     static bool GetImageType(const StringView& path, ImageType& type);
     static bool Transform(TextureData& texture, const Function<void(Color&)>& transformation);
+    static bool DilateTransparentPixels(TextureData& texture);
 
 #if COMPILE_WITH_DIRECTXTEX
     static bool ExportTextureDirectXTex(ImageType type, const StringView& path, const TextureData& textureData);

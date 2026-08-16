@@ -30,12 +30,14 @@ namespace
 
 String TextureTool::Options::ToString() const
 {
-    return String::Format(TEXT("Type: {}, IsAtlas: {}, NeverStream: {}, IndependentChannels: {}, sRGB: {}, GenerateMipMaps: {}, FlipY: {}, InvertRed: {}, InvertGreen: {}, InvertBlue {}, Invert Alpha {}, Scale: {}, MaxSize: {}, Resize: {}, PreserveAlphaCoverage: {}, PreserveAlphaCoverageReference: {}, SizeX: {}, SizeY: {}"),
+    return String::Format(TEXT("Type: {}, IsAtlas: {}, NeverStream: {}, IndependentChannels: {}, sRGB: {}, AlphaSource: {}, AlphaIsTransparency: {}, GenerateMipMaps: {}, FlipY: {}, InvertRed: {}, InvertGreen: {}, InvertBlue {}, Invert Alpha {}, Scale: {}, MaxSize: {}, Resize: {}, PreserveAlphaCoverage: {}, PreserveAlphaCoverageReference: {}, SizeX: {}, SizeY: {}"),
                           ScriptingEnum::ToString(Type),
                           IsAtlas,
                           NeverStream,
                           IndependentChannels,
                           sRGB,
+                          ScriptingEnum::ToString(AlphaSource),
+                          AlphaIsTransparency,
                           GenerateMipMaps,
                           FlipY,
                           InvertRedChannel,
@@ -44,13 +46,31 @@ String TextureTool::Options::ToString() const
                           InvertAlphaChannel,
                           Scale,
                           MaxSize,
-                          MaxSize,
                           Resize,
                           PreserveAlphaCoverage,
                           PreserveAlphaCoverageReference,
                           SizeX,
                           SizeY
     );
+}
+
+TextureFormatType TextureTool::GetOutputType(const Options& options)
+{
+    if (options.AlphaSource == TextureAlphaSource::None)
+    {
+        if (options.Type == TextureFormatType::ColorRGBA)
+            return TextureFormatType::ColorRGB;
+        if (options.Type == TextureFormatType::HdrRGBA)
+            return TextureFormatType::HdrRGB;
+    }
+    else if (options.AlphaSource == TextureAlphaSource::FromGrayScale)
+    {
+        if (options.Type == TextureFormatType::ColorRGB)
+            return TextureFormatType::ColorRGBA;
+        if (options.Type == TextureFormatType::HdrRGB)
+            return TextureFormatType::HdrRGBA;
+    }
+    return options.Type;
 }
 
 void TextureTool::Options::Serialize(SerializeStream& stream, const void* otherObj)
@@ -72,6 +92,12 @@ void TextureTool::Options::Serialize(SerializeStream& stream, const void* otherO
 
     stream.JKEY("sRGB");
     stream.Bool(sRGB);
+
+    stream.JKEY("AlphaSource");
+    stream.Enum(AlphaSource);
+
+    stream.JKEY("AlphaIsTransparency");
+    stream.Bool(AlphaIsTransparency);
 
     stream.JKEY("GenerateMipMaps");
     stream.Bool(GenerateMipMaps);
@@ -155,6 +181,8 @@ void TextureTool::Options::Deserialize(DeserializeStream& stream, ISerializeModi
     Compress = JsonTools::GetBool(stream, "Compress", Compress);
     IndependentChannels = JsonTools::GetBool(stream, "IndependentChannels", IndependentChannels);
     sRGB = JsonTools::GetBool(stream, "sRGB", sRGB);
+    AlphaSource = JsonTools::GetEnum(stream, "AlphaSource", AlphaSource);
+    AlphaIsTransparency = JsonTools::GetBool(stream, "AlphaIsTransparency", AlphaIsTransparency);
     GenerateMipMaps = JsonTools::GetBool(stream, "GenerateMipMaps", GenerateMipMaps);
     FlipY = JsonTools::GetBool(stream, "FlipY", FlipY);
     FlipX = JsonTools::GetBool(stream, "FlipX", FlipX);
@@ -712,7 +740,7 @@ bool TextureTool::GetImageType(const StringView& path, ImageType& type)
 }
 
 bool TextureTool::Transform(TextureData& texture, const Function<void(Color&)>& transformation)
-{   
+{
     PROFILE_CPU();
     PROFILE_MEM(GraphicsTextures);
     auto sampler = PixelFormatSampler::Get(texture.Format);
@@ -732,6 +760,84 @@ bool TextureTool::Transform(TextureData& texture, const Function<void(Color&)>& 
                     Color color = sampler->SamplePoint(mip.Data.Get(), x, y, mip.RowPitch);
                     transformation(color);
                     sampler->Store(mip.Data.Get(), x, y, mip.RowPitch, color);
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool TextureTool::DilateTransparentPixels(TextureData& texture)
+{
+    PROFILE_CPU();
+    PROFILE_MEM(GraphicsTextures);
+    const auto sampler = PixelFormatSampler::Get(texture.Format);
+    if (!sampler || !PixelFormatExtensions::HasAlpha(texture.Format) || PixelFormatExtensions::IsCompressed(texture.Format))
+        return true;
+
+    constexpr int32 neighborOffsets[8][2] =
+    {
+        { -1, -1 }, { 0, -1 }, { 1, -1 },
+        { -1,  0 },             { 1,  0 },
+        { -1,  1 }, { 0,  1 }, { 1,  1 },
+    };
+    for (auto& slice : texture.Items)
+    {
+        for (int32 mipIndex = 0; mipIndex < slice.Mips.Count(); mipIndex++)
+        {
+            auto& mip = slice.Mips[mipIndex];
+            const int32 width = Math::Max(texture.Width >> mipIndex, 1);
+            const int32 height = Math::Max(texture.Height >> mipIndex, 1);
+            const int32 pixelCount = width * height;
+            Array<Color> pixels;
+            Array<byte> assigned;
+            Array<int32> queue;
+            pixels.Resize(pixelCount);
+            assigned.Resize(pixelCount);
+            assigned.SetAll(0);
+            queue.EnsureCapacity(pixelCount);
+
+            for (int32 y = 0; y < height; y++)
+            {
+                for (int32 x = 0; x < width; x++)
+                {
+                    const int32 index = y * width + x;
+                    pixels[index] = sampler->SamplePoint(mip.Data.Get(), x, y, mip.RowPitch);
+                    if (pixels[index].A > 0.0f)
+                    {
+                        assigned[index] = 1;
+                        queue.Add(index);
+                    }
+                }
+            }
+
+            for (int32 head = 0; head < queue.Count(); head++)
+            {
+                const int32 index = queue[head];
+                const int32 x = index % width;
+                const int32 y = index / width;
+                for (const auto& offset : neighborOffsets)
+                {
+                    const int32 neighborX = x + offset[0];
+                    const int32 neighborY = y + offset[1];
+                    if (neighborX < 0 || neighborX >= width || neighborY < 0 || neighborY >= height)
+                        continue;
+                    const int32 neighborIndex = neighborY * width + neighborX;
+                    if (assigned[neighborIndex])
+                        continue;
+                    pixels[neighborIndex].R = pixels[index].R;
+                    pixels[neighborIndex].G = pixels[index].G;
+                    pixels[neighborIndex].B = pixels[index].B;
+                    assigned[neighborIndex] = 1;
+                    queue.Add(neighborIndex);
+                }
+            }
+
+            for (int32 y = 0; y < height; y++)
+            {
+                for (int32 x = 0; x < width; x++)
+                {
+                    sampler->Store(mip.Data.Get(), x, y, mip.RowPitch, pixels[y * width + x]);
                 }
             }
         }

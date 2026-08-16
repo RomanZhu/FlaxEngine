@@ -16,6 +16,7 @@ enum class ObjectFlags : uint32
     IsManagedType = 1 << 3,
     IsDuringPlay = 1 << 4,
     IsCustomScriptingType = 1 << 5,
+    IsDeleting = 1 << 6,
 };
 
 DECLARE_ENUM_OPERATORS(ObjectFlags);

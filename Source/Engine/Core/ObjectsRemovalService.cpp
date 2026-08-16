@@ -21,6 +21,14 @@ namespace
     float LastUpdateGameTime;
     Dictionary<Object*, float> Pool;
     uint64 PoolCounter = 0;
+
+    void DeleteObjectInternal(Object* obj)
+    {
+        if (EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
+            return;
+        obj->Flags |= ObjectFlags::IsDeleting;
+        obj->OnDeleteObject();
+    }
 }
 
 class ObjectsRemoval : public EngineService
@@ -55,13 +63,19 @@ void ObjectsRemovalService::Dereference(Object* obj)
 
 void ObjectsRemovalService::Add(Object* obj, float timeToLive, bool useGameTime)
 {
+    PoolLocker.Lock();
+    if (EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
+    {
+        PoolLocker.Unlock();
+        return;
+    }
+
     obj->Flags |= ObjectFlags::WasMarkedToDelete;
     if (useGameTime)
         obj->Flags |= ObjectFlags::UseGameTimeForDelete;
     else
         obj->Flags &= ~ObjectFlags::UseGameTimeForDelete;
 
-    PoolLocker.Lock();
     Pool[obj] = timeToLive;
     PoolCounter++;
     PoolLocker.Unlock();
@@ -83,7 +97,7 @@ void ObjectsRemovalService::Flush(float dt, float gameDelta)
         if (ttl <= 0.0f)
         {
             Pool.Remove(i);
-            obj->OnDeleteObject();
+            DeleteObjectInternal(obj);
         }
         else
         {
@@ -102,7 +116,7 @@ void ObjectsRemovalService::Flush(float dt, float gameDelta)
             {
                 Object* obj = i->Key;
                 Pool.Remove(i);
-                obj->OnDeleteObject();
+                DeleteObjectInternal(obj);
             }
         }
         if (PoolCounter != 0)
@@ -146,7 +160,7 @@ void ObjectsRemoval::Dispose()
         {
             Object* obj = i->Key;
             Pool.Remove(i);
-            obj->OnDeleteObject();
+            DeleteObjectInternal(obj);
         }
         Pool.Clear();
         PoolLocker.Unlock();
@@ -165,7 +179,7 @@ void Object::DeleteObjectNow()
 {
     ObjectsRemovalService::Dereference(this);
 
-    OnDeleteObject();
+    DeleteObjectInternal(this);
 }
 
 void Object::DeleteObject(float timeToLive, bool useGameTime)

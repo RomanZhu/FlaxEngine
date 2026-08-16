@@ -154,7 +154,7 @@ CreateAssetResult ImportTexture::Create(CreateAssetContext& context, const Textu
     textureHeader.Width = textureData.Width;
     textureHeader.Height = textureData.Height;
     textureHeader.Format = textureData.Format;
-    textureHeader.Type = options.Type;
+    textureHeader.Type = TextureTool::GetOutputType(options);
     textureHeader.MipLevels = textureData.GetMipLevels();
     textureHeader.IsSRGB = PixelFormatExtensions::IsSRGB(textureHeader.Format);
     textureHeader.IsCubeMap = isCubeMap;
@@ -259,7 +259,7 @@ CreateAssetResult ImportTexture::Create(CreateAssetContext& context, const Textu
     textureHeader.Width = textureData.Width;
     textureHeader.Height = textureData.Height;
     textureHeader.Format = textureData.Format;
-    textureHeader.Type = options.Type;
+    textureHeader.Type = TextureTool::GetOutputType(options);
     textureHeader.MipLevels = textureData.Mips.Count();
     textureHeader.IsSRGB = PixelFormatExtensions::IsSRGB(textureHeader.Format);
     textureHeader.IsCubeMap = isCubeMap;

@@ -5,13 +5,19 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Level/Actor.h"
+#include "Engine/Level/Level.h"
 #include "Engine/Level/Actors/EmptyActor.h"
 #include "Engine/Level/Actors/DirectionalLight.h"
 #include "Engine/Level/Actors/ExponentialHeightFog.h"
 #include "Engine/Level/Actors/AnimatedModel.h"
 #include "Engine/Level/Prefabs/Prefab.h"
 #include "Engine/Level/Prefabs/PrefabManager.h"
+#include "Engine/Level/Scene/Scene.h"
+#include "Engine/Serialization/JsonTools.h"
+#include "Engine/Serialization/JsonWriters.h"
+#include "Engine/Scripting/Scripting.h"
 #include "Engine/Scripting/ScriptingObjectReference.h"
+#include "FlaxEngine.Gen.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 TEST_CASE("Prefabs")
@@ -616,6 +622,108 @@ TEST_CASE("Prefabs")
         instanceA->DeleteObject();
         instanceB->DeleteObject();
     }
+    SECTION("Test Applying Prefab Ignores External Scene Object References")
+    {
+        AssetReference<Prefab> prefab = Content::CreateVirtualAsset<Prefab>();
+        REQUIRE(prefab);
+        SCOPE_EXIT{ Content::DeleteAsset(prefab); };
+        Guid prefabId;
+        Guid rootPrefabObjectId;
+        Guid lightPrefabObjectId;
+        Guid::Parse("790e55514cd6fdc2a269429a2bf84133", prefabId);
+        Guid::Parse("dc3f88cf413c2e668039a0bb7429900d", rootPrefabObjectId);
+        Guid::Parse("54873cc44e950c754f0c7bb59dd432d6", lightPrefabObjectId);
+        prefab->ChangeID(prefabId);
+        const bool prefabInit = prefab->Init(Prefab::TypeName,
+                                             "["
+                                             "{"
+                                             "\"ID\": \"dc3f88cf413c2e668039a0bb7429900d\","
+                                             "\"TypeName\": \"FlaxEngine.ExponentialHeightFog\","
+                                             "\"Name\": \"Fog\","
+                                             "\"DirectionalInscatteringLight\": \"54873cc44e950c754f0c7bb59dd432d6\""
+                                             "},"
+                                             "{"
+                                             "\"ID\": \"54873cc44e950c754f0c7bb59dd432d6\","
+                                             "\"TypeName\": \"FlaxEngine.DirectionalLight\","
+                                             "\"ParentID\": \"dc3f88cf413c2e668039a0bb7429900d\","
+                                             "\"Name\": \"Sun\""
+                                             "}"
+                                             "]");
+        REQUIRE(!prefabInit);
+
+        rapidjson_flax::StringBuffer sceneBuffer;
+        CompactJsonWriter sceneWriter(sceneBuffer);
+        sceneWriter.StartObject();
+        sceneWriter.JKEY("EngineBuild");
+        sceneWriter.Int(FLAXENGINE_VERSION_BUILD);
+        sceneWriter.JKEY("Data");
+        sceneWriter.StartArray();
+        sceneWriter.StartObject();
+        sceneWriter.JKEY("ID");
+        sceneWriter.Guid(Guid::New());
+        sceneWriter.JKEY("TypeName");
+        sceneWriter.String("FlaxEngine.Scene", ARRAY_COUNT("FlaxEngine.Scene") - 1);
+        sceneWriter.EndObject();
+        sceneWriter.EndArray(1);
+        sceneWriter.EndObject();
+        BytesContainer sceneData((const byte*)sceneBuffer.GetString(), (int32)sceneBuffer.GetSize());
+        Scene* scene = Level::LoadSceneFromBytes(sceneData);
+        REQUIRE(scene);
+        SCOPE_EXIT{ Level::UnloadScene(scene); };
+        Actor* instanceA = PrefabManager::SpawnPrefab(prefab);
+        Actor* instanceB = PrefabManager::SpawnPrefab(prefab);
+        REQUIRE(instanceA);
+        REQUIRE(instanceB);
+        ExponentialHeightFog* fogA = ScriptingObject::Cast<ExponentialHeightFog>(instanceA);
+        ExponentialHeightFog* fogB = ScriptingObject::Cast<ExponentialHeightFog>(instanceB);
+        REQUIRE(fogA);
+        REQUIRE(fogB);
+        REQUIRE(instanceA->Children.Count() == 1);
+        REQUIRE(instanceB->Children.Count() == 1);
+        CHECK(fogA->DirectionalInscatteringLight == instanceA->Children[0]);
+        CHECK(fogB->DirectionalInscatteringLight == instanceB->Children[0]);
+        instanceA->SetParent(scene);
+        instanceB->SetParent(scene);
+
+        DirectionalLight* externalLight = DirectionalLight::Spawn(ScriptingObject::SpawnParams(Guid::New(), DirectionalLight::TypeInitializer));
+        REQUIRE(externalLight);
+        externalLight->SetParent(scene);
+        externalLight->Initialize();
+        REQUIRE(externalLight->IsRegistered());
+        REQUIRE(externalLight->GetScene() == scene);
+        const Guid externalLightId = externalLight->GetID();
+        instanceA->SetName(TEXT("Changed Fog"));
+        fogA->DirectionalInscatteringLight = externalLight;
+
+        REQUIRE(!PrefabManager::ApplyAll(instanceA));
+        const ISerializable::DeserializeStream** rootDataPtr = prefab->ObjectsDataCache.TryGet(rootPrefabObjectId);
+        REQUIRE(rootDataPtr);
+        CHECK(JsonTools::GetGuid(**rootDataPtr, "DirectionalInscatteringLight") == lightPrefabObjectId);
+        CHECK(JsonTools::GetGuid(**rootDataPtr, "DirectionalInscatteringLight") != externalLightId);
+        ExponentialHeightFog* defaultFog = ScriptingObject::Cast<ExponentialHeightFog>(prefab->GetDefaultInstance(rootPrefabObjectId));
+        REQUIRE(defaultFog);
+        CHECK(defaultFog->DirectionalInscatteringLight == prefab->GetDefaultInstance(lightPrefabObjectId));
+        CHECK(defaultFog->DirectionalInscatteringLight != externalLight);
+        CHECK(fogA->DirectionalInscatteringLight == externalLight);
+        rapidjson_flax::StringBuffer instanceBuffer;
+        CompactJsonWriter instanceWriter(instanceBuffer);
+        instanceWriter.SceneObject(instanceA);
+        rapidjson_flax::Document instanceDocument;
+        instanceDocument.Parse(instanceBuffer.GetString(), instanceBuffer.GetSize());
+        REQUIRE(!instanceDocument.HasParseError());
+        CHECK(JsonTools::GetGuid(instanceDocument, "DirectionalInscatteringLight") == externalLightId);
+        CHECK(instanceB->GetName() == TEXT("Changed Fog"));
+        CHECK(fogB->DirectionalInscatteringLight == instanceB->Children[0]);
+
+        Actor* instanceC = PrefabManager::SpawnPrefab(prefab);
+        REQUIRE(instanceC);
+        ExponentialHeightFog* fogC = ScriptingObject::Cast<ExponentialHeightFog>(instanceC);
+        REQUIRE(fogC);
+        instanceC->SetParent(scene);
+        REQUIRE(instanceC->Children.Count() == 1);
+        CHECK(instanceC->GetName() == TEXT("Changed Fog"));
+        CHECK(fogC->DirectionalInscatteringLight == instanceC->Children[0]);
+    }
     SECTION("Test Applying Prefab With Missing Nested Prefab")
     {
         // https://github.com/FlaxEngine/FlaxEngine/issues/3244
@@ -1025,5 +1133,193 @@ TEST_CASE("Prefabs")
         // Cleanup
         instanceInner->DeleteObject();
         instanceOuter->DeleteObject();
+    }
+    SECTION("Test Loading Evolved Prefab With Existing Reparented Descendant")
+    {
+        AssetReference<Prefab> prefab = Content::CreateVirtualAsset<Prefab>();
+        REQUIRE(prefab);
+        SCOPE_EXIT{ Content::DeleteAsset(prefab); };
+
+        Guid prefabId;
+        Guid rootPrefabObjectId;
+        Guid visualsPrefabObjectId;
+        Guid movableVisualsPrefabObjectId;
+        Guid modelPrefabObjectId;
+        Guid modelChildPrefabObjectId;
+        Guid::Parse("6f2b1d9c4a3e47f8b5d60123456789ab", prefabId);
+        Guid::Parse("10000000000000000000000000000001", rootPrefabObjectId);
+        Guid::Parse("10000000000000000000000000000002", visualsPrefabObjectId);
+        Guid::Parse("10000000000000000000000000000003", movableVisualsPrefabObjectId);
+        Guid::Parse("10000000000000000000000000000004", modelPrefabObjectId);
+        Guid::Parse("10000000000000000000000000000005", modelChildPrefabObjectId);
+        prefab->ChangeID(prefabId);
+        const bool prefabInit = prefab->Init(Prefab::TypeName,
+            "["
+            "{"
+            "\"ID\": \"10000000000000000000000000000001\","
+            "\"TypeName\": \"FlaxEngine.EmptyActor\","
+            "\"Name\": \"Root\""
+            "},"
+            "{"
+            "\"ID\": \"10000000000000000000000000000002\","
+            "\"TypeName\": \"FlaxEngine.EmptyActor\","
+            "\"ParentID\": \"10000000000000000000000000000001\","
+            "\"IsActive\": false,"
+            "\"Name\": \"Visuals\""
+            "},"
+            "{"
+            "\"ID\": \"10000000000000000000000000000003\","
+            "\"TypeName\": \"FlaxEngine.EmptyActor\","
+            "\"ParentID\": \"10000000000000000000000000000002\","
+            "\"Name\": \"MovableVisuals\""
+            "},"
+            "{"
+            "\"ID\": \"10000000000000000000000000000004\","
+            "\"TypeName\": \"FlaxEngine.EmptyActor\","
+            "\"ParentID\": \"10000000000000000000000000000003\","
+            "\"Name\": \"Model\""
+            "},"
+            "{"
+            "\"ID\": \"10000000000000000000000000000005\","
+            "\"TypeName\": \"FlaxEngine.EmptyActor\","
+            "\"ParentID\": \"10000000000000000000000000000004\","
+            "\"Name\": \"ModelChild\""
+            "}"
+            "]");
+        REQUIRE(!prefabInit);
+
+        Guid sceneId;
+        Guid firstRootId;
+        Guid firstModelId;
+        Guid firstModelChildId;
+        Guid secondRootId;
+        Guid secondModelId;
+        Guid secondModelChildId;
+        Guid::Parse("20000000000000000000000000000001", sceneId);
+        Guid::Parse("20000000000000000000000000000002", firstRootId);
+        Guid::Parse("20000000000000000000000000000003", firstModelId);
+        Guid::Parse("20000000000000000000000000000004", firstModelChildId);
+        Guid::Parse("30000000000000000000000000000001", secondRootId);
+        Guid::Parse("30000000000000000000000000000002", secondModelId);
+        Guid::Parse("30000000000000000000000000000003", secondModelChildId);
+
+        rapidjson_flax::StringBuffer sceneBuffer;
+        CompactJsonWriter writer(sceneBuffer);
+        writer.StartObject();
+        writer.JKEY("EngineBuild");
+        writer.Int(FLAXENGINE_VERSION_BUILD);
+        writer.JKEY("Data");
+        writer.StartArray();
+        writer.StartObject();
+        writer.JKEY("ID");
+        writer.Guid(sceneId);
+        writer.JKEY("TypeName");
+        writer.String("FlaxEngine.Scene", ARRAY_COUNT("FlaxEngine.Scene") - 1);
+        writer.EndObject();
+        const auto writePrefabObject = [&](const Guid& id, const Guid& prefabObjectId, const Guid& parentId)
+        {
+            writer.StartObject();
+            writer.JKEY("ID");
+            writer.Guid(id);
+            writer.JKEY("PrefabID");
+            writer.Guid(prefabId);
+            writer.JKEY("PrefabObjectID");
+            writer.Guid(prefabObjectId);
+            writer.JKEY("ParentID");
+            writer.Guid(parentId);
+            writer.EndObject();
+        };
+        const auto writeStaleInstance = [&](const Guid& rootId, const Guid& modelId, const Guid& modelChildId)
+        {
+            writePrefabObject(rootId, rootPrefabObjectId, sceneId);
+            writePrefabObject(modelId, modelPrefabObjectId, rootId);
+            writePrefabObject(modelChildId, modelChildPrefabObjectId, modelId);
+        };
+        writeStaleInstance(firstRootId, firstModelId, firstModelChildId);
+        writeStaleInstance(secondRootId, secondModelId, secondModelChildId);
+        writer.EndArray(7);
+        writer.EndObject();
+
+        BytesContainer sceneData((const byte*)sceneBuffer.GetString(), (int32)sceneBuffer.GetSize());
+        Scene* scene = Level::LoadSceneFromBytes(sceneData);
+        REQUIRE(scene);
+        SCOPE_EXIT{ Level::UnloadScene(scene); };
+
+        struct LoadedInstance
+        {
+            Actor* Root;
+            Actor* Visuals;
+            Actor* MovableVisuals;
+            Actor* Model;
+            Actor* ModelChild;
+        };
+        const auto validateInstance = [&](const Guid& rootId, const Guid& modelId, const Guid& modelChildId)
+        {
+            LoadedInstance instance = {};
+            instance.Root = Scripting::FindObject<Actor>(rootId);
+            instance.Model = Scripting::FindObject<Actor>(modelId);
+            instance.ModelChild = Scripting::FindObject<Actor>(modelChildId);
+            REQUIRE(instance.Root);
+            REQUIRE(instance.Model);
+            REQUIRE(instance.ModelChild);
+            REQUIRE(instance.Root->Children.Count() == 1);
+            instance.Visuals = instance.Root->Children[0];
+            REQUIRE(instance.Visuals);
+            REQUIRE(instance.Visuals->Children.Count() == 1);
+            instance.MovableVisuals = instance.Visuals->Children[0];
+            REQUIRE(instance.MovableVisuals);
+            REQUIRE(instance.MovableVisuals->Children.Count() == 1);
+
+            // Missing ancestors are created, but the serialized descendant and its subtree are preserved.
+            CHECK(instance.Visuals->GetName() == TEXT("Visuals"));
+            CHECK(instance.MovableVisuals->GetName() == TEXT("MovableVisuals"));
+            CHECK(instance.MovableVisuals->Children[0] == instance.Model);
+            CHECK(instance.Root->GetID() == rootId);
+            CHECK(instance.Model->GetID() == modelId);
+            REQUIRE(instance.Model->Children.Count() == 1);
+            CHECK(instance.Model->Children[0] == instance.ModelChild);
+            CHECK(instance.ModelChild->GetID() == modelChildId);
+
+            CHECK(instance.Root->GetPrefabID() == prefabId);
+            CHECK(instance.Root->GetPrefabObjectID() == rootPrefabObjectId);
+            CHECK(instance.Visuals->GetPrefabID() == prefabId);
+            CHECK(instance.Visuals->GetPrefabObjectID() == visualsPrefabObjectId);
+            CHECK(instance.MovableVisuals->GetPrefabID() == prefabId);
+            CHECK(instance.MovableVisuals->GetPrefabObjectID() == movableVisualsPrefabObjectId);
+            CHECK(instance.Model->GetPrefabID() == prefabId);
+            CHECK(instance.Model->GetPrefabObjectID() == modelPrefabObjectId);
+            CHECK(instance.ModelChild->GetPrefabID() == prefabId);
+            CHECK(instance.ModelChild->GetPrefabObjectID() == modelChildPrefabObjectId);
+
+            CHECK(instance.Root->GetScene() == scene);
+            CHECK(instance.Visuals->GetScene() == scene);
+            CHECK(instance.MovableVisuals->GetScene() == scene);
+            CHECK(instance.Model->GetScene() == scene);
+            CHECK(instance.ModelChild->GetScene() == scene);
+            CHECK(instance.Root->IsActiveInHierarchy());
+            CHECK_FALSE(instance.Visuals->IsActiveInHierarchy());
+            CHECK_FALSE(instance.MovableVisuals->IsActiveInHierarchy());
+            CHECK_FALSE(instance.Model->IsActiveInHierarchy());
+            CHECK_FALSE(instance.ModelChild->IsActiveInHierarchy());
+            return instance;
+        };
+
+        const LoadedInstance first = validateInstance(firstRootId, firstModelId, firstModelChildId);
+        const LoadedInstance second = validateInstance(secondRootId, secondModelId, secondModelChildId);
+        CHECK(first.Root != second.Root);
+        CHECK(first.Visuals != second.Visuals);
+        CHECK(first.MovableVisuals != second.MovableVisuals);
+        CHECK(first.Model != second.Model);
+        CHECK(first.ModelChild != second.ModelChild);
+        CHECK(first.Visuals->GetID() != second.Visuals->GetID());
+        CHECK(first.MovableVisuals->GetID() != second.MovableVisuals->GetID());
+        CHECK(first.Visuals->GetParent() == first.Root);
+        CHECK(first.MovableVisuals->GetParent() == first.Visuals);
+        CHECK(first.Model->GetParent() == first.MovableVisuals);
+        CHECK(first.ModelChild->GetParent() == first.Model);
+        CHECK(second.Visuals->GetParent() == second.Root);
+        CHECK(second.MovableVisuals->GetParent() == second.Visuals);
+        CHECK(second.Model->GetParent() == second.MovableVisuals);
+        CHECK(second.ModelChild->GetParent() == second.Model);
     }
 }

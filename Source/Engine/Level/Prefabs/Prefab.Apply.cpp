@@ -68,6 +68,68 @@ struct AutoActorCleanup
 
 namespace
 {
+    bool ContainsExternalSceneObjectReference(const rapidjson_flax::Value& value, const Dictionary<Guid, Guid>& externalSceneObjectIds)
+    {
+        if (value.IsObject())
+        {
+            for (auto i = value.MemberBegin(); i != value.MemberEnd(); ++i)
+            {
+                if (ContainsExternalSceneObjectReference(i->value, externalSceneObjectIds))
+                    return true;
+            }
+        }
+        else if (value.IsArray())
+        {
+            for (auto i = value.Begin(); i != value.End(); ++i)
+            {
+                if (ContainsExternalSceneObjectReference(*i, externalSceneObjectIds))
+                    return true;
+            }
+        }
+        else if (value.IsString() && value.GetStringLength() == 32)
+        {
+            return externalSceneObjectIds.ContainsKey(JsonTools::GetGuid(value));
+        }
+        return false;
+    }
+
+    int32 RemoveExternalSceneObjectOverrides(rapidjson_flax::Value& objectData, const Dictionary<Guid, Guid>& externalSceneObjectIds)
+    {
+        int32 removedCount = 0;
+        for (auto i = objectData.MemberBegin(); i != objectData.MemberEnd();)
+        {
+            const bool isPropertiesContainer = (i->name == "V" || i->name == "D") && i->value.IsObject();
+            if (isPropertiesContainer)
+            {
+                for (auto property = i->value.MemberBegin(); property != i->value.MemberEnd();)
+                {
+                    if (ContainsExternalSceneObjectReference(property->value, externalSceneObjectIds))
+                    {
+                        property = i->value.EraseMember(property);
+                        removedCount++;
+                    }
+                    else
+                    {
+                        ++property;
+                    }
+                }
+                ++i;
+            }
+            else if (ContainsExternalSceneObjectReference(i->value, externalSceneObjectIds))
+            {
+                const bool isSceneParent = i->name == "ParentID";
+                i = objectData.EraseMember(i);
+                if (!isSceneParent)
+                    removedCount++;
+            }
+            else
+            {
+                ++i;
+            }
+        }
+        return removedCount;
+    }
+
     Actor* FindActorWithPrefabObjectId(Actor* a, const Guid& prefabObjectId)
     {
         if (a->GetPrefabObjectID() == prefabObjectId)
@@ -1134,6 +1196,22 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
             }
         }
 
+        // Find scene objects outside of the prefab instance. References to them are valid scene overrides,
+        // but cannot be persisted in the prefab asset.
+        Dictionary<Guid, Guid> externalSceneObjectIds;
+        const auto scriptingObjects = Scripting::GetObjects();
+        externalSceneObjectIds.EnsureCapacity(scriptingObjects.Count());
+        for (ScriptingObject* scriptingObject : scriptingObjects)
+        {
+            auto sceneObject = ScriptingObject::Cast<SceneObject>(scriptingObject);
+            if (!sceneObject || targetObjects->Contains(sceneObject))
+                continue;
+            Actor* actor = ScriptingObject::Cast<Actor>(sceneObject);
+            Actor* parent = actor ? actor : sceneObject->GetParent();
+            if (parent && parent->GetScene())
+                externalSceneObjectIds[sceneObject->GetSceneObjectId()] = Guid::Empty;
+        }
+
         // Change object ids to match the prefab objects ids (helps with linking references in scripts)
         Dictionary<Guid, Guid> objectInstanceIdToPrefabObjectId;
         objectInstanceIdToPrefabObjectId.EnsureCapacity(ObjectsCount);
@@ -1147,8 +1225,27 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
                 objectInstanceIdToPrefabObjectId.Add(obj->GetSceneObjectId(), obj->GetPrefabObjectID());
             }
         }
-        // TODO: what if user applied prefab with references to the other objects from scene? clear them or what?
+        int32 ignoredExternalOverrides = 0;
+        i = 0;
+        for (auto it = array.Begin(); it != array.End(); ++it, i++)
+        {
+            SceneObject* obj = targetObjects.Value->At(i);
+            if (obj->GetPrefabID() == prefabId)
+            {
+                // Existing prefab properties keep their previous value when the scene override points outside the instance.
+                ignoredExternalOverrides += RemoveExternalSceneObjectOverrides(*it, externalSceneObjectIds);
+            }
+            else if (ContainsExternalSceneObjectReference(*it, externalSceneObjectIds))
+            {
+                // New prefab objects have no previous value, so external references are mapped to null below.
+                ignoredExternalOverrides++;
+            }
+        }
+        for (auto i = externalSceneObjectIds.Begin(); i.IsNotEnd(); ++i)
+            objectInstanceIdToPrefabObjectId[i->Key] = Guid::Empty;
         JsonTools::ChangeIds(diffDataDocument, objectInstanceIdToPrefabObjectId);
+        if (ignoredExternalOverrides != 0)
+            LOG(Warning, "Ignored {0} prefab override(s) that reference scene objects outside the prefab instance.", ignoredExternalOverrides);
     }
     CollectionPoolCache<ActorsCache::SceneObjectsListType>::ScopeCache sceneObjects = ActorsCache::SceneObjectsListCache.Get();
 
