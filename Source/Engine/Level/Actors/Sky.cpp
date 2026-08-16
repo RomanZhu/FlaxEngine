@@ -14,6 +14,7 @@
 #include "Engine/Graphics/GPUDevice.h"
 #include "Engine/Graphics/Shaders/GPUConstantBuffer.h"
 #include "Engine/Graphics/Shaders/GPUShader.h"
+#include "Engine/Engine/Time.h"
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Level/Scene/SceneRendering.h"
 #if USE_EDITOR
@@ -27,6 +28,15 @@ GPU_CB_STRUCT(Data {
     float NoiseScale;
     ShaderGBufferData GBuffer;
     ShaderAtmosphericFogData Fog;
+    Float4 CloudParams0;
+    Float4 CloudParams1;
+    Float4 CloudDayColor;
+    Float4 CloudNightColor;
+    Float4 CloudStormColor;
+    Float4 NightParams;
+    Float4 MoonDirection;
+    Float4 MoonColor;
+    Float4 SkyParams;
     });
 
 Sky::Sky(const SpawnParams& params)
@@ -74,7 +84,7 @@ void Sky::InitConfig(ShaderAtmosphericFogData& config) const
     if (SunLight)
     {
         config.AtmosphericFogSunDirection = -SunLight->GetForward();
-        config.AtmosphericFogSunColor = SunLight->Color.ToFloat3() * SunLight->Color.A;
+        config.AtmosphericFogSunColor = SunLight->Color.ToFloat3() * SunLight->Color.A * AtmosphereSunIntensity;
     }
     else
     {
@@ -129,6 +139,25 @@ void Sky::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE(SunDiscScale);
     SERIALIZE(SunPower);
     SERIALIZE(IndirectLightingIntensity);
+    SERIALIZE(AtmosphereSunIntensity);
+    SERIALIZE(CloudTexture);
+    SERIALIZE(CloudCoverage);
+    SERIALIZE(CloudDensity);
+    SERIALIZE(CloudSoftness);
+    SERIALIZE(CloudScale);
+    SERIALIZE(CloudDetailScale);
+    SERIALIZE(CloudWind);
+    SERIALIZE(CloudOffset);
+    SERIALIZE(CloudDayColor);
+    SERIALIZE(CloudNightColor);
+    SERIALIZE(CloudStormColor);
+    SERIALIZE(CloudSunRimIntensity);
+    SERIALIZE(StarsTexture);
+    SERIALIZE(StarsIntensity);
+    SERIALIZE(MoonDirection);
+    SERIALIZE(MoonAngularRadius);
+    SERIALIZE(MoonIntensity);
+    SERIALIZE(MoonColor);
 }
 
 void Sky::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
@@ -139,6 +168,25 @@ void Sky::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
     DESERIALIZE(SunDiscScale);
     DESERIALIZE(SunPower);
     DESERIALIZE(IndirectLightingIntensity);
+    DESERIALIZE(AtmosphereSunIntensity);
+    DESERIALIZE(CloudTexture);
+    DESERIALIZE(CloudCoverage);
+    DESERIALIZE(CloudDensity);
+    DESERIALIZE(CloudSoftness);
+    DESERIALIZE(CloudScale);
+    DESERIALIZE(CloudDetailScale);
+    DESERIALIZE(CloudWind);
+    DESERIALIZE(CloudOffset);
+    DESERIALIZE(CloudDayColor);
+    DESERIALIZE(CloudNightColor);
+    DESERIALIZE(CloudStormColor);
+    DESERIALIZE(CloudSunRimIntensity);
+    DESERIALIZE(StarsTexture);
+    DESERIALIZE(StarsIntensity);
+    DESERIALIZE(MoonDirection);
+    DESERIALIZE(MoonAngularRadius);
+    DESERIALIZE(MoonIntensity);
+    DESERIALIZE(MoonColor);
 }
 
 bool Sky::HasContentLoaded() const
@@ -175,6 +223,10 @@ void Sky::ApplySky(GPUContext* context, RenderContext& renderContext, const Matr
     context->BindSR(4, cache.Transmittance);
     context->BindSR(5, cache.Irradiance);
     context->BindSR(6, cache.Inscatter->ViewVolume());
+    const bool hasCloudTexture = CloudTexture && CloudTexture->GetTexture();
+    const bool hasStarsTexture = StarsTexture && StarsTexture->GetTexture();
+    context->BindSR(7, hasCloudTexture ? CloudTexture->GetTexture() : GPUDevice::Instance->GetDefaultWhiteTexture());
+    context->BindSR(8, hasStarsTexture ? StarsTexture->GetTexture() : nullptr);
 
     // Setup constants data
     Matrix m;
@@ -186,6 +238,17 @@ void Sky::ApplySky(GPUContext* context, RenderContext& renderContext, const Matr
     data.ViewOffset = renderContext.View.Origin + GetPosition();
     data.NoiseScale = renderContext.View.IsSingleFrame ? 0.01f : 0.03f;
     InitConfig(data.Fog);
+    data.CloudParams0 = Float4(hasCloudTexture ? CloudCoverage : 0.0f, CloudDensity, CloudSoftness, CloudDetailScale);
+    const float cloudTime = Time::GetGameTime();
+    data.CloudParams1 = Float4(CloudScale.X, CloudScale.Y, CloudOffset.X + CloudWind.X * cloudTime, CloudOffset.Y + CloudWind.Y * cloudTime);
+    data.CloudDayColor = Float4(CloudDayColor.ToFloat3(), CloudDayColor.A);
+    data.CloudNightColor = Float4(CloudNightColor.ToFloat3(), CloudNightColor.A);
+    data.CloudStormColor = Float4(CloudStormColor.ToFloat3(), CloudStormColor.A);
+    const float moonCos = Math::Cos(MoonAngularRadius * 0.01745329252f);
+    data.NightParams = Float4(hasStarsTexture ? StarsIntensity : 0.0f, moonCos, 0.01f, MoonIntensity);
+    data.MoonDirection = Float4(MoonDirection, 0);
+    data.MoonColor = Float4(MoonColor.ToFloat3(), MoonColor.A);
+    data.SkyParams = Float4(AtmosphereSunIntensity, CloudSunRimIntensity, 0, 0);
     //data.Fog.AtmosphericFogSunPower *= SunLight ? SunLight->Brightness : 1.0f;
     if (EnumHasNoneFlags(renderContext.View.Flags, ViewFlags::SpecularLight))
     {
