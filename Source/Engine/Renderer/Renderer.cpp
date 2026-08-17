@@ -27,6 +27,7 @@
 #include "GlobalSignDistanceFieldPass.h"
 #include "GI/GlobalSurfaceAtlasPass.h"
 #include "GI/DynamicDiffuseGlobalIllumination.h"
+#include "GI/GlobalDistanceFieldGI.h"
 #include "Utils/MultiScaler.h"
 #include "Utils/BitonicSort.h"
 #include "AntiAliasing/FXAA.h"
@@ -97,6 +98,7 @@ bool RendererService::Init()
     PassList.Add(GlobalSignDistanceFieldPass::Instance());
     PassList.Add(GlobalSurfaceAtlasPass::Instance());
     PassList.Add(DynamicDiffuseGlobalIlluminationPass::Instance());
+    PassList.Add(GlobalDistanceFieldGIPass::Instance());
 #if USE_EDITOR
     PassList.Add(QuadOverdrawPass::Instance());
 #endif
@@ -400,7 +402,8 @@ void RenderInner(SceneRenderTask* task, RenderContext& renderContext, RenderCont
         setup.UseTemporalAAJitter = renderContext.List->Settings.AntiAliasing.Mode == AntialiasingMode::TemporalAntialiasing;
         const auto giMode = renderContext.List->Settings.GlobalIllumination.Mode;
         setup.UseGlobalSurfaceAtlas = renderContext.View.Mode == ViewMode::GlobalSurfaceAtlas ||
-                (EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI) && (giMode == GlobalIlluminationMode::DDGI || giMode == GlobalIlluminationMode::DDGIPlus));
+                renderContext.View.Mode == ViewMode::GlobalIllumination ||
+                (EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI) && (giMode == GlobalIlluminationMode::DDGI || giMode == GlobalIlluminationMode::DDGIPlus || giMode == GlobalIlluminationMode::GDFGI));
         setup.UseGlobalSDF = (graphicsSettings->EnableGlobalSDF && EnumHasAnyFlags(view.Flags, ViewFlags::GlobalSDF)) ||
                 renderContext.View.Mode == ViewMode::GlobalSDF ||
                 setup.UseGlobalSurfaceAtlas;
@@ -640,13 +643,16 @@ void RenderInner(SceneRenderTask* task, RenderContext& renderContext, RenderCont
     renderContextBatch.GetMainContext() = renderContext; // Sync render context in batch with the current value
     ShadowsPass::Instance()->RenderShadowMaps(renderContextBatch);
     LightPass::Instance()->RenderLights(renderContextBatch, *lightBuffer);
-    if (EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI))
+    if (EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI) || renderContext.View.Mode == ViewMode::GlobalIllumination)
     {
         switch (renderContext.List->Settings.GlobalIllumination.Mode)
         {
         case GlobalIlluminationMode::DDGI:
         case GlobalIlluminationMode::DDGIPlus:
             DynamicDiffuseGlobalIlluminationPass::Instance()->Render(renderContext, context, *lightBuffer);
+            break;
+        case GlobalIlluminationMode::GDFGI:
+            GlobalDistanceFieldGIPass::Instance()->Render(renderContext, context, *lightBuffer);
             break;
         }
     }

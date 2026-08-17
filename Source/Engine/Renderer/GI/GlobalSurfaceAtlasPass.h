@@ -3,6 +3,7 @@
 #pragma once
 
 #include "../RendererPass.h"
+#include "GlobalGIDirtyRegion.h"
 
 /// <summary>
 /// Global Surface Atlas rendering pass. Captures scene geometry into a single atlas texture which contains surface diffuse color, normal vector, emission light, and calculates direct+indirect lighting. Used by Global Illumination and Reflections.
@@ -103,6 +104,13 @@ public:
 
     // Rasterize actor into the Global Surface Atlas. Call it from actor Draw() method during DrawPass::GlobalSurfaceAtlas.
     void RasterizeActor(Actor* actor, void* actorObject, const BoundingSphere& actorObjectBounds, const Transform& localToWorld, const BoundingBox& localBounds, uint32 tilesMask = MAX_uint32, bool useVisibility = true, float qualityScale = 1.0f);
+
+    /// <summary>
+    /// Manually queues a dynamic GI dirty region to invalidate intersecting Global Surface Atlas lighting and trigger prompt relighting.
+    /// </summary>
+    /// <param name="buffers">The rendering context buffers.</param>
+    /// <param name="region">The dirty region to invalidate.</param>
+    void QueueDirtyRegion(RenderBuffers* buffers, const GlobalGIDirtyRegion& region);
 
 private:
 #if COMPILE_WITH_DEV_ENV

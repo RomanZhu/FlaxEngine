@@ -9,6 +9,7 @@
 #include "./Flax/GlobalSignDistanceField.hlsl"
 #include "./Flax/GI/GlobalSurfaceAtlas.hlsl"
 #include "./Flax/GI/DDGI.hlsl"
+#include "./Flax/GI/GDFGI.hlsl"
 
 META_CB_BEGIN(0, Data)
 float3 ViewWorldPos;
@@ -134,15 +135,52 @@ float4 PS_Lighting(AtlasVertexOutput input) : SV_Target
 #if INDIRECT_LIGHT
     // Sample irradiance
     float3 geometricNormal = gBuffer.Normal;
-    if (DDGI.Algorithm != 0)
+    geometricNormal = normalize(cross(ddx(gBuffer.WorldPos), ddy(gBuffer.WorldPos)));
+    if (dot(geometricNormal, gBuffer.Normal) < 0.0f)
+        geometricNormal = -geometricNormal;
+    if (any(isnan(geometricNormal)) || length(geometricNormal) < 0.5f)
+        geometricNormal = gBuffer.Normal;
+
+    float3 irradiance = 0;
+    if (DDGI.CascadesCount > 0)
     {
-        geometricNormal = normalize(cross(ddx(gBuffer.WorldPos), ddy(gBuffer.WorldPos)));
-        if (dot(geometricNormal, gBuffer.Normal) < 0.0f)
-            geometricNormal = -geometricNormal;
-        if (any(isnan(geometricNormal)) || length(geometricNormal) < 0.5f)
-            geometricNormal = gBuffer.Normal;
+        if (DDGI.Algorithm == 2)
+        {
+            GDFGIData gdfgiData = (GDFGIData)0;
+            UNROLL
+            for (uint c = 0; c < 4; c++)
+            {
+                gdfgiData.ProbesOriginAndSpacing[c] = DDGI.ProbesOriginAndSpacing[c];
+                gdfgiData.BlendOrigin[c] = DDGI.BlendOrigin[c];
+                gdfgiData.ProbesScrollOffsets[c] = DDGI.ProbesScrollOffsets[c];
+                gdfgiData.CascadeDirtyBoundsMin[c] = float4(0, 0, 0, 0);
+                gdfgiData.CascadeDirtyBoundsMax[c] = float4(0, 0, 0, 0);
+                gdfgiData.ProbeScrollClears[c] = int4(0, 0, 0, 0);
+            }
+            gdfgiData.ProbesCounts = DDGI.ProbesCounts;
+            gdfgiData.CascadesCount = DDGI.CascadesCount;
+            gdfgiData.IndirectLightingIntensity = DDGI.IndirectLightingIntensity;
+            gdfgiData.RayMaxDistance = DDGI.RayMaxDistance;
+            gdfgiData.ViewPos = DDGI.ViewPos;
+            gdfgiData.RaysCount = GDFGI_RAYS_COUNT;
+            gdfgiData.FallbackIrradiance = DDGI.FallbackIrradiance;
+            gdfgiData.NormalBias = DDGI.NormalBias;
+            gdfgiData.ViewBias = DDGI.ViewBias;
+            gdfgiData.ThinGeometryExpansion = 0;
+            gdfgiData.HistoryFrames = 8;
+            gdfgiData.HistoryFrameIndex = 0;
+            gdfgiData.DynamicInvalidation = 0;
+            gdfgiData.EnableDirectionalSpecular = 0;
+            gdfgiData.Algorithm = DDGI.Algorithm;
+            gdfgiData.UpdateRowOffset = 0;
+            gdfgiData.UpdateRowCount = 0;
+            irradiance = SampleGDFGITrilinearIrradiance(gdfgiData, ProbeStates, ProbesIrradiance, gBuffer.WorldPos, gBuffer.Normal);
+        }
+        else
+        {
+            irradiance = SampleDDGIIrradianceWithVisibilityNormal(DDGI, ProbesData, ProbeStates, ProbesDistance, ProbesIrradiance, gBuffer.WorldPos, gBuffer.Normal, geometricNormal);
+        }
     }
-    float3 irradiance = SampleDDGIIrradianceWithVisibilityNormal(DDGI, ProbesData, ProbeStates, ProbesDistance, ProbesIrradiance, gBuffer.WorldPos, gBuffer.Normal, geometricNormal);
     irradiance *= Light.Radius; // Cached BounceIntensity / IndirectLightingIntensity
 
     // Calculate lighting
@@ -388,7 +426,7 @@ float4 PS_Debug(Quad_VS2PS input) : SV_Target
 	{
         // Sample Global Surface Atlas at the hit location
         float surfaceThreshold = GetGlobalSurfaceAtlasThreshold(GlobalSDF, hit);
-        color = SampleGlobalSurfaceAtlas(GlobalSurfaceAtlas, GlobalSurfaceAtlasChunks, GlobalSurfaceAtlasCulledObjects, GlobalSurfaceAtlasObjects, GlobalSurfaceAtlasDepth, GlobalSurfaceAtlasTex, hit.GetHitPosition(trace), -viewRay, surfaceThreshold).rgb;
+        color = SampleGlobalSurfaceAtlas(GlobalSurfaceAtlas, GlobalSurfaceAtlasChunks, GlobalSurfaceAtlasCulledObjects, GlobalSurfaceAtlasObjects, GlobalSurfaceAtlasDepth, GlobalSurfaceAtlasTex, hit.GetHitPosition(trace), -viewRay, surfaceThreshold, CulledObjectsCapacity, 64u).rgb;
     }
     else
     {

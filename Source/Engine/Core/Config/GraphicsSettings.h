@@ -25,6 +25,68 @@ API_ENUM() enum class DDGITraceBackend
 };
 
 /// <summary>
+/// Ray tracing backend used by Global Distance Field Global Illumination (GDFGI).
+/// </summary>
+API_ENUM() enum class GDFGITraceBackend
+{
+    /// <summary>
+    /// Standard Global SDF and Global Surface Atlas ray marching.
+    /// </summary>
+    GlobalSDF = 0,
+
+    /// <summary>
+    /// Derived Hierarchical Digital Differential Analyzer (HDDA) tracing.
+    /// </summary>
+    DerivedHDDA = 1,
+};
+
+/// <summary>
+/// Execution stages for GDFGI developer isolation, step-by-step validation, and DX11 stabilization.
+/// </summary>
+API_ENUM() enum class GDFGIDebugExecutionStage
+{
+    /// <summary>
+    /// Normal production GDFGI execution.
+    /// </summary>
+    Disabled = 0,
+
+    /// <summary>
+    /// Allocates and clears GDFGI textures only (no compute dispatch).
+    /// </summary>
+    AllocateOnly = 1,
+
+    /// <summary>
+    /// Runs probe classification and relocation kernel only.
+    /// </summary>
+    Classify = 2,
+
+    /// <summary>
+    /// Runs probe classification and directional radiance ray tracing.
+    /// </summary>
+    Trace = 3,
+
+    /// <summary>
+    /// Runs up to temporal history update.
+    /// </summary>
+    Temporal = 4,
+
+    /// <summary>
+    /// Runs up to diffuse convolution.
+    /// </summary>
+    Convolve = 5,
+
+    /// <summary>
+    /// Runs up to deferred indirect lighting composition.
+    /// </summary>
+    Composite = 6,
+
+    /// <summary>
+    /// Full GDFGI pipeline execution with multibounce.
+    /// </summary>
+    Full = 7,
+};
+
+/// <summary>
 /// Graphics rendering settings.
 /// </summary>
 API_CLASS(sealed, Namespace="FlaxEditor.Content.Settings", NoConstructor) class FLAXENGINE_API GraphicsSettings : public SettingsBase
@@ -153,10 +215,10 @@ public:
     float GIProbesSpacing = 100;
 
     /// <summary>
-    /// Maximum number of DDGI probe rays scheduled per view and frame. Zero uses the quality-derived unlimited budget.
+    /// Maximum number of DDGI probe rays scheduled per view and frame. Zero uses the renderer's safe default budget.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(2121), Limit(0, 16777216), EditorDisplay(\"Global Illumination\")")
-    uint32 DDGIProbeRayBudget = 262144;
+    uint32 DDGIProbeRayBudget = 65536;
 
     /// <summary>
     /// Near-field Global SDF half-extent in world units when DDGI is enabled. The outer SDF cascades still cover the full GI range.
@@ -193,6 +255,54 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(2130), Limit(256, 8192), EditorDisplay(\"Global Illumination\")")
     int32 GlobalSurfaceAtlasResolution = 2048;
+
+    /// <summary>
+    /// Maximum number of GDFGI probe rays scheduled per view and frame. Zero uses the renderer's safe default budget.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2140), Limit(0, 16777216), EditorDisplay(\"Global Illumination\", \"GDFGI Probe Ray Budget\")")
+    uint32 GDFGIProbeRayBudget = 3200;
+
+    /// <summary>
+    /// Number of temporal history frames in the GDFGI moving average ring buffer.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2141), Limit(1, 32), EditorDisplay(\"Global Illumination\", \"GDFGI History Frames\")")
+    uint32 GDFGIHistoryFrames = 8;
+
+    /// <summary>
+    /// Inactive probe update interval in frames for GDFGI.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2142), Limit(1, 64), EditorDisplay(\"Global Illumination\", \"GDFGI Inactive Probe Update Frames\")")
+    uint32 GDFGIInactiveProbeUpdateFrames = 4;
+
+    /// <summary>
+    /// Dynamic invalidation radius around dirty bounding boxes in probe spacing units.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2143), Limit(0.5f, 10.0f), EditorDisplay(\"Global Illumination\", \"GDFGI Dynamic Dirty Radius (Probe Spacings)\")")
+    float GDFGIDynamicDirtyRadiusInProbeSpacings = 3.0f;
+
+    /// <summary>
+    /// Expands Global SDF surfaces during GDFGI ray hit detection to preserve thin geometry.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2144), Limit(0, 1000), ValueCategory(Utils.ValueCategory.Distance), EditorDisplay(\"Global Illumination\", \"GDFGI Thin Geometry Expansion\")")
+    float GDFGIThinGeometryExpansion = 0.0f;
+
+    /// <summary>
+    /// Enables directional specular indirect reflections sampled from GDFGI directional radiance bins.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2145), DefaultValue(false), EditorDisplay(\"Global Illumination\", \"GDFGI Enable Directional Specular\")")
+    bool GDFGIEnableDirectionalSpecular = false;
+
+    /// <summary>
+    /// Ray tracing backend to use for GDFGI.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2146), DefaultValue(GDFGITraceBackend.GlobalSDF), EditorDisplay(\"Global Illumination\", \"GDFGI Trace Backend\")")
+    GDFGITraceBackend GDFGITraceBackend = GDFGITraceBackend::GlobalSDF;
+
+    /// <summary>
+    /// Developer-only debug execution stage for GDFGI pipeline isolation and DX11 validation.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2147), DefaultValue(GDFGIDebugExecutionStage.Disabled), EditorDisplay(\"Global Illumination\", \"GDFGI Debug Execution Stage\")")
+    GDFGIDebugExecutionStage GDFGIDebugStage = GDFGIDebugExecutionStage::Disabled;
 
 public:
     /// <summary>

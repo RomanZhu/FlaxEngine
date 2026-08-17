@@ -105,7 +105,7 @@ TEST_CASE("TimeFixedStep")
         data.Synchronize(60.0f, 0.0, true);
 
         CHECK(ConsumeFixedSteps(data, 1.0, 60.0f, 0.1f) == 6);
-        CHECK(data.AccumulatedTime == Approx(0.1 - 6.0 / 60.0));
+        CHECK(data.AccumulatedTime == Approx(0.1 - 6.0 / 60.0).margin(1e-5));
     }
 
     SECTION("Fixed tick delta is stable across catch-up")

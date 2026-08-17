@@ -183,9 +183,14 @@ float4 SampleGlobalSurfaceAtlasTile(const GlobalSurfaceAtlasData data, GlobalSur
 
 // Samples the Global Surface Atlas and returns the lighting (with opacity) at the given world location (and direction).
 // surfaceThreshold - Additional threshold (in world-units) between object or tile size compared with input data (error due to SDF or LOD incorrect appearance)
-float4 SampleGlobalSurfaceAtlas(const GlobalSurfaceAtlasData data, ByteAddressBuffer chunks, ByteAddressBuffer culledObjects, Buffer<float4> objects, Texture2D depth, Texture2D atlas, float3 worldPosition, float3 worldNormal, float surfaceThreshold = 20.0f)
+float4 SampleGlobalSurfaceAtlas(const GlobalSurfaceAtlasData data, ByteAddressBuffer chunks, ByteAddressBuffer culledObjects, Buffer<float4> objects, Texture2D depth, Texture2D atlas, float3 worldPosition, float3 worldNormal, float surfaceThreshold = 20.0f, uint culledObjectsCapacity = 0xffffffffu, uint maxObjectsToTest = 0xffffffffu)
 {
     float4 result = float4(0, 0, 0, 0);
+
+    // Callers can explicitly invalidate the atlas by publishing no objects.
+    // This also prevents raw-buffer reads when a partial binding is unavailable.
+    if (data.ObjectsCount == 0 || culledObjectsCapacity == 0)
+        return result;
 
     // Snap to the closest chunk to get culled objects. Reject samples outside
     // the atlas volume instead of aliasing all of them into an edge chunk.
@@ -195,7 +200,7 @@ float4 SampleGlobalSurfaceAtlas(const GlobalSurfaceAtlasData data, ByteAddressBu
     uint3 chunkCoord = (uint3)chunkPosition;
     uint chunkAddress = (chunkCoord.z * (GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION * GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION) + chunkCoord.y * GLOBAL_SURFACE_ATLAS_CHUNKS_RESOLUTION + chunkCoord.x) * 4;
     uint objectsStart = chunks.Load(chunkAddress);
-    if (objectsStart == 0)
+    if (objectsStart == 0 || objectsStart >= culledObjectsCapacity)
     {
         // Empty chunk
         return result;
@@ -203,8 +208,9 @@ float4 SampleGlobalSurfaceAtlas(const GlobalSurfaceAtlasData data, ByteAddressBu
 
     // Read objects counter
     uint objectsCount = culledObjects.Load(objectsStart * 4);
-    if (objectsCount > data.ObjectsCount) // Prevents crashing - don't know why the data is invalid here (rare issue when moving fast though scene with terrain)
+    if (objectsCount > data.ObjectsCount || objectsCount == 0 || objectsCount > culledObjectsCapacity - objectsStart - 1) // Prevents out-of-range raw-buffer reads
         return result;
+    objectsCount = min(objectsCount, maxObjectsToTest);
     objectsStart++;
 
     // Loop over culled objects inside the chunk
@@ -214,6 +220,8 @@ float4 SampleGlobalSurfaceAtlas(const GlobalSurfaceAtlasData data, ByteAddressBu
         // Cull point vs sphere
         uint objectAddress = culledObjects.Load(objectsStart * 4);
         objectsStart++;
+        if (objectAddress == 0)
+            continue;
         float4 objectBounds = LoadGlobalSurfaceAtlasObjectBounds(objects, objectAddress);
         if (distance(objectBounds.xyz, worldPosition) > objectBounds.w)
             continue;

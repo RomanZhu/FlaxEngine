@@ -4,6 +4,7 @@
 
 #include "RendererPass.h"
 #include "Engine/Core/Math/Vector3.h"
+#include "Engine/Renderer/GI/GlobalGIDirtyRegion.h"
 
 /// <summary>
 /// Global Sign Distance Field (SDF) rendering pass. Composites scene geometry into series of 3D volume textures that cover the world around the camera for global distance field sampling.
@@ -81,6 +82,28 @@ public:
     void RasterizeModelSDF(Actor* actor, const ModelBase::SDFData& sdf, const Transform& localToWorld, const BoundingBox& objectBounds);
 
     void RasterizeHeightfield(Actor* actor, GPUTexture* heightfield, const Transform& localToWorld, const BoundingBox& objectBounds, const Float4& localToUV);
+
+    /// <summary>
+    /// Gets the geometry revision for the specified cascade (or total if index is negative), incremented whenever dynamic geometry changes in it.
+    /// </summary>
+    /// <param name="buffers">The rendering context buffers.</param>
+    /// <param name="cascadeIndex">The cascade index (0-3), or -1 for total revision across all cascades.</param>
+    /// <returns>The geometry revision counter.</returns>
+    uint32 GetGeometryRevision(const RenderBuffers* buffers, int32 cascadeIndex = -1) const;
+
+    /// <summary>
+    /// Gets the last frame count when dynamic geometry caused an update to the Global SDF.
+    /// </summary>
+    /// <param name="buffers">The rendering context buffers.</param>
+    /// <returns>The engine frame count of the last dynamic update.</returns>
+    uint64 GetLastDynamicUpdateFrame(const RenderBuffers* buffers) const;
+
+    /// <summary>
+    /// Manually queues a dynamic GI dirty region to invalidate intersecting Global SDF chunks and force near-cascade updates.
+    /// </summary>
+    /// <param name="buffers">The rendering context buffers.</param>
+    /// <param name="region">The dirty region to invalidate.</param>
+    void QueueDirtyRegion(RenderBuffers* buffers, const GlobalGIDirtyRegion& region);
 
 private:
 #if COMPILE_WITH_DEV_ENV

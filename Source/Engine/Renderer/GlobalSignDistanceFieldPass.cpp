@@ -20,6 +20,7 @@
 #include "Engine/Level/Scene/SceneRendering.h"
 #include "Engine/Level/Actors/StaticModel.h"
 #include "Engine/Threading/JobSystem.h"
+#include "GI/GlobalDistanceFieldGI.h"
 
 // Some of those constants must match in shader
 #define GLOBAL_SDF_FORMAT PixelFormat::R8_SNorm
@@ -150,6 +151,11 @@ struct CascadeData
     HashSet<RasterizeChunkKey> NonEmptyChunks;
     HashSet<RasterizeChunkKey> StaticChunks;
 
+    // Dynamic tracking
+    bool DynamicDirty = false;
+    uint32 GeometryRevision = 0;
+    uint64 LastDynamicUpdateFrame = 0;
+
     // Cache
     Dictionary<RasterizeChunkKey, RasterizeChunk> Chunks;
     Array<RasterizeObject> RasterizeObjects;
@@ -161,7 +167,7 @@ struct CascadeData
 
     void OnSceneRenderingDirty(const BoundingBox& objectBounds)
     {
-        if (StaticChunks.IsEmpty() || !CullingBounds.Intersects(objectBounds))
+        if (objectBounds.Minimum.X > objectBounds.Maximum.X || !CullingBounds.Intersects(objectBounds))
             return;
 
         BoundingBox objectBoundsCascade;
@@ -173,19 +179,25 @@ struct CascadeData
         const Int3 objectChunkMax(objectBoundsCascade.Maximum / ChunkSize);
 
         // Invalidate static chunks intersecting with dirty bounds
-        RasterizeChunkKey key;
-        key.Layer = 0;
-        for (key.Coord.Z = objectChunkMin.Z; key.Coord.Z <= objectChunkMax.Z; key.Coord.Z++)
+        if (StaticChunks.HasItems())
         {
-            for (key.Coord.Y = objectChunkMin.Y; key.Coord.Y <= objectChunkMax.Y; key.Coord.Y++)
+            RasterizeChunkKey key;
+            key.Layer = 0;
+            for (key.Coord.Z = objectChunkMin.Z; key.Coord.Z <= objectChunkMax.Z; key.Coord.Z++)
             {
-                for (key.Coord.X = objectChunkMin.X; key.Coord.X <= objectChunkMax.X; key.Coord.X++)
+                for (key.Coord.Y = objectChunkMin.Y; key.Coord.Y <= objectChunkMax.Y; key.Coord.Y++)
                 {
-                    key.Hash = key.Coord.Z * (RasterizeChunkKeyHashResolution * RasterizeChunkKeyHashResolution) + key.Coord.Y * RasterizeChunkKeyHashResolution + key.Coord.X;
-                    StaticChunks.Remove(key);
+                    for (key.Coord.X = objectChunkMin.X; key.Coord.X <= objectChunkMax.X; key.Coord.X++)
+                    {
+                        key.Hash = key.Coord.Z * (RasterizeChunkKeyHashResolution * RasterizeChunkKeyHashResolution) + key.Coord.Y * RasterizeChunkKeyHashResolution + key.Coord.X;
+                        StaticChunks.Remove(key);
+                    }
                 }
             }
         }
+
+        DynamicDirty = true;
+        GeometryRevision++;
     }
 };
 
@@ -203,6 +215,8 @@ public:
     HashSet<GPUTexture*> SDFTextures;
     GlobalSignDistanceFieldPass::BindingData Result;
     bool LayoutResetPending = false;
+    uint32 TotalGeometryRevision = 0;
+    uint64 LastDynamicUpdateFrame = 0;
 
     // Async objects drawing cache
     Array<int64, FixedAllocation<1>> AsyncDrawWaitLabels;
@@ -254,7 +268,7 @@ public:
         // DDGI can request a tighter near field independently of its far
         // irradiance range. Non-DDGI users retain the historical layout.
         float nearDistance = distance / CascadesDistanceScales[cascadesCount - 1];
-        if (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus)
+        if (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus || renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::GDFGI)
         {
             nearDistance = Math::Clamp(GraphicsSettings::Get()->DDGINearFieldDistance, 100.0f, distance);
         }
@@ -283,7 +297,12 @@ public:
             const float objectMargin = cascade.VoxelSize * GLOBAL_SDF_RASTERIZE_CHUNK_MARGIN;
             cascade.OriginMin = -Origin - objectMargin;
             cascade.OriginMax = -Origin + objectMargin;
+            cascade.DynamicDirty = true;
+            cascade.GeometryRevision++;
+            cascade.LastDynamicUpdateFrame = Engine::FrameCount;
         }
+        TotalGeometryRevision++;
+        LastDynamicUpdateFrame = Engine::FrameCount;
     }
 
     void GetOptions(const RenderContext& renderContext, int32& resolution, int32& cascadesCount, int32& resolutionMip, float& distance)
@@ -311,7 +330,7 @@ public:
         resolutionMip = Math::DivideAndRoundUp(resolution, GLOBAL_SDF_RASTERIZE_MIP_FACTOR);
         auto& giSettings = renderContext.List->Settings.GlobalIllumination;
         distance = GraphicsSettings::Get()->GlobalSDFDistance;
-        if (giSettings.Mode == GlobalIlluminationMode::DDGI || giSettings.Mode == GlobalIlluminationMode::DDGIPlus)
+        if (giSettings.Mode == GlobalIlluminationMode::DDGI || giSettings.Mode == GlobalIlluminationMode::DDGIPlus || giSettings.Mode == GlobalIlluminationMode::GDFGI)
             distance = Math::Max(distance, giSettings.Distance);
         distance = Math::Min(distance, renderContext.View.Far);
     }
@@ -391,9 +410,11 @@ public:
             const Float3 center = (Float3)(centerWorld - Origin);
             const bool centerMoved = !Float3::NearEqual(cascade.Position, center, cascadeVoxelSize);
             const bool layoutChanged = !Math::NearEqual(cascade.Extent, cascadeExtent);
-            cascade.Dirty = !useCache || centerMoved || layoutChanged || RenderTools::ShouldUpdateCascade(FrameIndex, cascadeIndex, cascadesCount, maxCascadeUpdatesPerFrame, updateEveryFrame);
+            const bool dynamicDirty = cascade.DynamicDirty;
+            cascade.Dirty = !useCache || centerMoved || layoutChanged || dynamicDirty || RenderTools::ShouldUpdateCascade(FrameIndex, cascadeIndex, cascadesCount, maxCascadeUpdatesPerFrame, updateEveryFrame);
             if (!cascade.Dirty)
                 continue;
+            cascade.DynamicDirty = false;
             //const Float3 center = Float3::Zero;
             BoundingBox cascadeBounds(center - cascadeExtent, center + cascadeExtent);
 
@@ -452,39 +473,86 @@ public:
         AsyncDrawWaitLabels.Clear();
     }
 
+    FORCE_INLINE bool ShouldTrackActor(Actor* a) const
+    {
+        return a && (ObjectTypes.Contains(a->GetTypeHandle()) || ObjectTypes.IsEmpty() || a->Is<StaticModel>());
+    }
+
     FORCE_INLINE void OnSceneRenderingDirty(const BoundingBox& objectBounds)
     {
+        bool anyHit = false;
         for (auto& cascade : Cascades)
-            cascade.OnSceneRenderingDirty(objectBounds);
+        {
+            if (cascade.CullingBounds.Intersects(objectBounds))
+            {
+                cascade.OnSceneRenderingDirty(objectBounds);
+                cascade.LastDynamicUpdateFrame = Engine::FrameCount;
+                anyHit = true;
+            }
+        }
+        if (anyHit)
+        {
+            TotalGeometryRevision++;
+            LastDynamicUpdateFrame = Engine::FrameCount;
+        }
+    }
+
+    FORCE_INLINE void OnSceneRenderingDirtyRegion(const GlobalGIDirtyRegion& region)
+    {
+        bool anyHit = false;
+        const BoundingBox combinedBounds = region.GetCombinedBounds();
+        for (auto& cascade : Cascades)
+        {
+            if (cascade.CullingBounds.Intersects(combinedBounds))
+            {
+                if (region.PreviousBounds.Minimum.X <= region.PreviousBounds.Maximum.X)
+                    cascade.OnSceneRenderingDirty(region.PreviousBounds);
+                if (region.CurrentBounds.Minimum.X <= region.CurrentBounds.Maximum.X)
+                    cascade.OnSceneRenderingDirty(region.CurrentBounds);
+                cascade.LastDynamicUpdateFrame = Engine::FrameCount;
+                anyHit = true;
+            }
+        }
+        if (anyHit)
+        {
+            TotalGeometryRevision++;
+            LastDynamicUpdateFrame = Engine::FrameCount;
+            GlobalDistanceFieldGIPass::Instance()->QueueDirtyRegion(nullptr, region);
+        }
     }
 
     // [ISceneRenderingListener]
     void OnSceneRenderingAddActor(Actor* a) override
     {
-        if (GLOBAL_SDF_ACTOR_IS_STATIC(a) && ObjectTypes.Contains(a->GetTypeHandle()))
+        if (ShouldTrackActor(a))
         {
             ScopeWriteLock lock(Locker);
-            OnSceneRenderingDirty(a->GetBox());
+            const BoundingBox newBox = a->GetBox();
+            GlobalGIDirtyRegion region(BoundingBox::Empty, newBox, GlobalGIDirtyFlags::GeometryChanged | GlobalGIDirtyFlags::LightingChanged);
+            OnSceneRenderingDirtyRegion(region);
         }
     }
 
     void OnSceneRenderingUpdateActor(Actor* a, const BoundingSphere& prevBounds, UpdateFlags flags) override
     {
-        if (GLOBAL_SDF_ACTOR_IS_STATIC(a) && ObjectTypes.Contains(a->GetTypeHandle()))
+        if (ShouldTrackActor(a))
         {
             ScopeWriteLock lock(Locker);
-            if (flags != DrawModes && flags != Layer && flags != StaticFlags)
-                OnSceneRenderingDirty(BoundingBox::FromSphere(prevBounds));
-            OnSceneRenderingDirty(a->GetBox());
+            const BoundingBox oldBox = (flags != DrawModes && flags != Layer && flags != StaticFlags) ? BoundingBox::FromSphere(prevBounds) : a->GetBox();
+            const BoundingBox newBox = a->GetBox();
+            GlobalGIDirtyRegion region(oldBox, newBox, GlobalGIDirtyFlags::GeometryChanged | GlobalGIDirtyFlags::LightingChanged);
+            OnSceneRenderingDirtyRegion(region);
         }
     }
 
     void OnSceneRenderingRemoveActor(Actor* a) override
     {
-        if (GLOBAL_SDF_ACTOR_IS_STATIC(a) && ObjectTypes.Contains(a->GetTypeHandle()))
+        if (ShouldTrackActor(a))
         {
             ScopeWriteLock lock(Locker);
-            OnSceneRenderingDirty(a->GetBox());
+            const BoundingBox oldBox = a->GetBox();
+            GlobalGIDirtyRegion region(oldBox, BoundingBox::Empty, GlobalGIDirtyFlags::GeometryChanged | GlobalGIDirtyFlags::LightingChanged);
+            OnSceneRenderingDirtyRegion(region);
         }
     }
 
@@ -492,7 +560,14 @@ public:
     {
         ScopeWriteLock lock(Locker);
         for (auto& cascade : Cascades)
+        {
             cascade.StaticChunks.Clear();
+            cascade.DynamicDirty = true;
+            cascade.GeometryRevision++;
+            cascade.LastDynamicUpdateFrame = Engine::FrameCount;
+        }
+        TotalGeometryRevision++;
+        LastDynamicUpdateFrame = Engine::FrameCount;
     }
 };
 
@@ -856,7 +931,12 @@ bool GlobalSignDistanceFieldPass::Render(RenderContext& renderContext, GPUContex
         {
             cascade.NonEmptyChunks.Clear();
             cascade.StaticChunks.Clear();
+            cascade.DynamicDirty = false;
+            cascade.GeometryRevision++;
+            cascade.LastDynamicUpdateFrame = currentFrame;
         }
+        sdfData.TotalGeometryRevision++;
+        sdfData.LastDynamicUpdateFrame = currentFrame;
         context->ClearUA(sdfData.Texture, Float4::One);
         context->ClearUA(sdfData.TextureMip, Float4::One);
     }
@@ -1295,5 +1375,32 @@ void GlobalSignDistanceFieldPass::RasterizeHeightfield(Actor* actor, GPUTexture*
     if (!dynamic && residentMipLevels != heightfield->MipLevels() && !Current->SDFTextures.Contains(heightfield))
     {
         cascade.PendingSDFTextures.Add(heightfield);
+    }
+}
+
+uint32 GlobalSignDistanceFieldPass::GetGeometryRevision(const RenderBuffers* buffers, int32 cascadeIndex) const
+{
+    auto* sdfData = buffers ? buffers->FindCustomBuffer<GlobalSignDistanceFieldCustomBuffer>(TEXT("GlobalSignDistanceField")) : nullptr;
+    if (!sdfData)
+        return 0;
+    ScopeReadLock lock(sdfData->Locker);
+    if (cascadeIndex >= 0 && cascadeIndex < sdfData->Cascades.Count())
+        return sdfData->Cascades[cascadeIndex].GeometryRevision;
+    return sdfData->TotalGeometryRevision;
+}
+
+uint64 GlobalSignDistanceFieldPass::GetLastDynamicUpdateFrame(const RenderBuffers* buffers) const
+{
+    auto* sdfData = buffers ? buffers->FindCustomBuffer<GlobalSignDistanceFieldCustomBuffer>(TEXT("GlobalSignDistanceField")) : nullptr;
+    return sdfData ? sdfData->LastDynamicUpdateFrame : 0;
+}
+
+void GlobalSignDistanceFieldPass::QueueDirtyRegion(RenderBuffers* buffers, const GlobalGIDirtyRegion& region)
+{
+    auto* sdfData = buffers ? buffers->GetCustomBuffer<GlobalSignDistanceFieldCustomBuffer>(TEXT("GlobalSignDistanceField")) : nullptr;
+    if (sdfData)
+    {
+        ScopeWriteLock lock(sdfData->Locker);
+        sdfData->OnSceneRenderingDirtyRegion(region);
     }
 }

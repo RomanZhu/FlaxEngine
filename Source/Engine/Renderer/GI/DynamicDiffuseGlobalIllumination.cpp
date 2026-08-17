@@ -725,7 +725,16 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
         int32 scheduledCascades = 0;
         for (int32 cascadeIndex = 0; cascadeIndex < cascadesCount; cascadeIndex++)
             scheduledCascades += cascadeSkipUpdate[cascadeIndex] ? 0 : 1;
-        const uint32 configuredRayBudget = isDDGIPlus ? graphicsSettings->DDGIProbeRayBudget : 0;
+        // Software Global SDF tracing can be selected explicitly or used as
+        // the fallback for the not-yet-implemented hardware backend. Keep a
+        // conservative per-frame ceiling on DX11 to avoid a long compute
+        // submission tripping the operating system's GPU timeout detection.
+        const uint32 requestedRayBudget = graphicsSettings->DDGIProbeRayBudget == 0
+                ? 65536u
+                : graphicsSettings->DDGIProbeRayBudget;
+        const uint32 configuredRayBudget = isDDGIPlus
+                ? Math::Min(requestedRayBudget, 65536u)
+                : 0;
         const uint32 perCascadeRayBudget = configuredRayBudget > 0 && scheduledCascades > 0 ? Math::Max((uint32)probeRaysCount, configuredRayBudget / (uint32)scheduledCascades) : 0;
 #if DDGI_DEBUG_STATS
         uint32 zero[4] = {};

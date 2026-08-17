@@ -15,6 +15,7 @@
 #include "Engine/Level/Scene/Lightmap.h"
 #include "Engine/Level/Actors/EnvironmentProbe.h"
 #include "Engine/Renderer/ReflectionsPass.h"
+#include "Engine/Renderer/GI/GlobalDistanceFieldGI.h"
 
 void ForwardShadingFeature::Bind(MaterialShader::BindParameters& params, Span<byte>& cb, int32& srv)
 {
@@ -178,6 +179,37 @@ bool GlobalIlluminationFeature::Bind(MaterialShader::BindParameters& params, Spa
                 params.GPUContext->BindSR(srv + 1, bindingDataDDGI.ProbeStates);
                 params.GPUContext->BindSR(srv + 2, bindingDataDDGI.ProbesDistance);
                 params.GPUContext->BindSR(srv + 3, bindingDataDDGI.ProbesIrradiance);
+            }
+            break;
+        }
+        case GlobalIlluminationMode::GDFGI:
+        {
+            GlobalDistanceFieldGIPass::BindingData bindingDataGDFGI;
+            if (!GlobalDistanceFieldGIPass::Instance()->Get(params.RenderContext.Buffers, bindingDataGDFGI))
+            {
+                useGI = true;
+                Platform::MemoryClear(&data.DDGI, sizeof(data.DDGI));
+                for (int32 c = 0; c < 4; c++)
+                {
+                    data.DDGI.ProbesOriginAndSpacing[c] = bindingDataGDFGI.Constants.ProbesOriginAndSpacing[c];
+                    data.DDGI.BlendOrigin[c] = bindingDataGDFGI.Constants.BlendOrigin[c];
+                    data.DDGI.ProbesScrollOffsets[c] = bindingDataGDFGI.Constants.ProbesScrollOffsets[c];
+                }
+                data.DDGI.ProbesCounts[0] = bindingDataGDFGI.Constants.ProbesCounts[0];
+                data.DDGI.ProbesCounts[1] = bindingDataGDFGI.Constants.ProbesCounts[1];
+                data.DDGI.ProbesCounts[2] = bindingDataGDFGI.Constants.ProbesCounts[2];
+                data.DDGI.CascadesCount = bindingDataGDFGI.Constants.CascadesCount;
+                data.DDGI.RayMaxDistance = bindingDataGDFGI.Constants.RayMaxDistance;
+                data.DDGI.IndirectLightingIntensity = bindingDataGDFGI.Constants.IndirectLightingIntensity;
+                data.DDGI.ViewPos = bindingDataGDFGI.Constants.ViewPos;
+                data.DDGI.FallbackIrradiance = bindingDataGDFGI.Constants.FallbackIrradiance;
+                data.DDGI.NormalBias = bindingDataGDFGI.Constants.NormalBias;
+                data.DDGI.ViewBias = bindingDataGDFGI.Constants.ViewBias;
+                data.DDGI.Algorithm = 2;
+                params.GPUContext->BindSR(srv + 0, bindingDataGDFGI.ProbesData);
+                params.GPUContext->BindSR(srv + 1, bindingDataGDFGI.ProbeStates);
+                params.GPUContext->BindSR(srv + 2, bindingDataGDFGI.ProbesDistance);
+                params.GPUContext->BindSR(srv + 3, bindingDataGDFGI.DirectionalDiffuse);
             }
             break;
         }

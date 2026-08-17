@@ -38,6 +38,11 @@ API_ENUM() enum class GlobalIlluminationMode
     API_ENUM(Attributes="EditorDisplay(null, \"DDGI+\")")
     DDGIPlus = 3,
 
+    /// <summary>
+    /// Global Distance Field Global Illumination (GDFGI) using cascaded probe clipmaps, octahedral directional radiance, temporal history rings, and dynamic leak prevention.
+    /// </summary>
+    API_ENUM(Attributes="EditorDisplay(null, \"GDFGI\")")
+    GDFGI = 4,
 };
 
 /// <summary>
