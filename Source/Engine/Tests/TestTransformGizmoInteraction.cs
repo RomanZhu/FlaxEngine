@@ -16,6 +16,20 @@ namespace FlaxEditor.Tests
     public class TestTransformGizmoInteraction
     {
         [Test]
+        public void TestViewportSelectionScopeSupportsMultipleDescendants()
+        {
+            var scope = new TestNode(Guid.NewGuid());
+            var first = new TestNode(Guid.NewGuid()) { ParentNode = scope };
+            var second = new TestNode(Guid.NewGuid()) { ParentNode = scope };
+            var outside = new TestNode(Guid.NewGuid());
+
+            Assert.IsTrue(TransformGizmo.IsSelectionInsideScope(scope, new List<SceneGraphNode> { first, second }));
+            Assert.IsTrue(TransformGizmo.IsSelectionInsideScope(scope, new List<SceneGraphNode> { scope, first }));
+            Assert.IsFalse(TransformGizmo.IsSelectionInsideScope(scope, new List<SceneGraphNode> { first, outside }));
+            Assert.IsFalse(TransformGizmo.IsSelectionInsideScope(scope, new List<SceneGraphNode>()));
+        }
+
+        [Test]
         public void TestProjectionSizingUsesForwardDepthAndDpiParity()
         {
             Assert.IsTrue(TransformGizmoBase.TryCalculateProjectionSizing(false, 10.0f, 60.0f, 1.0f, 1000.0f, 1.0f, 96.0f, 0.1f, out var perspectivePixelSize, out var perspectiveRadius));
