@@ -26,6 +26,7 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS;
 uint64 Globals::MainThreadID;
 String Globals::EngineVersion(TEXT(FLAXENGINE_VERSION_TEXT));
 int32 Globals::EngineBuildNumber = FLAXENGINE_VERSION_BUILD;
+String Globals::EngineCommitName(FLAXENGINE_COMMIT_NAME);
 String Globals::ProductName;
 String Globals::CompanyName;
 int32 Globals::ContentKey;

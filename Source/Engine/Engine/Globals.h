@@ -102,6 +102,11 @@ public:
     API_FIELD(ReadOnly) static int32 EngineBuildNumber;
 
     /// <summary>
+    /// The source-control subject of the engine commit used for this build.
+    /// </summary>
+    API_FIELD(ReadOnly) static String EngineCommitName;
+
+    /// <summary>
     /// The short name of the product (can be `Flax Editor` or name of the game e.g. `My Space Shooter`).
     /// </summary>
     API_FIELD(ReadOnly) static String ProductName;

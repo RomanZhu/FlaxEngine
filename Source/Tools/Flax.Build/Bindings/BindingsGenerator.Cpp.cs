@@ -3424,6 +3424,7 @@ namespace Flax.Build.Bindings
             var binaryModuleNameUpper = binaryModuleName.ToUpperInvariant();
             var project = Builder.GetModuleProject(binaryModule.First(), buildData);
             var version = project.Version;
+            var versionControlCommitName = project.VersionControlCommitName.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t");
 
             // Generate C++ binary module header
             var binaryModuleHeaderPath = Path.Combine(project.ProjectFolderPath, "Source", binaryModuleName + ".Gen.h");
@@ -3449,6 +3450,8 @@ namespace Flax.Build.Bindings
                 contents.AppendLine($"#define {binaryModuleNameUpper}_BRANCH {binaryModuleName}Branch");
             if (project.VersionControlCommit.Length != 0)
                 contents.AppendLine($"#define {binaryModuleNameUpper}_COMMIT {binaryModuleName}Commit");
+            if (versionControlCommitName.Length != 0)
+                contents.AppendLine($"#define {binaryModuleNameUpper}_COMMIT_NAME {binaryModuleName}CommitName");
             contents.AppendLine();
             contents.AppendLine("class BinaryModule;");
             contents.AppendLine($"extern \"C\" {binaryModuleNameUpper}_API BinaryModule* GetBinaryModule{binaryModuleName}();");
@@ -3456,6 +3459,8 @@ namespace Flax.Build.Bindings
                 contents.AppendLine($"extern \"C\" {binaryModuleNameUpper}_API const char* {binaryModuleName}Branch;");
             if (project.VersionControlCommit.Length != 0)
                 contents.AppendLine($"extern \"C\" {binaryModuleNameUpper}_API const char* {binaryModuleName}Commit;");
+            if (versionControlCommitName.Length != 0)
+                contents.AppendLine($"extern \"C\" {binaryModuleNameUpper}_API const char* {binaryModuleName}CommitName;");
             GenerateCppBinaryModuleHeader?.Invoke(buildData, binaryModule, contents);
             Utilities.WriteFileIfChanged(binaryModuleHeaderPath, contents.ToString());
 
@@ -3481,6 +3486,8 @@ namespace Flax.Build.Bindings
                 contents.AppendLine($"extern \"C\" const char* {binaryModuleName}Branch = \"{project.VersionControlBranch}\";");
             if (project.VersionControlCommit.Length != 0)
                 contents.AppendLine($"extern \"C\" const char* {binaryModuleName}Commit = \"{project.VersionControlCommit}\";");
+            if (versionControlCommitName.Length != 0)
+                contents.AppendLine($"extern \"C\" const char* {binaryModuleName}CommitName = \"{versionControlCommitName}\";");
             GenerateCppBinaryModuleSource?.Invoke(buildData, binaryModule, contents);
             Utilities.WriteFileIfChanged(binaryModuleSourcePath, contents.ToString());
             PutStringBuilder(contents);

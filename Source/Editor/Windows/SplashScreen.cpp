@@ -199,7 +199,17 @@ void SplashScreen::Show()
 #else
     str.Replace('\\', '/');
 #endif
-    _infoText = String::Format(TEXT("Flax Editor {0}\n{1}\nProject: {2}"), TEXT(FLAXENGINE_VERSION_TEXT), TEXT(FLAXENGINE_COPYRIGHT), str);
+#if BUILD_DEBUG
+    const Char* configuration = TEXT("Debug");
+#elif BUILD_DEVELOPMENT
+    const Char* configuration = TEXT("Development");
+#else
+    const Char* configuration = TEXT("Release");
+#endif
+    String commit(StringAsUTF16<>(FLAXENGINE_COMMIT).Get());
+    if (commit.Length() > 8)
+        commit = commit.Substring(0, 8);
+    _infoText = String::Format(TEXT("Flax Editor {0} | {1} {2}\nCommit: {3}\n{4}\nProject: {5}"), TEXT(FLAXENGINE_VERSION_TEXT), configuration, commit, Globals::EngineCommitName, TEXT(FLAXENGINE_COPYRIGHT), str);
     _quote = SplashScreenQuotes[rand() % ARRAY_COUNT(SplashScreenQuotes)];
 
     // Load font

@@ -312,6 +312,13 @@ namespace FlaxEditor.Modules
                     title = Path.GetFileNameWithoutExtension(Editor.GameProject?.ProjectPath);
                 if (string.IsNullOrEmpty(title))
                     title = "Flax Editor";
+                ScriptsBuilder.GetBinariesConfiguration(out _, out _, out _, out var configuration);
+                var version = typeof(Editor).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+                var versionParts = version?.Split('+');
+                var commit = versionParts != null && versionParts.Length == 3 ? versionParts[2] : string.Empty;
+                if (commit.Length > 8)
+                    commit = commit.Substring(0, 8);
+                title += string.IsNullOrEmpty(commit) ? $" [{configuration}]" : $" [{configuration} {commit} — {Globals.EngineCommitName}]";
                 if (Editor.MultiplayerPlayMode.IsActive)
                 {
                     if (Editor.MultiplayerPlayMode.IsReplica)

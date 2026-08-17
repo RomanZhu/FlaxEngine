@@ -194,7 +194,7 @@ namespace Flax.Build
     public sealed class ProjectInfo
     {
         private static List<ProjectInfo> _projectsCache;
-        private string _versionControlCommit, _versionControlBranch;
+        private string _versionControlCommit, _versionControlCommitName, _versionControlBranch;
 
         internal static JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
@@ -321,6 +321,19 @@ namespace Flax.Build
         }
 
         /// <summary>
+        /// Gets the latest commit subject from Version Control System (VCS) used by the project. Empty when unused.
+        /// </summary>
+        public string VersionControlCommitName
+        {
+            get
+            {
+                if (_versionControlCommitName == null)
+                    InitVersionControlInfo();
+                return _versionControlCommitName;
+            }
+        }
+
+        /// <summary>
         /// Gets the informative version of the project including any Version Control System (VCS) information such as branch name, commit hash or changeset identifier.
         /// </summary>
         public string VersionControlInfo
@@ -377,6 +390,7 @@ namespace Flax.Build
         {
             _versionControlBranch = string.Empty;
             _versionControlCommit = string.Empty;
+            _versionControlCommitName = string.Empty;
 
             // Git
             if (Directory.Exists(Path.Combine(ProjectFolderPath, ".git")))
@@ -385,6 +399,7 @@ namespace Flax.Build
                 {
                     _versionControlBranch = Utilities.ReadProcessOutput("git", "rev-parse --abbrev-ref HEAD", ProjectFolderPath);
                     _versionControlCommit = Utilities.ReadProcessOutput("git", "rev-parse HEAD", ProjectFolderPath);
+                    _versionControlCommitName = Utilities.ReadProcessOutput("git", "log -1 --pretty=%s", ProjectFolderPath);
                 }
                 catch (Exception)
                 {
