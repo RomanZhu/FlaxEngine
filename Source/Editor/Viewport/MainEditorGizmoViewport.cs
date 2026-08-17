@@ -2458,6 +2458,12 @@ namespace FlaxEditor.Viewport
                 return CycleContextualAuthoringMode();
             }
 
+            if (input.Duplicate.Process(this, key) && TransformGizmo.HasActiveTransaction)
+            {
+                if (TransformGizmo.TryStampDuplicate())
+                    return true;
+            }
+
             if (Gizmos.ActiveMode?.OnKeyDown(key) == true)
                 return true;
 

@@ -760,5 +760,12 @@ namespace FlaxEditor.Gizmo
                 RegisterDuplicatedObjects(createdObjects, undoAction);
             }
         }
+
+        /// <inheritdoc />
+        protected override void OnDuplicateStampCommitted()
+        {
+            base.OnDuplicateStampCommitted();
+            RequestCSGRebuilds(true);
+        }
     }
 }

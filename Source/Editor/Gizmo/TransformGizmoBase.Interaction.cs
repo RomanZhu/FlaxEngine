@@ -304,6 +304,7 @@ namespace FlaxEditor.Gizmo
         private InteractionResult _interactionResult = InteractionResult.Empty;
         private SemanticHandle _latchedHandle = SemanticHandle.None;
         private IUndoAction _duplicateUndoAction;
+        private bool _commitDuplicateWithoutTransform;
         private bool _expectingSelectionChange;
         private bool _focusLost;
         private bool _lastUseSnapping;
@@ -436,6 +437,14 @@ namespace FlaxEditor.Gizmo
                     OnEndTransforming();
                     committed = true;
                 }
+                else if (_commitDuplicateWithoutTransform && _duplicateUndoAction != null)
+                {
+                    OnDuplicateStampCommitted();
+                    var duplicateAction = _duplicateUndoAction;
+                    _duplicateUndoAction = null;
+                    Owner.Undo.AddAction(duplicateAction);
+                    committed = true;
+                }
                 else
                 {
                     RestoreTransactionOrigin();
@@ -465,6 +474,90 @@ namespace FlaxEditor.Gizmo
                 }
             }
             return committed;
+        }
+
+        /// <summary>
+        /// Commits the current drag segment, duplicates the resulting selection,
+        /// and starts a new segment on the same semantic handle.
+        /// </summary>
+        public bool TryStampDuplicate()
+        {
+            if (_interactionState != InteractionState.Dragging || !CanDuplicate || IsGeometrySnapActive)
+                return false;
+
+            var handle = _latchedHandle;
+            if (!handle.IsValid)
+                return false;
+
+            CommitTransforming();
+            if (HasActiveTransaction)
+                return false;
+
+            // Commit reset clears the active handle; restore the semantic handle
+            // latched by the drag before starting the next transaction.
+            _activeMode = handle.Mode;
+            _activeAxis = handle.Axis;
+            _latchedHandle = handle;
+            try
+            {
+                _isDuplicating = true;
+                _expectingSelectionChange = true;
+                OnDuplicate();
+            }
+            catch (Exception ex)
+            {
+                ReportInteractionFailure("Transform stamp duplication failed; continuing the drag.", ex);
+                RollbackPendingStampDuplicate();
+                RestoreStampHandle(handle);
+                StartTransformingInternal(false);
+                return true;
+            }
+            finally
+            {
+                _expectingSelectionChange = false;
+                _isDuplicating = false;
+            }
+
+            if (_createdObjects.Count == 0 || SelectionCount == 0 ||
+                !CollectCurrentObjects(_transactionObjects) || _transactionObjects.Count == 0)
+            {
+                RollbackPendingStampDuplicate();
+                RestoreStampHandle(handle);
+                StartTransformingInternal(false);
+                return true;
+            }
+
+            _commitDuplicateWithoutTransform = true;
+            if (StartTransformingInternal(false))
+                return true;
+
+            RollbackPendingStampDuplicate();
+            RestoreStampHandle(handle);
+            StartTransformingInternal(false);
+            return true;
+        }
+
+        private void RollbackPendingStampDuplicate()
+        {
+            try
+            {
+                RestoreTransactionOrigin();
+            }
+            catch (Exception ex)
+            {
+                ReportInteractionFailure("Transform stamp duplication rollback failed.", ex);
+            }
+            finally
+            {
+                ResetTransactionState();
+            }
+        }
+
+        private void RestoreStampHandle(SemanticHandle handle)
+        {
+            _activeMode = handle.Mode;
+            _activeAxis = handle.Axis;
+            _latchedHandle = handle;
         }
 
         /// <summary>
@@ -1025,6 +1118,7 @@ namespace FlaxEditor.Gizmo
             _createdObjects.Clear();
             _transactionObjects.Clear();
             _duplicateUndoAction = null;
+            _commitDuplicateWithoutTransform = false;
             _transactionOrigin = null;
             _interactionAnchor = null;
             _interactionResult = InteractionResult.Empty;

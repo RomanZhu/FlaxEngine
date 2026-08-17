@@ -1955,6 +1955,13 @@ namespace FlaxEditor.Gizmo
         {
         }
 
+        /// <summary>
+        /// Called when an explicit duplicate stamp is committed without a following transform delta.
+        /// </summary>
+        protected virtual void OnDuplicateStampCommitted()
+        {
+        }
+
         /// <inheritdoc />
         public override void OnSelectionChanged(List<SceneGraphNode> newSelection)
         {
