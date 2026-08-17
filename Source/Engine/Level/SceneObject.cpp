@@ -33,6 +33,42 @@ SceneObject::~SceneObject()
 {
 }
 
+#if USE_EDITOR
+
+bool SceneObject::TryAssignExternalOrderInParent(SceneObject* object, const SceneObject* previous, const SceneObject* next)
+{
+    constexpr int64 orderStep = 1024;
+    if (!previous)
+    {
+        if (!next)
+        {
+            object->_externalOrderInParent = orderStep;
+            return true;
+        }
+        if (next->_externalOrderInParent > 1)
+        {
+            object->_externalOrderInParent = next->_externalOrderInParent / 2;
+            return true;
+        }
+    }
+    else if (!next)
+    {
+        if (previous->_externalOrderInParent >= 0 && previous->_externalOrderInParent <= MAX_int64 - orderStep)
+        {
+            object->_externalOrderInParent = previous->_externalOrderInParent + orderStep;
+            return true;
+        }
+    }
+    else if (previous->_externalOrderInParent >= 0 && next->_externalOrderInParent > 0 && previous->_externalOrderInParent < next->_externalOrderInParent - 1)
+    {
+        object->_externalOrderInParent = previous->_externalOrderInParent + (next->_externalOrderInParent - previous->_externalOrderInParent) / 2;
+        return true;
+    }
+    return false;
+}
+
+#endif
+
 void SceneObject::LinkPrefab(const Guid& prefabId, const Guid& prefabObjectId)
 {
     ASSERT(prefabId.IsValid());

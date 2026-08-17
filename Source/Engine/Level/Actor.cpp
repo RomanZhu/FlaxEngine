@@ -447,9 +447,13 @@ void Actor::SetOrderInParent(int32 index)
 
 #if USE_EDITOR
         const int32 newIndex = parentChildren.Find(this);
-        const int64 prevOrder = newIndex > 0 ? parentChildren[newIndex - 1]->_externalOrderInParent : 0;
-        const int64 nextOrder = newIndex + 1 < parentChildren.Count() ? parentChildren[newIndex + 1]->_externalOrderInParent : 0;
-        _externalOrderInParent = nextOrder > prevOrder + 1 ? (prevOrder + nextOrder) / 2 : prevOrder + 1024;
+        Actor* previous = newIndex > 0 ? parentChildren[newIndex - 1] : nullptr;
+        Actor* next = newIndex + 1 < parentChildren.Count() ? parentChildren[newIndex + 1] : nullptr;
+        if (!TryAssignExternalOrderInParent(this, previous, next))
+        {
+            for (int32 i = 0; i < parentChildren.Count(); i++)
+                parentChildren[i]->_externalOrderInParent = (static_cast<int64>(i) + 1) * 1024;
+        }
 #endif
 
         // Fire event

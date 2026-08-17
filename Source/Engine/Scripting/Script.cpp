@@ -178,9 +178,13 @@ void Script::SetOrderInParent(int32 index)
         }
 #if USE_EDITOR
         const int32 newIndex = parentScripts.Find(this);
-        const int64 prevOrder = newIndex > 0 ? parentScripts[newIndex - 1]->_externalOrderInParent : 0;
-        const int64 nextOrder = newIndex + 1 < parentScripts.Count() ? parentScripts[newIndex + 1]->_externalOrderInParent : 0;
-        _externalOrderInParent = nextOrder > prevOrder + 1 ? (prevOrder + nextOrder) / 2 : prevOrder + 1024;
+        Script* previous = newIndex > 0 ? parentScripts[newIndex - 1] : nullptr;
+        Script* next = newIndex + 1 < parentScripts.Count() ? parentScripts[newIndex + 1] : nullptr;
+        if (!TryAssignExternalOrderInParent(this, previous, next))
+        {
+            for (int32 i = 0; i < parentScripts.Count(); i++)
+                parentScripts[i]->_externalOrderInParent = (static_cast<int64>(i) + 1) * 1024;
+        }
 #endif
     }
 }

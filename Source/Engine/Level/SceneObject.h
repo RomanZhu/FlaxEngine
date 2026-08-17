@@ -83,6 +83,10 @@ protected:
     Guid _prefabObjectID;
     int64 _externalOrderInParent;
 
+#if USE_EDITOR
+    static bool TryAssignExternalOrderInParent(SceneObject* object, const SceneObject* previous, const SceneObject* next);
+#endif
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SceneObject"/> class.
     /// </summary>

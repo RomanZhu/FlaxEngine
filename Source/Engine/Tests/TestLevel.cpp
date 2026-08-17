@@ -22,6 +22,7 @@
 #include "Engine/Level/Actors/EmptyActor.h"
 #include "Engine/Level/Scene/Scene.h"
 #include "Engine/Level/Scene/SceneAsset.h"
+#include "Engine/Level/Scripts/ModelPrefab.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/Platform.h"
@@ -387,6 +388,110 @@ TEST_CASE("ExternalActorsSceneStorage")
         REQUIRE(rootChildIds.Count() == 2);
         CHECK(rootChildIds[0] == siblingId);
         CHECK(rootChildIds[1] == parentId);
+    }
+
+    SECTION("Reorder rebalances exhausted external order gaps")
+    {
+        const Guid sceneId = ParseGuid("12111111111111111111111111111111");
+        const Guid parentId = ParseGuid("12111111111111111111111111111112");
+        const Guid childAId = ParseGuid("12111111111111111111111111111113");
+        const Guid childBId = ParseGuid("12111111111111111111111111111114");
+        const Guid childCId = ParseGuid("12111111111111111111111111111115");
+        const Guid childDId = ParseGuid("12111111111111111111111111111116");
+        const Guid scriptAId = ParseGuid("12111111111111111111111111111117");
+        const Guid scriptBId = ParseGuid("12111111111111111111111111111118");
+        const Guid scriptCId = ParseGuid("12111111111111111111111111111119");
+        const Guid scriptDId = ParseGuid("1211111111111111111111111111111a");
+        const String scenePath = GetTestScenePath(TEXT("OrderRebalance"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            scene->DeleteObject();
+        };
+        scene->UseExternalActors = true;
+
+        EmptyActor* parent = EmptyActor::Spawn(ScriptingObject::SpawnParams(parentId, EmptyActor::TypeInitializer));
+        REQUIRE(parent);
+        parent->SetParent(scene);
+        EmptyActor* children[] =
+        {
+            EmptyActor::Spawn(ScriptingObject::SpawnParams(childAId, EmptyActor::TypeInitializer)),
+            EmptyActor::Spawn(ScriptingObject::SpawnParams(childBId, EmptyActor::TypeInitializer)),
+            EmptyActor::Spawn(ScriptingObject::SpawnParams(childCId, EmptyActor::TypeInitializer)),
+            EmptyActor::Spawn(ScriptingObject::SpawnParams(childDId, EmptyActor::TypeInitializer)),
+        };
+        for (int32 i = 0; i < ARRAY_COUNT(children); i++)
+        {
+            REQUIRE(children[i]);
+            children[i]->SetParent(parent);
+            children[i]->SetExternalOrderInParent(1024 + i);
+        }
+
+        children[3]->SetOrderInParent(1);
+        Actor* expectedChildren[] = { children[0], children[3], children[1], children[2] };
+        REQUIRE(parent->Children.Count() == ARRAY_COUNT(expectedChildren));
+        for (int32 i = 0; i < ARRAY_COUNT(expectedChildren); i++)
+        {
+            CHECK(parent->Children[i] == expectedChildren[i]);
+            CHECK(parent->Children[i]->GetExternalOrderInParent() == static_cast<int64>(i + 1) * 1024);
+        }
+
+        ModelPrefab* scripts[] =
+        {
+            ModelPrefab::Spawn(ScriptingObject::SpawnParams(scriptAId, ModelPrefab::TypeInitializer)),
+            ModelPrefab::Spawn(ScriptingObject::SpawnParams(scriptBId, ModelPrefab::TypeInitializer)),
+            ModelPrefab::Spawn(ScriptingObject::SpawnParams(scriptCId, ModelPrefab::TypeInitializer)),
+            ModelPrefab::Spawn(ScriptingObject::SpawnParams(scriptDId, ModelPrefab::TypeInitializer)),
+        };
+        for (int32 i = 0; i < ARRAY_COUNT(scripts); i++)
+        {
+            REQUIRE(scripts[i]);
+            scripts[i]->SetParent(parent);
+            scripts[i]->SetExternalOrderInParent(1024 + i);
+        }
+        scripts[3]->SetOrderInParent(1);
+        Script* expectedScripts[] = { scripts[0], scripts[3], scripts[1], scripts[2] };
+        REQUIRE(parent->Scripts.Count() == ARRAY_COUNT(expectedScripts));
+        for (int32 i = 0; i < ARRAY_COUNT(expectedScripts); i++)
+        {
+            CHECK(parent->Scripts[i] == expectedScripts[i]);
+            CHECK(parent->Scripts[i]->GetExternalOrderInParent() == static_cast<int64>(i + 1) * 1024);
+        }
+
+        REQUIRE(!Level::SaveScene(scene));
+        for (int32 i = 0; i < ARRAY_COUNT(expectedChildren); i++)
+        {
+            rapidjson_flax::Document actorDocument;
+            ParseJsonFile(actorDocument, GetExternalActorPath(scenePath, expectedChildren[i]->GetID()));
+            const rapidjson_flax::Value& actorData = GetDataArray(actorDocument);
+            REQUIRE(actorData.Size() >= 1);
+            CHECK(actorData[0]["OrderInParent"].GetInt64() == static_cast<int64>(i + 1) * 1024);
+        }
+        rapidjson_flax::Document parentDocument;
+        ParseJsonFile(parentDocument, GetExternalActorPath(scenePath, parentId));
+        const rapidjson_flax::Value& parentData = GetDataArray(parentDocument);
+        for (int32 i = 0; i < ARRAY_COUNT(expectedScripts); i++)
+        {
+            const rapidjson_flax::Value* scriptData = nullptr;
+            for (rapidjson::SizeType j = 1; j < parentData.Size(); j++)
+            {
+                if (JsonTools::GetGuid(parentData[j], "ID") == expectedScripts[i]->GetID())
+                {
+                    scriptData = &parentData[j];
+                    break;
+                }
+            }
+            REQUIRE(scriptData);
+            CHECK((*scriptData)["OrderInParent"].GetInt64() == static_cast<int64>(i + 1) * 1024);
+        }
     }
 
     SECTION("Scene actors path includes content relative folder")
