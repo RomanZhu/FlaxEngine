@@ -574,8 +574,9 @@ bool DynamicDiffuseGlobalIlluminationPass::RenderInner(RenderContext& renderCont
     {
         // Clear probes
         PROFILE_GPU("Clear");
+        uint32 zero[4] = {};
         context->ClearUA(ddgiData.ProbesData, Float4::Zero);
-        context->ClearUA(ddgiData.ProbeStates, Float4::Zero);
+        context->ClearUA(ddgiData.ProbeStates, zero);
         context->ClearUA(ddgiData.ProbesIrradiance, Float4::Zero);
         context->ClearUA(ddgiData.ProbesDistance, Float4::Zero);
 #if DDGI_DEBUG_INSTABILITY
