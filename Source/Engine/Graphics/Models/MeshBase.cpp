@@ -804,6 +804,12 @@ bool MeshBase::DownloadData(Span<MeshBufferType> types, Array<BytesContainer, Fi
 
     if (forceGpu)
     {
+        if (IsInMainThread())
+        {
+            model->Locker.Unlock();
+            LOG(Warning, "Cannot download mesh data from GPU on a main thread.");
+            return true;
+        }
         if (!IsInitialized())
         {
             model->Locker.Unlock();

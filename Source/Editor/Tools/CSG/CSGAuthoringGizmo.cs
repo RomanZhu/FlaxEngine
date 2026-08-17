@@ -620,7 +620,8 @@ namespace FlaxEditor.Tools.CSG
             _activeBodyTransformBrush = null;
             _suppressEditBodyActivationUntilMouseUp = true;
             // The second click may already have armed a body drag. Consume its trailing mouse-up
-            // so entering Edit cannot immediately run the regular click picker again.
+            // so entering Edit cannot immediately run the regular click picker again. A later
+            // body click promotes the brush to the central transform target.
             _consumePointerMouseUp = true;
             UpdateSupplementalTransformGizmo();
             UpdateStatusText();

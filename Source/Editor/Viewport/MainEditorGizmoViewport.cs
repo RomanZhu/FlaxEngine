@@ -2073,17 +2073,17 @@ namespace FlaxEditor.Viewport
                 base.OnLeftMouseButtonUp();
                 return;
             }
-            if (IsCSGAuthoringActive && !csgOwnsRelease && TransformGizmo.ConsumeSelectionRelease())
-            {
-                base.OnLeftMouseButtonUp();
-                return;
-            }
             if (Gizmos.ActiveMode?.OnMouseUp(_viewMousePos, MouseButton.Left) == true)
             {
                 if (csgOwnsRelease)
                     TransformGizmo.ResetSelectionReleaseSuppression();
                 _rubberBandSelector.ReleaseRubberBandSelection();
                 Focus();
+                base.OnLeftMouseButtonUp();
+                return;
+            }
+            if (IsCSGAuthoringActive && !csgOwnsRelease && TransformGizmo.ConsumeSelectionRelease())
+            {
                 base.OnLeftMouseButtonUp();
                 return;
             }
