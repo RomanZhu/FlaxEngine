@@ -342,6 +342,8 @@ namespace
         {
             material->Surface.friction = material->Owner->Friction;
             material->Surface.restitution = material->Owner->Restitution;
+            material->Surface.rollingResistance =
+                Math::Clamp(material->Owner->RollingResistance, 0.0f, 1.0f);
             material->Surface.userMaterialId = (uint64)material->Owner;
         }
     }

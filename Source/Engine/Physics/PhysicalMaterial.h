@@ -29,6 +29,13 @@ public:
     float Friction = 0.7f;
 
     /// <summary>
+    /// Resistance against rolling motion at contacts.
+    /// Box3D uses this for sphere and capsule shapes.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2), Range(0, 1), EditorDisplay(\"Physical Material\")")
+    float RollingResistance = 0.0f;
+
+    /// <summary>
     /// The friction combine mode, controls how friction is computed for multiple materials.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(1), EditorDisplay(\"Physical Material\")")
