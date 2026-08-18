@@ -855,6 +855,11 @@ API_ENUM(Attributes="Flags") enum class DrawPass : int32
     GlobalSurfaceAtlas = 1 << 6,
 
     /// <summary>
+    /// The HDDAGI voxelization rendering pass. Used for hierarchical voxel GI scene rasterization on the GPU.
+    /// </summary>
+    HDDAGIVoxelization = 1 << 7,
+
+    /// <summary>
     /// The debug quad overdraw rendering (editor-only).
     /// </summary>
     API_ENUM(Attributes="HideInEditor")
@@ -864,16 +869,78 @@ API_ENUM(Attributes="Flags") enum class DrawPass : int32
     /// The default set of draw passes for the scene objects.
     /// </summary>
     API_ENUM(Attributes="HideInEditor")
-    Default = Depth | GBuffer | Forward | Distortion | MotionVectors | GlobalSDF | GlobalSurfaceAtlas,
+    Default = Depth | GBuffer | Forward | Distortion | MotionVectors | GlobalSDF | GlobalSurfaceAtlas | HDDAGIVoxelization,
 
     /// <summary>
     /// The all draw passes combined into a single mask.
     /// </summary>
     API_ENUM(Attributes="HideInEditor")
-    All = Depth | GBuffer | Forward | Distortion | MotionVectors | GlobalSDF | GlobalSurfaceAtlas,
+    All = Depth | GBuffer | Forward | Distortion | MotionVectors | GlobalSDF | GlobalSurfaceAtlas | HDDAGIVoxelization,
 };
 
 DECLARE_ENUM_OPERATORS(DrawPass);
+
+/// <summary>
+/// HDDAGI contribution mode for scene renderables.
+/// </summary>
+API_ENUM() enum class HDDAGIContribution : byte
+{
+    /// <summary>
+    /// Automatically classified based on actor mobility and flags.
+    /// </summary>
+    Auto = 0,
+
+    /// <summary>
+    /// Disabled from HDDAGI voxelization.
+    /// </summary>
+    Disabled = 1,
+
+    /// <summary>
+    /// Static contributor (cached in static occupancy layer).
+    /// </summary>
+    Static = 2,
+
+    /// <summary>
+    /// Dynamic contributor (re-rasterized into dynamic occupancy layer on move).
+    /// </summary>
+    Dynamic = 3,
+
+    /// <summary>
+    /// Receives GI only (does not cast voxel occupancy or direct light).
+    /// </summary>
+    ReceiveOnly = 4,
+};
+
+/// <summary>
+/// HDDAGI participation mode for material domains and instances.
+/// </summary>
+API_ENUM() enum class HDDAGIMaterialParticipation : byte
+{
+    /// <summary>
+    /// Default material participation based on surface domain and blend mode.
+    /// </summary>
+    Default = 0,
+
+    /// <summary>
+    /// Ignore in HDDAGI voxelization.
+    /// </summary>
+    Ignore = 1,
+
+    /// <summary>
+    /// Treat as opaque solid occluder.
+    /// </summary>
+    OpaqueOccluder = 2,
+
+    /// <summary>
+    /// Evaluate alpha mask for occupancy cut-off.
+    /// </summary>
+    AlphaTestedOccluder = 3,
+
+    /// <summary>
+    /// Emissive only (injects light without blocking).
+    /// </summary>
+    EmissiveOnly = 4,
+};
 
 /// <summary>
 /// Describes frame rendering modes.

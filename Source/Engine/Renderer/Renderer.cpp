@@ -27,7 +27,7 @@
 #include "GlobalSignDistanceFieldPass.h"
 #include "GI/GlobalSurfaceAtlasPass.h"
 #include "GI/DynamicDiffuseGlobalIllumination.h"
-#include "GI/GlobalDistanceFieldGI.h"
+#include "GI/HDDAGI.h"
 #include "Utils/MultiScaler.h"
 #include "Utils/BitonicSort.h"
 #include "AntiAliasing/FXAA.h"
@@ -98,7 +98,7 @@ bool RendererService::Init()
     PassList.Add(GlobalSignDistanceFieldPass::Instance());
     PassList.Add(GlobalSurfaceAtlasPass::Instance());
     PassList.Add(DynamicDiffuseGlobalIlluminationPass::Instance());
-    PassList.Add(GlobalDistanceFieldGIPass::Instance());
+    PassList.Add(HDDAGIPass::Instance());
 #if USE_EDITOR
     PassList.Add(QuadOverdrawPass::Instance());
 #endif
@@ -401,9 +401,10 @@ void RenderInner(SceneRenderTask* task, RenderContext& renderContext, RenderCont
         }
         setup.UseTemporalAAJitter = renderContext.List->Settings.AntiAliasing.Mode == AntialiasingMode::TemporalAntialiasing;
         const auto giMode = renderContext.List->Settings.GlobalIllumination.Mode;
+        setup.UseHDDAGI = EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI) && giMode == GlobalIlluminationMode::HDDAGI;
         setup.UseGlobalSurfaceAtlas = renderContext.View.Mode == ViewMode::GlobalSurfaceAtlas ||
                 renderContext.View.Mode == ViewMode::GlobalIllumination ||
-                (EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI) && (giMode == GlobalIlluminationMode::DDGI || giMode == GlobalIlluminationMode::DDGIPlus || giMode == GlobalIlluminationMode::GDFGI));
+                (EnumHasAnyFlags(renderContext.View.Flags, ViewFlags::GI) && (giMode == GlobalIlluminationMode::DDGI || giMode == GlobalIlluminationMode::DDGIPlus));
         setup.UseGlobalSDF = (graphicsSettings->EnableGlobalSDF && EnumHasAnyFlags(view.Flags, ViewFlags::GlobalSDF)) ||
                 renderContext.View.Mode == ViewMode::GlobalSDF ||
                 setup.UseGlobalSurfaceAtlas;
@@ -651,8 +652,8 @@ void RenderInner(SceneRenderTask* task, RenderContext& renderContext, RenderCont
         case GlobalIlluminationMode::DDGIPlus:
             DynamicDiffuseGlobalIlluminationPass::Instance()->Render(renderContext, context, *lightBuffer);
             break;
-        case GlobalIlluminationMode::GDFGI:
-            GlobalDistanceFieldGIPass::Instance()->Render(renderContext, context, *lightBuffer);
+        case GlobalIlluminationMode::HDDAGI:
+            HDDAGIPass::Instance()->Render(renderContext, context, *lightBuffer);
             break;
         }
     }

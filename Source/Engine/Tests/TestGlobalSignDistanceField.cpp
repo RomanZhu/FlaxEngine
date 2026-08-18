@@ -3,7 +3,7 @@
 #include "Engine/Core/Math/BoundingBox.h"
 #include "Engine/Core/Math/Transform.h"
 #include "Engine/Core/Math/Vector3.h"
-#include "Engine/Renderer/GI/GlobalGIDirtyRegion.h"
+#include "Engine/Renderer/GI/GlobalGIInvalidation.h"
 #include "Engine/Renderer/GlobalSignDistanceFieldPass.h"
 #include <ThirdParty/catch2/catch.hpp>
 

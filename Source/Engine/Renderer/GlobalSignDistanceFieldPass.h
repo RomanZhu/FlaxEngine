@@ -4,7 +4,7 @@
 
 #include "RendererPass.h"
 #include "Engine/Core/Math/Vector3.h"
-#include "Engine/Renderer/GI/GlobalGIDirtyRegion.h"
+#include "Engine/Renderer/GI/GlobalGIInvalidation.h"
 
 /// <summary>
 /// Global Sign Distance Field (SDF) rendering pass. Composites scene geometry into series of 3D volume textures that cover the world around the camera for global distance field sampling.

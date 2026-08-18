@@ -2,7 +2,6 @@
 
 #include "GlobalSurfaceAtlasPass.h"
 #include "DynamicDiffuseGlobalIllumination.h"
-#include "GlobalDistanceFieldGI.h"
 #include "../GlobalSignDistanceFieldPass.h"
 #include "../GBufferPass.h"
 #include "../RenderList.h"
@@ -226,9 +225,9 @@ public:
         resolution = Math::Clamp(graphicsSettings->GlobalSurfaceAtlasResolution, 256, GPU_MAX_TEXTURE_SIZE);
         auto& giSettings = renderContext.List->Settings.GlobalIllumination;
         distance = giSettings.Distance;
-        if (giSettings.Mode == GlobalIlluminationMode::DDGI || giSettings.Mode == GlobalIlluminationMode::DDGIPlus || giSettings.Mode == GlobalIlluminationMode::GDFGI)
+        if (giSettings.Mode == GlobalIlluminationMode::DDGI || giSettings.Mode == GlobalIlluminationMode::DDGIPlus)
         {
-            // Probe rays originate throughout the camera-centered DDGI/GDFGI volume,
+            // Probe rays originate throughout the camera-centered DDGI volume,
             // not only at the camera. Cover the volume and its outward traces
             // so distant probes do not repeatedly gain and lose atlas data as
             // the camera moves through the scene.
@@ -1247,24 +1246,6 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                 }
                 break;
             }
-            case GlobalIlluminationMode::GDFGI:
-            {
-                GlobalDistanceFieldGIPass::BindingData bindingDataGDFGI;
-                if (!GlobalDistanceFieldGIPass::Instance()->Get(renderContext.Buffers, bindingDataGDFGI))
-                {
-                    GlobalSurfaceAtlasLight& lightData = surfaceAtlasData.Lights[Guid(0, 0, 0, 1)];
-                    lightData.LastFrameUsed = currentFrame;
-                    lightData.IsDirectional = true;
-                    uint32 redrawFramesCount = 4; // GI Bounce redraw minimum frequency
-                    if (surfaceAtlasData.CurrentFrame - lightData.LastFrameUpdated < redrawFramesCount)
-                        break;
-                    lightData.LastFrameUpdated = currentFrame;
-
-                    // Mark all objects to shade
-                    allLightingDirty = true;
-                }
-                break;
-            }
             }
         }
         for (auto& light : renderContext.List->PointLights)
@@ -1546,57 +1527,6 @@ bool GlobalSurfaceAtlasPass::Render(RenderContext& renderContext, GPUContext* co
                 }
                 break;
             }
-            case GlobalIlluminationMode::GDFGI:
-            {
-                GlobalDistanceFieldGIPass::BindingData bindingDataGDFGI;
-                if (giSettings.BounceIntensity > ZeroTolerance && giSettings.Intensity > ZeroTolerance && !GlobalDistanceFieldGIPass::Instance()->Get(renderContext.Buffers, bindingDataGDFGI))
-                {
-                    _vertexBuffer->Clear();
-                    for (const auto& e : surfaceAtlasData.Objects)
-                    {
-                        const auto& object = e.Value;
-                        if (!allLightingDirty && object.LightingUpdateFrame != currentFrame)
-                            continue;
-                        for (int32 tileIndex = 0; tileIndex < 6; tileIndex++)
-                        {
-                            auto* tile = object.Tiles[tileIndex];
-                            if (!tile)
-                                continue;
-                            VB_WRITE_TILE(tile);
-                        }
-                    }
-                    if (_vertexBuffer->Data.Count() == 0)
-                        break;
-                    PROFILE_GPU_CPU_NAMED("GDFGI Multi-Bounce");
-                    Platform::MemoryClear(&data.DDGI, sizeof(data.DDGI));
-                    for (int32 c = 0; c < 4; c++)
-                    {
-                        data.DDGI.ProbesOriginAndSpacing[c] = bindingDataGDFGI.Constants.ProbesOriginAndSpacing[c];
-                        data.DDGI.BlendOrigin[c] = bindingDataGDFGI.Constants.BlendOrigin[c];
-                        data.DDGI.ProbesScrollOffsets[c] = bindingDataGDFGI.Constants.ProbesScrollOffsets[c];
-                    }
-                    data.DDGI.ProbesCounts[0] = bindingDataGDFGI.Constants.ProbesCounts[0];
-                    data.DDGI.ProbesCounts[1] = bindingDataGDFGI.Constants.ProbesCounts[1];
-                    data.DDGI.ProbesCounts[2] = bindingDataGDFGI.Constants.ProbesCounts[2];
-                    data.DDGI.CascadesCount = bindingDataGDFGI.Constants.CascadesCount;
-                    data.DDGI.RayMaxDistance = bindingDataGDFGI.Constants.RayMaxDistance;
-                    data.DDGI.IndirectLightingIntensity = bindingDataGDFGI.Constants.IndirectLightingIntensity;
-                    data.DDGI.ViewPos = bindingDataGDFGI.Constants.ViewPos;
-                    data.DDGI.FallbackIrradiance = bindingDataGDFGI.Constants.FallbackIrradiance;
-                    data.DDGI.NormalBias = bindingDataGDFGI.Constants.NormalBias;
-                    data.DDGI.ViewBias = bindingDataGDFGI.Constants.ViewBias;
-                    data.DDGI.Algorithm = 2;
-                    data.Light.Radius = giSettings.BounceIntensity / Math::Max(bindingDataGDFGI.Constants.IndirectLightingIntensity, 1e-4f);
-                    context->BindSR(5, bindingDataGDFGI.ProbesData);
-                    context->BindSR(6, bindingDataGDFGI.ProbeStates);
-                    context->BindSR(7, bindingDataGDFGI.ProbesDistance);
-                    context->BindSR(8, bindingDataGDFGI.DirectionalDiffuse);
-                    context->UpdateCB(_cb0, &data);
-                    context->SetState(_psIndirectLighting);
-                    VB_DRAW();
-                }
-                break;
-            }
             }
         }
     }
@@ -1618,9 +1548,6 @@ void GlobalSurfaceAtlasPass::RenderDebug(RenderContext& renderContext, GPUContex
         case GlobalIlluminationMode::DDGI:
         case GlobalIlluminationMode::DDGIPlus:
             DynamicDiffuseGlobalIlluminationPass::Instance()->Render(renderContext, context, nullptr);
-            break;
-        case GlobalIlluminationMode::GDFGI:
-            GlobalDistanceFieldGIPass::Instance()->Render(renderContext, context, nullptr);
             break;
         }
     }

@@ -5,6 +5,7 @@
 #include "MaterialShader.h"
 #include "Engine/Core/Types/Span.h"
 #include "Engine/Renderer/GI/DynamicDiffuseGlobalIllumination.h"
+#include "Engine/Renderer/GI/HDDAGIResources.h"
 #include "Engine/Renderer/GlobalSignDistanceFieldPass.h"
 #include "Engine/Renderer/GI/GlobalSurfaceAtlasPass.h"
 
@@ -73,10 +74,11 @@ struct LightmapFeature : MaterialShaderFeature
 // Material shader feature that adds Global Illumination sampling feature (light probes).
 struct GlobalIlluminationFeature : MaterialShaderFeature
 {
-    enum { SRVs = 4 };
+    enum { SRVs = 8 };
 
     PACK_STRUCT(struct Data {
         DynamicDiffuseGlobalIlluminationPass::ConstantsData DDGI;
+        HDDAGIConstantsData HDDAGI;
         });
 
     static bool Bind(MaterialShader::BindParameters& params, Span<byte>& cb, int32& srv);

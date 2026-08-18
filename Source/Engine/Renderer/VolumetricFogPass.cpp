@@ -622,11 +622,8 @@ void VolumetricFogPass::Render(RenderContext& renderContext)
                 useDDGI = true;
             }
             break;
-        case GlobalIlluminationMode::GDFGI:
-            // The volumetric fog shader currently implements DDGI atlas
-            // addressing only. Do not bind GDFGI's incompatible 7x7 diffuse
-            // atlas to that path; fog falls back to skylight until a native
-            // SampleGDFGIIrradiance branch is added.
+        case GlobalIlluminationMode::HDDAGI:
+            // Volumetric fog uses low-frequency ambient/skylight when directional probe sampling is active
             break;
         }
     }

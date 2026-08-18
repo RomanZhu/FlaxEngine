@@ -15,7 +15,7 @@
 #include "Engine/Level/Scene/Lightmap.h"
 #include "Engine/Level/Actors/EnvironmentProbe.h"
 #include "Engine/Renderer/ReflectionsPass.h"
-#include "Engine/Renderer/GI/GlobalDistanceFieldGI.h"
+#include "Engine/Renderer/GI/HDDAGI.h"
 
 void ForwardShadingFeature::Bind(MaterialShader::BindParameters& params, Span<byte>& cb, int32& srv)
 {
@@ -173,43 +173,41 @@ bool GlobalIlluminationFeature::Bind(MaterialShader::BindParameters& params, Spa
             {
                 useGI = true;
 
-                // Bind DDGI data
+                // Bind DDGI data (slots 0..3)
                 data.DDGI = bindingDataDDGI.Constants;
                 params.GPUContext->BindSR(srv + 0, bindingDataDDGI.ProbesData);
                 params.GPUContext->BindSR(srv + 1, bindingDataDDGI.ProbeStates);
                 params.GPUContext->BindSR(srv + 2, bindingDataDDGI.ProbesDistance);
                 params.GPUContext->BindSR(srv + 3, bindingDataDDGI.ProbesIrradiance);
+                params.GPUContext->UnBindSR(srv + 4);
+                params.GPUContext->UnBindSR(srv + 5);
+                params.GPUContext->UnBindSR(srv + 6);
+                params.GPUContext->UnBindSR(srv + 7);
             }
             break;
         }
-        case GlobalIlluminationMode::GDFGI:
+        case GlobalIlluminationMode::HDDAGI:
         {
-            GlobalDistanceFieldGIPass::BindingData bindingDataGDFGI;
-            if (!GlobalDistanceFieldGIPass::Instance()->Get(params.RenderContext.Buffers, bindingDataGDFGI))
+            HDDAGIPass::BindingData bindingDataHDDAGI;
+            if (!HDDAGIPass::Instance()->Get(params.RenderContext.Buffers, bindingDataHDDAGI))
             {
                 useGI = true;
-                Platform::MemoryClear(&data.DDGI, sizeof(data.DDGI));
-                for (int32 c = 0; c < 4; c++)
-                {
-                    data.DDGI.ProbesOriginAndSpacing[c] = bindingDataGDFGI.Constants.ProbesOriginAndSpacing[c];
-                    data.DDGI.BlendOrigin[c] = bindingDataGDFGI.Constants.BlendOrigin[c];
-                    data.DDGI.ProbesScrollOffsets[c] = bindingDataGDFGI.Constants.ProbesScrollOffsets[c];
-                }
-                data.DDGI.ProbesCounts[0] = bindingDataGDFGI.Constants.ProbesCounts[0];
-                data.DDGI.ProbesCounts[1] = bindingDataGDFGI.Constants.ProbesCounts[1];
-                data.DDGI.ProbesCounts[2] = bindingDataGDFGI.Constants.ProbesCounts[2];
-                data.DDGI.CascadesCount = bindingDataGDFGI.Constants.CascadesCount;
-                data.DDGI.RayMaxDistance = bindingDataGDFGI.Constants.RayMaxDistance;
-                data.DDGI.IndirectLightingIntensity = bindingDataGDFGI.Constants.IndirectLightingIntensity;
-                data.DDGI.ViewPos = bindingDataGDFGI.Constants.ViewPos;
-                data.DDGI.FallbackIrradiance = bindingDataGDFGI.Constants.FallbackIrradiance;
-                data.DDGI.NormalBias = bindingDataGDFGI.Constants.NormalBias;
-                data.DDGI.ViewBias = bindingDataGDFGI.Constants.ViewBias;
-                data.DDGI.Algorithm = 2;
-                params.GPUContext->BindSR(srv + 0, bindingDataGDFGI.ProbesData);
-                params.GPUContext->BindSR(srv + 1, bindingDataGDFGI.ProbeStates);
-                params.GPUContext->BindSR(srv + 2, bindingDataGDFGI.ProbesDistance);
-                params.GPUContext->BindSR(srv + 3, bindingDataGDFGI.DirectionalDiffuse);
+                data.HDDAGI = bindingDataHDDAGI.Constants;
+                data.DDGI.Algorithm = 3; // HDDAGI algorithm ID
+                data.DDGI.CascadesCount = bindingDataHDDAGI.Constants.CascadesCount;
+                data.DDGI.IndirectLightingIntensity = bindingDataHDDAGI.Constants.IndirectLightingIntensity;
+                data.DDGI.FallbackIrradiance = bindingDataHDDAGI.Constants.FallbackIrradiance;
+                data.DDGI.NormalBias = bindingDataHDDAGI.Constants.NormalBias;
+
+                // Bind HDDAGI data (slots 4..7)
+                params.GPUContext->UnBindSR(srv + 0);
+                params.GPUContext->UnBindSR(srv + 1);
+                params.GPUContext->UnBindSR(srv + 2);
+                params.GPUContext->UnBindSR(srv + 3);
+                params.GPUContext->BindSR(srv + 4, bindingDataHDDAGI.ProbeDiffuse);
+                params.GPUContext->BindSR(srv + 5, bindingDataHDDAGI.ProbeSpecular);
+                params.GPUContext->BindSR(srv + 6, bindingDataHDDAGI.Occlusion0);
+                params.GPUContext->BindSR(srv + 7, bindingDataHDDAGI.Occlusion1);
             }
             break;
         }
@@ -224,6 +222,10 @@ bool GlobalIlluminationFeature::Bind(MaterialShader::BindParameters& params, Spa
         params.GPUContext->UnBindSR(srv + 1);
         params.GPUContext->UnBindSR(srv + 2);
         params.GPUContext->UnBindSR(srv + 3);
+        params.GPUContext->UnBindSR(srv + 4);
+        params.GPUContext->UnBindSR(srv + 5);
+        params.GPUContext->UnBindSR(srv + 6);
+        params.GPUContext->UnBindSR(srv + 7);
     }
 
     cb = cb.Slice(sizeof(Data));

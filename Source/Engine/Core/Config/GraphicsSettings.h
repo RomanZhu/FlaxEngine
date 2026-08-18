@@ -25,65 +25,85 @@ API_ENUM() enum class DDGITraceBackend
 };
 
 /// <summary>
-/// Ray tracing backend used by Global Distance Field Global Illumination (GDFGI).
+/// Cascade layout format used by HDDAGI.
 /// </summary>
-API_ENUM() enum class GDFGITraceBackend
+API_ENUM() enum class HDDAGICascadeFormat
 {
     /// <summary>
-    /// Standard Global SDF and Global Surface Atlas ray marching.
+    /// Standard density: 16x8x16 probe regions (128x64x128 voxels per cascade).
     /// </summary>
-    GlobalSDF = 0,
+    Probes16x8x16 = 0,
 
     /// <summary>
-    /// Derived Hierarchical Digital Differential Analyzer (HDDA) tracing.
+    /// High vertical density: 16x16x16 probe regions (128x128x128 voxels per cascade).
     /// </summary>
-    DerivedHDDA = 1,
+    Probes16x16x16 = 1,
 };
 
 /// <summary>
-/// Execution stages for GDFGI developer isolation, step-by-step validation, and DX11 stabilization.
+/// Execution stages for HDDAGI developer isolation, step-by-step validation, and debugging.
 /// </summary>
-API_ENUM() enum class GDFGIDebugExecutionStage
+API_ENUM() enum class HDDAGIDebugExecutionStage
 {
     /// <summary>
-    /// Normal production GDFGI execution.
+    /// Normal production HDDAGI execution.
     /// </summary>
     Disabled = 0,
 
     /// <summary>
-    /// Allocates and clears GDFGI textures only (no compute dispatch).
+    /// Allocates and clears HDDAGI textures only (no compute dispatch).
     /// </summary>
-    AllocateOnly = 1,
+    Allocate = 1,
 
     /// <summary>
-    /// Runs probe classification and relocation kernel only.
+    /// Runs 3-axis voxelization only.
     /// </summary>
-    Classify = 2,
+    Voxelize = 2,
 
     /// <summary>
-    /// Runs probe classification and directional radiance ray tracing.
+    /// Builds occupancy hierarchy (block & region bits) and combined layers.
     /// </summary>
-    Trace = 3,
+    Hierarchy = 3,
 
     /// <summary>
-    /// Runs up to temporal history update.
+    /// Stores surface voxel material and emission fields.
     /// </summary>
-    Temporal = 4,
+    MaterialStore = 4,
 
     /// <summary>
-    /// Runs up to diffuse convolution.
+    /// Injects direct and multibounce lighting into the voxel field.
     /// </summary>
-    Convolve = 5,
+    DirectLight = 5,
 
     /// <summary>
-    /// Runs up to deferred indirect lighting composition.
+    /// Computes occlusion, proximity, and visibility probe metadata.
     /// </summary>
-    Composite = 6,
+    ProbeMetadata = 6,
 
     /// <summary>
-    /// Full GDFGI pipeline execution with multibounce.
+    /// Runs fixed-point HDDA probe ray tracing.
     /// </summary>
-    Full = 7,
+    Trace = 7,
+
+    /// <summary>
+    /// Updates temporal moving-window history and running sums.
+    /// </summary>
+    Temporal = 8,
+
+    /// <summary>
+    /// Filters visible near-geometry probes across neighbors.
+    /// </summary>
+    Filter = 9,
+
+    /// <summary>
+    /// Runs deferred indirect lighting composition.
+    /// </summary>
+    Composite = 10,
+
+    /// <summary>
+    /// Full HDDAGI pipeline execution.
+    /// </summary>
+    Full = 11,
 };
 
 /// <summary>
@@ -257,52 +277,94 @@ public:
     int32 GlobalSurfaceAtlasResolution = 2048;
 
     /// <summary>
-    /// Maximum number of GDFGI probe rays scheduled per view and frame. Zero uses the renderer's safe default budget.
+    /// Cascade layout format used by HDDAGI.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2140), Limit(0, 16777216), EditorDisplay(\"Global Illumination\", \"GDFGI Probe Ray Budget\")")
-    uint32 GDFGIProbeRayBudget = 3200;
+    API_FIELD(Attributes="EditorOrder(2140), DefaultValue(HDDAGICascadeFormat.Probes16x8x16), EditorDisplay(\"Global Illumination\", \"HDDAGI Cascade Format\")")
+    HDDAGICascadeFormat HDDAGICascadeFormat = HDDAGICascadeFormat::Probes16x8x16;
 
     /// <summary>
-    /// Number of temporal history frames in the GDFGI moving average ring buffer.
+    /// Number of cascades used by HDDAGI (typically 4 or 6).
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2141), Limit(1, 32), EditorDisplay(\"Global Illumination\", \"GDFGI History Frames\")")
-    uint32 GDFGIHistoryFrames = 8;
+    API_FIELD(Attributes="EditorOrder(2141), Limit(1, 8), EditorDisplay(\"Global Illumination\", \"HDDAGI Cascade Count\")")
+    uint32 HDDAGICascadeCount = 4;
 
     /// <summary>
-    /// Inactive probe update interval in frames for GDFGI.
+    /// Cell size (in world units) of the finest cascade (0 = auto based on scene / camera bounds).
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2142), Limit(1, 64), EditorDisplay(\"Global Illumination\", \"GDFGI Inactive Probe Update Frames\")")
-    uint32 GDFGIInactiveProbeUpdateFrames = 4;
+    API_FIELD(Attributes="EditorOrder(2142), Limit(0, 1000), ValueCategory(Utils.ValueCategory.Distance), EditorDisplay(\"Global Illumination\", \"HDDAGI Min Cell Size\")")
+    float HDDAGIMinCellSize = 10.0f;
+
+    /// <summary>
+    /// Maximum number of HDDAGI probe updates scheduled per view and frame. Zero uses safe default budget.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2143), Limit(0, 16777216), EditorDisplay(\"Global Illumination\", \"HDDAGI Probe Update Budget\")")
+    uint32 HDDAGIProbeUpdateBudget = 1024;
+
+    /// <summary>
+    /// Number of temporal history frames in the HDDAGI moving average ring buffer.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2144), Limit(1, 32), EditorDisplay(\"Global Illumination\", \"HDDAGI History Frames\")")
+    uint32 HDDAGIHistoryFrames = 6;
+
+    /// <summary>
+    /// Inactive probe update interval in frames for HDDAGI.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2145), Limit(1, 64), EditorDisplay(\"Global Illumination\", \"HDDAGI Inactive Probe Update Frames\")")
+    uint32 HDDAGIInactiveProbeUpdateFrames = 4;
 
     /// <summary>
     /// Dynamic invalidation radius around dirty bounding boxes in probe spacing units.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2143), Limit(0.5f, 10.0f), EditorDisplay(\"Global Illumination\", \"GDFGI Dynamic Dirty Radius (Probe Spacings)\")")
-    float GDFGIDynamicDirtyRadiusInProbeSpacings = 3.0f;
+    API_FIELD(Attributes="EditorOrder(2146), Limit(0.5f, 10.0f), EditorDisplay(\"Global Illumination\", \"HDDAGI Dynamic Dirty Radius (Probe Spacings)\")")
+    float HDDAGIDynamicDirtyRadiusInProbeSpacings = 3.0f;
 
     /// <summary>
-    /// Expands Global SDF surfaces during GDFGI ray hit detection to preserve thin geometry.
+    /// Conservative voxel expansion distance for voxelization rasterization.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2144), Limit(0, 1000), ValueCategory(Utils.ValueCategory.Distance), EditorDisplay(\"Global Illumination\", \"GDFGI Thin Geometry Expansion\")")
-    float GDFGIThinGeometryExpansion = 0.0f;
+    API_FIELD(Attributes="EditorOrder(2147), Limit(0, 1000), ValueCategory(Utils.ValueCategory.Distance), EditorDisplay(\"Global Illumination\", \"HDDAGI Conservative Voxel Expansion\")")
+    float HDDAGIConservativeVoxelExpansion = 0.0f;
 
     /// <summary>
-    /// Enables directional specular indirect reflections sampled from GDFGI directional radiance bins.
+    /// Enables directional specular indirect reflections sampled from HDDAGI directional radiance bins.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2145), DefaultValue(false), EditorDisplay(\"Global Illumination\", \"GDFGI Enable Directional Specular\")")
-    bool GDFGIEnableDirectionalSpecular = false;
+    API_FIELD(Attributes="EditorOrder(2148), DefaultValue(true), EditorDisplay(\"Global Illumination\", \"HDDAGI Enable Specular\")")
+    bool HDDAGIEnableSpecular = true;
 
     /// <summary>
-    /// Ray tracing backend to use for GDFGI.
+    /// Enables cross-probe spatial filtering for visible probes near geometry.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2146), DefaultValue(GDFGITraceBackend.GlobalSDF), EditorDisplay(\"Global Illumination\", \"GDFGI Trace Backend\")")
-    GDFGITraceBackend GDFGITraceBackend = GDFGITraceBackend::GlobalSDF;
+    API_FIELD(Attributes="EditorOrder(2149), DefaultValue(true), EditorDisplay(\"Global Illumination\", \"HDDAGI Enable Probe Filter\")")
+    bool HDDAGIEnableProbeFilter = true;
 
     /// <summary>
-    /// Developer-only debug execution stage for GDFGI pipeline isolation and DX11 validation.
+    /// Enables HDDAGI probe occlusion volumes and neighbor visibility weighting.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(2147), DefaultValue(GDFGIDebugExecutionStage.Disabled), EditorDisplay(\"Global Illumination\", \"GDFGI Debug Execution Stage\")")
-    GDFGIDebugExecutionStage GDFGIDebugStage = GDFGIDebugExecutionStage::Disabled;
+    API_FIELD(Attributes="EditorOrder(2150), DefaultValue(true), EditorDisplay(\"Global Illumination\", \"HDDAGI Enable Occlusion\")")
+    bool HDDAGIEnableOcclusion = true;
+
+    /// <summary>
+    /// Multi-bounce feedback factor for voxel light injection (0..1).
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2151), Limit(0.0f, 1.0f), EditorDisplay(\"Global Illumination\", \"HDDAGI Bounce Feedback\")")
+    float HDDAGIBounceFeedback = 0.5f;
+
+    /// <summary>
+    /// Maximum dynamic dirty regions tracked per frame.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2152), Limit(1, 4096), EditorDisplay(\"Global Illumination\", \"HDDAGI Max Dynamic Dirty Regions\")")
+    uint32 HDDAGIMaxDynamicDirtyRegions = 256;
+
+    /// <summary>
+    /// Maximum number of draw calls voxelized per frame (0 = unlimited).
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2153), Limit(0, 100000), EditorDisplay(\"Global Illumination\", \"HDDAGI Max Voxelized Draw Calls Per Frame\")")
+    uint32 HDDAGIMaxVoxelizedDrawCallsPerFrame = 0;
+
+    /// <summary>
+    /// Developer-only debug execution stage for HDDAGI pipeline isolation and validation.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(2154), DefaultValue(HDDAGIDebugExecutionStage.Disabled), EditorDisplay(\"Global Illumination\", \"HDDAGI Debug Execution Stage\")")
+    HDDAGIDebugExecutionStage HDDAGIDebugStage = HDDAGIDebugExecutionStage::Disabled;
 
 public:
     /// <summary>

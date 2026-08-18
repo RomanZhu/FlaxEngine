@@ -39,10 +39,10 @@ API_ENUM() enum class GlobalIlluminationMode
     DDGIPlus = 3,
 
     /// <summary>
-    /// Global Distance Field Global Illumination (GDFGI) using cascaded probe clipmaps, octahedral directional radiance, temporal history rings, and dynamic leak prevention.
+    /// Hierarchical DDA Global Illumination (HDDAGI) using dedicated hierarchical voxel clipmaps, dynamic lights, runtime rigid-geometry updates, and fixed-point HDDA traversal (no Global SDF requirement).
     /// </summary>
-    API_ENUM(Attributes="EditorDisplay(null, \"GDFGI\")")
-    GDFGI = 4,
+    API_ENUM(Attributes="EditorDisplay(null, \"HDDAGI\")")
+    HDDAGI = 4,
 };
 
 /// <summary>

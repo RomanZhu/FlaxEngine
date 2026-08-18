@@ -20,7 +20,6 @@
 #include "Engine/Level/Scene/SceneRendering.h"
 #include "Engine/Level/Actors/StaticModel.h"
 #include "Engine/Threading/JobSystem.h"
-#include "GI/GlobalDistanceFieldGI.h"
 
 // Some of those constants must match in shader
 #define GLOBAL_SDF_FORMAT PixelFormat::R8_SNorm
@@ -268,7 +267,7 @@ public:
         // DDGI can request a tighter near field independently of its far
         // irradiance range. Non-DDGI users retain the historical layout.
         float nearDistance = distance / CascadesDistanceScales[cascadesCount - 1];
-        if (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus || renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::GDFGI)
+        if (renderContext.List->Settings.GlobalIllumination.Mode == GlobalIlluminationMode::DDGIPlus)
         {
             nearDistance = Math::Clamp(GraphicsSettings::Get()->DDGINearFieldDistance, 100.0f, distance);
         }
@@ -330,7 +329,7 @@ public:
         resolutionMip = Math::DivideAndRoundUp(resolution, GLOBAL_SDF_RASTERIZE_MIP_FACTOR);
         auto& giSettings = renderContext.List->Settings.GlobalIllumination;
         distance = GraphicsSettings::Get()->GlobalSDFDistance;
-        if (giSettings.Mode == GlobalIlluminationMode::DDGI || giSettings.Mode == GlobalIlluminationMode::DDGIPlus || giSettings.Mode == GlobalIlluminationMode::GDFGI)
+        if (giSettings.Mode == GlobalIlluminationMode::DDGI || giSettings.Mode == GlobalIlluminationMode::DDGIPlus)
             distance = Math::Max(distance, giSettings.Distance);
         distance = Math::Min(distance, renderContext.View.Far);
     }
@@ -517,7 +516,6 @@ public:
         {
             TotalGeometryRevision++;
             LastDynamicUpdateFrame = Engine::FrameCount;
-            GlobalDistanceFieldGIPass::Instance()->QueueDirtyRegion(nullptr, region);
         }
     }
 
