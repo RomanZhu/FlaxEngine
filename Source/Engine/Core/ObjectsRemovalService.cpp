@@ -24,6 +24,8 @@ namespace
 
     void DeleteObjectInternal(Object* obj)
     {
+        if (!obj)
+            return;
         if (EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
             return;
         obj->Flags |= ObjectFlags::IsDeleting;

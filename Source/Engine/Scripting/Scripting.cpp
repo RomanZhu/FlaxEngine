@@ -116,8 +116,8 @@ namespace
 
     void ReleaseObjects(bool gameOnly)
     {
-        // Flush objects already enqueued objects to delete
-        ObjectsRemovalService::Flush();
+        // Drain delayed deletes so leftover TTL cannot survive module/ALC teardown
+        ObjectsRemovalService::ForceFlush();
 
         // Give GC a try to cleanup old user objects and the other mess
         MCore::GC::Collect();
@@ -150,8 +150,27 @@ namespace
 
             asset->DeleteObject();
         }
-        ObjectsRemovalService::Flush();
+        ObjectsRemovalService::ForceFlush();
     }
+
+#if USE_EDITOR
+    void DropCollectibleManagedRoots()
+    {
+#if !COMPILE_WITHOUT_CSHARP
+        if (!_isEngineAssemblyLoaded)
+            return;
+        MClass* mclass = Scripting::GetStaticClass();
+        if (!mclass)
+            return;
+        MMethod* method = mclass->GetMethod("Internal_DropCollectibleRoots", 0);
+        if (!method)
+            return;
+        MObject* exception = nullptr;
+        method->Invoke(nullptr, nullptr, &exception);
+        DebugLog::LogException(exception);
+#endif
+    }
+#endif
 }
 
 Delegate<BinaryModule*> Scripting::BinaryModuleLoaded;
@@ -689,8 +708,8 @@ void Scripting::Release()
     MCore::GC::Collect();
     MCore::GC::WaitForPendingFinalizers();
 
-    // Flush objects
-    ObjectsRemovalService::Flush();
+    // Drain remaining delayed deletes after module unload
+    ObjectsRemovalService::ForceFlush();
 
     // Switch domain
     auto rootDomain = MCore::GetRootDomain();
@@ -764,6 +783,13 @@ void Scripting::Reload(bool canTriggerSceneReload)
     _hasGameModulesLoaded = false;
     ManagedDictionary::CachedTypes.Clear();
 
+    // Empty the pool and drop collectible thunks before asking the old ALC to unload
+    ObjectsRemovalService::ForceFlush();
+    _objectsLocker.Lock();
+    UpdateActions.Clear();
+    _objectsLocker.Unlock();
+    DropCollectibleManagedRoots();
+
     // Release and create a new assembly load context for user assemblies
     MCore::UnloadScriptingAssemblyLoadContext();
     MCore::CreateScriptingAssemblyLoadContext();
@@ -771,6 +797,9 @@ void Scripting::Reload(bool canTriggerSceneReload)
     // Give GC a try to cleanup old user objects and the other mess
     MCore::GC::Collect();
     MCore::GC::WaitForPendingFinalizers();
+
+    // Finalizers / OnManagedInstanceDeleted may have queued more delayed deletes
+    ObjectsRemovalService::ForceFlush();
 
     // Load all game modules
     if (Load())

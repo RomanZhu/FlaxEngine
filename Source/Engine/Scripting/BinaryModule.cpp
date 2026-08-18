@@ -342,7 +342,11 @@ ScriptingType::~ScriptingType()
     {
     case ScriptingTypes::Script:
         if (Script.DefaultInstance)
-            Delete(Script.DefaultInstance);
+        {
+            ScriptingObject* instance = Script.DefaultInstance;
+            Script.DefaultInstance = nullptr;
+            instance->DeleteObjectNow();
+        }
         if (Script.VTable)
             Platform::Free((byte*)Script.VTable - GetVTablePrefix());
         Platform::Free(Script.InterfacesOffsets);
@@ -701,8 +705,9 @@ void BinaryModule::Destroy(bool isReloading)
     {
         if (type.Type == ScriptingTypes::Script && type.Script.DefaultInstance)
         {
-            Delete(type.Script.DefaultInstance);
+            ScriptingObject* instance = type.Script.DefaultInstance;
             type.Script.DefaultInstance = nullptr;
+            instance->DeleteObjectNow();
         }
     }
 

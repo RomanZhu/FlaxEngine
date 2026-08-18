@@ -1572,8 +1572,9 @@ void VisualScript::unload(bool isReloading)
         ScriptingType& type = VisualScriptingModule.Types[_scriptingTypeHandle.TypeIndex];
         if (type.Script.DefaultInstance)
         {
-            Delete(type.Script.DefaultInstance);
+            ScriptingObject* instance = type.Script.DefaultInstance;
             type.Script.DefaultInstance = nullptr;
+            instance->DeleteObjectNow();
         }
         char* typeName = (char*)Allocator::Allocate(sizeof(_typenameChars));
         Platform::MemoryCopy(typeName, _typenameChars, sizeof(_typenameChars));
@@ -1772,8 +1773,9 @@ void VisualScriptingBinaryModule::OnScriptsReloading()
             auto& type = VisualScriptingModule.Types[script->_scriptingTypeHandle.TypeIndex];
             if (type.Script.DefaultInstance)
             {
-                Delete(type.Script.DefaultInstance);
+                ScriptingObject* instance = type.Script.DefaultInstance;
                 type.Script.DefaultInstance = nullptr;
+                instance->DeleteObjectNow();
             }
             VisualScriptingModule.TypeNameToTypeIndex.RemoveValue(script->_scriptingTypeHandle.TypeIndex);
             script->_scriptingTypeHandleCached = script->_scriptingTypeHandle;

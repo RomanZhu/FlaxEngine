@@ -110,4 +110,37 @@ TEST_CASE("ObjectsRemovalService")
         CHECK(deleteCalls == 1);
         CHECK(destructorCalls == 1);
     }
+
+    SECTION("Flush does not destroy objects with remaining TTL")
+    {
+        int32 deleteCalls = 0;
+        int32 destructorCalls = 0;
+        auto* object = New<TestRemovalObject>(deleteCalls, destructorCalls);
+
+        object->DeleteObject(1.0f);
+        ObjectsRemovalService::Flush();
+
+        CHECK(deleteCalls == 0);
+        CHECK(destructorCalls == 0);
+
+        ObjectsRemovalService::ForceFlush();
+
+        CHECK(deleteCalls == 1);
+        CHECK(destructorCalls == 1);
+    }
+
+    SECTION("ForceFlush destroys delayed TTL objects in one call")
+    {
+        int32 deleteCalls = 0;
+        int32 destructorCalls = 0;
+        auto* delayed = New<TestRemovalObject>(deleteCalls, destructorCalls);
+        auto* longLived = New<TestRemovalObject>(deleteCalls, destructorCalls);
+
+        delayed->DeleteObject(1.0f);
+        longLived->DeleteObject(30.0f);
+        ObjectsRemovalService::ForceFlush();
+
+        CHECK(deleteCalls == 2);
+        CHECK(destructorCalls == 2);
+    }
 }

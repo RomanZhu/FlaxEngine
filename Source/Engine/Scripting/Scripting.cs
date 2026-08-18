@@ -32,6 +32,13 @@ namespace FlaxEngine
             }
         }
 
+        internal void ClearPending()
+        {
+            while (_tasks.TryTake(out _))
+            {
+            }
+        }
+
         private void Dispose(bool disposing)
         {
             if (!disposing)
@@ -185,10 +192,55 @@ namespace FlaxEngine
         }
 
 #if FLAX_EDITOR
+        private static bool IsCollectibleDelegate(Delegate d)
+        {
+            if (d == null)
+                return false;
+            if (d.Method.IsCollectible)
+                return true;
+            var declaringType = d.Method.DeclaringType;
+            if (declaringType != null && (declaringType.IsCollectible || declaringType.Assembly.IsCollectible))
+                return true;
+            var target = d.Target;
+            return target != null && target.GetType().IsCollectible;
+        }
+
+        private static Action DropCollectibleHandlers(Action evt)
+        {
+            if (evt == null)
+                return null;
+            Action kept = null;
+            foreach (var d in evt.GetInvocationList())
+            {
+                if (IsCollectibleDelegate(d))
+                    continue;
+                kept += (Action)d;
+            }
+            return kept;
+        }
+
+        internal static void Internal_DropCollectibleRoots()
+        {
+            // Keep FlaxEngine/FlaxEditor handlers (viewport present, UI canvas, play-mode tick).
+            // Only drop collectible game-assembly delegates so they cannot pin or run after ALC unload.
+            Update = DropCollectibleHandlers(Update);
+            LateUpdate = DropCollectibleHandlers(LateUpdate);
+            FixedUpdate = DropCollectibleHandlers(FixedUpdate);
+            LateFixedUpdate = DropCollectibleHandlers(LateFixedUpdate);
+            Draw = DropCollectibleHandlers(Draw);
+            Exit = DropCollectibleHandlers(Exit);
+            lock (UpdateActions)
+            {
+                UpdateActions.RemoveAll(IsCollectibleDelegate);
+            }
+            MainThreadTaskScheduler.ClearPending();
+        }
+
         private static void OnScriptsReloadBegin()
         {
             // Tooltip might hold references to scripting assemblies
             Style.Current.SharedTooltip = null;
+            Internal_DropCollectibleRoots();
         }
 
         private static void OnScriptsReloadEnd()

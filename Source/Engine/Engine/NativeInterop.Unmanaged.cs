@@ -995,7 +995,10 @@ namespace FlaxEngine.Interop
                     System.Threading.Thread.Sleep(1);
                 }
                 if (IsHandleAlive(weakRef))
+                {
                     Debug.Logger.LogHandler.LogWrite(LogType.Warning, "Scripting AssemblyLoadContext was not unloaded.");
+                    Debug.Logger.LogHandler.LogWrite(LogType.Info, "Reload continues with a leaked collectible AssemblyLoadContext until editor restart.");
+                }
                 weakRef.Free();
 
                 static bool IsHandleAlive(GCHandle weakRef)
@@ -1017,6 +1020,9 @@ namespace FlaxEngine.Interop
         internal static void UnloadScriptingAssemblyLoadContext()
         {
 #if FLAX_EDITOR
+            // Drop collectible Scripting tick handlers before caches and thunks are released
+            Scripting.Internal_DropCollectibleRoots();
+
             // Any of the windows might still process events while GC is blocking, the events
             // might go through the interop layer and require DelegateHelpers to invoke internal methods.
             // This seems to happen quite often with OnLostFocus event from debugger stealing the focus
