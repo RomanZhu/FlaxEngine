@@ -178,6 +178,18 @@ namespace FlaxEditor.Gizmo
             return (node.ViewportSelection & relationship) != 0;
         }
 
+        internal static bool IsSelectionInsideScope(SceneGraphNode scope, IList<SceneGraphNode> selection)
+        {
+            if (scope == null || selection == null || selection.Count == 0)
+                return false;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] != scope && !scope.ContainsInHierarchy(selection[i]))
+                    return false;
+            }
+            return true;
+        }
+
         private static SceneGraphNode ResolveRawSelectionTarget(SceneGraphNode hit)
         {
             if (hit is ActorChildNode actorChildNode && !actorChildNode.CanBeSelectedDirectly)
@@ -590,7 +602,7 @@ namespace FlaxEditor.Gizmo
             if (_selectionScopes.Count != 0)
             {
                 var scope = _selectionScopes[_selectionScopes.Count - 1];
-                if (newSelection.Count != 1 || (newSelection[0] != scope && !scope.ContainsInHierarchy(newSelection[0])))
+                if (!IsSelectionInsideScope(scope, newSelection))
                     _selectionScopes.Clear();
             }
 
