@@ -792,6 +792,8 @@ void Scripting::Reload(bool canTriggerSceneReload)
 
     // Release and create a new assembly load context for user assemblies
     MCore::UnloadScriptingAssemblyLoadContext();
+    // Collectible thunks are gone. Leftover game natives from a leaked ALC must not be invoked.
+    ObjectsRemovalService::SealExistingObjects();
     MCore::CreateScriptingAssemblyLoadContext();
 
     // Give GC a try to cleanup old user objects and the other mess

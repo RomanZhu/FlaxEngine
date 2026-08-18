@@ -51,4 +51,15 @@ public:
     /// Nested delayed deletes queued during destruction are also drained.
     /// </summary>
     static void ForceFlush();
+
+    /// <summary>
+    /// Current serial stamped on objects spawned from reloadable game modules.
+    /// </summary>
+    static uint16 GetGameReloadSerial();
+
+    /// <summary>
+    /// Drops pool entries from the previous game reload without calling OnDeleteObject.
+    /// Call after collectible thunks are released, before new game modules load.
+    /// </summary>
+    static void SealExistingObjects();
 };

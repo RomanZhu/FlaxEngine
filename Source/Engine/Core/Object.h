@@ -33,6 +33,12 @@ public:
     /// </summary>
     ObjectFlags Flags = ObjectFlags::None;
 
+    /// <summary>
+    /// Non-zero if this object was spawned from a reloadable game module.
+    /// Used to skip virtual teardown after a leaked AssemblyLoadContext reload.
+    /// </summary>
+    uint16 GameReloadSerial = 0;
+
 public:
 
     Object();

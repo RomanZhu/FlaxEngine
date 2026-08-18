@@ -12,6 +12,7 @@
 #include "Engine/Content/Asset.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Profiler/ProfilerCPU.h"
+#include "Engine/Core/ObjectsRemovalService.h"
 #include "Engine/Threading/ThreadLocal.h"
 #include "Engine/Serialization/SerializationFwd.h"
 #include "ManagedCLR/MAssembly.h"
@@ -101,6 +102,9 @@ ScriptingObject::ScriptingObject(const SpawnParams& params)
 {
     // Managed objects must have valid and unique ID
     ASSERT(_id.IsValid());
+
+    if (_type.Module && _type.Module != GetBinaryModuleFlaxEngine() && _type.Module != GetBinaryModuleCorlib())
+        GameReloadSerial = ObjectsRemovalService::GetGameReloadSerial();
 }
 
 ScriptingObject::~ScriptingObject()

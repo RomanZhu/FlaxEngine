@@ -31,6 +31,7 @@ namespace
         Dictionary<Object*, uint32> Live;
         uint64 PoolCounter = 0;
         uint32 NextEpoch = 1;
+        uint16 GameReloadSerial = 1;
 
         RemovalState()
         {
@@ -62,7 +63,16 @@ namespace
     bool IsPooledObjectCurrent(Object* obj, uint32 epoch)
     {
         uint32 liveEpoch;
-        return TryGetLiveEpoch(obj, liveEpoch) && liveEpoch == epoch;
+        if (!TryGetLiveEpoch(obj, liveEpoch) || liveEpoch != epoch)
+            return false;
+        const uint16 serial = obj->GameReloadSerial;
+        return serial == 0 || serial == GetRemovalState().GameReloadSerial;
+    }
+
+    bool CanInvokeObject(Object* obj)
+    {
+        const uint16 serial = obj->GameReloadSerial;
+        return serial == 0 || serial == GetRemovalState().GameReloadSerial;
     }
 
     void DeleteObjectInternal(Object* obj)
@@ -72,7 +82,7 @@ namespace
         auto& state = GetRemovalState();
         state.PoolLocker.Lock();
         uint32 liveEpoch;
-        if (!state.Live.TryGet(obj, liveEpoch) || EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
+        if (!state.Live.TryGet(obj, liveEpoch) || !CanInvokeObject(obj) || EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
         {
             state.PoolLocker.Unlock();
             return;
@@ -122,7 +132,7 @@ void ObjectsRemovalService::Add(Object* obj, float timeToLive, bool useGameTime)
     uint32 epoch;
     // Never touch obj->Flags unless this pointer is still a live Object. Leaked ALC
     // callbacks can call DeleteObject on natives that were already destroyed.
-    if (!TryGetLiveEpoch(obj, epoch) || EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
+    if (!TryGetLiveEpoch(obj, epoch) || !CanInvokeObject(obj) || EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
     {
         state.PoolLocker.Unlock();
         return;
@@ -216,6 +226,29 @@ void ObjectsRemovalService::ForceFlush()
         }
     } while (state.PoolCounter != 0);
     state.Pool.Clear();
+    state.PoolLocker.Unlock();
+}
+
+uint16 ObjectsRemovalService::GetGameReloadSerial()
+{
+    return GetRemovalState().GameReloadSerial;
+}
+
+void ObjectsRemovalService::SealExistingObjects()
+{
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    uint16 next = (uint16)(state.GameReloadSerial + 1);
+    if (next == 0)
+        next = 1;
+    state.GameReloadSerial = next;
+    for (auto i = state.Pool.Begin(); i.IsNotEnd(); ++i)
+    {
+        Object* obj = i->Key;
+        const uint32 epoch = i->Value.Epoch;
+        if (!IsPooledObjectCurrent(obj, epoch))
+            state.Pool.Remove(i);
+    }
     state.PoolLocker.Unlock();
 }
 

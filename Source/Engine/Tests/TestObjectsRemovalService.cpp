@@ -217,4 +217,22 @@ TEST_CASE("ObjectsRemovalService")
         CHECK(deleteCalls == 1);
         CHECK(destructorCalls == 2);
     }
+
+    SECTION("Flush abandons objects from a previous game reload serial")
+    {
+        int32 deleteCalls = 0;
+        int32 destructorCalls = 0;
+        auto* object = New<TestRemovalObject>(deleteCalls, destructorCalls);
+        object->GameReloadSerial = 999;
+
+        object->DeleteObject();
+        ObjectsRemovalService::Flush();
+
+        CHECK(deleteCalls == 0);
+        CHECK(destructorCalls == 0);
+
+        Delete(object);
+
+        CHECK(destructorCalls == 1);
+    }
 }
