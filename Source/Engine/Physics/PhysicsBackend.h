@@ -91,6 +91,46 @@ private:
 };
 
 /// <summary>
+/// Non-owning output sink for cast queries.
+/// </summary>
+struct PhysicsCastResultBuffer
+{
+    using WriteCallback = void (*)(void* context, int32 index, const RayCastHit& hit);
+
+    void* Context;
+    WriteCallback Write;
+    int32 Capacity;
+    int32 Count = 0;
+
+    PhysicsCastResultBuffer(void* context, int32 capacity, WriteCallback write)
+        : Context(context)
+        , Write(write)
+        , Capacity(capacity)
+        , Count(0)
+    {
+    }
+
+    explicit PhysicsCastResultBuffer(Span<RayCastHit> results)
+        : PhysicsCastResultBuffer(results.Get(), results.Length(), &WriteNative)
+    {
+    }
+
+    FORCE_INLINE bool Add(const RayCastHit& hit)
+    {
+        if (Count >= Capacity)
+            return false;
+        Write(Context, Count++, hit);
+        return Count < Capacity;
+    }
+
+private:
+    static void WriteNative(void* context, int32 index, const RayCastHit& hit)
+    {
+        ((RayCastHit*)context)[index] = hit;
+    }
+};
+
+/// <summary>
 /// Interface for the physical simulation backend implementation.
 /// </summary>
 class FLAXENGINE_API PhysicsBackend
@@ -162,23 +202,48 @@ public:
     static bool RayCast(void* scene, const Vector3& origin, const Vector3& direction, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool RayCast(void* scene, const Vector3& origin, const Vector3& direction, RayCastHit& hitInfo, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool RayCastAll(void* scene, const Vector3& origin, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, float maxDistance, uint32 layerMask, bool hitTriggers);
-    static int32 RayCastNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 RayCastAllNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, PhysicsCastResultBuffer& results, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 RayCastAllNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsCastResultBuffer buffer(results);
+        return RayCastAllNonAlloc(scene, origin, direction, buffer, maxDistance, layerMask, hitTriggers);
+    }
     static bool BoxCast(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool BoxCast(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, RayCastHit& hitInfo, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool BoxCastAll(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
-    static int32 BoxCastNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 BoxCastAllNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 BoxCastAllNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsCastResultBuffer buffer(results);
+        return BoxCastAllNonAlloc(scene, center, halfExtents, direction, buffer, rotation, maxDistance, layerMask, hitTriggers);
+    }
     static bool SphereCast(void* scene, const Vector3& center, float radius, const Vector3& direction, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool SphereCast(void* scene, const Vector3& center, float radius, const Vector3& direction, RayCastHit& hitInfo, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool SphereCastAll(void* scene, const Vector3& center, float radius, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, float maxDistance, uint32 layerMask, bool hitTriggers);
-    static int32 SphereCastNonAlloc(void* scene, const Vector3& center, float radius, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 SphereCastAllNonAlloc(void* scene, const Vector3& center, float radius, const Vector3& direction, PhysicsCastResultBuffer& results, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 SphereCastAllNonAlloc(void* scene, const Vector3& center, float radius, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsCastResultBuffer buffer(results);
+        return SphereCastAllNonAlloc(scene, center, radius, direction, buffer, maxDistance, layerMask, hitTriggers);
+    }
     static bool CapsuleCast(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool CapsuleCast(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, RayCastHit& hitInfo, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool CapsuleCastAll(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
-    static int32 CapsuleCastNonAlloc(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 CapsuleCastAllNonAlloc(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 CapsuleCastAllNonAlloc(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsCastResultBuffer buffer(results);
+        return CapsuleCastAllNonAlloc(scene, center, radius, height, direction, buffer, rotation, maxDistance, layerMask, hitTriggers);
+    }
     static bool ConvexCast(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool ConvexCast(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, RayCastHit& hitInfo, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
     static bool ConvexCastAll(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
-    static int32 ConvexCastNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 ConvexCastAllNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers);
+    static int32 ConvexCastAllNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+    {
+        PhysicsCastResultBuffer buffer(results);
+        return ConvexCastAllNonAlloc(scene, center, convexMesh, scale, direction, buffer, rotation, maxDistance, layerMask, hitTriggers);
+    }
     static bool CheckBox(void* scene, const Vector3& center, const Vector3& halfExtents, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);
     static bool CheckSphere(void* scene, const Vector3& center, float radius, uint32 layerMask, bool hitTriggers);
     static bool CheckCapsule(void* scene, const Vector3& center, float radius, float height, const Quaternion& rotation, uint32 layerMask, bool hitTriggers);

@@ -147,7 +147,7 @@ bool PhysicsBackend::RayCastAll(void* scene, const Vector3& origin, const Vector
     return false;
 }
 
-int32 PhysicsBackend::RayCastNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::RayCastAllNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, PhysicsCastResultBuffer& results, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return 0;
 }
@@ -167,7 +167,7 @@ bool PhysicsBackend::BoxCastAll(void* scene, const Vector3& center, const Vector
     return false;
 }
 
-int32 PhysicsBackend::BoxCastNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::BoxCastAllNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return 0;
 }
@@ -187,7 +187,7 @@ bool PhysicsBackend::SphereCastAll(void* scene, const Vector3& center, const flo
     return false;
 }
 
-int32 PhysicsBackend::SphereCastNonAlloc(void* scene, const Vector3& center, const float radius, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::SphereCastAllNonAlloc(void* scene, const Vector3& center, const float radius, const Vector3& direction, PhysicsCastResultBuffer& results, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return 0;
 }
@@ -207,7 +207,7 @@ bool PhysicsBackend::CapsuleCastAll(void* scene, const Vector3& center, const fl
     return false;
 }
 
-int32 PhysicsBackend::CapsuleCastNonAlloc(void* scene, const Vector3& center, const float radius, const float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::CapsuleCastAllNonAlloc(void* scene, const Vector3& center, const float radius, const float height, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return 0;
 }
@@ -227,7 +227,7 @@ bool PhysicsBackend::ConvexCastAll(void* scene, const Vector3& center, const Col
     return false;
 }
 
-int32 PhysicsBackend::ConvexCastNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::ConvexCastAllNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
     return 0;
 }

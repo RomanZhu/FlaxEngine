@@ -497,29 +497,30 @@ template<typename HitType>
 class NonAllocCastHitBuffer : public PxHitCallback<HitType>
 {
     HitType _buffer[32];
-    Span<RayCastHit> _results;
+    PhysicsCastResultBuffer& _results;
     Vector3 _sceneOrigin;
-    int32 _count = 0;
 
     PxAgain processTouches(const HitType* buffer, PxU32 nbHits) override
     {
-        const int32 count = Math::Min<int32>((int32)nbHits, _results.Length() - _count);
-        for (int32 i = 0; i < count; i++)
+        for (PxU32 i = 0; i < nbHits; i++)
         {
-            P2C(buffer[i], _results[_count++]);
-            _results[_count - 1].Point += _sceneOrigin;
+            RayCastHit hit;
+            P2C(buffer[i], hit);
+            hit.Point += _sceneOrigin;
+            if (!_results.Add(hit))
+                return false;
         }
-        return _count < _results.Length();
+        return true;
     }
 
     void finalizeQuery() override
     {
-        if (this->hasBlock && _count < _results.Length())
+        if (this->hasBlock && _results.Count < _results.Capacity)
             processTouches(&this->block, 1);
     }
 
 public:
-    NonAllocCastHitBuffer(Span<RayCastHit> results, const Vector3& sceneOrigin)
+    NonAllocCastHitBuffer(PhysicsCastResultBuffer& results, const Vector3& sceneOrigin)
         : PxHitCallback<HitType>(_buffer, ARRAY_COUNT(_buffer))
         , _results(results)
         , _sceneOrigin(sceneOrigin)
@@ -528,7 +529,7 @@ public:
 
     int32 Count() const
     {
-        return _count;
+        return _results.Count;
     }
 };
 
@@ -2241,9 +2242,9 @@ bool PhysicsBackend::RayCastAll(void* scene, const Vector3& origin, const Vector
     return true;
 }
 
-int32 PhysicsBackend::RayCastNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::RayCastAllNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, PhysicsCastResultBuffer& results, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0)
+    if (results.Capacity == 0)
         return 0;
     SCENE_QUERY_SETUP(false);
     NonAllocCastHitBuffer<PxRaycastHit> buffer(results, scenePhysX->Origin);
@@ -2281,9 +2282,9 @@ bool PhysicsBackend::BoxCastAll(void* scene, const Vector3& center, const Vector
     return true;
 }
 
-int32 PhysicsBackend::BoxCastNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::BoxCastAllNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0)
+    if (results.Capacity == 0)
         return 0;
     SCENE_QUERY_SETUP(false);
     NonAllocCastHitBuffer<PxSweepHit> buffer(results, scenePhysX->Origin);
@@ -2323,9 +2324,9 @@ bool PhysicsBackend::SphereCastAll(void* scene, const Vector3& center, const flo
     return true;
 }
 
-int32 PhysicsBackend::SphereCastNonAlloc(void* scene, const Vector3& center, const float radius, const Vector3& direction, Span<RayCastHit> results, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::SphereCastAllNonAlloc(void* scene, const Vector3& center, const float radius, const Vector3& direction, PhysicsCastResultBuffer& results, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0)
+    if (results.Capacity == 0)
         return 0;
     SCENE_QUERY_SETUP(false);
     NonAllocCastHitBuffer<PxSweepHit> buffer(results, scenePhysX->Origin);
@@ -2365,9 +2366,9 @@ bool PhysicsBackend::CapsuleCastAll(void* scene, const Vector3& center, const fl
     return true;
 }
 
-int32 PhysicsBackend::CapsuleCastNonAlloc(void* scene, const Vector3& center, const float radius, const float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::CapsuleCastAllNonAlloc(void* scene, const Vector3& center, const float radius, const float height, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0)
+    if (results.Capacity == 0)
         return 0;
     SCENE_QUERY_SETUP(false);
     NonAllocCastHitBuffer<PxSweepHit> buffer(results, scenePhysX->Origin);
@@ -2410,9 +2411,9 @@ bool PhysicsBackend::ConvexCastAll(void* scene, const Vector3& center, const Col
     return true;
 }
 
-int32 PhysicsBackend::ConvexCastNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::ConvexCastAllNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, const float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0 || !convexMesh || convexMesh->GetOptions().Type != CollisionDataType::ConvexMesh)
+    if (results.Capacity == 0 || !convexMesh || convexMesh->GetOptions().Type != CollisionDataType::ConvexMesh)
         return 0;
     SCENE_QUERY_SETUP(false);
     NonAllocCastHitBuffer<PxSweepHit> buffer(results, scenePhysX->Origin);

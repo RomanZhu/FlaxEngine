@@ -1033,9 +1033,7 @@ namespace
         Vector3 Direction = Vector3::Zero;
         RayCastHit Hit;
         Array<RayCastHit, HeapAllocation>* Results = nullptr;
-        RayCastHit* ResultsBuffer = nullptr;
-        int32 ResultsCapacity = 0;
-        int32 ResultsCount = 0;
+        PhysicsCastResultBuffer* ResultsBuffer = nullptr;
         Array<b3ShapeId, InlinedAllocation<8>> InitialOverlaps;
     };
 
@@ -1067,12 +1065,7 @@ namespace
             return true;
         }
         if (context.ResultsBuffer)
-        {
-            if (context.ResultsCount >= context.ResultsCapacity)
-                return false;
-            context.ResultsBuffer[context.ResultsCount++] = hit;
-            return context.ResultsCount < context.ResultsCapacity;
-        }
+            return context.ResultsBuffer->Add(hit);
         context.Hit = hit;
         return false;
     }
@@ -1181,7 +1174,7 @@ namespace
         proxy.radius = radius;
     }
 
-    bool CastShape(SceneBox3D* scene, const Vector3& center, const b3ShapeProxy& proxy, const Vector3& direction, RayCastHit* hitInfo, Array<RayCastHit, HeapAllocation>* results, float maxDistance, uint32 layerMask, bool hitTriggers, RayCastHit* resultsBuffer = nullptr, int32 resultsCapacity = 0, int32* resultsCount = nullptr)
+    bool CastShape(SceneBox3D* scene, const Vector3& center, const b3ShapeProxy& proxy, const Vector3& direction, RayCastHit* hitInfo, Array<RayCastHit, HeapAllocation>* results, float maxDistance, uint32 layerMask, bool hitTriggers, PhysicsCastResultBuffer* resultsBuffer = nullptr)
     {
         maxDistance = GetCastDistance(maxDistance);
         QueryContext context;
@@ -1191,13 +1184,12 @@ namespace
         context.Direction = direction;
         context.Results = results;
         context.ResultsBuffer = resultsBuffer;
-        context.ResultsCapacity = resultsCapacity;
         context.All = results != nullptr || resultsBuffer != nullptr;
         context.Any = hitInfo == nullptr && !context.All;
 
         const b3QueryFilter filter = MakeQueryFilter(layerMask);
         b3World_OverlapShape(scene->World, C2BPos(center), &proxy, filter, InitialOverlapCastCallback, &context);
-        if ((context.All || !context.Hit.Collider) && (!resultsBuffer || context.ResultsCount < resultsCapacity))
+        if ((context.All || !context.Hit.Collider) && (!resultsBuffer || resultsBuffer->Count < resultsBuffer->Capacity))
         {
             // Box3D sweeps rounded shapes to radius - linear slop. Compensate that slop,
             // but retain its cast tolerance so a separated shape never becomes a zero-fraction hit.
@@ -1206,10 +1198,8 @@ namespace
                 castProxy.radius += B3_LINEAR_SLOP * 0.75f;
             b3World_CastShape(scene->World, C2BPos(center), &castProxy, C2BVec(direction * maxDistance), filter, QueryCastCallback, &context);
         }
-        if (resultsCount)
-            *resultsCount = context.ResultsCount;
         if (resultsBuffer)
-            return context.ResultsCount != 0;
+            return resultsBuffer->Count != 0;
         if (results)
             return results->HasItems();
         if (context.Any)
@@ -1579,19 +1569,18 @@ bool PhysicsBackend::RayCastAll(void* scene, const Vector3& origin, const Vector
     return results.HasItems();
 }
 
-int32 PhysicsBackend::RayCastNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::RayCastAllNonAlloc(void* scene, const Vector3& origin, const Vector3& direction, PhysicsCastResultBuffer& results, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0)
+    if (results.Capacity == 0)
         return 0;
     maxDistance = GetCastDistance(maxDistance);
     QueryContext context;
     context.HitTriggers = hitTriggers;
     context.MaxDistance = maxDistance;
     context.All = true;
-    context.ResultsBuffer = results.Get();
-    context.ResultsCapacity = results.Length();
+    context.ResultsBuffer = &results;
     b3World_CastRay(((SceneBox3D*)scene)->World, C2BPos(origin), C2BVec(direction * maxDistance), MakeQueryFilter(layerMask), QueryCastCallback, &context);
-    return context.ResultsCount;
+    return results.Count;
 }
 
 bool PhysicsBackend::BoxCast(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -1618,16 +1607,15 @@ bool PhysicsBackend::BoxCastAll(void* scene, const Vector3& center, const Vector
     return CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, &results, maxDistance, layerMask, hitTriggers);
 }
 
-int32 PhysicsBackend::BoxCastNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::BoxCastAllNonAlloc(void* scene, const Vector3& center, const Vector3& halfExtents, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0)
+    if (results.Capacity == 0)
         return 0;
     Array<b3Vec3, InlinedAllocation<8>> points;
     b3ShapeProxy proxy;
     MakeBoxProxy(halfExtents, rotation, points, proxy);
-    int32 count = 0;
-    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, results.Get(), results.Length(), &count);
-    return count;
+    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, &results);
+    return results.Count;
 }
 
 bool PhysicsBackend::SphereCast(void* scene, const Vector3& center, float radius, const Vector3& direction, float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -1654,16 +1642,15 @@ bool PhysicsBackend::SphereCastAll(void* scene, const Vector3& center, float rad
     return CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, &results, maxDistance, layerMask, hitTriggers);
 }
 
-int32 PhysicsBackend::SphereCastNonAlloc(void* scene, const Vector3& center, float radius, const Vector3& direction, Span<RayCastHit> results, float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::SphereCastAllNonAlloc(void* scene, const Vector3& center, float radius, const Vector3& direction, PhysicsCastResultBuffer& results, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0)
+    if (results.Capacity == 0)
         return 0;
     Array<b3Vec3, InlinedAllocation<8>> points;
     b3ShapeProxy proxy;
     MakeSphereProxy(radius, points, proxy);
-    int32 count = 0;
-    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, results.Get(), results.Length(), &count);
-    return count;
+    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, &results);
+    return results.Count;
 }
 
 bool PhysicsBackend::CapsuleCast(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -1690,16 +1677,15 @@ bool PhysicsBackend::CapsuleCastAll(void* scene, const Vector3& center, float ra
     return CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, &results, maxDistance, layerMask, hitTriggers);
 }
 
-int32 PhysicsBackend::CapsuleCastNonAlloc(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::CapsuleCastAllNonAlloc(void* scene, const Vector3& center, float radius, float height, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0)
+    if (results.Capacity == 0)
         return 0;
     Array<b3Vec3, InlinedAllocation<8>> points;
     b3ShapeProxy proxy;
     MakeCapsuleProxy(radius, height, rotation, points, proxy);
-    int32 count = 0;
-    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, results.Get(), results.Length(), &count);
-    return count;
+    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, &results);
+    return results.Count;
 }
 
 bool PhysicsBackend::ConvexCast(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
@@ -1748,9 +1734,9 @@ bool PhysicsBackend::ConvexCastAll(void* scene, const Vector3& center, const Col
     return CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, &results, maxDistance, layerMask, hitTriggers);
 }
 
-int32 PhysicsBackend::ConvexCastNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
+int32 PhysicsBackend::ConvexCastAllNonAlloc(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, PhysicsCastResultBuffer& results, const Quaternion& rotation, float maxDistance, uint32 layerMask, bool hitTriggers)
 {
-    if (results.Length() == 0 || !convexMesh || convexMesh->GetOptions().Type != CollisionDataType::ConvexMesh)
+    if (results.Capacity == 0 || !convexMesh || convexMesh->GetOptions().Type != CollisionDataType::ConvexMesh)
         return 0;
     auto mesh = (MeshBox3D*)convexMesh->GetConvex();
     if (!mesh || mesh->Vertices.IsEmpty())
@@ -1765,9 +1751,8 @@ int32 PhysicsBackend::ConvexCastNonAlloc(void* scene, const Vector3& center, con
     proxy.points = points.Get();
     proxy.count = pointCount;
     proxy.radius = 0.0f;
-    int32 count = 0;
-    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, results.Get(), results.Length(), &count);
-    return count;
+    CastShape((SceneBox3D*)scene, center, proxy, direction, nullptr, nullptr, maxDistance, layerMask, hitTriggers, &results);
+    return results.Count;
 }
 
 bool PhysicsBackend::CheckBox(void* scene, const Vector3& center, const Vector3& halfExtents, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)

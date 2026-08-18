@@ -162,7 +162,12 @@ public:
     API_FUNCTION() static bool LineCastAll(const Vector3& start, const Vector3& end, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>Performs a line cast and writes up to the supplied buffer length without allocating.</summary>
-    API_FUNCTION() static int32 LineCastNonAlloc(const Vector3& start, const Vector3& end, Span<RayCastHit> results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    static int32 LineCastAllNonAlloc(const Vector3& start, const Vector3& end, Span<RayCastHit> results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#if !COMPILE_WITH_MONO
+    API_FUNCTION(NoProxy) static int32 LineCastAllNonAlloc(const Vector3& start, const Vector3& end, void* resultData, int32 capacity, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#else
+    API_FUNCTION(NoProxy) static int32 LineCastAllNonAlloc(const Vector3& start, const Vector3& end, MArray* results, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#endif
 
     /// <summary>
     /// Performs a raycast against objects in the scene.
@@ -200,7 +205,12 @@ public:
     API_FUNCTION() static bool RayCastAll(const Vector3& origin, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>Performs a raycast and writes up to the supplied buffer length without allocating.</summary>
-    API_FUNCTION() static int32 RayCastNonAlloc(const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    static int32 RayCastAllNonAlloc(const Vector3& origin, const Vector3& direction, Span<RayCastHit> results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#if !COMPILE_WITH_MONO
+    API_FUNCTION(NoProxy) static int32 RayCastAllNonAlloc(const Vector3& origin, const Vector3& direction, void* resultData, int32 capacity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#else
+    API_FUNCTION(NoProxy) static int32 RayCastAllNonAlloc(const Vector3& origin, const Vector3& direction, MArray* results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#endif
 
     /// <summary>
     /// Performs a sweep test against objects in the scene using a box geometry.
@@ -244,7 +254,12 @@ public:
     API_FUNCTION() static bool BoxCastAll(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>Performs a box cast and writes up to the supplied buffer length without allocating.</summary>
-    API_FUNCTION() static int32 BoxCastNonAlloc(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    static int32 BoxCastAllNonAlloc(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#if !COMPILE_WITH_MONO
+    API_FUNCTION(NoProxy) static int32 BoxCastAllNonAlloc(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, void* resultData, int32 capacity, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#else
+    API_FUNCTION(NoProxy) static int32 BoxCastAllNonAlloc(const Vector3& center, const Vector3& halfExtents, const Vector3& direction, MArray* results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#endif
 
     /// <summary>
     /// Performs a sweep test against objects in the scene using a sphere geometry.
@@ -285,7 +300,12 @@ public:
     API_FUNCTION() static bool SphereCastAll(const Vector3& center, float radius, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>Performs a sphere cast and writes up to the supplied buffer length without allocating.</summary>
-    API_FUNCTION() static int32 SphereCastNonAlloc(const Vector3& center, float radius, const Vector3& direction, Span<RayCastHit> results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    static int32 SphereCastAllNonAlloc(const Vector3& center, float radius, const Vector3& direction, Span<RayCastHit> results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#if !COMPILE_WITH_MONO
+    API_FUNCTION(NoProxy) static int32 SphereCastAllNonAlloc(const Vector3& center, float radius, const Vector3& direction, void* resultData, int32 capacity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#else
+    API_FUNCTION(NoProxy) static int32 SphereCastAllNonAlloc(const Vector3& center, float radius, const Vector3& direction, MArray* results, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#endif
 
     /// <summary>
     /// Performs a sweep test against objects in the scene using a capsule geometry.
@@ -332,7 +352,12 @@ public:
     API_FUNCTION() static bool CapsuleCastAll(const Vector3& center, float radius, float height, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>Performs a capsule cast and writes up to the supplied buffer length without allocating.</summary>
-    API_FUNCTION() static int32 CapsuleCastNonAlloc(const Vector3& center, float radius, float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    static int32 CapsuleCastAllNonAlloc(const Vector3& center, float radius, float height, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#if !COMPILE_WITH_MONO
+    API_FUNCTION(NoProxy) static int32 CapsuleCastAllNonAlloc(const Vector3& center, float radius, float height, const Vector3& direction, void* resultData, int32 capacity, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#else
+    API_FUNCTION(NoProxy) static int32 CapsuleCastAllNonAlloc(const Vector3& center, float radius, float height, const Vector3& direction, MArray* results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#endif
 
     /// <summary>
     /// Performs a sweep test against objects in the scene using a convex mesh.
@@ -379,7 +404,12 @@ public:
     API_FUNCTION() static bool ConvexCastAll(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, API_PARAM(Out) Array<RayCastHit, HeapAllocation>& results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
 
     /// <summary>Performs a convex cast and writes up to the supplied buffer length without allocating.</summary>
-    API_FUNCTION() static int32 ConvexCastNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+    static int32 ConvexCastAllNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, Span<RayCastHit> results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#if !COMPILE_WITH_MONO
+    API_FUNCTION(NoProxy) static int32 ConvexCastAllNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, void* resultData, int32 capacity, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#else
+    API_FUNCTION(NoProxy) static int32 ConvexCastAllNonAlloc(const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, const Vector3& direction, MArray* results, const Quaternion& rotation = Quaternion::Identity, float maxDistance = MAX_float, uint32 layerMask = MAX_uint32, bool hitTriggers = true);
+#endif
 
     /// <summary>
     /// Checks whether the given box overlaps with other colliders or not.
