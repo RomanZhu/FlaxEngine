@@ -5,6 +5,7 @@
 #include "Collections/Dictionary.h"
 #include "Engine/Engine/Time.h"
 #include "Engine/Engine/EngineService.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Platform/CriticalSection.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Scripting/ScriptingObject.h"
@@ -16,19 +17,68 @@ Span<const Char*> Utilities::Private::HertzSizes(HertzSizesData, ARRAY_COUNT(Her
 
 namespace
 {
-    CriticalSection PoolLocker;
-    double LastUpdate;
-    float LastUpdateGameTime;
-    Dictionary<Object*, float> Pool;
-    uint64 PoolCounter = 0;
+    struct Removal
+    {
+        float TimeToLive;
+        uint32 Epoch;
+    };
+
+    struct RemovalState
+    {
+        CriticalSection PoolLocker;
+        double LastUpdate = 0;
+        Dictionary<Object*, Removal> Pool;
+        Dictionary<Object*, uint32> Live;
+        uint64 PoolCounter = 0;
+        uint32 NextEpoch = 1;
+
+        RemovalState()
+        {
+            Instance = this;
+        }
+
+        ~RemovalState()
+        {
+            if (Instance == this)
+                Instance = nullptr;
+        }
+
+        static RemovalState* Instance;
+    };
+
+    RemovalState* RemovalState::Instance = nullptr;
+
+    RemovalState& GetRemovalState()
+    {
+        static RemovalState instance;
+        return instance;
+    }
+
+    bool TryGetLiveEpoch(Object* obj, uint32& epoch)
+    {
+        return obj && GetRemovalState().Live.TryGet(obj, epoch);
+    }
+
+    bool IsPooledObjectCurrent(Object* obj, uint32 epoch)
+    {
+        uint32 liveEpoch;
+        return TryGetLiveEpoch(obj, liveEpoch) && liveEpoch == epoch;
+    }
 
     void DeleteObjectInternal(Object* obj)
     {
         if (!obj)
             return;
-        if (EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
+        auto& state = GetRemovalState();
+        state.PoolLocker.Lock();
+        uint32 liveEpoch;
+        if (!state.Live.TryGet(obj, liveEpoch) || EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
+        {
+            state.PoolLocker.Unlock();
             return;
+        }
         obj->Flags |= ObjectFlags::IsDeleting;
+        state.PoolLocker.Unlock();
         obj->OnDeleteObject();
     }
 }
@@ -50,25 +100,31 @@ ObjectsRemoval ObjectsRemovalInstance;
 
 bool ObjectsRemovalService::IsInPool(Object* obj)
 {
-    PoolLocker.Lock();
-    const bool result = Pool.ContainsKey(obj);
-    PoolLocker.Unlock();
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    const bool result = state.Pool.ContainsKey(obj);
+    state.PoolLocker.Unlock();
     return result;
 }
 
 void ObjectsRemovalService::Dereference(Object* obj)
 {
-    PoolLocker.Lock();
-    Pool.Remove(obj);
-    PoolLocker.Unlock();
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    state.Pool.Remove(obj);
+    state.PoolLocker.Unlock();
 }
 
 void ObjectsRemovalService::Add(Object* obj, float timeToLive, bool useGameTime)
 {
-    PoolLocker.Lock();
-    if (EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    uint32 epoch;
+    // Never touch obj->Flags unless this pointer is still a live Object. Leaked ALC
+    // callbacks can call DeleteObject on natives that were already destroyed.
+    if (!TryGetLiveEpoch(obj, epoch) || EnumHasAnyFlags(obj->Flags, ObjectFlags::IsDeleting))
     {
-        PoolLocker.Unlock();
+        state.PoolLocker.Unlock();
         return;
     }
 
@@ -78,61 +134,97 @@ void ObjectsRemovalService::Add(Object* obj, float timeToLive, bool useGameTime)
     else
         obj->Flags &= ~ObjectFlags::UseGameTimeForDelete;
 
-    Pool[obj] = timeToLive;
-    PoolCounter++;
-    PoolLocker.Unlock();
+    state.Pool[obj] = { timeToLive, epoch };
+    state.PoolCounter++;
+    state.PoolLocker.Unlock();
 }
 
 void ObjectsRemovalService::Flush(float dt, float gameDelta)
 {
     PROFILE_CPU();
 
-    PoolLocker.Lock();
-    PoolCounter = 0;
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    state.PoolCounter = 0;
 
     // Update timeouts and delete objects that timed out
-    for (auto i = Pool.Begin(); i.IsNotEnd(); ++i)
+    for (auto i = state.Pool.Begin(); i.IsNotEnd(); ++i)
     {
         auto& bucket = *i;
         Object* obj = bucket.Key;
-        const float ttl = bucket.Value - ((obj->Flags & ObjectFlags::UseGameTimeForDelete) != ObjectFlags::None ? gameDelta : dt);
+        const uint32 epoch = bucket.Value.Epoch;
+        if (!IsPooledObjectCurrent(obj, epoch))
+        {
+            state.Pool.Remove(i);
+            continue;
+        }
+        const float ttl = bucket.Value.TimeToLive - ((obj->Flags & ObjectFlags::UseGameTimeForDelete) != ObjectFlags::None ? gameDelta : dt);
         if (ttl <= 0.0f)
         {
-            Pool.Remove(i);
+            state.Pool.Remove(i);
             DeleteObjectInternal(obj);
         }
         else
         {
-            bucket.Value = ttl;
+            bucket.Value.TimeToLive = ttl;
         }
     }
 
     // If any object was added to the pool while removing objects (by this thread) then retry removing any nested objects (but without delta time)
-    if (PoolCounter != 0)
+    if (state.PoolCounter != 0)
     {
     RETRY:
-        PoolCounter = 0;
-        for (auto i = Pool.Begin(); i.IsNotEnd(); ++i)
+        state.PoolCounter = 0;
+        for (auto i = state.Pool.Begin(); i.IsNotEnd(); ++i)
         {
-            if (i->Value <= 0.0f)
+            Object* obj = i->Key;
+            const uint32 epoch = i->Value.Epoch;
+            if (!IsPooledObjectCurrent(obj, epoch))
             {
-                Object* obj = i->Key;
-                Pool.Remove(i);
+                state.Pool.Remove(i);
+                continue;
+            }
+            if (i->Value.TimeToLive <= 0.0f)
+            {
+                state.Pool.Remove(i);
                 DeleteObjectInternal(obj);
             }
         }
-        if (PoolCounter != 0)
+        if (state.PoolCounter != 0)
             goto RETRY;
     }
 
-    PoolLocker.Unlock();
+    state.PoolLocker.Unlock();
+}
+
+void ObjectsRemovalService::ForceFlush()
+{
+    PROFILE_CPU();
+
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    do
+    {
+        state.PoolCounter = 0;
+        for (auto i = state.Pool.Begin(); i.IsNotEnd(); ++i)
+        {
+            Object* obj = i->Key;
+            const uint32 epoch = i->Value.Epoch;
+            state.Pool.Remove(i);
+            if (IsPooledObjectCurrent(obj, epoch))
+                DeleteObjectInternal(obj);
+        }
+    } while (state.PoolCounter != 0);
+    state.Pool.Clear();
+    state.PoolLocker.Unlock();
 }
 
 bool ObjectsRemoval::Init()
 {
-    Pool.EnsureCapacity(8192);
-    LastUpdate = Platform::GetTimeSeconds();
-    LastUpdateGameTime = 0;
+    auto& state = GetRemovalState();
+    state.Pool.EnsureCapacity(8192);
+    state.Live.EnsureCapacity(8192);
+    state.LastUpdate = Platform::GetTimeSeconds();
     return false;
 }
 
@@ -140,14 +232,16 @@ void ObjectsRemoval::LateUpdate()
 {
     PROFILE_CPU();
 
+    auto& state = GetRemovalState();
+
     // Delete all objects
     const double now = Platform::GetTimeSeconds();
-    const float dt = (float)(now - LastUpdate);
+    const float dt = (float)(now - state.LastUpdate);
     float gameDelta = Time::Update.DeltaTime.GetTotalSeconds();
     if (Time::GetGamePaused())
         gameDelta = 0;
     ObjectsRemovalService::Flush(dt, gameDelta);
-    LastUpdate = now;
+    state.LastUpdate = now;
 }
 
 void ObjectsRemoval::Dispose()
@@ -155,26 +249,43 @@ void ObjectsRemoval::Dispose()
     // Collect new objects
     ObjectsRemovalService::Flush();
 
-    // Delete all remaining objects
+    // Delete all remaining live objects and drop stale keys
     {
-        PoolLocker.Lock();
-        for (auto i = Pool.Begin(); i.IsNotEnd(); ++i)
+        auto& state = GetRemovalState();
+        state.PoolLocker.Lock();
+        for (auto i = state.Pool.Begin(); i.IsNotEnd(); ++i)
         {
             Object* obj = i->Key;
-            Pool.Remove(i);
-            DeleteObjectInternal(obj);
+            const uint32 epoch = i->Value.Epoch;
+            state.Pool.Remove(i);
+            if (IsPooledObjectCurrent(obj, epoch))
+                DeleteObjectInternal(obj);
         }
-        Pool.Clear();
-        PoolLocker.Unlock();
+        state.Pool.Clear();
+        state.PoolLocker.Unlock();
     }
+}
+
+Object::Object()
+{
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    uint32 epoch = state.NextEpoch++;
+    if (epoch == 0)
+        epoch = state.NextEpoch++;
+    state.Live[this] = epoch;
+    state.PoolLocker.Unlock();
 }
 
 Object::~Object()
 {
-#if BUILD_DEBUG && 0
-    // Prevent removing object that is still reverenced by the removal service
-    //ASSERT(!ObjectsRemovalService::IsInPool(this));
-#endif
+    if (!RemovalState::Instance)
+        return;
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    state.Live.Remove(this);
+    state.Pool.Remove(this);
+    state.PoolLocker.Unlock();
 }
 
 void Object::DeleteObjectNow()

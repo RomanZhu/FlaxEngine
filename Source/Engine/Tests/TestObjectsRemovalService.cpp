@@ -19,6 +19,7 @@ namespace
         int32& DestructorCalls;
         ReentryMode Mode;
         TestRemovalObject* Nested = nullptr;
+        float NestedTimeToLive = 0.0f;
 
         TestRemovalObject(int32& deleteCalls, int32& destructorCalls, ReentryMode mode = ReentryMode::None)
             : DeleteCalls(deleteCalls)
@@ -42,7 +43,7 @@ namespace
             DeleteCalls++;
             if (Nested)
             {
-                Nested->DeleteObject();
+                Nested->DeleteObject(NestedTimeToLive);
                 Nested = nullptr;
             }
             if (Mode == ReentryMode::Deferred)
@@ -141,6 +142,79 @@ TEST_CASE("ObjectsRemovalService")
         ObjectsRemovalService::ForceFlush();
 
         CHECK(deleteCalls == 2);
+        CHECK(destructorCalls == 2);
+    }
+
+    SECTION("ForceFlush destroys nested delayed TTL objects in one call")
+    {
+        int32 deleteCalls = 0;
+        int32 destructorCalls = 0;
+        auto* nested = New<TestRemovalObject>(deleteCalls, destructorCalls);
+        auto* object = New<TestRemovalObject>(deleteCalls, destructorCalls);
+        object->Nested = nested;
+        object->NestedTimeToLive = 30.0f;
+
+        object->DeleteObject();
+        ObjectsRemovalService::ForceFlush();
+
+        CHECK(deleteCalls == 2);
+        CHECK(destructorCalls == 2);
+    }
+
+    SECTION("Flush ignores destroyed objects still referenced by the pool")
+    {
+        int32 deleteCalls = 0;
+        int32 destructorCalls = 0;
+        auto* object = New<TestRemovalObject>(deleteCalls, destructorCalls);
+
+        object->DeleteObject(1.0f);
+        Delete(object);
+
+        CHECK(deleteCalls == 0);
+        CHECK(destructorCalls == 1);
+
+        ObjectsRemovalService::Flush();
+        ObjectsRemovalService::ForceFlush();
+
+        CHECK(deleteCalls == 0);
+        CHECK(destructorCalls == 1);
+    }
+
+    SECTION("Add after destroy does not resurrect a dangling pointer")
+    {
+        int32 deleteCalls = 0;
+        int32 destructorCalls = 0;
+        auto* object = New<TestRemovalObject>(deleteCalls, destructorCalls);
+        Object* stale = object;
+
+        Delete(object);
+
+        CHECK(destructorCalls == 1);
+
+        ObjectsRemovalService::Add(stale, 0.0f);
+        ObjectsRemovalService::Flush();
+
+        CHECK(deleteCalls == 0);
+        CHECK(destructorCalls == 1);
+    }
+
+    SECTION("Flush does not delete a reused pointer from a stale pool entry")
+    {
+        int32 deleteCalls = 0;
+        int32 destructorCalls = 0;
+        auto* first = New<TestRemovalObject>(deleteCalls, destructorCalls);
+        first->DeleteObject(1.0f);
+        Delete(first);
+
+        auto* second = New<TestRemovalObject>(deleteCalls, destructorCalls);
+        ObjectsRemovalService::ForceFlush();
+
+        CHECK(deleteCalls == 0);
+        CHECK(destructorCalls == 1);
+
+        second->DeleteObjectNow();
+
+        CHECK(deleteCalls == 1);
         CHECK(destructorCalls == 2);
     }
 }

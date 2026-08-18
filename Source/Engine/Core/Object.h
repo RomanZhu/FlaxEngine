@@ -35,6 +35,8 @@ public:
 
 public:
 
+    Object();
+
     /// <summary>
     /// Finalizes an instance of the <see cref="Object"/> class.
     /// </summary>

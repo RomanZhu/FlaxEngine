@@ -47,10 +47,8 @@ public:
     static void Flush(float dt, float gameDelta);
 
     /// <summary>
-    /// Forces the flush the all objects from the pool.
+    /// Destroys every live pooled object regardless of remaining TTL and drops stale keys.
+    /// Nested delayed deletes queued during destruction are also drained.
     /// </summary>
-    FORCE_INLINE static void ForceFlush()
-    {
-        Flush(1000, 1000);
-    }
+    static void ForceFlush();
 };
