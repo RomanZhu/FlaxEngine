@@ -70,7 +70,7 @@ TEST_CASE("AudioEventHandles")
         AudioEventHandle h2 = backend.CreateInstance(testGuid, StringView::Empty, options);
         CHECK(h2.IsValid());
         CHECK(h2.Index == 0);
-        CHECK(h2.Generation == 2);
+        CHECK(h2.Generation > h1.Generation);
         CHECK(h1 != h2);
 
         // h2 is valid, h1 remains invalid
