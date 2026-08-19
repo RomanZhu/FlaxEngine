@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.Linq;
 using FlaxEditor.Content;
 using FlaxEditor.GUI.ContextMenu;
+using FlaxEditor.Tools;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEngine;
@@ -356,6 +357,10 @@ namespace FlaxEditor.SceneGraph.Actors
             b.TooltipText = "Generate and add a convex collider for every selected model.";
             b = menu.ContextMenu.AddButton("Triangle Mesh", () => OnAddCollider(window, CreateTriangle));
             b.TooltipText = "Generate and add a triangle mesh collider for every selected model.";
+
+            var bakeBtn = contextMenu.AddButton("Bake Scale to New Model", () => OnBakeScale(window));
+            bakeBtn.TooltipText = "Bakes the actor's scale directly into the mesh geometry, saves a new Model asset in Content/SceneData/<Scene>/Models/Bakes/, generates a fresh 1:1 SDF, and resets the actor scale to 1.";
+            bakeBtn.Enabled = ((StaticModel)Actor).Model != null;
         }
 
         /// <inheritdoc />
@@ -607,6 +612,25 @@ namespace FlaxEditor.SceneGraph.Actors
             else if (window is PrefabWindow prefabWindow)
             {
                 prefabWindow.Select(createdNodes);
+            }
+        }
+
+        private void OnBakeScale(EditorWindow window)
+        {
+            var selection = GetSelection(window).ToArray();
+            if (selection.Length == 0)
+            {
+                if (Actor is StaticModel staticModel)
+                    ModelTransformBaker.BakeScale(staticModel);
+                return;
+            }
+
+            foreach (var node in selection)
+            {
+                if (node is StaticModelNode staticModelNode && staticModelNode.Actor is StaticModel staticModel)
+                {
+                    ModelTransformBaker.BakeScale(staticModel);
+                }
             }
         }
     }
