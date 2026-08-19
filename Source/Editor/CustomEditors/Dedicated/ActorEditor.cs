@@ -6,6 +6,7 @@ using FlaxEditor.CustomEditors.Elements;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Tree;
+using FlaxEditor.SceneGraph;
 using FlaxEditor.Scripting;
 using FlaxEditor.Windows.Assets;
 using FlaxEngine;

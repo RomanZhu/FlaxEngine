@@ -121,14 +121,14 @@ namespace
     constexpr const char* EngineBuildKey = "EngineBuild";
     constexpr const char* ParentIDKey = "ParentID";
     constexpr const char* OrderInParentKey = "OrderInParent";
-    constexpr int64 ExternalOrderStep = 1024;
+    constexpr const char* SiblingOrderKeyKey = "SiblingOrderKey";
 
     struct ExternalActorFileInfo
     {
         String File;
         Guid ActorId = Guid::Empty;
         Guid ParentId = Guid::Empty;
-        int64 OrderInParent = 0;
+        ExternalSiblingOrderKey SiblingOrderKey;
         bool IsValid = false;
     };
 
@@ -151,14 +151,21 @@ namespace
         return 0;
     }
 
-    int64 GetSerializedOrderInParent(const rapidjson_flax::Value& value)
+    ExternalSiblingOrderKey GetSerializedSiblingOrderKey(const rapidjson_flax::Value& value)
     {
-        const auto member = value.FindMember(OrderInParentKey);
-        if (member == value.MemberEnd() || !member->value.IsNumber())
-            return 0;
-        if (member->value.IsInt64())
-            return member->value.GetInt64();
-        return member->value.GetInt();
+        ExternalSiblingOrderKey result;
+        const auto keyMember = value.FindMember(SiblingOrderKeyKey);
+        if (keyMember != value.MemberEnd() && keyMember->value.IsString() &&
+            ExternalSiblingOrderKey::TryParse(keyMember->value.GetText(), result))
+        {
+            return result;
+        }
+
+        const auto legacyMember = value.FindMember(OrderInParentKey);
+        const int64 legacyOrder = legacyMember != value.MemberEnd() && legacyMember->value.IsInt64()
+                                      ? legacyMember->value.GetInt64()
+                                      : 0;
+        return ExternalSiblingOrderKey::FromLegacy(legacyOrder);
     }
 
     bool SortExternalActorFileInfo(const ExternalActorFileInfo& a, const ExternalActorFileInfo& b)
@@ -166,8 +173,9 @@ namespace
         const int32 parentCompare = CompareGuids(a.ParentId, b.ParentId);
         if (parentCompare != 0)
             return parentCompare < 0;
-        if (a.OrderInParent != b.OrderInParent)
-            return a.OrderInParent < b.OrderInParent;
+        const int32 orderCompare = a.SiblingOrderKey.Compare(b.SiblingOrderKey);
+        if (orderCompare != 0)
+            return orderCompare < 0;
         return CompareGuids(a.ActorId, b.ActorId) < 0;
     }
 
@@ -222,6 +230,61 @@ namespace
         return false;
     }
 
+    bool AreExternalActorDoublesEqual(double a, double b)
+    {
+        if (a == b)
+            return true;
+
+        uint64 aBits;
+        uint64 bBits;
+        Platform::MemoryCopy(&aBits, &a, sizeof(aBits));
+        Platform::MemoryCopy(&bBits, &b, sizeof(bBits));
+        constexpr uint64 signBit = (uint64)1 << 63;
+        aBits = (aBits & signBit) != 0 ? ~aBits + 1 : aBits | signBit;
+        bBits = (bBits & signBit) != 0 ? ~bBits + 1 : bBits | signBit;
+        return aBits > bBits ? aBits - bBits == 1 : bBits - aBits == 1;
+    }
+
+    bool HasSameExternalActorValue(const rapidjson_flax::Value& existingValue, const rapidjson_flax::Value& newValue)
+    {
+        if (existingValue == newValue)
+            return true;
+        if (existingValue.GetType() != newValue.GetType())
+            return false;
+        if (existingValue.IsNumber())
+        {
+            return existingValue.IsDouble() && newValue.IsDouble() &&
+                   AreExternalActorDoublesEqual(existingValue.GetDouble(), newValue.GetDouble());
+        }
+        if (existingValue.IsArray())
+        {
+            if (existingValue.Size() != newValue.Size())
+                return false;
+            for (rapidjson::SizeType i = 0; i < existingValue.Size(); i++)
+            {
+                if (!HasSameExternalActorValue(existingValue[i], newValue[i]))
+                    return false;
+            }
+            return true;
+        }
+        if (existingValue.IsObject())
+        {
+            if (existingValue.MemberCount() != newValue.MemberCount())
+                return false;
+            for (auto existingMember = existingValue.MemberBegin(); existingMember != existingValue.MemberEnd(); ++existingMember)
+            {
+                const auto newMember = newValue.FindMember(existingMember->name);
+                if (newMember == newValue.MemberEnd() ||
+                    !HasSameExternalActorValue(existingMember->value, newMember->value))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
     bool HasSameExternalActorData(const BytesContainer& existingData, const void* data, int32 length)
     {
         rapidjson_flax::Document existingDocument;
@@ -233,7 +296,7 @@ namespace
         {
             return false;
         }
-        return *existingActorData == *newActorData;
+        return HasSameExternalActorValue(*existingActorData, *newActorData);
     }
 
     bool WriteExternalActorBytesIfChanged(const StringView& path, const void* data, int32 length)
@@ -252,41 +315,89 @@ namespace
         return File::WriteAllBytes(path, data, length);
     }
 
-    void EnsureExternalOrderInParent(const Array<SceneObject*>& objects)
+    void EnsureExternalSiblingOrderKeys(const Array<SceneObject*>& objects)
     {
-        int64 previousOrder = 0;
+        if (objects.IsEmpty())
+            return;
+
+        Array<int32> predecessors;
+        predecessors.Resize(objects.Count());
+        predecessors.SetAll(-1);
+        Array<int32> tails(objects.Count());
+
+        // Keep the largest subset whose existing keys already encode the current order.
         for (int32 i = 0; i < objects.Count(); i++)
         {
             SceneObject* object = objects[i];
-            int64 order = object->GetExternalOrderInParent();
-            if (order <= previousOrder)
+            if (!object->HasExternalSiblingOrderKeyForCurrentParent())
+                continue;
+
+            int32 left = 0;
+            int32 right = tails.Count();
+            while (left < right)
             {
-                int64 nextOrder = 0;
-                for (int32 j = i + 1; j < objects.Count(); j++)
-                {
-                    nextOrder = objects[j]->GetExternalOrderInParent();
-                    if (nextOrder > previousOrder + 1)
-                        break;
-                    nextOrder = 0;
-                }
-                order = nextOrder > previousOrder + 1 ? (previousOrder + nextOrder) / 2 : previousOrder + ExternalOrderStep;
-                object->SetExternalOrderInParent(order);
+                const int32 middle = left + (right - left) / 2;
+                const SceneObject* tail = objects[tails[middle]];
+                if (tail->GetExternalSiblingOrderKey().Compare(object->GetExternalSiblingOrderKey()) < 0)
+                    left = middle + 1;
+                else
+                    right = middle;
             }
-            previousOrder = order;
+            if (left > 0)
+                predecessors[i] = tails[left - 1];
+            if (left == tails.Count())
+                tails.Add(i);
+            else
+                tails[left] = i;
+        }
+
+        Array<byte> keepExisting;
+        keepExisting.Resize(objects.Count());
+        keepExisting.SetAll(0);
+        if (tails.HasItems())
+        {
+            for (int32 i = tails.Last(); i != -1; i = predecessors[i])
+                keepExisting[i] = 1;
+        }
+
+        const ExternalSiblingOrderKey* previousKey = nullptr;
+        int32 index = 0;
+        while (index < objects.Count())
+        {
+            if (keepExisting[index])
+            {
+                previousKey = &objects[index]->GetExternalSiblingOrderKey();
+                index++;
+                continue;
+            }
+
+            int32 blockEnd = index + 1;
+            while (blockEnd < objects.Count() && !keepExisting[blockEnd])
+                blockEnd++;
+            const ExternalSiblingOrderKey* nextKey = blockEnd < objects.Count()
+                                                               ? &objects[blockEnd]->GetExternalSiblingOrderKey()
+                                                               : nullptr;
+            for (; index < blockEnd; index++)
+            {
+                SceneObject* object = objects[index];
+                const ExternalSiblingOrderKey key = ExternalSiblingOrderKey::CreateBetween(previousKey, nextKey, object->GetSceneObjectId());
+                object->SetExternalSiblingOrderKey(key);
+                previousKey = &object->GetExternalSiblingOrderKey();
+            }
         }
     }
 
-    void EnsureExternalOrderInParent(Scene* scene)
+    void EnsureExternalSiblingOrderKeys(Scene* scene)
     {
         Array<SceneObject*> rootScripts(scene->Scripts.Count());
         for (Script* script : scene->Scripts)
             rootScripts.Add(script);
-        EnsureExternalOrderInParent(rootScripts);
+        EnsureExternalSiblingOrderKeys(rootScripts);
 
         Array<SceneObject*> rootChildren(scene->Children.Count());
         for (Actor* child : scene->Children)
             rootChildren.Add(child);
-        EnsureExternalOrderInParent(rootChildren);
+        EnsureExternalSiblingOrderKeys(rootChildren);
 
         Array<Actor*> actors;
         SceneQuery::GetAllActors(scene, actors);
@@ -295,12 +406,12 @@ namespace
             Array<SceneObject*> scripts(actor->Scripts.Count());
             for (Script* script : actor->Scripts)
                 scripts.Add(script);
-            EnsureExternalOrderInParent(scripts);
+            EnsureExternalSiblingOrderKeys(scripts);
 
             Array<SceneObject*> children(actor->Children.Count());
             for (Actor* child : actor->Children)
                 children.Add(child);
-            EnsureExternalOrderInParent(children);
+            EnsureExternalSiblingOrderKeys(children);
         }
     }
 
@@ -338,8 +449,16 @@ namespace
 
         if (includeOrderInParent && obj->HasParent())
         {
-            writer.JKEY("OrderInParent");
-            writer.Int64(obj->GetExternalOrderInParent());
+            if (obj->HasExternalLegacyOrderInParent())
+            {
+                writer.JKEY("OrderInParent");
+                writer.Int64(obj->GetExternalOrderInParent());
+            }
+            else
+            {
+                writer.JKEY("SiblingOrderKey");
+                writer.String(obj->GetExternalSiblingOrderKey().ToString());
+            }
         }
 
         writer.EndObject();
@@ -443,7 +562,7 @@ namespace
         info.File = actorFile;
         info.ActorId = JsonTools::GetGuid((*actorData)[0], IDKey);
         info.ParentId = JsonTools::GetGuid((*actorData)[0], ParentIDKey);
-        info.OrderInParent = GetSerializedOrderInParent((*actorData)[0]);
+        info.SiblingOrderKey = GetSerializedSiblingOrderKey((*actorData)[0]);
         return false;
     }
 
@@ -2076,10 +2195,11 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
     CallSceneEvent(SceneEventType::OnSceneSaving, scene, sceneId);
 
 #if USE_EDITOR
+    if (scene->UseExternalActors)
+        EnsureExternalSiblingOrderKeys(scene);
+
     if (useExternalActorsStorage && scene->UseExternalActors)
     {
-        EnsureExternalOrderInParent(scene);
-
         const String actorsFolder = GetExternalActorsFolder(scene->GetPath());
         if (FileSystem::CreateDirectory(actorsFolder))
             return true;
@@ -2474,6 +2594,50 @@ bool Level::ConvertSceneToInternalActors(Scene* scene)
         }
     }
 
+    return false;
+}
+
+bool Level::ApplyExternalActorsSiblingKeys(Scene* scene)
+{
+    if (!scene)
+    {
+        Log::ArgumentNullException();
+        return true;
+    }
+    if (Editor::IsPlayMode)
+    {
+        LOG(Error, "Cannot apply sibling keys while in play mode.");
+        return true;
+    }
+    if (!scene->UseExternalActors)
+    {
+        LOG(Error, "Sibling keys can only be applied to an external actors scene.");
+        return true;
+    }
+
+    const String path = scene->GetPath();
+    if (path.IsEmpty() || !FileSystem::FileExists(path))
+    {
+        LOG(Error, "Missing scene path.");
+        return true;
+    }
+
+    EnsureExternalSiblingOrderKeys(scene);
+    Array<SceneObject*> objects;
+    SceneQuery::GetAllSerializableSceneObjects(scene, objects);
+    int32 migratedObjects = 0;
+    for (SceneObject* object : objects)
+    {
+        if (object->HasParent() && object->HasExternalLegacyOrderInParent())
+        {
+            object->SetExternalSiblingOrderKey(object->GetExternalSiblingOrderKey());
+            migratedObjects++;
+        }
+    }
+    if (saveScene(scene))
+        return true;
+
+    LOG(Info, "Applied sibling keys to {0} scene objects in '{1}'.", migratedObjects, scene->GetName());
     return false;
 }
 

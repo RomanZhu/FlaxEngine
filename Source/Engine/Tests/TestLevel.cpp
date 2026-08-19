@@ -390,7 +390,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(rootChildIds[1] == parentId);
     }
 
-    SECTION("Reorder rebalances exhausted external order gaps")
+    SECTION("Reorder changes only the moved external actor key")
     {
         const Guid sceneId = ParseGuid("12111111111111111111111111111111");
         const Guid parentId = ParseGuid("12111111111111111111111111111112");
@@ -402,7 +402,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         const Guid scriptBId = ParseGuid("12111111111111111111111111111118");
         const Guid scriptCId = ParseGuid("12111111111111111111111111111119");
         const Guid scriptDId = ParseGuid("1211111111111111111111111111111a");
-        const String scenePath = GetTestScenePath(TEXT("OrderRebalance"));
+        const String scenePath = GetTestScenePath(TEXT("SiblingOrderKey"));
         CleanupTestSceneFiles(scenePath);
         SCOPE_EXIT
         {
@@ -435,15 +435,6 @@ TEST_CASE("ExternalActorsSceneStorage")
             children[i]->SetExternalOrderInParent(1024 + i);
         }
 
-        children[3]->SetOrderInParent(1);
-        Actor* expectedChildren[] = { children[0], children[3], children[1], children[2] };
-        REQUIRE(parent->Children.Count() == ARRAY_COUNT(expectedChildren));
-        for (int32 i = 0; i < ARRAY_COUNT(expectedChildren); i++)
-        {
-            CHECK(parent->Children[i] == expectedChildren[i]);
-            CHECK(parent->Children[i]->GetExternalOrderInParent() == static_cast<int64>(i + 1) * 1024);
-        }
-
         ModelPrefab* scripts[] =
         {
             ModelPrefab::Spawn(ScriptingObject::SpawnParams(scriptAId, ModelPrefab::TypeInitializer)),
@@ -457,40 +448,153 @@ TEST_CASE("ExternalActorsSceneStorage")
             scripts[i]->SetParent(parent);
             scripts[i]->SetExternalOrderInParent(1024 + i);
         }
+
+        REQUIRE(!Level::SaveScene(scene));
+        BytesContainer originalChildFiles[ARRAY_COUNT(children)];
+        for (int32 i = 0; i < ARRAY_COUNT(children); i++)
+            ReadFileBytes(GetExternalActorPath(scenePath, children[i]->GetID()), originalChildFiles[i]);
+
+        children[3]->SetOrderInParent(1);
         scripts[3]->SetOrderInParent(1);
+
+        Actor* expectedChildren[] = { children[0], children[3], children[1], children[2] };
+        REQUIRE(parent->Children.Count() == ARRAY_COUNT(expectedChildren));
+        for (int32 i = 0; i < ARRAY_COUNT(expectedChildren); i++)
+            CHECK(parent->Children[i] == expectedChildren[i]);
         Script* expectedScripts[] = { scripts[0], scripts[3], scripts[1], scripts[2] };
         REQUIRE(parent->Scripts.Count() == ARRAY_COUNT(expectedScripts));
         for (int32 i = 0; i < ARRAY_COUNT(expectedScripts); i++)
-        {
             CHECK(parent->Scripts[i] == expectedScripts[i]);
-            CHECK(parent->Scripts[i]->GetExternalOrderInParent() == static_cast<int64>(i + 1) * 1024);
-        }
 
         REQUIRE(!Level::SaveScene(scene));
-        for (int32 i = 0; i < ARRAY_COUNT(expectedChildren); i++)
+        for (int32 i = 0; i < ARRAY_COUNT(children); i++)
         {
+            BytesContainer currentFile;
+            ReadFileBytes(GetExternalActorPath(scenePath, children[i]->GetID()), currentFile);
+            CHECK(AreBytesEqual(originalChildFiles[i], currentFile) == (i != 3));
+
             rapidjson_flax::Document actorDocument;
-            ParseJsonFile(actorDocument, GetExternalActorPath(scenePath, expectedChildren[i]->GetID()));
+            ParseJsonFile(actorDocument, GetExternalActorPath(scenePath, children[i]->GetID()));
             const rapidjson_flax::Value& actorData = GetDataArray(actorDocument);
             REQUIRE(actorData.Size() >= 1);
-            CHECK(actorData[0]["OrderInParent"].GetInt64() == static_cast<int64>(i + 1) * 1024);
+            if (i == 3)
+            {
+                CHECK(actorData[0].HasMember("SiblingOrderKey"));
+                CHECK(!actorData[0].HasMember("OrderInParent"));
+            }
+            else
+            {
+                CHECK(actorData[0]["OrderInParent"].GetInt64() == 1024 + i);
+                CHECK(!actorData[0].HasMember("SiblingOrderKey"));
+            }
         }
+
         rapidjson_flax::Document parentDocument;
         ParseJsonFile(parentDocument, GetExternalActorPath(scenePath, parentId));
         const rapidjson_flax::Value& parentData = GetDataArray(parentDocument);
-        for (int32 i = 0; i < ARRAY_COUNT(expectedScripts); i++)
+        for (int32 i = 0; i < ARRAY_COUNT(scripts); i++)
         {
             const rapidjson_flax::Value* scriptData = nullptr;
             for (rapidjson::SizeType j = 1; j < parentData.Size(); j++)
             {
-                if (JsonTools::GetGuid(parentData[j], "ID") == expectedScripts[i]->GetID())
+                if (JsonTools::GetGuid(parentData[j], "ID") == scripts[i]->GetID())
                 {
                     scriptData = &parentData[j];
                     break;
                 }
             }
             REQUIRE(scriptData);
-            CHECK((*scriptData)["OrderInParent"].GetInt64() == static_cast<int64>(i + 1) * 1024);
+            if (i == 3)
+            {
+                CHECK(scriptData->HasMember("SiblingOrderKey"));
+                CHECK(!scriptData->HasMember("OrderInParent"));
+            }
+            else
+            {
+                CHECK((*scriptData)["OrderInParent"].GetInt64() == 1024 + i);
+                CHECK(!scriptData->HasMember("SiblingOrderKey"));
+            }
+        }
+
+        REQUIRE(!Level::ApplyExternalActorsSiblingKeys(scene));
+        for (EmptyActor* child : children)
+        {
+            rapidjson_flax::Document actorDocument;
+            ParseJsonFile(actorDocument, GetExternalActorPath(scenePath, child->GetID()));
+            const rapidjson_flax::Value& actorData = GetDataArray(actorDocument);
+            REQUIRE(actorData.Size() >= 1);
+            CHECK(actorData[0].HasMember("SiblingOrderKey"));
+            CHECK(!actorData[0].HasMember("OrderInParent"));
+        }
+
+        rapidjson_flax::Document migratedParentDocument;
+        ParseJsonFile(migratedParentDocument, GetExternalActorPath(scenePath, parentId));
+        const rapidjson_flax::Value& migratedParentData = GetDataArray(migratedParentDocument);
+        for (rapidjson::SizeType i = 0; i < migratedParentData.Size(); i++)
+        {
+            if (migratedParentData[i].HasMember("ParentID"))
+            {
+                CHECK(migratedParentData[i].HasMember("SiblingOrderKey"));
+                CHECK(!migratedParentData[i].HasMember("OrderInParent"));
+            }
+        }
+    }
+
+    SECTION("Temporary prefab-style rotations preserve sibling keys")
+    {
+        const Guid sceneId = ParseGuid("13111111111111111111111111111111");
+        const Guid parentId = ParseGuid("13111111111111111111111111111112");
+        const Guid childIds[] =
+        {
+            ParseGuid("13111111111111111111111111111113"),
+            ParseGuid("13111111111111111111111111111114"),
+            ParseGuid("13111111111111111111111111111115"),
+        };
+        const String scenePath = GetTestScenePath(TEXT("TemporarySiblingRotation"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            scene->DeleteObject();
+        };
+        scene->UseExternalActors = true;
+
+        EmptyActor* parent = EmptyActor::Spawn(ScriptingObject::SpawnParams(parentId, EmptyActor::TypeInitializer));
+        REQUIRE(parent);
+        parent->SetParent(scene);
+        EmptyActor* children[ARRAY_COUNT(childIds)];
+        for (int32 i = 0; i < ARRAY_COUNT(children); i++)
+        {
+            children[i] = EmptyActor::Spawn(ScriptingObject::SpawnParams(childIds[i], EmptyActor::TypeInitializer));
+            REQUIRE(children[i]);
+            children[i]->SetParent(parent);
+            children[i]->SetExternalOrderInParent(1024 + i * 1024);
+        }
+
+        REQUIRE(!Level::SaveScene(scene));
+        BytesContainer originalFiles[ARRAY_COUNT(children)];
+        for (int32 i = 0; i < ARRAY_COUNT(children); i++)
+            ReadFileBytes(GetExternalActorPath(scenePath, children[i]->GetID()), originalFiles[i]);
+
+        // Prefab synchronization uses source indices that can include removed children.
+        for (int32 i = 0; i < ARRAY_COUNT(children); i++)
+            children[i]->SetOrderInParent(10 + i);
+        for (int32 i = 0; i < ARRAY_COUNT(children); i++)
+            CHECK(parent->Children[i] == children[i]);
+
+        REQUIRE(!Level::SaveScene(scene));
+        for (int32 i = 0; i < ARRAY_COUNT(children); i++)
+        {
+            BytesContainer currentFile;
+            ReadFileBytes(GetExternalActorPath(scenePath, children[i]->GetID()), currentFile);
+            CHECK(AreBytesEqual(originalFiles[i], currentFile));
         }
     }
 
@@ -662,6 +766,67 @@ TEST_CASE("ExternalActorsSceneStorage")
         ReadFileBytes(actorPath, afterSave);
 
         CHECK(AreBytesEqual(beforeSave, afterSave));
+    }
+
+    SECTION("Save ignores one ULP external actor drift")
+    {
+        const Guid sceneId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1");
+        const Guid actorId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2");
+        const String scenePath = GetTestScenePath(TEXT("UlpSave"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            scene->DeleteObject();
+        };
+        scene->UseExternalActors = true;
+
+        EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
+        REQUIRE(actor);
+        actor->SetParent(scene);
+        actor->SetLocalPosition(Vector3(1.0, 2.0, 3.0));
+
+        REQUIRE(!Level::SaveScene(scene));
+        const String actorPath = GetExternalActorPath(scenePath, actorId);
+        rapidjson_flax::Document actorDocument;
+        ParseJsonFile(actorDocument, actorPath);
+        auto& actorData = actorDocument["Data"][0];
+        REQUIRE(actorData.HasMember("Transform"));
+        auto& translationX = actorData["Transform"]["Translation"]["X"];
+        REQUIRE(translationX.IsDouble());
+        translationX.SetDouble(1.0000000000000002);
+
+        rapidjson_flax::StringBuffer oneUlpBuffer;
+        PrettyJsonWriter oneUlpWriter(oneUlpBuffer);
+        actorDocument.Accept(oneUlpWriter.GetWriter());
+        REQUIRE(!File::WriteAllBytes(actorPath, oneUlpBuffer.GetString(), static_cast<int32>(oneUlpBuffer.GetSize())));
+
+        BytesContainer oneUlpBeforeSave;
+        BytesContainer oneUlpAfterSave;
+        ReadFileBytes(actorPath, oneUlpBeforeSave);
+        REQUIRE(!Level::SaveScene(scene));
+        ReadFileBytes(actorPath, oneUlpAfterSave);
+        CHECK(AreBytesEqual(oneUlpBeforeSave, oneUlpAfterSave));
+
+        translationX.SetDouble(1.0000000000000004);
+        rapidjson_flax::StringBuffer twoUlpBuffer;
+        PrettyJsonWriter twoUlpWriter(twoUlpBuffer);
+        actorDocument.Accept(twoUlpWriter.GetWriter());
+        REQUIRE(!File::WriteAllBytes(actorPath, twoUlpBuffer.GetString(), static_cast<int32>(twoUlpBuffer.GetSize())));
+
+        BytesContainer twoUlpBeforeSave;
+        BytesContainer twoUlpAfterSave;
+        ReadFileBytes(actorPath, twoUlpBeforeSave);
+        REQUIRE(!Level::SaveScene(scene));
+        ReadFileBytes(actorPath, twoUlpAfterSave);
+        CHECK(!AreBytesEqual(twoUlpBeforeSave, twoUlpAfterSave));
     }
 
     SECTION("Convert external actors scene to internal actors")

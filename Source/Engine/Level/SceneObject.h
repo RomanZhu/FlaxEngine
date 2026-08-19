@@ -51,6 +51,30 @@ typedef Dictionary<Guid, Actor*, HeapAllocation> ActorsLookup;
 #define DECLARE_SCENE_OBJECT_NO_SPAWN(type) \
     DECLARE_SCRIPTING_TYPE_NO_SPAWN(type)
 
+#if USE_EDITOR
+
+/// <summary>
+/// Dense persistent sibling position used by external actor storage.
+/// </summary>
+struct FLAXENGINE_API ExternalSiblingOrderKey
+{
+    Array<uint16, InlinedAllocation<4>> Digits;
+
+    FORCE_INLINE bool IsValid() const
+    {
+        return Digits.HasItems();
+    }
+
+    int32 Compare(const ExternalSiblingOrderKey& other) const;
+    String ToString() const;
+
+    static bool TryParse(const StringView& text, ExternalSiblingOrderKey& result);
+    static ExternalSiblingOrderKey FromLegacy(int64 value);
+    static ExternalSiblingOrderKey CreateBetween(const ExternalSiblingOrderKey* previous, const ExternalSiblingOrderKey* next, const Guid& objectId);
+};
+
+#endif
+
 /// <summary>
 /// Base class for objects that are parts of the scene (actors and scripts).
 /// </summary>
@@ -81,10 +105,12 @@ protected:
     Actor* _parent;
     Guid _prefabID;
     Guid _prefabObjectID;
-    int64 _externalOrderInParent;
 
 #if USE_EDITOR
-    static bool TryAssignExternalOrderInParent(SceneObject* object, const SceneObject* previous, const SceneObject* next);
+    ExternalSiblingOrderKey _externalSiblingOrderKey;
+    Guid _externalSiblingOrderParentId;
+    int64 _externalLegacyOrderInParent;
+    bool _hasExternalLegacyOrderInParent;
 #endif
 
     /// <summary>
@@ -143,15 +169,12 @@ public:
 
 #if USE_EDITOR
 
-    FORCE_INLINE int64 GetExternalOrderInParent() const
-    {
-        return _externalOrderInParent;
-    }
-
-    FORCE_INLINE void SetExternalOrderInParent(int64 value)
-    {
-        _externalOrderInParent = value;
-    }
+    const ExternalSiblingOrderKey& GetExternalSiblingOrderKey() const;
+    bool HasExternalSiblingOrderKeyForCurrentParent() const;
+    bool HasExternalLegacyOrderInParent() const;
+    int64 GetExternalOrderInParent() const;
+    void SetExternalOrderInParent(int64 value);
+    void SetExternalSiblingOrderKey(const ExternalSiblingOrderKey& value);
 
 #endif
 

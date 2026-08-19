@@ -356,6 +356,13 @@ public:
     API_FUNCTION() static bool ConvertSceneToInternalActors(Scene* scene);
 
     /// <summary>
+    /// Replaces all legacy external actor order values with sibling order keys and saves the scene.
+    /// </summary>
+    /// <param name="scene">External actors scene to migrate.</param>
+    /// <returns>True if failed, otherwise false.</returns>
+    API_FUNCTION() static bool ApplyExternalActorsSiblingKeys(Scene* scene);
+
+    /// <summary>
     /// Checks if scene asset uses external actors storage.
     /// </summary>
     static bool IsExternalActorsSceneAsset(const JsonAssetBase* sceneAsset);

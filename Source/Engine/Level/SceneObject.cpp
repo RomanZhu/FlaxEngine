@@ -9,6 +9,7 @@
 #include "Engine/Scripting/Internal/ManagedSerialization.h"
 #include "Engine/Serialization/ISerializeModifier.h"
 #include "Engine/Serialization/Serialization.h"
+#include "Engine/Platform/StringUtils.h"
 
 void SceneBeginData::OnDone()
 {
@@ -25,7 +26,11 @@ SceneObject::SceneObject(const SpawnParams& params)
     , _parent(nullptr)
     , _prefabID(Guid::Empty)
     , _prefabObjectID(Guid::Empty)
-    , _externalOrderInParent(0)
+#if USE_EDITOR
+    , _externalSiblingOrderParentId(Guid::Empty)
+    , _externalLegacyOrderInParent(0)
+    , _hasExternalLegacyOrderInParent(false)
+#endif
 {
 }
 
@@ -35,36 +40,151 @@ SceneObject::~SceneObject()
 
 #if USE_EDITOR
 
-bool SceneObject::TryAssignExternalOrderInParent(SceneObject* object, const SceneObject* previous, const SceneObject* next)
+namespace
 {
-    constexpr int64 orderStep = 1024;
-    if (!previous)
+    constexpr uint16 ExternalOrderMiddleDigit = 32768;
+    constexpr uint16 ExternalOrderMinDigit = 0;
+    constexpr uint16 ExternalOrderMaxDigit = MAX_uint16;
+
+    uint16 GetExternalOrderDigit(const ExternalSiblingOrderKey& key, int32 index)
     {
-        if (!next)
-        {
-            object->_externalOrderInParent = orderStep;
-            return true;
-        }
-        if (next->_externalOrderInParent > 1)
-        {
-            object->_externalOrderInParent = next->_externalOrderInParent / 2;
-            return true;
-        }
+        return index < key.Digits.Count() ? key.Digits[index] : ExternalOrderMiddleDigit;
     }
-    else if (!next)
+}
+
+int32 ExternalSiblingOrderKey::Compare(const ExternalSiblingOrderKey& other) const
+{
+    const int32 count = Digits.Count() > other.Digits.Count() ? Digits.Count() : other.Digits.Count();
+    for (int32 i = 0; i < count; i++)
     {
-        if (previous->_externalOrderInParent >= 0 && previous->_externalOrderInParent <= MAX_int64 - orderStep)
-        {
-            object->_externalOrderInParent = previous->_externalOrderInParent + orderStep;
-            return true;
-        }
+        const uint16 a = GetExternalOrderDigit(*this, i);
+        const uint16 b = GetExternalOrderDigit(other, i);
+        if (a < b)
+            return -1;
+        if (a > b)
+            return 1;
     }
-    else if (previous->_externalOrderInParent >= 0 && next->_externalOrderInParent > 0 && previous->_externalOrderInParent < next->_externalOrderInParent - 1)
+    return 0;
+}
+
+String ExternalSiblingOrderKey::ToString() const
+{
+    static const Char HexDigits[] = TEXT("0123456789abcdef");
+    String result;
+    result.Resize(Digits.Count() * 4);
+    for (int32 i = 0; i < Digits.Count(); i++)
     {
-        object->_externalOrderInParent = previous->_externalOrderInParent + (next->_externalOrderInParent - previous->_externalOrderInParent) / 2;
-        return true;
+        const uint16 digit = Digits[i];
+        result[i * 4 + 0] = HexDigits[(digit >> 12) & 15];
+        result[i * 4 + 1] = HexDigits[(digit >> 8) & 15];
+        result[i * 4 + 2] = HexDigits[(digit >> 4) & 15];
+        result[i * 4 + 3] = HexDigits[digit & 15];
     }
-    return false;
+    return result;
+}
+
+bool ExternalSiblingOrderKey::TryParse(const StringView& text, ExternalSiblingOrderKey& result)
+{
+    result.Digits.Clear();
+    if (text.IsEmpty() || text.Length() % 4 != 0 || text.Length() > 4096)
+        return false;
+
+    result.Digits.Resize(text.Length() / 4);
+    for (int32 i = 0; i < result.Digits.Count(); i++)
+    {
+        uint16 digit = 0;
+        for (int32 j = 0; j < 4; j++)
+        {
+            const int32 value = StringUtils::HexDigit(text[i * 4 + j]);
+            if (value < 0)
+            {
+                result.Digits.Clear();
+                return false;
+            }
+            digit = static_cast<uint16>((digit << 4) | value);
+        }
+        result.Digits[i] = digit;
+    }
+    return true;
+}
+
+ExternalSiblingOrderKey ExternalSiblingOrderKey::FromLegacy(int64 value)
+{
+    ExternalSiblingOrderKey result;
+    const uint64 sortableValue = static_cast<uint64>(value) ^ (static_cast<uint64>(1) << 63);
+    result.Digits.Resize(4);
+    result.Digits[0] = static_cast<uint16>(sortableValue >> 48);
+    result.Digits[1] = static_cast<uint16>(sortableValue >> 32);
+    result.Digits[2] = static_cast<uint16>(sortableValue >> 16);
+    result.Digits[3] = static_cast<uint16>(sortableValue);
+    return result;
+}
+
+ExternalSiblingOrderKey ExternalSiblingOrderKey::CreateBetween(const ExternalSiblingOrderKey* previous, const ExternalSiblingOrderKey* next, const Guid& objectId)
+{
+    ASSERT(!previous || !next || previous->Compare(*next) < 0);
+
+    ExternalSiblingOrderKey result;
+    bool previousTight = previous != nullptr;
+    bool nextTight = next != nullptr;
+    uint32 random = objectId.Values[0] ^ (objectId.Values[1] * 0x9e3779b9u) ^ (objectId.Values[2] * 0x85ebca6bu) ^ (objectId.Values[3] * 0xc2b2ae35u);
+    for (int32 depth = 0;; depth++)
+    {
+        const uint16 previousDigit = previousTight ? GetExternalOrderDigit(*previous, depth) : ExternalOrderMinDigit;
+        const uint16 nextDigit = nextTight ? GetExternalOrderDigit(*next, depth) : ExternalOrderMaxDigit;
+        ASSERT(previousDigit <= nextDigit);
+
+        const uint32 gap = static_cast<uint32>(nextDigit) - previousDigit;
+        if (gap > 1)
+        {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            result.Digits.Add(static_cast<uint16>(previousDigit + 1 + random % (gap - 1)));
+            return result;
+        }
+
+        result.Digits.Add(previousDigit);
+        if (previousDigit < nextDigit)
+            nextTight = false;
+    }
+}
+
+const ExternalSiblingOrderKey& SceneObject::GetExternalSiblingOrderKey() const
+{
+    return _externalSiblingOrderKey;
+}
+
+bool SceneObject::HasExternalSiblingOrderKeyForCurrentParent() const
+{
+    return _externalSiblingOrderKey.IsValid() && _parent && _externalSiblingOrderParentId == _parent->GetID();
+}
+
+bool SceneObject::HasExternalLegacyOrderInParent() const
+{
+    return _hasExternalLegacyOrderInParent;
+}
+
+int64 SceneObject::GetExternalOrderInParent() const
+{
+    return _externalLegacyOrderInParent;
+}
+
+void SceneObject::SetExternalOrderInParent(int64 value)
+{
+    _externalSiblingOrderKey = ExternalSiblingOrderKey::FromLegacy(value);
+    _externalSiblingOrderParentId = _parent ? _parent->GetID() : Guid::Empty;
+    _externalLegacyOrderInParent = value;
+    _hasExternalLegacyOrderInParent = true;
+}
+
+void SceneObject::SetExternalSiblingOrderKey(const ExternalSiblingOrderKey& value)
+{
+    ASSERT(value.IsValid());
+    _externalSiblingOrderKey = value;
+    _externalSiblingOrderParentId = _parent ? _parent->GetID() : Guid::Empty;
+    _externalLegacyOrderInParent = 0;
+    _hasExternalLegacyOrderInParent = false;
 }
 
 #endif
@@ -186,7 +306,40 @@ void SceneObject::Deserialize(DeserializeStream& stream, ISerializeModifier* mod
     // _parent is deserialized by Actor/Script impl
     // _prefabID is deserialized by Actor/Script impl
     DESERIALIZE_MEMBER(PrefabObjectID, _prefabObjectID);
-    DESERIALIZE_MEMBER(OrderInParent, _externalOrderInParent);
+
+#if USE_EDITOR
+    bool hasExternalOrder = false;
+    const auto siblingOrderKeyMember = SERIALIZE_FIND_MEMBER(stream, "SiblingOrderKey");
+    if (siblingOrderKeyMember != stream.MemberEnd() && siblingOrderKeyMember->value.IsString())
+    {
+        ExternalSiblingOrderKey key;
+        if (ExternalSiblingOrderKey::TryParse(siblingOrderKeyMember->value.GetText(), key))
+        {
+            _externalSiblingOrderKey = MoveTemp(key);
+            _externalLegacyOrderInParent = 0;
+            _hasExternalLegacyOrderInParent = false;
+            hasExternalOrder = true;
+        }
+    }
+    if (!hasExternalOrder)
+    {
+        const auto legacyOrderMember = SERIALIZE_FIND_MEMBER(stream, "OrderInParent");
+        if (legacyOrderMember != stream.MemberEnd() && legacyOrderMember->value.IsInt64())
+        {
+            _externalLegacyOrderInParent = legacyOrderMember->value.GetInt64();
+            _externalSiblingOrderKey = ExternalSiblingOrderKey::FromLegacy(_externalLegacyOrderInParent);
+            _hasExternalLegacyOrderInParent = true;
+            hasExternalOrder = true;
+        }
+    }
+    if (hasExternalOrder)
+    {
+        _externalSiblingOrderParentId = Guid::Empty;
+        const auto parentMember = SERIALIZE_FIND_MEMBER(stream, "ParentID");
+        if (parentMember != stream.MemberEnd())
+            Serialization::Deserialize(parentMember->value, _externalSiblingOrderParentId, modifier);
+    }
+#endif
 
 #if !COMPILE_WITHOUT_CSHARP
     // Handle C# objects data serialization

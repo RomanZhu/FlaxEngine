@@ -104,9 +104,6 @@ void Script::SetParent(Actor* value, bool canBreakPrefabLink)
     // Set value
     const auto previous = _parent;
     _parent = value;
-#if USE_EDITOR
-    _externalOrderInParent = 0;
-#endif
 
     // Link to the new one
     if (_parent)
@@ -176,16 +173,6 @@ void Script::SetOrderInParent(int32 index)
             // Change order
             parentScripts.Insert(index, this);
         }
-#if USE_EDITOR
-        const int32 newIndex = parentScripts.Find(this);
-        Script* previous = newIndex > 0 ? parentScripts[newIndex - 1] : nullptr;
-        Script* next = newIndex + 1 < parentScripts.Count() ? parentScripts[newIndex + 1] : nullptr;
-        if (!TryAssignExternalOrderInParent(this, previous, next))
-        {
-            for (int32 i = 0; i < parentScripts.Count(); i++)
-                parentScripts[i]->_externalOrderInParent = (static_cast<int64>(i) + 1) * 1024;
-        }
-#endif
     }
 }
 

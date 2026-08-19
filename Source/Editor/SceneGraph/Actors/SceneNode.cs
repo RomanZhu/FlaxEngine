@@ -81,13 +81,15 @@ namespace FlaxEditor.SceneGraph.Actors
                 var convertText = Scene.UseExternalActors ? "Convert to internal actors" : "Convert to external actors";
                 var convertTooltip = Scene.UseExternalActors ? "Stores actors in the scene file." : "Stores actors in separate files for source control merging.";
                 contextMenu.AddButton(convertText, OnConvertActorsStorage).LinkTooltip(convertTooltip).Enabled = !Editor.IsPlayMode;
+                if (Scene.UseExternalActors)
+                    contextMenu.AddButton("Apply sibling keys", OnApplySiblingKeys).LinkTooltip("Migrates every external actor from legacy numeric order to sibling keys.").Enabled = !Editor.IsPlayMode;
             }
             contextMenu.AddButton("Save scene", OnSave).LinkTooltip("Saves this scene.").Enabled = IsEdited && !Editor.IsPlayMode;
             contextMenu.AddButton("Unload scene", OnUnload).LinkTooltip("Unloads this scene.").Enabled = Editor.Instance.StateMachine.CurrentState.CanChangeScene;
             if (Level.ScenesCount > 1)
                 contextMenu.AddButton("Unload all but this scene", OnUnloadAllButSelectedScene).LinkTooltip("Unloads all of the active scenes except for the selected scene.").Enabled = Editor.Instance.StateMachine.CurrentState.CanChangeScene;
 
-            contextMenu.MaximumItemsInViewCount += 4;
+            contextMenu.MaximumItemsInViewCount += Scene.UseExternalActors ? 5 : 4;
             base.OnContextMenu(contextMenu, window);
         }
 
@@ -104,6 +106,12 @@ namespace FlaxEditor.SceneGraph.Actors
         private void OnConvertActorsStorage()
         {
             if (Scene.UseExternalActors ? !Level.ConvertSceneToInternalActors(Scene) : !Level.ConvertSceneToExternalActors(Scene))
+                IsEdited = false;
+        }
+
+        private void OnApplySiblingKeys()
+        {
+            if (!Level.ApplyExternalActorsSiblingKeys(Scene))
                 IsEdited = false;
         }
 
