@@ -68,7 +68,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool CanCreate(ContentFolder targetLocation)
         {
-            return targetLocation.CanHaveAssets;
+            return targetLocation != null && targetLocation.CanHaveAssets;
         }
 
         /// <inheritdoc />
@@ -259,7 +259,7 @@ namespace FlaxEditor.Content
                 });
             };
             var initialName = (modelItem?.ShortName ?? Path.GetFileNameWithoutExtension(model.Path)) + " Collision";
-            Editor.Instance.Windows.ContentWin.NewItem(this, null, create, initialName, withRenaming);
+            Editor.Instance.Windows.ContentWin.NewItem(this, null, create, initialName, withRenaming, modelItem?.ParentFolder);
         }
     }
 }

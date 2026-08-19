@@ -1433,19 +1433,14 @@ namespace FlaxEditor.Windows
                 name = proxy.NewItemName;
 
             ContentFolder parentFolder;
-            if (destinationFolder != null)
+            if (destinationFolder != null && proxy.CanCreate(destinationFolder))
             {
-                if (!proxy.CanCreate(destinationFolder))
-                {
-                    Editor.LogWarning("Cannot create Content item in the requested destination: " + destinationFolder.Path);
-                    return;
-                }
                 parentFolder = destinationFolder;
             }
             else
             {
                 // If the proxy can not be created in the current folder, then navigate to the content folder
-                if (!proxy.CanCreate(CurrentViewFolder))
+                if (CurrentViewFolder == null || !proxy.CanCreate(CurrentViewFolder))
                     Navigate(Editor.Instance.ContentDatabase.Game.Content);
                 parentFolder = CurrentViewFolder;
             }
