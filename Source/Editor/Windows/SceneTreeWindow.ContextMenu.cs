@@ -3,6 +3,7 @@
 using System;
 using System.Linq;
 using FlaxEditor.GUI.ContextMenu;
+using FlaxEditor.GUI.Dialogs;
 using FlaxEditor.SceneGraph;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -62,6 +63,9 @@ namespace FlaxEditor.Windows
             bool canConvertSelection = canEditScene && hasSthSelected && Editor.SceneEditing.Selection.All(x => x is ActorNode actorNode && actorNode.Actor && actorNode.Actor is not Scene);
             if (canConvertSelection)
             {
+                var replaceBtn = contextMenu.AddButton("Replace with Prefab...", OnReplaceWithPrefabClicked);
+                replaceBtn.TooltipText = "Replaces the selected actor(s) with a chosen prefab asset, with options to preserve transforms, materials, and hierarchy.";
+
                 var convertMenu = contextMenu.AddChildMenu("Convert");
                 convertMenu.ContextMenu.AutoSort = true;
                 if (Editor.SceneEditing.SelectionCount > 1 || firstSelection.Actor.GetType() != typeof(GroupActor))
@@ -287,6 +291,16 @@ namespace FlaxEditor.Windows
                 if (Editor.SceneEditing.Selection[i] is ActorNode node)
                     node.TreeNode.CollapseAll();
             }
+        }
+
+        private void OnReplaceWithPrefabClicked()
+        {
+            var targetNodes = Editor.SceneEditing.Selection.OfType<ActorNode>().Where(x => x.Actor && x.Actor is not Scene).ToList();
+            if (targetNodes.Count == 0)
+                return;
+
+            var dialog = new ReplaceWithPrefabDialog(targetNodes);
+            dialog.Show();
         }
     }
 }
