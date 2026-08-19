@@ -21,12 +21,16 @@ API_CLASS(NoSpawn) class AudioDevice : public ScriptingObject
     {
         Name = other.Name;
         InternalName = other.InternalName;
+        BackendName = other.BackendName;
+        BackendIndex = other.BackendIndex;
     }
 
     AudioDevice& operator=(const AudioDevice& other)
     {
         Name = other.Name;
         InternalName = other.InternalName;
+        BackendName = other.BackendName;
+        BackendIndex = other.BackendIndex;
         return *this;
     }
 
@@ -40,6 +44,16 @@ public:
     /// The internal device name used by the audio backend.
     /// </summary>
     StringAnsi InternalName;
+
+    /// <summary>
+    /// The name of the backend that created this device entry (e.g. OpenAL, FMOD Studio).
+    /// </summary>
+    API_FIELD(ReadOnly) StringAnsi BackendName;
+
+    /// <summary>
+    /// The internal index of the device within its backend.
+    /// </summary>
+    API_FIELD(ReadOnly) int32 BackendIndex = -1;
 
     String ToString() const override
     {

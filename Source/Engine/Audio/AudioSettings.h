@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Engine/Core/Config/Settings.h"
+#include "Events/AudioEventTypes.h"
 
 /// <summary>
 /// Audio settings container.
@@ -18,6 +19,24 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(0), EditorDisplay(\"General\")")
     bool DisableAudio = false;
+
+    /// <summary>
+    /// The audio event backend to use (e.g. None, FMOD Studio).
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(20), EditorDisplay(\"Backend\")")
+    AudioEventBackendType EventBackend = AudioEventBackendType::None;
+
+    /// <summary>
+    /// Mode for legacy AudioClip / AudioSource playback when an event backend is active.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(30), EditorDisplay(\"Backend\", \"Native Clips\")")
+    NativeAudioClipMode NativeClips = NativeAudioClipMode::DisabledWhenEventBackendActive;
+
+    /// <summary>
+    /// Selects which audio subsystem owns the primary audio device and master output.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(40), EditorDisplay(\"Backend\", \"Output Owner\")")
+    AudioOutputOwner OutputOwner = AudioOutputOwner::NativeClipBackend;
 
     /// <summary>
     /// The doppler effect factor. Scale for source and listener velocities. Default is 1.

@@ -22,6 +22,7 @@
 #include "Steps/DeployDataStep.h"
 #include "Steps/CollectAssetsStep.h"
 #include "Steps/CookAssetsStep.h"
+#include "Steps/CookAudioStep.h"
 #include "Steps/PostProcessStep.h"
 #include "Engine/Platform/ConditionVariable.h"
 #include "Engine/Platform/CreateProcessSettings.h"
@@ -699,6 +700,7 @@ bool GameCookerImpl::Build()
         Steps.Add(New<PrecompileAssembliesStep>());
         Steps.Add(New<CollectAssetsStep>());
         Steps.Add(New<CookAssetsStep>());
+        Steps.Add(New<CookAudioStep>());
         Steps.Add(New<PostProcessStep>());
     }
 

@@ -49,6 +49,11 @@ namespace FlaxEditor.SceneGraph
             CustomNodesTypes.Add(typeof(TextRender), typeof(TextRenderNode));
             CustomNodesTypes.Add(typeof(AudioListener), typeof(AudioListenerNode));
             CustomNodesTypes.Add(typeof(AudioSource), typeof(AudioSourceNode));
+            CustomNodesTypes.Add(typeof(AudioEmitter), typeof(AudioEmitterNode));
+            CustomNodesTypes.Add(typeof(AudioBankLoader), typeof(AudioBankLoaderNode));
+            CustomNodesTypes.Add(typeof(AudioAreaEmitter), typeof(AudioAreaEmitterNode));
+            CustomNodesTypes.Add(typeof(AudioZoneVolume), typeof(AudioZoneVolumeNode));
+            CustomNodesTypes.Add(typeof(AudioTrigger), typeof(AudioTriggerNode));
             CustomNodesTypes.Add(typeof(BoneSocket), typeof(BoneSocketNode));
             CustomNodesTypes.Add(typeof(Decal), typeof(DecalNode));
             CustomNodesTypes.Add(typeof(Cloth), typeof(ClothNode));

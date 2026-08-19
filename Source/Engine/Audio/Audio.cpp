@@ -31,6 +31,15 @@
 #include "XAudio2/AudioBackendXAudio2.h"
 #endif
 
+#include "Events/AudioEventSystem.h"
+#include "Events/AudioEventBackendNone.h"
+#include "Events/AudioWorld.h"
+#include "AudioListener.h"
+#include "Engine/Engine/Time.h"
+#if AUDIO_EVENT_API_FMOD
+#include "FMOD/FmodEventBackend.h"
+#endif
+
 float AudioDataInfo::GetLength() const
 {
     return (float)NumSamples / (float)Math::Max(1U, SampleRate * NumChannels);
@@ -54,6 +63,9 @@ namespace
 
 class AudioService : public EngineService
 {
+private:
+    bool _wasPlayMode = false;
+
 public:
 
     AudioService()
@@ -73,11 +85,17 @@ namespace
     void OnEnginePause()
     {
         AudioBackend::SetVolume(0.0f);
+#if COMPILE_WITH_AUDIO_EVENTS
+        AudioEventSystem::SetPaused(true);
+#endif
     }
 
     void OnEngineUnpause()
     {
         AudioBackend::SetVolume(Volume);
+#if COMPILE_WITH_AUDIO_EVENTS
+        AudioEventSystem::SetPaused(!Engine::IsPlayMode());
+#endif
     }
 }
 
@@ -89,6 +107,9 @@ void AudioSettings::Apply()
         Audio::SetDopplerFactor(DopplerFactor);
         Audio::SetEnableHRTF(EnableHRTF);
     }
+#if COMPILE_WITH_AUDIO_EVENTS
+    AudioEventSystem::SetDopplerFactor(DopplerFactor);
+#endif
 }
 
 AudioDevice* Audio::GetActiveDevice()
@@ -110,6 +131,10 @@ void Audio::SetActiveDeviceIndex(int32 index)
     ActiveDeviceIndex = index;
 
     AudioBackend::OnActiveDeviceChanged();
+#if COMPILE_WITH_AUDIO_EVENTS
+    if (AudioEventSystem::GetBackend())
+        AudioEventSystem::GetBackend()->OnActiveDeviceChanged();
+#endif
 
     ActiveDeviceChanged();
 }
@@ -122,6 +147,9 @@ float Audio::GetMasterVolume()
 void Audio::SetMasterVolume(float value)
 {
     MasterVolume = Math::Saturate(value);
+#if COMPILE_WITH_AUDIO_EVENTS
+    AudioEventSystem::SetMasterVolume(MasterVolume);
+#endif
 }
 
 float Audio::GetVolume()
@@ -133,6 +161,9 @@ void Audio::SetDopplerFactor(float value)
 {
     value = Math::Max(0.0f, value);
     AudioBackend::SetDopplerFactor(value);
+#if COMPILE_WITH_AUDIO_EVENTS
+    AudioEventSystem::SetDopplerFactor(value);
+#endif
 }
 
 bool Audio::GetEnableHRTF()
@@ -158,12 +189,25 @@ bool AudioService::Init()
     PROFILE_CPU_NAMED("Audio.Init");
     PROFILE_MEM(Audio);
     const auto settings = AudioSettings::Get();
-    const bool mute = CommandLine::Options.Mute.IsTrue() || settings->DisableAudio;
+    const bool muteAll = CommandLine::Options.Mute.IsTrue() || settings->DisableAudio;
+    bool eventBackendRequested = false;
+#if AUDIO_EVENT_API_FMOD
+    eventBackendRequested = !muteAll && settings->EventBackend == AudioEventBackendType::FMODStudio;
+#endif
+
+    bool enableNativeClips = !muteAll && settings->NativeClips == NativeAudioClipMode::Enabled;
+    if (!muteAll && settings->NativeClips == NativeAudioClipMode::DisabledWhenEventBackendActive)
+        enableNativeClips = !eventBackendRequested;
+
+    if (settings->OutputOwner == AudioOutputOwner::EventBackend && !eventBackendRequested && !muteAll)
+        LOG(Warning, "Audio output owner is set to Event Backend, but the selected event backend is unavailable. Falling back to the native clip backend when enabled.");
+    if (eventBackendRequested && enableNativeClips)
+        LOG(Warning, "Native clips and the FMOD event backend are both enabled. This migration mode opens two mixer/device paths.");
 
     // Pick a backend to use
     AudioBackend* backend = nullptr;
 #if AUDIO_API_NONE
-    if (mute)
+    if (!enableNativeClips)
         backend = New<AudioBackendNone>();
 #endif
 #if AUDIO_API_PS4
@@ -190,8 +234,8 @@ bool AudioService::Init()
     if (!backend)
         backend = New<AudioBackendNone>();
 #else
-    if (mute)
-        LOG(Warning, "Cannot use mute audio. Null Audio Backend not available on this platform.");
+    if (!enableNativeClips)
+        LOG(Warning, "Cannot disable the native clip backend because the Null Audio Backend is unavailable on this platform.");
 #endif
     if (backend == nullptr)
     {
@@ -212,6 +256,30 @@ bool AudioService::Init()
         LOG(Warning, "HRTF audio is not supported.");
         EnableHRTF = false;
     }
+
+#if COMPILE_WITH_AUDIO_EVENTS
+    // Initialize Audio Event Backend
+    IAudioEventBackend* eventBackend = nullptr;
+#if AUDIO_EVENT_API_FMOD
+    if (eventBackendRequested)
+        eventBackend = New<FmodEventBackend>();
+#endif
+    if (!eventBackend)
+        eventBackend = New<AudioEventBackendNone>();
+
+    if (eventBackend->Init())
+    {
+        LOG(Warning, "Failed to initialize audio event backend '{0}'. Falling back to Null.", eventBackend->GetName());
+        Delete(eventBackend);
+        eventBackend = New<AudioEventBackendNone>();
+        if (eventBackend->Init())
+            LOG(Error, "Failed to initialize the Null audio event backend.");
+    }
+    AudioEventSystem::SetBackend(eventBackend);
+    _wasPlayMode = Engine::IsPlayMode();
+    AudioEventSystem::SetPaused(!_wasPlayMode);
+    LOG(Info, "Audio event system initialization... (backend: {0})", AudioEventSystem::GetBackendName());
+#endif
 
     Engine::Pause.Bind(&OnEnginePause);
     Engine::Unpause.Bind(&OnEngineUnpause);
@@ -235,9 +303,55 @@ void AudioService::Update()
     {
         Volume = masterVolume;
         AudioBackend::SetVolume(masterVolume);
+#if COMPILE_WITH_AUDIO_EVENTS
+        AudioEventSystem::SetMasterVolume(masterVolume);
+#endif
     }
 
+#if COMPILE_WITH_AUDIO_EVENTS
+    const bool playMode = Engine::IsPlayMode();
+    if (playMode != _wasPlayMode)
+    {
+        if (!playMode)
+        {
+            AudioEventSystem::StopAll(AudioStopMode::Immediate);
+            AudioEventSystem::UnloadAllBanks();
+            AudioEventSystem::SetPaused(true);
+        }
+        else
+        {
+            AudioEventSystem::SetPaused(false);
+        }
+        _wasPlayMode = playMode;
+    }
+#endif
+
     AudioBackend::Update();
+
+#if COMPILE_WITH_AUDIO_EVENTS
+    if (AudioEventSystem::GetBackend())
+    {
+        Array<AudioListenerState, InlinedAllocation<AUDIO_MAX_LISTENERS>> listenerStates;
+        const bool playMode = Engine::IsPlayMode();
+        const float dt = (float)Time::Update.UnscaledDeltaTime.GetTotalSeconds();
+        if (playMode)
+        {
+            for (int32 i = 0; i < Audio::Listeners.Count(); i++)
+            {
+                auto* listener = Audio::Listeners[i];
+                if (listener && listener->IsActiveInHierarchy() && listener->IsDuringPlay())
+                {
+                    Audio3DAttributes attrs(listener->GetPosition(), listener->GetVelocity(), listener->GetForward(), listener->GetTransform().GetUp());
+                    listenerStates.Add(AudioListenerState(listener->GetID(), attrs, 1.0f));
+                }
+            }
+            AudioEventSystem::GetBackend()->UpdateListeners(Span<AudioListenerState>(listenerStates.Get(), listenerStates.Count()));
+
+            AudioWorld::Update(dt);
+        }
+        AudioEventSystem::GetBackend()->Update(dt);
+    }
+#endif
 }
 
 void AudioService::Dispose()
@@ -246,6 +360,14 @@ void AudioService::Dispose()
 
     // Cleanup
     Audio::Devices.Resize(0);
+#if COMPILE_WITH_AUDIO_EVENTS
+    if (AudioEventSystem::GetBackend())
+    {
+        AudioEventSystem::GetBackend()->Dispose();
+        Delete(AudioEventSystem::GetBackend());
+        AudioEventSystem::SetBackend(nullptr);
+    }
+#endif
     if (AudioBackend::Instance)
     {
         AudioBackend::Dispose();

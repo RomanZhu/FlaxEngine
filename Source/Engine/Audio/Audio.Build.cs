@@ -17,12 +17,68 @@ public class Audio : EngineModule
 
         options.SourcePaths.Clear();
         options.SourceFiles.AddRange(Directory.GetFiles(FolderPath, "*.*", SearchOption.TopDirectoryOnly));
+        options.SourcePaths.Add(Path.Combine(FolderPath, "Events"));
 
         var depsRoot = options.DepsFolder;
 
         bool useNone = true;
         bool useOpenAL = false;
         bool useXAudio2 = false;
+
+        // Audio Event Subsystem
+        options.CompileEnv.PreprocessorDefinitions.Add("COMPILE_WITH_AUDIO_EVENTS");
+        options.CompileEnv.PreprocessorDefinitions.Add("AUDIO_EVENT_API_NONE");
+
+        // Resolve FMOD Studio SDK
+        string fmodRoot = System.Environment.GetEnvironmentVariable("FMOD_SDK_DIR");
+        if (string.IsNullOrEmpty(fmodRoot) || !Directory.Exists(fmodRoot))
+            fmodRoot = System.Environment.GetEnvironmentVariable("FMOD_DIR");
+        if (string.IsNullOrEmpty(fmodRoot) || !Directory.Exists(fmodRoot))
+            fmodRoot = Path.Combine(Globals.EngineRoot, "Source", "ThirdParty", "FMOD");
+        if (string.IsNullOrEmpty(fmodRoot) || !Directory.Exists(fmodRoot))
+        {
+            var defaultWindowsFmod = @"C:\Program Files (x86)\FMOD SoundSystem\FMOD Studio API Windows";
+            if (Directory.Exists(defaultWindowsFmod))
+                fmodRoot = defaultWindowsFmod;
+        }
+
+        bool hasFmod = !string.IsNullOrEmpty(fmodRoot) && Directory.Exists(fmodRoot);
+        if (hasFmod)
+        {
+            options.SourcePaths.Add(Path.Combine(FolderPath, "FMOD"));
+            options.CompileEnv.PreprocessorDefinitions.Add("AUDIO_EVENT_API_FMOD");
+
+            options.PrivateIncludePaths.Add(Path.Combine(fmodRoot, "api", "core", "inc"));
+            options.PrivateIncludePaths.Add(Path.Combine(fmodRoot, "api", "studio", "inc"));
+
+            switch (options.Platform.Target)
+            {
+            case TargetPlatform.Windows:
+            {
+                var coreLibDir = Path.Combine(fmodRoot, "api", "core", "lib", "x64");
+                var studioLibDir = Path.Combine(fmodRoot, "api", "studio", "lib", "x64");
+                bool useLogging = options.Configuration == TargetConfiguration.Debug || options.Configuration == TargetConfiguration.Development;
+
+                if (useLogging)
+                {
+                    options.OutputFiles.Add(Path.Combine(coreLibDir, "fmodL_vc.lib"));
+                    options.OutputFiles.Add(Path.Combine(studioLibDir, "fmodstudioL_vc.lib"));
+                    options.DependencyFiles.Add(Path.Combine(coreLibDir, "fmodL.dll"));
+                    options.DependencyFiles.Add(Path.Combine(studioLibDir, "fmodstudioL.dll"));
+                }
+                else
+                {
+                    options.OutputFiles.Add(Path.Combine(coreLibDir, "fmod_vc.lib"));
+                    options.OutputFiles.Add(Path.Combine(studioLibDir, "fmodstudio_vc.lib"));
+                    options.DependencyFiles.Add(Path.Combine(coreLibDir, "fmod.dll"));
+                    options.DependencyFiles.Add(Path.Combine(studioLibDir, "fmodstudio.dll"));
+                }
+                break;
+            }
+            default:
+                break;
+            }
+        }
 
         switch (options.Platform.Target)
         {
@@ -132,6 +188,6 @@ public class Audio : EngineModule
     /// <inheritdoc />
     public override void GetFilesToDeploy(List<string> files)
     {
-        files.AddRange(Directory.GetFiles(FolderPath, "*.h", SearchOption.TopDirectoryOnly));
+        files.AddRange(Directory.GetFiles(FolderPath, "*.h", SearchOption.AllDirectories));
     }
 }
