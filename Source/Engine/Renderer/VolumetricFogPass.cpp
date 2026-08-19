@@ -63,6 +63,8 @@ GPU_CB_STRUCT(Data {
     Float4 DensityNoiseOffsets[4];
     Float4 DensityNoiseParameters2;
     Float4 ScatteringParameters;
+    float PhaseDirectionality;
+    Float3 PhasePadding;
     Float4 NearClarityParameters;
     Float4 ShadowParameters0;
     Float4 ShadowParameters1;
@@ -375,6 +377,8 @@ bool VolumetricFogPass::Init(FrameCache& cache, RenderContext& renderContext, GP
         options.ForwardScatteringWeight,
         options.BackwardScatteringDistribution,
         options.BackwardScatteringWeight);
+    cache.Data.PhaseDirectionality = options.PhaseDirectionality;
+    cache.Data.PhasePadding = Float3::Zero;
     cache.Data.NearClarityParameters = Float4(
         options.NearClarityEnable ? 1.0f : 0.0f,
         options.NearClarityRadius,

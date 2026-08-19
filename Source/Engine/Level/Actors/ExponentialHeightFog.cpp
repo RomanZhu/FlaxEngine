@@ -94,6 +94,7 @@ void ExponentialHeightFog::Serialize(SerializeStream& stream, const void* otherO
     SERIALIZE(VolumetricFogForwardScatteringWeight);
     SERIALIZE(VolumetricFogBackwardScatteringDistribution);
     SERIALIZE(VolumetricFogBackwardScatteringWeight);
+    SERIALIZE(VolumetricFogPhaseDirectionality);
     SERIALIZE(VolumetricFogShadowPresentationEnable);
     SERIALIZE(VolumetricFogShadowContrast);
     SERIALIZE(VolumetricFogShadowExtinctionMultiplier);
@@ -168,6 +169,7 @@ void ExponentialHeightFog::Deserialize(DeserializeStream& stream, ISerializeModi
     DESERIALIZE(VolumetricFogForwardScatteringWeight);
     DESERIALIZE(VolumetricFogBackwardScatteringDistribution);
     DESERIALIZE(VolumetricFogBackwardScatteringWeight);
+    DESERIALIZE(VolumetricFogPhaseDirectionality);
     DESERIALIZE(VolumetricFogShadowPresentationEnable);
     DESERIALIZE(VolumetricFogShadowContrast);
     DESERIALIZE(VolumetricFogShadowExtinctionMultiplier);
@@ -240,6 +242,7 @@ void ExponentialHeightFog::GetVolumetricFogOptions(VolumetricFogOptions& result)
     result.ForwardScatteringWeight = VolumetricFogDualLobePhaseEnable ? Math::Saturate(VolumetricFogForwardScatteringWeight) : 1.0f;
     result.BackwardScatteringDistribution = Math::Clamp(VolumetricFogBackwardScatteringDistribution, -0.9f, 0.9f);
     result.BackwardScatteringWeight = VolumetricFogDualLobePhaseEnable ? Math::Saturate(VolumetricFogBackwardScatteringWeight) : 0.0f;
+    result.PhaseDirectionality = Math::Saturate(VolumetricFogPhaseDirectionality);
     result.ShadowPresentationEnable = VolumetricFogShadowPresentationEnable;
     result.ShadowContrast = VolumetricFogShadowPresentationEnable ? Math::Clamp(VolumetricFogShadowContrast, 0.1f, 8.0f) : 1.0f;
     result.ShadowExtinctionMultiplier = VolumetricFogShadowPresentationEnable ? Math::Clamp(VolumetricFogShadowExtinctionMultiplier, 0.0f, 8.0f) : 1.0f;

@@ -66,6 +66,8 @@ float4 DensityNoiseParameters1;
 float4 DensityNoiseOffsets[4];
 float4 DensityNoiseParameters2;
 float4 ScatteringParameters;
+float PhaseDirectionality;
+float3 PhasePadding;
 float4 NearClarityParameters;
 float4 ShadowParameters0;
 float4 ShadowParameters1;
@@ -470,7 +472,11 @@ void CS_LightScattering(uint3 DispatchThreadId : SV_DispatchThreadID)
 			shadow = lerp(1.0f, shadow, ShadowParameters1.x);
 			directionalShadowVisibility += shadow;
 			float directionalVisibility = max(shadow, ShadowParameters0.w);
-			lightScattering += DirectionalLight.Color * (8 * directionalVisibility * GetPhase(PhaseG, dot(DirectionalLight.Direction, cameraVectorNormalized)));
+			float cosTheta = dot(DirectionalLight.Direction, -cameraVectorNormalized);
+			float directionalPhase = GetPhase(PhaseG, cosTheta);
+			float isotropicPhase = 1.0f / (4.0f * PI);
+			float phase = lerp(isotropicPhase, directionalPhase, PhaseDirectionality);
+			lightScattering += DirectionalLight.Color * (8 * directionalVisibility * phase);
 		}
 
 #if USE_DDGI

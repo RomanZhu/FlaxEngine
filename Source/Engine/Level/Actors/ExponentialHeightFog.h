@@ -139,6 +139,12 @@ public:
     API_FIELD(Attributes="EditorOrder(316), DefaultValue(0.0f), Limit(0, 1, 0.01f), VisibleIf(nameof(VolumetricFogDualLobePhaseEnable)), EditorDisplay(\"Volumetric Fog\", \"Backward Scattering Weight\")")
     float VolumetricFogBackwardScatteringWeight = 0.0f;
 
+    /// <summary>
+    /// Blends directional-light scattering between isotropic and the configured phase function. A value of zero is fully isotropic and one is fully directional.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(317), DefaultValue(0.5f), Limit(0, 1, 0.01f), EditorDisplay(\"Volumetric Fog\", \"Phase Directionality\")")
+    float VolumetricFogPhaseDirectionality = 0.5f;
+
 public:
     /// <summary>
     /// Enables artistic presentation controls for directional-light volumetric shadows without changing the base fog density.

@@ -19,6 +19,7 @@ TEST_CASE("VolumetricFogOptions")
     CHECK(options.ScatteringIntensity == 1.0f);
     CHECK(options.ForwardScatteringWeight == 1.0f);
     CHECK(options.BackwardScatteringWeight == 0.0f);
+    CHECK(options.PhaseDirectionality == 0.5f);
     CHECK_FALSE(options.ShadowPresentationEnable);
     CHECK(options.ShadowContrast == 1.0f);
     CHECK(options.ShadowExtinctionMultiplier == 1.0f);
@@ -42,6 +43,7 @@ TEST_CASE("VolumetricFogOptions")
     fog->VolumetricFogForwardScatteringWeight = 2.0f;
     fog->VolumetricFogBackwardScatteringDistribution = -2.0f;
     fog->VolumetricFogBackwardScatteringWeight = 0.25f;
+    fog->VolumetricFogPhaseDirectionality = -1.0f;
     fog->VolumetricFogShadowContrast = 20.0f;
     fog->VolumetricFogShadowExtinctionMultiplier = 20.0f;
     fog->VolumetricFogShadowScatteringMultiplier = 20.0f;
@@ -74,6 +76,7 @@ TEST_CASE("VolumetricFogOptions")
     CHECK(options.ScatteringIntensity == 1.0f);
     CHECK(options.ForwardScatteringWeight == 1.0f);
     CHECK(options.BackwardScatteringWeight == 0.0f);
+    CHECK(options.PhaseDirectionality == 0.0f);
     CHECK(options.ShadowContrast == 1.0f);
     CHECK(options.ShadowExtinctionMultiplier == 1.0f);
     CHECK(options.ShadowScatteringMultiplier == 1.0f);
@@ -101,6 +104,7 @@ TEST_CASE("VolumetricFogOptions")
     CHECK(options.ForwardScatteringWeight == 1.0f);
     CHECK(options.BackwardScatteringDistribution == -0.9f);
     CHECK(options.BackwardScatteringWeight == 0.25f);
+    CHECK(options.PhaseDirectionality == 0.0f);
     CHECK(options.ShadowPresentationEnable);
     CHECK(options.ShadowContrast == 8.0f);
     CHECK(options.ShadowExtinctionMultiplier == 8.0f);

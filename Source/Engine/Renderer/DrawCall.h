@@ -82,6 +82,7 @@ struct VolumetricFogOptions
     float ForwardScatteringWeight;
     float BackwardScatteringDistribution;
     float BackwardScatteringWeight;
+    float PhaseDirectionality;
     bool ShadowPresentationEnable;
     float ShadowContrast;
     float ShadowExtinctionMultiplier;
