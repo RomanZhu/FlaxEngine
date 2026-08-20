@@ -374,4 +374,74 @@ PolygonSplitResult CSG::Mesh::polygonSplit(const Surface& cuttingPlane, int32 in
     }
 }
 
+void CSG::Mesh::PartitionVisiblePolygons(const Surface& cuttingPlane)
+{
+    const int32 initialCount = _polygons.Count();
+    for (int32 i = 0; i < initialCount; i++)
+    {
+        auto& polygon = _polygons[i];
+        if (!polygon.Visible || polygon.FirstEdgeIndex == INVALID_INDEX)
+            continue;
+
+        const auto side = cuttingPlane.OnSide(polygon.Bounds);
+        if (side == PlaneIntersectionType::Front || side == PlaneIntersectionType::Back)
+            continue;
+
+        Polygon* outsidePolygon = nullptr;
+        polygonSplit(cuttingPlane, i, &outsidePolygon);
+    }
+}
+
+void CSG::Mesh::PartitionVisiblePolygons(Span<const Surface> cuttingPlanes)
+{
+    for (int32 i = 0; i < cuttingPlanes.Length(); i++)
+    {
+        PartitionVisiblePolygons(cuttingPlanes[i]);
+    }
+}
+
+Vector3 CSG::Mesh::GetPolygonCentroid(int32 polygonIndex) const
+{
+    if (!Math::IsInRange(polygonIndex, 0, _polygons.Count() - 1))
+        return Vector3::Zero;
+
+    const auto& polygon = _polygons[polygonIndex];
+    if (polygon.FirstEdgeIndex == INVALID_INDEX)
+        return Vector3::Zero;
+
+    Vector3 centroid = Vector3::Zero;
+    int32 vertexCount = 0;
+
+    HalfEdge iterator = _edges[polygon.FirstEdgeIndex];
+    const HalfEdge& polygonFirst = _edges[polygon.FirstEdgeIndex];
+
+    do
+    {
+        centroid += _vertices[iterator.VertexIndex];
+        vertexCount++;
+        iterator = _edges.At(iterator.NextIndex);
+    } while (iterator != polygonFirst && vertexCount < 1000);
+
+    if (vertexCount > 0)
+        centroid /= (Real)vertexCount;
+
+    return centroid;
+}
+
+Vector3 CSG::Mesh::GetPolygonNormal(int32 polygonIndex) const
+{
+    if (!Math::IsInRange(polygonIndex, 0, _polygons.Count() - 1))
+        return Vector3::Up;
+
+    const auto& polygon = _polygons[polygonIndex];
+    if (!Math::IsInRange(polygon.SurfaceIndex, 0, _surfaces.Count() - 1))
+        return Vector3::Up;
+
+    Vector3 normal = _surfaces[polygon.SurfaceIndex].Normal;
+    if (polygon.Inverted)
+        normal = -normal;
+    return normal;
+}
+
 #endif
+

@@ -4,6 +4,7 @@
 
 #include "Engine/Core/Math/AABB.h"
 #include "Engine/Core/Collections/Array.h"
+#include "Engine/Core/Collections/Span.h"
 #include "Brush.h"
 #include "HalfEdge.h"
 #include "Polygon.h"
@@ -135,6 +136,32 @@ namespace CSG
         /// </summary>
         /// <param name="other">Other mesh to merge with</param>
         void Add(const Mesh* other);
+
+        /// <summary>
+        /// Partitions all visible polygons by a cutting plane without resolving keep/remove operations.
+        /// </summary>
+        /// <param name="cuttingPlane">The cutting plane.</param>
+        void PartitionVisiblePolygons(const Surface& cuttingPlane);
+
+        /// <summary>
+        /// Partitions all visible polygons by multiple cutting planes without resolving keep/remove operations.
+        /// </summary>
+        /// <param name="cuttingPlanes">The cutting planes.</param>
+        void PartitionVisiblePolygons(Span<const Surface> cuttingPlanes);
+
+        /// <summary>
+        /// Gets the centroid position of a polygon.
+        /// </summary>
+        /// <param name="polygonIndex">The polygon index.</param>
+        /// <returns>The centroid point.</returns>
+        Vector3 GetPolygonCentroid(int32 polygonIndex) const;
+
+        /// <summary>
+        /// Gets the geometric normal of a polygon (taking inversion into account).
+        /// </summary>
+        /// <param name="polygonIndex">The polygon index.</param>
+        /// <returns>The normal vector.</returns>
+        Vector3 GetPolygonNormal(int32 polygonIndex) const;
 
     private:
 
