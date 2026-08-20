@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using System.Threading.Tasks;
+using FlaxEditor.FMOD;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Content.Thumbnails;
@@ -100,6 +101,11 @@ namespace FlaxEditor
         /// The windows module.
         /// </summary>
         public WindowsModule Windows;
+
+        /// <summary>
+        /// The optional FMOD authoring module.
+        /// </summary>
+        public FmodEditorModule FMOD;
 
         /// <summary>
         /// The UI module.
@@ -299,6 +305,7 @@ namespace FlaxEditor
             // Create common editor modules
             Profiler.BeginEvent("Modules");
             RegisterModule(Options = new OptionsModule(this));
+            RegisterModule(FMOD = new FmodEditorModule(this));
             RegisterModule(MultiplayerPlayMode = new MultiplayerPlayModeModule(this));
             RegisterModule(ProjectCache = new ProjectCacheModule(this));
             RegisterModule(Scene = new SceneModule(this));

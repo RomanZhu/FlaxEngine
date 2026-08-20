@@ -310,6 +310,10 @@ namespace FlaxEditor.Tools.CSG
             if (!_modeActive || !TryEnterSelectionContext() || Owner.SceneGraphRoot == null)
                 return;
 
+            // In edit mode of a CSG brush, do not select other brushes/models on click.
+            if (IsEditingContext)
+                return;
+
             Profiler.BeginEvent("CSG.Pick");
             var ray = Owner.MouseRay;
             var view = new Ray(Owner.ViewPosition, Owner.ViewDirection);
@@ -439,7 +443,7 @@ namespace FlaxEditor.Tools.CSG
             }
             if (_controller.Tool == CSGTool.Edit)
                 return BeginFaceEdit();
-            if (IsDrawBrushEditingContext && Owner.IsShiftDown)
+            if (brushEditContext)
                 return false;
             if (_controller.Tool != CSGTool.Draw)
                 return false;
@@ -569,6 +573,60 @@ namespace FlaxEditor.Tools.CSG
             _selectClickAppliedOnDown = false;
             UpdateStatusText();
             return true;
+        }
+
+        /// <summary>Exits the persistent edit context for the edited brush.</summary>
+        internal bool ExitEditContext()
+        {
+            if (_drawEditingBrush == null && !IsEditingContext)
+                return false;
+
+            _drawEditingBrush = null;
+            _activeBodyTransformBrush = null;
+            _faceEditTool.Reset();
+            ResetDirectEditComponents();
+            _selectExclusionNodes.Clear();
+            _selectClickAppliedOnDown = false;
+            _consumePointerMouseUp = false;
+
+            // If component link nodes (faces/edges/vertices) were selected, revert selection back to parent brush
+            var currentSelection = _selection.CSGSelection;
+            var brushNodes = new List<SceneGraphNode>();
+            for (int i = 0; i < currentSelection.Count; i++)
+            {
+                var node = currentSelection[i];
+                var brush = node as BoxBrushNode ?? node?.ParentNode as BoxBrushNode;
+                if (brush != null && !brushNodes.Contains(brush))
+                    brushNodes.Add(brush);
+            }
+            if (brushNodes.Count > 0 && (currentSelection.Count != brushNodes.Count || currentSelection[0] != brushNodes[0]))
+            {
+                _selection.Leave(brushNodes, Owner.SceneGraphRoot, _selectionBuffer);
+                ApplySelectionBuffer(false);
+            }
+
+            UpdateSupplementalTransformGizmo();
+            UpdateStatusText();
+            return true;
+        }
+
+        /// <summary>Attempts to cancel the current interaction or exit edit context.</summary>
+        internal bool TryCancel(EditorGizmoModeCancelReason reason)
+        {
+            if (_selectTool.Stage == CSGSelectDragStage.Armed)
+            {
+                TryCancelArmedSelectDrag();
+                return true;
+            }
+            if (_controller.HasActiveInteraction)
+            {
+                return _controller.TryCancel(reason);
+            }
+            if (IsEditingContext || _drawEditingBrush != null)
+            {
+                return ExitEditContext();
+            }
+            return false;
         }
 
         /// <summary>Handles numeric box dimensions before mode shortcut processing.</summary>
@@ -2040,7 +2098,8 @@ namespace FlaxEditor.Tools.CSG
                     continue;
 
                 var box = brush.OrientedBox;
-                if (!box.Intersects(ref ray, out Real distance) || distance < 0.0f)
+                if (box.Contains(ref ray.Position) == ContainmentType.Contains ||
+                    !box.Intersects(ref ray, out Real distance) || distance <= 0.0001f)
                     continue;
                 _hits.Add(new CSGHit
                 {

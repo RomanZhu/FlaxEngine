@@ -3,8 +3,12 @@
 #pragma once
 
 #include "AudioEventTypes.h"
+#include "AudioEventCallbacks.h"
+#include "AudioProgrammerSoundProvider.h"
 #include "IAudioEventBackend.h"
 #include "Engine/Scripting/ScriptingType.h"
+
+class AudioEvent;
 
 /// <summary>
 /// Static engine-facing entry point for playing and managing audio events, snapshots, banks, and parameters.
@@ -19,6 +23,11 @@ private:
 
 public:
     /// <summary>
+    /// Raised on the main thread when an event backend reports a lifecycle or timeline callback.
+    /// </summary>
+    API_EVENT() static Delegate<const AudioEventCallback&> EventCallback;
+
+    /// <summary>
     /// Gets the currently active audio event backend instance.
     /// </summary>
     static IAudioEventBackend* GetBackend();
@@ -27,6 +36,12 @@ public:
     /// Sets the active audio event backend instance.
     /// </summary>
     static void SetBackend(IAudioEventBackend* backend);
+
+    /// <summary>
+    /// Dispatches a backend callback after its handle generation has been validated.
+    /// This is for backend implementations; gameplay should subscribe to <see cref="EventCallback"/>.
+    /// </summary>
+    static void DispatchEventCallback(const AudioEventCallback& callback);
 
     /// <summary>
     /// Gets the backend type currently active.
@@ -106,6 +121,24 @@ public:
     API_FUNCTION() static bool IsBankLoaded(const Guid& bankId);
 
     /// <summary>
+    /// Loads sample data for an already loaded sound bank.
+    /// </summary>
+    API_FUNCTION() static bool LoadBankSampleData(const Guid& bankId);
+
+    /// <summary>
+    /// Releases sample data while retaining the bank metadata.
+    /// </summary>
+    API_FUNCTION() static void UnloadBankSampleData(const Guid& bankId);
+
+    /// <summary>
+    /// Gets the current loading state of a sound bank.
+    /// </summary>
+    API_FUNCTION() static AudioBankState GetBankState(const Guid& bankId);
+
+    /// <summary>Queries a bank by its asset ID or path without relying on UI state.</summary>
+    API_FUNCTION() static bool QueryBank(const Guid& bankId, const StringView& path, API_PARAM(Out) AudioBankRuntimeState& outState);
+
+    /// <summary>
     /// Creates a playback instance for an audio event.
     /// </summary>
     /// <param name="eventId">The event asset ID or GUID.</param>
@@ -113,6 +146,17 @@ public:
     /// <param name="options">Playback options.</param>
     /// <returns>Valid handle on success, invalid on failure.</returns>
     API_FUNCTION() static AudioEventHandle CreateInstance(const Guid& eventId, const StringView& path = StringView::Empty, const AudioEventCreateOptions& options = AudioEventCreateOptions());
+
+    /// <summary>Creates an instance from a typed event asset after guaranteeing its bank dependencies.</summary>
+    API_FUNCTION() static AudioEventHandle CreateInstanceFromAsset(AudioEvent* audioEvent, const AudioEventCreateOptions& options = AudioEventCreateOptions());
+
+#if USE_EDITOR
+    /// <summary>Creates an editor-owned preview instance without requiring Play mode.</summary>
+    API_FUNCTION() static AudioEventHandle CreatePreviewInstance(const Guid& eventId, const StringView& path = StringView::Empty, const AudioEventCreateOptions& options = AudioEventCreateOptions());
+
+    /// <summary>Starts an editor-owned preview instance without requiring Play mode.</summary>
+    API_FUNCTION() static bool PlayPreview(AudioEventHandle handle);
+#endif
 
     /// <summary>
     /// Starts playback of an audio event instance.
@@ -127,6 +171,11 @@ public:
     /// <param name="handle">Instance handle.</param>
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool Pause(AudioEventHandle handle);
+
+    /// <summary>
+    /// Sends a sustain key-off to an event without forcing an immediate stop.
+    /// </summary>
+    API_FUNCTION() static bool KeyOff(AudioEventHandle handle);
 
     /// <summary>
     /// Stops playback of an audio event instance.
@@ -150,6 +199,9 @@ public:
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool ReleaseInstance(AudioEventHandle handle);
 
+    /// <summary>Stops an instance, emits its terminal lifecycle callback on the main thread, and releases it.</summary>
+    API_FUNCTION() static bool StopAndRelease(AudioEventHandle handle, AudioStopMode stopMode = AudioStopMode::AllowFadeOut);
+
     /// <summary>
     /// Plays an audio event one-shot in 3D or 2D space.
     /// </summary>
@@ -160,6 +212,9 @@ public:
     /// <param name="pitch">Pitch multiplier.</param>
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool PlayOneShot(const Guid& eventId, const StringView& path = StringView::Empty, const Audio3DAttributes& attributes = Audio3DAttributes(), float volume = 1.0f, float pitch = 1.0f);
+
+    /// <summary>Plays a typed event asset after guaranteeing its bank dependencies.</summary>
+    API_FUNCTION() static bool PlayOneShotFromAsset(AudioEvent* audioEvent, const Audio3DAttributes& attributes = Audio3DAttributes(), float volume = 1.0f, float pitch = 1.0f);
 
     /// <summary>
     /// Sets 3D spatial positioning and orientation attributes on an event instance.
@@ -201,6 +256,9 @@ public:
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool SetListenerMask(AudioEventHandle handle, uint32 listenerMask);
 
+    /// <summary>Resolves an authored parameter name to its stable backend-neutral ID.</summary>
+    API_FUNCTION() static bool ResolveParameterId(const Guid& eventId, const StringView& eventPath, const StringView& name, API_PARAM(Out) AudioParameterId& id);
+
     /// <summary>
     /// Sets a numeric parameter value on an event instance.
     /// </summary>
@@ -212,6 +270,11 @@ public:
     API_FUNCTION() static bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false);
 
     /// <summary>
+    /// Sets several numeric parameters in one backend call where supported.
+    /// </summary>
+    API_FUNCTION() static bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false);
+
+    /// <summary>
     /// Sets a labeled parameter value on an event instance.
     /// </summary>
     /// <param name="handle">Instance handle.</param>
@@ -220,6 +283,9 @@ public:
     /// <param name="ignoreSeekSpeed">If true, sets value instantly ignoring seek speed.</param>
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false);
+
+    /// <summary>Resolves and binds media for an authored programmer-sound instrument.</summary>
+    API_FUNCTION() static bool SetProgrammerSound(AudioEventHandle handle, const StringView& key, AudioProgrammerSoundProvider* provider);
 
     /// <summary>
     /// Sets a global numeric parameter across all event instances.
@@ -247,8 +313,15 @@ public:
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool QueryInstance(AudioEventHandle handle, API_PARAM(Out) AudioEventInstanceState& outState);
 
+    /// <summary>Reads the current and final middleware value of an instance parameter.</summary>
+    API_FUNCTION() static bool GetParameter(AudioEventHandle handle, const AudioParameterId& id, API_PARAM(Out) AudioParameterState& outState);
+
+    /// <summary>Reads the current and final middleware value of a global parameter.</summary>
+    API_FUNCTION() static bool GetGlobalParameter(const AudioParameterId& id, API_PARAM(Out) AudioParameterState& outState);
+
     /// <summary>
-    /// Sets snapshot evaluation blend weight.
+    /// Sets snapshot evaluation blend weight when the backend supports a native, backend-neutral blend operation.
+    /// Prefer an explicitly authored parameter on the snapshot asset for continuous blending.
     /// </summary>
     /// <param name="handle">Instance handle.</param>
     /// <param name="weight">Weight multiplier in range [0, 1].</param>
@@ -282,6 +355,16 @@ public:
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool SetBusPaused(const Guid& busId, const StringView& path, bool paused);
 
+    /// <summary>Stops all event instances routed through a bus.</summary>
+    /// <param name="busId">Bus GUID.</param>
+    /// <param name="path">Bus path.</param>
+    /// <param name="stopMode">Whether authored fade-out is allowed.</param>
+    API_FUNCTION() static bool StopBusEvents(const Guid& busId, const StringView& path, AudioStopMode stopMode = AudioStopMode::AllowFadeOut);
+
+    API_FUNCTION() static bool GetBusVolume(const Guid& busId, const StringView& path, API_PARAM(Out) float& outVolume, API_PARAM(Out) float& outFinalVolume);
+    API_FUNCTION() static bool GetBusMute(const Guid& busId, const StringView& path, API_PARAM(Out) bool& outMuted);
+    API_FUNCTION() static bool GetBusPaused(const Guid& busId, const StringView& path, API_PARAM(Out) bool& outPaused);
+
     /// <summary>
     /// Sets volume on a Voltage-Controlled Amplifier (VCA).
     /// </summary>
@@ -290,6 +373,9 @@ public:
     /// <param name="volume">Volume multiplier.</param>
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool SetVCAVolume(const Guid& vcaId, const StringView& path, float volume);
+
+    /// <summary>Gets the authored and final volume of a Voltage-Controlled Amplifier (VCA).</summary>
+    API_FUNCTION() static bool GetVCAVolume(const Guid& vcaId, const StringView& path, API_PARAM(Out) float& outVolume, API_PARAM(Out) float& outFinalVolume);
 
     /// <summary>
     /// Captures a point-in-time diagnostics telemetry snapshot from the active backend.

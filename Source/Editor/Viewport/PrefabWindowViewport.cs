@@ -556,6 +556,7 @@ namespace FlaxEditor.Viewport
                 trans.Translation += translationDelta;
 
                 obj.Transform = trans;
+
             }
         }
 

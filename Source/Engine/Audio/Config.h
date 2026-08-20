@@ -6,7 +6,7 @@
 #include "Engine/Content/Config.h"
 
 // The maximum amount of listeners used at once
-#define AUDIO_MAX_LISTENERS 1
+#define AUDIO_MAX_LISTENERS 4
 
 // The maximum amount of audio emitter buffers
 #define AUDIO_MAX_SOURCE_BUFFERS (ASSET_FILE_DATA_CHUNKS)

@@ -77,6 +77,18 @@ public:
     API_FIELD(Attributes="EditorOrder(100), EditorDisplay(\"Physical Material\")")
     Tag Tag;
 
+    /// <summary>
+    /// Broadband acoustic transmission coefficient used by audio occlusion (0 is opaque, 1 is transparent).
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(110), Range(0, 1), EditorDisplay(\"Audio\")")
+    float AudioTransmission = 0.0f;
+
+    /// <summary>
+    /// Low-frequency acoustic transmission coefficient used by audio occlusion.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(111), Range(0, 1), EditorDisplay(\"Audio\")")
+    float AudioLowFrequencyTransmission = 0.0f;
+
 public:
     /// <summary>
     /// Gets the PhysX material.

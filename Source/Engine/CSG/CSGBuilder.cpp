@@ -3,6 +3,7 @@
 #include "CSGBuilder.h"
 #include "CSGMesh.h"
 #include "CSGData.h"
+#include "CSGCompilation.h"
 #include "Engine/Level/Level.h"
 #include "Engine/Level/SceneQuery.h"
 #include "Engine/Level/Actor.h"
@@ -30,7 +31,15 @@ using namespace CSG;
 // Enable/disable locking scene during building CSG brushes nodes
 #define CSG_USE_SCENE_LOCKS 0
 
-struct BuildData;
+struct BuildData
+{
+    int32 brushesCount = 0;
+    Guid outputModelAssetId = Guid::Empty;
+    Guid outputRawDataAssetId = Guid::Empty;
+    Guid outputCollisionDataAssetId = Guid::Empty;
+
+    BuildData() = default;
+};
 
 namespace CSGBuilderImpl
 {
@@ -39,8 +48,8 @@ namespace CSGBuilderImpl
     void onSceneUnloading(Scene* scene, const Guid& sceneId);
     bool buildInner(Scene* scene, BuildData& data);
     void build(Scene* scene);
-    bool updatePreviewModel(Scene* scene, const ModelData& modelData);
-    bool generateRawDataAsset(Scene* scene, RawData& meshData, Guid& assetId, const String& assetPath);
+    bool updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData);
+    bool generateRawDataAsset(RawData& meshData, Guid& assetId, const String& assetPath);
 }
 
 using namespace CSGBuilderImpl;
@@ -92,6 +101,7 @@ void CSGBuilderService::Update()
             }
         }
     }
+
 }
 
 bool Builder::IsActive()
@@ -118,141 +128,8 @@ void Builder::Build(Scene* scene, float timeoutMs)
     scene->CSGData.BuildTime = DateTime::NowUTC() + TimeSpan::FromMilliseconds(timeoutMs);
 }
 
-namespace CSG
-{
-    typedef Dictionary<Actor*, Mesh*> MeshesLookup;
 
-    bool walkTree(Actor* actor, MeshesArray& meshes, MeshesLookup& cache)
-    {
-        // Check if actor is a brush
-        auto brush = dynamic_cast<Brush*>(actor);
-        if (brush)
-        {
-            // Check if can build it
-            if (brush->CanUseCSG())
-            {
-                // Skip subtract/common meshes from the beginning (they have no effect)
-                if (meshes.Count() > 0 || brush->GetBrushMode() == Mode::Additive)
-                {
-                    // Create new mesh and build for given brush
-                    auto mesh = New<CSG::Mesh>();
-                    mesh->Build(brush);
-
-                    // Save results
-                    meshes.Add(mesh);
-                    cache.Add(actor, mesh);
-                }
-                else
-                {
-                    // Info
-                    LOG(Info, "Skipping CSG brush '{0}'", actor->ToString());
-                }
-            }
-        }
-
-        return true;
-    }
-
-    Mesh* Combine(Actor* actor, MeshesLookup& cache, Mesh* combineParent)
-    {
-        ASSERT(actor);
-        Mesh* result = nullptr;
-        Mesh* myBrush = nullptr;
-        cache.TryGet(actor, myBrush);
-
-        // Get first child mesh with valid data (has additive brush)
-        int32 childIndex = 0;
-        while (childIndex < actor->Children.Count())
-        {
-            auto child = Combine(actor->Children[childIndex], cache, combineParent);
-
-            childIndex++;
-            if (child)
-            {
-                // If brush was based on additive brush or current actor is a brush we can stop searching
-                if (child->HasMode(Mode::Additive) || myBrush)
-                {
-                    // End searching
-                    result = child;
-                    break;
-                }
-
-                if (combineParent)
-                {
-                    // Combine
-                    combineParent->PerformOperation(child);
-                }
-            }
-        }
-
-        // Check if has any child with CSG brush
-        if (result)
-        {
-            // Check if has own brush
-            if (myBrush)
-            {
-                // Combine with first child
-                myBrush->PerformOperation(result);
-
-                // Set this actor brush as a result
-                result = myBrush;
-            }
-
-            // Merge with the other children
-            while (childIndex < actor->Children.Count())
-            {
-                auto child = Combine(actor->Children[childIndex], cache, result);
-                if (child)
-                {
-                    // Combine
-                    result->PerformOperation(child);
-                }
-
-                childIndex++;
-            }
-        }
-        else
-        {
-            // Use this actor brush (may be empty)
-            result = myBrush;
-        }
-
-        return result;
-    }
-
-    Mesh* Combine(Scene* scene, MeshesLookup& cache)
-    {
-#if CSG_USE_SCENE_LOCKS
-		auto Level = Level::Instance();
-		Level->Lock();
-#endif
-
-        Mesh* result = Combine(scene, cache, nullptr);
-
-#if CSG_USE_SCENE_LOCKS
-		Level->Unlock();
-#endif
-
-        return result;
-    }
-}
-
-struct BuildData
-{
-    MeshesArray meshes;
-    MeshesLookup cache;
-    Guid outputModelAssetId = Guid::Empty;
-    Guid outputRawDataAssetId = Guid::Empty;
-    Guid outputCollisionDataAssetId = Guid::Empty;
-
-    BuildData(int32 meshesCapacity = 32)
-        : meshes(meshesCapacity * 32)
-        , cache(meshesCapacity * 4)
-    {
-    }
-};
-
-bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData)
+bool CSGBuilderImpl::updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData)
 {
     // Render lists store raw mesh buffer pointers. Exclude rendering while the
     // inactive preview is rebuilt and published, then keep the old preview alive
@@ -268,7 +145,7 @@ bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData
     // live Mesh objects and invalidate their GPU-resource ownership. Material
     // changes commonly alter the number of CSG mesh partitions, so only reuse the
     // inactive preview when its LOD and mesh counts already match exactly.
-    AssetReference<Model> previewModel = scene->CSGData.PreviewModelCache;
+    AssetReference<Model> previewModel = csgData.PreviewModelCache;
     bool canReusePreview = previewModel && previewModel->LODs.Count() == meshesCountPerLod.Count();
     for (int32 lodIndex = 0; canReusePreview && lodIndex < meshesCountPerLod.Count(); lodIndex++)
         canReusePreview = previewModel->LODs[lodIndex].Meshes.Count() == meshesCountPerLod[lodIndex];
@@ -314,37 +191,29 @@ bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData
 
     // Publish only after the entire model is ready. The render lock guarantees no
     // draw list still contains pointers to the model moving into the cache.
-    scene->CSGData.PreviewModelCache = scene->CSGData.PreviewModel;
-    scene->CSGData.PreviewModel = previewModel;
-    scene->CSGData.PostCSGBuild();
+    csgData.PreviewModelCache = csgData.PreviewModel;
+    csgData.PreviewModel = previewModel;
+
     return false;
 }
 
 bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
 {
-    // Setup CSG meshes list and build them
-    {
-        Function<bool(Actor*, MeshesArray&, MeshesLookup&)> treeWalkFunction(walkTree);
-        SceneQuery::TreeExecute<Array<CSG::Mesh*>&, MeshesLookup&>(treeWalkFunction, data.meshes, data.cache);
-    }
-    if (data.meshes.IsEmpty())
+    // Compile explicit stacks and implicit brushes under the scene target
+    CSG::Mesh combinedMesh;
+    if (!CSGCompilation::CompileTargetMeshes(scene, combinedMesh))
         return false;
-
-    // Process all meshes (performs actual CSG opterations on geometry in tree structure)
-    CSG::Mesh* combinedMesh = Combine(scene, data.cache);
-    if (combinedMesh == nullptr)
+    if (combinedMesh.GetPolygons()->IsEmpty())
         return false;
 
     // TODO: split too big meshes (too many verts, to far parts, etc.)
 
     // Triangulate meshes
     {
-        // TODO: setup valid loop for splited meshes
-
         // Convert CSG meshes into raw triangles data
         RawData meshData;
         Array<MeshVertex> vertexBuffer;
-        combinedMesh->Triangulate(meshData, vertexBuffer);
+        combinedMesh.Triangulate(meshData, vertexBuffer);
         meshData.RemoveEmptySlots();
         if (meshData.Slots.HasItems())
         {
@@ -365,7 +234,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
             // Keep the viewport on a memory-backed model while the persisted model asset
             // is rewritten. This mirrors RealtimeCSG's dynamic-mesh update path and avoids
             // exposing the asset reload/unloaded state to rendering.
-            if (updatePreviewModel(scene, modelData))
+            if (updatePreviewModel(scene->CSGData, modelData))
             {
                 LOG(Warning, "Failed to update live CSG preview model");
                 return true;
@@ -385,13 +254,15 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 data.outputModelAssetId = modelDataAssetId;
             }
 
+            data.brushesCount = meshData.Brushes.Count();
+
             // Generate asset with CSG mesh metadata (for collisions and brush queries)
             {
                 Guid rawDataAssetId = scene->CSGData.Data.GetID();
                 if (!rawDataAssetId.IsValid())
                     rawDataAssetId = Guid::New();
                 const String rawDataAssetPath = sceneDataFolderPath / TEXT("CSG_Data") + ASSET_FILES_EXTENSION_WITH_DOT;
-                if (generateRawDataAsset(scene, meshData, rawDataAssetId, rawDataAssetPath))
+                if (generateRawDataAsset(meshData, rawDataAssetId, rawDataAssetPath))
                 {
                     LOG(Warning, "Failed to create raw CSG data");
                     return true;
@@ -435,8 +306,6 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                     return true;
                 }
                 data.outputCollisionDataAssetId = collisionDataAssetId;
-#else
-                data.outputCollisionDataAssetId = Guid::Empty;
 #endif
             }
         }
@@ -447,48 +316,44 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
 
 void CSGBuilderImpl::build(Scene* scene)
 {
-    // Start
+    if (scene == nullptr)
+        return;
+
     auto startTime = DateTime::Now();
-    LOG(Info, "Start building CSG...");
+    LOG(Info, "Start building CSG for scene \'{0}\'...", scene->GetName());
 
     // Build
     BuildData data;
-    bool failed = buildInner(scene, data);
-
-    // A failed or transiently invalid edit must not replace the last good result
-    // with empty references. The next successful request will update it.
-    if (failed)
+    if (buildInner(scene, data))
     {
-        data.meshes.ClearDelete();
-        LOG(Warning, "Failed to build CSG. Preserving the previous result.");
+        LOG(Warning, "Failed to build CSG for scene \'{0}\'.", scene->GetName());
         return;
     }
 
-    // Link new (or empty) CSG mesh
+    // Assign results
     auto outputData = Content::LoadAsync<RawDataAsset>(data.outputRawDataAssetId);
     auto outputModel = Content::LoadAsync<Model>(data.outputModelAssetId);
     auto outputCollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
 
+    scene->CSGData.Data = outputData;
     if (!outputModel)
     {
         GPUDeviceLock gpuLock(GPUDevice::Instance);
-        scene->CSGData.PreviewModel = nullptr;
-        scene->CSGData.PreviewModelCache = nullptr;
+        scene->CSGData.ClearTransientPreview();
+        scene->CSGData.Model = outputModel;
     }
-    scene->CSGData.Data = outputData;
-    scene->CSGData.Model = outputModel;
+    else
+    {
+        scene->CSGData.Model = outputModel;
+    }
     scene->CSGData.CollisionData = outputCollisionData;
-    // TODO: also set CSGData.InstanceBuffer - lightmap scales for the entries so csg mesh gets better quality in lightmaps
     scene->CSGData.PostCSGBuild();
 
-    // End
-    const int32 brushesCount = data.meshes.Count();
-    data.meshes.ClearDelete();
     auto endTime = DateTime::Now();
-    LOG(Info, "CSG build in {0} ms! {1} brush(es)", (endTime - startTime).GetTotalMilliseconds(), brushesCount);
+    LOG(Info, "CSG build for scene \'{0}\' in {1} ms! {2} brush(es)", scene->GetName(), (endTime - startTime).GetTotalMilliseconds(), data.brushesCount);
 }
 
-bool CSGBuilderImpl::generateRawDataAsset(Scene* scene, RawData& meshData, Guid& assetId, const String& assetPath)
+bool CSGBuilderImpl::generateRawDataAsset(RawData& meshData, Guid& assetId, const String& assetPath)
 {
     // Prepare data
     MemoryWriteStream stream(4096);

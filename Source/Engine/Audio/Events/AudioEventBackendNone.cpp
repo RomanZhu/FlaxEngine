@@ -103,6 +103,21 @@ void AudioEventBackendNone::OnActiveDeviceChanged()
 {
 }
 
+void AudioEventBackendNone::EnumerateOutputDevices(Array<AudioOutputDeviceInfo>& result) const
+{
+    result.Clear();
+}
+
+bool AudioEventBackendNone::SetOutputDevice(const StringView& stableId)
+{
+    return stableId.IsEmpty();
+}
+
+String AudioEventBackendNone::GetOutputDevice() const
+{
+    return String::Empty;
+}
+
 void AudioEventBackendNone::UpdateListeners(const Span<AudioListenerState>& listeners)
 {
 }
@@ -177,6 +192,20 @@ bool AudioEventBackendNone::IsBankLoaded(const Guid& bankId) const
     return _loadedBanks.Contains(bankId);
 }
 
+bool AudioEventBackendNone::LoadBankSampleData(const Guid& bankId)
+{
+    return _loadedBanks.Contains(bankId);
+}
+
+void AudioEventBackendNone::UnloadBankSampleData(const Guid& bankId)
+{
+}
+
+AudioBankState AudioEventBackendNone::GetBankState(const Guid& bankId) const
+{
+    return _loadedBanks.Contains(bankId) ? AudioBankState::Loaded : AudioBankState::Unloaded;
+}
+
 AudioEventHandle AudioEventBackendNone::CreateInstance(const Guid& eventId, const StringView& path, const AudioEventCreateOptions& options)
 {
     uint32 index = 0;
@@ -228,6 +257,11 @@ bool AudioEventBackendNone::Pause(AudioEventHandle handle)
     slot->State.IsPaused = true;
     slot->State.PlaybackState = AudioEventPlaybackState::Paused;
     return true;
+}
+
+bool AudioEventBackendNone::KeyOff(AudioEventHandle handle)
+{
+    return Stop(handle, AudioStopMode::AllowFadeOut);
 }
 
 bool AudioEventBackendNone::Stop(AudioEventHandle handle, AudioStopMode stopMode)
@@ -331,6 +365,12 @@ bool AudioEventBackendNone::SetListenerMask(AudioEventHandle handle, uint32 list
     return ValidateHandle(handle);
 }
 
+bool AudioEventBackendNone::ResolveParameterId(const Guid& eventId, const StringView& eventPath, const StringView& name, AudioParameterId& id)
+{
+    id = AudioParameterId(name);
+    return name.HasChars();
+}
+
 bool AudioEventBackendNone::SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed)
 {
     auto* slot = GetSlot(handle);
@@ -341,9 +381,22 @@ bool AudioEventBackendNone::SetParameter(AudioEventHandle handle, const AudioPar
     return true;
 }
 
+bool AudioEventBackendNone::SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed)
+{
+    bool result = true;
+    for (const auto& value : values)
+        result &= SetParameter(handle, value.Id, value.Value, ignoreSeekSpeed);
+    return result;
+}
+
 bool AudioEventBackendNone::SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed)
 {
     return ValidateHandle(handle);
+}
+
+bool AudioEventBackendNone::SetProgrammerSound(AudioEventHandle handle, const AudioProgrammerSoundData& data)
+{
+    return ValidateHandle(handle) && data.Path.HasChars();
 }
 
 bool AudioEventBackendNone::SetGlobalParameter(const AudioParameterId& id, float value, bool ignoreSeekSpeed)
@@ -394,6 +447,9 @@ bool AudioEventBackendNone::SetVCAVolume(const Guid& vcaId, const StringView& pa
 
 void AudioEventBackendNone::CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot)
 {
+    outSnapshot = AudioDiagnosticsSnapshot();
+    outSnapshot.BackendName = GetName();
+    outSnapshot.Initialized = true;
     outSnapshot.CpuUsage = 0.0f;
     outSnapshot.MemoryAllocated = 0;
     // Count path-only banks in addition to GUID-backed entries without double-counting

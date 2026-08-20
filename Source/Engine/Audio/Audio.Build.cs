@@ -18,6 +18,7 @@ public class Audio : EngineModule
         options.SourcePaths.Clear();
         options.SourceFiles.AddRange(Directory.GetFiles(FolderPath, "*.*", SearchOption.TopDirectoryOnly));
         options.SourcePaths.Add(Path.Combine(FolderPath, "Events"));
+        options.SourcePaths.Add(Path.Combine(FolderPath, "Diagnostics"));
 
         var depsRoot = options.DepsFolder;
 
@@ -42,7 +43,13 @@ public class Audio : EngineModule
                 fmodRoot = defaultWindowsFmod;
         }
 
-        bool hasFmod = !string.IsNullOrEmpty(fmodRoot) && Directory.Exists(fmodRoot);
+        bool disableFmod = string.Equals(System.Environment.GetEnvironmentVariable("FLAX_AUDIO_DISABLE_FMOD"), "1", System.StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(System.Environment.GetEnvironmentVariable("FLAX_AUDIO_DISABLE_FMOD"), "true", System.StringComparison.OrdinalIgnoreCase);
+        // This integration currently deploys the FMOD Studio Windows SDK layout.
+        // Keep other targets on the backend-neutral Null path until their native
+        // SDK libraries and runtime deployment rules are explicitly supplied.
+        bool hasFmod = !disableFmod && options.Platform.Target == TargetPlatform.Windows &&
+                       !string.IsNullOrEmpty(fmodRoot) && Directory.Exists(fmodRoot);
         if (hasFmod)
         {
             options.SourcePaths.Add(Path.Combine(FolderPath, "FMOD"));

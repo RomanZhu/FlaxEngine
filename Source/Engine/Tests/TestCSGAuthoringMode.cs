@@ -1063,6 +1063,62 @@ namespace FlaxEditor.Tests
             host.Dispose();
         }
 
+        [Test]
+        public void TestCSGAuthoringGizmoModeTryCancelExitsEditContext()
+        {
+            var owner = new TestGizmoOwner();
+            var mode = new CSGAuthoringGizmoMode();
+            owner.Gizmos.AddMode(mode);
+            owner.Gizmos.ActiveMode = mode;
+
+            var actor = new BoxBrush();
+            var brush = new BoxBrushNode(actor);
+            try
+            {
+                Assert.IsNotNull(mode.Gizmo);
+                Assert.IsTrue(mode.Gizmo.EnterEditContext(brush));
+                Assert.IsTrue(mode.Gizmo.IsEditingContext);
+
+                // Cancel in edit mode should exit edit mode cleanly
+                Assert.IsTrue(mode.TryCancel(EditorGizmoModeCancelReason.User));
+                Assert.IsFalse(mode.Gizmo.IsEditingContext);
+            }
+            finally
+            {
+                brush.Dispose();
+                FlaxEngine.Object.Destroy(actor);
+                mode.Dispose();
+                owner.Gizmos.Clear();
+            }
+        }
+
+        [Test]
+        public void TestCSGAuthoringGizmoMouseDownInEditModeReturnsFalseOutsideHandles()
+        {
+            var owner = new TestGizmoOwner();
+            var mode = new CSGAuthoringGizmoMode();
+            owner.Gizmos.AddMode(mode);
+            owner.Gizmos.ActiveMode = mode;
+
+            var actor = new BoxBrush();
+            var brush = new BoxBrushNode(actor);
+            try
+            {
+                Assert.IsTrue(mode.Gizmo.EnterEditContext(brush));
+                Assert.IsTrue(mode.Gizmo.IsEditingContext);
+
+                // Clicking outside handles in edit mode should return false so rubberband marquee can start
+                Assert.IsFalse(mode.Gizmo.OnMouseDown(new Float2(100, 100), MouseButton.Left));
+            }
+            finally
+            {
+                brush.Dispose();
+                FlaxEngine.Object.Destroy(actor);
+                mode.Dispose();
+                owner.Gizmos.Clear();
+            }
+        }
+
         private sealed class TestMode : EditorGizmoMode
         {
             public int ActivationCount;

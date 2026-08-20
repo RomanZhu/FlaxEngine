@@ -307,6 +307,7 @@ namespace FlaxEditor.Windows.Assets
             InputActions.Add(options => options.Delete, Delete);
             InputActions.Add(options => options.Rename, RenameSelection);
             InputActions.Add(options => options.FocusSelection, FocusSelection);
+            InputActions.Add(options => options.GroupSelectedActors, MakeSelectionGroup);
         }
 
         private void PerformUndo()

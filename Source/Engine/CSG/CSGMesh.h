@@ -4,6 +4,7 @@
 
 #include "Engine/Core/Math/AABB.h"
 #include "Engine/Core/Collections/Array.h"
+#include "Engine/Core/Types/Span.h"
 #include "Brush.h"
 #include "HalfEdge.h"
 #include "Polygon.h"
@@ -16,19 +17,16 @@
 namespace CSG
 {
     class RawData;
-
-    enum PolygonOperation
-    {
-        Keep,
-        Remove,
-        Flip
-    };
+    struct Operand;
+    class CSGStackEvaluator;
 
     /// <summary>
     /// CSG mesh object
     /// </summary>
     class Mesh
     {
+        friend class CSGStackEvaluator;
+
     private:
 
         struct BrushMeta
@@ -82,6 +80,15 @@ namespace CSG
         }
 
         /// <summary>
+        /// Gets mutable array with polygons
+        /// </summary>
+        /// <returns>Polygon array</returns>
+        Array<Polygon>& Polygons()
+        {
+            return _polygons;
+        }
+
+        /// <summary>
         /// Gets array with surfaces
         /// </summary>
         /// <returns>Surfaces</returns>
@@ -117,6 +124,12 @@ namespace CSG
         void Build(Brush* parentBrush);
 
         /// <summary>
+        /// Build mesh from operand snapshot
+        /// </summary>
+        /// <param name="operand">Operand snapshot to use</param>
+        void Build(const Operand& operand);
+
+        /// <summary>
         /// Triangulate mesh
         /// </summary>
         /// <param name="data">Result data</param>
@@ -125,26 +138,47 @@ namespace CSG
         bool Triangulate(RawData& data, Array<MeshVertex>& cacheVB) const;
 
         /// <summary>
-        /// Perform CSG operation with another mesh
-        /// </summary>
-        /// <param name="other">Other mesh data to process</param>
-        void PerformOperation(Mesh* other);
-
-        /// <summary>
         /// Add other mesh data
         /// </summary>
         /// <param name="other">Other mesh to merge with</param>
         void Add(const Mesh* other);
 
+        /// <summary>
+        /// Appends resolved mesh geometry without performing any boolean operation.
+        /// </summary>
+        /// <param name="other">The resolved mesh to append.</param>
+        void AppendResolvedGeometry(const Mesh* other);
+
+        /// <summary>
+        /// Partitions all visible polygons by a cutting plane without resolving keep/remove operations.
+        /// </summary>
+        /// <param name="cuttingPlane">The cutting plane.</param>
+        void PartitionVisiblePolygons(const Surface& cuttingPlane);
+
+        /// <summary>
+        /// Partitions all visible polygons by multiple cutting planes without resolving keep/remove operations.
+        /// </summary>
+        /// <param name="cuttingPlanes">The cutting planes.</param>
+        void PartitionVisiblePolygons(Span<const Surface> cuttingPlanes);
+
+        /// <summary>
+        /// Gets the centroid position of a polygon.
+        /// </summary>
+        /// <param name="polygonIndex">The polygon index.</param>
+        /// <returns>The centroid point.</returns>
+        Vector3 GetPolygonCentroid(int32 polygonIndex) const;
+
+        /// <summary>
+        /// Gets the geometric normal of a polygon (taking inversion into account).
+        /// </summary>
+        /// <param name="polygonIndex">The polygon index.</param>
+        /// <returns>The normal vector.</returns>
+        Vector3 GetPolygonNormal(int32 polygonIndex) const;
+
     private:
 
-        void intersect(const Mesh* other, PolygonOperation insideOp, PolygonOperation outsideOp);
-        void intersectSubMesh(const Mesh* other, int32 subMeshIndex, PolygonOperation insideOp, PolygonOperation outsideOp);
-        void updateBounds();
-        static void resolvePolygon(Polygon& polygon, PolygonOperation op);
         void edgeSplit(int32 edgeIndex, const Vector3& vertex);
         PolygonSplitResult polygonSplit(const Surface& cuttingPlane, int32 inputPolygonIndex, Polygon** outputPolygon);
-        void doPolygonsOperation(bool isInverted, bool visibility);
     };
 
     typedef Array<Mesh*> MeshesArray;

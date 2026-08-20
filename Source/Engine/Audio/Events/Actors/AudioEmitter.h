@@ -6,6 +6,8 @@
 #include "Engine/Content/JsonAssetReference.h"
 #include "Engine/Audio/Events/AudioEventHandle.h"
 #include "Engine/Audio/Events/AudioEventTypes.h"
+#include "Engine/Audio/Events/AudioEventCallbacks.h"
+#include "Engine/Audio/Events/Occlusion/AudioOcclusionTypes.h"
 #include "Engine/Audio/Events/Assets/AudioEvent.h"
 
 /// <summary>
@@ -28,6 +30,8 @@ private:
     bool _playOnStart = false;
     bool _allowSpatialization = true;
     AudioStopMode _stopMode = AudioStopMode::AllowFadeOut;
+    bool _stopOnDisable = true;
+    uint32 _listenerMask = 1;
     AudioEventHandle _handle;
 
 public:
@@ -133,9 +137,48 @@ public:
     /// </summary>
     API_PROPERTY() bool IsActuallyPlaying() const;
 
+    /// <summary>Raised when this emitter starts a playback instance.</summary>
+    API_EVENT() Action Started;
+
+    /// <summary>Raised when this emitter stops or releases its playback instance.</summary>
+    API_EVENT() Action Stopped;
+
+    /// <summary>Raised for a backend timeline marker owned by this emitter.</summary>
+    API_EVENT() Delegate<String, int32> TimelineMarker;
+
+    /// <summary>Raised for a backend musical timeline beat owned by this emitter.</summary>
+    API_EVENT() Delegate<AudioTimelineBeat> TimelineBeat;
+
+    /// <summary>Listener mask applied to newly created instances.</summary>
+    API_PROPERTY(Attributes="EditorOrder(60), EditorDisplay(\"Audio Emitter\", \"Listener Mask\")")
+    FORCE_INLINE uint32 GetListenerMask() const { return _listenerMask; }
+
+    /// <summary>Sets the listener mask applied to this emitter.</summary>
+    API_PROPERTY() void SetListenerMask(uint32 value);
+
+    /// <summary>Whether the instance is stopped when the actor is disabled.</summary>
+    API_PROPERTY(Attributes="EditorOrder(70), DefaultValue(true), EditorDisplay(\"Audio Emitter\", \"Stop On Disable\")")
+    FORCE_INLINE bool GetStopOnDisable() const { return _stopOnDisable; }
+
+    /// <summary>Sets whether the instance is stopped when the actor is disabled.</summary>
+    API_PROPERTY() void SetStopOnDisable(bool value) { _stopOnDisable = value; }
+
+    /// <summary>Per-emitter scalable acoustic obstruction settings.</summary>
+    API_FIELD(Attributes="EditorOrder(80), EditorDisplay(\"Audio Emitter\", \"Occlusion\")")
+    AudioOcclusionSettings Occlusion;
+
+    /// <summary>Priority used when the global occlusion query budget is oversubscribed.</summary>
+    API_FIELD(Attributes="EditorOrder(81), EditorDisplay(\"Audio Emitter\", \"Occlusion Priority\")")
+    int32 OcclusionPriority = 0;
+
+    /// <summary>Returns the sanitized occlusion settings used by the world scheduler.</summary>
+    const AudioOcclusionSettings& GetOcclusionSettings() const { return Occlusion; }
+    int32 GetOcclusionPriority() const { return OcclusionPriority; }
+
 private:
     void UpdateVelocity(float dt);
     void Push3DAttributes();
+    void HandleEventCallback(const AudioEventCallback& callback);
 
 public:
     // [Actor]

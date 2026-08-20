@@ -4,6 +4,7 @@
 
 #include "Engine/Scripting/ScriptingObject.h"
 #include "Engine/Core/ISerializable.h"
+#include "Engine/Audio/Events/AudioEventTypes.h"
 
 /// <summary>
 /// Serializable audio mixer snapshot asset.
@@ -26,4 +27,11 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(10), EditorDisplay(\"Snapshot\")")
     String Path;
+
+    /// <summary>
+    /// Optional authored parameter used to control this snapshot's blend weight.
+    /// Empty means the snapshot uses normal start/stop behaviour only.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(20), EditorDisplay(\"Snapshot\", \"Weight Parameter\")")
+    AudioParameterId WeightParameter;
 };

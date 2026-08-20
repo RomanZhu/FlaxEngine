@@ -4,7 +4,7 @@
 
 #if AUDIO_EVENT_API_FMOD
 
-AudioEventHandle FmodHandleRegistry::Allocate(FMOD::Studio::EventInstance* instance, const Guid& eventId, const Guid& ownerId)
+AudioEventHandle FmodHandleRegistry::Allocate(FMOD::Studio::EventInstance* instance, const Guid& eventId, const Guid& ownerId, bool oneShot)
 {
     uint32 index = 0;
     if (_freeIndices.HasItems())
@@ -24,20 +24,34 @@ AudioEventHandle FmodHandleRegistry::Allocate(FMOD::Studio::EventInstance* insta
 
     slot.InUse = true;
     slot.Instance = instance;
+    slot.CallbackContext = nullptr;
     slot.EventId = eventId;
     slot.OwnerId = ownerId;
+    slot.OneShot = oneShot;
+    slot.PlayCount = 0;
 
     return AudioEventHandle(index, slot.Generation);
 }
 
-bool FmodHandleRegistry::Free(AudioEventHandle handle, FMOD::Studio::EventInstance*& outInstance)
+bool FmodHandleRegistry::SetCallbackContext(AudioEventHandle handle, FmodInstanceContext* context)
+{
+    if (!Validate(handle))
+        return false;
+
+    _slots[handle.Index].CallbackContext = context;
+    return true;
+}
+
+bool FmodHandleRegistry::Free(AudioEventHandle handle, FMOD::Studio::EventInstance*& outInstance, FmodInstanceContext*& outContext)
 {
     outInstance = nullptr;
+    outContext = nullptr;
     if (!Validate(handle))
         return false;
 
     auto& slot = _slots[handle.Index];
     outInstance = slot.Instance;
+    outContext = slot.CallbackContext;
 
     slot.Generation++;
     if (slot.Generation == 0)
@@ -45,8 +59,11 @@ bool FmodHandleRegistry::Free(AudioEventHandle handle, FMOD::Studio::EventInstan
 
     slot.InUse = false;
     slot.Instance = nullptr;
+    slot.CallbackContext = nullptr;
     slot.EventId = Guid::Empty;
     slot.OwnerId = Guid::Empty;
+    slot.OneShot = false;
+    slot.PlayCount = 0;
     _freeIndices.Add(handle.Index);
 
     return true;
@@ -59,9 +76,27 @@ FMOD::Studio::EventInstance* FmodHandleRegistry::Get(AudioEventHandle handle) co
     return nullptr;
 }
 
+FmodInstanceContext* FmodHandleRegistry::GetCallbackContext(AudioEventHandle handle) const
+{
+    if (!Validate(handle))
+        return nullptr;
+    return _slots[handle.Index].CallbackContext;
+}
+
 bool FmodHandleRegistry::Validate(AudioEventHandle handle) const
 {
     return handle.IsValid() && (int32)handle.Index < _slots.Count() && _slots[handle.Index].InUse && _slots[handle.Index].Generation == handle.Generation;
+}
+
+bool FmodHandleRegistry::IsOneShot(AudioEventHandle handle) const
+{
+    return Validate(handle) && _slots[handle.Index].OneShot;
+}
+
+void FmodHandleRegistry::MarkPlayed(AudioEventHandle handle)
+{
+    if (Validate(handle))
+        _slots[handle.Index].PlayCount++;
 }
 
 void FmodHandleRegistry::Clear()

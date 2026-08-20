@@ -2,6 +2,7 @@
 
 #include "AudioBankLoader.h"
 #include "Engine/Audio/Events/AudioEventSystem.h"
+#include "Engine/Audio/Events/AudioEventCatalog.h"
 #include "Engine/Level/Scene/Scene.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Serialization/Serialization.h"
@@ -31,6 +32,7 @@ void AudioBankLoader::LoadBanks()
             const auto* bank = asset->GetInstance<AudioBank>();
             if (bank)
             {
+                AudioEventCatalog::RegisterBank(bank);
                 bankId = bank->BackendId;
                 path = bank->Path;
                 nonBlocking = bank->NonBlocking;

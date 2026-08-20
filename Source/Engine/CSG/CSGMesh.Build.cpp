@@ -1,12 +1,26 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "CSGMesh.h"
+#include "CSGOperand.h"
 
 #if COMPILE_WITH_CSG_BUILDER
 
 #include "Engine/Core/Log.h"
 
 void CSG::Mesh::Build(Brush* parentBrush)
+{
+    if (parentBrush == nullptr)
+        return;
+    Operand op;
+    op.SourceBrush = parentBrush;
+    op.BrushId = parentBrush->GetBrushID();
+    op.Mode = parentBrush->GetBrushMode();
+    op.FlipNormals = parentBrush->GetBrushFlipNormals();
+    parentBrush->GetSurfaces(op.Surfaces);
+    Build(op);
+}
+
+void CSG::Mesh::Build(const Operand& operand)
 {
     struct EdgeIntersection
     {
@@ -54,10 +68,9 @@ void CSG::Mesh::Build(Brush* parentBrush)
     _brushesMeta.Clear();
 
     // Get brush planes
-    if (parentBrush == nullptr)
-        return;
-    auto mode = parentBrush->GetBrushMode();
-    parentBrush->GetSurfaces(_surfaces);
+    auto mode = operand.Mode;
+    auto flipNormals = operand.FlipNormals;
+    _surfaces = operand.Surfaces;
     int32 surfacesCount = _surfaces.Count();
     if (surfacesCount > 250)
     {
@@ -309,11 +322,11 @@ void CSG::Mesh::Build(Brush* parentBrush)
     // Setup base brush meta
     BrushMeta meta;
     meta.Mode = mode;
-    meta.FlipNormals = parentBrush->GetBrushFlipNormals();
+    meta.FlipNormals = flipNormals;
     meta.StartSurfaceIndex = 0;
     meta.SurfacesCount = surfacesCount;
     meta.Bounds = _bounds;
-    meta.Parent = parentBrush;
+    meta.Parent = operand.SourceBrush;
     _brushesMeta.Add(meta);
 }
 

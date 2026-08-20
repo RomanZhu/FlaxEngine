@@ -268,8 +268,10 @@ namespace FlaxEditor.Modules
             var actor = node.Actor;
 
             // Auto CSG mesh rebuild
-            if (requestCSGRebuild && !isPlayMode && actor is BoxBrush && actor.Scene)
+            if (requestCSGRebuild && !isPlayMode && actor is BoxBrush)
+            {
                 CSGRebuildScheduler.Shared.RequestExternal(actor.Scene);
+            }
 
             // Auto NavMesh rebuild
             if (!isPlayMode && options.General.AutoRebuildNavMesh && actor.Scene && node.AffectsNavigationWithChildren)
@@ -871,12 +873,13 @@ namespace FlaxEditor.Modules
                 groupOrder = Math.Min(groupOrder, child.OrderInParent);
             }
 
-            var group = new GroupActor
-            {
-                Name = "Group",
-                Position = center,
-            };
             var selectionBefore = Selection.ToArray();
+            if (actors.Count == 1 && actors[0] is CSGStack)
+                return;
+            GroupActor group = actors.All(x => x is BoxBrush)
+                ? new CSGStack { Name = "CSG Stack", Position = center }
+                : new GroupActor { Name = "Group", Position = center };
+
             DeleteActorsAction createGroup = null;
             ParentActorsAction parentActors = null;
             try
@@ -912,6 +915,86 @@ namespace FlaxEditor.Modules
             }
         }
 
+        /// <summary>
+        /// Wraps selected actors in a CSG Stack.
+        /// </summary>
+        public void WrapSelectedInCSGStack()
+        {
+            WrapSelectedInCSG(typeof(CSGStack), "CSG Stack");
+        }
+
+        private void WrapSelectedInCSG(Type wrapperType, string defaultName)
+        {
+            if (!Level.IsAnySceneLoaded)
+                return;
+
+            var nodes = Selection.Where(x => x is ActorNode and not SceneNode).Cast<ActorNode>().ToList().BuildNodesParents();
+            if (nodes.Count == 0)
+                return;
+
+            var actors = nodes.Select(x => x.Actor).ToList();
+            var commonParent = FindLowestCommonActorParent(actors);
+            if (commonParent == null)
+                return;
+
+            var bounds = BoundingBox.Empty;
+            Vector3 center = Vector3.Zero;
+            for (int i = 0; i < actors.Count; i++)
+            {
+                bounds = BoundingBox.Merge(bounds, actors[i].EditorBoxChildren);
+                center += actors[i].Position;
+            }
+            center = bounds != BoundingBox.Empty ? bounds.Center : center / actors.Count;
+
+            int groupOrder = int.MaxValue;
+            for (int i = 0; i < actors.Count; i++)
+            {
+                var child = actors[i];
+                while (child.Parent != commonParent)
+                    child = child.Parent;
+                groupOrder = Math.Min(groupOrder, child.OrderInParent);
+            }
+
+            var wrapper = (GroupActor)FlaxEngine.Object.New(wrapperType);
+            wrapper.Name = defaultName;
+            wrapper.Position = center;
+
+            var selectionBefore = Selection.ToArray();
+            DeleteActorsAction createWrapper = null;
+            ParentActorsAction parentActors = null;
+            try
+            {
+                Level.SpawnActor(wrapper, commonParent);
+                wrapper.OrderInParent = groupOrder;
+                var wrapperNode = Editor.Scene.GetActorNode(wrapper);
+                if (wrapperNode == null)
+                    throw new InvalidOperationException("Failed to publish wrapper in the Scene graph.");
+                wrapperNode.PostSpawn();
+                createWrapper = new DeleteActorsAction(wrapperNode, true);
+
+                parentActors = new ParentActorsAction(actors.Cast<SceneObject>().ToArray(), wrapper, -1, true);
+                if (!parentActors.TryDo())
+                    throw new InvalidOperationException("Failed to attach Actors to the wrapper. " + parentActors.LastResult?.Message);
+
+                var selectWrapper = new SelectionChangeAction(selectionBefore, new SceneGraphNode[] { wrapperNode }, OnSelectionUndo);
+                selectWrapper.Do();
+                Undo.AddAction(new MultiUndoAction(new IUndoAction[] { createWrapper, parentActors, selectWrapper }, $"Wrap in {defaultName}"));
+                wrapperNode.TreeNode.StartRenaming(Editor.Windows.SceneWin, Editor.Windows.SceneWin.SceneTreePanel);
+            }
+            catch
+            {
+                parentActors?.TryUndo();
+                createWrapper?.TryUndo();
+                Selection.Clear();
+                Selection.AddRange(selectionBefore.Where(x => x != null));
+                OnSelectionChanged();
+                if (wrapper)
+                    FlaxEngine.Object.Destroy(ref wrapper);
+                FlaxEngine.Scripting.FlushRemovedObjects();
+                throw;
+            }
+        }
+
         private void SelectAndRenameGroup(GroupActor group)
         {
             Select(group);
@@ -920,7 +1003,12 @@ namespace FlaxEditor.Modules
                 node.TreeNode.StartRenaming(Editor.Windows.SceneWin, Editor.Windows.SceneWin.SceneTreePanel);
         }
 
-        private static Actor FindLowestCommonActorParent(List<Actor> actors)
+        /// <summary>
+        /// Finds the lowest common parent actor for the specified list of actors.
+        /// </summary>
+        /// <param name="actors">The actors list.</param>
+        /// <returns>The lowest common parent actor, or null if not found.</returns>
+        public static Actor FindLowestCommonActorParent(List<Actor> actors)
         {
             for (var candidate = actors[0].Parent; candidate != null; candidate = candidate.Parent)
             {

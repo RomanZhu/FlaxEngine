@@ -6,6 +6,18 @@
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Level/Scene/Scene.h"
 
+namespace
+{
+    CSG::CSGCompiledData* FindCompiledCSGData(const Actor* actor)
+    {
+        if (actor == nullptr)
+            return nullptr;
+
+        Scene* scene = actor->GetScene();
+        return scene != nullptr ? &scene->CSGData : nullptr;
+    }
+}
+
 void BrushSurface::Serialize(SerializeStream& stream, const void* otherObj)
 {
     SERIALIZE_GET_OTHER_OBJ(BrushSurface);
@@ -164,24 +176,26 @@ bool BoxBrush::Intersects(int32 surfaceIndex, const Ray& ray, Real& distance, Ve
 {
     distance = MAX_Real;
     normal = Vector3::Up;
-    auto scene = GetScene();
-    CHECK_RETURN(scene, false);
 
-    // Get surface data handle
-    CSG::SceneCSGData::SurfaceData surfaceData;
-    if (scene->CSGData.TryGetSurfaceData(GetBrushID(), surfaceIndex, surfaceData))
-    {
-        return surfaceData.Intersects(ray, distance, normal);
-    }
-    return false;
+    CSG::CSGCompiledData* csgData = FindCompiledCSGData(this);
+    if (csgData == nullptr)
+        return false;
+
+    CSG::CSGCompiledData::SurfaceData surfaceData;
+    if (!csgData->TryGetSurfaceData(GetBrushID(), surfaceIndex, surfaceData))
+        return false;
+
+    return surfaceData.Intersects(ray, distance, normal);
 }
 
 void BoxBrush::GetVertices(int32 surfaceIndex, Array<Vector3>& outputData) const
 {
-    auto scene = GetScene();
-    CHECK(scene);
-    CSG::SceneCSGData::SurfaceData surfaceData;
-    if (scene->CSGData.TryGetSurfaceData(GetBrushID(), surfaceIndex, surfaceData))
+    CSG::CSGCompiledData* csgData = FindCompiledCSGData(this);
+    if (csgData == nullptr)
+        return;
+
+    CSG::CSGCompiledData::SurfaceData surfaceData;
+    if (csgData->TryGetSurfaceData(GetBrushID(), surfaceIndex, surfaceData))
     {
         outputData.Add((Vector3*)surfaceData.Triangles.Get(), 3 * surfaceData.Triangles.Count());
     }

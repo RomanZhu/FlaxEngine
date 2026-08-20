@@ -7,6 +7,10 @@
 
 class AudioEmitter;
 class AudioVolumeBase;
+class AudioOcclusionScheduler;
+class AudioPhysicsInteractionSystem;
+class AudioSurfaceLibrary;
+struct AudioEventCallback;
 
 /// <summary>
 /// Central registry and evaluation manager for scene audio emitters, zones, and volumes.
@@ -25,6 +29,11 @@ public:
     /// All active registered audio volumes (zones, area emitters).
     /// </summary>
     static Array<AudioVolumeBase*> Volumes;
+
+private:
+    static AudioOcclusionScheduler Occlusion;
+    static AudioPhysicsInteractionSystem SurfaceInteractions;
+    static AudioSurfaceLibrary* SurfaceLibrary;
 
 public:
     /// <summary>
@@ -48,9 +57,14 @@ public:
     static void Unregister(AudioVolumeBase* volume);
 
     /// <summary>
-    /// Updates all registered emitters and volumes. Volume evaluation uses the first active
-    /// listener during play as the source of the listener position for this milestone.
+    /// Updates all registered emitters and volumes for every active listener.
     /// </summary>
     /// <param name="dt">Delta time in seconds.</param>
     static void Update(float dt);
+    static AudioOcclusionScheduler& GetOcclusionScheduler();
+    static AudioPhysicsInteractionSystem& GetSurfaceInteractions();
+    static void SetSurfaceLibrary(AudioSurfaceLibrary* library);
+
+private:
+    static void OnEventCallback(const AudioEventCallback& callback);
 };

@@ -55,6 +55,9 @@ public:
     void SetDopplerFactor(float factor) override;
     void SetDistanceFactor(float factor) override;
     void OnActiveDeviceChanged() override;
+    void EnumerateOutputDevices(Array<AudioOutputDeviceInfo>& result) const override;
+    bool SetOutputDevice(const StringView& stableId) override;
+    String GetOutputDevice() const override;
 
     void UpdateListeners(const Span<AudioListenerState>& listeners) override;
 
@@ -62,10 +65,14 @@ public:
     bool UnloadBank(const Guid& bankId, const StringView& path) override;
     bool UnloadAllBanks() override;
     bool IsBankLoaded(const Guid& bankId) const override;
+    bool LoadBankSampleData(const Guid& bankId) override;
+    void UnloadBankSampleData(const Guid& bankId) override;
+    AudioBankState GetBankState(const Guid& bankId) const override;
 
     AudioEventHandle CreateInstance(const Guid& eventId, const StringView& path, const AudioEventCreateOptions& options) override;
     bool Play(AudioEventHandle handle) override;
     bool Pause(AudioEventHandle handle) override;
+    bool KeyOff(AudioEventHandle handle) override;
     bool Stop(AudioEventHandle handle, AudioStopMode stopMode) override;
     bool StopAll(AudioStopMode stopMode) override;
     bool ReleaseInstance(AudioEventHandle handle) override;
@@ -76,8 +83,11 @@ public:
     bool SetPitch(AudioEventHandle handle, float pitch) override;
     bool SetTimelinePosition(AudioEventHandle handle, int32 milliseconds) override;
     bool SetListenerMask(AudioEventHandle handle, uint32 listenerMask) override;
+    bool ResolveParameterId(const Guid& eventId, const StringView& eventPath, const StringView& name, AudioParameterId& id) override;
     bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) override;
+    bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false) override;
     bool SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) override;
+    bool SetProgrammerSound(AudioEventHandle handle, const AudioProgrammerSoundData& data) override;
 
     bool SetGlobalParameter(const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) override;
     bool SetGlobalParameterLabel(const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) override;

@@ -5,9 +5,12 @@
 #if AUDIO_EVENT_API_FMOD
 
 #include "FmodConvert.h"
+#include "FmodBankPathResolver.h"
 #include "Engine/Core/Log.h"
+#include "Engine/Core/Types/DateTime.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/StringUtils.h"
 
 void FmodBankRegistry::Init(FMOD::Studio::System* system)
 {
@@ -19,6 +22,8 @@ void FmodBankRegistry::Init(FMOD::Studio::System* system)
 void FmodBankRegistry::Dispose()
 {
     UnloadAll();
+    _banksByGuid.Clear();
+    _guidByPath.Clear();
     _system = nullptr;
 }
 
@@ -27,9 +32,12 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
     if (!_system || (!bankId.IsValid() && path.IsEmpty()))
         return false;
 
-    String filePath(path);
-    if (filePath.HasChars() && FileSystem::IsRelative(filePath))
-        filePath = FileSystem::ConvertRelativePathToAbsolute(Globals::ProjectFolder, filePath);
+    String filePath;
+    if (path.HasChars() && !FmodBankPathResolver::Resolve(path, filePath))
+    {
+        LOG(Error, "FMOD bank path '{0}' could not be resolved for this runtime.", path);
+        return false;
+    }
 
     // Check if already loaded
     if (bankId.IsValid())
@@ -70,6 +78,9 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
     entry.Bank = bank;
     entry.Path = filePath;
     entry.RefCount = 1;
+    entry.State = nonBlocking ? AudioBankState::Loading : AudioBankState::Loaded;
+    entry.LastResult = result;
+    entry.FileRevision = filePath.HasChars() ? (uint64)FileSystem::GetFileLastEditTime(filePath).Ticks : 0;
 
     Guid resolvedGuid = bankId;
     if (!resolvedGuid.IsValid())
@@ -97,9 +108,9 @@ bool FmodBankRegistry::Unload(const Guid& bankId, const StringView& path)
     BankEntry* entry = resolvedGuid.IsValid() ? _banksByGuid.TryGet(resolvedGuid) : nullptr;
     if (!entry && path.HasChars())
     {
-        String filePath(path);
-        if (FileSystem::IsRelative(filePath))
-            filePath = FileSystem::ConvertRelativePathToAbsolute(Globals::ProjectFolder, filePath);
+        String filePath;
+        if (!FmodBankPathResolver::Resolve(path, filePath))
+            return false;
         const Guid* pathGuid = _guidByPath.TryGet(filePath);
         if (pathGuid)
         {
@@ -113,9 +124,11 @@ bool FmodBankRegistry::Unload(const Guid& bankId, const StringView& path)
     entry->RefCount--;
     if (entry->RefCount <= 0)
     {
-        if (entry->Bank)
+        if (entry->Bank && entry->Bank->unload() != FMOD_OK)
         {
-            entry->Bank->unload();
+            entry->RefCount = 1;
+            entry->State = AudioBankState::Error;
+            return false;
         }
         if (entry->Path.HasChars())
             _guidByPath.Remove(entry->Path);
@@ -126,17 +139,31 @@ bool FmodBankRegistry::Unload(const Guid& bankId, const StringView& path)
 
 bool FmodBankRegistry::UnloadAll()
 {
+    bool success = true;
+    Array<Guid, InlinedAllocation<16>> unloaded;
     if (_system)
     {
         for (auto& it : _banksByGuid)
         {
-            if (it.Value.Bank)
-                it.Value.Bank->unload();
+            const FMOD_RESULT result = it.Value.Bank ? it.Value.Bank->unload() : FMOD_OK;
+            if (result == FMOD_OK)
+                unloaded.Add(it.Key);
+            else
+            {
+                it.Value.State = AudioBankState::Error;
+                it.Value.LastResult = result;
+                success = false;
+            }
         }
     }
-    _banksByGuid.Clear();
-    _guidByPath.Clear();
-    return true;
+    for (const Guid& id : unloaded)
+    {
+        BankEntry* entry = _banksByGuid.TryGet(id);
+        if (entry && entry->Path.HasChars())
+            _guidByPath.Remove(entry->Path);
+        _banksByGuid.Remove(id);
+    }
+    return success;
 }
 
 bool FmodBankRegistry::IsLoaded(const Guid& bankId) const
@@ -152,10 +179,104 @@ bool FmodBankRegistry::IsLoaded(const Guid& bankId) const
     return false;
 }
 
+bool FmodBankRegistry::LoadSampleData(const Guid& bankId)
+{
+    BankEntry* entry = _banksByGuid.TryGet(bankId);
+    if (!entry || !entry->Bank)
+        return false;
+
+    const FMOD_RESULT result = entry->Bank->loadSampleData();
+    entry->SampleDataLoaded = result == FMOD_OK;
+    return entry->SampleDataLoaded;
+}
+
+void FmodBankRegistry::UnloadSampleData(const Guid& bankId)
+{
+    BankEntry* entry = _banksByGuid.TryGet(bankId);
+    if (entry && entry->Bank)
+    {
+        entry->Bank->unloadSampleData();
+        entry->SampleDataLoaded = false;
+    }
+}
+
+AudioBankState FmodBankRegistry::GetState(const Guid& bankId) const
+{
+    const BankEntry* entry = _banksByGuid.TryGet(bankId);
+    if (!entry || !entry->Bank)
+        return AudioBankState::Unloaded;
+
+    FMOD_STUDIO_LOADING_STATE state;
+    if (entry->Bank->getLoadingState(&state) != FMOD_OK)
+        return AudioBankState::Error;
+    if (state == FMOD_STUDIO_LOADING_STATE_LOADED)
+        return AudioBankState::Loaded;
+    if (state == FMOD_STUDIO_LOADING_STATE_LOADING)
+        return AudioBankState::Loading;
+    return AudioBankState::Error;
+}
+
+bool FmodBankRegistry::Query(const Guid& bankId, const StringView& path, AudioBankRuntimeState& outState) const
+{
+    outState = AudioBankRuntimeState();
+    Guid resolved = bankId;
+    const BankEntry* entry = resolved.IsValid() ? _banksByGuid.TryGet(resolved) : nullptr;
+    if (!entry && path.HasChars())
+    {
+        String filePath;
+        if (!FmodBankPathResolver::Resolve(path, filePath))
+            return false;
+        const Guid* found = _guidByPath.TryGet(filePath);
+        if (found)
+        {
+            resolved = *found;
+            entry = _banksByGuid.TryGet(*found);
+        }
+    }
+    if (!entry)
+        return false;
+    FMOD_STUDIO_LOADING_STATE loadingState;
+    if (entry->Bank->getLoadingState(&loadingState) != FMOD_OK)
+        outState.State = AudioBankState::Error;
+    else if (loadingState == FMOD_STUDIO_LOADING_STATE_LOADED)
+        outState.State = AudioBankState::Loaded;
+    else if (loadingState == FMOD_STUDIO_LOADING_STATE_LOADING)
+        outState.State = AudioBankState::Loading;
+    else
+        outState.State = AudioBankState::Error;
+    outState.SampleDataLoaded = entry->SampleDataLoaded;
+    outState.AssetId = resolved;
+    outState.RefCount = entry->RefCount;
+    outState.Path = entry->Path;
+    outState.FileRevision = entry->FileRevision;
+    outState.Name = String(StringUtils::GetFileNameWithoutExtension(entry->Path));
+    outState.LastResult = (int32)entry->LastResult;
+    return true;
+}
+
 FMOD::Studio::Bank* FmodBankRegistry::Get(const Guid& bankId) const
 {
     const BankEntry* entry = _banksByGuid.TryGet(bankId);
     return entry ? entry->Bank : nullptr;
+}
+
+int32 FmodBankRegistry::GetSampleDataLoadedCount() const
+{
+    int32 result = 0;
+    for (const auto& item : _banksByGuid)
+        result += item.Value.SampleDataLoaded ? 1 : 0;
+    return result;
+}
+
+void FmodBankRegistry::Capture(Array<AudioBankRuntimeState>& result) const
+{
+    result.Clear();
+    result.EnsureCapacity(_banksByGuid.Count());
+    for (const auto& item : _banksByGuid)
+    {
+        AudioBankRuntimeState& state = result.AddOne();
+        Query(item.Key, item.Value.Path, state);
+    }
 }
 
 #endif

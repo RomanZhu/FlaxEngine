@@ -32,6 +32,18 @@ API_ENUM() enum class AudioVolumeShape : uint8
 };
 
 /// <summary>
+/// Determines how a volume participates in an authored blend group. Volumes
+/// without a group remain independent, preserving the behaviour of existing
+/// scenes.
+/// </summary>
+API_ENUM() enum class AudioVolumeBlendMode : uint8
+{
+    Independent = 0,
+    ExclusiveByGroup = 1,
+    NormalizedByGroup = 2,
+};
+
+/// <summary>
 /// Sample result from querying an audio volume at a 3D world position.
 /// </summary>
 API_STRUCT(NoDefault) struct FLAXENGINE_API AudioVolumeSample
@@ -76,6 +88,8 @@ protected:
     float _blendDistanceOutside = 200.0f;
     float _blendDistanceInside = 100.0f;
     uint32 _listenerMask = MAX_uint32;
+    AudioVolumeBlendMode _blendMode = AudioVolumeBlendMode::Independent;
+    String _blendGroup;
 
 public:
     /// <summary>
@@ -166,6 +180,24 @@ public:
     /// </summary>
     API_PROPERTY() void SetBlendDistanceInside(float value);
 
+    API_PROPERTY(Attributes="EditorOrder(80), EditorDisplay(\"Volume\", \"Listener Mask\")")
+    FORCE_INLINE uint32 GetListenerMask() const { return _listenerMask; }
+    API_PROPERTY() void SetListenerMask(uint32 value) { _listenerMask = value; }
+
+    /// <summary>Gets the group resolution behaviour for this volume.</summary>
+    API_PROPERTY(Attributes="EditorOrder(80), EditorDisplay(\"Blending\")")
+    FORCE_INLINE AudioVolumeBlendMode GetBlendMode() const { return _blendMode; }
+
+    /// <summary>Sets the group resolution behaviour for this volume.</summary>
+    API_PROPERTY() void SetBlendMode(AudioVolumeBlendMode value) { _blendMode = value; }
+
+    /// <summary>Gets the optional semantic blend group.</summary>
+    API_PROPERTY(Attributes="EditorOrder(90), EditorDisplay(\"Blending\")")
+    FORCE_INLINE const String& GetBlendGroup() const { return _blendGroup; }
+
+    /// <summary>Sets the optional semantic blend group.</summary>
+    API_PROPERTY() void SetBlendGroup(const StringView& value) { _blendGroup = value; }
+
     /// <summary>
     /// Returns true if the volume shape is a box.
     /// </summary>
@@ -191,6 +223,14 @@ public:
     /// Updates this volume from the active audio listener position during play.
     /// </summary>
     virtual void UpdateListenerPosition(const Vector3& listenerPosition)
+    {
+    }
+
+    /// <summary>
+    /// Applies a previously resolved sample. AudioWorld calls this after it has
+    /// sampled all eligible volumes and resolved authored groups.
+    /// </summary>
+    virtual void ApplyResolvedSample(const Vector3& listenerPosition, const AudioVolumeSample& rawSample, float resolvedWeight)
     {
     }
 

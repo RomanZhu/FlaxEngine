@@ -16,7 +16,7 @@ namespace CSG
     /// <summary>
     /// CSG geometry builder
     /// </summary>
-    class Builder
+    class FLAXENGINE_API Builder
     {
     public:
 
@@ -35,6 +35,7 @@ namespace CSG
         /// <param name="scene">The scene.</param>
         /// <param name="timeoutMs">The timeout to wait before building CSG (in milliseconds).</param>
         static void Build(Scene* scene, float timeoutMs = 50);
+
     };
 
 #endif

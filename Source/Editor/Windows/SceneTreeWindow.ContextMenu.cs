@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Dialogs;
@@ -70,6 +71,33 @@ namespace FlaxEditor.Windows
                 convertMenu.ContextMenu.AutoSort = true;
                 if (Editor.SceneEditing.SelectionCount > 1 || firstSelection.Actor.GetType() != typeof(GroupActor))
                     convertMenu.ContextMenu.AddButton("Group", Editor.SceneEditing.MakeSelectionGroup);
+                if (isSingleActorSelected && (firstSelection.Actor is GroupActor || firstSelection.Actor is EmptyActor))
+                {
+                    convertMenu.ContextMenu.AddButton("CSG Stack", () => Editor.SceneEditing.Convert(typeof(CSGStack)));
+                }
+
+                if (Editor.SceneEditing.Selection.Any(x => x is ActorNode an && (an.Actor is BoxBrush || an.Actor is CSGScopeActor)))
+                {
+                    contextMenu.AddSeparator();
+                    var csgMenu = contextMenu.AddChildMenu("CSG");
+                    csgMenu.ContextMenu.AddButton("Wrap in CSG Stack", Editor.SceneEditing.WrapSelectedInCSGStack);
+                    csgMenu.ContextMenu.AddSeparator();
+                    csgMenu.ContextMenu.AddButton("Rebuild CSG", () =>
+                    {
+                        var scenes = new HashSet<Scene>();
+                        foreach (var node in Editor.SceneEditing.Selection)
+                        {
+                            if (node is ActorNode an && an.Actor != null)
+                            {
+                                var scene = an.Actor.Scene;
+                                if (scene != null)
+                                    scenes.Add(scene);
+                            }
+                        }
+                        foreach (var scene in scenes)
+                            scene.BuildCSG(0);
+                    });
+                }
 
                 if (isSingleActorSelected)
                 {
