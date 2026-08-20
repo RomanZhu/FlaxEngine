@@ -7,6 +7,7 @@
 #include "Engine/Level/Level.h"
 #include "Engine/Level/SceneQuery.h"
 #include "Engine/Level/Actor.h"
+#include "Engine/Level/Actors/CSGModel.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Types/TimeSpan.h"
 #include "Engine/Graphics/Models/ModelData.h"
@@ -36,12 +37,20 @@ struct BuildData;
 namespace CSGBuilderImpl
 {
     Array<Scene*> ScenesToRebuild;
+    struct ModelRebuildEntry
+    {
+        CSGModel* Model;
+        DateTime BuildTime;
+    };
+    Array<ModelRebuildEntry> ModelsToRebuild;
 
     void onSceneUnloading(Scene* scene, const Guid& sceneId);
     bool buildInner(Scene* scene, BuildData& data);
+    bool buildInner(CSGModel* model, BuildData& data);
     void build(Scene* scene);
-    bool updatePreviewModel(Scene* scene, const ModelData& modelData);
-    bool generateRawDataAsset(Scene* scene, RawData& meshData, Guid& assetId, const String& assetPath);
+    void build(CSGModel* model);
+    bool updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData);
+    bool generateRawDataAsset(RawData& meshData, Guid& assetId, const String& assetPath);
 }
 
 using namespace CSGBuilderImpl;
@@ -66,6 +75,13 @@ void CSGBuilderImpl::onSceneUnloading(Scene* scene, const Guid& sceneId)
 {
     // Ensure to remove scene (prevent crashes)
     ScenesToRebuild.Remove(scene);
+    for (int32 i = ModelsToRebuild.Count() - 1; i >= 0; i--)
+    {
+        if (ModelsToRebuild[i].Model && ModelsToRebuild[i].Model->GetScene() == scene)
+        {
+            ModelsToRebuild.RemoveAt(i);
+        }
+    }
 }
 
 bool CSGBuilderService::Init()
@@ -93,11 +109,27 @@ void CSGBuilderService::Update()
             }
         }
     }
+
+    if (ModelsToRebuild.HasItems() && Engine::IsReady())
+    {
+        auto now = DateTime::NowUTC();
+
+        for (int32 i = 0; ModelsToRebuild.HasItems() && i < ModelsToRebuild.Count(); i++)
+        {
+            if (now - ModelsToRebuild[i].BuildTime >= 0)
+            {
+                auto model = ModelsToRebuild[i].Model;
+                ModelsToRebuild.RemoveAt(i--);
+                if (model)
+                    build(model);
+            }
+        }
+    }
 }
 
 bool Builder::IsActive()
 {
-    return ScenesToRebuild.HasItems();
+    return ScenesToRebuild.HasItems() || ModelsToRebuild.HasItems();
 }
 
 void Builder::Build(Scene* scene, float timeoutMs)
@@ -117,6 +149,29 @@ void Builder::Build(Scene* scene, float timeoutMs)
         ScenesToRebuild.Add(scene);
     }
     scene->CSGData.BuildTime = DateTime::NowUTC() + TimeSpan::FromMilliseconds(timeoutMs);
+}
+
+void Builder::Build(CSGModel* model, float timeoutMs)
+{
+    if (model == nullptr)
+        return;
+
+#if USE_EDITOR
+    // Disable building during play mode
+    if (Editor::IsPlayMode)
+        return;
+#endif
+
+    const DateTime targetTime = DateTime::NowUTC() + TimeSpan::FromMilliseconds(timeoutMs);
+    for (int32 i = 0; i < ModelsToRebuild.Count(); i++)
+    {
+        if (ModelsToRebuild[i].Model == model)
+        {
+            ModelsToRebuild[i].BuildTime = targetTime;
+            return;
+        }
+    }
+    ModelsToRebuild.Add({ model, targetTime });
 }
 
 namespace CSG
@@ -254,7 +309,7 @@ struct BuildData
     }
 };
 
-bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData)
+bool CSGBuilderImpl::updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData)
 {
     // Render lists store raw mesh buffer pointers. Exclude rendering while the
     // inactive preview is rebuilt and published, then keep the old preview alive
@@ -270,7 +325,7 @@ bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData
     // live Mesh objects and invalidate their GPU-resource ownership. Material
     // changes commonly alter the number of CSG mesh partitions, so only reuse the
     // inactive preview when its LOD and mesh counts already match exactly.
-    AssetReference<Model> previewModel = scene->CSGData.PreviewModelCache;
+    AssetReference<Model> previewModel = csgData.PreviewModelCache;
     bool canReusePreview = previewModel && previewModel->LODs.Count() == meshesCountPerLod.Count();
     for (int32 lodIndex = 0; canReusePreview && lodIndex < meshesCountPerLod.Count(); lodIndex++)
         canReusePreview = previewModel->LODs[lodIndex].Meshes.Count() == meshesCountPerLod[lodIndex];
@@ -316,9 +371,9 @@ bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData
 
     // Publish only after the entire model is ready. The render lock guarantees no
     // draw list still contains pointers to the model moving into the cache.
-    scene->CSGData.PreviewModelCache = scene->CSGData.PreviewModel;
-    scene->CSGData.PreviewModel = previewModel;
-    scene->CSGData.PostCSGBuild();
+    csgData.PreviewModelCache = csgData.PreviewModel;
+    csgData.PreviewModel = previewModel;
+
     return false;
 }
 
@@ -359,7 +414,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
             // Keep the viewport on a memory-backed model while the persisted model asset
             // is rewritten. This mirrors RealtimeCSG's dynamic-mesh update path and avoids
             // exposing the asset reload/unloaded state to rendering.
-            if (updatePreviewModel(scene, modelData))
+            if (updatePreviewModel(scene->CSGData, modelData))
             {
                 LOG(Warning, "Failed to update live CSG preview model");
                 return true;
@@ -387,7 +442,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 if (!rawDataAssetId.IsValid())
                     rawDataAssetId = Guid::New();
                 const String rawDataAssetPath = sceneDataFolderPath / TEXT("CSG_Data") + ASSET_FILES_EXTENSION_WITH_DOT;
-                if (generateRawDataAsset(scene, meshData, rawDataAssetId, rawDataAssetPath))
+                if (generateRawDataAsset(meshData, rawDataAssetId, rawDataAssetPath))
                 {
                     LOG(Warning, "Failed to create raw CSG data");
                     return true;
@@ -425,6 +480,94 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 if (!collisionDataAssetId.IsValid())
                     collisionDataAssetId = Guid::New();
                 const String collisionDataAssetPath = sceneDataFolderPath / TEXT("CSG_Collision") + ASSET_FILES_EXTENSION_WITH_DOT;
+                if (AssetsImportingManager::Create(AssetsImportingManager::CreateCollisionDataTag, collisionDataAssetPath, collisionDataAssetId, &arg))
+                {
+                    LOG(Warning, "Failed to cook CSG mesh collision data");
+                    return true;
+                }
+                data.outputCollisionDataAssetId = collisionDataAssetId;
+#else
+                data.outputCollisionDataAssetId = Guid::Empty;
+#endif
+            }
+        }
+    }
+
+    return false;
+}
+
+bool CSGBuilderImpl::buildInner(CSGModel* model, BuildData& data)
+{
+    // Compile explicit stacks and implicit brushes under the CSGModel target in model-local space
+    CSG::Mesh combinedMesh;
+    if (!CSGCompilation::CompileTargetMeshes(model, combinedMesh))
+        return false;
+    if (combinedMesh.GetPolygons()->IsEmpty())
+        return false;
+
+    // Triangulate meshes
+    {
+        RawData meshData;
+        Array<MeshVertex> vertexBuffer;
+        combinedMesh.Triangulate(meshData, vertexBuffer);
+        meshData.RemoveEmptySlots();
+        if (meshData.Slots.HasItems())
+        {
+            Scene* scene = model->GetScene();
+            if (scene == nullptr)
+                return false;
+            const auto sceneDataFolderPath = scene->GetDataFolderPath();
+
+            ModelData modelData;
+            meshData.ToModelData(modelData);
+
+            if (updatePreviewModel(model->CSGData, modelData))
+            {
+                LOG(Warning, "Failed to update live CSG preview model");
+                return true;
+            }
+
+            // Import model data to the asset
+            {
+                Guid modelDataAssetId = model->CSGData.Model.GetID();
+                if (!modelDataAssetId.IsValid())
+                    modelDataAssetId = Guid::New();
+                const String modelDataAssetPath = sceneDataFolderPath / String::Format(TEXT("CSG_Model_{0}"), model->GetID().ToString(Guid::FormatType::N)) + ASSET_FILES_EXTENSION_WITH_DOT;
+                if (AssetsImportingManager::Create(AssetsImportingManager::CreateModelTag, modelDataAssetPath, modelDataAssetId, &modelData))
+                {
+                    LOG(Warning, "Failed to import CSG mesh data");
+                    return true;
+                }
+                data.outputModelAssetId = modelDataAssetId;
+            }
+
+            data.brushesCount = meshData.Brushes.Count();
+
+            // Generate asset with CSG mesh metadata
+            {
+                Guid rawDataAssetId = model->CSGData.Data.GetID();
+                if (!rawDataAssetId.IsValid())
+                    rawDataAssetId = Guid::New();
+                const String rawDataAssetPath = sceneDataFolderPath / String::Format(TEXT("CSG_Data_{0}"), model->GetID().ToString(Guid::FormatType::N)) + ASSET_FILES_EXTENSION_WITH_DOT;
+                if (generateRawDataAsset(meshData, rawDataAssetId, rawDataAssetPath))
+                {
+                    LOG(Warning, "Failed to create raw CSG data");
+                    return true;
+                }
+                data.outputRawDataAssetId = rawDataAssetId;
+            }
+
+            // Generate CSG mesh collision asset
+            {
+#if COMPILE_WITH_PHYSICS_COOKING
+                CollisionCooking::Argument arg;
+                arg.Type = CollisionDataType::TriangleMesh;
+                arg.OverrideModelData = &modelData;
+                arg.Model = data.outputModelAssetId;
+                Guid collisionDataAssetId = model->CSGData.CollisionData.GetID();
+                if (!collisionDataAssetId.IsValid())
+                    collisionDataAssetId = Guid::New();
+                const String collisionDataAssetPath = sceneDataFolderPath / String::Format(TEXT("CSG_Collision_{0}"), model->GetID().ToString(Guid::FormatType::N)) + ASSET_FILES_EXTENSION_WITH_DOT;
                 if (AssetsImportingManager::Create(AssetsImportingManager::CreateCollisionDataTag, collisionDataAssetPath, collisionDataAssetId, &arg))
                 {
                     LOG(Warning, "Failed to cook CSG mesh collision data");
@@ -482,7 +625,44 @@ void CSGBuilderImpl::build(Scene* scene)
     LOG(Info, "CSG build in {0} ms! {1} brush(es)", (endTime - startTime).GetTotalMilliseconds(), brushesCount);
 }
 
-bool CSGBuilderImpl::generateRawDataAsset(Scene* scene, RawData& meshData, Guid& assetId, const String& assetPath)
+void CSGBuilderImpl::build(CSGModel* model)
+{
+    if (model == nullptr)
+        return;
+
+    auto startTime = DateTime::Now();
+    LOG(Info, "Start building CSG Model {0}...", model->GetName());
+
+    BuildData data;
+    bool failed = buildInner(model, data);
+
+    if (failed)
+    {
+        LOG(Warning, "Failed to build CSG model. Preserving the previous result.");
+        return;
+    }
+
+    auto outputData = Content::LoadAsync<RawDataAsset>(data.outputRawDataAssetId);
+    auto outputModel = Content::LoadAsync<Model>(data.outputModelAssetId);
+    auto outputCollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
+
+    if (!outputModel)
+    {
+        GPUDeviceLock gpuLock(GPUDevice::Instance);
+        model->CSGData.PreviewModel = nullptr;
+        model->CSGData.PreviewModelCache = nullptr;
+    }
+    model->CSGData.Data = outputData;
+    model->CSGData.Model = outputModel;
+    model->CSGData.CollisionData = outputCollisionData;
+    model->CSGData.PostCSGBuild();
+
+    const int32 brushesCount = data.brushesCount;
+    auto endTime = DateTime::Now();
+    LOG(Info, "CSG Model build in {0} ms! {1} brush(es)", (endTime - startTime).GetTotalMilliseconds(), brushesCount);
+}
+
+bool CSGBuilderImpl::generateRawDataAsset(RawData& meshData, Guid& assetId, const String& assetPath)
 {
     // Prepare data
     MemoryWriteStream stream(4096);

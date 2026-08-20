@@ -6,6 +6,7 @@
 #include "Brush.h"
 
 class Scene;
+class CSGModel;
 
 namespace CSG
 {
@@ -35,6 +36,13 @@ namespace CSG
         /// <param name="scene">The scene.</param>
         /// <param name="timeoutMs">The timeout to wait before building CSG (in milliseconds).</param>
         static void Build(Scene* scene, float timeoutMs = 50);
+
+        /// <summary>
+        /// Build CSG geometry for the given CSGModel actor.
+        /// </summary>
+        /// <param name="model">The model.</param>
+        /// <param name="timeoutMs">The timeout to wait before building CSG (in milliseconds).</param>
+        static void Build(CSGModel* model, float timeoutMs = 50);
     };
 
 #endif

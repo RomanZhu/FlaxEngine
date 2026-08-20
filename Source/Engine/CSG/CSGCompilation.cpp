@@ -8,7 +8,7 @@
 
 using namespace CSG;
 
-bool CSGCompilation::SnapshotOperand(Brush* brush, int32 operationIndex, Operand& outOperand)
+bool CSGCompilation::SnapshotOperand(Brush* brush, int32 operationIndex, Operand& outOperand, const Transform* targetTransform)
 {
     if (brush == nullptr)
         return false;
@@ -24,7 +24,31 @@ bool CSGCompilation::SnapshotOperand(Brush* brush, int32 operationIndex, Operand
         return false;
 
     auto actor = dynamic_cast<Actor*>(brush);
-    if (actor != nullptr)
+    if (targetTransform != nullptr && !targetTransform->IsIdentity())
+    {
+        for (int32 i = 0; i < outOperand.Surfaces.Count(); i++)
+        {
+            auto& surface = outOperand.Surfaces[i];
+            Vector3 p0World = surface.Normal * surface.D;
+            Vector3 p0Local = targetTransform->WorldToLocal(p0World);
+            Vector3 normalLocal = targetTransform->WorldToLocalVector(surface.Normal);
+            normalLocal.Normalize();
+            surface.Normal = normalLocal;
+            surface.D = Vector3::Dot(normalLocal, p0Local);
+        }
+
+        if (actor != nullptr)
+        {
+            Vector3 corners[8];
+            actor->GetBox().GetCorners(corners);
+            outOperand.Bounds.Clear();
+            for (int32 c = 0; c < 8; c++)
+            {
+                outOperand.Bounds.Add(targetTransform->WorldToLocal(corners[c]));
+            }
+        }
+    }
+    else if (actor != nullptr)
     {
         outOperand.Bounds = actor->GetBox();
     }
@@ -32,7 +56,7 @@ bool CSGCompilation::SnapshotOperand(Brush* brush, int32 operationIndex, Operand
     return true;
 }
 
-bool CSGCompilation::SnapshotOperands(const Array<Brush*>& brushes, Array<Operand>& outOperands)
+bool CSGCompilation::SnapshotOperands(const Array<Brush*>& brushes, Array<Operand>& outOperands, const Transform* targetTransform)
 {
     outOperands.Clear();
     outOperands.EnsureCapacity(brushes.Count());
@@ -40,7 +64,7 @@ bool CSGCompilation::SnapshotOperands(const Array<Brush*>& brushes, Array<Operan
     for (int32 i = 0; i < brushes.Count(); i++)
     {
         Operand op;
-        if (SnapshotOperand(brushes[i], i, op))
+        if (SnapshotOperand(brushes[i], i, op, targetTransform))
         {
             outOperands.Add(op);
         }
@@ -49,13 +73,13 @@ bool CSGCompilation::SnapshotOperands(const Array<Brush*>& brushes, Array<Operan
     return outOperands.HasItems();
 }
 
-bool CSGCompilation::CompileStack(const Array<Brush*>& brushes, Mesh& outMesh, StackBuildStats* stats)
+bool CSGCompilation::CompileStack(const Array<Brush*>& brushes, Mesh& outMesh, const Transform* targetTransform, StackBuildStats* stats)
 {
     if (brushes.IsEmpty())
         return true;
 
     Array<Operand> operands;
-    if (!SnapshotOperands(brushes, operands))
+    if (!SnapshotOperands(brushes, operands, targetTransform))
         return false;
 
     return CSGStackEvaluator::EvaluateStack(Span<const Operand>(operands.Get(), operands.Count()), outMesh, stats);
@@ -66,6 +90,15 @@ bool CSGCompilation::CompileTargetMeshes(Actor* targetRoot, Mesh& outCombinedMes
     if (targetRoot == nullptr)
         return false;
 
+    const Transform* targetTransform = nullptr;
+    Transform localTransform;
+    auto scope = dynamic_cast<CSGScopeActor*>(targetRoot);
+    if (scope && scope->IsOutputScope())
+    {
+        localTransform = targetRoot->GetTransform();
+        targetTransform = &localTransform;
+    }
+
     Array<Actor*> explicitStacks;
     Array<Brush*> implicitBrushes;
     CSGHierarchy::CollectTargetScopes(targetRoot, explicitStacks, implicitBrushes);
@@ -73,7 +106,7 @@ bool CSGCompilation::CompileTargetMeshes(Actor* targetRoot, Mesh& outCombinedMes
     if (implicitBrushes.HasItems())
     {
         Mesh implicitMesh;
-        if (CompileStack(implicitBrushes, implicitMesh))
+        if (CompileStack(implicitBrushes, implicitMesh, targetTransform))
         {
             outCombinedMesh.AppendResolvedGeometry(&implicitMesh);
         }
@@ -86,7 +119,7 @@ bool CSGCompilation::CompileTargetMeshes(Actor* targetRoot, Mesh& outCombinedMes
         if (stackBrushes.HasItems())
         {
             Mesh stackMesh;
-            if (CompileStack(stackBrushes, stackMesh))
+            if (CompileStack(stackBrushes, stackMesh, targetTransform))
             {
                 outCombinedMesh.AppendResolvedGeometry(&stackMesh);
             }
