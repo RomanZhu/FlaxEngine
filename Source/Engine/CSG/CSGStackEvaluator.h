@@ -33,6 +33,24 @@ namespace CSG
         /// <param name="tolerance">Distance tolerance for plane containment.</param>
         /// <returns>The point occupancy state and latest containing operand index.</returns>
         static PointState EvaluatePoint(const Vector3& point, Span<const Operand> operands, Real tolerance = Plane::DistanceEpsilon);
+
+        /// <summary>
+        /// Evaluates an ordered sequence of CSG operands into a single resolved output mesh.
+        /// </summary>
+        /// <param name="operands">The ordered operands.</param>
+        /// <param name="outputMesh">The destination mesh to receive resolved boundaries.</param>
+        /// <param name="stats">Optional statistics output.</param>
+        /// <returns>True if evaluation succeeded, false if any operand failed to build or evaluate.</returns>
+        static bool EvaluateStack(Span<const Operand> operands, Mesh& outputMesh, StackBuildStats* stats = nullptr);
+
+        /// <summary>
+        /// Calculates adaptive sample epsilon for two-sided occupancy testing.
+        /// </summary>
+        /// <param name="p">Polygon sample point.</param>
+        /// <param name="normal">Polygon geometric normal.</param>
+        /// <param name="operands">The stack operands.</param>
+        /// <returns>The calculated epsilon distance.</returns>
+        static Real CalculateSampleEpsilon(const Vector3& p, const Vector3& normal, Span<const Operand> operands);
     };
 }
 

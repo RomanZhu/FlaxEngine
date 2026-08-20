@@ -136,6 +136,11 @@ void CSG::Mesh::Add(const Mesh* other)
     _bounds.Add(other->GetBounds());
 }
 
+void CSG::Mesh::AppendResolvedGeometry(const Mesh* other)
+{
+    Add(other);
+}
+
 void CSG::Mesh::intersect(const Mesh* other, PolygonOperation insideOp, PolygonOperation outsideOp)
 {
     // insideOp - operation for polygons being inside the other brush

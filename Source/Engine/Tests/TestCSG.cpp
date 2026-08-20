@@ -157,3 +157,92 @@ TEST_CASE("CSG ordered point occupancy evaluator")
     CHECK(state.LastInfluencingOperation == 2);
 }
 
+TEST_CASE("CSG stack evaluation")
+{
+    // Single box
+    {
+        Array<CSG::Operand> ops;
+        ops.Add(CreateBoxOperand(Vector3::Zero, Vector3(50, 50, 50), CSG::Mode::Additive, 0));
+
+        CSG::Mesh mesh;
+        CSG::StackBuildStats stats;
+        REQUIRE(CSG::CSGStackEvaluator::EvaluateStack(Span<const CSG::Operand>(ops.Get(), ops.Count()), mesh, &stats));
+        CHECK(stats.FinalFragmentCount == 6);
+
+        CSG::RawData data;
+        Array<CSG::MeshVertex> vertices;
+        CHECK_FALSE(mesh.Triangulate(data, vertices));
+        CHECK(vertices.Count() == 36); // 6 faces * 2 triangles * 3 vertices
+    }
+
+    // Disjoint boxes
+    {
+        Array<CSG::Operand> ops;
+        ops.Add(CreateBoxOperand(Vector3(-100, 0, 0), Vector3(20, 20, 20), CSG::Mode::Additive, 0));
+        ops.Add(CreateBoxOperand(Vector3(100, 0, 0), Vector3(20, 20, 20), CSG::Mode::Additive, 1));
+
+        CSG::Mesh mesh;
+        CSG::StackBuildStats stats;
+        REQUIRE(CSG::CSGStackEvaluator::EvaluateStack(Span<const CSG::Operand>(ops.Get(), ops.Count()), mesh, &stats));
+        CHECK(stats.FinalFragmentCount == 12);
+
+        CSG::RawData data;
+        Array<CSG::MeshVertex> vertices;
+        CHECK_FALSE(mesh.Triangulate(data, vertices));
+        CHECK(vertices.Count() == 72);
+    }
+
+    // Overlapping additive boxes (union without internal faces)
+    {
+        Array<CSG::Operand> ops;
+        ops.Add(CreateBoxOperand(Vector3(-25, 0, 0), Vector3(50, 50, 50), CSG::Mode::Additive, 0));
+        ops.Add(CreateBoxOperand(Vector3(25, 0, 0), Vector3(50, 50, 50), CSG::Mode::Additive, 1));
+
+        CSG::Mesh mesh;
+        CSG::StackBuildStats stats;
+        REQUIRE(CSG::CSGStackEvaluator::EvaluateStack(Span<const CSG::Operand>(ops.Get(), ops.Count()), mesh, &stats));
+        CHECK(stats.DiscardedInternalCount > 0);
+
+        CSG::RawData data;
+        Array<CSG::MeshVertex> vertices;
+        CHECK_FALSE(mesh.Triangulate(data, vertices));
+        CHECK(vertices.HasItems());
+    }
+
+    // Hollow shell: +Outer -Interior
+    {
+        Array<CSG::Operand> ops;
+        ops.Add(CreateBoxOperand(Vector3::Zero, Vector3(50, 50, 50), CSG::Mode::Additive, 0));
+        ops.Add(CreateBoxOperand(Vector3::Zero, Vector3(40, 40, 40), CSG::Mode::Subtractive, 1));
+
+        CSG::Mesh mesh;
+        CSG::StackBuildStats stats;
+        REQUIRE(CSG::CSGStackEvaluator::EvaluateStack(Span<const CSG::Operand>(ops.Get(), ops.Count()), mesh, &stats));
+        CHECK(stats.FinalFragmentCount == 12); // 6 outer + 6 inner cavity
+
+        CSG::RawData data;
+        Array<CSG::MeshVertex> vertices;
+        CHECK_FALSE(mesh.Triangulate(data, vertices));
+        CHECK(vertices.Count() == 72);
+    }
+
+    // Critical: +Outer -Interior +Wall -Door
+    {
+        Array<CSG::Operand> ops;
+        ops.Add(CreateBoxOperand(Vector3::Zero, Vector3(50, 50, 50), CSG::Mode::Additive, 0));
+        ops.Add(CreateBoxOperand(Vector3::Zero, Vector3(40, 40, 40), CSG::Mode::Subtractive, 1));
+        ops.Add(CreateBoxOperand(Vector3(5, 0, 0), Vector3(5, 40, 40), CSG::Mode::Additive, 2));
+        ops.Add(CreateBoxOperand(Vector3(5, -30, 0), Vector3(10, 10, 10), CSG::Mode::Subtractive, 3));
+
+        CSG::Mesh mesh;
+        CSG::StackBuildStats stats;
+        REQUIRE(CSG::CSGStackEvaluator::EvaluateStack(Span<const CSG::Operand>(ops.Get(), ops.Count()), mesh, &stats));
+
+        CSG::RawData data;
+        Array<CSG::MeshVertex> vertices;
+        CHECK_FALSE(mesh.Triangulate(data, vertices));
+        CHECK(vertices.HasItems());
+    }
+}
+
+

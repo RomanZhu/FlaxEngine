@@ -17,6 +17,8 @@
 namespace CSG
 {
     class RawData;
+    struct Operand;
+    class CSGStackEvaluator;
 
     enum PolygonOperation
     {
@@ -30,6 +32,8 @@ namespace CSG
     /// </summary>
     class Mesh
     {
+        friend class CSGStackEvaluator;
+
     private:
 
         struct BrushMeta
@@ -83,6 +87,15 @@ namespace CSG
         }
 
         /// <summary>
+        /// Gets mutable array with polygons
+        /// </summary>
+        /// <returns>Polygon array</returns>
+        Array<Polygon>& Polygons()
+        {
+            return _polygons;
+        }
+
+        /// <summary>
         /// Gets array with surfaces
         /// </summary>
         /// <returns>Surfaces</returns>
@@ -118,6 +131,12 @@ namespace CSG
         void Build(Brush* parentBrush);
 
         /// <summary>
+        /// Build mesh from operand snapshot
+        /// </summary>
+        /// <param name="operand">Operand snapshot to use</param>
+        void Build(const Operand& operand);
+
+        /// <summary>
         /// Triangulate mesh
         /// </summary>
         /// <param name="data">Result data</param>
@@ -136,6 +155,12 @@ namespace CSG
         /// </summary>
         /// <param name="other">Other mesh to merge with</param>
         void Add(const Mesh* other);
+
+        /// <summary>
+        /// Appends resolved mesh geometry without performing any boolean operation.
+        /// </summary>
+        /// <param name="other">The resolved mesh to append.</param>
+        void AppendResolvedGeometry(const Mesh* other);
 
         /// <summary>
         /// Partitions all visible polygons by a cutting plane without resolving keep/remove operations.
