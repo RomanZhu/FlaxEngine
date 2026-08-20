@@ -7,6 +7,7 @@
 
 class AudioEmitter;
 class AudioVolumeBase;
+class AudioOcclusionScheduler;
 
 /// <summary>
 /// Central registry and evaluation manager for scene audio emitters, zones, and volumes.
@@ -25,6 +26,9 @@ public:
     /// All active registered audio volumes (zones, area emitters).
     /// </summary>
     static Array<AudioVolumeBase*> Volumes;
+
+private:
+    static AudioOcclusionScheduler Occlusion;
 
 public:
     /// <summary>

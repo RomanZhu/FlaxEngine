@@ -19,6 +19,8 @@ private:
     float _volume = 1.0f;
     float _pitch = 1.0f;
     bool _playOnStart = true;
+    Vector3 _previousSourcePosition = Vector3::Zero;
+    float _belowStopDuration = 0.0f;
     AudioEventHandle _handle;
 
 public:
@@ -55,6 +57,28 @@ public:
     /// Sets base pitch multiplier.
     /// </summary>
     API_PROPERTY() void SetPitch(float value);
+
+    /// <summary>
+    /// Weight required before automatic ambient playback starts.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(40), EditorDisplay(\"Area Emitter\", \"Start Threshold\"), Limit(0, 1, 0.001f)")
+    float StartThreshold = 0.01f;
+
+    /// <summary>
+    /// Weight below which a playing ambient event becomes eligible to stop.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(50), EditorDisplay(\"Area Emitter\", \"Stop Threshold\"), Limit(0, 1, 0.001f)")
+    float StopThreshold = 0.001f;
+
+    /// <summary>
+    /// Time that the weight must remain below Stop Threshold before playback is released.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(60), EditorDisplay(\"Area Emitter\", \"Stop Delay\"), Limit(0, 30, 0.01f)")
+    float StopDelay = 1.0f;
+
+    /// <summary>Uses a zero-velocity virtual source while the listener is inside the volume.</summary>
+    API_FIELD(Attributes="EditorOrder(70), DefaultValue(true), EditorDisplay(\"Area Emitter\", \"Follow Listener Inside\")")
+    bool FollowListenerInside = true;
 
 public:
     /// <summary>

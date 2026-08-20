@@ -130,9 +130,11 @@ void Audio::SetActiveDeviceIndex(int32 index)
 
     ActiveDeviceIndex = index;
 
-    AudioBackend::OnActiveDeviceChanged();
+    const bool eventOwnsOutput = AudioSettings::Get()->OutputOwner == AudioOutputOwner::EventBackend && AudioEventSystem::GetBackend() && AudioEventSystem::GetBackend()->GetType() != AudioEventBackendType::None;
+    if (!eventOwnsOutput)
+        AudioBackend::OnActiveDeviceChanged();
 #if COMPILE_WITH_AUDIO_EVENTS
-    if (AudioEventSystem::GetBackend())
+    if (eventOwnsOutput)
         AudioEventSystem::GetBackend()->OnActiveDeviceChanged();
 #endif
 
@@ -276,6 +278,25 @@ bool AudioService::Init()
             LOG(Error, "Failed to initialize the Null audio event backend.");
     }
     AudioEventSystem::SetBackend(eventBackend);
+    if (settings->OutputOwner == AudioOutputOwner::EventBackend && eventBackend->GetType() != AudioEventBackendType::None)
+    {
+        Array<AudioOutputDeviceInfo> outputDevices;
+        eventBackend->EnumerateOutputDevices(outputDevices);
+        Audio::Devices.Resize(outputDevices.Count());
+        for (int32 i = 0; i < outputDevices.Count(); i++)
+        {
+            auto& destination = Audio::Devices[i];
+            const auto& source = outputDevices[i];
+            destination.Name = source.Name;
+            destination.InternalName = StringAnsi(source.StableId);
+            destination.BackendName = StringAnsi(eventBackend->GetName());
+            destination.BackendIndex = i;
+        }
+        ActiveDeviceIndex = Audio::Devices.HasItems() ? 0 : -1;
+        if (ActiveDeviceIndex >= 0)
+            eventBackend->SetOutputDevice(String(Audio::Devices[ActiveDeviceIndex].InternalName));
+        Audio::DevicesChanged();
+    }
     _wasPlayMode = Engine::IsPlayMode();
     AudioEventSystem::SetPaused(!_wasPlayMode);
     LOG(Info, "Audio event system initialization... (backend: {0})", AudioEventSystem::GetBackendName());

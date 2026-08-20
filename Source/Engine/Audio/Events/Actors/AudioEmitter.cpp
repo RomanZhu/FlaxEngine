@@ -39,6 +39,13 @@ void AudioEmitter::SetStopMode(AudioStopMode value)
     _stopMode = value;
 }
 
+void AudioEmitter::SetListenerMask(uint32 value)
+{
+    _listenerMask = value;
+    if (_handle.IsValid())
+        AudioEventSystem::SetListenerMask(_handle, _listenerMask);
+}
+
 void AudioEmitter::Play()
 {
 #if USE_EDITOR
@@ -100,12 +107,14 @@ void AudioEmitter::Play()
     options.AutoPlay = true;
     options.Attributes = Audio3DAttributes(GetTransform(), _velocity);
     options.OwnerId = GetID();
+    options.ListenerMask = _listenerMask;
 
     _handle = AudioEventSystem::CreateInstance(eventId, path, options);
     if (_handle.IsValid())
     {
         AudioEventSystem::SetVolume(_handle, _volume);
         AudioEventSystem::SetPitch(_handle, _pitch);
+        Started();
     }
 }
 
@@ -122,6 +131,7 @@ void AudioEmitter::Stop()
         AudioEventSystem::Stop(_handle, _stopMode);
         AudioEventSystem::ReleaseInstance(_handle);
         _handle = AudioEventHandle();
+        Stopped();
     }
 }
 
@@ -208,7 +218,8 @@ void AudioEmitter::OnDisable()
     GetSceneRendering()->RemoveViewportIcon(this);
 #endif
 
-    Stop();
+    if (_stopOnDisable)
+        Stop();
     AudioWorld::Unregister(this);
 
     Actor::OnDisable();
@@ -244,6 +255,9 @@ void AudioEmitter::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_MEMBER(Pitch, _pitch);
     SERIALIZE_MEMBER(PlayOnStart, _playOnStart);
     SERIALIZE_MEMBER(StopMode, _stopMode);
+    SERIALIZE_MEMBER(StopOnDisable, _stopOnDisable);
+    SERIALIZE_MEMBER(ListenerMask, _listenerMask);
+    SERIALIZE(Occlusion);
 }
 
 void AudioEmitter::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
@@ -256,4 +270,8 @@ void AudioEmitter::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
     DESERIALIZE_MEMBER(Pitch, _pitch);
     DESERIALIZE_MEMBER(PlayOnStart, _playOnStart);
     DESERIALIZE_MEMBER(StopMode, _stopMode);
+    DESERIALIZE_MEMBER(StopOnDisable, _stopOnDisable);
+    DESERIALIZE_MEMBER(ListenerMask, _listenerMask);
+    DESERIALIZE(Occlusion);
+    Occlusion.Sanitize();
 }

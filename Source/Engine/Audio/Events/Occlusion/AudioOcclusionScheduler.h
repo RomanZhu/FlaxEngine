@@ -7,6 +7,7 @@
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Physics/PhysicsScene.h"
 #include "Engine/Audio/Events/AudioEventHandle.h"
+#include "AudioOcclusionTypes.h"
 
 class AudioEmitter;
 
@@ -21,6 +22,9 @@ public:
         AudioEmitter* Emitter = nullptr;
         float CurrentOcclusion = 0.0f;
         float TargetOcclusion = 0.0f;
+        float LastSentOcclusion = -1.0f;
+        float TimeSinceQuery = 0.0f;
+        float Distance = MAX_float;
         int32 LastUpdateFrame = 0;
     };
 
@@ -43,6 +47,9 @@ public:
     /// Executes budgeted occlusion raycasts and smooth filtering.
     /// </summary>
     void Update(PhysicsScene* scene, const Vector3& listenerPosition, float dt);
+
+    /// <summary>Updates all registered emitters using their owning physics scenes.</summary>
+    void Update(const Vector3& listenerPosition, float dt);
 
     void Clear();
 };

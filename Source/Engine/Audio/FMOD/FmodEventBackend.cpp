@@ -5,6 +5,8 @@
 #if AUDIO_EVENT_API_FMOD
 
 #include "FmodConvert.h"
+#include "Engine/Audio/Audio.h"
+#include "Engine/Audio/Events/AudioEventSystem.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Math/Math.h"
 
@@ -77,7 +79,28 @@ void FmodEventBackend::Update(float dt)
     FmodCallbackRecord record;
     while (_callbacks.Dequeue(record))
     {
-        // Dispatched on game thread
+        // A slot can have been released and reused since FMOD emitted the callback.
+        // Generation validation is the final guard before exposing it to game code.
+        if (!_handles.Validate(record.Handle))
+            continue;
+
+        AudioEventCallback callback;
+        callback.Handle = record.Handle;
+        callback.Type = record.Type;
+        callback.TimelinePositionMs = record.TimelinePositionMs;
+        callback.Bar = record.Bar;
+        callback.Beat = record.Beat;
+        callback.Tempo = record.Tempo;
+        callback.TimeSignatureUpper = record.TimeSignatureUpper;
+        callback.TimeSignatureLower = record.TimeSignatureLower;
+        if (record.MarkerNameAnsi[0] != 0)
+            callback.Marker = String(record.MarkerNameAnsi);
+        AudioEventSystem::DispatchEventCallback(callback);
+
+        // Internally-owned one-shots retain a handle until the STOPPED callback,
+        // avoiding a per-frame registry sweep and keeping callback lifetime safe.
+        if (record.Type == AudioEventCallbackType::Stopped && _handles.IsOneShot(record.Handle))
+            ReleaseInstance(record.Handle);
     }
 
     _studioSystem->update();
@@ -96,7 +119,50 @@ void FmodEventBackend::Dispose()
         _studioSystem->release();
         _studioSystem = nullptr;
         _coreSystem = nullptr;
+        ReleaseCallbackContexts();
     }
+}
+
+bool FmodEventBackend::ConfigureInstanceCallback(FMOD::Studio::EventInstance* instance, AudioEventHandle handle)
+{
+    auto* context = New<FmodInstanceContext>();
+    context->Backend = this;
+    context->Handle = handle;
+    if (!_handles.SetCallbackContext(handle, context))
+    {
+        Delete(context);
+        return false;
+    }
+
+    // Contexts are retained until the Studio system shuts down. FMOD may invoke a
+    // callback concurrently with a release, so reclaiming them per-slot is unsafe.
+    _callbackContexts.Add(context);
+    if (instance->setUserData(context) != FMOD_OK)
+        return false;
+
+    constexpr FMOD_STUDIO_EVENT_CALLBACK_TYPE callbackMask =
+        FMOD_STUDIO_EVENT_CALLBACK_STARTING |
+        FMOD_STUDIO_EVENT_CALLBACK_STARTED |
+        FMOD_STUDIO_EVENT_CALLBACK_STOPPED |
+        FMOD_STUDIO_EVENT_CALLBACK_RESTARTED |
+        FMOD_STUDIO_EVENT_CALLBACK_TIMELINE_MARKER |
+        FMOD_STUDIO_EVENT_CALLBACK_TIMELINE_BEAT |
+        FMOD_STUDIO_EVENT_CALLBACK_REAL_TO_VIRTUAL |
+        FMOD_STUDIO_EVENT_CALLBACK_VIRTUAL_TO_REAL |
+        FMOD_STUDIO_EVENT_CALLBACK_START_FAILED;
+    return instance->setCallback(&OnEventCallback, callbackMask) == FMOD_OK;
+}
+
+void FmodEventBackend::ReleaseCallbackContexts()
+{
+    for (auto* context : _callbackContexts)
+        Delete(context);
+    _callbackContexts.Clear();
+}
+
+void FmodEventBackend::EnqueueCallback(const FmodCallbackRecord& record)
+{
+    _callbacks.Enqueue(record);
 }
 
 void FmodEventBackend::SetMasterVolume(float volume)
@@ -177,6 +243,67 @@ void FmodEventBackend::SetDistanceFactor(float factor)
 
 void FmodEventBackend::OnActiveDeviceChanged()
 {
+    const int32 index = Audio::GetActiveDeviceIndex();
+    if (index >= 0 && index < Audio::Devices.Count())
+        SetOutputDevice(String(Audio::Devices[index].InternalName));
+}
+
+void FmodEventBackend::EnumerateOutputDevices(Array<AudioOutputDeviceInfo>& result) const
+{
+    result.Clear();
+    if (!_coreSystem)
+        return;
+
+    int32 count = 0;
+    if (_coreSystem->getNumDrivers(&count) != FMOD_OK)
+        return;
+
+    result.EnsureCapacity(count);
+    for (int32 i = 0; i < count; i++)
+    {
+        char name[256] = {};
+        FMOD_GUID guid = {};
+        int32 sampleRate = 0;
+        FMOD_SPEAKERMODE speakerMode = FMOD_SPEAKERMODE_DEFAULT;
+        int32 channels = 0;
+        if (_coreSystem->getDriverInfo(i, name, sizeof(name), &guid, &sampleRate, &speakerMode, &channels) != FMOD_OK)
+            continue;
+
+        AudioOutputDeviceInfo& device = result.AddOne();
+        device.Name = String(name);
+        device.StableId = FmodConvert::FromFmodGuid(guid).ToString();
+        device.SampleRate = sampleRate;
+        device.Channels = channels;
+    }
+}
+
+bool FmodEventBackend::SetOutputDevice(const StringView& stableId)
+{
+    if (!_coreSystem || stableId.IsEmpty())
+        return false;
+
+    const String id(stableId);
+    int32 count = 0;
+    if (_coreSystem->getNumDrivers(&count) != FMOD_OK)
+        return false;
+    for (int32 i = 0; i < count; i++)
+    {
+        FMOD_GUID guid = {};
+        if (_coreSystem->getDriverInfo(i, nullptr, 0, &guid, nullptr, nullptr, nullptr) == FMOD_OK && FmodConvert::FromFmodGuid(guid).ToString() == id)
+            return _coreSystem->setDriver(i) == FMOD_OK;
+    }
+    return false;
+}
+
+String FmodEventBackend::GetOutputDevice() const
+{
+    if (!_coreSystem)
+        return String::Empty;
+    int32 driver = -1;
+    if (_coreSystem->getDriver(&driver) != FMOD_OK || driver < 0)
+        return String::Empty;
+    FMOD_GUID guid = {};
+    return _coreSystem->getDriverInfo(driver, nullptr, 0, &guid, nullptr, nullptr, nullptr) == FMOD_OK ? FmodConvert::FromFmodGuid(guid).ToString() : String::Empty;
 }
 
 void FmodEventBackend::UpdateListeners(const Span<AudioListenerState>& listeners)
@@ -226,6 +353,21 @@ bool FmodEventBackend::UnloadAllBanks()
 bool FmodEventBackend::IsBankLoaded(const Guid& bankId) const
 {
     return _banks.IsLoaded(bankId);
+}
+
+bool FmodEventBackend::LoadBankSampleData(const Guid& bankId)
+{
+    return _banks.LoadSampleData(bankId);
+}
+
+void FmodEventBackend::UnloadBankSampleData(const Guid& bankId)
+{
+    _banks.UnloadSampleData(bankId);
+}
+
+AudioBankState FmodEventBackend::GetBankState(const Guid& bankId) const
+{
+    return _banks.GetState(bankId);
 }
 
 FMOD::Studio::EventDescription* FmodEventBackend::GetEventDescription(const Guid& eventId, const StringView& path)
@@ -308,14 +450,19 @@ AudioEventHandle FmodEventBackend::CreateInstance(const Guid& eventId, const Str
         return AudioEventHandle();
 
     AudioEventHandle handle = _handles.Allocate(inst, eventId, options.OwnerId);
+    if (!ConfigureInstanceCallback(inst, handle))
+    {
+        FmodInstanceContext* context;
+        _handles.Free(handle, inst, context);
+        inst->setUserData(nullptr);
+        inst->release();
+        return AudioEventHandle();
+    }
 
     // Apply attributes
     FMOD_3D_ATTRIBUTES attrs = FmodConvert::ToFmodAttributes(options.Attributes);
     inst->set3DAttributes(&attrs);
     inst->setListenerMask(options.ListenerMask);
-
-    // Hook callback
-    inst->setCallback(&OnEventCallback, FMOD_STUDIO_EVENT_CALLBACK_TIMELINE_MARKER | FMOD_STUDIO_EVENT_CALLBACK_TIMELINE_BEAT | FMOD_STUDIO_EVENT_CALLBACK_STOPPED);
 
     if (options.AutoPlay)
         inst->start();
@@ -333,6 +480,12 @@ bool FmodEventBackend::Pause(AudioEventHandle handle)
 {
     auto* inst = _handles.Get(handle);
     return inst ? inst->setPaused(true) == FMOD_OK : false;
+}
+
+bool FmodEventBackend::KeyOff(AudioEventHandle handle)
+{
+    auto* inst = _handles.Get(handle);
+    return inst ? inst->keyOff() == FMOD_OK : false;
 }
 
 bool FmodEventBackend::Stop(AudioEventHandle handle, AudioStopMode stopMode)
@@ -368,9 +521,7 @@ bool FmodEventBackend::StopAll(AudioStopMode stopMode)
         if (auto* inst = _handles.Get(handle))
             inst->stop(sm);
 
-        FMOD::Studio::EventInstance* instance = nullptr;
-        if (_handles.Free(handle, instance) && instance)
-            instance->release();
+        ReleaseInstance(handle);
     }
 
     return true;
@@ -379,8 +530,14 @@ bool FmodEventBackend::StopAll(AudioStopMode stopMode)
 bool FmodEventBackend::ReleaseInstance(AudioEventHandle handle)
 {
     FMOD::Studio::EventInstance* inst = nullptr;
-    if (_handles.Free(handle, inst) && inst)
+    FmodInstanceContext* context = nullptr;
+    if (_handles.Free(handle, inst, context) && inst)
     {
+        // Prevent any later FMOD callback from resolving a released handle. The
+        // stable context remains allocated until backend shutdown for in-flight
+        // callback safety.
+        inst->setUserData(nullptr);
+        inst->setCallback(nullptr, FMOD_STUDIO_EVENT_CALLBACK_ALL);
         inst->release();
         return true;
     }
@@ -397,13 +554,26 @@ bool FmodEventBackend::PlayOneShot(const Guid& eventId, const StringView& path, 
     if (desc->createInstance(&inst) != FMOD_OK || !inst)
         return false;
 
+    // Keep a private handle until STOPPED so the callback bridge owns cleanup.
+    const AudioEventHandle handle = _handles.Allocate(inst, eventId, Guid::Empty, true);
+    if (!ConfigureInstanceCallback(inst, handle))
+    {
+        FmodInstanceContext* context;
+        _handles.Free(handle, inst, context);
+        inst->setUserData(nullptr);
+        inst->release();
+        return false;
+    }
+
     FMOD_3D_ATTRIBUTES fattrs = FmodConvert::ToFmodAttributes(attributes);
     inst->set3DAttributes(&fattrs);
     inst->setVolume(Math::Saturate(volume));
     inst->setPitch(Math::Clamp(pitch, 0.0f, 10.0f));
-    inst->start();
-    inst->release();
-    return true;
+    if (inst->start() == FMOD_OK)
+        return true;
+
+    ReleaseInstance(handle);
+    return false;
 }
 
 bool FmodEventBackend::Set3DAttributes(AudioEventHandle handle, const Audio3DAttributes& attributes)
@@ -446,6 +616,14 @@ bool FmodEventBackend::SetParameter(AudioEventHandle handle, const AudioParamete
     if (!inst)
         return false;
 
+    if (id.Data1 != 0 || id.Data2 != 0)
+    {
+        FMOD_STUDIO_PARAMETER_ID parameterId;
+        parameterId.data1 = id.Data1;
+        parameterId.data2 = id.Data2;
+        return inst->setParameterByID(parameterId, value, ignoreSeekSpeed) == FMOD_OK;
+    }
+
     if (id.Name.HasChars())
     {
         StringAnsi nameAnsi(id.Name);
@@ -453,6 +631,33 @@ bool FmodEventBackend::SetParameter(AudioEventHandle handle, const AudioParamete
     }
 
     return false;
+}
+
+bool FmodEventBackend::SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed)
+{
+    auto* inst = _handles.Get(handle);
+    if (!inst || values.Length() == 0)
+        return false;
+
+    Array<FMOD_STUDIO_PARAMETER_ID, InlinedAllocation<16>> ids;
+    Array<float, InlinedAllocation<16>> numericValues;
+    for (const auto& value : values)
+    {
+        if (value.Id.Data1 == 0 && value.Id.Data2 == 0)
+        {
+            // Name-only IDs cannot be batched by FMOD; preserve generic semantics.
+            bool result = true;
+            for (const auto& item : values)
+                result &= SetParameter(handle, item.Id, item.Value, ignoreSeekSpeed);
+            return result;
+        }
+        FMOD_STUDIO_PARAMETER_ID id;
+        id.data1 = value.Id.Data1;
+        id.data2 = value.Id.Data2;
+        ids.Add(id);
+        numericValues.Add(value.Value);
+    }
+    return inst->setParametersByIDs(ids.Get(), numericValues.Get(), ids.Count(), ignoreSeekSpeed) == FMOD_OK;
 }
 
 bool FmodEventBackend::SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed)
@@ -470,6 +675,14 @@ bool FmodEventBackend::SetGlobalParameter(const AudioParameterId& id, float valu
 {
     if (!_studioSystem)
         return false;
+
+    if (id.Data1 != 0 || id.Data2 != 0)
+    {
+        FMOD_STUDIO_PARAMETER_ID parameterId;
+        parameterId.data1 = id.Data1;
+        parameterId.data2 = id.Data2;
+        return _studioSystem->setParameterByID(parameterId, value, ignoreSeekSpeed) == FMOD_OK;
+    }
 
     if (id.Name.HasChars())
     {
@@ -526,13 +739,12 @@ bool FmodEventBackend::QueryInstance(AudioEventHandle handle, AudioEventInstance
     return true;
 }
 
-bool FmodEventBackend::SetSnapshotWeight(AudioEventHandle handle, float weight)
+bool FmodEventBackend::SetSnapshotWeight(AudioEventHandle /*handle*/, float /*weight*/)
 {
-    auto* inst = _handles.Get(handle);
-    if (!inst)
-        return false;
-
-    return inst->setParameterByName("Intensity", Math::Saturate(weight) * 100.0f) == FMOD_OK;
+    // FMOD Studio snapshots have no universal runtime blend-weight API. Projects
+    // that need continuous blending must author and reference a parameter through
+    // AudioSnapshot::WeightParameter (or an AudioZoneVolume override).
+    return false;
 }
 
 bool FmodEventBackend::SetBusVolume(const Guid& busId, const StringView& path, float volume)
@@ -562,6 +774,10 @@ bool FmodEventBackend::SetVCAVolume(const Guid& vcaId, const StringView& path, f
 void FmodEventBackend::CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot)
 {
     outSnapshot = AudioDiagnosticsSnapshot();
+    outSnapshot.BackendName = GetName();
+    outSnapshot.Initialized = _studioSystem != nullptr;
+    outSnapshot.CallbackQueueDepth = _callbacks.GetApproximateDepth();
+    outSnapshot.DroppedCallbacks = _callbacks.GetTotalDropped();
     if (_studioSystem)
     {
         FMOD_STUDIO_CPU_USAGE studioCpu;
@@ -579,7 +795,80 @@ void FmodEventBackend::CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot)
 
 FMOD_RESULT F_CALL FmodEventBackend::OnEventCallback(FMOD_STUDIO_EVENT_CALLBACK_TYPE type, FMOD_STUDIO_EVENTINSTANCE* event, void* parameters)
 {
-    // FMOD background/mixer callback
+    auto* instance = reinterpret_cast<FMOD::Studio::EventInstance*>(event);
+    if (!instance)
+        return FMOD_OK;
+
+    void* userData = nullptr;
+    if (instance->getUserData(&userData) != FMOD_OK || !userData)
+        return FMOD_OK;
+
+    const auto* context = static_cast<FmodInstanceContext*>(userData);
+    if (!context->Backend)
+        return FMOD_OK;
+
+    FmodCallbackRecord record;
+    record.Handle = context->Handle;
+    switch (type)
+    {
+    case FMOD_STUDIO_EVENT_CALLBACK_STARTING:
+        record.Type = AudioEventCallbackType::Starting;
+        break;
+    case FMOD_STUDIO_EVENT_CALLBACK_STARTED:
+        record.Type = AudioEventCallbackType::Started;
+        break;
+    case FMOD_STUDIO_EVENT_CALLBACK_STOPPED:
+        record.Type = AudioEventCallbackType::Stopped;
+        break;
+    case FMOD_STUDIO_EVENT_CALLBACK_RESTARTED:
+        record.Type = AudioEventCallbackType::Restarted;
+        break;
+    case FMOD_STUDIO_EVENT_CALLBACK_REAL_TO_VIRTUAL:
+        record.Type = AudioEventCallbackType::RealToVirtual;
+        break;
+    case FMOD_STUDIO_EVENT_CALLBACK_VIRTUAL_TO_REAL:
+        record.Type = AudioEventCallbackType::VirtualToReal;
+        break;
+    case FMOD_STUDIO_EVENT_CALLBACK_START_FAILED:
+        record.Type = AudioEventCallbackType::StartFailed;
+        break;
+    case FMOD_STUDIO_EVENT_CALLBACK_TIMELINE_MARKER:
+    {
+        record.Type = AudioEventCallbackType::TimelineMarker;
+        const auto* marker = static_cast<FMOD_STUDIO_TIMELINE_MARKER_PROPERTIES*>(parameters);
+        if (marker)
+        {
+            record.TimelinePositionMs = marker->position;
+            if (marker->name)
+            {
+                int32 i = 0;
+                for (; i < (int32)sizeof(record.MarkerNameAnsi) - 1 && marker->name[i] != 0; i++)
+                    record.MarkerNameAnsi[i] = marker->name[i];
+                record.MarkerNameAnsi[i] = 0;
+            }
+        }
+        break;
+    }
+    case FMOD_STUDIO_EVENT_CALLBACK_TIMELINE_BEAT:
+    {
+        record.Type = AudioEventCallbackType::TimelineBeat;
+        const auto* beat = static_cast<FMOD_STUDIO_TIMELINE_BEAT_PROPERTIES*>(parameters);
+        if (beat)
+        {
+            record.TimelinePositionMs = beat->position;
+            record.Bar = beat->bar;
+            record.Beat = beat->beat;
+            record.Tempo = beat->tempo;
+            record.TimeSignatureUpper = beat->timesignatureupper;
+            record.TimeSignatureLower = beat->timesignaturelower;
+        }
+        break;
+    }
+    default:
+        return FMOD_OK;
+    }
+
+    context->Backend->EnqueueCallback(record);
     return FMOD_OK;
 }
 

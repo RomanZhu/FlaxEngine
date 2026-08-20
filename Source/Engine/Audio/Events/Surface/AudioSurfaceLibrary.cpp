@@ -3,13 +3,11 @@
 #include "AudioSurfaceLibrary.h"
 #include "Engine/Audio/Events/AudioEventSystem.h"
 #include "Engine/Physics/PhysicalMaterial.h"
+#include "AudioSurfaceResolver.h"
 
 const AudioSurfaceProfile* AudioSurfaceLibrary::GetProfile(Tag surfaceTag) const
 {
-    const AudioSurfaceProfile* profile = Profiles.TryGet(surfaceTag);
-    if (profile)
-        return profile;
-    return &DefaultProfile;
+    return AudioSurfaceResolver::Resolve(*this, surfaceTag);
 }
 
 bool AudioSurfaceLibrary::TryGetProfile(Tag surfaceTag, AudioSurfaceProfile& outProfile) const
@@ -52,6 +50,26 @@ void AudioSurfaceLibrary::PlayImpact(Tag surfaceTag, const Vector3& position, fl
         if (eventData)
         {
             Audio3DAttributes attrs(position, Vector3::Zero, Vector3::Forward, Vector3::Up);
+            AudioEventSystem::PlayOneShot(eventData->BackendId, eventData->Path, attrs, volume, 1.0f);
+        }
+    }
+}
+
+void AudioSurfaceLibrary::PlayImpact(const AudioImpactContext& context, float volume) const
+{
+    Tag tag;
+    if (context.MaterialA)
+        tag = context.MaterialA->Tag;
+    if (!tag && context.MaterialB)
+        tag = context.MaterialB->Tag;
+    const auto* profile = GetProfile(tag);
+    const auto& event = profile && profile->Interactions.Impact ? profile->Interactions.Impact : (profile ? profile->ImpactEvent : AssetReference<JsonAsset>());
+    if (event)
+    {
+        const auto* eventData = event->GetInstance<AudioEvent>();
+        if (eventData)
+        {
+            Audio3DAttributes attrs(context.Point, context.RelativeVelocity, context.Normal, Vector3::Up);
             AudioEventSystem::PlayOneShot(eventData->BackendId, eventData->Path, attrs, volume, 1.0f);
         }
     }

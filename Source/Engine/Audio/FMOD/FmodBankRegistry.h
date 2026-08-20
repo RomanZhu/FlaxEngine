@@ -9,6 +9,7 @@
 #include "Engine/Core/Types/Guid.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Collections/Dictionary.h"
+#include "Engine/Audio/Events/AudioEventTypes.h"
 #include <fmod_studio.hpp>
 
 /// <summary>
@@ -22,6 +23,8 @@ public:
         FMOD::Studio::Bank* Bank = nullptr;
         String Path;
         int32 RefCount = 0;
+        bool SampleDataLoaded = false;
+        AudioBankState State = AudioBankState::Unloaded;
     };
 
 private:
@@ -40,6 +43,9 @@ public:
     bool Unload(const Guid& bankId, const StringView& path = StringView::Empty);
     bool UnloadAll();
     bool IsLoaded(const Guid& bankId) const;
+    bool LoadSampleData(const Guid& bankId);
+    void UnloadSampleData(const Guid& bankId);
+    AudioBankState GetState(const Guid& bankId) const;
 
     FMOD::Studio::Bank* Get(const Guid& bankId) const;
     int32 GetLoadedCount() const { return _banksByGuid.Count(); }

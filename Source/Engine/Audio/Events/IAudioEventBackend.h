@@ -50,6 +50,11 @@ public:
     virtual void SetDistanceFactor(float factor) = 0;
     virtual void OnActiveDeviceChanged() = 0;
 
+    // Output devices. These are meaningful only when this backend owns output.
+    virtual void EnumerateOutputDevices(Array<AudioOutputDeviceInfo>& result) const = 0;
+    virtual bool SetOutputDevice(const StringView& stableId) = 0;
+    virtual String GetOutputDevice() const = 0;
+
     // Listeners
     virtual void UpdateListeners(const Span<AudioListenerState>& listeners) = 0;
 
@@ -58,11 +63,15 @@ public:
     virtual bool UnloadBank(const Guid& bankId, const StringView& path) = 0;
     virtual bool UnloadAllBanks() = 0;
     virtual bool IsBankLoaded(const Guid& bankId) const = 0;
+    virtual bool LoadBankSampleData(const Guid& bankId) = 0;
+    virtual void UnloadBankSampleData(const Guid& bankId) = 0;
+    virtual AudioBankState GetBankState(const Guid& bankId) const = 0;
 
     // Event instance playback
     virtual AudioEventHandle CreateInstance(const Guid& eventId, const StringView& path, const AudioEventCreateOptions& options) = 0;
     virtual bool Play(AudioEventHandle handle) = 0;
     virtual bool Pause(AudioEventHandle handle) = 0;
+    virtual bool KeyOff(AudioEventHandle handle) = 0;
     virtual bool Stop(AudioEventHandle handle, AudioStopMode stopMode) = 0;
     virtual bool StopAll(AudioStopMode stopMode) = 0;
     virtual bool ReleaseInstance(AudioEventHandle handle) = 0;
@@ -75,6 +84,7 @@ public:
     virtual bool SetTimelinePosition(AudioEventHandle handle, int32 milliseconds) = 0;
     virtual bool SetListenerMask(AudioEventHandle handle, uint32 listenerMask) = 0;
     virtual bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) = 0;
+    virtual bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false) = 0;
     virtual bool SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) = 0;
 
     // Global parameters

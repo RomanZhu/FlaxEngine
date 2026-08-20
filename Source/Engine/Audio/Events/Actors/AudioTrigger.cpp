@@ -149,6 +149,32 @@ bool AudioTrigger::StartEvent()
     return started;
 }
 
+bool AudioTrigger::ExecuteAction()
+{
+    switch (_action)
+    {
+    case AudioTriggerActionType::StopEvent:
+    case AudioTriggerActionType::StopSnapshot:
+        Stop();
+        return true;
+    case AudioTriggerActionType::SetGlobalParameter:
+        return ActionParameter.IsValid() && AudioEventSystem::SetGlobalParameter(ActionParameter, ActionValue);
+    case AudioTriggerActionType::SetBusVolume:
+        return AudioEventSystem::SetBusVolume(Guid::Empty, MixerPath, Math::Saturate(ActionValue));
+    case AudioTriggerActionType::SetVCAVolume:
+        return AudioEventSystem::SetVCAVolume(Guid::Empty, MixerPath, Math::Saturate(ActionValue));
+    case AudioTriggerActionType::MuteBus:
+        return AudioEventSystem::SetBusMute(Guid::Empty, MixerPath, ActionValue >= 0.5f);
+    case AudioTriggerActionType::PauseBus:
+        return AudioEventSystem::SetBusPaused(Guid::Empty, MixerPath, ActionValue >= 0.5f);
+    case AudioTriggerActionType::PlayOneShot:
+    case AudioTriggerActionType::StartPersistentEvent:
+    case AudioTriggerActionType::StartSnapshot:
+    default:
+        return StartEvent();
+    }
+}
+
 void AudioTrigger::UpdateListenerPosition(const Vector3& listenerPosition)
 {
     if (!IsDuringPlay())
@@ -165,7 +191,10 @@ void AudioTrigger::UpdateListenerPosition(const Vector3& listenerPosition)
         Stop();
 
     if ((entered || exited) && ShouldTrigger(entered))
-        StartEvent();
+        ExecuteAction();
+
+    if (exited && _rearmOnExit)
+        _hasTriggered = false;
 
     _isInside = sample.IsInside;
     _hasSample = true;
@@ -215,6 +244,12 @@ void AudioTrigger::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_MEMBER(ActivationMode, _activationMode);
     SERIALIZE_MEMBER(StopOnExit, _stopOnExit);
     SERIALIZE_MEMBER(TriggerOnce, _triggerOnce);
+    SERIALIZE_MEMBER(RearmOnExit, _rearmOnExit);
+    SERIALIZE_MEMBER(TargetMode, _targetMode);
+    SERIALIZE_MEMBER(Action, _action);
+    SERIALIZE(ActionParameter);
+    SERIALIZE(ActionValue);
+    SERIALIZE(MixerPath);
     SERIALIZE_MEMBER(Cooldown, _cooldown);
     SERIALIZE_MEMBER(Volume, _volume);
     SERIALIZE_MEMBER(Pitch, _pitch);
@@ -230,6 +265,12 @@ void AudioTrigger::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
     DESERIALIZE_MEMBER(ActivationMode, _activationMode);
     DESERIALIZE_MEMBER(StopOnExit, _stopOnExit);
     DESERIALIZE_MEMBER(TriggerOnce, _triggerOnce);
+    DESERIALIZE_MEMBER(RearmOnExit, _rearmOnExit);
+    DESERIALIZE_MEMBER(TargetMode, _targetMode);
+    DESERIALIZE_MEMBER(Action, _action);
+    DESERIALIZE(ActionParameter);
+    DESERIALIZE(ActionValue);
+    DESERIALIZE(MixerPath);
     DESERIALIZE_MEMBER(Cooldown, _cooldown);
     DESERIALIZE_MEMBER(Volume, _volume);
     DESERIALIZE_MEMBER(Pitch, _pitch);

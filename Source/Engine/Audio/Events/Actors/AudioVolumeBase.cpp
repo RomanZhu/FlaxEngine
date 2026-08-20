@@ -162,7 +162,7 @@ void AudioVolumeBase::UpdateBounds()
     case AudioVolumeShape::Capsule:
     {
         float maxScale = (float)_transform.Scale.MaxValue();
-        _sphere = BoundingSphere(GetPosition(), (_sphereRadius + _capsuleHeight * 0.5f) * maxScale);
+        _sphere = BoundingSphere(GetPosition(), (_capsuleRadius + _capsuleHeight * 0.5f) * maxScale);
         _sphere.GetBoundingBox(_box);
         break;
     }
@@ -271,4 +271,3 @@ void AudioVolumeBase::Deserialize(DeserializeStream& stream, ISerializeModifier*
 
     UpdateBounds();
 }
-

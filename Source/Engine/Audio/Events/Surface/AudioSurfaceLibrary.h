@@ -9,6 +9,19 @@
 #include "Engine/Content/JsonAssetReference.h"
 #include "Engine/Physics/Types.h"
 #include "Engine/Audio/Events/Assets/AudioEvent.h"
+#include "AudioInteractionTypes.h"
+
+/// <summary>Reusable authored interaction event set for one physical surface.</summary>
+API_STRUCT() struct FLAXENGINE_API AudioSurfaceEventSet : ISerializable
+{
+    API_AUTO_SERIALIZATION();
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioSurfaceEventSet);
+    API_FIELD(Attributes="AssetReference(\"FlaxEngine.AudioEvent\")") AssetReference<JsonAsset> Footstep;
+    API_FIELD(Attributes="AssetReference(\"FlaxEngine.AudioEvent\")") AssetReference<JsonAsset> Landing;
+    API_FIELD(Attributes="AssetReference(\"FlaxEngine.AudioEvent\")") AssetReference<JsonAsset> Impact;
+    API_FIELD(Attributes="AssetReference(\"FlaxEngine.AudioEvent\")") AssetReference<JsonAsset> ScrapeLoop;
+    API_FIELD(Attributes="AssetReference(\"FlaxEngine.AudioEvent\")") AssetReference<JsonAsset> RollLoop;
+};
 
 /// <summary>
 /// Audio event mappings for physics surface interactions (footsteps, impacts, scrapes).
@@ -35,6 +48,9 @@ API_STRUCT() struct FLAXENGINE_API AudioSurfaceProfile : ISerializable
     /// </summary>
     API_FIELD(Attributes="EditorDisplay(\"Events\"), AssetReference(\"FlaxEngine.AudioEvent\")")
     AssetReference<JsonAsset> LandEvent;
+
+    /// <summary>Extended authored event set for persistent and transient interactions.</summary>
+    API_FIELD(Attributes="EditorDisplay(\"Events\")") AudioSurfaceEventSet Interactions;
 };
 
 /// <summary>
@@ -79,4 +95,7 @@ public:
     /// Plays an impact sound at a world position for a given surface tag.
     /// </summary>
     API_FUNCTION() void PlayImpact(Tag surfaceTag, const Vector3& position, float impulse, float volume = 1.0f);
+
+    /// <summary>Plays the strongest coalesced interaction for a physics contact context.</summary>
+    void PlayImpact(const AudioImpactContext& context, float volume = 1.0f) const;
 };

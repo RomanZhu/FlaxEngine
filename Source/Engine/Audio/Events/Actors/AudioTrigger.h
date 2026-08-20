@@ -29,6 +29,28 @@ API_ENUM() enum class AudioTriggerActivationMode : uint8
     ListenerEnterAndExit = 2,
 };
 
+API_ENUM() enum class AudioTriggerTargetMode : uint8
+{
+    Listener = 0,
+    Actor = 1,
+    LayerMask = 2,
+    Tag = 3,
+};
+
+API_ENUM() enum class AudioTriggerActionType : uint8
+{
+    PlayOneShot = 0,
+    StartPersistentEvent = 1,
+    StopEvent = 2,
+    StartSnapshot = 3,
+    StopSnapshot = 4,
+    SetGlobalParameter = 5,
+    SetBusVolume = 6,
+    SetVCAVolume = 7,
+    MuteBus = 8,
+    PauseBus = 9,
+};
+
 /// <summary>
 /// Listener volume that starts an audio event when the listener crosses its boundary.
 /// </summary>
@@ -41,6 +63,9 @@ private:
     AudioTriggerActivationMode _activationMode = AudioTriggerActivationMode::ListenerEnter;
     bool _stopOnExit = false;
     bool _triggerOnce = false;
+    bool _rearmOnExit = true;
+    AudioTriggerTargetMode _targetMode = AudioTriggerTargetMode::Listener;
+    AudioTriggerActionType _action = AudioTriggerActionType::PlayOneShot;
     float _cooldown = 0.0f;
     float _volume = 1.0f;
     float _pitch = 1.0f;
@@ -97,6 +122,25 @@ public:
     /// Sets whether the trigger can start its event only once per play session.
     /// </summary>
     API_PROPERTY() void SetTriggerOnce(bool value) { _triggerOnce = value; }
+
+    API_PROPERTY(Attributes="EditorOrder(45), EditorDisplay(\"Audio Trigger\", \"Target Mode\")")
+    FORCE_INLINE AudioTriggerTargetMode GetTargetMode() const { return _targetMode; }
+    API_PROPERTY() void SetTargetMode(AudioTriggerTargetMode value) { _targetMode = value; }
+
+    API_PROPERTY(Attributes="EditorOrder(46), DefaultValue(true), EditorDisplay(\"Audio Trigger\", \"Rearm On Exit\")")
+    FORCE_INLINE bool GetRearmOnExit() const { return _rearmOnExit; }
+    API_PROPERTY() void SetRearmOnExit(bool value) { _rearmOnExit = value; }
+
+    API_PROPERTY(Attributes="EditorOrder(47), EditorDisplay(\"Audio Trigger\", \"Action\")")
+    FORCE_INLINE AudioTriggerActionType GetAction() const { return _action; }
+    API_PROPERTY() void SetAction(AudioTriggerActionType value) { _action = value; }
+
+    API_FIELD(Attributes="EditorOrder(48), EditorDisplay(\"Audio Trigger\", \"Action Parameter\")")
+    AudioParameterId ActionParameter;
+    API_FIELD(Attributes="EditorOrder(49), EditorDisplay(\"Audio Trigger\", \"Action Value\")")
+    float ActionValue = 1.0f;
+    API_FIELD(Attributes="EditorOrder(49), EditorDisplay(\"Audio Trigger\", \"Mixer Path\")")
+    String MixerPath;
 
     /// <summary>
     /// Minimum time in seconds between event starts.
@@ -178,4 +222,5 @@ protected:
 private:
     bool ShouldTrigger(bool entered) const;
     bool StartEvent();
+    bool ExecuteAction();
 };

@@ -24,6 +24,7 @@ private:
     FmodHandleRegistry _handles;
     FmodBankRegistry _banks;
     FmodCallbackQueue _callbacks;
+    Array<FmodInstanceContext*> _callbackContexts;
 
     float _masterVolume = 1.0f;
     float _masterPitch = 1.0f;
@@ -48,6 +49,9 @@ public:
     void SetDopplerFactor(float factor) override;
     void SetDistanceFactor(float factor) override;
     void OnActiveDeviceChanged() override;
+    void EnumerateOutputDevices(Array<AudioOutputDeviceInfo>& result) const override;
+    bool SetOutputDevice(const StringView& stableId) override;
+    String GetOutputDevice() const override;
 
     void UpdateListeners(const Span<AudioListenerState>& listeners) override;
 
@@ -55,10 +59,14 @@ public:
     bool UnloadBank(const Guid& bankId, const StringView& path) override;
     bool UnloadAllBanks() override;
     bool IsBankLoaded(const Guid& bankId) const override;
+    bool LoadBankSampleData(const Guid& bankId) override;
+    void UnloadBankSampleData(const Guid& bankId) override;
+    AudioBankState GetBankState(const Guid& bankId) const override;
 
     AudioEventHandle CreateInstance(const Guid& eventId, const StringView& path, const AudioEventCreateOptions& options) override;
     bool Play(AudioEventHandle handle) override;
     bool Pause(AudioEventHandle handle) override;
+    bool KeyOff(AudioEventHandle handle) override;
     bool Stop(AudioEventHandle handle, AudioStopMode stopMode) override;
     bool StopAll(AudioStopMode stopMode) override;
     bool ReleaseInstance(AudioEventHandle handle) override;
@@ -70,6 +78,7 @@ public:
     bool SetTimelinePosition(AudioEventHandle handle, int32 milliseconds) override;
     bool SetListenerMask(AudioEventHandle handle, uint32 listenerMask) override;
     bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) override;
+    bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false) override;
     bool SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) override;
 
     bool SetGlobalParameter(const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) override;
@@ -85,10 +94,17 @@ public:
 
     void CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot) override;
 
+    /// <summary>
+    /// Queues a callback record for main-thread dispatch. Called only by the FMOD callback bridge.
+    /// </summary>
+    void EnqueueCallback(const FmodCallbackRecord& record);
+
     FMOD::Studio::System* GetStudioSystem() const { return _studioSystem; }
     FMOD::System* GetCoreSystem() const { return _coreSystem; }
 
 private:
+    bool ConfigureInstanceCallback(FMOD::Studio::EventInstance* instance, AudioEventHandle handle);
+    void ReleaseCallbackContexts();
     FMOD::Studio::EventDescription* GetEventDescription(const Guid& eventId, const StringView& path);
     FMOD::Studio::Bus* GetBus(const Guid& busId, const StringView& path);
     FMOD::Studio::VCA* GetVCA(const Guid& vcaId, const StringView& path);

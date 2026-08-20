@@ -4,6 +4,7 @@
 #include "Engine/Engine/Engine.h"
 
 IAudioEventBackend* AudioEventSystem::_backend = nullptr;
+Delegate<const AudioEventCallback&> AudioEventSystem::EventCallback;
 
 IAudioEventBackend* AudioEventSystem::GetBackend()
 {
@@ -13,6 +14,11 @@ IAudioEventBackend* AudioEventSystem::GetBackend()
 void AudioEventSystem::SetBackend(IAudioEventBackend* backend)
 {
     _backend = backend;
+}
+
+void AudioEventSystem::DispatchEventCallback(const AudioEventCallback& callback)
+{
+    EventCallback(callback);
 }
 
 AudioEventBackendType AudioEventSystem::GetBackendType()
@@ -81,6 +87,22 @@ bool AudioEventSystem::IsBankLoaded(const Guid& bankId)
     return _backend ? _backend->IsBankLoaded(bankId) : false;
 }
 
+bool AudioEventSystem::LoadBankSampleData(const Guid& bankId)
+{
+    return _backend ? _backend->LoadBankSampleData(bankId) : false;
+}
+
+void AudioEventSystem::UnloadBankSampleData(const Guid& bankId)
+{
+    if (_backend)
+        _backend->UnloadBankSampleData(bankId);
+}
+
+AudioBankState AudioEventSystem::GetBankState(const Guid& bankId)
+{
+    return _backend ? _backend->GetBankState(bankId) : AudioBankState::Unloaded;
+}
+
 AudioEventHandle AudioEventSystem::CreateInstance(const Guid& eventId, const StringView& path, const AudioEventCreateOptions& options)
 {
     if (!Engine::IsPlayMode())
@@ -98,6 +120,11 @@ bool AudioEventSystem::Play(AudioEventHandle handle)
 bool AudioEventSystem::Pause(AudioEventHandle handle)
 {
     return _backend ? _backend->Pause(handle) : false;
+}
+
+bool AudioEventSystem::KeyOff(AudioEventHandle handle)
+{
+    return _backend ? _backend->KeyOff(handle) : false;
 }
 
 bool AudioEventSystem::Stop(AudioEventHandle handle, AudioStopMode stopMode)
@@ -150,6 +177,11 @@ bool AudioEventSystem::SetListenerMask(AudioEventHandle handle, uint32 listenerM
 bool AudioEventSystem::SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed)
 {
     return _backend ? _backend->SetParameter(handle, id, value, ignoreSeekSpeed) : false;
+}
+
+bool AudioEventSystem::SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed)
+{
+    return _backend ? _backend->SetParameters(handle, values, ignoreSeekSpeed) : false;
 }
 
 bool AudioEventSystem::SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed)

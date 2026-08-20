@@ -2,24 +2,35 @@
 
 #include "AudioWorld.h"
 #include "AudioEventSystem.h"
+#include "AudioZoneMixer.h"
+#include "Occlusion/AudioOcclusionScheduler.h"
 #include "Actors/AudioVolumeBase.h"
+#include "Actors/AudioEmitter.h"
+#include "Actors/AudioZoneVolume.h"
 #include "Engine/Audio/Audio.h"
 #include "Engine/Audio/AudioListener.h"
 #include "Engine/Engine/Engine.h"
 
 Array<AudioEmitter*> AudioWorld::Emitters;
 Array<AudioVolumeBase*> AudioWorld::Volumes;
+AudioOcclusionScheduler AudioWorld::Occlusion;
 
 void AudioWorld::Register(AudioEmitter* emitter)
 {
     if (emitter && !Emitters.Contains(emitter))
+    {
         Emitters.Add(emitter);
+        Occlusion.Register(emitter);
+    }
 }
 
 void AudioWorld::Unregister(AudioEmitter* emitter)
 {
     if (emitter)
+    {
         Emitters.Remove(emitter);
+        Occlusion.Unregister(emitter);
+    }
 }
 
 void AudioWorld::Register(AudioVolumeBase* volume)
@@ -33,8 +44,6 @@ void AudioWorld::Unregister(AudioVolumeBase* volume)
     if (volume)
         Volumes.Remove(volume);
 }
-
-#include "Actors/AudioEmitter.h"
 
 void AudioWorld::Update(float dt)
 {
@@ -51,7 +60,8 @@ void AudioWorld::Update(float dt)
         }
     }
 
-    // Use the first active listener for volume evaluation until multi-listener blending is implemented.
+    // Use the first active listener for volume evaluation. The aggregation pass
+    // remains deterministic and can be extended to weighted listeners later.
     AudioListener* activeListener = nullptr;
     for (int32 i = 0; i < Audio::Listeners.Count(); i++)
     {
@@ -72,4 +82,13 @@ void AudioWorld::Update(float dt)
         if (volume && volume->IsActiveInHierarchy() && volume->IsDuringPlay())
             volume->UpdateListenerPosition(listenerPosition);
     }
+
+    Array<AudioZoneVolume*> zones;
+    for (int32 i = 0; i < Volumes.Count(); i++)
+    {
+        if (auto* zone = dynamic_cast<AudioZoneVolume*>(Volumes[i]))
+            zones.Add(zone);
+    }
+    AudioZoneMixer::Apply(zones);
+    Occlusion.Update(listenerPosition, dt);
 }

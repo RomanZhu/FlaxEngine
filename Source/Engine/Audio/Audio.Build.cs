@@ -18,6 +18,7 @@ public class Audio : EngineModule
         options.SourcePaths.Clear();
         options.SourceFiles.AddRange(Directory.GetFiles(FolderPath, "*.*", SearchOption.TopDirectoryOnly));
         options.SourcePaths.Add(Path.Combine(FolderPath, "Events"));
+        options.SourcePaths.Add(Path.Combine(FolderPath, "Diagnostics"));
 
         var depsRoot = options.DepsFolder;
 

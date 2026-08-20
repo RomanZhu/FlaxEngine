@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AudioEventTypes.h"
+#include "AudioEventCallbacks.h"
 #include "IAudioEventBackend.h"
 #include "Engine/Scripting/ScriptingType.h"
 
@@ -19,6 +20,11 @@ private:
 
 public:
     /// <summary>
+    /// Raised on the main thread when an event backend reports a lifecycle or timeline callback.
+    /// </summary>
+    API_EVENT() static Delegate<const AudioEventCallback&> EventCallback;
+
+    /// <summary>
     /// Gets the currently active audio event backend instance.
     /// </summary>
     static IAudioEventBackend* GetBackend();
@@ -27,6 +33,12 @@ public:
     /// Sets the active audio event backend instance.
     /// </summary>
     static void SetBackend(IAudioEventBackend* backend);
+
+    /// <summary>
+    /// Dispatches a backend callback after its handle generation has been validated.
+    /// This is for backend implementations; gameplay should subscribe to <see cref="EventCallback"/>.
+    /// </summary>
+    static void DispatchEventCallback(const AudioEventCallback& callback);
 
     /// <summary>
     /// Gets the backend type currently active.
@@ -106,6 +118,21 @@ public:
     API_FUNCTION() static bool IsBankLoaded(const Guid& bankId);
 
     /// <summary>
+    /// Loads sample data for an already loaded sound bank.
+    /// </summary>
+    API_FUNCTION() static bool LoadBankSampleData(const Guid& bankId);
+
+    /// <summary>
+    /// Releases sample data while retaining the bank metadata.
+    /// </summary>
+    API_FUNCTION() static void UnloadBankSampleData(const Guid& bankId);
+
+    /// <summary>
+    /// Gets the current loading state of a sound bank.
+    /// </summary>
+    API_FUNCTION() static AudioBankState GetBankState(const Guid& bankId);
+
+    /// <summary>
     /// Creates a playback instance for an audio event.
     /// </summary>
     /// <param name="eventId">The event asset ID or GUID.</param>
@@ -127,6 +154,11 @@ public:
     /// <param name="handle">Instance handle.</param>
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool Pause(AudioEventHandle handle);
+
+    /// <summary>
+    /// Sends a sustain key-off to an event without forcing an immediate stop.
+    /// </summary>
+    API_FUNCTION() static bool KeyOff(AudioEventHandle handle);
 
     /// <summary>
     /// Stops playback of an audio event instance.
@@ -212,6 +244,11 @@ public:
     API_FUNCTION() static bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false);
 
     /// <summary>
+    /// Sets several numeric parameters in one backend call where supported.
+    /// </summary>
+    API_FUNCTION() static bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false);
+
+    /// <summary>
     /// Sets a labeled parameter value on an event instance.
     /// </summary>
     /// <param name="handle">Instance handle.</param>
@@ -248,7 +285,8 @@ public:
     API_FUNCTION() static bool QueryInstance(AudioEventHandle handle, API_PARAM(Out) AudioEventInstanceState& outState);
 
     /// <summary>
-    /// Sets snapshot evaluation blend weight.
+    /// Sets snapshot evaluation blend weight when the backend supports a native, backend-neutral blend operation.
+    /// Prefer an explicitly authored parameter on the snapshot asset for continuous blending.
     /// </summary>
     /// <param name="handle">Instance handle.</param>
     /// <param name="weight">Weight multiplier in range [0, 1].</param>

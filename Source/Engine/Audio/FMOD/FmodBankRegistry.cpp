@@ -70,6 +70,7 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
     entry.Bank = bank;
     entry.Path = filePath;
     entry.RefCount = 1;
+    entry.State = nonBlocking ? AudioBankState::Loading : AudioBankState::Loaded;
 
     Guid resolvedGuid = bankId;
     if (!resolvedGuid.IsValid())
@@ -150,6 +151,43 @@ bool FmodBankRegistry::IsLoaded(const Guid& bankId) const
         return state == FMOD_STUDIO_LOADING_STATE_LOADED;
 
     return false;
+}
+
+bool FmodBankRegistry::LoadSampleData(const Guid& bankId)
+{
+    BankEntry* entry = _banksByGuid.TryGet(bankId);
+    if (!entry || !entry->Bank)
+        return false;
+
+    const FMOD_RESULT result = entry->Bank->loadSampleData();
+    entry->SampleDataLoaded = result == FMOD_OK;
+    return entry->SampleDataLoaded;
+}
+
+void FmodBankRegistry::UnloadSampleData(const Guid& bankId)
+{
+    BankEntry* entry = _banksByGuid.TryGet(bankId);
+    if (entry && entry->Bank)
+    {
+        entry->Bank->unloadSampleData();
+        entry->SampleDataLoaded = false;
+    }
+}
+
+AudioBankState FmodBankRegistry::GetState(const Guid& bankId) const
+{
+    const BankEntry* entry = _banksByGuid.TryGet(bankId);
+    if (!entry || !entry->Bank)
+        return AudioBankState::Unloaded;
+
+    FMOD_STUDIO_LOADING_STATE state;
+    if (entry->Bank->getLoadingState(&state) != FMOD_OK)
+        return AudioBankState::Error;
+    if (state == FMOD_STUDIO_LOADING_STATE_LOADED)
+        return AudioBankState::Loaded;
+    if (state == FMOD_STUDIO_LOADING_STATE_LOADING)
+        return AudioBankState::Loading;
+    return AudioBankState::Error;
 }
 
 FMOD::Studio::Bank* FmodBankRegistry::Get(const Guid& bankId) const

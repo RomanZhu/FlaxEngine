@@ -2,6 +2,7 @@
 
 #include "AudioZoneVolume.h"
 #include "Engine/Audio/Events/AudioEventSystem.h"
+#include "Engine/Core/Math/Math.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Serialization/Serialization.h"
 
@@ -16,6 +17,8 @@ void AudioZoneVolume::UpdateListenerPosition(const Vector3& listenerPosition)
         return;
 
     AudioVolumeSample sample = Evaluate(listenerPosition);
+    _mixerWeight = sample.Weight;
+    AudioParameterId weightParameter = SnapshotWeightParameter.IsValid() ? SnapshotWeightParameter : _resolvedWeightParameter;
 
     if (sample.Weight > 0.001f)
     {
@@ -40,6 +43,11 @@ void AudioZoneVolume::UpdateListenerPosition(const Vector3& listenerPosition)
                     hasTypedSnapshot = true;
                     snapId = data->BackendId;
                     path = data->Path;
+                    if (!SnapshotWeightParameter.IsValid())
+                    {
+                        weightParameter = data->WeightParameter;
+                        _resolvedWeightParameter = weightParameter;
+                    }
                 }
                 else if (Snapshot->Data && Snapshot->DataTypeName == TEXT("FlaxEngine.AudioSnapshot"))
                 {
@@ -67,7 +75,7 @@ void AudioZoneVolume::UpdateListenerPosition(const Vector3& listenerPosition)
 
         if (_snapshotHandle.IsValid())
         {
-            AudioEventSystem::SetSnapshotWeight(_snapshotHandle, sample.Weight);
+            // AudioZoneMixer applies the final value after all zones have been sampled.
         }
     }
     else if (_snapshotHandle.IsValid())
@@ -75,7 +83,34 @@ void AudioZoneVolume::UpdateListenerPosition(const Vector3& listenerPosition)
         AudioEventSystem::Stop(_snapshotHandle, AudioStopMode::AllowFadeOut);
         AudioEventSystem::ReleaseInstance(_snapshotHandle);
         _snapshotHandle = AudioEventHandle();
+        _resolvedWeightParameter = AudioParameterId();
     }
+}
+
+void AudioZoneVolume::ApplyMixerWeight(float weight)
+{
+    if (!_snapshotHandle.IsValid())
+        return;
+    const AudioParameterId parameter = SnapshotWeightParameter.IsValid() ? SnapshotWeightParameter : _resolvedWeightParameter;
+    if (parameter.IsValid())
+        AudioEventSystem::SetParameter(_snapshotHandle, parameter, Math::Saturate(weight));
+    else
+        AudioEventSystem::SetSnapshotWeight(_snapshotHandle, Math::Saturate(weight));
+}
+
+String AudioZoneVolume::GetMixerTargetKey() const
+{
+    if (Snapshot)
+    {
+        const auto* data = Snapshot->GetInstance<AudioSnapshot>();
+        if (data)
+        {
+            if (data->BackendId.IsValid())
+                return data->BackendId.ToString();
+            return data->Path;
+        }
+    }
+    return SnapshotPath;
 }
 
 void AudioZoneVolume::OnEnable()
@@ -90,6 +125,8 @@ void AudioZoneVolume::OnDisable()
         AudioEventSystem::Stop(_snapshotHandle, AudioStopMode::Immediate);
         AudioEventSystem::ReleaseInstance(_snapshotHandle);
         _snapshotHandle = AudioEventHandle();
+        _resolvedWeightParameter = AudioParameterId();
+        _mixerWeight = 0.0f;
     }
     AudioVolumeBase::OnDisable();
 }
@@ -102,6 +139,7 @@ void AudioZoneVolume::Serialize(SerializeStream& stream, const void* otherObj)
 
     SERIALIZE(Snapshot);
     SERIALIZE(SnapshotPath);
+    SERIALIZE(SnapshotWeightParameter);
 }
 
 void AudioZoneVolume::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
@@ -110,4 +148,5 @@ void AudioZoneVolume::Deserialize(DeserializeStream& stream, ISerializeModifier*
 
     DESERIALIZE(Snapshot);
     DESERIALIZE(SnapshotPath);
+    DESERIALIZE(SnapshotWeightParameter);
 }

@@ -5,6 +5,8 @@
 #include "Engine/Audio/AudioListener.h"
 #include "Engine/Audio/Events/AudioEventSystem.h"
 #include "Engine/Level/Scene/Scene.h"
+#include "Engine/Engine/Time.h"
+#include "Engine/Core/Math/Math.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Serialization/Serialization.h"
 
@@ -114,6 +116,7 @@ void AudioAreaEmitter::Stop()
         AudioEventSystem::ReleaseInstance(_handle);
         _handle = AudioEventHandle();
     }
+    _belowStopDuration = 0.0f;
 }
 
 void AudioAreaEmitter::UpdateListenerPosition(const Vector3& listenerPosition)
@@ -128,9 +131,28 @@ void AudioAreaEmitter::UpdateListenerPosition(const Vector3& listenerPosition)
         AudioEventInstanceState state;
         if (AudioEventSystem::QueryInstance(_handle, state))
         {
-            Audio3DAttributes attrs(sample.ClosestPoint, Vector3::Zero, Vector3::Forward, Vector3::Up);
+            Vector3 velocity = Vector3::Zero;
+            if (!FollowListenerInside)
+            {
+                const float dt = (float)Time::Update.UnscaledDeltaTime.GetTotalSeconds();
+                if (dt > 0.00001f)
+                    velocity = (sample.ClosestPoint - _previousSourcePosition) / dt;
+            }
+            _previousSourcePosition = sample.ClosestPoint;
+            Audio3DAttributes attrs(sample.ClosestPoint, velocity, Vector3::Forward, Vector3::Up);
             AudioEventSystem::Set3DAttributes(_handle, attrs);
             AudioEventSystem::SetVolume(_handle, _volume * sample.Weight);
+
+            if (sample.Weight <= StopThreshold)
+            {
+                _belowStopDuration += (float)Time::Update.UnscaledDeltaTime.GetTotalSeconds();
+                if (_belowStopDuration >= StopDelay)
+                    Stop();
+            }
+            else
+            {
+                _belowStopDuration = 0.0f;
+            }
         }
         else
         {
@@ -138,7 +160,7 @@ void AudioAreaEmitter::UpdateListenerPosition(const Vector3& listenerPosition)
         }
     }
 
-    if (!_handle.IsValid() && sample.Weight > 0.001f && _playOnStart)
+    if (!_handle.IsValid() && sample.Weight >= StartThreshold && _playOnStart)
     {
         Play();
     }
@@ -159,8 +181,20 @@ void AudioAreaEmitter::BeginPlay(SceneBeginData* data)
 {
     AudioVolumeBase::BeginPlay(data);
 
+    // Startup follows the same threshold as ongoing automatic playback; creating
+    // an instance outside the volume only to stop it next update wastes voices.
     if (_playOnStart && IsDuringPlay())
-        Play();
+    {
+        for (int32 i = 0; i < Audio::Listeners.Count(); i++)
+        {
+            auto* listener = Audio::Listeners[i];
+            if (listener && listener->IsActiveInHierarchy() && listener->IsDuringPlay() && Evaluate(listener->GetPosition()).Weight >= StartThreshold)
+            {
+                Play();
+                break;
+            }
+        }
+    }
 }
 
 void AudioAreaEmitter::Serialize(SerializeStream& stream, const void* otherObj)
@@ -174,6 +208,10 @@ void AudioAreaEmitter::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_MEMBER(Volume, _volume);
     SERIALIZE_MEMBER(Pitch, _pitch);
     SERIALIZE_MEMBER(PlayOnStart, _playOnStart);
+    SERIALIZE(StartThreshold);
+    SERIALIZE(StopThreshold);
+    SERIALIZE(StopDelay);
+    SERIALIZE(FollowListenerInside);
 }
 
 void AudioAreaEmitter::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
@@ -185,4 +223,11 @@ void AudioAreaEmitter::Deserialize(DeserializeStream& stream, ISerializeModifier
     DESERIALIZE_MEMBER(Volume, _volume);
     DESERIALIZE_MEMBER(Pitch, _pitch);
     DESERIALIZE_MEMBER(PlayOnStart, _playOnStart);
+    DESERIALIZE(StartThreshold);
+    DESERIALIZE(StopThreshold);
+    DESERIALIZE(StopDelay);
+    DESERIALIZE(FollowListenerInside);
+    StartThreshold = Math::Saturate(StartThreshold);
+    StopThreshold = Math::Saturate(StopThreshold);
+    StopDelay = Math::Max(0.0f, StopDelay);
 }

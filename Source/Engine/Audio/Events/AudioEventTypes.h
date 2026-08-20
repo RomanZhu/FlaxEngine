@@ -67,6 +67,26 @@ API_ENUM() enum class AudioOutputOwner : uint8
 };
 
 /// <summary>
+/// Backend-neutral description of a physical audio output device.
+/// </summary>
+API_STRUCT(NoDefault) struct FLAXENGINE_API AudioOutputDeviceInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioOutputDeviceInfo);
+
+    /// <summary>Display name reported by the output backend.</summary>
+    API_FIELD() String Name;
+
+    /// <summary>Stable backend identifier used to select this device.</summary>
+    API_FIELD() String StableId;
+
+    /// <summary>Output sample rate when known.</summary>
+    API_FIELD() int32 SampleRate = 0;
+
+    /// <summary>Output channel count when known.</summary>
+    API_FIELD() int32 Channels = 0;
+};
+
+/// <summary>
 /// Stop policy for audio event instances.
 /// </summary>
 API_ENUM() enum class AudioStopMode : uint8
@@ -113,6 +133,17 @@ API_ENUM() enum class AudioEventPlaybackState : uint8
     Stopping = 4,
 };
 
+/// <summary>
+/// Runtime loading state of a middleware sound bank.
+/// </summary>
+API_ENUM() enum class AudioBankState : uint8
+{
+    Unloaded = 0,
+    Loading = 1,
+    Loaded = 2,
+    Error = 3,
+};
+
 #include "Engine/Core/ISerializable.h"
 
 /// <summary>
@@ -127,6 +158,17 @@ API_STRUCT() struct FLAXENGINE_API AudioParameterId : ISerializable
     /// Unique GUID of the parameter from the audio middleware (if available).
     /// </summary>
     API_FIELD() Guid ID = Guid::Empty;
+
+    /// <summary>
+    /// Backend-neutral low word of a resolved parameter identifier. Together with Data2 this maps
+    /// directly to FMOD Studio's two-word parameter identifier without exposing FMOD SDK types.
+    /// </summary>
+    API_FIELD() uint32 Data1 = 0;
+
+    /// <summary>
+    /// Backend-neutral high word of a resolved parameter identifier.
+    /// </summary>
+    API_FIELD() uint32 Data2 = 0;
 
     /// <summary>
     /// Name of the parameter.
@@ -148,11 +190,13 @@ API_STRUCT() struct FLAXENGINE_API AudioParameterId : ISerializable
 
     FORCE_INLINE bool IsValid() const
     {
-        return ID.IsValid() || Name.HasChars();
+        return ID.IsValid() || Data1 != 0 || Data2 != 0 || Name.HasChars();
     }
 
     FORCE_INLINE bool operator==(const AudioParameterId& other) const
     {
+        if (Data1 != 0 || Data2 != 0 || other.Data1 != 0 || other.Data2 != 0)
+            return Data1 == other.Data1 && Data2 == other.Data2;
         if (ID.IsValid() && other.ID.IsValid())
             return ID == other.ID;
         return Name == other.Name;
@@ -166,8 +210,21 @@ API_STRUCT() struct FLAXENGINE_API AudioParameterId : ISerializable
 
 inline uint32 GetHash(const AudioParameterId& key)
 {
+    if (key.Data1 != 0 || key.Data2 != 0)
+        return GetHash(((uint64)key.Data2 << 32) | key.Data1);
     return key.ID.IsValid() ? GetHash(key.ID) : GetHash(key.Name);
 }
+
+/// <summary>
+/// A numeric parameter update used by batched event calls.
+/// </summary>
+API_STRUCT(NoDefault) struct FLAXENGINE_API AudioParameterValue
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioParameterValue);
+
+    API_FIELD() AudioParameterId Id;
+    API_FIELD() float Value = 0.0f;
+};
 
 /// <summary>
 /// 3D spatial transformation attributes for audio emitters and listeners.
@@ -316,6 +373,16 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioDiagnosticsSnapshot
     DECLARE_SCRIPTING_TYPE_MINIMAL(AudioDiagnosticsSnapshot);
 
     /// <summary>
+    /// Name of the backend that supplied this snapshot.
+    /// </summary>
+    API_FIELD() String BackendName;
+
+    /// <summary>
+    /// True when the backend is initialized and able to service event requests.
+    /// </summary>
+    API_FIELD() bool Initialized = false;
+
+    /// <summary>
     /// Total CPU percentage consumed by the audio event DSP / update thread.
     /// </summary>
     API_FIELD() float CpuUsage = 0.0f;
@@ -334,4 +401,14 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioDiagnosticsSnapshot
     /// Current number of loaded sound banks.
     /// </summary>
     API_FIELD() int32 LoadedBanks = 0;
+
+    /// <summary>
+    /// Approximate count of callback records waiting for main-thread dispatch.
+    /// </summary>
+    API_FIELD() uint32 CallbackQueueDepth = 0;
+
+    /// <summary>
+    /// Number of callback records dropped because the bounded callback queue was full.
+    /// </summary>
+    API_FIELD() uint64 DroppedCallbacks = 0;
 };
