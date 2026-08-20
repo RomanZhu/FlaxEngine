@@ -46,6 +46,8 @@ namespace FlaxEditor.Tools.CSG.Rebuild
         public long Revision;
         /// <summary>The native builder debounce in milliseconds.</summary>
         public float TimeoutMs;
+        /// <summary>The request kind.</summary>
+        public CSGRebuildRequestKind Kind;
 
         /// <summary>Legacy alias for TargetId.</summary>
         public Guid SceneId
@@ -87,6 +89,7 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             public long CompletedRevision;
             public double NextPreviewTime;
             public float PendingTimeoutMs;
+            public CSGRebuildRequestKind PendingKind;
             public int RequestCount;
             public int DispatchCount;
             public CSGRebuildVisualState State;
@@ -120,6 +123,7 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             {
                 entry.PendingRevision = revision;
                 entry.PendingTimeoutMs = timeoutMs;
+                entry.PendingKind = kind;
                 entry.State = CSGRebuildVisualState.Stale;
                 return revision;
             }
@@ -129,6 +133,7 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             {
                 entry.PendingRevision = revision;
                 entry.PendingTimeoutMs = dispatchTimeout;
+                entry.PendingKind = kind;
                 entry.State = CSGRebuildVisualState.Pending;
                 return revision;
             }
@@ -136,11 +141,12 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             {
                 entry.PendingRevision = revision;
                 entry.PendingTimeoutMs = dispatchTimeout;
+                entry.PendingKind = kind;
                 entry.State = CSGRebuildVisualState.Pending;
                 return revision;
             }
 
-            Submit(targetId, entry, revision, dispatchTimeout, now, out dispatch);
+            Submit(targetId, entry, revision, dispatchTimeout, kind, now, out dispatch);
             return revision;
         }
 
@@ -152,7 +158,7 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             dispatch = default;
             if (!autoRebuild || !_entries.TryGetValue(targetId, out var entry) || entry.PendingRevision == 0 || now < entry.NextPreviewTime)
                 return false;
-            Submit(targetId, entry, entry.PendingRevision, entry.PendingTimeoutMs, now, out dispatch);
+            Submit(targetId, entry, entry.PendingRevision, entry.PendingTimeoutMs, entry.PendingKind, now, out dispatch);
             return true;
         }
 
@@ -194,9 +200,10 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             _entries.Remove(targetId);
         }
 
-        private void Submit(Guid targetId, Entry entry, long revision, float timeoutMs, double now, out CSGRebuildDispatch dispatch)
+        private void Submit(Guid targetId, Entry entry, long revision, float timeoutMs, CSGRebuildRequestKind kind, double now, out CSGRebuildDispatch dispatch)
         {
             entry.PendingRevision = 0;
+            entry.PendingKind = CSGRebuildRequestKind.Preview;
             entry.SubmittedRevision = revision;
             entry.DispatchCount++;
             entry.NextPreviewTime = now + Math.Max(PreviewIntervalSeconds, 0.0);
@@ -206,6 +213,7 @@ namespace FlaxEditor.Tools.CSG.Rebuild
                 TargetId = targetId,
                 Revision = revision,
                 TimeoutMs = timeoutMs,
+                Kind = kind,
             };
         }
     }
