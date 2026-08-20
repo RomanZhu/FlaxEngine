@@ -70,6 +70,35 @@ namespace FlaxEditor.Windows
                 convertMenu.ContextMenu.AutoSort = true;
                 if (Editor.SceneEditing.SelectionCount > 1 || firstSelection.Actor.GetType() != typeof(GroupActor))
                     convertMenu.ContextMenu.AddButton("Group", Editor.SceneEditing.MakeSelectionGroup);
+                if (isSingleActorSelected && (firstSelection.Actor is GroupActor || firstSelection.Actor is EmptyActor))
+                {
+                    convertMenu.ContextMenu.AddButton("CSG Stack", () => Editor.SceneEditing.Convert(typeof(CSGStack)));
+                    convertMenu.ContextMenu.AddButton("CSG Model", () => Editor.SceneEditing.Convert(typeof(CSGModel)));
+                }
+
+                if (Editor.SceneEditing.Selection.Any(x => x is ActorNode an && (an.Actor is BoxBrush || an.Actor is CSGScopeActor)))
+                {
+                    contextMenu.AddButton("Rebuild CSG", () =>
+                    {
+                        var targets = new HashSet<Actor>();
+                        foreach (var node in Editor.SceneEditing.Selection)
+                        {
+                            if (node is ActorNode an && an.Actor != null)
+                            {
+                                var target = Tools.CSG.Rebuild.CSGRebuildScheduler.ResolveTarget(an.Actor);
+                                if (target != null)
+                                    targets.Add(target);
+                            }
+                        }
+                        foreach (var target in targets)
+                        {
+                            if (target is Scene s)
+                                s.BuildCSG(0);
+                            else if (target is CSGModel m)
+                                m.BuildCSG(0);
+                        }
+                    });
+                }
 
                 if (isSingleActorSelected)
                 {
