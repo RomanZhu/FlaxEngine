@@ -809,7 +809,7 @@ namespace FlaxEditor.Modules
             if (Selection.Count == 1 && Selection[0] is ActorNode actorNode && actorNode.Actor)
             {
                 var actorType = actorNode.Actor.GetType();
-                if (actorType == typeof(GroupActor))
+                if (actorType == typeof(GroupActor) || actorType == typeof(CSGStack))
                     return;
                 if (actorType == typeof(EmptyActor))
                 {
@@ -871,11 +871,24 @@ namespace FlaxEditor.Modules
                 groupOrder = Math.Min(groupOrder, child.OrderInParent);
             }
 
-            var group = new GroupActor
+            bool allCsg = actors.Count > 0 && actors.All(a => a is BoxBrush || a is CSGStack || a is CSGScopeActor);
+            GroupActor group;
+            if (allCsg)
             {
-                Name = "Group",
-                Position = center,
-            };
+                group = new CSGStack
+                {
+                    Name = "CSG Stack",
+                    Position = center,
+                };
+            }
+            else
+            {
+                group = new GroupActor
+                {
+                    Name = "Group",
+                    Position = center,
+                };
+            }
             var selectionBefore = Selection.ToArray();
             DeleteActorsAction createGroup = null;
             ParentActorsAction parentActors = null;
