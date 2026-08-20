@@ -268,8 +268,12 @@ namespace FlaxEditor.Modules
             var actor = node.Actor;
 
             // Auto CSG mesh rebuild
-            if (requestCSGRebuild && !isPlayMode && actor is BoxBrush && actor.Scene)
-                CSGRebuildScheduler.Shared.RequestExternal(actor.Scene);
+            if (requestCSGRebuild && !isPlayMode && actor is BoxBrush)
+            {
+                var target = CSGRebuildScheduler.ResolveTarget(actor);
+                if (target != null)
+                    CSGRebuildScheduler.Shared.RequestExternal(target);
+            }
 
             // Auto NavMesh rebuild
             if (!isPlayMode && options.General.AutoRebuildNavMesh && actor.Scene && node.AffectsNavigationWithChildren)
