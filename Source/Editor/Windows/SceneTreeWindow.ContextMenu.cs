@@ -79,7 +79,12 @@ namespace FlaxEditor.Windows
 
                 if (Editor.SceneEditing.Selection.Any(x => x is ActorNode an && (an.Actor is BoxBrush || an.Actor is CSGScopeActor)))
                 {
-                    contextMenu.AddButton("Rebuild CSG", () =>
+                    contextMenu.AddSeparator();
+                    var csgMenu = contextMenu.AddChildMenu("CSG");
+                    csgMenu.ContextMenu.AddButton("Wrap in CSG Stack", Editor.SceneEditing.WrapSelectedInCSGStack);
+                    csgMenu.ContextMenu.AddButton("Wrap in CSG Model", Editor.SceneEditing.WrapSelectedInCSGModel);
+                    csgMenu.ContextMenu.AddSeparator();
+                    csgMenu.ContextMenu.AddButton("Rebuild CSG", () =>
                     {
                         var targets = new HashSet<Actor>();
                         foreach (var node in Editor.SceneEditing.Selection)
