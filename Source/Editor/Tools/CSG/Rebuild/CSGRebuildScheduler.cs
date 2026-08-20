@@ -40,7 +40,7 @@ namespace FlaxEditor.Tools.CSG.Rebuild
     /// </summary>
     public struct CSGRebuildDispatch
     {
-        /// <summary>The target (scene or CSGModel) identifier.</summary>
+        /// <summary>The scene identifier.</summary>
         public Guid TargetId;
         /// <summary>The request revision.</summary>
         public long Revision;
@@ -219,11 +219,11 @@ namespace FlaxEditor.Tools.CSG.Rebuild
     }
 
     /// <summary>
-    /// Editor-facing CSG rebuild scheduler supporting Scene and CSGModel targets.
+    /// Editor-facing CSG rebuild scheduler for scene CSG output.
     /// </summary>
     public sealed class CSGRebuildScheduler
     {
-        private readonly Dictionary<Guid, Actor> _targets = new Dictionary<Guid, Actor>();
+        private readonly Dictionary<Guid, Scene> _targets = new Dictionary<Guid, Scene>();
         private readonly Dictionary<Guid, double> _dispatchNotBefore = new Dictionary<Guid, double>();
         private readonly List<Guid> _targetIds = new List<Guid>(8);
         private readonly CSGRebuildQueue _queue = new CSGRebuildQueue();
@@ -233,66 +233,19 @@ namespace FlaxEditor.Tools.CSG.Rebuild
         /// <summary>The shared editor scheduler.</summary>
         public static CSGRebuildScheduler Shared { get; } = new CSGRebuildScheduler();
 
-        /// <summary>
-        /// Resolves the compilation target root (CSGModel or Scene) for any actor.
-        /// </summary>
-        public static Actor ResolveTarget(Actor actor)
-        {
-            if (actor == null)
-                return null;
-            Actor current = actor.Parent;
-            while (current != null)
-            {
-                if (current is CSGModel model)
-                    return model;
-                current = current.Parent;
-            }
-            return actor.Scene;
-        }
-
-        /// <summary>
-        /// Requests a throttled interactive preview rebuild.
-        /// </summary>
-        public long RequestPreview(Actor target)
-        {
-            return Request(target, CSGRebuildRequestKind.Preview);
-        }
-
-        /// <summary>
-        /// Requests a throttled interactive preview rebuild for a scene.
-        /// </summary>
+        /// <summary>Requests a throttled interactive preview rebuild for a scene.</summary>
         public long RequestPreview(Scene scene)
         {
             return Request(scene, CSGRebuildRequestKind.Preview);
         }
 
-        /// <summary>
-        /// Requests an immediate final rebuild after commit or rollback.
-        /// </summary>
-        public long RequestFinal(Actor target)
-        {
-            return Request(target, CSGRebuildRequestKind.Final);
-        }
-
-        /// <summary>
-        /// Requests an immediate final rebuild for a scene after commit or rollback.
-        /// </summary>
+        /// <summary>Requests an immediate final rebuild for a scene after commit or rollback.</summary>
         public long RequestFinal(Scene scene)
         {
             return Request(scene, CSGRebuildRequestKind.Final);
         }
 
-        /// <summary>
-        /// Routes an ordinary editor mutation through the revision tracker and native debounce.
-        /// </summary>
-        public long RequestExternal(Actor target)
-        {
-            return Request(target, CSGRebuildRequestKind.External);
-        }
-
-        /// <summary>
-        /// Routes an ordinary editor mutation for a scene through the revision tracker and native debounce.
-        /// </summary>
+        /// <summary>Routes an ordinary editor mutation for a scene through the revision tracker and native debounce.</summary>
         public long RequestExternal(Scene scene)
         {
             return Request(scene, CSGRebuildRequestKind.External);
@@ -334,40 +287,19 @@ namespace FlaxEditor.Tools.CSG.Rebuild
             }
         }
 
-        /// <summary>
-        /// Gets the tracked state for a target.
-        /// </summary>
-        public CSGRebuildStatus GetStatus(Actor target)
-        {
-            return target != null ? _queue.GetStatus(target.ID) : new CSGRebuildStatus { State = CSGRebuildVisualState.UpToDate };
-        }
-
-        /// <summary>
-        /// Gets the tracked state for a scene.
-        /// </summary>
+        /// <summary>Gets the tracked state for a scene.</summary>
         public CSGRebuildStatus GetStatus(Scene scene)
         {
             return scene != null ? _queue.GetStatus(scene.ID) : new CSGRebuildStatus { State = CSGRebuildVisualState.UpToDate };
         }
 
-        /// <summary>
-        /// Forwards a builder completion when a future native completion callback is available.
-        /// Stale revisions are deliberately ignored.
-        /// </summary>
-        public bool TryAcknowledge(Actor target, long revision)
-        {
-            return target != null && _queue.TryAcknowledge(target.ID, revision);
-        }
-
-        /// <summary>
-        /// Forwards a builder completion for a scene.
-        /// </summary>
+        /// <summary>Forwards a builder completion for a scene.</summary>
         public bool TryAcknowledge(Scene scene, long revision)
         {
             return scene != null && _queue.TryAcknowledge(scene.ID, revision);
         }
 
-        private long Request(Actor target, CSGRebuildRequestKind kind)
+        private long Request(Scene target, CSGRebuildRequestKind kind)
         {
             if (target == null)
                 return 0;
@@ -388,12 +320,7 @@ namespace FlaxEditor.Tools.CSG.Rebuild
         private void Dispatch(ref CSGRebuildDispatch dispatch)
         {
             if (_targets.TryGetValue(dispatch.TargetId, out var target) && target != null)
-            {
-                if (target is Scene scene)
-                    scene.BuildCSG(dispatch.TimeoutMs);
-                else if (target is CSGModel model)
-                    model.BuildCSG(dispatch.TimeoutMs);
-            }
+                target.BuildCSG(dispatch.TimeoutMs);
         }
 
         private static double GetTime()

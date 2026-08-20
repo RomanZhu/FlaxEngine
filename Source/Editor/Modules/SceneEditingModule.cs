@@ -270,9 +270,7 @@ namespace FlaxEditor.Modules
             // Auto CSG mesh rebuild
             if (requestCSGRebuild && !isPlayMode && actor is BoxBrush)
             {
-                var target = CSGRebuildScheduler.ResolveTarget(actor);
-                if (target != null)
-                    CSGRebuildScheduler.Shared.RequestExternal(target);
+                CSGRebuildScheduler.Shared.RequestExternal(actor.Scene);
             }
 
             // Auto NavMesh rebuild
@@ -875,97 +873,12 @@ namespace FlaxEditor.Modules
                 groupOrder = Math.Min(groupOrder, child.OrderInParent);
             }
 
-            // Categorize actors for semantic CSG promotion hierarchy:
-            // Brushes -> CSGStack -> CSGModel -> GroupActor
-            var plan = Tools.CSG.CSGGroupingPolicy.Classify(actors);
             var selectionBefore = Selection.ToArray();
-
-            // Promotion rule: Stack + Brush -> CSGModel, with loose brushes auto-wrapped in a CSGStack
-            if (plan.WrapLooseBrushesInStack)
-            {
-                var looseBrushes = actors.Where(x => x is BoxBrush).ToList();
-                var stacks = actors.OfType<CSGStack>().ToList();
-
-                var model = new CSGModel
-                {
-                    Name = "CSG Model",
-                    Position = center,
-                };
-
-                var looseBounds = BoundingBox.Empty;
-                Vector3 looseCenter = Vector3.Zero;
-                foreach (var brush in looseBrushes)
-                {
-                    looseBounds = BoundingBox.Merge(looseBounds, brush.EditorBoxChildren);
-                    looseCenter += brush.Position;
-                }
-                looseCenter = looseBounds != BoundingBox.Empty ? looseBounds.Center : looseCenter / looseBrushes.Count;
-
-                var autoStack = new CSGStack
-                {
-                    Name = "CSG Stack",
-                    Position = looseCenter,
-                };
-
-                DeleteActorsAction createModel = null;
-                DeleteActorsAction createAutoStack = null;
-                ParentActorsAction parentLooseBrushes = null;
-                ParentActorsAction parentStacks = null;
-                try
-                {
-                    Level.SpawnActor(model, commonParent);
-                    model.OrderInParent = groupOrder;
-                    var modelNode = Editor.Scene.GetActorNode(model);
-                    if (modelNode == null)
-                        throw new InvalidOperationException("Failed to publish the CSG Model in the Scene graph.");
-                    modelNode.PostSpawn();
-                    createModel = new DeleteActorsAction(modelNode, true);
-
-                    Level.SpawnActor(autoStack, model);
-                    var autoStackNode = Editor.Scene.GetActorNode(autoStack);
-                    if (autoStackNode == null)
-                        throw new InvalidOperationException("Failed to publish the auto-generated CSG Stack in the Scene graph.");
-                    autoStackNode.PostSpawn();
-                    createAutoStack = new DeleteActorsAction(autoStackNode, true);
-
-                    parentLooseBrushes = new ParentActorsAction(looseBrushes.Cast<SceneObject>().ToArray(), autoStack, -1, true);
-                    if (!parentLooseBrushes.TryDo())
-                        throw new InvalidOperationException("Failed to attach loose brushes to the CSG Stack. " + parentLooseBrushes.LastResult?.Message);
-
-                    parentStacks = new ParentActorsAction(stacks.Cast<SceneObject>().ToArray(), model, -1, true);
-                    if (!parentStacks.TryDo())
-                        throw new InvalidOperationException("Failed to attach CSG Stacks to the CSG Model. " + parentStacks.LastResult?.Message);
-
-                    var selectModel = new SelectionChangeAction(selectionBefore, new SceneGraphNode[] { modelNode }, OnSelectionUndo);
-                    selectModel.Do();
-                    Undo.AddAction(new MultiUndoAction(new IUndoAction[] { createModel, createAutoStack, parentLooseBrushes, parentStacks, selectModel }, "Group actors"));
-                    modelNode.TreeNode.StartRenaming(Editor.Windows.SceneWin, Editor.Windows.SceneWin.SceneTreePanel);
-                    return;
-                }
-                catch
-                {
-                    parentStacks?.TryUndo();
-                    parentLooseBrushes?.TryUndo();
-                    createAutoStack?.TryUndo();
-                    createModel?.TryUndo();
-                    Selection.Clear();
-                    Selection.AddRange(selectionBefore.Where(x => x != null));
-                    OnSelectionChanged();
-                    if (autoStack)
-                        FlaxEngine.Object.Destroy(ref autoStack);
-                    if (model)
-                        FlaxEngine.Object.Destroy(ref model);
-                    FlaxEngine.Scripting.FlushRemovedObjects();
-                    throw;
-                }
-            }
-
-            GroupActor group = plan.Kind switch
-            {
-                Tools.CSG.CSGGroupingKind.CSGStack => new CSGStack { Name = "CSG Stack", Position = center },
-                Tools.CSG.CSGGroupingKind.CSGModel => new CSGModel { Name = "CSG Model", Position = center },
-                _ => new GroupActor { Name = "Group", Position = center },
-            };
+            if (actors.Count == 1 && actors[0] is CSGStack)
+                return;
+            GroupActor group = actors.All(x => x is BoxBrush)
+                ? new CSGStack { Name = "CSG Stack", Position = center }
+                : new GroupActor { Name = "Group", Position = center };
 
             DeleteActorsAction createGroup = null;
             ParentActorsAction parentActors = null;
@@ -1008,14 +921,6 @@ namespace FlaxEditor.Modules
         public void WrapSelectedInCSGStack()
         {
             WrapSelectedInCSG(typeof(CSGStack), "CSG Stack");
-        }
-
-        /// <summary>
-        /// Wraps selected actors in a CSG Model.
-        /// </summary>
-        public void WrapSelectedInCSGModel()
-        {
-            WrapSelectedInCSG(typeof(CSGModel), "CSG Model");
         }
 
         private void WrapSelectedInCSG(Type wrapperType, string defaultName)

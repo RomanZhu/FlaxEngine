@@ -4,7 +4,7 @@ using System;
 using System.Collections.Generic;
 using FlaxEditor.Modules;
 using FlaxEditor.SceneEditing;
-using FlaxEditor.Tools.CSG;
+using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEngine;
 using Object = FlaxEngine.Object;
 
@@ -172,19 +172,9 @@ namespace FlaxEditor.Actions
                 }
             }
 
-            var csgTargets = new HashSet<Actor>();
-            var newCsgTarget = CSGOwnershipInvalidation.ResolveTarget(newParent);
-            if (newCsgTarget != null)
-                csgTargets.Add(newCsgTarget);
-            for (int i = 0; i < objects.Length; i++)
-            {
-                if (objects[i] is Actor a && (a is BoxBrush || a is CSGScopeActor))
-                {
-                    var oldTarget = CSGOwnershipInvalidation.ResolveTarget(a);
-                    if (oldTarget != null)
-                        csgTargets.Add(oldTarget);
-                }
-            }
+            var csgScenes = CaptureCSGScenes(objects);
+            if (csgScenes != null && newParent?.Scene != null)
+                csgScenes.Add(newParent.Scene);
 
             var previous = CaptureStates(objects);
             try
@@ -201,7 +191,8 @@ namespace FlaxEditor.Actions
                         obj.OrderInParent = order++;
                 }
                 _lastResult = SceneMutationResult.Success(transactionId, SceneMutationOperation.Reparent, _sceneIDs);
-                CSGOwnershipInvalidation.InvalidateTargets(csgTargets);
+                AddCSGScenes(csgScenes, objects);
+                RebuildCSGScenes(csgScenes);
                 return true;
             }
             catch (Exception ex)
@@ -226,23 +217,16 @@ namespace FlaxEditor.Actions
                 return false;
             }
 
-            var csgTargets = new HashSet<Actor>();
-            for (int i = 0; i < objects.Length; i++)
+            var csgScenes = CaptureCSGScenes(objects);
+            if (csgScenes != null)
             {
-                if (objects[i] is Actor a && (a is BoxBrush || a is CSGScopeActor))
+                for (int i = 0; i < _items.Length; i++)
                 {
-                    var currentTarget = CSGOwnershipInvalidation.ResolveTarget(a);
-                    if (currentTarget != null)
-                        csgTargets.Add(currentTarget);
+                    var parentId = _items[i].Parent;
+                    var parent = parentId != Guid.Empty ? Object.Find<Actor>(ref parentId) : null;
+                    if (parent?.Scene != null)
+                        csgScenes.Add(parent.Scene);
                 }
-            }
-            for (int i = 0; i < _items.Length; i++)
-            {
-                var parentId = _items[i].Parent;
-                var parent = parentId != Guid.Empty ? Object.Find<Actor>(ref parentId) : null;
-                var restoredTarget = CSGOwnershipInvalidation.ResolveTarget(parent);
-                if (restoredTarget != null)
-                    csgTargets.Add(restoredTarget);
             }
 
             var previous = CaptureStates(objects);
@@ -264,7 +248,8 @@ namespace FlaxEditor.Actions
                     }
                 }
                 _lastResult = SceneMutationResult.Success(transactionId, SceneMutationOperation.Undo, _sceneIDs);
-                CSGOwnershipInvalidation.InvalidateTargets(csgTargets);
+                AddCSGScenes(csgScenes, objects);
+                RebuildCSGScenes(csgScenes);
                 return true;
             }
             catch (Exception ex)
@@ -273,6 +258,40 @@ namespace FlaxEditor.Actions
                 _lastResult = SceneMutationResult.Failed(transactionId, SceneMutationOperation.Undo, rolledBack ? SceneMutationErrorCode.PublicationFailed : SceneMutationErrorCode.RollbackFailed, ex.Message, rolledBack, _sceneIDs);
                 return false;
             }
+        }
+
+        private static HashSet<Scene> CaptureCSGScenes(SceneObject[] objects)
+        {
+            HashSet<Scene> scenes = null;
+            for (int i = 0; i < objects.Length; i++)
+            {
+                if (objects[i] is Actor actor && (actor is BoxBrush || actor is CSGScopeActor))
+                {
+                    scenes ??= new HashSet<Scene>();
+                    if (actor.Scene != null)
+                        scenes.Add(actor.Scene);
+                }
+            }
+            return scenes;
+        }
+
+        private static void AddCSGScenes(HashSet<Scene> scenes, SceneObject[] objects)
+        {
+            if (scenes == null)
+                return;
+            for (int i = 0; i < objects.Length; i++)
+            {
+                if (objects[i] is Actor actor && actor.Scene != null)
+                    scenes.Add(actor.Scene);
+            }
+        }
+
+        private static void RebuildCSGScenes(HashSet<Scene> scenes)
+        {
+            if (scenes == null)
+                return;
+            foreach (var scene in scenes)
+                CSGRebuildScheduler.Shared.RequestFinal(scene);
         }
 
         private bool ValidateScenes()

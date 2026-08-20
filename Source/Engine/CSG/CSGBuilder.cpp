@@ -4,11 +4,9 @@
 #include "CSGMesh.h"
 #include "CSGData.h"
 #include "CSGCompilation.h"
-#include "CSGGeneratedOutputPaths.h"
 #include "Engine/Level/Level.h"
 #include "Engine/Level/SceneQuery.h"
 #include "Engine/Level/Actor.h"
-#include "Engine/Level/Actors/CSGModel.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Types/TimeSpan.h"
 #include "Engine/Graphics/Models/ModelData.h"
@@ -46,30 +44,10 @@ struct BuildData
 namespace CSGBuilderImpl
 {
     Array<Scene*> ScenesToRebuild;
-    struct ModelRebuildEntry
-    {
-        CSGModel* Model;
-        DateTime BuildTime;
-        ModelBuildIntent Intent;
-    };
-    Array<ModelRebuildEntry> ModelsToRebuild;
-
-    struct CSGModelBuildProduct
-    {
-        RawData MeshData;
-        ModelData Model;
-        Array<MeshVertex> VertexBuffer;
-        int32 BrushesCount = 0;
-        bool HasGeometry = false;
-    };
 
     void onSceneUnloading(Scene* scene, const Guid& sceneId);
     bool buildInner(Scene* scene, BuildData& data);
-    bool compileModel(CSGModel* model, CSGModelBuildProduct& product);
-    bool publishModelPreview(CSGModel* model, CSGModelBuildProduct& product);
-    bool persistModelOutput(CSGModel* model, CSGModelBuildProduct& product, const CSGGeneratedOutputPaths& paths, BuildData& data);
     void build(Scene* scene);
-    void build(CSGModel* model, ModelBuildIntent intent = ModelBuildIntent::Preview);
     bool updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData);
     bool generateRawDataAsset(RawData& meshData, Guid& assetId, const String& assetPath);
 }
@@ -96,13 +74,6 @@ void CSGBuilderImpl::onSceneUnloading(Scene* scene, const Guid& sceneId)
 {
     // Ensure to remove scene (prevent crashes)
     ScenesToRebuild.Remove(scene);
-    for (int32 i = ModelsToRebuild.Count() - 1; i >= 0; i--)
-    {
-        if (ModelsToRebuild[i].Model && ModelsToRebuild[i].Model->GetScene() == scene)
-        {
-            ModelsToRebuild.RemoveAt(i);
-        }
-    }
 }
 
 bool CSGBuilderService::Init()
@@ -131,26 +102,11 @@ void CSGBuilderService::Update()
         }
     }
 
-    if (ModelsToRebuild.HasItems() && Engine::IsReady())
-    {
-        auto now = DateTime::NowUTC();
-
-        for (int32 i = 0; ModelsToRebuild.HasItems() && i < ModelsToRebuild.Count(); i++)
-        {
-            if (now - ModelsToRebuild[i].BuildTime >= 0)
-            {
-                auto entry = ModelsToRebuild[i];
-                ModelsToRebuild.RemoveAt(i--);
-                if (entry.Model)
-                    build(entry.Model, entry.Intent);
-            }
-        }
-    }
 }
 
 bool Builder::IsActive()
 {
-    return ScenesToRebuild.HasItems() || ModelsToRebuild.HasItems();
+    return ScenesToRebuild.HasItems();
 }
 
 void Builder::Build(Scene* scene, float timeoutMs)
@@ -172,73 +128,6 @@ void Builder::Build(Scene* scene, float timeoutMs)
     scene->CSGData.BuildTime = DateTime::NowUTC() + TimeSpan::FromMilliseconds(timeoutMs);
 }
 
-void Builder::Build(CSGModel* model, float timeoutMs, ModelBuildIntent intent)
-{
-    if (model == nullptr)
-        return;
-
-#if USE_EDITOR
-    // Disable building during play mode
-    if (Editor::IsPlayMode)
-        return;
-#endif
-
-    const DateTime targetTime = DateTime::NowUTC() + TimeSpan::FromMilliseconds(timeoutMs);
-    for (int32 i = 0; i < ModelsToRebuild.Count(); i++)
-    {
-        if (ModelsToRebuild[i].Model == model)
-        {
-            ModelsToRebuild[i].BuildTime = targetTime;
-            if (intent == ModelBuildIntent::Persist)
-                ModelsToRebuild[i].Intent = ModelBuildIntent::Persist;
-            return;
-        }
-    }
-    ModelsToRebuild.Add({ model, targetTime, intent });
-}
-
-bool Builder::Persist(CSGModel* model, const Guid& ownerAssetId)
-{
-    if (model == nullptr)
-        return false;
-
-    CSGModelBuildProduct product;
-    if (!compileModel(model, product))
-    {
-        LOG(Warning, "Failed to compile CSG model {0} for persistence.", model->GetName());
-        return false;
-    }
-
-    if (!publishModelPreview(model, product))
-    {
-        LOG(Warning, "Failed to publish CSG model preview for {0}.", model->GetName());
-        return false;
-    }
-
-    CSGGeneratedOutputPaths paths;
-    if (!CSGGeneratedOutputPathResolver::ResolveForAsset(ownerAssetId, model, paths))
-    {
-        LOG(Warning, "Failed to resolve CSG output paths for model {0}.", model->GetName());
-        return false;
-    }
-
-    BuildData data;
-    if (!persistModelOutput(model, product, paths, data))
-    {
-        LOG(Warning, "Failed to persist CSG output for model {0}.", model->GetName());
-        return false;
-    }
-
-    auto outputData = Content::LoadAsync<RawDataAsset>(data.outputRawDataAssetId);
-    auto outputModel = Content::LoadAsync<Model>(data.outputModelAssetId);
-    auto outputCollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
-
-    model->CSGData.Data = outputData;
-    model->CSGData.Model = outputModel;
-    model->CSGData.CollisionData = outputCollisionData;
-    model->CSGData.PostCSGBuild();
-    return true;
-}
 
 bool CSGBuilderImpl::updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData)
 {
@@ -425,118 +314,6 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
     return false;
 }
 
-bool CSGBuilderImpl::compileModel(CSGModel* model, CSGModelBuildProduct& product)
-{
-    CSG::Mesh combinedMesh;
-    if (!CSGCompilation::CompileTargetMeshes(model, combinedMesh))
-        return false;
-
-    if (combinedMesh.GetPolygons()->IsEmpty())
-    {
-        product.HasGeometry = false;
-        product.BrushesCount = 0;
-        return true;
-    }
-
-    combinedMesh.Triangulate(product.MeshData, product.VertexBuffer);
-    product.MeshData.RemoveEmptySlots();
-    if (product.MeshData.Slots.IsEmpty())
-    {
-        product.HasGeometry = false;
-        product.BrushesCount = 0;
-        return true;
-    }
-
-    product.MeshData.ToModelData(product.Model);
-    product.BrushesCount = product.MeshData.Brushes.Count();
-    product.HasGeometry = true;
-    return true;
-}
-
-bool CSGBuilderImpl::publishModelPreview(CSGModel* model, CSGModelBuildProduct& product)
-{
-    if (!product.HasGeometry)
-    {
-        model->CSGData.PublishEmptyPreview();
-        model->CSGData.PostCSGBuild();
-        return true;
-    }
-
-    if (updatePreviewModel(model->CSGData, product.Model))
-    {
-        LOG(Warning, "Failed to update live CSG preview model");
-        return false;
-    }
-
-    model->CSGData.PublishPreviewSurfaceData(product.MeshData);
-    model->CSGData.MarkPreviewOverrideActive();
-    model->CSGData.PostCSGBuild();
-    return true;
-}
-
-bool CSGBuilderImpl::persistModelOutput(CSGModel* model, CSGModelBuildProduct& product, const CSGGeneratedOutputPaths& paths, BuildData& data)
-{
-    if (!product.HasGeometry)
-    {
-        data.outputModelAssetId = Guid::Empty;
-        data.outputRawDataAssetId = Guid::Empty;
-        data.outputCollisionDataAssetId = Guid::Empty;
-        data.brushesCount = 0;
-        return true;
-    }
-
-    // Import model data to the asset
-    {
-        Guid modelDataAssetId = model->CSGData.Model.GetID();
-        if (!modelDataAssetId.IsValid())
-            modelDataAssetId = Guid::New();
-        if (AssetsImportingManager::Create(AssetsImportingManager::CreateModelTag, paths.Model, modelDataAssetId, &product.Model))
-        {
-            LOG(Warning, "Failed to import CSG mesh data");
-            return false;
-        }
-        data.outputModelAssetId = modelDataAssetId;
-    }
-
-    data.brushesCount = product.BrushesCount;
-
-    // Generate asset with CSG mesh metadata
-    {
-        Guid rawDataAssetId = model->CSGData.Data.GetID();
-        if (!rawDataAssetId.IsValid())
-            rawDataAssetId = Guid::New();
-        if (generateRawDataAsset(product.MeshData, rawDataAssetId, paths.RawData))
-        {
-            LOG(Warning, "Failed to create raw CSG data");
-            return false;
-        }
-        data.outputRawDataAssetId = rawDataAssetId;
-    }
-
-    // Generate CSG mesh collision asset
-    {
-#if COMPILE_WITH_PHYSICS_COOKING
-        CollisionCooking::Argument arg;
-        arg.Type = CollisionDataType::TriangleMesh;
-        arg.OverrideModelData = &product.Model;
-        arg.Model = data.outputModelAssetId;
-        Guid collisionDataAssetId = model->CSGData.CollisionData.GetID();
-        if (!collisionDataAssetId.IsValid())
-            collisionDataAssetId = Guid::New();
-        if (AssetsImportingManager::Create(AssetsImportingManager::CreateCollisionDataTag, paths.Collision, collisionDataAssetId, &arg))
-        {
-            LOG(Warning, "Failed to cook CSG mesh collision data");
-            return false;
-        }
-        data.outputCollisionDataAssetId = collisionDataAssetId;
-#else
-        data.outputCollisionDataAssetId = Guid::Empty;
-#endif
-    }
-
-    return true;
-}
-
 void CSGBuilderImpl::build(Scene* scene)
 {
     if (scene == nullptr)
@@ -559,64 +336,21 @@ void CSGBuilderImpl::build(Scene* scene)
     auto outputCollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
 
     scene->CSGData.Data = outputData;
-    scene->CSGData.Model = outputModel;
+    if (!outputModel)
+    {
+        GPUDeviceLock gpuLock(GPUDevice::Instance);
+        scene->CSGData.ClearTransientPreview();
+        scene->CSGData.Model = outputModel;
+    }
+    else
+    {
+        scene->CSGData.Model = outputModel;
+    }
     scene->CSGData.CollisionData = outputCollisionData;
     scene->CSGData.PostCSGBuild();
 
     auto endTime = DateTime::Now();
     LOG(Info, "CSG build for scene \'{0}\' in {1} ms! {2} brush(es)", scene->GetName(), (endTime - startTime).GetTotalMilliseconds(), data.brushesCount);
-}
-
-void CSGBuilderImpl::build(CSGModel* model, ModelBuildIntent intent)
-{
-    if (model == nullptr)
-        return;
-
-    auto startTime = DateTime::Now();
-    LOG(Info, "Start building CSG Model {0} ({1})...", model->GetName(), intent == ModelBuildIntent::Persist ? TEXT("Persist") : TEXT("Preview"));
-
-    CSGModelBuildProduct product;
-    if (!compileModel(model, product))
-    {
-        LOG(Warning, "Failed to compile CSG model {0}. Preserving previous result.", model->GetName());
-        return;
-    }
-
-    if (!publishModelPreview(model, product))
-    {
-        LOG(Warning, "Failed to publish CSG model preview for {0}.", model->GetName());
-        return;
-    }
-
-    if (intent == ModelBuildIntent::Persist)
-    {
-        CSGGeneratedOutputPaths paths;
-        if (!CSGGeneratedOutputPathResolver::ResolveForScene(model, paths))
-        {
-            LOG(Warning, "Failed to resolve CSG output paths for model {0}.", model->GetName());
-            return;
-        }
-
-        BuildData data;
-        if (!persistModelOutput(model, product, paths, data))
-        {
-            LOG(Warning, "Failed to persist CSG model {0}.", model->GetName());
-            return;
-        }
-
-        auto outputData = Content::LoadAsync<RawDataAsset>(data.outputRawDataAssetId);
-        auto outputModel = Content::LoadAsync<Model>(data.outputModelAssetId);
-        auto outputCollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
-
-        model->CSGData.Data = outputData;
-        model->CSGData.Model = outputModel;
-        model->CSGData.CollisionData = outputCollisionData;
-        model->CSGData.PostCSGBuild();
-    }
-
-    const int32 brushesCount = product.BrushesCount;
-    auto endTime = DateTime::Now();
-    LOG(Info, "CSG Model build in {0} ms! {1} brush(es)", (endTime - startTime).GetTotalMilliseconds(), brushesCount);
 }
 
 bool CSGBuilderImpl::generateRawDataAsset(RawData& meshData, Guid& assetId, const String& assetPath)

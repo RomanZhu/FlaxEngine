@@ -6,7 +6,6 @@
 #include "Engine/Level/CSG/CSGScopeTypes.h"
 
 class Actor;
-class Scene;
 
 namespace CSG
 {
@@ -19,23 +18,13 @@ namespace CSG
     {
     public:
         /// <summary>
-        /// Finds the nearest output scope ancestor (such as CSGModel), or null if directly under scene.
-        /// </summary>
-        static Actor* FindOwningOutputScope(const Actor* actor);
-
-        /// <summary>
         /// Finds the nearest boolean stack scope ancestor (such as CSGStack), or null if in implicit stack.
         /// </summary>
         static Actor* FindOwningStackScope(const Actor* actor);
 
         /// <summary>
-        /// Resolves the build target key for a given actor.
-        /// </summary>
-        static CSGBuildTargetKey ResolveBuildTarget(const Actor* actor);
-
-        /// <summary>
         /// Discovers explicit CSGStack scopes and top-level implicit brushes under a target root.
-        /// Traversal stops at child output scopes.
+        /// Traversal stops at child boolean stack scopes.
         /// </summary>
         static void CollectTargetScopes(Actor* targetRoot, Array<Actor*>& outExplicitStacks, Array<Brush*>& outImplicitBrushes);
 

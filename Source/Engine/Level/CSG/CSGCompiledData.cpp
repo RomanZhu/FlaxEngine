@@ -5,7 +5,6 @@
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Core/Math/CollisionsHelper.h"
-#include "Engine/CSG/CSGData.h"
 
 using namespace CSG;
 
@@ -21,54 +20,10 @@ CSGCompiledData::~CSGCompiledData()
     Data.Changed.Unbind<CSGCompiledData, &CSGCompiledData::OnDataChanged>(this);
 }
 
-void CSGCompiledData::PublishPreviewModel(::Model* model)
-{
-    _hasPreviewOverride = true;
-    PreviewModel = model;
-}
-
-void CSGCompiledData::PublishPreviewSurfaceData(const RawData& rawData)
-{
-    _previewSurfaceData.Clear();
-    _previewSurfaceData.EnsureCapacity(rawData.Brushes.Count());
-
-    for (auto i = rawData.Brushes.Begin(); i.IsNotEnd(); ++i)
-    {
-        const Guid brushId = i->Key;
-        const RawData::BrushData& srcBrush = i->Value;
-        auto& dstSurfaces = _previewSurfaceData[brushId];
-        dstSurfaces.Resize(srcBrush.Surfaces.Count());
-
-        for (int32 surfaceIndex = 0; surfaceIndex < srcBrush.Surfaces.Count(); surfaceIndex++)
-        {
-            const auto& srcTriangles = srcBrush.Surfaces[surfaceIndex].Triangles;
-            auto& dstTriangles = dstSurfaces[surfaceIndex].Triangles;
-            dstTriangles.Resize(srcTriangles.Count());
-
-            for (int32 triangleIndex = 0; triangleIndex < srcTriangles.Count(); triangleIndex++)
-            {
-                dstTriangles[triangleIndex].V0 = srcTriangles[triangleIndex].V[0];
-                dstTriangles[triangleIndex].V1 = srcTriangles[triangleIndex].V[1];
-                dstTriangles[triangleIndex].V2 = srcTriangles[triangleIndex].V[2];
-            }
-        }
-    }
-}
-
-void CSGCompiledData::PublishEmptyPreview()
-{
-    _hasPreviewOverride = true;
-    PreviewModel = nullptr;
-    PreviewModelCache = nullptr;
-    _previewSurfaceData.Clear();
-}
-
 void CSGCompiledData::ClearTransientPreview()
 {
-    _hasPreviewOverride = false;
     PreviewModel = nullptr;
     PreviewModelCache = nullptr;
-    _previewSurfaceData.Clear();
 }
 
 void CSGCompiledData::ClearAll()
@@ -102,17 +57,6 @@ bool CSGCompiledData::SurfaceData::Intersects(const Ray& ray, Real& distance, Ve
 
 bool CSGCompiledData::TryGetSurfaceData(const Guid& brushId, int32 brushSurfaceIndex, SurfaceData& outData)
 {
-    if (_hasPreviewOverride)
-    {
-        Array<SurfaceData>* surfaces = _previewSurfaceData.TryGet(brushId);
-        if (surfaces == nullptr)
-            return false;
-        if (!Math::IsInRange(brushSurfaceIndex, 0, surfaces->Count() - 1))
-            return false;
-        outData = (*surfaces)[brushSurfaceIndex];
-        return true;
-    }
-
     if (Data == nullptr || !Data->IsLoaded() || Data->Data.IsEmpty())
     {
         return false;

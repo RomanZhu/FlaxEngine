@@ -10,7 +10,6 @@ using FlaxEditor.GUI.Tree;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.GUI;
 using FlaxEditor.Scripting;
-using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -332,20 +331,6 @@ namespace FlaxEditor.Windows.Assets
                 contextMenu.AddSeparator();
                 var csgMenu = contextMenu.AddChildMenu("CSG");
                 csgMenu.ContextMenu.AddButton("Wrap in CSG Stack", WrapSelectedInCSGStack);
-                csgMenu.ContextMenu.AddButton("Wrap in CSG Model", WrapSelectedInCSGModel);
-                csgMenu.ContextMenu.AddSeparator();
-                csgMenu.ContextMenu.AddButton("Rebuild CSG Preview", () =>
-                {
-                    var targets = new HashSet<Actor>();
-                    foreach (var node in selectedActorNodes)
-                    {
-                        var target = CSGRebuildScheduler.ResolveTarget(node.Actor);
-                        if (target != null)
-                            targets.Add(target);
-                    }
-                    foreach (var target in targets)
-                        CSGRebuildScheduler.Shared.RequestFinal(target);
-                });
             }
 
             // Prefab options

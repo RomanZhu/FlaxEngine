@@ -2,28 +2,11 @@
 
 #include "CSGHierarchy.h"
 #include "Engine/Level/Actor.h"
-#include "Engine/Level/Scene/Scene.h"
 #include "Engine/Level/Actors/CSGScopeActor.h"
 #include "Engine/Level/Actors/CSGStack.h"
 #include "Engine/CSG/Brush.h"
 
 using namespace CSG;
-
-Actor* CSGHierarchy::FindOwningOutputScope(const Actor* actor)
-{
-    if (actor == nullptr)
-        return nullptr;
-
-    const Actor* current = actor->GetParent();
-    while (current != nullptr)
-    {
-        auto scope = dynamic_cast<const CSGScopeActor*>(current);
-        if (scope && scope->IsOutputScope())
-            return const_cast<Actor*>(current);
-        current = current->GetParent();
-    }
-    return nullptr;
-}
 
 Actor* CSGHierarchy::FindOwningStackScope(const Actor* actor)
 {
@@ -34,37 +17,11 @@ Actor* CSGHierarchy::FindOwningStackScope(const Actor* actor)
     while (current != nullptr)
     {
         auto scope = dynamic_cast<const CSGScopeActor*>(current);
-        if (scope)
-        {
-            if (scope->IsOutputScope())
-                return nullptr; // Stopped at output scope boundary
-            if (scope->IsBooleanScope())
-                return const_cast<Actor*>(current);
-        }
+        if (scope && scope->IsBooleanScope())
+            return const_cast<Actor*>(current);
         current = current->GetParent();
     }
     return nullptr;
-}
-
-CSGBuildTargetKey CSGHierarchy::ResolveBuildTarget(const Actor* actor)
-{
-    if (actor == nullptr)
-        return CSGBuildTargetKey();
-
-    Actor* outputScope = FindOwningOutputScope(actor);
-    if (outputScope != nullptr)
-    {
-        Scene* scene = outputScope->GetScene();
-        return CSGBuildTargetKey(CSGBuildTargetKind::Model, scene ? scene->GetID() : Guid::Empty, outputScope->GetID());
-    }
-
-    Scene* scene = actor->GetScene();
-    if (scene != nullptr)
-    {
-        return CSGBuildTargetKey(CSGBuildTargetKind::LegacyScene, scene->GetID(), scene->GetID());
-    }
-
-    return CSGBuildTargetKey();
 }
 
 namespace
@@ -74,13 +31,9 @@ namespace
         if (current == nullptr || !current->GetIsActive())
             return;
 
-        // Skip child output scopes if we are traversing a parent target
         if (current != targetRoot)
         {
             auto scope = dynamic_cast<CSGScopeActor*>(current);
-            if (scope && scope->IsOutputScope())
-                return; // Stop at nested output scope boundary
-
             if (scope && scope->IsBooleanScope())
             {
                 outExplicitStacks.Add(current);
@@ -109,7 +62,7 @@ namespace
         {
             auto scope = dynamic_cast<CSGScopeActor*>(current);
             if (scope)
-                return; // Stop at nested scope boundary (nested stack or model)
+                return; // Stop at nested stack boundary
         }
 
         auto brush = dynamic_cast<Brush*>(current);

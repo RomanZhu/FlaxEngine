@@ -12,11 +12,8 @@
 
 namespace CSG
 {
-    class RawData;
-
     /// <summary>
-    /// Reusable CSG compiled output container (models, raw surface queries, collision).
-    /// Used by both legacy Scene CSG output and CSGModel actor outputs.
+    /// Reusable Scene CSG compiled output container (model, raw surface queries, collision).
     /// </summary>
     class FLAXENGINE_API CSGCompiledData : public ISerializable
     {
@@ -27,10 +24,6 @@ namespace CSG
 
             bool Intersects(const Ray& ray, Real& distance, Vector3& normal) const;
         };
-
-    private:
-        bool _hasPreviewOverride = false;
-        Dictionary<Guid, Array<SurfaceData>> _previewSurfaceData;
 
     public:
         /// <summary>
@@ -73,43 +66,11 @@ namespace CSG
         ~CSGCompiledData();
 
         /// <summary>
-        /// Gets whether a live preview override is currently active.
-        /// </summary>
-        FORCE_INLINE bool HasPreviewOverride() const
-        {
-            return _hasPreviewOverride;
-        }
-
-        /// <summary>
-        /// Marks preview override active.
-        /// </summary>
-        FORCE_INLINE void MarkPreviewOverrideActive()
-        {
-            _hasPreviewOverride = true;
-        }
-
-        /// <summary>
-        /// Determines whether this container has persisted CSG data linked.
-        /// </summary>
-        FORCE_INLINE bool HasPersistedData() const
-        {
-            return Model || Data || CollisionData;
-        }
-
-        /// <summary>
-        /// Determines whether this container has renderable CSG data available.
-        /// </summary>
-        FORCE_INLINE bool HasRenderableData() const
-        {
-            return GetModelForRendering() != nullptr;
-        }
-
-        /// <summary>
         /// Determines whether this container has valid CSG model data linked.
         /// </summary>
         FORCE_INLINE bool HasData() const
         {
-            return HasPersistedData();
+            return (Model || PreviewModel) && Data;
         }
 
         /// <summary>
@@ -117,27 +78,10 @@ namespace CSG
         /// </summary>
         FORCE_INLINE ::Model* GetModelForRendering() const
         {
-            return _hasPreviewOverride ? PreviewModel.Get() : Model.Get();
+            return PreviewModel ? PreviewModel.Get() : Model.Get();
         }
 
-        /// <summary>
-        /// Publishes a transient preview model.
-        /// </summary>
-        void PublishPreviewModel(::Model* model);
-
-        /// <summary>
-        /// Publishes transient preview surface metadata from raw data.
-        /// </summary>
-        void PublishPreviewSurfaceData(const RawData& rawData);
-
-        /// <summary>
-        /// Publishes an authoritative empty preview.
-        /// </summary>
-        void PublishEmptyPreview();
-
-        /// <summary>
-        /// Clears transient preview models and surface data.
-        /// </summary>
+        /// <summary>Clears transient preview models.</summary>
         void ClearTransientPreview();
 
         /// <summary>

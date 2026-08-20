@@ -1486,12 +1486,6 @@ namespace FlaxEditor
         {
             var scenes = Level.Scenes;
             scenes.ForEach(x => x.BuildCSG(0));
-            var models = Level.GetActors<CSGModel>();
-            if (models != null)
-            {
-                for (int i = 0; i < models.Length; i++)
-                    models[i].BuildCSG(0);
-            }
             Scene.MarkSceneEdited(scenes);
         }
 

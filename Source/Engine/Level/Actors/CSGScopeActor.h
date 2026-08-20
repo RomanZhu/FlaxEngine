@@ -28,11 +28,4 @@ public:
         return GetCSGScopeKind() == CSGScopeKind::BooleanStack;
     }
 
-    /// <summary>
-    /// Gets whether this scope defines an independent generated output boundary.
-    /// </summary>
-    API_PROPERTY() FORCE_INLINE bool IsOutputScope() const
-    {
-        return GetCSGScopeKind() == CSGScopeKind::ModelOutput;
-    }
 };

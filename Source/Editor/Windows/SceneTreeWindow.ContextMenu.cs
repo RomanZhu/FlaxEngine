@@ -74,7 +74,6 @@ namespace FlaxEditor.Windows
                 if (isSingleActorSelected && (firstSelection.Actor is GroupActor || firstSelection.Actor is EmptyActor))
                 {
                     convertMenu.ContextMenu.AddButton("CSG Stack", () => Editor.SceneEditing.Convert(typeof(CSGStack)));
-                    convertMenu.ContextMenu.AddButton("CSG Model", () => Editor.SceneEditing.Convert(typeof(CSGModel)));
                 }
 
                 if (Editor.SceneEditing.Selection.Any(x => x is ActorNode an && (an.Actor is BoxBrush || an.Actor is CSGScopeActor)))
@@ -82,27 +81,21 @@ namespace FlaxEditor.Windows
                     contextMenu.AddSeparator();
                     var csgMenu = contextMenu.AddChildMenu("CSG");
                     csgMenu.ContextMenu.AddButton("Wrap in CSG Stack", Editor.SceneEditing.WrapSelectedInCSGStack);
-                    csgMenu.ContextMenu.AddButton("Wrap in CSG Model", Editor.SceneEditing.WrapSelectedInCSGModel);
                     csgMenu.ContextMenu.AddSeparator();
                     csgMenu.ContextMenu.AddButton("Rebuild CSG", () =>
                     {
-                        var targets = new HashSet<Actor>();
+                        var scenes = new HashSet<Scene>();
                         foreach (var node in Editor.SceneEditing.Selection)
                         {
                             if (node is ActorNode an && an.Actor != null)
                             {
-                                var target = Tools.CSG.Rebuild.CSGRebuildScheduler.ResolveTarget(an.Actor);
-                                if (target != null)
-                                    targets.Add(target);
+                                var scene = an.Actor.Scene;
+                                if (scene != null)
+                                    scenes.Add(scene);
                             }
                         }
-                        foreach (var target in targets)
-                        {
-                            if (target is Scene s)
-                                s.BuildCSG(0);
-                            else if (target is CSGModel m)
-                                m.BuildCSG(0);
-                        }
+                        foreach (var scene in scenes)
+                            scene.BuildCSG(0);
                     });
                 }
 
