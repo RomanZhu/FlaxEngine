@@ -719,7 +719,15 @@ namespace FlaxEditor.Windows.Assets
 
             public void Reimport()
             {
-                Editor.Instance.ContentImporting.Reimport((BinaryAssetItem)Window.Item, ImportSettings, true);
+                if (Window.Item.IsCanonicalSource)
+                {
+                    if (AssetDatabaseFacade.ApplyModelMetadata(Window.Item.Path, ImportSettings.Settings))
+                        FlaxEditor.Editor.LogError("Cannot apply canonical model import settings.");
+                }
+                else
+                {
+                    Editor.Instance.ContentImporting.Reimport((BinaryAssetItem)Window.Item, ImportSettings, true);
+                }
             }
 
             protected class ProxyEditor : ProxyEditorBase
@@ -740,7 +748,7 @@ namespace FlaxEditor.Windows.Assets
                     var group = layout.Group("Import Path");
                     Utilities.Utils.CreateImportPathUI(group, proxy.Window.Item as BinaryAssetItem);
 
-                    var reimportButton = importSettingsGroup.Button("Reimport");
+                    var reimportButton = importSettingsGroup.Button(proxy.Window.Item.IsCanonicalSource ? "Apply and Rebuild" : "Reimport");
                     reimportButton.Button.Clicked += () => ((ImportPropertiesProxyBase)Values[0]).Reimport();
                 }
             }
@@ -822,7 +830,15 @@ namespace FlaxEditor.Windows.Assets
         protected override void OnAssetLoaded()
         {
             _refreshOnLODsLoaded = true;
-            Editor.TryRestoreImportOptions(ref _importSettings.Settings, Item.Path);
+            if (Item.IsCanonicalSource)
+            {
+                if (AssetDatabaseFacade.LoadModelMetadata(Item.Path, out _importSettings.Settings))
+                    Editor.LogError("Cannot load canonical model import settings.");
+            }
+            else
+            {
+                Editor.TryRestoreImportOptions(ref _importSettings.Settings, Item.Path);
+            }
             UpdateEffectsOnAsset();
             foreach (var child in _tabs.Children)
             {

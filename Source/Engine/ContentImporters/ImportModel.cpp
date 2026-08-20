@@ -623,6 +623,21 @@ CreateAssetResult ImportModel::Create(CreateAssetContext& context)
     return CreateModel(context, modelData);
 }
 
+CreateAssetResult ImportModel::CreateCompatibility(CreateAssetContext& context, const ModelData& data, const Options& options)
+{
+    switch (options.Type)
+    {
+    case ModelTool::ModelType::Model:
+        return CreateModel(context, data, &options);
+    case ModelTool::ModelType::SkinnedModel:
+        return CreateSkinnedModel(context, data, &options);
+    case ModelTool::ModelType::Animation:
+        return CreateAnimation(context, data, &options);
+    default:
+        return CreateAssetResult::InvalidTypeID;
+    }
+}
+
 CreateAssetResult ImportModel::CreateModel(CreateAssetContext& context, const ModelData& modelData, const Options* options)
 {
     PROFILE_CPU();
@@ -654,7 +669,17 @@ CreateAssetResult ImportModel::CreateModel(CreateAssetContext& context, const Mo
     if (options && options->GenerateSDF)
     {
         stream.SetPosition(0);
-        if (!ModelTool::GenerateModelSDF(nullptr, &modelData, options->SDFResolution, lodCount - 1, nullptr, &stream, context.TargetAssetPath))
+        int32 sdfLod = lodCount - 1;
+        while (sdfLod > 0)
+        {
+            bool hasTriangles = false;
+            for (const MeshData* mesh : modelData.LODs[sdfLod].Meshes)
+                hasTriangles |= mesh && mesh->Positions.HasItems() && mesh->Indices.HasItems();
+            if (hasTriangles)
+                break;
+            sdfLod--;
+        }
+        if (!ModelTool::GenerateModelSDF(nullptr, &modelData, options->SDFResolution, sdfLod, nullptr, &stream, context.TargetAssetPath, 0.6f, false, false, false))
         {
             if (context.AllocateChunk(15))
                 return CreateAssetResult::CannotAllocateChunk;

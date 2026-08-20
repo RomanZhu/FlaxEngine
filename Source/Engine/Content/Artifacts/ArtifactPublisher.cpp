@@ -102,6 +102,26 @@ namespace
         return false;
     }
 
+    String DescribeDifference(const StringView& existingPath, const StringView& stagedPath)
+    {
+        Array<byte> existingBytes;
+        Array<byte> stagedBytes;
+#if PLATFORM_WINDOWS
+        if (File::ReadAllBytes(ToNativePath(existingPath), existingBytes) || File::ReadAllBytes(ToNativePath(stagedPath), stagedBytes))
+#else
+        if (File::ReadAllBytes(existingPath, existingBytes) || File::ReadAllBytes(stagedPath, stagedBytes))
+#endif
+            return TEXT("Existing immutable artifact key contains different or corrupt bytes.");
+        const int32 commonLength = Math::Min(existingBytes.Count(), stagedBytes.Count());
+        int32 firstDifference = 0;
+        while (firstDifference < commonLength && existingBytes[firstDifference] == stagedBytes[firstDifference])
+            firstDifference++;
+        const int32 existingValue = firstDifference < existingBytes.Count() ? existingBytes[firstDifference] : -1;
+        const int32 stagedValue = firstDifference < stagedBytes.Count() ? stagedBytes[firstDifference] : -1;
+        return String::Format(TEXT("Existing immutable artifact key contains different or corrupt bytes (existing {0} bytes, staged {1} bytes, first difference at byte {2}: existing {3}, staged {4})."),
+            existingBytes.Count(), stagedBytes.Count(), firstDifference, existingValue, stagedValue);
+    }
+
     bool FlushFile(const StringView& path)
     {
 #if PLATFORM_WINDOWS
@@ -285,7 +305,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
             uint64 existingSize;
             ContentHash existingHash;
             if (ReadAndHash(destination.Get(), existingSize, existingHash) || existingSize != output.Size || existingHash != output.Content)
-                return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, destination.Get(), TEXT("Existing immutable artifact key contains different or corrupt bytes."));
+                return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, destination.Get(), DescribeDifference(destination.Get(), staged->AbsolutePath));
         }
         else if (MoveNoReplace(destination.Get(), staged->AbsolutePath))
         {

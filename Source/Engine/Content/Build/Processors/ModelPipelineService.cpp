@@ -1,33 +1,32 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
-#include "TexturePipelineService.h"
-
-#if COMPILE_WITH_TEXTURE_TOOL && COMPILE_WITH_ASSETS_IMPORTER
-
-#include "TextureArtifactValidator.h"
-#include "TextureProcessor.h"
-#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
 #include "ModelPipelineService.h"
+
+#if COMPILE_WITH_MODEL_TOOL && COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+
+#include "ModelArtifactValidator.h"
+#include "ModelProcessor.h"
 #include "ModelProcessorSettings.h"
-#endif
-#include "Engine/Content/Assets/Texture.h"
+#include "TexturePipelineService.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/Content.h"
-#include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/ArtifactBuildContext.h"
+#include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
-#include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/FileSystem.h"
 #include "Engine/Scripting/Scripting.h"
 #include <memory>
 #include <mutex>
 
 namespace
 {
-    struct TextureExecution
+    struct ModelExecution
     {
         PreparedAsset Prepared;
         ArtifactTarget Target;
@@ -38,10 +37,9 @@ namespace
         std::unique_ptr<ArtifactBuildContext> Context;
     };
 
-    struct TexturePipelineState
+    struct ModelPipelineState
     {
         std::mutex Locker;
-        std::unique_ptr<AssetBuildService> Builds;
         AssetProcessorRegistration Registration;
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
@@ -50,9 +48,9 @@ namespace
         bool Initialized = false;
     };
 
-    TexturePipelineState& State()
+    ModelPipelineState& State()
     {
-        static TexturePipelineState state;
+        static ModelPipelineState state;
         return state;
     }
 
@@ -63,46 +61,22 @@ namespace
         diagnostic.Code = code;
         diagnostic.Stage = stage;
         diagnostic.AssetGuid = assetID;
-        diagnostic.ProcessorId = TextureProcessorSettings::ProcessorID();
+        diagnostic.ProcessorId = ModelProcessorSettings::ProcessorID();
         diagnostic.Message = message;
         return true;
     }
 
     bool EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
     {
-        TexturePipelineState& state = State();
+        ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
         if (state.Initialized)
             return false;
-
         AssetProcessorDescriptor existing;
-        if (!AssetProcessorRegistry::Get().TryGetDescriptor(TextureProcessorSettings::ProcessorID(), existing) &&
-            AssetProcessorRegistry::Get().Register(TextureProcessor::CreateDescriptor(), state.Registration, diagnostic))
+        if (!AssetProcessorRegistry::Get().TryGetDescriptor(ModelProcessorSettings::ProcessorID(), existing) &&
+            AssetProcessorRegistry::Get().Register(ModelProcessor::CreateDescriptor(), state.Registration, diagnostic))
             return true;
-
-        state.Builds = std::make_unique<AssetBuildService>();
-        AssetBuildServiceLimits limits;
-        limits.MaximumWorkers = 2;
-        limits.MaximumMemoryBytes = 4ull * 1024ull * 1024ull * 1024ull;
-        limits.MaximumExternalTools = 1;
-        if (state.Builds->Initialize(Globals::ProjectLibraryFolder, limits, diagnostic))
-        {
-            state.Builds.reset();
-            state.Registration.Reset();
-            return true;
-        }
         state.Initialized = true;
-        ArtifactResolutionPlanProvider provider = [](const AssetRecord& record, const ArtifactRequest& request,
-            ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& planDiagnostic)
-        {
-#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
-            if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
-                return ModelPipelineService::CreatePlan(record, request, plan, planDiagnostic);
-#endif
-            return TexturePipelineService::CreatePlan(record, request, plan, planDiagnostic);
-        };
-        ArtifactResolver::Get().Configure(AssetDatabase::Get(), *state.Builds, Globals::ProjectLibraryFolder,
-            TexturePipelineService::GetHostTarget(), provider);
         return false;
     }
 
@@ -116,13 +90,13 @@ namespace
             return;
         }
         revision = record.DatabaseRevision;
-        TexturePipelineState& state = State();
+        ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
-        const ArtifactKey* current = state.Fingerprints.TryGet(assetID);
-        fingerprint = current ? *current : ArtifactKey();
+        const ArtifactKey* value = state.Fingerprints.TryGet(assetID);
+        fingerprint = value ? *value : ArtifactKey();
     }
 
-    void QueueTextureHotSwap(const ArtifactManifest& manifest)
+    void QueueHotSwap(const ArtifactManifest& manifest, const String& typeName)
     {
         const ArtifactManifestOutput* runtime = nullptr;
         for (const ArtifactManifestOutput& output : manifest.Outputs)
@@ -135,118 +109,87 @@ namespace
         }
         if (!runtime)
             return;
-
         ArtifactStoragePath storagePath;
         AssetPipelineDiagnostic diagnostic;
         if (ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
             return;
         ResolvedArtifact artifact;
         artifact.AssetID = manifest.AssetID;
-        artifact.TypeName = Texture::TypeName;
+        artifact.TypeName = typeName;
         artifact.StoragePath = storagePath;
         artifact.OutputKind = TEXT("runtime");
         artifact.Key = String(runtime->Key.ToString());
         artifact.StorageKind = ArtifactStorageKind::Generated;
         artifact.IsExact = true;
-        artifact.IsLastGood = false;
         Scripting::InvokeOnUpdate([artifact]()
         {
             Asset* asset = Content::GetAsset(artifact.AssetID);
-            if (!asset || asset->GetTypeName() != Texture::TypeName)
+            auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
+            if (!binary || !binary->IsLoaded() || !binary->IsUsingGeneratedArtifact() || binary->GetTypeName() != artifact.TypeName ||
+                (binary->GetArtifactKey() == artifact.Key && binary->IsUsingExactArtifact()))
                 return;
-            auto* texture = static_cast<Texture*>(asset);
-            if (texture->GetArtifactKey() == artifact.Key && texture->IsUsingExactArtifact())
-                return;
-            const BinaryAssetStorageSwitchResult result = texture->SwitchStorage(artifact);
+            const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
             if (result != BinaryAssetStorageSwitchResult::Success)
-                LOG(Error, "Failed to hot-swap texture artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
+                LOG(Error, "Failed to hot-swap model-owned artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
         });
     }
 
-    class TexturePipelineEngineService : public EngineService
+    bool PrepareRecord(const AssetRecord& record, const AssetMeta& meta, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
     {
-    public:
-        TexturePipelineEngineService()
-            : EngineService(TEXT("TexturePipeline"), -500)
+        AssetProcessorLease lease;
+        if (AssetProcessorRegistry::Get().TryAcquire(record.ProcessorID, AssetProcessorInvocationStage::Prepare, lease, diagnostic))
+            return true;
+        AssetCancellationSource cancellation;
+        ModelPipelineState& state = State();
         {
-        }
-
-        bool Init() override
-        {
-            AssetPipelineDiagnostic diagnostic;
-            if (!TexturePipelineService::GetBuildService(diagnostic))
-            {
-                LOG(Error, "Cannot initialize the texture artifact pipeline: {0}", diagnostic.Message);
+            std::lock_guard<std::mutex> lock(state.Locker);
+            PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
+                record, lease.Get(), meta.Processor.SettingsJson, state.HashCache, cancellation.GetToken());
+            if (lease.Get().Prepare(context, prepared, diagnostic) || context.Finalize(record.DatabaseRevision, prepared, diagnostic))
                 return true;
-            }
-            return false;
+            state.Fingerprints[record.ID] = prepared.InputFingerprint;
         }
-
-        void Dispose() override
+        auto* payload = static_cast<ModelPreparedPayload*>(prepared.Payload.get());
+        if (!payload)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Prepare,
+                record.ID, TEXT("Model preparation returned no processor payload."));
+        payload->RootTypeName = meta.AssetType;
+        for (const auto& mapping : meta.SubAssets)
         {
-            TexturePipelineService::Shutdown();
+            if (!mapping.Value.Removed)
+                payload->AssignedIDs[mapping.Key] = mapping.Value.ID;
         }
-    };
-
-    TexturePipelineEngineService TexturePipelineEngineServiceInstance;
-}
-
-const ArtifactTarget& TexturePipelineService::GetHostTarget()
-{
-    static ArtifactTarget target;
-    static bool initialized = false;
-    if (!initialized)
-    {
-        target.Platform = "Windows";
-        target.Architecture = "x64";
-        target.Graphics = "DirectX12";
-        target.Configuration = "Development";
-        target.Quality = "High";
-        target.TextureCompression = "Desktop";
-        target.Role = "Editor";
-        initialized = true;
+        return false;
     }
-    return target;
 }
 
-AssetBuildService* TexturePipelineService::GetBuildService(AssetPipelineDiagnostic& diagnostic)
-{
-    if (EnsureInitialized(diagnostic))
-        return nullptr;
-    return State().Builds.get();
-}
-
-bool TexturePipelineService::CreatePlan(const AssetRecord& record, const ArtifactRequest& request,
+bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactRequest& request,
     ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& diagnostic)
 {
     plan = ArtifactResolutionPlan();
     if (EnsureInitialized(diagnostic))
         return true;
-    if (!record.ID.IsValid() || record.ProcessorID != TextureProcessorSettings::ProcessorID())
+    if (!record.ID.IsValid() || record.ProcessorID != ModelProcessorSettings::ProcessorID())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Prepare,
-            record.ID, TEXT("The asset is not owned by the texture processor."));
+            record.ID, TEXT("The asset is not owned by the model processor."));
 
     AssetMeta meta;
     if (AssetMeta::Load(record.MetaPath.Get(), meta, diagnostic))
         return true;
-    AssetProcessorLease prepareLease;
-    if (AssetProcessorRegistry::Get().TryAcquire(record.ProcessorID, AssetProcessorInvocationStage::Prepare, prepareLease, diagnostic))
-        return true;
-
-    AssetCancellationSource preparationCancellation;
     PreparedAsset prepared;
-    TexturePipelineState& state = State();
+    if (PrepareRecord(record, meta, prepared, diagnostic))
+        return true;
+    SubAssetReconcileResult reconciliation = SubAssetReconciler::Reconcile(meta, prepared.SubAssets, false);
+    if (reconciliation.RequiresUserReconciliation || reconciliation.HasTrackedChanges)
     {
-        std::lock_guard<std::mutex> lock(state.Locker);
-        PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
-            record, prepareLease.Get(), meta.Processor.SettingsJson, state.HashCache, preparationCancellation.GetToken());
-        if (prepareLease.Get().Prepare(context, prepared, diagnostic) ||
-            context.Finalize(record.DatabaseRevision, prepared, diagnostic))
-            return true;
-        state.Fingerprints[record.ID] = prepared.InputFingerprint;
+        diagnostic = reconciliation.Diagnostics.HasItems() ? reconciliation.Diagnostics[0] : AssetPipelineDiagnostic();
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Prepare,
+                record.ID, TEXT("Model subasset mappings require an explicit tracked reconciliation."));
+        return true;
     }
 
-    auto execution = std::make_shared<TextureExecution>();
+    auto execution = std::make_shared<ModelExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
     for (const AssetDependency& dependency : prepared.Dependencies)
@@ -255,17 +198,18 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
             continue;
         ArtifactBuildInput input;
         input.StableIdentity = dependency.StableIdentity;
-        input.Path = record.SourcePath.Get();
+        input.Path = Globals::ProjectFolder / dependency.StableIdentity;
+        FileSystem::NormalizePath(input.Path);
         input.ExpectedContent = dependency.Content;
         execution->Inputs.Add(MoveTemp(input));
     }
     if (execution->Inputs.IsEmpty())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-            record.ID, TEXT("Texture preparation declared no source input."));
-    if (TextureArtifactValidator::Register(execution->Validators, record.ID, diagnostic))
+            record.ID, TEXT("Model preparation declared no source inputs."));
+    if (ModelArtifactValidator::Register(execution->Validators, prepared, diagnostic))
         return true;
 
-    ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-texture-build-job-v1"));
+    ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-model-build-job-v1"));
     jobBuilder.AddGuid(StringAnsiView("asset"), prepared.AssetID);
     jobBuilder.AddUInt64(StringAnsiView("database-revision"), prepared.DatabaseRevision);
     jobBuilder.AddKey(StringAnsiView("prepared-input"), prepared.InputFingerprint);
@@ -275,22 +219,22 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
         ArtifactPublicationOutputPlan outputPlan;
         outputPlan.Kind = output.Kind;
         Array<ArtifactKeyComponent> outputComponents;
-        if (TextureProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+        if (ModelProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
             return true;
         execution->Outputs.Add(outputPlan);
-        jobBuilder.AddKey(StringAnsi::Format("output-{0}", output.Kind), outputPlan.Key);
+        jobBuilder.AddKey(StringAnsi("output-") + output.Kind, outputPlan.Key);
     }
 
     plan.CurrentInputFingerprint = prepared.InputFingerprint;
     plan.BuildRequest.Key.ExactPlan = jobBuilder.Finalize();
     plan.BuildRequest.KeyComponents = jobBuilder.GetComponents();
     plan.BuildRequest.AssetID = prepared.AssetID;
-    plan.BuildRequest.ProcessorClass = TEXT("texture");
+    plan.BuildRequest.ProcessorClass = TEXT("model");
     plan.BuildRequest.ProcessorID = record.ProcessorID;
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     plan.BuildRequest.MemoryBytes = Math::Max<uint64>(1, prepared.MemoryEstimate);
-    plan.BuildRequest.ProcessorConcurrencyLimit = 2;
-    plan.BuildRequest.RebuildReason = TEXT("Texture canonical inputs changed or rebuild was requested.");
+    plan.BuildRequest.ProcessorConcurrencyLimit = 1;
+    plan.BuildRequest.RebuildReason = TEXT("Model canonical inputs, stable mappings, or target outputs changed.");
     for (const DeclaredArtifactOutput& output : prepared.Outputs)
         plan.BuildRequest.OutputKinds.Add(output.Kind);
 
@@ -300,13 +244,13 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
             Globals::ProjectLibraryFolder, execution->JobID, execution->Prepared, execution->Inputs, cancellation, execution->Target);
         if (execution->Context->Initialize(buildDiagnostic))
             return true;
-        AssetProcessorLease buildLease;
-        if (AssetProcessorRegistry::Get().TryAcquire(TextureProcessorSettings::ProcessorID(), AssetProcessorInvocationStage::Build, buildLease, buildDiagnostic))
+        AssetProcessorLease lease;
+        if (AssetProcessorRegistry::Get().TryAcquire(ModelProcessorSettings::ProcessorID(), AssetProcessorInvocationStage::Build, lease, buildDiagnostic))
         {
             execution->Context->Cancel();
             return true;
         }
-        const bool failed = buildLease.Get().Build(*execution->Context, buildDiagnostic);
+        const bool failed = lease.Get().Build(*execution->Context, buildDiagnostic);
         if (failed)
             execution->Context->Cancel();
         return failed;
@@ -315,20 +259,20 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     {
         if (!execution->Context)
             return Fail(publicationDiagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Publication,
-                execution->Prepared.AssetID, TEXT("Texture build produced no publication context."));
+                execution->Prepared.AssetID, TEXT("Model build produced no publication context."));
         ArtifactPublicationRequest publication;
         publication.Target = execution->Target;
-        publication.ProcessorID = TextureProcessorSettings::ProcessorID();
-        publication.ProcessorImplementationVersion = TextureProcessor::ImplementationVersion;
+        publication.ProcessorID = ModelProcessorSettings::ProcessorID();
+        publication.ProcessorImplementationVersion = ModelProcessor::ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
         publication.Outputs = execution->Outputs;
         publication.QueryCurrentState = [assetID = execution->Prepared.AssetID](uint64& revision, ArtifactKey& fingerprint)
         {
             QueryCurrentState(assetID, revision, fingerprint);
         };
-        publication.Notify = [](const ArtifactManifest& manifest)
+        publication.Notify = [typeName = execution->Prepared.OutputType](const ArtifactManifest& manifest)
         {
-            QueueTextureHotSwap(manifest);
+            QueueHotSwap(manifest, typeName);
         };
         ArtifactPublicationResult result;
         return ArtifactPublisher::Publish(Globals::ProjectLibraryFolder, execution->Prepared, *execution->Context,
@@ -338,46 +282,48 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     return false;
 }
 
-bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
+bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
 {
-    AssetBuildService* builds = GetBuildService(diagnostic);
+    if (EnsureInitialized(diagnostic))
+        return true;
+    AssetBuildService* builds = TexturePipelineService::GetBuildService(diagnostic);
     if (!builds)
         return true;
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(assetID, record))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-            assetID, TEXT("Texture asset is not registered."));
+            assetID, TEXT("Model asset is not registered."));
 
     ArtifactRequest request;
     request.AssetID = assetID;
-    request.Target = GetHostTarget();
+    request.Target = TexturePipelineService::GetHostTarget();
     request.OutputKind = "runtime";
-    request.RequiredCompatibility = "flax-texture-v4";
+    request.RequiredCompatibility = "flax-model-runtime-v1";
     request.Policy = ArtifactResolvePolicy::Exact;
     ArtifactResolutionPlan plan;
     if (CreatePlan(record, request, plan, diagnostic))
         return true;
     if (force)
     {
-        TexturePipelineState& state = State();
         uint64 generation;
         {
+            ModelPipelineState& state = State();
             std::lock_guard<std::mutex> lock(state.Locker);
             generation = ++state.ForceGeneration;
         }
-        ArtifactKeyBuilder builder(StringAnsiView("flax-texture-forced-build-v1"));
+        ArtifactKeyBuilder builder(StringAnsiView("flax-model-forced-build-v1"));
         builder.AddKey(StringAnsiView("exact-plan"), plan.BuildRequest.Key.ExactPlan);
         builder.AddUInt64(StringAnsiView("generation"), generation);
         plan.BuildRequest.Key.ExactPlan = builder.Finalize();
-        plan.BuildRequest.RebuildReason = TEXT("Explicit texture rebuild.");
+        plan.BuildRequest.RebuildReason = TEXT("Explicit model rebuild.");
     }
 
     const AssetBuildRequestHandle handle = builds->Request(plan.BuildRequest);
     if (!handle.IsValid())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
-            assetID, TEXT("Texture build request was not accepted."));
+            assetID, TEXT("Model build request was not accepted."));
     {
-        TexturePipelineState& state = State();
+        ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
         state.Handles[assetID] = handle;
     }
@@ -391,11 +337,11 @@ bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, Asset
     return false;
 }
 
-AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
+AssetBuildJobStatus ModelPipelineService::GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
 {
     AssetBuildRequestHandle handle;
     {
-        TexturePipelineState& state = State();
+        ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
         const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID);
         if (!value)
@@ -413,14 +359,48 @@ AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, Asset
     return handle.GetStatus();
 }
 
-void TexturePipelineService::Shutdown()
+bool ModelPipelineService::ReconcileMetadata(const Guid& rootAssetID, Array<SubAssetReconcileChange>& changes,
+    AssetPipelineDiagnostic& diagnostic)
 {
-#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
-    ModelPipelineService::Shutdown();
-#endif
-    ArtifactResolver::Get().Reset();
-    TexturePipelineState& state = State();
-    std::unique_ptr<AssetBuildService> builds;
+    changes.Clear();
+    if (EnsureInitialized(diagnostic))
+        return true;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(rootAssetID, record) || !record.IsMainAsset() ||
+        record.ProcessorID != ModelProcessorSettings::ProcessorID())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+            rootAssetID, TEXT("Model reconciliation requires a registered root model GUID."));
+    AssetMeta meta;
+    if (AssetMeta::Load(record.MetaPath.Get(), meta, diagnostic))
+        return true;
+    PreparedAsset prepared;
+    if (PrepareRecord(record, meta, prepared, diagnostic))
+        return true;
+    SubAssetReconcileResult result = SubAssetReconciler::Reconcile(meta, prepared.SubAssets, true);
+    if (result.RequiresUserReconciliation)
+    {
+        diagnostic = result.Diagnostics.HasItems() ? result.Diagnostics[0] : diagnostic;
+        return true;
+    }
+    changes = result.Changes;
+    if (!result.HasTrackedChanges)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+    meta.SubAssets = MoveTemp(result.Resolved);
+    if (AssetMeta::SaveAtomic(record.MetaPath.Get(), meta, diagnostic))
+        return true;
+    if (AssetDatabaseFacade::Scan(false))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, AssetPipelineDiagnosticStage::DatabaseScan,
+            rootAssetID, TEXT("Model metadata was reconciled but the database rescan failed."));
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+void ModelPipelineService::Shutdown()
+{
+    ModelPipelineState& state = State();
     AssetProcessorRegistration registration;
     {
         std::lock_guard<std::mutex> lock(state.Locker);
@@ -428,12 +408,9 @@ void TexturePipelineService::Shutdown()
             return;
         state.Handles.Clear();
         state.Fingerprints.Clear();
-        builds = MoveTemp(state.Builds);
         registration = MoveTemp(state.Registration);
         state.Initialized = false;
     }
-    if (builds)
-        builds->Shutdown();
     registration.Reset();
 }
 

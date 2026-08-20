@@ -39,6 +39,9 @@ public:
     /// <returns>Result.</returns>
     static CreateAssetResult Create(CreateAssetContext& context);
 
+    /// <summary>Writes one current-layout model, skinned-model, or animation compatibility artifact from prepared data.</summary>
+    static CreateAssetResult CreateCompatibility(CreateAssetContext& context, const ModelData& data, const Options& options);
+
 private:
     static CreateAssetResult CreateModel(CreateAssetContext& context, const ModelData& data, const Options* options = nullptr);
     static CreateAssetResult CreateSkinnedModel(CreateAssetContext& context, const ModelData& data, const Options* options = nullptr);

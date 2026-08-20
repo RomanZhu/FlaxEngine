@@ -272,7 +272,7 @@ bool PrepareAssetContext::Finalize(uint64 currentDatabaseRevision, PreparedAsset
     }
 
     prepared.AssetID = _record.ID;
-    prepared.OutputType = _descriptor.MainOutputType;
+    prepared.OutputType = _record.TypeName.IsEmpty() ? _descriptor.MainOutputType : _record.TypeName;
     prepared.DatabaseRevision = _record.DatabaseRevision;
     prepared.SettingsHash = ContentHash::Compute(_settings.Get(), _settings.Length());
     prepared.Outputs = _declaredOutputs;

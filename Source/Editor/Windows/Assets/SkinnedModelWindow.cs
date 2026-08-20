@@ -698,6 +698,17 @@ namespace FlaxEditor.Windows.Assets
                     tab.Proxy.OnSave();
             }
 
+            if (Item.IsCanonicalSource)
+            {
+                if (AssetDatabaseFacade.ApplyModelMetadata(Item.Path, _importSettings.Settings))
+                {
+                    Editor.LogError("Cannot apply canonical model settings.");
+                    return;
+                }
+                ClearEditedFlag();
+                return;
+            }
+
             if (Editor.ContentDatabase.SaveAsset(_asset))
             {
                 Editor.LogError("Cannot save asset.");

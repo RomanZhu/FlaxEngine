@@ -751,8 +751,27 @@ bool ProcessMesh(ModelData& result, OpenFbxImporterData& data, const ofbx::Mesh*
         mesh.UVs.Resize(channelIndex + 1);
         auto& channel = mesh.UVs[channelIndex];
         channel.Resize(vertexCount, false);
+        bool hadInvalidIndices = false;
         for (int i = 0; i < vertexCount; i++)
-            channel.Get()[i] = ToFloat2(uvs.get(triangulatedIndices[i]));
+        {
+            const int sourceIndex = triangulatedIndices[i];
+            Float2 uv = Float2::Zero;
+            const int valueIndex = sourceIndex >= 0 && sourceIndex < uvs.count
+                ? (uvs.indices ? uvs.indices[sourceIndex] : sourceIndex)
+                : -1;
+            if (valueIndex >= 0 && valueIndex < uvs.values_count)
+                uv = ToFloat2(uvs.values[valueIndex]);
+            else
+                hadInvalidIndices = true;
+            // Collapse values that serialize as half zero before vertex deduplication.
+            if ((Float16Compressor::Compress(uv.X) & 0x7fff) == 0)
+                uv.X = 0.0f;
+            if ((Float16Compressor::Compress(uv.Y) & 0x7fff) == 0)
+                uv.Y = 0.0f;
+            channel.Get()[i] = uv;
+        }
+        if (hadInvalidIndices)
+            LOG(Warning, "Mesh '{0}' UV channel {1} contains incomplete polygon-vertex data; missing values were replaced with zero.", mesh.Name, channelIndex);
         if (data.ConvertRH)
         {
             for (int v = 0; v < vertexCount; v++)

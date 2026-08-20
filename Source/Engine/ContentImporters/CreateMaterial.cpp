@@ -10,7 +10,9 @@
 #include "Engine/Tools/MaterialGenerator/Types.h"
 #include "Engine/Tools/MaterialGenerator/MaterialLayer.h"
 #include "Engine/Tools/MaterialGenerator/MaterialGenerator.h"
+#include "Engine/Graphics/Materials/MaterialShader.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
+#include "Engine/Utilities/Encryption.h"
 
 #define SET_POS(node, pos) meta.Position = pos; node->Meta.AddEntry(11, (byte*)&meta, sizeof(meta));
 #define CONNECT(boxA, boxB) boxA.Connections.Add(&boxB); boxB.Connections.Add(&boxA)
@@ -194,7 +196,28 @@ CreateAssetResult CreateMaterial::Create(CreateAssetContext& context)
         MemoryWriteStream stream(512);
         layer->Graph.Save(&stream, true);
         context.Data.Header.Chunks[SHADER_FILE_CHUNK_VISJECT_SURFACE]->Data.Copy(ToSpan(stream));
-        Delete(layer);
+        if (context.IsArtifactStagingMode())
+        {
+            if (context.AllocateChunk(SHADER_FILE_CHUNK_MATERIAL_PARAMS) || context.AllocateChunk(SHADER_FILE_CHUNK_SOURCE))
+            {
+                Delete(layer);
+                return CreateAssetResult::CannotAllocateChunk;
+            }
+            MaterialGenerator generator;
+            generator.AddLayer(layer);
+            MemoryWriteStream source(64 * 1024);
+            MaterialInfo generatedInfo = shaderHeader.Material.Info;
+            if (generator.Generate(source, generatedInfo, context.Data.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS]->Data))
+                return CreateAssetResult::Error;
+            Encryption::EncryptBytes(static_cast<byte*>(source.GetHandle()), source.GetPosition());
+            context.Data.Header.Chunks[SHADER_FILE_CHUNK_SOURCE]->Data.Copy(ToSpan(source));
+            shaderHeader.Material.GraphVersion = MATERIAL_GRAPH_VERSION;
+            shaderHeader.Material.Info = generatedInfo;
+        }
+        else
+        {
+            Delete(layer);
+        }
     }
     else
     {

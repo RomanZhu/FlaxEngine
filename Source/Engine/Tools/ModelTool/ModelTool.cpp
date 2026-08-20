@@ -239,7 +239,7 @@ public:
     }
 };
 
-bool ModelTool::GenerateModelSDF(Model* inputModel, const ModelData* modelData, float resolutionScale, int32 lodIndex, ModelBase::SDFData* outputSDF, MemoryWriteStream* outputStream, const StringView& assetName, float backfacesThreshold, bool useGPU)
+bool ModelTool::GenerateModelSDF(Model* inputModel, const ModelData* modelData, float resolutionScale, int32 lodIndex, ModelBase::SDFData* outputSDF, MemoryWriteStream* outputStream, const StringView& assetName, float backfacesThreshold, bool useGPU, bool useJobSystem, bool loadMaterialAssets)
 {
     PROFILE_CPU();
     auto startTime = Platform::GetTimeSeconds();
@@ -338,7 +338,7 @@ bool ModelTool::GenerateModelSDF(Model* inputModel, const ModelData* modelData, 
     if (inputModel)
         scene.Add(inputModel, lodIndex);
     else if (modelData)
-        scene.Add(modelData, lodIndex);
+        scene.Add(modelData, lodIndex, false, loadMaterialAssets);
 
     // Check if run SDF generation on a GPU via Compute Shader or on a Job System
     useGPU &= GPUDevice::Instance
@@ -442,7 +442,13 @@ bool ModelTool::GenerateModelSDF(Model* inputModel, const ModelData* modelData, 
                 }
             }
         };
-        JobSystem::Execute(sdfJob, resolution.Z);
+        if (useJobSystem)
+            JobSystem::Execute(sdfJob, resolution.Z);
+        else
+        {
+            for (int32 z = 0; z < resolution.Z; z++)
+                sdfJob(z);
+        }
     }
 
     // Cache SDF data on a CPU
@@ -506,7 +512,13 @@ bool ModelTool::GenerateModelSDF(Model* inputModel, const ModelData* modelData, 
                 }
             }
         };
-        JobSystem::Execute(mipJob, resolutionMip.Z);
+        if (useJobSystem)
+            JobSystem::Execute(mipJob, resolutionMip.Z);
+        else
+        {
+            for (int32 z = 0; z < resolutionMip.Z; z++)
+                mipJob(z);
+        }
 
         // Cache SDF data on a CPU
         if (outputStream)

@@ -2361,6 +2361,8 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
             request.OutputKind = "runtime";
             if (pipelineRecord.ProcessorID == TEXT("Flax.Texture"))
                 request.RequiredCompatibility = "flax-texture-v4";
+            else if (pipelineRecord.ProcessorID == TEXT("Flax.Model"))
+                request.RequiredCompatibility = "flax-model-runtime-v1";
             request.Policy = ArtifactResolvePolicy::Interactive;
             AssetPipelineDiagnostic diagnostic;
             if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))

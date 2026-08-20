@@ -1227,23 +1227,33 @@ bool CookAssetsStep::Perform(CookingData& data)
         e.FileModified = minDateTime;
 #endif
 
-        // Canonical textures are already target-processed compatibility assets. Resolve exact bytes and
+        // Converted imported sources are already target-processed compatibility assets. Resolve exact bytes and
         // feed them directly to the existing package writer instead of cooking the host-editor artifact.
         AssetRecord canonicalRecord;
-        if (AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord) &&
-            canonicalRecord.SourceKind == AssetSourceKind::ImportedSource && canonicalRecord.TypeName == Texture::TypeName)
+        const bool hasCanonicalRecord = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord) &&
+            canonicalRecord.SourceKind == AssetSourceKind::ImportedSource;
+        const bool isCanonicalTexture = hasCanonicalRecord && canonicalRecord.ProcessorID == TEXT("Flax.Texture") &&
+            canonicalRecord.TypeName == Texture::TypeName;
+        const bool isCanonicalModel = hasCanonicalRecord && canonicalRecord.ProcessorID == TEXT("Flax.Model");
+        if (isCanonicalTexture || isCanonicalModel)
         {
             ArtifactRequest request;
             request.AssetID = assetId;
             request.Target = cookArtifactTarget;
             request.OutputKind = "runtime";
-            request.RequiredCompatibility = "flax-texture-v4";
+            request.RequiredCompatibility = isCanonicalTexture ? "flax-texture-v4" : "flax-model-runtime-v1";
             request.Policy = ArtifactResolvePolicy::Exact;
             ResolvedArtifact artifact;
             AssetPipelineDiagnostic diagnostic;
-            if (ArtifactResolver::Get().Resolve(request, artifact, diagnostic) || !artifact.IsExact || !artifact.IsGenerated())
+            bool resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
+            if (resolveFailed && diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated)
             {
-                LOG(Error, "Failed to resolve exact texture artifact {0} for cook target {1}: {2}", assetId,
+                LOG(Warning, "Canonical record {0} changed during its exact build; retrying against the current database revision.", assetId);
+                resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
+            }
+            if (resolveFailed || !artifact.IsExact || !artifact.IsGenerated())
+            {
+                LOG(Error, "Failed to resolve exact canonical artifact {0} for cook target {1}: {2}", assetId,
                     String(cookArtifactTarget.BuildKey(ArtifactTargetDimension::All).ToString()), diagnostic.Message);
                 return true;
             }
@@ -1253,7 +1263,7 @@ bool CookAssetsStep::Perform(CookingData& data)
             cache.GetFilePath(assetId, cachedFilePath);
             if (FileSystem::CopyFile(cachedFilePath, artifact.StoragePath.Get()))
             {
-                LOG(Error, "Failed to copy exact texture artifact from '{0}' to cooker cache '{1}'", artifact.StoragePath.Get(), cachedFilePath);
+                LOG(Error, "Failed to copy exact canonical artifact from '{0}' to cooker cache '{1}'", artifact.StoragePath.Get(), cachedFilePath);
                 return true;
             }
             auto& cacheEntry = cache.Entries[assetId];

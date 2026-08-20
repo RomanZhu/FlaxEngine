@@ -3,7 +3,7 @@
 #include "DeployDataStep.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
-#include "Engine/Core/Collections/Sorting.h"
+#include "Engine/Core/Types/Version.h"
 #include "Engine/Core/Config/BuildSettings.h"
 #include "Engine/Core/Config/GameSettings.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
@@ -136,8 +136,16 @@ bool DeployDataStep::Perform(CookingData& data)
                     if (majorVersion < GAME_BUILD_DOTNET_RUNTIME_MIN_VER || majorVersion > GAME_BUILD_DOTNET_RUNTIME_MAX_VER) // Check for major part
                         version.Clear();
                 }
-                Sorting::QuickSort(versions);
-                const String version = versions.Last();
+                String version;
+                Version parsedVersion, newestVersion;
+                for (const String& candidate : versions)
+                {
+                    if (!candidate.IsEmpty() && !Version::Parse(candidate, &parsedVersion) && (version.IsEmpty() || parsedVersion > newestVersion))
+                    {
+                        version = candidate;
+                        newestVersion = parsedVersion;
+                    }
+                }
                 if (version.IsEmpty())
                 {
                     data.Error(TEXT("Failed to find supported .NET hostfxr version for the current host platform."));

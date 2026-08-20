@@ -38,6 +38,12 @@ private:
     String _artifactOutputPath;
 
 public:
+    /// <summary>Returns true when the importer can write only to an isolated build-job staging file.</summary>
+    FORCE_INLINE bool IsArtifactStagingMode() const
+    {
+        return _artifactStagingMode;
+    }
+
     /// <summary>
     /// Path of the input file (may be empty if creating new asset)
     /// </summary>

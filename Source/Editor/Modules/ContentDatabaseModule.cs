@@ -2053,6 +2053,11 @@ namespace FlaxEditor.Modules
             return record.IsMain && string.Equals(record.ProcessorID, "Flax.Texture", StringComparison.Ordinal);
         }
 
+        private static bool IsModelRecord(AssetDatabaseRecordInfo record)
+        {
+            return record.IsMain && string.Equals(record.ProcessorID, "Flax.Model", StringComparison.Ordinal);
+        }
+
         private void QueueAssetDiskChange(string path, bool renameOnly)
         {
             if (string.IsNullOrEmpty(path))
@@ -2064,7 +2069,7 @@ namespace FlaxEditor.Modules
                 _pendingAssetDiskChanges.Add(path);
                 _pendingTextureBuildSources.Add(sourcePath);
                 _lastAssetDiskChangeTime = DateTime.UtcNow;
-                if (_sourceAssetRecords.TryGetValue(sourcePath, out var record) && IsTextureRecord(record))
+                if (_sourceAssetRecords.TryGetValue(sourcePath, out var record) && (IsTextureRecord(record) || IsModelRecord(record)))
                 {
                     _pendingTextureBuildIds.Add(record.ID);
                     _textureRecordsBeforeWatcherScan[record.ID] = record;
@@ -2086,7 +2091,7 @@ namespace FlaxEditor.Modules
                 ids = new HashSet<Guid>(_pendingTextureBuildIds);
                 foreach (var sourcePath in _pendingTextureBuildSources)
                 {
-                    if (_sourceAssetRecords.TryGetValue(sourcePath, out var record) && IsTextureRecord(record))
+                    if (_sourceAssetRecords.TryGetValue(sourcePath, out var record) && (IsTextureRecord(record) || IsModelRecord(record)))
                         ids.Add(record.ID);
                 }
                 renameOnlyIds = new HashSet<Guid>(_renameOnlyTextureIds);
@@ -2099,12 +2104,13 @@ namespace FlaxEditor.Modules
 
             foreach (var id in ids)
             {
-                if (!_assetRecordsById.TryGetValue(id, out var record) || !IsTextureRecord(record) || record.Status != AssetRecordStatus.Ready)
+                if (!_assetRecordsById.TryGetValue(id, out var record) || (!IsTextureRecord(record) && !IsModelRecord(record)) || record.Status != AssetRecordStatus.Ready)
                     continue;
                 if (renameOnlyIds.Contains(id) && previousRecords.TryGetValue(id, out var previous) && previous.MetaSemanticHash == record.MetaSemanticHash)
                     continue;
-                if (AssetDatabaseFacade.BuildTexture(id))
-                    Editor.LogError($"Cannot queue texture build after disk change: {record.SourcePath}");
+                var failed = IsTextureRecord(record) ? AssetDatabaseFacade.BuildTexture(id) : AssetDatabaseFacade.BuildModel(id);
+                if (failed)
+                    Editor.LogError($"Cannot queue canonical asset build after disk change: {record.SourcePath}");
             }
         }
 

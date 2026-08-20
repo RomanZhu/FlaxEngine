@@ -9,6 +9,9 @@
 #include "Engine/Tools/TextureTool/TextureTool.h"
 class Texture;
 #endif
+#if COMPILE_WITH_MODEL_TOOL
+#include "Engine/Tools/ModelTool/ModelTool.h"
+#endif
 
 /// <summary>Managed-safe immutable asset database record projection.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
@@ -84,5 +87,25 @@ public:
 
     /// <summary>Loads the exact Library thumbnail into a virtual texture, or returns null when unavailable.</summary>
     API_FUNCTION() static Texture* LoadTextureThumbnail(const Guid& assetID);
+#endif
+
+#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
+    /// <summary>Loads tracked canonical model import settings without writing the sidecar.</summary>
+    API_FUNCTION() static bool LoadModelMetadata(const StringView& sourcePath, API_PARAM(Out) ModelTool::Options& options);
+
+    /// <summary>Atomically applies tracked canonical model settings and queues an exact host build.</summary>
+    API_FUNCTION() static bool ApplyModelMetadata(const StringView& sourcePath, const ModelTool::Options& options);
+
+    /// <summary>Explicitly reconciles model-owned stable child GUID mappings into the root sidecar.</summary>
+    API_FUNCTION() static bool ReconcileModel(const Guid& rootAssetID);
+
+    /// <summary>Queues the current exact model or model-owned child build.</summary>
+    API_FUNCTION() static bool BuildModel(const Guid& assetID);
+
+    /// <summary>Queues a forced exact model or model-owned child build.</summary>
+    API_FUNCTION() static bool RebuildModel(const Guid& assetID);
+
+    API_FUNCTION() static String GetModelBuildStatus(const Guid& assetID);
+    API_FUNCTION() static AssetPipelineDiagnostic GetModelBuildDiagnostic(const Guid& assetID);
 #endif
 };

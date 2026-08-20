@@ -187,15 +187,20 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
         changes.Revision = _revision + 1;
         for (auto& entry : nextRecords)
         {
-            entry.Value.DatabaseRevision = changes.Revision;
             const AssetRecord* previous = _records.TryGet(entry.Key);
             if (!previous)
+            {
+                entry.Value.DatabaseRevision = changes.Revision;
                 changes.Added.Add(entry.Key);
+            }
             else
             {
-                if (!HasSameIdentityAndContent(*previous, entry.Value))
+                const bool contentChanged = !HasSameIdentityAndContent(*previous, entry.Value);
+                const bool statusChanged = previous->Status != entry.Value.Status;
+                entry.Value.DatabaseRevision = contentChanged || statusChanged ? changes.Revision : previous->DatabaseRevision;
+                if (contentChanged)
                     changes.Changed.Add(entry.Key);
-                if (previous->Status != entry.Value.Status)
+                if (statusChanged)
                     changes.StatusChanged.Add(entry.Key);
             }
         }

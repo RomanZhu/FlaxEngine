@@ -80,6 +80,13 @@ TEST_CASE("Asset database publishes coherent indexed immutable snapshots")
     database.GetBuildDependants(Guid(91, 92, 93, 94), query);
     CHECK(query.Count() == 2);
 
+    const uint64 rootRecordRevision = found.DatabaseRevision;
+    const uint64 unchangedSnapshotRevision = database.GetRevision();
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+    CHECK(database.GetRevision() == unchangedSnapshotRevision + 1);
+    REQUIRE(database.TryGetRecord(rootId, found));
+    CHECK(found.DatabaseRevision == rootRecordRevision);
+
     AssetDatabaseSnapshot snapshot = database.GetSnapshot();
     const uint64 oldRevision = snapshot.Revision;
     records[0].Status = AssetRecordStatus::Building;
@@ -87,7 +94,7 @@ TEST_CASE("Asset database publishes coherent indexed immutable snapshots")
     REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
     CHECK(database.GetRevision() == oldRevision + 1);
     CHECK(snapshot.Records.Count() == 2);
-    CHECK(snapshot.Records[0].DatabaseRevision == oldRevision);
+    CHECK(snapshot.Records[0].DatabaseRevision == rootRecordRevision);
 }
 
 TEST_CASE("Asset database detects portable main path collisions")

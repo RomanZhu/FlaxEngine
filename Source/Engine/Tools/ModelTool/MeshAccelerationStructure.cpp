@@ -354,7 +354,7 @@ void MeshAccelerationStructure::Add(Model* model, int32 lodIndex)
     }
 }
 
-void MeshAccelerationStructure::Add(const ModelData* modelData, int32 lodIndex, bool copy)
+void MeshAccelerationStructure::Add(const ModelData* modelData, int32 lodIndex, bool copy, bool loadMaterials)
 {
     PROFILE_CPU();
     lodIndex = Math::Clamp(lodIndex, 0, modelData->LODs.Count() - 1);
@@ -364,7 +364,9 @@ void MeshAccelerationStructure::Add(const ModelData* modelData, int32 lodIndex, 
     {
         MeshData* mesh = lod.Meshes[i];
         const MaterialSlotEntry& materialSlot = modelData->Materials[mesh->MaterialSlotIndex];
-        auto material = Content::LoadAsync<MaterialBase>(materialSlot.AssetID);
+        if (!loadMaterials && (!Math::IsOne(materialSlot.Opacity.Value) || materialSlot.Opacity.TextureIndex != -1))
+            continue;
+        auto material = loadMaterials ? Content::LoadAsync<MaterialBase>(materialSlot.AssetID) : nullptr;
         if (material && !material->WaitForLoaded())
         {
             // Skip transparent materials

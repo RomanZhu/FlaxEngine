@@ -121,6 +121,13 @@ namespace FlaxEditor.Windows.Assets
 
             private void OnRebuildSDF()
             {
+                if (Window.Item.IsCanonicalSource)
+                {
+                    Window._importSettings.Settings.GenerateSDF = true;
+                    if (AssetDatabaseFacade.ApplyModelMetadata(Window.Item.Path, Window._importSettings.Settings))
+                        FlaxEditor.Editor.LogError("Cannot apply canonical model SDF settings.");
+                    return;
+                }
                 Window.Enabled = false;
                 Task.Run(() =>
                 {
@@ -141,6 +148,13 @@ namespace FlaxEditor.Windows.Assets
 
             private void OnRemoveSDF()
             {
+                if (Window.Item.IsCanonicalSource)
+                {
+                    Window._importSettings.Settings.GenerateSDF = false;
+                    if (AssetDatabaseFacade.ApplyModelMetadata(Window.Item.Path, Window._importSettings.Settings))
+                        FlaxEditor.Editor.LogError("Cannot apply canonical model SDF settings.");
+                    return;
+                }
                 Asset.SetSDF(new ModelBase.SDFData());
                 Window.MarkAsEdited();
                 _presenter.BuildLayoutOnUpdate();
@@ -330,6 +344,17 @@ namespace FlaxEditor.Windows.Assets
             {
                 if (child is Tab tab && tab.Proxy.Window != null)
                     tab.Proxy.OnSave();
+            }
+
+            if (Item.IsCanonicalSource)
+            {
+                if (AssetDatabaseFacade.ApplyModelMetadata(Item.Path, _importSettings.Settings))
+                {
+                    Editor.LogError("Cannot apply canonical model settings.");
+                    return;
+                }
+                ClearEditedFlag();
+                return;
             }
 
             if (Editor.ContentDatabase.SaveAsset(_asset))

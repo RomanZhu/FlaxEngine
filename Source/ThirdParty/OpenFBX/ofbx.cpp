@@ -1128,7 +1128,7 @@ struct Vec2AttributesImpl {
 	std::vector<int> indices;
 	VertexDataMapping mapping;
 	operator Vec2Attributes() const {
-		return { values.data(), indices.data(), int(indices.empty() ? values.size() : indices.size()) };
+		return { values.data(), indices.data(), int(indices.empty() ? values.size() : indices.size()), int(values.size()) };
 	}
 };
 

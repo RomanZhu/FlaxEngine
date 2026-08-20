@@ -257,6 +257,158 @@ namespace FlaxEditor
             }
         }
 
+        /// <summary>Explicitly updates tracked stable child GUID mappings for a canonical model source.</summary>
+        [CliCommand("assets.model.reconcile", Description = "Reconcile canonical model subasset GUID mappings.", Access = CliCommandAccess.MutatesProject)]
+        public static CliCommandResult ReconcileModel([CliOption("asset", Required = true)] string asset)
+        {
+            var item = ResolveAssetItem(asset);
+            if (AssetDatabaseFacade.ReconcileModel(item.ID))
+                return CliCommandResult.Failure("FLX-ASSET-MODEL-RECONCILE-0004", "Model subasset reconciliation failed.", AssetDatabaseFacade.GetDiagnostics());
+            var records = AssetDatabaseFacade.GetRecords().Where(x => x.SourceAssetID == item.ID).OrderBy(x => x.SubAssetKey).Select(x => new
+            {
+                id = x.ID,
+                sourceId = x.SourceAssetID,
+                key = x.SubAssetKey,
+                type = x.TypeName,
+                removed = x.Status == AssetRecordStatus.MissingSource,
+            }).ToArray();
+            return CliCommandResult.Success(new { id = item.ID, path = item.Path, records });
+        }
+
+        /// <summary>Builds an exact host model or GUID-addressed model-owned child artifact.</summary>
+        [CliCommand("assets.model.build", Description = "Build an exact canonical model artifact.", Access = CliCommandAccess.MutatesProject)]
+        public static CliCommandOperation BuildModel(
+            [CliOption("asset", Required = true)] string asset,
+            [CliOption("force", Description = "Revalidate and republish even when the key is unchanged.")] bool force = false)
+        {
+            Guid id;
+            string path;
+            if (Guid.TryParse(asset, out id))
+            {
+                if (!FlaxEngine.Content.GetAssetInfo(id, out var info))
+                    throw new FileNotFoundException($"Asset '{asset}' was not found in the Content database.");
+                path = info.Path;
+            }
+            else
+            {
+                var item = ResolveAssetItem(asset);
+                id = item.ID;
+                path = item.Path;
+            }
+            return new ModelBuildOperation(id, path, force);
+        }
+
+        private sealed class ModelBuildOperation : CliCommandOperation
+        {
+            private readonly Guid _id;
+            private readonly string _path;
+            private readonly bool _force;
+            private CliCommandResult _result;
+            private bool _requested;
+
+            public ModelBuildOperation(Guid id, string path, bool force)
+            {
+                _id = id;
+                _path = path;
+                _force = force;
+            }
+
+            public override bool IsCompleted => _result != null;
+            public override CliCommandResult Result => _result;
+
+            public override void Update(TimeSpan timeBudget)
+            {
+                if (!_requested)
+                {
+                    _requested = true;
+                    var failed = _force ? AssetDatabaseFacade.RebuildModel(_id) : AssetDatabaseFacade.BuildModel(_id);
+                    if (failed)
+                    {
+                        _result = CliCommandResult.Failure("FLX-ASSET-MODEL-BUILD-0004", "Model build request failed.", AssetDatabaseFacade.GetModelBuildDiagnostic(_id));
+                        return;
+                    }
+                }
+                var status = AssetDatabaseFacade.GetModelBuildStatus(_id);
+                if (status == "ReadyExact")
+                    _result = CliCommandResult.Success(new { id = _id, path = _path, status, forced = _force });
+                else if (status == "Failed" || status == "Cancelled")
+                    _result = CliCommandResult.Failure("FLX-ASSET-MODEL-BUILD-0004", "Model build failed.", AssetDatabaseFacade.GetModelBuildDiagnostic(_id));
+            }
+        }
+
+        /// <summary>Extracts a model-owned material artifact as an independent legacy material with a new GUID.</summary>
+        [CliCommand("assets.model.material.extract", Description = "Extract a model-owned material to an independent asset.", Access = CliCommandAccess.MutatesProject)]
+        public static CliCommandOperation ExtractModelMaterial(
+            [CliOption("asset", Required = true)] string asset,
+            [CliOption("target", Required = true)] string target)
+        {
+            if (!Guid.TryParse(asset, out var id))
+                id = ResolveAssetItem(asset).ID;
+            var record = AssetDatabaseFacade.GetRecords().FirstOrDefault(x => x.ID == id);
+            if (record.ID == Guid.Empty || record.ProcessorID != "Flax.Model" || record.TypeName != typeof(Material).FullName || record.IsMain)
+                throw new InvalidOperationException("Extract Material requires a live model-owned material child GUID.");
+            var outputPath = Path.IsPathRooted(target) ? Path.GetFullPath(target) : Path.GetFullPath(Path.Combine(Globals.ProjectContentFolder, target));
+            var relativeOutput = Path.GetRelativePath(Globals.ProjectContentFolder, outputPath);
+            if (relativeOutput == ".." || relativeOutput.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new InvalidOperationException("Extracted materials must be created inside the project Content directory.");
+            if (!outputPath.EndsWith(".flax", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Extracted compatibility materials must use the .flax extension until P08 material documents are available.");
+            if (File.Exists(outputPath))
+                throw new IOException($"Extraction target '{outputPath}' already exists.");
+            return new ExtractModelMaterialOperation(id, outputPath);
+        }
+
+        private sealed class ExtractModelMaterialOperation : CliCommandOperation
+        {
+            private readonly Guid _sourceId;
+            private readonly string _targetPath;
+            private readonly Guid _outputId = Guid.NewGuid();
+            private CliCommandResult _result;
+            private bool _requested;
+
+            public ExtractModelMaterialOperation(Guid sourceId, string targetPath)
+            {
+                _sourceId = sourceId;
+                _targetPath = targetPath;
+            }
+
+            public override bool IsCompleted => _result != null;
+            public override CliCommandResult Result => _result;
+
+            public override void Update(TimeSpan timeBudget)
+            {
+                if (!_requested)
+                {
+                    _requested = true;
+                    if (AssetDatabaseFacade.BuildModel(_sourceId))
+                    {
+                        _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "Model-owned material build request failed.", AssetDatabaseFacade.GetModelBuildDiagnostic(_sourceId));
+                        return;
+                    }
+                }
+                var status = AssetDatabaseFacade.GetModelBuildStatus(_sourceId);
+                if (status == "Failed" || status == "Cancelled")
+                {
+                    _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "Model-owned material build failed.", AssetDatabaseFacade.GetModelBuildDiagnostic(_sourceId));
+                    return;
+                }
+                if (status != "ReadyExact")
+                    return;
+                var material = FlaxEngine.Content.LoadAsync<Material>(_sourceId);
+                if (material == null || material.WaitForLoaded())
+                {
+                    _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "The exact model-owned material could not be loaded.");
+                    return;
+                }
+                if (Editor.Instance.ContentEditing.CloneAssetFile(material.StoragePath, _targetPath, _outputId))
+                {
+                    _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "The independent material could not be created.");
+                    return;
+                }
+                _result = CliCommandResult.Success(new { sourceId = _sourceId, id = _outputId, path = _targetPath, ownership = "independent" });
+            }
+        }
+
         /// <summary>
         /// Loads an asset and returns a stable, type-specific semantic summary.
         /// </summary>
@@ -265,6 +417,17 @@ namespace FlaxEditor
             [CliOption("asset", Required = true)] string asset,
             [CliOption("reload", Description = "Reload the Content item before inspection.")] bool reload = false)
         {
+            if (Guid.TryParse(asset, out var requestedId) && FlaxEngine.Content.GetAssetInfo(requestedId, out var requestedInfo))
+            {
+                var directItem = Editor.Instance.ContentDatabase.FindAsset(requestedId);
+                if (directItem == null || directItem.ID != requestedId)
+                {
+                    var direct = FlaxEngine.Content.LoadAsync<Asset>(requestedId);
+                    if (direct == null || direct.WaitForLoaded())
+                        throw new InvalidOperationException($"Asset '{requestedId}' failed to load.");
+                    return DescribeLoaded(requestedId, requestedInfo.Path, direct, false);
+                }
+            }
             var item = ResolveAssetItem(asset);
             if (reload)
                 item.Reload();
@@ -278,10 +441,15 @@ namespace FlaxEditor
                 if (thumbnail != null)
                     thumbnailInfo = new { thumbnail.Width, thumbnail.Height, format = thumbnail.Format.ToString() };
             }
+            return DescribeLoaded(item.ID, item.Path, loaded, item.IsCanonicalSource, thumbnailInfo);
+        }
+
+        private static object DescribeLoaded(Guid id, string path, Asset loaded, bool canonical, object thumbnailInfo = null)
+        {
             return new
             {
-                id = item.ID,
-                path = item.Path,
+                id,
+                path,
                 type = loaded.GetType().FullName,
                 sourcePath = loaded.SourcePath,
                 storagePath = loaded is BinaryAsset storage ? storage.StoragePath : loaded.Path,

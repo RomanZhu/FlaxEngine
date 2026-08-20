@@ -16,6 +16,12 @@
 #include "Engine/Content/Build/Processors/TexturePipelineService.h"
 #endif
 #endif
+#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
+#include "Engine/Content/Build/Processors/ModelProcessorSettings.h"
+#if COMPILE_WITH_ASSETS_IMPORTER
+#include "Engine/Content/Build/Processors/ModelPipelineService.h"
+#endif
+#endif
 #include <algorithm>
 
 Delegate<uint64> AssetDatabaseFacade::DatabaseChanged;
@@ -389,5 +395,143 @@ Texture* AssetDatabaseFacade::LoadTextureThumbnail(const Guid& assetID)
 #else
     return nullptr;
 #endif
+}
+#endif
+
+#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
+bool AssetDatabaseFacade::LoadModelMetadata(const StringView& sourcePath, ModelTool::Options& options)
+{
+    AssetMeta meta;
+    AssetPipelineDiagnostic diagnostic;
+    if (AssetMeta::Load(String(sourcePath) + TEXT(".meta"), meta, diagnostic))
+        goto Failed;
+    {
+        ModelProcessorSettings settings;
+        if (meta.Processor.ID != ModelProcessorSettings::ProcessorID())
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.ProcessorId = meta.Processor.ID;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.Message = TEXT("Model metadata is not owned by the Flax.Model processor.");
+            goto Failed;
+        }
+        if (ModelProcessorSettings::Parse(meta.Processor.SettingsJson, meta.Processor.SettingsVersion, settings, diagnostic))
+            goto Failed;
+        options = settings.Import;
+    }
+    return false;
+
+Failed:
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+    }
+    return true;
+}
+
+bool AssetDatabaseFacade::ApplyModelMetadata(const StringView& sourcePath, const ModelTool::Options& options)
+{
+    const String metaPath = String(sourcePath) + TEXT(".meta");
+    AssetMeta meta;
+    AssetPipelineDiagnostic diagnostic;
+    if (AssetMeta::Load(metaPath, meta, diagnostic))
+        goto Failed;
+    {
+        const ModelProcessorSettings settings = ModelProcessorSettings::FromLegacyOptions(options);
+        if (settings.Validate(diagnostic) || settings.ToJson(meta.Processor.SettingsJson, diagnostic))
+            goto Failed;
+        meta.Processor.ID = ModelProcessorSettings::ProcessorID();
+        meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
+    }
+    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || Scan(false))
+        goto Failed;
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
+        goto Failed;
+#endif
+    return false;
+
+Failed:
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+    }
+    return true;
+}
+
+bool AssetDatabaseFacade::ReconcileModel(const Guid& rootAssetID)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER
+    Array<SubAssetReconcileChange> changes;
+    AssetPipelineDiagnostic diagnostic;
+    if (!ModelPipelineService::ReconcileMetadata(rootAssetID, changes, diagnostic))
+        return false;
+    Array<AssetPipelineDiagnostic> diagnostics;
+    diagnostics.Add(diagnostic);
+    SetDiagnostics(diagnostics);
+#endif
+    return true;
+}
+
+bool AssetDatabaseFacade::BuildModel(const Guid& assetID)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER
+    AssetPipelineDiagnostic diagnostic;
+    if (!ModelPipelineService::RequestBuild(assetID, false, diagnostic))
+        return false;
+    Array<AssetPipelineDiagnostic> diagnostics;
+    diagnostics.Add(diagnostic);
+    SetDiagnostics(diagnostics);
+#endif
+    return true;
+}
+
+bool AssetDatabaseFacade::RebuildModel(const Guid& assetID)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER
+    AssetPipelineDiagnostic diagnostic;
+    if (!ModelPipelineService::RequestBuild(assetID, true, diagnostic))
+        return false;
+    Array<AssetPipelineDiagnostic> diagnostics;
+    diagnostics.Add(diagnostic);
+    SetDiagnostics(diagnostics);
+#endif
+    return true;
+}
+
+String AssetDatabaseFacade::GetModelBuildStatus(const Guid& assetID)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER
+    AssetPipelineDiagnostic diagnostic;
+    switch (ModelPipelineService::GetStatus(assetID, diagnostic))
+    {
+    case AssetBuildJobStatus::Queued: return TEXT("Queued");
+    case AssetBuildJobStatus::Building: return TEXT("Building");
+    case AssetBuildJobStatus::Publishing: return TEXT("Publishing");
+    case AssetBuildJobStatus::Succeeded: return TEXT("ReadyExact");
+    case AssetBuildJobStatus::Failed: return TEXT("Failed");
+    case AssetBuildJobStatus::Cancelled: return TEXT("Cancelled");
+    default: break;
+    }
+#endif
+    return TEXT("NotBuilt");
+}
+
+AssetPipelineDiagnostic AssetDatabaseFacade::GetModelBuildDiagnostic(const Guid& assetID)
+{
+    AssetPipelineDiagnostic diagnostic;
+#if COMPILE_WITH_ASSETS_IMPORTER
+    ModelPipelineService::GetStatus(assetID, diagnostic);
+    if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+    {
+        const Array<AssetPipelineDiagnostic> diagnostics = GetDiagnostics();
+        if (diagnostics.HasItems())
+            diagnostic = diagnostics[0];
+    }
+#endif
+    return diagnostic;
 }
 #endif
