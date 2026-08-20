@@ -809,7 +809,7 @@ namespace FlaxEditor.Modules
             if (Selection.Count == 1 && Selection[0] is ActorNode actorNode && actorNode.Actor)
             {
                 var actorType = actorNode.Actor.GetType();
-                if (actorType == typeof(GroupActor) || actorType == typeof(CSGStack))
+                if (actorType == typeof(GroupActor))
                     return;
                 if (actorType == typeof(EmptyActor))
                 {
@@ -871,17 +871,106 @@ namespace FlaxEditor.Modules
                 groupOrder = Math.Min(groupOrder, child.OrderInParent);
             }
 
-            bool allCsg = actors.Count > 0 && actors.All(a => a is BoxBrush || a is CSGStack || a is CSGScopeActor);
-            GroupActor group;
-            if (allCsg)
+            // Categorize actors for semantic CSG promotion hierarchy:
+            // Brushes -> CSGStack -> CSGModel -> GroupActor
+            var looseBrushes = new List<Actor>();
+            var stacks = new List<CSGStack>();
+            var models = new List<CSGModel>();
+            var otherActors = new List<Actor>();
+
+            foreach (var actor in actors)
             {
-                group = new CSGStack
+                if (actor is CSGStack stack)
+                    stacks.Add(stack);
+                else if (actor is CSGModel model)
+                    models.Add(model);
+                else if (actor is BoxBrush)
+                    looseBrushes.Add(actor);
+                else
+                    otherActors.Add(actor);
+            }
+
+            var selectionBefore = Selection.ToArray();
+
+            // Promotion rule: Stack + Brush -> CSGModel, with loose brushes auto-wrapped in a CSGStack
+            if (stacks.Count > 0 && looseBrushes.Count > 0 && otherActors.Count == 0 && models.Count == 0)
+            {
+                var model = new CSGModel
                 {
-                    Name = "CSG Stack",
+                    Name = "CSG Model",
                     Position = center,
                 };
+
+                var looseBounds = BoundingBox.Empty;
+                Vector3 looseCenter = Vector3.Zero;
+                foreach (var brush in looseBrushes)
+                {
+                    looseBounds = BoundingBox.Merge(looseBounds, brush.EditorBoxChildren);
+                    looseCenter += brush.Position;
+                }
+                looseCenter = looseBounds != BoundingBox.Empty ? looseBounds.Center : looseCenter / looseBrushes.Count;
+
+                var autoStack = new CSGStack
+                {
+                    Name = "CSG Stack",
+                    Position = looseCenter,
+                };
+
+                DeleteActorsAction createModel = null;
+                DeleteActorsAction createAutoStack = null;
+                ParentActorsAction parentLooseBrushes = null;
+                ParentActorsAction parentStacks = null;
+                try
+                {
+                    Level.SpawnActor(model, commonParent);
+                    model.OrderInParent = groupOrder;
+                    var modelNode = Editor.Scene.GetActorNode(model);
+                    if (modelNode == null)
+                        throw new InvalidOperationException("Failed to publish the CSG Model in the Scene graph.");
+                    modelNode.PostSpawn();
+                    createModel = new DeleteActorsAction(modelNode, true);
+
+                    Level.SpawnActor(autoStack, model);
+                    var autoStackNode = Editor.Scene.GetActorNode(autoStack);
+                    if (autoStackNode == null)
+                        throw new InvalidOperationException("Failed to publish the auto-generated CSG Stack in the Scene graph.");
+                    autoStackNode.PostSpawn();
+                    createAutoStack = new DeleteActorsAction(autoStackNode, true);
+
+                    parentLooseBrushes = new ParentActorsAction(looseBrushes.Cast<SceneObject>().ToArray(), autoStack, -1, true);
+                    if (!parentLooseBrushes.TryDo())
+                        throw new InvalidOperationException("Failed to attach loose brushes to the CSG Stack. " + parentLooseBrushes.LastResult?.Message);
+
+                    parentStacks = new ParentActorsAction(stacks.Cast<SceneObject>().ToArray(), model, -1, true);
+                    if (!parentStacks.TryDo())
+                        throw new InvalidOperationException("Failed to attach CSG Stacks to the CSG Model. " + parentStacks.LastResult?.Message);
+
+                    var selectModel = new SelectionChangeAction(selectionBefore, new SceneGraphNode[] { modelNode }, OnSelectionUndo);
+                    selectModel.Do();
+                    Undo.AddAction(new MultiUndoAction(new IUndoAction[] { createModel, createAutoStack, parentLooseBrushes, parentStacks, selectModel }, "Group actors"));
+                    modelNode.TreeNode.StartRenaming(Editor.Windows.SceneWin, Editor.Windows.SceneWin.SceneTreePanel);
+                    return;
+                }
+                catch
+                {
+                    parentStacks?.TryUndo();
+                    parentLooseBrushes?.TryUndo();
+                    createAutoStack?.TryUndo();
+                    createModel?.TryUndo();
+                    Selection.Clear();
+                    Selection.AddRange(selectionBefore.Where(x => x != null));
+                    OnSelectionChanged();
+                    if (autoStack)
+                        FlaxEngine.Object.Destroy(ref autoStack);
+                    if (model)
+                        FlaxEngine.Object.Destroy(ref model);
+                    FlaxEngine.Scripting.FlushRemovedObjects();
+                    throw;
+                }
             }
-            else
+
+            GroupActor group;
+            if (otherActors.Count > 0 || models.Count > 0)
             {
                 group = new GroupActor
                 {
@@ -889,7 +978,23 @@ namespace FlaxEditor.Modules
                     Position = center,
                 };
             }
-            var selectionBefore = Selection.ToArray();
+            else if (stacks.Count > 0)
+            {
+                group = new CSGModel
+                {
+                    Name = "CSG Model",
+                    Position = center,
+                };
+            }
+            else
+            {
+                group = new CSGStack
+                {
+                    Name = "CSG Stack",
+                    Position = center,
+                };
+            }
+
             DeleteActorsAction createGroup = null;
             ParentActorsAction parentActors = null;
             try
