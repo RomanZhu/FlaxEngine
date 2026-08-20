@@ -23,6 +23,7 @@
 #include "Engine/Scripting/ScriptingType.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/JsonAsset.h"
+#include "Engine/Content/Artifacts/ProjectLibrary.h"
 #include "Engine/Core/Config/GameSettings.h"
 #include "Engine/Graphics/RenderTargetPool.h"
 #include "Engine/Graphics/RenderTask.h"
@@ -656,6 +657,7 @@ void EngineImpl::InitPaths()
 #if USE_EDITOR
     Globals::ProjectSourceFolder = Globals::ProjectFolder / TEXT("Source");
     Globals::ProjectCacheFolder = Globals::ProjectFolder / TEXT("Cache");
+    Globals::ProjectLibraryFolder = Globals::ProjectFolder / TEXT("Library");
 #endif
 
 #if USE_MONO
@@ -689,6 +691,11 @@ void EngineImpl::InitPaths()
         FileSystem::DeleteDirectory(Globals::ProjectCacheFolder / TEXT("Cooker"), true);
     if (!FileSystem::DirectoryExists(Globals::ProjectCacheFolder))
         FileSystem::CreateDirectory(Globals::ProjectCacheFolder);
+    AssetPipelineDiagnostic libraryDiagnostic;
+    String projectLibraryFolder;
+    if (ProjectLibrary::EnsureRoot(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, projectLibraryFolder, libraryDiagnostic))
+        Platform::Fatal(String::Format(TEXT("{0}: {1}"), GetAssetPipelineDiagnosticCodeName(libraryDiagnostic.Code), libraryDiagnostic.Message));
+    Globals::ProjectLibraryFolder = projectLibraryFolder;
 #endif
 
     // Setup current working directory to the project root

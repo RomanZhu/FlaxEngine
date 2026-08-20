@@ -236,10 +236,7 @@ namespace FlaxEditor.Content
             _journal.UpdatedUtc = DateTime.UtcNow;
             var temporaryPath = _journalPath + ".tmp";
             File.WriteAllText(temporaryPath, JsonConvert.SerializeObject(_journal, Formatting.Indented));
-            if (File.Exists(_journalPath))
-                File.Replace(temporaryPath, _journalPath, null);
-            else
-                File.Move(temporaryPath, _journalPath);
+            File.Move(temporaryPath, _journalPath, true);
             InjectFault("after-journal-persist");
         }
 

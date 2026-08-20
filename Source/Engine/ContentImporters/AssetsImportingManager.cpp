@@ -123,6 +123,20 @@ CreateAssetContext::CreateAssetContext(const StringView& inputPath, const String
     OutputPath = Content::CreateTemporaryAssetPath();
 }
 
+CreateAssetContext::CreateAssetContext(const StringView& inputPath, const StringView& outputPath, const Guid& id, void* arg, bool artifactStagingMode, const StringView& intendedTypeName)
+    : _artifactStagingMode(artifactStagingMode)
+    , _intendedAssetID(id)
+    , _intendedTypeName(intendedTypeName)
+    , _artifactOutputPath(outputPath)
+{
+    InputPath = inputPath;
+    OutputPath = outputPath;
+    TargetAssetPath = outputPath;
+    CustomArg = arg;
+    Data.Header.ID = id;
+    SkipMetadata = artifactStagingMode;
+}
+
 CreateAssetResult CreateAssetContext::Run(const CreateAssetFunction& callback)
 {
     ASSERT(callback.IsBinded());
@@ -131,6 +145,19 @@ CreateAssetResult CreateAssetContext::Run(const CreateAssetFunction& callback)
     auto result = callback(*this);
     if (result != CreateAssetResult::Ok)
         return result;
+
+    if (_artifactStagingMode)
+    {
+        // Legacy callbacks may alter target paths and identity. Artifact mode owns both.
+        OutputPath = _artifactOutputPath;
+        TargetAssetPath = _artifactOutputPath;
+        Data.Header.ID = _intendedAssetID;
+        if (!TargetAssetPath.EndsWith(ASSET_FILES_EXTENSION) || Data.Header.TypeName.IsEmpty() ||
+            (!_intendedTypeName.IsEmpty() && Data.Header.TypeName != _intendedTypeName))
+            return CreateAssetResult::InvalidTypeID;
+        Data.Metadata.Release();
+        return FlaxStorage::Create(OutputPath, Data) ? CreateAssetResult::CannotSaveFile : CreateAssetResult::Ok;
+    }
 
     // Skip for non-flax assets (eg. json resource or custom asset type)
     if (!TargetAssetPath.EndsWith(ASSET_FILES_EXTENSION))

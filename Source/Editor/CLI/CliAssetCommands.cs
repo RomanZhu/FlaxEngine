@@ -7,7 +7,9 @@ using System.Linq;
 using System.Reflection;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Import;
 using FlaxEngine;
+using FlaxEngine.Tools;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using FlaxJsonSerializer = FlaxEngine.Json.JsonSerializer;
@@ -48,6 +50,12 @@ namespace FlaxEditor
         /// </summary>
         [JsonProperty("assetType")]
         public string AssetType { get; set; }
+
+        /// <summary>
+        /// Gets or sets typed importer options.
+        /// </summary>
+        [JsonProperty("importOptions")]
+        public JObject ImportOptions { get; set; }
 
         /// <summary>
         /// Gets or sets a public property path.
@@ -318,13 +326,24 @@ namespace FlaxEditor
                     x.IsAsset && x.CanCreate(parent) && IsAssetTypeMatch(x, options.AssetType));
                 if (proxy == null)
                     throw new InvalidOperationException($"Asset type '{options.AssetType}' is not available in '{parent.Path}'.");
-                var createResult = Editor.Instance.ContentDatabase.CreatePath(path, false, () => proxy.Create(path, null));
+                var createResult = Editor.Instance.ContentDatabase.CreatePath(path, false, () => CreateAssetFile(proxy, path));
                 if (!createResult.Succeeded)
                     throw new InvalidOperationException(createResult.Message ?? $"Failed to create {options.AssetType} asset '{path}'.");
                 RefreshPath(path, false);
                 RequireItem(path);
                 TrackVerification(path);
                 return DescribePath(path, options.AssetType);
+            }
+
+            private static void CreateAssetFile(ContentProxy proxy, string path)
+            {
+                if (proxy is VisualScriptProxy)
+                {
+                    if (Editor.CreateVisualScript(path, typeof(Script).FullName))
+                        throw new IOException($"Failed to create Visual Script asset '{path}'.");
+                    return;
+                }
+                proxy.Create(path, null);
             }
 
             private static bool IsAssetTypeMatch(ContentProxy proxy, string requestedType)
@@ -373,7 +392,7 @@ namespace FlaxEditor
                             throw new InvalidOperationException($"Asset '{item.Path}' does not support reimport.");
                         if (item.GetImportPath(out var importPath) || !File.Exists(importPath))
                             throw new FileNotFoundException($"The import source for asset '{item.Path}' does not exist.", importPath);
-                        importing.Reimport(item, null, true);
+                        importing.Reimport(item, CreateImportSettings(options.AssetType, options.ImportOptions), true);
                     }
                     else
                     {
@@ -389,7 +408,7 @@ namespace FlaxEditor
                         var preflight = importing.PreflightImport(sources, target);
                         if (!preflight.Succeeded)
                             throw new InvalidOperationException(preflight.Message ?? $"Asset import preflight failed ({preflight.Failure}).");
-                        importing.Import(sources, target, true);
+                        importing.Import(sources, target, true, CreateImportSettings(options.AssetType, options.ImportOptions));
                     }
                 }
                 catch
@@ -399,6 +418,22 @@ namespace FlaxEditor
                     DetachImportEvents();
                     throw;
                 }
+            }
+
+            private static object CreateImportSettings(string assetType, JObject importOptions)
+            {
+                if (string.IsNullOrWhiteSpace(assetType) && importOptions == null)
+                    return null;
+                var modelOptions = importOptions == null
+                    ? ModelTool.Options.Default
+                    : JsonConvert.DeserializeObject<ModelTool.Options>(importOptions.ToString(Formatting.None), FlaxJsonSerializer.Settings);
+                if (!string.IsNullOrWhiteSpace(assetType))
+                {
+                    if (!Enum.TryParse(assetType, true, out ModelTool.ModelType modelType))
+                        throw new InvalidOperationException($"Unsupported import asset type '{assetType}'.");
+                    modelOptions.Type = modelType;
+                }
+                return new ModelImportSettings { Settings = modelOptions };
             }
 
             private void OnAssetImportFileEnd(FlaxEditor.Content.IFileEntryAction entry, bool failed)

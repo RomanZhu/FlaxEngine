@@ -239,7 +239,7 @@ namespace FlaxEditor
             Directory.CreateDirectory(directory);
             var temporaryPath = _request.ResultPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(temporaryPath, JsonConvert.SerializeObject(value, Formatting.Indented));
-            File.Move(temporaryPath, _request.ResultPath);
+            File.Move(temporaryPath, _request.ResultPath, true);
         }
     }
 

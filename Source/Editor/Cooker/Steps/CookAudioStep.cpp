@@ -551,6 +551,11 @@ bool CookAudioStep::Perform(CookingData& data)
         LOG(Info, "Audio is disabled in project settings. Skipping audio cooking step.");
         return false;
     }
+    if (audioSettings->EventBackend != AudioEventBackendType::FMODStudio)
+    {
+        LOG(Info, "FMOD Studio is not the selected audio event backend. Skipping FMOD bank cooking step.");
+        return false;
+    }
 
     const String projectBanksDir = Globals::ProjectFolder / TEXT("Content") / TEXT("Audio") / TEXT("Banks");
     const String projectAudioDir = Globals::ProjectFolder / TEXT("Content") / TEXT("Audio");

@@ -11,6 +11,9 @@
 #include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/AssetReference.h"
+#include "Engine/Content/Artifacts/ArtifactLease.h"
+#include "Engine/Content/Artifacts/ArtifactResolver.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/Shader.h"
 #include "Engine/Content/Assets/Texture.h"
@@ -52,6 +55,106 @@
 #include "FlaxEngine.Gen.h"
 
 Dictionary<String, CookAssetsStep::ProcessAssetFunc> CookAssetsStep::AssetProcessors;
+
+namespace
+{
+    ArtifactTarget GetCookArtifactTarget(const CookingData& data)
+    {
+        ArtifactTarget target;
+        switch (data.Platform)
+        {
+        case BuildPlatform::Windows32:
+            target.Platform = "Windows";
+            target.Architecture = "x86";
+            target.Graphics = "DirectX12";
+            break;
+        case BuildPlatform::Windows64:
+            target.Platform = "Windows";
+            target.Architecture = "x64";
+            target.Graphics = "DirectX12";
+            break;
+        case BuildPlatform::WindowsARM64:
+            target.Platform = "Windows";
+            target.Architecture = "ARM64";
+            target.Graphics = "DirectX12";
+            break;
+        case BuildPlatform::UWPx86:
+            target.Platform = "UWP";
+            target.Architecture = "x86";
+            target.Graphics = "DirectX12";
+            break;
+        case BuildPlatform::UWPx64:
+            target.Platform = "UWP";
+            target.Architecture = "x64";
+            target.Graphics = "DirectX12";
+            break;
+        case BuildPlatform::XboxOne:
+            target.Platform = "XboxOne";
+            target.Architecture = "x64";
+            target.Graphics = "DirectX12";
+            break;
+        case BuildPlatform::XboxScarlett:
+            target.Platform = "XboxScarlett";
+            target.Architecture = "x64";
+            target.Graphics = "DirectX12";
+            break;
+        case BuildPlatform::LinuxX64:
+            target.Platform = "Linux";
+            target.Architecture = "x64";
+            target.Graphics = "Vulkan";
+            break;
+        case BuildPlatform::AndroidARM64:
+            target.Platform = "Android";
+            target.Architecture = "ARM64";
+            target.Graphics = "Vulkan";
+            break;
+        case BuildPlatform::MacOSx64:
+            target.Platform = "Mac";
+            target.Architecture = "x64";
+            target.Graphics = "Metal";
+            break;
+        case BuildPlatform::MacOSARM64:
+            target.Platform = "Mac";
+            target.Architecture = "ARM64";
+            target.Graphics = "Metal";
+            break;
+        case BuildPlatform::iOSARM64:
+            target.Platform = "iOS";
+            target.Architecture = "ARM64";
+            target.Graphics = "Metal";
+            break;
+        case BuildPlatform::PS4:
+            target.Platform = "PS4";
+            target.Architecture = "x64";
+            target.Graphics = "GNM";
+            break;
+        case BuildPlatform::PS5:
+            target.Platform = "PS5";
+            target.Architecture = "x64";
+            target.Graphics = "GNM";
+            break;
+        case BuildPlatform::Switch:
+            target.Platform = "Switch";
+            target.Architecture = "ARM64";
+            target.Graphics = "NVN";
+            break;
+        case BuildPlatform::Web:
+            target.Platform = "Web";
+            target.Architecture = "x86";
+            target.Graphics = "WebGPU";
+            break;
+        default:
+            break;
+        }
+        target.Configuration = data.Configuration == BuildConfiguration::Debug ? "Debug" :
+            data.Configuration == BuildConfiguration::Development ? "Development" : "Release";
+        target.Quality = "Default";
+        target.TextureCompression = data.Platform == BuildPlatform::AndroidARM64 || data.Platform == BuildPlatform::iOSARM64 || data.Platform == BuildPlatform::Switch
+            ? "Mobile" : data.Platform == BuildPlatform::Web ? "Web" : "Desktop";
+        target.Role = "Runtime";
+        return target;
+    }
+}
 
 void IBuildCache::InvalidateCacheShaders()
 {
@@ -1103,6 +1206,8 @@ bool CookAssetsStep::Perform(CookingData& data)
     auto minDateTime = DateTime::MinValue();
 #endif
     int32 subStepIndex = 0;
+    const ArtifactTarget cookArtifactTarget = GetCookArtifactTarget(data);
+    Array<ArtifactLease> cookArtifactLeases;
     AssetReference<Asset> assetRef;
     assetRef.Unload.Bind([]
     {
@@ -1121,6 +1226,47 @@ bool CookAssetsStep::Perform(CookingData& data)
 #if ENABLE_ASSETS_DISCOVERY
         e.FileModified = minDateTime;
 #endif
+
+        // Canonical textures are already target-processed compatibility assets. Resolve exact bytes and
+        // feed them directly to the existing package writer instead of cooking the host-editor artifact.
+        AssetRecord canonicalRecord;
+        if (AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord) &&
+            canonicalRecord.SourceKind == AssetSourceKind::ImportedSource && canonicalRecord.TypeName == Texture::TypeName)
+        {
+            ArtifactRequest request;
+            request.AssetID = assetId;
+            request.Target = cookArtifactTarget;
+            request.OutputKind = "runtime";
+            request.RequiredCompatibility = "flax-texture-v4";
+            request.Policy = ArtifactResolvePolicy::Exact;
+            ResolvedArtifact artifact;
+            AssetPipelineDiagnostic diagnostic;
+            if (ArtifactResolver::Get().Resolve(request, artifact, diagnostic) || !artifact.IsExact || !artifact.IsGenerated())
+            {
+                LOG(Error, "Failed to resolve exact texture artifact {0} for cook target {1}: {2}", assetId,
+                    String(cookArtifactTarget.BuildKey(ArtifactTargetDimension::All).ToString()), diagnostic.Message);
+                return true;
+            }
+
+            cookArtifactLeases.Add(ArtifactLease::Acquire(artifact.StoragePath.Get()));
+            String cachedFilePath;
+            cache.GetFilePath(assetId, cachedFilePath);
+            if (FileSystem::CopyFile(cachedFilePath, artifact.StoragePath.Get()))
+            {
+                LOG(Error, "Failed to copy exact texture artifact from '{0}' to cooker cache '{1}'", artifact.StoragePath.Get(), cachedFilePath);
+                return true;
+            }
+            auto& cacheEntry = cache.Entries[assetId];
+            cacheEntry.ID = assetId;
+            cacheEntry.TypeName = canonicalRecord.TypeName;
+            cacheEntry.FileModified = FileSystem::GetFileLastEditTime(canonicalRecord.SourcePath.Get());
+            cacheEntry.FileDependencies.Clear();
+            cacheEntry.FileDependencies.Add(ToPair(String(canonicalRecord.SourcePath.Get()), cacheEntry.FileModified));
+            cacheEntry.FileDependencies.Add(ToPair(String(canonicalRecord.MetaPath.Get()), FileSystem::GetFileLastEditTime(canonicalRecord.MetaPath.Get())));
+            e.Info.TypeName = canonicalRecord.TypeName;
+            data.Stats.CookedAssets++;
+            continue;
+        }
 
         // Check if asset is in cooking cache and was not modified since last build
         const auto cachedEntry = cache.Entries.TryGet(assetId);

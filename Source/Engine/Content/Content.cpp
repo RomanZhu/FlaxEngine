@@ -7,6 +7,11 @@
 #include "Storage/ContentStorageManager.h"
 #include "Storage/JsonStorageProxy.h"
 #include "Factories/IAssetFactory.h"
+#include "Artifacts/ResolvedArtifact.h"
+#include "Artifacts/ArtifactResolver.h"
+#include "AssetDatabase/AssetPath.h"
+#include "AssetDatabase/AssetDatabase.h"
+#include "AssetPipeline/AssetPipelineSettings.h"
 #include "Loading/LoadingThread.h"
 #include "Loading/ContentLoadTask.h"
 #include "Engine/Core/Log.h"
@@ -72,6 +77,7 @@ namespace
     // Assets
     CriticalSection AssetsLocker;
     Dictionary<Guid, Asset*> Assets;
+    Dictionary<Guid, AssetLoadLocation> ExplicitLoadLocations;
     CriticalSection LoadedAssetsToInvokeLocker;
     Array<Asset*> LoadedAssetsToInvoke;
     Array<Asset*> ToUnload;
@@ -688,6 +694,11 @@ void ContentService::Dispose()
 {
     IsExiting = true;
 
+    {
+        ScopeLock lock(AssetsLocker);
+        ExplicitLoadLocations.Clear();
+    }
+
     // Save assets registry before engine closing
     Cache.Save();
 
@@ -896,6 +907,15 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
     if (!id.IsValid())
         return false;
 
+    {
+        AssetRecord record;
+        if (AssetDatabase::Get().TryGetRecord(id, record))
+        {
+            info = AssetInfo(record.ID, record.TypeName, record.CanonicalPath.Get());
+            return true;
+        }
+    }
+
 #if ENABLE_ASSETS_DISCOVERY
     // Find asset in registry
     if (Cache.FindAsset(id, info))
@@ -947,6 +967,19 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 #if ENABLE_ASSETS_DISCOVERY
     String formattedPath(path);
     FileSystem::NormalizePath(formattedPath);
+
+    {
+        AssetPathPolicy::ProjectPath projectPath;
+        AssetPipelineDiagnostic diagnostic;
+        AssetRecord record;
+        if (!AssetPathPolicy::TryNormalizeProjectPath(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
+                formattedPath, projectPath, diagnostic) &&
+            AssetDatabase::Get().TryGetMainRecordByPath(projectPath.PortabilityKey, record))
+        {
+            info = AssetInfo(record.ID, record.TypeName, record.CanonicalPath.Get());
+            return true;
+        }
+    }
 
     // Find asset in registry
     if (Cache.FindAsset(formattedPath, info))
@@ -1905,6 +1938,65 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
 
 #endif
 
+bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, AssetPipelineDiagnostic& diagnostic)
+{
+    diagnostic = AssetPipelineDiagnostic();
+#if USE_EDITOR
+    const AssetPipelineSettings* settings = AssetPipelineSettings::Get();
+    if (!settings->UseNewAssetDatabase || !settings->UseLibraryArtifacts)
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+        diagnostic.AssetGuid = location.Info.ID;
+        diagnostic.Message = TEXT("Explicit Library artifact resolution requires UseNewAssetDatabase and UseLibraryArtifacts.");
+        return true;
+    }
+    if (!location.Info.ID.IsValid() || location.Artifact.AssetID != location.Info.ID || location.Artifact.TypeName != location.Info.TypeName ||
+        !AssetPathPolicy::IsCanonicalPathValid(CanonicalAssetPath(location.Info.Path), Globals::ProjectContentFolder) ||
+        !AssetPathPolicy::IsArtifactPathValid(location.Artifact.StoragePath, Globals::ProjectLibraryFolder))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+        diagnostic.AssetGuid = location.Info.ID;
+        diagnostic.SourcePath = location.Info.Path;
+        diagnostic.Message = TEXT("Explicit asset load location has invalid identity, canonical path, or Library storage path.");
+        return true;
+    }
+
+    if (!FileSystem::FileExists(location.Info.Path) || !FileSystem::FileExists(location.Artifact.StoragePath.Get()))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+        diagnostic.AssetGuid = location.Info.ID;
+        diagnostic.Message = TEXT("Explicit load location source or artifact storage is missing.");
+        return true;
+    }
+
+    ScopeLock lock(AssetsLocker);
+    if (Assets.ContainsKey(location.Info.ID))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+        diagnostic.AssetGuid = location.Info.ID;
+        diagnostic.Message = TEXT("Cannot replace the load location of an already loaded asset. Use BinaryAsset::SwitchStorage.");
+        return true;
+    }
+    ExplicitLoadLocations[location.Info.ID] = location;
+    return false;
+#else
+    diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+    diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+    diagnostic.Message = TEXT("Project Library load locations are available only in editor and cooker builds.");
+    return true;
+#endif
+}
+
+void Content::UnregisterAssetLoadLocation(const Guid& id)
+{
+    ScopeLock lock(AssetsLocker);
+    ExplicitLoadLocations.Remove(id);
+}
+
 void Content::UnloadAsset(Asset* asset)
 {
     if (asset == nullptr)
@@ -2246,18 +2338,52 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
 
     AssetsLocker.Unlock();
 
-    // Get cached asset info (from registry)
+    // Get canonical asset info from the explicit new-pipeline record or the legacy registry.
     AssetInfo assetInfo;
-    if (!GetAssetInfo(id, assetInfo))
+    AssetLoadLocation loadLocation;
+    bool hasExplicitLocation;
+    {
+        ScopeLock lock(AssetsLocker);
+        hasExplicitLocation = ExplicitLoadLocations.TryGet(id, loadLocation);
+    }
+    if (hasExplicitLocation)
+    {
+        assetInfo = loadLocation.Info;
+    }
+    else if (ArtifactResolver::Get().IsConfigured())
+    {
+        AssetRecord pipelineRecord;
+        if (AssetDatabase::Get().TryGetRecord(id, pipelineRecord) && pipelineRecord.SourceKind != AssetSourceKind::LegacyBinary)
+        {
+            ArtifactRequest request;
+            request.AssetID = id;
+            request.Target = ArtifactResolver::Get().GetDefaultTarget();
+            request.OutputKind = "runtime";
+            if (pipelineRecord.ProcessorID == TEXT("Flax.Texture"))
+                request.RequiredCompatibility = "flax-texture-v4";
+            request.Policy = ArtifactResolvePolicy::Interactive;
+            AssetPipelineDiagnostic diagnostic;
+            if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))
+            {
+                LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, id, diagnostic.SourcePath);
+                LOAD_FAILED();
+            }
+            assetInfo = loadLocation.Info;
+            hasExplicitLocation = true;
+        }
+    }
+    if (!hasExplicitLocation && !GetAssetInfo(id, assetInfo))
     {
         LOG(Warning, "Invalid or missing asset ({0}, {1}).", id, type.ToString());
         LogContext::Print(LogType::Warning);
         LOAD_FAILED();
     }
+    if (!hasExplicitLocation)
+        loadLocation = AssetLoadLocation::Legacy(assetInfo);
 #if ASSETS_LOADING_EXTRA_VERIFICATION
-    if (!FileSystem::FileExists(assetInfo.Path))
+    if (!FileSystem::FileExists(loadLocation.Artifact.StoragePath.Get()))
     {
-        LOG(Error, "Cannot find file '{0}'", assetInfo.Path);
+        LOG(Error, "Cannot find asset storage '{0}' for canonical asset '{1}'", loadLocation.Artifact.StoragePath.Get(), assetInfo.Path);
         LOAD_FAILED();
     }
 #endif
@@ -2272,7 +2398,7 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
 
     // Create asset object
     PROFILE_MEM_BEGIN(ContentAssets);
-    result = factory->New(assetInfo);
+    result = factory->New(loadLocation);
     PROFILE_MEM_END();
     if (result == nullptr)
     {

@@ -652,7 +652,7 @@ bool Asset::onLoad(LoadAssetTask* task)
     
 #if USE_EDITOR
     // Auto-save deprecated assets to get rid of data in an old format
-    if (isDeprecated && isLoaded && !IsVirtual() && !GetPath().StartsWith(StringUtils::GetDirectoryName(Globals::TemporaryFolder)))
+    if (isDeprecated && isLoaded && !IsVirtual() && canAutoSaveDeprecatedData() && !GetPath().StartsWith(StringUtils::GetDirectoryName(Globals::TemporaryFolder)))
     {
         PROFILE_CPU_NAMED("Asset.Save");
         LOG(Info, "Resaving asset '{}' that uses deprecated data format", ToString());

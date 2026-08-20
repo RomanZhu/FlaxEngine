@@ -1,0 +1,92 @@
+// Copyright (c) Wojciech Figat. All rights reserved.
+
+#include "TextureArtifactValidator.h"
+#include "TextureProcessor.h"
+#include "Engine/Content/Assets/Texture.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Graphics/PixelFormatExtensions.h"
+#include "Engine/Graphics/Textures/TextureData.h"
+#include "Engine/Platform/File.h"
+#include "Engine/Platform/FileSystem.h"
+#include "Engine/Tools/TextureTool/TextureTool.h"
+
+#if COMPILE_WITH_TEXTURE_TOOL
+
+namespace
+{
+    bool Invalid(AssetPipelineDiagnostic& diagnostic, const StringView& message)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.Message = message;
+        return true;
+    }
+}
+
+bool TextureArtifactValidator::Register(ArtifactOutputValidatorRegistry& registry, const Guid& expectedAssetID, AssetPipelineDiagnostic& diagnostic)
+{
+    ArtifactOutputValidator runtime = [expectedAssetID](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
+    {
+        return ValidateRuntime(path, output, expectedAssetID, result);
+    };
+    ArtifactOutputValidator thumbnail = [](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
+    {
+        return ValidateThumbnail(path, output, result);
+    };
+    return registry.Register(StringAnsiView("runtime"), Texture::TypeName, runtime, diagnostic) ||
+           registry.Register(StringAnsiView("thumbnail"), Texture::TypeName, thumbnail, diagnostic);
+}
+
+bool TextureArtifactValidator::ValidateRuntime(const StringView& path, const ArtifactManifestOutput& output, const Guid& expectedAssetID, AssetPipelineDiagnostic& diagnostic)
+{
+    if (output.FormatVersion != TextureProcessor::RuntimeFormatVersion || output.Compatibility != "flax-texture-v4" ||
+        output.Size == 0 || output.Size != FileSystem::GetFileSize(path))
+        return Invalid(diagnostic, TEXT("Texture runtime artifact format metadata or size is invalid."));
+
+    auto storage = ContentStorageManager::GetStorage(path);
+    if (!storage)
+        return Invalid(diagnostic, TEXT("Texture runtime artifact is not a readable Flax storage file."));
+    Array<FlaxStorage::Entry> entries;
+    storage->GetEntries(entries);
+    if (entries.Count() != 1 || entries[0].ID != expectedAssetID || entries[0].TypeName != Texture::TypeName)
+        return Invalid(diagnostic, TEXT("Texture runtime artifact identity or type does not match the requested asset."));
+
+    AssetInitData data;
+    if (storage->LoadAssetHeader(expectedAssetID, data) || data.SerializedVersion != Texture::SerializedVersion ||
+        data.CustomData.Length() != sizeof(TextureHeader))
+        return Invalid(diagnostic, TEXT("Texture runtime artifact header version or metadata is invalid."));
+#if USE_EDITOR
+    if (data.Metadata.IsValid())
+        return Invalid(diagnostic, TEXT("Texture runtime artifact contains authoritative editor metadata."));
+#endif
+    TextureHeader header;
+    Platform::MemoryCopy(&header, data.CustomData.Get(), sizeof(TextureHeader));
+    if (header.Width < 1 || header.Height < 1 || header.Depth < 0 ||
+        header.Width > TextureProcessor::MaximumDimension || header.Height > TextureProcessor::MaximumDimension ||
+        header.MipLevels < 1 || header.MipLevels > GPU_MAX_TEXTURE_MIP_LEVELS ||
+        !PixelFormatExtensions::IsValid(header.Format) || header.Type > TextureFormatType::HdrRGB)
+        return Invalid(diagnostic, TEXT("Texture runtime artifact dimensions, format, or mip count are invalid."));
+    for (int32 mip = 0; mip < header.MipLevels; mip++)
+    {
+        const FlaxChunk* chunk = data.Header.Chunks[mip];
+        if (!chunk || !chunk->ExistsInFile() || static_cast<uint64>(chunk->LocationInFile.Address) + chunk->LocationInFile.Size > output.Size)
+            return Invalid(diagnostic, TEXT("Texture runtime artifact has a missing or out-of-bounds mip chunk."));
+    }
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool TextureArtifactValidator::ValidateThumbnail(const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& diagnostic)
+{
+    if (output.FormatVersion != TextureProcessor::ThumbnailFormatVersion || output.Compatibility != "flax-texture-thumbnail-v1" ||
+        output.Size == 0 || output.Size > 16ull * 1024ull * 1024ull || output.Size != FileSystem::GetFileSize(path))
+        return Invalid(diagnostic, TEXT("Texture thumbnail format metadata or size is invalid."));
+    TextureData image;
+    if (TextureTool::ImportTexture(path, image) || image.Width < 1 || image.Height < 1 || image.Width > 256 || image.Height > 256)
+        return Invalid(diagnostic, TEXT("Texture thumbnail is not a valid bounded PNG image."));
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+#endif

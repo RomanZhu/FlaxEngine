@@ -15,6 +15,8 @@ class FlaxFile;
 class BinaryAsset;
 class IAssetFactory;
 class AssetsCache;
+struct AssetLoadLocation;
+struct AssetPipelineDiagnostic;
 
 // Content and assets statistics container.
 API_STRUCT() struct FLAXENGINE_API ContentStats
@@ -40,6 +42,15 @@ API_CLASS(Static) class FLAXENGINE_API Content
     friend Engine;
     friend Asset;
 public:
+    /// <summary>
+    /// Registers an explicit canonical/storage load location for the Library-artifact rollout path.
+    /// </summary>
+    /// <returns>True on failure.</returns>
+    static bool RegisterAssetLoadLocation(const AssetLoadLocation& location, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Removes an explicit load location. Already loaded assets are unchanged.</summary>
+    static void UnregisterAssetLoadLocation(const Guid& id);
+
     /// <summary>
     /// The time between content pool updates.
     /// </summary>
@@ -399,13 +410,13 @@ public:
     API_EVENT() static Delegate<Asset*> AssetReloading;
 
 private:
+    friend class BinaryAsset;
     static void WaitForTask(ContentLoadTask* loadingTask, double timeoutInMilliseconds);
     static void tryCallOnLoaded(Asset* asset);
     static void onAssetLoaded(Asset* asset);
     static void onAssetUnload(Asset* asset);
     static void onAssetChangeId(Asset* asset, const Guid& oldId, const Guid& newId);
 #if USE_EDITOR
-    friend BinaryAsset;
     friend class ContentService;
     static void onAssetDepend(BinaryAsset* asset, const Guid& otherId);
     static void onAddDependencies(Asset* asset);

@@ -3,6 +3,7 @@
 #if PLATFORM_WIN32
 
 #include "Win32FileSystem.h"
+#include "Win32Path.h"
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Types/StringView.h"
@@ -17,10 +18,10 @@ const DateTime WindowsEpoch(1970, 1, 1);
 
 bool Win32FileSystem::CreateDirectory(const StringView& path)
 {
-    WIN32_INIT_BUFFER(path, buffer);
+    const String filesystemPath = GetWin32FilesystemPath(path);
 
     // If the specified directory name doesn't exist, do our thing
-    const DWORD fileAttributes = GetFileAttributesW(buffer);
+    const DWORD fileAttributes = GetFileAttributesW(*filesystemPath);
     if (fileAttributes == INVALID_FILE_ATTRIBUTES)
     {
         const auto error = GetLastError();
@@ -38,7 +39,7 @@ bool Win32FileSystem::CreateDirectory(const StringView& path)
         }
 
         // Create the last directory on the path (the recursive calls will have taken care of the parent directories by now)
-        const BOOL result = ::CreateDirectoryW(buffer, nullptr);
+        const BOOL result = ::CreateDirectoryW(*filesystemPath, nullptr);
         if (result == FALSE)
         {
             return true;
@@ -63,6 +64,7 @@ bool Win32FileSystem::DeleteDirectory(const String& path, bool deleteContents)
     {
         // Create search pattern
         String pattern = path / '*';
+        pattern = GetWin32FilesystemPath(pattern);
 
         WIN32_FIND_DATA info;
         HANDLE hp;
@@ -92,6 +94,7 @@ bool Win32FileSystem::DeleteDirectory(const String& path, bool deleteContents)
             }
             else
             {
+                tmpPath = GetWin32FilesystemPath(tmpPath);
                 if (!DeleteFileW(*tmpPath))
                 {
                     FindClose(hp);
@@ -108,17 +111,18 @@ bool Win32FileSystem::DeleteDirectory(const String& path, bool deleteContents)
     }
 
     // Remove directory
-    RemoveDirectoryW(*path);
+    const String filesystemPath = GetWin32FilesystemPath(path);
+    RemoveDirectoryW(*filesystemPath);
 
     // Check if still exists
-    const DWORD result = GetFileAttributesW(*path);
+    const DWORD result = GetFileAttributesW(*filesystemPath);
     return result != 0xFFFFFFFF && result & FILE_ATTRIBUTE_DIRECTORY;
 }
 
 bool Win32FileSystem::DirectoryExists(const StringView& path)
 {
-    WIN32_INIT_BUFFER(path, buffer);
-    const DWORD result = GetFileAttributesW(buffer);
+    const String filesystemPath = GetWin32FilesystemPath(path);
+    const DWORD result = GetFileAttributesW(*filesystemPath);
     return result != 0xFFFFFFFF && result & FILE_ATTRIBUTE_DIRECTORY;
 }
 
@@ -161,21 +165,22 @@ bool Win32FileSystem::GetChildDirectories(Array<String>& results, const String& 
 
 bool Win32FileSystem::FileExists(const StringView& path)
 {
-    WIN32_INIT_BUFFER(path, buffer);
-    const DWORD result = GetFileAttributesW(buffer);
+    const String filesystemPath = GetWin32FilesystemPath(path);
+    const DWORD result = GetFileAttributesW(*filesystemPath);
     return result != 0xFFFFFFFF && !(result & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 bool Win32FileSystem::DeleteFile(const StringView& path)
 {
-    return DeleteFileW(*path) == 0;
+    const String filesystemPath = GetWin32FilesystemPath(path);
+    return DeleteFileW(*filesystemPath) == 0;
 }
 
 uint64 Win32FileSystem::GetFileSize(const StringView& path)
 {
-    WIN32_INIT_BUFFER(path, buffer);
+    const String filesystemPath = GetWin32FilesystemPath(path);
     WIN32_FILE_ATTRIBUTE_DATA info;
-    if (!!GetFileAttributesExW(buffer, GetFileExInfoStandard, &info))
+    if (!!GetFileAttributesExW(*filesystemPath, GetFileExInfoStandard, &info))
     {
         if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
         {
@@ -204,18 +209,18 @@ bool Win32FileSystem::SetReadOnly(const StringView& path, bool isReadOnly)
 bool Win32FileSystem::MoveFile(const StringView& dst, const StringView& src, bool overwrite)
 {
     const DWORD flags = overwrite ? MOVEFILE_REPLACE_EXISTING : 0;
-    WIN32_INIT_BUFFER(dst, bufferDst);
-    WIN32_INIT_BUFFER(src, bufferSrc);
+    const String bufferDst = GetWin32FilesystemPath(dst);
+    const String bufferSrc = GetWin32FilesystemPath(src);
 
     // If paths are almost the same but some characters have different case we need to use a proxy file
     if (dst.Length() == src.Length() && StringUtils::CompareIgnoreCase(*dst, *src) == 0)
     {
         String tmp;
         GetTempFilePath(tmp);
-        return MoveFileExW(bufferSrc, *tmp, MOVEFILE_REPLACE_EXISTING) == 0 || MoveFileExW(*tmp, bufferDst, flags) == 0;
+        return MoveFileExW(*bufferSrc, *tmp, MOVEFILE_REPLACE_EXISTING) == 0 || MoveFileExW(*tmp, *bufferDst, flags) == 0;
     }
 
-    if (MoveFileExW(bufferSrc, bufferDst, flags) != 0)
+    if (MoveFileExW(*bufferSrc, *bufferDst, flags) != 0)
         return false;
 
     // MOVEFILE_COPY_ALLOWED can leave both source and destination behind when its copy succeeds
@@ -223,21 +228,21 @@ bool Win32FileSystem::MoveFile(const StringView& dst, const StringView& src, boo
     // actual cross-volume move, never as part of a normal same-volume rename.
     if (GetLastError() != ERROR_NOT_SAME_DEVICE)
         return true;
-    return MoveFileExW(bufferSrc, bufferDst, flags | MOVEFILE_COPY_ALLOWED) == 0;
+    return MoveFileExW(*bufferSrc, *bufferDst, flags | MOVEFILE_COPY_ALLOWED) == 0;
 }
 
 bool Win32FileSystem::CopyFile(const StringView& dst, const StringView& src)
 {
-    WIN32_INIT_BUFFER(dst, bufferDst);
-    WIN32_INIT_BUFFER(src, bufferSrc);
+    const String bufferDst = GetWin32FilesystemPath(dst);
+    const String bufferSrc = GetWin32FilesystemPath(src);
 #if PLATFORM_UWP
 	const bool overwrite = true;
 	COPYFILE2_EXTENDED_PARAMETERS param = { 0 };
 	param.dwSize = sizeof(COPYFILE2_EXTENDED_PARAMETERS);
 	param.dwCopyFlags = (!overwrite) ? COPY_FILE_FAIL_IF_EXISTS : 0;
-	return FAILED(CopyFile2(bufferSrc, bufferDst, &param));
+	return FAILED(CopyFile2(*bufferSrc, *bufferDst, &param));
 #else
-    return CopyFileW(bufferSrc, bufferDst, FALSE) == 0;
+    return CopyFileW(*bufferSrc, *bufferDst, FALSE) == 0;
 #endif
 }
 
@@ -272,7 +277,8 @@ bool Win32FileSystem::getFilesFromDirectoryTop(Array<String>& results, const Str
     // Try to find first file
     WIN32_FIND_DATA info;
     String pattern = directory / searchPattern;
-    const HANDLE hp = FindFirstFileW(*pattern, &info);
+    const String filesystemPattern = GetWin32FilesystemPath(pattern);
+    const HANDLE hp = FindFirstFileW(*filesystemPattern, &info);
     if (INVALID_HANDLE_VALUE == hp)
     {
         // Check if no files at all
@@ -309,7 +315,8 @@ bool Win32FileSystem::getFilesFromDirectoryAll(Array<String>& results, const Str
 
     // Try to find first file/directory
     WIN32_FIND_DATA info;
-    const HANDLE hp = FindFirstFileW(*(directory / TEXT('*')), &info);
+    const String filesystemPattern = GetWin32FilesystemPath(directory / TEXT('*'));
+    const HANDLE hp = FindFirstFileW(*filesystemPattern, &info);
     if (INVALID_HANDLE_VALUE == hp)
     {
         // Check if no files at all
@@ -352,9 +359,9 @@ DateTime Win32FileSystem::GetFileLastEditTime(const StringView& path)
 	}
 #endif
 
-    WIN32_INIT_BUFFER(path, buffer);
+    const String filesystemPath = GetWin32FilesystemPath(path);
     WIN32_FILE_ATTRIBUTE_DATA data;
-    if (!!GetFileAttributesExW(buffer, GetFileExInfoStandard, &data))
+    if (!!GetFileAttributesExW(*filesystemPath, GetFileExInfoStandard, &data))
     {
         SYSTEMTIME lpSystemTime;
         FileTimeToSystemTime(&data.ftLastWriteTime, &lpSystemTime);

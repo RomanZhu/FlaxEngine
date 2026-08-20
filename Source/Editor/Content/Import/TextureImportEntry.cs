@@ -112,6 +112,10 @@ namespace FlaxEditor.Content.Import
     {
         private TextureImportSettings _settings = new();
 
+        internal bool IsCanonicalSource { get; }
+
+        internal string MetadataPath => ResultUrl + ".meta";
+
         /// <summary>
         /// Initializes a new instance of the <see cref="TextureImportEntry"/> class.
         /// </summary>
@@ -119,6 +123,7 @@ namespace FlaxEditor.Content.Import
         public TextureImportEntry(ref Request request)
         : base(ref request)
         {
+            IsCanonicalSource = request.UseCanonicalSource;
             // Try to guess format type based on file name
             var snl = System.IO.Path.GetFileNameWithoutExtension(SourceUrl).ToLower();
             var extension = System.IO.Path.GetExtension(SourceUrl).ToLower();
@@ -201,7 +206,8 @@ namespace FlaxEditor.Content.Import
                 _settings.Settings.Type = TextureFormatType.ColorRGBA;
 
             // Try to restore target asset texture import options (useful for fast reimport)
-            Editor.TryRestoreImportOptions(ref _settings.Settings, ResultUrl);
+            if (!IsCanonicalSource)
+                Editor.TryRestoreImportOptions(ref _settings.Settings, ResultUrl);
         }
 
         /// <inheritdoc />
@@ -230,7 +236,12 @@ namespace FlaxEditor.Content.Import
         /// <inheritdoc />
         public override bool Import()
         {
-            return Editor.Import(SourceUrl, ResultUrl, _settings.Settings);
+            return IsCanonicalSource ? CopySourceToResult() : Editor.Import(SourceUrl, ResultUrl, _settings.Settings);
+        }
+
+        internal bool CreateMetadata()
+        {
+            return AssetDatabaseFacade.CreateTextureMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
         }
     }
 }

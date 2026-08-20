@@ -52,4 +52,20 @@ TEST_CASE("FileSystem path comparison")
         CHECK(!FileSystem::AreFilePathsEquivalent(fileA, root / TEXT("filea.TXT")));
 #endif
     }
+
+    SECTION("Same-volume overwrite move publishes the replacement")
+    {
+        const String replacement = root / TEXT("Replacement.txt");
+        const byte replacementContents[] = { 9, 8, 7, 6 };
+        REQUIRE(!File::WriteAllBytes(replacement, replacementContents, ARRAY_COUNT(replacementContents)));
+
+        REQUIRE(!FileSystem::MoveFile(fileA, replacement, true));
+        CHECK(!FileSystem::FileExists(replacement));
+        REQUIRE(FileSystem::GetFileSize(fileA) == ARRAY_COUNT(replacementContents));
+
+        Array<byte> loaded;
+        REQUIRE(!File::ReadAllBytes(fileA, loaded));
+        REQUIRE(loaded.Count() == ARRAY_COUNT(replacementContents));
+        CHECK(Platform::MemoryCompare(loaded.Get(), replacementContents, loaded.Count()) == 0);
+    }
 }

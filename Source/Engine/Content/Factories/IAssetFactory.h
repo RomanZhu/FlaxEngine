@@ -6,6 +6,7 @@
 #include "Engine/Core/Collections/Dictionary.h"
 
 struct AssetInfo;
+struct AssetLoadLocation;
 class Asset;
 class IAssetUpgrader;
 
@@ -43,9 +44,9 @@ public:
     /// <summary>
     /// Creates new asset instance.
     /// </summary>
-    /// <param name="info">The asset info structure.</param>
+    /// <param name="location">The canonical identity and resolved physical storage.</param>
     /// <returns>Created asset object.</returns>
-    virtual Asset* New(const AssetInfo& info) = 0;
+    virtual Asset* New(const AssetLoadLocation& location) = 0;
 
     /// <summary>
     /// Creates new virtual asset instance. Virtual assets are temporary and exist until application exit.

@@ -3,6 +3,7 @@
 #if PLATFORM_WIN32
 
 #include "Win32File.h"
+#include "Win32Path.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Log.h"
 #include "IncludeWindowsHeaders.h"
@@ -23,7 +24,8 @@ Win32File* Win32File::Open(const StringView& path, FileMode mode, FileAccess acc
 	param.dwSecurityQosFlags = SECURITY_ANONYMOUS;
 	auto handle = CreateFile2(*path, (DWORD)access, (DWORD)share, (DWORD)mode, &param);
 #else
-    auto handle = CreateFileW(*path, (DWORD)access, (DWORD)share, nullptr, (DWORD)mode, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const String filesystemPath = GetWin32FilesystemPath(path);
+    auto handle = CreateFileW(*filesystemPath, (DWORD)access, (DWORD)share, nullptr, (DWORD)mode, FILE_ATTRIBUTE_NORMAL, nullptr);
 #endif
     if (handle == INVALID_HANDLE_VALUE)
     {

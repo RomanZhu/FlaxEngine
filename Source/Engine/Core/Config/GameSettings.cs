@@ -117,6 +117,12 @@ namespace FlaxEditor.Content.Settings
         public JsonAsset Streaming;
 
         /// <summary>
+        /// Reference to <see cref="AssetPipelineSettings"/> asset.
+        /// </summary>
+        [EditorOrder(1070), EditorDisplay("Other Settings"), AssetReference(typeof(AssetPipelineSettings), true), Tooltip("Reference to Asset Pipeline Settings asset")]
+        public JsonAsset AssetPipeline;
+
+        /// <summary>
         /// The custom settings to use with a game. Can be specified by the user to define game-specific options and be used by the external plugins (used as key-value pair).
         /// </summary>
         [EditorOrder(1500), EditorDisplay("Other Settings"), Tooltip("The custom settings to use with a game. Can be specified by the user to define game-specific options and be used by the external plugins (used as key-value pair).")]
@@ -305,6 +311,8 @@ namespace FlaxEditor.Content.Settings
                 return Load<BuildSettings>(gameSettings.GameCooking) as T;
             if (type == typeof(StreamingSettings))
                 return Load<StreamingSettings>(gameSettings.Streaming) as T;
+            if (type == typeof(AssetPipelineSettings))
+                return Load<AssetPipelineSettings>(gameSettings.AssetPipeline) as T;
             if (type == typeof(InputSettings))
                 return Load<InputSettings>(gameSettings.Input) as T;
             if (type == typeof(AudioSettings))
@@ -407,6 +415,8 @@ namespace FlaxEditor.Content.Settings
                 return gameSettings.GameCooking;
             if (type == typeof(StreamingSettings))
                 return gameSettings.Streaming;
+            if (type == typeof(AssetPipelineSettings))
+                return gameSettings.AssetPipeline;
             if (type == typeof(InputSettings))
                 return gameSettings.Input;
             if (type == typeof(AudioSettings))
@@ -547,6 +557,8 @@ namespace FlaxEditor.Content.Settings
                 return SaveAsset(gameSettings, ref gameSettings.GameCooking, obj);
             if (type == typeof(StreamingSettings))
                 return SaveAsset(gameSettings, ref gameSettings.Streaming, obj);
+            if (type == typeof(AssetPipelineSettings))
+                return SaveAsset(gameSettings, ref gameSettings.AssetPipeline, obj);
             if (type == typeof(InputSettings))
                 return SaveAsset(gameSettings, ref gameSettings.Input, obj);
             if (type == typeof(WindowsPlatformSettings))

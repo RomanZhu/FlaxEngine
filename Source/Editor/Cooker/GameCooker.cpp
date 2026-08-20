@@ -12,6 +12,7 @@
 #include "Engine/Scripting/BinaryModule.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Threading/ThreadSpawner.h"
@@ -347,6 +348,16 @@ void CookingData::AddRootAsset(const Guid& id)
 
 void CookingData::AddRootAsset(const String& path)
 {
+    const AssetDatabaseSnapshot database = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : database.Records)
+    {
+        if (record.IsMainAsset() && FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), path))
+        {
+            LOG(Info, "Adding canonical cooker root {0} from '{1}'.", record.ID, path);
+            RootAssets.Add(record.ID);
+            return;
+        }
+    }
     AssetInfo info;
     if (Content::GetAssetInfo(path, info))
     {

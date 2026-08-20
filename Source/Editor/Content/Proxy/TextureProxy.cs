@@ -22,9 +22,21 @@ namespace FlaxEditor.Content
         public override string Name => "Texture";
 
         /// <inheritdoc />
+        public override bool AcceptsAsset(string typeName, string path)
+        {
+            if (typeName != TypeName)
+                return false;
+            var extension = System.IO.Path.GetExtension(path);
+            return string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".tga", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".exr", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <inheritdoc />
         public override bool CanReimport(ContentItem item)
         {
-            return true;
+            return item is not AssetItem asset || !asset.IsCanonicalSource;
         }
 
         /// <inheritdoc />

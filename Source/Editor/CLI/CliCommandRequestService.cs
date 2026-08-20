@@ -932,21 +932,49 @@ namespace FlaxEditor
                 ? CliCommandRegistry.RequireGenerator(commands, options.Name)
                 : CliCommandRegistry.RequireCommand(commands, options.Name);
             TryWriteEvent(new { type = "phase", requestId = _request.RequestId, name = command.Attribute.Name });
-            var result = CliCommandRegistry.Invoke(command, options.Arguments, options.Confirm, context);
-            warnings.AddRange(result.Warnings);
-            if (!result.Succeeded)
+            var invocation = CliCommandRegistry.BeginInvoke(command, options.Arguments, options.Confirm, context);
+
+            void CompleteInvocation(CliCommandResult result)
             {
-                foreach (var error in result.Errors)
-                    TryWriteEvent(new { type = "diagnostic", requestId = _request.RequestId, severity = "error", code = error.Code, message = error.Message, details = error.Details });
+                warnings.AddRange(result.Warnings);
+                if (!result.Succeeded)
+                {
+                    foreach (var error in result.Errors)
+                        TryWriteEvent(new { type = "diagnostic", requestId = _request.RequestId, severity = "error", code = error.Code, message = error.Message, details = error.Details });
+                }
+                CompleteCommand(result.Data, result.Succeeded, result.Errors, warnings);
             }
-            CompleteCommand(result.Data, result.Succeeded, result.Errors, warnings);
+
+            if (invocation.IsCompleted)
+            {
+                CompleteInvocation(invocation.Result);
+                return;
+            }
+
+            Action update = null;
+            update = () =>
+            {
+                try
+                {
+                    invocation.Update(TimeSpan.FromMilliseconds(10.0));
+                    if (!invocation.IsCompleted)
+                        return;
+                    Editor.Instance.EditorUpdate -= update;
+                    CompleteInvocation(invocation.Result);
+                }
+                catch (Exception ex)
+                {
+                    Editor.Instance.EditorUpdate -= update;
+                    CompleteCommand(null, false, new[] { new CliCommandMessage("FLX-COMMAND-0006", ex.Message) }, warnings);
+                }
+            };
+            Editor.Instance.EditorUpdate += update;
         }
 
         private void CompleteCommand(object data, bool success, IEnumerable<CliCommandMessage> errors, IEnumerable<CliCommandMessage> warnings)
         {
             if (_completed)
                 return;
-            _completed = true;
             var errorArray = errors?.ToArray() ?? Array.Empty<CliCommandMessage>();
             var warningArray = warnings?.ToArray() ?? Array.Empty<CliCommandMessage>();
             WriteResult(new
@@ -959,6 +987,7 @@ namespace FlaxEditor
                 errors = errorArray,
                 warnings = warningArray,
             });
+            _completed = true;
             TryWriteEvent(new { type = "result", requestId = _request.RequestId, success, exitCode = success ? 0 : 6 });
             Engine.RequestExit(success ? 0 : 1);
         }

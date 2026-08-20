@@ -36,6 +36,9 @@ public:
     // Project specific cache folder path (editor-only).
     API_FIELD(ReadOnly) static String ProjectCacheFolder;
 
+    // Project generated asset library folder path (editor-only).
+    API_FIELD(ReadOnly) static String ProjectLibraryFolder;
+
     // Engine content directory path (editor-only).
     API_FIELD(ReadOnly) static String EngineContentFolder;
 

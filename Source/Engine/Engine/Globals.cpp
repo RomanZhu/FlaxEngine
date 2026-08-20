@@ -11,6 +11,7 @@ String Globals::ProductLocalFolder;
 String Globals::BinariesFolder;
 #if USE_EDITOR
 String Globals::ProjectCacheFolder;
+String Globals::ProjectLibraryFolder;
 String Globals::EngineContentFolder;
 String Globals::ProjectSourceFolder;
 #endif

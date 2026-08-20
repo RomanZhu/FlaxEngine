@@ -8,6 +8,7 @@ using System.Threading;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Create;
 using FlaxEditor.Content.Import;
+using FlaxEditor.Content.Settings;
 using FlaxEngine;
 
 namespace FlaxEditor.Modules
@@ -155,11 +156,17 @@ namespace FlaxEditor.Modules
         public void Reimport(BinaryAssetItem item, object settings = null, bool skipSettingsDialog = false)
         {
             if (item != null && !item.GetImportPath(out string importPath))
-            {
-                if (GetReimportPath(item.ShortName, ref importPath, skipSettingsDialog))
-                    return;
-                Import(importPath, item.Path, true, skipSettingsDialog, settings, true);
-            }
+                Reimport(item, importPath, settings, skipSettingsDialog);
+        }
+
+        internal void Reimport(BinaryAssetItem item, string importPath, object settings = null, bool skipSettingsDialog = false)
+        {
+            if (item == null)
+                throw new ArgumentNullException(nameof(item));
+            importPath = StringUtils.NormalizePath(importPath);
+            if (GetReimportPath(item.ShortName, ref importPath, skipSettingsDialog))
+                return;
+            Import(importPath, item.Path, true, skipSettingsDialog, settings, true);
         }
 
         internal bool GetReimportPath(string contextName, ref string importPath, bool skipSettingsDialog = false)
@@ -193,6 +200,11 @@ namespace FlaxEditor.Modules
         /// <param name="skipSettingsDialog">True if skip any popup dialogs showing for import options adjusting. Can be used when importing files from code.</param>
         public void Import(IEnumerable<string> files, ContentFolder targetLocation, bool skipSettingsDialog = false)
         {
+            Import(files, targetLocation, skipSettingsDialog, null);
+        }
+
+        internal void Import(IEnumerable<string> files, ContentFolder targetLocation, bool skipSettingsDialog, object settings)
+        {
             if (targetLocation == null)
                 throw new ArgumentNullException();
             if (files == null)
@@ -212,7 +224,7 @@ namespace FlaxEditor.Modules
                 bool skipDialog = skipSettingsDialog;
                 foreach (var file in filesArray)
                 {
-                    Import(file, targetLocation, skipSettingsDialog, null, ref skipDialog);
+                    Import(file, targetLocation, skipSettingsDialog, settings, ref skipDialog);
                 }
             }
         }
@@ -264,7 +276,11 @@ namespace FlaxEditor.Modules
                 else
                 {
                     var extension = Path.GetExtension(inputPath) ?? string.Empty;
-                    var isBuilt = Editor.CanImport(extension, out var outputExtension);
+                    var isCanonicalTexture = IsCanonicalTextureImport(extension);
+                    string outputExtension = null;
+                    var isBuilt = !isCanonicalTexture && Editor.CanImport(extension, out outputExtension);
+                    if (isCanonicalTexture && !targetLocation.CanHaveAssets)
+                        return ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, inputPath, targetLocation.Path, "The target folder cannot contain texture assets.");
                     if (isBuilt)
                     {
                         if (!targetLocation.CanHaveAssets)
@@ -282,6 +298,12 @@ namespace FlaxEditor.Modules
                 firstDestination ??= destination;
                 if (!destinations.Add(destination) || ContentMutationPathUtils.Exists(destination))
                     return ContentMutationResult.Fail(ContentMutationFailure.DestinationCollision, inputPath, destination, $"Import destination '{destination}' already exists or is duplicated in the batch.");
+                if (!isDirectory && IsCanonicalTextureImport(Path.GetExtension(inputPath)))
+                {
+                    var metaDestination = destination + ".meta";
+                    if (!destinations.Add(metaDestination) || ContentMutationPathUtils.Exists(metaDestination))
+                        return ContentMutationResult.Fail(ContentMutationFailure.DestinationCollision, inputPath, metaDestination, $"Texture metadata destination '{metaDestination}' already exists or is duplicated in the batch.");
+                }
             }
             return destinations.Count == 0
                 ? ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, null, targetLocation.Path, "No import sources were provided.")
@@ -296,7 +318,18 @@ namespace FlaxEditor.Modules
             var extension = System.IO.Path.GetExtension(inputPath) ?? string.Empty;
 
             // Check if given file extension is a binary asset (.flax files) and can be imported by the engine
-            bool isBuilt = Editor.CanImport(extension, out var outputExtension);
+            bool useCanonicalSource = IsCanonicalTextureImport(extension);
+            string outputExtension = null;
+            bool isBuilt = !useCanonicalSource && Editor.CanImport(extension, out outputExtension);
+            if (useCanonicalSource)
+            {
+                outputExtension = extension;
+                if (!targetLocation.CanHaveAssets)
+                {
+                    Editor.LogWarning(string.Format("Cannot import '{0}' to '{1}'. The target directory cannot have assets.", inputPath, targetLocation.Node.Path));
+                    return;
+                }
+            }
             if (isBuilt)
             {
                 outputExtension = '.' + outputExtension;
@@ -335,7 +368,7 @@ namespace FlaxEditor.Modules
             var shortName = System.IO.Path.GetFileNameWithoutExtension(inputPath);
             var outputPath = System.IO.Path.Combine(targetLocation.Path, shortName + outputExtension);
 
-            Import(inputPath, outputPath, isBuilt, skipSettingsDialog, settings, false);
+            Import(inputPath, outputPath, isBuilt, skipSettingsDialog, settings, false, useCanonicalSource);
         }
 
         /// <summary>
@@ -348,7 +381,8 @@ namespace FlaxEditor.Modules
         /// <param name="skipSettingsDialog">True if skip any popup dialogs showing for import options adjusting. Can be used when importing files from code.</param>
         /// <param name="settings">Import settings to override. Use null to skip this value.</param>
         /// <param name="allowReplace">True only for an explicit reimport that may replace the destination.</param>
-        private void Import(string inputPath, string outputPath, bool isInBuilt, bool skipSettingsDialog = false, object settings = null, bool allowReplace = false)
+        /// <param name="useCanonicalSource">True to preserve a texture source and create adjacent metadata.</param>
+        private void Import(string inputPath, string outputPath, bool isInBuilt, bool skipSettingsDialog = false, object settings = null, bool allowReplace = false, bool useCanonicalSource = false)
         {
             inputPath = StringUtils.NormalizePath(inputPath);
             outputPath = StringUtils.NormalizePath(outputPath);
@@ -361,9 +395,19 @@ namespace FlaxEditor.Modules
                     IsInBuilt = isInBuilt,
                     SkipSettingsDialog = skipSettingsDialog,
                     AllowReplace = allowReplace,
+                    UseCanonicalSource = useCanonicalSource,
                     Settings = settings,
                 });
             }
+        }
+
+        private static bool IsCanonicalTextureImport(string extension)
+        {
+            extension = extension?.ToLowerInvariant();
+            if (extension != ".png" && extension != ".tga" && extension != ".exr")
+                return false;
+            var settings = GameSettings.Load<AssetPipelineSettings>();
+            return settings != null && settings.UseNewAssetDatabase && settings.UseLibraryArtifacts;
         }
 
         private void WorkerMain()
@@ -513,6 +557,24 @@ namespace FlaxEditor.Modules
                     : DeleteImportedOutput(destinationPath),
                 () => File.Exists(destinationPath) && new FileInfo(destinationPath).Length > 0));
 
+            if (entry is TextureImportEntry { IsCanonicalSource: true } textureEntry)
+            {
+                var metadataPath = ContentMutationPathUtils.Normalize(textureEntry.MetadataPath);
+                var metadataEntryIndex = plan.Entries.Count;
+                plan.Entries.Add(new ContentMutationEntry(destinationPath, metadataPath, ContentMutationPathRole.MetadataSidecar, false)
+                {
+                    SourceProducedByTransaction = true,
+                });
+                steps.Add(new ContentMutationStep(
+                    "texture-metadata",
+                    new[] { metadataEntryIndex },
+                    () => textureEntry.CreateMetadata()
+                        ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, destinationPath, metadataPath, "Texture metadata creation or database registration failed.")
+                        : ContentMutationResult.Success(destinationPath, metadataPath),
+                    () => DeleteCanonicalMetadata(metadataPath),
+                    () => File.Exists(metadataPath) && FlaxEngine.Content.GetAssetInfo(destinationPath, out var info) && info.ID != Guid.Empty));
+            }
+
             var result = new ContentMutationTransaction(plan).Execute(steps);
             if (result.Succeeded && backupPath != null)
             {
@@ -588,6 +650,14 @@ namespace FlaxEditor.Modules
                 Editor.LogWarning("Failed to remove import transaction path: " + ex.Message);
                 return false;
             }
+        }
+
+        private static bool DeleteCanonicalMetadata(string path)
+        {
+            var deleted = DeleteImportPath(path);
+            if (deleted)
+                AssetDatabaseFacade.Scan(false);
+            return deleted;
         }
 
         internal void LetThemBeImportedxD(List<ImportFileEntry> entries)

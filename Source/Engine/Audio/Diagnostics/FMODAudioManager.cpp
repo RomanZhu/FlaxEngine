@@ -94,6 +94,7 @@ void FMODAudioManager::OnDisable()
     Actor::OnDisable();
 }
 
+#if USE_EDITOR
 void FMODAudioManager::OnDebugDraw()
 {
     if (ShowOcclusionRays)
@@ -107,3 +108,4 @@ void FMODAudioManager::OnDebugDraw()
     }
     Actor::OnDebugDraw();
 }
+#endif

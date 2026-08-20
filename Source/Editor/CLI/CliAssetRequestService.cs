@@ -7,7 +7,9 @@ using System.Linq;
 using System.Reflection;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Import;
 using FlaxEngine;
+using FlaxEngine.Tools;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using FlaxJsonSerializer = FlaxEngine.Json.JsonSerializer;
@@ -30,6 +32,9 @@ namespace FlaxEditor
 
         [JsonProperty("assetType")]
         public string AssetType { get; set; }
+
+        [JsonProperty("importOptions")]
+        public JObject ImportOptions { get; set; }
 
         [JsonProperty("propertyPath")]
         public string PropertyPath { get; set; }
@@ -148,12 +153,23 @@ namespace FlaxEditor
                 x.IsAsset && x.CanCreate(parent) && IsAssetTypeMatch(x, options.AssetType));
             if (proxy == null)
                 throw new InvalidOperationException($"Asset type '{options.AssetType}' is not available in '{parent.Path}'.");
-            var createResult = Editor.Instance.ContentDatabase.CreatePath(path, false, () => proxy.Create(path, null));
+            var createResult = Editor.Instance.ContentDatabase.CreatePath(path, false, () => CreateAssetFile(proxy, path));
             if (!createResult.Succeeded)
                 throw new InvalidOperationException(createResult.Message ?? $"Failed to create {options.AssetType} asset '{path}'.");
             Editor.Instance.ContentDatabase.RefreshFolder(Editor.Instance.ContentDatabase.Find(System.IO.Path.GetDirectoryName(path)), false);
             TryWriteEvent(new { type = "artifact", requestId = _request.RequestId, kind = "asset", path });
             CompleteAsset(DescribePath(path, options.AssetType));
+        }
+
+        private static void CreateAssetFile(ContentProxy proxy, string path)
+        {
+            if (proxy is VisualScriptProxy)
+            {
+                if (Editor.CreateVisualScript(path, typeof(Script).FullName))
+                    throw new IOException($"Failed to create Visual Script asset '{path}'.");
+                return;
+            }
+            proxy.Create(path, null);
         }
 
         private static bool IsAssetTypeMatch(ContentProxy proxy, string requestedType)
@@ -195,24 +211,51 @@ namespace FlaxEditor
             importing.ImportFileEnd += OnAssetImportFileEnd;
             importing.ImportingQueueEnd += OnAssetImportQueueEnd;
             TryWriteEvent(new { type = "phase", requestId = _request.RequestId, name = "Import" });
-            importing.Import(sources, target, true);
+            importing.Import(sources, target, true, CreateImportSettings(options.AssetType, options.ImportOptions));
+        }
+
+        private static object CreateImportSettings(string assetType, JObject importOptions)
+        {
+            if (string.IsNullOrWhiteSpace(assetType) && importOptions == null)
+                return null;
+            var modelOptions = importOptions == null
+                ? ModelTool.Options.Default
+                : JsonConvert.DeserializeObject<ModelTool.Options>(importOptions.ToString(Formatting.None), FlaxJsonSerializer.Settings);
+            if (!string.IsNullOrWhiteSpace(assetType))
+            {
+                if (!Enum.TryParse(assetType, true, out ModelTool.ModelType modelType))
+                    throw new InvalidOperationException($"Unsupported import asset type '{assetType}'.");
+                modelOptions.Type = modelType;
+            }
+            return new ModelImportSettings { Settings = modelOptions };
         }
 
         private void ReimportAsset(CliAssetOptions options)
         {
             var item = RequireItem(options.Path) as BinaryAssetItem
-                       ?? throw new InvalidOperationException("Only binary assets with import metadata can be reimported.");
+                       ?? throw new InvalidOperationException("Only binary assets can be reimported.");
             var proxy = Editor.Instance.ContentDatabase.GetProxy(item);
             if (proxy == null || !proxy.CanReimport(item))
                 throw new InvalidOperationException($"Asset '{item.Path}' does not support reimport.");
-            if (item.GetImportPath(out var importPath) || !File.Exists(importPath))
+            string importPath;
+            if (options.Sources != null && options.Sources.Length != 0)
+            {
+                if (options.Sources.Length != 1)
+                    throw new InvalidOperationException("Asset reimport accepts exactly one source override.");
+                importPath = System.IO.Path.GetFullPath(options.Sources[0]);
+            }
+            else if (item.GetImportPath(out importPath))
+            {
+                throw new FileNotFoundException($"The import source for asset '{item.Path}' is not recorded.");
+            }
+            if (!File.Exists(importPath))
                 throw new FileNotFoundException($"The import source for asset '{item.Path}' does not exist.", importPath);
 
             var importing = Editor.Instance.ContentImporting;
             importing.ImportFileEnd += OnAssetImportFileEnd;
             importing.ImportingQueueEnd += OnAssetImportQueueEnd;
             TryWriteEvent(new { type = "phase", requestId = _request.RequestId, name = "Reimport" });
-            importing.Reimport(item, null, true);
+            importing.Reimport(item, importPath, CreateImportSettings(options.AssetType, options.ImportOptions), true);
         }
 
         private void OnAssetImportFileEnd(FlaxEditor.Content.IFileEntryAction entry, bool failed)

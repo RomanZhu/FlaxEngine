@@ -21,8 +21,11 @@ public class Tests : EngineModule
     {
         base.Setup(options);
 
+        options.CompileEnv.PreprocessorDefinitions.Add("COMPILE_WITH_TESTS=1");
+        options.CompileEnv.PreprocessorDefinitions.Add("COMPILE_WITH_ASSETS_IMPORTER=1");
         options.PrivateDependencies.Add("CSG");
         options.PrivateDependencies.Add("ModelTool");
+        options.PrivateDependencies.Add("TextureTool");
         options.PrivateDependencies.Add("Audio");
 
         // FMOD-specific tests are compiled only when the SDK is available. The

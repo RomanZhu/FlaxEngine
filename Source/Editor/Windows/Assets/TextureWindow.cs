@@ -90,6 +90,8 @@ namespace FlaxEditor.Windows.Assets
         [CustomEditor(typeof(ProxyEditor))]
         private sealed class ImportPropertiesProxy : PropertiesProxyBase
         {
+            private FlaxEngine.Tools.TextureTool.Options _savedSettings;
+
             [EditorOrder(1000), EditorDisplay("Import Settings", EditorDisplayAttribute.InlineStyle)]
             public FlaxEngine.Tools.TextureTool.Options ImportSettings = new();
 
@@ -101,8 +103,15 @@ namespace FlaxEditor.Windows.Assets
             {
                 base.OnLoad(window);
 
-                // Try to restore target asset texture import options (useful for fast reimport)
-                Editor.TryRestoreImportOptions(ref ImportSettings, window.Item.Path);
+                if (window.Item.IsCanonicalSource)
+                {
+                    if (AssetDatabaseFacade.LoadTextureMetadata(window.Item.Path, out ImportSettings))
+                        Editor.LogWarning("Cannot load tracked texture settings for " + window.Item.Path);
+                }
+                else
+                {
+                    Editor.TryRestoreImportOptions(ref ImportSettings, window.Item.Path);
+                }
 
                 // Prepare restore data
                 PeekState();
@@ -113,6 +122,7 @@ namespace FlaxEditor.Windows.Assets
             /// </summary>
             public void PeekState()
             {
+                _savedSettings = ImportSettings;
             }
 
             /// <summary>
@@ -123,11 +133,50 @@ namespace FlaxEditor.Windows.Assets
                 Editor.Instance.ContentImporting.Reimport((BinaryAssetItem)_window.Item, ImportSettings);
             }
 
+            public void Apply()
+            {
+                using var save = Editor.Instance.ContentDatabase.TrackAssetSave(_window.Item.Path + ".meta");
+                var failed = AssetDatabaseFacade.ApplyTextureMetadata(_window.Item.Path, ImportSettings);
+                save.Complete(!failed);
+                if (failed)
+                {
+                    var diagnostic = AssetDatabaseFacade.GetTextureBuildDiagnostic(_window.Item.ID);
+                    Editor.LogError(string.IsNullOrEmpty(diagnostic.Message) ? "Cannot apply texture settings." : diagnostic.Message);
+                    return;
+                }
+                PeekState();
+                _window.ClearEditedFlag();
+            }
+
+            public void Rebuild()
+            {
+                if (AssetDatabaseFacade.RebuildTexture(_window.Item.ID))
+                    Editor.LogError("Cannot queue texture rebuild.");
+            }
+
+            public void ResetDefaults()
+            {
+                ImportSettings = FlaxEngine.Tools.TextureTool.Options.Default;
+                _window.MarkAsEdited();
+                _window._importTab.Presenter.BuildLayout();
+            }
+
             /// <summary>
             /// On discard changes
             /// </summary>
             public void DiscardChanges()
             {
+                if (_window.Item.IsCanonicalSource)
+                {
+                    if (AssetDatabaseFacade.LoadTextureMetadata(_window.Item.Path, out ImportSettings))
+                        ImportSettings = _savedSettings;
+                }
+                else
+                {
+                    ImportSettings = _savedSettings;
+                }
+                _window.ClearEditedFlag();
+                _window._importTab.Presenter.BuildLayout();
             }
 
             private sealed class ProxyEditor : GenericEditor
@@ -144,14 +193,26 @@ namespace FlaxEditor.Windows.Assets
                     // Import settings
                     base.Initialize(layout);
 
-                    // Creates the import path UI
-                    var group = layout.Group("Import Path");
-                    Utilities.Utils.CreateImportPathUI(group, proxy._window.Item as BinaryAssetItem);
-
-                    // Reimport
-                    layout.Space(5);
-                    var reimportButton = layout.Button("Reimport");
-                    reimportButton.Button.Clicked += () => ((ImportPropertiesProxy)Values[0]).Reimport();
+                    if (proxy._window.Item.IsCanonicalSource)
+                    {
+                        var state = layout.Group("Artifact State");
+                        state.Label("Status: " + AssetDatabaseFacade.GetTextureBuildStatus(proxy._window.Item.ID));
+                        var diagnostic = AssetDatabaseFacade.GetTextureBuildDiagnostic(proxy._window.Item.ID);
+                        if (!string.IsNullOrEmpty(diagnostic.Message))
+                            state.Label(diagnostic.Message);
+                        layout.Space(5);
+                        layout.Button("Apply Settings").Button.Clicked += proxy.Apply;
+                        layout.Button("Revert Settings").Button.Clicked += proxy.DiscardChanges;
+                        layout.Button("Reset Settings to Current Defaults").Button.Clicked += proxy.ResetDefaults;
+                        layout.Button("Rebuild").Button.Clicked += proxy.Rebuild;
+                    }
+                    else
+                    {
+                        var group = layout.Group("Import Path");
+                        Utilities.Utils.CreateImportPathUI(group, proxy._window.Item as BinaryAssetItem);
+                        layout.Space(5);
+                        layout.Button("Reimport").Button.Clicked += proxy.Reimport;
+                    }
                 }
             }
         }
@@ -218,6 +279,7 @@ namespace FlaxEditor.Windows.Assets
         }
 
         private readonly GUI.Tabs.Tabs _tabs;
+        private readonly ImportTab _importTab;
         private readonly SplitPanel _split;
         private readonly TexturePreview _preview;
         private readonly ToolStripButton _saveButton;
@@ -256,11 +318,15 @@ namespace FlaxEditor.Windows.Assets
             };
 
             _tabs.AddTab(new TextureTab(this));
-            _tabs.AddTab(new ImportTab(this));
+            _importTab = new ImportTab(this);
+            _tabs.AddTab(_importTab);
 
             // Toolstrip
             _saveButton = (ToolStripButton)_toolstrip.AddButton(Editor.Icons.Save64, Save).LinkTooltip("Save", ref inputOptions.Save);
-            _toolstrip.AddButton(Editor.Icons.Import64, () => Editor.ContentImporting.Reimport((BinaryAssetItem)Item)).LinkTooltip("Reimport");
+            if (Item.IsCanonicalSource)
+                _toolstrip.AddButton(Editor.Icons.Import64, () => ((ImportPropertiesProxy)_importTab.Proxy).Rebuild()).LinkTooltip("Rebuild");
+            else
+                _toolstrip.AddButton(Editor.Icons.Import64, () => Editor.ContentImporting.Reimport((BinaryAssetItem)Item)).LinkTooltip("Reimport");
             _toolstrip.AddSeparator();
             _toolstrip.AddButton(Editor.Icons.CenterView64, _preview.CenterView).LinkTooltip("Center view");
             _toolstrip.AddSeparator();
@@ -313,6 +379,12 @@ namespace FlaxEditor.Windows.Assets
         {
             if (!IsEdited)
                 return;
+
+            if (Item.IsCanonicalSource)
+            {
+                ((ImportPropertiesProxy)_importTab.Proxy).Apply();
+                return;
+            }
 
             if (Editor.ContentDatabase.SaveAsset(Asset))
             {

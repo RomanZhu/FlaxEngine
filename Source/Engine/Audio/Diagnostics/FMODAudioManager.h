@@ -92,7 +92,9 @@ public:
 protected:
     void OnEnable() override;
     void OnDisable() override;
+#if USE_EDITOR
     void OnDebugDraw() override;
+#endif
 
 private:
     float _consoleLogElapsed = 0.0f;

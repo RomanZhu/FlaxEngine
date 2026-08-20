@@ -4,6 +4,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Asset.h"
 #include "Engine/Content/AssetReference.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/Assets/Texture.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Content/Assets/CubeTexture.h"
@@ -32,9 +33,12 @@ bool CollectAssetsStep::Perform(CookingData& data)
         const Guid assetId = assetsQueue.Dequeue();
 
         // Skip already processed or invalid assets
-        if (!assetId.IsValid()
-            || !Content::GetRegistry()->FindAsset(assetId, assetInfo)
-            || data.Assets.Contains(assetId))
+        if (!assetId.IsValid() || data.Assets.Contains(assetId))
+            continue;
+        AssetRecord canonicalRecord;
+        if (AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord))
+            assetInfo = canonicalRecord.ToAssetInfo();
+        else if (!Content::GetRegistry()->FindAsset(assetId, assetInfo))
             continue;
 
         // Skip some assets (with no refs and not required to load)

@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Text;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -23,6 +24,24 @@ namespace FlaxEditor.Content
         /// </summary>
         public string TypeName { get; }
 
+        /// <summary>True when this item is backed by a canonical source/document plus metadata sidecar.</summary>
+        public bool IsCanonicalSource { get; private set; }
+
+        /// <summary>Canonical metadata status shown by the content browser.</summary>
+        public AssetRecordStatus DatabaseStatus { get; private set; } = AssetRecordStatus.Ready;
+
+        /// <summary>Adjacent metadata sidecar path for canonical source items.</summary>
+        public string MetadataPath { get; private set; }
+
+        /// <summary>Canonical authored source path for database-backed assets.</summary>
+        public string SourcePath { get; private set; }
+
+        /// <summary>Processor selected by the adjacent metadata sidecar.</summary>
+        public string ProcessorID { get; private set; }
+
+        /// <summary>Physical runtime storage currently attached to a loaded binary asset.</summary>
+        public string StoragePath => (FlaxEngine.Content.GetAsset(ID) as BinaryAsset)?.StoragePath ?? string.Empty;
+
         /// <summary>
         /// Returns true if asset is now loaded.
         /// </summary>
@@ -39,6 +58,43 @@ namespace FlaxEditor.Content
         {
             TypeName = typeName;
             ID = id;
+        }
+
+        internal void SetAssetDatabaseRecord(AssetDatabaseRecordInfo record)
+        {
+            IsCanonicalSource = true;
+            DatabaseStatus = record.Status;
+            MetadataPath = record.MetaPath;
+            SourcePath = record.SourcePath;
+            ProcessorID = record.ProcessorID;
+        }
+
+        /// <inheritdoc />
+        protected override void OnBuildTooltipText(StringBuilder sb)
+        {
+            base.OnBuildTooltipText(sb);
+            sb.Append("GUID: ").Append(ID).AppendLine();
+            sb.Append("Pipeline: ").Append(IsCanonicalSource ? "Canonical source" : "Legacy asset").AppendLine();
+            if (IsCanonicalSource)
+            {
+                sb.Append("Status: ").Append(DatabaseStatus).AppendLine();
+                sb.Append("Processor: ").Append(ProcessorID).AppendLine();
+                sb.Append("Source: ").Append(SourcePath).AppendLine();
+                var storagePath = StoragePath;
+                if (!string.IsNullOrEmpty(storagePath))
+                    sb.Append("Storage: ").Append(storagePath).AppendLine();
+                sb.Append("Metadata: ").Append(MetadataPath).AppendLine();
+            }
+        }
+
+        /// <inheritdoc />
+        public override void Draw()
+        {
+            base.Draw();
+            var color = IsCanonicalSource
+                ? (DatabaseStatus == AssetRecordStatus.Ready ? Color.FromRGB(0x25B84C) : Color.FromRGB(0xD47A1F))
+                : Color.FromRGB(0x707070);
+            Render2D.FillRectangle(new Rectangle(Mathf.Max(0, Width - 8), 0, 8, 8), color);
         }
 
         private sealed class TooltipDoubleClickHook : Control

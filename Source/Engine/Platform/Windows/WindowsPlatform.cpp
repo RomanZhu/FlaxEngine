@@ -788,6 +788,7 @@ bool WindowsPlatform::Init()
     }
 
     // Get computer name string
+    tmp = ARRAY_COUNT(buffer);
     if (GetComputerNameW(buffer, &tmp))
     {
         ComputerName = String(buffer);
@@ -795,6 +796,7 @@ bool WindowsPlatform::Init()
 
     // Get user name string
     String userName;
+    tmp = ARRAY_COUNT(buffer);
     if (GetUserNameW(buffer, &tmp))
     {
         userName = String(buffer);

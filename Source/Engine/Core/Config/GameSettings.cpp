@@ -18,6 +18,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/AssetReference.h"
+#include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Profiler/ProfilerCPU.h"
@@ -71,6 +72,7 @@ IMPLEMENT_ENGINE_SETTINGS_GETTER(AudioSettings, Audio);
 IMPLEMENT_ENGINE_SETTINGS_GETTER(PhysicsSettings, Physics);
 IMPLEMENT_ENGINE_SETTINGS_GETTER(InputSettings, Input);
 IMPLEMENT_ENGINE_SETTINGS_GETTER(StreamingSettings, Streaming);
+IMPLEMENT_ENGINE_SETTINGS_GETTER(AssetPipelineSettings, AssetPipeline);
 
 #if !USE_EDITOR
 #if PLATFORM_WINDOWS
@@ -193,6 +195,8 @@ bool GameSettings::Load()
     PRELOAD_SETTINGS(GameCooking);
     PRELOAD_SETTINGS(Streaming);
 #undef PRELOAD_SETTINGS
+    if (settings->AssetPipeline)
+        Content::LoadAsync<JsonAsset>(settings->AssetPipeline);
 
     // Apply the game settings to the engine
     settings->Apply();
@@ -227,6 +231,7 @@ void GameSettings::Apply()
     APPLY_SETTINGS(LocalizationSettings);
     APPLY_SETTINGS(BuildSettings);
     APPLY_SETTINGS(PlatformSettings);
+    APPLY_SETTINGS(AssetPipelineSettings);
 #undef APPLY_SETTINGS
 }
 
@@ -269,6 +274,7 @@ void GameSettings::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
     DESERIALIZE(Localization);
     DESERIALIZE(GameCooking);
     DESERIALIZE(Streaming);
+    DESERIALIZE(AssetPipeline);
 
     // Per-platform settings containers
     DESERIALIZE(WindowsPlatform);

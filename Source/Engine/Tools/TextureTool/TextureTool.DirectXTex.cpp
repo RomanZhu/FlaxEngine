@@ -18,6 +18,9 @@
 #include "Engine/Graphics/GPUDevice.h"
 #endif
 #include "Engine/Utilities/AnsiPathTempFile.h"
+#if PLATFORM_WIN32
+#include "Engine/Platform/Win32/Win32Path.h"
+#endif
 
 // Import DirectXTex library
 // Source: https://github.com/Microsoft/DirectXTex
@@ -454,6 +457,13 @@ HRESULT LoadFromEXRFile(const StringView& path, DirectX::ScratchImage& image)
 
 bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path, TextureData& textureData, bool& hasAlpha)
 {
+#if PLATFORM_WIN32
+    const String filesystemPath = GetWin32FilesystemPath(path);
+    const StringView directXPath(filesystemPath);
+#else
+    const StringView directXPath(path);
+#endif
+
     // Load image data
     DirectX::ScratchImage image;
     HRESULT result;
@@ -464,16 +474,16 @@ bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path
     case ImageType::TIFF:
     case ImageType::JPEG:
     case ImageType::PNG:
-        result = DirectX::LoadFromWICFile(*path, DirectX::WIC_FLAGS_NONE, nullptr, image);
+        result = DirectX::LoadFromWICFile(*directXPath, DirectX::WIC_FLAGS_NONE, nullptr, image);
         break;
     case ImageType::DDS:
-        result = DirectX::LoadFromDDSFile(*path, DirectX::DDS_FLAGS_NONE, nullptr, image);
+        result = DirectX::LoadFromDDSFile(*directXPath, DirectX::DDS_FLAGS_NONE, nullptr, image);
         break;
     case ImageType::TGA:
-        result = DirectX::LoadFromTGAFile(*path, nullptr, image);
+        result = DirectX::LoadFromTGAFile(*directXPath, nullptr, image);
         break;
     case ImageType::HDR:
-        result = DirectX::LoadFromHDRFile(*path, nullptr, image);
+        result = DirectX::LoadFromHDRFile(*directXPath, nullptr, image);
         break;
     case ImageType::RAW:
         result = LoadFromRAWFile(path, image);
@@ -669,6 +679,12 @@ bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path
 {
 #define SET_CURRENT_IMG(x) currentImage = &x
 #define GET_TMP_IMG() (currentImage != &image1 ? image1 : image2)
+#if PLATFORM_WIN32
+    const String filesystemPath = GetWin32FilesystemPath(path);
+    const StringView directXPath(filesystemPath);
+#else
+    const StringView directXPath(path);
+#endif
     DirectX::ScratchImage* currentImage;
     DirectX::ScratchImage image1;
     DirectX::ScratchImage image2;
@@ -683,16 +699,16 @@ bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path
     case ImageType::TIFF:
     case ImageType::JPEG:
     case ImageType::PNG:
-        result = DirectX::LoadFromWICFile(*path, DirectX::WIC_FLAGS_NONE, nullptr, image1);
+        result = DirectX::LoadFromWICFile(*directXPath, DirectX::WIC_FLAGS_NONE, nullptr, image1);
         break;
     case ImageType::DDS:
-        result = DirectX::LoadFromDDSFile(*path, DirectX::DDS_FLAGS_NONE, nullptr, image1);
+        result = DirectX::LoadFromDDSFile(*directXPath, DirectX::DDS_FLAGS_NONE, nullptr, image1);
         break;
     case ImageType::TGA:
-        result = DirectX::LoadFromTGAFile(*path, nullptr, image1);
+        result = DirectX::LoadFromTGAFile(*directXPath, nullptr, image1);
         break;
     case ImageType::HDR:
-        result = DirectX::LoadFromHDRFile(*path, nullptr, image1);
+        result = DirectX::LoadFromHDRFile(*directXPath, nullptr, image1);
         break;
     case ImageType::RAW:
         result = LoadFromRAWFile(path, image1);

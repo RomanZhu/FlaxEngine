@@ -68,6 +68,12 @@ public:
     /// <returns>Result.</returns>
     static CreateAssetResult Create(CreateAssetContext& context, TextureBase::InitData* initData);
 
+    /// <summary>Writes already-decoded texture data using explicit tracked options for artifact staging.</summary>
+    static CreateAssetResult CreateArtifact(CreateAssetContext& context, const TextureData& textureData, Options& options);
+
+    /// <summary>Applies importer invariants to explicit tracked texture options.</summary>
+    static void NormalizeOptions(Options& options);
+
     /// <summary>
     /// Imports the Cube Texture.
     /// </summary>

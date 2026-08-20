@@ -6,6 +6,7 @@
 #include "Engine/Core/Collections/Sorting.h"
 #include "Engine/Core/Config/BuildSettings.h"
 #include "Engine/Core/Config/GameSettings.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Renderer/ReflectionsPass.h"
 #include "Engine/Renderer/AntiAliasing/SMAA.h"
 #include "Engine/Engine/Globals.h"
@@ -15,6 +16,11 @@
 bool DeployDataStep::Perform(CookingData& data)
 {
     data.StepProgress(TEXT("Deploying engine data"), 0);
+    if (AssetDatabaseFacade::LoadOrScan(false))
+    {
+        data.Error(TEXT("Failed to initialize the canonical asset database for cooking."));
+        return true;
+    }
     const String depsRoot = data.GetPlatformBinariesRoot();
     const auto& gameSettings = *GameSettings::Get();
     const auto& buildSettings = *BuildSettings::Get();
@@ -487,6 +493,8 @@ bool DeployDataStep::Perform(CookingData& data)
             data.Error(TEXT("Failed to find additional assets to deploy."));
             return true;
         }
+
+        LOG(Info, "Adding {0} files from cooker root '{1}'.", files.Count(), path);
 
         for (auto& q : files)
             data.AddRootAsset(q);

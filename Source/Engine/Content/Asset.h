@@ -39,6 +39,7 @@ API_CLASS(Abstract, NoSpawn) class FLAXENGINE_API Asset : public ManagedScriptin
 {
     DECLARE_SCRIPTING_TYPE_NO_SPAWN(Asset);
     friend Content;
+    friend class BinaryAsset;
     friend LoadAssetTask;
     friend class ContentService;
 public:
@@ -124,9 +125,25 @@ public:
 
 public:
     /// <summary>
-    /// Gets the path to the asset storage file. In Editor, it reflects the actual file, in cooked Game, it fakes the Editor path to be informative for developers.
+    /// Gets the canonical source/document path. In cooked games it is the retained logical editor path when available.
     /// </summary>
     API_PROPERTY() virtual StringView GetPath() const = 0;
+
+    /// <summary>
+    /// Gets the canonical physical source or document path. For legacy assets this equals the storage path.
+    /// </summary>
+    API_PROPERTY() virtual StringView GetSourcePath() const
+    {
+        return GetPath();
+    }
+
+    /// <summary>
+    /// Gets a display locator. Subasset locators are UI-only and must never be passed to filesystem APIs or serialized as identity.
+    /// </summary>
+    API_PROPERTY() virtual String GetLogicalPath() const
+    {
+        return String(GetPath());
+    }
 
     /// <summary>
     /// Gets the asset type name.
@@ -261,6 +278,14 @@ protected:
     /// Releases the storage file/container handle to prevent issues when renaming or moving the asset.
     /// </summary>
     virtual void releaseStorage();
+
+#if USE_EDITOR
+    /// <summary>Returns true when deprecated loaded data may be saved back to authoritative storage.</summary>
+    virtual bool canAutoSaveDeprecatedData() const
+    {
+        return true;
+    }
+#endif
 
     /// <summary>
     /// Loads asset

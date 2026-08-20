@@ -5,6 +5,7 @@
 #include "IAssetFactory.h"
 #include "../JsonAsset.h"
 #include "Engine/Content/AssetInfo.h"
+#include "Engine/Content/Artifacts/ResolvedArtifact.h"
 
 /// <summary>
 /// The Json assets factory base class.
@@ -17,9 +18,9 @@ protected:
 
 public:
     // [IAssetFactory]
-    Asset* New(const AssetInfo& info) override
+    Asset* New(const AssetLoadLocation& location) override
     {
-        return Create(info);
+        return Create(location.Info);
     }
 
     Asset* NewVirtual(const AssetInfo& info) override

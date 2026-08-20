@@ -17,7 +17,10 @@ class LoadAssetDataTask : public ContentLoadTask
 private:
     WeakAssetReference<BinaryAsset> _asset; // Don't keep ref to the asset (so it can be unloaded if none using it, task will fail then)
     AssetChunksFlag _chunks;
+    FlaxStorageReference _storage;
+    ArtifactLease _artifactLease;
     FlaxStorage::LockData _dataLock;
+    FlaxChunk* _chunkPointers[ASSET_FILE_DATA_CHUNKS];
 
 public:
     /// <summary>
@@ -28,8 +31,16 @@ public:
     LoadAssetDataTask(BinaryAsset* asset, AssetChunksFlag chunks)
         : _asset(asset)
         , _chunks(chunks)
-        , _dataLock(asset->Storage->Lock())
+        , _storage(asset->Storage)
+        , _artifactLease(asset->_artifactLease)
+        , _dataLock(_storage->Lock())
     {
+        Platform::MemoryClear(_chunkPointers, sizeof(_chunkPointers));
+        for (int32 i = 0; i < ASSET_FILE_DATA_CHUNKS; i++)
+        {
+            if (GET_CHUNK_FLAG(i) & _chunks)
+                _chunkPointers[i] = asset->GetChunk(i);
+        }
     }
 
 public:
@@ -63,7 +74,7 @@ protected:
         {
             if (GET_CHUNK_FLAG(i) & _chunks)
             {
-                const auto chunk = ref->GetChunk(i);
+                const auto chunk = _chunkPointers[i];
                 if (chunk != nullptr)
                 {
                     if (IsCancelRequested())
@@ -73,7 +84,7 @@ protected:
                     ZoneName(*name, name.Length());
                     ZoneValue(chunk->LocationInFile.Size / 1024); // Size in kB
 #endif
-                    if (ref->Storage->LoadAssetChunk(chunk))
+                    if (_storage->LoadAssetChunk(chunk))
                     {
                         LOG(Warning, "Cannot load asset \'{0}\' chunk {1}.", ref->ToString(), i);
                         return Result::LoadDataError;
@@ -88,6 +99,8 @@ protected:
     void OnEnd() override
     {
         _dataLock.Release();
+        _artifactLease.Reset();
+        _storage = FlaxStorageReference();
         _asset = nullptr;
 
         // Base

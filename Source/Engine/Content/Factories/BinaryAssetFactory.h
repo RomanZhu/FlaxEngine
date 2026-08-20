@@ -7,6 +7,7 @@
 #include "Engine/Content/Upgraders/BinaryAssetUpgrader.h"
 #endif
 #include "Engine/Content/AssetInfo.h"
+#include "Engine/Content/Artifacts/ResolvedArtifact.h"
 #include "Engine/Scripting/ScriptingObject.h"
 
 class BinaryAsset;
@@ -35,7 +36,7 @@ protected:
 
 public:
     // [IAssetFactory]
-    Asset* New(const AssetInfo& info) override;
+    Asset* New(const AssetLoadLocation& location) override;
     Asset* NewVirtual(const AssetInfo& info) override;
 };
 

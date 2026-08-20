@@ -36,6 +36,11 @@ namespace FlaxEditor.Content.Import
         public bool AllowReplace;
 
         /// <summary>
+        /// True when the original source and an adjacent sidecar are the authoritative texture asset.
+        /// </summary>
+        public bool UseCanonicalSource;
+
+        /// <summary>
         /// The custom settings object.
         /// </summary>
         public object Settings;

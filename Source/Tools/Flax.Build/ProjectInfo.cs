@@ -393,7 +393,8 @@ namespace Flax.Build
             _versionControlCommitName = string.Empty;
 
             // Git
-            if (Directory.Exists(Path.Combine(ProjectFolderPath, ".git")))
+            var gitMetadataPath = Path.Combine(ProjectFolderPath, ".git");
+            if (Directory.Exists(gitMetadataPath) || File.Exists(gitMetadataPath))
             {
                 try
                 {

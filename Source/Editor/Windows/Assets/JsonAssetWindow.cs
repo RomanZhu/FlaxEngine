@@ -435,6 +435,7 @@ namespace FlaxEditor.Windows.Assets
             AddAsset(settings.Localization);
             AddAsset(settings.GameCooking);
             AddAsset(settings.Streaming);
+            AddAsset(settings.AssetPipeline);
             AddAsset(settings.WindowsPlatform);
             AddAsset(settings.UWPPlatform);
             AddAsset(settings.LinuxPlatform);
@@ -475,6 +476,7 @@ namespace FlaxEditor.Windows.Assets
             AddGameSettingsPage("Localization", settings.Localization);
             AddGameSettingsPage("Game Cooking", settings.GameCooking);
             AddGameSettingsPage("Streaming", settings.Streaming);
+            AddGameSettingsPage("Asset Pipeline", settings.AssetPipeline);
 
             // Keep asset assignment available without duplicating those references on the General page.
             AddGameSettingsObjectPage("Settings Assets", settings, "Other Settings");

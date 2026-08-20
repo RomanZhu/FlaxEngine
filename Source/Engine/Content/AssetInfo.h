@@ -23,7 +23,7 @@ API_STRUCT() struct AssetInfo
     API_FIELD() String TypeName;
 
     /// <summary>
-    /// Cached path.
+    /// Canonical source or document path. Generated physical storage is carried by AssetLoadLocation.
     /// </summary>
     API_FIELD() String Path;
 

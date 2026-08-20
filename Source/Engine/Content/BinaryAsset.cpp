@@ -5,15 +5,16 @@
 #include "Storage/ContentStorageManager.h"
 #include "Loading/Tasks/LoadAssetDataTask.h"
 #include "Factories/BinaryAssetFactory.h"
+#include "Artifacts/ResolvedArtifact.h"
 #include "Engine/ContentImporters/AssetsImportingManager.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Debug/Exceptions/JsonParseException.h"
 #include "Engine/Threading/ThreadPoolTask.h"
+#include "Engine/Threading/Threading.h"
 #include "Engine/Profiler/ProfilerMemory.h"
 #if USE_EDITOR
 #include "Engine/Platform/FileSystem.h"
-#include "Engine/Threading/Threading.h"
 #include "Engine/Engine/Globals.h"
 #endif
 
@@ -21,8 +22,12 @@ REGISTER_BINARY_ASSET_ABSTRACT(BinaryAsset, "FlaxEngine.BinaryAsset");
 
 BinaryAsset::BinaryAsset(const SpawnParams& params, const AssetInfo* info)
     : Asset(params, info)
+    , _canonicalPath(info ? info->Path : String::Empty)
     , _storageRef(nullptr) // We link storage container later
     , _isSaving(false)
+    , _isUsingExactArtifact(true)
+    , _isGeneratedArtifact(false)
+    , _artifactLoadDisposition(ArtifactLoadDisposition::Ready)
     , Storage(nullptr)
 {
 }
@@ -103,16 +108,127 @@ bool BinaryAsset::InitVirtual(AssetInitData& initData)
     return Init(initData);
 }
 
+void BinaryAsset::SetResolvedArtifact(const ResolvedArtifact& artifact)
+{
+    ASSERT(Storage == nullptr);
+    _artifactKey = artifact.Key;
+    _isUsingExactArtifact = artifact.IsExact;
+    _isGeneratedArtifact = artifact.IsGenerated();
+    _artifactLoadDisposition = ArtifactLoadDisposition::Ready;
+    _artifactLease = _isGeneratedArtifact ? ArtifactLease::Acquire(artifact.StoragePath.Get()) : ArtifactLease();
+}
+
+BinaryAssetStorageSwitchResult BinaryAsset::SwitchStorage(const ResolvedArtifact& artifact)
+{
+    if (!IsInMainThread())
+    {
+        LOG(Error, "Binary asset storage can only be switched from the main thread. Asset: '{0}'.", GetPath());
+        return BinaryAssetStorageSwitchResult::InvalidThread;
+    }
+    if (!artifact.AssetID.IsValid() || artifact.AssetID != GetID() || artifact.TypeName != GetTypeName() || artifact.StoragePath.Get().IsEmpty())
+        return BinaryAssetStorageSwitchResult::InvalidArtifact;
+
+    const FlaxStorageReference newStorage = ContentStorageManager::GetStorage(artifact.StoragePath.Get(), false);
+    if (!newStorage || (!newStorage->IsLoaded() && newStorage->Load()))
+        return BinaryAssetStorageSwitchResult::InvalidArtifact;
+
+    AssetInitData newData;
+    if (newStorage->LoadAssetHeader(GetID(), newData))
+        return BinaryAssetStorageSwitchResult::InvalidArtifact;
+    if (newData.Header.ID != GetID() || newData.Header.TypeName != GetTypeName())
+        return BinaryAssetStorageSwitchResult::IdentityMismatch;
+    if (newData.SerializedVersion != GetSerializedVersion())
+        return BinaryAssetStorageSwitchResult::UnsupportedVersion;
+
+    // Drain the current load graph before retaining and replacing its backing storage.
+    WaitForLoaded();
+    const FlaxStorageReference oldStorage = _storageRef;
+    const AssetHeader oldHeader = _header;
+    const String oldKey = _artifactKey;
+    const bool oldExactness = _isUsingExactArtifact;
+    const bool oldGenerated = _isGeneratedArtifact;
+    const ArtifactLoadDisposition oldDisposition = _artifactLoadDisposition;
+    const ArtifactLease oldLease = _artifactLease;
+    const ArtifactLease newLease = artifact.IsGenerated() ? ArtifactLease::Acquire(artifact.StoragePath.Get()) : ArtifactLease();
+
+    CancelStreaming();
+    OnBeforeArtifactStorageChange();
+    if (!IsInternalType())
+        Content::AssetReloading(this);
+    OnReloading(this);
+    {
+        ScopeLock lock(Locker);
+        if (IsLoaded() || LastLoadFailed())
+        {
+            unload(true);
+            Platform::AtomicStore(&_loadState, (int64)LoadState::Unloaded);
+        }
+    }
+#if USE_EDITOR
+    if (Storage)
+        Storage->OnReloaded.Unbind<BinaryAsset, &BinaryAsset::OnStorageReloaded>(this);
+#endif
+    _storageRef = newStorage;
+    Storage = newStorage.Get();
+    _header = newData.Header;
+    _artifactKey = artifact.Key;
+    _isUsingExactArtifact = artifact.IsExact;
+    _isGeneratedArtifact = artifact.IsGenerated();
+    _artifactLoadDisposition = ArtifactLoadDisposition::Ready;
+    _artifactLease = newLease;
+#if USE_EDITOR
+    Storage->OnReloaded.Bind<BinaryAsset, &BinaryAsset::OnStorageReloaded>(this);
+#endif
+
+    startLoading();
+    if (!WaitForLoaded())
+    {
+        OnAfterArtifactStorageChange();
+        return BinaryAssetStorageSwitchResult::Success;
+    }
+
+    // The replacement could be structurally valid but unusable by the concrete asset. Restore the old state.
+    {
+        ScopeLock lock(Locker);
+        if (IsLoaded() || LastLoadFailed())
+        {
+            unload(true);
+            Platform::AtomicStore(&_loadState, (int64)LoadState::Unloaded);
+        }
+    }
+#if USE_EDITOR
+    Storage->OnReloaded.Unbind<BinaryAsset, &BinaryAsset::OnStorageReloaded>(this);
+#endif
+    _storageRef = oldStorage;
+    Storage = oldStorage.Get();
+    _header = oldHeader;
+    _artifactKey = oldKey;
+    _isUsingExactArtifact = oldExactness;
+    _isGeneratedArtifact = oldGenerated;
+    _artifactLoadDisposition = oldDisposition;
+    _artifactLease = oldLease;
+#if USE_EDITOR
+    Storage->OnReloaded.Bind<BinaryAsset, &BinaryAsset::OnStorageReloaded>(this);
+#endif
+    startLoading();
+    return WaitForLoaded() ? BinaryAssetStorageSwitchResult::RollbackFailed : BinaryAssetStorageSwitchResult::LoadFailed;
+}
+
 #if USE_EDITOR
 
 #if COMPILE_WITH_ASSETS_IMPORTER
 
 void BinaryAsset::Reimport() const
 {
+    if (_isGeneratedArtifact)
+    {
+        LOG(Error, "Generated artifact storage cannot be reimported as an authoritative binary. Rebuild it from the canonical source instead.");
+        return;
+    }
     const String importPath = GetImportPath();
     if (importPath.HasChars())
     {
-        AssetsImportingManager::Import(importPath, GetPath());
+        AssetsImportingManager::Import(importPath, GetStoragePath());
     }
 }
 
@@ -307,7 +423,12 @@ bool BinaryAsset::LoadChunks(AssetChunksFlag chunks) const
 
 bool BinaryAsset::SaveAsset(AssetInitData& data, bool silentMode) const
 {
-    return SaveAsset(GetPath(), data, silentMode);
+    if (_isGeneratedArtifact)
+    {
+        LOG(Error, "Generated artifact storage is immutable and cannot be saved in place.");
+        return true;
+    }
+    return SaveAsset(GetStoragePath(), data, silentMode);
 }
 
 bool BinaryAsset::SaveAsset(const StringView& path, AssetInitData& data, bool silentMode) const
@@ -454,25 +575,31 @@ void BinaryAsset::OnStorageReloaded(FlaxStorage* storage, bool failed)
     }
 }
 
+#endif
+
 void BinaryAsset::OnDeleteObject()
 {
-    // Clear dependencies stuff
+#if USE_EDITOR
     ClearDependencies();
     _dependantAssets.Clear();
-
+#endif
+    _artifactLease.Reset();
     Asset::OnDeleteObject();
 }
-
-#endif
 
 StringView BinaryAsset::GetPath() const
 {
 #if USE_EDITOR
-    return Storage ? StringView(Storage->GetPath()) : StringView::Empty;
+    return _canonicalPath;
 #else
     // In build all assets are packed into packages so use ID for original path lookup
     return Content::GetRegistry()->GetEditorAssetPath(_id);
 #endif
+}
+
+StringView BinaryAsset::GetStoragePath() const
+{
+    return Storage ? StringView(Storage->GetPath()) : StringView::Empty;
 }
 
 uint64 BinaryAsset::GetMemoryUsage() const
@@ -632,11 +759,15 @@ void BinaryAsset::onRename(const StringView& newPath)
 {
     ScopeLock lock(Locker);
 
-    // We don't support packages now
-    ASSERT(!Storage->IsPackage() && !Storage->IsReadOnly() && Storage->GetEntriesCount() == 1);
+    if (!_isGeneratedArtifact)
+    {
+        // We don't support packages now
+        ASSERT(!Storage->IsPackage() && !Storage->IsReadOnly() && Storage->GetEntriesCount() == 1);
 
-    // Rename storage
-    Storage->OnRename(newPath);
+        // Legacy canonical storage moves with the asset
+        Storage->OnRename(newPath);
+    }
+    _canonicalPath = newPath;
 }
 
 #endif

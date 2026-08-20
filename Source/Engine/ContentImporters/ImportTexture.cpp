@@ -92,7 +92,11 @@ void ImportTexture::InitOptions(CreateAssetContext& context, Options& options)
         }
     }
 
-    // Tweak options
+    NormalizeOptions(options);
+}
+
+void ImportTexture::NormalizeOptions(Options& options)
+{
     if (options.IsAtlas)
     {
         // Disable streaming for atlases
@@ -384,6 +388,11 @@ CreateAssetResult ImportTexture::Create(CreateAssetContext& context, TextureBase
 {
     Options options;
     return Create(context, *initData, options);
+}
+
+CreateAssetResult ImportTexture::CreateArtifact(CreateAssetContext& context, const TextureData& textureData, Options& options)
+{
+    return Create(context, textureData, options);
 }
 
 CreateAssetResult ImportTexture::ImportCube(CreateAssetContext& context)

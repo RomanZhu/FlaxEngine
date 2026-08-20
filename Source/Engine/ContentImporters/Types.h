@@ -32,6 +32,10 @@ class FLAXENGINE_API CreateAssetContext : public NonCopyable
 {
 private:
     CreateAssetResult _applyChangesResult;
+    bool _artifactStagingMode = false;
+    Guid _intendedAssetID = Guid::Empty;
+    String _intendedTypeName;
+    String _artifactOutputPath;
 
 public:
     /// <summary>
@@ -76,6 +80,9 @@ public:
     /// <param name="id">The identifier.</param>
     /// <param name="arg">The custom argument.</param>
     CreateAssetContext(const StringView& inputPath, const StringView& outputPath, const Guid& id, void* arg);
+
+    /// <summary>Creates a compatibility importer context that can publish only to a staging file.</summary>
+    CreateAssetContext(const StringView& inputPath, const StringView& outputPath, const Guid& id, void* arg, bool artifactStagingMode, const StringView& intendedTypeName);
 
     /// <summary>
     /// Finalizes an instance of the <see cref="CreateAssetContext"/> class.

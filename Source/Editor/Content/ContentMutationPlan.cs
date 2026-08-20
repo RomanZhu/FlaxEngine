@@ -23,6 +23,7 @@ namespace FlaxEditor.Content
         Main,
         Descendant,
         ExternalActorSidecar,
+        MetadataSidecar,
         Temporary,
         UndoTrash,
         ReplacementBackup,

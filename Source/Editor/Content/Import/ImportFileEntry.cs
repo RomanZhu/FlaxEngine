@@ -76,6 +76,12 @@ namespace FlaxEditor.Content.Import
         /// <returns>True if failed, otherwise false.</returns>
         public virtual bool Import()
         {
+            return CopySourceToResult();
+        }
+
+        /// <summary>Copies the source without processing it.</summary>
+        protected bool CopySourceToResult()
+        {
             // Skip if missing
             if (!Directory.Exists(SourceUrl) && !File.Exists(SourceUrl))
                 return true;
