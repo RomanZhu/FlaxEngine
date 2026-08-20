@@ -2,6 +2,7 @@
 
 #include "Engine/CSG/CSGData.h"
 #include "Engine/CSG/CSGMesh.h"
+#include "Engine/CSG/CSGStackEvaluator.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 namespace
@@ -62,6 +63,22 @@ namespace
         CHECK_FALSE(mesh.Triangulate(data, vertices));
         return vertices;
     }
+
+    CSG::Operand CreateBoxOperand(const Vector3& center, const Vector3& halfSize, CSG::Mode mode, int32 opIndex = 0)
+    {
+        CSG::Operand op;
+        op.Mode = mode;
+        op.OperationIndex = opIndex;
+        op.Bounds = AABB(center - halfSize, center + halfSize);
+        op.Surfaces.Resize(6, false);
+        op.Surfaces[0] = CSG::Surface(Vector3::Right, center.X + halfSize.X);
+        op.Surfaces[1] = CSG::Surface(Vector3::Left, -center.X + halfSize.X);
+        op.Surfaces[2] = CSG::Surface(Vector3::Up, center.Y + halfSize.Y);
+        op.Surfaces[3] = CSG::Surface(Vector3::Down, -center.Y + halfSize.Y);
+        op.Surfaces[4] = CSG::Surface(Vector3::Forward, center.Z + halfSize.Z);
+        op.Surfaces[5] = CSG::Surface(Vector3::Backward, -center.Z + halfSize.Z);
+        return op;
+    }
 }
 
 TEST_CASE("CSG normal flipping")
@@ -80,3 +97,63 @@ TEST_CASE("CSG normal flipping")
         CHECK(Float3::NearEqual(outward[i].Normal, -inward[i].Normal));
     }
 }
+
+TEST_CASE("CSG ordered point occupancy evaluator")
+{
+    // Case A: +Outer (50 half-size)
+    const auto outer = CreateBoxOperand(Vector3::Zero, Vector3(50, 50, 50), CSG::Mode::Additive, 0);
+
+    Array<CSG::Operand> ops;
+    ops.Add(outer);
+
+    auto state = CSG::CSGStackEvaluator::EvaluatePoint(Vector3::Zero, Span<const CSG::Operand>(ops.Get(), ops.Count()));
+    CHECK(state.Solid);
+    CHECK(state.LastInfluencingOperation == 0);
+
+    state = CSG::CSGStackEvaluator::EvaluatePoint(Vector3(100, 0, 0), Span<const CSG::Operand>(ops.Get(), ops.Count()));
+    CHECK_FALSE(state.Solid);
+    CHECK(state.LastInfluencingOperation == -1);
+
+    // Case B: +Outer -Interior (40 half-size)
+    const auto interior = CreateBoxOperand(Vector3::Zero, Vector3(40, 40, 40), CSG::Mode::Subtractive, 1);
+    ops.Add(interior);
+
+    // Center is now inside interior subtraction -> empty
+    state = CSG::CSGStackEvaluator::EvaluatePoint(Vector3::Zero, Span<const CSG::Operand>(ops.Get(), ops.Count()));
+    CHECK_FALSE(state.Solid);
+    CHECK(state.LastInfluencingOperation == 1);
+
+    // Shell wall is still solid
+    state = CSG::CSGStackEvaluator::EvaluatePoint(Vector3(45, 0, 0), Span<const CSG::Operand>(ops.Get(), ops.Count()));
+    CHECK(state.Solid);
+    CHECK(state.LastInfluencingOperation == 0);
+
+    // Case C: +Outer -Interior +Wall (x: [0, 10], y: [-40, 40], z: [-40, 40])
+    const auto wall = CreateBoxOperand(Vector3(5, 0, 0), Vector3(5, 40, 40), CSG::Mode::Additive, 2);
+    ops.Add(wall);
+
+    // Point in wall inside cavity is now restored to solid!
+    state = CSG::CSGStackEvaluator::EvaluatePoint(Vector3(5, 0, 0), Span<const CSG::Operand>(ops.Get(), ops.Count()));
+    CHECK(state.Solid);
+    CHECK(state.LastInfluencingOperation == 2);
+
+    // Point in cavity outside wall remains empty
+    state = CSG::CSGStackEvaluator::EvaluatePoint(Vector3(-20, 0, 0), Span<const CSG::Operand>(ops.Get(), ops.Count()));
+    CHECK_FALSE(state.Solid);
+    CHECK(state.LastInfluencingOperation == 1);
+
+    // Case D: +Outer -Interior +Wall -Door (x: [-5, 15], y: [-40, -20], z: [-10, 10])
+    const auto door = CreateBoxOperand(Vector3(5, -30, 0), Vector3(10, 10, 10), CSG::Mode::Subtractive, 3);
+    ops.Add(door);
+
+    // Point in door opening is now subtracted -> empty
+    state = CSG::CSGStackEvaluator::EvaluatePoint(Vector3(5, -30, 0), Span<const CSG::Operand>(ops.Get(), ops.Count()));
+    CHECK_FALSE(state.Solid);
+    CHECK(state.LastInfluencingOperation == 3);
+
+    // Point in wall above door remains solid
+    state = CSG::CSGStackEvaluator::EvaluatePoint(Vector3(5, 0, 0), Span<const CSG::Operand>(ops.Get(), ops.Count()));
+    CHECK(state.Solid);
+    CHECK(state.LastInfluencingOperation == 2);
+}
+
