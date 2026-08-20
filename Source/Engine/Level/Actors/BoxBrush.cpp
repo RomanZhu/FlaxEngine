@@ -435,9 +435,6 @@ void BoxBrush::OnParentChanged()
     // Base
     Actor::OnParentChanged();
 
-    if (!IsDuringPlay())
-        return;
-
     // Fire event
     OnBrushModified();
 }

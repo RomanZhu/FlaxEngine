@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using FlaxEditor.Modules;
 using FlaxEditor.SceneEditing;
+using FlaxEditor.Tools.CSG;
 using FlaxEngine;
 using Object = FlaxEngine.Object;
 
@@ -171,6 +172,20 @@ namespace FlaxEditor.Actions
                 }
             }
 
+            var csgTargets = new HashSet<Actor>();
+            var newCsgTarget = CSGOwnershipInvalidation.ResolveTarget(newParent);
+            if (newCsgTarget != null)
+                csgTargets.Add(newCsgTarget);
+            for (int i = 0; i < objects.Length; i++)
+            {
+                if (objects[i] is Actor a && (a is BoxBrush || a is CSGScopeActor))
+                {
+                    var oldTarget = CSGOwnershipInvalidation.ResolveTarget(a);
+                    if (oldTarget != null)
+                        csgTargets.Add(oldTarget);
+                }
+            }
+
             var previous = CaptureStates(objects);
             try
             {
@@ -186,6 +201,7 @@ namespace FlaxEditor.Actions
                         obj.OrderInParent = order++;
                 }
                 _lastResult = SceneMutationResult.Success(transactionId, SceneMutationOperation.Reparent, _sceneIDs);
+                CSGOwnershipInvalidation.InvalidateTargets(csgTargets);
                 return true;
             }
             catch (Exception ex)
@@ -210,6 +226,25 @@ namespace FlaxEditor.Actions
                 return false;
             }
 
+            var csgTargets = new HashSet<Actor>();
+            for (int i = 0; i < objects.Length; i++)
+            {
+                if (objects[i] is Actor a && (a is BoxBrush || a is CSGScopeActor))
+                {
+                    var currentTarget = CSGOwnershipInvalidation.ResolveTarget(a);
+                    if (currentTarget != null)
+                        csgTargets.Add(currentTarget);
+                }
+            }
+            for (int i = 0; i < _items.Length; i++)
+            {
+                var parentId = _items[i].Parent;
+                var parent = parentId != Guid.Empty ? Object.Find<Actor>(ref parentId) : null;
+                var restoredTarget = CSGOwnershipInvalidation.ResolveTarget(parent);
+                if (restoredTarget != null)
+                    csgTargets.Add(restoredTarget);
+            }
+
             var previous = CaptureStates(objects);
             try
             {
@@ -229,6 +264,7 @@ namespace FlaxEditor.Actions
                     }
                 }
                 _lastResult = SceneMutationResult.Success(transactionId, SceneMutationOperation.Undo, _sceneIDs);
+                CSGOwnershipInvalidation.InvalidateTargets(csgTargets);
                 return true;
             }
             catch (Exception ex)
