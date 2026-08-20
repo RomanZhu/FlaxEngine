@@ -537,6 +537,36 @@ bool CSGBuilderImpl::persistModelOutput(CSGModel* model, CSGModelBuildProduct& p
     return true;
 }
 
+void CSGBuilderImpl::build(Scene* scene)
+{
+    if (scene == nullptr)
+        return;
+
+    auto startTime = DateTime::Now();
+    LOG(Info, "Start building CSG for scene \'{0}\'...", scene->GetName());
+
+    // Build
+    BuildData data;
+    if (buildInner(scene, data))
+    {
+        LOG(Warning, "Failed to build CSG for scene \'{0}\'.", scene->GetName());
+        return;
+    }
+
+    // Assign results
+    auto outputData = Content::LoadAsync<RawDataAsset>(data.outputRawDataAssetId);
+    auto outputModel = Content::LoadAsync<Model>(data.outputModelAssetId);
+    auto outputCollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
+
+    scene->CSGData.Data = outputData;
+    scene->CSGData.Model = outputModel;
+    scene->CSGData.CollisionData = outputCollisionData;
+    scene->CSGData.PostCSGBuild();
+
+    auto endTime = DateTime::Now();
+    LOG(Info, "CSG build for scene \'{0}\' in {1} ms! {2} brush(es)", scene->GetName(), (endTime - startTime).GetTotalMilliseconds(), data.brushesCount);
+}
+
 void CSGBuilderImpl::build(CSGModel* model, ModelBuildIntent intent)
 {
     if (model == nullptr)
