@@ -877,28 +877,15 @@ namespace FlaxEditor.Modules
 
             // Categorize actors for semantic CSG promotion hierarchy:
             // Brushes -> CSGStack -> CSGModel -> GroupActor
-            var looseBrushes = new List<Actor>();
-            var stacks = new List<CSGStack>();
-            var models = new List<CSGModel>();
-            var otherActors = new List<Actor>();
-
-            foreach (var actor in actors)
-            {
-                if (actor is CSGStack stack)
-                    stacks.Add(stack);
-                else if (actor is CSGModel model)
-                    models.Add(model);
-                else if (actor is BoxBrush)
-                    looseBrushes.Add(actor);
-                else
-                    otherActors.Add(actor);
-            }
-
+            var plan = Tools.CSG.CSGGroupingPolicy.Classify(actors);
             var selectionBefore = Selection.ToArray();
 
             // Promotion rule: Stack + Brush -> CSGModel, with loose brushes auto-wrapped in a CSGStack
-            if (stacks.Count > 0 && looseBrushes.Count > 0 && otherActors.Count == 0 && models.Count == 0)
+            if (plan.WrapLooseBrushesInStack)
             {
+                var looseBrushes = actors.Where(x => x is BoxBrush).ToList();
+                var stacks = actors.OfType<CSGStack>().ToList();
+
                 var model = new CSGModel
                 {
                     Name = "CSG Model",
@@ -973,31 +960,12 @@ namespace FlaxEditor.Modules
                 }
             }
 
-            GroupActor group;
-            if (otherActors.Count > 0 || models.Count > 0)
+            GroupActor group = plan.Kind switch
             {
-                group = new GroupActor
-                {
-                    Name = "Group",
-                    Position = center,
-                };
-            }
-            else if (stacks.Count > 0)
-            {
-                group = new CSGModel
-                {
-                    Name = "CSG Model",
-                    Position = center,
-                };
-            }
-            else
-            {
-                group = new CSGStack
-                {
-                    Name = "CSG Stack",
-                    Position = center,
-                };
-            }
+                Tools.CSG.CSGGroupingKind.CSGStack => new CSGStack { Name = "CSG Stack", Position = center },
+                Tools.CSG.CSGGroupingKind.CSGModel => new CSGModel { Name = "CSG Model", Position = center },
+                _ => new GroupActor { Name = "Group", Position = center },
+            };
 
             DeleteActorsAction createGroup = null;
             ParentActorsAction parentActors = null;
