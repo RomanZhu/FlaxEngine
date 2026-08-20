@@ -9,6 +9,7 @@ using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Modules;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.Scripting;
+using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEditor.Viewport.Cameras;
 using FlaxEditor.Viewport.Previews;
 using FlaxEditor.Windows.Assets;
@@ -208,6 +209,7 @@ namespace FlaxEditor.Viewport
             // Add transformation gizmo
             TransformGizmo = new TransformGizmo(this);
             TransformGizmo.ApplyTransformation += ApplyTransform;
+            TransformGizmo.TransformingEnded += OnTransformingEnded;
             TransformGizmo.Duplicate += _window.Duplicate;
             Gizmos.Active = TransformGizmo;
 
@@ -556,6 +558,27 @@ namespace FlaxEditor.Viewport
                 trans.Translation += translationDelta;
 
                 obj.Transform = trans;
+
+                if (obj is ActorNode actorNode && actorNode.Actor != null)
+                {
+                    var target = CSGRebuildScheduler.ResolveTarget(actorNode.Actor);
+                    if (target != null)
+                        CSGRebuildScheduler.Shared.RequestPreview(target);
+                }
+            }
+        }
+
+        private void OnTransformingEnded()
+        {
+            var selection = _window.Selection;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is ActorNode actorNode && actorNode.Actor != null)
+                {
+                    var target = CSGRebuildScheduler.ResolveTarget(actorNode.Actor);
+                    if (target != null)
+                        CSGRebuildScheduler.Shared.RequestFinal(target);
+                }
             }
         }
 

@@ -11,6 +11,7 @@ using FlaxEditor.GUI;
 using FlaxEditor.GUI.Input;
 using FlaxEditor.History;
 using FlaxEditor.SceneGraph;
+using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEditor.Viewport;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -307,6 +308,7 @@ namespace FlaxEditor.Windows.Assets
             InputActions.Add(options => options.Delete, Delete);
             InputActions.Add(options => options.Rename, RenameSelection);
             InputActions.Add(options => options.FocusSelection, FocusSelection);
+            InputActions.Add(options => options.GroupSelectedActors, MakeSelectionGroup);
         }
 
         private void PerformUndo()
@@ -474,8 +476,66 @@ namespace FlaxEditor.Windows.Assets
             UpdateToolstrip();
         }
 
+        private void RequestCSGPreviewFor(Actor actor)
+        {
+            var target = CSGRebuildScheduler.ResolveTarget(actor);
+            if (target is CSGModel model)
+                CSGRebuildScheduler.Shared.RequestPreview(model);
+        }
+
+        private void RebuildAllCSGModelPreviews()
+        {
+            var root = _viewport.Instance;
+            if (root == null)
+                return;
+
+            var models = new HashSet<CSGModel>();
+            CollectCSGModels(root, models);
+            foreach (var model in models)
+                CSGRebuildScheduler.Shared.RequestPreview(model);
+        }
+
+        private bool PersistCSGModelsForSave()
+        {
+            var root = _viewport.Instance;
+            if (root == null)
+                return true;
+
+            var models = new HashSet<CSGModel>();
+            CollectCSGModels(root, models);
+
+            foreach (var model in models)
+            {
+                if (!model.PersistCSG(Asset.ID))
+                {
+                    Editor.LogError($"Failed to persist CSGModel '{model.Name}' output for prefab save.");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static void CollectCSGModels(Actor actor, HashSet<CSGModel> models)
+        {
+            if (actor == null)
+                return;
+            if (actor is CSGModel model)
+                models.Add(model);
+            for (int i = 0; i < actor.ChildrenCount; i++)
+                CollectCSGModels(actor.GetChild(i), models);
+        }
+
         private void OnPrefabModified()
         {
+            if (Selection.Count > 0)
+            {
+                foreach (var node in Selection)
+                {
+                    if (node is ActorNode actorNode && actorNode.Actor != null)
+                        RequestCSGPreviewFor(actorNode.Actor);
+                }
+            }
             RequestAutoSave();
             MarkAsEdited();
         }
@@ -503,6 +563,7 @@ namespace FlaxEditor.Windows.Assets
             Selection.Clear();
             Select(Graph.Main);
             Graph.Root.TreeNode.Expand(true);
+            RebuildAllCSGModelPreviews();
         }
 
         private void OnUIModeToggled(bool value)
@@ -557,6 +618,12 @@ namespace FlaxEditor.Windows.Assets
             try
             {
                 Editor.Scene.OnSaveStart(_viewport._uiParentLink);
+
+                if (!PersistCSGModelsForSave())
+                {
+                    Editor.LogError("Failed to persist CSGModel output for prefab save.");
+                    return;
+                }
 
                 // Simply update changes
                 Editor.Prefabs.ApplyAll(_viewport.Instance);

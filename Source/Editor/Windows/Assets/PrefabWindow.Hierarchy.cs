@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using FlaxEditor.Content;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.GUI.Drag;
@@ -9,6 +10,7 @@ using FlaxEditor.GUI.Tree;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.GUI;
 using FlaxEditor.Scripting;
+using FlaxEditor.Tools.CSG.Rebuild;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -295,6 +297,8 @@ namespace FlaxEditor.Windows.Assets
 
             // Basic editing options
 
+            var inputOptions = Editor.Options.Options.Input;
+
             var b = contextMenu.AddButton("Rename", RenameSelection);
             b.Enabled = isSingleActorSelected;
 
@@ -302,6 +306,9 @@ namespace FlaxEditor.Windows.Assets
             b.Enabled = hasSthSelected && !isRootSelected;
 
             b = contextMenu.AddButton("Delete", Delete);
+            b.Enabled = hasSthSelected && !isRootSelected;
+
+            b = contextMenu.AddButton("Group", inputOptions.GroupSelectedActors, MakeSelectionGroup);
             b.Enabled = hasSthSelected && !isRootSelected;
 
             contextMenu.AddSeparator();
@@ -316,6 +323,30 @@ namespace FlaxEditor.Windows.Assets
 
             b = contextMenu.AddButton("Set Root", SetRoot);
             b.Enabled = isSingleActorSelected && !isRootSelected && hasPrefabLink && Editor.Internal_CanSetToRoot(FlaxEngine.Object.GetUnmanagedPtr(Asset), FlaxEngine.Object.GetUnmanagedPtr(((ActorNode)Selection[0]).Actor));
+
+            // CSG options
+            var selectedActorNodes = Selection.OfType<ActorNode>().ToList();
+            bool hasCsgActors = selectedActorNodes.Any(x => x.Actor is BoxBrush || x.Actor is CSGScopeActor);
+            if (hasCsgActors)
+            {
+                contextMenu.AddSeparator();
+                var csgMenu = contextMenu.AddChildMenu("CSG");
+                csgMenu.ContextMenu.AddButton("Wrap in CSG Stack", WrapSelectedInCSGStack);
+                csgMenu.ContextMenu.AddButton("Wrap in CSG Model", WrapSelectedInCSGModel);
+                csgMenu.ContextMenu.AddSeparator();
+                csgMenu.ContextMenu.AddButton("Rebuild CSG Preview", () =>
+                {
+                    var targets = new HashSet<Actor>();
+                    foreach (var node in selectedActorNodes)
+                    {
+                        var target = CSGRebuildScheduler.ResolveTarget(node.Actor);
+                        if (target != null)
+                            targets.Add(target);
+                    }
+                    foreach (var target in targets)
+                        CSGRebuildScheduler.Shared.RequestFinal(target);
+                });
+            }
 
             // Prefab options
 

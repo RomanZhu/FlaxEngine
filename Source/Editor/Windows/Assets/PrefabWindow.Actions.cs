@@ -4,7 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using FlaxEditor.Actions;
+using FlaxEditor.Modules;
 using FlaxEditor.SceneGraph;
+using FlaxEditor.Tools.CSG;
 using FlaxEngine;
 using Object = FlaxEngine.Object;
 
@@ -484,6 +486,282 @@ namespace FlaxEditor.Windows.Assets
 
             _treePanel.PerformLayout();
             _treePanel.PerformLayout();
+        }
+
+        /// <summary>
+        /// Groups selected actors.
+        /// </summary>
+        public void MakeSelectionGroup()
+        {
+            CreateParentForSelectedActors();
+        }
+
+        /// <summary>
+        /// Creates parent actor for selected actors and links them to it.
+        /// </summary>
+        public void CreateParentForSelectedActors()
+        {
+            var nodes = Selection.Where(x => x is ActorNode).Cast<ActorNode>().ToList().BuildNodesParents();
+            if (nodes.Count == 0)
+            {
+                if (Graph.MainActor != null)
+                {
+                    var emptyGroup = new GroupActor { Name = "Group" };
+                    Spawn(emptyGroup, Graph.MainActor);
+                }
+                return;
+            }
+
+            var actors = nodes.Select(x => x.Actor).Where(x => x != null).ToList();
+            if (actors.Count == 0)
+                return;
+
+            var commonParent = SceneEditingModule.FindLowestCommonActorParent(actors) ?? Graph.MainActor;
+
+            // Calculate center
+            var bounds = BoundingBox.Empty;
+            Vector3 center = Vector3.Zero;
+            for (int i = 0; i < actors.Count; i++)
+            {
+                bounds = BoundingBox.Merge(bounds, actors[i].EditorBoxChildren);
+                center += actors[i].Position;
+            }
+            center = bounds != BoundingBox.Empty ? bounds.Center : center / actors.Count;
+
+            // Calculate order
+            int groupOrder = int.MaxValue;
+            for (int i = 0; i < actors.Count; i++)
+            {
+                var child = actors[i];
+                while (child.Parent != null && child.Parent != commonParent)
+                    child = child.Parent;
+                if (child.Parent == commonParent)
+                    groupOrder = Math.Min(groupOrder, child.OrderInParent);
+            }
+            if (groupOrder == int.MaxValue)
+                groupOrder = -1;
+
+            var plan = CSGGroupingPolicy.Classify(actors);
+            var selectionBefore = Selection.ToArray();
+
+            if (plan.WrapLooseBrushesInStack)
+            {
+                var looseBrushes = actors.Where(x => x is BoxBrush).ToList();
+                var stacks = actors.OfType<CSGStack>().ToList();
+
+                var model = new CSGModel
+                {
+                    Name = "CSG Model",
+                    Position = center,
+                };
+
+                var looseBounds = BoundingBox.Empty;
+                Vector3 looseCenter = Vector3.Zero;
+                foreach (var brush in looseBrushes)
+                {
+                    looseBounds = BoundingBox.Merge(looseBounds, brush.EditorBoxChildren);
+                    looseCenter += brush.Position;
+                }
+                looseCenter = looseBounds != BoundingBox.Empty ? looseBounds.Center : looseCenter / looseBrushes.Count;
+
+                var autoStack = new CSGStack
+                {
+                    Name = "CSG Stack",
+                    Position = looseCenter,
+                };
+
+                CustomDeleteActorsAction createModel = null;
+                CustomDeleteActorsAction createAutoStack = null;
+                ParentActorsAction parentLooseBrushes = null;
+                ParentActorsAction parentStacks = null;
+                try
+                {
+                    model.Parent = commonParent;
+                    if (groupOrder != -1)
+                        model.OrderInParent = groupOrder;
+                    var modelNode = SceneGraphFactory.FindNode(model.ID) as ActorNode ?? SceneGraphFactory.BuildActorNode(model);
+                    if (modelNode == null)
+                        throw new InvalidOperationException("Failed to publish the CSG Model in the Scene graph.");
+                    var commonParentNode = SceneGraphFactory.FindNode(commonParent.ID) as ActorNode;
+                    modelNode.ParentNode = commonParentNode;
+                    modelNode.PostSpawn();
+                    createModel = new CustomDeleteActorsAction(new List<SceneGraphNode> { modelNode }, true);
+
+                    autoStack.Parent = model;
+                    var autoStackNode = SceneGraphFactory.FindNode(autoStack.ID) as ActorNode ?? SceneGraphFactory.BuildActorNode(autoStack);
+                    if (autoStackNode == null)
+                        throw new InvalidOperationException("Failed to publish the auto-generated CSG Stack in the Scene graph.");
+                    autoStackNode.ParentNode = modelNode;
+                    autoStackNode.PostSpawn();
+                    createAutoStack = new CustomDeleteActorsAction(new List<SceneGraphNode> { autoStackNode }, true);
+
+                    parentLooseBrushes = new ParentActorsAction(looseBrushes.Cast<SceneObject>().ToArray(), autoStack, -1, true);
+                    if (!parentLooseBrushes.TryDo())
+                        throw new InvalidOperationException("Failed to attach loose brushes to the CSG Stack. " + parentLooseBrushes.LastResult?.Message);
+
+                    parentStacks = new ParentActorsAction(stacks.Cast<SceneObject>().ToArray(), model, -1, true);
+                    if (!parentStacks.TryDo())
+                        throw new InvalidOperationException("Failed to attach CSG Stacks to the CSG Model. " + parentStacks.LastResult?.Message);
+
+                    var selectModel = new SelectionChangeAction(selectionBefore, new SceneGraphNode[] { modelNode }, OnSelectionUndo);
+                    selectModel.Do();
+                    Undo.AddAction(new MultiUndoAction(new IUndoAction[] { createModel, createAutoStack, parentLooseBrushes, parentStacks, selectModel }, "Group actors"));
+                    modelNode.TreeNode.StartRenaming(this, _treePanel);
+                    return;
+                }
+                catch
+                {
+                    parentStacks?.TryUndo();
+                    parentLooseBrushes?.TryUndo();
+                    createAutoStack?.TryUndo();
+                    createModel?.TryUndo();
+                    Selection.Clear();
+                    Selection.AddRange(selectionBefore.Where(x => x != null));
+                    OnSelectionChanges();
+                    if (autoStack)
+                        FlaxEngine.Object.Destroy(ref autoStack);
+                    if (model)
+                        FlaxEngine.Object.Destroy(ref model);
+                    FlaxEngine.Scripting.FlushRemovedObjects();
+                    throw;
+                }
+            }
+
+            GroupActor group = plan.Kind switch
+            {
+                CSGGroupingKind.CSGStack => new CSGStack { Name = "CSG Stack", Position = center },
+                CSGGroupingKind.CSGModel => new CSGModel { Name = "CSG Model", Position = center },
+                _ => new GroupActor { Name = "Group", Position = center },
+            };
+
+            CustomDeleteActorsAction createGroup = null;
+            ParentActorsAction parentActors = null;
+            try
+            {
+                group.Parent = commonParent;
+                if (groupOrder != -1)
+                    group.OrderInParent = groupOrder;
+                var groupNode = SceneGraphFactory.FindNode(group.ID) as ActorNode ?? SceneGraphFactory.BuildActorNode(group);
+                if (groupNode == null)
+                    throw new InvalidOperationException("Failed to publish the group in the Scene graph.");
+                var commonParentNode = SceneGraphFactory.FindNode(commonParent.ID) as ActorNode;
+                groupNode.ParentNode = commonParentNode;
+                groupNode.PostSpawn();
+                createGroup = new CustomDeleteActorsAction(new List<SceneGraphNode> { groupNode }, true);
+
+                parentActors = new ParentActorsAction(actors.Cast<SceneObject>().ToArray(), group, -1, true);
+                if (!parentActors.TryDo())
+                    throw new InvalidOperationException("Failed to attach Actors to the group. " + parentActors.LastResult?.Message);
+
+                var selectGroup = new SelectionChangeAction(selectionBefore, new SceneGraphNode[] { groupNode }, OnSelectionUndo);
+                selectGroup.Do();
+                Undo.AddAction(new MultiUndoAction(new IUndoAction[] { createGroup, parentActors, selectGroup }, "Group actors"));
+                groupNode.TreeNode.StartRenaming(this, _treePanel);
+            }
+            catch
+            {
+                parentActors?.TryUndo();
+                createGroup?.TryUndo();
+                Selection.Clear();
+                Selection.AddRange(selectionBefore.Where(x => x != null));
+                OnSelectionChanges();
+                if (group)
+                    FlaxEngine.Object.Destroy(ref group);
+                FlaxEngine.Scripting.FlushRemovedObjects();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Wraps selected actors in a CSG Stack.
+        /// </summary>
+        public void WrapSelectedInCSGStack()
+        {
+            WrapSelectedInCSG(typeof(CSGStack), "CSG Stack");
+        }
+
+        /// <summary>
+        /// Wraps selected actors in a CSG Model.
+        /// </summary>
+        public void WrapSelectedInCSGModel()
+        {
+            WrapSelectedInCSG(typeof(CSGModel), "CSG Model");
+        }
+
+        private void WrapSelectedInCSG(Type wrapperType, string defaultName)
+        {
+            var nodes = Selection.Where(x => x is ActorNode).Cast<ActorNode>().ToList().BuildNodesParents();
+            if (nodes.Count == 0)
+                return;
+
+            var actors = nodes.Select(x => x.Actor).Where(x => x != null).ToList();
+            if (actors.Count == 0)
+                return;
+
+            var commonParent = SceneEditingModule.FindLowestCommonActorParent(actors) ?? Graph.MainActor;
+
+            var bounds = BoundingBox.Empty;
+            Vector3 center = Vector3.Zero;
+            for (int i = 0; i < actors.Count; i++)
+            {
+                bounds = BoundingBox.Merge(bounds, actors[i].EditorBoxChildren);
+                center += actors[i].Position;
+            }
+            center = bounds != BoundingBox.Empty ? bounds.Center : center / actors.Count;
+
+            int groupOrder = int.MaxValue;
+            for (int i = 0; i < actors.Count; i++)
+            {
+                var child = actors[i];
+                while (child.Parent != null && child.Parent != commonParent)
+                    child = child.Parent;
+                if (child.Parent == commonParent)
+                    groupOrder = Math.Min(groupOrder, child.OrderInParent);
+            }
+            if (groupOrder == int.MaxValue)
+                groupOrder = -1;
+
+            var wrapper = (GroupActor)FlaxEngine.Object.New(wrapperType);
+            wrapper.Name = defaultName;
+            wrapper.Position = center;
+
+            var selectionBefore = Selection.ToArray();
+            CustomDeleteActorsAction createWrapper = null;
+            ParentActorsAction parentActors = null;
+            try
+            {
+                wrapper.Parent = commonParent;
+                if (groupOrder != -1)
+                    wrapper.OrderInParent = groupOrder;
+                var wrapperNode = SceneGraphFactory.FindNode(wrapper.ID) as ActorNode ?? SceneGraphFactory.BuildActorNode(wrapper);
+                if (wrapperNode == null)
+                    throw new InvalidOperationException("Failed to publish wrapper in the Scene graph.");
+                var commonParentNode = SceneGraphFactory.FindNode(commonParent.ID) as ActorNode;
+                wrapperNode.ParentNode = commonParentNode;
+                wrapperNode.PostSpawn();
+                createWrapper = new CustomDeleteActorsAction(new List<SceneGraphNode> { wrapperNode }, true);
+
+                parentActors = new ParentActorsAction(actors.Cast<SceneObject>().ToArray(), wrapper, -1, true);
+                if (!parentActors.TryDo())
+                    throw new InvalidOperationException("Failed to attach Actors to the wrapper. " + parentActors.LastResult?.Message);
+
+                var selectWrapper = new SelectionChangeAction(selectionBefore, new SceneGraphNode[] { wrapperNode }, OnSelectionUndo);
+                selectWrapper.Do();
+                Undo.AddAction(new MultiUndoAction(new IUndoAction[] { createWrapper, parentActors, selectWrapper }, $"Wrap in {defaultName}"));
+                wrapperNode.TreeNode.StartRenaming(this, _treePanel);
+            }
+            catch
+            {
+                parentActors?.TryUndo();
+                createWrapper?.TryUndo();
+                Selection.Clear();
+                Selection.AddRange(selectionBefore.Where(x => x != null));
+                OnSelectionChanges();
+                if (wrapper)
+                    FlaxEngine.Object.Destroy(ref wrapper);
+                FlaxEngine.Scripting.FlushRemovedObjects();
+                throw;
+            }
         }
     }
 }
