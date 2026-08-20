@@ -176,137 +176,16 @@ void Builder::Build(CSGModel* model, float timeoutMs)
 
 namespace CSG
 {
-    typedef Dictionary<Actor*, Mesh*> MeshesLookup;
-
-    bool walkTree(Actor* actor, MeshesArray& meshes, MeshesLookup& cache)
-    {
-        // Check if actor is a brush
-        auto brush = dynamic_cast<Brush*>(actor);
-        if (brush)
-        {
-            // Check if can build it
-            if (brush->CanUseCSG())
-            {
-                // Skip subtract/common meshes from the beginning (they have no effect)
-                if (meshes.Count() > 0 || brush->GetBrushMode() == Mode::Additive)
-                {
-                    // Create new mesh and build for given brush
-                    auto mesh = New<CSG::Mesh>();
-                    mesh->Build(brush);
-
-                    // Save results
-                    meshes.Add(mesh);
-                    cache.Add(actor, mesh);
-                }
-                else
-                {
-                    // Info
-                    LOG(Info, "Skipping CSG brush '{0}'", actor->ToString());
-                }
-            }
-        }
-
-        return true;
-    }
-
-    Mesh* Combine(Actor* actor, MeshesLookup& cache, Mesh* combineParent)
-    {
-        ASSERT(actor);
-        Mesh* result = nullptr;
-        Mesh* myBrush = nullptr;
-        cache.TryGet(actor, myBrush);
-
-        // Get first child mesh with valid data (has additive brush)
-        int32 childIndex = 0;
-        while (childIndex < actor->Children.Count())
-        {
-            auto child = Combine(actor->Children[childIndex], cache, combineParent);
-
-            childIndex++;
-            if (child)
-            {
-                // If brush was based on additive brush or current actor is a brush we can stop searching
-                if (child->HasMode(Mode::Additive) || myBrush)
-                {
-                    // End searching
-                    result = child;
-                    break;
-                }
-
-                if (combineParent)
-                {
-                    // Combine
-                    combineParent->PerformOperation(child);
-                }
-            }
-        }
-
-        // Check if has any child with CSG brush
-        if (result)
-        {
-            // Check if has own brush
-            if (myBrush)
-            {
-                // Combine with first child
-                myBrush->PerformOperation(result);
-
-                // Set this actor brush as a result
-                result = myBrush;
-            }
-
-            // Merge with the other children
-            while (childIndex < actor->Children.Count())
-            {
-                auto child = Combine(actor->Children[childIndex], cache, result);
-                if (child)
-                {
-                    // Combine
-                    result->PerformOperation(child);
-                }
-
-                childIndex++;
-            }
-        }
-        else
-        {
-            // Use this actor brush (may be empty)
-            result = myBrush;
-        }
-
-        return result;
-    }
-
-    Mesh* Combine(Scene* scene, MeshesLookup& cache)
-    {
-#if CSG_USE_SCENE_LOCKS
-		auto Level = Level::Instance();
-		Level->Lock();
-#endif
-
-        Mesh* result = Combine(scene, cache, nullptr);
-
-#if CSG_USE_SCENE_LOCKS
-		Level->Unlock();
-#endif
-
-        return result;
-    }
 }
 
 struct BuildData
 {
-    MeshesArray meshes;
-    MeshesLookup cache;
     int32 brushesCount = 0;
     Guid outputModelAssetId = Guid::Empty;
     Guid outputRawDataAssetId = Guid::Empty;
     Guid outputCollisionDataAssetId = Guid::Empty;
 
-    BuildData(int32 meshesCapacity = 32)
-        : meshes(meshesCapacity * 32)
-        , cache(meshesCapacity * 4)
-    {
-    }
+    BuildData() = default;
 };
 
 bool CSGBuilderImpl::updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData)

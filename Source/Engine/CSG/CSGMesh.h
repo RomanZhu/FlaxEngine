@@ -20,13 +20,6 @@ namespace CSG
     struct Operand;
     class CSGStackEvaluator;
 
-    enum PolygonOperation
-    {
-        Keep,
-        Remove,
-        Flip
-    };
-
     /// <summary>
     /// CSG mesh object
     /// </summary>
@@ -145,12 +138,6 @@ namespace CSG
         bool Triangulate(RawData& data, Array<MeshVertex>& cacheVB) const;
 
         /// <summary>
-        /// Perform CSG operation with another mesh
-        /// </summary>
-        /// <param name="other">Other mesh data to process</param>
-        void PerformOperation(Mesh* other);
-
-        /// <summary>
         /// Add other mesh data
         /// </summary>
         /// <param name="other">Other mesh to merge with</param>
@@ -190,13 +177,8 @@ namespace CSG
 
     private:
 
-        void intersect(const Mesh* other, PolygonOperation insideOp, PolygonOperation outsideOp);
-        void intersectSubMesh(const Mesh* other, int32 subMeshIndex, PolygonOperation insideOp, PolygonOperation outsideOp);
-        void updateBounds();
-        static void resolvePolygon(Polygon& polygon, PolygonOperation op);
         void edgeSplit(int32 edgeIndex, const Vector3& vertex);
         PolygonSplitResult polygonSplit(const Surface& cuttingPlane, int32 inputPolygonIndex, Polygon** outputPolygon);
-        void doPolygonsOperation(bool isInverted, bool visibility);
     };
 
     typedef Array<Mesh*> MeshesArray;

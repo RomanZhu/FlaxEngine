@@ -6,27 +6,6 @@
 
 using namespace CSG;
 
-void CSG::Mesh::resolvePolygon(Polygon& polygon, PolygonOperation op)
-{
-    switch (op)
-    {
-    case Keep:
-        break;
-    case Remove:
-    {
-        polygon.Visible = false;
-        break;
-    }
-    case Flip:
-    {
-        polygon.Inverted = true;
-        break;
-    }
-    default:
-        break;
-    }
-}
-
 void CSG::Mesh::edgeSplit(int32 edgeIndex, const Vector3& vertex)
 {
     // Splits a half edge
