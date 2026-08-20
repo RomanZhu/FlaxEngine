@@ -12,12 +12,26 @@
 
 namespace CSG
 {
+    class RawData;
+
     /// <summary>
     /// Reusable CSG compiled output container (models, raw surface queries, collision).
     /// Used by both legacy Scene CSG output and CSGModel actor outputs.
     /// </summary>
     class FLAXENGINE_API CSGCompiledData : public ISerializable
     {
+    public:
+        struct SurfaceData
+        {
+            Array<Triangle> Triangles;
+
+            bool Intersects(const Ray& ray, Real& distance, Vector3& normal) const;
+        };
+
+    private:
+        bool _hasPreviewOverride = false;
+        Dictionary<Guid, Array<SurfaceData>> _previewSurfaceData;
+
     public:
         /// <summary>
         /// The persisted CSG model mesh.
@@ -59,20 +73,70 @@ namespace CSG
         ~CSGCompiledData();
 
         /// <summary>
+        /// Gets whether a live preview override is currently active.
+        /// </summary>
+        FORCE_INLINE bool HasPreviewOverride() const
+        {
+            return _hasPreviewOverride;
+        }
+
+        /// <summary>
+        /// Marks preview override active.
+        /// </summary>
+        FORCE_INLINE void MarkPreviewOverrideActive()
+        {
+            _hasPreviewOverride = true;
+        }
+
+        /// <summary>
+        /// Determines whether this container has persisted CSG data linked.
+        /// </summary>
+        FORCE_INLINE bool HasPersistedData() const
+        {
+            return Model || Data || CollisionData;
+        }
+
+        /// <summary>
+        /// Determines whether this container has renderable CSG data available.
+        /// </summary>
+        FORCE_INLINE bool HasRenderableData() const
+        {
+            return GetModelForRendering() != nullptr;
+        }
+
+        /// <summary>
         /// Determines whether this container has valid CSG model data linked.
         /// </summary>
-        bool HasData() const;
+        FORCE_INLINE bool HasData() const
+        {
+            return HasPersistedData();
+        }
 
         /// <summary>
         /// Gets the model to use for rendering CSG geometry.
         /// </summary>
         FORCE_INLINE ::Model* GetModelForRendering() const
         {
-            return PreviewModel ? PreviewModel.Get() : Model.Get();
+            return _hasPreviewOverride ? PreviewModel.Get() : Model.Get();
         }
 
         /// <summary>
-        /// Clears transient preview models.
+        /// Publishes a transient preview model.
+        /// </summary>
+        void PublishPreviewModel(::Model* model);
+
+        /// <summary>
+        /// Publishes transient preview surface metadata from raw data.
+        /// </summary>
+        void PublishPreviewSurfaceData(const RawData& rawData);
+
+        /// <summary>
+        /// Publishes an authoritative empty preview.
+        /// </summary>
+        void PublishEmptyPreview();
+
+        /// <summary>
+        /// Clears transient preview models and surface data.
         /// </summary>
         void ClearTransientPreview();
 
@@ -80,14 +144,6 @@ namespace CSG
         /// Clears all linked assets and caches.
         /// </summary>
         void ClearAll();
-
-    public:
-        struct SurfaceData
-        {
-            Array<Triangle> Triangles;
-
-            bool Intersects(const Ray& ray, Real& distance, Vector3& normal) const;
-        };
 
         /// <summary>
         /// Tries to get the brush surface data.
