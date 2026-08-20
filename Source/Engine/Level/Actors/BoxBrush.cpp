@@ -5,6 +5,39 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Level/Scene/Scene.h"
+#include "Engine/CSG/CSGHierarchy.h"
+#include "Engine/Level/Actors/CSGModel.h"
+
+namespace
+{
+    CSG::CSGCompiledData* FindCompiledCSGData(const Actor* actor, Transform* outTargetTransform = nullptr)
+    {
+        if (actor == nullptr)
+            return nullptr;
+
+        Actor* outputScope = CSG::CSGHierarchy::FindOwningOutputScope(actor);
+        if (outputScope != nullptr)
+        {
+            auto model = dynamic_cast<CSGModel*>(outputScope);
+            if (model != nullptr)
+            {
+                if (outTargetTransform)
+                    *outTargetTransform = model->GetTransform();
+                return &model->CSGData;
+            }
+        }
+
+        Scene* scene = actor->GetScene();
+        if (scene != nullptr)
+        {
+            if (outTargetTransform)
+                *outTargetTransform = Transform::Identity;
+            return &scene->CSGData;
+        }
+
+        return nullptr;
+    }
+}
 
 void BrushSurface::Serialize(SerializeStream& stream, const void* otherObj)
 {
@@ -164,26 +197,61 @@ bool BoxBrush::Intersects(int32 surfaceIndex, const Ray& ray, Real& distance, Ve
 {
     distance = MAX_Real;
     normal = Vector3::Up;
-    auto scene = GetScene();
-    CHECK_RETURN(scene, false);
 
-    // Get surface data handle
-    CSG::SceneCSGData::SurfaceData surfaceData;
-    if (scene->CSGData.TryGetSurfaceData(GetBrushID(), surfaceIndex, surfaceData))
+    Transform targetTransform;
+    CSG::CSGCompiledData* csgData = FindCompiledCSGData(this, &targetTransform);
+    if (csgData == nullptr)
+        return false;
+
+    CSG::CSGCompiledData::SurfaceData surfaceData;
+    if (!csgData->TryGetSurfaceData(GetBrushID(), surfaceIndex, surfaceData))
+        return false;
+
+    if (!targetTransform.IsIdentity())
     {
-        return surfaceData.Intersects(ray, distance, normal);
+        Ray localRay;
+        localRay.Position = targetTransform.WorldToLocal(ray.Position);
+        localRay.Direction = targetTransform.WorldToLocalVector(ray.Direction).Normalized();
+
+        Real localDistance;
+        Vector3 localNormal;
+        if (surfaceData.Intersects(localRay, localDistance, localNormal))
+        {
+            normal = targetTransform.LocalToWorldVector(localNormal).Normalized();
+            Vector3 hitLocal = localRay.Position + localRay.Direction * localDistance;
+            Vector3 hitWorld = targetTransform.LocalToWorld(hitLocal);
+            distance = Vector3::Distance(ray.Position, hitWorld);
+            return true;
+        }
+        return false;
     }
-    return false;
+
+    return surfaceData.Intersects(ray, distance, normal);
 }
 
 void BoxBrush::GetVertices(int32 surfaceIndex, Array<Vector3>& outputData) const
 {
-    auto scene = GetScene();
-    CHECK(scene);
-    CSG::SceneCSGData::SurfaceData surfaceData;
-    if (scene->CSGData.TryGetSurfaceData(GetBrushID(), surfaceIndex, surfaceData))
+    Transform targetTransform;
+    CSG::CSGCompiledData* csgData = FindCompiledCSGData(this, &targetTransform);
+    if (csgData == nullptr)
+        return;
+
+    CSG::CSGCompiledData::SurfaceData surfaceData;
+    if (csgData->TryGetSurfaceData(GetBrushID(), surfaceIndex, surfaceData))
     {
-        outputData.Add((Vector3*)surfaceData.Triangles.Get(), 3 * surfaceData.Triangles.Count());
+        if (!targetTransform.IsIdentity())
+        {
+            for (int32 i = 0; i < surfaceData.Triangles.Count(); i++)
+            {
+                outputData.Add(targetTransform.LocalToWorld(surfaceData.Triangles[i].V0));
+                outputData.Add(targetTransform.LocalToWorld(surfaceData.Triangles[i].V1));
+                outputData.Add(targetTransform.LocalToWorld(surfaceData.Triangles[i].V2));
+            }
+        }
+        else
+        {
+            outputData.Add((Vector3*)surfaceData.Triangles.Get(), 3 * surfaceData.Triangles.Count());
+        }
     }
 }
 
