@@ -22,8 +22,17 @@ CSGModel::CSGModel(const SpawnParams& params)
 void CSGModel::BuildCSG(float timeoutMs) const
 {
 #if COMPILE_WITH_CSG_BUILDER
-    // Rebuild target model via CSG builder
-    CSG::Builder::Build(const_cast<CSGModel*>(this), timeoutMs);
+    // Rebuild target model via CSG builder in preview mode
+    CSG::Builder::Build(const_cast<CSGModel*>(this), timeoutMs, CSG::ModelBuildIntent::Preview);
+#endif
+}
+
+bool CSGModel::PersistCSG(const Guid& ownerAssetId) const
+{
+#if COMPILE_WITH_CSG_BUILDER
+    return CSG::Builder::Persist(const_cast<CSGModel*>(this), ownerAssetId);
+#else
+    return false;
 #endif
 }
 
@@ -103,17 +112,27 @@ void CSGModel::OnCsgCollisionDataChanged()
 
 void CSGModel::OnCSGBuildEnd()
 {
-    if (CSGData.CollisionData && TryGetCsgCollider() == nullptr)
-        CreateCsgCollider();
+    auto output = CSGData.GetModelForRendering();
     auto csgModel = TryGetCsgModel();
     if (csgModel)
     {
         csgModel->HideFlags |= HideFlags::FullyHidden;
-        csgModel->Model = CSGData.GetModelForRendering();
+        csgModel->Model = output;
     }
-    else if (CSGData.GetModelForRendering())
+    else if (output)
     {
         CreateCsgModel();
+    }
+
+    auto collider = TryGetCsgCollider();
+    if (collider)
+    {
+        collider->HideFlags |= HideFlags::FullyHidden;
+        collider->CollisionData = CSGData.CollisionData;
+    }
+    else if (CSGData.CollisionData)
+    {
+        CreateCsgCollider();
     }
 }
 

@@ -9,9 +9,9 @@ class StaticModel;
 class MeshCollider;
 
 /// <summary>
-/// A CSG scope actor that establishes an independent generated output boundary.
-/// All brushes and stacks inside this model compile into this actor's own Model and CollisionData
-/// in model-local coordinate space.
+/// A live CSG authoring assembly and independent generated-output boundary.
+/// Child brushes and stacks remain editable source geometry.
+/// The generated model, raw surface data, and collision are derived outputs.
 /// </summary>
 API_CLASS(Attributes="ActorContextMenu(\"New/CSG/CSG Model\"), ActorToolbox(\"CSG\")")
 class FLAXENGINE_API CSGModel : public CSGScopeActor
@@ -32,10 +32,17 @@ public:
     }
 
     /// <summary>
-    /// Requests CSG geometry rebuild for this model.
+    /// Requests CSG geometry preview rebuild for this model.
     /// </summary>
     /// <param name="timeoutMs">The timeout to wait before building CSG (in milliseconds).</param>
     API_FUNCTION() void BuildCSG(float timeoutMs = 50) const;
+
+    /// <summary>
+    /// Synchronously compiles and persists CSG model output.
+    /// </summary>
+    /// <param name="ownerAssetId">The owning asset ID (e.g. Prefab ID) for asset-owned output, or empty for scene-owned output.</param>
+    /// <returns>True if successfully persisted, false otherwise.</returns>
+    API_FUNCTION() bool PersistCSG(const Guid& ownerAssetId = Guid::Empty) const;
 
     /// <summary>
     /// Tries to get the generated static model component.
