@@ -1098,6 +1098,11 @@ namespace FlaxEditor.Modules
                 node.TreeNode.StartRenaming(Editor.Windows.SceneWin, Editor.Windows.SceneWin.SceneTreePanel);
         }
 
+        /// <summary>
+        /// Finds the lowest common parent actor for the specified list of actors.
+        /// </summary>
+        /// <param name="actors">The actors list.</param>
+        /// <returns>The lowest common parent actor, or null if not found.</returns>
         public static Actor FindLowestCommonActorParent(List<Actor> actors)
         {
             for (var candidate = actors[0].Parent; candidate != null; candidate = candidate.Parent)
