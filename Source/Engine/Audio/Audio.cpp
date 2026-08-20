@@ -34,10 +34,14 @@
 #include "Events/AudioEventSystem.h"
 #include "Events/AudioEventBackendNone.h"
 #include "Events/AudioWorld.h"
+#include "Events/AudioEventCatalog.h"
+#include "Events/Surface/AudioSurfaceLibrary.h"
+#include "Events/Surface/AudioPhysicsInteractionSystem.h"
 #include "AudioListener.h"
 #include "Engine/Engine/Time.h"
 #if AUDIO_EVENT_API_FMOD
 #include "FMOD/FmodEventBackend.h"
+#include "FMOD/AudioBackendFMODCore.h"
 #endif
 
 float AudioDataInfo::GetLength() const
@@ -97,6 +101,33 @@ namespace
         AudioEventSystem::SetPaused(!Engine::IsPlayMode());
 #endif
     }
+
+#if COMPILE_WITH_AUDIO_EVENTS
+    bool LoadConfiguredBank(const JsonAssetReference<AudioBank>& reference, bool preloadSampleData, bool forceBlocking = false)
+    {
+        if (!reference)
+            return true;
+        reference->WaitForLoaded();
+        const AudioBank* bank = reference->GetInstance<AudioBank>();
+        if (!bank)
+        {
+            LOG(Error, "Configured startup audio bank '{0}' is not a valid AudioBank asset.", reference->GetPath());
+            return false;
+        }
+        AudioEventCatalog::RegisterBank(bank);
+        if (!AudioEventSystem::LoadBank(bank->BackendId, bank->Path, forceBlocking ? false : bank->NonBlocking))
+        {
+            LOG(Error, "Failed to load configured audio bank '{0}' ({1}).", reference->GetPath(), bank->Path);
+            return false;
+        }
+        if (preloadSampleData && bank->BackendId.IsValid() && !AudioEventSystem::LoadBankSampleData(bank->BackendId))
+        {
+            LOG(Error, "Failed to preload sample data for audio bank '{0}'.", reference->GetPath());
+            return false;
+        }
+        return true;
+    }
+#endif
 }
 
 void AudioSettings::Apply()
@@ -114,7 +145,7 @@ void AudioSettings::Apply()
 
 AudioDevice* Audio::GetActiveDevice()
 {
-    return &Devices[ActiveDeviceIndex];
+    return ActiveDeviceIndex >= 0 && ActiveDeviceIndex < Devices.Count() ? &Devices[ActiveDeviceIndex] : nullptr;
 }
 
 int32 Audio::GetActiveDeviceIndex()
@@ -197,17 +228,42 @@ bool AudioService::Init()
     eventBackendRequested = !muteAll && settings->EventBackend == AudioEventBackendType::FMODStudio;
 #endif
 
+#if COMPILE_WITH_AUDIO_EVENTS
+    // Studio must be initialized before selecting a shared FMOD Core AudioClip
+    // backend. This guarantees a single FMOD system and one physical output.
+    IAudioEventBackend* eventBackend = nullptr;
+#if AUDIO_EVENT_API_FMOD
+    if (eventBackendRequested)
+        eventBackend = New<FmodEventBackend>();
+#endif
+    if (!eventBackend)
+        eventBackend = New<AudioEventBackendNone>();
+    if (eventBackend->Init())
+    {
+        LOG(Warning, "Failed to initialize audio event backend '{0}'. Falling back to Null.", eventBackend->GetName());
+        Delete(eventBackend);
+        eventBackend = New<AudioEventBackendNone>();
+        if (eventBackend->Init())
+            LOG(Error, "Failed to initialize the Null audio event backend.");
+    }
+    AudioEventSystem::SetBackend(eventBackend);
+#endif
+
     bool enableNativeClips = !muteAll && settings->NativeClips == NativeAudioClipMode::Enabled;
     if (!muteAll && settings->NativeClips == NativeAudioClipMode::DisabledWhenEventBackendActive)
         enableNativeClips = !eventBackendRequested;
 
     if (settings->OutputOwner == AudioOutputOwner::EventBackend && !eventBackendRequested && !muteAll)
         LOG(Warning, "Audio output owner is set to Event Backend, but the selected event backend is unavailable. Falling back to the native clip backend when enabled.");
-    if (eventBackendRequested && enableNativeClips)
-        LOG(Warning, "Native clips and the FMOD event backend are both enabled. This migration mode opens two mixer/device paths.");
+    if (eventBackendRequested && enableNativeClips && settings->OutputOwner != AudioOutputOwner::EventBackend)
+        LOG(Warning, "Native clips and the FMOD event backend are both enabled with native output ownership. This migration mode opens two mixer/device paths.");
 
     // Pick a backend to use
     AudioBackend* backend = nullptr;
+#if AUDIO_EVENT_API_FMOD
+    if (enableNativeClips && settings->OutputOwner == AudioOutputOwner::EventBackend && eventBackend && eventBackend->GetType() == AudioEventBackendType::FMODStudio)
+        backend = New<AudioBackendFMODCore>(static_cast<FmodEventBackend*>(eventBackend)->GetCoreSystem());
+#endif
 #if AUDIO_API_NONE
     if (!enableNativeClips)
         backend = New<AudioBackendNone>();
@@ -260,24 +316,6 @@ bool AudioService::Init()
     }
 
 #if COMPILE_WITH_AUDIO_EVENTS
-    // Initialize Audio Event Backend
-    IAudioEventBackend* eventBackend = nullptr;
-#if AUDIO_EVENT_API_FMOD
-    if (eventBackendRequested)
-        eventBackend = New<FmodEventBackend>();
-#endif
-    if (!eventBackend)
-        eventBackend = New<AudioEventBackendNone>();
-
-    if (eventBackend->Init())
-    {
-        LOG(Warning, "Failed to initialize audio event backend '{0}'. Falling back to Null.", eventBackend->GetName());
-        Delete(eventBackend);
-        eventBackend = New<AudioEventBackendNone>();
-        if (eventBackend->Init())
-            LOG(Error, "Failed to initialize the Null audio event backend.");
-    }
-    AudioEventSystem::SetBackend(eventBackend);
     if (settings->OutputOwner == AudioOutputOwner::EventBackend && eventBackend->GetType() != AudioEventBackendType::None)
     {
         Array<AudioOutputDeviceInfo> outputDevices;
@@ -297,6 +335,23 @@ bool AudioService::Init()
             eventBackend->SetOutputDevice(String(Audio::Devices[ActiveDeviceIndex].InternalName));
         Audio::DevicesChanged();
     }
+    // Deterministic bank initialization: strings, master, then authored startup order.
+    if (eventBackend->GetType() != AudioEventBackendType::None)
+    {
+        AudioEventCatalog::Clear();
+        if (settings->MasterStringsBank && !settings->MasterStringsBank->WaitForLoaded()) AudioEventCatalog::RegisterBank(settings->MasterStringsBank->GetInstance<AudioBank>());
+        if (settings->MasterBank && !settings->MasterBank->WaitForLoaded()) AudioEventCatalog::RegisterBank(settings->MasterBank->GetInstance<AudioBank>());
+        for (const auto& bank : settings->StartupBanks)
+            if (bank && !bank->WaitForLoaded()) AudioEventCatalog::RegisterBank(bank->GetInstance<AudioBank>());
+        LoadConfiguredBank(settings->MasterStringsBank, false, true);
+        LoadConfiguredBank(settings->MasterBank, false, true);
+        for (const auto& bank : settings->StartupBanks)
+            LoadConfiguredBank(bank, settings->PreloadStartupBankSampleData);
+    }
+    AudioSurfaceLibrary* surfaceLibrary = nullptr;
+    if (settings->SurfaceLibrary && !settings->SurfaceLibrary->WaitForLoaded())
+        surfaceLibrary = settings->SurfaceLibrary->GetInstance<AudioSurfaceLibrary>();
+    AudioWorld::SetSurfaceLibrary(surfaceLibrary);
     _wasPlayMode = Engine::IsPlayMode();
     AudioEventSystem::SetPaused(!_wasPlayMode);
     LOG(Info, "Audio event system initialization... (backend: {0})", AudioEventSystem::GetBackendName());
@@ -341,6 +396,11 @@ void AudioService::Update()
         }
         else
         {
+            const auto settings = AudioSettings::Get();
+            LoadConfiguredBank(settings->MasterStringsBank, false, true);
+            LoadConfiguredBank(settings->MasterBank, false, true);
+            for (const auto& bank : settings->StartupBanks)
+                LoadConfiguredBank(bank, settings->PreloadStartupBankSampleData);
             AudioEventSystem::SetPaused(false);
         }
         _wasPlayMode = playMode;
@@ -379,8 +439,15 @@ void AudioService::Dispose()
 {
     ASSERT(Audio::Sources.IsEmpty() && Audio::Listeners.IsEmpty());
 
-    // Cleanup
+    // Dispose the native backend first because FMOD Core may share the Studio
+    // system and must release all sounds/channels before Studio is released.
     Audio::Devices.Resize(0);
+    if (AudioBackend::Instance)
+    {
+        AudioBackend::Dispose();
+        Delete(AudioBackend::Instance);
+        AudioBackend::Instance = nullptr;
+    }
 #if COMPILE_WITH_AUDIO_EVENTS
     if (AudioEventSystem::GetBackend())
     {
@@ -389,11 +456,8 @@ void AudioService::Dispose()
         AudioEventSystem::SetBackend(nullptr);
     }
 #endif
-    if (AudioBackend::Instance)
-    {
-        AudioBackend::Dispose();
-        Delete(AudioBackend::Instance);
-        AudioBackend::Instance = nullptr;
-    }
     ActiveDeviceIndex = -1;
+    AudioWorld::SetSurfaceLibrary(nullptr);
+    AudioWorld::GetSurfaceInteractions().Clear();
+    AudioEventCatalog::Clear();
 }

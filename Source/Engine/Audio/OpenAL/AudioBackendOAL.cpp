@@ -687,7 +687,13 @@ void AudioBackendOAL::Base_OnActiveDeviceChanged()
     }
 
     // Open device
-    const StringAnsi& name = Audio::GetActiveDevice()->InternalName;
+    const AudioDevice* activeDevice = Audio::GetActiveDevice();
+    if (!activeDevice)
+    {
+        LOG(Warning, "Cannot open OpenAL output because no audio device is available.");
+        return;
+    }
+    const StringAnsi& name = activeDevice->InternalName;
     ALC::Device = alcOpenDevice(name.Get());
     if (ALC::Device == nullptr)
     {
@@ -695,7 +701,7 @@ void AudioBackendOAL::Base_OnActiveDeviceChanged()
         return;
     }
     if (ALC::Inited)
-        LOG(Info, "Changed audio device to: {}", String(Audio::GetActiveDevice()->Name));
+        LOG(Info, "Changed audio device to: {}", String(activeDevice->Name));
 
     // Rebuild context
     ALC::RebuildContext();

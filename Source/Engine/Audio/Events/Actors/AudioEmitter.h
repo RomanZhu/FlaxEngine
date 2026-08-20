@@ -167,12 +167,18 @@ public:
     API_FIELD(Attributes="EditorOrder(80), EditorDisplay(\"Audio Emitter\", \"Occlusion\")")
     AudioOcclusionSettings Occlusion;
 
+    /// <summary>Priority used when the global occlusion query budget is oversubscribed.</summary>
+    API_FIELD(Attributes="EditorOrder(81), EditorDisplay(\"Audio Emitter\", \"Occlusion Priority\")")
+    int32 OcclusionPriority = 0;
+
     /// <summary>Returns the sanitized occlusion settings used by the world scheduler.</summary>
     const AudioOcclusionSettings& GetOcclusionSettings() const { return Occlusion; }
+    int32 GetOcclusionPriority() const { return OcclusionPriority; }
 
 private:
     void UpdateVelocity(float dt);
     void Push3DAttributes();
+    void HandleEventCallback(const AudioEventCallback& callback);
 
 public:
     // [Actor]

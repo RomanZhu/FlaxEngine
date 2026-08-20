@@ -25,6 +25,8 @@ public:
         int32 RefCount = 0;
         bool SampleDataLoaded = false;
         AudioBankState State = AudioBankState::Unloaded;
+        FMOD_RESULT LastResult = FMOD_OK;
+        uint64 FileRevision = 0;
     };
 
 private:
@@ -46,9 +48,12 @@ public:
     bool LoadSampleData(const Guid& bankId);
     void UnloadSampleData(const Guid& bankId);
     AudioBankState GetState(const Guid& bankId) const;
+    bool Query(const Guid& bankId, const StringView& path, AudioBankRuntimeState& outState) const;
 
     FMOD::Studio::Bank* Get(const Guid& bankId) const;
     int32 GetLoadedCount() const { return _banksByGuid.Count(); }
+    int32 GetSampleDataLoadedCount() const;
+    void Capture(Array<AudioBankRuntimeState>& result) const;
 };
 
 #endif

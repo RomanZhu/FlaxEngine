@@ -17,7 +17,7 @@ namespace
         const String directory = appData / TEXT("Flax") / TEXT("FMOD");
         if (!FileSystem::DirectoryExists(directory))
             FileSystem::CreateDirectory(directory);
-        return directory / String::Format(TEXT("{0:x8}.studio"), projectHash);
+        return directory / String::Format(TEXT("{0:x8}.fspro"), projectHash);
     }
 }
 
@@ -27,6 +27,7 @@ String FmodStudioLocator::GetUserProjectPath()
     const String settingsPath = GetSettingsPath();
     if (FileSystem::FileExists(settingsPath) && !File::ReadAllText(settingsPath, path))
     {
+        path = path.TrimTrailing();
         if (path.HasChars() && FileSystem::FileExists(path))
             return path;
     }
@@ -37,8 +38,9 @@ bool FmodStudioLocator::SetUserProjectPath(const StringView& path)
 {
     String value(path);
     FileSystem::NormalizePath(value);
+    value = value.TrimTrailing();
     if (value.HasChars() && !FileSystem::FileExists(value))
-        return true;
+        return false;
     return File::WriteAllText(GetSettingsPath(), value, Encoding::UTF8);
 }
 

@@ -365,6 +365,12 @@ bool AudioEventBackendNone::SetListenerMask(AudioEventHandle handle, uint32 list
     return ValidateHandle(handle);
 }
 
+bool AudioEventBackendNone::ResolveParameterId(const Guid& eventId, const StringView& eventPath, const StringView& name, AudioParameterId& id)
+{
+    id = AudioParameterId(name);
+    return name.HasChars();
+}
+
 bool AudioEventBackendNone::SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed)
 {
     auto* slot = GetSlot(handle);
@@ -386,6 +392,11 @@ bool AudioEventBackendNone::SetParameters(AudioEventHandle handle, const Span<Au
 bool AudioEventBackendNone::SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed)
 {
     return ValidateHandle(handle);
+}
+
+bool AudioEventBackendNone::SetProgrammerSound(AudioEventHandle handle, const AudioProgrammerSoundData& data)
+{
+    return ValidateHandle(handle) && data.Path.HasChars();
 }
 
 bool AudioEventBackendNone::SetGlobalParameter(const AudioParameterId& id, float value, bool ignoreSeekSpeed)

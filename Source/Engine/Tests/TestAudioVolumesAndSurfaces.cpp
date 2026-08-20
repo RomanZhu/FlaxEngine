@@ -6,6 +6,10 @@
 #include "Engine/Audio/Events/Actors/AudioAreaEmitter.h"
 #include "Engine/Audio/Events/Actors/AudioZoneVolume.h"
 #include "Engine/Audio/Events/Surface/AudioSurfaceLibrary.h"
+#include "Engine/Audio/Events/Surface/AudioSurfaceResolver.h"
+#include "Engine/Audio/Events/Surface/AudioPhysicsInteractionSystem.h"
+#include "Engine/Audio/Events/Occlusion/AudioOcclusionMaterial.h"
+#include "Engine/Physics/PhysicalMaterial.h"
 #include "Engine/Scripting/ScriptingObject.h"
 #include <ThirdParty/catch2/catch.hpp>
 
@@ -77,5 +81,58 @@ TEST_CASE("AudioVolumesAndSurfaces")
         CHECK(def == &lib->DefaultProfile);
 
         Delete(lib);
+    }
+
+    SECTION("Hierarchical Surface Fallback")
+    {
+        AudioSurfaceLibrary* lib = New<AudioSurfaceLibrary>(ScriptingObject::SpawnParams(Guid::New(), AudioSurfaceLibrary::TypeInitializer));
+        const Tag wood = Tags::Get(TEXT("Surface.Wood"));
+        const Tag wetWood = Tags::Get(TEXT("Surface.Wood.Wet"));
+        AudioSurfaceProfile profile;
+        lib->Profiles[wood] = profile;
+        CHECK(AudioSurfaceResolver::Resolve(*lib, wetWood) == &lib->Profiles[wood]);
+        Delete(lib);
+    }
+
+    SECTION("Surface Impact Coalescing And Persistent Grace")
+    {
+        AudioSurfaceLibrary* lib = New<AudioSurfaceLibrary>(ScriptingObject::SpawnParams(Guid::New(), AudioSurfaceLibrary::TypeInitializer));
+        AudioPhysicsInteractionSystem interactions;
+        AudioImpactContext weak;
+        weak.Impulse = 1.0f;
+        AudioImpactContext strong;
+        strong.Impulse = 5.0f;
+        interactions.QueueImpact(weak, 42);
+        interactions.QueueImpact(strong, 42);
+        CHECK(interactions.Flush(*lib) == 1);
+
+        interactions.UpdatePersistent(42, 10.0f, 2.0f, 1.0f / 60.0f);
+        CHECK(interactions.GetPersistentLoopCount() == 1);
+        interactions.ReleaseExpired(0.2f);
+        CHECK(interactions.GetPersistentLoopCount() == 0);
+        Delete(lib);
+    }
+
+    SECTION("Surface Pending Impact Backlog Is Bounded")
+    {
+        AudioPhysicsInteractionSystem interactions;
+        interactions.SetBudgetPerFrame(2);
+        AudioImpactContext context;
+        for (uint64 i = 0; i < 128; i++)
+        {
+            context.Impulse = (float)i;
+            interactions.QueueImpact(context, i + 1);
+        }
+        CHECK(interactions.GetPendingImpactCount() <= 32);
+    }
+
+    SECTION("Occlusion Material Transmission")
+    {
+        PhysicalMaterial* material = New<PhysicalMaterial>(ScriptingObject::SpawnParams(Guid::New(), PhysicalMaterial::TypeInitializer));
+        material->AudioTransmission = 0.25f;
+        material->AudioLowFrequencyTransmission = 0.5f;
+        CHECK(AudioOcclusionMaterial::ResolveTransmission(material) == Approx(0.25f));
+        CHECK(AudioOcclusionMaterial::ResolveLowFrequencyTransmission(material) == Approx(0.5f));
+        Delete(material);
     }
 }

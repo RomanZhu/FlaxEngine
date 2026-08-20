@@ -127,6 +127,18 @@ public:
     FORCE_INLINE AudioTriggerTargetMode GetTargetMode() const { return _targetMode; }
     API_PROPERTY() void SetTargetMode(AudioTriggerTargetMode value) { _targetMode = value; }
 
+    /// <summary>Optional actor selected when TargetMode is Actor.</summary>
+    API_FIELD(Attributes="EditorOrder(46), EditorDisplay(\"Audio Trigger\", \"Target Actor\")")
+    Actor* TargetActor = nullptr;
+
+    /// <summary>Layer mask accepted when TargetMode is LayerMask.</summary>
+    API_FIELD(Attributes="EditorOrder(47), EditorDisplay(\"Audio Trigger\", \"Target Layer Mask\")")
+    uint32 TargetLayerMask = MAX_uint32;
+
+    /// <summary>Tag accepted when TargetMode is Tag.</summary>
+    API_FIELD(Attributes="EditorOrder(48), EditorDisplay(\"Audio Trigger\", \"Target Tag\")")
+    Tag TargetTag;
+
     API_PROPERTY(Attributes="EditorOrder(46), DefaultValue(true), EditorDisplay(\"Audio Trigger\", \"Rearm On Exit\")")
     FORCE_INLINE bool GetRearmOnExit() const { return _rearmOnExit; }
     API_PROPERTY() void SetRearmOnExit(bool value) { _rearmOnExit = value; }
@@ -204,6 +216,12 @@ public:
     /// </summary>
     void UpdateListenerPosition(const Vector3& listenerPosition) override;
 
+    /// <summary>Updates this trigger for a concrete listener or actor target.</summary>
+    void UpdateTarget(Actor* target);
+
+    /// <summary>Aggregates all eligible targets into one boundary sample for this frame.</summary>
+    void UpdateTargets(const Array<Actor*>& targets);
+
     /// <summary>
     /// Stops and releases the active persistent event.
     /// </summary>
@@ -223,4 +241,5 @@ private:
     bool ShouldTrigger(bool entered) const;
     bool StartEvent();
     bool ExecuteAction();
+    void ProcessSample(const AudioVolumeSample& sample);
 };

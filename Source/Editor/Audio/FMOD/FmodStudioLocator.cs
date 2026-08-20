@@ -63,9 +63,13 @@ namespace FlaxEditor.FMOD
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                // Do not redirect streams here: FMOD can emit enough output to fill a pipe
+                // before the process exits, which would deadlock WaitForExit.
+                RedirectStandardOutput = false,
+                RedirectStandardError = false,
             });
+            if (process == null)
+                return false;
             process.WaitForExit();
             return process.ExitCode == 0;
         }

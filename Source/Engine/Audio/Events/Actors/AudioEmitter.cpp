@@ -3,10 +3,10 @@
 #include "AudioEmitter.h"
 #include "Engine/Audio/Events/AudioEventSystem.h"
 #include "Engine/Audio/Events/AudioWorld.h"
+#include "Engine/Audio/Events/AudioEventCatalog.h"
 #include "Engine/Engine/Time.h"
 #include "Engine/Level/Scene/Scene.h"
 #include "Engine/Debug/DebugDraw.h"
-#include "Engine/Serialization/JsonTools.h"
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Core/Log.h"
 
@@ -84,17 +84,6 @@ void AudioEmitter::Play()
             eventId = data->BackendId;
             path = data->Path;
         }
-        else if (Event->Data && Event->DataTypeName == TEXT("FlaxEngine.AudioEvent"))
-        {
-            hasTypedEvent = true;
-            auto& node = *Event->Data;
-            auto itBackend = node.FindMember("BackendId");
-            if (itBackend != node.MemberEnd() && itBackend->value.IsString())
-                JsonTools::GetGuid(eventId, node, "BackendId");
-            auto itPath = node.FindMember("Path");
-            if (itPath != node.MemberEnd() && itPath->value.IsString())
-                path = itPath->value.GetString();
-        }
     }
 
     if (!hasTypedEvent)
@@ -102,6 +91,13 @@ void AudioEmitter::Play()
 
     if (!eventId.IsValid() && path.IsEmpty())
         return;
+
+    if (Event)
+    {
+        const auto* eventData = Event->GetInstance<AudioEvent>();
+        if (eventData && !AudioEventCatalog::EnsureDependenciesLoaded(eventData))
+            return;
+    }
 
     AudioEventCreateOptions options;
     options.AutoPlay = true;
@@ -114,7 +110,6 @@ void AudioEmitter::Play()
     {
         AudioEventSystem::SetVolume(_handle, _volume);
         AudioEventSystem::SetPitch(_handle, _pitch);
-        Started();
     }
 }
 
@@ -128,10 +123,8 @@ void AudioEmitter::Stop()
 {
     if (_handle.IsValid())
     {
-        AudioEventSystem::Stop(_handle, _stopMode);
-        AudioEventSystem::ReleaseInstance(_handle);
+        AudioEventSystem::StopAndRelease(_handle, _stopMode);
         _handle = AudioEventHandle();
-        Stopped();
     }
 }
 
@@ -182,6 +175,37 @@ void AudioEmitter::Push3DAttributes()
     {
         Audio3DAttributes attrs(GetTransform(), _velocity);
         AudioEventSystem::Set3DAttributes(_handle, attrs);
+    }
+}
+
+void AudioEmitter::HandleEventCallback(const AudioEventCallback& callback)
+{
+    switch (callback.Type)
+    {
+    case AudioEventCallbackType::Started:
+    case AudioEventCallbackType::Restarted:
+        Started();
+        break;
+    case AudioEventCallbackType::Stopped:
+        Stopped();
+        break;
+    case AudioEventCallbackType::TimelineMarker:
+        TimelineMarker(callback.Marker, callback.TimelinePositionMs);
+        break;
+    case AudioEventCallbackType::TimelineBeat:
+    {
+        AudioTimelineBeat beat;
+        beat.PositionMs = callback.TimelinePositionMs;
+        beat.Bar = callback.Bar;
+        beat.Beat = callback.Beat;
+        beat.Tempo = callback.Tempo;
+        beat.TimeSignatureUpper = callback.TimeSignatureUpper;
+        beat.TimeSignatureLower = callback.TimeSignatureLower;
+        TimelineBeat(beat);
+        break;
+    }
+    default:
+        break;
     }
 }
 
@@ -258,6 +282,7 @@ void AudioEmitter::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_MEMBER(StopOnDisable, _stopOnDisable);
     SERIALIZE_MEMBER(ListenerMask, _listenerMask);
     SERIALIZE(Occlusion);
+    SERIALIZE(OcclusionPriority);
 }
 
 void AudioEmitter::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
@@ -273,5 +298,6 @@ void AudioEmitter::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
     DESERIALIZE_MEMBER(StopOnDisable, _stopOnDisable);
     DESERIALIZE_MEMBER(ListenerMask, _listenerMask);
     DESERIALIZE(Occlusion);
+    DESERIALIZE(OcclusionPriority);
     Occlusion.Sanitize();
 }

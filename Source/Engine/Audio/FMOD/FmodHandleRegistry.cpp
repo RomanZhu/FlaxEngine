@@ -28,6 +28,7 @@ AudioEventHandle FmodHandleRegistry::Allocate(FMOD::Studio::EventInstance* insta
     slot.EventId = eventId;
     slot.OwnerId = ownerId;
     slot.OneShot = oneShot;
+    slot.PlayCount = 0;
 
     return AudioEventHandle(index, slot.Generation);
 }
@@ -62,6 +63,7 @@ bool FmodHandleRegistry::Free(AudioEventHandle handle, FMOD::Studio::EventInstan
     slot.EventId = Guid::Empty;
     slot.OwnerId = Guid::Empty;
     slot.OneShot = false;
+    slot.PlayCount = 0;
     _freeIndices.Add(handle.Index);
 
     return true;
@@ -74,6 +76,13 @@ FMOD::Studio::EventInstance* FmodHandleRegistry::Get(AudioEventHandle handle) co
     return nullptr;
 }
 
+FmodInstanceContext* FmodHandleRegistry::GetCallbackContext(AudioEventHandle handle) const
+{
+    if (!Validate(handle))
+        return nullptr;
+    return _slots[handle.Index].CallbackContext;
+}
+
 bool FmodHandleRegistry::Validate(AudioEventHandle handle) const
 {
     return handle.IsValid() && (int32)handle.Index < _slots.Count() && _slots[handle.Index].InUse && _slots[handle.Index].Generation == handle.Generation;
@@ -82,6 +91,12 @@ bool FmodHandleRegistry::Validate(AudioEventHandle handle) const
 bool FmodHandleRegistry::IsOneShot(AudioEventHandle handle) const
 {
     return Validate(handle) && _slots[handle.Index].OneShot;
+}
+
+void FmodHandleRegistry::MarkPlayed(AudioEventHandle handle)
+{
+    if (Validate(handle))
+        _slots[handle.Index].PlayCount++;
 }
 
 void FmodHandleRegistry::Clear()

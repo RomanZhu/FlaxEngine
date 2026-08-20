@@ -83,9 +83,11 @@ public:
     bool SetPitch(AudioEventHandle handle, float pitch) override;
     bool SetTimelinePosition(AudioEventHandle handle, int32 milliseconds) override;
     bool SetListenerMask(AudioEventHandle handle, uint32 listenerMask) override;
+    bool ResolveParameterId(const Guid& eventId, const StringView& eventPath, const StringView& name, AudioParameterId& id) override;
     bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) override;
     bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false) override;
     bool SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) override;
+    bool SetProgrammerSound(AudioEventHandle handle, const AudioProgrammerSoundData& data) override;
 
     bool SetGlobalParameter(const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) override;
     bool SetGlobalParameterLabel(const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) override;

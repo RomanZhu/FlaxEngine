@@ -6,6 +6,8 @@
 #include "Engine/Core/ISerializable.h"
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Audio/Events/AudioEventTypes.h"
+#include "Engine/Content/JsonAssetReference.h"
+#include "AudioBank.h"
 
 /// <summary>
 /// Serializable audio event asset containing metadata, paths, and parameter definitions for an audio middleware event.
@@ -64,4 +66,12 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(70), EditorDisplay(\"Parameters\")")
     Array<AudioParameterId> Parameters;
+
+    /// <summary>Bank GUIDs that must be loaded before an instance is created.</summary>
+    API_FIELD(Attributes="EditorOrder(80), EditorDisplay(\"Content\")")
+    Array<Guid> BankDependencies;
+
+    /// <summary>Typed bank assets used to register and load dependencies without relying on startup-bank side effects.</summary>
+    API_FIELD(Attributes="EditorOrder(90), EditorDisplay(\"Content\")")
+    Array<JsonAssetReference<AudioBank>> BankAssets;
 };

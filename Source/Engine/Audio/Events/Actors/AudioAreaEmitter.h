@@ -7,6 +7,8 @@
 #include "Engine/Audio/Events/AudioEventHandle.h"
 #include "Engine/Audio/Events/Assets/AudioEvent.h"
 
+class AudioListener;
+
 /// <summary>
 /// Spatial area audio emitter that positions its virtual source at the closest point to the listener and modulates volume based on zone distance.
 /// </summary>
@@ -16,12 +18,26 @@ class FLAXENGINE_API AudioAreaEmitter : public AudioVolumeBase
     DECLARE_SCENE_OBJECT(AudioAreaEmitter);
 
 private:
+    struct ListenerVoice
+    {
+        AudioListener* Listener = nullptr;
+        AudioEventHandle Handle;
+        Vector3 PreviousSourcePosition = Vector3::Zero;
+        float BelowStopDuration = 0.0f;
+        float Weight = 0.0f;
+        bool Seen = false;
+    };
+
     float _volume = 1.0f;
     float _pitch = 1.0f;
     bool _playOnStart = true;
+    bool _manualPlayRequested = false;
     Vector3 _previousSourcePosition = Vector3::Zero;
     float _belowStopDuration = 0.0f;
     AudioEventHandle _handle;
+    Array<ListenerVoice> _listenerVoices;
+    float _currentWeight = 0.0f;
+    Vector3 _currentClosestPoint = Vector3::Zero;
 
 public:
     /// <summary>
@@ -91,14 +107,44 @@ public:
     /// </summary>
     API_FUNCTION() void Stop();
 
+    /// <summary>Gets the owned event instance for runtime diagnostics.</summary>
+    API_PROPERTY(Attributes="HideInEditor, NoSerialize")
+    FORCE_INLINE AudioEventHandle GetHandle() const { return _handle; }
+
+    /// <summary>Gets the final, group-resolved listener contribution.</summary>
+    API_PROPERTY(Attributes="HideInEditor, NoSerialize")
+    FORCE_INLINE float GetCurrentWeight() const { return _currentWeight; }
+
+    /// <summary>Gets the closest virtual source point from the latest sample.</summary>
+    API_PROPERTY(Attributes="HideInEditor, NoSerialize")
+    FORCE_INLINE Vector3 GetCurrentClosestPoint() const { return _currentClosestPoint; }
+
+    API_FUNCTION() bool SetParameter(const StringView& name, float value, bool ignoreSeekSpeed = false);
+    API_FUNCTION() bool SetParameterLabel(const StringView& name, const StringView& label, bool ignoreSeekSpeed = false);
+    API_PROPERTY(Attributes="HideInEditor, NoSerialize") AudioEventPlaybackState GetPlaybackState() const;
+
     /// <summary>
     /// Updates spatial positioning relative to listener position.
     /// </summary>
     void UpdateListenerPosition(const Vector3& listenerPosition) override;
+    void ApplyResolvedSample(const Vector3& listenerPosition, const AudioVolumeSample& rawSample, float resolvedWeight) override;
+
+    /// <summary>Begins one AudioWorld multi-listener arbitration pass.</summary>
+    void BeginListenerUpdate();
+    /// <summary>Applies the group-resolved contribution for one compact listener.</summary>
+    void ApplyResolvedListenerSample(AudioListener* listener, int32 listenerIndex, const AudioVolumeSample& rawSample, float resolvedWeight);
+    /// <summary>Releases per-listener voices whose listeners disappeared or were masked out.</summary>
+    void EndListenerUpdate();
 
     // [Actor]
     void Serialize(SerializeStream& stream, const void* otherObj) override;
     void Deserialize(DeserializeStream& stream, ISerializeModifier* modifier) override;
+
+private:
+    AudioEventHandle CreateVoice(const Vector3& position, uint32 listenerMask);
+    void UpdateVoice(AudioListener* listener, uint32 listenerMask, const Vector3& listenerPosition, const AudioVolumeSample& sample);
+    void UpdateAllListeners();
+    void StopVoice(ListenerVoice& voice, AudioStopMode stopMode = AudioStopMode::AllowFadeOut);
 
 protected:
     // [Actor]

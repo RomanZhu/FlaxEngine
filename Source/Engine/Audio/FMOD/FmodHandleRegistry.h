@@ -21,6 +21,8 @@ struct FmodInstanceContext
 {
     FmodEventBackend* Backend = nullptr;
     AudioEventHandle Handle;
+    char ProgrammerSoundPath[512] = {};
+    int32 ProgrammerSoundSubsound = -1;
 };
 
 /// <summary>
@@ -38,6 +40,7 @@ public:
         Guid OwnerId = Guid::Empty;
         bool InUse = false;
         bool OneShot = false;
+        int32 PlayCount = 0;
     };
 
 private:
@@ -52,8 +55,10 @@ public:
     bool SetCallbackContext(AudioEventHandle handle, FmodInstanceContext* context);
     bool Free(AudioEventHandle handle, FMOD::Studio::EventInstance*& outInstance, FmodInstanceContext*& outContext);
     FMOD::Studio::EventInstance* Get(AudioEventHandle handle) const;
+    FmodInstanceContext* GetCallbackContext(AudioEventHandle handle) const;
     bool Validate(AudioEventHandle handle) const;
     bool IsOneShot(AudioEventHandle handle) const;
+    void MarkPlayed(AudioEventHandle handle);
     void Clear();
 
     int32 GetActiveCount() const;

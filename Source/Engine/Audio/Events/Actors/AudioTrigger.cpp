@@ -2,6 +2,8 @@
 
 #include "AudioTrigger.h"
 #include "Engine/Audio/Events/AudioEventSystem.h"
+#include "Engine/Audio/Events/AudioEventCatalog.h"
+#include "Engine/Audio/AudioListener.h"
 #include "Engine/Core/Math/Math.h"
 #include "Engine/Engine/Time.h"
 #include "Engine/Level/Scene/Scene.h"
@@ -120,18 +122,36 @@ bool AudioTrigger::StartEvent()
     if (!eventId.IsValid() && path.IsEmpty())
         return false;
 
+    if (Event)
+    {
+        const auto* eventData = Event->GetInstance<AudioEvent>();
+        if (eventData && !AudioEventCatalog::EnsureDependenciesLoaded(eventData))
+            return false;
+    }
+
     const Audio3DAttributes attributes(GetPosition(), Vector3::Zero, Vector3::Forward, Vector3::Up);
     bool started = false;
+    AudioEventCreateOptions options;
+    options.AutoPlay = true;
+    options.Attributes = attributes;
+    options.OwnerId = GetID();
+    options.ListenerMask = GetListenerMask();
     if (oneShot)
     {
-        started = AudioEventSystem::PlayOneShot(eventId, path, attributes, _volume, _pitch);
+        // Use an explicit instance so the trigger's listener mask is applied.
+        // Releasing an FMOD one-shot relinquishes ownership while authored
+        // playback continues to completion.
+        const AudioEventHandle oneShotHandle = AudioEventSystem::CreateInstance(eventId, path, options);
+        started = oneShotHandle.IsValid();
+        if (started)
+        {
+            AudioEventSystem::SetVolume(oneShotHandle, _volume);
+            AudioEventSystem::SetPitch(oneShotHandle, _pitch);
+            AudioEventSystem::ReleaseInstance(oneShotHandle);
+        }
     }
     else
     {
-        AudioEventCreateOptions options;
-        options.AutoPlay = true;
-        options.Attributes = attributes;
-        options.OwnerId = GetID();
         _handle = AudioEventSystem::CreateInstance(eventId, path, options);
         started = _handle.IsValid();
         if (started)
@@ -180,10 +200,68 @@ void AudioTrigger::UpdateListenerPosition(const Vector3& listenerPosition)
     if (!IsDuringPlay())
         return;
 
+    ProcessSample(Evaluate(listenerPosition));
+}
+
+void AudioTrigger::UpdateTarget(Actor* target)
+{
+    Array<Actor*> targets;
+    if (target)
+        targets.Add(target);
+    UpdateTargets(targets);
+}
+
+void AudioTrigger::UpdateTargets(const Array<Actor*>& targets)
+{
+    if (!IsDuringPlay())
+        return;
+
+    AudioVolumeSample aggregate;
+    bool anyInside = false;
+    for (int32 i = 0; i < targets.Count(); i++)
+    {
+        auto* target = targets[i];
+        if (!target)
+            continue;
+        bool accepted = target->IsActiveInHierarchy();
+        switch (_targetMode)
+        {
+        case AudioTriggerTargetMode::Listener:
+            accepted &= dynamic_cast<AudioListener*>(target) != nullptr && i < 32 && (GetListenerMask() & (1u << i)) != 0;
+            break;
+        case AudioTriggerTargetMode::Actor:
+            accepted &= !TargetActor || TargetActor == target;
+            break;
+        case AudioTriggerTargetMode::LayerMask:
+            accepted &= TargetLayerMask == 0 || (static_cast<uint32>(target->GetLayerMask()) & TargetLayerMask) != 0;
+            break;
+        case AudioTriggerTargetMode::Tag:
+            accepted &= !TargetTag || target->HasTag(TargetTag);
+            break;
+        default:
+            break;
+        }
+
+        if (!accepted)
+            continue;
+        const AudioVolumeSample sample = Evaluate(target->GetPosition());
+        if (sample.IsInside)
+            anyInside = true;
+        if (sample.Weight > aggregate.Weight)
+            aggregate = sample;
+    }
+    aggregate.IsInside = anyInside;
+    ProcessSample(aggregate);
+}
+
+void AudioTrigger::ProcessSample(const AudioVolumeSample& sample)
+{
+    if (!IsDuringPlay())
+        return;
+
     if (_cooldownRemaining > 0.0f)
         _cooldownRemaining = Math::Max(0.0f, _cooldownRemaining - Time::GetDeltaTime());
 
-    const AudioVolumeSample sample = Evaluate(listenerPosition);
     const bool entered = sample.IsInside && (!_hasSample || !_isInside);
     const bool exited = _hasSample && _isInside && !sample.IsInside;
 
@@ -204,8 +282,7 @@ void AudioTrigger::Stop()
 {
     if (_handle.IsValid())
     {
-        AudioEventSystem::Stop(_handle, _stopMode);
-        AudioEventSystem::ReleaseInstance(_handle);
+        AudioEventSystem::StopAndRelease(_handle, _stopMode);
         _handle = AudioEventHandle();
     }
 }
@@ -246,6 +323,9 @@ void AudioTrigger::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_MEMBER(TriggerOnce, _triggerOnce);
     SERIALIZE_MEMBER(RearmOnExit, _rearmOnExit);
     SERIALIZE_MEMBER(TargetMode, _targetMode);
+    SERIALIZE(TargetActor);
+    SERIALIZE(TargetLayerMask);
+    SERIALIZE(TargetTag);
     SERIALIZE_MEMBER(Action, _action);
     SERIALIZE(ActionParameter);
     SERIALIZE(ActionValue);
@@ -267,6 +347,9 @@ void AudioTrigger::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
     DESERIALIZE_MEMBER(TriggerOnce, _triggerOnce);
     DESERIALIZE_MEMBER(RearmOnExit, _rearmOnExit);
     DESERIALIZE_MEMBER(TargetMode, _targetMode);
+    DESERIALIZE(TargetActor);
+    DESERIALIZE(TargetLayerMask);
+    DESERIALIZE(TargetTag);
     DESERIALIZE_MEMBER(Action, _action);
     DESERIALIZE(ActionParameter);
     DESERIALIZE(ActionValue);

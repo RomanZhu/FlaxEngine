@@ -12,6 +12,7 @@ namespace FlaxEditor.FMOD
     {
         private readonly FileSystemWatcher _watcher;
         private DateTime _lastChange;
+        private bool _pending;
 
         public event Action Changed;
 
@@ -37,10 +38,21 @@ namespace FlaxEditor.FMOD
             if (!args.Name.EndsWith(".bank", StringComparison.OrdinalIgnoreCase) &&
                 !args.Name.EndsWith("metadata.json", StringComparison.OrdinalIgnoreCase))
                 return;
-            if ((DateTime.UtcNow - _lastChange).TotalMilliseconds < 250)
-                return;
             _lastChange = DateTime.UtcNow;
-            Changed?.Invoke();
+            _pending = true;
+        }
+
+        /// <summary>
+        /// Dispatches a change after the filesystem has been quiet for the debounce interval.
+        /// Call from the editor update thread.
+        /// </summary>
+        public void Update()
+        {
+            if (_pending && (DateTime.UtcNow - _lastChange).TotalMilliseconds >= 250)
+            {
+                _pending = false;
+                Changed?.Invoke();
+            }
         }
 
         public void Dispose()

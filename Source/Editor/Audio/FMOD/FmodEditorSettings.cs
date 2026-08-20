@@ -22,7 +22,7 @@ namespace FlaxEditor.FMOD
                 var key = Convert.ToHexString(hash).ToLowerInvariant();
                 var directory = Path.Combine(Editor.LocalCachePath, "FMOD");
                 Directory.CreateDirectory(directory);
-                return Path.Combine(directory, key + ".studio");
+                return Path.Combine(directory, key + ".fspro");
             }
         }
 

@@ -144,6 +144,31 @@ API_ENUM() enum class AudioBankState : uint8
     Error = 3,
 };
 
+/// <summary>Observed middleware state for a numeric parameter.</summary>
+API_STRUCT() struct FLAXENGINE_API AudioParameterState
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioParameterState);
+
+    API_FIELD() float Value = 0.0f;
+    API_FIELD() float FinalValue = 0.0f;
+    API_FIELD() bool IsValid = false;
+};
+
+/// <summary>Observed runtime state for a loaded middleware bank.</summary>
+API_STRUCT() struct FLAXENGINE_API AudioBankRuntimeState
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioBankRuntimeState);
+
+    API_FIELD() AudioBankState State = AudioBankState::Unloaded;
+    API_FIELD() Guid AssetId = Guid::Empty;
+    API_FIELD() bool SampleDataLoaded = false;
+    API_FIELD() int32 RefCount = 0;
+    API_FIELD() String Name;
+    API_FIELD() String Path;
+    API_FIELD() uint64 FileRevision = 0;
+    API_FIELD() int32 LastResult = 0;
+};
+
 #include "Engine/Core/ISerializable.h"
 
 /// <summary>
@@ -365,6 +390,52 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioEventCreateOptions
     API_FIELD() Guid OwnerId = Guid::Empty;
 };
 
+/// <summary>Observed runtime state for a live event instance.</summary>
+API_STRUCT() struct FLAXENGINE_API AudioEventRuntimeInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioEventRuntimeInfo);
+
+    API_FIELD() AudioEventHandle Handle;
+    API_FIELD() Guid EventId = Guid::Empty;
+    API_FIELD() Guid OwnerId = Guid::Empty;
+    API_FIELD() String Path;
+    API_FIELD() AudioEventPlaybackState PlaybackState = AudioEventPlaybackState::Stopped;
+    API_FIELD() int32 TimelinePosition = 0;
+    API_FIELD() float Volume = 1.0f;
+    API_FIELD() bool IsVirtual = false;
+    API_FIELD() bool IsOneShot = false;
+    /// <summary>Number of real mixer voices attributed to this event when reported by the backend.</summary>
+    API_FIELD() int32 RealVoices = 0;
+    /// <summary>Number of virtual voices attributed to this event when reported by the backend.</summary>
+    API_FIELD() int32 VirtualVoices = 0;
+    /// <summary>Observed starts for this event instance (diagnostics may report zero when unavailable).</summary>
+    API_FIELD() int32 PlayCount = 0;
+    /// <summary>Elapsed timeline time in seconds for display and profiling.</summary>
+    API_FIELD() float TimeSeconds = 0.0f;
+};
+
+/// <summary>Observed runtime state for an audio bus.</summary>
+API_STRUCT() struct FLAXENGINE_API AudioBusRuntimeInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioBusRuntimeInfo);
+
+    API_FIELD() String Path;
+    API_FIELD() float Volume = 1.0f;
+    API_FIELD() float FinalVolume = 1.0f;
+    API_FIELD() bool Muted = false;
+    API_FIELD() bool Paused = false;
+};
+
+/// <summary>Observed runtime state for an active snapshot instance.</summary>
+API_STRUCT() struct FLAXENGINE_API AudioSnapshotRuntimeInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioSnapshotRuntimeInfo);
+
+    API_FIELD() AudioEventHandle Handle;
+    API_FIELD() String Path;
+    API_FIELD() AudioEventPlaybackState PlaybackState = AudioEventPlaybackState::Stopped;
+};
+
 /// <summary>
 /// Diagnostic metrics snapshot from the audio event backend.
 /// </summary>
@@ -376,6 +447,9 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioDiagnosticsSnapshot
     /// Name of the backend that supplied this snapshot.
     /// </summary>
     API_FIELD() String BackendName;
+    API_FIELD() String RuntimeVersion;
+    API_FIELD() bool LiveUpdateEnabled = false;
+    API_FIELD() String ActiveDevice;
 
     /// <summary>
     /// True when the backend is initialized and able to service event requests.
@@ -391,16 +465,35 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioDiagnosticsSnapshot
     /// Total memory allocated by the audio event backend in bytes.
     /// </summary>
     API_FIELD() uint64 MemoryAllocated = 0;
+    API_FIELD() uint64 MemoryPeak = 0;
 
     /// <summary>
     /// Current number of active event instances.
     /// </summary>
     API_FIELD() int32 ActiveInstances = 0;
+    API_FIELD() int32 RealVoices = 0;
+    API_FIELD() int32 VirtualVoices = 0;
+    API_FIELD() uint64 TotalInstancesCreated = 0;
+    API_FIELD() uint64 TotalPlays = 0;
+    API_FIELD() uint64 TotalStopped = 0;
+    API_FIELD() int32 PeakActiveInstances = 0;
 
     /// <summary>
     /// Current number of loaded sound banks.
     /// </summary>
     API_FIELD() int32 LoadedBanks = 0;
+    API_FIELD() int32 LoadedSampleDataBanks = 0;
+    API_FIELD() float StudioUpdateCpu = 0.0f;
+    API_FIELD() float MixerCpu = 0.0f;
+    API_FIELD() float StreamCpu = 0.0f;
+    API_FIELD() int32 OutputSampleRate = 0;
+    API_FIELD() int32 OutputChannels = 0;
+    API_FIELD() uint32 DspBufferLength = 0;
+    API_FIELD() int32 DspBufferCount = 0;
+    API_FIELD() Array<AudioBankRuntimeState> Banks;
+    API_FIELD() Array<AudioEventRuntimeInfo> Events;
+    API_FIELD() Array<AudioBusRuntimeInfo> Buses;
+    API_FIELD() Array<AudioSnapshotRuntimeInfo> Snapshots;
 
     /// <summary>
     /// Approximate count of callback records waiting for main-thread dispatch.
@@ -411,4 +504,6 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioDiagnosticsSnapshot
     /// Number of callback records dropped because the bounded callback queue was full.
     /// </summary>
     API_FIELD() uint64 DroppedCallbacks = 0;
+    API_FIELD() int32 OcclusionQueriesThisFrame = 0;
+    API_FIELD() int32 OcclusionDeferred = 0;
 };

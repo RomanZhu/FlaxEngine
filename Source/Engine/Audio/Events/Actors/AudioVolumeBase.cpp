@@ -254,6 +254,9 @@ void AudioVolumeBase::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE_MEMBER(Priority, _priority);
     SERIALIZE_MEMBER(BlendDistanceOutside, _blendDistanceOutside);
     SERIALIZE_MEMBER(BlendDistanceInside, _blendDistanceInside);
+    SERIALIZE_MEMBER(ListenerMask, _listenerMask);
+    SERIALIZE_MEMBER(BlendMode, _blendMode);
+    SERIALIZE_MEMBER(BlendGroup, _blendGroup);
 }
 
 void AudioVolumeBase::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
@@ -268,6 +271,9 @@ void AudioVolumeBase::Deserialize(DeserializeStream& stream, ISerializeModifier*
     DESERIALIZE_MEMBER(Priority, _priority);
     DESERIALIZE_MEMBER(BlendDistanceOutside, _blendDistanceOutside);
     DESERIALIZE_MEMBER(BlendDistanceInside, _blendDistanceInside);
+    DESERIALIZE_MEMBER(ListenerMask, _listenerMask);
+    DESERIALIZE_MEMBER(BlendMode, _blendMode);
+    DESERIALIZE_MEMBER(BlendGroup, _blendGroup);
 
     UpdateBounds();
 }

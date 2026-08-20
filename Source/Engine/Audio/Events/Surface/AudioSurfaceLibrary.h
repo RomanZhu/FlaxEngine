@@ -91,6 +91,9 @@ public:
     /// </summary>
     API_FUNCTION() void PlayFootstep(const RayCastHit& hit, float volume = 1.0f);
 
+    /// <summary>Plays an authored landing sound using the resolved surface profile.</summary>
+    API_FUNCTION() void PlayLanding(const RayCastHit& hit, float volume = 1.0f);
+
     /// <summary>
     /// Plays an impact sound at a world position for a given surface tag.
     /// </summary>
@@ -98,4 +101,7 @@ public:
 
     /// <summary>Plays the strongest coalesced interaction for a physics contact context.</summary>
     void PlayImpact(const AudioImpactContext& context, float volume = 1.0f) const;
+
+    /// <summary>Resolves an authored persistent roll or scrape event for a contact.</summary>
+    const AudioEvent* ResolvePersistentEvent(const AudioImpactContext& context, bool rolling) const;
 };
