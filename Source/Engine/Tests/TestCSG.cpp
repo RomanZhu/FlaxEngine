@@ -185,6 +185,8 @@ TEST_CASE("CSG stack evaluation")
         CSG::StackBuildStats stats;
         REQUIRE(CSG::CSGStackEvaluator::EvaluateStack(Span<const CSG::Operand>(ops.Get(), ops.Count()), mesh, &stats));
         CHECK(stats.FinalFragmentCount == 12);
+        CHECK(stats.DisjointPairsCount == 2);
+        CHECK(stats.OverlappingPairsCount == 0);
 
         CSG::RawData data;
         Array<CSG::MeshVertex> vertices;
@@ -202,6 +204,8 @@ TEST_CASE("CSG stack evaluation")
         CSG::StackBuildStats stats;
         REQUIRE(CSG::CSGStackEvaluator::EvaluateStack(Span<const CSG::Operand>(ops.Get(), ops.Count()), mesh, &stats));
         CHECK(stats.DiscardedInternalCount > 0);
+        CHECK(stats.OverlappingPairsCount == 2);
+        CHECK(stats.DisjointPairsCount == 0);
 
         CSG::RawData data;
         Array<CSG::MeshVertex> vertices;

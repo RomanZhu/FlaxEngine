@@ -80,6 +80,8 @@ bool CSGStackEvaluator::EvaluateStack(Span<const Operand> operands, Mesh& output
         stats->FinalFragmentCount = 0;
         stats->DiscardedInternalCount = 0;
         stats->DuplicateFragmentCount = 0;
+        stats->OverlappingPairsCount = 0;
+        stats->DisjointPairsCount = 0;
     }
 
     // Step 1: Build source mesh for each operand
@@ -113,7 +115,14 @@ bool CSGStackEvaluator::EvaluateStack(Span<const Operand> operands, Mesh& output
 
             const auto& opB = operands[j];
             if (AABB::IsOutside(opA.Bounds, opB.Bounds))
+            {
+                if (stats)
+                    stats->DisjointPairsCount++;
                 continue;
+            }
+
+            if (stats)
+                stats->OverlappingPairsCount++;
 
             const int32 polyCountBefore = mesh.GetPolygons()->Count();
             mesh.PartitionVisiblePolygons(Span<const Surface>(opB.Surfaces.Get(), opB.Surfaces.Count()));

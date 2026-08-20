@@ -49,6 +49,8 @@ namespace CSG
         int32 FinalFragmentCount = 0;
         int32 DiscardedInternalCount = 0;
         int32 DuplicateFragmentCount = 0;
+        int32 OverlappingPairsCount = 0;
+        int32 DisjointPairsCount = 0;
     };
 }
 
