@@ -4,6 +4,7 @@
 #include "CSGMesh.h"
 #include "CSGData.h"
 #include "CSGCompilation.h"
+#include "CSGGeneratedOutputPaths.h"
 #include "Engine/Level/Level.h"
 #include "Engine/Level/SceneQuery.h"
 #include "Engine/Level/Actor.h"
@@ -32,7 +33,15 @@ using namespace CSG;
 // Enable/disable locking scene during building CSG brushes nodes
 #define CSG_USE_SCENE_LOCKS 0
 
-struct BuildData;
+struct BuildData
+{
+    int32 brushesCount = 0;
+    Guid outputModelAssetId = Guid::Empty;
+    Guid outputRawDataAssetId = Guid::Empty;
+    Guid outputCollisionDataAssetId = Guid::Empty;
+
+    BuildData() = default;
+};
 
 namespace CSGBuilderImpl
 {
@@ -231,20 +240,6 @@ bool Builder::Persist(CSGModel* model, const Guid& ownerAssetId)
     return true;
 }
 
-namespace CSG
-{
-}
-
-struct BuildData
-{
-    int32 brushesCount = 0;
-    Guid outputModelAssetId = Guid::Empty;
-    Guid outputRawDataAssetId = Guid::Empty;
-    Guid outputCollisionDataAssetId = Guid::Empty;
-
-    BuildData() = default;
-};
-
 bool CSGBuilderImpl::updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData)
 {
     // Render lists store raw mesh buffer pointers. Exclude rendering while the
@@ -422,34 +417,11 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                     return true;
                 }
                 data.outputCollisionDataAssetId = collisionDataAssetId;
-#else
-    if (csgData.PreviewModelCache == nullptr || csgData.PreviewModelCache->GetLODsNum() != modelData.LODs.Count())
-    {
-        csgData.PreviewModelCache = Content::CreateVirtualAsset<Model>();
-        if (csgData.PreviewModelCache == nullptr)
-            return true;
-        if (csgData.PreviewModelCache->SetupLODs(meshesCountPerLod))
-            return true;
-    }
-    else
-    {
-        for (int32 lodIndex = 0; lodIndex < modelData.LODs.Count(); lodIndex++)
-        {
-            if (csgData.PreviewModelCache->LODs[lodIndex].Meshes.Count() != meshesCountPerLod[lodIndex])
-            {
-                if (csgData.PreviewModelCache->SetupLODs(meshesCountPerLod))
-                    return true;
-                break;
+#endif
             }
         }
     }
 
-    if (csgData.PreviewModelCache->SaveLODs(modelData))
-        return true;
-
-    auto oldPreview = csgData.PreviewModel;
-    csgData.PublishPreviewModel(csgData.PreviewModelCache.Get());
-    csgData.PreviewModelCache = oldPreview;
     return false;
 }
 

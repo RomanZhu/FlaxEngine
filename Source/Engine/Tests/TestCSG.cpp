@@ -73,12 +73,12 @@ namespace
         op.Bounds.Add(center - halfSize);
         op.Bounds.Add(center + halfSize);
         op.Surfaces.Resize(6, false);
-        op.Surfaces[0] = CSG::Surface(Vector3::Right, (Real)(center.X + halfSize.X));
-        op.Surfaces[1] = CSG::Surface(Vector3::Left, (Real)(-center.X + halfSize.X));
-        op.Surfaces[2] = CSG::Surface(Vector3::Up, (Real)(center.Y + halfSize.Y));
-        op.Surfaces[3] = CSG::Surface(Vector3::Down, (Real)(-center.Y + halfSize.Y));
-        op.Surfaces[4] = CSG::Surface(Vector3::Forward, (Real)(center.Z + halfSize.Z));
-        op.Surfaces[5] = CSG::Surface(Vector3::Backward, (Real)(-center.Z + halfSize.Z));
+        op.Surfaces[0] = CSG::Surface(Vector3::Right, (float)(center.X + halfSize.X));
+        op.Surfaces[1] = CSG::Surface(Vector3::Left, (float)(-center.X + halfSize.X));
+        op.Surfaces[2] = CSG::Surface(Vector3::Up, (float)(center.Y + halfSize.Y));
+        op.Surfaces[3] = CSG::Surface(Vector3::Down, (float)(-center.Y + halfSize.Y));
+        op.Surfaces[4] = CSG::Surface(Vector3::Forward, (float)(center.Z + halfSize.Z));
+        op.Surfaces[5] = CSG::Surface(Vector3::Backward, (float)(-center.Z + halfSize.Z));
         return op;
     }
 }
@@ -323,11 +323,11 @@ TEST_CASE("CSGModel compiles without Scene")
 
     brush1->SetSize(Vector3(100, 100, 100));
     brush1->SetPosition(Vector3(0, 0, 0));
-    brush1->Mode = CSG::Mode::Additive;
+    brush1->SetMode(BrushMode::Additive);
 
     brush2->SetSize(Vector3(40, 40, 40));
     brush2->SetPosition(Vector3(0, 0, 0));
-    brush2->Mode = CSG::Mode::Subtractive;
+    brush2->SetMode(BrushMode::Subtractive);
 
     brush1->SetParent(stack, false, false);
     brush2->SetParent(stack, false, false);
