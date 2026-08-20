@@ -4,7 +4,7 @@
 
 #include "Engine/Core/Math/AABB.h"
 #include "Engine/Core/Collections/Array.h"
-#include "Engine/Core/Collections/Span.h"
+#include "Engine/Core/Types/Span.h"
 #include "Brush.h"
 #include "HalfEdge.h"
 #include "Polygon.h"

@@ -4,7 +4,7 @@
 
 #include "Engine/Core/Math/AABB.h"
 #include "Engine/Core/Collections/Array.h"
-#include "Engine/Core/Collections/Span.h"
+#include "Engine/Core/Types/Span.h"
 #include "Engine/Core/Types/Guid.h"
 #include "Brush.h"
 #include "Types.h"
@@ -25,7 +25,7 @@ namespace CSG
         Mode Mode = Mode::Additive;
         bool FlipNormals = false;
         int32 OperationIndex = 0;
-        AABB Bounds = AABB::Empty;
+        AABB Bounds;
         Array<Surface> Surfaces;
     };
 

@@ -566,9 +566,39 @@ namespace FlaxEditor.Gizmo
                     continue;
                 var brush = (BoxBrush)node.Actor;
                 var box = brush.OrientedBox;
-                bool intersects = brush.Mode == BrushMode.Subtractive
-                    ? Utilities.Utils.RayCastWire(ref box, ref ray, out var distance, ref view.Position)
-                    : box.Intersects(ref ray, out distance);
+                Real distance = Real.MaxValue;
+                bool isWireHit = false;
+                bool intersects = false;
+
+                if (brush.Mode == BrushMode.Subtractive)
+                {
+                    if (Utilities.Utils.RayCastWire(ref box, ref ray, out var wireDistance, ref view.Position) && wireDistance >= 0.0f)
+                    {
+                        intersects = true;
+                        distance = wireDistance;
+                        isWireHit = true;
+                    }
+                }
+                else
+                {
+                    // For additive brushes, check solid face intersection if ray origin is outside the box.
+                    bool insideBox = box.Contains(ref ray.Position) == ContainmentType.Contains;
+                    if (!insideBox && box.Intersects(ref ray, out Real solidDistance) && solidDistance > 0.0001f)
+                    {
+                        intersects = true;
+                        distance = solidDistance;
+                        isWireHit = false;
+                    }
+
+                    // Also check wireframe intersection (e.g. when camera is inside the box or clicking near an edge).
+                    if (Utilities.Utils.RayCastWire(ref box, ref ray, out var wireDistance, ref view.Position) && wireDistance >= 0.0f && wireDistance < distance)
+                    {
+                        intersects = true;
+                        distance = wireDistance;
+                        isWireHit = true;
+                    }
+                }
+
                 if (!intersects || distance < 0.0f)
                     continue;
 
@@ -581,7 +611,7 @@ namespace FlaxEditor.Gizmo
                 {
                     closest = node;
                     closestDistance = distance;
-                    closestIsWireHit = brush.Mode == BrushMode.Subtractive;
+                    closestIsWireHit = isWireHit;
                 }
             }
             return closest;

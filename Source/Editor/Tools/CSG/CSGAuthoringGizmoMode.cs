@@ -215,9 +215,9 @@ namespace FlaxEditor.Tools.CSG
         /// <inheritdoc />
         public override bool TryCancel(EditorGizmoModeCancelReason reason)
         {
-            bool armed = Gizmo?.TryCancelArmedSelectDrag() == true;
-            bool active = Controller?.TryCancel(reason) ?? false;
-            return armed || active;
+            bool gizmoCancelled = Gizmo?.TryCancel(reason) == true;
+            bool controllerCancelled = Controller?.TryCancel(reason) ?? false;
+            return gizmoCancelled || controllerCancelled;
         }
 
         /// <summary>

@@ -71,21 +71,24 @@ void RawData::AddSurface(Brush* brush, int32 brushSurfaceIndex, const Guid& surf
     auto slot = GetOrAddSlot(surfaceMaterial);
     slot->AddSurface(scaleInLightmap, lightmapUVsBox, firstVertex, vertexCount);
 
-    // Add surface to brush
-    auto& brushData = Brushes[brush->GetBrushID()];
-    if (brushData.Surfaces.Count() != brush->GetSurfacesCount())
-        brushData.Surfaces.Resize(brush->GetSurfacesCount());
-    auto& surfaceData = brushData.Surfaces[brushSurfaceIndex];
-    auto& triangles = surfaceData.Triangles;
-    triangles.Resize(vertexCount / 3);
-
-    // Copy triangles
-    for (int32 i = 0; i < vertexCount;)
+    if (brush != nullptr)
     {
-        auto& triangle = triangles[i / 3];
-        triangle.V[0] = firstVertex[i++].Position;
-        triangle.V[1] = firstVertex[i++].Position;
-        triangle.V[2] = firstVertex[i++].Position;
+        // Add surface to brush
+        auto& brushData = Brushes[brush->GetBrushID()];
+        if (brushData.Surfaces.Count() != brush->GetSurfacesCount())
+            brushData.Surfaces.Resize(brush->GetSurfacesCount());
+        auto& surfaceData = brushData.Surfaces[brushSurfaceIndex];
+        auto& triangles = surfaceData.Triangles;
+        triangles.Resize(vertexCount / 3);
+
+        // Copy triangles
+        for (int32 i = 0; i < vertexCount;)
+        {
+            auto& triangle = triangles[i / 3];
+            triangle.V[0] = firstVertex[i++].Position;
+            triangle.V[1] = firstVertex[i++].Position;
+            triangle.V[2] = firstVertex[i++].Position;
+        }
     }
 }
 

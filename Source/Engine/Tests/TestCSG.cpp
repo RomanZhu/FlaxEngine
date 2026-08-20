@@ -69,14 +69,16 @@ namespace
         CSG::Operand op;
         op.Mode = mode;
         op.OperationIndex = opIndex;
-        op.Bounds = AABB(center - halfSize, center + halfSize);
+        op.Bounds.Clear();
+        op.Bounds.Add(center - halfSize);
+        op.Bounds.Add(center + halfSize);
         op.Surfaces.Resize(6, false);
-        op.Surfaces[0] = CSG::Surface(Vector3::Right, center.X + halfSize.X);
-        op.Surfaces[1] = CSG::Surface(Vector3::Left, -center.X + halfSize.X);
-        op.Surfaces[2] = CSG::Surface(Vector3::Up, center.Y + halfSize.Y);
-        op.Surfaces[3] = CSG::Surface(Vector3::Down, -center.Y + halfSize.Y);
-        op.Surfaces[4] = CSG::Surface(Vector3::Forward, center.Z + halfSize.Z);
-        op.Surfaces[5] = CSG::Surface(Vector3::Backward, -center.Z + halfSize.Z);
+        op.Surfaces[0] = CSG::Surface(Vector3::Right, (Real)(center.X + halfSize.X));
+        op.Surfaces[1] = CSG::Surface(Vector3::Left, (Real)(-center.X + halfSize.X));
+        op.Surfaces[2] = CSG::Surface(Vector3::Up, (Real)(center.Y + halfSize.Y));
+        op.Surfaces[3] = CSG::Surface(Vector3::Down, (Real)(-center.Y + halfSize.Y));
+        op.Surfaces[4] = CSG::Surface(Vector3::Forward, (Real)(center.Z + halfSize.Z));
+        op.Surfaces[5] = CSG::Surface(Vector3::Backward, (Real)(-center.Z + halfSize.Z));
         return op;
     }
 }
@@ -222,12 +224,14 @@ TEST_CASE("CSG stack evaluation")
         CSG::Mesh mesh;
         CSG::StackBuildStats stats;
         REQUIRE(CSG::CSGStackEvaluator::EvaluateStack(Span<const CSG::Operand>(ops.Get(), ops.Count()), mesh, &stats));
-        CHECK(stats.FinalFragmentCount == 12); // 6 outer + 6 inner cavity
+        CHECK(stats.FinalFragmentCount == 60); // 54 outer quad fragments + 6 inner cavity quads
+        CHECK(stats.OverlappingPairsCount == 2);
+        CHECK(stats.DisjointPairsCount == 0);
 
         CSG::RawData data;
         Array<CSG::MeshVertex> vertices;
         CHECK_FALSE(mesh.Triangulate(data, vertices));
-        CHECK(vertices.Count() == 72);
+        CHECK(vertices.Count() == 360); // 60 quads * 6 vertices
     }
 
     // Critical: +Outer -Interior +Wall -Door

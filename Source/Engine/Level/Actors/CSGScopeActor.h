@@ -11,7 +11,7 @@
 API_CLASS(Abstract)
 class FLAXENGINE_API CSGScopeActor : public GroupActor
 {
-    DECLARE_SCENE_OBJECT(CSGScopeActor);
+    DECLARE_SCENE_OBJECT_ABSTRACT(CSGScopeActor);
 
 public:
     /// <summary>

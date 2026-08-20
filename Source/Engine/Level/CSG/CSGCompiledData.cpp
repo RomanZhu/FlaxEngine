@@ -4,7 +4,7 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Serialization/MemoryReadStream.h"
-#include "Engine/Physics/CollisionsHelper.h"
+#include "Engine/Core/Math/CollisionsHelper.h"
 
 using namespace CSG;
 

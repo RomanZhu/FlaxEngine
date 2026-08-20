@@ -211,13 +211,13 @@ bool BoxBrush::Intersects(int32 surfaceIndex, const Ray& ray, Real& distance, Ve
     {
         Ray localRay;
         localRay.Position = targetTransform.WorldToLocal(ray.Position);
-        localRay.Direction = targetTransform.WorldToLocalVector(ray.Direction).Normalized();
+        localRay.Direction = targetTransform.WorldToLocalVector(ray.Direction).GetNormalized();
 
         Real localDistance;
         Vector3 localNormal;
         if (surfaceData.Intersects(localRay, localDistance, localNormal))
         {
-            normal = targetTransform.LocalToWorldVector(localNormal).Normalized();
+            normal = targetTransform.LocalToWorldVector(localNormal).GetNormalized();
             Vector3 hitLocal = localRay.Position + localRay.Direction * localDistance;
             Vector3 hitWorld = targetTransform.LocalToWorld(hitLocal);
             distance = Vector3::Distance(ray.Position, hitWorld);

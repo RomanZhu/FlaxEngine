@@ -1485,13 +1485,13 @@ namespace FlaxEditor
         public void BuildCSG()
         {
             var scenes = Level.Scenes;
-            scenes.ForEach(x =>
+            scenes.ForEach(x => x.BuildCSG(0));
+            var models = Level.GetActors<CSGModel>();
+            if (models != null)
             {
-                x.BuildCSG(0);
-                var models = SceneQuery.GetAllActors<CSGModel>(x);
-                for (int i = 0; i < models.Count; i++)
+                for (int i = 0; i < models.Length; i++)
                     models[i].BuildCSG(0);
-            });
+            }
             Scene.MarkSceneEdited(scenes);
         }
 

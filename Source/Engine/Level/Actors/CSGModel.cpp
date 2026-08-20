@@ -3,7 +3,7 @@
 #include "CSGModel.h"
 #include "Engine/CSG/CSGBuilder.h"
 #include "Engine/Level/Actors/StaticModel.h"
-#include "Engine/Physics/Actors/MeshCollider.h"
+#include "Engine/Physics/Colliders/MeshCollider.h"
 #include "Engine/Serialization/Serialization.h"
 
 #define CSG_MODEL_NAME TEXT("CSG.Model")
@@ -23,7 +23,7 @@ void CSGModel::BuildCSG(float timeoutMs) const
 {
 #if COMPILE_WITH_CSG_BUILDER
     // Rebuild target model via CSG builder
-    Builder::Build(const_cast<CSGModel*>(this), timeoutMs);
+    CSG::Builder::Build(const_cast<CSGModel*>(this), timeoutMs);
 #endif
 }
 
@@ -56,18 +56,7 @@ void CSGModel::CreateCsgModel()
     result->SetName(String(CSG_MODEL_NAME));
     result->Model = CSGData.GetModelForRendering();
     result->HideFlags |= HideFlags::FullyHidden;
-
-    if (IsDuringPlay())
-    {
-        result->SetParent(this, false);
-    }
-    else
-    {
-        result->_parent = this;
-        result->_scene = _scene;
-        Children.Add(result);
-        result->CreateManaged();
-    }
+    result->SetParent(this, false, false);
 }
 
 void CSGModel::CreateCsgCollider()
@@ -77,18 +66,7 @@ void CSGModel::CreateCsgCollider()
     result->SetName(String(CSG_COLLIDER_NAME));
     result->CollisionData = CSGData.CollisionData;
     result->HideFlags |= HideFlags::FullyHidden;
-
-    if (IsDuringPlay())
-    {
-        result->SetParent(this, false);
-    }
-    else
-    {
-        result->_parent = this;
-        result->_scene = _scene;
-        Children.Add(result);
-        result->CreateManaged();
-    }
+    result->SetParent(this, false, false);
 }
 
 void CSGModel::OnCsgModelChanged()
@@ -162,7 +140,7 @@ void CSGModel::Serialize(SerializeStream& stream, const void* otherObj)
 
     if (CSGData.HasData())
     {
-        stream.JKey("CSG");
+        stream.Key("CSG");
         stream.Object(&CSGData, other ? &other->CSGData : nullptr);
     }
 }

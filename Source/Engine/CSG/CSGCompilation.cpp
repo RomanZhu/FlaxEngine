@@ -3,6 +3,7 @@
 #include "CSGCompilation.h"
 #include "CSGStackEvaluator.h"
 #include "Engine/Level/Actor.h"
+#include "Engine/Level/Actors/CSGScopeActor.h"
 
 #if COMPILE_WITH_CSG_BUILDER
 
@@ -50,7 +51,10 @@ bool CSGCompilation::SnapshotOperand(Brush* brush, int32 operationIndex, Operand
     }
     else if (actor != nullptr)
     {
-        outOperand.Bounds = actor->GetBox();
+        const auto box = actor->GetBox();
+        outOperand.Bounds.Clear();
+        outOperand.Bounds.Add(box.Minimum);
+        outOperand.Bounds.Add(box.Maximum);
     }
 
     return true;

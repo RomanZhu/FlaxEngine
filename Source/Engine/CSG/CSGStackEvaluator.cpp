@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "CSGStackEvaluator.h"
+#include "CSGMesh.h"
 
 #if COMPILE_WITH_CSG_BUILDER
 
@@ -53,7 +54,7 @@ Real CSGStackEvaluator::CalculateSampleEpsilon(const Vector3& p, const Vector3& 
         for (int32 j = 0; j < surfaces.Count(); j++)
         {
             const auto& surface = surfaces[j];
-            const float dot = Math::Abs(Vector3::Dot(surface.Normal, normal));
+            const float dot = (float)Math::Abs(Vector3::Dot(surface.Normal, normal));
             if (dot < 0.999f)
             {
                 const Real dist = Math::Abs(surface.Distance(p));
@@ -69,7 +70,7 @@ Real CSGStackEvaluator::CalculateSampleEpsilon(const Vector3& p, const Vector3& 
 
 bool CSGStackEvaluator::EvaluateStack(Span<const Operand> operands, Mesh& outputMesh, StackBuildStats* stats)
 {
-    if (operands.IsEmpty())
+    if (operands.Length() == 0)
         return true;
 
     if (stats)
