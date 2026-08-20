@@ -3,6 +3,7 @@
 #include "CSGBuilder.h"
 #include "CSGMesh.h"
 #include "CSGData.h"
+#include "CSGCompilation.h"
 #include "Engine/Level/Level.h"
 #include "Engine/Level/SceneQuery.h"
 #include "Engine/Level/Actor.h"
@@ -241,6 +242,7 @@ struct BuildData
 {
     MeshesArray meshes;
     MeshesLookup cache;
+    int32 brushesCount = 0;
     Guid outputModelAssetId = Guid::Empty;
     Guid outputRawDataAssetId = Guid::Empty;
     Guid outputCollisionDataAssetId = Guid::Empty;
@@ -322,29 +324,21 @@ bool CSGBuilderImpl::updatePreviewModel(Scene* scene, const ModelData& modelData
 
 bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
 {
-    // Setup CSG meshes list and build them
-    {
-        Function<bool(Actor*, MeshesArray&, MeshesLookup&)> treeWalkFunction(walkTree);
-        SceneQuery::TreeExecute<Array<CSG::Mesh*>&, MeshesLookup&>(treeWalkFunction, data.meshes, data.cache);
-    }
-    if (data.meshes.IsEmpty())
+    // Compile explicit stacks and implicit brushes under the scene target
+    CSG::Mesh combinedMesh;
+    if (!CSGCompilation::CompileTargetMeshes(scene, combinedMesh))
         return false;
-
-    // Process all meshes (performs actual CSG opterations on geometry in tree structure)
-    CSG::Mesh* combinedMesh = Combine(scene, data.cache);
-    if (combinedMesh == nullptr)
+    if (combinedMesh.GetPolygons()->IsEmpty())
         return false;
 
     // TODO: split too big meshes (too many verts, to far parts, etc.)
 
     // Triangulate meshes
     {
-        // TODO: setup valid loop for splited meshes
-
         // Convert CSG meshes into raw triangles data
         RawData meshData;
         Array<MeshVertex> vertexBuffer;
-        combinedMesh->Triangulate(meshData, vertexBuffer);
+        combinedMesh.Triangulate(meshData, vertexBuffer);
         meshData.RemoveEmptySlots();
         if (meshData.Slots.HasItems())
         {
@@ -384,6 +378,8 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 }
                 data.outputModelAssetId = modelDataAssetId;
             }
+
+            data.brushesCount = meshData.Brushes.Count();
 
             // Generate asset with CSG mesh metadata (for collisions and brush queries)
             {
@@ -459,7 +455,6 @@ void CSGBuilderImpl::build(Scene* scene)
     // with empty references. The next successful request will update it.
     if (failed)
     {
-        data.meshes.ClearDelete();
         LOG(Warning, "Failed to build CSG. Preserving the previous result.");
         return;
     }
@@ -482,8 +477,7 @@ void CSGBuilderImpl::build(Scene* scene)
     scene->CSGData.PostCSGBuild();
 
     // End
-    const int32 brushesCount = data.meshes.Count();
-    data.meshes.ClearDelete();
+    const int32 brushesCount = data.brushesCount;
     auto endTime = DateTime::Now();
     LOG(Info, "CSG build in {0} ms! {1} brush(es)", (endTime - startTime).GetTotalMilliseconds(), brushesCount);
 }
