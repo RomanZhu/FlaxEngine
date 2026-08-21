@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using FlaxEngine;
 using FlaxEngine.Json;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor.FMOD
@@ -118,6 +119,8 @@ namespace FlaxEditor.FMOD
                 ValidateBankReferences(bank.ReferencedBanks, knownBankIds, report, $"bank '{bankData.file}' dependencies");
                 if (Editor.SaveJsonAsset(bankPath, bank))
                     report.Errors.Add($"Failed to save FMOD bank asset '{bankPath}'.");
+                else
+                    NormalizeNativeGuids(bankPath);
                 bankAssetPaths[bankId] = bankPath;
                 if (bankData.events == null)
                     continue;
@@ -172,7 +175,11 @@ namespace FlaxEditor.FMOD
                 {
                     if (!bankAssetPaths.TryGetValue(dependency, out var bankAssetPath))
                         continue;
-                    var contentPath = Path.GetRelativePath(contentRoot, bankAssetPath).Replace('\\', '/');
+                    // Content.Load resolves relative paths from the project root,
+                    // not from Globals.ProjectContentFolder. Preserve the
+                    // explicit Content prefix so generated bank references load
+                    // from the same canonical location they were saved to.
+                    var contentPath = "Content/" + Path.GetRelativePath(contentRoot, bankAssetPath).Replace('\\', '/');
                     var asset = FlaxEngine.Content.Load<JsonAsset>(contentPath);
                     if (asset)
                         bankAssets.Add(new JsonAssetReference<AudioBank>(asset));
@@ -180,6 +187,8 @@ namespace FlaxEditor.FMOD
                 audioEvent.BankAssets = bankAssets.ToArray();
                 if (Editor.SaveJsonAsset(eventPath, audioEvent))
                     report.Errors.Add($"Failed to save FMOD event asset '{eventPath}'.");
+                else
+                    NormalizeNativeGuids(eventPath);
             }
 
             SynchronizeMixerAssets(metadata, snapshots, buses, vcas, snapshotDirectory, busDirectory, vcaDirectory, report, contentRoot);
@@ -216,6 +225,8 @@ namespace FlaxEditor.FMOD
                 };
                 if (Editor.SaveJsonAsset(path, asset))
                     report.Errors.Add($"Failed to save FMOD snapshot asset '{path}'.");
+                else
+                    NormalizeNativeGuids(path);
             }
             foreach (var busData in metadata.buses ?? Array.Empty<FmodMetadataImporter.Bus>())
             {
@@ -232,6 +243,8 @@ namespace FlaxEditor.FMOD
                 var asset = new AudioBus { BackendId = id, Path = busData.path ?? string.Empty };
                 if (Editor.SaveJsonAsset(path, asset))
                     report.Errors.Add($"Failed to save FMOD bus asset '{path}'.");
+                else
+                    NormalizeNativeGuids(path);
             }
             foreach (var vcaData in metadata.vcas ?? Array.Empty<FmodMetadataImporter.VCA>())
             {
@@ -248,7 +261,32 @@ namespace FlaxEditor.FMOD
                 var asset = new AudioVCA { BackendId = id, Path = vcaData.path ?? string.Empty };
                 if (Editor.SaveJsonAsset(path, asset))
                     report.Errors.Add($"Failed to save FMOD VCA asset '{path}'.");
+                else
+                    NormalizeNativeGuids(path);
             }
+        }
+
+        private static void NormalizeNativeGuids(string path)
+        {
+            // Native Flax JSON Guid deserialization uses the engine's compact N
+            // representation. Newtonsoft's default Guid converter writes D;
+            // normalize every generated Guid string while preserving paths and
+            // other authored strings.
+            var root = JToken.Parse(File.ReadAllText(path));
+            NormalizeNativeGuids(root);
+            File.WriteAllText(path, root.ToString(Formatting.Indented));
+        }
+
+        private static void NormalizeNativeGuids(JToken token)
+        {
+            if (token is JValue value && value.Type == JTokenType.String &&
+                Guid.TryParse((string)value, out var guid))
+            {
+                value.Value = guid.ToString("N");
+                return;
+            }
+            foreach (var child in token.Children().ToArray())
+                NormalizeNativeGuids(child);
         }
 
         private static string MakeSafeName(string path, string fallback)
@@ -338,15 +376,11 @@ namespace FlaxEditor.FMOD
 
         private static string MoveToCanonicalPath(string existingPath, string canonicalPath, string root)
         {
-            if (string.Equals(existingPath, canonicalPath, StringComparison.OrdinalIgnoreCase) || File.Exists(canonicalPath))
-                return existingPath;
-            var fullExisting = Path.GetFullPath(existingPath);
-            var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            if (!fullExisting.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
-                return existingPath;
-            Directory.CreateDirectory(Path.GetDirectoryName(canonicalPath) ?? root);
-            File.Move(existingPath, canonicalPath);
-            return canonicalPath;
+            // Existing assets may be loaded and referenced by open scenes or
+            // settings. Updating them in place preserves both their stable ID
+            // and the Content database's live path mapping. A raw File.Move
+            // invalidates those references until an Editor restart.
+            return existingPath;
         }
     }
 }

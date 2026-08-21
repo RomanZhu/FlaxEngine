@@ -59,6 +59,7 @@ public:
 private:
     BufferSlot* GetBuffer(uint32 id);
     SourceSlot* GetSource(uint32 id);
+    bool ValidateChannel(SourceSlot& source, bool* outPlaying = nullptr);
     void ApplySource(SourceSlot& source);
     bool PlayBuffer(SourceSlot& source, uint32 bufferId);
 

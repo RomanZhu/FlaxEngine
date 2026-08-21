@@ -58,6 +58,26 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
             BankEntry* existing = _banksByGuid.TryGet(*existingGuid);
             if (existing)
             {
+                if (bankId.IsValid() && *existingGuid != bankId)
+                {
+                    if (!existing->SyntheticKey)
+                    {
+                        LOG(Error, "FMOD bank path '{0}' is already registered as {1} and cannot also be registered as {2}.", filePath, *existingGuid, bankId);
+                        return false;
+                    }
+
+                    // Promote a path-only load to its stable typed ID. This keeps
+                    // dependency lookup and IsBankLoaded coherent when an async
+                    // loader was the first owner of the physical bank.
+                    BankEntry promoted = *existing;
+                    promoted.RefCount++;
+                    promoted.SyntheticKey = false;
+                    const Guid oldKey = *existingGuid;
+                    _banksByGuid.Remove(oldKey);
+                    _banksByGuid[bankId] = promoted;
+                    _guidByPath[filePath] = bankId;
+                    return true;
+                }
                 existing->RefCount++;
                 return true;
             }
@@ -71,6 +91,18 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
     StringAnsi pathAnsi(filePath);
     FMOD::Studio::Bank* bank = nullptr;
     FMOD_RESULT result = _system->loadBankFile(pathAnsi.Get(), flags, &bank);
+
+    // A bank may already be resident in the Studio system even when this
+    // registry has just been rebuilt (for example after an Editor-side bank
+    // refresh or a Play-mode transition). FMOD reports that perfectly valid
+    // state as ERR_EVENT_ALREADY_LOADED and does not return the existing
+    // handle from loadBankFile. Recover the handle by its stable bank ID so
+    // loading remains idempotent and the registry can resume ownership.
+    if (result == FMOD_ERR_EVENT_ALREADY_LOADED && bankId.IsValid())
+    {
+        FMOD_GUID fmodGuid = FmodConvert::ToFmodGuid(bankId);
+        result = _system->getBankByID(&fmodGuid, &bank);
+    }
     if (!FmodConvert::CheckResult(result, "loadBankFile") || !bank)
         return false;
 
@@ -83,14 +115,23 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
     entry.FileRevision = filePath.HasChars() ? (uint64)FileSystem::GetFileLastEditTime(filePath).Ticks : 0;
 
     Guid resolvedGuid = bankId;
+    bool syntheticKey = false;
     if (!resolvedGuid.IsValid())
     {
         FMOD_GUID fmodGuid;
-        if (bank->getID(&fmodGuid) == FMOD_OK)
+        // Non-blocking banks are not guaranteed to expose their ID until the
+        // metadata load completes. Path-based callers are already tracked by
+        // _guidByPath, so use an internal key without issuing a premature
+        // getID call that FMOD reports as ERR_NOTREADY.
+        if (!nonBlocking && bank->getID(&fmodGuid) == FMOD_OK)
             resolvedGuid = FmodConvert::FromFmodGuid(fmodGuid);
         else
+        {
             resolvedGuid = Guid::New();
+            syntheticKey = true;
+        }
     }
+    entry.SyntheticKey = syntheticKey;
 
     _banksByGuid[resolvedGuid] = entry;
     if (filePath.HasChars())

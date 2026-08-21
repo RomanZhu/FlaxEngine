@@ -53,10 +53,13 @@ public class Audio : EngineModule
         if (hasFmod)
         {
             options.SourcePaths.Add(Path.Combine(FolderPath, "FMOD"));
-            options.CompileEnv.PreprocessorDefinitions.Add("AUDIO_EVENT_API_FMOD");
+            // FMOD support is part of the Audio module's public contract. Editor
+            // authoring tools (catalog extraction, event browsing, and setup)
+            // consume the same SDK and must compile against the same backend.
+            options.PublicDefinitions.Add("AUDIO_EVENT_API_FMOD");
 
-            options.PrivateIncludePaths.Add(Path.Combine(fmodRoot, "api", "core", "inc"));
-            options.PrivateIncludePaths.Add(Path.Combine(fmodRoot, "api", "studio", "inc"));
+            options.PublicIncludePaths.Add(Path.Combine(fmodRoot, "api", "core", "inc"));
+            options.PublicIncludePaths.Add(Path.Combine(fmodRoot, "api", "studio", "inc"));
 
             switch (options.Platform.Target)
             {

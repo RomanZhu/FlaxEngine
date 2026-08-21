@@ -17,6 +17,7 @@ namespace FlaxEditor.FMOD
     public sealed class FmodEditorModule : EditorModule
     {
         private FmodBankWatcher _watcher;
+        private FmodEventBrowserWindow _eventBrowser;
 
         public event Action BanksChanged;
 
@@ -49,6 +50,10 @@ namespace FlaxEditor.FMOD
             Editor.UI.AddMenuButton("Audio", "Build + Synchronize", () => BuildBanksAndSynchronize());
             Editor.UI.AddMenuButton("Audio", "Reload Banks", ReloadBanks);
             Editor.UI.AddMenuButton("Audio", "Open Audio Diagnostics", OpenDiagnostics);
+            Editor.UI.AddMenuButton("Audio", "FMOD Setup Wizard", () => FmodSetupWizard.Show(Editor));
+            Editor.UI.AddMenuButton("Audio", "Validate FMOD Setup", () => FmodSetupWizard.Validate(true));
+            Editor.UI.AddMenuButton("Audio", "Repair FMOD References", () => SynchronizeMetadata());
+            Editor.UI.AddMenuButton("Audio", "Open Event Browser", OpenEventBrowser);
         }
 
         public override void OnUpdate()
@@ -141,6 +146,14 @@ namespace FlaxEditor.FMOD
             Editor.Windows.PropertiesWin.FocusOrShow();
         }
 
+        /// <summary>Opens and focuses the typed FMOD Event Browser.</summary>
+        public void OpenEventBrowser()
+        {
+            _eventBrowser ??= new FmodEventBrowserWindow(Editor);
+            _eventBrowser.Show();
+            _eventBrowser.Focus();
+        }
+
         /// <summary>
         /// Reloads all banks from the current editor bank directory through the generic audio API.
         /// </summary>
@@ -184,12 +197,22 @@ namespace FlaxEditor.FMOD
             }
             if (metadata != null)
             {
-                var untracked = candidates.Where(candidate => candidate.ID == Guid.Empty).Select(candidate => candidate.RelativePath).ToArray();
+                var trackedLocaleFamilies = new HashSet<string>(candidates.Where(candidate => candidate.ID != Guid.Empty)
+                    .Select(candidate => GetLocalizedBankFamily(candidate.RelativePath))
+                    .Where(family => family != null), StringComparer.OrdinalIgnoreCase);
+                var untracked = candidates.Where(candidate => candidate.ID == Guid.Empty &&
+                                                               !trackedLocaleFamilies.Contains(GetLocalizedBankFamily(candidate.RelativePath) ?? string.Empty))
+                    .Select(candidate => candidate.RelativePath).ToArray();
                 if (untracked.Length != 0)
                 {
                     Editor.LogError("FMOD bank reload aborted because active banks are absent from metadata: " + string.Join(", ", untracked));
                     return;
                 }
+                // A flat default folder may contain mutually exclusive locale
+                // variants of one FMOD bank. The catalog selects one typed
+                // representative (English first); do not try to load its
+                // unselected siblings into the same Studio system.
+                candidates.RemoveAll(candidate => candidate.ID == Guid.Empty);
             }
 
             var ordered = new List<BankReloadCandidate>();
@@ -236,6 +259,19 @@ namespace FlaxEditor.FMOD
                 RelativePath = relativePath;
                 ID = id;
             }
+        }
+
+        private static string GetLocalizedBankFamily(string relativePath)
+        {
+            var normalized = relativePath?.Replace('\\', '/');
+            var file = Path.GetFileNameWithoutExtension(normalized);
+            var separator = file?.LastIndexOf('_') ?? -1;
+            if (separator <= 0 || file.Length - separator != 3 ||
+                !char.IsLetter(file[separator + 1]) || !char.IsLetter(file[separator + 2]))
+                return null;
+            var directory = Path.GetDirectoryName(normalized)?.Replace('\\', '/');
+            var family = file.Substring(0, separator) + ".bank";
+            return string.IsNullOrEmpty(directory) ? family : directory + "/" + family;
         }
 
         private static void AddConfiguredBank(JsonAssetReference<AudioBank> reference,

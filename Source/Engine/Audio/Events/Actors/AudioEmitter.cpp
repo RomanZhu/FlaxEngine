@@ -41,7 +41,7 @@ void AudioEmitter::SetStopMode(AudioStopMode value)
 
 void AudioEmitter::SetListenerMask(uint32 value)
 {
-    _listenerMask = value;
+    _listenerMask = value != 0 ? value : 1u;
     if (_handle.IsValid())
         AudioEventSystem::SetListenerMask(_handle, _listenerMask);
 }
@@ -50,7 +50,10 @@ void AudioEmitter::Play()
 {
 #if USE_EDITOR
     if (!IsDuringPlay())
+    {
+        _lastPlayError = TEXT("Emitter is not in a runtime scene.");
         return;
+    }
 #endif
 
     if (_handle.IsValid())
@@ -59,15 +62,30 @@ void AudioEmitter::Play()
         if (AudioEventSystem::QueryInstance(_handle, state))
         {
             if (state.PlaybackState == AudioEventPlaybackState::Playing || state.PlaybackState == AudioEventPlaybackState::Sustaining)
+            {
+                _lastPlayError.Clear();
                 return;
-            AudioEventSystem::Play(_handle);
-            return;
-        }
+            }
+            if (AudioEventSystem::Play(_handle))
+            {
+                _lastPlayError.Clear();
+                return;
+            }
 
-        // The backend may have invalidated this handle during a global stop (for example
-        // while leaving Editor play mode). Drop it before creating a fresh instance.
-        AudioEventSystem::ReleaseInstance(_handle);
-        _handle = AudioEventHandle();
+            // FMOD can retain a stopped instance whose resources were invalidated
+            // by a bank/play-mode transition. A failed restart must not strand the
+            // emitter on that handle forever; release and create a fresh instance.
+            LOG(Warning, "AudioEmitter '{0}' could not restart its stopped event instance; recreating it.", GetName());
+            AudioEventSystem::ReleaseInstance(_handle);
+            _handle = AudioEventHandle();
+        }
+        else
+        {
+            // The backend may have invalidated this handle during a global stop (for example
+            // while leaving Editor play mode). Drop it before creating a fresh instance.
+            AudioEventSystem::ReleaseInstance(_handle);
+            _handle = AudioEventHandle();
+        }
     }
 
     Guid eventId = Guid::Empty;
@@ -90,26 +108,69 @@ void AudioEmitter::Play()
         path = EventPath;
 
     if (!eventId.IsValid() && path.IsEmpty())
+    {
+        _lastPlayError = TEXT("No valid typed event or legacy event path.");
+        LOG(Error, "AudioEmitter '{0}' cannot play because it has no valid typed event or legacy event path.", GetName());
         return;
+    }
 
     if (Event)
     {
         const auto* eventData = Event->GetInstance<AudioEvent>();
         if (eventData && !AudioEventCatalog::EnsureDependenciesLoaded(eventData))
+        {
+            _lastPlayError = String::Format(TEXT("Dependencies for '{0}' are unavailable."), eventData->Path);
+            LOG(Error, "AudioEmitter '{0}' could not load dependencies for event '{1}'.", GetName(), eventData->Path);
             return;
+        }
     }
 
     AudioEventCreateOptions options;
-    options.AutoPlay = true;
+    // Configure the entire initial state before start. Parameter-driven FMOD events
+    // can have a deliberately silent default state and must not be started before
+    // their authored/runtime parameters have been applied.
+    options.AutoPlay = false;
     options.Attributes = Audio3DAttributes(GetTransform(), _velocity);
     options.OwnerId = GetID();
     options.ListenerMask = _listenerMask;
+    for (const auto& value : InitialParameters)
+    {
+        AudioParameterId resolved;
+        if (value.Id.Name.HasChars() && ResolveParameter(value.Id.Name, resolved))
+        {
+            AudioParameterValue parameter = value;
+            parameter.Id = resolved;
+            options.InitialParameters.Add(parameter);
+        }
+        else if (!value.Id.Name.HasChars() && value.Id.IsValid())
+        {
+            options.InitialParameters.Add(value);
+        }
+    }
 
     _handle = AudioEventSystem::CreateInstance(eventId, path, options);
     if (_handle.IsValid())
     {
-        AudioEventSystem::SetVolume(_handle, _volume);
-        AudioEventSystem::SetPitch(_handle, _pitch);
+        if (!AudioEventSystem::SetVolume(_handle, _volume))
+            LOG(Warning, "AudioEmitter '{0}' could not apply volume to event '{1}'.", GetName(), path);
+        if (!AudioEventSystem::SetPitch(_handle, _pitch))
+            LOG(Warning, "AudioEmitter '{0}' could not apply pitch to event '{1}'.", GetName(), path);
+        if (!AudioEventSystem::Play(_handle))
+        {
+            _lastPlayError = String::Format(TEXT("Backend refused to start '{0}'."), path);
+            LOG(Error, "AudioEmitter '{0}' created event '{1}' but the backend refused to start it.", GetName(), path);
+            AudioEventSystem::ReleaseInstance(_handle);
+            _handle = AudioEventHandle();
+        }
+        else
+        {
+            _lastPlayError.Clear();
+        }
+    }
+    else
+    {
+        _lastPlayError = String::Format(TEXT("Could not create event instance '{0}'."), path);
+        LOG(Error, "AudioEmitter '{0}' could not create event instance '{1}' ({2}).", GetName(), path, eventId);
     }
 }
 
@@ -128,18 +189,78 @@ void AudioEmitter::Stop()
     }
 }
 
+bool AudioEmitter::SignalActivation(AudioActivationEvent activationEvent, Actor* source, Actor* target)
+{
+    bool handled = false;
+    if (_playActivationState.TryActivate(PlayActivation, activationEvent, source, target))
+    {
+        Play();
+        handled = true;
+    }
+    if (_stopActivationState.TryActivate(StopActivation, activationEvent, source, target))
+    {
+        Stop();
+        handled = true;
+    }
+    if (activationEvent == AudioActivationEvent::TriggerExit || activationEvent == AudioActivationEvent::CollisionExit || activationEvent == AudioActivationEvent::PointerExit)
+    {
+        _playActivationState.NotifyExit(PlayActivation);
+        _stopActivationState.NotifyExit(StopActivation);
+    }
+    return handled;
+}
+
 bool AudioEmitter::SetParameter(const StringView& name, float value, bool ignoreSeekSpeed)
 {
+    AudioParameterId id;
+    if (!ResolveParameter(name, id))
+        return false;
+    bool found = false;
+    for (auto& parameter : InitialParameters)
+    {
+        if (parameter.Id == id)
+        {
+            parameter.Value = value;
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+    {
+        auto& parameter = InitialParameters.AddOne();
+        parameter.Id = id;
+        parameter.Value = value;
+    }
+
     if (_handle.IsValid())
-        return AudioEventSystem::SetParameter(_handle, AudioParameterId(name), value, ignoreSeekSpeed);
-    return false;
+        return AudioEventSystem::SetParameter(_handle, id, value, ignoreSeekSpeed);
+    return true;
 }
 
 bool AudioEmitter::SetParameterLabel(const StringView& name, const StringView& label, bool ignoreSeekSpeed)
 {
-    if (_handle.IsValid())
-        return AudioEventSystem::SetParameterLabel(_handle, AudioParameterId(name), label, ignoreSeekSpeed);
+    AudioParameterId id;
+    if (_handle.IsValid() && ResolveParameter(name, id))
+        return AudioEventSystem::SetParameterLabel(_handle, id, label, ignoreSeekSpeed);
     return false;
+}
+
+bool AudioEmitter::ResolveParameter(const StringView& name, AudioParameterId& result) const
+{
+    if (name.IsEmpty())
+        return false;
+    Guid eventId = Guid::Empty;
+    StringView eventPath = EventPath;
+    if (Event)
+    {
+        Event->WaitForLoaded();
+        if (const auto* data = Event->GetInstance<AudioEvent>())
+        {
+            eventId = data->BackendId;
+            eventPath = data->Path;
+        }
+    }
+    return AudioEventSystem::ResolveParameterId(eventId, eventPath, name, result);
 }
 
 AudioEventPlaybackState AudioEmitter::GetPlaybackState() const
@@ -165,6 +286,12 @@ void AudioEmitter::UpdateVelocity(float dt)
     if (dt > 0.00001f)
     {
         _velocity = (pos - _prevPos) / dt;
+        const float maxVelocity = 10000.0f;
+        const float velocityLength = (float)_velocity.Length();
+        if (velocityLength > maxVelocity)
+            _velocity *= maxVelocity / velocityLength;
+        if (_velocity.IsNanOrInfinity())
+            _velocity = Vector3::Zero;
     }
     _prevPos = pos;
 }
@@ -234,6 +361,8 @@ void AudioEmitter::OnEnable()
 #endif
 
     Actor::OnEnable();
+    if (IsDuringPlay())
+        SignalActivation(AudioActivationEvent::ActorEnable, this, this);
 }
 
 void AudioEmitter::OnDisable()
@@ -242,6 +371,8 @@ void AudioEmitter::OnDisable()
     GetSceneRendering()->RemoveViewportIcon(this);
 #endif
 
+    if (IsDuringPlay())
+        SignalActivation(AudioActivationEvent::ActorDisable, this, this);
     if (_stopOnDisable)
         Stop();
     AudioWorld::Unregister(this);
@@ -263,8 +394,17 @@ void AudioEmitter::BeginPlay(SceneBeginData* data)
 {
     Actor::BeginPlay(data);
 
+    _playActivationState.Reset();
+    _stopActivationState.Reset();
     if (_playOnStart && IsDuringPlay())
         Play();
+    SignalActivation(AudioActivationEvent::BeginPlay, this, this);
+}
+
+void AudioEmitter::EndPlay()
+{
+    SignalActivation(AudioActivationEvent::EndPlay, this, this);
+    Actor::EndPlay();
 }
 
 void AudioEmitter::Serialize(SerializeStream& stream, const void* otherObj)
@@ -275,6 +415,9 @@ void AudioEmitter::Serialize(SerializeStream& stream, const void* otherObj)
 
     SERIALIZE(Event);
     SERIALIZE(EventPath);
+    SERIALIZE(InitialParameters);
+    SERIALIZE(PlayActivation);
+    SERIALIZE(StopActivation);
     SERIALIZE_MEMBER(Volume, _volume);
     SERIALIZE_MEMBER(Pitch, _pitch);
     SERIALIZE_MEMBER(PlayOnStart, _playOnStart);
@@ -291,6 +434,9 @@ void AudioEmitter::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
 
     DESERIALIZE(Event);
     DESERIALIZE(EventPath);
+    DESERIALIZE(InitialParameters);
+    DESERIALIZE(PlayActivation);
+    DESERIALIZE(StopActivation);
     DESERIALIZE_MEMBER(Volume, _volume);
     DESERIALIZE_MEMBER(Pitch, _pitch);
     DESERIALIZE_MEMBER(PlayOnStart, _playOnStart);

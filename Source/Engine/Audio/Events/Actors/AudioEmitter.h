@@ -7,6 +7,7 @@
 #include "Engine/Audio/Events/AudioEventHandle.h"
 #include "Engine/Audio/Events/AudioEventTypes.h"
 #include "Engine/Audio/Events/AudioEventCallbacks.h"
+#include "Engine/Audio/Events/AudioActivation.h"
 #include "Engine/Audio/Events/Occlusion/AudioOcclusionTypes.h"
 #include "Engine/Audio/Events/Assets/AudioEvent.h"
 
@@ -33,6 +34,11 @@ private:
     bool _stopOnDisable = true;
     uint32 _listenerMask = 1;
     AudioEventHandle _handle;
+    String _lastPlayError;
+    AudioActivationState _playActivationState;
+    AudioActivationState _stopActivationState;
+
+    bool ResolveParameter(const StringView& name, AudioParameterId& result) const;
 
 public:
     /// <summary>
@@ -46,6 +52,21 @@ public:
     /// </summary>
     API_FIELD(Attributes="EditorOrder(10), EditorDisplay(\"Audio Emitter\"), HideInEditor")
     String EventPath;
+
+    /// <summary>
+    /// Parameter values applied to a new event instance before playback starts.
+    /// Values set through SetParameter are also retained here for the next playback.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(15), EditorDisplay(\"Audio Emitter\", \"Initial Parameters\")")
+    Array<AudioParameterValue> InitialParameters;
+
+    /// <summary>Selectable event that starts this emitter.</summary>
+    API_FIELD(Attributes="EditorOrder(16), EditorDisplay(\"Activation\", \"Play Event\")")
+    AudioActivationBinding PlayActivation;
+
+    /// <summary>Selectable event that stops this emitter.</summary>
+    API_FIELD(Attributes="EditorOrder(17), EditorDisplay(\"Activation\", \"Stop Event\")")
+    AudioActivationBinding StopActivation;
 
     /// <summary>
     /// Gets the volume of the played audio event (in range 0-1).
@@ -101,6 +122,9 @@ public:
     /// </summary>
     API_PROPERTY() FORCE_INLINE AudioEventHandle GetHandle() const { return _handle; }
 
+    /// <summary>Most recent typed playback failure, or empty after a successful start.</summary>
+    API_PROPERTY(Attributes="HideInEditor, NoSerialize") FORCE_INLINE const String& GetLastPlayError() const { return _lastPlayError; }
+
 public:
     /// <summary>
     /// Starts playing the audio event.
@@ -116,6 +140,9 @@ public:
     /// Stops audio event playback.
     /// </summary>
     API_FUNCTION() void Stop();
+
+    /// <summary>Routes lifecycle, physics, pointer, Visual Scripting, or manual signals through the shared activation contract.</summary>
+    API_FUNCTION() bool SignalActivation(AudioActivationEvent activationEvent, Actor* source = nullptr, Actor* target = nullptr);
 
     /// <summary>
     /// Sets an instance parameter value by name.
@@ -200,4 +227,5 @@ protected:
     void OnDisable() override;
     void OnTransformChanged() override;
     void BeginPlay(SceneBeginData* data) override;
+    void EndPlay() override;
 };

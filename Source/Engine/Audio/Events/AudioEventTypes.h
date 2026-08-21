@@ -240,11 +240,25 @@ inline uint32 GetHash(const AudioParameterId& key)
     return key.ID.IsValid() ? GetHash(key.ID) : GetHash(key.Name);
 }
 
+/// <summary>Authored numeric parameter metadata reported by the active middleware.</summary>
+API_STRUCT() struct FLAXENGINE_API AudioParameterDescription
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AudioParameterDescription);
+
+    API_FIELD() AudioParameterId Id;
+    API_FIELD() float Minimum = 0.0f;
+    API_FIELD() float Maximum = 1.0f;
+    API_FIELD() float DefaultValue = 0.0f;
+    API_FIELD() int32 Type = 0;
+    API_FIELD() uint32 Flags = 0;
+};
+
 /// <summary>
 /// A numeric parameter update used by batched event calls.
 /// </summary>
-API_STRUCT(NoDefault) struct FLAXENGINE_API AudioParameterValue
+API_STRUCT(NoDefault) struct FLAXENGINE_API AudioParameterValue : ISerializable
 {
+    API_AUTO_SERIALIZATION();
     DECLARE_SCRIPTING_TYPE_MINIMAL(AudioParameterValue);
 
     API_FIELD() AudioParameterId Id;
@@ -309,6 +323,9 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioListenerState
     /// </summary>
     API_FIELD() Guid ActorId = Guid::Empty;
 
+    /// <summary>Explicit middleware listener index used by listener masks.</summary>
+    API_FIELD() int32 Index = 0;
+
     /// <summary>
     /// Spatial attributes of the listener.
     /// </summary>
@@ -321,8 +338,9 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioListenerState
 
     AudioListenerState() = default;
 
-    AudioListenerState(const Guid& actorId, const Audio3DAttributes& attributes, float weight = 1.0f)
+    AudioListenerState(const Guid& actorId, const Audio3DAttributes& attributes, float weight = 1.0f, int32 index = 0)
         : ActorId(actorId)
+        , Index(index)
         , Attributes(attributes)
         , Weight(weight)
     {
@@ -388,6 +406,12 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioEventCreateOptions
     /// Optional owner actor ID for lifetime association.
     /// </summary>
     API_FIELD() Guid OwnerId = Guid::Empty;
+
+    /// <summary>
+    /// Parameter values applied before optional automatic playback. Use this for
+    /// parameter-driven events whose default state contains no audible instruments.
+    /// </summary>
+    API_FIELD() Array<AudioParameterValue> InitialParameters;
 };
 
 /// <summary>Observed runtime state for a live event instance.</summary>
@@ -402,6 +426,22 @@ API_STRUCT() struct FLAXENGINE_API AudioEventRuntimeInfo
     API_FIELD() AudioEventPlaybackState PlaybackState = AudioEventPlaybackState::Stopped;
     API_FIELD() int32 TimelinePosition = 0;
     API_FIELD() float Volume = 1.0f;
+    /// <summary>Final event gain after authored automation and modulation.</summary>
+    API_FIELD() float FinalVolume = 1.0f;
+    /// <summary>Final low-level channel-group audibility reported by FMOD.</summary>
+    API_FIELD() float Audibility = 0.0f;
+    /// <summary>Direct low-level channels currently attached to the event group.</summary>
+    API_FIELD() int32 ChannelCount = 0;
+    /// <summary>Backend sample loading state (FMOD_STUDIO_LOADING_STATE for FMOD).</summary>
+    API_FIELD() int32 SampleLoadingState = 0;
+    /// <summary>True after this instance has received a successful start request.</summary>
+    API_FIELD() bool Started = false;
+    /// <summary>True while the middleware timeline is playing or sustaining.</summary>
+    API_FIELD() bool Playing = false;
+    /// <summary>True when the instance has a real voice and non-zero final audibility.</summary>
+    API_FIELD() bool Audible = false;
+    /// <summary>True when the final master output meter is non-silent.</summary>
+    API_FIELD() bool ReachingOutput = false;
     API_FIELD() bool IsVirtual = false;
     API_FIELD() bool IsOneShot = false;
     /// <summary>Number of real mixer voices attributed to this event when reported by the backend.</summary>
@@ -412,6 +452,17 @@ API_STRUCT() struct FLAXENGINE_API AudioEventRuntimeInfo
     API_FIELD() int32 PlayCount = 0;
     /// <summary>Elapsed timeline time in seconds for display and profiling.</summary>
     API_FIELD() float TimeSeconds = 0.0f;
+    API_FIELD() uint32 ListenerMask = 0;
+    API_FIELD() bool Has3DAttributes = false;
+    API_FIELD() Vector3 SourcePositionCentimeters = Vector3::Zero;
+    API_FIELD() Vector3 SourcePositionMeters = Vector3::Zero;
+    API_FIELD() Vector3 ListenerPositionCentimeters = Vector3::Zero;
+    API_FIELD() Vector3 ListenerPositionMeters = Vector3::Zero;
+    API_FIELD() float DistanceMeters = 0.0f;
+    API_FIELD() float MinimumDistanceMeters = 0.0f;
+    API_FIELD() float MaximumDistanceMeters = 0.0f;
+    /// <summary>Most specific currently observable reason this instance is silent.</summary>
+    API_FIELD() String SilenceCause;
 };
 
 /// <summary>Observed runtime state for an audio bus.</summary>
@@ -490,6 +541,18 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioDiagnosticsSnapshot
     API_FIELD() int32 OutputChannels = 0;
     API_FIELD() uint32 DspBufferLength = 0;
     API_FIELD() int32 DspBufferCount = 0;
+    /// <summary>Per-channel master-output peak levels in linear amplitude.</summary>
+    API_FIELD() Array<float> OutputPeak;
+    /// <summary>Per-channel master-output RMS levels in linear amplitude.</summary>
+    API_FIELD() Array<float> OutputRms;
+    API_FIELD() float CombinedOutputPeak = 0.0f;
+    API_FIELD() float CombinedOutputRms = 0.0f;
+    API_FIELD() float CombinedOutputDbfs = -120.0f;
+    API_FIELD() bool OutputClipping = false;
+    API_FIELD() float SecondsSinceNonSilentOutput = -1.0f;
+    API_FIELD() int32 ListenerCount = 0;
+    API_FIELD() int32 LastErrorCode = 0;
+    API_FIELD() String LastError;
     API_FIELD() Array<AudioBankRuntimeState> Banks;
     API_FIELD() Array<AudioEventRuntimeInfo> Events;
     API_FIELD() Array<AudioBusRuntimeInfo> Buses;
@@ -504,6 +567,12 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API AudioDiagnosticsSnapshot
     /// Number of callback records dropped because the bounded callback queue was full.
     /// </summary>
     API_FIELD() uint64 DroppedCallbacks = 0;
+    /// <summary>
+    /// Number of normal FMOD channel-reuse notifications observed. These
+    /// notifications commonly occur as polyphony is virtualized or voices are
+    /// recycled and are reported separately from actionable backend errors.
+    /// </summary>
+    API_FIELD() uint64 ChannelReuseNotifications = 0;
     API_FIELD() int32 OcclusionQueriesThisFrame = 0;
     API_FIELD() int32 OcclusionDeferred = 0;
 };

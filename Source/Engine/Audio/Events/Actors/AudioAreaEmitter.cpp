@@ -285,20 +285,44 @@ void AudioAreaEmitter::UpdateAllListeners()
 
 bool AudioAreaEmitter::SetParameter(const StringView& name, float value, bool ignoreSeekSpeed)
 {
+    AudioParameterId id;
+    if (!ResolveParameter(name, id))
+        return false;
     bool result = false;
     for (auto& voice : _listenerVoices)
         if (voice.Handle.IsValid())
-            result |= AudioEventSystem::SetParameter(voice.Handle, AudioParameterId(name), value, ignoreSeekSpeed);
-    return result || (_handle.IsValid() && AudioEventSystem::SetParameter(_handle, AudioParameterId(name), value, ignoreSeekSpeed));
+            result |= AudioEventSystem::SetParameter(voice.Handle, id, value, ignoreSeekSpeed);
+    return result || (_handle.IsValid() && AudioEventSystem::SetParameter(_handle, id, value, ignoreSeekSpeed));
 }
 
 bool AudioAreaEmitter::SetParameterLabel(const StringView& name, const StringView& label, bool ignoreSeekSpeed)
 {
+    AudioParameterId id;
+    if (!ResolveParameter(name, id))
+        return false;
     bool result = false;
     for (auto& voice : _listenerVoices)
         if (voice.Handle.IsValid())
-            result |= AudioEventSystem::SetParameterLabel(voice.Handle, AudioParameterId(name), label, ignoreSeekSpeed);
-    return result || (_handle.IsValid() && AudioEventSystem::SetParameterLabel(_handle, AudioParameterId(name), label, ignoreSeekSpeed));
+            result |= AudioEventSystem::SetParameterLabel(voice.Handle, id, label, ignoreSeekSpeed);
+    return result || (_handle.IsValid() && AudioEventSystem::SetParameterLabel(_handle, id, label, ignoreSeekSpeed));
+}
+
+bool AudioAreaEmitter::ResolveParameter(const StringView& name, AudioParameterId& result) const
+{
+    if (name.IsEmpty())
+        return false;
+    Guid eventId = Guid::Empty;
+    StringView eventPath = EventPath;
+    if (Event)
+    {
+        Event->WaitForLoaded();
+        if (const auto* data = Event->GetInstance<AudioEvent>())
+        {
+            eventId = data->BackendId;
+            eventPath = data->Path;
+        }
+    }
+    return AudioEventSystem::ResolveParameterId(eventId, eventPath, name, result);
 }
 
 AudioEventPlaybackState AudioAreaEmitter::GetPlaybackState() const

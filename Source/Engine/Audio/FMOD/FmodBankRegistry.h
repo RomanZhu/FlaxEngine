@@ -27,6 +27,9 @@ public:
         AudioBankState State = AudioBankState::Unloaded;
         FMOD_RESULT LastResult = FMOD_OK;
         uint64 FileRevision = 0;
+        // Path-only non-blocking loads need a temporary internal dictionary key
+        // until a typed bank ID is supplied or FMOD metadata becomes available.
+        bool SyntheticKey = false;
     };
 
 private:

@@ -19,9 +19,31 @@ AudioBackendFMODCore::SourceSlot* AudioBackendFMODCore::GetSource(uint32 id)
     return id && id <= (uint32)_sources.Count() && _sources[id - 1].Allocated ? &_sources[id - 1] : nullptr;
 }
 
-void AudioBackendFMODCore::ApplySource(SourceSlot& source)
+bool AudioBackendFMODCore::ValidateChannel(SourceSlot& source, bool* outPlaying)
 {
     if (!source.Channel)
+        return false;
+    bool playing = false;
+    if (source.Channel->isPlaying(&playing) != FMOD_OK)
+    {
+        // FMOD may recycle Core channels when the shared Studio voice budget is
+        // saturated. Raw Channel pointers become invalid at that point; retire
+        // the slot immediately so subsequent property updates cannot flood the
+        // error callback with operations on the stale handle.
+        source.Channel = nullptr;
+        source.Playing = false;
+        if (outPlaying)
+            *outPlaying = false;
+        return false;
+    }
+    if (outPlaying)
+        *outPlaying = playing;
+    return true;
+}
+
+void AudioBackendFMODCore::ApplySource(SourceSlot& source)
+{
+    if (!ValidateChannel(source))
         return;
     source.Channel->setVolume(source.Volume);
     source.Channel->setPitch(source.Pitch);
@@ -29,8 +51,8 @@ void AudioBackendFMODCore::ApplySource(SourceSlot& source)
     source.Channel->setMode((source.Spatial ? FMOD_3D : FMOD_2D) | (source.Loop ? FMOD_LOOP_NORMAL : FMOD_LOOP_OFF));
     if (source.Spatial)
     {
-        const FMOD_VECTOR position = FmodConvert::ToFmodVector(source.Position);
-        const FMOD_VECTOR velocity = FmodConvert::ToFmodVector(source.Velocity);
+        const FMOD_VECTOR position = FmodConvert::ToFmodPositionMeters(source.Position);
+        const FMOD_VECTOR velocity = FmodConvert::ToFmodVelocityMetersPerSecond(source.Velocity);
         source.Channel->set3DAttributes(&position, &velocity);
         source.Channel->set3DMinMaxDistance(source.MinDistance * 0.01f, source.MaxDistance * 0.01f);
     }
@@ -72,10 +94,10 @@ void AudioBackendFMODCore::Listener_TransformChanged(const Vector3& position, co
     if (!_system)
         return;
     const Vector3 velocity = Audio::Listeners.HasItems() ? Audio::Listeners[0]->GetVelocity() : Vector3::Zero;
-    const FMOD_VECTOR p = FmodConvert::ToFmodVector(position);
-    const FMOD_VECTOR v = FmodConvert::ToFmodVector(velocity);
-    const FMOD_VECTOR f = FmodConvert::ToFmodVector(Vector3::Transform(Vector3::Forward, orientation));
-    const FMOD_VECTOR u = FmodConvert::ToFmodVector(Vector3::Transform(Vector3::Up, orientation));
+    const FMOD_VECTOR p = FmodConvert::ToFmodPositionMeters(position);
+    const FMOD_VECTOR v = FmodConvert::ToFmodVelocityMetersPerSecond(velocity);
+    const FMOD_VECTOR f = FmodConvert::ToFmodDirection(Vector3::Transform(Vector3::Forward, orientation));
+    const FMOD_VECTOR u = FmodConvert::ToFmodDirection(Vector3::Transform(Vector3::Up, orientation));
     _system->set3DListenerAttributes(0, &p, &v, &f, &u);
 }
 
@@ -114,7 +136,7 @@ void AudioBackendFMODCore::Source_Remove(uint32 sourceID)
     SourceSlot* source = GetSource(sourceID);
     if (!source)
         return;
-    if (source->Channel)
+    if (ValidateChannel(*source))
         source->Channel->stop();
     *source = SourceSlot();
 }
@@ -143,21 +165,21 @@ void AudioBackendFMODCore::Source_Play(uint32 sourceID)
     if (!source)
         return;
     source->Paused = false;
-    if (source->Channel && source->Playing)
-        source->Channel->setPaused(false);
-    else if (source->CurrentBuffer)
+    if (source->Playing && ValidateChannel(*source) && source->Channel->setPaused(false) == FMOD_OK)
+        return;
+    if (source->CurrentBuffer)
         PlayBuffer(*source, source->CurrentBuffer);
     else if (source->Queue.HasItems())
         PlayBuffer(*source, source->Queue[0]);
 }
 
-void AudioBackendFMODCore::Source_Pause(uint32 sourceID) { if (auto* s = GetSource(sourceID)) { s->Paused = true; if (s->Channel) s->Channel->setPaused(true); } }
-void AudioBackendFMODCore::Source_Stop(uint32 sourceID) { if (auto* s = GetSource(sourceID)) { if (s->Channel) s->Channel->stop(); s->Channel = nullptr; s->Playing = false; s->ProcessedBuffers = 0; } }
+void AudioBackendFMODCore::Source_Pause(uint32 sourceID) { if (auto* s = GetSource(sourceID)) { s->Paused = true; if (ValidateChannel(*s)) s->Channel->setPaused(true); } }
+void AudioBackendFMODCore::Source_Stop(uint32 sourceID) { if (auto* s = GetSource(sourceID)) { if (ValidateChannel(*s)) s->Channel->stop(); s->Channel = nullptr; s->Playing = false; s->ProcessedBuffers = 0; } }
 
 void AudioBackendFMODCore::Source_SetCurrentBufferTime(uint32 sourceID, float value)
 {
     if (auto* s = GetSource(sourceID))
-        if (s->Channel)
+        if (ValidateChannel(*s))
             s->Channel->setPosition((uint32)(Math::Max(0.0f, value) * 1000.0f), FMOD_TIMEUNIT_MS);
 }
 
@@ -165,8 +187,11 @@ float AudioBackendFMODCore::Source_GetCurrentBufferTime(uint32 sourceID)
 {
     uint32 position = 0;
     if (auto* s = GetSource(sourceID))
-        if (s->Channel)
-            s->Channel->getPosition(&position, FMOD_TIMEUNIT_MS);
+        if (ValidateChannel(*s) && s->Channel->getPosition(&position, FMOD_TIMEUNIT_MS) != FMOD_OK)
+        {
+            s->Channel = nullptr;
+            s->Playing = false;
+        }
     return position * 0.001f;
 }
 
@@ -230,7 +255,7 @@ void AudioBackendFMODCore::Buffer_Write(uint32 bufferID, byte* samples, const Au
 const Char* AudioBackendFMODCore::Base_Name() { return TEXT("FMOD Core (Studio shared)"); }
 AudioBackend::FeatureFlags AudioBackendFMODCore::Base_Features() { return FeatureFlags::SpatialMultiChannel; }
 void AudioBackendFMODCore::Base_OnActiveDeviceChanged() { }
-void AudioBackendFMODCore::Base_SetDopplerFactor(float value) { if (_system) _system->set3DSettings(Math::Max(0.0f, value), 0.01f, 1.0f); }
+void AudioBackendFMODCore::Base_SetDopplerFactor(float value) { if (_system) _system->set3DSettings(Math::Max(0.0f, value), 1.0f, 1.0f); }
 void AudioBackendFMODCore::Base_SetVolume(float value) { _masterVolume = Math::Saturate(value); if (_channelGroup) _channelGroup->setVolume(_masterVolume); }
 bool AudioBackendFMODCore::Base_Init()
 {
@@ -254,7 +279,9 @@ void AudioBackendFMODCore::Base_Update()
         if (!source.Allocated || !source.Playing || !source.Channel || source.Paused)
             continue;
         bool playing = false;
-        if (source.Channel->isPlaying(&playing) != FMOD_OK || playing)
+        if (!ValidateChannel(source, &playing))
+            continue;
+        if (playing)
             continue;
         source.Channel = nullptr;
         source.Playing = false;
@@ -271,7 +298,7 @@ void AudioBackendFMODCore::Base_Update()
 void AudioBackendFMODCore::Base_Dispose()
 {
     for (SourceSlot& source : _sources)
-        if (source.Channel)
+        if (ValidateChannel(source))
             source.Channel->stop();
     for (BufferSlot& buffer : _buffers)
         if (buffer.Sound)

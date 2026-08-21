@@ -73,6 +73,31 @@ namespace
         return nullptr;
     }
 
+    const MetadataBank* FindLocalizedBankByFile(const Array<MetadataBank>& banks, const String& file, String& language)
+    {
+        language.Clear();
+        const String sourceDirectory(StringUtils::GetDirectoryName(file));
+        const String sourceStem(StringUtils::GetFileNameWithoutExtension(file));
+        const int32 sourceSeparator = sourceStem.FindLast('_');
+        if (sourceSeparator < 0 || sourceStem.Length() - sourceSeparator - 1 != 2)
+            return nullptr;
+        language = sourceStem.Substring(sourceSeparator + 1).ToUpper();
+        const String sourceBase = sourceStem.Left(sourceSeparator);
+        for (const MetadataBank& bank : banks)
+        {
+            if (String(StringUtils::GetDirectoryName(bank.File)) != sourceDirectory)
+                continue;
+            const String metadataStem(StringUtils::GetFileNameWithoutExtension(bank.File));
+            const int32 metadataSeparator = metadataStem.FindLast('_');
+            const String metadataBase = metadataSeparator >= 0 && metadataStem.Length() - metadataSeparator - 1 == 2
+                ? metadataStem.Left(metadataSeparator)
+                : metadataStem;
+            if (metadataBase == sourceBase)
+                return &bank;
+        }
+        return nullptr;
+    }
+
     bool HasEvent(const Array<MetadataBank>& banks, const Guid& eventId)
     {
         for (const MetadataBank& bank : banks)
@@ -97,7 +122,7 @@ namespace
         Array<byte> bytes;
         if (File::ReadAllBytes(path, bytes))
             return String::Empty;
-        return String::Format(TEXT("{0:x16}"), HashBytes(bytes));
+        return String::Format(TEXT("{0:016x}"), HashBytes(bytes));
     }
 
     void SortPaths(Array<String>& paths)
@@ -172,7 +197,7 @@ namespace
             MetadataBank& metadataBank = metadataBanks.AddOne();
             metadataBank.File = String(file->value.GetString());
             metadataBank.File.Replace(TEXT("\\"), TEXT("/"));
-            if (!Guid::Parse(String(id->value.GetString()), metadataBank.ID) || !metadataBank.ID.IsValid())
+            if (Guid::Parse(String(id->value.GetString()), metadataBank.ID) || !metadataBank.ID.IsValid())
             {
                 LOG(Error, "FMOD metadata '{0}' has an invalid bank id.", metadataPath);
                 return true;
@@ -219,7 +244,7 @@ namespace
                             eventId = String(eventIdMember->value.GetString());
                     }
                     Guid parsedEvent;
-                    if (eventId.IsEmpty() || !Guid::Parse(eventId, parsedEvent) || !parsedEvent.IsValid() || HasEvent(metadataBanks, parsedEvent))
+                    if (eventId.IsEmpty() || Guid::Parse(eventId, parsedEvent) || !parsedEvent.IsValid() || HasEvent(metadataBanks, parsedEvent))
                     {
                         LOG(Error, "FMOD metadata bank '{0}' has an invalid or duplicate event id.", metadataBank.File);
                         return true;
@@ -238,7 +263,7 @@ namespace
                 for (auto dependency = dependencies->value.Begin(); dependency != dependencies->value.End(); ++dependency)
                 {
                     Guid dependencyId;
-                    if (!dependency->IsString() || !Guid::Parse(String(dependency->GetString()), dependencyId) || !dependencyId.IsValid() || ContainsGuid(metadataBank.Dependencies, dependencyId))
+                    if (!dependency->IsString() || Guid::Parse(String(dependency->GetString()), dependencyId) || !dependencyId.IsValid() || ContainsGuid(metadataBank.Dependencies, dependencyId))
                     {
                         LOG(Error, "FMOD metadata bank '{0}' has an invalid dependency id.", metadataBank.File);
                         return true;
@@ -365,7 +390,7 @@ namespace
             }
             const auto backendId = dataMember->value.FindMember("BackendId");
             Guid eventId;
-            if (backendId == dataMember->value.MemberEnd() || !backendId->value.IsString() || !Guid::Parse(String(backendId->value.GetString()), eventId) || !eventId.IsValid())
+            if (backendId == dataMember->value.MemberEnd() || !backendId->value.IsString() || Guid::Parse(String(backendId->value.GetString()), eventId) || !eventId.IsValid())
             {
                 data.Error(String::Format(TEXT("FMOD event asset '{0}' has an invalid BackendId."), path));
                 return true;
@@ -387,7 +412,7 @@ namespace
                 for (auto dependency = bankDependencies->value.Begin(); dependency != bankDependencies->value.End(); ++dependency)
                 {
                     Guid bankId;
-                    if (!dependency->IsString() || !Guid::Parse(String(dependency->GetString()), bankId) || !bankId.IsValid() || ContainsGuid(dependencies, bankId))
+                    if (!dependency->IsString() || Guid::Parse(String(dependency->GetString()), bankId) || !bankId.IsValid() || ContainsGuid(dependencies, bankId))
                     {
                         data.Error(String::Format(TEXT("FMOD event asset '{0}' has an invalid or duplicate bank dependency."), path));
                         return true;
@@ -648,6 +673,22 @@ bool CookAudioStep::Perform(CookingData& data)
         // Preserve the platform/locale directory in the cooked output. The runtime
         // manifest and synchronized editor assets therefore use one root-relative path.
         const String relative = RelativePath(projectBanksDir, sourcePath);
+        const MetadataBank* metadataBank = FindBankByFile(metadataBanks, relative);
+        if (!metadataBank)
+        {
+            String language;
+            metadataBank = FindLocalizedBankByFile(metadataBanks, relative, language);
+            String selectedLanguage = manifest.Locale.ToUpper();
+            if (selectedLanguage.IsEmpty() || selectedLanguage == TEXT("DEFAULT"))
+                selectedLanguage = TEXT("EN");
+            if (metadataBank && language != selectedLanguage && language != TEXT("EN"))
+                continue;
+        }
+        if (!metadataBank)
+        {
+            data.Error(String::Format(TEXT("FMOD bank '{0}' is missing from metadata."), relative));
+            return true;
+        }
         const String destination = outputAudioDir / relative;
         const String destinationDirectory = StringUtils::GetDirectoryName(destination);
         if (!FileSystem::DirectoryExists(destinationDirectory) && FileSystem::CreateDirectory(destinationDirectory))
@@ -662,12 +703,6 @@ bool CookAudioStep::Perform(CookingData& data)
         }
         AudioCookManifestBank& bank = manifest.Banks.AddOne();
         bank.File = relative;
-        const MetadataBank* metadataBank = FindBankByFile(metadataBanks, relative);
-        if (!metadataBank)
-        {
-            data.Error(String::Format(TEXT("FMOD bank '{0}' is missing from metadata."), relative));
-            return true;
-        }
         bank.ID = metadataBank->ID;
         bank.Hash = HashFile(sourcePath);
         bank.Size = FileSystem::GetFileSize(sourcePath);

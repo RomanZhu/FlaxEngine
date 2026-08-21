@@ -96,6 +96,8 @@ void AudioWorld::Update(float dt)
     if (!Engine::IsPlayMode())
         return;
 
+    AudioEventSystem::UpdateTrackedInstances(dt);
+
     SurfaceInteractions.SetSurfaceLibrary(SurfaceLibrary);
     SurfaceInteractions.SyncColliders(Level::GetActors<PhysicsColliderActor>(true));
     if (SurfaceLibrary)

@@ -10,7 +10,11 @@
 #include "Engine/Audio/Events/AudioEventSystem.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Math/Math.h"
+#include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Utilities/StringConverter.h"
+#include "Engine/Platform/Platform.h"
+#include <cmath>
+#include <cstring>
 
 FmodEventBackend::FmodEventBackend()
 {
@@ -50,12 +54,16 @@ bool FmodEventBackend::Init()
         return true;
     }
 
-    // Configure 3D settings with 0.01 distance factor for Flax centimeters
-    _coreSystem->set3DSettings(1.0f, 0.01f, 1.0f);
+    // All positions and velocities crossing this boundary are explicitly converted
+    // to meters, so FMOD receives one distance unit per meter. Attenuation values
+    // authored by Studio therefore remain unchanged.
+    _coreSystem->set3DSettings(1.0f, 1.0f, 1.0f);
     _coreSystem->setUserData(this);
-    _coreSystem->setCallback(&OnSystemCallback, FMOD_SYSTEM_CALLBACK_DEVICELISTCHANGED | FMOD_SYSTEM_CALLBACK_DEVICELOST);
+    _coreSystem->setCallback(&OnSystemCallback, FMOD_SYSTEM_CALLBACK_DEVICELISTCHANGED | FMOD_SYSTEM_CALLBACK_DEVICELOST | FMOD_SYSTEM_CALLBACK_ERROR);
 
     const auto settings = AudioSettings::Get();
+    if (settings->FmodOutputType >= 0)
+        FmodConvert::CheckResult(_coreSystem->setOutput((FMOD_OUTPUTTYPE)settings->FmodOutputType), "Core::System::setOutput");
     if (settings->OutputOwner == AudioOutputOwner::NativeClipBackend)
     {
         // The event backend remains usable for deterministic timeline/gameplay behavior,
@@ -70,7 +78,37 @@ bool FmodEventBackend::Init()
     FMOD_ADVANCEDSETTINGS coreAdvanced = {};
     coreAdvanced.cbSize = sizeof(coreAdvanced);
     coreAdvanced.profilePort = settings->LiveUpdatePort;
-    _coreSystem->setAdvancedSettings(&coreAdvanced);
+    coreAdvanced.maxVorbisCodecs = Math::Clamp(settings->FmodMaxVorbisCodecs, 0, 1024);
+    String encryptionKey;
+    StringAnsi encryptionKeyAnsi;
+    if (settings->EncryptionKeyEnvironmentVariable.HasChars())
+    {
+        if (Platform::GetEnvironmentVariable(settings->EncryptionKeyEnvironmentVariable, encryptionKey) && encryptionKey.HasChars())
+        {
+            encryptionKeyAnsi.Set(encryptionKey.Get(), encryptionKey.Length());
+        }
+        else
+            LOG(Error, "FMOD encryption-key environment variable '{0}' is missing or empty.", settings->EncryptionKeyEnvironmentVariable);
+    }
+    FmodConvert::CheckResult(_coreSystem->setAdvancedSettings(&coreAdvanced), "Core::System::setAdvancedSettings");
+    FMOD_STUDIO_ADVANCEDSETTINGS studioAdvanced = {};
+    studioAdvanced.cbsize = sizeof(studioAdvanced);
+    // FMOD otherwise processes Studio commands at 20 ms (50 Hz), which makes
+    // listener rotation visibly outrun 3D panning at common game frame rates.
+    // A shorter period keeps spatial attributes aligned with camera motion. FMOD
+    // quantizes this value to the platform mixer block duration.
+    studioAdvanced.studioupdateperiod = Math::Clamp(settings->FmodStudioUpdatePeriod, 1, 1000);
+    studioAdvanced.encryptionkey = encryptionKeyAnsi.HasChars() ? encryptionKeyAnsi.Get() : nullptr;
+    FmodConvert::CheckResult(_studioSystem->setAdvancedSettings(&studioAdvanced), "Studio::System::setAdvancedSettings");
+    if (settings->FmodSampleRate > 0 || settings->FmodSpeakerMode > 0)
+        FmodConvert::CheckResult(_coreSystem->setSoftwareFormat(Math::Max(0, settings->FmodSampleRate), (FMOD_SPEAKERMODE)Math::Max(0, settings->FmodSpeakerMode), 0), "Core::System::setSoftwareFormat");
+    // Studio's initialize count is the virtual-event budget. The number of
+    // voices that actually reach the mixer is a separate Core setting. Keeping
+    // these independent lets large scenes retain cheap virtual timelines while
+    // enforcing a bounded, predictable real mixing cost.
+    FmodConvert::CheckResult(_coreSystem->setSoftwareChannels(Math::Clamp(settings->FmodRealChannels, 1, 256)), "Core::System::setSoftwareChannels");
+    if (settings->FmodDspBufferLength > 0 && settings->FmodDspBufferCount > 0)
+        FmodConvert::CheckResult(_coreSystem->setDSPBufferSize(settings->FmodDspBufferLength, settings->FmodDspBufferCount), "Core::System::setDSPBufferSize");
 
     FMOD_STUDIO_INITFLAGS studioFlags = FMOD_STUDIO_INIT_NORMAL;
 #if USE_EDITOR || !BUILD_RELEASE
@@ -79,14 +117,36 @@ bool FmodEventBackend::Init()
 #endif
 
     result = _studioSystem->initialize(Math::Clamp(settings->FmodMaxChannels, 32, 4096), studioFlags, FMOD_INIT_NORMAL, nullptr);
+    _liveUpdateActive = (studioFlags & FMOD_STUDIO_INIT_LIVEUPDATE) != 0;
+    if (result != FMOD_OK && _liveUpdateActive && settings->AllowLiveUpdateFallback)
+    {
+        LOG(Warning, "FMOD Live Update initialization failed on port {0}: ({1}) {2}. Retrying without Live Update.", settings->LiveUpdatePort, (int32)result, String(FMOD_ErrorString(result)));
+        studioFlags = (FMOD_STUDIO_INITFLAGS)(studioFlags & ~FMOD_STUDIO_INIT_LIVEUPDATE);
+        result = _studioSystem->initialize(Math::Clamp(settings->FmodMaxChannels, 32, 4096), studioFlags, FMOD_INIT_NORMAL, nullptr);
+        _liveUpdateActive = false;
+    }
     if (!FmodConvert::CheckResult(result, "Studio::System::initialize"))
     {
         Dispose();
         return true;
     }
 
+    FMOD::ChannelGroup* masterGroup = nullptr;
+    if (FmodConvert::CheckResult(_coreSystem->getMasterChannelGroup(&masterGroup), "Core::System::getMasterChannelGroup") && masterGroup)
+    {
+        result = masterGroup->getDSP(FMOD_CHANNELCONTROL_DSP_HEAD, &_masterMeterDsp);
+        if (FmodConvert::CheckResult(result, "MasterChannelGroup::getDSP") && _masterMeterDsp)
+            FmodConvert::CheckResult(_masterMeterDsp->setMeteringEnabled(false, true), "MasterDSP::setMeteringEnabled");
+    }
+
     _banks.Init(_studioSystem);
+    // A previous editor play session can leave a diagnostic error latched even
+    // though the Studio system has just been recreated successfully.
+    _lastErrorCode.store(0, std::memory_order_relaxed);
+    _channelReuseNotifications.store(0, std::memory_order_relaxed);
     _handles.Clear();
+    _releasedInstances.Clear();
+    _nextReleasedDiagnosticIndex = 0x80000000u;
     _callbacks.Clear();
     _totalInstancesCreated = 0;
     _totalPlays = 0;
@@ -101,52 +161,48 @@ void FmodEventBackend::Update(float dt)
     if (!_studioSystem)
         return;
 
+    PROFILE_CPU_NAMED("FMOD.EventBackend.Update");
+
     if (_outputDevicesDirty.exchange(false, std::memory_order_acq_rel))
         RefreshOutputDevices();
 
     // Drain callback queue
-    FmodCallbackRecord record;
-    while (_callbacks.Dequeue(record))
     {
-        // A slot can have been released and reused since FMOD emitted the callback.
-        // Generation validation is the final guard before exposing it to game code.
-        if (!_handles.Validate(record.Handle))
-            continue;
+        PROFILE_CPU_NAMED("FMOD.Callbacks");
+        FmodCallbackRecord record;
+        while (_callbacks.Dequeue(record))
+        {
+            // A slot can have been released and reused since FMOD emitted the callback.
+            // Generation validation is the final guard before exposing it to game code.
+            if (!_handles.Validate(record.Handle))
+                continue;
 
-        AudioEventCallback callback;
-        callback.Handle = record.Handle;
-        callback.Type = record.Type;
-        callback.TimelinePositionMs = record.TimelinePositionMs;
-        callback.Bar = record.Bar;
-        callback.Beat = record.Beat;
-        callback.Tempo = record.Tempo;
-        callback.TimeSignatureUpper = record.TimeSignatureUpper;
-        callback.TimeSignatureLower = record.TimeSignatureLower;
-        if (record.MarkerNameAnsi[0] != 0)
-            callback.Marker = String(record.MarkerNameAnsi);
-        AudioEventSystem::DispatchEventCallback(callback);
+            AudioEventCallback callback;
+            callback.Handle = record.Handle;
+            callback.Type = record.Type;
+            callback.TimelinePositionMs = record.TimelinePositionMs;
+            callback.Bar = record.Bar;
+            callback.Beat = record.Beat;
+            callback.Tempo = record.Tempo;
+            callback.TimeSignatureUpper = record.TimeSignatureUpper;
+            callback.TimeSignatureLower = record.TimeSignatureLower;
+            if (record.MarkerNameAnsi[0] != 0)
+                callback.Marker = String(record.MarkerNameAnsi);
+            AudioEventSystem::DispatchEventCallback(callback);
 
-        // Internally-owned one-shots retain a handle until the STOPPED callback,
-        // avoiding a per-frame registry sweep and keeping callback lifetime safe.
-        if (record.Type == AudioEventCallbackType::Stopped && _handles.IsOneShot(record.Handle))
-            ReleaseInstance(record.Handle);
-        if (record.Type == AudioEventCallbackType::Stopped)
-            _totalStopped++;
+            if (record.Type == AudioEventCallbackType::Stopped)
+                _totalStopped++;
+        }
     }
 
-    _studioSystem->update();
-
-    // Reclaim all callback contexts retired since the previous update behind a
-    // single Studio-thread barrier. This keeps asynchronous callback ownership
-    // safe without serializing one blocking flush per released one-shot.
-    if (_retiredCallbackContexts.HasItems() && _studioSystem->flushCommands() == FMOD_OK)
     {
-        for (auto* context : _retiredCallbackContexts)
-        {
-            _callbackContexts.Remove(context);
-            Delete(context);
-        }
-        _retiredCallbackContexts.Clear();
+        PROFILE_CPU_NAMED("FMOD.Studio.Update");
+        _studioSystem->update();
+    }
+    UpdateReleasedInstances();
+    {
+        PROFILE_CPU_NAMED("FMOD.OutputMeter");
+        UpdateOutputMeter(dt);
     }
 
     // STOPPED can be dropped by an intentionally bounded callback queue. Keep a
@@ -163,7 +219,8 @@ void FmodEventBackend::Update(float dt)
             if (!slots[i].InUse || !slots[i].OneShot || !slots[i].Instance)
                 continue;
             FMOD_STUDIO_PLAYBACK_STATE state;
-            if (slots[i].Instance->getPlaybackState(&state) == FMOD_OK && state == FMOD_STUDIO_PLAYBACK_STOPPED)
+            if (!slots[i].Instance->isValid() ||
+                (slots[i].Instance->getPlaybackState(&state) == FMOD_OK && state == FMOD_STUDIO_PLAYBACK_STOPPED))
                 stopped.Add(AudioEventHandle((uint32)i, slots[i].Generation));
         }
         for (const auto handle : stopped)
@@ -188,6 +245,7 @@ void FmodEventBackend::Dispose()
         _studioSystem->flushCommands();
         _banks.Dispose();
         _handles.Clear();
+        _releasedInstances.Clear();
 
         _studioSystem->unloadAll();
         _studioSystem->flushCommands();
@@ -195,9 +253,12 @@ void FmodEventBackend::Dispose()
         _studioSystem = nullptr;
         _coreSystem = nullptr;
         ReleaseCallbackContexts();
-        _retiredCallbackContexts.Clear();
         _callbacks.Clear();
     }
+    _masterMeterDsp = nullptr;
+    _listeners.Clear();
+    _outputPeak.Clear();
+    _outputRms.Clear();
 }
 
 bool FmodEventBackend::ConfigureInstanceCallback(FMOD::Studio::EventInstance* instance, AudioEventHandle handle)
@@ -247,7 +308,12 @@ void FmodEventBackend::EnqueueCallback(const FmodCallbackRecord& record)
 void FmodEventBackend::SetMasterVolume(float volume)
 {
     _masterVolume = Math::Saturate(volume);
-    if (_studioSystem)
+    // Studio's root bus does not exist until the master bank is loaded. Audio
+    // settings are applied before startup banks during initialization, so an
+    // unconditional lookup here produces a real FMOD ERR_EVENT_NOTFOUND and
+    // poisons diagnostics even though startup succeeds moments later. The
+    // cached value is applied again after banks load by AudioEventSystem.
+    if (_studioSystem && _banks.GetLoadedCount() > 0)
     {
         FMOD::Studio::Bus* masterBus = nullptr;
         if (_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
@@ -273,7 +339,7 @@ void FmodEventBackend::SetMasterPitch(float pitch)
 void FmodEventBackend::SetPaused(bool paused)
 {
     _isPaused = paused;
-    if (_studioSystem)
+    if (_studioSystem && _banks.GetLoadedCount() > 0)
     {
         FMOD::Studio::Bus* masterBus = nullptr;
         if (_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
@@ -286,7 +352,7 @@ void FmodEventBackend::SetPaused(bool paused)
 void FmodEventBackend::SetMuted(bool muted)
 {
     _isMuted = muted;
-    if (_studioSystem)
+    if (_studioSystem && _banks.GetLoadedCount() > 0)
     {
         FMOD::Studio::Bus* masterBus = nullptr;
         if (_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
@@ -416,12 +482,113 @@ void FmodEventBackend::RefreshOutputDevices()
     Audio::DevicesChanged();
 }
 
-FMOD_RESULT F_CALL FmodEventBackend::OnSystemCallback(FMOD_SYSTEM*, FMOD_SYSTEM_CALLBACK_TYPE type, void*, void*, void* userData)
+FMOD_RESULT F_CALL FmodEventBackend::OnSystemCallback(FMOD_SYSTEM*, FMOD_SYSTEM_CALLBACK_TYPE type, void* commandData1, void*, void* userData)
 {
     auto* backend = static_cast<FmodEventBackend*>(userData);
     if (backend && (type & (FMOD_SYSTEM_CALLBACK_DEVICELISTCHANGED | FMOD_SYSTEM_CALLBACK_DEVICELOST)) != 0)
         backend->_outputDevicesDirty.store(true, std::memory_order_release);
+    if (backend && (type & FMOD_SYSTEM_CALLBACK_ERROR) != 0)
+    {
+        const auto* error = static_cast<FMOD_ERRORCALLBACK_INFO*>(commandData1);
+        if (error)
+        {
+            // Voice stealing is FMOD's normal polyphony-budget behavior. Keep
+            // it visible as benchmark telemetry without poisoning LastError or
+            // flooding the console as though it were an integration failure.
+            if (error->result == FMOD_ERR_CHANNEL_STOLEN)
+            {
+                backend->_channelReuseNotifications.fetch_add(1, std::memory_order_relaxed);
+                return FMOD_OK;
+            }
+            // The shared Core backend retires raw channel slots as soon as FMOD
+            // recycles them. A race can still report one invalid-handle result
+            // from the Core Channel/ChannelControl API during that handoff; it
+            // is normal voice-budget behavior, not an Event backend failure.
+            if (error->result == FMOD_ERR_INVALID_HANDLE && error->functionname &&
+                (std::strstr(error->functionname, "Channel::") != nullptr ||
+                 std::strstr(error->functionname, "ChannelControl::") != nullptr))
+            {
+                backend->_channelReuseNotifications.fetch_add(1, std::memory_order_relaxed);
+                return FMOD_OK;
+            }
+            // Catalog discovery and typed-reference fallback intentionally probe
+            // IDs and paths. A miss is returned to the caller and surfaced with
+            // context there; it is not a backend fault and must not flood the
+            // console through FMOD's synchronous error callback.
+            if (error->result == FMOD_ERR_EVENT_NOTFOUND && error->functionname)
+            {
+                const char* function = error->functionname;
+                if (std::strstr(function, "getParameterDescriptionByName") != nullptr ||
+                    std::strstr(function, "getEvent") != nullptr ||
+                    std::strstr(function, "getBus") != nullptr ||
+                    std::strstr(function, "getVCA") != nullptr)
+                    return FMOD_OK;
+            }
+            backend->_lastErrorCode.store((int32)error->result, std::memory_order_relaxed);
+            LOG(Error, "[FMOD] {0}({1}) failed for instance {2}: ({3}) {4}",
+                String(error->functionname ? error->functionname : "unknown"),
+                String(error->functionparams ? error->functionparams : ""),
+                (uint64)(uintptr)error->instance,
+                (int32)error->result,
+                String(FMOD_ErrorString(error->result)));
+        }
+    }
     return FMOD_OK;
+}
+
+void FmodEventBackend::UpdateOutputMeter(float dt)
+{
+    _combinedOutputPeak = 0.0f;
+    _combinedOutputRms = 0.0f;
+    _combinedOutputDbfs = -120.0f;
+    _outputClipping = false;
+    _outputPeak.Clear();
+    _outputRms.Clear();
+    if (!_masterMeterDsp && _coreSystem)
+    {
+        // Output-device and Play-mode transitions may rebuild FMOD's master
+        // channel group while the Studio system remains alive. Reacquire the
+        // built-in head DSP instead of retaining a stale native handle.
+        FMOD::ChannelGroup* masterGroup = nullptr;
+        if (_coreSystem->getMasterChannelGroup(&masterGroup) == FMOD_OK && masterGroup &&
+            masterGroup->getDSP(FMOD_CHANNELCONTROL_DSP_HEAD, &_masterMeterDsp) == FMOD_OK && _masterMeterDsp)
+            _masterMeterDsp->setMeteringEnabled(false, true);
+    }
+    if (!_masterMeterDsp)
+        return;
+
+    FMOD_DSP_METERING_INFO output = {};
+    const FMOD_RESULT result = _masterMeterDsp->getMeteringInfo(nullptr, &output);
+    if (result != FMOD_OK)
+    {
+        if (result == FMOD_ERR_INVALID_HANDLE)
+        {
+            _masterMeterDsp = nullptr;
+            return;
+        }
+        _lastErrorCode.store((int32)result, std::memory_order_relaxed);
+        return;
+    }
+    const int32 channels = Math::Clamp((int32)output.numchannels, 0, 32);
+    float rmsSquares = 0.0f;
+    _outputPeak.Resize(channels);
+    _outputRms.Resize(channels);
+    for (int32 i = 0; i < channels; i++)
+    {
+        _outputPeak[i] = output.peaklevel[i];
+        _outputRms[i] = output.rmslevel[i];
+        _combinedOutputPeak = Math::Max(_combinedOutputPeak, output.peaklevel[i]);
+        rmsSquares += output.rmslevel[i] * output.rmslevel[i];
+    }
+    if (channels > 0)
+        _combinedOutputRms = Math::Sqrt(rmsSquares / channels);
+    if (_combinedOutputRms > 0.000001f)
+        _combinedOutputDbfs = Math::Max(-120.0f, 20.0f * (float)std::log10(_combinedOutputRms));
+    _outputClipping = _combinedOutputPeak >= 0.999f;
+    if (_combinedOutputRms > 0.00001f)
+        _secondsSinceNonSilentOutput = 0.0f;
+    else if (_secondsSinceNonSilentOutput >= 0.0f)
+        _secondsSinceNonSilentOutput += Math::Max(0.0f, dt);
 }
 
 void FmodEventBackend::UpdateListeners(const Span<AudioListenerState>& listeners)
@@ -431,6 +598,13 @@ void FmodEventBackend::UpdateListeners(const Span<AudioListenerState>& listeners
 
     if (listeners.Length() == 0)
     {
+        const bool lostActiveListener = _listeners.HasItems();
+        _listeners.Clear();
+        if (lostActiveListener && !_missingListenerWarned)
+        {
+            LOG(Warning, "FMOD has no active AudioListener. 3D events can start but cannot become audible.");
+            _missingListenerWarned = true;
+        }
         // FMOD requires at least one listener. Reset the retained listener and mute
         // its contribution so disabling the last Flax listener cannot leave a stale
         // camera transform driving 3D spatialization.
@@ -441,15 +615,36 @@ void FmodEventBackend::UpdateListeners(const Span<AudioListenerState>& listeners
         return;
     }
 
+    _missingListenerWarned = false;
+
     int32 count = Math::Min(listeners.Length(), (int32)FMOD_MAX_LISTENERS);
-    _studioSystem->setNumListeners(Math::Max(1, count));
+    int32 middlewareCount = 1;
+    for (int32 i = 0; i < count; i++)
+        middlewareCount = Math::Max(middlewareCount, Math::Clamp(listeners[i].Index + 1, 1, (int32)FMOD_MAX_LISTENERS));
+    _listeners.Resize(middlewareCount);
+    // Grow/shrink the Studio listener table before touching weights. FMOD rejects
+    // setListenerWeight for an index that is outside the current listener count.
+    _studioSystem->setNumListeners(middlewareCount);
+    for (int32 i = 0; i < middlewareCount; i++)
+    {
+        _listeners[i] = AudioListenerState();
+        _listeners[i].Index = i;
+        _studioSystem->setListenerWeight(i, 0.0f);
+    }
 
     for (int32 i = 0; i < count; i++)
     {
         const auto& l = listeners[i];
+        const int32 listenerIndex = Math::Clamp(l.Index, 0, middlewareCount - 1);
+        if (_listeners[listenerIndex].ActorId.IsValid() && !_duplicateListenerWarned)
+        {
+            LOG(Warning, "Multiple AudioListeners use listener index {0}; the last listener wins.", listenerIndex);
+            _duplicateListenerWarned = true;
+        }
+        _listeners[listenerIndex] = l;
         FMOD_3D_ATTRIBUTES attrs = FmodConvert::ToFmodAttributes(l.Attributes);
-        _studioSystem->setListenerAttributes(i, &attrs);
-        _studioSystem->setListenerWeight(i, Math::Saturate(l.Weight));
+        _studioSystem->setListenerAttributes(listenerIndex, &attrs);
+        _studioSystem->setListenerWeight(listenerIndex, Math::Saturate(l.Weight));
     }
 }
 
@@ -495,7 +690,7 @@ bool FmodEventBackend::QueryBank(const Guid& bankId, const StringView& path, Aud
 
 FMOD::Studio::EventDescription* FmodEventBackend::GetEventDescription(const Guid& eventId, const StringView& path)
 {
-    if (!_studioSystem)
+    if (!_studioSystem || _banks.GetLoadedCount() == 0)
         return nullptr;
 
     FMOD::Studio::EventDescription* desc = nullptr;
@@ -518,7 +713,7 @@ FMOD::Studio::EventDescription* FmodEventBackend::GetEventDescription(const Guid
 
 FMOD::Studio::Bus* FmodEventBackend::GetBus(const Guid& busId, const StringView& path)
 {
-    if (!_studioSystem)
+    if (!_studioSystem || _banks.GetLoadedCount() == 0)
         return nullptr;
 
     FMOD::Studio::Bus* bus = nullptr;
@@ -541,7 +736,7 @@ FMOD::Studio::Bus* FmodEventBackend::GetBus(const Guid& busId, const StringView&
 
 FMOD::Studio::VCA* FmodEventBackend::GetVCA(const Guid& vcaId, const StringView& path)
 {
-    if (!_studioSystem)
+    if (!_studioSystem || _banks.GetLoadedCount() == 0)
         return nullptr;
 
     FMOD::Studio::VCA* vca = nullptr;
@@ -587,7 +782,23 @@ AudioEventHandle FmodEventBackend::CreateInstance(const Guid& eventId, const Str
     // Apply attributes
     FMOD_3D_ATTRIBUTES attrs = FmodConvert::ToFmodAttributes(options.Attributes);
     inst->set3DAttributes(&attrs);
-    inst->setListenerMask(options.ListenerMask);
+    // FMOD rejects a zero mask. Treat it as the primary listener so malformed or
+    // legacy content cannot turn every created instance into an error callback.
+    inst->setListenerMask(options.ListenerMask != 0 ? options.ListenerMask : 1u);
+
+    // Apply initial parameters before start so parameter-triggered instruments do
+    // not enter FMOD virtualization in their silent default state.
+    for (const auto& parameter : options.InitialParameters)
+    {
+        if (!SetParameter(handle, parameter.Id, parameter.Value, true))
+        {
+            FmodInstanceContext* context;
+            _handles.Free(handle, inst, context);
+            inst->setUserData(nullptr);
+            inst->release();
+            return AudioEventHandle();
+        }
+    }
 
     if (options.AutoPlay && inst->start() == FMOD_OK)
     {
@@ -635,7 +846,7 @@ bool FmodEventBackend::StopAll(AudioStopMode stopMode)
     const FMOD_STUDIO_STOP_MODE sm = (stopMode == AudioStopMode::Immediate) ? FMOD_STUDIO_STOP_IMMEDIATE : FMOD_STUDIO_STOP_ALLOWFADEOUT;
 
     // Stopping the master bus also catches one-shots that were released immediately after start.
-    if (_studioSystem)
+    if (_studioSystem && _banks.GetLoadedCount() > 0)
     {
         FMOD::Studio::Bus* masterBus = nullptr;
         if (_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
@@ -656,11 +867,42 @@ bool FmodEventBackend::StopAll(AudioStopMode stopMode)
         ReleaseInstance(handle);
     }
 
+    // These instances have already transferred ownership to FMOD via release().
+    // The master-bus stop above owns their shutdown; discard only our observer records.
+    _releasedInstances.Clear();
+
     return true;
 }
 
 bool FmodEventBackend::ReleaseInstance(AudioEventHandle handle)
 {
+    ReleasedInstanceDiagnostic diagnostic;
+    bool retainDiagnostic = false;
+    if (_handles.Validate(handle))
+    {
+        const auto& slot = _handles.GetSlots()[handle.Index];
+        FMOD_STUDIO_PLAYBACK_STATE state = FMOD_STUDIO_PLAYBACK_STOPPED;
+        retainDiagnostic = slot.Instance && slot.PlayCount > 0 && slot.Instance->isValid() &&
+                           slot.Instance->getPlaybackState(&state) == FMOD_OK && state != FMOD_STUDIO_PLAYBACK_STOPPED;
+        if (retainDiagnostic)
+        {
+            diagnostic.Instance = slot.Instance;
+            diagnostic.Handle = handle;
+            diagnostic.EventId = slot.EventId;
+            diagnostic.OwnerId = slot.OwnerId;
+            diagnostic.PlayCount = slot.PlayCount;
+            diagnostic.IsOneShot = true;
+            FMOD::Studio::EventDescription* description = nullptr;
+            if (slot.Instance->getDescription(&description) == FMOD_OK && description)
+            {
+                char path[512] = {};
+                int32 retrieved = 0;
+                if (description->getPath(path, ARRAY_COUNT(path), &retrieved) == FMOD_OK)
+                    diagnostic.Path = String(StringAnsi(path));
+            }
+        }
+    }
+
     FMOD::Studio::EventInstance* inst = nullptr;
     FmodInstanceContext* context = nullptr;
     if (_handles.Free(handle, inst, context) && inst)
@@ -668,11 +910,20 @@ bool FmodEventBackend::ReleaseInstance(AudioEventHandle handle)
         // Prevent any later FMOD callback from resolving a released handle. The
         // stable context remains allocated until backend shutdown for in-flight
         // callback safety.
-        inst->setUserData(nullptr);
-        inst->setCallback(nullptr, FMOD_STUDIO_EVENT_CALLBACK_ALL);
-        inst->release();
-        if (context && !_retiredCallbackContexts.Contains(context))
-            _retiredCallbackContexts.Add(context);
+        if (inst->isValid())
+        {
+            inst->setUserData(nullptr);
+            inst->setCallback(nullptr, FMOD_STUDIO_EVENT_CALLBACK_ALL);
+            inst->release();
+        }
+        if (retainDiagnostic)
+        {
+            _releasedInstances.Add(MoveTemp(diagnostic));
+            _peakActiveInstances = Math::Max(_peakActiveInstances, _handles.GetActiveCount() + _releasedInstances.Count());
+        }
+        // FMOD can invoke callbacks from its Studio thread while a release is in
+        // flight. Keep the tiny context allocation until backend shutdown rather
+        // than putting a synchronous flushCommands barrier in the frame loop.
         return true;
     }
     return false;
@@ -688,32 +939,55 @@ bool FmodEventBackend::PlayOneShot(const Guid& eventId, const StringView& path, 
     if (desc->createInstance(&inst) != FMOD_OK || !inst)
         return false;
 
-    // Keep a private handle until STOPPED so the callback bridge owns cleanup.
-    const AudioEventHandle handle = _handles.Allocate(inst, eventId, Guid::Empty, true);
+    // Fire-and-forget instances need no callback bridge or stable handle. FMOD
+    // retains the event until playback ends after release(), which is the same
+    // non-blocking ownership model used by the official integration. Avoiding a
+    // callback allocation here keeps rapid gunfire off the command-flush path.
     _totalInstancesCreated++;
-    _peakActiveInstances = Math::Max(_peakActiveInstances, _handles.GetActiveCount());
-    if (!ConfigureInstanceCallback(inst, handle))
-    {
-        FmodInstanceContext* context;
-        _handles.Free(handle, inst, context);
-        inst->setUserData(nullptr);
-        inst->release();
-        return false;
-    }
 
     FMOD_3D_ATTRIBUTES fattrs = FmodConvert::ToFmodAttributes(attributes);
     inst->set3DAttributes(&fattrs);
     inst->setVolume(Math::Saturate(volume));
     inst->setPitch(Math::Clamp(pitch, 0.0f, 10.0f));
-    if (inst->start() == FMOD_OK)
+    const FMOD_RESULT startResult = inst->start();
+    inst->release();
+    if (startResult == FMOD_OK)
     {
-        _handles.MarkPlayed(handle);
         _totalPlays++;
+        TrackReleasedInstance(inst, AudioEventHandle(_nextReleasedDiagnosticIndex++, 1), eventId, Guid::Empty, path, 1, true);
+        _peakActiveInstances = Math::Max(_peakActiveInstances, _handles.GetActiveCount() + _releasedInstances.Count());
         return true;
     }
 
-    ReleaseInstance(handle);
     return false;
+}
+
+void FmodEventBackend::TrackReleasedInstance(FMOD::Studio::EventInstance* instance, const AudioEventHandle& handle, const Guid& eventId, const Guid& ownerId, const StringView& path, int32 playCount, bool isOneShot)
+{
+    if (!instance)
+        return;
+    ReleasedInstanceDiagnostic& diagnostic = _releasedInstances.AddOne();
+    diagnostic.Instance = instance;
+    diagnostic.Handle = handle;
+    diagnostic.EventId = eventId;
+    diagnostic.OwnerId = ownerId;
+    diagnostic.Path = path;
+    diagnostic.PlayCount = playCount;
+    diagnostic.IsOneShot = isOneShot;
+}
+
+void FmodEventBackend::UpdateReleasedInstances()
+{
+    for (int32 i = _releasedInstances.Count() - 1; i >= 0; i--)
+    {
+        auto* instance = _releasedInstances[i].Instance;
+        FMOD_STUDIO_PLAYBACK_STATE state = FMOD_STUDIO_PLAYBACK_STOPPED;
+        if (!instance || !instance->isValid() || instance->getPlaybackState(&state) != FMOD_OK || state == FMOD_STUDIO_PLAYBACK_STOPPED)
+        {
+            _releasedInstances.RemoveAt(i);
+            _totalStopped++;
+        }
+    }
 }
 
 bool FmodEventBackend::Set3DAttributes(AudioEventHandle handle, const Audio3DAttributes& attributes)
@@ -762,6 +1036,35 @@ bool FmodEventBackend::ResolveParameterId(const Guid& eventId, const StringView&
     id = AudioParameterId(name);
     id.Data1 = parameter.id.data1;
     id.Data2 = parameter.id.data2;
+    return true;
+}
+
+bool FmodEventBackend::GetEventParameters(const Guid& eventId, const StringView& eventPath, Array<AudioParameterDescription>& result)
+{
+    result.Clear();
+    auto* description = GetEventDescription(eventId, eventPath);
+    if (!description)
+        return false;
+    int count = 0;
+    if (description->getParameterDescriptionCount(&count) != FMOD_OK)
+        return false;
+    result.EnsureCapacity(count);
+    for (int i = 0; i < count; i++)
+    {
+        FMOD_STUDIO_PARAMETER_DESCRIPTION parameter;
+        if (description->getParameterDescriptionByIndex(i, &parameter) != FMOD_OK)
+            continue;
+        AudioParameterDescription value;
+        value.Id = AudioParameterId(String(parameter.name));
+        value.Id.Data1 = parameter.id.data1;
+        value.Id.Data2 = parameter.id.data2;
+        value.Minimum = parameter.minimum;
+        value.Maximum = parameter.maximum;
+        value.DefaultValue = parameter.defaultvalue;
+        value.Type = (int32)parameter.type;
+        value.Flags = (uint32)parameter.flags;
+        result.Add(value);
+    }
     return true;
 }
 
@@ -875,15 +1178,19 @@ bool FmodEventBackend::SetGlobalParameterLabel(const AudioParameterId& id, const
 
 bool FmodEventBackend::QueryInstance(AudioEventHandle handle, AudioEventInstanceState& outState) const
 {
+    outState = AudioEventInstanceState();
     auto* inst = _handles.Get(handle);
-    if (!inst)
+    if (!inst || !inst->isValid())
         return false;
 
     FMOD_STUDIO_PLAYBACK_STATE pbState;
-    if (inst->getPlaybackState(&pbState) == FMOD_OK)
+    if (inst->getPlaybackState(&pbState) != FMOD_OK)
+        return false;
+    else
     {
         switch (pbState)
         {
+        case FMOD_STUDIO_PLAYBACK_STARTING:
         case FMOD_STUDIO_PLAYBACK_PLAYING:
             outState.PlaybackState = AudioEventPlaybackState::Playing;
             break;
@@ -902,10 +1209,18 @@ bool FmodEventBackend::QueryInstance(AudioEventHandle handle, AudioEventInstance
         }
     }
 
-    inst->getTimelinePosition(&outState.TimelinePosition);
-    inst->getPitch(&outState.Pitch);
-    inst->getVolume(&outState.Volume);
-    inst->getPaused(&outState.IsPaused);
+    // A Studio instance may be invalidated by FMOD between any two calls (for
+    // example when a stolen one-shot finishes on the mixer thread). Stop at the
+    // first failed probe so diagnostics produce at most one useful stale-handle
+    // report instead of amplifying it into a full property-query cascade.
+    if (inst->getTimelinePosition(&outState.TimelinePosition) != FMOD_OK)
+        return false;
+    if (inst->getPitch(&outState.Pitch) != FMOD_OK)
+        return false;
+    if (inst->getVolume(&outState.Volume) != FMOD_OK)
+        return false;
+    if (inst->getPaused(&outState.IsPaused) != FMOD_OK)
+        return false;
     return true;
 }
 
@@ -1023,15 +1338,150 @@ bool FmodEventBackend::GetVCAVolume(const Guid& vcaId, const StringView& path, f
     return vca ? vca->getVolume(&outVolume, &outFinalVolume) == FMOD_OK : false;
 }
 
+void FmodEventBackend::FillRuntimeInfo(FMOD::Studio::EventInstance* instance, const AudioEventHandle& handle, const Guid& eventId, const Guid& ownerId, const StringView& path, int32 playCount, bool isOneShot, AudioEventRuntimeInfo& eventInfo) const
+{
+    eventInfo.Handle = handle;
+    eventInfo.EventId = eventId;
+    eventInfo.OwnerId = ownerId;
+    eventInfo.Path = path;
+    eventInfo.IsOneShot = isOneShot;
+    eventInfo.PlayCount = playCount;
+    eventInfo.Started = playCount > 0;
+    if (!instance || !instance->isValid())
+        return;
+
+    FMOD_STUDIO_PLAYBACK_STATE playbackState = FMOD_STUDIO_PLAYBACK_STOPPED;
+    if (instance->getPlaybackState(&playbackState) != FMOD_OK)
+        return;
+    switch (playbackState)
+    {
+        case FMOD_STUDIO_PLAYBACK_STARTING:
+        case FMOD_STUDIO_PLAYBACK_PLAYING:
+            eventInfo.PlaybackState = AudioEventPlaybackState::Playing;
+            break;
+        case FMOD_STUDIO_PLAYBACK_SUSTAINING:
+            eventInfo.PlaybackState = AudioEventPlaybackState::Sustaining;
+            break;
+        case FMOD_STUDIO_PLAYBACK_STOPPING:
+            eventInfo.PlaybackState = AudioEventPlaybackState::Stopping;
+            break;
+        default:
+            eventInfo.PlaybackState = AudioEventPlaybackState::Stopped;
+            break;
+    }
+    if (instance->getTimelinePosition(&eventInfo.TimelinePosition) != FMOD_OK)
+        return;
+    if (instance->getVolume(&eventInfo.Volume, &eventInfo.FinalVolume) != FMOD_OK)
+        return;
+    if (instance->isVirtual(&eventInfo.IsVirtual) != FMOD_OK)
+        return;
+    if (instance->getListenerMask(&eventInfo.ListenerMask) != FMOD_OK)
+        return;
+    eventInfo.Playing = eventInfo.PlaybackState == AudioEventPlaybackState::Playing || eventInfo.PlaybackState == AudioEventPlaybackState::Sustaining;
+    eventInfo.TimeSeconds = (float)eventInfo.TimelinePosition * 0.001f;
+    eventInfo.RealVoices = eventInfo.IsVirtual || !eventInfo.Playing ? 0 : 1;
+    eventInfo.VirtualVoices = eventInfo.IsVirtual && eventInfo.Playing ? 1 : 0;
+
+    FMOD_3D_ATTRIBUTES eventAttributes = {};
+    if (instance->get3DAttributes(&eventAttributes) != FMOD_OK)
+        return;
+    eventInfo.Has3DAttributes = true;
+    eventInfo.SourcePositionCentimeters = FmodConvert::FromFmodPositionCentimeters(eventAttributes.position);
+    eventInfo.SourcePositionMeters = Vector3(eventAttributes.position.x, eventAttributes.position.y, eventAttributes.position.z);
+    if (_listeners.HasItems())
+    {
+        int32 listenerIndex = 0;
+        for (int32 i = 0; i < _listeners.Count(); i++)
+        {
+            if ((eventInfo.ListenerMask & (1u << i)) != 0)
+            {
+                listenerIndex = i;
+                break;
+            }
+        }
+        eventInfo.ListenerPositionCentimeters = _listeners[listenerIndex].Attributes.Position;
+        eventInfo.ListenerPositionMeters = _listeners[listenerIndex].Attributes.Position * FmodConvert::MetersPerFlaxUnit;
+        eventInfo.DistanceMeters = (float)Vector3::Distance(eventInfo.SourcePositionMeters, eventInfo.ListenerPositionMeters);
+    }
+
+    FMOD::Studio::EventDescription* description = nullptr;
+    if (instance->getDescription(&description) != FMOD_OK)
+        return;
+    if (description)
+    {
+        FMOD_STUDIO_LOADING_STATE sampleState;
+        if (description->getSampleLoadingState(&sampleState) == FMOD_OK)
+            eventInfo.SampleLoadingState = (int32)sampleState;
+        if (eventInfo.Path.IsEmpty())
+        {
+            char resolvedPath[512] = {};
+            int32 retrieved = 0;
+            if (description->getPath(resolvedPath, ARRAY_COUNT(resolvedPath), &retrieved) == FMOD_OK)
+                eventInfo.Path = String(StringAnsi(resolvedPath));
+        }
+        description->getMinMaxDistance(&eventInfo.MinimumDistanceMeters, &eventInfo.MaximumDistanceMeters);
+    }
+
+    eventInfo.Audibility = eventInfo.FinalVolume;
+    eventInfo.ChannelCount = eventInfo.Playing && !eventInfo.IsVirtual ? 1 : 0;
+    eventInfo.Audible = eventInfo.Playing && !eventInfo.IsVirtual && eventInfo.FinalVolume > 0.0001f;
+    eventInfo.ReachingOutput = eventInfo.Audible && _combinedOutputRms > 0.00001f;
+    if (!eventInfo.Started)
+        eventInfo.SilenceCause = TEXT("instance has not started");
+    else if (!eventInfo.Playing)
+        eventInfo.SilenceCause = TEXT("timeline is not playing");
+    else if (eventInfo.ListenerMask == 0)
+        eventInfo.SilenceCause = TEXT("listener mask is zero");
+    else if (_listeners.IsEmpty() && eventInfo.Has3DAttributes)
+        eventInfo.SilenceCause = TEXT("no active listener");
+    else if (eventInfo.IsVirtual)
+        eventInfo.SilenceCause = TEXT("FMOD virtualized the instance");
+    else if (eventInfo.FinalVolume <= 0.0001f)
+        eventInfo.SilenceCause = TEXT("final event volume is zero");
+    else if (_combinedOutputRms <= 0.00001f)
+        eventInfo.SilenceCause = TEXT("signal is not reaching the master output");
+}
+
 void FmodEventBackend::CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot)
 {
+    // Bank unloads and middleware-owned one-shot completion can invalidate the
+    // native handle before the queued STOPPED callback reaches this thread.
+    // Evict those slots first so a diagnostic snapshot never amplifies one stale
+    // instance into a cascade of failing property queries.
+    Array<AudioEventHandle, InlinedAllocation<8>> staleHandles;
+    const auto& diagnosticSlots = _handles.GetSlots();
+    for (int32 i = 0; i < diagnosticSlots.Count(); i++)
+    {
+        const FmodHandleRegistry::Slot& slot = diagnosticSlots[i];
+        if (slot.InUse && (!slot.Instance || !slot.Instance->isValid()))
+            staleHandles.Add(AudioEventHandle((uint32)i, slot.Generation));
+    }
+    for (const AudioEventHandle handle : staleHandles)
+        ReleaseInstance(handle);
+
     outSnapshot = AudioDiagnosticsSnapshot();
     outSnapshot.BackendName = GetName();
     outSnapshot.Initialized = _studioSystem != nullptr;
     const auto settings = AudioSettings::Get();
-    outSnapshot.LiveUpdateEnabled = settings->EnableLiveUpdate;
+    outSnapshot.LiveUpdateEnabled = _liveUpdateActive;
     outSnapshot.CallbackQueueDepth = _callbacks.GetApproximateDepth();
     outSnapshot.DroppedCallbacks = _callbacks.GetTotalDropped();
+    outSnapshot.ChannelReuseNotifications = _channelReuseNotifications.load(std::memory_order_relaxed);
+    outSnapshot.ListenerCount = _listeners.Count();
+    outSnapshot.CombinedOutputPeak = _combinedOutputPeak;
+    outSnapshot.CombinedOutputRms = _combinedOutputRms;
+    outSnapshot.CombinedOutputDbfs = _combinedOutputDbfs;
+    outSnapshot.OutputClipping = _outputClipping;
+    outSnapshot.SecondsSinceNonSilentOutput = _secondsSinceNonSilentOutput;
+    outSnapshot.OutputPeak.Resize(_outputPeak.Count());
+    outSnapshot.OutputRms.Resize(_outputRms.Count());
+    for (int32 i = 0; i < _outputPeak.Count(); i++)
+        outSnapshot.OutputPeak[i] = _outputPeak[i];
+    for (int32 i = 0; i < _outputRms.Count(); i++)
+        outSnapshot.OutputRms[i] = _outputRms[i];
+    outSnapshot.LastErrorCode = _lastErrorCode.load(std::memory_order_relaxed);
+    if (outSnapshot.LastErrorCode != 0)
+        outSnapshot.LastError = String(FMOD_ErrorString((FMOD_RESULT)outSnapshot.LastErrorCode));
     if (_studioSystem)
     {
         FMOD_STUDIO_CPU_USAGE studioCpu;
@@ -1048,7 +1498,7 @@ void FmodEventBackend::CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot)
         outSnapshot.MemoryPeak = (uint64)maxAlloc;
         outSnapshot.LoadedBanks = _banks.GetLoadedCount();
         outSnapshot.LoadedSampleDataBanks = _banks.GetSampleDataLoadedCount();
-        outSnapshot.ActiveInstances = _handles.GetActiveCount();
+        outSnapshot.ActiveInstances = _handles.GetActiveCount() + _releasedInstances.Count();
         outSnapshot.TotalInstancesCreated = _totalInstancesCreated;
         outSnapshot.TotalPlays = _totalPlays;
         outSnapshot.TotalStopped = _totalStopped;
@@ -1058,29 +1508,94 @@ void FmodEventBackend::CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot)
         {
             if (!slot.InUse || !slot.Instance)
                 continue;
+            const AudioEventHandle diagnosticHandle = slot.CallbackContext ? slot.CallbackContext->Handle : AudioEventHandle();
+            AudioEventInstanceState state;
+            if (!QueryInstance(diagnosticHandle, state))
+                continue;
             AudioEventRuntimeInfo& eventInfo = outSnapshot.Events.AddOne();
-            eventInfo.Handle = slot.CallbackContext ? slot.CallbackContext->Handle : AudioEventHandle();
+            eventInfo.Handle = diagnosticHandle;
             eventInfo.EventId = slot.EventId;
             eventInfo.OwnerId = slot.OwnerId;
             eventInfo.IsOneShot = slot.OneShot;
-            AudioEventInstanceState state;
-            QueryInstance(eventInfo.Handle, state);
             eventInfo.PlaybackState = state.PlaybackState;
             eventInfo.TimelinePosition = state.TimelinePosition;
             eventInfo.Volume = state.Volume;
-            slot.Instance->isVirtual(&eventInfo.IsVirtual);
+            if (slot.Instance->getVolume(&eventInfo.Volume, &eventInfo.FinalVolume) != FMOD_OK)
+                continue;
+            if (slot.Instance->isVirtual(&eventInfo.IsVirtual) != FMOD_OK)
+                continue;
             eventInfo.RealVoices = eventInfo.IsVirtual || state.PlaybackState == AudioEventPlaybackState::Stopped ? 0 : 1;
             eventInfo.VirtualVoices = eventInfo.IsVirtual && state.PlaybackState != AudioEventPlaybackState::Stopped ? 1 : 0;
             eventInfo.PlayCount = slot.PlayCount;
+            eventInfo.Started = slot.PlayCount > 0;
+            eventInfo.Playing = state.PlaybackState == AudioEventPlaybackState::Playing || state.PlaybackState == AudioEventPlaybackState::Sustaining;
             eventInfo.TimeSeconds = (float)state.TimelinePosition * 0.001f;
-            FMOD::Studio::EventDescription* description = nullptr;
-            if (slot.Instance->getDescription(&description) == FMOD_OK && description)
+            if (slot.Instance->getListenerMask(&eventInfo.ListenerMask) != FMOD_OK)
+                continue;
+            FMOD_3D_ATTRIBUTES eventAttributes = {};
+            if (slot.Instance->get3DAttributes(&eventAttributes) != FMOD_OK)
+                continue;
+            eventInfo.Has3DAttributes = true;
+            eventInfo.SourcePositionCentimeters = FmodConvert::FromFmodPositionCentimeters(eventAttributes.position);
+            eventInfo.SourcePositionMeters = Vector3(eventAttributes.position.x, eventAttributes.position.y, eventAttributes.position.z);
+            if (_listeners.HasItems())
             {
+                int32 listenerIndex = 0;
+                for (int32 i = 0; i < _listeners.Count(); i++)
+                {
+                    if ((eventInfo.ListenerMask & (1u << i)) != 0)
+                    {
+                        listenerIndex = i;
+                        break;
+                    }
+                }
+                eventInfo.ListenerPositionCentimeters = _listeners[listenerIndex].Attributes.Position;
+                eventInfo.ListenerPositionMeters = _listeners[listenerIndex].Attributes.Position * FmodConvert::MetersPerFlaxUnit;
+                eventInfo.DistanceMeters = (float)Vector3::Distance(eventInfo.SourcePositionMeters, eventInfo.ListenerPositionMeters);
+            }
+            FMOD::Studio::EventDescription* description = nullptr;
+            if (slot.Instance->getDescription(&description) != FMOD_OK)
+                continue;
+            if (description)
+            {
+                FMOD_STUDIO_LOADING_STATE sampleState;
+                if (description->getSampleLoadingState(&sampleState) == FMOD_OK)
+                    eventInfo.SampleLoadingState = (int32)sampleState;
                 char path[512] = {};
                 int32 retrieved = 0;
                 if (description->getPath(path, ARRAY_COUNT(path), &retrieved) == FMOD_OK)
                     eventInfo.Path = String(StringAnsi(path));
+                description->getMinMaxDistance(&eventInfo.MinimumDistanceMeters, &eventInfo.MaximumDistanceMeters);
             }
+            // getChannelGroup reports FMOD_ERR_STUDIO_NOT_LOADED for otherwise
+            // valid instances whose sample/channel is still being prepared. The
+            // global FMOD error callback logs that expected transient, so derive
+            // the signal-path state from stable instance properties and the
+            // measured master output instead of probing the optional group.
+            eventInfo.Audibility = eventInfo.FinalVolume;
+            eventInfo.ChannelCount = eventInfo.Playing && !eventInfo.IsVirtual ? 1 : 0;
+            eventInfo.Audible = eventInfo.Playing && !eventInfo.IsVirtual && eventInfo.ChannelCount > 0 && eventInfo.FinalVolume > 0.0001f && eventInfo.Audibility > 0.0001f;
+            eventInfo.ReachingOutput = eventInfo.Audible && _combinedOutputRms > 0.00001f;
+            if (!eventInfo.Started)
+                eventInfo.SilenceCause = TEXT("instance has not started");
+            else if (!eventInfo.Playing)
+                eventInfo.SilenceCause = TEXT("timeline is not playing");
+            else if (eventInfo.ListenerMask == 0)
+                eventInfo.SilenceCause = TEXT("listener mask is zero");
+            else if (_listeners.IsEmpty() && eventInfo.Has3DAttributes)
+                eventInfo.SilenceCause = TEXT("no active listener");
+            else if (eventInfo.IsVirtual)
+                eventInfo.SilenceCause = TEXT("FMOD virtualized the instance");
+            else if (eventInfo.ChannelCount == 0)
+                eventInfo.SilenceCause = TEXT("event has no real output channel");
+            else if (eventInfo.FinalVolume <= 0.0001f)
+                eventInfo.SilenceCause = TEXT("final event volume is zero");
+            else if (eventInfo.Audibility <= 0.0001f)
+                eventInfo.SilenceCause = eventInfo.MaximumDistanceMeters > 0.0f && eventInfo.DistanceMeters > eventInfo.MaximumDistanceMeters
+                    ? TEXT("source is beyond the event maximum attenuation distance")
+                    : TEXT("final channel-group audibility is zero");
+            else if (_combinedOutputRms <= 0.00001f)
+                eventInfo.SilenceCause = TEXT("signal is not reaching the master output");
             if (eventInfo.Path.StartsWith(TEXT("snapshot:/")))
             {
                 AudioSnapshotRuntimeInfo& snapshotInfo = outSnapshot.Snapshots.AddOne();
@@ -1089,13 +1604,35 @@ void FmodEventBackend::CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot)
                 snapshotInfo.PlaybackState = eventInfo.PlaybackState;
             }
         }
-        if (FMOD::Studio::Bus* masterBus = GetBus(Guid::Empty, TEXT("bus:/")))
+        for (const ReleasedInstanceDiagnostic& diagnostic : _releasedInstances)
         {
-            AudioBusRuntimeInfo& busInfo = outSnapshot.Buses.AddOne();
-            busInfo.Path = TEXT("bus:/");
-            masterBus->getVolume(&busInfo.Volume, &busInfo.FinalVolume);
-            masterBus->getMute(&busInfo.Muted);
-            masterBus->getPaused(&busInfo.Paused);
+            if (!diagnostic.Instance || !diagnostic.Instance->isValid())
+                continue;
+            AudioEventRuntimeInfo& eventInfo = outSnapshot.Events.AddOne();
+            FillRuntimeInfo(diagnostic.Instance, diagnostic.Handle, diagnostic.EventId, diagnostic.OwnerId, diagnostic.Path, diagnostic.PlayCount, diagnostic.IsOneShot, eventInfo);
+        }
+        // The Studio system remains initialized in editor idle mode, but its
+        // banks are intentionally unloaded on play-mode exit. Avoid querying a
+        // master bus that cannot exist until the master bank is loaded again.
+        if (_banks.GetLoadedCount() > 0)
+        {
+            if (FMOD::Studio::Bus* masterBus = GetBus(Guid::Empty, TEXT("bus:/")))
+            {
+                AudioBusRuntimeInfo& busInfo = outSnapshot.Buses.AddOne();
+                busInfo.Path = TEXT("bus:/");
+                masterBus->getVolume(&busInfo.Volume, &busInfo.FinalVolume);
+                masterBus->getMute(&busInfo.Muted);
+                masterBus->getPaused(&busInfo.Paused);
+                if (busInfo.Muted || busInfo.Paused || busInfo.FinalVolume <= 0.0001f)
+                {
+                    for (auto& eventInfo : outSnapshot.Events)
+                    {
+                        eventInfo.ReachingOutput = false;
+                        if (eventInfo.Playing)
+                            eventInfo.SilenceCause = busInfo.Muted ? TEXT("master bus is muted") : busInfo.Paused ? TEXT("master bus is paused") : TEXT("master bus gain is zero");
+                    }
+                }
+            }
         }
         outSnapshot.ActiveDevice = GetOutputDevice();
         int32 channels = 0;

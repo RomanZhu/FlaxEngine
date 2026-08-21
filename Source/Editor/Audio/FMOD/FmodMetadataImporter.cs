@@ -30,8 +30,8 @@ namespace FlaxEditor.FMOD
             public string path;
             public bool is3D = true;
             public bool isOneShot;
-            public float minDistance = 100.0f;
-            public float maxDistance = 10000.0f;
+            public float minDistance = 1.0f;
+            public float maxDistance = 100.0f;
             public float length;
             public string[] bankDependencies;
             public Parameter[] parameters;
@@ -43,6 +43,11 @@ namespace FlaxEditor.FMOD
             public string name;
             public uint data1;
             public uint data2;
+            public float minimum;
+            public float maximum = 1.0f;
+            public float defaultValue;
+            public int type;
+            public uint flags;
         }
 
         public sealed class Snapshot

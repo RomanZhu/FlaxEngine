@@ -47,13 +47,13 @@ public:
     /// Minimum distance for 3D attenuation.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(40), EditorDisplay(\"3D Attributes\")")
-    float MinDistance = 100.0f;
+    float MinDistance = 1.0f;
 
     /// <summary>
     /// Maximum distance for 3D attenuation.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(50), EditorDisplay(\"3D Attributes\")")
-    float MaxDistance = 10000.0f;
+    float MaxDistance = 100.0f;
 
     /// <summary>
     /// Total duration of the event in seconds (0 for infinite/looping).

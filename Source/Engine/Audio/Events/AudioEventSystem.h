@@ -9,6 +9,8 @@
 #include "Engine/Scripting/ScriptingType.h"
 
 class AudioEvent;
+class Actor;
+class AudioWorld;
 
 /// <summary>
 /// Static engine-facing entry point for playing and managing audio events, snapshots, banks, and parameters.
@@ -17,9 +19,12 @@ API_CLASS(Static) class FLAXENGINE_API AudioEventSystem
 {
     DECLARE_SCRIPTING_TYPE_NO_SPAWN(AudioEventSystem);
     friend class AudioService;
+    friend class AudioWorld;
 
 private:
     static IAudioEventBackend* _backend;
+
+    static void UpdateTrackedInstances(float dt);
 
 public:
     /// <summary>
@@ -150,12 +155,49 @@ public:
     /// <summary>Creates an instance from a typed event asset after guaranteeing its bank dependencies.</summary>
     API_FUNCTION() static AudioEventHandle CreateInstanceFromAsset(AudioEvent* audioEvent, const AudioEventCreateOptions& options = AudioEventCreateOptions());
 
+    /// <summary>
+    /// Plays or retriggers a persistent event attached to an owner Actor.
+    /// The instance follows the owner's transform and can also be controlled with the returned handle.
+    /// </summary>
+    /// <param name="audioEvent">Typed event asset to play.</param>
+    /// <param name="owner">Actor used for instance identity, position, velocity, and lifetime.</param>
+    /// <returns>Valid handle on success, invalid on failure.</returns>
+    API_FUNCTION() static AudioEventHandle Play(AudioEvent* audioEvent, Actor* owner);
+
+    /// <summary>Plays or retriggers a persistent event attached to an owner Actor with initial parameter values.</summary>
+    /// <param name="audioEvent">Typed event asset to play.</param>
+    /// <param name="owner">Actor used for instance identity, position, velocity, and lifetime.</param>
+    /// <param name="initialParameters">Parameter values applied before a newly created instance starts, or before an existing instance restarts.</param>
+    /// <returns>Valid handle on success, invalid on failure.</returns>
+    API_FUNCTION() static AudioEventHandle Play(AudioEvent* audioEvent, Actor* owner, const Array<AudioParameterValue>& initialParameters);
+    static AudioEventHandle Play(AudioEvent* audioEvent, Actor* owner, const Span<AudioParameterValue>& initialParameters);
+
+    /// <summary>
+    /// Plays a tracked event at a fixed world position. Naturally completed instances are released automatically.
+    /// The returned handle can be used for runtime control or explicit stopping.
+    /// </summary>
+    /// <param name="audioEvent">Typed event asset to play.</param>
+    /// <param name="position">World-space playback position.</param>
+    /// <returns>Valid handle on success, invalid on failure.</returns>
+    API_FUNCTION() static AudioEventHandle PlayAt(AudioEvent* audioEvent, const Vector3& position);
+
+    /// <summary>Plays a tracked event at a fixed world position with initial parameter values.</summary>
+    /// <param name="audioEvent">Typed event asset to play.</param>
+    /// <param name="position">World-space playback position.</param>
+    /// <param name="initialParameters">Parameter values applied before playback starts.</param>
+    /// <returns>Valid handle on success, invalid on failure.</returns>
+    API_FUNCTION() static AudioEventHandle PlayAt(AudioEvent* audioEvent, const Vector3& position, const Array<AudioParameterValue>& initialParameters);
+    static AudioEventHandle PlayAt(AudioEvent* audioEvent, const Vector3& position, const Span<AudioParameterValue>& initialParameters);
+
 #if USE_EDITOR
     /// <summary>Creates an editor-owned preview instance without requiring Play mode.</summary>
     API_FUNCTION() static AudioEventHandle CreatePreviewInstance(const Guid& eventId, const StringView& path = StringView::Empty, const AudioEventCreateOptions& options = AudioEventCreateOptions());
 
     /// <summary>Starts an editor-owned preview instance without requiring Play mode.</summary>
     API_FUNCTION() static bool PlayPreview(AudioEventHandle handle);
+
+    /// <summary>Configures the dedicated listener used by editor-owned 3D previews.</summary>
+    API_FUNCTION() static void SetPreviewListener(const Audio3DAttributes& attributes);
 #endif
 
     /// <summary>
@@ -184,6 +226,9 @@ public:
     /// <param name="stopMode">Stop mode.</param>
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool Stop(AudioEventHandle handle, AudioStopMode stopMode = AudioStopMode::AllowFadeOut);
+
+    /// <summary>Stops and releases the persistent instance identified by an event asset and owner Actor.</summary>
+    API_FUNCTION() static bool Stop(AudioEvent* audioEvent, Actor* owner, AudioStopMode stopMode = AudioStopMode::AllowFadeOut);
 
     /// <summary>
     /// Stops all active audio event instances, including one-shots owned by the backend.
@@ -259,6 +304,9 @@ public:
     /// <summary>Resolves an authored parameter name to its stable backend-neutral ID.</summary>
     API_FUNCTION() static bool ResolveParameterId(const Guid& eventId, const StringView& eventPath, const StringView& name, API_PARAM(Out) AudioParameterId& id);
 
+    /// <summary>Enumerates authored parameter names, ranges, defaults, types, and flags for an event.</summary>
+    API_FUNCTION() static bool GetEventParameters(const Guid& eventId, const StringView& eventPath, API_PARAM(Out) Array<AudioParameterDescription>& result);
+
     /// <summary>
     /// Sets a numeric parameter value on an event instance.
     /// </summary>
@@ -269,10 +317,14 @@ public:
     /// <returns>True on success, false on failure.</returns>
     API_FUNCTION() static bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false);
 
+    /// <summary>Sets a runtime parameter on the persistent instance identified by an event asset and owner Actor.</summary>
+    API_FUNCTION() static bool SetParameter(AudioEvent* audioEvent, Actor* owner, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false);
+
     /// <summary>
     /// Sets several numeric parameters in one backend call where supported.
     /// </summary>
-    API_FUNCTION() static bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false);
+    API_FUNCTION() static bool SetParameters(AudioEventHandle handle, const Array<AudioParameterValue>& values, bool ignoreSeekSpeed = false);
+    static bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false);
 
     /// <summary>
     /// Sets a labeled parameter value on an event instance.

@@ -233,6 +233,8 @@ AudioEventHandle AudioEventBackendNone::CreateInstance(const Guid& eventId, cons
     slot.State.IsPaused = false;
     slot.Attributes = options.Attributes;
     slot.Parameters.Clear();
+    for (const auto& parameter : options.InitialParameters)
+        slot.Parameters[parameter.Id] = parameter.Value;
 
     return AudioEventHandle(index, slot.Generation);
 }
@@ -392,6 +394,21 @@ bool AudioEventBackendNone::SetParameters(AudioEventHandle handle, const Span<Au
 bool AudioEventBackendNone::SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed)
 {
     return ValidateHandle(handle);
+}
+
+bool AudioEventBackendNone::GetParameter(AudioEventHandle handle, const AudioParameterId& id, AudioParameterState& outState) const
+{
+    outState = AudioParameterState();
+    const auto* slot = GetSlot(handle);
+    if (!slot)
+        return false;
+    const float* value = slot->Parameters.TryGet(id);
+    if (!value)
+        return false;
+    outState.Value = *value;
+    outState.FinalValue = *value;
+    outState.IsValid = true;
+    return true;
 }
 
 bool AudioEventBackendNone::SetProgrammerSound(AudioEventHandle handle, const AudioProgrammerSoundData& data)

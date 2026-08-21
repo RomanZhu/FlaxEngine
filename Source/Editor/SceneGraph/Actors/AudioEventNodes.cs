@@ -68,4 +68,15 @@ namespace FlaxEditor.SceneGraph.Actors
         {
         }
     }
+
+    /// <summary>Scene tree node for <see cref="AudioParameterTrigger"/>.</summary>
+    [HideInEditor]
+    public sealed class AudioParameterTriggerNode : ActorNodeWithIcon
+    {
+        /// <inheritdoc />
+        public AudioParameterTriggerNode(Actor actor)
+            : base(actor)
+        {
+        }
+    }
 }
