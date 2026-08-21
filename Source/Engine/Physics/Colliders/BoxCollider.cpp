@@ -77,6 +77,7 @@ void BoxCollider::OnDebugDraw()
     if (GetIsTrigger())
     {
         const Color color = Color::GreenYellow;
+        DEBUG_DRAW_BOX(_bounds, color.AlphaMultiplied(0.06f), 0, true);
         DEBUG_DRAW_WIRE_BOX(_bounds, color, 0, true);
     }
 

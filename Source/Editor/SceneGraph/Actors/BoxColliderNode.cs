@@ -63,9 +63,18 @@ namespace FlaxEditor.SceneGraph.Actors
         /// <inheritdoc />
         public override bool RayCastSelf(ref RayCastData ray, out Real distance, out Vector3 normal)
         {
-            // Pick wires
+            // Trigger volumes have no rendered surface. Pick their whole volume so
+            // authors can select them in the viewport instead of hunting a thin,
+            // often occluded wire. SkipTriggers still opts out through the base node.
             var actor = (BoxCollider)_actor;
             var box = actor.OrientedBox;
+            if (actor.IsTrigger && (ray.Flags & RayCastData.FlagTypes.SkipTriggers) == 0 && box.Intersects(ref ray.Ray, out distance))
+            {
+                normal = Vector3.Up;
+                return true;
+            }
+            // Non-trigger colliders retain wire-only picking to avoid stealing
+            // selection from visible geometry they surround.
             if (Utilities.Utils.RayCastWire(ref box, ref ray.Ray, out distance, ref ray.View.Position))
             {
                 normal = Vector3.Up;

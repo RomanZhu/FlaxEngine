@@ -75,13 +75,10 @@ public:
     /// </summary>
     virtual int32 GetDotnetVersion() const
     {
-#if OFFICIAL_BUILD
-        // Use the fixed .NET SDK version in packaged builds for compatibility (FlaxGame is precompiled with it)
-        return GAME_BUILD_DOTNET_RUNTIME_MIN_VER;
-#else
-        // Use the highest version found on a system (Flax.Build will decide)
-        return 0;
-#endif
+        // The cooked scripts and packaged runtime must match the runtime used to compile
+        // FlaxEngine.CSharp. Selecting the newest installed SDK here can otherwise produce
+        // a newer assembly next to an older bundled runtime and fail the managed Init lookup.
+        return GAME_BUILD_DOTNET_RUNTIME_VER;
     }
 
     /// <summary>
