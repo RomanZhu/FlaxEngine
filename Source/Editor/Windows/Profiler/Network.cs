@@ -49,8 +49,8 @@ namespace FlaxEditor.Windows.Profiler
         private NetworkDriverStats _prevTotalStats;
         private List<NetworkDriverStats> _stats;
 
-        public Network()
-        : base("Network")
+        public Network(ProfilerHistoryView historyView)
+        : base("Network", historyView)
         {
             // Layout
             var panel = new Panel(ScrollBars.Vertical)
@@ -69,28 +69,28 @@ namespace FlaxEditor.Windows.Profiler
             };
 
             // Charts
-            _dataSentChart = new SingleChart
+            _dataSentChart = new SingleChart(historyView)
             {
                 Title = "Data Sent",
                 FormatSample = FormatSampleBytes,
                 Parent = layout,
             };
             _dataSentChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _dataReceivedChart = new SingleChart
+            _dataReceivedChart = new SingleChart(historyView)
             {
                 Title = "Data Received",
                 FormatSample = FormatSampleBytes,
                 Parent = layout,
             };
             _dataReceivedChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _dataSentRateChart = new SingleChart
+            _dataSentRateChart = new SingleChart(historyView)
             {
                 Title = "Data Sent Rate",
                 FormatSample = FormatSampleBytesRate,
                 Parent = layout,
             };
             _dataSentRateChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _dataReceivedRateChart = new SingleChart
+            _dataReceivedRateChart = new SingleChart(historyView)
             {
                 Title = "Data Received Rate",
                 FormatSample = FormatSampleBytesRate,

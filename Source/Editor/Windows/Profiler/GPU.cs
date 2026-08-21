@@ -18,13 +18,15 @@ namespace FlaxEditor.Windows.Profiler
         private readonly SingleChart _drawTimeGPU;
         private readonly Timeline _timeline;
         private readonly Table _table;
+        private readonly ProfilerHistoryView _historyView;
         private SamplesBuffer<ProfilerGPU.Event[]> _events;
         private List<Timeline.Event> _timelineEventsCache;
         private List<Row> _tableRowsCache;
 
-        public GPU()
-        : base("GPU")
+        public GPU(ProfilerHistoryView historyView)
+        : base("GPU", historyView)
         {
+            _historyView = historyView;
             // Layout
             var mainPanel = new Panel(ScrollBars.None)
             {
@@ -34,22 +36,26 @@ namespace FlaxEditor.Windows.Profiler
             };
             
             // Chart
-            _drawTimeCPU = new SingleChart
+            _drawTimeCPU = new SingleChart(historyView)
             {
                 Title = "Draw (CPU)",
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 Offsets = Margin.Zero,
                 Height = SingleChart.DefaultHeight,
+                DrawBars = true,
+                UseFrameBudget = true,
                 FormatSample = v => (Mathf.RoundToInt(v * 10.0f) / 10.0f) + " ms",
                 Parent = mainPanel,
             };
             _drawTimeCPU.SelectedSampleChanged += OnSelectedSampleChanged;
             
-            _drawTimeGPU = new SingleChart
+            _drawTimeGPU = new SingleChart(historyView)
             {
                 Title = "Draw (GPU)",
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 Offsets = new Margin(0, 0, _drawTimeCPU.Height + 2, 0),
+                DrawBars = true,
+                UseFrameBudget = true,
                 FormatSample = v => (Mathf.RoundToInt(v * 10.0f) / 10.0f) + " ms",
                 Parent = mainPanel,
             };
@@ -74,6 +80,7 @@ namespace FlaxEditor.Windows.Profiler
             _timeline = new Timeline
             {
                 Height = 340,
+                FrameBudgetMs = historyView.FrameBudgetMs,
                 Parent = layout,
             };
 
@@ -176,6 +183,7 @@ namespace FlaxEditor.Windows.Profiler
         {
             _drawTimeCPU.SelectedSampleIndex = selectedFrame;
             _drawTimeGPU.SelectedSampleIndex = selectedFrame;
+            _timeline.FrameBudgetMs = _historyView.FrameBudgetMs;
 
             if (_events == null)
                 return;
@@ -184,6 +192,7 @@ namespace FlaxEditor.Windows.Profiler
             if (_tableRowsCache == null)
                 _tableRowsCache = new List<Row>();
 
+            _timeline.FitToDuration(Mathf.Max(_drawTimeGPU.SelectedSample, _drawTimeCPU.SelectedSample));
             UpdateTimeline();
             UpdateTable();
         }
@@ -201,8 +210,8 @@ namespace FlaxEditor.Windows.Profiler
         {
             ref ProfilerGPU.Event e = ref events[index];
 
-            double scale = 100.0;
-            float width = (float)(e.Time * scale);
+            double scale = _timeline.PixelsPerMillisecond;
+            float width = Mathf.Max((float)(e.Time * scale), 1.0f);
             string name = new string(e.Name);
 
             Timeline.Event control;
@@ -216,10 +225,15 @@ namespace FlaxEditor.Windows.Profiler
             {
                 control = new Timeline.Event();
             }
-            control.Bounds = new Rectangle(x, e.Depth * Timeline.Event.DefaultHeight, width, Timeline.Event.DefaultHeight - 1);
+            control.StartTimeMs = x / (float)scale;
+            control.DurationMs = (float)e.Time;
+            control.SourceKey = index;
+            control.LinkedRow = null;
+            control.Bounds = new Rectangle(x, Timeline.RulerHeight + e.Depth * Timeline.Event.DefaultHeight, width, Timeline.Event.DefaultHeight - 1);
             control.Name = name;
             control.TooltipText = string.Format("{0}, {1} ms", name, ((int)(e.Time * 10000.0) / 10000.0f));
             control.Parent = parent;
+            _timeline.RegisterEvent(control);
 
             // Spawn sub events
             int childrenDepth = e.Depth + 1;
@@ -264,6 +278,7 @@ namespace FlaxEditor.Windows.Profiler
         private void UpdateTimeline()
         {
             var container = _timeline.EventsContainer;
+            _timeline.BeginContentUpdate();
 
             container.IsLayoutLocked = true;
             int idx = 0;
@@ -287,6 +302,7 @@ namespace FlaxEditor.Windows.Profiler
 
             container.UnlockChildrenRecursive();
             container.PerformLayout();
+            _timeline.EndContentUpdate();
         }
 
         private float UpdateTimelineInner()
@@ -317,7 +333,7 @@ namespace FlaxEditor.Windows.Profiler
                 }
             }
 
-            return Timeline.Event.DefaultHeight * (maxDepth + 2);
+            return Timeline.RulerHeight + Timeline.Event.DefaultHeight * (maxDepth + 2);
         }
 
         private void UpdateTable()
@@ -360,9 +376,11 @@ namespace FlaxEditor.Windows.Profiler
                         Values = new object[6],
                         BackgroundColors = new Color[6],
                     };
-                    for (int k = 0; k < row.BackgroundColors.Length; k++)
-                        row.BackgroundColors[k] = Color.Transparent;
                 }
+                for (int k = 0; k < row.BackgroundColors.Length; k++)
+                    row.BackgroundColors[k] = Color.Transparent;
+                row.Highlighted = false;
+                row.Selected = false;
                 {
                     // Event
                     row.Values[0] = name;
@@ -370,10 +388,15 @@ namespace FlaxEditor.Windows.Profiler
                     // Total (%)
                     float rowTimePerc = (float)(e.Time / totalTimeMs);
                     row.Values[1] = (int)(rowTimePerc * 1000.0f) / 10.0f;
-                    row.BackgroundColors[1] = Color.Red.AlphaMultiplied(Mathf.Min(1, rowTimePerc) * 0.5f);
+                    float budgetRatio = (float)(e.Time / _historyView.FrameBudgetMs);
+                    Color budgetColor = budgetRatio >= 0.25f ? Color.Red : budgetRatio >= 0.10f ? Color.Orange : budgetRatio >= 0.05f ? Color.Yellow : Color.Green;
+                    float budgetAlpha = budgetRatio >= 0.05f ? 0.34f : 0.10f;
+                    row.BackgroundColors[0] = budgetColor.AlphaMultiplied(budgetAlpha * 0.55f);
+                    row.BackgroundColors[1] = budgetColor.AlphaMultiplied(budgetAlpha);
 
                     // GPU ms
                     row.Values[2] = (e.Time * 10000.0f) / 10000.0f;
+                    row.BackgroundColors[2] = budgetColor.AlphaMultiplied(budgetAlpha);
 
                     // Draw Calls
                     row.Values[3] = e.Stats.DrawCalls + e.Stats.DispatchCalls;
@@ -384,10 +407,12 @@ namespace FlaxEditor.Windows.Profiler
                     // Vertices
                     row.Values[5] = e.Stats.Vertices;
                 }
+                row.TooltipText = $"{name}: {e.Time:0.###} ms ({e.Time / _historyView.FrameBudgetMs * 100.0:0.0}% of the global frame budget).";
                 row.Depth = e.Depth;
                 row.Width = _table.Width;
                 row.Visible = e.Depth < 3;
                 row.Parent = _table;
+                _timeline.LinkRow(i, row);
             }
         }
     }

@@ -37,8 +37,8 @@ namespace FlaxEditor.Windows.Profiler
         private StringBuilder _stringBuilder;
         private GPUResource[] _gpuResourcesCached;
 
-        public MemoryGPU()
-        : base("GPU Memory")
+        public MemoryGPU(ProfilerHistoryView historyView)
+        : base("GPU Memory", historyView)
         {
             // Layout
             var mainPanel = new Panel(ScrollBars.None)
@@ -49,7 +49,7 @@ namespace FlaxEditor.Windows.Profiler
             };
             
             // Chart
-            _memoryUsageChart = new SingleChart
+            _memoryUsageChart = new SingleChart(historyView)
             {
                 Title = "GPU Memory Usage",
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,

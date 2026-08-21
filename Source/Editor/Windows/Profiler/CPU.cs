@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using FlaxEditor.GUI;
+using FlaxEditor.GUI.Input;
 using FlaxEngine;
 using FlaxEngine.GUI;
 
@@ -48,15 +49,62 @@ namespace FlaxEditor.Windows.Profiler
         private readonly SingleChart _mainChart;
         private readonly Timeline _timeline;
         private readonly Table _table;
+        private readonly SearchBox _timerSearch;
+        private readonly ProfilerHistoryView _historyView;
         private SamplesBuffer<ProfilingTools.ThreadStats[]> _events;
         private List<Timeline.TrackLabel> _timelineLabelsCache;
         private List<Timeline.Event> _timelineEventsCache;
         private List<Row> _tableRowsCache;
+        private readonly List<bool> _eventSearchMatches = new List<bool>();
+        private readonly List<int> _eventSearchAncestors = new List<int>();
         private bool _showOnlyLastUpdateEvents;
+        private bool _showMainThread = true;
+        private bool _showJobSystemThreads;
+        private bool _showOtherThreads = true;
 
-        public CPU()
-        : base("CPU")
+        internal bool ShowMainThread
         {
+            get => _showMainThread;
+            set
+            {
+                if (_showMainThread != value)
+                {
+                    _showMainThread = value;
+                    RefreshView();
+                }
+            }
+        }
+
+        internal bool ShowJobSystemThreads
+        {
+            get => _showJobSystemThreads;
+            set
+            {
+                if (_showJobSystemThreads != value)
+                {
+                    _showJobSystemThreads = value;
+                    RefreshView();
+                }
+            }
+        }
+
+        internal bool ShowOtherThreads
+        {
+            get => _showOtherThreads;
+            set
+            {
+                if (_showOtherThreads != value)
+                {
+                    _showOtherThreads = value;
+                    RefreshView();
+                }
+            }
+        }
+
+        public CPU(ProfilerHistoryView historyView)
+        : base("CPU", historyView)
+        {
+            _historyView = historyView;
             // Layout
             var mainPanel = new Panel(ScrollBars.None)
             {
@@ -66,12 +114,14 @@ namespace FlaxEditor.Windows.Profiler
             };
             
             // Chart
-            _mainChart = new SingleChart
+            _mainChart = new SingleChart(historyView)
             {
                 Title = "Update",
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 Offsets = Margin.Zero,
                 Height = SingleChart.DefaultHeight,
+                DrawBars = true,
+                UseFrameBudget = true,
                 FormatSample = v => (Mathf.RoundToInt(v * 10.0f) / 10.0f) + " ms",
                 Parent = mainPanel,
             };
@@ -97,17 +147,36 @@ namespace FlaxEditor.Windows.Profiler
             _timeline = new Timeline
             {
                 Height = 340,
+                ContentOffset = 90,
+                FrameBudgetMs = historyView.FrameBudgetMs,
                 Parent = layout,
             };
 
-            // Table
+            // Timer table controls
             var style = Style.Current;
+            var timerToolbar = new ContainerControl
+            {
+                AnchorPreset = AnchorPresets.HorizontalStretchTop,
+                Offsets = new Margin(0, 0, 0, 29),
+                Parent = layout,
+            };
+            _timerSearch = new SearchBox
+            {
+                AnchorPreset = AnchorPresets.HorizontalStretchTop,
+                Offsets = new Margin(4, 4, 3, 26),
+                WatermarkText = "Search timers or groups...",
+                TooltipText = "Filter CPU timers and thread groups. Matching timers keep their parent path visible.",
+                Parent = timerToolbar,
+            };
+            _timerSearch.TextChanged += RefreshTable;
+
+            // Table
             var headerColor = style.SecondaryBackground;
             var textColor = style.Foreground;
             _table = new Table
             {
-                RowColorEven = Color.Transparent,
-                RowColorOdd = style.Background * 1.4f,
+                RowColorEven = style.Background * 1.08f,
+                RowColorOdd = style.Background * 1.28f,
                 Columns = new[]
                 {
                     new ColumnDefinition
@@ -182,6 +251,106 @@ namespace FlaxEditor.Windows.Profiler
             return Utilities.Utils.FormatBytesCount(Convert.ToUInt64(x));
         }
 
+        private void RefreshView()
+        {
+            if (_events != null)
+                UpdateView(_mainChart.SelectedSampleIndex, _showOnlyLastUpdateEvents);
+        }
+
+        private void RefreshTable()
+        {
+            if (_events == null || _tableRowsCache == null)
+                return;
+            var viewRange = _showOnlyLastUpdateEvents ? GetMainThreadUpdateRange() : ViewRange.Full;
+            UpdateTable(ref viewRange);
+        }
+
+        private Color GetBudgetColor(double timeMs, float alpha)
+        {
+            float ratio = (float)(timeMs / _historyView.FrameBudgetMs);
+            Color color = ratio >= 0.25f ? Color.Red : ratio >= 0.10f ? Color.Orange : ratio >= 0.05f ? Color.Yellow : Color.Green;
+            return color.AlphaMultiplied(alpha);
+        }
+
+        private void ApplyBudgetColors(Row row, double totalTimeMs, double selfTimeMs)
+        {
+            var totalColor = GetBudgetColor(totalTimeMs, totalTimeMs >= _historyView.FrameBudgetMs * 0.05f ? 0.34f : 0.10f);
+            var selfColor = GetBudgetColor(selfTimeMs, selfTimeMs >= _historyView.FrameBudgetMs * 0.05f ? 0.34f : 0.10f);
+            row.BackgroundColors[0] = totalColor.AlphaMultiplied(0.55f);
+            row.BackgroundColors[1] = totalColor;
+            row.BackgroundColors[2] = selfColor;
+            row.BackgroundColors[3] = totalColor;
+            row.BackgroundColors[4] = selfColor;
+        }
+
+        private bool BuildSearchMatches(ProfilerCPU.Event[] events, string searchText)
+        {
+            while (_eventSearchMatches.Count < events.Length)
+                _eventSearchMatches.Add(false);
+            for (int i = 0; i < events.Length; i++)
+                _eventSearchMatches[i] = false;
+            _eventSearchAncestors.Clear();
+
+            bool anyMatch = false;
+            for (int i = 0; i < events.Length; i++)
+            {
+                int depth = events[i].Depth;
+                while (_eventSearchAncestors.Count <= depth)
+                    _eventSearchAncestors.Add(-1);
+                _eventSearchAncestors[depth] = i;
+                string name = events[i].Name.Replace("::", ".");
+                if (name.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) == -1)
+                    continue;
+
+                anyMatch = true;
+                for (int ancestorDepth = 0; ancestorDepth <= depth; ancestorDepth++)
+                {
+                    int ancestor = _eventSearchAncestors[ancestorDepth];
+                    if (ancestor >= 0)
+                        _eventSearchMatches[ancestor] = true;
+                }
+            }
+            return anyMatch;
+        }
+
+        private Row GetTableRow()
+        {
+            Row row;
+            if (_tableRowsCache.Count != 0)
+            {
+                var last = _tableRowsCache.Count - 1;
+                row = _tableRowsCache[last];
+                _tableRowsCache.RemoveAt(last);
+            }
+            else
+            {
+                row = new Row
+                {
+                    Values = new object[6],
+                    BackgroundColors = new Color[6],
+                };
+            }
+            for (int i = 0; i < row.BackgroundColors.Length; i++)
+                row.BackgroundColors[i] = Color.Transparent;
+            row.Highlighted = false;
+            row.Selected = false;
+            return row;
+        }
+
+        private static long GetEventKey(int threadIndex, int eventIndex)
+        {
+            return ((long)threadIndex << 32) | (uint)eventIndex;
+        }
+
+        private bool IsThreadVisible(string name)
+        {
+            if (name == "Main")
+                return _showMainThread;
+            if (name != null && name.StartsWith("Job System", StringComparison.Ordinal))
+                return _showJobSystemThreads;
+            return _showOtherThreads;
+        }
+
         /// <inheritdoc />
         public override void Clear()
         {
@@ -206,6 +375,7 @@ namespace FlaxEditor.Windows.Profiler
         {
             _showOnlyLastUpdateEvents = showOnlyLastUpdateEvents;
             _mainChart.SelectedSampleIndex = selectedFrame;
+            _timeline.FrameBudgetMs = _historyView.FrameBudgetMs;
 
             if (_events == null)
                 return;
@@ -217,6 +387,7 @@ namespace FlaxEditor.Windows.Profiler
                 _tableRowsCache = new List<Row>();
 
             var viewRange = _showOnlyLastUpdateEvents ? GetMainThreadUpdateRange() : ViewRange.Full;
+            _timeline.FitToDuration(_mainChart.SelectedSample);
             UpdateTimeline(ref viewRange);
             UpdateTable(ref viewRange);
         }
@@ -278,16 +449,16 @@ namespace FlaxEditor.Windows.Profiler
             return ViewRange.Full;
         }
 
-        private void AddEvent(double startTime, int maxDepth, float xOffset, int depthOffset, int index, ProfilerCPU.Event[] events, ContainerControl parent)
+        private void AddEvent(double startTime, int maxDepth, float xOffset, int depthOffset, int threadIndex, int index, ProfilerCPU.Event[] events, ContainerControl parent)
         {
             ref ProfilerCPU.Event e = ref events[index];
 
             double length = e.End - e.Start;
             if (length <= 0.0)
                 return;
-            double scale = 100.0;
+            double scale = _timeline.PixelsPerMillisecond;
             float x = (float)((e.Start - startTime) * scale);
-            float width = (float)(length * scale);
+            float width = Mathf.Max((float)(length * scale), 1.0f);
             Timeline.Event control;
             if (_timelineEventsCache.Count != 0)
             {
@@ -299,10 +470,15 @@ namespace FlaxEditor.Windows.Profiler
             {
                 control = new Timeline.Event();
             }
-            control.Bounds = new Rectangle(x + xOffset, (e.Depth + depthOffset) * Timeline.Event.DefaultHeight, width, Timeline.Event.DefaultHeight - 1);
+            control.StartTimeMs = (float)(e.Start - startTime);
+            control.DurationMs = (float)length;
+            control.SourceKey = GetEventKey(threadIndex, index);
+            control.LinkedRow = null;
+            control.Bounds = new Rectangle(x + xOffset, Timeline.RulerHeight + (e.Depth + depthOffset) * Timeline.Event.DefaultHeight, width, Timeline.Event.DefaultHeight - 1);
             control.Name = e.Name.Replace("::", ".");
             control.TooltipText = string.Format("{0}, {1} ms", control.Name, ((int)(length * 1000.0) / 1000.0f));
             control.Parent = parent;
+            _timeline.RegisterEvent(control);
 
             // Spawn sub events
             int childrenDepth = e.Depth + 1;
@@ -315,7 +491,7 @@ namespace FlaxEditor.Windows.Profiler
                         break;
                     if (subDepth == childrenDepth)
                     {
-                        AddEvent(startTime, maxDepth, xOffset, depthOffset, index, events, parent);
+                        AddEvent(startTime, maxDepth, xOffset, depthOffset, threadIndex, index, events, parent);
                     }
                 }
             }
@@ -324,6 +500,7 @@ namespace FlaxEditor.Windows.Profiler
         private void UpdateTimeline(ref ViewRange viewRange)
         {
             var container = _timeline.EventsContainer;
+            _timeline.BeginContentUpdate();
 
             container.IsLayoutLocked = true;
             int idx = 0;
@@ -350,6 +527,7 @@ namespace FlaxEditor.Windows.Profiler
 
             container.UnlockChildrenRecursive();
             container.PerformLayout();
+            _timeline.EndContentUpdate();
         }
 
         private float UpdateTimelineInner(ref ViewRange viewRange)
@@ -391,6 +569,8 @@ namespace FlaxEditor.Windows.Profiler
             int depthOffset = 0;
             for (int i = 0; i < data.Length; i++)
             {
+                if (!IsThreadVisible(data[i].Name))
+                    continue;
                 var events = data[i].Events;
                 if (events == null)
                     continue;
@@ -422,7 +602,7 @@ namespace FlaxEditor.Windows.Profiler
                 {
                     trackLabel = new Timeline.TrackLabel();
                 }
-                trackLabel.Bounds = new Rectangle(0, depthOffset * Timeline.Event.DefaultHeight, xOffset, (maxDepth + 2) * Timeline.Event.DefaultHeight);
+                trackLabel.Bounds = new Rectangle(0, Timeline.RulerHeight + depthOffset * Timeline.Event.DefaultHeight, xOffset, (maxDepth + 2) * Timeline.Event.DefaultHeight);
                 trackLabel.Name = data[i].Name;
                 trackLabel.BackgroundColor = Style.Current.Background * 1.1f;
                 trackLabel.Parent = container;
@@ -435,14 +615,14 @@ namespace FlaxEditor.Windows.Profiler
                     {
                         if (viewRange.SkipEvent(ref e))
                             continue;
-                        AddEvent(startTime, maxDepth, xOffset, depthOffset, j, events, container);
+                        AddEvent(startTime, maxDepth, xOffset, depthOffset, i, j, events, container);
                     }
                 }
 
                 depthOffset += maxDepth + 2;
             }
 
-            return Timeline.Event.DefaultHeight * depthOffset;
+            return Timeline.RulerHeight + Timeline.Event.DefaultHeight * depthOffset;
         }
 
         private void UpdateTable(ref ViewRange viewRange)
@@ -464,19 +644,55 @@ namespace FlaxEditor.Windows.Profiler
             if (data == null || data.Length == 0)
                 return;
             float totalTimeMs = _mainChart.SelectedSample;
+            string searchText = _timerSearch.Text?.Trim();
+            bool searching = !string.IsNullOrEmpty(searchText);
+            int timerRowsAdded = 0;
 
-            // Add rows
+            // Add thread groups and timer rows
             for (int j = 0; j < data.Length; j++)
             {
+                if (!IsThreadVisible(data[j].Name))
+                    continue;
                 var events = data[j].Events;
                 if (events == null)
                     continue;
+
+                bool threadMatches = searching && data[j].Name?.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasTimerMatches = !searching || threadMatches || BuildSearchMatches(events, searchText);
+                if (!hasTimerMatches)
+                    continue;
+
+                double threadTime = 0;
+                int threadMemory = 0;
+                for (int i = 0; i < events.Length; i++)
+                {
+                    if (events[i].Depth == 0 && events[i].End > events[i].Start && !viewRange.SkipEvent(ref events[i]))
+                    {
+                        threadTime += events[i].End - events[i].Start;
+                        threadMemory += events[i].ManagedMemoryAllocation + events[i].NativeMemoryAllocation;
+                    }
+                }
+                var groupRow = GetTableRow();
+                groupRow.Values[0] = data[j].Name;
+                groupRow.Values[1] = totalTimeMs > Mathf.Epsilon ? (float)(threadTime / totalTimeMs * 100.0) : 0.0f;
+                groupRow.Values[2] = 0.0f;
+                groupRow.Values[3] = (float)threadTime;
+                groupRow.Values[4] = 0.0f;
+                groupRow.Values[5] = threadMemory;
+                ApplyBudgetColors(groupRow, threadTime, 0);
+                groupRow.TooltipText = $"Thread group: {threadTime:0.###} ms ({threadTime / _historyView.FrameBudgetMs * 100.0:0.0}% of the selected frame budget). Alt-click to expand or collapse everything inside.";
+                groupRow.Depth = 0;
+                groupRow.Width = _table.Width;
+                groupRow.Visible = true;
+                groupRow.Parent = _table;
 
                 for (int i = 0; i < events.Length; i++)
                 {
                     var e = events[i];
                     var time = Math.Max(e.End - e.Start, MinEventTimeMs);
                     if (e.End <= 0.0f || viewRange.SkipEvent(ref e))
+                        continue;
+                    if (searching && !threadMatches && !_eventSearchMatches[i])
                         continue;
 
                     // Count sub-events time
@@ -498,51 +714,55 @@ namespace FlaxEditor.Windows.Profiler
 
                     string name = e.Name.Replace("::", ".");
 
-                    Row row;
-                    if (_tableRowsCache.Count != 0)
+                    Row row = GetTableRow();
                     {
-                        var last = _tableRowsCache.Count - 1;
-                        row = _tableRowsCache[last];
-                        _tableRowsCache.RemoveAt(last);
-                    }
-                    else
-                    {
-                        row = new Row
-                        {
-                            Values = new object[6],
-                            BackgroundColors = new Color[6],
-                        };
-                        for (int k = 0; k < row.BackgroundColors.Length; k++)
-                            row.BackgroundColors[k] = Color.Transparent;
-                    }
-                    {
+                        double selfTime = Math.Max(time - subEventsTimeTotal, 0.0);
+
                         // Event
                         row.Values[0] = name;
 
                         // Total (%)
-                        float rowTotalTimePerc = (float)(time / totalTimeMs);
+                        float rowTotalTimePerc = totalTimeMs > Mathf.Epsilon ? (float)(time / totalTimeMs) : 0.0f;
                         row.Values[1] = (int)(rowTotalTimePerc * 1000.0f) / 10.0f;
-                        row.BackgroundColors[1] = Color.Red.AlphaMultiplied(Mathf.Min(1, rowTotalTimePerc) * 0.5f);
 
                         // Self (%)
-                        float rowSelfTimePerc = (float)((time - subEventsTimeTotal) / totalTimeMs);
+                        float rowSelfTimePerc = totalTimeMs > Mathf.Epsilon ? (float)(selfTime / totalTimeMs) : 0.0f;
                         row.Values[2] = (int)(rowSelfTimePerc * 1000.0f) / 10.0f;
-                        row.BackgroundColors[2] = Color.Red.AlphaMultiplied(Mathf.Min(1, rowSelfTimePerc) * 0.5f);
 
                         // Time ms
                         row.Values[3] = (float)((time * 10000.0f) / 10000.0f);
 
                         // Self ms
-                        row.Values[4] = (float)(((time - subEventsTimeTotal) * 10000.0f) / 10000.0f);
+                        row.Values[4] = (float)((selfTime * 10000.0f) / 10000.0f);
 
                         // Memory Alloc
                         row.Values[5] = subEventsMemoryTotal;
+                        ApplyBudgetColors(row, time, selfTime);
+                        row.TooltipText = $"Inclusive: {time:0.###} ms ({time / _historyView.FrameBudgetMs * 100.0:0.0}% budget). Self: {selfTime:0.###} ms ({selfTime / _historyView.FrameBudgetMs * 100.0:0.0}% budget). Alt-click a group to recursively expand or collapse it.";
                     }
-                    row.Depth = e.Depth;
+                    row.Depth = e.Depth + 1;
                     row.Width = _table.Width;
-                    row.Visible = e.Depth < 2;
+                    row.Visible = searching || e.Depth < 2;
                     row.Parent = _table;
+                    _timeline.LinkRow(GetEventKey(j, i), row);
+                    timerRowsAdded++;
                 }
+            }
+
+            if (timerRowsAdded == 0)
+            {
+                var messageRow = GetTableRow();
+                messageRow.Values[0] = "No completed CPU timer events in this frame - choose a neighboring frame";
+                messageRow.Values[1] = 0.0f;
+                messageRow.Values[2] = 0.0f;
+                messageRow.Values[3] = 0.0f;
+                messageRow.Values[4] = 0.0f;
+                messageRow.Values[5] = 0;
+                messageRow.TooltipText = "The frame summary was captured, but the CPU profiler had no completed timer events for this exact frame.";
+                messageRow.Depth = 0;
+                messageRow.Width = _table.Width;
+                messageRow.Visible = true;
+                messageRow.Parent = _table;
             }
         }
     }

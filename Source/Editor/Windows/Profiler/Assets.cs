@@ -36,8 +36,8 @@ namespace FlaxEditor.Windows.Profiler
         private StringBuilder _stringBuilder;
         private Asset[] _assetsCache;
 
-        public Assets()
-        : base("Assets")
+        public Assets(ProfilerHistoryView historyView)
+        : base("Assets", historyView)
         {
             // Layout
             var mainPanel = new Panel(ScrollBars.None)
@@ -48,7 +48,7 @@ namespace FlaxEditor.Windows.Profiler
             };
             
             // Chart
-            _memoryUsageChart = new SingleChart
+            _memoryUsageChart = new SingleChart(historyView)
             {
                 Title = "Assets Memory Usage (CPU)",
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,

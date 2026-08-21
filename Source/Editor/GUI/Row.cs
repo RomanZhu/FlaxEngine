@@ -15,6 +15,16 @@ namespace FlaxEditor.GUI
         private Table _table;
 
         /// <summary>
+        /// True when another view, such as a profiler timeline, is hovering this row.
+        /// </summary>
+        public bool Highlighted;
+
+        /// <summary>
+        /// True when another view, such as a profiler timeline, selected this row.
+        /// </summary>
+        public bool Selected;
+
+        /// <summary>
         /// Gets the parent table that owns this row.
         /// </summary>
         public Table Table => _table;
@@ -54,6 +64,9 @@ namespace FlaxEditor.GUI
             base.Draw();
 
             var style = Style.Current;
+
+            if (Highlighted && !Selected)
+                Render2D.FillRectangle(new Rectangle(Float2.Zero, Size), style.BackgroundHighlighted * 0.85f);
 
             if (IsMouseOver)
             {
@@ -113,6 +126,14 @@ namespace FlaxEditor.GUI
                     x += width;
                 }
             }
+
+            // Draw persistent selection after cell backgrounds so profiler budget colors cannot hide it.
+            if (Selected)
+            {
+                var bounds = new Rectangle(Float2.Zero, Size);
+                Render2D.FillRectangle(bounds, style.Selection.AlphaMultiplied(0.24f));
+                Render2D.DrawRectangle(bounds, style.SelectionBorder, 2.0f);
+            }
         }
 
         /// <inheritdoc />
@@ -128,6 +149,13 @@ namespace FlaxEditor.GUI
         {
             if (button == MouseButton.Left && Values != null && _table?.Columns != null)
             {
+                // Alt-clicking a group toggles its complete subtree. This is useful for large profiling and hierarchy tables.
+                if ((Root?.GetKey(KeyboardKeys.Alt) ?? false) && HasSubRows())
+                {
+                    SetAllSubRowsVisible(!GetSubRowsVisible());
+                    return true;
+                }
+
                 float x = 0;
                 int end = Mathf.Min(Values.Length, _table.Columns.Length);
                 for (int i = 0; i < end; i++)
@@ -149,7 +177,11 @@ namespace FlaxEditor.GUI
                                 if (arrowRect.Contains(location))
                                 {
                                     // Collapse/expand
-                                    SetSubRowsVisible(!GetSubRowsVisible());
+                                    bool visible = !GetSubRowsVisible();
+                                    if (Root?.GetKey(KeyboardKeys.Alt) ?? false)
+                                        SetAllSubRowsVisible(visible);
+                                    else
+                                        SetSubRowsVisible(visible);
                                     return true;
                                 }
                             }
@@ -191,6 +223,33 @@ namespace FlaxEditor.GUI
             return true;
         }
 
+        private bool HasSubRows()
+        {
+            int nextIndex = Parent.GetChildIndex(this) + 1;
+            return nextIndex < Parent.ChildrenCount && Parent.Children[nextIndex] is Row child && child.Depth > Depth;
+        }
+
+        /// <summary>
+        /// Reveals this row by expanding each hierarchy group along the path to it.
+        /// </summary>
+        public void RevealHierarchy()
+        {
+            Visible = true;
+            if (_table == null || Depth <= 0)
+                return;
+
+            int ancestorDepth = Depth - 1;
+            for (int i = IndexInParent - 1; i >= 0 && ancestorDepth >= 0; i--)
+            {
+                if (_table.Children[i] is Row ancestor && ancestor.Depth == ancestorDepth)
+                {
+                    ancestor.Visible = true;
+                    ancestor.SetSubRowsVisible(true);
+                    ancestorDepth--;
+                }
+            }
+        }
+
         private void SetSubRowsVisible(bool visible)
         {
             for (int i = Parent.GetChildIndex(this) + 1; i < Parent.ChildrenCount; i++)
@@ -201,6 +260,19 @@ namespace FlaxEditor.GUI
                         child.Visible = visible;
                     else if (child.Depth <= Depth)
                         break;
+                }
+            }
+        }
+
+        private void SetAllSubRowsVisible(bool visible)
+        {
+            for (int i = Parent.GetChildIndex(this) + 1; i < Parent.ChildrenCount; i++)
+            {
+                if (Parent.Children[i] is Row child)
+                {
+                    if (child.Depth <= Depth)
+                        break;
+                    child.Visible = visible;
                 }
             }
         }
