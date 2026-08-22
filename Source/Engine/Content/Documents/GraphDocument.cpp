@@ -8,9 +8,20 @@
 #include "Engine/Content/Assets/AnimationGraphFunction.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
 #include "Engine/Content/Assets/VisualScript.h"
+#include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/ContentImporters/Types.h"
+#include "Engine/Graphics/Shaders/Cache/ShaderStorage.h"
+#include "Engine/Utilities/Encryption.h"
+#if USE_EDITOR
+#ifndef COMPILE_WITH_MATERIAL_GRAPH
+#define COMPILE_WITH_MATERIAL_GRAPH 1
+#endif
+#include "Engine/Graphics/Materials/MaterialShader.h"
+#include "Engine/Tools/MaterialGenerator/MaterialLayer.h"
+#include "Engine/Tools/MaterialGenerator/MaterialGenerator.h"
+#endif
 #endif
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/Collections/Dictionary.h"
@@ -231,6 +242,83 @@ namespace
     bool IsParticleEmitterFunctionType(const StringView& typeName)
     {
         return typeName == TEXT("FlaxEngine.ParticleEmitterFunction");
+    }
+
+    bool IsMaterialType(const StringView& typeName)
+    {
+        return typeName == Material::TypeName;
+    }
+
+    StringAnsi MakeMaterialPropertiesJson()
+    {
+        JsonDocument json;
+        json.SetObject();
+        JsonAlloc& allocator = json.GetAllocator();
+        AddInt(json, "domain", static_cast<int32>(MaterialDomain::Surface), allocator);
+        AddInt(json, "blendMode", static_cast<int32>(MaterialBlendMode::Opaque), allocator);
+        AddInt(json, "shadingModel", static_cast<int32>(MaterialShadingModel::Lit), allocator);
+        json.AddMember("maskThreshold", JsonValue(0.3f), allocator);
+        json.AddMember("opacityThreshold", JsonValue(0.12f), allocator);
+        StringAnsi output;
+        CanonicalJsonError error;
+        Array<StringAnsi> order;
+        order.Add("blendMode");
+        order.Add("domain");
+        order.Add("maskThreshold");
+        order.Add("opacityThreshold");
+        order.Add("shadingModel");
+        CanonicalJsonWriter::Write(json, output, error, &order);
+        return output;
+    }
+
+    int32 JsonInt(const JsonDocument& json, const char* name, int32 fallback)
+    {
+        if (!json.HasMember(name))
+            return fallback;
+        const JsonValue& value = json[name];
+        if (value.IsInt())
+            return value.GetInt();
+        if (value.IsUint())
+            return static_cast<int32>(value.GetUint());
+        return fallback;
+    }
+
+    float JsonFloat(const JsonDocument& json, const char* name, float fallback)
+    {
+        if (!json.HasMember(name))
+            return fallback;
+        const JsonValue& value = json[name];
+        if (value.IsNumber())
+            return value.GetFloat();
+        return fallback;
+    }
+
+    void ParseMaterialInfo(const StringAnsiView& propertiesJson, MaterialInfo& info)
+    {
+        info.Domain = MaterialDomain::Surface;
+        info.BlendMode = MaterialBlendMode::Opaque;
+        info.ShadingModel = MaterialShadingModel::Lit;
+        info.UsageFlags = MaterialUsageFlags::None;
+        info.FeaturesFlags = MaterialFeaturesFlags::None;
+        info.DecalBlendingMode = MaterialDecalBlendingMode::Translucent;
+        info.TransparentLightingMode = MaterialTransparentLightingMode::Surface;
+        info.PostFxLocation = MaterialPostFxLocation::AfterPostProcessingPass;
+        info.CullMode = CullMode::Normal;
+        info.MaskThreshold = 0.3f;
+        info.OpacityThreshold = 0.12f;
+        info.TessellationMode = TessellationMethod::None;
+        info.MaxTessellationFactor = 15;
+        if (propertiesJson.Length() == 0)
+            return;
+        JsonDocument json;
+        json.Parse(propertiesJson.Get(), propertiesJson.Length());
+        if (json.HasParseError() || !json.IsObject())
+            return;
+        info.Domain = static_cast<MaterialDomain>(JsonInt(json, "domain", static_cast<int32>(info.Domain)));
+        info.BlendMode = static_cast<MaterialBlendMode>(JsonInt(json, "blendMode", static_cast<int32>(info.BlendMode)));
+        info.ShadingModel = static_cast<MaterialShadingModel>(JsonInt(json, "shadingModel", static_cast<int32>(info.ShadingModel)));
+        info.MaskThreshold = JsonFloat(json, "maskThreshold", info.MaskThreshold);
+        info.OpacityThreshold = JsonFloat(json, "opacityThreshold", info.OpacityThreshold);
     }
 
     StringAnsi MakeVisualScriptPropertiesJson(const StringView& baseType, int32 flags)
@@ -1395,6 +1483,42 @@ namespace
         context.Data.Header.TypeName = arguments->TypeName;
         if (arguments->ID.IsValid())
             context.Data.Header.ID = arguments->ID;
+        if (IsMaterialType(arguments->TypeName))
+        {
+            context.Data.SerializedVersion = 20;
+            context.SkipMetadata = true;
+            if (context.AllocateChunk(SHADER_FILE_CHUNK_VISJECT_SURFACE))
+                return CreateAssetResult::CannotAllocateChunk;
+            context.Data.Header.Chunks[SHADER_FILE_CHUNK_VISJECT_SURFACE]->Data.Copy(ToSpan(*arguments->Surface));
+            ShaderStorage::Header20 shaderHeader;
+            Platform::MemoryClear(&shaderHeader, sizeof(shaderHeader));
+            ParseMaterialInfo(arguments->PropertiesJson, shaderHeader.Material.Info);
+            shaderHeader.Material.GraphVersion = MATERIAL_GRAPH_VERSION;
+#if USE_EDITOR
+            if (context.IsArtifactStagingMode())
+            {
+                if (context.AllocateChunk(SHADER_FILE_CHUNK_MATERIAL_PARAMS) || context.AllocateChunk(SHADER_FILE_CHUNK_SOURCE))
+                    return CreateAssetResult::CannotAllocateChunk;
+                MemoryReadStream stream(arguments->Surface->Get(), arguments->Surface->Count());
+                MaterialLayer* layer = MaterialLayer::Load(context.Data.Header.ID, &stream, shaderHeader.Material.Info, TEXT("GraphDocument"));
+                MaterialGenerator generator;
+                generator.AddLayer(layer);
+                MemoryWriteStream source(64 * 1024);
+                MaterialInfo generatedInfo = shaderHeader.Material.Info;
+                if (generator.Generate(source, generatedInfo, context.Data.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS]->Data))
+                {
+                    Delete(layer);
+                    return CreateAssetResult::Error;
+                }
+                Encryption::EncryptBytes(static_cast<byte*>(source.GetHandle()), source.GetPosition());
+                context.Data.Header.Chunks[SHADER_FILE_CHUNK_SOURCE]->Data.Copy(ToSpan(source));
+                shaderHeader.Material.Info = generatedInfo;
+                Delete(layer);
+            }
+#endif
+            context.Data.CustomData.Copy(&shaderHeader);
+            return CreateAssetResult::Ok;
+        }
         context.Data.SerializedVersion = 1;
         if (context.AllocateChunk(0))
             return CreateAssetResult::CannotAllocateChunk;
@@ -1479,7 +1603,8 @@ bool GraphDocumentCodec::IsSupportedType(const StringView& typeName)
         typeName == AnimationGraph::TypeName ||
         IsVisualScriptType(typeName) ||
         IsBehaviorTreeType(typeName) ||
-        IsParticleEmitterFunctionType(typeName);
+        IsParticleEmitterFunctionType(typeName) ||
+        IsMaterialType(typeName);
 }
 
 const Char* GraphDocumentCodec::ExtensionForType(const StringView& typeName)
@@ -1496,6 +1621,8 @@ const Char* GraphDocumentCodec::ExtensionForType(const StringView& typeName)
         return TEXT(".behaviortree");
     if (IsParticleEmitterFunctionType(typeName))
         return TEXT(".particlefunction");
+    if (IsMaterialType(typeName))
+        return TEXT(".material");
     return nullptr;
 }
 
@@ -1515,6 +1642,8 @@ bool GraphDocumentCodec::TypeForExtension(const StringView& extension, String& t
         typeName = TEXT("FlaxEngine.BehaviorTree");
     else if (value == TEXT("particlefunction") || value == TEXT(".particlefunction"))
         typeName = TEXT("FlaxEngine.ParticleEmitterFunction");
+    else if (value == TEXT("material") || value == TEXT(".material"))
+        typeName = Material::TypeName;
     else
         return true;
     return false;
@@ -1759,6 +1888,20 @@ bool GraphDocumentCodec::CreateStarter(const StringView& typeName, GraphDocument
         graph.Parameters[0].IsPublic = false;
         graph.Parameters[0].Value = Guid::Empty;
     }
+    else if (IsMaterialType(typeName))
+    {
+        auto& rootNode = graph.Nodes.AddOne();
+        rootNode.ID = 1;
+        rootNode.Type = GRAPH_NODE_MAKE_TYPE(1, 1);
+        rootNode.Boxes.Resize(15);
+        const VariantType::Types boxTypes[] = {
+            VariantType::Void, VariantType::Float3, VariantType::Float, VariantType::Float3, VariantType::Float,
+            VariantType::Float, VariantType::Float, VariantType::Float, VariantType::Float3, VariantType::Float,
+            VariantType::Float, VariantType::Float3, VariantType::Float, VariantType::Float3, VariantType::Float3
+        };
+        for (int32 i = 0; i < 15; i++)
+            rootNode.Boxes[i] = VisjectGraphBox(&rootNode, static_cast<byte>(i), boxTypes[i]);
+    }
     else if (IsVisualScriptType(typeName) || IsBehaviorTreeType(typeName))
     {
         // Empty Visject surface. Visual Script metadata lives in PropertiesJson.
@@ -1778,6 +1921,8 @@ bool GraphDocumentCodec::CreateStarter(const StringView& typeName, GraphDocument
         return true;
     if (IsVisualScriptType(typeName))
         document.PropertiesJson = MakeVisualScriptPropertiesJson(TEXT("FlaxEngine.Script"), 0);
+    else if (IsMaterialType(typeName))
+        document.PropertiesJson = MakeMaterialPropertiesJson();
     return false;
 }
 

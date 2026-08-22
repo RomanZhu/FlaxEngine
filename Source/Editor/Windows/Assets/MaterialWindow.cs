@@ -406,6 +406,12 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override bool SaveToOriginal()
         {
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+            {
+                FillMaterialInfo(out var info);
+                return CanonicalGraphDocuments.SaveCloneSurface(_item, _asset.LoadSurface(true), CanonicalGraphDocuments.MaterialProperties(info));
+            }
+
             // Copy shader cache from the temporary Particle Emitter (will skip compilation on Reload - faster)
             Guid dstId = _item.ID;
             Guid srcId = _asset.ID;

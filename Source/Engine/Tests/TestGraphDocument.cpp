@@ -3,6 +3,7 @@
 #include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
 #include "Engine/Content/Assets/VisualScript.h"
+#include "Engine/Content/Assets/Material.h"
 #include "Engine/Core/Math/Quaternion.h"
 #include "Engine/Core/Math/Transform.h"
 #include "Engine/Core/Math/Vector2.h"
@@ -273,4 +274,34 @@ TEST_CASE("Graph documents support visual script, behavior tree, and particle fu
     REQUIRE(particleFunction.Nodes.Count() == 1);
     CHECK(particleFunction.Nodes[0].GroupID == 16);
     CHECK(particleFunction.Nodes[0].TypeID == 2);
+}
+
+TEST_CASE("Graph documents support authored material text without generated shader source")
+{
+    AssetPipelineDiagnostic diagnostic;
+    CHECK(GraphDocumentCodec::IsSupportedType(Material::TypeName));
+    CHECK(StringView(GraphDocumentCodec::ExtensionForType(Material::TypeName)) == TEXT(".material"));
+    String typeName;
+    REQUIRE_FALSE(GraphDocumentCodec::TypeForExtension(TEXT("material"), typeName));
+    CHECK(typeName == Material::TypeName);
+
+    GraphDocument document;
+    REQUIRE_FALSE(GraphDocumentCodec::CreateStarter(Material::TypeName, document, diagnostic));
+    REQUIRE(document.Nodes.Count() == 1);
+    CHECK(document.Nodes[0].GroupID == 1);
+    CHECK(document.Nodes[0].TypeID == 1);
+    CHECK(document.Nodes[0].Pins.Count() == 15);
+    CHECK(document.PropertiesJson.Contains("domain"));
+    CHECK(document.PropertiesJson.Contains("shadingModel"));
+    StringAnsi json;
+    REQUIRE_FALSE(GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic));
+    CHECK_FALSE(json.Contains("HLSL"));
+    CHECK_FALSE(json.Contains("SHADER_FILE_CHUNK_SOURCE"));
+    GraphDocumentCodec codec;
+    GraphDocumentSnapshot snapshot;
+    REQUIRE_FALSE(codec.DecodeGraph(json, snapshot, diagnostic));
+    CHECK(snapshot.Document.PropertiesJson.Contains("blendMode"));
+    Array<byte> compiled;
+    REQUIRE_FALSE(GraphDocumentCompiler::CompileDocument(snapshot.Document, compiled, diagnostic));
+    CHECK(compiled.Count() > 0);
 }

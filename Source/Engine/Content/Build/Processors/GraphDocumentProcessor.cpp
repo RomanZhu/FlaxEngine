@@ -11,6 +11,7 @@
 #include "Engine/Content/Assets/AnimationGraphFunction.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
 #include "Engine/Content/Assets/VisualScript.h"
+#include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
@@ -49,6 +50,7 @@ AssetProcessorDescriptor GraphDocumentProcessor::CreateDescriptor()
     descriptor.SourceExtensions.Add(TEXT(".visualscript"));
     descriptor.SourceExtensions.Add(TEXT(".behaviortree"));
     descriptor.SourceExtensions.Add(TEXT(".particlefunction"));
+    descriptor.SourceExtensions.Add(TEXT(".material"));
     descriptor.SourceKinds.Add(AssetSourceKind::TextDocument);
     descriptor.DocumentTypes.Add(MaterialFunction::TypeName);
     descriptor.DocumentTypes.Add(AnimationGraphFunction::TypeName);
@@ -56,6 +58,7 @@ AssetProcessorDescriptor GraphDocumentProcessor::CreateDescriptor()
     descriptor.DocumentTypes.Add(VisualScript::TypeName);
     descriptor.DocumentTypes.Add(TEXT("FlaxEngine.BehaviorTree"));
     descriptor.DocumentTypes.Add(TEXT("FlaxEngine.ParticleEmitterFunction"));
+    descriptor.DocumentTypes.Add(Material::TypeName);
     descriptor.MainOutputType = MaterialFunction::TypeName;
     descriptor.SettingsSchemaVersion = 1;
     descriptor.ImplementationVersion = ImplementationVersion;

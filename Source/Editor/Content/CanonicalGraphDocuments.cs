@@ -29,7 +29,8 @@ namespace FlaxEditor.Content
                    extension.Equals(".animgraph", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".visualscript", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".behaviortree", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".particlefunction", StringComparison.OrdinalIgnoreCase);
+                   extension.Equals(".particlefunction", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".material", StringComparison.OrdinalIgnoreCase);
         }
 
         public static string TypeNameFromPath(string path)
@@ -47,6 +48,8 @@ namespace FlaxEditor.Content
                 return typeof(BehaviorTree).FullName;
             if (extension.Equals(".particlefunction", StringComparison.OrdinalIgnoreCase))
                 return typeof(ParticleEmitterFunction).FullName;
+            if (extension.Equals(".material", StringComparison.OrdinalIgnoreCase))
+                return typeof(Material).FullName;
             return null;
         }
 
@@ -54,6 +57,15 @@ namespace FlaxEditor.Content
         {
             var type = string.IsNullOrEmpty(baseType) ? "FlaxEngine.Script" : baseType;
             return "{\n  \"baseType\": \"" + type + "\",\n  \"flags\": " + flags + "\n}\n";
+        }
+
+        public static string MaterialProperties(MaterialInfo info)
+        {
+            return "{\n  \"blendMode\": " + (int)info.BlendMode +
+                   ",\n  \"domain\": " + (int)info.Domain +
+                   ",\n  \"maskThreshold\": " + info.MaskThreshold.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                   ",\n  \"opacityThreshold\": " + info.OpacityThreshold.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                   ",\n  \"shadingModel\": " + (int)info.ShadingModel + "\n}\n";
         }
 
         public static T LoadClone<T>(AssetItem item) where T : Asset

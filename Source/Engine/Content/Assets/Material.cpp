@@ -167,7 +167,7 @@ Asset::LoadResult Material::load()
 #if COMPILE_WITH_SHADER_COMPILER
 
     // Check if current engine has different materials version or convert it by force or has no source generated at all
-    if (_shaderHeader.Material.GraphVersion != MATERIAL_GRAPH_VERSION
+    if (!IsUsingGeneratedArtifact() && (_shaderHeader.Material.GraphVersion != MATERIAL_GRAPH_VERSION
 #if MATERIAL_AUTO_GENERATE_MISSING_SOURCE
         || !HasChunk(SHADER_FILE_CHUNK_SOURCE)
 #endif
@@ -176,7 +176,7 @@ Asset::LoadResult Material::load()
         // Set to true to enable force GPU shader regeneration (don't commit it)
         || false
 #endif
-    )
+    ))
     {
         // Guard file with the lock during shader generation (prevents FlaxStorage::Tick from messing with the file)
         auto lock = Storage->Lock();
@@ -329,7 +329,7 @@ Asset::LoadResult Material::load()
 
         // Save to file
 #if USE_EDITOR
-        if (SaveShaderAsset())
+        if (!IsUsingGeneratedArtifact() && SaveShaderAsset())
         {
             LOG(Error, "Cannot save \'{0}\'", name);
             return LoadResult::Failed;

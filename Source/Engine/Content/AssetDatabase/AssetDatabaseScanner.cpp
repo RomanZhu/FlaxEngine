@@ -23,7 +23,7 @@ namespace
             TEXT("wav"), TEXT("mp3"), TEXT("ogg"), TEXT("flac"),
             TEXT("ttf"), TEXT("otf"),
             TEXT("materialfunction"), TEXT("animgraphfunction"), TEXT("animgraph"),
-            TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction")
+            TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction"), TEXT("material")
         };
         for (const Char* value : supported)
         {

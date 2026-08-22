@@ -1151,6 +1151,8 @@ namespace FlaxEditor.Surface
                     surface = materialFunction.LoadSurface();
                 else if (_asset is AnimationGraphFunction animationGraphFunction)
                     surface = animationGraphFunction.LoadSurface();
+                else if (_asset is Material material)
+                    surface = material.LoadSurface(true);
                 return CanonicalGraphDocuments.SaveCloneSurface(_item, surface);
             }
             return base.SaveToOriginal();
