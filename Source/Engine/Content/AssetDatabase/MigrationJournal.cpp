@@ -265,6 +265,9 @@ bool MigrationSession::SaveAtomic(const StringView& path, const MigrationJournal
 
 bool MigrationSession::Load(const StringView& path, MigrationJournal& journal, AssetPipelineDiagnostic& diagnostic)
 {
+    const String value(path);
+    if (FileSystem::GetExtension(path).ToLower() == TEXT("tmp") || value.EndsWith(TEXT(".json.tmp")))
+        return Fail(diagnostic, TEXT("Incomplete migration journal staging files are not committed state."));
     Array<byte> bytes;
     if (File::ReadAllBytes(path, bytes))
         return Fail(diagnostic, TEXT("Migration journal could not be read."));

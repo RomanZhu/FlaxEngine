@@ -51,6 +51,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
+            CanonicalGraphDocuments.EnsureCanAuthor(typeof(AnimationGraph).FullName, outputPath);
             if (CanonicalGraphDocuments.UseTextGraphAssets)
             {
                 if (AssetDatabaseFacade.CreateGraphDocument(outputPath, typeof(AnimationGraph).FullName) == Guid.Empty)

@@ -21,6 +21,12 @@ namespace FlaxEditor.Content
             }
         }
 
+        public static void EnsureCanAuthor(string typeName, string outputPath)
+        {
+            if (!ConvertedTypePolicy.AllowsLegacyBinaryAuthoring(typeName, outputPath))
+                throw new InvalidOperationException("Converted asset types cannot write authoritative .flax files.");
+        }
+
         public static bool IsGraphDocumentPath(string path)
         {
             var extension = Path.GetExtension(path);

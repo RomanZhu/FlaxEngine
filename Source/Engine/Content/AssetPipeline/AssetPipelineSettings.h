@@ -32,6 +32,9 @@ public:
     API_FIELD(Attributes="EditorOrder(50), EditorDisplay(\"Rollout\")")
     bool AllowLastGoodArtifacts = false;
 
+    API_FIELD(Attributes="EditorOrder(60), EditorDisplay(\"Rollout\")")
+    bool LockConvertedTypeAuthoring = false;
+
 public:
     API_FIELD(Attributes="EditorOrder(100), EditorDisplay(\"Library\"), Limit(1, 1048576)")
     int32 DiskQuotaGigabytes = 100;

@@ -148,5 +148,10 @@ TEST_CASE("Migration rollback refuses post-migration edits and corrupt journals"
     CHECK(MigrationSession::ParseCanonicalJson("{\"formatVersion\":1}", journal, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::MigrationFailed);
 
+    const String staging = root / TEXT("journal.json.tmp");
+    REQUIRE_FALSE(File::WriteAllBytes(staging, legacy, ARRAY_COUNT(legacy)));
+    CHECK(MigrationSession::Load(staging, journal, diagnostic));
+    CHECK(diagnostic.Message.Contains(TEXT("staging")));
+
     FileSystem::DeleteDirectory(root, true);
 }

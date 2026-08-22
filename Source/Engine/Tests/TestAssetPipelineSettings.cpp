@@ -19,6 +19,7 @@ TEST_CASE("Asset pipeline rollout settings")
         CHECK_FALSE(settings.StrictAssetMetadata);
         CHECK_FALSE(settings.AutoCreateMetaInEditor);
         CHECK_FALSE(settings.AllowLastGoodArtifacts);
+        CHECK_FALSE(settings.LockConvertedTypeAuthoring);
     }
 
     SECTION("Dependent flags reject unsupported combinations")
@@ -43,6 +44,10 @@ TEST_CASE("Asset pipeline rollout settings")
         settings = AssetPipelineSettings();
         settings.AllowLastGoodArtifacts = true;
         CHECK_FALSE(settings.IsValid(diagnostic));
+
+        settings = AssetPipelineSettings();
+        settings.LockConvertedTypeAuthoring = true;
+        CHECK_FALSE(settings.IsValid(diagnostic));
     }
 
     SECTION("Fully enabled rollout is valid")
@@ -53,6 +58,7 @@ TEST_CASE("Asset pipeline rollout settings")
         settings.StrictAssetMetadata = true;
         settings.AutoCreateMetaInEditor = true;
         settings.AllowLastGoodArtifacts = true;
+        settings.LockConvertedTypeAuthoring = true;
         CHECK(settings.IsValid(diagnostic));
     }
 }

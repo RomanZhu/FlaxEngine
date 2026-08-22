@@ -50,6 +50,7 @@ namespace FlaxEditor.Content.Create
         /// <inheritdoc />
         public override bool Create()
         {
+            CanonicalGraphDocuments.EnsureCanAuthor(typeof(VisualScript).FullName, ResultUrl);
             if (CanonicalGraphDocuments.UseTextGraphAssets)
             {
                 var properties = CanonicalGraphDocuments.VisualScriptProperties(_options.BaseClass?.FullName, 0);
