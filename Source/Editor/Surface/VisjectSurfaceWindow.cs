@@ -1132,6 +1132,31 @@ namespace FlaxEditor.Surface
         }
 
         /// <inheritdoc />
+        protected override TAsset LoadAsset()
+        {
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return CanonicalGraphDocuments.LoadClone<TAsset>(_item);
+            return base.LoadAsset();
+        }
+
+        /// <inheritdoc />
+        protected override bool SaveToOriginal()
+        {
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+            {
+                byte[] surface = null;
+                if (_asset is AnimationGraph animationGraph)
+                    surface = animationGraph.LoadSurface();
+                else if (_asset is MaterialFunction materialFunction)
+                    surface = materialFunction.LoadSurface();
+                else if (_asset is AnimationGraphFunction animationGraphFunction)
+                    surface = animationGraphFunction.LoadSurface();
+                return CanonicalGraphDocuments.SaveCloneSurface(_item, surface);
+            }
+            return base.SaveToOriginal();
+        }
+
+        /// <inheritdoc />
         protected override void UpdateToolstrip()
         {
             _saveButton.Enabled = IsEdited;

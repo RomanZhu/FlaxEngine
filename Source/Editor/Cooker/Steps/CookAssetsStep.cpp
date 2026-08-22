@@ -1230,18 +1230,20 @@ bool CookAssetsStep::Perform(CookingData& data)
         // Converted imported sources are already target-processed compatibility assets. Resolve exact bytes and
         // feed them directly to the existing package writer instead of cooking the host-editor artifact.
         AssetRecord canonicalRecord;
-        const bool hasCanonicalRecord = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord) &&
-            canonicalRecord.SourceKind == AssetSourceKind::ImportedSource;
-        const bool isCanonicalTexture = hasCanonicalRecord && canonicalRecord.ProcessorID == TEXT("Flax.Texture") &&
+        const bool foundCanonical = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord);
+        const bool hasImportedCanonical = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::ImportedSource;
+        const bool isCanonicalTexture = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Texture") &&
             canonicalRecord.TypeName == Texture::TypeName;
-        const bool isCanonicalModel = hasCanonicalRecord && canonicalRecord.ProcessorID == TEXT("Flax.Model");
-        if (isCanonicalTexture || isCanonicalModel)
+        const bool isCanonicalModel = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Model");
+        const bool isCanonicalGraph = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
+            canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument");
+        if (isCanonicalTexture || isCanonicalModel || isCanonicalGraph)
         {
             ArtifactRequest request;
             request.AssetID = assetId;
             request.Target = cookArtifactTarget;
             request.OutputKind = "runtime";
-            request.RequiredCompatibility = isCanonicalTexture ? "flax-texture-v4" : "flax-model-runtime-v1";
+            request.RequiredCompatibility = isCanonicalTexture ? "flax-texture-v4" : (isCanonicalModel ? "flax-model-runtime-v1" : "flax-graph-document-v1");
             request.Policy = ArtifactResolvePolicy::Exact;
             ResolvedArtifact artifact;
             AssetPipelineDiagnostic diagnostic;

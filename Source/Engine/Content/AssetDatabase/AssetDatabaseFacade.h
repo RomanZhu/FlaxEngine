@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AssetDatabaseScanner.h"
+#include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Scripting/ScriptingType.h"
 
 #if COMPILE_WITH_TEXTURE_TOOL
@@ -108,4 +109,16 @@ public:
     API_FUNCTION() static String GetModelBuildStatus(const Guid& assetID);
     API_FUNCTION() static AssetPipelineDiagnostic GetModelBuildDiagnostic(const Guid& assetID);
 #endif
+
+    /// <summary>Creates a canonical graph document plus sidecar and queues its first exact build.</summary>
+    API_FUNCTION() static Guid CreateGraphDocument(const StringView& outputPath, const StringView& typeName);
+
+    /// <summary>Loads compiled Visject surface bytes from a canonical graph document without writing.</summary>
+    API_FUNCTION() static BytesContainer LoadGraphSurface(const StringView& path);
+
+    /// <summary>Encodes Visject surface bytes into a canonical graph document and queues an exact build.</summary>
+    API_FUNCTION() static bool SaveGraphSurface(const StringView& path, const BytesContainer& surface, bool allowOverwriteConflict = false);
+
+    /// <summary>Queues an exact graph document rebuild.</summary>
+    API_FUNCTION() static bool RebuildGraph(const Guid& assetID);
 };

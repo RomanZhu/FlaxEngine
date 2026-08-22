@@ -17,7 +17,7 @@ struct FLAXENGINE_API AssetDocumentSnapshot
     Array<AssetDependency> Dependencies;
 };
 
-/// <summary>Decodes authored bytes into a validated immutable snapshot.</summary>
+/// <summary>Decodes authored bytes into a validated immutable snapshot. Does not require BinaryAsset.</summary>
 class FLAXENGINE_API IAssetDocumentCodec
 {
 public:
@@ -37,7 +37,7 @@ public:
     virtual bool Validate(const AssetDocumentSnapshot& snapshot, AssetPipelineDiagnostic& diagnostic) const = 0;
 };
 
-/// <summary>Upgrades an older immutable document into the requested canonical version.</summary>
+/// <summary>Upgrades an older immutable document into the requested canonical version without silent headless writes.</summary>
 class FLAXENGINE_API IAssetDocumentMigrator
 {
 public:
@@ -47,7 +47,7 @@ public:
     virtual bool Migrate(const AssetDocumentSnapshot& source, int32 targetVersion, StringAnsi& canonicalText, AssetPipelineDiagnostic& diagnostic) const = 0;
 };
 
-/// <summary>Compiles one immutable document into compatibility artifact bytes.</summary>
+/// <summary>Compiles one immutable document snapshot into compatibility artifact bytes.</summary>
 class FLAXENGINE_API IAssetDocumentCompiler
 {
 public:

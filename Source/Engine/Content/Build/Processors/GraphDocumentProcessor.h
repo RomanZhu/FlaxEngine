@@ -12,6 +12,7 @@ class FLAXENGINE_API GraphDocumentPreparedPayload : public PreparedAssetPayload
 {
 public:
     ContentHash SemanticHash;
+    ContentHash FunctionInterfaceHash;
     int32 SurfaceBytes = 0;
     int32 NodeCount = 0;
 
@@ -25,7 +26,7 @@ public:
 class FLAXENGINE_API GraphDocumentProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 1;
+    static constexpr uint32 ImplementationVersion = 2;
     static constexpr uint32 RuntimeFormatVersion = 1;
 
     static const String& ProcessorID();
@@ -33,6 +34,7 @@ public:
     static bool Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic);
     static bool BuildOutputKey(const PreparedAsset& prepared, const ArtifactTarget& target, const StringAnsiView& outputKind,
         ArtifactKey& key, Array<ArtifactKeyComponent>& components, AssetPipelineDiagnostic& diagnostic);
+    static bool ExtractSemanticInterface(const AssetRecord& record, AssetSemanticInterface& result, AssetPipelineDiagnostic& diagnostic);
 
 private:
     static bool Build(ArtifactBuildContext& context, AssetPipelineDiagnostic& diagnostic);

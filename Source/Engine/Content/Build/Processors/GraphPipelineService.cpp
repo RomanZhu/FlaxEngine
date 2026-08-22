@@ -1,37 +1,32 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
-#include "TexturePipelineService.h"
-
-#if COMPILE_WITH_TEXTURE_TOOL && COMPILE_WITH_ASSETS_IMPORTER
-
-#include "TextureArtifactValidator.h"
-#include "TextureProcessor.h"
-#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
-#include "ModelPipelineService.h"
-#include "ModelProcessorSettings.h"
-#endif
-#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
-#include "GraphDocumentProcessor.h"
 #include "GraphPipelineService.h"
-#endif
-#include "Engine/Content/Assets/Texture.h"
+
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+
+#include "GraphDocumentProcessor.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/Content.h"
-#include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/ArtifactBuildContext.h"
+#include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
-#include "Engine/Engine/EngineService.h"
+#include "Engine/Content/Documents/GraphDocument.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Core/Log.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/FileSystem.h"
 #include "Engine/Scripting/Scripting.h"
+#include "TexturePipelineService.h"
 #include <memory>
 #include <mutex>
 
 namespace
 {
-    struct TextureExecution
+    struct GraphExecution
     {
         PreparedAsset Prepared;
         ArtifactTarget Target;
@@ -42,10 +37,9 @@ namespace
         std::unique_ptr<ArtifactBuildContext> Context;
     };
 
-    struct TexturePipelineState
+    struct GraphPipelineState
     {
         std::mutex Locker;
-        std::unique_ptr<AssetBuildService> Builds;
         AssetProcessorRegistration Registration;
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
@@ -54,9 +48,9 @@ namespace
         bool Initialized = false;
     };
 
-    TexturePipelineState& State()
+    GraphPipelineState& State()
     {
-        static TexturePipelineState state;
+        static GraphPipelineState state;
         return state;
     }
 
@@ -67,57 +61,9 @@ namespace
         diagnostic.Code = code;
         diagnostic.Stage = stage;
         diagnostic.AssetGuid = assetID;
-        diagnostic.ProcessorId = TextureProcessorSettings::ProcessorID();
+        diagnostic.ProcessorId = GraphDocumentProcessor::ProcessorID();
         diagnostic.Message = message;
         return true;
-    }
-
-    bool EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
-    {
-        TexturePipelineState& state = State();
-        std::lock_guard<std::mutex> lock(state.Locker);
-        if (state.Initialized)
-            return false;
-
-        AssetProcessorDescriptor existing;
-        if (!AssetProcessorRegistry::Get().TryGetDescriptor(TextureProcessorSettings::ProcessorID(), existing) &&
-            AssetProcessorRegistry::Get().Register(TextureProcessor::CreateDescriptor(), state.Registration, diagnostic))
-            return true;
-
-        state.Builds = std::make_unique<AssetBuildService>();
-        AssetBuildServiceLimits limits;
-        limits.MaximumWorkers = 2;
-        limits.MaximumMemoryBytes = 4ull * 1024ull * 1024ull * 1024ull;
-        limits.MaximumExternalTools = 1;
-        if (state.Builds->Initialize(Globals::ProjectLibraryFolder, limits, diagnostic))
-        {
-            state.Builds.reset();
-            state.Registration.Reset();
-            return true;
-        }
-#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
-        if (GraphPipelineService::EnsureInitialized(diagnostic))
-        {
-            state.Builds.reset();
-            state.Registration.Reset();
-            return true;
-        }
-#endif
-        state.Initialized = true;
-        ArtifactResolutionPlanProvider provider = [](const AssetRecord& record, const ArtifactRequest& request,
-            ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& planDiagnostic)
-        {
-#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
-            if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
-                return ModelPipelineService::CreatePlan(record, request, plan, planDiagnostic);
-#endif
-            if (record.ProcessorID == GraphDocumentProcessor::ProcessorID())
-                return GraphPipelineService::CreatePlan(record, request, plan, planDiagnostic);
-            return TexturePipelineService::CreatePlan(record, request, plan, planDiagnostic);
-        };
-        ArtifactResolver::Get().Configure(AssetDatabase::Get(), *state.Builds, Globals::ProjectLibraryFolder,
-            TexturePipelineService::GetHostTarget(), provider);
-        return false;
     }
 
     void QueryCurrentState(const Guid& assetID, uint64& revision, ArtifactKey& fingerprint)
@@ -130,13 +76,13 @@ namespace
             return;
         }
         revision = record.DatabaseRevision;
-        TexturePipelineState& state = State();
+        GraphPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
-        const ArtifactKey* current = state.Fingerprints.TryGet(assetID);
-        fingerprint = current ? *current : ArtifactKey();
+        const ArtifactKey* value = state.Fingerprints.TryGet(assetID);
+        fingerprint = value ? *value : ArtifactKey();
     }
 
-    void QueueTextureHotSwap(const ArtifactManifest& manifest)
+    void QueueHotSwap(const ArtifactManifest& manifest, const String& typeName)
     {
         const ArtifactManifestOutput* runtime = nullptr;
         for (const ArtifactManifestOutput& output : manifest.Outputs)
@@ -149,96 +95,58 @@ namespace
         }
         if (!runtime)
             return;
-
         ArtifactStoragePath storagePath;
         AssetPipelineDiagnostic diagnostic;
         if (ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
             return;
         ResolvedArtifact artifact;
         artifact.AssetID = manifest.AssetID;
-        artifact.TypeName = Texture::TypeName;
+        artifact.TypeName = typeName;
         artifact.StoragePath = storagePath;
         artifact.OutputKind = TEXT("runtime");
         artifact.Key = String(runtime->Key.ToString());
         artifact.StorageKind = ArtifactStorageKind::Generated;
         artifact.IsExact = true;
-        artifact.IsLastGood = false;
         Scripting::InvokeOnUpdate([artifact]()
         {
             Asset* asset = Content::GetAsset(artifact.AssetID);
-            if (!asset || asset->GetTypeName() != Texture::TypeName)
+            auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
+            if (!binary || !binary->IsLoaded() || !binary->IsUsingGeneratedArtifact() || binary->GetTypeName() != artifact.TypeName ||
+                (binary->GetArtifactKey() == artifact.Key && binary->IsUsingExactArtifact()))
                 return;
-            auto* texture = static_cast<Texture*>(asset);
-            if (texture->GetArtifactKey() == artifact.Key && texture->IsUsingExactArtifact())
-                return;
-            const BinaryAssetStorageSwitchResult result = texture->SwitchStorage(artifact);
+            const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
             if (result != BinaryAssetStorageSwitchResult::Success)
-                LOG(Error, "Failed to hot-swap texture artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
+                LOG(Error, "Failed to hot-swap graph artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
         });
     }
-
-    class TexturePipelineEngineService : public EngineService
-    {
-    public:
-        TexturePipelineEngineService()
-            : EngineService(TEXT("TexturePipeline"), -500)
-        {
-        }
-
-        bool Init() override
-        {
-            AssetPipelineDiagnostic diagnostic;
-            if (!TexturePipelineService::GetBuildService(diagnostic))
-            {
-                LOG(Error, "Cannot initialize the texture artifact pipeline: {0}", diagnostic.Message);
-                return true;
-            }
-            return false;
-        }
-
-        void Dispose() override
-        {
-            TexturePipelineService::Shutdown();
-        }
-    };
-
-    TexturePipelineEngineService TexturePipelineEngineServiceInstance;
 }
 
-const ArtifactTarget& TexturePipelineService::GetHostTarget()
+bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
 {
-    static ArtifactTarget target;
-    static bool initialized = false;
-    if (!initialized)
-    {
-        target.Platform = "Windows";
-        target.Architecture = "x64";
-        target.Graphics = "DirectX12";
-        target.Configuration = "Development";
-        target.Quality = "High";
-        target.TextureCompression = "Desktop";
-        target.Role = "Editor";
-        initialized = true;
-    }
-    return target;
+    GraphPipelineState& state = State();
+    std::lock_guard<std::mutex> lock(state.Locker);
+    if (state.Initialized)
+        return false;
+    AssetProcessorDescriptor existing;
+    if (!AssetProcessorRegistry::Get().TryGetDescriptor(GraphDocumentProcessor::ProcessorID(), existing) &&
+        AssetProcessorRegistry::Get().Register(GraphDocumentProcessor::CreateDescriptor(), state.Registration, diagnostic))
+        return true;
+    state.Initialized = true;
+    return false;
 }
 
-AssetBuildService* TexturePipelineService::GetBuildService(AssetPipelineDiagnostic& diagnostic)
-{
-    if (EnsureInitialized(diagnostic))
-        return nullptr;
-    return State().Builds.get();
-}
-
-bool TexturePipelineService::CreatePlan(const AssetRecord& record, const ArtifactRequest& request,
+bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactRequest& request,
     ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& diagnostic)
 {
     plan = ArtifactResolutionPlan();
     if (EnsureInitialized(diagnostic))
         return true;
-    if (!record.ID.IsValid() || record.ProcessorID != TextureProcessorSettings::ProcessorID())
+    if (!record.ID.IsValid() || record.ProcessorID != GraphDocumentProcessor::ProcessorID())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Prepare,
-            record.ID, TEXT("The asset is not owned by the texture processor."));
+            record.ID, TEXT("The asset is not owned by the graph document processor."));
+    if (GraphDocumentPreview::IsPreviewPath(record.SourcePath.Get()))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactIncompatible, AssetPipelineDiagnosticStage::Resolution,
+            record.ID, TEXT("Preview graph artifacts are never consumed by the current resolver or cooker."));
 
     AssetMeta meta;
     if (AssetMeta::Load(record.MetaPath.Get(), meta, diagnostic))
@@ -249,7 +157,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
 
     AssetCancellationSource preparationCancellation;
     PreparedAsset prepared;
-    TexturePipelineState& state = State();
+    GraphPipelineState& state = State();
     {
         std::lock_guard<std::mutex> lock(state.Locker);
         PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
@@ -260,7 +168,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
         state.Fingerprints[record.ID] = prepared.InputFingerprint;
     }
 
-    auto execution = std::make_shared<TextureExecution>();
+    auto execution = std::make_shared<GraphExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
     for (const AssetDependency& dependency : prepared.Dependencies)
@@ -275,11 +183,30 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     }
     if (execution->Inputs.IsEmpty())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-            record.ID, TEXT("Texture preparation declared no source input."));
-    if (TextureArtifactValidator::Register(execution->Validators, record.ID, diagnostic))
+            record.ID, TEXT("Graph preparation declared no source input."));
+
+    ArtifactOutputValidator runtime = [expectedAssetID = record.ID, typeName = record.TypeName](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
+    {
+        if (output.FormatVersion != GraphDocumentProcessor::RuntimeFormatVersion || output.Compatibility != "flax-graph-document-v1" ||
+            output.Size == 0 || output.Size != FileSystem::GetFileSize(path) || GraphDocumentPreview::IsPreviewPath(path))
+            return Fail(result, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Publication,
+                expectedAssetID, TEXT("Graph runtime artifact format, size, or preview path is invalid."));
+        auto storage = ContentStorageManager::GetStorage(path);
+        if (!storage)
+            return Fail(result, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Publication,
+                expectedAssetID, TEXT("Graph runtime artifact is not a readable Flax storage file."));
+        Array<FlaxStorage::Entry> entries;
+        storage->GetEntries(entries);
+        if (entries.Count() != 1 || entries[0].ID != expectedAssetID || entries[0].TypeName != typeName)
+            return Fail(result, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Publication,
+                expectedAssetID, TEXT("Graph runtime artifact identity or type does not match the requested asset."));
+        result = AssetPipelineDiagnostic();
+        return false;
+    };
+    if (execution->Validators.Register(StringAnsiView("runtime"), record.TypeName, runtime, diagnostic))
         return true;
 
-    ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-texture-build-job-v1"));
+    ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-graph-document-build-job-v2"));
     jobBuilder.AddGuid(StringAnsiView("asset"), prepared.AssetID);
     jobBuilder.AddUInt64(StringAnsiView("database-revision"), prepared.DatabaseRevision);
     jobBuilder.AddKey(StringAnsiView("prepared-input"), prepared.InputFingerprint);
@@ -289,7 +216,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
         ArtifactPublicationOutputPlan outputPlan;
         outputPlan.Kind = output.Kind;
         Array<ArtifactKeyComponent> outputComponents;
-        if (TextureProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+        if (GraphDocumentProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
             return true;
         execution->Outputs.Add(outputPlan);
         jobBuilder.AddKey(StringAnsi::Format("output-{0}", output.Kind), outputPlan.Key);
@@ -299,12 +226,12 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     plan.BuildRequest.Key.ExactPlan = jobBuilder.Finalize();
     plan.BuildRequest.KeyComponents = jobBuilder.GetComponents();
     plan.BuildRequest.AssetID = prepared.AssetID;
-    plan.BuildRequest.ProcessorClass = TEXT("texture");
+    plan.BuildRequest.ProcessorClass = TEXT("graph-document");
     plan.BuildRequest.ProcessorID = record.ProcessorID;
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     plan.BuildRequest.MemoryBytes = Math::Max<uint64>(1, prepared.MemoryEstimate);
     plan.BuildRequest.ProcessorConcurrencyLimit = 2;
-    plan.BuildRequest.RebuildReason = TEXT("Texture canonical inputs changed or rebuild was requested.");
+    plan.BuildRequest.RebuildReason = TEXT("Graph canonical inputs changed or rebuild was requested.");
     for (const DeclaredArtifactOutput& output : prepared.Outputs)
         plan.BuildRequest.OutputKinds.Add(output.Kind);
 
@@ -315,7 +242,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
         if (execution->Context->Initialize(buildDiagnostic))
             return true;
         AssetProcessorLease buildLease;
-        if (AssetProcessorRegistry::Get().TryAcquire(TextureProcessorSettings::ProcessorID(), AssetProcessorInvocationStage::Build, buildLease, buildDiagnostic))
+        if (AssetProcessorRegistry::Get().TryAcquire(GraphDocumentProcessor::ProcessorID(), AssetProcessorInvocationStage::Build, buildLease, buildDiagnostic))
         {
             execution->Context->Cancel();
             return true;
@@ -329,20 +256,20 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     {
         if (!execution->Context)
             return Fail(publicationDiagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Publication,
-                execution->Prepared.AssetID, TEXT("Texture build produced no publication context."));
+                execution->Prepared.AssetID, TEXT("Graph build produced no publication context."));
         ArtifactPublicationRequest publication;
         publication.Target = execution->Target;
-        publication.ProcessorID = TextureProcessorSettings::ProcessorID();
-        publication.ProcessorImplementationVersion = TextureProcessor::ImplementationVersion;
+        publication.ProcessorID = GraphDocumentProcessor::ProcessorID();
+        publication.ProcessorImplementationVersion = GraphDocumentProcessor::ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
         publication.Outputs = execution->Outputs;
         publication.QueryCurrentState = [assetID = execution->Prepared.AssetID](uint64& revision, ArtifactKey& fingerprint)
         {
             QueryCurrentState(assetID, revision, fingerprint);
         };
-        publication.Notify = [](const ArtifactManifest& manifest)
+        publication.Notify = [typeName = execution->Prepared.OutputType](const ArtifactManifest& manifest)
         {
-            QueueTextureHotSwap(manifest);
+            QueueHotSwap(manifest, typeName);
         };
         ArtifactPublicationResult result;
         return ArtifactPublisher::Publish(Globals::ProjectLibraryFolder, execution->Prepared, *execution->Context,
@@ -352,46 +279,48 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     return false;
 }
 
-bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
+bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
 {
-    AssetBuildService* builds = GetBuildService(diagnostic);
+    if (EnsureInitialized(diagnostic))
+        return true;
+    AssetBuildService* builds = TexturePipelineService::GetBuildService(diagnostic);
     if (!builds)
         return true;
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(assetID, record))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-            assetID, TEXT("Texture asset is not registered."));
+            assetID, TEXT("Graph asset is not registered."));
 
     ArtifactRequest request;
     request.AssetID = assetID;
-    request.Target = GetHostTarget();
+    request.Target = TexturePipelineService::GetHostTarget();
     request.OutputKind = "runtime";
-    request.RequiredCompatibility = "flax-texture-v4";
+    request.RequiredCompatibility = "flax-graph-document-v1";
     request.Policy = ArtifactResolvePolicy::Exact;
     ArtifactResolutionPlan plan;
     if (CreatePlan(record, request, plan, diagnostic))
         return true;
     if (force)
     {
-        TexturePipelineState& state = State();
         uint64 generation;
         {
+            GraphPipelineState& state = State();
             std::lock_guard<std::mutex> lock(state.Locker);
             generation = ++state.ForceGeneration;
         }
-        ArtifactKeyBuilder builder(StringAnsiView("flax-texture-forced-build-v1"));
+        ArtifactKeyBuilder builder(StringAnsiView("flax-graph-document-forced-build-v1"));
         builder.AddKey(StringAnsiView("exact-plan"), plan.BuildRequest.Key.ExactPlan);
         builder.AddUInt64(StringAnsiView("generation"), generation);
         plan.BuildRequest.Key.ExactPlan = builder.Finalize();
-        plan.BuildRequest.RebuildReason = TEXT("Explicit texture rebuild.");
+        plan.BuildRequest.RebuildReason = TEXT("Explicit graph rebuild.");
     }
 
     const AssetBuildRequestHandle handle = builds->Request(plan.BuildRequest);
     if (!handle.IsValid())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
-            assetID, TEXT("Texture build request was not accepted."));
+            assetID, TEXT("Graph build request was not accepted."));
     {
-        TexturePipelineState& state = State();
+        GraphPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
         state.Handles[assetID] = handle;
     }
@@ -405,11 +334,11 @@ bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, Asset
     return false;
 }
 
-AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
+AssetBuildJobStatus GraphPipelineService::GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
 {
     AssetBuildRequestHandle handle;
     {
-        TexturePipelineState& state = State();
+        GraphPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
         const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID);
         if (!value)
@@ -427,17 +356,9 @@ AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, Asset
     return handle.GetStatus();
 }
 
-void TexturePipelineService::Shutdown()
+void GraphPipelineService::Shutdown()
 {
-#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
-    ModelPipelineService::Shutdown();
-#endif
-#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
-    GraphPipelineService::Shutdown();
-#endif
-    ArtifactResolver::Get().Reset();
-    TexturePipelineState& state = State();
-    std::unique_ptr<AssetBuildService> builds;
+    GraphPipelineState& state = State();
     AssetProcessorRegistration registration;
     {
         std::lock_guard<std::mutex> lock(state.Locker);
@@ -445,12 +366,9 @@ void TexturePipelineService::Shutdown()
             return;
         state.Handles.Clear();
         state.Fingerprints.Clear();
-        builds = MoveTemp(state.Builds);
         registration = MoveTemp(state.Registration);
         state.Initialized = false;
     }
-    if (builds)
-        builds->Shutdown();
     registration.Reset();
 }
 

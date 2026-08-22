@@ -38,7 +38,8 @@ bool CollectAssetsStep::Perform(CookingData& data)
         AssetRecord canonicalRecord;
         const bool hasCanonicalRecord = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord);
         if (hasCanonicalRecord && canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary &&
-            canonicalRecord.ProcessorID != TEXT("Flax.Texture") && canonicalRecord.ProcessorID != TEXT("Flax.Model"))
+            canonicalRecord.ProcessorID != TEXT("Flax.Texture") && canonicalRecord.ProcessorID != TEXT("Flax.Model") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.GraphDocument"))
         {
             LOG(Warning, "Skipping canonical cooker root {0}; processor '{1}' is not converted yet.", assetId, canonicalRecord.ProcessorID);
             continue;

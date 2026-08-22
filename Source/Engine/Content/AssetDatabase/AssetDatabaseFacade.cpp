@@ -4,8 +4,10 @@
 #include "AssetDatabaseSnapshot.h"
 #include "AssetMeta.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
+#include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Threading/Threading.h"
 #if COMPILE_WITH_TEXTURE_TOOL
@@ -21,6 +23,10 @@
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/Content/Build/Processors/ModelPipelineService.h"
 #endif
+#endif
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+#include "Engine/Content/Build/Processors/GraphDocumentProcessor.h"
+#include "Engine/Content/Build/Processors/GraphPipelineService.h"
 #endif
 #include <algorithm>
 
@@ -535,3 +541,122 @@ AssetPipelineDiagnostic AssetDatabaseFacade::GetModelBuildDiagnostic(const Guid&
     return diagnostic;
 }
 #endif
+
+Guid AssetDatabaseFacade::CreateGraphDocument(const StringView& outputPath, const StringView& typeName)
+{
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return Guid::Empty;
+    };
+    if (!GraphDocumentCodec::IsSupportedType(typeName) || outputPath.IsEmpty())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.Message = TEXT("Graph document type or path is invalid.");
+        return fail();
+    }
+    GraphDocument document;
+    StringAnsi json;
+    if (GraphDocumentCodec::CreateStarter(typeName, document, diagnostic) ||
+        GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) ||
+        GraphDocumentCodec::SaveAtomic(outputPath, json, diagnostic))
+        return fail();
+
+    AssetMeta meta;
+    meta.ID = Guid::New();
+    meta.AssetType = typeName;
+    meta.SourceKind = AssetSourceKind::TextDocument;
+    meta.Processor.ID = TEXT("Flax.GraphDocument");
+    meta.Processor.SettingsVersion = 1;
+    meta.Processor.SettingsJson = "{}\n";
+    if (AssetMeta::SaveAtomic(String(outputPath) + TEXT(".meta"), meta, diagnostic) || Scan(false))
+        return fail();
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    if (GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
+        return fail();
+#endif
+    return meta.ID;
+}
+
+BytesContainer AssetDatabaseFacade::LoadGraphSurface(const StringView& path)
+{
+    BytesContainer result;
+    AssetPipelineDiagnostic diagnostic;
+    GraphDocumentSession session;
+    if (session.Open(path, diagnostic))
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return result;
+    }
+    Array<byte> surface;
+    if (GraphDocumentCompiler::CompileDocument(session.Document, surface, diagnostic))
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return result;
+    }
+    result.Copy(ToSpan(surface));
+    return result;
+}
+
+bool AssetDatabaseFacade::SaveGraphSurface(const StringView& path, const BytesContainer& surface, bool allowOverwriteConflict)
+{
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    };
+    String typeName;
+    const String extension = FileSystem::GetExtension(path);
+    if (GraphDocumentCodec::TypeForExtension(extension, typeName))
+    {
+        AssetMeta meta;
+        if (!AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic))
+            typeName = meta.AssetType;
+    }
+    StringAnsi json;
+    if (GraphDocumentCodec::Encode(typeName, surface, json, diagnostic))
+        return fail();
+    ContentHash previous;
+    if (!allowOverwriteConflict && FileSystem::FileExists(path))
+    {
+        Array<byte> existing;
+        if (!File::ReadAllBytes(path, existing))
+            previous = ContentHash::Compute(existing.Get(), existing.Count());
+    }
+    if (GraphDocumentCodec::SaveAtomic(path, json, diagnostic, previous.IsZero() ? nullptr : &previous) || Scan(false))
+        return fail();
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    AssetMeta meta;
+    if (!AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) && GraphPipelineService::RequestBuild(meta.ID, false, diagnostic))
+        return fail();
+#endif
+    return false;
+}
+
+bool AssetDatabaseFacade::RebuildGraph(const Guid& assetID)
+{
+    AssetPipelineDiagnostic diagnostic;
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    if (GraphPipelineService::RequestBuild(assetID, true, diagnostic))
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    }
+    return false;
+#else
+    return true;
+#endif
+}

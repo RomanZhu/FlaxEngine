@@ -49,11 +49,6 @@ namespace
         diagnostic.Message = message;
         return true;
     }
-
-    bool IsSupportedType(const StringView& typeName)
-    {
-        return typeName == MaterialFunction::TypeName || typeName == AnimationGraphFunction::TypeName || typeName == AnimationGraph::TypeName;
-    }
 }
 
 const String& GraphDocumentProcessor::ProcessorID()
@@ -82,6 +77,7 @@ AssetProcessorDescriptor GraphDocumentProcessor::CreateDescriptor()
     descriptor.MemoryEstimate = 128ull * 1024ull * 1024ull;
     descriptor.Prepare = &GraphDocumentProcessor::Prepare;
     descriptor.Build = &GraphDocumentProcessor::Build;
+    descriptor.ExtractSemanticInterface = &GraphDocumentProcessor::ExtractSemanticInterface;
 
     AssetProcessorOutputDescriptor runtime;
     runtime.Kind = "runtime";
@@ -98,7 +94,7 @@ bool GraphDocumentProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
 {
     prepared = PreparedAsset();
     const AssetRecord& record = context.GetRecord();
-    if (!IsSupportedType(record.TypeName))
+    if (!GraphDocumentCodec::IsSupportedType(record.TypeName))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Graph document metadata declares an unsupported runtime type."));
 
@@ -120,16 +116,35 @@ bool GraphDocumentProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
     if (snapshot.TypeName != record.TypeName)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Graph document type does not match its metadata sidecar."));
+    for (const AssetDependency& dependency : snapshot.Dependencies)
+    {
+        AssetDependencyOrigin declared = dependency.Origin;
+        declared.Path = record.SourcePath.Get();
+        if (dependency.Kind == AssetDependencyKind::BuildInput)
+        {
+            AssetSemanticInterface semantic;
+            semantic.Hash = dependency.SemanticInterface;
+            semantic.Version = dependency.InterfaceVersion;
+            if (context.DeclareBuildInput(dependency.StableIdentity, dependency.AssetID, dependency.ExactArtifact, semantic, declared, diagnostic))
+                return true;
+        }
+        else if (dependency.Kind == AssetDependencyKind::RuntimeReference)
+        {
+            if (context.DeclareRuntimeReference(dependency.StableIdentity, dependency.AssetID, declared, diagnostic))
+                return true;
+        }
+    }
     if (context.DeclareOutput(StringAnsiView("runtime"), record.ID, diagnostic))
         return true;
-    const char compilerIdentity[] = "flax-visject-compatibility-compiler-v1";
+    const char compilerIdentity[] = "flax-visject-compatibility-compiler-v2";
     if (context.DeclareToolchain(TEXT("graph-compiler"), ContentHash::Compute(compilerIdentity, ARRAY_COUNT(compilerIdentity) - 1), origin, diagnostic))
         return true;
 
     auto payload = std::make_shared<GraphDocumentPreparedPayload>();
     payload->SemanticHash = snapshot.SemanticHash;
+    payload->FunctionInterfaceHash = snapshot.FunctionInterfaceHash;
     payload->SurfaceBytes = snapshot.CompatibilitySurface.Count();
-    payload->NodeCount = snapshot.Nodes.Count();
+    payload->NodeCount = snapshot.Document.Nodes.Count();
     prepared.Payload = payload;
     prepared.MemoryEstimate = sizeof(GraphDocumentPreparedPayload) + snapshot.CompatibilitySurface.Count() + snapshot.CanonicalText.Length();
     diagnostic = AssetPipelineDiagnostic();
@@ -147,11 +162,12 @@ bool GraphDocumentProcessor::BuildOutputKey(const PreparedAsset& prepared, const
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Prepare,
             prepared.AssetID, StringView::Empty, TEXT("Graph output key requires prepared graph state and the runtime output."));
     const AssetProcessorOutputDescriptor& output = descriptor.Outputs[0];
-    ArtifactKeyBuilder builder(StringAnsiView("flax-graph-document-output-v1"));
+    ArtifactKeyBuilder builder(StringAnsiView("flax-graph-document-output-v2"));
     descriptor.AppendVersionKey(builder, output);
     builder.AddGuid(StringAnsiView("effective-asset"), prepared.AssetID);
     builder.AddString(StringAnsiView("output-type"), prepared.OutputType);
     builder.AddHash(StringAnsiView("semantic-graph"), payload->SemanticHash);
+    builder.AddHash(StringAnsiView("function-interface"), payload->FunctionInterfaceHash);
     builder.AddUInt32(StringAnsiView("node-count"), payload->NodeCount);
     for (int32 i = 0; i < prepared.Dependencies.Count(); i++)
     {
@@ -161,6 +177,23 @@ bool GraphDocumentProcessor::BuildOutputKey(const PreparedAsset& prepared, const
     builder.AddTarget(target, output.TargetDimensions);
     key = builder.Finalize();
     components = builder.GetComponents();
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool GraphDocumentProcessor::ExtractSemanticInterface(const AssetRecord& record, AssetSemanticInterface& result, AssetPipelineDiagnostic& diagnostic)
+{
+    result = AssetSemanticInterface();
+    Array<byte> bytes;
+    if (File::ReadAllBytes(record.SourcePath.Get(), bytes))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+            record.ID, record.SourcePath.Get(), TEXT("Graph document is missing."));
+    GraphDocumentCodec codec;
+    GraphDocumentSnapshot snapshot;
+    if (codec.DecodeGraph(StringAnsiView(reinterpret_cast<const char*>(bytes.Get()), bytes.Count()), snapshot, diagnostic))
+        return true;
+    result.Version = 1;
+    result.Hash = snapshot.FunctionInterfaceHash.IsZero() ? snapshot.SemanticHash : snapshot.FunctionInterfaceHash;
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
