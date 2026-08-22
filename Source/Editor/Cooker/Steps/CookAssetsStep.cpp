@@ -14,6 +14,7 @@
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/RuntimeAssetIndex.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/Shader.h"
 #include "Engine/Content/Assets/Texture.h"
@@ -1488,6 +1489,24 @@ bool CookAssetsStep::Perform(CookingData& data)
     {
         data.Error(TEXT("Failed to create assets registry."));
         return true;
+    }
+    {
+        Array<RuntimeAssetIndexEntry> indexEntries;
+        indexEntries.EnsureCapacity(AssetsRegistry.Count());
+        for (auto i = AssetsRegistry.Begin(); i.IsNotEnd(); ++i)
+        {
+            RuntimeAssetIndexEntry entry;
+            entry.ID = i->Key;
+            entry.TypeName = i->Value.Info.TypeName;
+            entry.PackagedPath = i->Value.Info.Path;
+            indexEntries.Add(MoveTemp(entry));
+        }
+        AssetPipelineDiagnostic diagnostic;
+        if (RuntimeAssetIndex::SaveAtomic(data.DataOutputPath / TEXT("Content/RuntimeAssetIndex.json"), indexEntries, diagnostic))
+        {
+            data.Error(String::Format(TEXT("Failed to create runtime asset index. {0}"), diagnostic.Message));
+            return true;
+        }
     }
 
     // Print stats
