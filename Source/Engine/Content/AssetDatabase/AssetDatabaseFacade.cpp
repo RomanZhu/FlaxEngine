@@ -3,6 +3,7 @@
 #include "AssetDatabaseFacade.h"
 #include "AssetDatabaseSnapshot.h"
 #include "AssetMeta.h"
+#include "MigrationInventory.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/Core/Types/DateTime.h"
@@ -674,4 +675,16 @@ bool AssetDatabaseFacade::RebuildGraph(const Guid& assetID)
 #else
     return true;
 #endif
+}
+
+String AssetDatabaseFacade::GetMigrationInventoryJson()
+{
+    LoadOrScan(false);
+    Array<MigrationInventoryEntry> entries;
+    MigrationInventory::Build(AssetDatabase::Get().GetSnapshot().Records, entries);
+    StringAnsi json;
+    AssetPipelineDiagnostic diagnostic;
+    if (MigrationInventory::WriteCanonicalJson(entries, json, diagnostic))
+        return String::Empty;
+    return String(json);
 }

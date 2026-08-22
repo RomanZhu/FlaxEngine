@@ -54,6 +54,18 @@ namespace FlaxEditor.Windows
                 AssetDatabaseFacade.CleanLibrary();
                 RefreshView();
             };
+            var inventory = new Button
+            {
+                Parent = toolbar,
+                Text = "Inventory",
+                Width = 100,
+                TooltipText = "Build a read-only mixed-mode migration inventory.",
+            };
+            inventory.Clicked += () =>
+            {
+                AssetDatabaseFacade.Scan(false);
+                RefreshView();
+            };
 
             _summary = new Label
             {
@@ -106,7 +118,7 @@ namespace FlaxEditor.Windows
             for (int i = 0; i < limit; i++)
             {
                 var record = records[i];
-                recordsText.Append(record.Status).Append("  ").Append(record.TypeName).Append("  ").AppendLine(record.CanonicalPath);
+                recordsText.Append(record.Status).Append("  ").Append(record.SourceKind).Append("  ").Append(record.TypeName).Append("  ").AppendLine(record.CanonicalPath);
             }
             if (records.Length > limit)
                 recordsText.Append("… ").Append(records.Length - limit).AppendLine(" more");

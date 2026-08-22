@@ -119,6 +119,24 @@ namespace FlaxEditor
             });
         }
 
+        /// <summary>Describes mixed-mode migration eligibility without writing Content.</summary>
+        [CliCommand("assets.migration.inventory", Description = "Describe mixed-mode migration eligibility without tracked writes.", Access = CliCommandAccess.ReadOnly)]
+        public static CliCommandResult MigrationInventory()
+        {
+            var before = HashContentTree();
+            var json = AssetDatabaseFacade.GetMigrationInventoryJson();
+            var after = HashContentTree();
+            if (!before.SequenceEqual(after))
+                return CliCommandResult.Failure("FLX-ASSET-MIGRATION-NOWRITE-0006", "Migration inventory changed tracked Content files.");
+            if (string.IsNullOrEmpty(json))
+                return CliCommandResult.Failure("FLX-ASSET-MIGRATION-INVENTORY-0006", "Migration inventory serialization failed.", AssetDatabaseFacade.GetDiagnostics());
+            return CliCommandResult.Success(new
+            {
+                schemaVersion = 1,
+                inventoryJson = json,
+            });
+        }
+
         private static object DescribeLegacyTexture(TextureAssetItem item)
         {
             var settings = FlaxEngine.Tools.TextureTool.Options.Default;

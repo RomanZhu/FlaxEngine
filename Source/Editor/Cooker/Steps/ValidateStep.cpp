@@ -5,6 +5,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/MigrationInventory.h"
 #include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
@@ -121,6 +122,13 @@ bool ValidateStep::Perform(CookingData& data)
         }
         const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
         LOG(Info, "Cook asset database revision {0}, records {1}", snapshot.Revision, snapshot.Records.Count());
+        Array<MigrationInventoryEntry> inventory;
+        MigrationInventory::Build(snapshot.Records, inventory);
+        if (MigrationInventory::HasBlockingConflict(inventory))
+        {
+            data.Error(TEXT("Mixed-mode cook refused because legacy and canonical records conflict."));
+            return true;
+        }
         for (const AssetRecord& record : snapshot.Records)
         {
             if (IsBlockingRecordStatus(record.Status))

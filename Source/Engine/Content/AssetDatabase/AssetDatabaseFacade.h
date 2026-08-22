@@ -121,4 +121,7 @@ public:
 
     /// <summary>Queues an exact graph document rebuild.</summary>
     API_FUNCTION() static bool RebuildGraph(const Guid& assetID);
+
+    /// <summary>Builds a read-only mixed-mode migration inventory JSON without writing Content.</summary>
+    API_FUNCTION() static String GetMigrationInventoryJson();
 };
