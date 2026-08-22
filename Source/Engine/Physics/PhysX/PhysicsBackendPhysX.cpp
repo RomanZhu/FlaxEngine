@@ -333,6 +333,7 @@ class CharacterControllerHitReportPhysX : public PxUserControllerHitReport
         }
 
         c.Impulse = Vector3::Zero;
+        c.ApproachSpeed = 0.0f;
         c.ThisVelocity = P2C(hit.dir) * hit.length;
         c.OtherVelocity = Vector3::Zero;
         c.ContactsCount = 1;

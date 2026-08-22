@@ -967,11 +967,12 @@ namespace
         }
     }
 
-    void FillCollision(Collision& collision, b3ShapeId shapeA, b3ShapeId shapeB, b3ContactId contactId)
+    void FillCollision(Collision& collision, b3ShapeId shapeA, b3ShapeId shapeB, b3ContactId contactId, float approachSpeed)
     {
         collision.ThisActor = GetCollider(shapeA);
         collision.OtherActor = GetCollider(shapeB);
         collision.Impulse = Vector3::Zero;
+        collision.ApproachSpeed = approachSpeed;
         collision.ThisVelocity = Vector3::Zero;
         collision.OtherVelocity = Vector3::Zero;
         collision.ContactsCount = 0;
@@ -1003,10 +1004,10 @@ namespace
         }
     }
 
-    void SendCollisionEvent(b3ShapeId shapeA, b3ShapeId shapeB, b3ContactId contactId, bool enter)
+    void SendCollisionEvent(b3ShapeId shapeA, b3ShapeId shapeB, b3ContactId contactId, bool enter, float approachSpeed)
     {
         Collision collision;
-        FillCollision(collision, shapeA, shapeB, contactId);
+        FillCollision(collision, shapeA, shapeB, contactId, approachSpeed);
         if (!collision.ThisActor || !collision.OtherActor)
             return;
 
@@ -1022,6 +1023,18 @@ namespace
             collision.SwapObjects();
             collision.ThisActor->OnCollisionExit(collision);
         }
+    }
+
+    float GetApproachSpeed(const b3ContactEvents& events, b3ContactId contactId)
+    {
+        float result = 0.0f;
+        for (int32 i = 0; i < events.hitCount; i++)
+        {
+            const b3ContactHitEvent& hit = events.hitEvents[i];
+            if (B3_ID_EQUALS(hit.contactId, contactId))
+                result = Math::Max(result, hit.approachSpeed);
+        }
+        return result;
     }
 
     struct QueryContext
@@ -1440,9 +1453,12 @@ void PhysicsBackend::EndSimulateScene(void* scene)
 
     b3ContactEvents contactEvents = b3World_GetContactEvents(sceneBox3D->World);
     for (int32 i = 0; i < contactEvents.beginCount; i++)
-        SendCollisionEvent(contactEvents.beginEvents[i].shapeIdA, contactEvents.beginEvents[i].shapeIdB, contactEvents.beginEvents[i].contactId, true);
+    {
+        const b3ContactBeginTouchEvent& contact = contactEvents.beginEvents[i];
+        SendCollisionEvent(contact.shapeIdA, contact.shapeIdB, contact.contactId, true, GetApproachSpeed(contactEvents, contact.contactId));
+    }
     for (int32 i = 0; i < contactEvents.endCount; i++)
-        SendCollisionEvent(contactEvents.endEvents[i].shapeIdA, contactEvents.endEvents[i].shapeIdB, contactEvents.endEvents[i].contactId, false);
+        SendCollisionEvent(contactEvents.endEvents[i].shapeIdA, contactEvents.endEvents[i].shapeIdB, contactEvents.endEvents[i].contactId, false, 0.0f);
 
     sceneBox3D->LastDeltaTime = 0.0f;
 }

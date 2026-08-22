@@ -62,6 +62,12 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API Collision
     API_FIELD() Vector3 Impulse;
 
     /// <summary>
+    /// The maximum pre-solver speed at which the colliders approached along the contact normal.
+    /// </summary>
+    /// <remarks>Positive for an impact and zero when no impact was reported.</remarks>
+    API_FIELD() float ApproachSpeed;
+
+    /// <summary>
     /// The linear velocity of the first colliding object (this instance).
     /// </summary>
     API_FIELD() Vector3 ThisVelocity;
