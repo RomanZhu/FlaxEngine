@@ -42,4 +42,6 @@ goto Exit
 
 :Exit
 popd
+echo.
+pause
 exit /B 1

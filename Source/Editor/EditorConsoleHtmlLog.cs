@@ -31,7 +31,10 @@ namespace FlaxEditor
         {
             kind = (kind ?? "info").ToLowerInvariant();
             message = WebUtility.HtmlEncode(message ?? string.Empty);
-            stackTrace = WebUtility.HtmlEncode(stackTrace ?? string.Empty);
+            bool includeStackTrace = kind == "warning" || kind == "error" || kind == "fatal";
+            stackTrace = includeStackTrace
+                ? WebUtility.HtmlEncode(stackTrace ?? string.Empty)
+                : string.Empty;
             lock (_locker)
             {
                 if (_disposed)
