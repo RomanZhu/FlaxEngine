@@ -247,6 +247,11 @@ namespace FlaxEditor.Modules
         public PluginsWindow PluginsWin;
 
         /// <summary>
+        /// The asset pipeline status and repair window.
+        /// </summary>
+        public AssetPipelineWindow AssetPipelineWin;
+
+        /// <summary>
         /// The Visual Script debugger window.
         /// </summary>
         public VisualScriptDebuggerWindow VisualScriptDebuggerWin;
@@ -975,6 +980,7 @@ namespace FlaxEditor.Modules
             ProfilerWin = new ProfilerWindow(Editor);
             EditorOptionsWin = new EditorOptionsWindow(Editor);
             PluginsWin = new PluginsWindow(Editor);
+            AssetPipelineWin = new AssetPipelineWindow(Editor);
             VisualScriptDebuggerWin = new VisualScriptDebuggerWindow(Editor);
             UIDesignInspectorWin = new UIDesignInspectorWindow(Editor);
 
@@ -1553,6 +1559,7 @@ namespace FlaxEditor.Modules
                    ReferenceEquals(window, ProfilerWin) ||
                    ReferenceEquals(window, EditorOptionsWin) ||
                    ReferenceEquals(window, PluginsWin) ||
+                   ReferenceEquals(window, AssetPipelineWin) ||
                    ReferenceEquals(window, VisualScriptDebuggerWin) ||
                    ReferenceEquals(window, UIDesignInspectorWin);
         }

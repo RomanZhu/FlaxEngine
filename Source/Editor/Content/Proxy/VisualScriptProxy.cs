@@ -28,6 +28,19 @@ namespace FlaxEditor.Content
         public override string Name => "Visual Script";
 
         /// <inheritdoc />
+        public override string FileExtension => CanonicalGraphDocuments.UseTextGraphAssets ? "visualscript" : Extension;
+
+        /// <inheritdoc />
+        public override bool AcceptsAsset(string typeName, string path)
+        {
+            if (typeName != TypeName)
+                return false;
+            var extension = System.IO.Path.GetExtension(path);
+            return string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".visualscript", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <inheritdoc />
         public override EditorWindow Open(Editor editor, ContentItem item)
         {
             return new VisualScriptWindow(editor, item as VisualScriptItem);

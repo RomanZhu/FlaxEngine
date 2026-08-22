@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEditor.Content;
 using FlaxEngine;
 
 namespace FlaxEditor.Content.Create
@@ -49,6 +50,11 @@ namespace FlaxEditor.Content.Create
         /// <inheritdoc />
         public override bool Create()
         {
+            if (CanonicalGraphDocuments.UseTextGraphAssets)
+            {
+                var properties = CanonicalGraphDocuments.VisualScriptProperties(_options.BaseClass?.FullName, 0);
+                return AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(VisualScript).FullName, properties) == Guid.Empty;
+            }
             return Editor.CreateVisualScript(ResultUrl, _options.BaseClass?.FullName);
         }
     }

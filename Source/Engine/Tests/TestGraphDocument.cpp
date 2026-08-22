@@ -2,6 +2,7 @@
 
 #include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
+#include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Core/Math/Quaternion.h"
 #include "Engine/Core/Math/Transform.h"
 #include "Engine/Core/Math/Vector2.h"
@@ -228,4 +229,48 @@ TEST_CASE("Graph documents encode typed values and visject meta as text")
     REQUIRE(snapshot.Document.GraphMeta.GetEntry(10) != nullptr);
     REQUIRE(snapshot.Document.Parameters.Count() == 1);
     REQUIRE(snapshot.Document.Parameters[0].Meta.GetEntry(13) != nullptr);
+}
+
+TEST_CASE("Graph documents support visual script, behavior tree, and particle function types")
+{
+    AssetPipelineDiagnostic diagnostic;
+    CHECK(GraphDocumentCodec::IsSupportedType(VisualScript::TypeName));
+    CHECK(GraphDocumentCodec::IsSupportedType(TEXT("FlaxEngine.BehaviorTree")));
+    CHECK(GraphDocumentCodec::IsSupportedType(TEXT("FlaxEngine.ParticleEmitterFunction")));
+    CHECK(StringView(GraphDocumentCodec::ExtensionForType(VisualScript::TypeName)) == TEXT(".visualscript"));
+    CHECK(StringView(GraphDocumentCodec::ExtensionForType(TEXT("FlaxEngine.BehaviorTree"))) == TEXT(".behaviortree"));
+    CHECK(StringView(GraphDocumentCodec::ExtensionForType(TEXT("FlaxEngine.ParticleEmitterFunction"))) == TEXT(".particlefunction"));
+
+    String typeName;
+    REQUIRE_FALSE(GraphDocumentCodec::TypeForExtension(TEXT("visualscript"), typeName));
+    CHECK(typeName == VisualScript::TypeName);
+    REQUIRE_FALSE(GraphDocumentCodec::TypeForExtension(TEXT(".behaviortree"), typeName));
+    CHECK(typeName == TEXT("FlaxEngine.BehaviorTree"));
+    REQUIRE_FALSE(GraphDocumentCodec::TypeForExtension(TEXT("particlefunction"), typeName));
+    CHECK(typeName == TEXT("FlaxEngine.ParticleEmitterFunction"));
+    CHECK(GraphDocumentCodec::TypeForExtension(TEXT("flax"), typeName));
+
+    GraphDocument visualScript;
+    REQUIRE_FALSE(GraphDocumentCodec::CreateStarter(VisualScript::TypeName, visualScript, diagnostic));
+    CHECK(visualScript.TypeName == VisualScript::TypeName);
+    CHECK(visualScript.PropertiesJson.Contains("baseType"));
+    CHECK(visualScript.PropertiesJson.Contains("FlaxEngine.Script"));
+    StringAnsi json;
+    REQUIRE_FALSE(GraphDocumentCodec::ToCanonicalJson(visualScript, json, diagnostic));
+    GraphDocumentCodec codec;
+    GraphDocumentSnapshot snapshot;
+    REQUIRE_FALSE(codec.DecodeGraph(json, snapshot, diagnostic));
+    CHECK(snapshot.Document.PropertiesJson.Contains("baseType"));
+    Array<byte> compiled;
+    REQUIRE_FALSE(GraphDocumentCompiler::CompileDocument(snapshot.Document, compiled, diagnostic));
+    CHECK(compiled.Count() > 0);
+
+    GraphDocument behaviorTree;
+    REQUIRE_FALSE(GraphDocumentCodec::CreateStarter(TEXT("FlaxEngine.BehaviorTree"), behaviorTree, diagnostic));
+    CHECK(behaviorTree.TypeName == TEXT("FlaxEngine.BehaviorTree"));
+    GraphDocument particleFunction;
+    REQUIRE_FALSE(GraphDocumentCodec::CreateStarter(TEXT("FlaxEngine.ParticleEmitterFunction"), particleFunction, diagnostic));
+    REQUIRE(particleFunction.Nodes.Count() == 1);
+    CHECK(particleFunction.Nodes[0].GroupID == 16);
+    CHECK(particleFunction.Nodes[0].TypeID == 2);
 }

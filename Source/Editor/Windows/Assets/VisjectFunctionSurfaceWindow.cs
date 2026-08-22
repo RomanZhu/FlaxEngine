@@ -163,6 +163,8 @@ namespace FlaxEditor.Windows.Assets
                     surface = animationGraphFunction.LoadSurface();
                 else if (_asset is AnimationGraph animationGraph)
                     surface = animationGraph.LoadSurface();
+                else if (_asset is ParticleEmitterFunction particleEmitterFunction)
+                    surface = particleEmitterFunction.LoadSurface();
                 return CanonicalGraphDocuments.SaveCloneSurface(_item, surface);
             }
             return base.SaveToOriginal();

@@ -7,6 +7,7 @@
 #include "Engine/Content/Assets/AnimationGraph.h"
 #include "Engine/Content/Assets/AnimationGraphFunction.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
+#include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/ContentImporters/Types.h"
@@ -215,6 +216,63 @@ namespace
     void AddBool(JsonValue& object, const char* name, bool value, JsonAlloc& allocator)
     {
         object.AddMember(JsonValue(name, allocator), JsonValue(value), allocator);
+    }
+
+    bool IsVisualScriptType(const StringView& typeName)
+    {
+        return typeName == VisualScript::TypeName;
+    }
+
+    bool IsBehaviorTreeType(const StringView& typeName)
+    {
+        return typeName == TEXT("FlaxEngine.BehaviorTree");
+    }
+
+    bool IsParticleEmitterFunctionType(const StringView& typeName)
+    {
+        return typeName == TEXT("FlaxEngine.ParticleEmitterFunction");
+    }
+
+    StringAnsi MakeVisualScriptPropertiesJson(const StringView& baseType, int32 flags)
+    {
+        JsonDocument json;
+        json.SetObject();
+        JsonAlloc& allocator = json.GetAllocator();
+        const String resolved = baseType.HasChars() ? String(baseType) : String(TEXT("FlaxEngine.Script"));
+        AddString(json, "baseType", StringAnsi(resolved), allocator);
+        AddInt(json, "flags", flags, allocator);
+        StringAnsi output;
+        CanonicalJsonError error;
+        Array<StringAnsi> order;
+        order.Add("baseType");
+        order.Add("flags");
+        CanonicalJsonWriter::Write(json, output, error, &order);
+        return output;
+    }
+
+    void WriteVisualScriptMetadata(const StringAnsiView& propertiesJson, Array<byte>& output)
+    {
+        String baseType(TEXT("FlaxEngine.Script"));
+        int32 flags = 0;
+        if (propertiesJson.Length() > 0)
+        {
+            JsonDocument json;
+            json.Parse(propertiesJson.Get(), propertiesJson.Length());
+            if (!json.HasParseError() && json.IsObject())
+            {
+                if (json.HasMember("baseType") && json["baseType"].IsString())
+                    baseType = String(json["baseType"].GetString());
+                if (json.HasMember("flags") && json["flags"].IsInt())
+                    flags = json["flags"].GetInt();
+                else if (json.HasMember("flags") && json["flags"].IsUint())
+                    flags = static_cast<int32>(json["flags"].GetUint());
+            }
+        }
+        MemoryWriteStream stream(256);
+        stream.Write(1);
+        stream.Write(baseType, 31);
+        stream.Write(flags);
+        output.Set(stream.GetHandle(), static_cast<int32>(stream.GetPosition()));
     }
 
     JsonValue MakeNumberArray(const float* values, int32 count, JsonAlloc& allocator)
@@ -1324,6 +1382,7 @@ namespace
     {
         const Array<byte>* Surface = nullptr;
         String TypeName;
+        StringAnsi PropertiesJson;
         Guid ID = Guid::Empty;
     };
 
@@ -1340,16 +1399,25 @@ namespace
         if (context.AllocateChunk(0))
             return CreateAssetResult::CannotAllocateChunk;
         context.Data.Header.Chunks[0]->Data.Copy(ToSpan(*arguments->Surface));
+        if (IsVisualScriptType(arguments->TypeName))
+        {
+            if (context.AllocateChunk(1))
+                return CreateAssetResult::CannotAllocateChunk;
+            Array<byte> metadata;
+            WriteVisualScriptMetadata(arguments->PropertiesJson, metadata);
+            context.Data.Header.Chunks[1]->Data.Copy(ToSpan(metadata));
+        }
         return CreateAssetResult::Ok;
     }
 #endif
 
-    bool WriteCompatibilityFlax(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, AssetPipelineDiagnostic& diagnostic)
+    bool WriteCompatibilityFlax(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, const StringAnsiView& propertiesJson, AssetPipelineDiagnostic& diagnostic)
     {
 #if COMPILE_WITH_ASSETS_IMPORTER
         GraphArtifactArguments arguments;
         arguments.Surface = &surface;
         arguments.TypeName = typeName;
+        arguments.PropertiesJson = StringAnsi(propertiesJson.Get(), propertiesJson.Length());
         arguments.ID = id;
         CreateAssetContext importerContext(StringView::Empty, path, id, &arguments, true, typeName);
         const CreateAssetResult result = importerContext.Run(&CreateGraphArtifact);
@@ -1384,7 +1452,7 @@ namespace
 
     bool IsFunctionAssetType(const StringView& typeName)
     {
-        return typeName == MaterialFunction::TypeName || typeName == AnimationGraphFunction::TypeName;
+        return typeName == MaterialFunction::TypeName || typeName == AnimationGraphFunction::TypeName || IsParticleEmitterFunctionType(typeName);
     }
 
     Dictionary<Guid, ArtifactLease> PreviewLeases;
@@ -1406,7 +1474,12 @@ StringAnsi GraphDocumentNode::GetStableType() const
 
 bool GraphDocumentCodec::IsSupportedType(const StringView& typeName)
 {
-    return typeName == MaterialFunction::TypeName || typeName == AnimationGraphFunction::TypeName || typeName == AnimationGraph::TypeName;
+    return typeName == MaterialFunction::TypeName ||
+        typeName == AnimationGraphFunction::TypeName ||
+        typeName == AnimationGraph::TypeName ||
+        IsVisualScriptType(typeName) ||
+        IsBehaviorTreeType(typeName) ||
+        IsParticleEmitterFunctionType(typeName);
 }
 
 const Char* GraphDocumentCodec::ExtensionForType(const StringView& typeName)
@@ -1417,6 +1490,12 @@ const Char* GraphDocumentCodec::ExtensionForType(const StringView& typeName)
         return TEXT(".animgraphfunction");
     if (typeName == AnimationGraph::TypeName)
         return TEXT(".animgraph");
+    if (IsVisualScriptType(typeName))
+        return TEXT(".visualscript");
+    if (IsBehaviorTreeType(typeName))
+        return TEXT(".behaviortree");
+    if (IsParticleEmitterFunctionType(typeName))
+        return TEXT(".particlefunction");
     return nullptr;
 }
 
@@ -1430,6 +1509,12 @@ bool GraphDocumentCodec::TypeForExtension(const StringView& extension, String& t
         typeName = AnimationGraphFunction::TypeName;
     else if (value == TEXT("animgraph") || value == TEXT(".animgraph"))
         typeName = AnimationGraph::TypeName;
+    else if (value == TEXT("visualscript") || value == TEXT(".visualscript"))
+        typeName = VisualScript::TypeName;
+    else if (value == TEXT("behaviortree") || value == TEXT(".behaviortree"))
+        typeName = TEXT("FlaxEngine.BehaviorTree");
+    else if (value == TEXT("particlefunction") || value == TEXT(".particlefunction"))
+        typeName = TEXT("FlaxEngine.ParticleEmitterFunction");
     else
         return true;
     return false;
@@ -1645,7 +1730,7 @@ bool GraphDocumentCodec::CreateStarter(const StringView& typeName, GraphDocument
 {
     document = GraphDocument();
     SurfaceGraph graph;
-    if (typeName == MaterialFunction::TypeName || typeName == AnimationGraphFunction::TypeName)
+    if (typeName == MaterialFunction::TypeName || typeName == AnimationGraphFunction::TypeName || IsParticleEmitterFunctionType(typeName))
     {
         auto& outputNode = graph.Nodes.AddOne();
         outputNode.ID = 1;
@@ -1674,12 +1759,31 @@ bool GraphDocumentCodec::CreateStarter(const StringView& typeName, GraphDocument
         graph.Parameters[0].IsPublic = false;
         graph.Parameters[0].Value = Guid::Empty;
     }
+    else if (IsVisualScriptType(typeName) || IsBehaviorTreeType(typeName))
+    {
+        // Empty Visject surface. Visual Script metadata lives in PropertiesJson.
+    }
     else
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Unsupported graph document type."));
     MemoryWriteStream stream(512);
-    if (graph.Save(&stream, true))
+    if (IsVisualScriptType(typeName))
+    {
+        VisualScriptGraph visualScript;
+        if (visualScript.Save(&stream, true))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Starter graph serialization failed."));
+    }
+    else if (graph.Save(&stream, true))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Starter graph serialization failed."));
-    return FromSurface(typeName, Span<byte>(stream.GetHandle(), static_cast<int32>(stream.GetPosition())), document, diagnostic);
+    if (FromSurface(typeName, Span<byte>(stream.GetHandle(), static_cast<int32>(stream.GetPosition())), document, diagnostic))
+        return true;
+    if (IsVisualScriptType(typeName))
+        document.PropertiesJson = MakeVisualScriptPropertiesJson(TEXT("FlaxEngine.Script"), 0);
+    return false;
+}
+
+bool GraphDocumentCodec::WriteCompatibilityAsset(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, const StringAnsiView& propertiesJson, AssetPipelineDiagnostic& diagnostic)
+{
+    return WriteCompatibilityFlax(path, id, typeName, surface, propertiesJson, diagnostic);
 }
 
 bool GraphDocumentCompiler::CompileDocument(const GraphDocument& document, Array<byte>& output, AssetPipelineDiagnostic& diagnostic)
@@ -2253,7 +2357,7 @@ bool GraphDocumentPreview::Publish(const Guid& assetID, const StringView& typeNa
     storagePath = folder / TEXT("graph.flax");
     Array<byte> bytes;
     bytes.Set(surface.Get(), surface.Length());
-    if (WriteCompatibilityFlax(storagePath, assetID, typeName, bytes, diagnostic))
+    if (WriteCompatibilityFlax(storagePath, assetID, typeName, bytes, StringAnsiView(), diagnostic))
         return true;
     lease = ArtifactLease::Acquire(storagePath);
     {

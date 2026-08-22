@@ -8,7 +8,7 @@ using FlaxEngine;
 namespace FlaxEditor.Content
 {
     /// <summary>
-    /// Shared helpers for canonical Material Function and Animation Graph documents.
+    /// Shared helpers for canonical graph documents (material/anim/visual script/behavior/particle functions).
     /// </summary>
     internal static class CanonicalGraphDocuments
     {
@@ -26,7 +26,10 @@ namespace FlaxEditor.Content
             var extension = Path.GetExtension(path);
             return extension.Equals(".materialfunction", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".animgraphfunction", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".animgraph", StringComparison.OrdinalIgnoreCase);
+                   extension.Equals(".animgraph", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".visualscript", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".behaviortree", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".particlefunction", StringComparison.OrdinalIgnoreCase);
         }
 
         public static string TypeNameFromPath(string path)
@@ -38,7 +41,19 @@ namespace FlaxEditor.Content
                 return typeof(AnimationGraphFunction).FullName;
             if (extension.Equals(".animgraph", StringComparison.OrdinalIgnoreCase))
                 return typeof(AnimationGraph).FullName;
+            if (extension.Equals(".visualscript", StringComparison.OrdinalIgnoreCase))
+                return typeof(VisualScript).FullName;
+            if (extension.Equals(".behaviortree", StringComparison.OrdinalIgnoreCase))
+                return typeof(BehaviorTree).FullName;
+            if (extension.Equals(".particlefunction", StringComparison.OrdinalIgnoreCase))
+                return typeof(ParticleEmitterFunction).FullName;
             return null;
+        }
+
+        public static string VisualScriptProperties(string baseType, int flags)
+        {
+            var type = string.IsNullOrEmpty(baseType) ? "FlaxEngine.Script" : baseType;
+            return "{\n  \"baseType\": \"" + type + "\",\n  \"flags\": " + flags + "\n}\n";
         }
 
         public static T LoadClone<T>(AssetItem item) where T : Asset
@@ -57,10 +72,12 @@ namespace FlaxEditor.Content
             return clone;
         }
 
-        public static bool SaveCloneSurface(AssetItem item, byte[] surface)
+        public static bool SaveCloneSurface(AssetItem item, byte[] surface, string propertiesJson = null)
         {
             using var save = Editor.Instance.ContentDatabase.TrackAssetSave(item.Path);
-            var failed = AssetDatabaseFacade.SaveGraphSurface(item.Path, surface);
+            var failed = string.IsNullOrEmpty(propertiesJson)
+                ? AssetDatabaseFacade.SaveGraphSurface(item.Path, surface)
+                : AssetDatabaseFacade.SaveGraphSurface(item.Path, surface, false, propertiesJson);
             save.Complete(!failed);
             if (failed)
                 Editor.LogError("Cannot save canonical graph document " + item.Path);

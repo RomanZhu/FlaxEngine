@@ -10,33 +10,14 @@
 #include "Engine/Content/Assets/AnimationGraph.h"
 #include "Engine/Content/Assets/AnimationGraphFunction.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
+#include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
-#include "Engine/ContentImporters/Types.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 
 namespace
 {
-    struct GraphArtifactArguments
-    {
-        const Array<byte>* Surface = nullptr;
-        String TypeName;
-    };
-
-    CreateAssetResult CreateGraphArtifact(CreateAssetContext& context)
-    {
-        const auto* arguments = static_cast<const GraphArtifactArguments*>(context.CustomArg);
-        if (!arguments || !arguments->Surface || arguments->Surface->IsEmpty() || arguments->TypeName.IsEmpty())
-            return CreateAssetResult::Error;
-        context.Data.Header.TypeName = arguments->TypeName;
-        context.Data.SerializedVersion = 1;
-        if (context.AllocateChunk(0))
-            return CreateAssetResult::CannotAllocateChunk;
-        context.Data.Header.Chunks[0]->Data.Copy(ToSpan(*arguments->Surface));
-        return CreateAssetResult::Ok;
-    }
-
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, AssetPipelineDiagnosticStage stage,
         const Guid& assetID, const StringView& path, const StringView& message)
     {
@@ -65,10 +46,16 @@ AssetProcessorDescriptor GraphDocumentProcessor::CreateDescriptor()
     descriptor.SourceExtensions.Add(TEXT(".materialfunction"));
     descriptor.SourceExtensions.Add(TEXT(".animgraphfunction"));
     descriptor.SourceExtensions.Add(TEXT(".animgraph"));
+    descriptor.SourceExtensions.Add(TEXT(".visualscript"));
+    descriptor.SourceExtensions.Add(TEXT(".behaviortree"));
+    descriptor.SourceExtensions.Add(TEXT(".particlefunction"));
     descriptor.SourceKinds.Add(AssetSourceKind::TextDocument);
     descriptor.DocumentTypes.Add(MaterialFunction::TypeName);
     descriptor.DocumentTypes.Add(AnimationGraphFunction::TypeName);
     descriptor.DocumentTypes.Add(AnimationGraph::TypeName);
+    descriptor.DocumentTypes.Add(VisualScript::TypeName);
+    descriptor.DocumentTypes.Add(TEXT("FlaxEngine.BehaviorTree"));
+    descriptor.DocumentTypes.Add(TEXT("FlaxEngine.ParticleEmitterFunction"));
     descriptor.MainOutputType = MaterialFunction::TypeName;
     descriptor.SettingsSchemaVersion = 1;
     descriptor.ImplementationVersion = ImplementationVersion;
@@ -233,15 +220,14 @@ bool GraphDocumentProcessor::Build(ArtifactBuildContext& context, AssetPipelineD
         ContentStorageManager::EnsureAccess(scratchPath);
         FileSystem::DeleteFile(scratchPath);
     };
-    GraphArtifactArguments arguments;
-    arguments.Surface = &snapshot.CompatibilitySurface;
-    arguments.TypeName = prepared.OutputType;
-    CreateAssetContext importerContext(sourceDependency->StableIdentity, scratchPath, prepared.AssetID, &arguments, true, prepared.OutputType);
-    CreateAssetFunction callback = &CreateGraphArtifact;
-    const CreateAssetResult result = importerContext.Run(callback);
-    if (result != CreateAssetResult::Ok)
-        return Fail(diagnostic, result == CreateAssetResult::Abort ? AssetPipelineDiagnosticCode::BuildCancelled : AssetPipelineDiagnosticCode::BuildFailed,
-            AssetPipelineDiagnosticStage::Build, prepared.AssetID, sourceDependency->StableIdentity, TEXT("Graph compatibility artifact writer failed."));
+    if (GraphDocumentCodec::WriteCompatibilityAsset(scratchPath, prepared.AssetID, prepared.OutputType, snapshot.CompatibilitySurface, snapshot.Document.PropertiesJson, diagnostic))
+    {
+        diagnostic.AssetGuid = prepared.AssetID;
+        diagnostic.SourcePath = sourceDependency->StableIdentity;
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+        return true;
+    }
     Array<byte> artifact;
     if (File::ReadAllBytes(scratchPath, artifact))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Build,

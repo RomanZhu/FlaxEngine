@@ -542,7 +542,7 @@ AssetPipelineDiagnostic AssetDatabaseFacade::GetModelBuildDiagnostic(const Guid&
 }
 #endif
 
-Guid AssetDatabaseFacade::CreateGraphDocument(const StringView& outputPath, const StringView& typeName)
+Guid AssetDatabaseFacade::CreateGraphDocument(const StringView& outputPath, const StringView& typeName, const StringView& propertiesJson)
 {
     AssetPipelineDiagnostic diagnostic;
     auto fail = [&diagnostic]()
@@ -561,8 +561,11 @@ Guid AssetDatabaseFacade::CreateGraphDocument(const StringView& outputPath, cons
     }
     GraphDocument document;
     StringAnsi json;
-    if (GraphDocumentCodec::CreateStarter(typeName, document, diagnostic) ||
-        GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) ||
+    if (GraphDocumentCodec::CreateStarter(typeName, document, diagnostic))
+        return fail();
+    if (propertiesJson.HasChars())
+        document.PropertiesJson = StringAnsi(String(propertiesJson));
+    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) ||
         GraphDocumentCodec::SaveAtomic(outputPath, json, diagnostic))
         return fail();
 
@@ -606,7 +609,7 @@ BytesContainer AssetDatabaseFacade::LoadGraphSurface(const StringView& path)
     return result;
 }
 
-bool AssetDatabaseFacade::SaveGraphSurface(const StringView& path, const BytesContainer& surface, bool allowOverwriteConflict)
+bool AssetDatabaseFacade::SaveGraphSurface(const StringView& path, const BytesContainer& surface, bool allowOverwriteConflict, const StringView& propertiesJson)
 {
     AssetPipelineDiagnostic diagnostic;
     auto fail = [&diagnostic]()
@@ -624,8 +627,20 @@ bool AssetDatabaseFacade::SaveGraphSurface(const StringView& path, const BytesCo
         if (!AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic))
             typeName = meta.AssetType;
     }
+    GraphDocument document;
+    if (GraphDocumentCodec::FromSurface(typeName, surface, document, diagnostic))
+        return fail();
+    if (propertiesJson.HasChars())
+        document.PropertiesJson = StringAnsi(String(propertiesJson));
+    else if (FileSystem::FileExists(path))
+    {
+        GraphDocumentSession session;
+        AssetPipelineDiagnostic ignored;
+        if (!session.Open(path, ignored))
+            document.PropertiesJson = session.Document.PropertiesJson;
+    }
     StringAnsi json;
-    if (GraphDocumentCodec::Encode(typeName, surface, json, diagnostic))
+    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic))
         return fail();
     ContentHash previous;
     if (!allowOverwriteConflict && FileSystem::FileExists(path))

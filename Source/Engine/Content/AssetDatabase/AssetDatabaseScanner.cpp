@@ -21,7 +21,9 @@ namespace
             TEXT("png"), TEXT("jpg"), TEXT("jpeg"), TEXT("tga"), TEXT("bmp"), TEXT("hdr"), TEXT("exr"),
             TEXT("fbx"), TEXT("obj"), TEXT("gltf"), TEXT("glb"),
             TEXT("wav"), TEXT("mp3"), TEXT("ogg"), TEXT("flac"),
-            TEXT("materialfunction"), TEXT("animgraphfunction"), TEXT("animgraph")
+            TEXT("ttf"), TEXT("otf"),
+            TEXT("materialfunction"), TEXT("animgraphfunction"), TEXT("animgraph"),
+            TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction")
         };
         for (const Char* value : supported)
         {

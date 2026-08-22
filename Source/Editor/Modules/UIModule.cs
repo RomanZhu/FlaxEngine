@@ -1087,6 +1087,7 @@ namespace FlaxEditor.Modules
             _menuToolsTakeScreenshot = cm.AddButton("Take screenshot", inputOptions.TakeScreenshot, Editor.Windows.TakeScreenshot);
             cm.AddSeparator();
             cm.AddButton("Plugins", () => Editor.Windows.PluginsWin.Show());
+            cm.AddButton("Asset Pipeline", () => Editor.Windows.AssetPipelineWin.FocusOrShow());
             cm.AddSeparator();
             var childMenu = cm.AddChildMenu("Open Product Local folder");
             childMenu.ContextMenu.AddButton("Editor", () => FileSystem.ShowFileExplorer(Globals.ProductLocalFolder));
@@ -1115,6 +1116,7 @@ namespace FlaxEditor.Modules
             cm.AddButton("Content Search", inputOptions.ContentSearchWindow, Editor.ContentFinding.ShowSearch);
             cm.AddButton("Visual Script Debugger", inputOptions.VisualScriptDebuggerWindow, Editor.Windows.VisualScriptDebuggerWin.FocusOrShow);
             cm.AddButton("UI Design Inspector", Editor.Windows.UIDesignInspectorWin.FocusOrShow);
+            cm.AddButton("Asset Pipeline", Editor.Windows.AssetPipelineWin.FocusOrShow);
             cm.AddSeparator();
             cm.AddButton("Save window layout", Editor.Windows.SaveLayout);
             _menuWindowApplyWindowLayout = cm.AddChildMenu("Window layouts");

@@ -370,11 +370,30 @@ namespace FlaxEditor.Windows.Assets
         public string SurfaceName => "Behavior Tree";
 
         /// <inheritdoc />
+        protected override BehaviorTree LoadAsset()
+        {
+            if (_item != null && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return FlaxEngine.Content.LoadAsync<BehaviorTree>(_item.ID);
+            return base.LoadAsset();
+        }
+
+        /// <inheritdoc />
         public byte[] SurfaceData
         {
             get => _asset.LoadSurface();
             set
             {
+                if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                {
+                    if (CanonicalGraphDocuments.SaveCloneSurface(_item, value))
+                    {
+                        _surface.MarkAsEdited();
+                        Editor.LogError("Failed to save surface data");
+                    }
+                    _asset.Reload();
+                    return;
+                }
+
                 // Save data to the asset
                 if (_asset.SaveSurface(value))
                 {

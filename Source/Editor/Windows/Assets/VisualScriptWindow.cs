@@ -1119,6 +1119,14 @@ namespace FlaxEditor.Windows.Assets
         public string SurfaceName => "Visual Script";
 
         /// <inheritdoc />
+        protected override VisualScript LoadAsset()
+        {
+            if (_item != null && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return FlaxEngine.Content.LoadAsync<VisualScript>(_item.ID);
+            return base.LoadAsset();
+        }
+
+        /// <inheritdoc />
         public byte[] SurfaceData
         {
             get => _asset.LoadSurface();
@@ -1134,6 +1142,21 @@ namespace FlaxEditor.Windows.Assets
                     meta.Flags |= VisualScript.Flags.Abstract;
                 if (_properties.IsSealed)
                     meta.Flags |= VisualScript.Flags.Sealed;
+
+                if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                {
+                    var properties = CanonicalGraphDocuments.VisualScriptProperties(meta.BaseTypename, (int)meta.Flags);
+                    if (CanonicalGraphDocuments.SaveCloneSurface(_item, value, properties))
+                    {
+                        _surface.MarkAsEdited();
+                        Editor.LogError("Failed to save surface data");
+                    }
+                    _asset.Reload();
+                    SaveBreakpoints();
+                    Editor.CodeEditing.ClearTypes();
+                    Editor.CodeEditing.OnTypesChanged();
+                    return;
+                }
 
                 // Save data to the asset
                 if (_asset.SaveSurface(value, ref meta))

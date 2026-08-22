@@ -111,13 +111,13 @@ public:
 #endif
 
     /// <summary>Creates a canonical graph document plus sidecar and queues its first exact build.</summary>
-    API_FUNCTION() static Guid CreateGraphDocument(const StringView& outputPath, const StringView& typeName);
+    API_FUNCTION() static Guid CreateGraphDocument(const StringView& outputPath, const StringView& typeName, const StringView& propertiesJson = StringView::Empty);
 
     /// <summary>Loads compiled Visject surface bytes from a canonical graph document without writing.</summary>
     API_FUNCTION() static BytesContainer LoadGraphSurface(const StringView& path);
 
     /// <summary>Encodes Visject surface bytes into a canonical graph document and queues an exact build.</summary>
-    API_FUNCTION() static bool SaveGraphSurface(const StringView& path, const BytesContainer& surface, bool allowOverwriteConflict = false);
+    API_FUNCTION() static bool SaveGraphSurface(const StringView& path, const BytesContainer& surface, bool allowOverwriteConflict = false, const StringView& propertiesJson = StringView::Empty);
 
     /// <summary>Queues an exact graph document rebuild.</summary>
     API_FUNCTION() static bool RebuildGraph(const Guid& assetID);
