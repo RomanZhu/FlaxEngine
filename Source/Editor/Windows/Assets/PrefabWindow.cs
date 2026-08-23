@@ -461,6 +461,7 @@ namespace FlaxEditor.Windows.Assets
             // Cleanup
             Deselect();
             Graph.MainActor = null;
+            _viewport.ClearCSGPreview();
             _viewport.Prefab = null;
             _undo?.Clear(); // TODO: maybe don't clear undo?
 
@@ -477,6 +478,7 @@ namespace FlaxEditor.Windows.Assets
 
         private void OnPrefabModified()
         {
+            _viewport.RequestCSGPreview();
             RequestAutoSave();
             MarkAsEdited();
         }
@@ -504,6 +506,7 @@ namespace FlaxEditor.Windows.Assets
             Selection.Clear();
             Select(Graph.Main);
             Graph.Root.TreeNode.Expand(true);
+            _viewport.RebuildCSGPreview();
         }
 
         private void OnUIModeToggled(bool value)
@@ -632,6 +635,7 @@ namespace FlaxEditor.Windows.Assets
         {
             Deselect();
             Graph.MainActor = null;
+            _viewport.ClearCSGPreview();
             _viewport.Prefab = null;
             _undo?.Clear();
 
@@ -662,6 +666,7 @@ namespace FlaxEditor.Windows.Assets
                 // Refresh
                 Deselect();
                 Graph.MainActor = null;
+                _viewport.ClearCSGPreview();
                 _viewport.Prefab = null;
                 if (_asset.IsLoaded)
                 {

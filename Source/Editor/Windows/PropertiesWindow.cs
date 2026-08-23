@@ -856,9 +856,24 @@ namespace FlaxEditor.Windows
             if (Editor.ContentDatabase.IsAssetSaveInProgress(asset.Path))
                 return;
 
-            // Keep displaying the current properties until the replacement data is ready. Once loaded,
-            // rebuild the selection from the asset and discard any deferred save owned by the stale proxy.
+            PrepareForAssetReload(asset);
+        }
+
+        /// <summary>
+        /// Releases content-property objects before a caller replaces a loaded asset during a tracked save.
+        /// The selection is rebuilt automatically after the replacement asset finishes loading.
+        /// </summary>
+        /// <param name="asset">Asset that is about to be reloaded.</param>
+        internal void PrepareForAssetReload(Asset asset)
+        {
+            if (!_showContentSelection || asset == null || !ContentSelectionContainsAsset(asset.ID))
+                return;
+
+            // Native JsonAsset reload deletes its current scripting instance immediately. Deselect before
+            // that happens so custom editors and deferred-save proxies cannot retain the stale object.
             _discardContentAssetChanges = true;
+            Presenter.Deselect();
+            ClearContentAssetState();
             _waitingForContentAssets.Clear();
             _waitingForContentAssets.Add(asset);
             _assetPreviewAsset = null;
