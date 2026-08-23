@@ -57,7 +57,7 @@ namespace FlaxEditor.Tools.CSG
             {
                 Parent = this,
                 Text = "Auto",
-                TooltipText = "Automatically use a material selected in the Content window while the Brush tool is active.",
+                TooltipText = "Automatically use a material selected in the Project window while the Brush tool is active.",
             };
             _autoPickButton.Clicked += ToggleAutoPick;
             _resetButton = new Button(374, 27, 60, AssetPicker.CompactFieldWithPreviewHeight)

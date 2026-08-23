@@ -189,7 +189,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             }
             cm.AddButton("Copy ID", OnClickCopyId);
             cm.AddButton("Edit actor type", OnClickEditActorType).Enabled = item != null;
-            var showButton = cm.AddButton("Show in content window", OnClickShowActorType);
+            var showButton = cm.AddButton("Show in Project", OnClickShowActorType);
             showButton.Enabled = item != null;
             showButton.Icon = Editor.Instance.Icons.Search12;
             cm.Show(image, image.Size);

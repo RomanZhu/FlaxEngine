@@ -165,7 +165,7 @@ namespace FlaxEngine.GUI
 
         /// <summary>
         /// Get or sets a value indicating whether the panel can be opened or closed via the user interacting with the ui.
-        /// Changing the open/ closed state from code or the Properties panel will still work regardless.
+        /// Changing the open/ closed state from code or the Inspector will still work regardless.
         /// </summary>
         [EditorOrder(1)]
         public bool CanOpenClose { get; set; } = true;

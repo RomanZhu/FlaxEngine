@@ -720,11 +720,11 @@ namespace FlaxEditor.Options
         public PlayModeShortcutAvailability PlayModeWindowShortcutAvaliability { get; set; } = PlayModeShortcutAvailability.ProfilerOnly;
 
         [DefaultValue(typeof(InputBinding), "Ctrl+Alpha5")]
-        [EditorDisplay("Windows"), EditorOrder(3010)]
+        [EditorDisplay("Windows", "Project Window"), EditorOrder(3010)]
         public InputBinding ContentWindow = new InputBinding(KeyboardKeys.Alpha5, KeyboardKeys.Control);
 
         [DefaultValue(typeof(InputBinding), "Ctrl+Alpha4")]
-        [EditorDisplay("Windows"), EditorOrder(3020)]
+        [EditorDisplay("Windows", "Hierarchy Window"), EditorOrder(3020)]
         public InputBinding SceneWindow = new InputBinding(KeyboardKeys.Alpha4, KeyboardKeys.Control);
 
         [DefaultValue(typeof(InputBinding), "None")]
@@ -732,7 +732,7 @@ namespace FlaxEditor.Options
         public InputBinding ToolboxWindow = new InputBinding(KeyboardKeys.None);
 
         [DefaultValue(typeof(InputBinding), "Ctrl+Alpha3")]
-        [EditorDisplay("Windows"), EditorOrder(3040)]
+        [EditorDisplay("Windows", "Inspector Window"), EditorOrder(3040)]
         public InputBinding PropertiesWindow = new InputBinding(KeyboardKeys.Alpha3, KeyboardKeys.Control);
 
         [DefaultValue(typeof(InputBinding), "Ctrl+Alpha2")]
@@ -740,7 +740,7 @@ namespace FlaxEditor.Options
         public InputBinding GameWindow = new InputBinding(KeyboardKeys.Alpha2, KeyboardKeys.Control);
 
         [DefaultValue(typeof(InputBinding), "Ctrl+Alpha1")]
-        [EditorDisplay("Windows"), EditorOrder(3060)]
+        [EditorDisplay("Windows", "Scene Window"), EditorOrder(3060)]
         public InputBinding EditorWindow = new InputBinding(KeyboardKeys.Alpha1, KeyboardKeys.Control);
 
         [DefaultValue(typeof(InputBinding), "None")]

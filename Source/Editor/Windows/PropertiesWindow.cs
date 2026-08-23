@@ -478,7 +478,7 @@ namespace FlaxEditor.Windows
         public PropertiesWindow(Editor editor)
         : base(editor, true, ScrollBars.None)
         {
-            Title = "Properties";
+            Title = "Inspector";
             Icon = editor.Icons.Build64;
             AutoFocus = true;
             var controlHeight = Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 18.0f;
