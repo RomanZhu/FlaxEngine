@@ -24,6 +24,7 @@ namespace FlaxEditor.Content.Thumbnails
         private readonly List<PreviewsCache> _cache = new List<PreviewsCache>(4);
         private readonly string _cacheFolder;
         private readonly List<ThumbnailRequest> _requests = new List<ThumbnailRequest>(128);
+        private readonly HashSet<ContentItem> _pendingRequests = new HashSet<ContentItem>();
         private readonly PreviewRoot _guiRoot = new PreviewRoot();
         private DateTime _lastFlushTime;
         private RenderTask _task;
@@ -46,7 +47,10 @@ namespace FlaxEditor.Content.Thumbnails
             if (item == null)
                 throw new ArgumentNullException();
             if (_task == null)
+            {
+                _pendingRequests.Add(item);
                 return;
+            }
 
             // Check if use default icon
             var defaultThumbnail = item.DefaultThumbnail;
@@ -151,6 +155,9 @@ namespace FlaxEditor.Content.Thumbnails
                 if (slot.Material && !HasMinimumQuality(slot.Material))
                     return false;
             }
+
+            if (lods == 0)
+                return true;
 
             // Check if enough LODs are loaded
             if (asset.LoadedLODs >= Mathf.Max(1, (int)(lods * MinimumRequiredResourcesQuality)))
@@ -320,6 +327,17 @@ namespace FlaxEditor.Content.Thumbnails
             _task.Order = 50; // Render this task later
             _task.Enabled = false;
             _task.Render += OnRender;
+
+            if (_pendingRequests.Count != 0)
+            {
+                var pendingRequests = new List<ContentItem>(_pendingRequests);
+                _pendingRequests.Clear();
+                for (int i = 0; i < pendingRequests.Count; i++)
+                {
+                    if (!pendingRequests[i].IsDisposing)
+                        RequestPreview(pendingRequests[i]);
+                }
+            }
         }
 
         private void OnRender(RenderTask task, GPUContext context)
@@ -607,6 +625,7 @@ namespace FlaxEditor.Content.Thumbnails
                 while (_requests.Count > 0)
                     RemoveRequest(_requests[0]);
                 _cache.Clear();
+                _pendingRequests.Clear();
             }
 
             _guiRoot.Dispose();

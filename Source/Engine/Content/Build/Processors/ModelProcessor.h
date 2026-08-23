@@ -34,7 +34,7 @@ public:
 class FLAXENGINE_API ModelProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 8;
+    static constexpr uint32 ImplementationVersion = 9;
     static constexpr uint32 RuntimeFormatVersion = 1;
     static constexpr uint32 GeometryFormatVersion = 1;
     static constexpr uint32 LodFormatVersion = 1;

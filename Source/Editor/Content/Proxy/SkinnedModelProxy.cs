@@ -18,6 +18,7 @@ namespace FlaxEditor.Content
     public class SkinnedModelProxy : BinaryAssetProxy
     {
         private AnimatedModelPreview _preview;
+        private ThumbnailRequest _previewRequest;
 
         /// <inheritdoc />
         public override string Name => "Skinned Model";
@@ -106,13 +107,19 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool CanDrawThumbnail(ThumbnailRequest request)
         {
-            return _preview.HasLoadedAssets && ThumbnailsModule.HasMinimumQuality((SkinnedModel)request.Asset);
+            if (_previewRequest == null)
+            {
+                _previewRequest = request;
+                _preview.SkinnedModel = (SkinnedModel)request.Asset;
+                return false;
+            }
+            return _previewRequest == request && _preview.HasLoadedAssets && ThumbnailsModule.HasMinimumQuality((SkinnedModel)request.Asset);
         }
 
         /// <inheritdoc />
         public override void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
         {
-            _preview.SkinnedModel = (SkinnedModel)request.Asset;
+            _preview.ShowNodes = ((SkinnedModel)request.Asset).LODsCount == 0;
             _preview.Parent = guiRoot;
             _preview.SyncBackbufferSize();
 
@@ -122,13 +129,28 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void OnThumbnailDrawEnd(ThumbnailRequest request, ContainerControl guiRoot)
         {
-            _preview.SkinnedModel = null;
             _preview.Parent = null;
+            ReleasePreview(request);
+        }
+
+        /// <inheritdoc />
+        public override void OnThumbnailDrawCleanup(ThumbnailRequest request)
+        {
+            ReleasePreview(request);
+        }
+
+        private void ReleasePreview(ThumbnailRequest request)
+        {
+            if (_previewRequest != request)
+                return;
+            _preview.SkinnedModel = null;
+            _previewRequest = null;
         }
 
         /// <inheritdoc />
         public override void Dispose()
         {
+            _previewRequest = null;
             if (_preview != null)
             {
                 _preview.Dispose();

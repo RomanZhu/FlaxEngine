@@ -283,13 +283,17 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
     const bool animationOutput = (selected && selected->Kind == ModelSubAssetKind::Animation) ||
         (!selected && context.GetRecord().TypeName == Animation::TypeName);
     const bool materialOutput = selected && selected->Kind == ModelSubAssetKind::Material;
+    const bool hasGeometry = data.LODs.HasItems() && data.LODs[0].Meshes.HasItems();
     if (!animationOutput && !materialOutput)
     {
-        if (context.DeclareOutput(StringAnsiView("geometry"), context.GetRecord().ID, diagnostic) ||
-            context.DeclareOutput(StringAnsiView("lod"), context.GetRecord().ID, diagnostic))
-            return true;
+        if (hasGeometry)
+        {
+            if (context.DeclareOutput(StringAnsiView("geometry"), context.GetRecord().ID, diagnostic) ||
+                context.DeclareOutput(StringAnsiView("lod"), context.GetRecord().ID, diagnostic))
+                return true;
+        }
         const bool isStatic = selected ? selected->TypeName == Model::TypeName : context.GetRecord().TypeName == Model::TypeName;
-        if (isStatic && settings.Import.GenerateSDF && context.DeclareOutput(StringAnsiView("sdf"), context.GetRecord().ID, diagnostic))
+        if (hasGeometry && isStatic && settings.Import.GenerateSDF && context.DeclareOutput(StringAnsiView("sdf"), context.GetRecord().ID, diagnostic))
             return true;
         const bool isSkinned = selected ? selected->TypeName == SkinnedModel::TypeName : context.GetRecord().TypeName == SkinnedModel::TypeName;
         if (isSkinned && context.DeclareOutput(StringAnsiView("skeleton"), context.GetRecord().ID, diagnostic))
@@ -685,34 +689,37 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Build,
             prepared.AssetID, runtimeScratchPath, TEXT("Model compatibility artifact header could not be reopened."));
 
-    const int32 geometryChunkIndex = MODEL_LOD_TO_CHUNK_INDEX(0);
-    if (LoadChunk(storage.Get(), initData, geometryChunkIndex, diagnostic, prepared, runtimeScratchPath))
-        return true;
-    FlaxChunk* geometryChunk = initData.Header.Chunks[geometryChunkIndex];
-    if (WriteOutput(context, StringAnsiView("geometry"), TEXT("geometry.bin"), geometryChunk->Data.Get(), geometryChunk->Data.Length(), diagnostic))
-        return true;
-
-    MemoryWriteStream lodStream(1024);
-    lodStream.WriteInt32(data.LODs.Count());
-    for (int32 lodIndex = 0; lodIndex < data.LODs.Count(); lodIndex++)
+    if (payload->SourceMeshCount > 0)
     {
-        const int32 chunkIndex = MODEL_LOD_TO_CHUNK_INDEX(lodIndex);
-        if (LoadChunk(storage.Get(), initData, chunkIndex, diagnostic, prepared, runtimeScratchPath))
+        const int32 geometryChunkIndex = MODEL_LOD_TO_CHUNK_INDEX(0);
+        if (LoadChunk(storage.Get(), initData, geometryChunkIndex, diagnostic, prepared, runtimeScratchPath))
             return true;
-        const FlaxChunk* chunk = initData.Header.Chunks[chunkIndex];
-        lodStream.WriteInt32(chunk->Data.Length());
-        lodStream.WriteBytes(chunk->Data.Get(), chunk->Data.Length());
-    }
-    if (WriteOutput(context, StringAnsiView("lod"), TEXT("lod.bin"), lodStream.GetHandle(), static_cast<int32>(lodStream.GetPosition()), diagnostic))
-        return true;
+        FlaxChunk* geometryChunk = initData.Header.Chunks[geometryChunkIndex];
+        if (WriteOutput(context, StringAnsiView("geometry"), TEXT("geometry.bin"), geometryChunk->Data.Get(), geometryChunk->Data.Length(), diagnostic))
+            return true;
 
-    if (options.Type == ModelTool::ModelType::Model && options.GenerateSDF)
-    {
-        if (LoadChunk(storage.Get(), initData, 15, diagnostic, prepared, runtimeScratchPath))
+        MemoryWriteStream lodStream(1024);
+        lodStream.WriteInt32(data.LODs.Count());
+        for (int32 lodIndex = 0; lodIndex < data.LODs.Count(); lodIndex++)
+        {
+            const int32 chunkIndex = MODEL_LOD_TO_CHUNK_INDEX(lodIndex);
+            if (LoadChunk(storage.Get(), initData, chunkIndex, diagnostic, prepared, runtimeScratchPath))
+                return true;
+            const FlaxChunk* chunk = initData.Header.Chunks[chunkIndex];
+            lodStream.WriteInt32(chunk->Data.Length());
+            lodStream.WriteBytes(chunk->Data.Get(), chunk->Data.Length());
+        }
+        if (WriteOutput(context, StringAnsiView("lod"), TEXT("lod.bin"), lodStream.GetHandle(), static_cast<int32>(lodStream.GetPosition()), diagnostic))
             return true;
-        const FlaxChunk* sdfChunk = initData.Header.Chunks[15];
-        if (WriteOutput(context, StringAnsiView("sdf"), TEXT("sdf.bin"), sdfChunk->Data.Get(), sdfChunk->Data.Length(), diagnostic))
-            return true;
+
+        if (options.Type == ModelTool::ModelType::Model && options.GenerateSDF)
+        {
+            if (LoadChunk(storage.Get(), initData, 15, diagnostic, prepared, runtimeScratchPath))
+                return true;
+            const FlaxChunk* sdfChunk = initData.Header.Chunks[15];
+            if (WriteOutput(context, StringAnsiView("sdf"), TEXT("sdf.bin"), sdfChunk->Data.Get(), sdfChunk->Data.Length(), diagnostic))
+                return true;
+        }
     }
     if (options.Type == ModelTool::ModelType::SkinnedModel)
     {

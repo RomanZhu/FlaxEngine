@@ -34,6 +34,8 @@
 #endif
 #endif
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
+#include "Engine/Content/Assets/Model.h"
+#include "Engine/Content/Assets/SkinnedModel.h"
 #include "Engine/Content/Build/Processors/ModelProcessorSettings.h"
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/Content/Build/Processors/ModelPipelineService.h"
@@ -490,6 +492,9 @@ bool AssetDatabaseFacade::ApplyModelMetadata(const StringView& sourcePath, const
         const ModelProcessorSettings settings = ModelProcessorSettings::FromLegacyOptions(options);
         if (settings.Validate(diagnostic) || settings.ToJson(meta.Processor.SettingsJson, diagnostic))
             goto Failed;
+        meta.AssetType = options.Type == ModelTool::ModelType::SkinnedModel || options.Type == ModelTool::ModelType::Animation
+            ? SkinnedModel::TypeName
+            : Model::TypeName;
         meta.Processor.ID = ModelProcessorSettings::ProcessorID();
         meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
     }
@@ -900,11 +905,9 @@ Guid AssetDatabaseFacade::CreateModelMetadata(const StringView& sourcePath, cons
         return fail();
     AssetMeta meta;
     meta.ID = Guid::New();
-    meta.AssetType = TEXT("FlaxEngine.Model");
-    if (options.Type == ModelTool::ModelType::SkinnedModel)
-        meta.AssetType = TEXT("FlaxEngine.SkinnedModel");
-    else if (options.Type == ModelTool::ModelType::Animation)
-        meta.AssetType = TEXT("FlaxEngine.Animation");
+    meta.AssetType = options.Type == ModelTool::ModelType::SkinnedModel || options.Type == ModelTool::ModelType::Animation
+        ? SkinnedModel::TypeName
+        : Model::TypeName;
     meta.SourceKind = AssetSourceKind::ImportedSource;
     meta.Processor.ID = ModelProcessorSettings::ProcessorID();
     meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;

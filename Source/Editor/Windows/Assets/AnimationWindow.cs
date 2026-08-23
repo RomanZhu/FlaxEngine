@@ -177,7 +177,15 @@ namespace FlaxEditor.Windows.Assets
                 EnablePreviewModelCache = true;
 
                 // Try to restore target asset import options (useful for fast reimport)
-                Editor.TryRestoreImportOptions(ref ImportSettings.Settings, window.Item.Path);
+                if (window.Item.IsCanonicalSource && !window.Item.IsCanonicalSubAsset)
+                {
+                    if (AssetDatabaseFacade.LoadModelMetadata(window.Item.Path, out ImportSettings.Settings))
+                        Editor.LogError("Cannot load canonical model import settings.");
+                }
+                else if (!window.Item.IsCanonicalSubAsset)
+                {
+                    Editor.TryRestoreImportOptions(ref ImportSettings.Settings, window.Item.Path);
+                }
             }
 
             public void OnClean()
@@ -191,7 +199,15 @@ namespace FlaxEditor.Windows.Assets
 
             public void Reimport()
             {
-                Editor.Instance.ContentImporting.Reimport((BinaryAssetItem)Window.Item, ImportSettings, true);
+                if (Window.Item.IsCanonicalSource)
+                {
+                    if (AssetDatabaseFacade.ApplyModelMetadata(Window.Item.Path, ImportSettings.Settings))
+                        Editor.LogError("Cannot apply canonical model import settings.");
+                }
+                else
+                {
+                    Editor.Instance.ContentImporting.Reimport((BinaryAssetItem)Window.Item, ImportSettings, true);
+                }
             }
 
             private class ProxyEditor : GenericEditor
@@ -234,7 +250,7 @@ namespace FlaxEditor.Windows.Assets
                         Utilities.Utils.CreateImportPathUI(group, proxy.Window.Item as BinaryAssetItem);
 
                         layout.Space(5);
-                        var reimportButton = layout.Button("Reimport");
+                        var reimportButton = layout.Button(proxy.Window.Item.IsCanonicalSource ? "Apply and Rebuild" : "Reimport");
                         reimportButton.Button.Clicked += () => ((PropertiesProxy)Values[0]).Reimport();
                     }
                 }
@@ -317,6 +333,12 @@ namespace FlaxEditor.Windows.Assets
             InputActions.Add(options => options.Redo, _undo.PerformRedo);
         }
 
+        /// <inheritdoc />
+        protected override Animation LoadAsset()
+        {
+            return _item.IsCanonicalSource ? FlaxEngine.Content.LoadAsync<Animation>(_item.ID) : base.LoadAsset();
+        }
+
         private void OnUndoRedo(IUndoAction action)
         {
             if (!UndoActionMetadata.IsSelectionOnly(action))
@@ -382,7 +404,7 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override void Save()
         {
-            if (!IsEdited || _item.IsCanonicalSubAsset)
+            if (!IsEdited || _item.IsCanonicalSource)
                 return;
 
             if (RefreshTempAsset())
@@ -397,9 +419,9 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override void UpdateToolstrip()
         {
-            _saveButton.Enabled = IsEdited && !_item.IsCanonicalSubAsset;
-            _undoButton.Enabled = _undo.CanUndo && !_item.IsCanonicalSubAsset;
-            _redoButton.Enabled = _undo.CanRedo && !_item.IsCanonicalSubAsset;
+            _saveButton.Enabled = IsEdited && !_item.IsCanonicalSource;
+            _undoButton.Enabled = _undo.CanUndo && !_item.IsCanonicalSource;
+            _redoButton.Enabled = _undo.CanRedo && !_item.IsCanonicalSource;
 
             base.UpdateToolstrip();
         }
@@ -459,7 +481,7 @@ namespace FlaxEditor.Windows.Assets
                 _timeline._id = _item.ID;
                 _timeline.Load(_asset);
                 _undo.Clear();
-                _timeline.Enabled = !_item.IsCanonicalSubAsset;
+                _timeline.Enabled = !_item.IsCanonicalSource;
                 _timeline.SetNoTracksText(null);
                 ClearEditedFlag();
                 _timeline.ShowWholeTimeline();
