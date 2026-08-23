@@ -7,6 +7,7 @@
 #include "CSGHierarchy.h"
 
 class Scene;
+class Actor;
 
 #if COMPILE_WITH_CSG_BUILDER
 
@@ -32,6 +33,11 @@ namespace CSG
         /// Compiles a set of brushes belonging to a single stack scope into a resolved mesh.
         /// </summary>
         static bool CompileStack(const Array<Brush*>& brushes, Mesh& outMesh, StackBuildStats* stats = nullptr);
+
+        /// <summary>
+        /// Compiles all explicit and implicit stacks under an actor into a combined resolved mesh.
+        /// </summary>
+        static bool CompileTargetMeshes(Actor* targetRoot, Mesh& outCombinedMesh);
 
         /// <summary>
         /// Compiles all explicit and implicit stacks under a scene into a combined resolved mesh.
