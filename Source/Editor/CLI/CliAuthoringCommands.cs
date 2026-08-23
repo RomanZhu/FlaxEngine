@@ -1347,9 +1347,10 @@ namespace FlaxEditor
         public static object SetActorTags([CliOption("actor", Required = true)] Guid actor, [CliOption("tags", Required = true)] string[] tags)
         {
             var value = RequireActor(actor);
-            tags = tags ?? Array.Empty<string>();
+            tags = (tags ?? Array.Empty<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            CliAssetPersistence.PersistTags(tags);
             using (new UndoBlock(Editor.Instance.Undo, value, "Set actor tags"))
-                value.Tags = tags.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Select(Tags.Get).ToArray();
+                value.Tags = tags.Select(Tags.Get).ToArray();
             MarkEdited(value);
             return MutationResult(value);
         }

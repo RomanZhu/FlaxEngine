@@ -178,8 +178,7 @@ namespace FlaxEditor
                 if (!_serverReady.Wait(TimeSpan.FromSeconds(2.0)))
                     throw new TimeoutException("The local IPC listener did not become ready.");
                 WriteManifest();
-                Debug.Logger.LogHandler.SendLog += OnLog;
-                Debug.Logger.LogHandler.SendExceptionLog += OnExceptionLog;
+                Debug.LogMessageReceived += OnLogMessage;
                 FlaxEditor.Editor.Log($"Flax CLI bridge listening for instance {_instanceId}.");
             }
             catch (Exception ex)
@@ -246,8 +245,7 @@ namespace FlaxEditor
         /// <inheritdoc />
         public override void OnExit()
         {
-            Debug.Logger.LogHandler.SendLog -= OnLog;
-            Debug.Logger.LogHandler.SendExceptionLog -= OnExceptionLog;
+            Debug.LogMessageReceived -= OnLogMessage;
             _shutdown.Cancel();
             try
             {
@@ -929,14 +927,9 @@ namespace FlaxEditor
             }
         }
 
-        private void OnLog(LogType level, string message, FlaxEngine.Object context, string stackTrace)
+        private void OnLogMessage(LogType level, string message, string stackTrace, ulong threadId)
         {
             AddLog(level.ToString(), message, stackTrace);
-        }
-
-        private void OnExceptionLog(Exception exception, FlaxEngine.Object context)
-        {
-            AddLog(LogType.Error.ToString(), exception?.Message, exception?.StackTrace);
         }
 
         private void AddLog(string level, string message, string stackTrace)

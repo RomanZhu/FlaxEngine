@@ -113,14 +113,36 @@ namespace FlaxEditor.FMOD
         }
 
         /// <summary>Opens the configured Studio project.</summary>
-        public static bool OpenProject()
+        public static bool OpenProject() => OpenProject(out _);
+
+        /// <summary>Opens the configured Studio project and returns an actionable failure reason.</summary>
+        public static bool OpenProject(out string error)
         {
             var project = FmodEditorSettings.StudioProjectPath;
-            var executable = FindExecutable();
-            if (!File.Exists(project) || string.IsNullOrEmpty(executable))
+            if (!File.Exists(project))
+            {
+                error = string.IsNullOrWhiteSpace(project)
+                    ? "No FMOD Studio project is linked."
+                    : $"The linked FMOD Studio project no longer exists: '{project}'.";
                 return false;
-            Process.Start(new ProcessStartInfo(executable, $"\"{project}\"") { UseShellExecute = true });
-            return true;
+            }
+            var executable = FindExecutable();
+            if (string.IsNullOrEmpty(executable))
+            {
+                error = "No FMOD Studio executable was found. Install FMOD Studio and try again.";
+                return false;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo(executable, $"\"{project}\"") { UseShellExecute = true });
+                error = string.Empty;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "FMOD Studio could not be started: " + ex.Message;
+                return false;
+            }
         }
 
         /// <summary>Builds banks and returns actionable process diagnostics.</summary>

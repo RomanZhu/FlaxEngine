@@ -4,6 +4,7 @@
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
 #include "Engine/Core/Log.h"
+#include "Engine/Core/Math/Math.h"
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Serialization/JsonWriters.h"
@@ -161,7 +162,7 @@ bool FmodCatalogBuilder::BuildCatalog(const String& banksDirectory, const String
     Array<MixerRecord> snapshots, buses, vcas;
 
     writer.StartObject();
-    writer.JKEY("schema"); writer.Int(2);
+    writer.JKEY("schema"); writer.Int(3);
     writer.JKEY("revision"); writeString(String::Format(TEXT("runtime-{0}"), DateTime::Now().Ticks));
     writer.JKEY("banks"); writer.StartArray();
     for (const LoadedBank& bank : banks)
@@ -222,6 +223,7 @@ bool FmodCatalogBuilder::BuildCatalog(const String& banksDirectory, const String
                 if (description->getParameterDescriptionByIndex(parameterIndex, &parameter) != FMOD_OK)
                     continue;
                 writer.StartObject();
+                writer.JKEY("id"); writeString(FromFmodStudioGuid(parameter.guid).ToString());
                 writer.JKEY("name"); writeString(String(parameter.name));
                 writer.JKEY("data1"); writer.Uint(parameter.id.data1);
                 writer.JKEY("data2"); writer.Uint(parameter.id.data2);
@@ -230,6 +232,24 @@ bool FmodCatalogBuilder::BuildCatalog(const String& banksDirectory, const String
                 writer.JKEY("defaultValue"); writer.Double(parameter.defaultvalue);
                 writer.JKEY("type"); writer.Int((int32)parameter.type);
                 writer.JKEY("flags"); writer.Uint((uint32)parameter.flags);
+                writer.JKEY("labels"); writer.StartArray();
+                int labelsWritten = 0;
+                if ((parameter.flags & FMOD_STUDIO_PARAMETER_LABELED) != 0)
+                {
+                    // FMOD labeled parameters always use the integer range 0..maximum.
+                    const int labelCount = Math::Clamp((int32)parameter.maximum + 1, 0, 1024);
+                    for (int labelIndex = 0; labelIndex < labelCount; labelIndex++)
+                    {
+                        char label[2048] = {};
+                        int retrieved = 0;
+                        if (description->getParameterLabelByID(parameter.id, labelIndex, label, sizeof(label), &retrieved) == FMOD_OK)
+                        {
+                            writeString(String(label));
+                            labelsWritten++;
+                        }
+                    }
+                }
+                writer.EndArray(labelsWritten);
                 writer.EndObject();
                 parametersWritten++;
             }

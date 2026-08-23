@@ -146,6 +146,34 @@ namespace FlaxEditor.FMOD
             _window.RefreshState();
         }
 
+        /// <summary>Prompts for an FMOD Studio project and updates the per-user project and bank-output links.</summary>
+        public static bool TryRelinkProject(Editor editor, out string message)
+        {
+            var current = FmodEditorSettings.StudioProjectPath;
+            var initialDirectory = string.IsNullOrWhiteSpace(current) ? null : System.IO.Path.GetDirectoryName(current);
+            if (!Directory.Exists(initialDirectory))
+                initialDirectory = Globals.ProjectFolder;
+            if (FileSystem.ShowOpenFileDialog(editor.Windows.MainWindow, initialDirectory, "FMOD Studio projects (*.fspro)\0*.fspro\0All files (*.*)\0*.*\0", false, "Select FMOD Studio project", out var files) || files == null || files.Length == 0)
+            {
+                message = "FMOD Studio project relink was canceled.";
+                return false;
+            }
+
+            try
+            {
+                var detected = FmodProjectLinker.LinkProject(files[0]);
+                message = string.IsNullOrEmpty(detected)
+                    ? $"Linked FMOD Studio project '{files[0]}'. Select its built-bank folder in the FMOD Setup Wizard."
+                    : $"Linked FMOD Studio project '{files[0]}'.\nBuilt-bank output: {detected}";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                message = "FMOD Studio project could not be linked: " + ex.Message;
+                return false;
+            }
+        }
+
         public static string ApplyDiscoveredSettings()
         {
             var banks = FindBanks();

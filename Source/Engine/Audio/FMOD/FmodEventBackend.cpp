@@ -1063,6 +1063,21 @@ bool FmodEventBackend::GetEventParameters(const Guid& eventId, const StringView&
         value.DefaultValue = parameter.defaultvalue;
         value.Type = (int32)parameter.type;
         value.Flags = (uint32)parameter.flags;
+        if ((parameter.flags & FMOD_STUDIO_PARAMETER_LABELED) != 0)
+        {
+            // FMOD labeled parameters always use the integer range 0..maximum. Labels are stored newline-separated.
+            const int labelCount = Math::Clamp((int32)parameter.maximum + 1, 0, 1024);
+            for (int labelIndex = 0; labelIndex < labelCount; labelIndex++)
+            {
+                char label[2048] = {};
+                int retrieved = 0;
+                if (description->getParameterLabelByID(parameter.id, labelIndex, label, sizeof(label), &retrieved) != FMOD_OK)
+                    continue;
+                if (value.Labels.HasChars())
+                    value.Labels += TEXT('\n');
+                value.Labels += String(label);
+            }
+        }
         result.Add(value);
     }
     return true;

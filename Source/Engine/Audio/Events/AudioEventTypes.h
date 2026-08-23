@@ -240,17 +240,22 @@ inline uint32 GetHash(const AudioParameterId& key)
     return key.ID.IsValid() ? GetHash(key.ID) : GetHash(key.Name);
 }
 
-/// <summary>Authored numeric parameter metadata reported by the active middleware.</summary>
-API_STRUCT() struct FLAXENGINE_API AudioParameterDescription
+/// <summary>Authored parameter metadata reported by the active middleware.</summary>
+API_STRUCT() struct FLAXENGINE_API AudioParameterDescription : ISerializable
 {
+    API_AUTO_SERIALIZATION();
     DECLARE_SCRIPTING_TYPE_MINIMAL(AudioParameterDescription);
 
-    API_FIELD() AudioParameterId Id;
-    API_FIELD() float Minimum = 0.0f;
-    API_FIELD() float Maximum = 1.0f;
-    API_FIELD() float DefaultValue = 0.0f;
-    API_FIELD() int32 Type = 0;
-    API_FIELD() uint32 Flags = 0;
+    API_FIELD(Attributes="EditorOrder(0), EditorDisplay(\"Parameter\", \"Identifier\")") AudioParameterId Id;
+    API_FIELD(Attributes="EditorOrder(10), EditorDisplay(\"Values\", \"Minimum\")") float Minimum = 0.0f;
+    API_FIELD(Attributes="EditorOrder(20), EditorDisplay(\"Values\", \"Maximum\")") float Maximum = 1.0f;
+    API_FIELD(Attributes="EditorOrder(30), EditorDisplay(\"Values\", \"Default\")") float DefaultValue = 0.0f;
+    API_FIELD(Attributes="EditorOrder(40), EditorDisplay(\"Parameter\", \"Type\")") int32 Type = 0;
+    API_FIELD(Attributes="EditorOrder(50), EditorDisplay(\"Parameter\", \"Flags\")") uint32 Flags = 0;
+
+    /// <summary>Labels indexed by their numeric parameter value for labeled discrete parameters. Multiple labels are separated with newline characters.</summary>
+    API_FIELD(Attributes="EditorOrder(60), EditorDisplay(\"Values\", \"Labels\")") String Labels;
+
 };
 
 /// <summary>

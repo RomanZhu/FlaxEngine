@@ -329,18 +329,13 @@ namespace FlaxEditor.FMOD
 
         private void SelectProject()
         {
-            if (FileSystem.ShowOpenFileDialog(Editor.Windows.MainWindow, null, "FMOD Studio projects (*.fspro)\0*.fspro\0All files (*.*)\0*.*\0", false, "Select FMOD Studio project", out var files) || files == null || files.Length == 0)
-                return;
-            try
-            {
-                var detected = FmodProjectLinker.LinkProject(files[0]);
-                ShowStep(string.IsNullOrEmpty(detected) ? 3 : 4);
-                _result.Text = string.IsNullOrEmpty(detected) ? "Project linked. Select its built-bank folder next." : "Project linked; bank output detected:\n" + detected;
-            }
-            catch (Exception ex)
-            {
-                _result.Text = ex.Message;
-            }
+            var linked = FmodSetupWizard.TryRelinkProject(Editor, out var message);
+            if (linked)
+                ShowStep(Directory.Exists(FmodEditorSettings.BankOutputPath) ? 4 : 3);
+            else
+                RefreshNavigation();
+            _result.Text = message;
+            _result.TextColor = linked ? Color.LightGreen : Color.Orange;
         }
 
         private void SelectBanks()

@@ -317,8 +317,15 @@ namespace FlaxEditor
                 throw new InvalidOperationException("Asset property assignment requires a JSON value.");
             var asset = LoadAsset(options.Path);
             var member = SetMemberPathValue(asset, options.PropertyPath, options.Value);
-            if (options.Save && Editor.Instance.ContentDatabase.SaveAsset(asset))
-                throw new InvalidOperationException($"Failed to save asset '{options.Path}'.");
+            var assignedValue = GetMemberPathValue(asset, options.PropertyPath);
+            if (options.Save)
+            {
+                if (assignedValue is Tag tag)
+                    CliAssetPersistence.PersistTags(new[] { tag.ToString() });
+                CliAssetPersistence.PrepareForSave(asset, options.PropertyPath);
+                if (Editor.Instance.ContentDatabase.SaveAsset(asset))
+                    throw new InvalidOperationException($"Failed to save asset '{options.Path}'.");
+            }
             CompleteAsset(new { path = RequireItem(options.Path).Path, property = options.PropertyPath, value = options.Value, valueType = GetMemberType(member).FullName, saved = options.Save });
         }
 

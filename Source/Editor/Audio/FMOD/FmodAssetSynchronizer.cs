@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using FlaxEditor.Content;
 using FlaxEngine;
 using FlaxEngine.Json;
 using Newtonsoft.Json;
@@ -67,6 +68,11 @@ namespace FlaxEditor.FMOD
                 return report;
             }
 
+            // Banks are regenerated before events. If an event is selected, its Properties layout can
+            // contain editors for those bank references, so release the whole selected audio asset before
+            // any dependency is reloaded. The selection is rebuilt after its own asset finishes loading.
+            PrepareSelectedAudioAssetForReload(contentRoot);
+
             var events = FindExistingAssets(contentRoot, "FlaxEngine.AudioEvent", "BackendId");
             var banks = FindExistingAssets(contentRoot, "FlaxEngine.AudioBank", "BackendId");
             var snapshots = FindExistingAssets(contentRoot, "FlaxEngine.AudioSnapshot", "BackendId");
@@ -89,7 +95,7 @@ namespace FlaxEditor.FMOD
                     knownBankIds.Add(knownBankId);
             var eventRecords = new Dictionary<Guid, FmodMetadataImporter.Event>();
             var eventBanks = new Dictionary<Guid, List<Guid>>();
-            var bankAssetPaths = new Dictionary<Guid, string>();
+            var bankAssetIds = new Dictionary<Guid, Guid>();
             foreach (var bankData in metadata.banks)
             {
                 if (bankData == null || !Guid.TryParse(bankData.id, out var bankId))
@@ -117,11 +123,12 @@ namespace FlaxEditor.FMOD
                     ReferencedBanks = ParseGuids(bankData.dependencies, report, $"bank '{bankData.file}' dependencies"),
                 };
                 ValidateBankReferences(bank.ReferencedBanks, knownBankIds, report, $"bank '{bankData.file}' dependencies");
-                if (Editor.SaveJsonAsset(bankPath, bank))
+                if (SaveGeneratedAsset(bankPath, bank))
                     report.Errors.Add($"Failed to save FMOD bank asset '{bankPath}'.");
+                if (TryReadAssetId(bankPath, out var bankAssetId))
+                    bankAssetIds[bankId] = bankAssetId;
                 else
-                    NormalizeNativeGuids(bankPath);
-                bankAssetPaths[bankId] = bankPath;
+                    report.Errors.Add($"Failed to read the generated FMOD bank asset ID from '{bankPath}'.");
                 if (bankData.events == null)
                     continue;
                 foreach (var eventData in bankData.events)
@@ -158,37 +165,32 @@ namespace FlaxEditor.FMOD
                     if (!dependencies.Contains(dependency))
                         dependencies.Add(dependency);
                 ValidateBankReferences(dependencies, knownBankIds, report, $"event '{eventData.path}' dependencies");
-                var audioEvent = new AudioEvent
-                {
-                    BackendId = eventId,
-                    Path = eventData.path ?? string.Empty,
-                    Is3D = eventData.is3D,
-                    IsOneShot = eventData.isOneShot,
-                    MinDistance = eventData.minDistance,
-                    MaxDistance = eventData.maxDistance,
-                    Length = eventData.length,
-                    BankDependencies = dependencies.ToArray(),
-                    Parameters = ParseParameters(eventData.parameters, report, $"event '{eventData.path}' parameters"),
-                };
-                var bankAssets = new List<JsonAssetReference<AudioBank>>();
+                var parameterDescriptions = ParseParameterDescriptions(eventData.parameters, report, $"event '{eventData.path}' parameters");
+                var bankAssets = new JArray();
                 foreach (var dependency in dependencies)
                 {
-                    if (!bankAssetPaths.TryGetValue(dependency, out var bankAssetPath))
+                    if (!bankAssetIds.TryGetValue(dependency, out var bankAssetId))
                         continue;
-                    // Content.Load resolves relative paths from the project root,
-                    // not from Globals.ProjectContentFolder. Preserve the
-                    // explicit Content prefix so generated bank references load
-                    // from the same canonical location they were saved to.
-                    var contentPath = "Content/" + Path.GetRelativePath(contentRoot, bankAssetPath).Replace('\\', '/');
-                    var asset = FlaxEngine.Content.Load<JsonAsset>(contentPath);
-                    if (asset)
-                        bankAssets.Add(new JsonAssetReference<AudioBank>(asset));
+                    bankAssets.Add(bankAssetId.ToString("N"));
                 }
-                audioEvent.BankAssets = bankAssets.ToArray();
-                if (Editor.SaveJsonAsset(eventPath, audioEvent))
+                var eventAssetData = new JObject
+                {
+                    [nameof(AudioEvent.BackendId)] = eventId.ToString("N"),
+                    [nameof(AudioEvent.Path)] = eventData.path ?? string.Empty,
+                    [nameof(AudioEvent.Is3D)] = eventData.is3D,
+                    [nameof(AudioEvent.IsOneShot)] = eventData.isOneShot,
+                    [nameof(AudioEvent.MinDistance)] = eventData.minDistance,
+                    [nameof(AudioEvent.MaxDistance)] = eventData.maxDistance,
+                    [nameof(AudioEvent.Length)] = eventData.length,
+                    [nameof(AudioEvent.Parameters)] = CreateParameterIdsJson(parameterDescriptions),
+                    [nameof(AudioEvent.BankDependencies)] = new JArray(dependencies.Select(x => x.ToString("N"))),
+                    [nameof(AudioEvent.BankAssets)] = bankAssets,
+                    // Editor-only authored metadata. Keeping this out of the native AudioEvent
+                    // layout avoids exposing nested string-containing arrays through bindings.
+                    ["ParameterDescriptions"] = CreateParameterDescriptionsJson(parameterDescriptions),
+                };
+                if (SaveGeneratedAsset(eventPath, eventAssetData, typeof(AudioEvent).FullName))
                     report.Errors.Add($"Failed to save FMOD event asset '{eventPath}'.");
-                else
-                    NormalizeNativeGuids(eventPath);
             }
 
             SynchronizeMixerAssets(metadata, snapshots, buses, vcas, snapshotDirectory, busDirectory, vcaDirectory, report, contentRoot);
@@ -223,10 +225,8 @@ namespace FlaxEditor.FMOD
                     Path = snapshotData.path ?? string.Empty,
                     WeightParameter = ParseParameter(snapshotData.weightParameter, report, $"snapshot '{snapshotData.path}' weight parameter"),
                 };
-                if (Editor.SaveJsonAsset(path, asset))
+                if (SaveGeneratedAsset(path, asset))
                     report.Errors.Add($"Failed to save FMOD snapshot asset '{path}'.");
-                else
-                    NormalizeNativeGuids(path);
             }
             foreach (var busData in metadata.buses ?? Array.Empty<FmodMetadataImporter.Bus>())
             {
@@ -241,10 +241,8 @@ namespace FlaxEditor.FMOD
                 else
                     report.BusesCreated++;
                 var asset = new AudioBus { BackendId = id, Path = busData.path ?? string.Empty };
-                if (Editor.SaveJsonAsset(path, asset))
+                if (SaveGeneratedAsset(path, asset))
                     report.Errors.Add($"Failed to save FMOD bus asset '{path}'.");
-                else
-                    NormalizeNativeGuids(path);
             }
             foreach (var vcaData in metadata.vcas ?? Array.Empty<FmodMetadataImporter.VCA>())
             {
@@ -259,10 +257,146 @@ namespace FlaxEditor.FMOD
                 else
                     report.VcasCreated++;
                 var asset = new AudioVCA { BackendId = id, Path = vcaData.path ?? string.Empty };
-                if (Editor.SaveJsonAsset(path, asset))
+                if (SaveGeneratedAsset(path, asset))
                     report.Errors.Add($"Failed to save FMOD VCA asset '{path}'.");
-                else
-                    NormalizeNativeGuids(path);
+            }
+        }
+
+        private static bool SaveGeneratedAsset(string path, object asset)
+        {
+            var data = JToken.Parse(FlaxEngine.Json.JsonSerializer.Serialize(asset));
+            return SaveGeneratedAsset(path, data, asset.GetType().FullName);
+        }
+
+        private static bool SaveGeneratedAsset(string path, JToken data, string typeName)
+        {
+            if (IsGeneratedAssetCurrent(path, data))
+                return false;
+
+            var contentDatabase = Editor.Instance?.ContentDatabase;
+            using var saveScope = contentDatabase?.TrackAssetSave(path);
+            var succeeded = false;
+            AssetItem loadedItem = null;
+            try
+            {
+                // CreateJson reloads an existing loaded JsonAsset immediately after writing it.
+                // Let open asset editors discard their native instance before that reload occurs.
+                if (contentDatabase?.Find(path) is AssetItem item && item.IsLoaded)
+                {
+                    loadedItem = item;
+                    var loadedAsset = FlaxEngine.Content.GetAsset(item.ID);
+                    Editor.Instance.Windows.PropertiesWin?.PrepareForAssetReload(loadedAsset);
+                }
+
+                // Authored event metadata contains nested structures with managed strings. Keep it
+                // out of generated C# setters and use the native JSON creation path with serialized data.
+                if (Editor.Internal_SaveJsonAsset(path, data.ToString(Formatting.None), typeName))
+                    return true;
+
+                // Match the normal disk-change path: notify item owners only after Reload has been requested.
+                loadedItem?.NotifyReloaded();
+
+                NormalizeNativeGuids(path);
+                succeeded = true;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Editor.LogError($"Failed to save generated FMOD asset '{path}'. Exception: {ex}");
+                return true;
+            }
+            finally
+            {
+                // Keep the initial JSON write and the normalized GUID rewrite in one
+                // tracked save so the file watcher cannot schedule a second reload.
+                saveScope?.Complete(succeeded);
+            }
+        }
+
+        private static bool IsGeneratedAssetCurrent(string path, JToken generatedData)
+        {
+            if (!File.Exists(path))
+                return false;
+            try
+            {
+                var currentRoot = JToken.Parse(File.ReadAllText(path));
+                var currentData = currentRoot["Data"];
+                NormalizeNativeGuids(currentData);
+                NormalizeNativeGuids(generatedData);
+                return JToken.DeepEquals(currentData, generatedData);
+            }
+            catch
+            {
+                // Invalid or obsolete assets should flow through the normal replacement path,
+                // which reports any failure with the generated asset path.
+                return false;
+            }
+        }
+
+        private static bool TryReadAssetId(string path, out Guid id)
+        {
+            id = Guid.Empty;
+            try
+            {
+                return Guid.TryParse((string)JObject.Parse(File.ReadAllText(path))["ID"], out id);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static JArray CreateParameterIdsJson(IEnumerable<AudioParameterDescription> descriptions)
+        {
+            return new JArray(descriptions.Select(x => CreateParameterIdJson(x.Id)));
+        }
+
+        private static JArray CreateParameterDescriptionsJson(IEnumerable<AudioParameterDescription> descriptions)
+        {
+            return new JArray(descriptions.Select(x => new JObject
+            {
+                [nameof(AudioParameterDescription.Id)] = CreateParameterIdJson(x.Id),
+                [nameof(AudioParameterDescription.Minimum)] = x.Minimum,
+                [nameof(AudioParameterDescription.Maximum)] = x.Maximum,
+                [nameof(AudioParameterDescription.DefaultValue)] = x.DefaultValue,
+                [nameof(AudioParameterDescription.Type)] = x.Type,
+                [nameof(AudioParameterDescription.Flags)] = x.Flags,
+                [nameof(AudioParameterDescription.Labels)] = x.Labels ?? string.Empty,
+            }));
+        }
+
+        private static JObject CreateParameterIdJson(AudioParameterId id)
+        {
+            return new JObject
+            {
+                [nameof(AudioParameterId.ID)] = id.ID.ToString("N"),
+                [nameof(AudioParameterId.Data1)] = id.Data1,
+                [nameof(AudioParameterId.Data2)] = id.Data2,
+                [nameof(AudioParameterId.Name)] = id.Name ?? string.Empty,
+            };
+        }
+
+        private static void PrepareSelectedAudioAssetForReload(string contentRoot)
+        {
+            var editor = Editor.Instance;
+            var selection = editor?.Windows?.ContentWin?.Selection;
+            if (selection == null)
+                return;
+
+            var audioRoot = Path.GetFullPath(Path.Combine(contentRoot, "Audio"))
+                                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            for (var i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is not AssetItem item)
+                    continue;
+                var itemPath = Path.GetFullPath(item.Path);
+                if (!itemPath.StartsWith(audioRoot, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var asset = FlaxEngine.Content.GetAsset(item.ID);
+                if (asset != null)
+                    editor.Windows.PropertiesWin?.PrepareForAssetReload(asset);
+                break;
             }
         }
 
@@ -330,11 +464,11 @@ namespace FlaxEditor.FMOD
             return result.ToArray();
         }
 
-        private static AudioParameterId[] ParseParameters(FmodMetadataImporter.Parameter[] values, Report report, string context)
+        private static AudioParameterDescription[] ParseParameterDescriptions(FmodMetadataImporter.Parameter[] values, Report report, string context)
         {
             if (values == null || values.Length == 0)
-                return Array.Empty<AudioParameterId>();
-            var result = new List<AudioParameterId>(values.Length);
+                return Array.Empty<AudioParameterDescription>();
+            var result = new List<AudioParameterDescription>(values.Length);
             foreach (var value in values)
             {
                 if (value == null)
@@ -342,29 +476,39 @@ namespace FlaxEditor.FMOD
                     report.Errors.Add($"FMOD metadata contains an invalid parameter in {context}.");
                     continue;
                 }
-                if (!string.IsNullOrWhiteSpace(value.id) && !Guid.TryParse(value.id, out var id))
+                Guid parameterGuid = Guid.Empty;
+                if (!string.IsNullOrWhiteSpace(value.id) && !Guid.TryParse(value.id, out parameterGuid))
                 {
                     report.Errors.Add($"FMOD metadata contains an invalid parameter GUID in {context}.");
                     continue;
                 }
-                var parameter = new AudioParameterId
+                var parameterId = new AudioParameterId
                 {
-                    ID = Guid.TryParse(value.id, out var parsedId) ? parsedId : Guid.Empty,
+                    ID = parameterGuid,
                     Data1 = value.data1,
                     Data2 = value.data2,
                     Name = value.name ?? string.Empty,
                 };
-                if (parameter.ID == Guid.Empty && parameter.Data1 == 0 && parameter.Data2 == 0 && string.IsNullOrWhiteSpace(parameter.Name))
+                if (parameterId.ID == Guid.Empty && parameterId.Data1 == 0 && parameterId.Data2 == 0 && string.IsNullOrWhiteSpace(parameterId.Name))
                     report.Errors.Add($"FMOD metadata contains an empty parameter in {context}.");
-                else if (!result.Contains(parameter))
-                    result.Add(parameter);
+                else if (!result.Any(x => x.Id.Equals(parameterId)))
+                    result.Add(new AudioParameterDescription
+                    {
+                        Id = parameterId,
+                        Minimum = value.minimum,
+                        Maximum = value.maximum,
+                        DefaultValue = value.defaultValue,
+                        Type = value.type,
+                        Flags = value.flags,
+                        Labels = string.Join("\n", (value.labels ?? Array.Empty<string>()).Where(x => x != null)),
+                    });
             }
             return result.ToArray();
         }
 
         private static AudioParameterId ParseParameter(FmodMetadataImporter.Parameter value, Report report, string context)
         {
-            return ParseParameters(value == null ? null : new[] { value }, report, context).FirstOrDefault();
+            return ParseParameterDescriptions(value == null ? null : new[] { value }, report, context).Select(x => x.Id).FirstOrDefault();
         }
 
         private static void ValidateBankReferences(IEnumerable<Guid> references, HashSet<Guid> knownBankIds, Report report, string context)

@@ -48,6 +48,7 @@ namespace FlaxEditor.FMOD
             public float defaultValue;
             public int type;
             public uint flags;
+            public string[] labels;
         }
 
         public sealed class Snapshot

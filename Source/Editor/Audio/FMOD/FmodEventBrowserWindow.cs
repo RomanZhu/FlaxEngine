@@ -21,6 +21,7 @@ namespace FlaxEditor.FMOD
             public string Type;
             public string Path;
             public Guid BackendId;
+            public Guid NativeBackendId;
             public Guid AssetId;
             public string AssetFile;
             public bool Is3D;
@@ -28,8 +29,19 @@ namespace FlaxEditor.FMOD
             public float MinDistance;
             public float MaxDistance;
             public float Length;
-            public string[] ParameterNames = Array.Empty<string>();
+            public BrowserParameter[] Parameters = Array.Empty<BrowserParameter>();
             public string[] Dependencies = Array.Empty<string>();
+        }
+
+        private sealed class BrowserParameter
+        {
+            public string Name;
+            public float Minimum;
+            public float Maximum = 1.0f;
+            public float DefaultValue;
+            public int Type;
+            public uint Flags;
+            public string[] Labels = Array.Empty<string>();
         }
 
         private static readonly (string Type, string Label)[] Groups =
@@ -46,8 +58,9 @@ namespace FlaxEditor.FMOD
         private readonly Button _close;
         private readonly SplitPanel _split;
         private readonly Tree _tree;
-        private readonly Panel _detailContent;
+        private readonly Panel _detailScroll;
         private readonly List<BrowserItem> _items = new();
+        private readonly Dictionary<string, float> _previewParameterValues = new(StringComparer.OrdinalIgnoreCase);
         private BrowserItem _selected;
         private AudioEventHandle _previewHandle;
         private Label _previewState;
@@ -86,7 +99,7 @@ namespace FlaxEditor.FMOD
             };
             _close.Clicked += () => Close();
 
-            _split = new SplitPanel(Orientation.Horizontal, ScrollBars.Vertical, ScrollBars.Vertical)
+            _split = new SplitPanel(Orientation.Horizontal, ScrollBars.Vertical, ScrollBars.None)
             {
                 Parent = this,
                 AnchorPreset = AnchorPresets.StretchAll,
@@ -100,14 +113,13 @@ namespace FlaxEditor.FMOD
                 IsScrollable = true,
             };
             _tree.SelectedChanged += OnSelectionChanged;
-            _detailContent = new Panel
+            _detailScroll = new Panel(ScrollBars.Vertical)
             {
                 Parent = _split.Panel2,
-                AnchorPreset = AnchorPresets.HorizontalStretchTop,
+                AnchorPreset = AnchorPresets.StretchAll,
                 Offsets = Margin.Zero,
-                Height = 720,
+                Pivot = Float2.Zero,
             };
-
             LoadItems();
             RebuildTree();
             ShowWelcome();
@@ -133,6 +145,7 @@ namespace FlaxEditor.FMOD
                         Type = type,
                         Path = (string)data?["Path"] ?? string.Empty,
                         BackendId = Guid.TryParse((string)data?["BackendId"], out var id) ? id : Guid.Empty,
+                        NativeBackendId = ParseSerializedGuid((string)data?["BackendId"]),
                         AssetId = Guid.TryParse((string)json["ID"], out var assetId) ? assetId : Guid.Empty,
                         AssetFile = file,
                         Is3D = (bool?)data?["Is3D"] ?? false,
@@ -140,7 +153,7 @@ namespace FlaxEditor.FMOD
                         MinDistance = (float?)data?["MinDistance"] ?? 0.0f,
                         MaxDistance = (float?)data?["MaxDistance"] ?? 0.0f,
                         Length = (float?)data?["Length"] ?? 0.0f,
-                        ParameterNames = (data?["Parameters"] as JArray)?.Select(x => (string)x["Name"]).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() ?? Array.Empty<string>(),
+                        Parameters = ReadParameters(data),
                         Dependencies = (data?["BankDependencies"] as JArray)?.Select(x => (string)x).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() ?? Array.Empty<string>(),
                     });
                 }
@@ -152,11 +165,77 @@ namespace FlaxEditor.FMOD
             _items.Sort((a, b) => string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase));
         }
 
+        private static BrowserParameter[] ReadParameters(JObject data)
+        {
+            var definitions = data?["ParameterDescriptions"] as JArray;
+            if (definitions != null && definitions.Count != 0)
+            {
+                return definitions.OfType<JObject>().Select(x =>
+                {
+                    var id = x["Id"] as JObject;
+                    return new BrowserParameter
+                    {
+                        Name = (string)id?["Name"] ?? string.Empty,
+                        Minimum = (float?)x["Minimum"] ?? 0.0f,
+                        Maximum = (float?)x["Maximum"] ?? 1.0f,
+                        DefaultValue = (float?)x["DefaultValue"] ?? 0.0f,
+                        Type = (int?)x["Type"] ?? 0,
+                        Flags = (uint?)x["Flags"] ?? 0,
+                        Labels = ParseParameterLabels(x["Labels"]),
+                    };
+                }).Where(x => !string.IsNullOrWhiteSpace(x.Name)).ToArray();
+            }
+
+            // Backward-compatible display for assets synchronized before full definitions were stored.
+            return (data?["Parameters"] as JArray)?.OfType<JObject>().Select(x => new BrowserParameter
+            {
+                Name = (string)x["Name"] ?? string.Empty,
+            }).Where(x => !string.IsNullOrWhiteSpace(x.Name)).ToArray() ?? Array.Empty<BrowserParameter>();
+        }
+
+        private static string[] ParseParameterLabels(JToken token)
+        {
+            // Newer assets store labels as a single newline-separated string, older ones as a JSON array.
+            if (token is JArray array)
+                return array.Select(label => (string)label).Where(label => label != null).ToArray();
+            var joined = token?.Type == JTokenType.String ? (string)token : null;
+            return SplitLabels(joined);
+        }
+
+        private static string[] SplitLabels(string labels)
+        {
+            return string.IsNullOrEmpty(labels) ? Array.Empty<string>() : labels.Split('\n');
+        }
+
+        private static Guid ParseSerializedGuid(string value)
+        {
+            if (!Guid.TryParse(value, out var parsed))
+                return Guid.Empty;
+            return FlaxEngine.Json.JsonSerializer.ParseID(parsed.ToString("N"));
+        }
+
+        internal void RefreshMetadata()
+        {
+            var selectedId = _selected?.BackendId ?? Guid.Empty;
+            var selectedType = _selected?.Type;
+            LoadItems();
+            RebuildTree();
+            var refreshed = selectedId == Guid.Empty ? null : _items.FirstOrDefault(x => x.BackendId == selectedId && x.Type == selectedType);
+            if (refreshed != null)
+                ShowItem(refreshed);
+            else
+                ShowWelcome();
+        }
+
         private void RebuildTree()
         {
             _tree.DisposeChildren();
             var query = _search.Text?.Trim() ?? string.Empty;
-            var visible = _items.Where(x => query.Length == 0 || x.Path.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 || x.Type.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0).ToArray();
+            var visible = _items.Where(x => query.Length == 0 ||
+                                            x.Path.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                            x.Type.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                            x.Parameters.Any(parameter => parameter.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                                                          parameter.Labels.Any(label => label.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))).ToArray();
             foreach (var group in Groups)
             {
                 var groupItems = visible.Where(x => x.Type == group.Type).ToArray();
@@ -214,13 +293,17 @@ namespace FlaxEditor.FMOD
         {
             var label = new Label(14, y, 620, height)
             {
-                Parent = _detailContent,
+                Parent = _detailScroll,
                 AnchorPreset = AnchorPresets.HorizontalStretchTop,
                 Offsets = new Margin(14, 14, y, height),
                 Text = text,
                 TextColor = color ?? Style.Current.Foreground,
                 Wrapping = TextWrapping.WrapWords,
+                HorizontalAlignment = TextAlignment.Near,
                 VerticalAlignment = TextAlignment.Near,
+                // Anchored controls default to fixed viewport content. Detail rows
+                // must move with the panel's view offset just like buttons/sliders.
+                IsScrollable = true,
             };
             // FontReference is a class. Assigning its default (null) used to clear Label.Font
             // and crash Label.DrawSelf when ordinary detail rows were rendered.
@@ -231,7 +314,7 @@ namespace FlaxEditor.FMOD
 
         private Button AddButton(string text, float x, float y, float width, Action action)
         {
-            var button = new Button(x, y, width, 30) { Parent = _detailContent, Text = text };
+            var button = new Button(x, y, width, 30) { Parent = _detailScroll, Text = text };
             button.Clicked += action;
             return button;
         }
@@ -239,26 +322,29 @@ namespace FlaxEditor.FMOD
         private void ShowWelcome()
         {
             ReleasePreview();
-            _detailContent.DisposeChildren();
+            _detailScroll.DisposeChildren();
             _previewState = null;
             _meter = null;
             _meterText = null;
             _runtimeInfo = null;
             _selected = null;
+            _previewParameterValues.Clear();
             AddLabel("FMOD / FLAX EVENT BROWSER", 18, 32, Color.White, new FontReference(Style.Current.FontTitle));
             AddLabel("Select an event, snapshot, bank, bus, or VCA from the hierarchy.", 62, 26, Style.Current.ForegroundGrey, new FontReference(Style.Current.FontLarge));
             AddLabel("Events expose typed metadata, authored parameter ranges, 3D preview distance, transport controls, and measured master output. Paths and GUIDs are metadata; the generated Flax asset remains the serialized reference.", 108, 70, Style.Current.ForegroundGrey);
+            FinishDetailLayout(200);
         }
 
         private void ShowItem(BrowserItem item)
         {
             ReleasePreview();
-            _detailContent.DisposeChildren();
+            _detailScroll.DisposeChildren();
             _previewState = null;
             _meter = null;
             _meterText = null;
             _runtimeInfo = null;
             _selected = item;
+            _previewParameterValues.Clear();
             var y = 16.0f;
             AddLabel(StripPrefix(item.Path), y, 34, Color.White, new FontReference(Style.Current.FontTitle));
             y += 42;
@@ -275,7 +361,7 @@ namespace FlaxEditor.FMOD
             if (item.Type != "Event" && item.Type != "Snapshot")
             {
                 AddLabel("This typed object is available for asset pickers, scene references, validation, and CLI lookup.", y, 48, Style.Current.ForegroundGrey);
-                _detailContent.Height = y + 90;
+                FinishDetailLayout(y + 90);
                 return;
             }
 
@@ -290,7 +376,7 @@ namespace FlaxEditor.FMOD
             _previewState = AddLabel("Stopped", y + 4, 24, new Color(0.75f, 0.85f, 1.0f));
             _previewState.Offsets = new Margin(382, 14, y + 4, 24);
             y += 46;
-            _meter = new ProgressBar(14, y, 350, 18) { Parent = _detailContent, Value = 0 };
+            _meter = new ProgressBar(14, y, 350, 18) { Parent = _detailScroll, Value = 0 };
             _meterText = AddLabel("Master output: -120.0 dBFS", y - 2, 22, Style.Current.ForegroundGrey);
             _meterText.Offsets = new Margin(380, 14, y - 2, 22);
             y += 36;
@@ -299,12 +385,12 @@ namespace FlaxEditor.FMOD
 
             if (item.Is3D)
             {
-                var spatial = new SpatialPreview { Parent = _detailContent, Bounds = new Rectangle(14, y, 496, 150), MinDistance = item.MinDistance, MaxDistance = item.MaxDistance, Distance = _previewDistance };
+                var spatial = new SpatialPreview { Parent = _detailScroll, Bounds = new Rectangle(14, y, 496, 150), MinDistance = item.MinDistance, MaxDistance = item.MaxDistance, Distance = _previewDistance };
                 y += 160;
                 AddLabel("Listener distance", y, 22, Style.Current.ForegroundGrey);
                 var max = Mathf.Max(item.MaxDistance * 1.5f, 2.0f);
                 _previewDistance = Mathf.Clamp(_previewDistance, 0.0f, max);
-                var distance = new SliderControl(_previewDistance, 150, y, 360, 0.0f, max) { Parent = _detailContent };
+                var distance = new SliderControl(_previewDistance, 150, y, 360, 0.0f, max) { Parent = _detailScroll };
                 distance.ValueChanged += () => { _previewDistance = distance.Value; spatial.Distance = _previewDistance; spatial.PerformLayout(); ApplyPreviewPosition(); };
                 y += 38;
             }
@@ -316,23 +402,116 @@ namespace FlaxEditor.FMOD
                 foreach (var parameter in parameters)
                 {
                     var captured = parameter;
-                    AddLabel(captured.Id.Name, y, 22, Style.Current.ForegroundGrey);
-                    var slider = new SliderControl(captured.DefaultValue, 150, y, 360, captured.Minimum, captured.Maximum) { Parent = _detailContent };
-                    slider.ValueChanged += () => { if (IsPreviewValid()) AudioEventSystem.SetParameter(_previewHandle, captured.Id, slider.Value, false); };
+                    var authored = item.Parameters.FirstOrDefault(x => string.Equals(x.Name, captured.Id.Name, StringComparison.OrdinalIgnoreCase));
+                    var labels = authored?.Labels ?? SplitLabels(captured.Labels);
+                    AddParameterDescription(captured.Id.Name, captured.Minimum, captured.Maximum, captured.DefaultValue, captured.Type, captured.Flags, labels, ref y);
+                    var slider = new SliderControl(captured.DefaultValue, 14, y, 496, captured.Minimum, captured.Maximum) { Parent = _detailScroll };
+                    var parameterKey = GetParameterKey(captured.Id);
+                    _previewParameterValues[parameterKey] = captured.DefaultValue;
+                    slider.ValueChanged += () =>
+                    {
+                        var value = slider.Value;
+                        if ((captured.Flags & (0x8u | 0x10u)) != 0)
+                        {
+                            value = Mathf.Round(value);
+                            if (!Mathf.NearEqual(slider.Value, value))
+                            {
+                                slider.Value = value;
+                                return;
+                            }
+                        }
+                        _previewParameterValues[parameterKey] = value;
+                        if (IsPreviewValid())
+                            AudioEventSystem.SetParameter(_previewHandle, captured.Id, value, true);
+                    };
                     y += 34;
                 }
             }
-            else if (item.ParameterNames.Length != 0)
+            else if (item.Parameters.Length != 0)
             {
-                AddLabel($"Runtime ranges become available after the FMOD backend initializes. Authored parameters: {string.Join(", ", item.ParameterNames)}", y, 46, Color.Orange);
-                y += 54;
+                foreach (var parameter in item.Parameters)
+                    AddParameterDescription(parameter.Name, parameter.Minimum, parameter.Maximum, parameter.DefaultValue, parameter.Type, parameter.Flags, parameter.Labels, ref y);
+                AddLabel("Preview controls become available after the FMOD backend and event banks initialize.", y, 36, Color.Orange);
+                y += 44;
             }
             else
             {
                 AddLabel("No authored parameters.", y, 24, Style.Current.ForegroundGrey);
                 y += 32;
             }
-            _detailContent.Height = y + 40;
+            FinishDetailLayout(y + 40);
+        }
+
+        private void FinishDetailLayout(float height)
+        {
+            // Add a layout boundary so the panel derives its scroll range from the
+            // generated content rather than from an anchored intermediary panel.
+            _ = new Control(0, height - 1.0f, 1.0f, 1.0f)
+            {
+                Parent = _detailScroll,
+            };
+            _detailScroll.PerformLayout(true);
+            _detailScroll.ScrollViewTo(Float2.Zero, true);
+        }
+
+        private void AddParameterDescription(string name, float minimum, float maximum, float defaultValue, int type, uint flags, string[] labels, ref float y)
+        {
+            labels ??= Array.Empty<string>();
+            var kind = GetParameterKind(type, flags);
+            var defaultText = defaultValue.ToString("0.###");
+            var defaultIndex = (int)Math.Round(defaultValue);
+            if (defaultIndex >= 0 && defaultIndex < labels.Length)
+                defaultText = $"{labels[defaultIndex]} ({defaultText})";
+            var text = $"{name}   -   {kind}\nRange: {minimum:0.###} to {maximum:0.###}    Default: {defaultText}";
+            var height = 42.0f;
+            if (labels.Length != 0)
+            {
+                text += "\nValues: " + string.Join(", ", labels.Select((label, index) => $"{index} = {label}"));
+                height += 22.0f;
+            }
+            AddLabel(text, y, height, Style.Current.ForegroundGrey);
+            y += height + 6.0f;
+        }
+
+        private static string GetParameterKind(int type, uint flags)
+        {
+            const uint readOnly = 0x1;
+            const uint automatic = 0x2;
+            const uint global = 0x4;
+            const uint discrete = 0x8;
+            const uint labeled = 0x10;
+            string result;
+            if ((flags & labeled) != 0)
+                result = "Labeled";
+            else if ((flags & discrete) != 0)
+                result = "Discrete";
+            else
+                result = type switch
+                {
+                    0 => "Continuous",
+                    1 => "Automatic Distance",
+                    2 => "Automatic Event Cone Angle",
+                    3 => "Automatic Event Orientation",
+                    4 => "Automatic Direction",
+                    5 => "Automatic Elevation",
+                    6 => "Automatic Listener Orientation",
+                    7 => "Automatic Speed",
+                    8 => "Automatic Absolute Speed",
+                    9 => "Automatic Normalized Distance",
+                    _ => $"Type {type}",
+                };
+            if ((flags & global) != 0)
+                result += ", Global";
+            if ((flags & readOnly) != 0)
+                result += ", Read-only";
+            else if ((flags & automatic) != 0 && type == 0)
+                result += ", Automatic";
+            return result;
+        }
+
+        private static string GetParameterKey(AudioParameterId id)
+        {
+            return !string.IsNullOrEmpty(id.Name) ? id.Name : $"{id.Data1:X8}:{id.Data2:X8}";
         }
 
         private string FormatDependencies(string[] dependencies)
@@ -406,7 +585,7 @@ namespace FlaxEditor.FMOD
                 options.Attributes = PreviewAttributes();
             LoadPreviewBanks();
             AudioEventSystem.SetPreviewListener(PreviewListenerAttributes());
-            if (!AudioEventSystem.GetEventParameters(_selected.BackendId, _selected.Path, out _))
+            if (!AudioEventSystem.GetEventParameters(_selected.BackendId, _selected.Path, out var parameters))
             {
                 if (_previewState != null)
                     _previewState.Text = "Unavailable in the linked banks — rebuild/import metadata, then Refresh";
@@ -417,6 +596,11 @@ namespace FlaxEditor.FMOD
             {
                 SetPreviewFailure("Create failed");
                 return;
+            }
+            foreach (var parameter in parameters)
+            {
+                if (_previewParameterValues.TryGetValue(GetParameterKey(parameter.Id), out var value))
+                    AudioEventSystem.SetParameter(_previewHandle, parameter.Id, value, true);
             }
             if (!AudioEventSystem.PlayPreview(_previewHandle))
                 SetPreviewFailure("Play failed");
@@ -437,8 +621,8 @@ namespace FlaxEditor.FMOD
                     continue;
                 var asset = FlaxEngine.Content.LoadAsync<JsonAsset>(databaseItem.ID);
                 var bank = asset?.GetInstance<AudioBank>();
-                if (bank != null && !AudioEventSystem.IsBankLoaded(bank.BackendId))
-                    AudioEventSystem.LoadBank(bank.BackendId, bank.Path, bank.NonBlocking);
+                if (bank != null && !AudioEventSystem.IsBankLoaded(item.NativeBackendId))
+                    AudioEventSystem.LoadBank(item.NativeBackendId, bank.Path, bank.NonBlocking);
             }
         }
 

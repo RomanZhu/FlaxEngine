@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Modules;
 using FlaxEngine;
+using FlaxEngine.GUI;
 
 namespace FlaxEditor.FMOD
 {
@@ -45,6 +46,7 @@ namespace FlaxEditor.FMOD
             // The scene viewport is available only after the editor's end-init phase.
             FmodDebugOverlay.Attach(Editor);
             Editor.UI.AddMenuButton("Audio", "Open FMOD Studio Project", OpenProject);
+            Editor.UI.AddMenuButton("Audio", "Relink FMOD Studio Project...", RelinkProject);
             Editor.UI.AddMenuButton("Audio", "Build FMOD Banks", BuildBanks);
             Editor.UI.AddMenuButton("Audio", "Synchronize FMOD Metadata", () => SynchronizeMetadata());
             Editor.UI.AddMenuButton("Audio", "Build + Synchronize", () => BuildBanksAndSynchronize());
@@ -113,6 +115,7 @@ namespace FlaxEditor.FMOD
                         Editor.LogError(item);
                     return false;
                 }
+                _eventBrowser?.RefreshMetadata();
                 Editor.Log($"FMOD metadata synchronized: {report.EventsCreated} events created, {report.EventsUpdated} updated, {report.BanksCreated} banks created, {report.BanksUpdated} updated, {report.SnapshotsCreated + report.SnapshotsUpdated} snapshots, {report.BusesCreated + report.BusesUpdated} buses, {report.VcasCreated + report.VcasUpdated} VCAs.");
                 return report.Succeeded;
             }
@@ -125,8 +128,40 @@ namespace FlaxEditor.FMOD
 
         private void OpenProject()
         {
-            if (!FmodStudioLocator.OpenProject())
-                Editor.LogError("FMOD Studio or its per-user project path is not configured.");
+            if (!EnsureStudioProjectLinked("open"))
+                return;
+            if (!FmodStudioLocator.OpenProject(out var error))
+                Editor.LogError(error);
+        }
+
+        private void RelinkProject()
+        {
+            if (FmodSetupWizard.TryRelinkProject(Editor, out var message))
+                Editor.Log(message);
+            else
+                Editor.LogWarning(message);
+        }
+
+        private bool EnsureStudioProjectLinked(string operation)
+        {
+            var project = FmodEditorSettings.StudioProjectPath;
+            if (File.Exists(project))
+                return true;
+
+            var problem = string.IsNullOrWhiteSpace(project)
+                ? $"Cannot {operation} the FMOD Studio project because no .fspro is linked."
+                : $"Cannot {operation} the FMOD Studio project because the linked file is missing: '{project}'.";
+            Editor.LogError(problem + " Use Audio > Relink FMOD Studio Project to select its new location.");
+            if (Editor.IsHeadlessMode || MessageBox.Show(problem + "\n\nSelect the FMOD Studio project at its new location now?", "FMOD Studio Project Missing", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return false;
+
+            if (FmodSetupWizard.TryRelinkProject(Editor, out var message))
+            {
+                Editor.Log(message);
+                return true;
+            }
+            Editor.LogWarning(message);
+            return false;
         }
 
         private void BuildBanks()
@@ -342,13 +377,27 @@ namespace FlaxEditor.FMOD
         /// </summary>
         public bool BuildBanksAndSynchronize()
         {
-            if (!FmodStudioLocator.BuildBanks())
+            if (!EnsureStudioProjectLinked("build banks for"))
+                return false;
+            var build = FmodStudioLocator.BuildBanksDetailed();
+            if (!build.Success)
             {
-                Editor.LogError("FMOD Studio bank build failed or Studio is not configured.");
+                Editor.LogError(build.ToDisplayString());
                 return false;
             }
             var settings = GameSettings.Load<AudioSettings>();
-            var synchronized = !settings.AutoSyncMetadataOnBankBuild || SynchronizeMetadata();
+            var synchronized = true;
+            if (settings.AutoSyncMetadataOnBankBuild)
+            {
+                synchronized = FmodProjectLinker.ImportAndSynchronize(out var message);
+                if (synchronized)
+                {
+                    Editor.Log(message);
+                    _eventBrowser?.RefreshMetadata();
+                }
+                else
+                    Editor.LogError(message);
+            }
             if (synchronized)
                 Editor.Log("FMOD build complete.");
             if (settings.AutoReloadBanksOnBuild && synchronized)

@@ -62,9 +62,9 @@ public:
     float Length = 0.0f;
 
     /// <summary>
-    /// Exposed parameters for this audio event.
+    /// Parameter identifiers retained for compatibility with existing gameplay code and assets.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(70), EditorDisplay(\"Parameters\")")
+    API_FIELD(Attributes="EditorOrder(75), EditorDisplay(\"Parameters\"), HideInEditor")
     Array<AudioParameterId> Parameters;
 
     /// <summary>Bank GUIDs that must be loaded before an instance is created.</summary>
