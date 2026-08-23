@@ -210,7 +210,20 @@ namespace FlaxEditor.Modules
         {
             RefreshAssetDatabaseRecords(revision);
             if (_enableEvents)
-                _rebuildFlag = true;
+            {
+                // Reconcile the visible tree incrementally. A full rebuild disposes
+                // every AssetItem, which also closes editors for assets that merely
+                // changed their canonical document contents.
+                lock (_dirtyNodes)
+                {
+                    for (int i = 0; i < Projects.Count; i++)
+                    {
+                        var content = Projects[i].Content;
+                        if (content != null)
+                            _dirtyNodes.Add(content);
+                    }
+                }
+            }
         }
 
         /// <summary>Gets the immutable canonical database record for an asset identity.</summary>
@@ -1668,6 +1681,26 @@ namespace FlaxEditor.Modules
                     }
                     else if (canHaveAssets && child is AssetItem childAsset)
                     {
+                        if (childAsset.IsCanonicalSource)
+                        {
+                            var recordExists = _assetRecordsById.TryGetValue(childAsset.ID, out var record);
+                            var recordMatchesItem = recordExists &&
+                                                    record.TypeName == childAsset.TypeName &&
+                                                    record.IsMain != childAsset.IsCanonicalSubAsset &&
+                                                    string.Equals(ContentMutationPathUtils.Normalize(record.SourcePath), ContentMutationPathUtils.Normalize(childAsset.SourcePath), StringComparison.OrdinalIgnoreCase);
+                            if (!recordMatchesItem)
+                            {
+                                // The identity, type, or source mapping changed. Replace only
+                                // this item and leave unrelated open asset editors untouched.
+                                Dispose(childAsset);
+                                i--;
+                                continue;
+                            }
+
+                            childAsset.SetAssetDatabaseRecord(record);
+                            continue;
+                        }
+
                         // Check if asset type doesn't match the item proxy (eg. item reimported as Material Instance instead of Material)
                         if (FlaxEngine.Content.GetAssetInfo(child.Path, out var assetInfo))
                         {
