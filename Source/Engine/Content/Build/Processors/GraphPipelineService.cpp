@@ -118,8 +118,9 @@ namespace
         {
             Asset* asset = Content::GetAsset(artifact.AssetID);
             auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
-            if (!binary || !binary->IsLoaded() || !binary->IsUsingGeneratedArtifact() || binary->GetTypeName() != artifact.TypeName ||
-                (binary->GetArtifactKey() == artifact.Key && binary->IsUsingExactArtifact()))
+            if (!binary || binary->GetTypeName() != artifact.TypeName ||
+                (!binary->IsLoaded() && !binary->LastLoadFailed()) ||
+                (binary->GetArtifactKey() == artifact.Key && binary->IsUsingExactArtifact() && binary->IsLoaded()))
                 return;
             const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
             if (result != BinaryAssetStorageSwitchResult::Success)

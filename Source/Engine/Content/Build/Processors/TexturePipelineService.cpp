@@ -169,7 +169,9 @@ namespace
             if (!asset || asset->GetTypeName() != Texture::TypeName)
                 return;
             auto* texture = static_cast<Texture*>(asset);
-            if (texture->GetArtifactKey() == artifact.Key && texture->IsUsingExactArtifact())
+            if (!texture->IsLoaded() && !texture->LastLoadFailed())
+                return;
+            if (texture->GetArtifactKey() == artifact.Key && texture->IsUsingExactArtifact() && texture->IsLoaded())
                 return;
             const BinaryAssetStorageSwitchResult result = texture->SwitchStorage(artifact);
             if (result != BinaryAssetStorageSwitchResult::Success)

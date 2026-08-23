@@ -207,8 +207,11 @@ bool AssetDatabaseFacade::LoadOrScan(bool strictMetadata)
         HashCache.Seed(states);
         if (FileStatesStillMatch(states))
         {
-            SetDiagnostics(Array<AssetPipelineDiagnostic>());
-            return false;
+            if (!strictMetadata)
+            {
+                SetDiagnostics(Array<AssetPipelineDiagnostic>());
+                return false;
+            }
         }
     }
     return Scan(strictMetadata);
@@ -881,6 +884,34 @@ Guid AssetDatabaseFacade::CreateAudioMetadata(const StringView& sourcePath, cons
 #endif
 
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
+Guid AssetDatabaseFacade::CreateDefaultModelMetadata(const StringView& sourcePath)
+{
+    ModelTool::Options probeOptions;
+    probeOptions.Type = ModelTool::ModelType::Prefab;
+    probeOptions.ImportTypes = ImportDataTypes::Geometry | ImportDataTypes::Skeleton | ImportDataTypes::Animations |
+                               ImportDataTypes::Nodes | ImportDataTypes::Materials | ImportDataTypes::Textures;
+    ModelData data;
+    String error;
+    if (ModelTool::ImportData(String(sourcePath), data, probeOptions, error))
+    {
+        AssetPipelineDiagnostic diagnostic;
+        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.Message = error.IsEmpty() ? TEXT("Model structure parser rejected the source.") : error;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return Guid::Empty;
+    }
+
+    ModelTool::Options options;
+    options.Type = data.Skeleton.Bones.HasItems() || data.Animations.HasItems()
+        ? ModelTool::ModelType::SkinnedModel
+        : ModelTool::ModelType::Model;
+    return CreateModelMetadata(sourcePath, options);
+}
+
 Guid AssetDatabaseFacade::CreateModelMetadata(const StringView& sourcePath, const ModelTool::Options& options)
 {
     const String metaPath = String(sourcePath) + TEXT(".meta");

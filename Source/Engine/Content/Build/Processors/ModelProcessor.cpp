@@ -538,6 +538,19 @@ namespace
         }
         return false;
     }
+
+    const ModelSubAssetInfo* ResolveBuiltSelection(const Array<ModelSubAssetInfo>& infos, const ModelSubAssetInfo& selected)
+    {
+        const ModelSubAssetInfo* result = ModelSubAssetKeys::Find(infos, selected.StableKey);
+        if (result)
+            return result;
+        for (const ModelSubAssetInfo& info : infos)
+        {
+            if (info.Kind == selected.Kind && info.SourceIndex == selected.SourceIndex && info.SemanticHash == selected.SemanticHash)
+                return &info;
+        }
+        return nullptr;
+    }
 }
 #endif
 
@@ -585,6 +598,8 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     options.CollisionMeshesPostfix.Clear();
     if (selected && selected->Kind == ModelSubAssetKind::Animation)
         options.Type = ModelTool::ModelType::Animation;
+    else if (selected && selected->Kind == ModelSubAssetKind::Material)
+        options.Type = ModelTool::ModelType::Prefab;
     else
         options.Type = TypeFromName(selected ? selected->TypeName : prepared.OutputType);
     if (selected && (selected->Kind == ModelSubAssetKind::Animation || selected->Kind == ModelSubAssetKind::Material))
@@ -626,7 +641,7 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
             prepared.AssetID, sourcePath, TEXT("Stable mesh group could not be selected after source processing."));
     if (selected && selected->Kind == ModelSubAssetKind::Animation)
     {
-        const ModelSubAssetInfo* rebuilt = ModelSubAssetKeys::Find(builtInfos, selected->StableKey);
+        const ModelSubAssetInfo* rebuilt = ResolveBuiltSelection(builtInfos, *selected);
         if (!rebuilt || rebuilt->SourceIndex < 0 || rebuilt->SourceIndex >= data.Animations.Count())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, sourcePath, TEXT("Stable animation selection became ambiguous after processing."));
@@ -645,7 +660,7 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     CreateAssetResult createResult;
     if (selected && selected->Kind == ModelSubAssetKind::Material)
     {
-        const ModelSubAssetInfo* rebuilt = ModelSubAssetKeys::Find(builtInfos, selected->StableKey);
+        const ModelSubAssetInfo* rebuilt = ResolveBuiltSelection(builtInfos, *selected);
         if (!rebuilt || rebuilt->SourceIndex < 0 || rebuilt->SourceIndex >= data.Materials.Count())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, sourcePath, TEXT("Stable material selection became ambiguous after processing."));

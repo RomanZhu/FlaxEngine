@@ -135,6 +135,9 @@ public:
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
     /// <summary>Creates canonical model metadata beside an imported source and seeds subasset GUIDs from a sibling flax package when present.</summary>
     API_FUNCTION() static Guid CreateModelMetadata(const StringView& sourcePath, const ModelTool::Options& options);
+
+    /// <summary>Creates model metadata with a root type inferred from the source contents.</summary>
+    API_FUNCTION() static Guid CreateDefaultModelMetadata(const StringView& sourcePath);
 #endif
 
     /// <summary>Loads compiled Visject surface bytes from a canonical graph document without writing.</summary>

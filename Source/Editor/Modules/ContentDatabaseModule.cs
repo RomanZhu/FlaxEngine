@@ -34,6 +34,7 @@ namespace FlaxEditor.Modules
         private readonly HashSet<MainContentFolderTreeNode> _dirtyNodes = new HashSet<MainContentFolderTreeNode>();
         private readonly object _assetDiskChangesLock = new object();
         private readonly HashSet<string> _pendingAssetDiskChanges = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _pendingMissingMetadataRegistrations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _pendingTextureBuildSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<Guid> _pendingTextureBuildIds = new HashSet<Guid>();
         private readonly HashSet<Guid> _renameOnlyTextureIds = new HashSet<Guid>();
@@ -204,6 +205,25 @@ namespace FlaxEditor.Modules
                 }
             }
             _assetDatabaseRevision = revision;
+        }
+
+        private void QueueMissingMetadataRegistrations()
+        {
+            var diagnostics = AssetDatabaseFacade.GetDiagnostics();
+            for (int i = 0; i < diagnostics.Length; i++)
+            {
+                var diagnostic = diagnostics[i];
+                if (string.IsNullOrWhiteSpace(diagnostic.SourcePath))
+                    continue;
+                if (diagnostic.Code == AssetPipelineDiagnosticCode.MissingMeta)
+                {
+                    _pendingMissingMetadataRegistrations.Add(ContentMutationPathUtils.Normalize(diagnostic.SourcePath));
+                }
+                else if (diagnostic.Code == AssetPipelineDiagnosticCode.MetaParseError && diagnostic.SourcePath.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
+                {
+                    _pendingMissingMetadataRegistrations.Add(ContentMutationPathUtils.Normalize(diagnostic.SourcePath.Substring(0, diagnostic.SourcePath.Length - 5)));
+                }
+            }
         }
 
         private void OnAssetDatabaseChanged(ulong revision)
@@ -1691,6 +1711,29 @@ namespace FlaxEditor.Modules
                             continue;
                         }
 
+                        if (_sourceAssetRecords.TryGetValue(ContentMutationPathUtils.Normalize(childAsset.Path), out var sourceRecord))
+                        {
+                            if (sourceRecord.ID == childAsset.ID && sourceRecord.TypeName == childAsset.TypeName)
+                            {
+                                // A copied source can be discovered by the legacy cache before its sidecar
+                                // registration completes. Promote the existing item once canonical ownership
+                                // becomes available, and discard only a failed object that tried to parse the
+                                // source bytes as a legacy .flax container.
+                                if (FlaxEngine.Content.GetAsset(childAsset.ID) is BinaryAsset staleAsset &&
+                                    staleAsset.LastLoadFailed &&
+                                    string.Equals(ContentMutationPathUtils.Normalize(staleAsset.StoragePath), ContentMutationPathUtils.Normalize(sourceRecord.SourcePath), StringComparison.OrdinalIgnoreCase))
+                                {
+                                    FlaxEngine.Content.UnloadAsset(staleAsset);
+                                }
+                                childAsset.SetAssetDatabaseRecord(sourceRecord);
+                                continue;
+                            }
+
+                            Dispose(childAsset);
+                            i--;
+                            continue;
+                        }
+
                         // Check if asset type doesn't match the item proxy (eg. item reimported as Material Instance instead of Material)
                         if (FlaxEngine.Content.GetAssetInfo(child.Path, out var assetInfo))
                         {
@@ -1710,12 +1753,9 @@ namespace FlaxEditor.Modules
                             }
                         }
                     }
-                    else if (canHaveAssets && child is FileItem && FlaxEngine.Content.GetAssetInfo(child.Path, out var assetInfo))
+                    else if (canHaveAssets && child is FileItem && _sourceAssetRecords.TryGetValue(ContentMutationPathUtils.Normalize(child.Path), out var sourceRecord))
                     {
-                        // The asset info can become available after the file system notification that created
-                        // a temporary generic file item. Upgrade it into the proper asset item when refreshing.
-                        var proxy = GetAssetProxy(assetInfo.TypeName, child.Path);
-                        var item = proxy?.ConstructItem(child.Path, assetInfo.TypeName, ref assetInfo.ID);
+                        var item = ConstructCanonicalSourceItem(child.Path, sourceRecord);
                         if (item != null)
                         {
                             var index = folder.Children.IndexOf(child);
@@ -1733,9 +1773,12 @@ namespace FlaxEditor.Modules
                             }
                         }
                     }
-                    else if (canHaveAssets && child is FileItem && _sourceAssetRecords.TryGetValue(ContentMutationPathUtils.Normalize(child.Path), out var sourceRecord))
+                    else if (canHaveAssets && child is FileItem && FlaxEngine.Content.GetAssetInfo(child.Path, out var assetInfo))
                     {
-                        var item = ConstructCanonicalSourceItem(child.Path, sourceRecord);
+                        // The asset info can become available after the file system notification that created
+                        // a temporary generic file item. Upgrade it into the proper asset item when refreshing.
+                        var proxy = GetAssetProxy(assetInfo.TypeName, child.Path);
+                        var item = proxy?.ConstructItem(child.Path, assetInfo.TypeName, ref assetInfo.ID);
                         if (item != null)
                         {
                             var index = folder.Children.IndexOf(child);
@@ -1974,6 +2017,7 @@ namespace FlaxEditor.Modules
                 if (AssetDatabaseFacade.LoadOrScan(true))
                     Editor.LogError("Failed to initialize the canonical asset database. See asset pipeline diagnostics.");
                 RefreshAssetDatabaseRecords(AssetDatabaseFacade.Revision);
+                QueueMissingMetadataRegistrations();
             }
 
             // Setup content proxies
@@ -2530,13 +2574,21 @@ namespace FlaxEditor.Modules
         {
             ProcessPendingAssetDiskChanges();
 
-            if (_assetDatabaseRescanPending)
+            if (_pendingMissingMetadataRegistrations.Count != 0 && !Editor.ContentImporting.IsImporting)
+            {
+                var sourcePaths = _pendingMissingMetadataRegistrations.ToArray();
+                _pendingMissingMetadataRegistrations.Clear();
+                Editor.ContentImporting.RegisterInPlaceCanonicalSources(sourcePaths);
+            }
+
+            if (_assetDatabaseRescanPending && !Editor.ContentImporting.IsImporting)
             {
                 _assetDatabaseRescanPending = false;
                 if (AssetDatabaseFacade.Scan(true))
                     Editor.LogError("Canonical asset database reconciliation failed. See asset pipeline diagnostics.");
                 else
                     SchedulePendingTextureBuilds();
+                QueueMissingMetadataRegistrations();
             }
 
             // Update all dirty content tree nodes

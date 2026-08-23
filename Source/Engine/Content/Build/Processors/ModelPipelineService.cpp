@@ -40,6 +40,7 @@ namespace
     struct ModelPipelineState
     {
         std::mutex Locker;
+        std::mutex InvocationLocker;
         AssetProcessorRegistration Registration;
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
@@ -125,8 +126,9 @@ namespace
         {
             Asset* asset = Content::GetAsset(artifact.AssetID);
             auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
-            if (!binary || !binary->IsLoaded() || !binary->IsUsingGeneratedArtifact() || binary->GetTypeName() != artifact.TypeName ||
-                (binary->GetArtifactKey() == artifact.Key && binary->IsUsingExactArtifact()))
+            if (!binary || binary->GetTypeName() != artifact.TypeName ||
+                (!binary->IsLoaded() && !binary->LastLoadFailed()) ||
+                (binary->GetArtifactKey() == artifact.Key && binary->IsUsingExactArtifact() && binary->IsLoaded()))
                 return;
             const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
             if (result != BinaryAssetStorageSwitchResult::Success)
@@ -136,11 +138,12 @@ namespace
 
     bool PrepareRecord(const AssetRecord& record, const AssetMeta& meta, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
     {
+        ModelPipelineState& state = State();
+        std::lock_guard<std::mutex> invocationLock(state.InvocationLocker);
         AssetProcessorLease lease;
         if (AssetProcessorRegistry::Get().TryAcquire(record.ProcessorID, AssetProcessorInvocationStage::Prepare, lease, diagnostic))
             return true;
         AssetCancellationSource cancellation;
-        ModelPipelineState& state = State();
         {
             std::lock_guard<std::mutex> lock(state.Locker);
             PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
@@ -240,6 +243,8 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
 
     plan.BuildRequest.Build = [execution](const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& buildDiagnostic)
     {
+        ModelPipelineState& state = State();
+        std::lock_guard<std::mutex> invocationLock(state.InvocationLocker);
         execution->Context = std::make_unique<ArtifactBuildContext>(Globals::ProjectFolder, Globals::ProjectContentFolder,
             Globals::ProjectLibraryFolder, execution->JobID, execution->Prepared, execution->Inputs, cancellation, execution->Target);
         if (execution->Context->Initialize(buildDiagnostic))
