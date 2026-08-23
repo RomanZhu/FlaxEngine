@@ -2381,7 +2381,8 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
             else if (pipelineRecord.ProcessorID == TEXT("Flax.Audio") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.Font") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.Video"))
+                pipelineRecord.ProcessorID == TEXT("Flax.Video") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.Text"))
                 request.RequiredCompatibility = "flax-imported-source-v1";
             if (pipelineRecord.SourceKind == AssetSourceKind::ExistingJson)
             {

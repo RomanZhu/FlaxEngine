@@ -2224,7 +2224,8 @@ namespace FlaxEditor.Modules
                    string.Equals(record.ProcessorID, "Flax.Audio", StringComparison.Ordinal) ||
                    string.Equals(record.ProcessorID, "Flax.Font", StringComparison.Ordinal) ||
                    string.Equals(record.ProcessorID, "Flax.ShaderSource", StringComparison.Ordinal) ||
-                   string.Equals(record.ProcessorID, "Flax.Video", StringComparison.Ordinal);
+                   string.Equals(record.ProcessorID, "Flax.Video", StringComparison.Ordinal) ||
+                   string.Equals(record.ProcessorID, "Flax.Text", StringComparison.Ordinal);
         }
 
         private static bool CanBuildCanonicalRecord(AssetDatabaseRecordInfo record)

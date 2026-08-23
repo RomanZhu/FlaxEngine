@@ -28,11 +28,11 @@ public:
     }
 };
 
-/// <summary>Rebuilds audio, font, shader, and video runtime bytes from imported sources.</summary>
+/// <summary>Rebuilds text, audio, font, shader, and video runtime data from canonical sources.</summary>
 class FLAXENGINE_API ImportedSourceProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 2;
+    static constexpr uint32 ImplementationVersion = 3;
     static constexpr uint32 RuntimeFormatVersion = 1;
 
     static bool Owns(const StringView& processorID);
@@ -40,6 +40,7 @@ public:
     static const String& FontID();
     static const String& ShaderID();
     static const String& VideoID();
+    static const String& TextID();
     static AssetProcessorDescriptor CreateDescriptor(const StringView& processorID);
     static bool Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic);
     static bool BuildOutputKey(const PreparedAsset& prepared, const ArtifactTarget& target, const StringAnsiView& outputKind,

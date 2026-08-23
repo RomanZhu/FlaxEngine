@@ -165,6 +165,7 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     extraIds.Add(ImportedSourceProcessor::FontID());
     extraIds.Add(ImportedSourceProcessor::ShaderID());
     extraIds.Add(ImportedSourceProcessor::VideoID());
+    extraIds.Add(ImportedSourceProcessor::TextID());
 #if COMPILE_WITH_AUDIO_TOOL
     extraIds.Add(ImportedSourceProcessor::AudioID());
 #endif

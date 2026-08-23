@@ -6,7 +6,9 @@
 
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
+#include "Engine/Content/Assets/RawDataAsset.h"
 #include "Engine/Content/Assets/Shader.h"
+#include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
@@ -43,7 +45,7 @@ bool ImportedSourceProcessor::Owns(const StringView& processorID)
 #if COMPILE_WITH_AUDIO_TOOL
         processorID == AudioID() ||
 #endif
-        processorID == FontID() || processorID == ShaderID() || processorID == VideoID();
+        processorID == FontID() || processorID == ShaderID() || processorID == VideoID() || processorID == TextID();
 }
 
 const String& ImportedSourceProcessor::AudioID()
@@ -70,12 +72,18 @@ const String& ImportedSourceProcessor::VideoID()
     return value;
 }
 
+const String& ImportedSourceProcessor::TextID()
+{
+    static const String value(TEXT("Flax.Text"));
+    return value;
+}
+
 AssetProcessorDescriptor ImportedSourceProcessor::CreateDescriptor(const StringView& processorID)
 {
     AssetProcessorDescriptor descriptor;
     descriptor.ID = processorID;
     descriptor.ProviderID = TEXT("flax");
-    descriptor.SourceKinds.Add(AssetSourceKind::ImportedSource);
+    descriptor.SourceKinds.Add(processorID == TextID() ? AssetSourceKind::TextDocument : AssetSourceKind::ImportedSource);
     descriptor.SettingsSchemaVersion = 1;
     descriptor.ImplementationVersion = ImplementationVersion;
     descriptor.InterfaceVersion = 1;
@@ -105,6 +113,12 @@ AssetProcessorDescriptor ImportedSourceProcessor::CreateDescriptor(const StringV
         descriptor.SourceExtensions.Add(TEXT(".shader"));
         descriptor.DocumentTypes.Add(Shader::TypeName);
         descriptor.MainOutputType = Shader::TypeName;
+    }
+    else if (processorID == TextID())
+    {
+        descriptor.SourceExtensions.Add(TEXT(".txt"));
+        descriptor.DocumentTypes.Add(RawDataAsset::TypeName);
+        descriptor.MainOutputType = RawDataAsset::TypeName;
     }
     else
     {
@@ -139,7 +153,7 @@ bool ImportedSourceProcessor::Prepare(PrepareAssetContext& context, PreparedAsse
     origin.Path = record.SourcePath.Get();
     if (context.ReadSourceFile(record.SourcePath.Get(), bytes, sourceHash, origin, diagnostic))
         return true;
-    if (bytes.IsEmpty())
+    if (bytes.IsEmpty() && record.ProcessorID != TextID())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Imported source file is empty."));
     if (record.ProcessorID == ShaderID() && bytes.Count() < 10)
@@ -225,6 +239,7 @@ bool ImportedSourceProcessor::Build(ArtifactBuildContext& context, AssetPipeline
     if (context.ReadInput(sourceDependency->StableIdentity, sourceBytes, sourceHash, diagnostic))
         return true;
     const bool video = prepared.OutputType == TEXT("FlaxEngine.Video");
+    const bool rawText = prepared.OutputType == RawDataAsset::TypeName;
     String scratchPath;
     if (context.CreateScratchFilePath(video ? payload->SourceExtension : String(TEXT(".flax")), scratchPath, diagnostic))
         return true;
@@ -238,6 +253,19 @@ bool ImportedSourceProcessor::Build(ArtifactBuildContext& context, AssetPipeline
         if (File::WriteAllBytes(scratchPath, sourceBytes.Get(), sourceBytes.Count()))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, scratchPath, TEXT("Video source snapshot could not be written."));
+    }
+    else if (rawText)
+    {
+        FlaxChunk chunk;
+        chunk.Data.Copy(sourceBytes.Get(), sourceBytes.Count());
+        AssetInitData data;
+        data.Header.ID = prepared.AssetID;
+        data.Header.TypeName = RawDataAsset::TypeName;
+        data.Header.Chunks[0] = &chunk;
+        data.SerializedVersion = RawDataAsset::SerializedVersion;
+        if (FlaxStorage::Create(scratchPath, data))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, scratchPath, TEXT("Text runtime asset could not be written."));
     }
     else
     {

@@ -1046,6 +1046,15 @@ namespace FlaxEditor.Windows
             {
                 for (int i = 0; i < selection.Count; i++)
                 {
+                    if (selection[i] is AssetItem canonicalText &&
+                        canonicalText.IsCanonicalSource &&
+                        string.Equals(canonicalText.ProcessorID, "Flax.Text", StringComparison.Ordinal))
+                    {
+                        if (TryCreateTextFilePropertiesProxy(canonicalText, out var textFile))
+                            objects.Add(textFile);
+                        continue;
+                    }
+
                     if (selection[i] is not AssetItem assetItem)
                     {
                         if (TryCreateTextFilePropertiesProxy(selection[i], out var textFile))
@@ -1095,7 +1104,8 @@ namespace FlaxEditor.Windows
         private static bool TryCreateTextFilePropertiesProxy(ContentItem item, out TextFilePropertiesProxy proxy)
         {
             proxy = null;
-            bool isText = item is ScriptItem or ShaderSourceItem;
+            bool isText = item is ScriptItem or ShaderSourceItem ||
+                          item is AssetItem { IsCanonicalSource: true, ProcessorID: "Flax.Text" };
             if (!isText && (item is not FileItem || item is VideoItem))
                 return false;
 
