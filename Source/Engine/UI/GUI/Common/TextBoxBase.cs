@@ -1438,6 +1438,7 @@ namespace FlaxEngine.GUI
             var window = Root;
             bool shiftDown = window.GetKey(KeyboardKeys.Shift);
             bool ctrDown = window.GetKey(KeyboardKeys.Control);
+            bool altDown = window.GetKey(KeyboardKeys.Alt);
             KeyDown?.Invoke(key);
 
             // A submitted text box keeps focus but stops editing. Pressing Enter again resumes editing.
@@ -1455,32 +1456,35 @@ namespace FlaxEngine.GUI
             // Handle controls that have bindings
 #if FLAX_EDITOR
             InputOptions options = FlaxEditor.Editor.Instance.Options.Options.Input;
-            if (options.Copy.Process(this))
+            // Shift is part of normal text entry. Do not let printable editor shortcuts such as
+            // Shift+D alter the selection before OnCharInput inserts the character.
+            bool processEditorBindings = ctrDown || altDown || !IsTextInputKey(key);
+            if (processEditorBindings && options.Copy.Process(this))
             {
                 Copy();
                 return true;
             }
-            else if (options.Paste.Process(this))
+            else if (processEditorBindings && options.Paste.Process(this))
             {
                 Paste();
                 return true;
             }
-            else if (options.Duplicate.Process(this))
+            else if (processEditorBindings && options.Duplicate.Process(this))
             {
                 Duplicate();
                 return true;
             }
-            else if (options.Cut.Process(this))
+            else if (processEditorBindings && options.Cut.Process(this))
             {
                 Cut();
                 return true;
             }
-            else if (options.SelectAll.Process(this))
+            else if (processEditorBindings && options.SelectAll.Process(this))
             {
                 SelectAll();
                 return true;
             }
-            else if (options.DeselectAll.Process(this))
+            else if (processEditorBindings && options.DeselectAll.Process(this))
             {
                 Deselect();
                 return true;
@@ -1673,6 +1677,16 @@ namespace FlaxEngine.GUI
             }
 
             return _consumeAllKeyDownEvents;
+        }
+
+        private static bool IsTextInputKey(KeyboardKeys key)
+        {
+            int keyValue = (int)key;
+            return key == KeyboardKeys.Spacebar ||
+                   (keyValue >= (int)KeyboardKeys.Alpha0 && keyValue <= (int)KeyboardKeys.Alpha9) ||
+                   (keyValue >= (int)KeyboardKeys.A && keyValue <= (int)KeyboardKeys.Z) ||
+                   (keyValue >= (int)KeyboardKeys.Numpad0 && keyValue <= (int)KeyboardKeys.NumpadDivide) ||
+                   (keyValue >= (int)KeyboardKeys.Colon && keyValue <= (int)KeyboardKeys.Oem102);
         }
     }
 }
