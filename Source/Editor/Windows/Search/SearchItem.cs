@@ -191,7 +191,7 @@ namespace FlaxEditor.Windows.Search
                 b = cm.AddButton("Open", () => Editor.Instance.ContentFinding.Open(Item));
                 cm.AddSeparator();
                 cm.AddButton(Utilities.Constants.ShowInExplorer, () => FileSystem.ShowFileExplorer(System.IO.Path.GetDirectoryName(contentItem.Path)));
-                cm.AddButton("Show in Content window", () => Editor.Instance.Windows.ContentWin.Select(contentItem, true));
+                cm.AddButton("Show in Project", () => Editor.Instance.Windows.ContentWin.Select(contentItem, true));
                 b.Enabled = proxy != null && proxy.CanReimport(contentItem);
                 if (contentItem is BinaryAssetItem binaryAsset)
                 {

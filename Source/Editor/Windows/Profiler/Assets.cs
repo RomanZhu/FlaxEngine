@@ -292,7 +292,7 @@ namespace FlaxEditor.Windows.Profiler
                 var cm = new ContextMenu();
                 ContextMenuButton b;
                 b = cm.AddButton("Open", () => Editor.Instance.ContentEditing.Open(assetItem));
-                cm.AddButton("Show in content window", () => Editor.Instance.Windows.ContentWin.Select(assetItem));
+                cm.AddButton("Show in Project", () => Editor.Instance.Windows.ContentWin.Select(assetItem));
                 cm.AddButton(Utilities.Constants.ShowInExplorer, () => FileSystem.ShowFileExplorer(System.IO.Path.GetDirectoryName(assetItem.Path)));
                 cm.AddButton("Select actors using this asset", () => Editor.Instance.SceneEditing.SelectActorsUsingAsset(assetItem.ID));
                 cm.AddButton("Show asset references graph", () => Editor.Instance.Windows.Open(new AssetReferencesGraphWindow(Editor.Instance, assetItem)));

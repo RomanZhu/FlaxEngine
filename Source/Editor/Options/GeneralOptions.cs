@@ -157,10 +157,10 @@ namespace FlaxEditor.Options
         public bool ForceScriptCompilationOnStartup { get; set; } = true;
 
         /// <summary>
-        /// Gets or sets an order of script properties/fields in properties panel.
+        /// Gets or sets an order of script properties/fields in the Inspector.
         /// </summary>
         [DefaultValue(MembersOrder.Declaration)]
-        [EditorDisplay("Scripting", "Script Members Order"), EditorOrder(503), Tooltip("Order of script properties/fields in properties panel")]
+        [EditorDisplay("Scripting", "Script Members Order"), EditorOrder(503), Tooltip("Order of script properties/fields in the Inspector")]
         public MembersOrder ScriptMembersOrder { get; set; } = MembersOrder.Declaration;
 
         /// <summary>

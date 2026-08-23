@@ -757,7 +757,7 @@ namespace FlaxEditor.GUI.Timeline.Tracks
             var icons = Editor.Instance.Icons;
             _pilotCamera = new Image
             {
-                TooltipText = "Starts piloting camera (in scene edit window)",
+                TooltipText = "Starts piloting camera (in the Scene window)",
                 AutoFocus = true,
                 AnchorPreset = AnchorPresets.MiddleRight,
                 IsScrollable = false,

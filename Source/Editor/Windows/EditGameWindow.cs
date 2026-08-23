@@ -145,7 +145,7 @@ namespace FlaxEditor.Windows
         public EditGameWindow(Editor editor)
         : base(editor, true, ScrollBars.None)
         {
-            Title = "Editor";
+            Title = "Scene";
             Icon = editor.Icons.Grid32;
 
             // Create viewport

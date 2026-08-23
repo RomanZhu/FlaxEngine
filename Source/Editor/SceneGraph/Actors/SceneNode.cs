@@ -75,9 +75,9 @@ namespace FlaxEditor.SceneGraph.Actors
             var path = Scene.Path;
             if (!string.IsNullOrEmpty(path) && File.Exists(path))
             {
-                var b = contextMenu.AddButton("Show in content window", OnSelect);
+                var b = contextMenu.AddButton("Show in Project", OnSelect);
                 b.Icon = Editor.Instance.Icons.Search12;
-                b.TooltipText = "Finds and selects the scene asset int Content window.";
+                b.TooltipText = "Finds and selects the scene asset in the Project window.";
                 var convertText = Scene.UseExternalActors ? "Convert to internal actors" : "Convert to external actors";
                 var convertTooltip = Scene.UseExternalActors ? "Stores actors in the scene file." : "Stores actors in separate files for source control merging.";
                 contextMenu.AddButton(convertText, OnConvertActorsStorage).LinkTooltip(convertTooltip).Enabled = !Editor.IsPlayMode;

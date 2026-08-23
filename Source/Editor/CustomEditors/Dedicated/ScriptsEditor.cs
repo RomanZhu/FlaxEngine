@@ -1222,7 +1222,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             var scriptType = TypeUtils.GetType(script.TypeName);
             var item = scriptType.ContentItem;
             menu.AddButton("Edit script", OnClickEditScript).Enabled = item != null;
-            var showButton = menu.AddButton("Show in content window", OnClickShowScript);
+            var showButton = menu.AddButton("Show in Project", OnClickShowScript);
             showButton.Enabled = item != null;
             showButton.Icon = Editor.Instance.Icons.Search12;
         }

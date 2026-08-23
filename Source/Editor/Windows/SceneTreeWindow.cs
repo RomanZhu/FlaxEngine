@@ -79,7 +79,7 @@ namespace FlaxEditor.Windows
         public SceneTreeWindow(Editor editor)
         : base(editor, true, ScrollBars.None)
         {
-            Title = "Scene";
+            Title = "Hierarchy";
             Icon = editor.Icons.Globe32;
             var controlHeight = Style.Current.ControlHeight > 0.0f ? Style.Current.ControlHeight : 18.0f;
             const float headerGap = 4.0f;
@@ -110,7 +110,7 @@ namespace FlaxEditor.Windows
                 AnchorPreset = AnchorPresets.HorizontalStretchMiddle,
                 Parent = headerPanel,
                 Bounds = new Rectangle(searchLeft, headerPadding, headerPanel.Width - searchLeft - searchRightPadding, controlHeight),
-                TooltipText = "Search the scene tree.\n\nt: or a: Actor type\ns: Script type\nc: Control type",
+                TooltipText = "Search the hierarchy.\n\nt: or a: Actor type\ns: Script type\nc: Control type",
             };
             _searchBox.TextChanged += OnSearchBoxTextChanged;
             ScriptsBuilder.ScriptsReloadEnd += OnSearchBoxTextChanged;
@@ -120,7 +120,7 @@ namespace FlaxEditor.Windows
                 AnchorPreset = AnchorPresets.MiddleRight,
                 Bounds = new Rectangle(headerPanel.Width - headerPadding - headerButtonSize, headerPadding, headerButtonSize, headerButtonSize),
                 Text = "•••",
-                TooltipText = "Scene view options",
+                TooltipText = "Hierarchy view options",
             };
             ApplyHeaderButtonStyle(_viewButton);
             _viewButton.Clicked += ShowViewMenu;
@@ -647,7 +647,7 @@ namespace FlaxEditor.Windows
             alternating.Checked = Editor.Options.Options.Interface.AlternatingTreeRows;
 
             ContextMenuButton highlightInViewport = null;
-            highlightInViewport = menu.AddButton("Highlight in Editor", () =>
+            highlightInViewport = menu.AddButton("Highlight in Scene", () =>
             {
                 Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport = !Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport;
                 if (!Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport)
@@ -656,11 +656,11 @@ namespace FlaxEditor.Windows
                 Editor.Options.SaveOptions();
             });
             highlightInViewport.CloseMenuOnClick = false;
-            highlightInViewport.TooltipText = "When hovered Scene items will highlight items in Editor.";
+            highlightInViewport.TooltipText = "When hovered Hierarchy items will highlight items in Scene.";
             highlightInViewport.Checked = Editor.Options.Options.Interface.HighlightSceneTreeHoverInViewport;
 
             ContextMenuButton highlightEditorHoverInScene = null;
-            highlightEditorHoverInScene = menu.AddButton("Highlight Scene Items from Editor", () =>
+            highlightEditorHoverInScene = menu.AddButton("Highlight Hierarchy Items from Scene", () =>
             {
                 Editor.Options.Options.Interface.HighlightViewportObjectHover = !Editor.Options.Options.Interface.HighlightViewportObjectHover;
                 if (!Editor.Options.Options.Interface.HighlightViewportObjectHover)
@@ -669,7 +669,7 @@ namespace FlaxEditor.Windows
                 Editor.Options.SaveOptions();
             });
             highlightEditorHoverInScene.CloseMenuOnClick = false;
-            highlightEditorHoverInScene.TooltipText = "When hovered Editor items will highlight items in Scene.";
+            highlightEditorHoverInScene.TooltipText = "When hovered Scene items will highlight items in Hierarchy.";
             highlightEditorHoverInScene.Checked = Editor.Options.Options.Interface.HighlightViewportObjectHover;
 
             var treeRowHeight = menu.AddButton("Tree Row Height");
@@ -968,7 +968,7 @@ namespace FlaxEditor.Windows
             }
             else if (((ContainerControl)_tree.GetChild(0)).ChildrenCount == 0)
             {
-                overlayText = "No scene\nOpen one from the content window";
+                overlayText = "No scene\nOpen one from the Project window";
                 textWrap = TextWrapping.WrapWords;
             }
             if (overlayText != null)
