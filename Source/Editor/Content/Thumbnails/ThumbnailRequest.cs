@@ -98,7 +98,9 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (State != States.Created)
                 throw new InvalidOperationException();
-            if (Item.IsCanonicalSource && Proxy is TextureProxy)
+            if (Item.IsCanonicalSubAsset)
+                Asset = FlaxEngine.Content.LoadAsync<Asset>(Item.ID);
+            else if (Item.IsCanonicalSource && Proxy is TextureProxy)
                 Asset = AssetDatabaseFacade.LoadTextureThumbnail(Item.ID);
             Asset ??= FlaxEngine.Content.LoadAsync(Item.Path);
             Proxy.OnThumbnailDrawPrepare(this);

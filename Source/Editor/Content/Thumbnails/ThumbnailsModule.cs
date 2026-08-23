@@ -456,7 +456,8 @@ namespace FlaxEditor.Content.Thumbnails
                 {
                     Editor.LogWarning($"Failed to prepare thumbnail rendering for {request.Item.ShortName}.");
                     Editor.LogWarning(ex);
-                    _requests.RemoveAt(i--);
+                    RemoveRequest(request);
+                    i--;
                 }
             }
 
@@ -564,14 +565,16 @@ namespace FlaxEditor.Content.Thumbnails
                             }
                             else if (request.State == ThumbnailRequest.States.Failed)
                             {
-                                _requests.RemoveAt(i--);
+                                RemoveRequest(request);
+                                i--;
                             }
                         }
                         catch (Exception ex)
                         {
                             Editor.LogWarning($"Failed to prepare thumbnail rendering for {request.Item.ShortName}.");
                             Editor.LogWarning(ex);
-                            _requests.RemoveAt(i--);
+                            RemoveRequest(request);
+                            i--;
                         }
                     }
 
