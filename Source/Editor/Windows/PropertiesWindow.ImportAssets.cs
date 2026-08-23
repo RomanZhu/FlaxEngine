@@ -610,7 +610,10 @@ namespace FlaxEditor.Windows
             if (asset is Model or SkinnedModel or Animation or Prefab)
             {
                 var settings = new ModelImportSettings();
-                if (!FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path))
+                var restored = item.IsCanonicalSource
+                    ? !AssetDatabaseFacade.LoadModelMetadata(item.SourcePath, out settings.Settings)
+                    : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
+                if (!restored)
                     return false;
 
                 var expectedType = asset switch
@@ -644,7 +647,10 @@ namespace FlaxEditor.Windows
             if (asset is Texture or CubeTexture or SpriteAtlas)
             {
                 var settings = new TextureImportSettings();
-                if (!FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path))
+                var restored = item.IsCanonicalSource
+                    ? !AssetDatabaseFacade.LoadTextureMetadata(item.SourcePath, out settings.Settings)
+                    : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
+                if (!restored)
                     return false;
                 proxy = new TextureImportAssetPropertiesProxy(item, asset, settings);
                 return true;
@@ -653,7 +659,10 @@ namespace FlaxEditor.Windows
             if (asset is AudioClip audioClip)
             {
                 var settings = new AudioImportSettings();
-                if (!FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path))
+                var restored = item.IsCanonicalSource
+                    ? !AssetDatabaseFacade.LoadAudioMetadata(item.SourcePath, out settings.Settings)
+                    : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
+                if (!restored)
                     return false;
                 proxy = new AudioImportAssetPropertiesProxy(item, audioClip, settings);
                 return true;

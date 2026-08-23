@@ -881,6 +881,43 @@ Guid AssetDatabaseFacade::CreateAudioMetadata(const StringView& sourcePath, cons
 #endif
     return meta.ID;
 }
+
+bool AssetDatabaseFacade::LoadAudioMetadata(const StringView& sourcePath, AudioTool::Options& options)
+{
+    AssetMeta meta;
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    };
+    if (AssetMeta::Load(String(sourcePath) + TEXT(".meta"), meta, diagnostic))
+        return fail();
+    if (meta.Processor.ID != TEXT("Flax.Audio") || meta.Processor.SettingsVersion != 1)
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.ProcessorId = meta.Processor.ID;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.Message = TEXT("Audio metadata is not owned by the supported Flax.Audio processor version.");
+        return fail();
+    }
+    rapidjson_flax::Document settings;
+    settings.Parse(meta.Processor.SettingsJson.Get(), meta.Processor.SettingsJson.Length());
+    if (settings.HasParseError() || !settings.IsObject())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.ProcessorId = meta.Processor.ID;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.Message = TEXT("Audio processor settings are malformed.");
+        return fail();
+    }
+    options.Deserialize(settings, nullptr);
+    return false;
+}
 #endif
 
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR

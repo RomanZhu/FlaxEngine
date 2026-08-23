@@ -660,6 +660,8 @@ bool ManagedEditor::Import(const String& inputPath, const String& outputPath, co
 bool ManagedEditor::TryRestoreImportOptions(TextureTool::Options& options, String assetPath)
 {
     FileSystem::NormalizePath(assetPath);
+    if (FileSystem::FileExists(assetPath + TEXT(".meta")))
+        return !AssetDatabaseFacade::LoadTextureMetadata(assetPath, options);
     return ImportTexture::TryGetImportOptions(assetPath, options);
 }
 
@@ -676,6 +678,8 @@ bool ManagedEditor::TryRestoreImportOptions(ModelTool::Options& options, String 
         options.GenerateSDF = graphicsSettings->GenerateSDFOnModelImport;
     }
     FileSystem::NormalizePath(assetPath);
+    if (FileSystem::FileExists(assetPath + TEXT(".meta")))
+        return !AssetDatabaseFacade::LoadModelMetadata(assetPath, options);
     return ImportModel::TryGetImportOptions(assetPath, options);
 }
 
@@ -687,6 +691,8 @@ bool ManagedEditor::Import(const String& inputPath, const String& outputPath, co
 bool ManagedEditor::TryRestoreImportOptions(AudioTool::Options& options, String assetPath)
 {
     FileSystem::NormalizePath(assetPath);
+    if (FileSystem::FileExists(assetPath + TEXT(".meta")))
+        return !AssetDatabaseFacade::LoadAudioMetadata(assetPath, options);
     return ImportAudio::TryGetImportOptions(assetPath, options);
 }
 

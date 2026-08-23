@@ -130,6 +130,9 @@ public:
 #if COMPILE_WITH_AUDIO_TOOL && USE_EDITOR
     /// <summary>Creates canonical audio metadata with the selected import settings.</summary>
     API_FUNCTION() static Guid CreateAudioMetadata(const StringView& sourcePath, const AudioTool::Options& options);
+
+    /// <summary>Loads tracked canonical audio import settings without writing the sidecar.</summary>
+    API_FUNCTION() static bool LoadAudioMetadata(const StringView& sourcePath, API_PARAM(Out) AudioTool::Options& options);
 #endif
 
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
