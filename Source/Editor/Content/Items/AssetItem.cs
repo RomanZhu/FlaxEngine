@@ -40,6 +40,9 @@ namespace FlaxEditor.Content
         /// <summary>Canonical authored source path for database-backed assets.</summary>
         public string SourcePath { get; private set; }
 
+        /// <summary>Human-readable name of a processor-owned canonical subasset.</summary>
+        public string CanonicalSubAssetName { get; private set; }
+
         /// <summary>Processor selected by the adjacent metadata sidecar.</summary>
         public string ProcessorID { get; private set; }
 
@@ -72,6 +75,19 @@ namespace FlaxEditor.Content
             MetadataPath = record.MetaPath;
             SourcePath = record.SourcePath;
             ProcessorID = record.ProcessorID;
+            CanonicalSubAssetName = IsCanonicalSubAsset ? GetCanonicalSubAssetName(record.SubAssetKey) : null;
+        }
+
+        private string GetCanonicalSubAssetName(string key)
+        {
+            var separator = key.IndexOf(':');
+            if (separator != -1)
+                key = key.Substring(separator + 1);
+            var disambiguation = key.LastIndexOf('#');
+            if (disambiguation != -1)
+                key = key.Substring(0, disambiguation);
+            key = Uri.UnescapeDataString(key);
+            return string.IsNullOrWhiteSpace(key) ? TypeDescription : key;
         }
 
         /// <inheritdoc />

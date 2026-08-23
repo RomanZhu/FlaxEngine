@@ -705,8 +705,8 @@ namespace FlaxEditor.Windows
                 _contentViewPanel.Visible = true;
                 RunWithContentSelectionHistorySuppressed(() =>
                 {
-                    if (_tree.SelectedNode is ContentItemTreeNode itemNode && itemNode.Parent is TreeNode parentNode)
-                        _tree.Select(parentNode);
+                    if (_tree.SelectedNode is ContentItemTreeNode itemNode && itemNode.Item?.ParentFolder?.Node != null)
+                        _tree.Select(itemNode.Item.ParentFolder.Node);
                     if (_root != null)
                         RemoveTreeAssetNodes(_root);
                     RefreshView(SelectedNode);
@@ -1749,6 +1749,7 @@ namespace FlaxEditor.Windows
                         var itemNode = FindTreeItemNode(targetNode, item);
                         if (itemNode != null)
                         {
+                            itemNode.ExpandAllParents(true);
                             _tree.Select(itemNode, additive);
                             _contentTreePanel.ScrollViewTo(itemNode, fastScroll);
                             itemNode.Focus();
@@ -1804,7 +1805,10 @@ namespace FlaxEditor.Windows
                         targetNode.Expand(true);
                         var itemNode = FindTreeItemNode(targetNode, item);
                         if (itemNode != null)
+                        {
+                            itemNode.ExpandAllParents(true);
                             nodeToHighlight = itemNode;
+                        }
                     }
 
                     _contentTreePanel.ScrollViewTo(nodeToHighlight, fastScroll);
@@ -1820,14 +1824,20 @@ namespace FlaxEditor.Windows
             _view.Focus();
         }
 
-        private ContentItemTreeNode FindTreeItemNode(ContentFolderTreeNode parentNode, ContentItem item)
+        private ContentItemTreeNode FindTreeItemNode(TreeNode parentNode, ContentItem item)
         {
             if (parentNode == null || item == null)
                 return null;
             for (int i = 0; i < parentNode.ChildrenCount; i++)
             {
-                if (parentNode.GetChild(i) is ContentItemTreeNode itemNode && itemNode.Item == item)
-                    return itemNode;
+                if (parentNode.GetChild(i) is ContentItemTreeNode itemNode)
+                {
+                    if (itemNode.Item == item)
+                        return itemNode;
+                    var nested = FindTreeItemNode(itemNode, item);
+                    if (nested != null)
+                        return nested;
+                }
             }
             return null;
         }
@@ -1924,7 +1934,10 @@ namespace FlaxEditor.Windows
                     else if (item?.ParentFolder?.Node != null)
                         node = FindTreeItemNode(item.ParentFolder.Node, item);
                     if (node != null && !selectedNodes.Contains(node))
+                    {
+                        node.ExpandAllParents(true);
                         selectedNodes.Add(node);
+                    }
                 }
                 _tree.Select(selectedNodes);
                 if (restoreFocus && selectedNodes.Count != 0)
@@ -1946,8 +1959,18 @@ namespace FlaxEditor.Windows
                 }
                 else if (node.GetChild(i) is ContentItemTreeNode itemNode)
                 {
-                    itemNode.UpdateDisplayedName();
+                    UpdateTreeItemNames(itemNode);
                 }
+            }
+        }
+
+        private void UpdateTreeItemNames(ContentItemTreeNode node)
+        {
+            node.UpdateDisplayedName();
+            for (int i = 0; i < node.ChildrenCount; i++)
+            {
+                if (node.GetChild(i) is ContentItemTreeNode child)
+                    UpdateTreeItemNames(child);
             }
         }
 
@@ -1970,6 +1993,20 @@ namespace FlaxEditor.Windows
             SaveExpandedFolders();
         }
 
+        internal void OnContentTreeItemNodeExpandedChanged(ContentItemTreeNode node, bool isExpanded)
+        {
+            if (_suppressExpandedStateSave || node?.Item is not AssetItem { IsCanonicalSource: true, IsCanonicalSubAsset: false } ||
+                !string.IsNullOrWhiteSpace(_foldersSearchBox?.Text))
+                return;
+
+            var path = StringUtils.NormalizePath(node.Item.Path);
+            if (isExpanded)
+                _expandedFolderPaths.Add(path);
+            else
+                _expandedFolderPaths.Remove(path);
+            SaveExpandedFolders();
+        }
+
         internal void TryAutoExpandContentNode(ContentFolderTreeNode node)
         {
             if (node == null || node == _root)
@@ -1981,6 +2018,16 @@ namespace FlaxEditor.Windows
             path = StringUtils.NormalizePath(path);
 
             if (!_expandedFolderPaths.Contains(path))
+                return;
+
+            _suppressExpandedStateSave = true;
+            node.Expand(true);
+            _suppressExpandedStateSave = false;
+        }
+
+        private void TryAutoExpandContentItemNode(ContentItemTreeNode node)
+        {
+            if (node?.Item == null || !_expandedFolderPaths.Contains(StringUtils.NormalizePath(node.Item.Path)))
                 return;
 
             _suppressExpandedStateSave = true;
@@ -2029,6 +2076,11 @@ namespace FlaxEditor.Windows
                     folder.Node.ExpandAllParents(true);
                     folder.Node.Expand(true);
                 }
+                else if (Editor.ContentDatabase.Find(path) is AssetItem assetItem && assetItem.ParentFolder?.Node != null)
+                {
+                    var itemNode = FindTreeItemNode(assetItem.ParentFolder.Node, assetItem);
+                    itemNode?.Expand(true);
+                }
             }
             _suppressExpandedStateSave = false;
         }
@@ -2054,18 +2106,53 @@ namespace FlaxEditor.Windows
             if (node.Folder != null)
             {
                 var children = node.Folder.Children;
+                var visibleSubAssets = new List<AssetItem>();
+                var visibleSubAssetSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < children.Count; i++)
+                {
+                    if (children[i] is AssetItem { IsCanonicalSubAsset: true } subAsset && ShouldShowTreeItem(subAsset))
+                    {
+                        visibleSubAssets.Add(subAsset);
+                        visibleSubAssetSources.Add(ContentMutationPathUtils.Normalize(subAsset.SourcePath));
+                    }
+                }
+
+                var canonicalSourceNodes = new Dictionary<string, ContentItemTreeNode>(StringComparer.OrdinalIgnoreCase);
                 for (int i = 0; i < children.Count; i++)
                 {
                     var child = children[i];
-                    if (child is ContentFolder)
+                    if (child is ContentFolder || child is AssetItem { IsCanonicalSubAsset: true })
                         continue;
-                    if (!ShouldShowTreeItem(child))
+                    var canonicalSource = child as AssetItem;
+                    var sourcePath = canonicalSource is { IsCanonicalSource: true }
+                        ? ContentMutationPathUtils.Normalize(canonicalSource.SourcePath)
+                        : null;
+                    if (!ShouldShowTreeItem(child) && (sourcePath == null || !visibleSubAssetSources.Contains(sourcePath)))
                         continue;
 
                     var itemNode = new ContentItemTreeNode(child)
                     {
                         Parent = node,
                     };
+                    if (sourcePath != null)
+                        canonicalSourceNodes[sourcePath] = itemNode;
+                }
+
+                for (int i = 0; i < visibleSubAssets.Count; i++)
+                {
+                    var subAsset = visibleSubAssets[i];
+                    var sourcePath = ContentMutationPathUtils.Normalize(subAsset.SourcePath);
+                    canonicalSourceNodes.TryGetValue(sourcePath, out var sourceNode);
+                    var itemNode = new ContentItemTreeNode(subAsset, sourceNode != null)
+                    {
+                        Parent = (TreeNode)sourceNode ?? node,
+                    };
+                }
+
+                foreach (var sourceNode in canonicalSourceNodes.Values)
+                {
+                    sourceNode.SortChildren();
+                    TryAutoExpandContentItemNode(sourceNode);
                 }
             }
 
@@ -2163,19 +2250,31 @@ namespace FlaxEditor.Windows
                     ApplyTreeNodeScale(child, headerHeight, fontRef, textMarginLeft, rowPadding, childrenIndent);
                 else if (node.GetChild(i) is ContentItemTreeNode itemNode)
                 {
-                    var itemMargin = itemNode.TextMargin;
-                    itemMargin.Left = textMarginLeft;
-                    itemMargin.Top = rowPadding;
-                    itemMargin.Right = rowPadding;
-                    itemMargin.Bottom = rowPadding;
-                    itemNode.TextMargin = itemMargin;
-                    itemNode.HeaderHeight = headerHeight;
-                    itemNode.TextFont = fontRef;
+                    ApplyTreeItemNodeScale(itemNode, headerHeight, fontRef, textMarginLeft, rowPadding, childrenIndent);
                 }
             }
         }
 
-        private static Rectangle GetTreeArrowRect(ContentFolderTreeNode node, float headerHeight)
+        private void ApplyTreeItemNodeScale(ContentItemTreeNode node, float headerHeight, FontReference fontRef, float textMarginLeft, float rowPadding, float childrenIndent)
+        {
+            var margin = node.TextMargin;
+            margin.Left = textMarginLeft;
+            margin.Top = rowPadding;
+            margin.Right = rowPadding;
+            margin.Bottom = rowPadding;
+            node.TextMargin = margin;
+            node.HeaderHeight = headerHeight;
+            node.ChildrenIndent = childrenIndent;
+            node.CustomArrowRect = GetTreeArrowRect(node, headerHeight);
+            node.TextFont = fontRef;
+            for (int i = 0; i < node.ChildrenCount; i++)
+            {
+                if (node.GetChild(i) is ContentItemTreeNode child)
+                    ApplyTreeItemNodeScale(child, headerHeight, fontRef, textMarginLeft, rowPadding, childrenIndent);
+            }
+        }
+
+        private static Rectangle GetTreeArrowRect(TreeNode node, float headerHeight)
         {
             if (node == null)
                 return Rectangle.Empty;

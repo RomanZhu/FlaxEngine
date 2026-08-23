@@ -742,7 +742,7 @@ namespace FlaxEditor.Windows
             {
                 var selected = GetActiveTreeSelection(_tree.Selection);
                 if (selected is ContentItemTreeNode itemNode)
-                    return itemNode.Parent as ContentFolderTreeNode;
+                    return itemNode.Item?.ParentFolder?.Node;
                 return selected as ContentFolderTreeNode;
             }
         }

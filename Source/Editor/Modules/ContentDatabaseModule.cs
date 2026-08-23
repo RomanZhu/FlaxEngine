@@ -371,17 +371,7 @@ namespace FlaxEditor.Modules
             if (item == null)
                 return null;
 
-            var key = record.SubAssetKey;
-            var separator = key.IndexOf(':');
-            if (separator != -1)
-                key = key.Substring(separator + 1);
-            var disambiguation = key.LastIndexOf('#');
-            if (disambiguation != -1)
-                key = key.Substring(0, disambiguation);
-            key = Uri.UnescapeDataString(key);
-            if (string.IsNullOrWhiteSpace(key))
-                key = item.TypeDescription;
-            item.ShortName = Path.GetFileNameWithoutExtension(record.SourcePath) + " / " + key + " [" + item.TypeDescription + "]";
+            item.ShortName = Path.GetFileNameWithoutExtension(record.SourcePath) + " / " + item.CanonicalSubAssetName + " [" + item.TypeDescription + "]";
             return item;
         }
 

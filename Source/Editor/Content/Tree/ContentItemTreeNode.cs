@@ -21,6 +21,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
 
     private List<Rectangle> _highlights;
     private float _pendingRenameTime = -1.0f;
+    private readonly bool _useCanonicalSubAssetName;
 
     /// <summary>
     /// The content item.
@@ -34,10 +35,12 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     /// Initializes a new instance of the <see cref="ContentItemTreeNode"/> class.
     /// </summary>
     /// <param name="item">The content item.</param>
-    public ContentItemTreeNode(ContentItem item)
+    /// <param name="useCanonicalSubAssetName">Whether to display only the canonical subasset name.</param>
+    public ContentItemTreeNode(ContentItem item, bool useCanonicalSubAssetName = false)
     : base(false, Editor.Instance.Icons.Document128, Editor.Instance.Icons.Document128)
     {
         Item = item ?? throw new ArgumentNullException(nameof(item));
+        _useCanonicalSubAssetName = useCanonicalSubAssetName;
         UpdateDisplayedName();
         IconColor = Color.Transparent; // Reserve icon space but draw custom thumbnail.
         Item.AddReference(this);
@@ -123,7 +126,25 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
             }
         }
 
-        Visible = isVisible;
+        bool isAnyChildVisible = false;
+        for (int i = 0; i < _children.Count; i++)
+        {
+            if (_children[i] is ContentItemTreeNode child)
+            {
+                child.UpdateFilter(filterText);
+                isAnyChildVisible |= child.Visible;
+            }
+        }
+
+        if (!noFilter)
+        {
+            if (isAnyChildVisible)
+                Expand(true);
+            else if (HasChildren)
+                Collapse(true);
+        }
+
+        Visible = isVisible || isAnyChildVisible;
     }
 
     /// <inheritdoc />
@@ -192,6 +213,14 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     protected override void OnSelectedClickHeader()
     {
         _pendingRenameTime = Item.CanRename ? Time.UnscaledGameTime + RenameDelay : -1.0f;
+    }
+
+    /// <inheritdoc />
+    protected override void OnExpandedChanged()
+    {
+        base.OnExpandedChanged();
+        if (HasChildren)
+            Editor.Instance?.Windows?.ContentWin?.OnContentTreeItemNodeExpandedChanged(this, IsExpanded);
     }
 
     /// <inheritdoc />
@@ -270,7 +299,10 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     {
         var contentWindow = Editor.Instance?.Windows?.ContentWin;
         var showExtensions = contentWindow?.View?.ShowFileExtensions ?? true;
-        Text = Item.ShowFileExtension || showExtensions ? Item.FileName : Item.ShortName;
+        if (_useCanonicalSubAssetName && Item is AssetItem { IsCanonicalSubAsset: true } assetItem)
+            Text = assetItem.CanonicalSubAssetName;
+        else
+            Text = Item.ShowFileExtension || showExtensions ? Item.FileName : Item.ShortName;
     }
 
     private static SortType GetSortType()
