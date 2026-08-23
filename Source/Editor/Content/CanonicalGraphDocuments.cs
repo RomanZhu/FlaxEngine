@@ -2,7 +2,6 @@
 
 using System;
 using System.IO;
-using FlaxEditor.Content.Settings;
 using FlaxEngine;
 
 namespace FlaxEditor.Content
@@ -12,14 +11,9 @@ namespace FlaxEditor.Content
     /// </summary>
     internal static class CanonicalGraphDocuments
     {
-        public static bool UseTextGraphAssets
-        {
-            get
-            {
-                var settings = GameSettings.Load<AssetPipelineSettings>();
-                return settings != null && settings.UseNewAssetDatabase && settings.UseLibraryArtifacts && settings.UseTextGraphAssets;
-            }
-        }
+        public static bool UseTextGraphAssets => true;
+
+        public static bool UseNewAssetDatabase => true;
 
         public static void EnsureCanAuthor(string typeName, string outputPath)
         {
@@ -36,7 +30,10 @@ namespace FlaxEditor.Content
                    extension.Equals(".visualscript", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".behaviortree", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".particlefunction", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".material", StringComparison.OrdinalIgnoreCase);
+                   extension.Equals(".material", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".materialinstance", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".sceneanimation", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".skeletonmask", StringComparison.OrdinalIgnoreCase);
         }
 
         public static string TypeNameFromPath(string path)
@@ -56,6 +53,12 @@ namespace FlaxEditor.Content
                 return typeof(ParticleEmitterFunction).FullName;
             if (extension.Equals(".material", StringComparison.OrdinalIgnoreCase))
                 return typeof(Material).FullName;
+            if (extension.Equals(".materialinstance", StringComparison.OrdinalIgnoreCase))
+                return typeof(MaterialInstance).FullName;
+            if (extension.Equals(".sceneanimation", StringComparison.OrdinalIgnoreCase))
+                return typeof(SceneAnimation).FullName;
+            if (extension.Equals(".skeletonmask", StringComparison.OrdinalIgnoreCase))
+                return typeof(SkeletonMask).FullName;
             return null;
         }
 

@@ -6,7 +6,6 @@
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/Artifacts/ResolvedArtifact.h"
-#include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Content/Loading/ContentLoadTask.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
@@ -377,7 +376,7 @@ TEST_CASE("Generated unsupported binary requests rebuild without mutation")
     Delete(asset);
 }
 
-TEST_CASE("Content resolves an explicit distinct Library load location behind rollout flags")
+TEST_CASE("Content resolves an explicit distinct Library load location and still reads legacy binary assets")
 {
     const String root = Globals::ProjectLibraryFolder / TEXT("Artifacts/FoundationFixture");
     const String canonicalPath = Globals::ProjectContentFolder / TEXT("__FoundationFixture.source");
@@ -389,9 +388,6 @@ TEST_CASE("Content resolves an explicit distinct Library load location behind ro
     const byte payload[] = { 10, 20, 30, 40 };
     RawDataAsset* asset = nullptr;
     RawDataAsset* legacyAsset = nullptr;
-    AssetPipelineSettings* settings = AssetPipelineSettings::Get();
-    const bool oldDatabaseFlag = settings->UseNewAssetDatabase;
-    const bool oldLibraryFlag = settings->UseLibraryArtifacts;
     FileSystem::DeleteDirectory(root, true);
     REQUIRE_FALSE(FileSystem::CreateDirectory(root));
     REQUIRE_FALSE(File::WriteAllBytes(canonicalPath, sourceBytes, ARRAY_COUNT(sourceBytes)));
@@ -406,8 +402,6 @@ TEST_CASE("Content resolves an explicit distinct Library load location behind ro
         ContentStorageManager::EnsureAccess(storagePath);
         FileSystem::DeleteDirectory(root, true);
         FileSystem::DeleteFile(canonicalPath);
-        settings->UseNewAssetDatabase = oldDatabaseFlag;
-        settings->UseLibraryArtifacts = oldLibraryFlag;
     };
 
     AssetLoadLocation location;
@@ -421,13 +415,6 @@ TEST_CASE("Content resolves an explicit distinct Library load location behind ro
     location.Artifact.IsExact = true;
 
     AssetPipelineDiagnostic diagnostic;
-    settings->UseNewAssetDatabase = false;
-    settings->UseLibraryArtifacts = false;
-    CHECK(Content::RegisterAssetLoadLocation(location, diagnostic));
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidSettingsCombination);
-
-    settings->UseNewAssetDatabase = true;
-    settings->UseLibraryArtifacts = true;
     REQUIRE_FALSE(Content::RegisterAssetLoadLocation(location, diagnostic));
     asset = Content::Load<RawDataAsset>(id);
     REQUIRE(asset);

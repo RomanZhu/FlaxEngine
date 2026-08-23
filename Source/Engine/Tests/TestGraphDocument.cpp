@@ -4,9 +4,12 @@
 #include "Engine/Content/Assets/MaterialFunction.h"
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/Assets/Material.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Core/Math/Quaternion.h"
 #include "Engine/Core/Math/Transform.h"
 #include "Engine/Core/Math/Vector2.h"
+#include "Engine/Engine/Globals.h"
+#include "Engine/Platform/FileSystem.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Visject/VisjectGraph.h"
@@ -193,6 +196,10 @@ TEST_CASE("Graph documents encode typed values and visject meta as text")
     items.Add(5);
     items.Add(true);
     document.Nodes[0].Values.Add(Variant(items));
+    const byte blobBytes[] = { 1, 2, 3, 250 };
+    Variant blob;
+    blob.SetBlob(blobBytes, ARRAY_COUNT(blobBytes));
+    document.Nodes[0].Values.Add(blob);
 
     float view[3] = { 12.0f, -8.0f, 1.5f };
     document.GraphMeta.AddEntry(10, reinterpret_cast<byte*>(view), sizeof(view));
@@ -217,16 +224,21 @@ TEST_CASE("Graph documents encode typed values and visject meta as text")
     CHECK(json.Contains("\"$type\": \"Int2\""));
     CHECK(json.Contains("\"$type\": \"Transform\""));
     CHECK(json.Contains("\"$type\": \"Array\""));
+    CHECK(json.Contains("\"$type\": \"Blob\""));
+    CHECK(json.Contains("\"value\": [\n"));
+    CHECK_FALSE(json.Contains("AQID+g=="));
 
     GraphDocumentCodec codec;
     GraphDocumentSnapshot snapshot;
     REQUIRE_FALSE(codec.DecodeGraph(json, snapshot, diagnostic));
     REQUIRE(snapshot.Document.Nodes.Count() == 1);
-    REQUIRE(snapshot.Document.Nodes[0].Values.Count() >= 6);
+    REQUIRE(snapshot.Document.Nodes[0].Values.Count() >= 7);
     CHECK(snapshot.Document.Nodes[0].Values[2].Type.Type == VariantType::Quaternion);
     CHECK(snapshot.Document.Nodes[0].Values[3].AsInt2() == Int2(3, 4));
     CHECK(snapshot.Document.Nodes[0].Values[4].Type.Type == VariantType::Transform);
     CHECK(snapshot.Document.Nodes[0].Values[5].Type.Type == VariantType::Array);
+    CHECK(snapshot.Document.Nodes[0].Values[6].Type.Type == VariantType::Blob);
+    CHECK(snapshot.Document.Nodes[0].Values[6].AsBlob.Length == ARRAY_COUNT(blobBytes));
     REQUIRE(snapshot.Document.GraphMeta.GetEntry(10) != nullptr);
     REQUIRE(snapshot.Document.Parameters.Count() == 1);
     REQUIRE(snapshot.Document.Parameters[0].Meta.GetEntry(13) != nullptr);
@@ -304,4 +316,10 @@ TEST_CASE("Graph documents support authored material text without generated shad
     Array<byte> compiled;
     REQUIRE_FALSE(GraphDocumentCompiler::CompileDocument(snapshot.Document, compiled, diagnostic));
     CHECK(compiled.Count() > 0);
+
+    const String artifact = Globals::TemporaryFolder / (Guid::New().ToString(Guid::FormatType::N) + TEXT(".flax"));
+    REQUIRE_FALSE(GraphDocumentCodec::WriteCompatibilityAsset(artifact, Guid::New(), Material::TypeName, compiled, snapshot.Document.PropertiesJson, diagnostic, true));
+    CHECK(FileSystem::FileExists(artifact));
+    ContentStorageManager::EnsureAccess(artifact);
+    FileSystem::DeleteFile(artifact);
 }

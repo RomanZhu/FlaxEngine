@@ -924,6 +924,30 @@ namespace FlaxEditor
             return new { actor = DescribeActor(value), property = member.Name, type = memberType.FullName, value = SerializeMemberValue(GetMemberValue(member, value), memberType) };
         }
 
+        [CliCommand("actors.animated-model.node", Description = "Read one animated-model skeleton node transform.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
+        public static object GetAnimatedModelNode([CliOption("actor", Required = true)] Guid actor, [CliOption("node", Required = true)] string node, [CliOption("world-space")] bool worldSpace = false)
+        {
+            var value = RequireActor(actor) as AnimatedModel ?? throw new ArgumentException($"Actor '{actor}' is not an AnimatedModel.", nameof(actor));
+            if (value.SkinnedModel == null || value.SkinnedModel.WaitForLoaded())
+                throw new InvalidOperationException($"AnimatedModel '{actor}' has no loaded skinned model.");
+            if (value.SkinnedModel.FindNode(node) < 0)
+                throw new KeyNotFoundException($"Skeleton node '{node}' was not found.");
+            value.GetNodeTransformation(node, out var transform, worldSpace);
+            return new
+            {
+                actor = DescribeActor(value),
+                node,
+                worldSpace,
+                matrix = new[]
+                {
+                    transform.M11, transform.M12, transform.M13, transform.M14,
+                    transform.M21, transform.M22, transform.M23, transform.M24,
+                    transform.M31, transform.M32, transform.M33, transform.M34,
+                    transform.M41, transform.M42, transform.M43, transform.M44,
+                },
+            };
+        }
+
         [CliCommand("actors.property.set", Description = "Set one direct public Actor field or property with undo, including Actor and asset references.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
         public static object SetActorProperty([CliOption("actor", Required = true)] Guid actor, [CliOption("property", Required = true)] string property, [CliOption("value", Required = true)] JToken value)
         {

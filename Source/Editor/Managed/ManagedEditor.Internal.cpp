@@ -22,7 +22,6 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
-#include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
 #include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/ContentImporters/ImportModel.h"
 #include "Engine/ContentImporters/ImportAudio.h"
@@ -238,15 +237,10 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CreateVisualScript(MString* outputPath
     FileSystem::NormalizePath(outputPath);
     String baseTypename;
     MUtils::ToString(baseTypenameObj, baseTypename);
-    const auto* settings = AssetPipelineSettings::Get();
-    if (settings && settings->UseNewAssetDatabase && settings->UseLibraryArtifacts && settings->UseTextGraphAssets)
-    {
-        String propertiesJson = TEXT("{\n  \"baseType\": \"");
-        propertiesJson += baseTypename.HasChars() ? baseTypename : TEXT("FlaxEngine.Script");
-        propertiesJson += TEXT("\",\n  \"flags\": 0\n}\n");
-        return !AssetDatabaseFacade::CreateGraphDocument(outputPath, VisualScript::TypeName, propertiesJson).IsValid();
-    }
-    return AssetsImportingManager::Create(AssetsImportingManager::CreateVisualScriptTag, outputPath, &baseTypename);
+    String propertiesJson = TEXT("{\n  \"baseType\": \"");
+    propertiesJson += baseTypename.HasChars() ? baseTypename : TEXT("FlaxEngine.Script");
+    propertiesJson += TEXT("\",\n  \"flags\": 0\n}\n");
+    return !AssetDatabaseFacade::CreateGraphDocument(outputPath, VisualScript::TypeName, propertiesJson).IsValid();
 }
 
 DEFINE_INTERNAL_CALL(MString*) EditorInternal_CanImport(MString* extensionObj)

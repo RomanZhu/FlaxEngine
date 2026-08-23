@@ -73,8 +73,8 @@ namespace FlaxEditor.Content.Import
         public ModelImportEntry(ref Request request)
         : base(ref request)
         {
-            // Try to restore target asset model import options (useful for fast reimport)
-            Editor.TryRestoreImportOptions(ref _settings.Settings, ResultUrl);
+            if (!IsCanonicalSource)
+                Editor.TryRestoreImportOptions(ref _settings.Settings, ResultUrl);
         }
 
         /// <inheritdoc />
@@ -99,7 +99,14 @@ namespace FlaxEditor.Content.Import
         /// <inheritdoc />
         public override bool Import()
         {
-            return Editor.Import(SourceUrl, ResultUrl, _settings.Settings);
+            return IsCanonicalSource ? CopySourceToResult() : Editor.Import(SourceUrl, ResultUrl, _settings.Settings);
+        }
+
+        internal string MetadataPath => ResultUrl + ".meta";
+
+        internal bool CreateMetadata()
+        {
+            return AssetDatabaseFacade.CreateModelMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
         }
     }
 }

@@ -675,14 +675,15 @@ namespace FlaxEditor.CustomEditors.Editors
             if (!new ScriptType(typeof(Asset)).IsAssignableFrom(_type))
                 return false;
 
-            // Load or get asset
-            var id = assetItem.ID;
-            var obj = Object.Find<Asset>(ref id);
-            if (obj == null)
+            // Validate from database type metadata so canonical source assets don't
+            // need an existing Library artifact merely to be accepted by the field.
+            var assetType = TypeUtils.GetType(assetItem.TypeName);
+            if (!_type.IsAssignableFrom(assetType))
                 return false;
 
-            // Check it
-            return IsValid(obj);
+            // Custom validation needs the actual object. Loading here also starts
+            // artifact generation for canonical sources when required.
+            return CheckValid == null || IsValid(assetItem.LoadAsync());
         }
 
         private bool ValidateDragActorWithScript(ActorNode node)
@@ -731,7 +732,7 @@ namespace FlaxEditor.CustomEditors.Editors
             }
             else if (_dragAssets.HasValidDrag)
             {
-                ValueID = _dragAssets.Objects[0].ID;
+                Value = _dragAssets.Objects[0].LoadAsync();
             }
             else if (_dragScripts.HasValidDrag)
             {

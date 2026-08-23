@@ -57,7 +57,10 @@ namespace FlaxEditor.Content.Import
             SourceUrl = request.InputPath;
             ResultUrl = request.OutputPath;
             AllowReplace = request.AllowReplace;
+            IsCanonicalSource = request.UseCanonicalSource;
         }
+
+        internal bool IsCanonicalSource { get; }
 
         /// <summary>
         /// Modifies the result URL filename (keeps destination folder and extension).

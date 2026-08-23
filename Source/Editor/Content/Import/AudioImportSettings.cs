@@ -64,8 +64,8 @@ namespace FlaxEditor.Content.Import
         public AudioImportEntry(ref Request request)
         : base(ref request)
         {
-            // Try to restore target asset Audio import options (useful for fast reimport)
-            Editor.TryRestoreImportOptions(ref _settings.Settings, ResultUrl);
+            if (!IsCanonicalSource)
+                Editor.TryRestoreImportOptions(ref _settings.Settings, ResultUrl);
         }
 
         /// <inheritdoc />
@@ -90,7 +90,14 @@ namespace FlaxEditor.Content.Import
         /// <inheritdoc />
         public override bool Import()
         {
-            return Editor.Import(SourceUrl, ResultUrl, _settings.Settings);
+            return IsCanonicalSource ? CopySourceToResult() : Editor.Import(SourceUrl, ResultUrl, _settings.Settings);
+        }
+
+        internal string MetadataPath => ResultUrl + ".meta";
+
+        internal bool CreateMetadata()
+        {
+            return AssetDatabaseFacade.CreateAudioMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
         }
     }
 }

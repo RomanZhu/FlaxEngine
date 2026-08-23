@@ -22,6 +22,12 @@
 
 namespace
 {
+    void AddU16LE(Array<byte>& data, uint16 value)
+    {
+        data.Add(static_cast<byte>(value));
+        data.Add(static_cast<byte>(value >> 8));
+    }
+
     void AddU32LE(Array<byte>& data, uint32 value)
     {
         data.Add(static_cast<byte>(value));
@@ -89,6 +95,108 @@ namespace
         return result;
     }
 
+    Array<byte> MakeBmp(int32 width, int32 height)
+    {
+        Array<byte> result;
+        result.Resize(54);
+        Platform::MemoryClear(result.Get(), result.Count());
+        result[0] = 'B';
+        result[1] = 'M';
+        result[14] = 40;
+        result[18] = static_cast<byte>(width);
+        result[19] = static_cast<byte>(width >> 8);
+        result[22] = static_cast<byte>(height);
+        result[23] = static_cast<byte>(height >> 8);
+        result[26] = 1;
+        result[28] = 32;
+        return result;
+    }
+
+    Array<byte> MakeGif(uint16 width, uint16 height)
+    {
+        Array<byte> result;
+        const char signature[] = "GIF89a";
+        result.Add(reinterpret_cast<const byte*>(signature), 6);
+        AddU16LE(result, width);
+        AddU16LE(result, height);
+        return result;
+    }
+
+    Array<byte> MakeJpeg(uint16 width, uint16 height)
+    {
+        Array<byte> result;
+        const byte bytes[] = {
+            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x08, 0x08,
+            static_cast<byte>(height >> 8), static_cast<byte>(height),
+            static_cast<byte>(width >> 8), static_cast<byte>(width), 0x01
+        };
+        result.Add(bytes, ARRAY_COUNT(bytes));
+        return result;
+    }
+
+    void AddTiffEntry(Array<byte>& data, uint16 tag, uint16 type, uint32 value)
+    {
+        AddU16LE(data, tag);
+        AddU16LE(data, type);
+        AddU32LE(data, 1);
+        if (type == 3)
+        {
+            AddU16LE(data, static_cast<uint16>(value));
+            AddU16LE(data, 0);
+        }
+        else
+        {
+            AddU32LE(data, value);
+        }
+    }
+
+    Array<byte> MakeTiff(uint32 width, uint32 height)
+    {
+        Array<byte> result;
+        result.Add('I');
+        result.Add('I');
+        AddU16LE(result, 42);
+        AddU32LE(result, 8);
+        AddU16LE(result, 4);
+        AddTiffEntry(result, 256, 4, width);
+        AddTiffEntry(result, 257, 4, height);
+        AddTiffEntry(result, 258, 3, 8);
+        AddTiffEntry(result, 277, 3, 4);
+        AddU32LE(result, 0);
+        return result;
+    }
+
+    Array<byte> MakeDds(uint32 width, uint32 height)
+    {
+        Array<byte> result;
+        result.Resize(128);
+        Platform::MemoryClear(result.Get(), result.Count());
+        Platform::MemoryCopy(result.Get(), "DDS ", 4);
+        result[4] = 124;
+        result[12] = static_cast<byte>(height);
+        result[13] = static_cast<byte>(height >> 8);
+        result[16] = static_cast<byte>(width);
+        result[17] = static_cast<byte>(width >> 8);
+        result[76] = 32;
+        return result;
+    }
+
+    Array<byte> MakeHdr(int32 width, int32 height)
+    {
+        const StringAnsi text = StringAnsi::Format("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {0} +X {1}\n", height, width);
+        Array<byte> result;
+        result.Add(reinterpret_cast<const byte*>(text.Get()), text.Length());
+        return result;
+    }
+
+    Array<byte> MakeRaw(int32 size)
+    {
+        Array<byte> result;
+        result.Resize(size * size * 2);
+        Platform::MemoryClear(result.Get(), result.Count());
+        return result;
+    }
+
     Array<byte> MakeExr(int32 width, int32 height)
     {
         Array<byte> result;
@@ -134,7 +242,7 @@ namespace
     }
 }
 
-TEST_CASE("Texture processor Prepare probes PNG TGA and EXR deterministically without writing outputs")
+TEST_CASE("Texture processor Prepare probes every supported source format deterministically without writing outputs")
 {
     const String root = Globals::TemporaryFolder / (TEXT("TexturePrepare-") + Guid::New().ToString(Guid::FormatType::N));
     const String content = root / TEXT("Content");
@@ -166,6 +274,13 @@ TEST_CASE("Texture processor Prepare probes PNG TGA and EXR deterministically wi
     fixtures.Add({ TEXT("probe.png"), MakePng(64, 32), TextureSourceFormat::Png, 64, 32 });
     fixtures.Add({ TEXT("probe.tga"), MakeTga(33, 17), TextureSourceFormat::Tga, 33, 17 });
     fixtures.Add({ TEXT("probe.exr"), MakeExr(19, 11), TextureSourceFormat::Exr, 19, 11 });
+    fixtures.Add({ TEXT("probe.bmp"), MakeBmp(41, 23), TextureSourceFormat::Bmp, 41, 23 });
+    fixtures.Add({ TEXT("probe.gif"), MakeGif(29, 13), TextureSourceFormat::Gif, 29, 13 });
+    fixtures.Add({ TEXT("probe.tiff"), MakeTiff(37, 21), TextureSourceFormat::Tiff, 37, 21 });
+    fixtures.Add({ TEXT("probe.jpg"), MakeJpeg(31, 15), TextureSourceFormat::Jpeg, 31, 15 });
+    fixtures.Add({ TEXT("probe.dds"), MakeDds(48, 24), TextureSourceFormat::Dds, 48, 24 });
+    fixtures.Add({ TEXT("probe.hdr"), MakeHdr(43, 27), TextureSourceFormat::Hdr, 43, 27 });
+    fixtures.Add({ TEXT("probe.raw"), MakeRaw(16), TextureSourceFormat::Raw, 16, 16 });
 
     for (const Fixture& fixture : fixtures)
     {
@@ -369,8 +484,8 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     runtimeOutput.FormatVersion = TextureProcessor::RuntimeFormatVersion;
     runtimeOutput.Size = FileSystem::GetFileSize(runtimePath);
     runtimeOutput.Compatibility = "flax-texture-v4";
-    REQUIRE_FALSE(TextureArtifactValidator::ValidateRuntime(runtimePath, runtimeOutput, record.ID, diagnostic));
-    CHECK(TextureArtifactValidator::ValidateRuntime(runtimePath, runtimeOutput, Guid::New(), diagnostic));
+    REQUIRE_FALSE(TextureArtifactValidator::ValidateRuntime(runtimePath, runtimeOutput, record.ID, Texture::TypeName, diagnostic));
+    CHECK(TextureArtifactValidator::ValidateRuntime(runtimePath, runtimeOutput, Guid::New(), Texture::TypeName, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
     ArtifactManifestOutput thumbnailOutput;
     thumbnailOutput.Kind = "thumbnail";

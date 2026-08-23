@@ -11,8 +11,6 @@
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
-#include "Engine/Content/Assets/Texture.h"
-#include "Engine/Render2D/SpriteAtlas.h"
 #include "Engine/Graphics/Textures/TextureData.h"
 #endif
 
@@ -25,6 +23,7 @@ namespace
         TextureSourceFormat Format = TextureSourceFormat::Unknown;
         int32 Width = 0;
         int32 Height = 0;
+        int32 ArraySize = 1;
         int32 Channels = 0;
         int32 BitsPerChannel = 0;
     };
@@ -72,6 +71,33 @@ namespace
     {
         return (static_cast<uint32>(data[0]) << 24) | (static_cast<uint32>(data[1]) << 16) |
                (static_cast<uint32>(data[2]) << 8) | static_cast<uint32>(data[3]);
+    }
+
+    uint16 ReadU16BE(const byte* data)
+    {
+        return static_cast<uint16>((static_cast<uint16>(data[0]) << 8) | data[1]);
+    }
+
+    uint16 ReadU16(const byte* data, bool littleEndian)
+    {
+        return littleEndian ? ReadU16LE(data) : ReadU16BE(data);
+    }
+
+    uint32 ReadU32(const byte* data, bool littleEndian)
+    {
+        return littleEndian ? ReadU32LE(data) : ReadU32BE(data);
+    }
+
+    bool SetProbe(TextureProbe& result, TextureSourceFormat format, uint32 width, uint32 height, int32 channels, int32 bitsPerChannel)
+    {
+        if (width == 0 || height == 0 || width > MAX_int32 || height > MAX_int32 || channels < 1 || bitsPerChannel < 1)
+            return true;
+        result.Format = format;
+        result.Width = static_cast<int32>(width);
+        result.Height = static_cast<int32>(height);
+        result.Channels = channels;
+        result.BitsPerChannel = bitsPerChannel;
+        return false;
     }
 
     bool EqualAscii(const Array<byte>& data, int32 offset, int32 length, const char* value)
@@ -147,6 +173,233 @@ namespace
         result.Channels = colorMapped ? Math::Max<int32>(1, colorMapDepth / 8) : gray ? (pixelDepth == 16 ? 2 : 1) : Math::Max<int32>(1, pixelDepth / 8);
         result.BitsPerChannel = 8;
         return false;
+    }
+
+    bool ProbeBmp(const Array<byte>& data, TextureProbe& result)
+    {
+        if (data.Count() < 26 || data[0] != 'B' || data[1] != 'M')
+            return true;
+        const uint32 headerSize = ReadU32LE(data.Get() + 14);
+        uint32 width;
+        uint32 height;
+        uint16 planes;
+        uint16 bits;
+        if (headerSize == 12)
+        {
+            width = ReadU16LE(data.Get() + 18);
+            height = ReadU16LE(data.Get() + 20);
+            planes = ReadU16LE(data.Get() + 22);
+            bits = ReadU16LE(data.Get() + 24);
+        }
+        else
+        {
+            if (headerSize < 40 || data.Count() < 30)
+                return true;
+            const int32 signedWidth = static_cast<int32>(ReadU32LE(data.Get() + 18));
+            const int32 signedHeight = static_cast<int32>(ReadU32LE(data.Get() + 22));
+            if (signedWidth <= 0 || signedHeight == 0 || signedHeight == MIN_int32)
+                return true;
+            width = static_cast<uint32>(signedWidth);
+            height = static_cast<uint32>(Math::Abs(signedHeight));
+            planes = ReadU16LE(data.Get() + 26);
+            bits = ReadU16LE(data.Get() + 28);
+        }
+        if (planes != 1 || (bits != 1 && bits != 4 && bits != 8 && bits != 16 && bits != 24 && bits != 32))
+            return true;
+        return SetProbe(result, TextureSourceFormat::Bmp, width, height, bits <= 8 ? 1 : bits <= 24 ? 3 : 4, bits <= 8 ? bits : 8);
+    }
+
+    bool ProbeGif(const Array<byte>& data, TextureProbe& result)
+    {
+        if (data.Count() < 10 ||
+            (Platform::MemoryCompare(data.Get(), "GIF87a", 6) != 0 && Platform::MemoryCompare(data.Get(), "GIF89a", 6) != 0))
+            return true;
+        return SetProbe(result, TextureSourceFormat::Gif, ReadU16LE(data.Get() + 6), ReadU16LE(data.Get() + 8), 4, 8);
+    }
+
+    bool ProbeJpeg(const Array<byte>& data, TextureProbe& result)
+    {
+        if (data.Count() < 4 || data[0] != 0xff || data[1] != 0xd8)
+            return true;
+        int32 offset = 2;
+        while (offset + 1 < data.Count())
+        {
+            while (offset < data.Count() && data[offset] != 0xff)
+                offset++;
+            while (offset < data.Count() && data[offset] == 0xff)
+                offset++;
+            if (offset >= data.Count())
+                return true;
+            const byte marker = data[offset++];
+            if (marker == 0x00 || marker == 0x01 || marker == 0xd8 || (marker >= 0xd0 && marker <= 0xd9))
+                continue;
+            if (offset + 2 > data.Count())
+                return true;
+            const uint16 segmentSize = ReadU16BE(data.Get() + offset);
+            if (segmentSize < 2 || offset + segmentSize > data.Count())
+                return true;
+            const bool startOfFrame = (marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) ||
+                                      (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf);
+            if (startOfFrame)
+            {
+                if (segmentSize < 8)
+                    return true;
+                const byte bits = data[offset + 2];
+                const uint16 height = ReadU16BE(data.Get() + offset + 3);
+                const uint16 width = ReadU16BE(data.Get() + offset + 5);
+                const byte channels = data[offset + 7];
+                return SetProbe(result, TextureSourceFormat::Jpeg, width, height, channels, bits);
+            }
+            offset += segmentSize;
+        }
+        return true;
+    }
+
+    bool ReadTiffScalar(const Array<byte>& data, bool littleEndian, uint16 type, uint32 count, const byte* entry, uint32& value)
+    {
+        if (count < 1 || (type != 3 && type != 4))
+            return true;
+        const uint32 elementSize = type == 3 ? 2 : 4;
+        const uint64 byteCount = static_cast<uint64>(count) * elementSize;
+        const byte* values = entry + 8;
+        if (byteCount > 4)
+        {
+            const uint32 valueOffset = ReadU32(entry + 8, littleEndian);
+            if (valueOffset > static_cast<uint32>(data.Count()) || byteCount > static_cast<uint64>(data.Count()) - valueOffset)
+                return true;
+            values = data.Get() + valueOffset;
+        }
+        value = type == 3 ? ReadU16(values, littleEndian) : ReadU32(values, littleEndian);
+        return false;
+    }
+
+    bool ProbeTiff(const Array<byte>& data, TextureProbe& result)
+    {
+        if (data.Count() < 8)
+            return true;
+        const bool littleEndian = data[0] == 'I' && data[1] == 'I';
+        if (!littleEndian && !(data[0] == 'M' && data[1] == 'M'))
+            return true;
+        if (ReadU16(data.Get() + 2, littleEndian) != 42)
+            return true;
+        const uint32 directoryOffset = ReadU32(data.Get() + 4, littleEndian);
+        if (directoryOffset > static_cast<uint32>(data.Count() - 2))
+            return true;
+        const uint16 entryCount = ReadU16(data.Get() + directoryOffset, littleEndian);
+        if (entryCount > 4096 || static_cast<uint64>(directoryOffset) + 2ull + static_cast<uint64>(entryCount) * 12ull > static_cast<uint64>(data.Count()))
+            return true;
+        uint32 width = 0;
+        uint32 height = 0;
+        uint32 bits = 8;
+        uint32 channels = 1;
+        for (uint16 i = 0; i < entryCount; i++)
+        {
+            const byte* entry = data.Get() + directoryOffset + 2 + i * 12;
+            const uint16 tag = ReadU16(entry, littleEndian);
+            if (tag != 256 && tag != 257 && tag != 258 && tag != 277)
+                continue;
+            uint32 value;
+            if (ReadTiffScalar(data, littleEndian, ReadU16(entry + 2, littleEndian), ReadU32(entry + 4, littleEndian), entry, value))
+                return true;
+            if (tag == 256)
+                width = value;
+            else if (tag == 257)
+                height = value;
+            else if (tag == 258)
+                bits = value;
+            else
+                channels = value;
+        }
+        return SetProbe(result, TextureSourceFormat::Tiff, width, height, static_cast<int32>(channels), static_cast<int32>(bits));
+    }
+
+    bool ProbeDds(const Array<byte>& data, TextureProbe& result)
+    {
+        if (data.Count() < 128 || Platform::MemoryCompare(data.Get(), "DDS ", 4) != 0 ||
+            ReadU32LE(data.Get() + 4) != 124 || ReadU32LE(data.Get() + 76) != 32)
+            return true;
+        if (SetProbe(result, TextureSourceFormat::Dds, ReadU32LE(data.Get() + 16), ReadU32LE(data.Get() + 12), 4, 8))
+            return true;
+        const uint32 caps2 = ReadU32LE(data.Get() + 112);
+        result.ArraySize = (caps2 & 0x200) != 0 ? 6 : 1;
+        if (ReadU32LE(data.Get() + 84) == 0x30315844 && data.Count() >= 148)
+        {
+            const uint32 arraySize = ReadU32LE(data.Get() + 140);
+            const bool cube = (ReadU32LE(data.Get() + 136) & 0x4) != 0;
+            if (arraySize == 0 || arraySize > MAX_int32 / (cube ? 6 : 1))
+                return true;
+            result.ArraySize = static_cast<int32>(arraySize) * (cube ? 6 : 1);
+        }
+        return false;
+    }
+
+    bool ParsePositiveInteger(const Array<byte>& data, int32& offset, int32& value)
+    {
+        while (offset < data.Count() && (data[offset] == ' ' || data[offset] == '\t'))
+            offset++;
+        if (offset >= data.Count() || data[offset] < '0' || data[offset] > '9')
+            return true;
+        uint64 parsed = 0;
+        while (offset < data.Count() && data[offset] >= '0' && data[offset] <= '9')
+        {
+            parsed = parsed * 10 + (data[offset++] - '0');
+            if (parsed > MAX_int32)
+                return true;
+        }
+        value = static_cast<int32>(parsed);
+        return value < 1;
+    }
+
+    bool ProbeHdr(const Array<byte>& data, TextureProbe& result)
+    {
+        if (data.Count() < 16 ||
+            (Platform::MemoryCompare(data.Get(), "#?RADIANCE", 10) != 0 && Platform::MemoryCompare(data.Get(), "#?RGBE", 6) != 0))
+            return true;
+        int32 offset = 0;
+        while (offset < data.Count())
+        {
+            const int32 lineStart = offset;
+            while (offset < data.Count() && data[offset] != '\n' && data[offset] != '\r')
+                offset++;
+            const int32 lineEnd = offset;
+            while (offset < data.Count() && (data[offset] == '\n' || data[offset] == '\r'))
+                offset++;
+            if (lineEnd - lineStart < 6)
+                continue;
+            int32 cursor = lineStart;
+            const byte firstSign = data[cursor++];
+            const byte firstAxis = cursor < lineEnd ? data[cursor++] : 0;
+            if ((firstSign != '+' && firstSign != '-') || (firstAxis != 'X' && firstAxis != 'Y'))
+                continue;
+            int32 firstSize;
+            if (ParsePositiveInteger(data, cursor, firstSize))
+                return true;
+            while (cursor < lineEnd && (data[cursor] == ' ' || data[cursor] == '\t'))
+                cursor++;
+            if (cursor + 2 > lineEnd)
+                return true;
+            const byte secondSign = data[cursor++];
+            const byte secondAxis = data[cursor++];
+            if ((secondSign != '+' && secondSign != '-') || (secondAxis != 'X' && secondAxis != 'Y') || secondAxis == firstAxis)
+                return true;
+            int32 secondSize;
+            if (ParsePositiveInteger(data, cursor, secondSize))
+                return true;
+            const uint32 width = firstAxis == 'X' ? firstSize : secondSize;
+            const uint32 height = firstAxis == 'Y' ? firstSize : secondSize;
+            return SetProbe(result, TextureSourceFormat::Hdr, width, height, 4, 8);
+        }
+        return true;
+    }
+
+    bool ProbeRaw(const Array<byte>& data, TextureProbe& result)
+    {
+        if (data.IsEmpty() || (data.Count() & 1) != 0)
+            return true;
+        const int32 size = static_cast<int32>(Math::Sqrt(data.Count() / 2.0f));
+        if (size < 1 || static_cast<int64>(size) * size * 2 != data.Count())
+            return true;
+        return SetProbe(result, TextureSourceFormat::Raw, size, size, 1, 16);
     }
 
     bool ProbeExrChannels(const Array<byte>& data, int32 start, int32 size, int32& channels, int32& bitsPerChannel)
@@ -272,7 +525,19 @@ AssetProcessorDescriptor TextureProcessor::CreateDescriptor()
     descriptor.SourceExtensions.Add(TEXT(".png"));
     descriptor.SourceExtensions.Add(TEXT(".tga"));
     descriptor.SourceExtensions.Add(TEXT(".exr"));
+    descriptor.SourceExtensions.Add(TEXT(".bmp"));
+    descriptor.SourceExtensions.Add(TEXT(".gif"));
+    descriptor.SourceExtensions.Add(TEXT(".tiff"));
+    descriptor.SourceExtensions.Add(TEXT(".tif"));
+    descriptor.SourceExtensions.Add(TEXT(".jpeg"));
+    descriptor.SourceExtensions.Add(TEXT(".jpg"));
+    descriptor.SourceExtensions.Add(TEXT(".dds"));
+    descriptor.SourceExtensions.Add(TEXT(".hdr"));
+    descriptor.SourceExtensions.Add(TEXT(".raw"));
     descriptor.SourceKinds.Add(AssetSourceKind::ImportedSource);
+    descriptor.DocumentTypes.Add(TEXT("FlaxEngine.Texture"));
+    descriptor.DocumentTypes.Add(TEXT("FlaxEngine.CubeTexture"));
+    descriptor.DocumentTypes.Add(TEXT("FlaxEngine.SpriteAtlas"));
     descriptor.MainOutputType = TEXT("FlaxEngine.Texture");
     descriptor.SettingsSchemaVersion = TextureProcessorSettings::CurrentVersion;
     descriptor.ImplementationVersion = ImplementationVersion;
@@ -402,13 +667,27 @@ bool TextureProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prep
         probeFailed = ProbeTga(source, probe);
     else if (extension == TEXT("exr"))
         probeFailed = ProbeExr(source, probe);
+    else if (extension == TEXT("bmp"))
+        probeFailed = ProbeBmp(source, probe);
+    else if (extension == TEXT("gif"))
+        probeFailed = ProbeGif(source, probe);
+    else if (extension == TEXT("tiff") || extension == TEXT("tif"))
+        probeFailed = ProbeTiff(source, probe);
+    else if (extension == TEXT("jpeg") || extension == TEXT("jpg"))
+        probeFailed = ProbeJpeg(source, probe);
+    else if (extension == TEXT("dds"))
+        probeFailed = ProbeDds(source, probe);
+    else if (extension == TEXT("hdr"))
+        probeFailed = ProbeHdr(source, probe);
+    else if (extension == TEXT("raw"))
+        probeFailed = ProbeRaw(source, probe);
     if (probeFailed)
         return PrepareFail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, context, TEXT("Texture source header is malformed or does not match its supported file extension."));
 
     if (probe.Width > MaximumDimension || probe.Height > MaximumDimension)
         return PrepareFail(diagnostic, AssetPipelineDiagnosticCode::ResourceLimitExceeded, context, TEXT("Texture source dimensions exceed the bounded decoder limit."));
-    const uint64 pixels = static_cast<uint64>(probe.Width) * static_cast<uint64>(probe.Height);
-    const uint64 sourceBytesPerPixel = probe.Format == TextureSourceFormat::Exr
+    const uint64 pixels = static_cast<uint64>(probe.Width) * static_cast<uint64>(probe.Height) * static_cast<uint64>(probe.ArraySize);
+    const uint64 sourceBytesPerPixel = probe.Format == TextureSourceFormat::Exr || probe.Format == TextureSourceFormat::Hdr
         ? 16ull
         : Math::Max<uint64>(4, (static_cast<uint64>(probe.Channels) * probe.BitsPerChannel + 7) / 8);
     if (pixels > MaximumDecodedBytes / sourceBytesPerPixel)
@@ -419,10 +698,8 @@ bool TextureProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prep
     if (decodedBytes > MaximumDecodedBytes)
         return PrepareFail(diagnostic, AssetPipelineDiagnosticCode::ResourceLimitExceeded, context, TEXT("Texture mip-chain estimate exceeds the configured memory limit."));
 
-    const char* decoderIdentity = probe.Format == TextureSourceFormat::Png
-        ? "flax-texture-decoder-png-v1"
-        : probe.Format == TextureSourceFormat::Tga ? "flax-texture-decoder-tga-v1" : "flax-texture-decoder-exr-v1";
-    const ContentHash decoderHash = ContentHash::Compute(decoderIdentity, StringUtils::Length(decoderIdentity));
+    const StringAnsi decoderIdentity = StringAnsi("flax-texture-decoder-") + StringAnsi(extension) + "-v1";
+    const ContentHash decoderHash = ContentHash::Compute(decoderIdentity.Get(), decoderIdentity.Length());
     static const char CompressorIdentity[] = "flax-texture-compressor-v1";
     const ContentHash compressorHash = ContentHash::Compute(CompressorIdentity, ARRAY_COUNT(CompressorIdentity) - 1);
     if (context.DeclareToolchain(TEXT("texture-decoder"), decoderHash, sourceOrigin, diagnostic) ||
@@ -436,6 +713,7 @@ bool TextureProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prep
     payload->SourceFormat = probe.Format;
     payload->Width = probe.Width;
     payload->Height = probe.Height;
+    payload->SourceArraySize = probe.ArraySize;
     payload->SourceChannels = probe.Channels;
     payload->SourceBitsPerChannel = probe.BitsPerChannel;
     payload->EstimatedDecodedBytes = decodedBytes;
@@ -523,8 +801,7 @@ bool TextureProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnos
     TextureArtifactAdapterArguments adapterArguments;
     adapterArguments.Data = &textureData;
     adapterArguments.Options = &options;
-    const String& intendedType = options.IsAtlas ? SpriteAtlas::TypeName : Texture::TypeName;
-    CreateAssetContext importerContext(verifiedSourcePath, runtimeScratchPath, prepared.AssetID, &adapterArguments, true, intendedType);
+    CreateAssetContext importerContext(verifiedSourcePath, runtimeScratchPath, prepared.AssetID, &adapterArguments, true, prepared.OutputType);
     CreateAssetFunction importerCallback = &CreateTextureArtifact;
     const CreateAssetResult importResult = importerContext.Run(importerCallback);
     if (importResult != CreateAssetResult::Ok)

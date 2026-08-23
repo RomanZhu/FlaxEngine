@@ -660,6 +660,11 @@ namespace FlaxEditor.Windows.Assets
         /// <returns>True if failed, otherwise false.</returns>
         protected virtual bool SaveToOriginal()
         {
+            if (!ConvertedTypePolicy.AllowsLegacyBinaryAuthoring(_item.TypeName, _item.Path))
+            {
+                Editor.LogError("Legacy .flax saving is disabled for converted asset types. Migrate the asset before editing it.");
+                return true;
+            }
             using var saveScope = Editor.ContentDatabase.TrackAssetSave(_item.Path);
 
             // Wait until temporary asset file be fully loaded

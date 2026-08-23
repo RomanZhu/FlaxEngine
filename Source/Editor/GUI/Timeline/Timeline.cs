@@ -38,7 +38,7 @@ namespace FlaxEditor.GUI.Timeline
             new KeyValuePair<float, string>(0, "Custom"),
         };
 
-        internal const int FormatVersion = 4;
+        internal const int FormatVersion = 5;
 
         /// <summary>
         /// The base class for timeline properties proxy objects.

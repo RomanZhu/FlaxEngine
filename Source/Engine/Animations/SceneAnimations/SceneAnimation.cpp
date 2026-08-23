@@ -40,7 +40,7 @@ const BytesContainer& SceneAnimation::LoadTimeline()
 void SceneAnimation::SaveData(MemoryWriteStream& stream) const
 {
     // Save properties
-    stream.Write(4);
+    stream.Write(5);
     stream.Write(FramesPerSecond);
     stream.Write(DurationFrames);
 
@@ -54,6 +54,7 @@ void SceneAnimation::SaveData(MemoryWriteStream& stream) const
         stream.Write((int32)track.ChildrenCount);
         stream.Write(track.Name, -13);
         stream.Write(track.Color);
+        stream.Write(track.ID);
         switch (track.Type)
         {
         case Track::Types::Folder:
@@ -277,6 +278,7 @@ Asset::LoadResult SceneAnimation::load()
     case 3: // [Deprecated on 03.09.2021 expires on 03.09.2023]
         MARK_CONTENT_DEPRECATED();
     case 4:
+    case 5:
     {
         stream.Read(FramesPerSecond);
         stream.Read(DurationFrames);
@@ -295,6 +297,10 @@ Asset::LoadResult SceneAnimation::load()
             stream.ReadInt32(&track.ChildrenCount);
             stream.Read(track.Name, -13);
             stream.Read(track.Color);
+            if (version >= 5)
+                stream.Read(track.ID);
+            else
+                track.ID = Guid::Empty;
             track.Disabled = (int32)track.Flag & (int32)Track::Flags::Mute || (track.ParentIndex != -1 && Tracks[track.ParentIndex].Disabled);
             track.TrackStateIndex = -1;
             track.Data = nullptr;

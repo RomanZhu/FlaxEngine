@@ -705,6 +705,11 @@ namespace FlaxEditor.Windows.Assets
             // Early check
             if (!IsEdited || _asset == null || _isWaitingForSurfaceLoad)
                 return;
+            if (!ConvertedTypePolicy.AllowsLegacyBinaryAuthoring(_item.TypeName, _item.Path))
+            {
+                Editor.LogError("Legacy .flax saving is disabled for converted asset types. Migrate the asset before editing it.");
+                return;
+            }
             using var saveScope = Editor.ContentDatabase.TrackAssetSave(_item.Path);
 
             // Check if surface has been edited

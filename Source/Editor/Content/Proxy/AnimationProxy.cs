@@ -23,7 +23,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool CanReimport(ContentItem item)
         {
-            return true;
+            return false;
         }
 
         /// <inheritdoc />

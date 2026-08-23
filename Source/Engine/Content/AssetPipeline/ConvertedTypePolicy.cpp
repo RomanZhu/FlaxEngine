@@ -11,25 +11,40 @@ bool ConvertedTypePolicy::IsConvertedGraphType(const StringView& typeName)
         typeName == TEXT("FlaxEngine.AnimationGraphFunction") ||
         typeName == TEXT("FlaxEngine.VisualScript") ||
         typeName == TEXT("FlaxEngine.BehaviorTree") ||
-        typeName == TEXT("FlaxEngine.ParticleEmitterFunction");
+        typeName == TEXT("FlaxEngine.ParticleEmitterFunction") ||
+        typeName == TEXT("FlaxEngine.MaterialInstance") ||
+        typeName == TEXT("FlaxEngine.SkeletonMask") ||
+        typeName == TEXT("FlaxEngine.SceneAnimation");
 }
 
 bool ConvertedTypePolicy::IsLegacyExceptionType(const StringView& typeName)
 {
-    return typeName == TEXT("FlaxEngine.Scene") ||
-        typeName == TEXT("FlaxEngine.Prefab") ||
-        typeName == TEXT("FlaxEngine.ParticleEmitter") ||
+    return typeName == TEXT("FlaxEngine.ParticleEmitter") ||
         typeName == TEXT("FlaxEngine.ParticleSystem") ||
-        typeName == TEXT("FlaxEngine.SceneAnimation") ||
-        typeName == TEXT("FlaxEngine.MaterialInstance") ||
-        typeName == TEXT("FlaxEngine.Shader") ||
-        typeName == TEXT("FlaxEngine.SkeletonMask") ||
         typeName == TEXT("FlaxEngine.RawDataAsset");
 }
 
-bool ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(const AssetPipelineSettings& settings, const StringView& typeName, const StringView& path)
+bool ConvertedTypePolicy::IsConvertedImportedType(const StringView& typeName)
 {
-    if (!settings.LockConvertedTypeAuthoring || !IsConvertedGraphType(typeName))
+    return typeName == TEXT("FlaxEngine.Texture") ||
+        typeName == TEXT("FlaxEngine.CubeTexture") ||
+        typeName == TEXT("FlaxEngine.SpriteAtlas") ||
+        typeName == TEXT("FlaxEngine.Model") ||
+        typeName == TEXT("FlaxEngine.SkinnedModel") ||
+        typeName == TEXT("FlaxEngine.Animation") ||
+        typeName == TEXT("FlaxEngine.AudioClip") ||
+        typeName == TEXT("FlaxEngine.FontAsset") ||
+        typeName == TEXT("FlaxEngine.Shader");
+}
+
+bool ConvertedTypePolicy::IsConvertedAssetType(const StringView& typeName)
+{
+    return IsConvertedGraphType(typeName) || IsConvertedImportedType(typeName);
+}
+
+bool ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(const AssetPipelineSettings&, const StringView& typeName, const StringView& path)
+{
+    if (!IsConvertedAssetType(typeName))
         return true;
     const String extension = FileSystem::GetExtension(path).ToLower();
     return extension != TEXT("flax");
@@ -37,8 +52,6 @@ bool ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(const AssetPipelineSetting
 
 bool ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(const StringView& typeName, const StringView& path)
 {
-    const AssetPipelineSettings* settings = AssetPipelineSettings::Get();
-    if (settings == nullptr)
-        return true;
-    return AllowsLegacyBinaryAuthoring(*settings, typeName, path);
+    AssetPipelineSettings settings;
+    return AllowsLegacyBinaryAuthoring(settings, typeName, path);
 }

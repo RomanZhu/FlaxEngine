@@ -39,7 +39,15 @@ bool CollectAssetsStep::Perform(CookingData& data)
         const bool hasCanonicalRecord = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord);
         if (hasCanonicalRecord && canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary &&
             canonicalRecord.ProcessorID != TEXT("Flax.Texture") && canonicalRecord.ProcessorID != TEXT("Flax.Model") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.GraphDocument"))
+            canonicalRecord.ProcessorID != TEXT("Flax.GraphDocument") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.ExistingJson") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.MaterialInstance") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.SkeletonMask") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.SceneAnimation") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.Audio") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.Font") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.Video") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.ShaderSource"))
         {
             LOG(Warning, "Skipping canonical cooker root {0}; processor '{1}' is not converted yet.", assetId, canonicalRecord.ProcessorID);
             continue;
@@ -52,7 +60,8 @@ bool CollectAssetsStep::Perform(CookingData& data)
         // Skip some assets (with no refs and not required to load)
         if (assetInfo.TypeName == Texture::TypeName ||
             assetInfo.TypeName == CubeTexture::TypeName ||
-            assetInfo.TypeName == Shader::TypeName)
+            assetInfo.TypeName == Shader::TypeName ||
+            (hasCanonicalRecord && canonicalRecord.ProcessorID == TEXT("Flax.Video")))
         {
             LOG_STR(Info, assetInfo.Path);
             data.Assets.Add(assetId);

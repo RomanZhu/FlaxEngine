@@ -26,6 +26,7 @@ namespace FlaxEditor.Windows
 
             // Cache data
             bool isValidElement = item != null;
+            bool isCanonicalSubAsset = item is AssetItem { IsCanonicalSubAsset: true };
             var proxy = Editor.ContentDatabase.GetProxy(item);
             ContentFolder folder = null;
             bool isFolder = false;
@@ -152,7 +153,11 @@ namespace FlaxEditor.Windows
                     }
                 }
 
-                if (isFolder && folder.Node is MainContentFolderTreeNode)
+                if (isCanonicalSubAsset)
+                {
+                    cm.AddSeparator();
+                }
+                else if (isFolder && folder.Node is MainContentFolderTreeNode)
                 {
                     cm.AddSeparator();
                 }
@@ -177,7 +182,7 @@ namespace FlaxEditor.Windows
                 b = _showAllContentInTree ? cm.AddButton("Paste", _treeOnlyPanel.Paste) : cm.AddButton("Paste", _view.Paste);
                 b.Enabled = _view.CanPaste();
 
-                if (isFolder && folder.Node is MainContentFolderTreeNode)
+                if (isCanonicalSubAsset || isFolder && folder.Node is MainContentFolderTreeNode)
                 {
                     // Do nothing
                 }

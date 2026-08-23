@@ -108,6 +108,7 @@ namespace FlaxEditor.GUI.Timeline
                 case 2: // [Deprecated in 2020 expires on 03.09.2023]
                 case 3: // [Deprecated on 03.09.2021 expires on 03.09.2023]
                 case 4:
+                case 5:
                 {
                     // Load properties
                     FramesPerSecond = stream.ReadSingle();
@@ -142,6 +143,8 @@ namespace FlaxEditor.GUI.Timeline
                         track.Name = Utilities.Utils.ReadStr(stream, -13);
                         track.Tag = parentIndex;
                         track.Color = stream.ReadColor32();
+                        if (version >= 5)
+                            track.ID = new Guid(stream.ReadBytes(16));
 
                         Profiler.BeginEvent("LoadTack");
                         track.Archetype.Load(version, track, stream);
@@ -212,6 +215,7 @@ namespace FlaxEditor.GUI.Timeline
                     stream.Write(track.SubTracks.Count);
                     Utilities.Utils.WriteStr(stream, track.Name, -13);
                     stream.Write((Color32)track.Color);
+                    stream.Write(track.ID.ToByteArray());
                     track.Archetype.Save(track, stream);
                 }
 

@@ -3,7 +3,9 @@
 #include "TextureArtifactValidator.h"
 #include "TextureProcessor.h"
 #include "Engine/Content/Assets/Texture.h"
+#include "Engine/Content/Assets/CubeTexture.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Render2D/SpriteAtlas.h"
 #include "Engine/Graphics/PixelFormatExtensions.h"
 #include "Engine/Graphics/Textures/TextureData.h"
 #include "Engine/Platform/File.h"
@@ -24,21 +26,21 @@ namespace
     }
 }
 
-bool TextureArtifactValidator::Register(ArtifactOutputValidatorRegistry& registry, const Guid& expectedAssetID, AssetPipelineDiagnostic& diagnostic)
+bool TextureArtifactValidator::Register(ArtifactOutputValidatorRegistry& registry, const Guid& expectedAssetID, const StringView& expectedType, AssetPipelineDiagnostic& diagnostic)
 {
-    ArtifactOutputValidator runtime = [expectedAssetID](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
+    ArtifactOutputValidator runtime = [expectedAssetID, expectedType = String(expectedType)](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
     {
-        return ValidateRuntime(path, output, expectedAssetID, result);
+        return ValidateRuntime(path, output, expectedAssetID, expectedType, result);
     };
     ArtifactOutputValidator thumbnail = [](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
     {
         return ValidateThumbnail(path, output, result);
     };
-    return registry.Register(StringAnsiView("runtime"), Texture::TypeName, runtime, diagnostic) ||
-           registry.Register(StringAnsiView("thumbnail"), Texture::TypeName, thumbnail, diagnostic);
+    return registry.Register(StringAnsiView("runtime"), expectedType, runtime, diagnostic) ||
+           registry.Register(StringAnsiView("thumbnail"), expectedType, thumbnail, diagnostic);
 }
 
-bool TextureArtifactValidator::ValidateRuntime(const StringView& path, const ArtifactManifestOutput& output, const Guid& expectedAssetID, AssetPipelineDiagnostic& diagnostic)
+bool TextureArtifactValidator::ValidateRuntime(const StringView& path, const ArtifactManifestOutput& output, const Guid& expectedAssetID, const StringView& expectedType, AssetPipelineDiagnostic& diagnostic)
 {
     if (output.FormatVersion != TextureProcessor::RuntimeFormatVersion || output.Compatibility != "flax-texture-v4" ||
         output.Size == 0 || output.Size != FileSystem::GetFileSize(path))
@@ -49,11 +51,12 @@ bool TextureArtifactValidator::ValidateRuntime(const StringView& path, const Art
         return Invalid(diagnostic, TEXT("Texture runtime artifact is not a readable Flax storage file."));
     Array<FlaxStorage::Entry> entries;
     storage->GetEntries(entries);
-    if (entries.Count() != 1 || entries[0].ID != expectedAssetID || entries[0].TypeName != Texture::TypeName)
+    if (entries.Count() != 1 || entries[0].ID != expectedAssetID || entries[0].TypeName != expectedType)
         return Invalid(diagnostic, TEXT("Texture runtime artifact identity or type does not match the requested asset."));
 
     AssetInitData data;
-    if (storage->LoadAssetHeader(expectedAssetID, data) || data.SerializedVersion != Texture::SerializedVersion ||
+    const bool validType = expectedType == Texture::TypeName || expectedType == CubeTexture::TypeName || expectedType == SpriteAtlas::TypeName;
+    if (!validType || storage->LoadAssetHeader(expectedAssetID, data) || data.SerializedVersion != Texture::SerializedVersion ||
         data.CustomData.Length() != sizeof(TextureHeader))
         return Invalid(diagnostic, TEXT("Texture runtime artifact header version or metadata is invalid."));
 #if USE_EDITOR

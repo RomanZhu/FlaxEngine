@@ -137,6 +137,15 @@ namespace FlaxEditor
             });
         }
 
+        /// <summary>Converts one eligible legacy binary to its canonical text document.</summary>
+        [CliCommand("assets.migration.convert", Description = "Convert one eligible legacy flax asset to canonical text.", Access = CliCommandAccess.MutatesProject)]
+        public static CliCommandResult MigrateLegacyAsset(string sourcePath)
+        {
+            if (AssetDatabaseFacade.MigrateLegacyAsset(sourcePath))
+                return CliCommandResult.Failure("FLX-ASSET-MIGRATION-0006", "Legacy asset migration failed.", AssetDatabaseFacade.GetDiagnostics());
+            return CliCommandResult.Success(new { sourcePath });
+        }
+
         private static object DescribeLegacyTexture(TextureAssetItem item)
         {
             var settings = FlaxEngine.Tools.TextureTool.Options.Default;

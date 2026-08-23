@@ -194,13 +194,6 @@ namespace
         return true;
     }
 
-    StringAnsi Base64(const byte* data, int32 length)
-    {
-        Array<char> encoded;
-        Encryption::Base64Encode(data, length, encoded);
-        return StringAnsi(encoded.Get(), encoded.Count());
-    }
-
     bool DecodeBase64(const StringAnsiView& encoded, Array<byte>& output)
     {
         if ((encoded.Length() & 3) != 0)
@@ -695,7 +688,7 @@ namespace
             MemoryWriteStream stream(64);
             stream.Write(value);
             AddString(object, "$type", "VariantBinary", allocator);
-            AddString(object, "value", Base64(stream.GetHandle(), static_cast<int32>(stream.GetPosition())), allocator);
+            object.AddMember("value", EncodeByteArray(stream.GetHandle(), static_cast<int32>(stream.GetPosition()), allocator), allocator);
         };
 
         switch (value.Type.Type)
@@ -1033,11 +1026,14 @@ namespace
         const auto guidMember = value.FindMember("guid");
         if (typeName == "VariantBinary")
         {
-            if (payload == value.MemberEnd() || !payload->value.IsString())
-                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("VariantBinary values require base64 payload."));
+            if (payload == value.MemberEnd())
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("VariantBinary values require a byte-array payload."));
             Array<byte> bytes;
-            if (DecodeBase64(StringAnsiView(payload->value.GetString(), payload->value.GetStringLength()), bytes))
-                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("VariantBinary payload is not valid base64."));
+            const bool decodeFailed = payload->value.IsString()
+                ? DecodeBase64(StringAnsiView(payload->value.GetString(), payload->value.GetStringLength()), bytes)
+                : DecodeByteArray(payload->value, bytes);
+            if (decodeFailed)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("VariantBinary payload is not a valid byte array or legacy base64 value."));
             MemoryReadStream stream(bytes.Get(), bytes.Count());
             stream.Read(result);
             return stream.HasError() ? Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("VariantBinary payload is truncated.")) : false;
@@ -1507,13 +1503,11 @@ namespace
                 MaterialInfo generatedInfo = shaderHeader.Material.Info;
                 if (generator.Generate(source, generatedInfo, context.Data.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS]->Data))
                 {
-                    Delete(layer);
                     return CreateAssetResult::Error;
                 }
                 Encryption::EncryptBytes(static_cast<byte*>(source.GetHandle()), source.GetPosition());
                 context.Data.Header.Chunks[SHADER_FILE_CHUNK_SOURCE]->Data.Copy(ToSpan(source));
                 shaderHeader.Material.Info = generatedInfo;
-                Delete(layer);
             }
 #endif
             context.Data.CustomData.Copy(&shaderHeader);
@@ -1535,7 +1529,7 @@ namespace
     }
 #endif
 
-    bool WriteCompatibilityFlax(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, const StringAnsiView& propertiesJson, AssetPipelineDiagnostic& diagnostic)
+    bool WriteCompatibilityFlax(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, const StringAnsiView& propertiesJson, AssetPipelineDiagnostic& diagnostic, bool artifactStagingMode)
     {
 #if COMPILE_WITH_ASSETS_IMPORTER
         GraphArtifactArguments arguments;
@@ -1543,7 +1537,7 @@ namespace
         arguments.TypeName = typeName;
         arguments.PropertiesJson = StringAnsi(propertiesJson.Get(), propertiesJson.Length());
         arguments.ID = id;
-        CreateAssetContext importerContext(StringView::Empty, path, id, &arguments, true, typeName);
+        CreateAssetContext importerContext(StringView::Empty, path, id, &arguments, artifactStagingMode, typeName);
         const CreateAssetResult result = importerContext.Run(&CreateGraphArtifact);
         if (result != CreateAssetResult::Ok)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, TEXT("Graph compatibility artifact writer failed."));
@@ -1926,9 +1920,9 @@ bool GraphDocumentCodec::CreateStarter(const StringView& typeName, GraphDocument
     return false;
 }
 
-bool GraphDocumentCodec::WriteCompatibilityAsset(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, const StringAnsiView& propertiesJson, AssetPipelineDiagnostic& diagnostic)
+bool GraphDocumentCodec::WriteCompatibilityAsset(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, const StringAnsiView& propertiesJson, AssetPipelineDiagnostic& diagnostic, bool artifactStagingMode)
 {
-    return WriteCompatibilityFlax(path, id, typeName, surface, propertiesJson, diagnostic);
+    return WriteCompatibilityFlax(path, id, typeName, surface, propertiesJson, diagnostic, artifactStagingMode);
 }
 
 bool GraphDocumentCompiler::CompileDocument(const GraphDocument& document, Array<byte>& output, AssetPipelineDiagnostic& diagnostic)
@@ -2502,7 +2496,7 @@ bool GraphDocumentPreview::Publish(const Guid& assetID, const StringView& typeNa
     storagePath = folder / TEXT("graph.flax");
     Array<byte> bytes;
     bytes.Set(surface.Get(), surface.Length());
-    if (WriteCompatibilityFlax(storagePath, assetID, typeName, bytes, StringAnsiView(), diagnostic))
+    if (WriteCompatibilityFlax(storagePath, assetID, typeName, bytes, StringAnsiView(), diagnostic, true))
         return true;
     lease = ArtifactLease::Acquire(storagePath);
     {

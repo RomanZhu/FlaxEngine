@@ -1233,18 +1233,34 @@ bool CookAssetsStep::Perform(CookingData& data)
         AssetRecord canonicalRecord;
         const bool foundCanonical = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord);
         const bool hasImportedCanonical = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::ImportedSource;
-        const bool isCanonicalTexture = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Texture") &&
-            canonicalRecord.TypeName == Texture::TypeName;
+        const bool isCanonicalTexture = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Texture");
         const bool isCanonicalModel = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Model");
         const bool isCanonicalGraph = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
-            canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument");
-        if (isCanonicalTexture || isCanonicalModel || isCanonicalGraph)
+            (canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.MaterialInstance") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.SkeletonMask") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.SceneAnimation"));
+        const bool isCanonicalImported = hasImportedCanonical &&
+            (canonicalRecord.ProcessorID == TEXT("Flax.Audio") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.Font") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.Video"));
+        if (isCanonicalTexture || isCanonicalModel || isCanonicalGraph || isCanonicalImported)
         {
             ArtifactRequest request;
             request.AssetID = assetId;
             request.Target = cookArtifactTarget;
             request.OutputKind = "runtime";
-            request.RequiredCompatibility = isCanonicalTexture ? "flax-texture-v4" : (isCanonicalModel ? "flax-model-runtime-v1" : "flax-graph-document-v1");
+            if (isCanonicalTexture)
+                request.RequiredCompatibility = "flax-texture-v4";
+            else if (isCanonicalModel)
+                request.RequiredCompatibility = "flax-model-runtime-v1";
+            else if (canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument"))
+                request.RequiredCompatibility = "flax-graph-document-v1";
+            else if (isCanonicalGraph)
+                request.RequiredCompatibility = "flax-authored-document-v1";
+            else
+                request.RequiredCompatibility = "flax-imported-source-v1";
             request.Policy = ArtifactResolvePolicy::Exact;
             ResolvedArtifact artifact;
             AssetPipelineDiagnostic diagnostic;

@@ -2,6 +2,8 @@
 
 #include "AssetDatabaseScanner.h"
 #include "AssetMeta.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Utilities/Crc.h"
@@ -13,17 +15,45 @@ namespace
         return path.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase);
     }
 
+    bool ReadLegacyEntries(const StringView& path, Array<FlaxStorage::Entry>& entries)
+    {
+        bool failed = false;
+        {
+            const FlaxStorageReference storage = ContentStorageManager::GetStorage(path, true);
+            if (!storage || storage->GetEntriesCount() < 1)
+            {
+                failed = true;
+            }
+            else
+            {
+                entries.Resize(storage->GetEntriesCount());
+                for (int32 i = 0; i < entries.Count(); i++)
+                    storage->GetEntry(i, entries[i]);
+            }
+        }
+        ContentStorageManager::EnsureAccess(path);
+        return failed;
+    }
+
     bool RequiresMetadata(const StringView& path)
     {
         const String extension = FileSystem::GetExtension(path).ToLower();
         const Char* supported[] =
         {
-            TEXT("png"), TEXT("jpg"), TEXT("jpeg"), TEXT("tga"), TEXT("bmp"), TEXT("hdr"), TEXT("exr"),
-            TEXT("fbx"), TEXT("obj"), TEXT("gltf"), TEXT("glb"),
-            TEXT("wav"), TEXT("mp3"), TEXT("ogg"), TEXT("flac"),
+            TEXT("png"), TEXT("jpg"), TEXT("jpeg"), TEXT("tga"), TEXT("bmp"), TEXT("gif"), TEXT("tiff"), TEXT("tif"),
+            TEXT("dds"), TEXT("hdr"), TEXT("raw"), TEXT("exr"),
+            TEXT("obj"), TEXT("fbx"), TEXT("x"), TEXT("dae"), TEXT("gltf"), TEXT("glb"), TEXT("blend"),
+            TEXT("bvh"), TEXT("ase"), TEXT("ply"), TEXT("dxf"), TEXT("ifc"), TEXT("nff"), TEXT("smd"),
+            TEXT("vta"), TEXT("mdl"), TEXT("md2"), TEXT("md3"), TEXT("md5mesh"), TEXT("q3o"), TEXT("q3s"),
+            TEXT("ac"), TEXT("stl"), TEXT("lwo"), TEXT("lws"), TEXT("lxo"),
+            TEXT("wav"), TEXT("mp3"), TEXT("ogg"),
             TEXT("ttf"), TEXT("otf"),
+            TEXT("mp4"), TEXT("webm"), TEXT("mov"), TEXT("mkv"),
+            TEXT("shader"),
             TEXT("materialfunction"), TEXT("animgraphfunction"), TEXT("animgraph"),
-            TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction"), TEXT("material")
+            TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction"), TEXT("material"),
+            TEXT("materialinstance"), TEXT("sceneanimation"), TEXT("skeletonmask"),
+            TEXT("scene"), TEXT("prefab")
         };
         for (const Char* value : supported)
         {
@@ -205,7 +235,38 @@ bool AssetDatabaseScanner::Scan(const StringView& projectRoot, const StringView&
         }
         result.FilesExamined++;
         if (FileSystem::GetExtension(sourcePath).ToLower() == TEXT("flax"))
+        {
+            AssetPipelineDiagnostic diagnostic;
+            AssetPathPolicy::ProjectPath normalizedPath;
+            if (AssetPathPolicy::TryNormalizeProjectPath(projectRoot, contentRoot, libraryRoot, sourcePath, normalizedPath, diagnostic))
+            {
+                result.Diagnostics.Add(diagnostic);
+                continue;
+            }
+            Array<FlaxStorage::Entry> entries;
+            if (ReadLegacyEntries(sourcePath, entries))
+            {
+                result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::InvalidMeta, sourcePath, TEXT("Legacy binary asset header is unreadable.")));
+                continue;
+            }
+            const Guid rootID = entries[0].ID;
+            for (int32 i = 0; i < entries.Count(); i++)
+            {
+                AssetRecord record;
+                record.ID = entries[i].ID;
+                record.SourceAssetID = rootID;
+                record.TypeName = entries[i].TypeName;
+                record.CanonicalPath = CanonicalAssetPath(sourcePath);
+                record.SourcePath = SourceFilePath(sourcePath);
+                if (i != 0)
+                    record.SubAsset = SubAssetKey(String::Format(TEXT("legacy:{0}"), i));
+                record.PortabilityKey = normalizedPath.PortabilityKey;
+                record.SourceKind = AssetSourceKind::LegacyBinary;
+                record.Status = AssetRecordStatus::Ready;
+                AddRecordWithDuplicateCheck(MoveTemp(record), records, recordIndices, result.Diagnostics);
+            }
             continue;
+        }
         const String metaPath = sourcePath + TEXT(".meta");
         if (!fileSet.Contains(metaPath))
         {

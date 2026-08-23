@@ -5,6 +5,8 @@
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
 
 #include "GraphDocumentProcessor.h"
+#include "AuthoredAssetProcessor.h"
+#include "ImportedSourceProcessor.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
@@ -31,6 +33,9 @@ namespace
         PreparedAsset Prepared;
         ArtifactTarget Target;
         Guid JobID = Guid::New();
+        String ProcessorID;
+        uint32 ImplementationVersion = 1;
+        bool ValidateFlaxStorage = true;
         Array<ArtifactBuildInput> Inputs;
         Array<ArtifactPublicationOutputPlan> Outputs;
         ArtifactOutputValidatorRegistry Validators;
@@ -40,12 +45,14 @@ namespace
     struct GraphPipelineState
     {
         std::mutex Locker;
-        AssetProcessorRegistration Registration;
+        AssetProcessorRegistration GraphRegistration;
+        Array<AssetProcessorRegistration> ExtraRegistrations;
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
         Dictionary<Guid, ArtifactKey> Fingerprints;
         uint64 ForceGeneration = 0;
         bool Initialized = false;
+        bool ExtraInitialized = false;
     };
 
     GraphPipelineState& State()
@@ -61,7 +68,7 @@ namespace
         diagnostic.Code = code;
         diagnostic.Stage = stage;
         diagnostic.AssetGuid = assetID;
-        diagnostic.ProcessorId = GraphDocumentProcessor::ProcessorID();
+        diagnostic.ProcessorId = TEXT("Flax.GraphDocument");
         diagnostic.Message = message;
         return true;
     }
@@ -121,6 +128,13 @@ namespace
     }
 }
 
+bool GraphPipelineService::OwnsProcessor(const StringView& processorID)
+{
+    return processorID == GraphDocumentProcessor::ProcessorID() ||
+        AuthoredAssetProcessor::Owns(processorID) ||
+        ImportedSourceProcessor::Owns(processorID);
+}
+
 bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
 {
     GraphPipelineState& state = State();
@@ -129,9 +143,44 @@ bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic
         return false;
     AssetProcessorDescriptor existing;
     if (!AssetProcessorRegistry::Get().TryGetDescriptor(GraphDocumentProcessor::ProcessorID(), existing) &&
-        AssetProcessorRegistry::Get().Register(GraphDocumentProcessor::CreateDescriptor(), state.Registration, diagnostic))
+        AssetProcessorRegistry::Get().Register(GraphDocumentProcessor::CreateDescriptor(), state.GraphRegistration, diagnostic))
         return true;
     state.Initialized = true;
+    return false;
+}
+
+static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
+{
+    if (GraphPipelineService::EnsureInitialized(diagnostic))
+        return true;
+    GraphPipelineState& state = State();
+    std::lock_guard<std::mutex> lock(state.Locker);
+    if (state.ExtraInitialized)
+        return false;
+    Array<String> extraIds;
+    extraIds.Add(AuthoredAssetProcessor::MaterialInstanceID());
+    extraIds.Add(AuthoredAssetProcessor::SkeletonMaskID());
+    extraIds.Add(AuthoredAssetProcessor::SceneAnimationID());
+    extraIds.Add(ImportedSourceProcessor::FontID());
+    extraIds.Add(ImportedSourceProcessor::ShaderID());
+    extraIds.Add(ImportedSourceProcessor::VideoID());
+#if COMPILE_WITH_AUDIO_TOOL
+    extraIds.Add(ImportedSourceProcessor::AudioID());
+#endif
+    for (const String& id : extraIds)
+    {
+        AssetProcessorDescriptor existing;
+        if (AssetProcessorRegistry::Get().TryGetDescriptor(id, existing))
+            continue;
+        AssetProcessorRegistration registration;
+        AssetProcessorDescriptor descriptor = AuthoredAssetProcessor::Owns(id)
+            ? AuthoredAssetProcessor::CreateDescriptor(id)
+            : ImportedSourceProcessor::CreateDescriptor(id);
+        if (AssetProcessorRegistry::Get().Register(MoveTemp(descriptor), registration, diagnostic))
+            return true;
+        state.ExtraRegistrations.Add(MoveTemp(registration));
+    }
+    state.ExtraInitialized = true;
     return false;
 }
 
@@ -141,10 +190,12 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     plan = ArtifactResolutionPlan();
     if (EnsureInitialized(diagnostic))
         return true;
-    if (!record.ID.IsValid() || record.ProcessorID != GraphDocumentProcessor::ProcessorID())
+    if (!record.ID.IsValid() || !OwnsProcessor(record.ProcessorID))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Prepare,
-            record.ID, TEXT("The asset is not owned by the graph document processor."));
-    if (GraphDocumentPreview::IsPreviewPath(record.SourcePath.Get()))
+            record.ID, TEXT("The asset is not owned by a registered document or imported-source processor."));
+    if (record.ProcessorID != GraphDocumentProcessor::ProcessorID() && RegisterExtraProcessors(diagnostic))
+        return true;
+    if (record.ProcessorID == GraphDocumentProcessor::ProcessorID() && GraphDocumentPreview::IsPreviewPath(record.SourcePath.Get()))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactIncompatible, AssetPipelineDiagnosticStage::Resolution,
             record.ID, TEXT("Preview graph artifacts are never consumed by the current resolver or cooker."));
 
@@ -171,6 +222,18 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     auto execution = std::make_shared<GraphExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
+    execution->ProcessorID = record.ProcessorID;
+    execution->ValidateFlaxStorage = record.ProcessorID != ImportedSourceProcessor::VideoID();
+    AssetProcessorDescriptor processorDescriptor;
+    if (AssetProcessorRegistry::Get().TryGetDescriptor(record.ProcessorID, processorDescriptor))
+        execution->ImplementationVersion = processorDescriptor.ImplementationVersion;
+    StringAnsi compatibility = "flax-graph-document-v1";
+    uint32 formatVersion = GraphDocumentProcessor::RuntimeFormatVersion;
+    if (processorDescriptor.Outputs.Count())
+    {
+        compatibility = processorDescriptor.Outputs[0].CompatibilityTag;
+        formatVersion = processorDescriptor.Outputs[0].FormatVersion;
+    }
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
         if (dependency.Kind != AssetDependencyKind::SourceFile)
@@ -185,21 +248,26 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
             record.ID, TEXT("Graph preparation declared no source input."));
 
-    ArtifactOutputValidator runtime = [expectedAssetID = record.ID, typeName = record.TypeName](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
+    ArtifactOutputValidator runtime = [expectedAssetID = record.ID, typeName = record.TypeName, compatibility, formatVersion, validateFlax = execution->ValidateFlaxStorage](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
     {
-        if (output.FormatVersion != GraphDocumentProcessor::RuntimeFormatVersion || output.Compatibility != "flax-graph-document-v1" ||
+        if (output.FormatVersion != formatVersion || output.Compatibility != compatibility ||
             output.Size == 0 || output.Size != FileSystem::GetFileSize(path) || GraphDocumentPreview::IsPreviewPath(path))
             return Fail(result, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Publication,
-                expectedAssetID, TEXT("Graph runtime artifact format, size, or preview path is invalid."));
+                expectedAssetID, TEXT("Runtime artifact format, size, compatibility, or preview path is invalid."));
+        if (!validateFlax)
+        {
+            result = AssetPipelineDiagnostic();
+            return false;
+        }
         auto storage = ContentStorageManager::GetStorage(path);
         if (!storage)
             return Fail(result, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Publication,
-                expectedAssetID, TEXT("Graph runtime artifact is not a readable Flax storage file."));
+                expectedAssetID, TEXT("Runtime artifact is not a readable Flax storage file."));
         Array<FlaxStorage::Entry> entries;
         storage->GetEntries(entries);
         if (entries.Count() != 1 || entries[0].ID != expectedAssetID || entries[0].TypeName != typeName)
             return Fail(result, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Publication,
-                expectedAssetID, TEXT("Graph runtime artifact identity or type does not match the requested asset."));
+                expectedAssetID, TEXT("Runtime artifact identity or type does not match the requested asset."));
         result = AssetPipelineDiagnostic();
         return false;
     };
@@ -216,7 +284,17 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         ArtifactPublicationOutputPlan outputPlan;
         outputPlan.Kind = output.Kind;
         Array<ArtifactKeyComponent> outputComponents;
-        if (GraphDocumentProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+        if (record.ProcessorID == GraphDocumentProcessor::ProcessorID())
+        {
+            if (GraphDocumentProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+                return true;
+        }
+        else if (AuthoredAssetProcessor::Owns(record.ProcessorID))
+        {
+            if (AuthoredAssetProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+                return true;
+        }
+        else if (ImportedSourceProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
             return true;
         execution->Outputs.Add(outputPlan);
         jobBuilder.AddKey(StringAnsi::Format("output-{0}", output.Kind), outputPlan.Key);
@@ -242,7 +320,7 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         if (execution->Context->Initialize(buildDiagnostic))
             return true;
         AssetProcessorLease buildLease;
-        if (AssetProcessorRegistry::Get().TryAcquire(GraphDocumentProcessor::ProcessorID(), AssetProcessorInvocationStage::Build, buildLease, buildDiagnostic))
+        if (AssetProcessorRegistry::Get().TryAcquire(execution->ProcessorID, AssetProcessorInvocationStage::Build, buildLease, buildDiagnostic))
         {
             execution->Context->Cancel();
             return true;
@@ -259,8 +337,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
                 execution->Prepared.AssetID, TEXT("Graph build produced no publication context."));
         ArtifactPublicationRequest publication;
         publication.Target = execution->Target;
-        publication.ProcessorID = GraphDocumentProcessor::ProcessorID();
-        publication.ProcessorImplementationVersion = GraphDocumentProcessor::ImplementationVersion;
+        publication.ProcessorID = execution->ProcessorID;
+        publication.ProcessorImplementationVersion = execution->ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
         publication.Outputs = execution->Outputs;
         publication.QueryCurrentState = [assetID = execution->Prepared.AssetID](uint64& revision, ArtifactKey& fingerprint)
@@ -296,6 +374,9 @@ bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     request.Target = TexturePipelineService::GetHostTarget();
     request.OutputKind = "runtime";
     request.RequiredCompatibility = "flax-graph-document-v1";
+    AssetProcessorDescriptor processorDescriptor;
+    if (AssetProcessorRegistry::Get().TryGetDescriptor(record.ProcessorID, processorDescriptor) && processorDescriptor.Outputs.Count())
+        request.RequiredCompatibility = processorDescriptor.Outputs[0].CompatibilityTag;
     request.Policy = ArtifactResolvePolicy::Exact;
     ArtifactResolutionPlan plan;
     if (CreatePlan(record, request, plan, diagnostic))
@@ -359,17 +440,21 @@ AssetBuildJobStatus GraphPipelineService::GetStatus(const Guid& assetID, AssetPi
 void GraphPipelineService::Shutdown()
 {
     GraphPipelineState& state = State();
-    AssetProcessorRegistration registration;
+    AssetProcessorRegistration graphRegistration;
+    Array<AssetProcessorRegistration> extra;
     {
         std::lock_guard<std::mutex> lock(state.Locker);
         if (!state.Initialized)
             return;
         state.Handles.Clear();
         state.Fingerprints.Clear();
-        registration = MoveTemp(state.Registration);
+        graphRegistration = MoveTemp(state.GraphRegistration);
+        extra = MoveTemp(state.ExtraRegistrations);
         state.Initialized = false;
+        state.ExtraInitialized = false;
     }
-    registration.Reset();
+    graphRegistration.Reset();
+    extra.Clear();
 }
 
 #endif

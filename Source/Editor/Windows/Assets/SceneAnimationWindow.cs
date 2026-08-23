@@ -853,6 +853,22 @@ namespace FlaxEditor.Windows.Assets
         }
 
         /// <inheritdoc />
+        protected override SceneAnimation LoadAsset()
+        {
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return CanonicalGraphDocuments.LoadClone<SceneAnimation>(_item);
+            return base.LoadAsset();
+        }
+
+        /// <inheritdoc />
+        protected override bool SaveToOriginal()
+        {
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return AssetDatabaseFacade.SaveAuthoredDocument(_asset, _item.ID);
+            return base.SaveToOriginal();
+        }
+
+        /// <inheritdoc />
         public override void Save()
         {
             if (!IsEdited)

@@ -30,8 +30,28 @@ namespace FlaxEditor.Content
         public override Type AssetType => typeof(MaterialInstance);
 
         /// <inheritdoc />
+        public override string FileExtension => CanonicalGraphDocuments.UseTextGraphAssets ? "materialinstance" : Extension;
+
+        /// <inheritdoc />
+        public override bool AcceptsAsset(string typeName, string path)
+        {
+            if (typeName != TypeName)
+                return false;
+            var extension = System.IO.Path.GetExtension(path);
+            return string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".materialinstance", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
+            CanonicalGraphDocuments.EnsureCanAuthor(typeof(MaterialInstance).FullName, outputPath);
+            if (CanonicalGraphDocuments.UseTextGraphAssets)
+            {
+                if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(MaterialInstance).FullName) == Guid.Empty)
+                    throw new Exception("Failed to create new asset.");
+                return;
+            }
             if (Editor.CreateAsset("MaterialInstance", outputPath))
                 throw new Exception("Failed to create new asset.");
         }

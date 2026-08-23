@@ -1,8 +1,10 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "MigrationJournal.h"
+#include "LegacyAssetMigrator.h"
 #include "Engine/Content/Artifacts/ArtifactKey.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
@@ -140,7 +142,7 @@ bool MigrationSession::CreatePlan(const Array<MigrationInventoryEntry>& inventor
             return Fail(diagnostic, TEXT("Migration plan cannot include unresolved or unsupported assets."));
         MigrationJournalOperation operation;
         operation.AssetID = entry->ID;
-        operation.Kind = TEXT("GraphDocument");
+        operation.Kind = TEXT("CanonicalDocument");
         operation.SourcePath = entry->SourcePath;
         operation.DestinationPath = entry->ProposedDestination;
         operation.BackupPath = String(backupRoot) / String(GuidKey(entry->ID)) / String(StringUtils::GetFileName(entry->SourcePath));
@@ -328,15 +330,11 @@ bool MigrationSession::Publish(MigrationJournal& journal, AssetPipelineDiagnosti
     {
         if (!FileSystem::FileExists(operation.BackupPath))
             return Fail(diagnostic, TEXT("Migration publish refused because the backup is missing."));
-        Array<byte> payload;
-        StringAnsi marker("canonical-migrated:");
-        marker += GuidKey(operation.AssetID);
-        marker += "\n";
-        payload.Set(reinterpret_cast<const byte*>(marker.Get()), marker.Length());
-        if (EnsureDirectory(operation.DestinationPath) || File::WriteAllBytes(operation.DestinationPath, payload.Get(), payload.Count()))
-            return Fail(diagnostic, TEXT("Migration publish could not write the canonical destination."));
+        if (LegacyAssetMigrator::ConvertFlax(operation.SourcePath, operation.DestinationPath, operation.AssetID, StringView(), diagnostic))
+            return true;
         if (HashFile(operation.DestinationPath, operation.AfterHash, diagnostic))
             return true;
+        ContentStorageManager::EnsureAccess(operation.SourcePath);
         if (FileSystem::FileExists(operation.SourcePath) && FileSystem::DeleteFile(operation.SourcePath))
             return Fail(diagnostic, TEXT("Migration publish could not retire the legacy source."));
         operation.State = GetStateName(MigrationJournalState::Published);

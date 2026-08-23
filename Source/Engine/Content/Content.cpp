@@ -11,7 +11,6 @@
 #include "Artifacts/ArtifactResolver.h"
 #include "AssetDatabase/AssetPath.h"
 #include "AssetDatabase/AssetDatabase.h"
-#include "AssetPipeline/AssetPipelineSettings.h"
 #include "Loading/LoadingThread.h"
 #include "Loading/ContentLoadTask.h"
 #include "Engine/Core/Log.h"
@@ -1043,6 +1042,14 @@ Array<Guid> Content::GetAllAssets()
 {
     Array<Guid> result;
     Cache.GetAll(result);
+#if USE_EDITOR
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.Status != AssetRecordStatus::MissingSource && !result.Contains(record.ID))
+            result.Add(record.ID);
+    }
+#endif
     return result;
 }
 
@@ -1050,7 +1057,16 @@ Array<Guid> Content::GetAllAssetsByType(const MClass* type)
 {
     Array<Guid> result;
     CHECK_RETURN(type, result);
-    Cache.GetAllByTypeName(String(type->GetFullName()), result);
+    const String typeName(type->GetFullName());
+    Cache.GetAllByTypeName(typeName, result);
+#if USE_EDITOR
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.TypeName == typeName && record.Status != AssetRecordStatus::MissingSource && !result.Contains(record.ID))
+            result.Add(record.ID);
+    }
+#endif
     return result;
 }
 
@@ -1942,15 +1958,6 @@ bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, Asset
 {
     diagnostic = AssetPipelineDiagnostic();
 #if USE_EDITOR
-    const AssetPipelineSettings* settings = AssetPipelineSettings::Get();
-    if (!settings->UseNewAssetDatabase || !settings->UseLibraryArtifacts)
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = location.Info.ID;
-        diagnostic.Message = TEXT("Explicit Library artifact resolution requires UseNewAssetDatabase and UseLibraryArtifacts.");
-        return true;
-    }
     if (!location.Info.ID.IsValid() || location.Artifact.AssetID != location.Info.ID || location.Artifact.TypeName != location.Info.TypeName ||
         !AssetPathPolicy::IsCanonicalPathValid(CanonicalAssetPath(location.Info.Path), Globals::ProjectContentFolder) ||
         !AssetPathPolicy::IsArtifactPathValid(location.Artifact.StoragePath, Globals::ProjectLibraryFolder))
@@ -2359,13 +2366,30 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
             request.AssetID = id;
             request.Target = ArtifactResolver::Get().GetDefaultTarget();
             request.OutputKind = "runtime";
+            request.Policy = ArtifactResolvePolicy::Interactive;
+            AssetPipelineDiagnostic diagnostic;
             if (pipelineRecord.ProcessorID == TEXT("Flax.Texture"))
                 request.RequiredCompatibility = "flax-texture-v4";
             else if (pipelineRecord.ProcessorID == TEXT("Flax.Model"))
                 request.RequiredCompatibility = "flax-model-runtime-v1";
-            request.Policy = ArtifactResolvePolicy::Interactive;
-            AssetPipelineDiagnostic diagnostic;
-            if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))
+            else if (pipelineRecord.ProcessorID == TEXT("Flax.GraphDocument"))
+                request.RequiredCompatibility = "flax-graph-document-v1";
+            else if (pipelineRecord.ProcessorID == TEXT("Flax.MaterialInstance") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.SkeletonMask") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.SceneAnimation"))
+                request.RequiredCompatibility = "flax-authored-document-v1";
+            else if (pipelineRecord.ProcessorID == TEXT("Flax.Audio") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.Font") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.Video"))
+                request.RequiredCompatibility = "flax-imported-source-v1";
+            if (pipelineRecord.SourceKind == AssetSourceKind::ExistingJson)
+            {
+                assetInfo = pipelineRecord.ToAssetInfo();
+                loadLocation = AssetLoadLocation::Legacy(assetInfo);
+                hasExplicitLocation = true;
+            }
+            else if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))
             {
                 LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, id, diagnostic.SourcePath);
                 LOAD_FAILED();

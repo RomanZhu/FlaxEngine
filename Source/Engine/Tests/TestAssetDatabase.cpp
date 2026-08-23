@@ -3,6 +3,8 @@
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseScanner.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/Assets/Texture.h"
+#include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Engine/Globals.h"
@@ -155,6 +157,39 @@ TEST_CASE("Asset database scan pairs exact sidecars and diagnoses duplicates orp
     CHECK(record.Status == AssetRecordStatus::DuplicateGuid);
     REQUIRE(database.TryGetRecord(Guid(41, 42, 43, 44), record));
     CHECK(record.Status == AssetRecordStatus::OrphanMeta);
+}
+
+TEST_CASE("Asset database scan registers legacy binary assets for mixed-mode loading and migration")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseLegacyScan-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid id(45, 46, 47, 48);
+    const String path = content / TEXT("Legacy.flax");
+    byte value = 1;
+    FlaxChunk chunk;
+    chunk.Data.Copy(&value, 1);
+    AssetInitData data;
+    data.Header.ID = id;
+    data.Header.TypeName = Texture::TypeName;
+    data.SerializedVersion = 1;
+    data.Header.Chunks[0] = &chunk;
+    REQUIRE_FALSE(FlaxStorage::Create(path, data));
+
+    AssetDatabase database;
+    AssetDatabaseScanOptions options;
+    options.StrictMetadata = true;
+    AssetDatabaseScanResult scan;
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    AssetRecord record;
+    REQUIRE(database.TryGetRecord(id, record));
+    CHECK(record.SourceKind == AssetSourceKind::LegacyBinary);
+    CHECK(record.SourcePath.Get() == path);
+    CHECK(record.MetaPath.Get().IsEmpty());
 }
 
 TEST_CASE("Asset database snapshot is disposable checksummed and project scoped")

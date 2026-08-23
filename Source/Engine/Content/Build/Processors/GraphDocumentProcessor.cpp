@@ -223,7 +223,7 @@ bool GraphDocumentProcessor::Build(ArtifactBuildContext& context, AssetPipelineD
         ContentStorageManager::EnsureAccess(scratchPath);
         FileSystem::DeleteFile(scratchPath);
     };
-    if (GraphDocumentCodec::WriteCompatibilityAsset(scratchPath, prepared.AssetID, prepared.OutputType, snapshot.CompatibilitySurface, snapshot.Document.PropertiesJson, diagnostic))
+    if (GraphDocumentCodec::WriteCompatibilityAsset(scratchPath, prepared.AssetID, prepared.OutputType, snapshot.CompatibilitySurface, snapshot.Document.PropertiesJson, diagnostic, true))
     {
         diagnostic.AssetGuid = prepared.AssetID;
         diagnostic.SourcePath = sourceDependency->StableIdentity;

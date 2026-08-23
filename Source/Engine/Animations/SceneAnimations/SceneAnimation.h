@@ -58,6 +58,11 @@ public:
         Types Type;
 
         /// <summary>
+        /// Stable authored track identity.
+        /// </summary>
+        Guid ID;
+
+        /// <summary>
         /// The flags of the track.
         /// </summary>
         Flags Flag;

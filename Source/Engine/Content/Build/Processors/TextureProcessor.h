@@ -15,6 +15,13 @@ enum class TextureSourceFormat : byte
     Png,
     Tga,
     Exr,
+    Bmp,
+    Gif,
+    Tiff,
+    Jpeg,
+    Dds,
+    Hdr,
+    Raw,
 };
 
 /// <summary>Small deterministic texture state retained between Prepare and Build.</summary>
@@ -25,6 +32,7 @@ public:
     TextureSourceFormat SourceFormat = TextureSourceFormat::Unknown;
     int32 Width = 0;
     int32 Height = 0;
+    int32 SourceArraySize = 1;
     int32 SourceChannels = 0;
     int32 SourceBitsPerChannel = 0;
     uint64 EstimatedDecodedBytes = 0;
@@ -37,7 +45,7 @@ public:
 class FLAXENGINE_API TextureProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 1;
+    static constexpr uint32 ImplementationVersion = 2;
     static constexpr uint32 RuntimeFormatVersion = 4;
     static constexpr uint32 ThumbnailFormatVersion = 1;
     static constexpr int32 MaximumDimension = 32768;

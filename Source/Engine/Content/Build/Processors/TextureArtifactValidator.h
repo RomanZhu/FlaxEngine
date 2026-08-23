@@ -10,8 +10,8 @@
 class FLAXENGINE_API TextureArtifactValidator
 {
 public:
-    static bool Register(ArtifactOutputValidatorRegistry& registry, const Guid& expectedAssetID, AssetPipelineDiagnostic& diagnostic);
-    static bool ValidateRuntime(const StringView& path, const ArtifactManifestOutput& output, const Guid& expectedAssetID, AssetPipelineDiagnostic& diagnostic);
+    static bool Register(ArtifactOutputValidatorRegistry& registry, const Guid& expectedAssetID, const StringView& expectedType, AssetPipelineDiagnostic& diagnostic);
+    static bool ValidateRuntime(const StringView& path, const ArtifactManifestOutput& output, const Guid& expectedAssetID, const StringView& expectedType, AssetPipelineDiagnostic& diagnostic);
     static bool ValidateThumbnail(const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& diagnostic);
 };
 

@@ -1074,14 +1074,16 @@ namespace FlaxEditor.Windows
                 return;
 
             // Sort items to remove files first, then folders
-            var toDelete = new List<ContentItem>(items);
+            var toDelete = items.Where(x => x is not AssetItem { IsCanonicalSubAsset: true }).ToList();
+            if (toDelete.Count == 0)
+                return;
             toDelete.Sort((a, b) => a.IsFolder ? 1 : b.IsFolder ? -1 : a.Compare(b));
 
             string singularPlural = toDelete.Count > 1 ? "s" : "";
 
             string msg = toDelete.Count == 1
-                         ? string.Format("Delete \'{0}\'?\n\nThis action can be undone from the edit history.", items[0].Path)
-                         : string.Format("Delete {0} selected items?\n\nThis action can be undone from the edit history.", items.Count);
+                         ? string.Format("Delete \'{0}\'?\n\nThis action can be undone from the edit history.", toDelete[0].Path)
+                         : string.Format("Delete {0} selected items?\n\nThis action can be undone from the edit history.", toDelete.Count);
 
             // Ask user
             if (MessageBox.Show(msg, "Delete asset" + singularPlural, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
@@ -1165,7 +1167,7 @@ namespace FlaxEditor.Windows
         public void Duplicate(ContentItem item)
         {
             // Skip null
-            if (item == null)
+            if (item == null || item is AssetItem { IsCanonicalSubAsset: true })
                 return;
 
             // TODO: don't allow to duplicate items without ParentFolder - like root items (Content, Source, Engine and Editor dirs)
@@ -1225,7 +1227,9 @@ namespace FlaxEditor.Windows
             }
             else
             {
-                var toDuplicate = RemoveSelectedDescendants(items);
+                var toDuplicate = RemoveSelectedDescendants(items).Where(x => x is not AssetItem { IsCanonicalSubAsset: true }).ToList();
+                if (toDuplicate.Count == 0)
+                    return;
                 var createdItems = new List<ContentItem>(items.Count);
                 var createdPaths = new List<string>(items.Count);
                 var duplicatePlans = new List<(ContentItem Item, string Destination)>(toDuplicate.Count);

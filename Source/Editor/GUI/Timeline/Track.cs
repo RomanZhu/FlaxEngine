@@ -20,6 +20,11 @@ namespace FlaxEditor.GUI.Timeline
     public class Track : ContainerControl
     {
         /// <summary>
+        /// Stable authored identity used by text timeline documents.
+        /// </summary>
+        public Guid ID = Guid.NewGuid();
+
+        /// <summary>
         /// The default prefix for drag data used for tracks dragging.
         /// </summary>
         public const string DragPrefix = "TRACK!?";

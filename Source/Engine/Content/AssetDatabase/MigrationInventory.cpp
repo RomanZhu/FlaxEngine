@@ -82,6 +82,31 @@ namespace
             extension = TEXT("particlefunction");
             return true;
         }
+        if (typeName == TEXT("FlaxEngine.MaterialInstance"))
+        {
+            extension = TEXT("materialinstance");
+            return true;
+        }
+        if (typeName == TEXT("FlaxEngine.SkeletonMask"))
+        {
+            extension = TEXT("skeletonmask");
+            return true;
+        }
+        if (typeName == TEXT("FlaxEngine.SceneAnimation"))
+        {
+            extension = TEXT("sceneanimation");
+            return true;
+        }
+        return false;
+    }
+
+    bool IsExtractableShader(const String& typeName, String& extension)
+    {
+        if (typeName == TEXT("FlaxEngine.Shader"))
+        {
+            extension = TEXT("shader");
+            return true;
+        }
         return false;
     }
 
@@ -144,6 +169,12 @@ MigrationEligibility MigrationInventory::Classify(const AssetRecord& record, Str
     {
         proposedDestination = ReplaceExtension(record.SourcePath.Get(), extension);
         reason = TEXT("Legacy graph binary can be converted to a text document while preserving the GUID.");
+        return MigrationEligibility::ReadyToMigrate;
+    }
+    if (IsExtractableShader(record.TypeName, extension))
+    {
+        proposedDestination = ReplaceExtension(record.SourcePath.Get(), extension);
+        reason = TEXT("Legacy shader binary can be converted to source text while preserving the GUID.");
         return MigrationEligibility::ReadyToMigrate;
     }
     if (IsImportedType(record.TypeName))

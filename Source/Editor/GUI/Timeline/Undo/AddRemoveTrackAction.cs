@@ -1,5 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using System;
 using System.IO;
 using FlaxEngine;
 
@@ -10,6 +11,7 @@ namespace FlaxEditor.GUI.Timeline.Undo
         private Timeline _timeline;
         private bool _isAdd;
         private TrackCreateOptions _options;
+        private Guid _id;
         private Color _color;
         private byte[] _data;
         private string _name;
@@ -21,6 +23,7 @@ namespace FlaxEditor.GUI.Timeline.Undo
         {
             _timeline = timeline;
             _isAdd = isAdd;
+            _id = track.ID;
             _options = new TrackCreateOptions
             {
                 Archetype = track.Archetype,
@@ -48,6 +51,7 @@ namespace FlaxEditor.GUI.Timeline.Undo
                 return;
             }
             track = _options.Archetype.Create(_options);
+            track.ID = _id;
             track.Name = _name;
             track.Color = _color;
             track.IsExpanded = _expanded;

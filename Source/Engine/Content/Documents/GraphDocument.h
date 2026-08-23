@@ -105,7 +105,8 @@ public:
     static bool CreateStarter(const StringView& typeName, GraphDocument& document, AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Writes a compatibility .flax asset with Visject surface bytes and type-specific extra chunks.</summary>
-    static bool WriteCompatibilityAsset(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, const StringAnsiView& propertiesJson, AssetPipelineDiagnostic& diagnostic);
+    /// <param name="artifactStagingMode">When true, writes the flax in place and materials also generate runtime shader chunks.</param>
+    static bool WriteCompatibilityAsset(const StringView& path, const Guid& id, const StringView& typeName, const Array<byte>& surface, const StringAnsiView& propertiesJson, AssetPipelineDiagnostic& diagnostic, bool artifactStagingMode = true);
 
     static bool IsSupportedType(const StringView& typeName);
     static const Char* ExtensionForType(const StringView& typeName);

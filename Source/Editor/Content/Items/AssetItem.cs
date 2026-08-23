@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.IO;
 using System.Text;
 using FlaxEngine;
 using FlaxEngine.GUI;
@@ -26,6 +27,9 @@ namespace FlaxEditor.Content
 
         /// <summary>True when this item is backed by a canonical source/document plus metadata sidecar.</summary>
         public bool IsCanonicalSource { get; private set; }
+
+        /// <summary>True when this item represents a processor-owned asset inside a canonical source.</summary>
+        public bool IsCanonicalSubAsset { get; private set; }
 
         /// <summary>Canonical metadata status shown by the content browser.</summary>
         public AssetRecordStatus DatabaseStatus { get; private set; } = AssetRecordStatus.Ready;
@@ -63,6 +67,7 @@ namespace FlaxEditor.Content
         internal void SetAssetDatabaseRecord(AssetDatabaseRecordInfo record)
         {
             IsCanonicalSource = true;
+            IsCanonicalSubAsset = !record.IsMain;
             DatabaseStatus = record.Status;
             MetadataPath = record.MetaPath;
             SourcePath = record.SourcePath;
@@ -70,11 +75,19 @@ namespace FlaxEditor.Content
         }
 
         /// <inheritdoc />
+        public override bool CanRename => !IsCanonicalSubAsset;
+
+        /// <inheritdoc />
+        public override bool Exists => IsCanonicalSubAsset
+            ? File.Exists(SourcePath) && File.Exists(MetadataPath)
+            : base.Exists;
+
+        /// <inheritdoc />
         protected override void OnBuildTooltipText(StringBuilder sb)
         {
             base.OnBuildTooltipText(sb);
             sb.Append("GUID: ").Append(ID).AppendLine();
-            sb.Append("Pipeline: ").Append(IsCanonicalSource ? "Canonical source" : "Legacy asset").AppendLine();
+            sb.Append("Pipeline: ").Append(IsCanonicalSubAsset ? "Canonical subasset" : IsCanonicalSource ? "Canonical source" : "Legacy asset").AppendLine();
             if (IsCanonicalSource)
             {
                 sb.Append("Status: ").Append(DatabaseStatus).AppendLine();

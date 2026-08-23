@@ -13,6 +13,11 @@ class Texture;
 #if COMPILE_WITH_MODEL_TOOL
 #include "Engine/Tools/ModelTool/ModelTool.h"
 #endif
+#if COMPILE_WITH_AUDIO_TOOL && USE_EDITOR
+#include "Engine/Tools/AudioTool/AudioTool.h"
+#endif
+
+class BinaryAsset;
 
 /// <summary>Managed-safe immutable asset database record projection.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
@@ -113,6 +118,25 @@ public:
     /// <summary>Creates a canonical graph document plus sidecar and queues its first exact build.</summary>
     API_FUNCTION() static Guid CreateGraphDocument(const StringView& outputPath, const StringView& typeName, const StringView& propertiesJson = StringView::Empty);
 
+    /// <summary>Creates an authored material instance, skeleton mask, or scene animation document plus sidecar.</summary>
+    API_FUNCTION() static Guid CreateAuthoredDocument(const StringView& outputPath, const StringView& typeName);
+
+    /// <summary>Saves an edited authored compatibility asset back into its canonical text document.</summary>
+    API_FUNCTION() static bool SaveAuthoredDocument(BinaryAsset* asset, const Guid& canonicalAssetID);
+
+    /// <summary>Creates canonical imported-source metadata beside an audio, font, shader, or video file.</summary>
+    API_FUNCTION() static Guid CreateImportedSourceMetadata(const StringView& sourcePath, const StringView& typeName, const StringView& processorId);
+
+#if COMPILE_WITH_AUDIO_TOOL && USE_EDITOR
+    /// <summary>Creates canonical audio metadata with the selected import settings.</summary>
+    API_FUNCTION() static Guid CreateAudioMetadata(const StringView& sourcePath, const AudioTool::Options& options);
+#endif
+
+#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
+    /// <summary>Creates canonical model metadata beside an imported source and seeds subasset GUIDs from a sibling flax package when present.</summary>
+    API_FUNCTION() static Guid CreateModelMetadata(const StringView& sourcePath, const ModelTool::Options& options);
+#endif
+
     /// <summary>Loads compiled Visject surface bytes from a canonical graph document without writing.</summary>
     API_FUNCTION() static BytesContainer LoadGraphSurface(const StringView& path);
 
@@ -122,6 +146,16 @@ public:
     /// <summary>Queues an exact graph document rebuild.</summary>
     API_FUNCTION() static bool RebuildGraph(const Guid& assetID);
 
+    /// <summary>Creates a sidecar for an existing JSON scene/prefab, preserving the in-file GUID.</summary>
+    API_FUNCTION() static Guid CreateExistingJsonMetadata(const StringView& sourcePath);
+
+    /// <summary>Writes missing scene/prefab sidecars without changing document bytes.</summary>
+    API_FUNCTION() static bool EnsureExistingJsonSidecars();
+
     /// <summary>Builds a read-only mixed-mode migration inventory JSON without writing Content.</summary>
     API_FUNCTION() static String GetMigrationInventoryJson();
+
+    /// <summary>Converts one eligible legacy flax asset to its canonical source and removes the legacy binary.</summary>
+    /// <returns>True on failure.</returns>
+    API_FUNCTION() static bool MigrateLegacyAsset(const StringView& sourcePath);
 };

@@ -6,7 +6,6 @@
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/MigrationInventory.h"
-#include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
 
@@ -102,42 +101,37 @@ bool ValidateStep::Perform(CookingData& data)
         }
     }
 
-    const auto* pipelineSettings = AssetPipelineSettings::Get();
-    if (pipelineSettings && pipelineSettings->UseNewAssetDatabase)
+    data.StepProgress(TEXT("Validating asset metadata"), 0.5f);
+    if (AssetDatabaseFacade::Scan(true))
     {
-        data.StepProgress(TEXT("Validating asset metadata"), 0.5f);
-        if (AssetDatabaseFacade::Scan(true))
+        data.Error(TEXT("Canonical asset metadata scan failed."));
+        return true;
+    }
+    const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseFacade::GetDiagnostics();
+    for (const AssetPipelineDiagnostic& diagnostic : diagnostics)
+    {
+        if (diagnostic.Severity == AssetPipelineDiagnosticSeverity::Error)
         {
-            data.Error(TEXT("Canonical asset metadata scan failed."));
+            data.Error(String::Format(TEXT("Asset metadata validation failed: {0}"), diagnostic.Message));
             return true;
-        }
-        const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseFacade::GetDiagnostics();
-        for (const AssetPipelineDiagnostic& diagnostic : diagnostics)
-        {
-            if (diagnostic.Severity == AssetPipelineDiagnosticSeverity::Error)
-            {
-                data.Error(String::Format(TEXT("Asset metadata validation failed: {0}"), diagnostic.Message));
-                return true;
-            }
-        }
-        const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
-        LOG(Info, "Cook asset database revision {0}, records {1}", snapshot.Revision, snapshot.Records.Count());
-        Array<MigrationInventoryEntry> inventory;
-        MigrationInventory::Build(snapshot.Records, inventory);
-        if (MigrationInventory::HasBlockingConflict(inventory))
-        {
-            data.Error(TEXT("Mixed-mode cook refused because legacy and canonical records conflict."));
-            return true;
-        }
-        for (const AssetRecord& record : snapshot.Records)
-        {
-            if (IsBlockingRecordStatus(record.Status))
-            {
-                data.Error(String::Format(TEXT("Canonical record {0} is not cookable (status {1})."), record.ID, static_cast<int32>(record.Status)));
-                return true;
-            }
         }
     }
-
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    LOG(Info, "Cook asset database revision {0}, records {1}", snapshot.Revision, snapshot.Records.Count());
+    Array<MigrationInventoryEntry> inventory;
+    MigrationInventory::Build(snapshot.Records, inventory);
+    if (MigrationInventory::HasBlockingConflict(inventory))
+    {
+        data.Error(TEXT("Mixed-mode cook refused because legacy and canonical records conflict."));
+        return true;
+    }
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (IsBlockingRecordStatus(record.Status))
+        {
+            data.Error(String::Format(TEXT("Canonical record {0} is not cookable (status {1})."), record.ID, static_cast<int32>(record.Status)));
+            return true;
+        }
+    }
     return false;
 }

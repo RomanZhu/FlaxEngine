@@ -218,7 +218,7 @@ namespace FlaxEditor.Windows.Assets
                     base.Initialize(layout);
 
                     // Ignore import settings GUI if the type is not animation. This removes the import UI if the animation asset was not created using an import.
-                    if (proxy.ImportSettings.Settings.Type != FlaxEngine.Tools.ModelTool.ModelType.Animation)
+                    if (proxy.Window.Item.IsCanonicalSubAsset || proxy.ImportSettings.Settings.Type != FlaxEngine.Tools.ModelTool.ModelType.Animation)
                         return;
 
                     // Import Settings
@@ -382,7 +382,7 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override void Save()
         {
-            if (!IsEdited)
+            if (!IsEdited || _item.IsCanonicalSubAsset)
                 return;
 
             if (RefreshTempAsset())
@@ -397,9 +397,9 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override void UpdateToolstrip()
         {
-            _saveButton.Enabled = IsEdited;
-            _undoButton.Enabled = _undo.CanUndo;
-            _redoButton.Enabled = _undo.CanRedo;
+            _saveButton.Enabled = IsEdited && !_item.IsCanonicalSubAsset;
+            _undoButton.Enabled = _undo.CanUndo && !_item.IsCanonicalSubAsset;
+            _redoButton.Enabled = _undo.CanRedo && !_item.IsCanonicalSubAsset;
 
             base.UpdateToolstrip();
         }
@@ -459,7 +459,7 @@ namespace FlaxEditor.Windows.Assets
                 _timeline._id = _item.ID;
                 _timeline.Load(_asset);
                 _undo.Clear();
-                _timeline.Enabled = true;
+                _timeline.Enabled = !_item.IsCanonicalSubAsset;
                 _timeline.SetNoTracksText(null);
                 ClearEditedFlag();
                 _timeline.ShowWholeTimeline();

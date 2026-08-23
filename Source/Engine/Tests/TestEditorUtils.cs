@@ -83,6 +83,48 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestCanonicalSubAssetIsReferenceableButNotIndependentlyMutable()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxCanonicalSubAssetTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var sourcePath = Path.Combine(root, "Character.gltf");
+                var metadataPath = sourcePath + ".meta";
+                File.WriteAllText(sourcePath, "{}");
+                File.WriteAllText(metadataPath, "{}");
+                var id = Guid.NewGuid();
+                var item = new BinaryAssetItem(sourcePath + "." + id.ToString("N") + ".subasset", ref id,
+                    typeof(Animation).FullName, typeof(Animation), ContentItemSearchFilter.Animation);
+                item.SetAssetDatabaseRecord(new AssetDatabaseRecordInfo
+                {
+                    ID = id,
+                    SourceAssetID = Guid.NewGuid(),
+                    TypeName = typeof(Animation).FullName,
+                    SourcePath = sourcePath,
+                    MetaPath = metadataPath,
+                    SubAssetKey = "animation:Walk",
+                    ProcessorID = "Flax.Model",
+                    SourceKind = AssetSourceKind.ImportedSource,
+                    Status = AssetRecordStatus.Ready,
+                    IsMain = false,
+                });
+
+                Assert.IsTrue(item.Exists);
+                Assert.IsTrue(item.CanDrag);
+                Assert.IsFalse(item.CanRename);
+                Assert.IsTrue(item.IsCanonicalSubAsset);
+                var result = new ContentDatabaseModule(null).Copy(item, Path.Combine(root, "Walk.flax"));
+                Assert.IsFalse(result.Succeeded);
+                Assert.AreEqual(ContentMutationFailure.InvalidSource, result.Failure);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
         public void TestContentCopyRejectsFileCollisionWithoutChangingBytes()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentCopyTests", Guid.NewGuid().ToString("N"));

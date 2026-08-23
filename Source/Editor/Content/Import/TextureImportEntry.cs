@@ -112,8 +112,6 @@ namespace FlaxEditor.Content.Import
     {
         private TextureImportSettings _settings = new();
 
-        internal bool IsCanonicalSource { get; }
-
         internal string MetadataPath => ResultUrl + ".meta";
 
         /// <summary>
@@ -123,7 +121,6 @@ namespace FlaxEditor.Content.Import
         public TextureImportEntry(ref Request request)
         : base(ref request)
         {
-            IsCanonicalSource = request.UseCanonicalSource;
             // Try to guess format type based on file name
             var snl = System.IO.Path.GetFileNameWithoutExtension(SourceUrl).ToLower();
             var extension = System.IO.Path.GetExtension(SourceUrl).ToLower();

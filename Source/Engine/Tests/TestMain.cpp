@@ -24,6 +24,18 @@ public:
 
 TestsRunnerService TestsRunnerServiceInstance;
 
+struct FlaxTestLogger : Catch::TestEventListenerBase
+{
+    using TestEventListenerBase::TestEventListenerBase;
+
+    void testCaseStarting(Catch::TestCaseInfo const& testInfo) override
+    {
+        LOG(Info, "Catch test: {0}", String(testInfo.name.c_str()));
+    }
+};
+
+CATCH_REGISTER_LISTENER(FlaxTestLogger)
+
 void TestsRunnerService::Update()
 {
     // End if failed to perform a startup

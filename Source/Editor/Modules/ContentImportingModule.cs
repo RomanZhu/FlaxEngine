@@ -8,7 +8,6 @@ using System.Threading;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Create;
 using FlaxEditor.Content.Import;
-using FlaxEditor.Content.Settings;
 using FlaxEngine;
 
 namespace FlaxEditor.Modules
@@ -276,11 +275,11 @@ namespace FlaxEditor.Modules
                 else
                 {
                     var extension = Path.GetExtension(inputPath) ?? string.Empty;
-                    var isCanonicalTexture = IsCanonicalTextureImport(extension);
+                    var isCanonicalSource = IsCanonicalSourceImport(extension);
                     string outputExtension = null;
-                    var isBuilt = !isCanonicalTexture && Editor.CanImport(extension, out outputExtension);
-                    if (isCanonicalTexture && !targetLocation.CanHaveAssets)
-                        return ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, inputPath, targetLocation.Path, "The target folder cannot contain texture assets.");
+                    var isBuilt = !isCanonicalSource && Editor.CanImport(extension, out outputExtension);
+                    if (isCanonicalSource && !targetLocation.CanHaveAssets)
+                        return ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, inputPath, targetLocation.Path, "The target folder cannot contain imported assets.");
                     if (isBuilt)
                     {
                         if (!targetLocation.CanHaveAssets)
@@ -298,11 +297,11 @@ namespace FlaxEditor.Modules
                 firstDestination ??= destination;
                 if (!destinations.Add(destination) || ContentMutationPathUtils.Exists(destination))
                     return ContentMutationResult.Fail(ContentMutationFailure.DestinationCollision, inputPath, destination, $"Import destination '{destination}' already exists or is duplicated in the batch.");
-                if (!isDirectory && IsCanonicalTextureImport(Path.GetExtension(inputPath)))
+                if (!isDirectory && IsCanonicalSourceImport(Path.GetExtension(inputPath)))
                 {
                     var metaDestination = destination + ".meta";
                     if (!destinations.Add(metaDestination) || ContentMutationPathUtils.Exists(metaDestination))
-                        return ContentMutationResult.Fail(ContentMutationFailure.DestinationCollision, inputPath, metaDestination, $"Texture metadata destination '{metaDestination}' already exists or is duplicated in the batch.");
+                        return ContentMutationResult.Fail(ContentMutationFailure.DestinationCollision, inputPath, metaDestination, $"Canonical metadata destination '{metaDestination}' already exists or is duplicated in the batch.");
                 }
             }
             return destinations.Count == 0
@@ -318,7 +317,7 @@ namespace FlaxEditor.Modules
             var extension = System.IO.Path.GetExtension(inputPath) ?? string.Empty;
 
             // Check if given file extension is a binary asset (.flax files) and can be imported by the engine
-            bool useCanonicalSource = IsCanonicalTextureImport(extension);
+            bool useCanonicalSource = IsCanonicalSourceImport(extension);
             string outputExtension = null;
             bool isBuilt = !useCanonicalSource && Editor.CanImport(extension, out outputExtension);
             if (useCanonicalSource)
@@ -381,7 +380,7 @@ namespace FlaxEditor.Modules
         /// <param name="skipSettingsDialog">True if skip any popup dialogs showing for import options adjusting. Can be used when importing files from code.</param>
         /// <param name="settings">Import settings to override. Use null to skip this value.</param>
         /// <param name="allowReplace">True only for an explicit reimport that may replace the destination.</param>
-        /// <param name="useCanonicalSource">True to preserve a texture source and create adjacent metadata.</param>
+        /// <param name="useCanonicalSource">True to preserve the imported source and create adjacent metadata.</param>
         private void Import(string inputPath, string outputPath, bool isInBuilt, bool skipSettingsDialog = false, object settings = null, bool allowReplace = false, bool useCanonicalSource = false)
         {
             inputPath = StringUtils.NormalizePath(inputPath);
@@ -401,13 +400,63 @@ namespace FlaxEditor.Modules
             }
         }
 
-        private static bool IsCanonicalTextureImport(string extension)
+        private static bool IsCanonicalSourceImport(string extension)
         {
             extension = extension?.ToLowerInvariant();
-            if (extension != ".png" && extension != ".tga" && extension != ".exr")
+            switch (extension)
+            {
+            case ".png":
+            case ".tga":
+            case ".exr":
+            case ".bmp":
+            case ".gif":
+            case ".tiff":
+            case ".tif":
+            case ".jpeg":
+            case ".jpg":
+            case ".dds":
+            case ".hdr":
+            case ".raw":
+            case ".fbx":
+            case ".obj":
+            case ".x":
+            case ".dae":
+            case ".gltf":
+            case ".glb":
+            case ".blend":
+            case ".bvh":
+            case ".ase":
+            case ".ply":
+            case ".dxf":
+            case ".ifc":
+            case ".nff":
+            case ".smd":
+            case ".vta":
+            case ".mdl":
+            case ".md2":
+            case ".md3":
+            case ".md5mesh":
+            case ".q3o":
+            case ".q3s":
+            case ".ac":
+            case ".stl":
+            case ".lwo":
+            case ".lws":
+            case ".lxo":
+            case ".wav":
+            case ".mp3":
+            case ".ogg":
+            case ".ttf":
+            case ".otf":
+            case ".shader":
+            case ".mp4":
+            case ".webm":
+            case ".mov":
+            case ".mkv":
+                return true;
+            default:
                 return false;
-            var settings = GameSettings.Load<AssetPipelineSettings>();
-            return settings != null && settings.UseNewAssetDatabase && settings.UseLibraryArtifacts;
+            }
         }
 
         private void WorkerMain()
@@ -574,6 +623,19 @@ namespace FlaxEditor.Modules
                     () => DeleteCanonicalMetadata(metadataPath),
                     () => File.Exists(metadataPath) && FlaxEngine.Content.GetAssetInfo(destinationPath, out var info) && info.ID != Guid.Empty));
             }
+            else if (entry is ModelImportEntry { IsCanonicalSource: true } modelEntry)
+            {
+                AddCanonicalMetadataStep(plan, steps, destinationPath, modelEntry.MetadataPath, modelEntry.CreateMetadata, "model-metadata");
+            }
+            else if (entry is AudioImportEntry { IsCanonicalSource: true } audioEntry)
+            {
+                AddCanonicalMetadataStep(plan, steps, destinationPath, audioEntry.MetadataPath, audioEntry.CreateMetadata, "audio-metadata");
+            }
+            else if (entry is ImportFileEntry { IsCanonicalSource: true })
+            {
+                var metadataPath = destinationPath + ".meta";
+                AddCanonicalMetadataStep(plan, steps, destinationPath, metadataPath, () => CreateImportedSourceMetadata(destinationPath), "imported-metadata");
+            }
 
             var result = new ContentMutationTransaction(plan).Execute(steps);
             if (result.Succeeded && backupPath != null)
@@ -650,6 +712,53 @@ namespace FlaxEditor.Modules
                 Editor.LogWarning("Failed to remove import transaction path: " + ex.Message);
                 return false;
             }
+        }
+
+        private static void AddCanonicalMetadataStep(ContentMutationPlan plan, List<ContentMutationStep> steps, string destinationPath, string metadataPath, Func<bool> createMetadata, string stepName)
+        {
+            metadataPath = ContentMutationPathUtils.Normalize(metadataPath);
+            var metadataEntryIndex = plan.Entries.Count;
+            plan.Entries.Add(new ContentMutationEntry(destinationPath, metadataPath, ContentMutationPathRole.MetadataSidecar, false)
+            {
+                SourceProducedByTransaction = true,
+            });
+            steps.Add(new ContentMutationStep(
+                stepName,
+                new[] { metadataEntryIndex },
+                () => createMetadata()
+                    ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, destinationPath, metadataPath, "Canonical metadata creation or database registration failed.")
+                    : ContentMutationResult.Success(destinationPath, metadataPath),
+                () => DeleteCanonicalMetadata(metadataPath),
+                () => File.Exists(metadataPath)));
+        }
+
+        private static bool CreateImportedSourceMetadata(string destinationPath)
+        {
+            var extension = Path.GetExtension(destinationPath)?.ToLowerInvariant();
+            string typeName;
+            string processorId;
+            switch (extension)
+            {
+            case ".ttf":
+            case ".otf":
+                typeName = typeof(FontAsset).FullName;
+                processorId = "Flax.Font";
+                break;
+            case ".shader":
+                typeName = typeof(Shader).FullName;
+                processorId = "Flax.ShaderSource";
+                break;
+            case ".mp4":
+            case ".webm":
+            case ".mov":
+            case ".mkv":
+                typeName = "FlaxEngine.Video";
+                processorId = "Flax.Video";
+                break;
+            default:
+                return true;
+            }
+            return AssetDatabaseFacade.CreateImportedSourceMetadata(destinationPath, typeName, processorId) == Guid.Empty;
         }
 
         private static bool DeleteCanonicalMetadata(string path)

@@ -6,34 +6,12 @@
 #include "Engine/Core/Config/Settings.h"
 
 /// <summary>
-/// Project settings and temporary rollout controls for the new asset pipeline.
+/// Project settings for Library storage and asset build limits.
 /// </summary>
 API_CLASS(sealed, Namespace="FlaxEditor.Content.Settings") class FLAXENGINE_API AssetPipelineSettings : public SettingsBase
 {
     DECLARE_SCRIPTING_TYPE_MINIMAL(AssetPipelineSettings);
     API_AUTO_SERIALIZATION();
-
-public:
-    API_FIELD(Attributes="EditorOrder(0), EditorDisplay(\"Rollout\")")
-    bool UseNewAssetDatabase = false;
-
-    API_FIELD(Attributes="EditorOrder(10), EditorDisplay(\"Rollout\")")
-    bool UseLibraryArtifacts = false;
-
-    API_FIELD(Attributes="EditorOrder(20), EditorDisplay(\"Rollout\")")
-    bool UseTextGraphAssets = false;
-
-    API_FIELD(Attributes="EditorOrder(30), EditorDisplay(\"Rollout\")")
-    bool StrictAssetMetadata = false;
-
-    API_FIELD(Attributes="EditorOrder(40), EditorDisplay(\"Rollout\")")
-    bool AutoCreateMetaInEditor = false;
-
-    API_FIELD(Attributes="EditorOrder(50), EditorDisplay(\"Rollout\")")
-    bool AllowLastGoodArtifacts = false;
-
-    API_FIELD(Attributes="EditorOrder(60), EditorDisplay(\"Rollout\")")
-    bool LockConvertedTypeAuthoring = false;
 
 public:
     API_FIELD(Attributes="EditorOrder(100), EditorDisplay(\"Library\"), Limit(1, 1048576)")
@@ -59,12 +37,12 @@ public:
 
 public:
     /// <summary>
-    /// Gets the active settings asset, or a legacy-default instance when the project has none.
+    /// Gets the active settings asset, or a default instance when the project has none.
     /// </summary>
     static AssetPipelineSettings* Get();
 
     /// <summary>
-    /// Validates supported rollout combinations and numeric limits.
+    /// Validates numeric Library and build limits.
     /// </summary>
     bool IsValid(AssetPipelineDiagnostic& diagnostic) const;
 

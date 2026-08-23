@@ -111,7 +111,7 @@ namespace
             if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
                 return ModelPipelineService::CreatePlan(record, request, plan, planDiagnostic);
 #endif
-            if (record.ProcessorID == GraphDocumentProcessor::ProcessorID())
+            if (record.ProcessorID == GraphDocumentProcessor::ProcessorID() || GraphPipelineService::OwnsProcessor(record.ProcessorID))
                 return GraphPipelineService::CreatePlan(record, request, plan, planDiagnostic);
             return TexturePipelineService::CreatePlan(record, request, plan, planDiagnostic);
         };
@@ -276,7 +276,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     if (execution->Inputs.IsEmpty())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
             record.ID, TEXT("Texture preparation declared no source input."));
-    if (TextureArtifactValidator::Register(execution->Validators, record.ID, diagnostic))
+    if (TextureArtifactValidator::Register(execution->Validators, record.ID, record.TypeName, diagnostic))
         return true;
 
     ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-texture-build-job-v1"));

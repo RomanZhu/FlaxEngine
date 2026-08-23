@@ -348,7 +348,10 @@ namespace FlaxEditor.Windows.Assets
                     Editor.LogError("Failed to save surface data");
                     return;
                 }
-                if (_asset.SaveSurface(value))
+                var failed = _item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path)
+                    ? CanonicalGraphDocuments.SaveCloneSurface(_item, value)
+                    : _asset.SaveSurface(value);
+                if (failed)
                 {
                     _surface.MarkAsEdited();
                     Editor.LogError("Failed to save surface data");

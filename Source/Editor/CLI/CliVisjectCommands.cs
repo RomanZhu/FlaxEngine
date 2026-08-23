@@ -16,6 +16,8 @@ namespace FlaxEditor
     /// <summary>Typed, asset-backed Visject graph authoring for material and animation graphs.</summary>
     internal static class CliVisjectCommands
     {
+        private static readonly Guid AnimationBaseModelId = new Guid(1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
         [CliCommand("visject.groups.list", Description = "List the specialized Visject node groups and archetypes.", Access = CliCommandAccess.ReadOnly)]
         public static object ListGroups()
         {
@@ -47,6 +49,19 @@ namespace FlaxEditor
         {
             using var state = Open(asset, kind, writable: false);
             return new { valid = true, kind = state.Kind, assetId = state.AssetId, nodes = state.Surface.Nodes?.Count ?? 0, parameters = state.Surface.Parameters?.Count ?? 0 };
+        }
+
+        [CliCommand("visject.animation.base-model.set", Description = "Set the base model reference stored by an animation graph.", Access = CliCommandAccess.MutatesProject)]
+        public static object SetAnimationBaseModel([CliOption("asset", Required = true)] string asset, [CliOption("model", Required = true)] Guid model)
+        {
+            var baseModel = FlaxEngine.Content.LoadAsync<SkinnedModel>(model);
+            if (baseModel == null || baseModel.WaitForLoaded())
+                throw new InvalidOperationException($"Skinned model '{model}' failed to load.");
+            using var state = Open(asset, "animation", writable: true);
+            var parameter = state.Surface.GetParameter(AnimationBaseModelId) ?? throw new InvalidOperationException("The animation graph has no base-model parameter.");
+            parameter.Value = model;
+            state.Save();
+            return new { assetId = state.AssetId, baseModel = model };
         }
 
         [CliCommand("visject.node.add", Description = "Add a node to a material or animation graph and persist it.", Access = CliCommandAccess.MutatesProject)]
@@ -322,12 +337,27 @@ namespace FlaxEditor
             public void OnSurfaceClose() { }
             public void Save()
             {
-                if (Editor.Instance.ContentEditing.FastTempAssetClone(Path, out var backupPath))
+                var textDocument = CanonicalGraphDocuments.IsGraphDocumentPath(Path);
+                string backupPath;
+                if (textDocument)
+                {
+                    backupPath = System.IO.Path.Combine(Globals.TemporaryFolder, Guid.NewGuid().ToString("N") + System.IO.Path.GetExtension(Path));
+                    File.Copy(Path, backupPath, true);
+                }
+                else if (Editor.Instance.ContentEditing.FastTempAssetClone(Path, out backupPath))
+                {
                     throw new IOException($"Failed to create a rollback copy for graph asset '{Path}'.");
+                }
                 using var saveScope = Editor.Instance.ContentDatabase.TrackAssetSave(Path);
                 try
                 {
-                    if (Material != null)
+                    if (textDocument)
+                    {
+                        var properties = Material != null ? CanonicalGraphDocuments.MaterialProperties(Material.Info) : null;
+                        if (AssetDatabaseFacade.SaveGraphSurface(Path, SurfaceData, false, properties))
+                            throw new IOException("Canonical graph document save failed.");
+                    }
+                    else if (Material != null)
                     {
                         if (Material.SaveSurface(SurfaceData, Material.Info))
                             throw new IOException("Material surface save failed.");
@@ -342,13 +372,26 @@ namespace FlaxEditor
                 }
                 catch (Exception ex)
                 {
-                    var rollbackFailed = Editor.Instance.ContentEditing.CloneAssetFile(backupPath, Path, AssetId, true);
+                    var rollbackFailed = false;
+                    if (textDocument)
+                    {
+                        try { File.Copy(backupPath, Path, true); }
+                        catch { rollbackFailed = true; }
+                    }
+                    else
+                    {
+                        rollbackFailed = Editor.Instance.ContentEditing.CloneAssetFile(backupPath, Path, AssetId, true);
+                    }
                     Item.Reload();
                     var rollbackAsset = Item.LoadAsync();
                     var rollbackLoadFailed = rollbackAsset == null || rollbackAsset.WaitForLoaded();
                     if (rollbackFailed || rollbackLoadFailed)
                         throw new IOException($"Graph save failed and the rollback copy could not be restored for '{Path}'.", ex);
                     throw new IOException($"Graph save failed persistence validation; the original asset was restored for '{Path}'.", ex);
+                }
+                finally
+                {
+                    File.Delete(backupPath);
                 }
             }
 

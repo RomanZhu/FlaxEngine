@@ -36,7 +36,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool CanReimport(ContentItem item)
         {
-            return item is not AssetItem asset || !asset.IsCanonicalSource;
+            return false;
         }
 
         /// <inheritdoc />
