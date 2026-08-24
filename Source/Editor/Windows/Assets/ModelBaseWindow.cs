@@ -774,9 +774,6 @@ namespace FlaxEditor.Windows.Assets
         protected ModelBaseWindow(Editor editor, AssetItem item)
         : base(editor, item)
         {
-            if (item.IsCanonicalSource)
-                FlaxEngine.Content.AssetReloading += OnCanonicalAssetReloading;
-
             var inputOptions = Editor.Options.Options.Input;
 
             // Toolstrip
@@ -801,12 +798,6 @@ namespace FlaxEditor.Windows.Assets
                 UseScroll = true,
                 Parent = _split.Panel2
             };
-        }
-
-        private void OnCanonicalAssetReloading(Asset asset)
-        {
-            if (asset == _asset)
-                OnItemReimported(_item);
         }
 
         protected string ImportSourcePath => Item.IsCanonicalSource ? Item.SourcePath : Item.Path;
@@ -897,9 +888,6 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override void OnDestroy()
         {
-            if (Item.IsCanonicalSource)
-                FlaxEngine.Content.AssetReloading -= OnCanonicalAssetReloading;
-
             // Free mesh memory
             _meshData?.Dispose();
             _meshData = null;

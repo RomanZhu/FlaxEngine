@@ -154,7 +154,10 @@ BinaryAssetStorageSwitchResult BinaryAsset::SwitchStorage(const ResolvedArtifact
     CancelStreaming();
     OnBeforeArtifactStorageChange();
     if (!IsInternalType())
+    {
+        Content::AssetArtifactReloading(this);
         Content::AssetReloading(this);
+    }
     OnReloading(this);
     {
         ScopeLock lock(Locker);

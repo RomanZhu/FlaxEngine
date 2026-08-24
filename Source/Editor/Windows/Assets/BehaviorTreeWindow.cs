@@ -356,6 +356,17 @@ namespace FlaxEditor.Windows.Assets
             base.OnAssetLinked();
         }
 
+        /// <inheritdoc />
+        public override void OnItemReimported(ContentItem item)
+        {
+            _nodePropertiesEditor.Deselect();
+            _knowledgePropertiesEditor.Deselect();
+            _surface.Enabled = false;
+            _isWaitingForSurfaceLoad = true;
+
+            base.OnItemReimported(item);
+        }
+
         /// <summary>
         /// Focuses the node.
         /// </summary>

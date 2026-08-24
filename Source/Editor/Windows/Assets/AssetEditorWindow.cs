@@ -488,6 +488,8 @@ namespace FlaxEditor.Windows.Assets
     /// <seealso cref="FlaxEditor.Windows.Assets.AssetEditorWindow" />
     public abstract class AssetEditorWindowBase<T> : AssetEditorWindow where T : Asset
     {
+        private bool _artifactReloadingSubscribed;
+
         /// <summary>
         /// Flag set to true if window is waiting for asset to be loaded (to send <see cref="OnAssetLoaded"/> or <see cref="OnAssetLoadFailed"/> events).
         /// </summary>
@@ -605,6 +607,14 @@ namespace FlaxEditor.Windows.Assets
                 // Fire event
                 OnAssetLinked();
                 _isWaitingForLoaded = true;
+
+                // Generated artifact hot-swaps reload the linked asset without reimporting the content item.
+                // Exclude cloned editors because their temporary asset has a different ID than the authored item.
+                if (_asset.ID == item.ID)
+                {
+                    FlaxEngine.Content.AssetArtifactReloading += OnAssetArtifactReloading;
+                    _artifactReloadingSubscribed = true;
+                }
             }
 
             // Base
@@ -619,6 +629,11 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override void UnlinkItem()
         {
+            if (_artifactReloadingSubscribed)
+            {
+                FlaxEngine.Content.AssetArtifactReloading -= OnAssetArtifactReloading;
+                _artifactReloadingSubscribed = false;
+            }
             _asset = null;
 
             base.UnlinkItem();
@@ -631,6 +646,12 @@ namespace FlaxEditor.Windows.Assets
             _isWaitingForLoaded = true;
 
             base.OnItemReimported(item);
+        }
+
+        private void OnAssetArtifactReloading(Asset asset)
+        {
+            if (asset == _asset && _item != null)
+                OnItemReimported(_item);
         }
     }
 

@@ -526,6 +526,16 @@ namespace FlaxEditor.Windows.Assets
         }
 
         /// <inheritdoc />
+        public override void OnItemReimported(ContentItem item)
+        {
+            _properties.OnClean();
+            _editor.Deselect();
+            _isWaitingForLoad = true;
+
+            base.OnItemReimported(item);
+        }
+
+        /// <inheritdoc />
         protected override void OnClose()
         {
             if (Asset)

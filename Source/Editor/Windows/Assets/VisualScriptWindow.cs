@@ -745,6 +745,19 @@ namespace FlaxEditor.Windows.Assets
             base.OnAssetLinked();
         }
 
+        /// <inheritdoc />
+        public override void OnItemReimported(ContentItem item)
+        {
+            Editor.VisualScriptingDebugFlow -= OnDebugFlow;
+            _properties.OnClean();
+            _propertiesEditor.Deselect();
+            _surface.Enabled = false;
+            _isWaitingForSurfaceLoad = true;
+            _refreshPropertiesOnLoad = false;
+
+            base.OnItemReimported(item);
+        }
+
         private void OnDebugFlow(Editor.VisualScriptingDebugFlowInfo flowInfo)
         {
             // Skip any debug flows during hang

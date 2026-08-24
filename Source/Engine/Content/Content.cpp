@@ -55,6 +55,7 @@ TimeSpan Content::AssetsUpdateInterval = TimeSpan::FromMilliseconds(500);
 TimeSpan Content::AssetsUnloadInterval = TimeSpan::FromSeconds(10);
 Delegate<Asset*> Content::AssetDisposing;
 Delegate<Asset*> Content::AssetReloading;
+Delegate<Asset*> Content::AssetArtifactReloading;
 
 String AssetInfo::ToString() const
 {

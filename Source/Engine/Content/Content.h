@@ -409,6 +409,11 @@ public:
     /// </summary>
     API_EVENT() static Delegate<Asset*> AssetReloading;
 
+    /// <summary>
+    /// Occurs when a loaded binary asset is being switched to newly generated artifact storage. Always called from the main thread.
+    /// </summary>
+    API_EVENT() static Delegate<Asset*> AssetArtifactReloading;
+
 private:
     friend class BinaryAsset;
     static void WaitForTask(ContentLoadTask* loadingTask, double timeoutInMilliseconds);
