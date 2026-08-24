@@ -294,7 +294,7 @@ namespace FlaxEditor.Windows.Assets
                         {
                             _isCooking = false;
                             if (Window != null)
-                                window.OnCookFinished(failed);
+                                window.OnCookFinished(failed, model.ID);
                         });
                     }
                 });
@@ -326,7 +326,7 @@ namespace FlaxEditor.Windows.Assets
                 {
                     _isCooking = false;
                     if (window != null)
-                        window.OnSaveFinished(failed);
+                        window.OnSaveFinished(failed, model.ID);
                 }
 
                 return !failed;
@@ -425,6 +425,7 @@ namespace FlaxEditor.Windows.Assets
         private StaticModel _collisionWiresShowActor;
         private bool _updateWireMesh;
         private bool _resetPreviewCamera;
+        private Guid _pendingCookModel;
 
         private class CollisionDataPreview : ModelBasePreview
         {
@@ -584,6 +585,8 @@ namespace FlaxEditor.Windows.Assets
 
         private void OnPropertiesModified()
         {
+            if (_collisionWiresShowActor)
+                _collisionWiresShowActor.IsActive = false;
             UpdatePreviewModel();
             MarkAsEdited();
             MarkAutoSaveEdit();
@@ -661,25 +664,25 @@ namespace FlaxEditor.Windows.Assets
             UpdateToolstrip();
         }
 
-        private void OnCookFinished(bool failed)
+        private void OnCookFinished(bool failed, Guid modelId)
         {
             _propertiesPresenter.BuildLayout();
             UpdateToolstrip();
             if (!failed)
             {
                 ClearEditedFlag();
-                ReloadAsset();
+                _pendingCookModel = modelId;
             }
         }
 
-        private void OnSaveFinished(bool failed)
+        private void OnSaveFinished(bool failed, Guid modelId)
         {
             _propertiesPresenter.BuildLayout();
             UpdateToolstrip();
             if (!failed)
             {
                 ClearEditedFlag();
-                ReloadAsset();
+                _pendingCookModel = modelId;
             }
         }
 
@@ -701,7 +704,8 @@ namespace FlaxEditor.Windows.Assets
                 _collisionWiresModel.SetupLODs(new[] { 1 });
             }
             Editor.Internal_GetCollisionWires(FlaxEngine.Object.GetUnmanagedPtr(Asset), out var triangles, out var indices, out var triangleCount, out var indicesCount);
-            if (triangles != null && indices != null)
+            var hasWires = triangles != null && indices != null;
+            if (hasWires)
                 _collisionWiresModel.LODs[0].Meshes[0].UpdateMesh(triangles, indices);
             else
                 Editor.LogWarning("Failed to get collision wires for " + Asset);
@@ -711,14 +715,10 @@ namespace FlaxEditor.Windows.Assets
                 _preview.Task.AddCustomActor(_collisionWiresShowActor);
             }
             _collisionWiresShowActor.Model = _collisionWiresModel;
+            _collisionWiresShowActor.IsActive = hasWires;
             _collisionWiresShowActor.SetMaterial(0, FlaxEngine.Content.LoadAsyncInternal<MaterialBase>(EditorAssets.WiresDebugMaterial));
             _preview.Info = string.Format("\nTriangles: {0:N0}\nVertices: {1:N0}\nMemory Size: {2}", triangleCount, indicesCount / 3, Utilities.Utils.FormatBytesCount(Asset.MemoryUsage));
-            var model = FlaxEngine.Content.LoadAsync<ModelBase>(_asset.Options.Model);
-            if (_preview.Asset != model)
-            {
-                _preview.Asset = model;
-                _resetPreviewCamera = model != null;
-            }
+            UpdatePreviewModel();
         }
 
         /// <inheritdoc />
@@ -788,6 +788,11 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override void OnUpdate()
         {
+            if (_pendingCookModel != Guid.Empty && Asset && Asset.IsLoaded && Asset.Options.Model == _pendingCookModel)
+            {
+                _pendingCookModel = Guid.Empty;
+                UpdateWiresModel();
+            }
             if (_updateWireMesh)
             {
                 _updateWireMesh = false;

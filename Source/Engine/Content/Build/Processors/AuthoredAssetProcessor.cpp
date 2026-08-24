@@ -168,17 +168,28 @@ namespace
         if (!modelID.IsValid())
             return false;
         AssetRecord modelRecord;
-        if (!AssetDatabase::Get().TryGetRecord(modelID, modelRecord))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-                context.GetRecord().ID, context.GetRecord().SourcePath.Get(), TEXT("Collision source model is not registered."));
+        String modelPath;
+        const bool hasModelRecord = AssetDatabase::Get().TryGetRecord(modelID, modelRecord);
+        if (hasModelRecord)
+        {
+            modelPath = modelRecord.SourcePath.Get();
+        }
+        else
+        {
+            AssetInfo modelInfo;
+            if (!Content::GetAssetInfo(modelID, modelInfo) || modelInfo.Path.IsEmpty())
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+                    context.GetRecord().ID, context.GetRecord().SourcePath.Get(), TEXT("Collision source model is unavailable."));
+            modelPath = modelInfo.Path;
+        }
         Array<byte> bytes;
-        if (File::ReadAllBytes(modelRecord.SourcePath.Get(), bytes))
+        if (File::ReadAllBytes(modelPath, bytes))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-                context.GetRecord().ID, modelRecord.SourcePath.Get(), TEXT("Collision source model file is missing."));
+                context.GetRecord().ID, modelPath, TEXT("Collision source model file is missing."));
         ContentHasher hasher;
         hasher.Update(bytes.Get(), bytes.Count());
         bytes.Clear();
-        if (FileSystem::FileExists(modelRecord.MetaPath.Get()))
+        if (hasModelRecord && FileSystem::FileExists(modelRecord.MetaPath.Get()))
         {
             if (File::ReadAllBytes(modelRecord.MetaPath.Get(), bytes))
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,

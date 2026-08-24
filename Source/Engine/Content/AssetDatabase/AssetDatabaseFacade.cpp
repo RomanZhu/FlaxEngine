@@ -915,7 +915,7 @@ bool AssetDatabaseFacade::SaveCollisionDataDocument(const StringView& path, Coll
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.CollisionData"))
         return fail();
-    if (GraphPipelineService::RequestBuild(meta.ID, false, diagnostic))
+    if (GraphPipelineService::RequestBuildAndWait(meta.ID, false, diagnostic))
         return fail();
     return false;
 #else

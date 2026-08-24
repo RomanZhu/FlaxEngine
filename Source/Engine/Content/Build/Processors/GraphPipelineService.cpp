@@ -361,7 +361,7 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     return false;
 }
 
-bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
+bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic, AssetBuildRequestHandle* resultHandle)
 {
     if (EnsureInitialized(diagnostic))
         return true;
@@ -404,6 +404,8 @@ bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     if (!handle.IsValid())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
             assetID, TEXT("Graph build request was not accepted."));
+    if (resultHandle)
+        *resultHandle = handle;
     {
         GraphPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
@@ -413,6 +415,31 @@ bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     if (handle.TryGetResult(immediate) && immediate.Status == AssetBuildJobStatus::Failed)
     {
         diagnostic = immediate.Diagnostic;
+        return true;
+    }
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool GraphPipelineService::RequestBuildAndWait(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
+{
+    AssetBuildRequestHandle handle;
+    if (RequestBuild(assetID, force, diagnostic, &handle))
+        return true;
+    if (!handle.Wait())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+            assetID, TEXT("Graph build request could not be completed."));
+
+    AssetBuildJobResult result;
+    if (!handle.TryGetResult(result))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+            assetID, TEXT("Graph build completed without a result."));
+    if (result.Status != AssetBuildJobStatus::Succeeded)
+    {
+        diagnostic = result.Diagnostic;
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                assetID, TEXT("Graph build did not succeed."));
         return true;
     }
     diagnostic = AssetPipelineDiagnostic();
