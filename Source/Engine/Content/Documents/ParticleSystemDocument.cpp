@@ -101,7 +101,7 @@ bool ParticleSystemDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
     MemoryReadStream stream(timeline.Get(), timeline.Length());
     int32 version = 0;
     stream.Read(version);
-    if (version != 4)
+    if (version != 4 && version != 5)
     {
         error = TEXT("Unsupported particle system timeline version.");
         return true;
@@ -139,6 +139,11 @@ bool ParticleSystemDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
         stream.ReadInt32(&childrenCount);
         stream.Read(name, -13);
         stream.Read(color);
+        if (version >= 5)
+        {
+            Guid trackID;
+            stream.Read(trackID);
+        }
         const char* typeName = TrackTypeName(type);
         if (!typeName || parentIndex >= i || parentIndex < -1)
         {

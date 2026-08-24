@@ -53,6 +53,9 @@ public:
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
 
+    /// <summary>Returns the canonical source path for an asset identifier, or an empty string when it is not registered.</summary>
+    API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
+
     /// <summary>Loads a still-current disposable snapshot or performs one full scan.</summary>
     /// <returns>True if the scan infrastructure failed. Content diagnostics remain queryable.</returns>
     API_FUNCTION() static bool LoadOrScan(bool strictMetadata = false);
@@ -118,6 +121,9 @@ public:
 
     /// <summary>Creates a canonical graph document plus sidecar and queues its first exact build.</summary>
     API_FUNCTION() static Guid CreateGraphDocument(const StringView& outputPath, const StringView& typeName, const StringView& propertiesJson = StringView::Empty);
+
+    /// <summary>Creates a canonical graph document from an existing Visject surface and queues its first exact build.</summary>
+    API_FUNCTION() static Guid CreateGraphDocumentFromSurface(const StringView& outputPath, const StringView& typeName, const BytesContainer& surface, const StringView& propertiesJson = StringView::Empty);
 
     /// <summary>Creates a canonical small authored document plus sidecar.</summary>
     API_FUNCTION() static Guid CreateAuthoredDocument(const StringView& outputPath, const StringView& typeName);

@@ -9,6 +9,7 @@ using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.Elements;
 using FlaxEditor.GUI;
+using FlaxEditor.History;
 using FlaxEditor.Viewport.Cameras;
 using FlaxEditor.Viewport.Previews;
 using FlaxEngine;
@@ -302,7 +303,7 @@ namespace FlaxEditor.Windows.Assets
                     return false;
                 _isCooking = true;
                 window._propertiesPresenter.BuildLayout();
-                window.Editor.ContentImporting.Create(new CookData(asset.Path)
+                window.Editor.ContentImporting.Create(new CookData(window.Item.Path)
                 {
                     Proxy = this,
                     Type = type,
@@ -329,7 +330,8 @@ namespace FlaxEditor.Windows.Assets
                 bool failed = true;
                 try
                 {
-                    failed = Task.Run(() => window.Editor.ContentDatabase.SaveAsset(asset.Path, () => FlaxEditor.Editor.CookMeshCollision(asset.Path, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit))).GetAwaiter().GetResult();
+                    var sourcePath = window.Item.Path;
+                    failed = Task.Run(() => window.Editor.ContentDatabase.SaveAsset(sourcePath, () => FlaxEditor.Editor.CookMeshCollision(sourcePath, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit))).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
@@ -438,7 +440,6 @@ namespace FlaxEditor.Windows.Assets
         private Model _collisionWiresModel;
         private StaticModel _collisionWiresShowActor;
         private bool _updateWireMesh;
-        private bool _isCreatingOptionsUndoAction;
 
         private class CollisionDataPreview : ModelBasePreview
         {
@@ -527,7 +528,7 @@ namespace FlaxEditor.Windows.Assets
 
         IUndoAction IUndoLinkedActionProvider.CreateLinkedUndoAction(Undo sourceUndo, IUndoAction sourceAction)
         {
-            if (!ReferenceEquals(sourceUndo, _undo) || _isCreatingOptionsUndoAction || UndoActionMetadata.DoesNotModifyData(sourceAction))
+            if (!ReferenceEquals(sourceUndo, _undo) || UndoActionMetadata.DoesNotModifyData(sourceAction))
                 return null;
 
             return CreateCollisionDataOptionsUndoAction(sourceAction);
@@ -539,38 +540,61 @@ namespace FlaxEditor.Windows.Assets
                 return null;
 
             var afterState = _properties.CaptureState();
-            CollisionDataOptionsState beforeState;
-            var sourceActionUndone = false;
-            _isCreatingOptionsUndoAction = true;
-            try
-            {
-                sourceAction.Undo();
-                sourceActionUndone = true;
-                beforeState = _properties.CaptureState();
-
-                sourceAction.Do();
-                sourceActionUndone = false;
-            }
-            finally
-            {
-                if (sourceActionUndone)
-                {
-                    try
-                    {
-                        sourceAction.Do();
-                    }
-                    catch (Exception ex)
-                    {
-                        FlaxEditor.Editor.LogWarning(ex);
-                        FlaxEditor.Editor.LogWarning("Failed to restore collision data options after creating an undo snapshot.");
-                    }
-                }
-                _isCreatingOptionsUndoAction = false;
-            }
+            var beforeState = afterState;
+            if (!ApplyPreviousValues(sourceAction, ref beforeState))
+                return null;
 
             if (beforeState.HasSameValues(afterState))
                 return null;
             return new CollisionDataOptionsUndoAction(this, sourceAction.ActionString, beforeState, afterState);
+        }
+
+        private bool ApplyPreviousValues(IUndoAction action, ref CollisionDataOptionsState state)
+        {
+            if (action is MultiUndoAction multi)
+            {
+                var changed = false;
+                for (var i = multi.Actions.Length - 1; i >= 0; i--)
+                    changed |= ApplyPreviousValues(multi.Actions[i], ref state);
+                return changed;
+            }
+            if (!(action is UndoActionObject objectAction))
+                return false;
+            var data = objectAction.PrepareData();
+            if (!ReferenceEquals(data.TargetInstance, _properties))
+                return false;
+            var changedValue = false;
+            foreach (var diff in data.Diff)
+                changedValue |= ApplyPreviousValue(diff.MemberPath.Path, diff.Value1, ref state);
+            return changedValue;
+        }
+
+        private static bool ApplyPreviousValue(string path, object value, ref CollisionDataOptionsState state)
+        {
+            switch (path)
+            {
+            case nameof(PropertiesProxy.Type):
+                state.Type = (CollisionDataType)Convert.ToInt32(value);
+                return true;
+            case nameof(PropertiesProxy.Model):
+                var model = value as ModelBase;
+                state.ModelId = model ? model.ID : Guid.Empty;
+                return true;
+            case nameof(PropertiesProxy.ModelLodIndex):
+                state.ModelLodIndex = Convert.ToInt32(value);
+                return true;
+            case nameof(PropertiesProxy.MaterialSlotsMask):
+                state.MaterialSlotsMaskValue = Convert.ToUInt32(value);
+                return true;
+            case nameof(PropertiesProxy.ConvexFlags):
+                state.ConvexFlags = (ConvexMeshGenerationFlags)Convert.ToInt32(value);
+                return true;
+            case nameof(PropertiesProxy.ConvexVertexLimit):
+                state.ConvexVertexLimit = Convert.ToInt32(value);
+                return true;
+            default:
+                return false;
+            }
         }
 
         private void OnPropertiesModified()

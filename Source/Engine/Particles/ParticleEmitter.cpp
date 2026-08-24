@@ -245,7 +245,7 @@ Asset::LoadResult ParticleEmitter::load()
 
         // Save to file
 #if USE_EDITOR
-        if (SaveShaderAsset())
+        if (!IsUsingGeneratedArtifact() && SaveShaderAsset())
         {
             LOG(Error, "Cannot save \'{0}\'", ToString());
             return LoadResult::Failed;

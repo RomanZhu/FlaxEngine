@@ -22,6 +22,9 @@
 #include "Engine/Graphics/Materials/MaterialShader.h"
 #include "Engine/Tools/MaterialGenerator/MaterialLayer.h"
 #include "Engine/Tools/MaterialGenerator/MaterialGenerator.h"
+#if COMPILE_WITH_PARTICLE_GPU_GRAPH
+#include "Engine/Particles/Graph/GPU/ParticleEmitterGraph.GPU.h"
+#endif
 #endif
 #endif
 #include "Engine/Core/Collections/HashSet.h"
@@ -1528,6 +1531,30 @@ namespace
             context.Data.Header.Chunks[SHADER_FILE_CHUNK_VISJECT_SURFACE]->Data.Copy(ToSpan(*arguments->Surface));
             ShaderStorage::Header20 shaderHeader;
             Platform::MemoryClear(&shaderHeader, sizeof(shaderHeader));
+#if USE_EDITOR && COMPILE_WITH_PARTICLE_GPU_GRAPH && COMPILE_WITH_SHADER_COMPILER
+            if (context.IsArtifactStagingMode())
+            {
+                if (context.AllocateChunk(SHADER_FILE_CHUNK_MATERIAL_PARAMS) || context.AllocateChunk(SHADER_FILE_CHUNK_SOURCE))
+                    return CreateAssetResult::CannotAllocateChunk;
+                MemoryReadStream stream(arguments->Surface->Get(), arguments->Surface->Count());
+                auto* graph = New<ParticleEmitterGraphGPU>();
+                if (graph->Load(&stream, false))
+                {
+                    Delete(graph);
+                    return CreateAssetResult::Error;
+                }
+                ParticleEmitterGPUGenerator generator;
+                generator.AddGraph(graph);
+                MemoryWriteStream source(16 * 1024);
+                int32 customDataSize;
+                if (generator.Generate(source, context.Data.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS]->Data, customDataSize))
+                    return CreateAssetResult::Error;
+                Encryption::EncryptBytes(static_cast<byte*>(source.GetHandle()), source.GetPosition());
+                context.Data.Header.Chunks[SHADER_FILE_CHUNK_SOURCE]->Data.Copy(ToSpan(source));
+                shaderHeader.ParticleEmitter.GraphVersion = PARTICLE_GPU_GRAPH_VERSION;
+                shaderHeader.ParticleEmitter.CustomDataSize = customDataSize;
+            }
+#endif
             context.Data.CustomData.Copy(&shaderHeader);
             return CreateAssetResult::Ok;
         }
@@ -2437,6 +2464,19 @@ bool GraphDocumentCodec::Decode(const StringAnsiView& source, AssetDocumentSnaps
 
 bool GraphDocumentCodec::SaveAtomic(const StringView& path, const StringAnsiView& canonicalText, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash)
 {
+    GraphDocumentCodec codec;
+    GraphDocumentSnapshot reparsed;
+    if (codec.DecodeGraph(canonicalText, reparsed, diagnostic))
+        return true;
+    return SaveJsonAtomic(path, canonicalText, diagnostic, previousHash);
+}
+
+bool GraphDocumentCodec::SaveJsonAtomic(const StringView& path, const StringAnsiView& canonicalText, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash)
+{
+    StringAnsi reparsed;
+    CanonicalJsonError jsonError;
+    if (CanonicalJsonWriter::Canonicalize(canonicalText, reparsed, jsonError))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Authored document is not valid JSON."));
     if (previousHash && !previousHash->IsZero() && FileSystem::FileExists(path))
     {
         Array<byte> existing;
@@ -2450,15 +2490,11 @@ bool GraphDocumentCodec::SaveAtomic(const StringView& path, const StringAnsiView
     const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
     SCOPE_EXIT { FileSystem::DeleteFile(staging); };
     if (File::WriteAllBytes(staging, canonicalText.Get(), canonicalText.Length()) || FlushWrittenFile(staging))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Cannot write or flush graph document staging file."));
-    GraphDocumentCodec codec;
-    GraphDocumentSnapshot reparsed;
-    if (codec.DecodeGraph(canonicalText, reparsed, diagnostic))
-        return true;
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Cannot write or flush authored document staging file."));
     if (FileSystem::FileExists(path) && FileSystem::IsReadOnly(path))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph document is read-only."));
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Authored document is read-only."));
     if (AtomicReplace(path, staging))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Cannot atomically replace graph document."));
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Cannot atomically replace authored document."));
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }

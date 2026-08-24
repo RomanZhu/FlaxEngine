@@ -175,6 +175,14 @@ Array<AssetPipelineDiagnostic> AssetDatabaseFacade::GetDiagnostics()
     return LastDiagnostics;
 }
 
+String AssetDatabaseFacade::GetCanonicalSourcePath(const Guid& assetID)
+{
+    AssetRecord record;
+    return assetID.IsValid() && AssetDatabase::Get().TryGetRecord(assetID, record)
+        ? String(record.SourcePath.Get())
+        : String::Empty;
+}
+
 bool AssetDatabaseFacade::Scan(bool strictMetadata)
 {
 #if USE_EDITOR
@@ -617,13 +625,41 @@ Guid AssetDatabaseFacade::CreateGraphDocument(const StringView& outputPath, cons
         return fail();
     }
     GraphDocument document;
-    StringAnsi json;
     if (GraphDocumentCodec::CreateStarter(typeName, document, diagnostic))
+        return fail();
+    Array<byte> surface;
+    if (GraphDocumentCompiler::CompileDocument(document, surface, diagnostic))
+        return fail();
+
+    BytesContainer data;
+    data.Link(ToSpan(surface));
+    return CreateGraphDocumentFromSurface(outputPath, typeName, data, propertiesJson);
+}
+
+Guid AssetDatabaseFacade::CreateGraphDocumentFromSurface(const StringView& outputPath, const StringView& typeName, const BytesContainer& surface, const StringView& propertiesJson)
+{
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return Guid::Empty;
+    };
+    if (!GraphDocumentCodec::IsSupportedType(typeName) || outputPath.IsEmpty() || !surface.IsValid())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.Message = TEXT("Graph document type, path, or surface is invalid.");
+        return fail();
+    }
+    GraphDocument document;
+    StringAnsi json;
+    if (GraphDocumentCodec::FromSurface(typeName, surface, document, diagnostic))
         return fail();
     if (propertiesJson.HasChars())
         document.PropertiesJson = StringAnsi(String(propertiesJson));
-    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) ||
-        GraphDocumentCodec::SaveAtomic(outputPath, json, diagnostic))
+    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) || GraphDocumentCodec::SaveAtomic(outputPath, json, diagnostic))
         return fail();
 
     AssetMeta meta;
@@ -874,7 +910,7 @@ bool AssetDatabaseFacade::SaveCollisionDataDocument(const StringView& path, Coll
     order.Add("materialSlotsMask");
     order.Add("convexFlags");
     order.Add("convexVertexLimit");
-    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveAtomic(path, text, diagnostic) || Scan(false))
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || Scan(false))
         return fail();
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.CollisionData"))
@@ -917,7 +953,7 @@ bool AssetDatabaseFacade::SaveParticleSystemTimeline(const StringView& path, con
     order.Add("durationFrames");
     order.Add("tracks");
     order.Add("parameterOverrides");
-    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveAtomic(path, text, diagnostic) || Scan(false))
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || Scan(false))
         return fail();
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.ParticleSystem"))

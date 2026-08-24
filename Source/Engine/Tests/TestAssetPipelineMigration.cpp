@@ -444,7 +444,7 @@ TEST_CASE("Legacy particle system flax converts to semantic authored JSON")
     const Guid id(91, 92, 93, 94);
     const Guid emitterId(101, 102, 103, 104);
     MemoryWriteStream source;
-    source.WriteInt32(4);
+    source.WriteInt32(5);
     source.WriteFloat(60.0f);
     source.WriteInt32(300);
     source.WriteInt32(1);
@@ -455,6 +455,7 @@ TEST_CASE("Legacy particle system flax converts to semantic authored JSON")
     source.WriteInt32(0);
     source.Write(TEXT("Emitter"), -13);
     source.Write(Color32::White);
+    source.Write(Guid(201, 202, 203, 204));
     source.Write(emitterId);
     source.WriteInt32(0);
     source.WriteInt32(0);

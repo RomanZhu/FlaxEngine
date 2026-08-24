@@ -106,15 +106,13 @@ namespace FlaxEditor.Content.Create
             }
             if (CanonicalGraphDocuments.UseTextGraphAssets && Path.GetExtension(ResultUrl).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
             {
-                if (AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(ParticleEmitter).FullName) == Guid.Empty)
-                    return true;
                 if (templateName == null)
-                    return false;
+                    return AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(ParticleEmitter).FullName) == Guid.Empty;
                 var sourcePath = Path.Combine(Globals.EngineContentFolder, "Editor/Particles", templateName + ".flax");
                 var template = FlaxEngine.Content.Load<ParticleEmitter>(sourcePath);
                 if (!template || template.WaitForLoaded())
                     return true;
-                return AssetDatabaseFacade.SaveGraphSurface(ResultUrl, template.LoadSurface(true));
+                return AssetDatabaseFacade.CreateGraphDocumentFromSurface(ResultUrl, typeof(ParticleEmitter).FullName, template.LoadSurface(true)) == Guid.Empty;
             }
             if (templateName == null)
                 return Editor.CreateAsset("ParticleEmitter", ResultUrl);

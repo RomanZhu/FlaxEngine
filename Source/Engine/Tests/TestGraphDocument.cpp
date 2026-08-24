@@ -5,10 +5,12 @@
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Graphics/Shaders/Cache/ShaderStorage.h"
 #include "Engine/Core/Math/Quaternion.h"
 #include "Engine/Core/Math/Transform.h"
 #include "Engine/Core/Math/Vector2.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
@@ -182,6 +184,24 @@ TEST_CASE("Graph preview paths are excluded from current resolution")
     CHECK_FALSE(GraphDocumentPreview::IsPreviewPath(TEXT("C:/Project/Content/Graphs/Test.materialfunction")));
 }
 
+TEST_CASE("Authored JSON atomic saves do not require graph fields")
+{
+    const String path = Globals::TemporaryFolder / (Guid::New().ToString(Guid::FormatType::N) + TEXT(".json"));
+    const StringAnsi json("{\n  \"documentVersion\": 1,\n  \"type\": \"FlaxEngine.CollisionData\"\n}\n");
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(GraphDocumentCodec::SaveJsonAtomic(path, json, diagnostic));
+
+    Array<byte> saved;
+    REQUIRE_FALSE(File::ReadAllBytes(path, saved));
+    CHECK(StringAnsiView(reinterpret_cast<const char*>(saved.Get()), saved.Count()) == json);
+    CHECK(GraphDocumentCodec::SaveJsonAtomic(path, StringAnsiView("{"), diagnostic));
+
+    saved.Clear();
+    REQUIRE_FALSE(File::ReadAllBytes(path, saved));
+    CHECK(StringAnsiView(reinterpret_cast<const char*>(saved.Get()), saved.Count()) == json);
+    FileSystem::DeleteFile(path);
+}
+
 TEST_CASE("Graph documents encode typed values and visject meta as text")
 {
     GraphDocument document;
@@ -293,6 +313,22 @@ TEST_CASE("Graph documents support visual script, behavior tree, and particle gr
     GraphDocument particleEmitter;
     REQUIRE_FALSE(GraphDocumentCodec::CreateStarter(TEXT("FlaxEngine.ParticleEmitter"), particleEmitter, diagnostic));
     CHECK(particleEmitter.Nodes.HasItems());
+#if COMPILE_WITH_PARTICLE_GPU_GRAPH && COMPILE_WITH_SHADER_COMPILER
+    Array<byte> particleSurface;
+    REQUIRE_FALSE(GraphDocumentCompiler::CompileDocument(particleEmitter, particleSurface, diagnostic));
+    const Guid particleID = Guid::New();
+    const String particleArtifact = Globals::TemporaryFolder / (particleID.ToString(Guid::FormatType::N) + TEXT(".flax"));
+    REQUIRE_FALSE(GraphDocumentCodec::WriteCompatibilityAsset(particleArtifact, particleID, TEXT("FlaxEngine.ParticleEmitter"), particleSurface, StringAnsiView::Empty, diagnostic, true));
+    auto particleStorage = ContentStorageManager::GetStorage(particleArtifact);
+    REQUIRE(particleStorage);
+    AssetInitData particleData;
+    REQUIRE_FALSE(particleStorage->LoadAssetHeader(particleID, particleData));
+    CHECK(particleData.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS] != nullptr);
+    CHECK(particleData.Header.Chunks[SHADER_FILE_CHUNK_SOURCE] != nullptr);
+    particleStorage = nullptr;
+    ContentStorageManager::EnsureAccess(particleArtifact);
+    FileSystem::DeleteFile(particleArtifact);
+#endif
 }
 
 TEST_CASE("Graph documents support authored material text without generated shader source")

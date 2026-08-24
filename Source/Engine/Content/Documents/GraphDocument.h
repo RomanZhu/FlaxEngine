@@ -101,6 +101,9 @@ public:
     /// <summary>Writes canonical JSON through sibling staging, reparse, and atomic replace.</summary>
     static bool SaveAtomic(const StringView& path, const StringAnsiView& canonicalText, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr);
 
+    /// <summary>Writes a non-graph canonical JSON document through sibling staging and atomic replace.</summary>
+    static bool SaveJsonAtomic(const StringView& path, const StringAnsiView& canonicalText, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr);
+
     /// <summary>Creates a deterministic starter document for a supported runtime type.</summary>
     static bool CreateStarter(const StringView& typeName, GraphDocument& document, AssetPipelineDiagnostic& diagnostic);
 

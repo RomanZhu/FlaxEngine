@@ -227,6 +227,7 @@ Asset::LoadResult ParticleSystem::load()
     case 3: // [Deprecated on 03.09.2021 expires on 03.09.2023]
         MARK_CONTENT_DEPRECATED();
     case 4:
+    case 5:
     {
         // Load properties
         stream.ReadFloat(&FramesPerSecond);
@@ -253,6 +254,11 @@ Asset::LoadResult ParticleSystem::load()
             stream.Read(track.Name, -13);
             track.Disabled = (int32)track.Flag & (int32)Track::Flags::Mute || (track.ParentIndex != -1 && Tracks[track.ParentIndex].Disabled);
             stream.Read(track.Color);
+            if (version >= 5)
+            {
+                Guid trackID;
+                stream.Read(trackID);
+            }
 
             switch (track.Type)
             {

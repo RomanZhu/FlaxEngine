@@ -161,12 +161,18 @@ namespace FlaxEditor.GUI.Timeline
         public void Save(ParticleSystem asset)
         {
             var data = Save();
-            var extension = Path.GetExtension(asset.Path);
-            if (extension.Equals(".particlesystem", StringComparison.OrdinalIgnoreCase))
-                AssetDatabaseFacade.SaveParticleSystemTimeline(asset.Path, data);
-            else
-                asset.SaveTimeline(data);
+            var sourcePath = AssetDatabaseFacade.GetCanonicalSourcePath(asset.ID);
+            var extension = Path.GetExtension(string.IsNullOrEmpty(sourcePath) ? asset.Path : sourcePath);
+            var failed = extension.Equals(".particlesystem", StringComparison.OrdinalIgnoreCase)
+                ? AssetDatabaseFacade.SaveParticleSystemTimeline(sourcePath, data)
+                : asset.SaveTimeline(data);
+            if (failed)
+            {
+                Editor.LogError("Failed to save Particle System timeline.");
+                return;
+            }
             asset.Reload();
+            asset.WaitForLoaded();
         }
 
         /// <inheritdoc />

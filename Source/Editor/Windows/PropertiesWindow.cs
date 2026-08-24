@@ -1977,7 +1977,9 @@ namespace FlaxEditor.Windows
 
             private void SaveEmitterSurface(bool rebuildLayout)
             {
-                if (_particleEmitter && _emitterSurface != null && Editor.Instance.ContentDatabase.SaveAsset(_particleEmitter.Path, () => _emitterSurface.Save()))
+                var sourcePath = _particleEmitter ? AssetDatabaseFacade.GetCanonicalSourcePath(_particleEmitter.ID) : null;
+                var savePath = string.IsNullOrEmpty(sourcePath) ? _particleEmitter?.Path : sourcePath;
+                if (_particleEmitter && _emitterSurface != null && Editor.Instance.ContentDatabase.SaveAsset(savePath, () => _emitterSurface.Save()))
                     Editor.LogError("Failed to save Particle Emitter surface.");
                 if (rebuildLayout)
                     Editor.Instance.Windows.PropertiesWin.Presenter.BuildLayoutOnUpdate();
@@ -2013,8 +2015,9 @@ namespace FlaxEditor.Windows
                     get => _asset.LoadSurface(true);
                     set
                     {
-                        var failed = CanonicalGraphDocuments.IsGraphDocumentPath(_asset.Path)
-                            ? AssetDatabaseFacade.SaveGraphSurface(_asset.Path, value)
+                        var sourcePath = AssetDatabaseFacade.GetCanonicalSourcePath(_asset.ID);
+                        var failed = !string.IsNullOrEmpty(sourcePath) && CanonicalGraphDocuments.IsGraphDocumentPath(sourcePath)
+                            ? AssetDatabaseFacade.SaveGraphSurface(sourcePath, value)
                             : _asset.SaveSurface(value);
                         if (failed)
                         {
