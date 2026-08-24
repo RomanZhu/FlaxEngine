@@ -348,10 +348,7 @@ namespace FlaxEditor.Windows.Assets
                     Editor.LogError("Failed to save surface data");
                     return;
                 }
-                var failed = _item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path)
-                    ? CanonicalGraphDocuments.SaveCloneSurface(_item, value)
-                    : _asset.SaveSurface(value);
-                if (failed)
+                if (_asset.SaveSurface(value))
                 {
                     _surface.MarkAsEdited();
                     Editor.LogError("Failed to save surface data");
@@ -359,6 +356,9 @@ namespace FlaxEditor.Windows.Assets
                 }
                 _asset.Reload();
                 _asset.WaitForLoaded();
+                PreviewActor.AnimationGraph = null;
+                PreviewActor.AnimationGraph = _asset;
+                PreviewActor.ResetAnimation();
                 _preview.PreviewActor.ResetLocalTransform();
                 _previewTab.Presenter.BuildLayoutOnUpdate();
             }

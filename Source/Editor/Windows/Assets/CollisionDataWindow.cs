@@ -440,6 +440,7 @@ namespace FlaxEditor.Windows.Assets
         private Model _collisionWiresModel;
         private StaticModel _collisionWiresShowActor;
         private bool _updateWireMesh;
+        private bool _resetPreviewCamera;
 
         private class CollisionDataPreview : ModelBasePreview
         {
@@ -599,6 +600,7 @@ namespace FlaxEditor.Windows.Assets
 
         private void OnPropertiesModified()
         {
+            UpdatePreviewModel();
             MarkAsEdited();
             MarkAutoSaveEdit();
         }
@@ -609,14 +611,30 @@ namespace FlaxEditor.Windows.Assets
             {
                 MarkAsEdited();
                 MarkAutoSaveEdit();
-                _propertiesPresenter.BuildLayout();
+                _propertiesPresenter.BuildLayoutOnUpdate();
             }
             UpdateToolstrip();
+        }
+
+        private void UpdatePreviewModel()
+        {
+            var model = _properties?.Model;
+            if (_preview.Asset == model)
+                return;
+
+            _preview.Asset = model;
+            _resetPreviewCamera = model != null;
         }
 
         /// <inheritdoc />
         public override void Update(float deltaTime)
         {
+            if (_resetPreviewCamera && _preview.Asset && _preview.Asset.IsLoaded)
+            {
+                _resetPreviewCamera = false;
+                _preview.ResetCamera();
+            }
+
             // Sync helper actor size with actual preview model (preview scales model for better usage experience)
             if (_collisionWiresShowActor && _collisionWiresShowActor.IsActive)
             {
@@ -711,7 +729,12 @@ namespace FlaxEditor.Windows.Assets
             _collisionWiresShowActor.Model = _collisionWiresModel;
             _collisionWiresShowActor.SetMaterial(0, FlaxEngine.Content.LoadAsyncInternal<MaterialBase>(EditorAssets.WiresDebugMaterial));
             _preview.Info = string.Format("\nTriangles: {0:N0}\nVertices: {1:N0}\nMemory Size: {2}", triangleCount, indicesCount / 3, Utilities.Utils.FormatBytesCount(Asset.MemoryUsage));
-            _preview.Asset = FlaxEngine.Content.LoadAsync<ModelBase>(_asset.Options.Model);
+            var model = FlaxEngine.Content.LoadAsync<ModelBase>(_asset.Options.Model);
+            if (_preview.Asset != model)
+            {
+                _preview.Asset = model;
+                _resetPreviewCamera = model != null;
+            }
         }
 
         /// <inheritdoc />
