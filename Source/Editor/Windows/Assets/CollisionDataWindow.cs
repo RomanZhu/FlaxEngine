@@ -4,7 +4,6 @@ using System;
 using System.Threading.Tasks;
 using System.Xml;
 using FlaxEditor.Content;
-using FlaxEditor.Content.Create;
 using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.Elements;
@@ -224,45 +223,6 @@ namespace FlaxEditor.Windows.Assets
                 }
             }
 
-            private class CookData : CreateFileEntry
-            {
-                public PropertiesProxy Proxy;
-                public CollisionDataType Type;
-                public ModelBase Model;
-                public int ModelLodIndex;
-                public uint MaterialSlotsMask;
-                public ConvexMeshGenerationFlags ConvexFlags;
-                public int ConvexVertexLimit;
-
-                public override bool CanBeCreated => Type != CollisionDataType.None && Model;
-
-                public CookData(string resultUrl)
-                : base("Collision Data", resultUrl)
-                {
-                }
-
-                /// <inheritdoc />
-                public override bool Create()
-                {
-                    bool failed = true;
-                    try
-                    {
-                        failed = FlaxEditor.Editor.CookMeshCollision(ResultUrl, Type, Model, ModelLodIndex, MaterialSlotsMask, ConvexFlags, ConvexVertexLimit);
-                    }
-                    finally
-                    {
-                        Proxy._isCooking = false;
-                        FlaxEngine.Scripting.InvokeOnUpdate(() =>
-                        {
-                            if (Proxy.Window != null)
-                                Proxy.Window.OnCookFinished(failed);
-                        });
-                    }
-
-                    return failed;
-                }
-            }
-
             private bool TryGetCookData(out CollisionDataType type, out ModelBase model, out int modelLodIndex, out uint materialSlotsMask, out ConvexMeshGenerationFlags convexFlags, out int convexVertexLimit)
             {
                 type = Type;
@@ -272,9 +232,19 @@ namespace FlaxEditor.Windows.Assets
                 convexFlags = ConvexFlags;
                 convexVertexLimit = ConvexVertexLimit;
 
-                if (!CanCook)
+                if (Window == null || Asset == null)
                 {
                     FlaxEditor.Editor.LogWarning("Cannot cook collision data. Asset is not loaded.");
+                    return false;
+                }
+                if (_isCooking)
+                {
+                    FlaxEditor.Editor.LogWarning("Cannot cook collision data. Cooking is already in progress.");
+                    return false;
+                }
+                if (Type == CollisionDataType.None)
+                {
+                    FlaxEditor.Editor.LogWarning("Cannot cook collision data. Missing collision type.");
                     return false;
                 }
 
@@ -298,20 +268,35 @@ namespace FlaxEditor.Windows.Assets
             public bool Cook()
             {
                 var window = Window;
-                var asset = Asset;
                 if (!TryGetCookData(out var type, out var model, out var modelLodIndex, out var materialSlotsMask, out var convexFlags, out var convexVertexLimit))
                     return false;
+
                 _isCooking = true;
                 window._propertiesPresenter.BuildLayout();
-                window.Editor.ContentImporting.Create(new CookData(window.Item.Path)
+                window.UpdateToolstrip();
+
+                var sourcePath = window.Item.Path;
+                Task.Run(() =>
                 {
-                    Proxy = this,
-                    Type = type,
-                    Model = model,
-                    ModelLodIndex = modelLodIndex,
-                    MaterialSlotsMask = materialSlotsMask,
-                    ConvexFlags = convexFlags,
-                    ConvexVertexLimit = convexVertexLimit,
+                    bool failed = true;
+                    try
+                    {
+                        failed = window.Editor.ContentDatabase.SaveAsset(sourcePath, () => FlaxEditor.Editor.CookMeshCollision(sourcePath, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit));
+                    }
+                    catch (Exception ex)
+                    {
+                        FlaxEditor.Editor.LogError("Cannot cook collision data asset.");
+                        Debug.LogException(ex);
+                    }
+                    finally
+                    {
+                        FlaxEngine.Scripting.InvokeOnUpdate(() =>
+                        {
+                            _isCooking = false;
+                            if (Window != null)
+                                window.OnCookFinished(failed);
+                        });
+                    }
                 });
                 return true;
             }
@@ -319,7 +304,6 @@ namespace FlaxEditor.Windows.Assets
             public bool Save()
             {
                 var window = Window;
-                var asset = Asset;
                 if (!TryGetCookData(out var type, out var model, out var modelLodIndex, out var materialSlotsMask, out var convexFlags, out var convexVertexLimit))
                     return false;
 
