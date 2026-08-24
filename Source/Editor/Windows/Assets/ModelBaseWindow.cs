@@ -721,7 +721,7 @@ namespace FlaxEditor.Windows.Assets
             {
                 if (Window.Item.IsCanonicalSource)
                 {
-                    if (AssetDatabaseFacade.ApplyModelMetadata(Window.Item.Path, ImportSettings.Settings))
+                    if (AssetDatabaseFacade.ApplyModelMetadata(Window.ImportSourcePath, ImportSettings.Settings))
                         FlaxEditor.Editor.LogError("Cannot apply canonical model import settings.");
                 }
                 else
@@ -746,7 +746,10 @@ namespace FlaxEditor.Windows.Assets
 
                     // Creates the import path UI
                     var group = layout.Group("Import Path");
-                    Utilities.Utils.CreateImportPathUI(group, proxy.Window.Item as BinaryAssetItem);
+                    if (proxy.Window.Item.IsCanonicalSource)
+                        Utilities.Utils.CreateImportPathUI(group, proxy.Window.ImportSourcePath);
+                    else
+                        Utilities.Utils.CreateImportPathUI(group, proxy.Window.Item as BinaryAssetItem);
 
                     var reimportButton = importSettingsGroup.Button(proxy.Window.Item.IsCanonicalSource ? "Apply and Rebuild" : "Reimport");
                     reimportButton.Button.Clicked += () => ((ImportPropertiesProxyBase)Values[0]).Reimport();
@@ -797,6 +800,14 @@ namespace FlaxEditor.Windows.Assets
             };
         }
 
+        protected string ImportSourcePath => Item.IsCanonicalSource ? Item.SourcePath : Item.Path;
+
+        /// <inheritdoc />
+        protected override TAsset LoadAsset()
+        {
+            return _item.IsCanonicalSource ? FlaxEngine.Content.LoadAsync<TAsset>(_item.ID) : base.LoadAsset();
+        }
+
         /// <summary>
         /// Updates the highlight/isolate effects on a model asset.
         /// </summary>
@@ -832,7 +843,7 @@ namespace FlaxEditor.Windows.Assets
             _refreshOnLODsLoaded = true;
             if (Item.IsCanonicalSource)
             {
-                if (AssetDatabaseFacade.LoadModelMetadata(Item.Path, out _importSettings.Settings))
+                if (AssetDatabaseFacade.LoadModelMetadata(ImportSourcePath, out _importSettings.Settings))
                     Editor.LogError("Cannot load canonical model import settings.");
             }
             else

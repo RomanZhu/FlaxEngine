@@ -391,7 +391,7 @@ bool ModelProcessor::BuildOutputKey(const PreparedAsset& prepared, const Artifac
     }
     else if (outputKind == "skeleton")
     {
-        if (addSection("geometry") || addSection("transform"))
+        if (addSection("geometry") || addSection("transform") || addSection("lod"))
             return true;
     }
     else if (outputKind == "animation")
