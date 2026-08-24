@@ -50,6 +50,7 @@ AssetProcessorDescriptor GraphDocumentProcessor::CreateDescriptor()
     descriptor.SourceExtensions.Add(TEXT(".visualscript"));
     descriptor.SourceExtensions.Add(TEXT(".behaviortree"));
     descriptor.SourceExtensions.Add(TEXT(".particlefunction"));
+    descriptor.SourceExtensions.Add(TEXT(".particleemitter"));
     descriptor.SourceExtensions.Add(TEXT(".material"));
     descriptor.SourceKinds.Add(AssetSourceKind::TextDocument);
     descriptor.DocumentTypes.Add(MaterialFunction::TypeName);
@@ -58,6 +59,7 @@ AssetProcessorDescriptor GraphDocumentProcessor::CreateDescriptor()
     descriptor.DocumentTypes.Add(VisualScript::TypeName);
     descriptor.DocumentTypes.Add(TEXT("FlaxEngine.BehaviorTree"));
     descriptor.DocumentTypes.Add(TEXT("FlaxEngine.ParticleEmitterFunction"));
+    descriptor.DocumentTypes.Add(TEXT("FlaxEngine.ParticleEmitter"));
     descriptor.DocumentTypes.Add(Material::TypeName);
     descriptor.MainOutputType = MaterialFunction::TypeName;
     descriptor.SettingsSchemaVersion = 1;

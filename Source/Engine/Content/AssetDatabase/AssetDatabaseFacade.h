@@ -5,6 +5,7 @@
 #include "AssetDatabaseScanner.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Scripting/ScriptingType.h"
+#include "Engine/Physics/CollisionData.h"
 
 #if COMPILE_WITH_TEXTURE_TOOL
 #include "Engine/Tools/TextureTool/TextureTool.h"
@@ -118,11 +119,21 @@ public:
     /// <summary>Creates a canonical graph document plus sidecar and queues its first exact build.</summary>
     API_FUNCTION() static Guid CreateGraphDocument(const StringView& outputPath, const StringView& typeName, const StringView& propertiesJson = StringView::Empty);
 
-    /// <summary>Creates an authored material instance, skeleton mask, or scene animation document plus sidecar.</summary>
+    /// <summary>Creates a canonical small authored document plus sidecar.</summary>
     API_FUNCTION() static Guid CreateAuthoredDocument(const StringView& outputPath, const StringView& typeName);
 
     /// <summary>Saves an edited authored compatibility asset back into its canonical text document.</summary>
     API_FUNCTION() static bool SaveAuthoredDocument(BinaryAsset* asset, const Guid& canonicalAssetID);
+
+    /// <summary>Writes particle-system timeline bytes back into the canonical text document.</summary>
+    API_FUNCTION() static bool SaveParticleSystemTimeline(const StringView& path, const BytesContainer& timeline);
+
+    /// <summary>Writes a collision recipe document and queues recooking into Library.</summary>
+    static bool SaveCollisionDataDocument(const StringView& path, CollisionDataType type, const Guid& model, int32 modelLodIndex,
+        uint32 materialSlotsMask, ConvexMeshGenerationFlags convexFlags, int32 convexVertexLimit);
+
+    /// <summary>Reads collision cooking options from a canonical recipe document.</summary>
+    static bool LoadCollisionDataDocument(const StringView& path, CollisionData::SerializedOptions& options);
 
     /// <summary>Creates canonical imported-source metadata beside an audio, font, shader, or video file.</summary>
     API_FUNCTION() static Guid CreateImportedSourceMetadata(const StringView& sourcePath, const StringView& typeName, const StringView& processorId);

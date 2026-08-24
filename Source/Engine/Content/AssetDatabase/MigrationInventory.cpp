@@ -82,6 +82,21 @@ namespace
             extension = TEXT("particlefunction");
             return true;
         }
+        if (typeName == TEXT("FlaxEngine.ParticleEmitter"))
+        {
+            extension = TEXT("particleemitter");
+            return true;
+        }
+        if (typeName == TEXT("FlaxEngine.ParticleSystem"))
+        {
+            extension = TEXT("particlesystem");
+            return true;
+        }
+        if (typeName == TEXT("FlaxEngine.CollisionData"))
+        {
+            extension = TEXT("collisiondata");
+            return true;
+        }
         if (typeName == TEXT("FlaxEngine.MaterialInstance"))
         {
             extension = TEXT("materialinstance");

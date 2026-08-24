@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using FlaxEditor.Content;
 using FlaxEngine;
 
 namespace FlaxEditor.Content.Create
@@ -84,7 +85,8 @@ namespace FlaxEditor.Content.Create
             switch (_options.Template)
             {
             case Templates.Empty:
-                return Editor.CreateAsset("ParticleEmitter", ResultUrl);
+                templateName = null;
+                break;
             case Templates.ConstantBurst:
                 templateName = "Constant Burst";
                 break;
@@ -102,6 +104,20 @@ namespace FlaxEditor.Content.Create
                 break;
             default: throw new ArgumentOutOfRangeException();
             }
+            if (CanonicalGraphDocuments.UseTextGraphAssets && Path.GetExtension(ResultUrl).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
+            {
+                if (AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(ParticleEmitter).FullName) == Guid.Empty)
+                    return true;
+                if (templateName == null)
+                    return false;
+                var sourcePath = Path.Combine(Globals.EngineContentFolder, "Editor/Particles", templateName + ".flax");
+                var template = FlaxEngine.Content.Load<ParticleEmitter>(sourcePath);
+                if (!template || template.WaitForLoaded())
+                    return true;
+                return AssetDatabaseFacade.SaveGraphSurface(ResultUrl, template.LoadSurface(true));
+            }
+            if (templateName == null)
+                return Editor.CreateAsset("ParticleEmitter", ResultUrl);
             var templatePath = Path.Combine(Globals.EngineContentFolder, "Editor/Particles", templateName + ".flax");
             return Editor.Instance.ContentEditing.CloneAssetFile(templatePath, ResultUrl, Guid.NewGuid());
         }

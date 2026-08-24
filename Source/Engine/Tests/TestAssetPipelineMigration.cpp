@@ -8,12 +8,16 @@
 #include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/Content/Documents/MaterialInstanceDocument.h"
 #include "Engine/Content/Documents/SceneAnimationDocument.h"
+#include "Engine/Content/Documents/ParticleSystemDocument.h"
+#include "Engine/Content/Documents/CollisionDataDocument.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Content/Assets/Animation.h"
 #include "Engine/Content/Assets/Shader.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
+#include "Engine/Particles/ParticleSystem.h"
+#include "Engine/Physics/CollisionData.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Graphics/Shaders/Cache/ShaderStorage.h"
@@ -82,10 +86,13 @@ TEST_CASE("Migration inventory is read-only, deterministic, and classifies mixed
     records.Add(MakeRecord(Guid(5, 0, 0, 0), TEXT("FlaxEngine.Material"), TEXT("Content/Dup.flax"), AssetSourceKind::LegacyBinary, AssetRecordStatus::DuplicateGuid));
     records.Add(MakeRecord(Guid(6, 0, 0, 0), TEXT("FlaxEngine.MaterialInstance"), TEXT("Content/Inst.flax"), AssetSourceKind::LegacyBinary));
     records.Add(MakeRecord(Guid(7, 0, 0, 0), TEXT("FlaxEngine.Shader"), TEXT("Content/Lit.flax"), AssetSourceKind::LegacyBinary));
+    records.Add(MakeRecord(Guid(8, 0, 0, 0), TEXT("FlaxEngine.ParticleEmitter"), TEXT("Content/Emitter.flax"), AssetSourceKind::LegacyBinary));
+    records.Add(MakeRecord(Guid(9, 0, 0, 0), TEXT("FlaxEngine.ParticleSystem"), TEXT("Content/System.flax"), AssetSourceKind::LegacyBinary));
+    records.Add(MakeRecord(Guid(10, 0, 0, 0), TEXT("FlaxEngine.CollisionData"), TEXT("Content/Collision.flax"), AssetSourceKind::LegacyBinary));
 
     Array<MigrationInventoryEntry> entries;
     MigrationInventory::Build(records, entries);
-    REQUIRE(entries.Count() == 7);
+    REQUIRE(entries.Count() == 10);
     CHECK(entries[0].ID == Guid(1, 0, 0, 0));
     CHECK(entries[0].Eligibility == TEXT("ReadyToMigrate"));
     CHECK(entries[0].ProposedDestination.EndsWith(TEXT(".material")));
@@ -97,6 +104,9 @@ TEST_CASE("Migration inventory is read-only, deterministic, and classifies mixed
     CHECK(entries[5].ProposedDestination.EndsWith(TEXT(".materialinstance")));
     CHECK(entries[6].Eligibility == TEXT("ReadyToMigrate"));
     CHECK(entries[6].ProposedDestination.EndsWith(TEXT(".shader")));
+    CHECK(entries[7].ProposedDestination.EndsWith(TEXT(".particleemitter")));
+    CHECK(entries[8].ProposedDestination.EndsWith(TEXT(".particlesystem")));
+    CHECK(entries[9].ProposedDestination.EndsWith(TEXT(".collisiondata")));
     CHECK(MigrationInventory::HasBlockingConflict(entries));
 
     AssetPipelineDiagnostic diagnostic;
@@ -422,5 +432,119 @@ TEST_CASE("Legacy scene animation flax converts to semantic authored JSON")
     int32 compiledVersion;
     compiledStream.ReadInt32(&compiledVersion);
     CHECK(compiledVersion == 5);
+    FileSystem::DeleteDirectory(root, true);
+}
+
+TEST_CASE("Legacy particle system flax converts to semantic authored JSON")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("ParticleSystemConvert-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    const String flax = root / TEXT("System.flax");
+    const String document = root / TEXT("System.particlesystem");
+    const Guid id(91, 92, 93, 94);
+    const Guid emitterId(101, 102, 103, 104);
+    MemoryWriteStream source;
+    source.WriteInt32(4);
+    source.WriteFloat(60.0f);
+    source.WriteInt32(300);
+    source.WriteInt32(1);
+    source.WriteInt32(1);
+    source.WriteByte(static_cast<byte>(ParticleSystem::Track::Types::Emitter));
+    source.WriteByte(0);
+    source.WriteInt32(-1);
+    source.WriteInt32(0);
+    source.Write(TEXT("Emitter"), -13);
+    source.Write(Color32::White);
+    source.Write(emitterId);
+    source.WriteInt32(0);
+    source.WriteInt32(0);
+    source.WriteInt32(300);
+    source.WriteInt32(0);
+    FlaxChunk chunk;
+    chunk.Data.Copy(source.GetHandle(), static_cast<int32>(source.GetPosition()));
+    AssetInitData data;
+    data.Header.ID = id;
+    data.Header.TypeName = ParticleSystem::TypeName;
+    data.SerializedVersion = ParticleSystem::SerializedVersion;
+    data.Header.Chunks[0] = &chunk;
+    REQUIRE_FALSE(FlaxStorage::Create(flax, data));
+
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(LegacyAssetMigrator::ConvertFlax(flax, document, id, ParticleSystem::TypeName, diagnostic));
+    StringAnsi published;
+    REQUIRE_FALSE(File::ReadAllText(document, published));
+    CHECK(published.Contains("\"framesPerSecond\": 60.0"));
+    CHECK(published.Contains("\"id\": \"track-0\""));
+    CHECK(published.Contains("\"$type\": \"AssetReference\""));
+    CHECK_FALSE(published.Contains("timeline"));
+    rapidjson_flax::Document parsed;
+    parsed.Parse(published.Get(), published.Length());
+    REQUIRE_FALSE(parsed.HasParseError());
+    Array<byte> compiled;
+    Array<Guid> references;
+    String error;
+    REQUIRE_FALSE(ParticleSystemDocument::Compile(parsed, compiled, &references, error));
+    REQUIRE(references.Count() == 1);
+    CHECK(references[0] == emitterId);
+    MemoryReadStream compiledStream(compiled.Get(), compiled.Count());
+    int32 compiledVersion;
+    compiledStream.ReadInt32(&compiledVersion);
+    CHECK(compiledVersion == 4);
+    AssetMeta meta;
+    REQUIRE_FALSE(AssetMeta::Load(document + TEXT(".meta"), meta, diagnostic));
+    CHECK(meta.ID == id);
+    CHECK(meta.Processor.ID == TEXT("Flax.ParticleSystem"));
+    FileSystem::DeleteDirectory(root, true);
+}
+
+TEST_CASE("Legacy collision flax converts to a recook recipe without cooked bytes")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("CollisionConvert-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    const String flax = root / TEXT("Collision.flax");
+    const String document = root / TEXT("Collision.collisiondata");
+    const Guid id(111, 112, 113, 114);
+    const Guid modelId(121, 122, 123, 124);
+    CollisionData::SerializedOptions options;
+    Platform::MemoryClear(&options, sizeof(options));
+    options.Type = CollisionDataType::ConvexMesh;
+    options.Model = modelId;
+    options.ModelLodIndex = 2;
+    options.ConvexFlags = ConvexMeshGenerationFlags::ShiftVertices;
+    options.ConvexVertexLimit = 128;
+    options.MaterialSlotsMask = 3;
+    FlaxChunk chunk;
+    chunk.Data.Copy(&options);
+    AssetInitData data;
+    data.Header.ID = id;
+    data.Header.TypeName = CollisionData::TypeName;
+    data.SerializedVersion = CollisionData::SerializedVersion;
+    data.Header.Chunks[0] = &chunk;
+    REQUIRE_FALSE(FlaxStorage::Create(flax, data));
+
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(LegacyAssetMigrator::ConvertFlax(flax, document, id, CollisionData::TypeName, diagnostic));
+    StringAnsi published;
+    REQUIRE_FALSE(File::ReadAllText(document, published));
+    CHECK(published.Contains("\"collisionType\": \"ConvexMesh\""));
+    CHECK(published.Contains("\"sourceModel\": {"));
+    CHECK(published.Contains("\"convexVertexLimit\": 128"));
+    CHECK_FALSE(published.Contains("cooked"));
+    rapidjson_flax::Document parsed;
+    parsed.Parse(published.Get(), published.Length());
+    REQUIRE_FALSE(parsed.HasParseError());
+    CollisionData::SerializedOptions compiled;
+    String error;
+    REQUIRE_FALSE(CollisionDataDocument::Parse(parsed, compiled, error));
+    CHECK(compiled.Type == options.Type);
+    CHECK(compiled.Model == modelId);
+    CHECK(compiled.ModelLodIndex == 2);
+    CHECK(compiled.ConvexFlags == ConvexMeshGenerationFlags::ShiftVertices);
+    CHECK(compiled.ConvexVertexLimit == 128);
+    CHECK(compiled.MaterialSlotsMask == 3);
+    AssetMeta meta;
+    REQUIRE_FALSE(AssetMeta::Load(document + TEXT(".meta"), meta, diagnostic));
+    CHECK(meta.ID == id);
+    CHECK(meta.Processor.ID == TEXT("Flax.CollisionData"));
     FileSystem::DeleteDirectory(root, true);
 }

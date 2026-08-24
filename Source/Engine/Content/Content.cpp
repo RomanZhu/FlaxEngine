@@ -2376,7 +2376,9 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
                 request.RequiredCompatibility = "flax-graph-document-v1";
             else if (pipelineRecord.ProcessorID == TEXT("Flax.MaterialInstance") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.SkeletonMask") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.SceneAnimation"))
+                pipelineRecord.ProcessorID == TEXT("Flax.SceneAnimation") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.ParticleSystem") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.CollisionData"))
                 request.RequiredCompatibility = "flax-authored-document-v1";
             else if (pipelineRecord.ProcessorID == TEXT("Flax.Audio") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.Font") ||

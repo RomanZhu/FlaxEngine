@@ -605,6 +605,25 @@ namespace FlaxEditor
             case AnimationGraphFunction function:
                 function.GetSignature(out var animationTypes, out var animationNames);
                 return new { surfaceBytes = function.LoadSurface()?.Length ?? 0, signature = animationTypes.Zip(animationNames, (type, name) => new { type, name }).ToArray() };
+            case ParticleEmitter emitter:
+                return new { surfaceBytes = emitter.LoadSurface(true)?.Length ?? 0 };
+            case ParticleSystem system:
+                return new { system.FramesPerSecond, system.DurationFrames, timelineBytes = system.LoadTimeline()?.Length ?? 0 };
+            case CollisionData collision:
+            {
+                var options = collision.Options;
+                return new
+                {
+                    type = options.Type.ToString(),
+                    options.Model,
+                    options.ModelLodIndex,
+                    convexFlags = options.ConvexFlags.ToString(),
+                    options.ConvexVertexLimit,
+                    options.MaterialSlotsMask,
+                    boundsMin = Describe(options.Box.Minimum),
+                    boundsMax = Describe(options.Box.Maximum),
+                };
+            }
             case VisualScript script:
                 return new
                 {

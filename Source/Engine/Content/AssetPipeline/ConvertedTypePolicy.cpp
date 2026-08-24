@@ -12,6 +12,9 @@ bool ConvertedTypePolicy::IsConvertedGraphType(const StringView& typeName)
         typeName == TEXT("FlaxEngine.VisualScript") ||
         typeName == TEXT("FlaxEngine.BehaviorTree") ||
         typeName == TEXT("FlaxEngine.ParticleEmitterFunction") ||
+        typeName == TEXT("FlaxEngine.ParticleEmitter") ||
+        typeName == TEXT("FlaxEngine.ParticleSystem") ||
+        typeName == TEXT("FlaxEngine.CollisionData") ||
         typeName == TEXT("FlaxEngine.MaterialInstance") ||
         typeName == TEXT("FlaxEngine.SkeletonMask") ||
         typeName == TEXT("FlaxEngine.SceneAnimation");
@@ -19,9 +22,7 @@ bool ConvertedTypePolicy::IsConvertedGraphType(const StringView& typeName)
 
 bool ConvertedTypePolicy::IsLegacyExceptionType(const StringView& typeName)
 {
-    return typeName == TEXT("FlaxEngine.ParticleEmitter") ||
-        typeName == TEXT("FlaxEngine.ParticleSystem") ||
-        typeName == TEXT("FlaxEngine.RawDataAsset");
+    return typeName == TEXT("FlaxEngine.RawDataAsset");
 }
 
 bool ConvertedTypePolicy::IsConvertedImportedType(const StringView& typeName)

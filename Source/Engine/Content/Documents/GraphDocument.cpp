@@ -9,6 +9,7 @@
 #include "Engine/Content/Assets/MaterialFunction.h"
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/Assets/Material.h"
+#include "Engine/Particles/ParticleEmitter.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/ContentImporters/Types.h"
@@ -235,6 +236,11 @@ namespace
     bool IsParticleEmitterFunctionType(const StringView& typeName)
     {
         return typeName == TEXT("FlaxEngine.ParticleEmitterFunction");
+    }
+
+    bool IsParticleEmitterType(const StringView& typeName)
+    {
+        return typeName == TEXT("FlaxEngine.ParticleEmitter");
     }
 
     bool IsMaterialType(const StringView& typeName)
@@ -1513,6 +1519,18 @@ namespace
             context.Data.CustomData.Copy(&shaderHeader);
             return CreateAssetResult::Ok;
         }
+        if (IsParticleEmitterType(arguments->TypeName))
+        {
+            context.Data.SerializedVersion = 20;
+            context.SkipMetadata = true;
+            if (context.AllocateChunk(SHADER_FILE_CHUNK_VISJECT_SURFACE))
+                return CreateAssetResult::CannotAllocateChunk;
+            context.Data.Header.Chunks[SHADER_FILE_CHUNK_VISJECT_SURFACE]->Data.Copy(ToSpan(*arguments->Surface));
+            ShaderStorage::Header20 shaderHeader;
+            Platform::MemoryClear(&shaderHeader, sizeof(shaderHeader));
+            context.Data.CustomData.Copy(&shaderHeader);
+            return CreateAssetResult::Ok;
+        }
         context.Data.SerializedVersion = 1;
         if (context.AllocateChunk(0))
             return CreateAssetResult::CannotAllocateChunk;
@@ -1598,6 +1616,7 @@ bool GraphDocumentCodec::IsSupportedType(const StringView& typeName)
         IsVisualScriptType(typeName) ||
         IsBehaviorTreeType(typeName) ||
         IsParticleEmitterFunctionType(typeName) ||
+        IsParticleEmitterType(typeName) ||
         IsMaterialType(typeName);
 }
 
@@ -1615,6 +1634,8 @@ const Char* GraphDocumentCodec::ExtensionForType(const StringView& typeName)
         return TEXT(".behaviortree");
     if (IsParticleEmitterFunctionType(typeName))
         return TEXT(".particlefunction");
+    if (IsParticleEmitterType(typeName))
+        return TEXT(".particleemitter");
     if (IsMaterialType(typeName))
         return TEXT(".material");
     return nullptr;
@@ -1636,11 +1657,34 @@ bool GraphDocumentCodec::TypeForExtension(const StringView& extension, String& t
         typeName = TEXT("FlaxEngine.BehaviorTree");
     else if (value == TEXT("particlefunction") || value == TEXT(".particlefunction"))
         typeName = TEXT("FlaxEngine.ParticleEmitterFunction");
+    else if (value == TEXT("particleemitter") || value == TEXT(".particleemitter"))
+        typeName = TEXT("FlaxEngine.ParticleEmitter");
     else if (value == TEXT("material") || value == TEXT(".material"))
         typeName = Material::TypeName;
     else
         return true;
     return false;
+}
+
+bool GraphDocumentCodec::EncodeVariantJson(const Variant& value, StringAnsi& output, AssetPipelineDiagnostic& diagnostic)
+{
+    JsonDocument json;
+    json.SetObject();
+    JsonValue encoded = EncodeVariant(value, json.GetAllocator());
+    CanonicalJsonError error;
+    if (CanonicalJsonWriter::Write(encoded, output, error))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Variant canonical serialization failed."));
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool GraphDocumentCodec::DecodeVariantJson(const StringAnsiView& source, Variant& value, AssetPipelineDiagnostic& diagnostic)
+{
+    JsonDocument json;
+    json.Parse(source.Get(), source.Length());
+    if (json.HasParseError())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Variant JSON is malformed."));
+    return DecodeVariant(json, value, diagnostic);
 }
 
 bool GraphDocumentCodec::FromSurface(const StringView& typeName, const Span<byte>& surface, GraphDocument& document, AssetPipelineDiagnostic& diagnostic)
@@ -1865,6 +1909,17 @@ bool GraphDocumentCodec::CreateStarter(const StringView& typeName, GraphDocument
         outputBox.Parent = &outputNode;
         outputBox.ID = 0;
         outputBox.Type = VariantType::Float;
+    }
+    else if (IsParticleEmitterType(typeName))
+    {
+        ParticleEmitterGraphCPU particles;
+        particles.CreateDefault();
+        MemoryWriteStream stream(512);
+        if (particles.Save(&stream, true))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Starter particle emitter serialization failed."));
+        if (FromSurface(typeName, Span<byte>(stream.GetHandle(), static_cast<int32>(stream.GetPosition())), document, diagnostic))
+            return true;
+        return false;
     }
     else if (typeName == AnimationGraph::TypeName)
     {

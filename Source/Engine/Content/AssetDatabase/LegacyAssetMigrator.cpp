@@ -5,12 +5,16 @@
 #include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/Content/Documents/MaterialInstanceDocument.h"
 #include "Engine/Content/Documents/SceneAnimationDocument.h"
+#include "Engine/Content/Documents/ParticleSystemDocument.h"
+#include "Engine/Content/Documents/CollisionDataDocument.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
+#include "Engine/Particles/ParticleSystem.h"
+#include "Engine/Physics/CollisionData.h"
 #include "Engine/Graphics/Shaders/Cache/ShaderStorage.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -132,7 +136,8 @@ namespace
     bool ConvertGraph(const StringView& destination, const Guid& id, const StringView& typeName, const AssetInitData& data, AssetPipelineDiagnostic& diagnostic)
     {
         const bool material = typeName == Material::TypeName;
-        const FlaxChunk* surface = Chunk(data, material ? SHADER_FILE_CHUNK_VISJECT_SURFACE : 0);
+        const bool shaderGraph = material || typeName == TEXT("FlaxEngine.ParticleEmitter");
+        const FlaxChunk* surface = Chunk(data, shaderGraph ? SHADER_FILE_CHUNK_VISJECT_SURFACE : 0);
         if (!surface)
             return Fail(diagnostic, TEXT("Legacy graph flax has no Visject surface chunk."));
         GraphDocument document;
@@ -227,6 +232,46 @@ namespace
         order.Add("durationFrames");
         order.Add("tracks");
         return WriteSimpleDocument(destination, id, SceneAnimation::TypeName, TEXT("Flax.SceneAnimation"), json, order, diagnostic);
+    }
+
+    bool ConvertParticleSystem(const StringView& destination, const Guid& id, const AssetInitData& data, AssetPipelineDiagnostic& diagnostic)
+    {
+        const FlaxChunk* chunk = Chunk(data, 0);
+        if (!chunk)
+            return Fail(diagnostic, TEXT("Particle system flax is missing timeline data."));
+        JsonDocument json;
+        String error;
+        if (ParticleSystemDocument::DecodeLegacy(Span<byte>(chunk->Get(), chunk->Size()), json, error))
+            return Fail(diagnostic, error);
+        Array<StringAnsi> order;
+        order.Add("documentVersion");
+        order.Add("type");
+        order.Add("framesPerSecond");
+        order.Add("durationFrames");
+        order.Add("tracks");
+        order.Add("parameterOverrides");
+        return WriteSimpleDocument(destination, id, ParticleSystem::TypeName, TEXT("Flax.ParticleSystem"), json, order, diagnostic);
+    }
+
+    bool ConvertCollisionData(const StringView& destination, const Guid& id, const AssetInitData& data, AssetPipelineDiagnostic& diagnostic)
+    {
+        const FlaxChunk* chunk = Chunk(data, 0);
+        if (!chunk || chunk->Size() < sizeof(CollisionData::SerializedOptions))
+            return Fail(diagnostic, TEXT("Collision data flax is missing its recipe."));
+        JsonDocument json;
+        String error;
+        if (CollisionDataDocument::DecodeLegacy(*reinterpret_cast<const CollisionData::SerializedOptions*>(chunk->Get()), json, error))
+            return Fail(diagnostic, error);
+        Array<StringAnsi> order;
+        order.Add("documentVersion");
+        order.Add("type");
+        order.Add("collisionType");
+        order.Add("sourceModel");
+        order.Add("modelLodIndex");
+        order.Add("materialSlotsMask");
+        order.Add("convexFlags");
+        order.Add("convexVertexLimit");
+        return WriteSimpleDocument(destination, id, CollisionData::TypeName, TEXT("Flax.CollisionData"), json, order, diagnostic);
     }
 
     bool ConvertShader(const StringView& destination, const Guid& id, const AssetInitData& data, AssetPipelineDiagnostic& diagnostic)
@@ -354,6 +399,10 @@ bool LegacyAssetMigrator::ConvertFlax(const StringView& sourcePath, const String
         return ConvertSkeletonMask(destinationPath, id, data, diagnostic);
     if (resolvedType == SceneAnimation::TypeName)
         return ConvertSceneAnimation(destinationPath, id, data, diagnostic);
+    if (resolvedType == ParticleSystem::TypeName)
+        return ConvertParticleSystem(destinationPath, id, data, diagnostic);
+    if (resolvedType == CollisionData::TypeName)
+        return ConvertCollisionData(destinationPath, id, data, diagnostic);
     if (resolvedType == Shader::TypeName)
         return ConvertShader(destinationPath, id, data, diagnostic);
     return Fail(diagnostic, TEXT("No flax-to-canonical converter is registered for this type."));

@@ -244,15 +244,17 @@ TEST_CASE("Graph documents encode typed values and visject meta as text")
     REQUIRE(snapshot.Document.Parameters[0].Meta.GetEntry(13) != nullptr);
 }
 
-TEST_CASE("Graph documents support visual script, behavior tree, and particle function types")
+TEST_CASE("Graph documents support visual script, behavior tree, and particle graph types")
 {
     AssetPipelineDiagnostic diagnostic;
     CHECK(GraphDocumentCodec::IsSupportedType(VisualScript::TypeName));
     CHECK(GraphDocumentCodec::IsSupportedType(TEXT("FlaxEngine.BehaviorTree")));
     CHECK(GraphDocumentCodec::IsSupportedType(TEXT("FlaxEngine.ParticleEmitterFunction")));
+    CHECK(GraphDocumentCodec::IsSupportedType(TEXT("FlaxEngine.ParticleEmitter")));
     CHECK(StringView(GraphDocumentCodec::ExtensionForType(VisualScript::TypeName)) == TEXT(".visualscript"));
     CHECK(StringView(GraphDocumentCodec::ExtensionForType(TEXT("FlaxEngine.BehaviorTree"))) == TEXT(".behaviortree"));
     CHECK(StringView(GraphDocumentCodec::ExtensionForType(TEXT("FlaxEngine.ParticleEmitterFunction"))) == TEXT(".particlefunction"));
+    CHECK(StringView(GraphDocumentCodec::ExtensionForType(TEXT("FlaxEngine.ParticleEmitter"))) == TEXT(".particleemitter"));
 
     String typeName;
     REQUIRE_FALSE(GraphDocumentCodec::TypeForExtension(TEXT("visualscript"), typeName));
@@ -261,6 +263,8 @@ TEST_CASE("Graph documents support visual script, behavior tree, and particle fu
     CHECK(typeName == TEXT("FlaxEngine.BehaviorTree"));
     REQUIRE_FALSE(GraphDocumentCodec::TypeForExtension(TEXT("particlefunction"), typeName));
     CHECK(typeName == TEXT("FlaxEngine.ParticleEmitterFunction"));
+    REQUIRE_FALSE(GraphDocumentCodec::TypeForExtension(TEXT(".particleemitter"), typeName));
+    CHECK(typeName == TEXT("FlaxEngine.ParticleEmitter"));
     CHECK(GraphDocumentCodec::TypeForExtension(TEXT("flax"), typeName));
 
     GraphDocument visualScript;
@@ -286,6 +290,9 @@ TEST_CASE("Graph documents support visual script, behavior tree, and particle fu
     REQUIRE(particleFunction.Nodes.Count() == 1);
     CHECK(particleFunction.Nodes[0].GroupID == 16);
     CHECK(particleFunction.Nodes[0].TypeID == 2);
+    GraphDocument particleEmitter;
+    REQUIRE_FALSE(GraphDocumentCodec::CreateStarter(TEXT("FlaxEngine.ParticleEmitter"), particleEmitter, diagnostic));
+    CHECK(particleEmitter.Nodes.HasItems());
 }
 
 TEST_CASE("Graph documents support authored material text without generated shader source")

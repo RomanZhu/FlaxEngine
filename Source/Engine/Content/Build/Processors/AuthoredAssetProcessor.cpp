@@ -8,9 +8,16 @@
 #include "Engine/Content/Build/PrepareAssetContext.h"
 #include "Engine/Content/Documents/MaterialInstanceDocument.h"
 #include "Engine/Content/Documents/SceneAnimationDocument.h"
+#include "Engine/Content/Documents/ParticleSystemDocument.h"
+#include "Engine/Content/Documents/CollisionDataDocument.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
+#include "Engine/Particles/ParticleSystem.h"
+#include "Engine/Physics/CollisionCooking.h"
+#include "Engine/Content/Content.h"
+#include "Engine/Content/Assets/ModelBase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Core/ScopeExit.h"
@@ -106,11 +113,86 @@ namespace
             return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Scene animation flax could not be written."));
         return false;
     }
+
+    bool BuildParticleSystem(const JsonDocument& json, const Guid& id, const StringView& scratchPath, AssetPipelineDiagnostic& diagnostic)
+    {
+        Array<byte> chunk;
+        String error;
+        if (ParticleSystemDocument::Compile(json, chunk, nullptr, error))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build, id, scratchPath, error);
+        if (WriteFlax(scratchPath, id, ParticleSystem::TypeName, ParticleSystem::SerializedVersion, chunk))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Particle system flax could not be written."));
+        return false;
+    }
+
+    bool BuildCollisionData(const JsonDocument& json, const Guid& id, const StringView& scratchPath, AssetPipelineDiagnostic& diagnostic)
+    {
+        CollisionData::SerializedOptions recipe;
+        String error;
+        if (CollisionDataDocument::Parse(json, recipe, error))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build, id, scratchPath, error);
+        CollisionData::SerializedOptions cooked = recipe;
+        BytesContainer cookedBytes;
+#if COMPILE_WITH_PHYSICS_COOKING
+        if (recipe.Type != CollisionDataType::None)
+        {
+            auto model = Content::LoadAsync<ModelBase>(recipe.Model);
+            if (!model || model->WaitForLoaded())
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Collision source model artifact could not be loaded."));
+            CollisionCooking::Argument argument;
+            argument.Type = recipe.Type;
+            argument.Model = model;
+            argument.ModelLodIndex = recipe.ModelLodIndex;
+            argument.MaterialSlotsMask = recipe.MaterialSlotsMask;
+            argument.ConvexFlags = recipe.ConvexFlags;
+            argument.ConvexVertexLimit = recipe.ConvexVertexLimit;
+            if (CollisionCooking::CookCollision(argument, cooked, cookedBytes))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Collision source model could not be cooked."));
+        }
+#else
+        if (recipe.Type != CollisionDataType::None)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Collision cooking is unavailable for this editor build."));
+#endif
+        Array<byte> chunk;
+        chunk.Resize(sizeof(cooked) + cookedBytes.Length());
+        Platform::MemoryCopy(chunk.Get(), &cooked, sizeof(cooked));
+        if (cookedBytes.Length())
+            Platform::MemoryCopy(chunk.Get() + sizeof(cooked), cookedBytes.Get(), cookedBytes.Length());
+        if (WriteFlax(scratchPath, id, CollisionData::TypeName, CollisionData::SerializedVersion, chunk))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Collision data flax could not be written."));
+        return false;
+    }
+
+    bool HashCollisionModelInputs(PrepareAssetContext& context, const Guid& modelID, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+    {
+        if (!modelID.IsValid())
+            return false;
+        AssetRecord modelRecord;
+        if (!AssetDatabase::Get().TryGetRecord(modelID, modelRecord))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+                context.GetRecord().ID, context.GetRecord().SourcePath.Get(), TEXT("Collision source model is not registered."));
+        Array<byte> bytes;
+        if (File::ReadAllBytes(modelRecord.SourcePath.Get(), bytes))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+                context.GetRecord().ID, modelRecord.SourcePath.Get(), TEXT("Collision source model file is missing."));
+        ContentHasher hasher;
+        hasher.Update(bytes.Get(), bytes.Count());
+        bytes.Clear();
+        if (FileSystem::FileExists(modelRecord.MetaPath.Get()))
+        {
+            if (File::ReadAllBytes(modelRecord.MetaPath.Get(), bytes))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+                    context.GetRecord().ID, modelRecord.MetaPath.Get(), TEXT("Collision source model metadata is unreadable."));
+            hasher.Update(bytes.Get(), bytes.Count());
+        }
+        return context.DeclareToolchain(TEXT("collision-model-input"), hasher.Finalize(), origin, diagnostic);
+    }
 }
 
 bool AuthoredAssetProcessor::Owns(const StringView& processorID)
 {
-    return processorID == MaterialInstanceID() || processorID == SkeletonMaskID() || processorID == SceneAnimationID();
+    return processorID == MaterialInstanceID() || processorID == SkeletonMaskID() || processorID == SceneAnimationID() ||
+        processorID == ParticleSystemID() || processorID == CollisionDataID();
 }
 
 const String& AuthoredAssetProcessor::MaterialInstanceID()
@@ -128,6 +210,18 @@ const String& AuthoredAssetProcessor::SkeletonMaskID()
 const String& AuthoredAssetProcessor::SceneAnimationID()
 {
     static const String value(TEXT("Flax.SceneAnimation"));
+    return value;
+}
+
+const String& AuthoredAssetProcessor::ParticleSystemID()
+{
+    static const String value(TEXT("Flax.ParticleSystem"));
+    return value;
+}
+
+const String& AuthoredAssetProcessor::CollisionDataID()
+{
+    static const String value(TEXT("Flax.CollisionData"));
     return value;
 }
 
@@ -156,11 +250,23 @@ AssetProcessorDescriptor AuthoredAssetProcessor::CreateDescriptor(const StringVi
         descriptor.DocumentTypes.Add(SkeletonMask::TypeName);
         descriptor.MainOutputType = SkeletonMask::TypeName;
     }
-    else
+    else if (processorID == SceneAnimationID())
     {
         descriptor.SourceExtensions.Add(TEXT(".sceneanimation"));
         descriptor.DocumentTypes.Add(SceneAnimation::TypeName);
         descriptor.MainOutputType = SceneAnimation::TypeName;
+    }
+    else if (processorID == ParticleSystemID())
+    {
+        descriptor.SourceExtensions.Add(TEXT(".particlesystem"));
+        descriptor.DocumentTypes.Add(ParticleSystem::TypeName);
+        descriptor.MainOutputType = ParticleSystem::TypeName;
+    }
+    else
+    {
+        descriptor.SourceExtensions.Add(TEXT(".collisiondata"));
+        descriptor.DocumentTypes.Add(CollisionData::TypeName);
+        descriptor.MainOutputType = CollisionData::TypeName;
     }
     AssetProcessorOutputDescriptor runtime;
     runtime.Kind = "runtime";
@@ -195,14 +301,26 @@ bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
     if (ReadString(json, "type", type) || String(type) != record.TypeName)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Authored document type does not match its metadata sidecar."));
-    if (record.ProcessorID == MaterialInstanceID() || record.ProcessorID == SceneAnimationID())
+    if (record.ProcessorID == MaterialInstanceID() || record.ProcessorID == SceneAnimationID() ||
+        record.ProcessorID == ParticleSystemID() || record.ProcessorID == CollisionDataID())
     {
         Array<byte> runtimeChunk;
         Array<Guid> references;
         String error;
-        const bool invalid = record.ProcessorID == MaterialInstanceID()
-            ? MaterialInstanceDocument::Compile(json, runtimeChunk, &references, error)
-            : SceneAnimationDocument::Compile(json, runtimeChunk, &references, error);
+        bool invalid;
+        if (record.ProcessorID == MaterialInstanceID())
+            invalid = MaterialInstanceDocument::Compile(json, runtimeChunk, &references, error);
+        else if (record.ProcessorID == SceneAnimationID())
+            invalid = SceneAnimationDocument::Compile(json, runtimeChunk, &references, error);
+        else if (record.ProcessorID == ParticleSystemID())
+            invalid = ParticleSystemDocument::Compile(json, runtimeChunk, &references, error);
+        else
+        {
+            CollisionData::SerializedOptions options;
+            invalid = CollisionDataDocument::Parse(json, options, error);
+            if (!invalid && options.Model.IsValid())
+                references.Add(options.Model);
+        }
         if (invalid)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
                 record.ID, record.SourcePath.Get(), error);
@@ -212,6 +330,8 @@ bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
             if (context.DeclareRuntimeReference(identity, references[i], origin, diagnostic))
                 return true;
         }
+        if (record.ProcessorID == CollisionDataID() && references.HasItems() && HashCollisionModelInputs(context, references[0], origin, diagnostic))
+            return true;
     }
     static const char CompilerIdentity[] = "flax-authored-document-compiler-v2";
     if (context.DeclareToolchain(TEXT("authored-compiler"), ContentHash::Compute(CompilerIdentity, ARRAY_COUNT(CompilerIdentity) - 1), origin, diagnostic) ||
@@ -295,6 +415,16 @@ bool AuthoredAssetProcessor::Build(ArtifactBuildContext& context, AssetPipelineD
     else if (prepared.OutputType == SceneAnimation::TypeName)
     {
         if (BuildSceneAnimation(json, prepared.AssetID, scratchPath, diagnostic))
+            return true;
+    }
+    else if (prepared.OutputType == ParticleSystem::TypeName)
+    {
+        if (BuildParticleSystem(json, prepared.AssetID, scratchPath, diagnostic))
+            return true;
+    }
+    else if (prepared.OutputType == CollisionData::TypeName)
+    {
+        if (BuildCollisionData(json, prepared.AssetID, scratchPath, diagnostic))
             return true;
     }
     else

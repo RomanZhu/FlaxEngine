@@ -316,16 +316,17 @@ namespace FlaxEditor
             {
                 if (string.IsNullOrWhiteSpace(options.AssetType))
                     throw new InvalidOperationException("Asset creation requires an asset type.");
-                var path = EnsureAssetExtension(options.Path);
-                var existing = FindExisting(path);
-                if (existing != null)
-                    return HandleExisting(existing, options.IfExists);
-                path = RequireNewPath(path);
-                var parent = RequireExistingParent(path);
+                var requestedPath = RequireProjectContentPath(options.Path);
+                var parent = RequireExistingParent(requestedPath);
                 var proxy = Editor.Instance.ContentDatabase.Proxy.FirstOrDefault(x =>
                     x.IsAsset && x.CanCreate(parent) && IsAssetTypeMatch(x, options.AssetType));
                 if (proxy == null)
                     throw new InvalidOperationException($"Asset type '{options.AssetType}' is not available in '{parent.Path}'.");
+                var path = EnsureAssetExtension(requestedPath, proxy.FileExtension);
+                var existing = FindExisting(path);
+                if (existing != null)
+                    return HandleExisting(existing, options.IfExists);
+                path = RequireNewPath(path);
                 var createResult = Editor.Instance.ContentDatabase.CreatePath(path, false, () => CreateAssetFile(proxy, path));
                 if (!createResult.Succeeded)
                     throw new InvalidOperationException(createResult.Message ?? $"Failed to create {options.AssetType} asset '{path}'.");
@@ -341,6 +342,12 @@ namespace FlaxEditor
                 {
                     if (Editor.CreateVisualScript(path, typeof(Script).FullName))
                         throw new IOException($"Failed to create Visual Script asset '{path}'.");
+                    return;
+                }
+                if (proxy is ParticleEmitterProxy && System.IO.Path.GetExtension(path).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (AssetDatabaseFacade.CreateGraphDocument(path, typeof(ParticleEmitter).FullName) == Guid.Empty)
+                        throw new IOException($"Failed to create Particle Emitter asset '{path}'.");
                     return;
                 }
                 proxy.Create(path, null);
@@ -590,14 +597,13 @@ namespace FlaxEditor
 
             private object ConfigureMaterialInstance(CliAssetOperationOptions options)
             {
-                var path = EnsureAssetExtension(options.Path);
+                var path = EnsureAssetExtension(options.Path, "materialinstance");
                 var existing = FindExisting(path);
                 if (existing == null)
                 {
                     path = RequireNewPath(path);
                     RequireExistingParent(path);
-                    if (Editor.CreateAsset("MaterialInstance", path))
-                        throw new InvalidOperationException($"Failed to create MaterialInstance asset '{path}'.");
+                    Editor.Instance.ContentDatabase.GetProxy<MaterialInstance>().Create(path, null);
                     RefreshPath(path, false);
                 }
                 else if (NormalizeIfExists(options.IfExists) == "error")
@@ -772,12 +778,12 @@ namespace FlaxEditor
                     : RequireNewPath(destination);
             }
 
-            private static string EnsureAssetExtension(string path)
+            private static string EnsureAssetExtension(string path, string extension = "flax")
             {
                 if (string.IsNullOrWhiteSpace(path))
                     throw new InvalidOperationException("An asset path is required.");
                 if (string.IsNullOrEmpty(System.IO.Path.GetExtension(path)))
-                    path += ".flax";
+                    path += "." + extension.TrimStart('.');
                 return RequireProjectContentPath(path);
             }
 

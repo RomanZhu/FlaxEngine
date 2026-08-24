@@ -1239,7 +1239,9 @@ bool CookAssetsStep::Perform(CookingData& data)
             (canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.MaterialInstance") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.SkeletonMask") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.SceneAnimation"));
+                canonicalRecord.ProcessorID == TEXT("Flax.SceneAnimation") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.ParticleSystem") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.CollisionData"));
         const bool isCanonicalImported = hasImportedCanonical &&
             (canonicalRecord.ProcessorID == TEXT("Flax.Audio") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.Font") ||

@@ -111,6 +111,12 @@ public:
     static bool IsSupportedType(const StringView& typeName);
     static const Char* ExtensionForType(const StringView& typeName);
     static bool TypeForExtension(const StringView& extension, String& typeName);
+
+    /// <summary>Serializes one Variant as explicit canonical JSON.</summary>
+    static bool EncodeVariantJson(const Variant& value, StringAnsi& output, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Deserializes one Variant from explicit canonical JSON.</summary>
+    static bool DecodeVariantJson(const StringAnsiView& source, Variant& value, AssetPipelineDiagnostic& diagnostic);
 };
 
 /// <summary>Structural graph validator used before compilation and publication.</summary>

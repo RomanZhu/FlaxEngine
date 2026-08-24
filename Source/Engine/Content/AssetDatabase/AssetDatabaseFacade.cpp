@@ -13,6 +13,11 @@
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Storage/JsonStorageProxy.h"
 #include "Engine/Content/Documents/GraphDocument.h"
+#include "Engine/Content/Documents/CanonicalJsonWriter.h"
+#include "Engine/Content/Documents/CollisionDataDocument.h"
+#include "Engine/Content/Documents/ParticleSystemDocument.h"
+#include "Engine/Particles/ParticleSystem.h"
+#include "Engine/Physics/CollisionData.h"
 #include "LegacyAssetMigrator.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DateTime.h"
@@ -47,6 +52,8 @@
 #include "Engine/ContentImporters/CreateMaterialInstance.h"
 #include "Engine/ContentImporters/CreateSkeletonMask.h"
 #include "Engine/ContentImporters/CreateSceneAnimation.h"
+#include "Engine/ContentImporters/CreateParticleSystem.h"
+#include "Engine/ContentImporters/CreateCollisionData.h"
 #include "Engine/ContentImporters/Types.h"
 #endif
 #include <algorithm>
@@ -653,6 +660,10 @@ Guid AssetDatabaseFacade::CreateAuthoredDocument(const StringView& outputPath, c
         callback.Bind(&CreateSkeletonMask::Create);
     else if (typeName == TEXT("FlaxEngine.SceneAnimation"))
         callback.Bind(&CreateSceneAnimation::Create);
+    else if (typeName == TEXT("FlaxEngine.ParticleSystem"))
+        callback.Bind(&CreateParticleSystem::Create);
+    else if (typeName == TEXT("FlaxEngine.CollisionData"))
+        callback.Bind(&CreateCollisionData::Create);
     if (!callback.IsBinded() || outputPath.IsEmpty())
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
@@ -661,7 +672,15 @@ Guid AssetDatabaseFacade::CreateAuthoredDocument(const StringView& outputPath, c
         return fail();
     }
     const Guid id = Guid::New();
-    const String tempPath = String(outputPath) + TEXT(".tmp.flax");
+    const String temporaryFolder = Globals::ProjectLibraryFolder / TEXT("Temp/AuthoredCreates");
+    if (FileSystem::CreateDirectory(temporaryFolder))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::LibraryCreationFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+        diagnostic.Message = TEXT("Cannot create the temporary authored-document folder.");
+        return fail();
+    }
+    const String tempPath = temporaryFolder / id.ToString(Guid::FormatType::N) + TEXT(".flax");
     CreateAssetContext importerContext(StringView::Empty, tempPath, id, nullptr, true, typeName);
     if (importerContext.Run(callback) != CreateAssetResult::Ok)
     {
@@ -704,7 +723,8 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
     AssetRecord record;
     if (!asset || !canonicalAssetID.IsValid() || !AssetDatabase::Get().TryGetRecord(canonicalAssetID, record) ||
         record.SourceKind != AssetSourceKind::TextDocument ||
-        (record.ProcessorID != TEXT("Flax.MaterialInstance") && record.ProcessorID != TEXT("Flax.SkeletonMask") && record.ProcessorID != TEXT("Flax.SceneAnimation")))
+        (record.ProcessorID != TEXT("Flax.MaterialInstance") && record.ProcessorID != TEXT("Flax.SkeletonMask") &&
+            record.ProcessorID != TEXT("Flax.SceneAnimation") && record.ProcessorID != TEXT("Flax.ParticleSystem")))
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
@@ -761,6 +781,22 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
             saveFailed = FlaxStorage::Create(temporaryFlax, data);
         }
     }
+    else if (record.TypeName == ParticleSystem::TypeName)
+    {
+        auto* typed = ScriptingObject::Cast<ParticleSystem>(asset);
+        if (typed)
+        {
+            const BytesContainer timeline = typed->LoadTimeline();
+            FlaxChunk chunk;
+            chunk.Data.Copy(timeline.Get(), timeline.Length());
+            AssetInitData data;
+            data.Header.ID = canonicalAssetID;
+            data.Header.TypeName = ParticleSystem::TypeName;
+            data.SerializedVersion = ParticleSystem::SerializedVersion;
+            data.Header.Chunks[0] = &chunk;
+            saveFailed = FlaxStorage::Create(temporaryFlax, data);
+        }
+    }
     if (saveFailed)
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
@@ -795,6 +831,112 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
 #else
     return true;
 #endif
+}
+
+bool AssetDatabaseFacade::SaveCollisionDataDocument(const StringView& path, CollisionDataType type, const Guid& model, int32 modelLodIndex,
+    uint32 materialSlotsMask, ConvexMeshGenerationFlags convexFlags, int32 convexVertexLimit)
+{
+#if USE_EDITOR && COMPILE_WITH_ASSETS_IMPORTER
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    };
+    CollisionData::SerializedOptions options;
+    Platform::MemoryClear(&options, sizeof(options));
+    options.Type = type;
+    options.Model = model;
+    options.ModelLodIndex = modelLodIndex;
+    options.MaterialSlotsMask = materialSlotsMask;
+    options.ConvexFlags = convexFlags;
+    options.ConvexVertexLimit = convexVertexLimit;
+    rapidjson_flax::Document json;
+    String error;
+    if (CollisionDataDocument::DecodeLegacy(options, json, error))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = error;
+        return fail();
+    }
+    StringAnsi text;
+    CanonicalJsonError jsonError;
+    Array<StringAnsi> order;
+    order.Add("documentVersion");
+    order.Add("type");
+    order.Add("collisionType");
+    order.Add("sourceModel");
+    order.Add("modelLodIndex");
+    order.Add("materialSlotsMask");
+    order.Add("convexFlags");
+    order.Add("convexVertexLimit");
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveAtomic(path, text, diagnostic) || Scan(false))
+        return fail();
+    AssetMeta meta;
+    if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.CollisionData"))
+        return fail();
+    if (GraphPipelineService::RequestBuild(meta.ID, false, diagnostic))
+        return fail();
+    return false;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::SaveParticleSystemTimeline(const StringView& path, const BytesContainer& timeline)
+{
+#if USE_EDITOR && COMPILE_WITH_ASSETS_IMPORTER
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    };
+    rapidjson_flax::Document json;
+    String error;
+    if (ParticleSystemDocument::DecodeLegacy(Span<byte>(timeline.Get(), timeline.Length()), json, error))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = error;
+        return fail();
+    }
+    StringAnsi text;
+    CanonicalJsonError jsonError;
+    Array<StringAnsi> order;
+    order.Add("documentVersion");
+    order.Add("type");
+    order.Add("framesPerSecond");
+    order.Add("durationFrames");
+    order.Add("tracks");
+    order.Add("parameterOverrides");
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveAtomic(path, text, diagnostic) || Scan(false))
+        return fail();
+    AssetMeta meta;
+    if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.ParticleSystem"))
+        return fail();
+    return GraphPipelineService::RequestBuild(meta.ID, false, diagnostic) ? fail() : false;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::LoadCollisionDataDocument(const StringView& path, CollisionData::SerializedOptions& options)
+{
+    Array<byte> bytes;
+    if (File::ReadAllBytes(path, bytes))
+        return true;
+    rapidjson_flax::Document json;
+    json.Parse(reinterpret_cast<const char*>(bytes.Get()), bytes.Count());
+    String error;
+    return json.HasParseError() || CollisionDataDocument::Parse(json, options, error);
 }
 
 Guid AssetDatabaseFacade::CreateImportedSourceMetadata(const StringView& sourcePath, const StringView& typeName, const StringView& processorId)
@@ -1123,7 +1265,7 @@ bool AssetDatabaseFacade::MigrateLegacyAsset(const StringView& sourcePath)
     bool found = false;
     for (const AssetRecord& candidate : AssetDatabase::Get().GetSnapshot().Records)
     {
-        if (candidate.IsMainAsset() && candidate.SourcePath.Get() == sourcePath)
+        if (candidate.IsMainAsset() && FileSystem::AreFilePathsEqual(candidate.SourcePath.Get(), sourcePath))
         {
             record = candidate;
             found = true;

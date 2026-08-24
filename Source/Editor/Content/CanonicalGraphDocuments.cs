@@ -30,6 +30,9 @@ namespace FlaxEditor.Content
                    extension.Equals(".visualscript", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".behaviortree", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".particlefunction", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".particleemitter", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".particlesystem", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".collisiondata", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".material", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".materialinstance", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".sceneanimation", StringComparison.OrdinalIgnoreCase) ||
@@ -51,6 +54,12 @@ namespace FlaxEditor.Content
                 return typeof(BehaviorTree).FullName;
             if (extension.Equals(".particlefunction", StringComparison.OrdinalIgnoreCase))
                 return typeof(ParticleEmitterFunction).FullName;
+            if (extension.Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
+                return typeof(ParticleEmitter).FullName;
+            if (extension.Equals(".particlesystem", StringComparison.OrdinalIgnoreCase))
+                return typeof(ParticleSystem).FullName;
+            if (extension.Equals(".collisiondata", StringComparison.OrdinalIgnoreCase))
+                return typeof(CollisionData).FullName;
             if (extension.Equals(".material", StringComparison.OrdinalIgnoreCase))
                 return typeof(Material).FullName;
             if (extension.Equals(".materialinstance", StringComparison.OrdinalIgnoreCase))

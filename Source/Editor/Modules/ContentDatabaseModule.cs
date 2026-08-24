@@ -2221,6 +2221,8 @@ namespace FlaxEditor.Modules
                    string.Equals(record.ProcessorID, "Flax.MaterialInstance", StringComparison.Ordinal) ||
                    string.Equals(record.ProcessorID, "Flax.SkeletonMask", StringComparison.Ordinal) ||
                    string.Equals(record.ProcessorID, "Flax.SceneAnimation", StringComparison.Ordinal) ||
+                   string.Equals(record.ProcessorID, "Flax.ParticleSystem", StringComparison.Ordinal) ||
+                   string.Equals(record.ProcessorID, "Flax.CollisionData", StringComparison.Ordinal) ||
                    string.Equals(record.ProcessorID, "Flax.Audio", StringComparison.Ordinal) ||
                    string.Equals(record.ProcessorID, "Flax.Font", StringComparison.Ordinal) ||
                    string.Equals(record.ProcessorID, "Flax.ShaderSource", StringComparison.Ordinal) ||

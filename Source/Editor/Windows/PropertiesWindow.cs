@@ -2013,7 +2013,10 @@ namespace FlaxEditor.Windows
                     get => _asset.LoadSurface(true);
                     set
                     {
-                        if (_asset.SaveSurface(value))
+                        var failed = CanonicalGraphDocuments.IsGraphDocumentPath(_asset.Path)
+                            ? AssetDatabaseFacade.SaveGraphSurface(_asset.Path, value)
+                            : _asset.SaveSurface(value);
+                        if (failed)
                         {
                             Editor.LogError("Failed to save Particle Emitter surface.");
                             return;

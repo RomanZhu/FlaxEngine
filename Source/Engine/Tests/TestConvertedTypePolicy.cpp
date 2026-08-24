@@ -24,4 +24,7 @@ TEST_CASE("Converted type lockout forbids new flax authoring and keeps legacy ex
     CHECK(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.MaterialInstance"), TEXT("Content/I.materialinstance")));
     CHECK_FALSE(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.Texture"), TEXT("Content/T.flax")));
     CHECK(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.Texture"), TEXT("Content/T.png")));
+    CHECK_FALSE(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.ParticleEmitter"), TEXT("Content/E.flax")));
+    CHECK_FALSE(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.ParticleSystem"), TEXT("Content/S.flax")));
+    CHECK_FALSE(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.CollisionData"), TEXT("Content/C.flax")));
 }

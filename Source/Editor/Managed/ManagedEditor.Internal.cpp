@@ -355,6 +355,8 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CookMeshCollision(MString* pathObj, Co
     String path;
     MUtils::ToString(pathObj, path);
     FileSystem::NormalizePath(path);
+    if (FileSystem::GetExtension(path).ToLower() == TEXT("collisiondata"))
+        return AssetDatabaseFacade::SaveCollisionDataDocument(path, type, modelObj->GetID(), modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit);
     arg.Type = type;
     arg.Model = modelObj;
     arg.ModelLodIndex = modelLodIndex;
@@ -380,6 +382,20 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_GetCollisionDataOptions(MString* pathO
     String path;
     MUtils::ToString(pathObj, path);
     FileSystem::NormalizePath(path);
+
+    if (FileSystem::GetExtension(path).ToLower() == TEXT("collisiondata"))
+    {
+        CollisionData::SerializedOptions options;
+        if (AssetDatabaseFacade::LoadCollisionDataDocument(path, options))
+            return false;
+        *type = options.Type;
+        *model = options.Model;
+        *modelLodIndex = options.ModelLodIndex;
+        *materialSlotsMask = options.MaterialSlotsMask;
+        *convexFlags = options.ConvexFlags;
+        *convexVertexLimit = options.ConvexVertexLimit;
+        return true;
+    }
 
     AssetInfo info;
     if (!Content::GetAssetInfo(path, info) || info.TypeName != TEXT("FlaxEngine.CollisionData"))

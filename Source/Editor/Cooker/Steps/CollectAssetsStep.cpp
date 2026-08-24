@@ -44,6 +44,8 @@ bool CollectAssetsStep::Perform(CookingData& data)
             canonicalRecord.ProcessorID != TEXT("Flax.MaterialInstance") &&
             canonicalRecord.ProcessorID != TEXT("Flax.SkeletonMask") &&
             canonicalRecord.ProcessorID != TEXT("Flax.SceneAnimation") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.ParticleSystem") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.CollisionData") &&
             canonicalRecord.ProcessorID != TEXT("Flax.Audio") &&
             canonicalRecord.ProcessorID != TEXT("Flax.Font") &&
             canonicalRecord.ProcessorID != TEXT("Flax.Video") &&

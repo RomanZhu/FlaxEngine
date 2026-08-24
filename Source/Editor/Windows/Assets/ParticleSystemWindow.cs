@@ -471,6 +471,22 @@ namespace FlaxEditor.Windows.Assets
         }
 
         /// <inheritdoc />
+        protected override ParticleSystem LoadAsset()
+        {
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return CanonicalGraphDocuments.LoadClone<ParticleSystem>(_item);
+            return base.LoadAsset();
+        }
+
+        /// <inheritdoc />
+        protected override bool SaveToOriginal()
+        {
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return AssetDatabaseFacade.SaveAuthoredDocument(_asset, _item.ID);
+            return base.SaveToOriginal();
+        }
+
+        /// <inheritdoc />
         protected override void UpdateToolstrip()
         {
             _saveButton.Enabled = IsEdited;

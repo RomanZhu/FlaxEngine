@@ -52,6 +52,7 @@ namespace
             TEXT("shader"),
             TEXT("materialfunction"), TEXT("animgraphfunction"), TEXT("animgraph"),
             TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction"), TEXT("material"),
+            TEXT("particleemitter"), TEXT("particlesystem"), TEXT("collisiondata"),
             TEXT("materialinstance"), TEXT("sceneanimation"), TEXT("skeletonmask"),
             TEXT("scene"), TEXT("prefab")
         };

@@ -19,17 +19,19 @@ public:
     }
 };
 
-/// <summary>Rebuilds material instance, skeleton mask, and scene animation flax from authored JSON.</summary>
+/// <summary>Rebuilds small authored JSON assets into runtime flax artifacts.</summary>
 class FLAXENGINE_API AuthoredAssetProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 2;
+    static constexpr uint32 ImplementationVersion = 3;
     static constexpr uint32 RuntimeFormatVersion = 1;
 
     static bool Owns(const StringView& processorID);
     static const String& MaterialInstanceID();
     static const String& SkeletonMaskID();
     static const String& SceneAnimationID();
+    static const String& ParticleSystemID();
+    static const String& CollisionDataID();
     static AssetProcessorDescriptor CreateDescriptor(const StringView& processorID);
     static bool Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic);
     static bool BuildOutputKey(const PreparedAsset& prepared, const ArtifactTarget& target, const StringAnsiView& outputKind,

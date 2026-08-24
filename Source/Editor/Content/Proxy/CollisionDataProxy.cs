@@ -48,6 +48,19 @@ namespace FlaxEditor.Content
         public override string Name => "Collision Data";
 
         /// <inheritdoc />
+        public override string FileExtension => CanonicalGraphDocuments.UseTextGraphAssets ? "collisiondata" : Extension;
+
+        /// <inheritdoc />
+        public override bool AcceptsAsset(string typeName, string path)
+        {
+            if (typeName != TypeName)
+                return false;
+            var extension = Path.GetExtension(path);
+            return string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(extension, ".collisiondata", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <inheritdoc />
         public override EditorWindow Open(Editor editor, ContentItem item)
         {
             return new CollisionDataWindow(editor, item as AssetItem);
@@ -82,6 +95,13 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
+            CanonicalGraphDocuments.EnsureCanAuthor(typeof(CollisionData).FullName, outputPath);
+            if (CanonicalGraphDocuments.UseTextGraphAssets)
+            {
+                if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(CollisionData).FullName) == Guid.Empty)
+                    throw new Exception("Failed to create new asset.");
+                return;
+            }
             if (Editor.CreateAsset("CollisionData", outputPath))
                 throw new Exception("Failed to create new asset.");
         }
