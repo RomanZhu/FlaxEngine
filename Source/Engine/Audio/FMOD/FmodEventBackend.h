@@ -62,6 +62,7 @@ private:
     float _masterPitch = 1.0f;
     bool _isPaused = false;
     bool _isMuted = false;
+    bool _masterBusStateDirty = true;
     bool _liveUpdateActive = false;
     std::atomic<bool> _outputDevicesDirty { false };
 
@@ -148,6 +149,7 @@ public:
     FMOD::System* GetCoreSystem() const { return _coreSystem; }
 
 private:
+    void ApplyMasterBusState();
     bool ConfigureInstanceCallback(FMOD::Studio::EventInstance* instance, AudioEventHandle handle);
     void ReleaseCallbackContexts();
     FMOD::Studio::EventDescription* GetEventDescription(const Guid& eventId, const StringView& path);

@@ -199,6 +199,7 @@ void FmodEventBackend::Update(float dt)
         PROFILE_CPU_NAMED("FMOD.Studio.Update");
         _studioSystem->update();
     }
+    ApplyMasterBusState();
     UpdateReleasedInstances();
     {
         PROFILE_CPU_NAMED("FMOD.OutputMeter");
@@ -308,19 +309,8 @@ void FmodEventBackend::EnqueueCallback(const FmodCallbackRecord& record)
 void FmodEventBackend::SetMasterVolume(float volume)
 {
     _masterVolume = Math::Saturate(volume);
-    // Studio's root bus does not exist until the master bank is loaded. Audio
-    // settings are applied before startup banks during initialization, so an
-    // unconditional lookup here produces a real FMOD ERR_EVENT_NOTFOUND and
-    // poisons diagnostics even though startup succeeds moments later. The
-    // cached value is applied again after banks load by AudioEventSystem.
-    if (_studioSystem && _banks.GetLoadedCount() > 0)
-    {
-        FMOD::Studio::Bus* masterBus = nullptr;
-        if (_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
-        {
-            masterBus->setVolume(_masterVolume);
-        }
-    }
+    _masterBusStateDirty = true;
+    ApplyMasterBusState();
 }
 
 void FmodEventBackend::SetMasterPitch(float pitch)
@@ -339,26 +329,31 @@ void FmodEventBackend::SetMasterPitch(float pitch)
 void FmodEventBackend::SetPaused(bool paused)
 {
     _isPaused = paused;
-    if (_studioSystem && _banks.GetLoadedCount() > 0)
-    {
-        FMOD::Studio::Bus* masterBus = nullptr;
-        if (_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
-        {
-            masterBus->setPaused(_isPaused);
-        }
-    }
+    _masterBusStateDirty = true;
+    ApplyMasterBusState();
 }
 
 void FmodEventBackend::SetMuted(bool muted)
 {
     _isMuted = muted;
-    if (_studioSystem && _banks.GetLoadedCount() > 0)
+    _masterBusStateDirty = true;
+    ApplyMasterBusState();
+}
+
+void FmodEventBackend::ApplyMasterBusState()
+{
+    // The root bus does not exist until the master bank finishes loading. Keep
+    // the cached state dirty so non-blocking loads can apply it after update.
+    if (!_masterBusStateDirty || !_studioSystem || _banks.GetLoadedCount() == 0)
+        return;
+
+    FMOD::Studio::Bus* masterBus = nullptr;
+    if (_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
     {
-        FMOD::Studio::Bus* masterBus = nullptr;
-        if (_studioSystem->getBus("bus:/", &masterBus) == FMOD_OK && masterBus)
-        {
-            masterBus->setMute(_isMuted);
-        }
+        const FMOD_RESULT volumeResult = masterBus->setVolume(_masterVolume);
+        const FMOD_RESULT pausedResult = masterBus->setPaused(_isPaused);
+        const FMOD_RESULT muteResult = masterBus->setMute(_isMuted);
+        _masterBusStateDirty = volumeResult != FMOD_OK || pausedResult != FMOD_OK || muteResult != FMOD_OK;
     }
 }
 
@@ -650,7 +645,11 @@ void FmodEventBackend::UpdateListeners(const Span<AudioListenerState>& listeners
 
 bool FmodEventBackend::LoadBank(const Guid& bankId, const StringView& path, bool nonBlocking)
 {
-    return _banks.Load(bankId, path, nonBlocking);
+    if (!_banks.Load(bankId, path, nonBlocking))
+        return false;
+    _masterBusStateDirty = true;
+    ApplyMasterBusState();
+    return true;
 }
 
 bool FmodEventBackend::UnloadBank(const Guid& bankId, const StringView& path)

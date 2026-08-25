@@ -137,10 +137,10 @@ public:
     float DopplerFactor = 1.0f;
 
     /// <summary>
-    /// True if mute all audio playback when game has no use focus.
+    /// True if all audio playback should be muted when the game has no user focus.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(210), EditorDisplay(\"General\", \"Mute On Focus Loss\")")
-    bool MuteOnFocusLoss = true;
+    bool MuteOnFocusLoss = false;
 
     /// <summary>
     /// Enables or disables HRTF audio for in-engine processing of 3D audio (if supported by platform).

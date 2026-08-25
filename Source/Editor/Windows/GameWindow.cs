@@ -263,6 +263,7 @@ namespace FlaxEditor.Windows
             set
             {
                 Audio.MasterVolume = value ? 0 : AudioVolume;
+                AudioEventSystem.SetMuted(value);
                 _audioMuted = value;
                 MuteAudio?.Invoke();
                 UpdateToolStrip();

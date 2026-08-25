@@ -61,7 +61,7 @@ namespace
     float MasterVolume = 1.0f;
     float Volume = 1.0f;
     int32 ActiveDeviceIndex = -1;
-    bool MuteOnFocusLoss = true;
+    bool MuteOnFocusLoss = false;
     bool EnableHRTF = true;
 }
 
