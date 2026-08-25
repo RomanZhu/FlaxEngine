@@ -101,3 +101,11 @@ Initial parameters are applied before `start()`. This is required when an author
 Prefer stable `AudioParameterId` values resolved from typed event metadata. String names are acceptable during authoring and migration, but repeated runtime resolution and raw event paths should not become the primary API.
 
 Validate persistent behavior with `QueryInstance` and `GetParameter`, and use `CaptureDiagnostics` or the CLI audio commands to prove the instance reaches measured output.
+
+## Prediction and networking
+
+Do not create RPCs whose payload exists only to play, stop, or parameterize audio. Audio presentation should be a derivative of the gameplay action, replicated state transition, or existing gameplay event that already owns the behavior.
+
+In predicted systems, guard audio presentation with the project's resimulation state so rollback/replay cannot create voices. If the same non-resimulated presentation callback may be visited more than once, reuse its existing sequence/edge deduplication rather than adding a parallel audio network identity. Keep all voice handles and stop/release bookkeeping local; they are not deterministic simulation state and must not be serialized into prediction snapshots.
+
+For remote Actors, observe the replicated gameplay state locally and apply the same typed event/profile. For persistent loops, start and stop on state edges and let the owner-managed API follow the rendered Actor transform.

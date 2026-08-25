@@ -28,6 +28,8 @@ dotnet $cli command audio.setup.validate --project $project --engine $engine --o
 dotnet $cli command audio.banks.discover --project $project --engine $engine --one-shot --json
 ```
 
+For FMOD project authoring or repair, inspect `audio.authoring.inspect`, run checked-in migrations through `audio.authoring.run`, and use `audio.authoring.diagnose` as the standalone postcondition. Read [authoring-workflows.md](authoring-workflows.md) before creating or changing FMOD events.
+
 Use the setup wizard or project-linking UI when the FMOD Studio project path is per-user. Build and synchronize through typed commands rather than copying or editing `.flax` assets directly:
 
 1. `audio.setup.build-banks`

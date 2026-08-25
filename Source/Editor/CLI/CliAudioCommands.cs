@@ -126,19 +126,108 @@ namespace FlaxEditor
             return setup;
         }
 
-        [CliCommand("audio.setup.build-banks", Description = "Build banks from the linked FMOD Studio project and return the exact builder diagnostics.", Access = CliCommandAccess.MutatesProject)]
+        [CliCommand("audio.setup.build-banks", Description = "Build banks from the linked FMOD Studio project, synchronize successful output, and return exact diagnostics.", Access = CliCommandAccess.MutatesProject)]
         public static object SetupBuildBanks()
         {
             var result = FmodStudioLocator.BuildBanksDetailed();
+            var synchronized = false;
+            var synchronization = string.Empty;
+            if (result.Success)
+                synchronized = FmodProjectLinker.ImportAndSynchronize(out synchronization);
             return new
             {
-                result.Success,
+                Success = result.Success && synchronized,
+                BuildSucceeded = result.Success,
+                Synchronized = synchronized,
+                Synchronization = synchronization,
                 result.Project,
                 result.Executable,
                 result.ExitCode,
                 result.Output,
                 result.Error,
                 summary = result.ToDisplayString(),
+            };
+        }
+
+        [CliCommand("audio.authoring.inspect", Description = "Inspect the linked FMOD Studio authoring project, command-line tool, version, and allowed script root.", Access = CliCommandAccess.ReadOnly)]
+        public static object AuthoringInspect()
+        {
+            var project = FmodEditorSettings.StudioProjectPath;
+            return new
+            {
+                linked = File.Exists(project),
+                project,
+                scriptRoot = string.IsNullOrWhiteSpace(project) ? string.Empty : Path.GetDirectoryName(project),
+                executable = FmodStudioLocator.FindCommandLineExecutable(),
+                version = FmodStudioLocator.GetCommandLineVersion(),
+            };
+        }
+
+        [CliCommand("audio.authoring.diagnose", Description = "Run FMOD Studio project diagnostics and fail the command on invalid or corrupt authoring data.", Access = CliCommandAccess.ReadOnly)]
+        public static object AuthoringDiagnose()
+        {
+            var result = FmodStudioLocator.RunDiagnosticsDetailed();
+            if (!result.Success)
+                throw new InvalidOperationException(result.ToDisplayString());
+            return ToolReport(result);
+        }
+
+        private static object ToolReport(FmodStudioLocator.ToolResult result)
+        {
+            return new
+            {
+                success = result.Success,
+                operation = result.Operation,
+                project = result.Project,
+                executable = result.Executable,
+                version = result.ToolVersion,
+                script = result.Script,
+                exitCode = result.ExitCode,
+                summary = result.Success ? "FMOD Studio " + result.Operation + " completed successfully." : result.ToDisplayString(),
+            };
+        }
+
+        [CliCommand("audio.authoring.run", Description = "Run a linked-project FMOD JavaScript migration, require clean diagnostics, build banks, and synchronize typed Flax assets.", Access = CliCommandAccess.MutatesProject)]
+        public static object AuthoringRun([CliOption("script", Description = "JavaScript path relative to, and contained by, the linked FMOD project.", Required = true)] string script)
+        {
+            // A dirty preflight is reported but does not block a migration whose
+            // purpose may be to repair invalid authoring data. Every later stage
+            // is fail-fast and clean post-migration diagnostics are mandatory.
+            var before = FmodStudioLocator.RunDiagnosticsDetailed();
+            var authoring = FmodStudioLocator.RunProjectScriptDetailed(script);
+            if (!authoring.Success)
+                throw new InvalidOperationException("FMOD authoring stopped before build/synchronization.\n" + authoring.ToDisplayString() +
+                                                    "\n\nPreflight diagnostic:\n" + before.ToDisplayString());
+
+            var after = FmodStudioLocator.RunDiagnosticsDetailed();
+            if (!after.Success)
+                throw new InvalidOperationException("FMOD authoring script completed, but post-migration diagnostics failed. Banks were not built or synchronized.\n" + after.ToDisplayString());
+
+            var build = FmodStudioLocator.BuildBanksDetailed();
+            if (!build.Success)
+                throw new InvalidOperationException("FMOD authoring and diagnostics completed, but the bank build failed. Synchronization was not attempted.\n" + build.ToDisplayString());
+
+            if (!FmodProjectLinker.ImportAndSynchronize(out var synchronization))
+                throw new InvalidOperationException("FMOD banks built successfully, but typed Flax asset synchronization failed.\n" + synchronization);
+
+            return new
+            {
+                success = true,
+                preflightWasClean = before.Success,
+                preflight = ToolReport(before),
+                authoring = ToolReport(authoring),
+                diagnostic = ToolReport(after),
+                build = new
+                {
+                    build.Success,
+                    build.Project,
+                    build.Executable,
+                    build.ExitCode,
+                    summary = build.ToDisplayString(),
+                },
+                synchronized = true,
+                synchronization,
+                setup = InspectSetup(),
             };
         }
 
