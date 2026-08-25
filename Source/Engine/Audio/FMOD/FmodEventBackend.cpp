@@ -695,7 +695,7 @@ FMOD::Studio::EventDescription* FmodEventBackend::GetEventDescription(const Guid
     FMOD::Studio::EventDescription* desc = nullptr;
     if (eventId.IsValid())
     {
-        FMOD_GUID fg = FmodConvert::ToFmodGuid(eventId);
+        FMOD_GUID fg = FmodConvert::ToFmodStudioGuid(eventId);
         if (_studioSystem->getEventByID(&fg, &desc) == FMOD_OK && desc)
             return desc;
     }
@@ -718,7 +718,7 @@ FMOD::Studio::Bus* FmodEventBackend::GetBus(const Guid& busId, const StringView&
     FMOD::Studio::Bus* bus = nullptr;
     if (busId.IsValid())
     {
-        FMOD_GUID fg = FmodConvert::ToFmodGuid(busId);
+        FMOD_GUID fg = FmodConvert::ToFmodStudioGuid(busId);
         if (_studioSystem->getBusByID(&fg, &bus) == FMOD_OK && bus)
             return bus;
     }
@@ -741,7 +741,7 @@ FMOD::Studio::VCA* FmodEventBackend::GetVCA(const Guid& vcaId, const StringView&
     FMOD::Studio::VCA* vca = nullptr;
     if (vcaId.IsValid())
     {
-        FMOD_GUID fg = FmodConvert::ToFmodGuid(vcaId);
+        FMOD_GUID fg = FmodConvert::ToFmodStudioGuid(vcaId);
         if (_studioSystem->getVCAByID(&fg, &vca) == FMOD_OK && vca)
             return vca;
     }

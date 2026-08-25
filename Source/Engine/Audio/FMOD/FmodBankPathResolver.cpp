@@ -22,7 +22,12 @@ bool FmodBankPathResolver::Resolve(const StringView& requestedPath, String& resu
     }
     if (!FileSystem::IsRelative(result))
 #if USE_EDITOR
-        return FileSystem::FileExists(result);
+    {
+        const bool exists = FileSystem::FileExists(result);
+        if (exists)
+            FileSystem::NormalizePath(result);
+        return exists;
+    }
 #else
         return false;
 #endif
@@ -58,12 +63,14 @@ bool FmodBankPathResolver::Resolve(const StringView& requestedPath, String& resu
         if (FileSystem::FileExists(candidate))
         {
             result = MoveTemp(candidate);
+            FileSystem::NormalizePath(result);
             return true;
         }
         candidate = Globals::ProjectContentFolder / TEXT("Audio/Banks") / path;
         if (FileSystem::FileExists(candidate))
         {
             result = MoveTemp(candidate);
+            FileSystem::NormalizePath(result);
             return true;
         }
     }
@@ -74,7 +81,10 @@ bool FmodBankPathResolver::Resolve(const StringView& requestedPath, String& resu
     for (const String& path : paths)
     {
         if (FmodBankManifest::ResolveBank(path, result))
+        {
+            FileSystem::NormalizePath(result);
             return true;
+        }
     }
     return false;
 #endif

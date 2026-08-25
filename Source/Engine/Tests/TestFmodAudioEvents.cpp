@@ -23,6 +23,20 @@ TEST_CASE("FMOD GUID conversion preserves Flax asset identifiers")
     CHECK(FmodConvert::FromFmodGuid(converted) == source);
 }
 
+TEST_CASE("FMOD Studio GUID conversion preserves canonical catalog identifiers")
+{
+    const Guid source(0x803ab263, 0x79c70f6e, 0x2817920e, 0xee88b297);
+    const FMOD_GUID converted = FmodConvert::ToFmodStudioGuid(source);
+    CHECK(converted.Data1 == 0x803ab263);
+    CHECK(converted.Data2 == 0x79c7);
+    CHECK(converted.Data3 == 0x0f6e);
+    CHECK(converted.Data4[0] == 0x28);
+    CHECK(converted.Data4[3] == 0x0e);
+    CHECK(converted.Data4[4] == 0xee);
+    CHECK(converted.Data4[7] == 0x97);
+    CHECK(FmodConvert::FromFmodStudioGuid(converted) == source);
+}
+
 TEST_CASE("FMOD spatial conversion uses meters and preserves orientation")
 {
     Audio3DAttributes source;

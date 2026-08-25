@@ -105,6 +105,12 @@ public:
     static FMOD_GUID ToFmodGuid(const Guid& guid);
     static Guid FromFmodGuid(const FMOD_GUID& guid);
 
+    /// <summary>Converts a canonical FMOD Studio catalog identifier to FMOD's native GUID fields.</summary>
+    static FMOD_GUID ToFmodStudioGuid(const Guid& guid);
+
+    /// <summary>Converts FMOD's native GUID fields to canonical Studio catalog ordering.</summary>
+    static Guid FromFmodStudioGuid(const FMOD_GUID& guid);
+
     static bool CheckResult(FMOD_RESULT result, const char* operation);
 };
 

@@ -36,6 +36,9 @@ private:
     FMOD::Studio::System* _system = nullptr;
     Dictionary<Guid, BankEntry> _banksByGuid;
     Dictionary<String, Guid> _guidByPath;
+    Dictionary<Guid, Guid> _aliases;
+
+    Guid ResolveBankId(const Guid& bankId) const;
 
 public:
     FmodBankRegistry() = default;
