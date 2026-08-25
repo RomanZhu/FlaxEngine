@@ -321,7 +321,15 @@ namespace FlaxEditor.Windows
                 {
                     bool shortcutModifier = Root.GetKey(KeyboardKeys.Control) || Root.GetKey(KeyboardKeys.Alt);
                     if (!shortcutModifier)
+                    {
+                        if (CanUseNavigation && Root.FocusedControl is TextBoxBase { IsEditing: true })
+                        {
+                            bool shiftDown = Root.GetKey(KeyboardKeys.Shift);
+                            Root.Navigate(shiftDown ? NavDirection.Previous : NavDirection.Next);
+                            return true;
+                        }
                         return Editor.Windows.EditWin?.Viewport?.CycleContextualAuthoringMode() ?? false;
+                    }
                 }
                 break;
             }
