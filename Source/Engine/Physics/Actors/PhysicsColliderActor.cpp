@@ -33,6 +33,15 @@ void PhysicsColliderActor::OnCollisionEnter(const Collision& c)
         rigidBody->OnCollisionEnter(c);
 }
 
+void PhysicsColliderActor::OnCollisionHit(const Collision& c)
+{
+    CollisionHit(c);
+
+    auto rigidBody = GetAttachedRigidBody();
+    if (rigidBody)
+        rigidBody->OnCollisionHit(c);
+}
+
 void PhysicsColliderActor::OnCollisionExit(const Collision& c)
 {
     CollisionExit(c);

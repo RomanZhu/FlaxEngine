@@ -29,6 +29,7 @@
 #include <box3d/constants.h>
 
 #define BOX3D_LENGTH_UNITS_PER_METER 100.0f
+#define BOX3D_HIT_EVENT_THRESHOLD 5.0f
 #define BOX3D_DEFAULT_SUBSTEPS 4
 #define BOX3D_COOKED_MAGIC 0x33425846u
 #define BOX3D_COOKED_VERSION 1u
@@ -1025,6 +1026,25 @@ namespace
         }
     }
 
+    void SendCollisionHit(const b3ContactHitEvent& hit)
+    {
+        Collision collision;
+        FillCollision(collision, hit.shapeIdA, hit.shapeIdB, hit.contactId, hit.approachSpeed);
+        if (!collision.ThisActor || !collision.OtherActor)
+            return;
+
+        // The hit event contains the point and normal at the beginning of the
+        // step, which is the most useful location for impact audio and effects.
+        collision.ContactsCount = 1;
+        collision.Contacts[0].Point = B2C(hit.point);
+        collision.Contacts[0].Normal = B2C(hit.normal);
+        collision.Contacts[0].Separation = 0.0f;
+
+        collision.ThisActor->OnCollisionHit(collision);
+        collision.SwapObjects();
+        collision.ThisActor->OnCollisionHit(collision);
+    }
+
     float GetApproachSpeed(const b3ContactEvents& events, b3ContactId contactId)
     {
         float result = 0.0f;
@@ -1387,6 +1407,7 @@ void* PhysicsBackend::CreateScene(const PhysicsSettings& settings)
     b3WorldDef def = b3DefaultWorldDef();
     def.gravity = C2BVec(settings.DefaultGravity);
     def.restitutionThreshold = settings.BounceThresholdVelocity;
+    def.hitEventThreshold = BOX3D_HIT_EVENT_THRESHOLD;
     def.enableContinuous = scene->EnableCCD;
     def.userData = scene;
     scene->World = b3CreateWorld(&def);
@@ -1459,6 +1480,8 @@ void PhysicsBackend::EndSimulateScene(void* scene)
     }
     for (int32 i = 0; i < contactEvents.endCount; i++)
         SendCollisionEvent(contactEvents.endEvents[i].shapeIdA, contactEvents.endEvents[i].shapeIdB, contactEvents.endEvents[i].contactId, false, 0.0f);
+    for (int32 i = 0; i < contactEvents.hitCount; i++)
+        SendCollisionHit(contactEvents.hitEvents[i]);
 
     sceneBox3D->LastDeltaTime = 0.0f;
 }

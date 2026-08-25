@@ -39,7 +39,7 @@ struct TIsPODType<ContactPoint>
 #define COLLISION_NAX_CONTACT_POINTS 8
 
 /// <summary>
-/// Contains a collision information passed to the OnCollisionEnter/OnCollisionExit events.
+/// Contains collision information passed to the OnCollisionEnter, OnCollisionHit, and OnCollisionExit events.
 /// </summary>
 API_STRUCT(NoDefault) struct FLAXENGINE_API Collision
 {

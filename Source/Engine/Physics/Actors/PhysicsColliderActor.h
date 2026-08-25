@@ -22,6 +22,12 @@ public:
     API_EVENT() Delegate<const Collision&> CollisionEnter;
 
     /// <summary>
+    /// Occurs when this collider receives a significant collision hit, including
+    /// hits generated while the collider pair is already touching.
+    /// </summary>
+    API_EVENT() Delegate<const Collision&> CollisionHit;
+
+    /// <summary>
     /// Occurs when a collision end gets registered for this collider (it ends colliding with something).
     /// </summary>
     API_EVENT() Delegate<const Collision&> CollisionExit;
@@ -98,6 +104,12 @@ public:
     /// </summary>
     /// <param name="c">The collision info.</param>
     API_FUNCTION() virtual void OnCollisionEnter(const Collision& c);
+
+    /// <summary>
+    /// Called when a significant collision hit gets registered for this collider.
+    /// </summary>
+    /// <param name="c">The collision hit info.</param>
+    API_FUNCTION() virtual void OnCollisionHit(const Collision& c);
 
     /// <summary>
     /// Called when a collision end gets registered for this collider (it ends colliding with something).
