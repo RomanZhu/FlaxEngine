@@ -440,6 +440,8 @@ namespace FlaxEditor.Tools.CSG
                     return false;
                 if (_controller.Tool == CSGTool.SelectPlace)
                     return ArmSelectDrag(location);
+                if (TryActivateSelectedBodyTransform(location))
+                    return true;
             }
             if (_controller.Tool == CSGTool.Edit)
                 return BeginFaceEdit();
@@ -899,9 +901,49 @@ namespace FlaxEditor.Tools.CSG
 
         private void UpdateBodyTransformActivation(SceneGraphNode candidate)
         {
-            _activeBodyTransformBrush = IsEditingContext && candidate is BoxBrushNode brush && IsBrushBodySelected(brush)
+            _activeBodyTransformBrush = candidate is BoxBrushNode brush &&
+                                        ShouldActivateBodyTransform(IsEditingContext, _suppressEditBodyActivationUntilMouseUp, _selection.CSGSelection, brush)
                 ? brush
                 : null;
+        }
+
+        private bool TryActivateSelectedBodyTransform(Float2 location)
+        {
+            if (Owner.SceneGraphRoot == null)
+                return false;
+
+            var ray = Owner.MouseRay;
+            var view = new Ray(Owner.ViewPosition, Owner.ViewDirection);
+            var flags = SceneGraphNode.RayCastData.FlagTypes.SkipColliders |
+                        SceneGraphNode.RayCastData.FlagTypes.SkipEditorPrimitives |
+                        SceneGraphNode.RayCastData.FlagTypes.SkipTriggers;
+            _hitTest.Gather(Owner.SceneGraphRoot, ref ray, ref view, _hits, flags);
+            AddSubtractiveVolumeHits(ref ray);
+            AddBrushOutlineHits(location);
+            for (int i = 0; i < _hits.Count; i++)
+            {
+                var brush = _hits[i].Brush;
+                if (_hits[i].Kind != CSGHitKind.Brush ||
+                    !ShouldActivateBodyTransform(IsEditingContext, _suppressEditBodyActivationUntilMouseUp, _selection.CSGSelection, brush))
+                    continue;
+                _activeBodyTransformBrush = brush;
+                UpdateSupplementalTransformGizmo();
+                ResetDeepSelectionCycle();
+                return true;
+            }
+            return false;
+        }
+
+        internal static bool ShouldActivateBodyTransform(bool editingContext, bool suppressed, IReadOnlyList<SceneGraphNode> selection, BoxBrushNode brush)
+        {
+            if (!editingContext || suppressed || brush == null)
+                return false;
+            for (int i = 0; selection != null && i < selection.Count; i++)
+            {
+                if (selection[i] == brush)
+                    return true;
+            }
+            return false;
         }
 
         private void PaintBrushSurfaceAtPointer()
@@ -1119,32 +1161,23 @@ namespace FlaxEditor.Tools.CSG
                 return false;
 
             _selectClickAppliedOnDown = false;
-            if (Owner.IsShiftDown)
+            bool brushAlreadySelected = IsBrushSelected(hitBrush);
+            if (!ShouldArmDirectTranslation(brushAlreadySelected, Owner.IsShiftDown))
             {
-                // Shift consistently toggles one clicked brush while Shift-marquee is additive.
-                // A Shift click is selection-only and never arms direct translation.
-                _selection.ApplyClick(hitBrush, false, true, _selectionBuffer);
-                ApplySelectionBuffer(true);
-                _selectClickAppliedOnDown = true;
-                _consumePointerMouseUp = true;
-                ResetDeepSelectionCycle();
-                return true;
+                // An unselected or modifier-clicked brush does not become movable on mouse-down.
+                // Let the viewport resolve an ordinary release as a click pick, or movement as
+                // marquee selection (including additive Shift-marquee).
+                return false;
             }
-            if (!IsBrushSelected(hitBrush))
-            {
-                _selection.ApplyClick(hitBrush, false, false, _selectionBuffer);
-                ApplySelectionBuffer(true);
-            }
-            else if (IsEditingContext && !_suppressEditBodyActivationUntilMouseUp)
+            if (IsEditingContext && !_suppressEditBodyActivationUntilMouseUp)
             {
                 // Entering Edit intentionally starts without the central transform. A later body
                 // click promotes that selected brush to the current body target and reveals it.
                 _activeBodyTransformBrush = hitBrush;
                 UpdateSupplementalTransformGizmo();
             }
-            // The body click has been fully resolved on mouse-down. An unselected brush replaces
-            // the selection; a selected brush preserves the complete multi-selection so the same
-            // armed gesture can either remain a click or become a group XZ translation.
+            // A selected brush preserves the complete multi-selection so the armed gesture can
+            // either remain a click or become a group XZ translation.
             _selectClickAppliedOnDown = true;
 
             CollectSelectedBrushes(_selectBrushes);
@@ -1157,6 +1190,11 @@ namespace FlaxEditor.Tools.CSG
             ResetDeepSelectionCycle();
             UpdateStatusText();
             return true;
+        }
+
+        internal static bool ShouldArmDirectTranslation(bool brushAlreadySelected, bool selectionModifier)
+        {
+            return brushAlreadySelected && !selectionModifier;
         }
 
         private void BeginSelectDrag()
