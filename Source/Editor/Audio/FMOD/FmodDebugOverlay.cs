@@ -400,10 +400,13 @@ namespace FlaxEditor.FMOD
         private static bool TryProjectLabel(Vector3 position, bool sceneView, Control overlay, out Float2 screen)
         {
             screen = Float2.Minimum;
+            // Perspective projection can mirror points behind the view into valid screen coordinates.
             if (sceneView)
             {
                 var viewport = Editor.Instance?.Windows?.EditWin?.Viewport;
                 if (viewport == null)
+                    return false;
+                if (Vector3.Dot(position - viewport.ViewPosition, (Vector3)viewport.ViewDirection) <= 0.0f)
                     return false;
                 viewport.ProjectPoint(position, out screen);
             }
@@ -411,6 +414,8 @@ namespace FlaxEditor.FMOD
             {
                 var camera = Camera.MainCamera;
                 if (camera == null)
+                    return false;
+                if (Vector3.Dot(position - camera.Position, (Vector3)camera.Forward) <= 0.0f)
                     return false;
                 var viewport = new FlaxEngine.Viewport(Float2.Zero, overlay.Size);
                 camera.ProjectPoint(position, out screen, ref viewport);
