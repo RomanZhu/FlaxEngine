@@ -432,7 +432,7 @@ namespace FlaxEditor.Gizmo
             bool committed = false;
             try
             {
-                if (HasWorkingTransformChanges())
+                if (HasWorkingChanges())
                 {
                     OnEndTransforming();
                     committed = true;
@@ -690,6 +690,11 @@ namespace FlaxEditor.Gizmo
         /// Gets a value indicating whether the current working transforms differ from their captured state.
         /// </summary>
         protected bool HasTransformChanges => HasWorkingTransformChanges();
+
+        /// <summary>
+        /// Gets whether a derived gizmo has changed transaction-owned data outside scene transforms.
+        /// </summary>
+        protected virtual bool HasAdditionalWorkingChanges => false;
 
         /// <summary>
         /// Registers the result of a transaction-aware duplicate operation.
@@ -1019,6 +1024,11 @@ namespace FlaxEditor.Gizmo
                     return true;
             }
             return false;
+        }
+
+        private bool HasWorkingChanges()
+        {
+            return HasWorkingTransformChanges() || HasAdditionalWorkingChanges;
         }
 
         private void RestoreTransactionOrigin()

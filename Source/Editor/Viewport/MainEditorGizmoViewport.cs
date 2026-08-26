@@ -1866,9 +1866,12 @@ namespace FlaxEditor.Viewport
                 }
 
                 // Apply scale
-                trans.Scale = applyWorldBoundsScale
-                    ? TransformGizmoBase.ApplyWorldScaleDelta(trans.Scale, trans.Orientation, scaleDelta)
-                    : TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
+                if (!applyWorldBoundsScale || !TransformGizmo.TryApplyBoundsShapeResize(obj, ref trans, scaleDelta))
+                {
+                    trans.Scale = applyWorldBoundsScale
+                        ? TransformGizmoBase.ApplyWorldScaleDelta(trans.Scale, trans.Orientation, scaleDelta)
+                        : TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
+                }
 
                 // Apply translation
                 trans.Translation += translationDelta;
