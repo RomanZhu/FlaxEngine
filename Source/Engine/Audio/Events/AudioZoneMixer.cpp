@@ -201,9 +201,11 @@ void AudioZoneMixer::Apply(const Array<AudioZoneVolume*>& zones)
                     }
                     state.WinnerId = contribution.Zone->GetID();
                 }
-                contribution.Zone->EnsureMixerInstance();
-                contribution.Zone->ApplyMixerWeight(finalWeight);
-                state.Active = true;
+                if (contribution.Zone->EnsureMixerInstance(finalWeight))
+                {
+                    contribution.Zone->ApplyMixerWeight(finalWeight);
+                    state.Active = true;
+                }
             }
             else if (state.Active)
             {

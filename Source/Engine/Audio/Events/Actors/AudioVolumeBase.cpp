@@ -60,6 +60,10 @@ AudioVolumeSample AudioVolumeBase::Evaluate(const Vector3& worldPosition) const
 {
     AudioVolumeSample sample;
     const Vector3 localPos = _transform.WorldToLocal(worldPosition);
+    const Vector3 worldScale(
+        (Real)Math::Abs(_transform.Scale.X),
+        (Real)Math::Abs(_transform.Scale.Y),
+        (Real)Math::Abs(_transform.Scale.Z));
 
     switch (_shape)
     {
@@ -73,13 +77,14 @@ AudioVolumeSample AudioVolumeBase::Evaluate(const Vector3& worldPosition) const
         if (outDist > 0.0001f)
         {
             sample.IsInside = false;
-            sample.SignedDistance = outDist;
             sample.ClosestPoint = _transform.LocalToWorld(clamped);
+            sample.SignedDistance = (float)Vector3::Distance(worldPosition, sample.ClosestPoint);
         }
         else
         {
             sample.IsInside = true;
             Vector3 d = half - Vector3::Abs(localPos);
+            d *= worldScale;
             sample.SignedDistance = (float)-Math::Min(Math::Min(d.X, d.Y), d.Z);
             sample.ClosestPoint = worldPosition;
         }
@@ -88,16 +93,19 @@ AudioVolumeSample AudioVolumeBase::Evaluate(const Vector3& worldPosition) const
     case AudioVolumeShape::Sphere:
     {
         float dist = (float)localPos.Length();
-        sample.SignedDistance = dist - _sphereRadius;
-        sample.IsInside = sample.SignedDistance <= 0.0f;
+        sample.IsInside = dist <= _sphereRadius;
         if (sample.IsInside)
         {
+            Vector3 dir = dist > 0.0001f ? localPos / dist : Vector3::Forward;
+            const Vector3 surfacePoint = _transform.LocalToWorld(dir * _sphereRadius);
+            sample.SignedDistance = (float)-Vector3::Distance(worldPosition, surfacePoint);
             sample.ClosestPoint = worldPosition;
         }
         else
         {
             Vector3 dir = dist > 0.0001f ? localPos / dist : Vector3::Forward;
             sample.ClosestPoint = _transform.LocalToWorld(dir * _sphereRadius);
+            sample.SignedDistance = (float)Vector3::Distance(worldPosition, sample.ClosestPoint);
         }
         break;
     }
@@ -107,16 +115,19 @@ AudioVolumeSample AudioVolumeBase::Evaluate(const Vector3& worldPosition) const
         Vector3 segPoint((Real)0.0, Math::Clamp(localPos.Y, -halfH, halfH), (Real)0.0);
         Vector3 delta = localPos - segPoint;
         float dist = (float)delta.Length();
-        sample.SignedDistance = dist - _capsuleRadius;
-        sample.IsInside = sample.SignedDistance <= 0.0f;
+        sample.IsInside = dist <= _capsuleRadius;
         if (sample.IsInside)
         {
+            Vector3 dir = dist > 0.0001f ? delta / dist : Vector3::Forward;
+            const Vector3 surfacePoint = _transform.LocalToWorld(segPoint + dir * _capsuleRadius);
+            sample.SignedDistance = (float)-Vector3::Distance(worldPosition, surfacePoint);
             sample.ClosestPoint = worldPosition;
         }
         else
         {
             Vector3 dir = dist > 0.0001f ? delta / dist : Vector3::Forward;
             sample.ClosestPoint = _transform.LocalToWorld(segPoint + dir * _capsuleRadius);
+            sample.SignedDistance = (float)Vector3::Distance(worldPosition, sample.ClosestPoint);
         }
         break;
     }
@@ -147,8 +158,7 @@ void AudioVolumeBase::UpdateBounds()
     {
     case AudioVolumeShape::Box:
     {
-        OrientedBoundingBox obb(Vector3::Zero, _boxSize * 0.5f);
-        obb.Transform(_transform);
+        OrientedBoundingBox obb(_boxSize * 0.5f, _transform);
         obb.GetBoundingBox(_box);
         BoundingSphere::FromBox(_box, _sphere);
         break;
@@ -186,8 +196,7 @@ void AudioVolumeBase::OnDebugDraw()
     {
     case AudioVolumeShape::Box:
     {
-        OrientedBoundingBox obb(Vector3::Zero, _boxSize * 0.5f);
-        obb.Transform(_transform);
+        OrientedBoundingBox obb(_boxSize * 0.5f, _transform);
         DEBUG_DRAW_WIRE_BOX(obb, Color::Teal, 0, true);
         break;
     }

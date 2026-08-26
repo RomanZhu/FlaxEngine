@@ -25,19 +25,32 @@ void AudioZoneVolume::ApplyResolvedSample(const Vector3& listenerPosition, const
     _currentRawWeight = sample.Weight;
     _currentResolvedWeight = Math::Saturate(resolvedWeight);
     _mixerWeight = _currentResolvedWeight;
-    if (_currentResolvedWeight > 0.001f)
+    if (TargetType == AudioZoneTargetType::Snapshot)
     {
-        // AudioZoneMixer owns creation and applies one target instance per snapshot key.
+        // FMOD has no generic API for setting snapshot intensity. Unless the
+        // snapshot exposes an authored weight parameter, keep the zone strictly
+        // binary so the exterior blend band cannot start it at full intensity.
+        if (!SnapshotWeightParameter.IsValid() && !_weightParameterResolved && Snapshot)
+        {
+            Snapshot->WaitForLoaded();
+            if (const auto* data = Snapshot->GetInstance<AudioSnapshot>())
+            {
+                _resolvedWeightParameter = data->WeightParameter;
+                _weightParameterResolved = true;
+            }
+        }
+        const AudioParameterId parameter = SnapshotWeightParameter.IsValid() ? SnapshotWeightParameter : _resolvedWeightParameter;
+        if (!parameter.IsValid())
+            _mixerWeight = sample.IsInside && _currentResolvedWeight > 0.001f ? 1.0f : 0.0f;
     }
-    else if (_snapshotHandle.IsValid())
+    if (_mixerWeight <= 0.001f && _snapshotHandle.IsValid())
     {
         AudioEventSystem::StopAndRelease(_snapshotHandle, AudioStopMode::AllowFadeOut);
         _snapshotHandle = AudioEventHandle();
-        _resolvedWeightParameter = AudioParameterId();
     }
 }
 
-bool AudioZoneVolume::EnsureMixerInstance()
+bool AudioZoneVolume::EnsureMixerInstance(float initialWeight)
 {
     if (TargetType != AudioZoneTargetType::Snapshot)
         return true;
@@ -59,7 +72,10 @@ bool AudioZoneVolume::EnsureMixerInstance()
             snapId = data->BackendId;
             path = data->Path;
             if (!SnapshotWeightParameter.IsValid())
+            {
                 _resolvedWeightParameter = data->WeightParameter;
+                _weightParameterResolved = true;
+            }
         }
     }
     if (!snapId.IsValid() && path.IsEmpty())
@@ -68,6 +84,14 @@ bool AudioZoneVolume::EnsureMixerInstance()
         return false;
     AudioEventCreateOptions options;
     options.AutoPlay = true;
+    const AudioParameterId parameter = SnapshotWeightParameter.IsValid() ? SnapshotWeightParameter : _resolvedWeightParameter;
+    if (parameter.IsValid())
+    {
+        AudioParameterValue initialParameter;
+        initialParameter.Id = parameter;
+        initialParameter.Value = Math::Saturate(initialWeight);
+        options.InitialParameters.Add(initialParameter);
+    }
     _snapshotHandle = AudioEventSystem::CreateInstance(snapId, path, options);
     return _snapshotHandle.IsValid();
 }
@@ -112,7 +136,6 @@ void AudioZoneVolume::ReleaseMixerInstance(AudioStopMode stopMode)
         AudioEventSystem::StopAndRelease(_snapshotHandle, stopMode);
         _snapshotHandle = AudioEventHandle();
     }
-    _resolvedWeightParameter = AudioParameterId();
 }
 
 String AudioZoneVolume::GetMixerTargetKey() const
@@ -140,18 +163,20 @@ String AudioZoneVolume::GetMixerTargetKey() const
 
 void AudioZoneVolume::OnEnable()
 {
+    _resolvedWeightParameter = AudioParameterId();
+    _weightParameterResolved = false;
     AudioVolumeBase::OnEnable();
 }
 
 void AudioZoneVolume::OnDisable()
 {
     if (_snapshotHandle.IsValid())
-    {
         ReleaseMixerInstance(AudioStopMode::Immediate);
-        _mixerWeight = 0.0f;
-        _currentRawWeight = 0.0f;
-        _currentResolvedWeight = 0.0f;
-    }
+    _mixerWeight = 0.0f;
+    _currentRawWeight = 0.0f;
+    _currentResolvedWeight = 0.0f;
+    _resolvedWeightParameter = AudioParameterId();
+    _weightParameterResolved = false;
     AudioVolumeBase::OnDisable();
 }
 

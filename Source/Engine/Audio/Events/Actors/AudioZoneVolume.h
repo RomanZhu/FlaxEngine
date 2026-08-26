@@ -19,6 +19,7 @@ class FLAXENGINE_API AudioZoneVolume : public AudioVolumeBase
 private:
     AudioEventHandle _snapshotHandle;
     AudioParameterId _resolvedWeightParameter;
+    bool _weightParameterResolved = false;
     float _mixerWeight = 0.0f;
     float _currentRawWeight = 0.0f;
     float _currentResolvedWeight = 0.0f;
@@ -75,7 +76,7 @@ public:
 
     /// <summary>Applies one deterministic final weight for this zone target.</summary>
     void ApplyMixerWeight(float weight);
-    bool EnsureMixerInstance();
+    bool EnsureMixerInstance(float initialWeight);
     /// <summary>Releases this zone's snapshot when another zone becomes canonical.</summary>
     void ReleaseMixerInstance(AudioStopMode stopMode = AudioStopMode::AllowFadeOut);
     AudioZoneTargetType GetTargetType() const { return TargetType; }
