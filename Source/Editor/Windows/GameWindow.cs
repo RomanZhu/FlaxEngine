@@ -530,6 +530,8 @@ namespace FlaxEditor.Windows
             };
             RootControl.GameRoot = _guiRoot.UIRoot;
             InitToolStrip();
+            if (MultiplayerPlayMode.IsReplica)
+                AudioMuted = true;
 
             SizeChanged += control => { ResizeViewport(); };
 
