@@ -74,6 +74,7 @@ namespace FlaxEditor.Windows
             public Types Type;
             public string Url;
             public int Line;
+            public TextRange Range;
         }
 
         /// <summary>
@@ -210,7 +211,7 @@ namespace FlaxEditor.Windows
                 {
                     int index = CharIndexAtPoint(ref location);
                     if (GetTextBlock(index, out TextBlock block) && block.Tag is TextBlockTag tag &&
-                        tag.Type == TextBlockTag.Types.CodeLocation && File.Exists(tag.Url))
+                        tag.Type == TextBlockTag.Types.CodeLocation && tag.Range.Contains(index) && File.Exists(tag.Url))
                     {
                         Editor.Instance.CodeEditing.OpenFile(tag.Url, tag.Line);
                         return true;
@@ -848,7 +849,7 @@ namespace FlaxEditor.Windows
         private StringBuilder _textBuffer = new StringBuilder();
         private List<TextBlock> _textBlocks = new List<TextBlock>();
         private DateTime _startupTime;
-        private Regex _compileRegex = new Regex("(?<path>^(?:[a-zA-Z]\\:|\\\\\\\\[ \\-\\.\\w\\.]+\\\\[ \\-\\.\\w.$]+)\\\\(?:[ \\-\\.\\w]+\\\\)*\\w([ \\w.])+)\\((?<line>\\d{1,}),\\d{1,},\\d{1,},\\d{1,}\\): (?<level>error|warning) (?<message>.*)", RegexOptions.Compiled | RegexOptions.Multiline);
+        private Regex _compileRegex = new Regex("(?<location>(?<path>^(?:[a-zA-Z]\\:|\\\\\\\\[ \\-\\.\\w\\.]+\\\\[ \\-\\.\\w.$]+)\\\\(?:[ \\-\\.\\w]+\\\\)*\\w([ \\w.])+)\\((?<line>\\d{1,}),\\d{1,},\\d{1,},\\d{1,}\\)): (?<level>error|warning) (?<message>.*)", RegexOptions.Compiled | RegexOptions.Multiline);
         private List<string> _commandHistory;
         private const string CommandHistoryKey = "CommandHistory";
         private const int CommandHistoryLimit = 30;
@@ -1333,6 +1334,8 @@ namespace FlaxEditor.Windows
                                 Type = TextBlockTag.Types.CodeLocation,
                                 Url = match.Groups["path"].Value,
                                 Line = int.Parse(match.Groups["line"].Value),
+                                Range = new TextRange(textStartIndex + match.Groups["location"].Index,
+                                    textStartIndex + match.Groups["location"].Index + match.Groups["location"].Length),
                             };
                         }
                     }
@@ -1402,19 +1405,7 @@ namespace FlaxEditor.Windows
         private void AddEntry(Entry entry, bool allowPause = true)
         {
             _entries.Add(entry);
-            switch (entry.Kind)
-            {
-            case EntryKind.Info:
-                _logTypeCounts[0]++;
-                break;
-            case EntryKind.Warning:
-                _logTypeCounts[1]++;
-                break;
-            case EntryKind.Error:
-            case EntryKind.Fatal:
-                _logTypeCounts[2]++;
-                break;
-            }
+            AddLogTypeCount(entry.Kind);
             UpdateLogTypeCounts();
             _htmlLog.Append(entry.Time, entry.ThreadId, entry.Kind.ToString(), entry.Message, entry.StackTrace);
             _isDirty = true;
@@ -1427,15 +1418,53 @@ namespace FlaxEditor.Windows
             }
         }
 
+        private void AddLogTypeCount(EntryKind kind)
+        {
+            switch (kind)
+            {
+            case EntryKind.Info:
+                _logTypeCounts[0]++;
+                break;
+            case EntryKind.Warning:
+                _logTypeCounts[1]++;
+                break;
+            case EntryKind.Error:
+            case EntryKind.Fatal:
+                _logTypeCounts[2]++;
+                break;
+            }
+        }
+
         /// <summary>
         /// Clears the log.
         /// </summary>
         public void Clear()
         {
-            _entries?.Clear();
+            if (ScriptsBuilder.LastCompilationFailed)
+                _entries?.RemoveAll(entry => !IsCompilationError(entry));
+            else
+                _entries?.Clear();
+
             Array.Clear(_logTypeCounts, 0, _logTypeCounts.Length);
+            if (_entries != null)
+            {
+                for (int i = 0; i < _entries.Count; i++)
+                    AddLogTypeCount(_entries[i].Kind);
+            }
             UpdateLogTypeCounts();
             Refresh();
+        }
+
+        private bool IsCompilationError(Entry entry)
+        {
+            var match = _compileRegex.Match(entry.Message ?? string.Empty);
+            while (match.Success)
+            {
+                if (match.Groups["level"].Value == "error")
+                    return true;
+                match = match.NextMatch();
+            }
+            return false;
         }
 
         private void UpdateLogTypeCounts()
