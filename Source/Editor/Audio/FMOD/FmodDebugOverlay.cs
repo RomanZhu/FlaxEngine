@@ -293,14 +293,14 @@ namespace FlaxEditor.FMOD
                     tracked.TimelinePosition = eventInfo.TimelinePosition;
                     tracked.IsVirtual = eventInfo.IsVirtual;
                     tracked.Plays = Math.Max(tracked.Plays, eventInfo.PlayCount);
-                    if (eventInfo.Has3DAttributes)
+                    var owner = eventInfo.OwnerId != Guid.Empty ? Level.FindActor(eventInfo.OwnerId) : null;
+                    // Area voices follow the listener or closest point, but their label belongs at the volume pivot.
+                    if (owner is AudioAreaEmitter)
+                        tracked.Position = owner.Position;
+                    else if (eventInfo.Has3DAttributes)
                         tracked.Position = eventInfo.SourcePositionCentimeters;
-                    else if (eventInfo.OwnerId != Guid.Empty)
-                    {
-                        var owner = Level.FindActor(eventInfo.OwnerId);
-                        if (owner != null)
-                            tracked.Position = owner.Position;
-                    }
+                    else if (owner != null)
+                        tracked.Position = owner.Position;
 
                     var playing = eventInfo.PlaybackState != AudioEventPlaybackState.Stopped;
                     if (playing)

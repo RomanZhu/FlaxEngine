@@ -114,7 +114,7 @@ namespace
     {
         AudioBackend::SetVolume(Volume);
 #if COMPILE_WITH_AUDIO_EVENTS
-        AudioEventSystem::SetPaused(!Engine::IsPlayMode());
+        AudioEventSystem::SetPaused(!Engine::IsPlayMode() || Time::GetGamePaused());
 #endif
     }
 
