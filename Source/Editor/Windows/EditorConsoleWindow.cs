@@ -62,6 +62,11 @@ namespace FlaxEditor.Windows
             /// The source thread identifier.
             /// </summary>
             public ulong ThreadId;
+
+            /// <summary>
+            /// The compilation attempt that produced this diagnostic, or zero for other entries.
+            /// </summary>
+            public int CompilationGeneration;
         };
 
         private struct TextBlockTag
@@ -837,6 +842,9 @@ namespace FlaxEditor.Windows
         private List<Entry> _entries = new List<Entry>(1024);
         private readonly int[] _logTypeCounts = new int[3];
         private bool _isDirty;
+        private int _compilationGeneration;
+        private int _activeCompilationGeneration;
+        private int _latestFailedCompilationGeneration;
         private int _logTypeShowMask = (int)LogType.Info | (int)LogType.Warning | (int)LogType.Error | (int)LogType.Fatal;
         private float _scrollSize = ScrollBar.DefaultSize;
         private const int OutCapacity = 64;
@@ -1020,6 +1028,8 @@ namespace FlaxEditor.Windows
             InputActions.Add(options => options.Search, _searchBox.Focus);
 
             GameCooker.Event += OnGameCookerEvent;
+            ScriptsBuilder.CompilationBegin += OnScriptsCompilationBegin;
+            ScriptsBuilder.CompilationEnd += OnScriptsCompilationEnd;
             ScriptsBuilder.CompilationFailed += OnScriptsCompilationFailed;
 
             EditorConsole.MessageWritten += OnEditorConsoleMessage;
@@ -1194,6 +1204,20 @@ namespace FlaxEditor.Windows
         {
             if (eventType == GameCooker.EventType.BuildFailed && !Editor.IsHeadlessMode && Editor.Options.Options.Interface.FocusOutputLogOnGameBuildError)
                 FocusOrShow();
+        }
+
+        private void OnScriptsCompilationBegin()
+        {
+            _activeCompilationGeneration = ++_compilationGeneration;
+            _latestFailedCompilationGeneration = 0;
+            ReadIncomingLogs();
+        }
+
+        private void OnScriptsCompilationEnd(bool success)
+        {
+            ReadIncomingLogs();
+            _latestFailedCompilationGeneration = success ? 0 : _activeCompilationGeneration;
+            _activeCompilationGeneration = 0;
         }
 
         private void OnScriptsCompilationFailed()
@@ -1440,8 +1464,8 @@ namespace FlaxEditor.Windows
         /// </summary>
         public void Clear()
         {
-            if (ScriptsBuilder.LastCompilationFailed)
-                _entries?.RemoveAll(entry => !IsCompilationError(entry));
+            if (_latestFailedCompilationGeneration != 0)
+                _entries?.RemoveAll(entry => entry.CompilationGeneration != _latestFailedCompilationGeneration);
             else
                 _entries?.Clear();
 
@@ -1455,9 +1479,9 @@ namespace FlaxEditor.Windows
             Refresh();
         }
 
-        private bool IsCompilationError(Entry entry)
+        private bool IsCompilationError(string message)
         {
-            var match = _compileRegex.Match(entry.Message ?? string.Empty);
+            var match = _compileRegex.Match(message ?? string.Empty);
             while (match.Success)
             {
                 if (match.Groups["level"].Value == "error")
@@ -1580,12 +1604,8 @@ namespace FlaxEditor.Windows
             _commandLineBox.Focus();
         }
 
-        /// <inheritdoc />
-        public override void Update(float deltaTime)
+        private void ReadIncomingLogs()
         {
-            FlaxEngine.Profiler.BeginEvent("EditorConsoleWindow.Update");
-
-            // Read the incoming log messages
             int logCount;
             do
             {
@@ -1594,19 +1614,30 @@ namespace FlaxEditor.Windows
 
                 for (int i = 0; i < logCount; i++)
                 {
+                    var message = _outMessages[i];
                     var entry = new Entry
                     {
                         Kind = (EntryKind)_outLogTypes[i],
                         Time = new DateTime(_outLogTimes[i], DateTimeKind.Utc),
-                        Message = _outMessages[i],
+                        Message = message,
                         StackTrace = _outStackTraces[i],
                         ThreadId = _outThreadIds[i],
+                        CompilationGeneration = IsCompilationError(message) ? _activeCompilationGeneration : 0,
                     };
                     AddEntry(entry);
                     _outMessages[i] = null;
                     _outStackTraces[i] = null;
                 }
             } while (logCount != 0);
+        }
+
+        /// <inheritdoc />
+        public override void Update(float deltaTime)
+        {
+            FlaxEngine.Profiler.BeginEvent("EditorConsoleWindow.Update");
+
+            // Read the incoming log messages
+            ReadIncomingLogs();
 
             if (_isDirty && _output.IsSelectingText)
                 _outputSelectionBlockedAutoScroll = true;
@@ -1762,6 +1793,8 @@ namespace FlaxEditor.Windows
             Editor.Options.OptionsChanged -= OnEditorOptionsChanged;
             Editor.InitializationEnd -= OnEditorInitializationEnd;
             GameCooker.Event -= OnGameCookerEvent;
+            ScriptsBuilder.CompilationBegin -= OnScriptsCompilationBegin;
+            ScriptsBuilder.CompilationEnd -= OnScriptsCompilationEnd;
             ScriptsBuilder.CompilationFailed -= OnScriptsCompilationFailed;
             EditorConsole.MessageWritten -= OnEditorConsoleMessage;
             EditorConsole.ClearRequested -= Clear;
