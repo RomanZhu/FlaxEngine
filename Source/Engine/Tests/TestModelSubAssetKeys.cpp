@@ -21,7 +21,7 @@ namespace
     }
 }
 
-TEST_CASE("Model stable mesh keys ignore source ordering and reject ambiguous collisions")
+TEST_CASE("Model stable mesh keys ignore source ordering and disambiguate identical slots")
 {
     ModelData data;
     data.LODs.Resize(1);
@@ -47,8 +47,10 @@ TEST_CASE("Model stable mesh keys ignore source ordering and reject ambiguous co
     data.Materials.Resize(2);
     data.Materials[0].Name = TEXT("Duplicate");
     data.Materials[1].Name = TEXT("Duplicate");
-    CHECK(ModelSubAssetKeys::Enumerate(data, reorderedInfos, reorderedCandidates, diagnostic));
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::SubAssetReconcileRequired);
+    REQUIRE_FALSE(ModelSubAssetKeys::Enumerate(data, reorderedInfos, reorderedCandidates, diagnostic));
+    REQUIRE(reorderedInfos.Count() == 3);
+    CHECK(reorderedInfos[0].StableKey != reorderedInfos[1].StableKey);
+    CHECK(reorderedInfos[1].StableKey != reorderedInfos[2].StableKey);
 }
 
 #endif

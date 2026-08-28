@@ -77,6 +77,10 @@ public:
     /// <returns>The new asset identifier, or an invalid identifier on failure.</returns>
     API_FUNCTION() static Guid CreateTextureMetadata(const StringView& sourcePath, const TextureTool::Options& options);
 
+    /// <summary>Stages a GUID-preserving legacy texture extraction without publishing a database scan.</summary>
+    API_FUNCTION() static Guid StageLegacyTextureMigration(const StringView& legacyPath, const StringView& extractedPath,
+        const StringView& destinationPath, const StringView& backupPath, const TextureTool::Options& options);
+
     /// <summary>Loads tracked texture settings without writing the sidecar.</summary>
     API_FUNCTION() static bool LoadTextureMetadata(const StringView& sourcePath, API_PARAM(Out) TextureTool::Options& options);
 
@@ -156,6 +160,10 @@ public:
     /// <summary>Creates canonical model metadata beside an imported source and seeds subasset GUIDs from a sibling flax package when present.</summary>
     API_FUNCTION() static Guid CreateModelMetadata(const StringView& sourcePath, const ModelTool::Options& options);
 
+    /// <summary>Stages a GUID-preserving legacy model extraction without publishing a database scan.</summary>
+    API_FUNCTION() static Guid StageLegacyModelMigration(const StringView& legacyPath, const StringView& extractedPath,
+        const StringView& destinationPath, const StringView& backupPath, const ModelTool::Options& options);
+
     /// <summary>Creates model metadata with a root type inferred from the source contents.</summary>
     API_FUNCTION() static Guid CreateDefaultModelMetadata(const StringView& sourcePath);
 #endif
@@ -166,8 +174,14 @@ public:
     /// <summary>Encodes Visject surface bytes into a canonical graph document and queues an exact build.</summary>
     API_FUNCTION() static bool SaveGraphSurface(const StringView& path, const BytesContainer& surface, bool allowOverwriteConflict = false, const StringView& propertiesJson = StringView::Empty);
 
+    /// <summary>Queues the current exact graph, authored-document, or imported-source build.</summary>
+    API_FUNCTION() static bool BuildGraph(const Guid& assetID);
+
     /// <summary>Queues an exact graph document rebuild.</summary>
     API_FUNCTION() static bool RebuildGraph(const Guid& assetID);
+
+    API_FUNCTION() static String GetGraphBuildStatus(const Guid& assetID);
+    API_FUNCTION() static AssetPipelineDiagnostic GetGraphBuildDiagnostic(const Guid& assetID);
 
     /// <summary>Creates a sidecar for an existing JSON scene/prefab, preserving the in-file GUID.</summary>
     API_FUNCTION() static Guid CreateExistingJsonMetadata(const StringView& sourcePath);
@@ -181,4 +195,10 @@ public:
     /// <summary>Converts one eligible legacy flax asset to its canonical source and removes the legacy binary.</summary>
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool MigrateLegacyAsset(const StringView& sourcePath);
+
+    /// <summary>Deletes a staged legacy backup after its canonical replacement has been verified.</summary>
+    API_FUNCTION() static bool FinalizeLegacyImportedMigration(const StringView& backupPath);
+
+    /// <summary>Restores a staged imported migration after validation fails.</summary>
+    API_FUNCTION() static bool RollbackLegacyImportedMigration(const StringView& legacyPath, const StringView& destinationPath, const StringView& backupPath);
 };

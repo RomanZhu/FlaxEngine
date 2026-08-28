@@ -112,7 +112,7 @@ namespace
         diagnostic.Code = AssetPipelineDiagnosticCode::SubAssetReconcileRequired;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
         diagnostic.ProcessorId = TEXT("Flax.Model");
-        diagnostic.Message = message;
+        diagnostic.Message = key.IsEmpty() ? String(message) : String::Format(TEXT("{0} Key: '{1}'."), message, key);
         if (!key.IsEmpty())
             diagnostic.Related.Add(key);
         return true;
@@ -207,6 +207,15 @@ bool ModelSubAssetKeys::Enumerate(const ModelData& data, Array<ModelSubAssetInfo
         const String baseKey = TEXT("material:") + Escape(material.Name);
         AddInfo(infos, ModelSubAssetKind::Material, baseKey, material.Name, Material::TypeName,
             HashMaterial(material), index, materialNames[baseKey] > 1);
+    }
+
+    Dictionary<String, int32> identicalKeys;
+    for (const ModelSubAssetInfo& info : infos)
+        identicalKeys[info.StableKey] = identicalKeys.ContainsKey(info.StableKey) ? identicalKeys[info.StableKey] + 1 : 1;
+    for (ModelSubAssetInfo& info : infos)
+    {
+        if (identicalKeys[info.StableKey] > 1)
+            info.StableKey += String::Format(TEXT("-{0}"), info.SourceIndex);
     }
 
     if (infos.Count() > 1)

@@ -1,11 +1,14 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/Documents/GraphDocument.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/Assets/Material.h"
+#include "Engine/Content/Assets/Texture.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Graphics/Shaders/Cache/ShaderStorage.h"
+#include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Math/Quaternion.h"
 #include "Engine/Core/Math/Transform.h"
 #include "Engine/Core/Math/Vector2.h"
@@ -139,6 +142,32 @@ TEST_CASE("Graph documents preserve unknown nodes and ignore layout in the seman
     CHECK(renamedSnapshot.Document.Parameters[0].ID == Guid(1, 2, 3, 4));
     CHECK(renamedSnapshot.Document.Parameters[0].Name == TEXT("Renamed"));
     CHECK(renamed.Contains("pluginData"));
+}
+
+TEST_CASE("Graph documents decode asset references as assets")
+{
+    auto* referencedAsset = Content::CreateVirtualAsset<Texture>();
+    REQUIRE(referencedAsset);
+    SCOPE_EXIT { Content::DeleteAsset(referencedAsset); };
+
+    GraphDocument document;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(GraphDocumentCodec::CreateStarter(MaterialFunction::TypeName, document, diagnostic));
+    GraphDocumentParameter parameter;
+    parameter.ID = Guid(1, 2, 3, 4);
+    parameter.Name = TEXT("Reference");
+    parameter.Type = VariantType(VariantType::Asset, Texture::TypeName);
+    parameter.Default = Variant(referencedAsset);
+    document.Parameters.Add(MoveTemp(parameter));
+
+    StringAnsi json;
+    REQUIRE_FALSE(GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic));
+    GraphDocumentCodec codec;
+    GraphDocumentSnapshot snapshot;
+    REQUIRE_FALSE(codec.DecodeGraph(json, snapshot, diagnostic));
+    REQUIRE(snapshot.Document.Parameters.Count() == 1);
+    CHECK(snapshot.Document.Parameters[0].Default.Type.Type == VariantType::Asset);
+    CHECK(snapshot.Document.Parameters[0].Default.AsAsset == referencedAsset);
 }
 
 TEST_CASE("Graph document migrations refuse silent upgrades and newer versions")

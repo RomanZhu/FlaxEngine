@@ -3,6 +3,7 @@
 #include "GraphDocument.h"
 #include "CanonicalJsonWriter.h"
 #include "Engine/Content/Config.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/Assets/AnimationGraph.h"
 #include "Engine/Content/Assets/AnimationGraphFunction.h"
@@ -1097,11 +1098,12 @@ namespace
             Guid id;
             if (ParseGuidToken(StringAnsiView(guidMember->value.GetString(), guidMember->value.GetStringLength()), id))
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph GUID value is invalid."));
-            result = Variant(id);
             if (typeName == "AssetReference")
-                result.Type.Type = VariantType::Asset;
+                result.SetAsset(Content::LoadAsync<Asset>(id));
             else if (typeName == "ObjectReference")
-                result.Type.Type = VariantType::Object;
+                result.SetObject(FindObject(id, ScriptingObject::GetStaticClass()));
+            else
+                result = Variant(id);
             const auto typeNameMember = value.FindMember("typeName");
             if (typeNameMember != value.MemberEnd() && typeNameMember->value.IsString())
                 result.Type.SetTypeName(StringAnsiView(typeNameMember->value.GetString(), typeNameMember->value.GetStringLength()));

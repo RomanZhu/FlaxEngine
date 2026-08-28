@@ -14,6 +14,9 @@ public:
     static ExportAssetResult ExportAudioClip(ExportAssetContext& context);
     static ExportAssetResult ExportModel(ExportAssetContext& context);
     static ExportAssetResult ExportSkinnedModel(ExportAssetContext& context);
+
+private:
+    static ExportAssetResult ExportModelGlb(ExportAssetContext& context);
 };
 
 #endif
