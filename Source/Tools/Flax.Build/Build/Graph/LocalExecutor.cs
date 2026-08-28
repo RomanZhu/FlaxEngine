@@ -270,7 +270,7 @@ namespace Flax.Build.BuildSystem.Graph
             string output = e.Data;
             if (output != null)
             {
-                Log.Info(output);
+                Log.ToolOutput(output);
             }
         }
 

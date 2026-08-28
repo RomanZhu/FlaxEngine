@@ -101,7 +101,7 @@ namespace FlaxEditor.Windows
                 
                 if (!_showAllContentInTree && !String.IsNullOrEmpty(Editor.Instance.Windows.ContentWin._itemsSearchBox.Text))
                 {
-                    cm.AddButton("Show in Content Panel", () =>
+                    cm.AddButton("Show in Project", () =>
                     {
                         Editor.Instance.Windows.ContentWin.ClearItemsSearch();
                         Editor.Instance.Windows.ContentWin.Select(item);

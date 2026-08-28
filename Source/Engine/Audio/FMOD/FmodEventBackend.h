@@ -20,23 +20,50 @@
 class FLAXENGINE_API FmodEventBackend : public IAudioEventBackend
 {
 private:
+    struct ReleasedInstanceDiagnostic
+    {
+        FMOD::Studio::EventInstance* Instance = nullptr;
+        AudioEventHandle Handle;
+        Guid EventId = Guid::Empty;
+        Guid OwnerId = Guid::Empty;
+        String Path;
+        int32 PlayCount = 1;
+        bool IsOneShot = true;
+    };
+
     FMOD::Studio::System* _studioSystem = nullptr;
     FMOD::System* _coreSystem = nullptr;
+    FMOD::DSP* _masterMeterDsp = nullptr;
     FmodHandleRegistry _handles;
     FmodBankRegistry _banks;
     FmodCallbackQueue _callbacks;
     Array<FmodInstanceContext*> _callbackContexts;
-    Array<FmodInstanceContext*> _retiredCallbackContexts;
+    Array<ReleasedInstanceDiagnostic> _releasedInstances;
+    uint32 _nextReleasedDiagnosticIndex = 0x80000000u;
     float _oneShotSweepTimer = 0.0f;
     uint64 _totalInstancesCreated = 0;
     uint64 _totalPlays = 0;
     uint64 _totalStopped = 0;
     int32 _peakActiveInstances = 0;
+    Array<AudioListenerState, InlinedAllocation<FMOD_MAX_LISTENERS>> _listeners;
+    Array<float, InlinedAllocation<8>> _outputPeak;
+    Array<float, InlinedAllocation<8>> _outputRms;
+    float _combinedOutputPeak = 0.0f;
+    float _combinedOutputRms = 0.0f;
+    float _combinedOutputDbfs = -120.0f;
+    float _secondsSinceNonSilentOutput = -1.0f;
+    bool _outputClipping = false;
+    bool _missingListenerWarned = false;
+    bool _duplicateListenerWarned = false;
+    std::atomic<int32> _lastErrorCode { 0 };
+    std::atomic<uint64> _channelReuseNotifications { 0 };
 
     float _masterVolume = 1.0f;
     float _masterPitch = 1.0f;
     bool _isPaused = false;
     bool _isMuted = false;
+    bool _masterBusStateDirty = true;
+    bool _liveUpdateActive = false;
     std::atomic<bool> _outputDevicesDirty { false };
 
 public:
@@ -87,6 +114,7 @@ public:
     bool SetTimelinePosition(AudioEventHandle handle, int32 milliseconds) override;
     bool SetListenerMask(AudioEventHandle handle, uint32 listenerMask) override;
     bool ResolveParameterId(const Guid& eventId, const StringView& eventPath, const StringView& name, AudioParameterId& id) override;
+    bool GetEventParameters(const Guid& eventId, const StringView& eventPath, Array<AudioParameterDescription>& result) override;
     bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) override;
     bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false) override;
     bool SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) override;
@@ -121,12 +149,17 @@ public:
     FMOD::System* GetCoreSystem() const { return _coreSystem; }
 
 private:
+    void ApplyMasterBusState();
     bool ConfigureInstanceCallback(FMOD::Studio::EventInstance* instance, AudioEventHandle handle);
     void ReleaseCallbackContexts();
     FMOD::Studio::EventDescription* GetEventDescription(const Guid& eventId, const StringView& path);
     FMOD::Studio::Bus* GetBus(const Guid& busId, const StringView& path);
     FMOD::Studio::VCA* GetVCA(const Guid& vcaId, const StringView& path);
     void RefreshOutputDevices();
+    void UpdateOutputMeter(float dt);
+    void TrackReleasedInstance(FMOD::Studio::EventInstance* instance, const AudioEventHandle& handle, const Guid& eventId, const Guid& ownerId, const StringView& path, int32 playCount, bool isOneShot);
+    void UpdateReleasedInstances();
+    void FillRuntimeInfo(FMOD::Studio::EventInstance* instance, const AudioEventHandle& handle, const Guid& eventId, const Guid& ownerId, const StringView& path, int32 playCount, bool isOneShot, AudioEventRuntimeInfo& eventInfo) const;
     static FMOD_RESULT F_CALL OnSystemCallback(FMOD_SYSTEM* system, FMOD_SYSTEM_CALLBACK_TYPE type, void* commandData1, void* commandData2, void* userData);
     static FMOD_RESULT F_CALL OnEventCallback(FMOD_STUDIO_EVENT_CALLBACK_TYPE type, FMOD_STUDIO_EVENTINSTANCE* event, void* parameters);
 };

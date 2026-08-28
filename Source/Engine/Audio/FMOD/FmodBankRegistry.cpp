@@ -17,6 +17,7 @@ void FmodBankRegistry::Init(FMOD::Studio::System* system)
     _system = system;
     _banksByGuid.Clear();
     _guidByPath.Clear();
+    _aliases.Clear();
 }
 
 void FmodBankRegistry::Dispose()
@@ -24,6 +25,7 @@ void FmodBankRegistry::Dispose()
     UnloadAll();
     _banksByGuid.Clear();
     _guidByPath.Clear();
+    _aliases.Clear();
     _system = nullptr;
 }
 
@@ -42,7 +44,7 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
     // Check if already loaded
     if (bankId.IsValid())
     {
-        BankEntry* existing = _banksByGuid.TryGet(bankId);
+        BankEntry* existing = _banksByGuid.TryGet(ResolveBankId(bankId));
         if (existing)
         {
             existing->RefCount++;
@@ -58,6 +60,31 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
             BankEntry* existing = _banksByGuid.TryGet(*existingGuid);
             if (existing)
             {
+                if (bankId.IsValid() && *existingGuid != bankId)
+                {
+                    if (!existing->SyntheticKey)
+                    {
+                        // Managed System.Guid and native Flax Guid field order
+                        // can represent the same canonical Studio ID
+                        // differently. The normalized physical path is the
+                        // authoritative ownership key.
+                        _aliases[bankId] = *existingGuid;
+                        existing->RefCount++;
+                        return true;
+                    }
+
+                    // Promote a path-only load to its stable typed ID. This keeps
+                    // dependency lookup and IsBankLoaded coherent when an async
+                    // loader was the first owner of the physical bank.
+                    BankEntry promoted = *existing;
+                    promoted.RefCount++;
+                    promoted.SyntheticKey = false;
+                    const Guid oldKey = *existingGuid;
+                    _banksByGuid.Remove(oldKey);
+                    _banksByGuid[bankId] = promoted;
+                    _guidByPath[filePath] = bankId;
+                    return true;
+                }
                 existing->RefCount++;
                 return true;
             }
@@ -71,6 +98,18 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
     StringAnsi pathAnsi(filePath);
     FMOD::Studio::Bank* bank = nullptr;
     FMOD_RESULT result = _system->loadBankFile(pathAnsi.Get(), flags, &bank);
+
+    // A bank may already be resident in the Studio system even when this
+    // registry has just been rebuilt (for example after an Editor-side bank
+    // refresh or a Play-mode transition). FMOD reports that perfectly valid
+    // state as ERR_EVENT_ALREADY_LOADED and does not return the existing
+    // handle from loadBankFile. Recover the handle by its stable bank ID so
+    // loading remains idempotent and the registry can resume ownership.
+    if (result == FMOD_ERR_EVENT_ALREADY_LOADED && bankId.IsValid())
+    {
+        FMOD_GUID fmodGuid = FmodConvert::ToFmodStudioGuid(bankId);
+        result = _system->getBankByID(&fmodGuid, &bank);
+    }
     if (!FmodConvert::CheckResult(result, "loadBankFile") || !bank)
         return false;
 
@@ -82,15 +121,24 @@ bool FmodBankRegistry::Load(const Guid& bankId, const StringView& path, bool non
     entry.LastResult = result;
     entry.FileRevision = filePath.HasChars() ? (uint64)FileSystem::GetFileLastEditTime(filePath).Ticks : 0;
 
-    Guid resolvedGuid = bankId;
+    Guid resolvedGuid = ResolveBankId(bankId);
+    bool syntheticKey = false;
     if (!resolvedGuid.IsValid())
     {
         FMOD_GUID fmodGuid;
-        if (bank->getID(&fmodGuid) == FMOD_OK)
-            resolvedGuid = FmodConvert::FromFmodGuid(fmodGuid);
+        // Non-blocking banks are not guaranteed to expose their ID until the
+        // metadata load completes. Path-based callers are already tracked by
+        // _guidByPath, so use an internal key without issuing a premature
+        // getID call that FMOD reports as ERR_NOTREADY.
+        if (!nonBlocking && bank->getID(&fmodGuid) == FMOD_OK)
+            resolvedGuid = FmodConvert::FromFmodStudioGuid(fmodGuid);
         else
+        {
             resolvedGuid = Guid::New();
+            syntheticKey = true;
+        }
     }
+    entry.SyntheticKey = syntheticKey;
 
     _banksByGuid[resolvedGuid] = entry;
     if (filePath.HasChars())
@@ -104,7 +152,7 @@ bool FmodBankRegistry::Unload(const Guid& bankId, const StringView& path)
     if (!_system || (!bankId.IsValid() && path.IsEmpty()))
         return false;
 
-    Guid resolvedGuid = bankId;
+    Guid resolvedGuid = ResolveBankId(bankId);
     BankEntry* entry = resolvedGuid.IsValid() ? _banksByGuid.TryGet(resolvedGuid) : nullptr;
     if (!entry && path.HasChars())
     {
@@ -130,9 +178,24 @@ bool FmodBankRegistry::Unload(const Guid& bankId, const StringView& path)
             entry->State = AudioBankState::Error;
             return false;
         }
+        // Studio bank unloading is asynchronous. Complete it before removing
+        // the registry entry so an immediate editor reload cannot race the old
+        // physical bank and receive FMOD_ERR_EVENT_ALREADY_LOADED.
+        if (_system->flushCommands() != FMOD_OK)
+        {
+            entry->RefCount = 1;
+            entry->State = AudioBankState::Error;
+            return false;
+        }
         if (entry->Path.HasChars())
             _guidByPath.Remove(entry->Path);
         _banksByGuid.Remove(resolvedGuid);
+        Array<Guid, InlinedAllocation<4>> aliases;
+        for (const auto& alias : _aliases)
+            if (alias.Value == resolvedGuid || alias.Key == resolvedGuid)
+                aliases.Add(alias.Key);
+        for (const Guid& alias : aliases)
+            _aliases.Remove(alias);
     }
     return true;
 }
@@ -155,6 +218,19 @@ bool FmodBankRegistry::UnloadAll()
                 success = false;
             }
         }
+
+        // Bank::unload queues work in FMOD Studio. ReloadBanks deliberately
+        // follows UnloadAll with loadBankFile in the same frame, so make the
+        // ownership handoff synchronous at this boundary.
+        if (!unloaded.IsEmpty())
+        {
+            const FMOD_RESULT result = _system->flushCommands();
+            if (result != FMOD_OK)
+            {
+                FmodConvert::CheckResult(result, "flushCommands after unloading banks");
+                success = false;
+            }
+        }
     }
     for (const Guid& id : unloaded)
     {
@@ -163,12 +239,13 @@ bool FmodBankRegistry::UnloadAll()
             _guidByPath.Remove(entry->Path);
         _banksByGuid.Remove(id);
     }
+    _aliases.Clear();
     return success;
 }
 
 bool FmodBankRegistry::IsLoaded(const Guid& bankId) const
 {
-    const BankEntry* entry = _banksByGuid.TryGet(bankId);
+    const BankEntry* entry = _banksByGuid.TryGet(ResolveBankId(bankId));
     if (!entry || !entry->Bank)
         return false;
 
@@ -181,7 +258,7 @@ bool FmodBankRegistry::IsLoaded(const Guid& bankId) const
 
 bool FmodBankRegistry::LoadSampleData(const Guid& bankId)
 {
-    BankEntry* entry = _banksByGuid.TryGet(bankId);
+    BankEntry* entry = _banksByGuid.TryGet(ResolveBankId(bankId));
     if (!entry || !entry->Bank)
         return false;
 
@@ -192,7 +269,7 @@ bool FmodBankRegistry::LoadSampleData(const Guid& bankId)
 
 void FmodBankRegistry::UnloadSampleData(const Guid& bankId)
 {
-    BankEntry* entry = _banksByGuid.TryGet(bankId);
+    BankEntry* entry = _banksByGuid.TryGet(ResolveBankId(bankId));
     if (entry && entry->Bank)
     {
         entry->Bank->unloadSampleData();
@@ -202,7 +279,7 @@ void FmodBankRegistry::UnloadSampleData(const Guid& bankId)
 
 AudioBankState FmodBankRegistry::GetState(const Guid& bankId) const
 {
-    const BankEntry* entry = _banksByGuid.TryGet(bankId);
+    const BankEntry* entry = _banksByGuid.TryGet(ResolveBankId(bankId));
     if (!entry || !entry->Bank)
         return AudioBankState::Unloaded;
 
@@ -219,7 +296,7 @@ AudioBankState FmodBankRegistry::GetState(const Guid& bankId) const
 bool FmodBankRegistry::Query(const Guid& bankId, const StringView& path, AudioBankRuntimeState& outState) const
 {
     outState = AudioBankRuntimeState();
-    Guid resolved = bankId;
+    Guid resolved = ResolveBankId(bankId);
     const BankEntry* entry = resolved.IsValid() ? _banksByGuid.TryGet(resolved) : nullptr;
     if (!entry && path.HasChars())
     {
@@ -256,7 +333,7 @@ bool FmodBankRegistry::Query(const Guid& bankId, const StringView& path, AudioBa
 
 FMOD::Studio::Bank* FmodBankRegistry::Get(const Guid& bankId) const
 {
-    const BankEntry* entry = _banksByGuid.TryGet(bankId);
+    const BankEntry* entry = _banksByGuid.TryGet(ResolveBankId(bankId));
     return entry ? entry->Bank : nullptr;
 }
 
@@ -277,6 +354,12 @@ void FmodBankRegistry::Capture(Array<AudioBankRuntimeState>& result) const
         AudioBankRuntimeState& state = result.AddOne();
         Query(item.Key, item.Value.Path, state);
     }
+}
+
+Guid FmodBankRegistry::ResolveBankId(const Guid& bankId) const
+{
+    const Guid* resolved = bankId.IsValid() ? _aliases.TryGet(bankId) : nullptr;
+    return resolved ? *resolved : bankId;
 }
 
 #endif

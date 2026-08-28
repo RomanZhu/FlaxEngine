@@ -48,7 +48,7 @@ namespace CSGBuilderImpl
     void onSceneUnloading(Scene* scene, const Guid& sceneId);
     bool buildInner(Scene* scene, BuildData& data);
     void build(Scene* scene);
-    bool updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData);
+    bool updatePreviewModel(AssetReference<Model>& previewModel, const ModelData& modelData);
     bool generateRawDataAsset(RawData& meshData, Guid& assetId, const String& assetPath);
 }
 
@@ -129,7 +129,7 @@ void Builder::Build(Scene* scene, float timeoutMs)
 }
 
 
-bool CSGBuilderImpl::updatePreviewModel(CSGCompiledData& csgData, const ModelData& modelData)
+bool CSGBuilderImpl::updatePreviewModel(AssetReference<Model>& previewModel, const ModelData& modelData)
 {
     // Render lists store raw mesh buffer pointers. Exclude rendering while the
     // inactive preview is rebuilt and published, then keep the old preview alive
@@ -145,7 +145,6 @@ bool CSGBuilderImpl::updatePreviewModel(CSGCompiledData& csgData, const ModelDat
     // live Mesh objects and invalidate their GPU-resource ownership. Material
     // changes commonly alter the number of CSG mesh partitions, so only reuse the
     // inactive preview when its LOD and mesh counts already match exactly.
-    AssetReference<Model> previewModel = csgData.PreviewModelCache;
     bool canReusePreview = previewModel && previewModel->LODs.Count() == meshesCountPerLod.Count();
     for (int32 lodIndex = 0; canReusePreview && lodIndex < meshesCountPerLod.Count(); lodIndex++)
         canReusePreview = previewModel->LODs[lodIndex].Meshes.Count() == meshesCountPerLod[lodIndex];
@@ -189,12 +188,34 @@ bool CSGBuilderImpl::updatePreviewModel(CSGCompiledData& csgData, const ModelDat
         }
     }
 
-    // Publish only after the entire model is ready. The render lock guarantees no
-    // draw list still contains pointers to the model moving into the cache.
-    csgData.PreviewModelCache = csgData.PreviewModel;
-    csgData.PreviewModel = previewModel;
-
     return false;
+}
+
+Model* CSGPreviewBuilder::Build(Actor* root, Model* reusableModel)
+{
+    if (root == nullptr)
+        return nullptr;
+
+    CSG::Mesh combinedMesh;
+    if (!CSGCompilation::CompileTargetMeshes(root, combinedMesh) || combinedMesh.GetPolygons()->IsEmpty())
+        return nullptr;
+
+    RawData meshData;
+    Array<MeshVertex> vertexBuffer;
+    combinedMesh.Triangulate(meshData, vertexBuffer);
+    meshData.RemoveEmptySlots();
+    if (meshData.Slots.IsEmpty())
+        return nullptr;
+
+    ModelData modelData;
+    meshData.ToModelData(modelData);
+    AssetReference<Model> previewModel = reusableModel;
+    if (updatePreviewModel(previewModel, modelData))
+    {
+        LOG(Warning, "Failed to build transient CSG preview model");
+        return nullptr;
+    }
+    return previewModel.Get();
 }
 
 bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
@@ -234,11 +255,16 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
             // Keep the viewport on a memory-backed model while the persisted model asset
             // is rewritten. This mirrors RealtimeCSG's dynamic-mesh update path and avoids
             // exposing the asset reload/unloaded state to rendering.
-            if (updatePreviewModel(scene->CSGData, modelData))
+            AssetReference<Model> previewModel = scene->CSGData.PreviewModelCache;
+            if (updatePreviewModel(previewModel, modelData))
             {
                 LOG(Warning, "Failed to update live CSG preview model");
                 return true;
             }
+            // Publish only after the entire model is ready. The render lock guarantees no
+            // draw list still contains pointers to the model moving into the cache.
+            scene->CSGData.PreviewModelCache = scene->CSGData.PreviewModel;
+            scene->CSGData.PreviewModel = previewModel;
 
             // Import model data to the asset
             {

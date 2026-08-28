@@ -172,9 +172,11 @@ public:
 class FLAXENGINE_API GraphDocumentPreview
 {
 public:
+#if USE_EDITOR
     /// <returns>True on failure.</returns>
     static bool Publish(const Guid& assetID, const StringView& typeName, const Span<byte>& surface,
         String& storagePath, ArtifactLease& lease, AssetPipelineDiagnostic& diagnostic);
     static void Release(const Guid& assetID);
+#endif
     static bool IsPreviewPath(const StringView& path);
 };

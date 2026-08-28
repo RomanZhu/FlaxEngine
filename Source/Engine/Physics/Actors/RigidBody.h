@@ -462,6 +462,12 @@ public:
     API_EVENT() Delegate<const Collision&> CollisionEnter;
 
     /// <summary>
+    /// Occurs when this rigidbody receives a significant collision hit, including
+    /// hits generated while the collider pair is already touching.
+    /// </summary>
+    API_EVENT() Delegate<const Collision&> CollisionHit;
+
+    /// <summary>
     /// Occurs when a collision end gets registered for this rigidbody (it ends colliding with something).
     /// </summary>
     API_EVENT() Delegate<const Collision&> CollisionExit;
@@ -478,6 +484,7 @@ public:
 
 public:
     void OnCollisionEnter(const Collision& c);
+    void OnCollisionHit(const Collision& c);
     void OnCollisionExit(const Collision& c);
 
     void OnTriggerEnter(PhysicsColliderActor* c);

@@ -71,9 +71,15 @@ namespace FlaxEditor.Windows.Profiler
         }
 
         /// <summary>
-        /// The maximum amount of samples to collect.
+        /// The initial amount of sample storage to reserve. Sample storage grows for the whole recording session.
         /// </summary>
-        public const int MaxSamples = 60 * 10;
+        public const int InitialSamplesCapacity = 60 * 10;
+
+        /// <summary>
+        /// The legacy initial sample capacity. Profiler buffers are no longer capped at this value.
+        /// </summary>
+        [Obsolete("Profiler sample storage now grows for the whole recording. Use InitialSamplesCapacity when reserving storage.")]
+        public const int MaxSamples = InitialSamplesCapacity;
 
         /// <summary>
         /// The minimum event time in ms.
@@ -89,6 +95,13 @@ namespace FlaxEditor.Windows.Profiler
         public ProfilerMode(string text)
         : base(text)
         {
+        }
+
+        internal ProfilerMode(string text, ProfilerHistoryView historyView)
+        : base(text)
+        {
+            if (historyView == null)
+                throw new ArgumentNullException(nameof(historyView));
         }
 
         /// <inheritdoc />

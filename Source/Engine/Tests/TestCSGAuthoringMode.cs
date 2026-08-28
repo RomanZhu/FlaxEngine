@@ -300,6 +300,14 @@ namespace FlaxEditor.Tests
         }
 
         [Test]
+        public void TestDirectTranslationRequiresAnExistingSelection()
+        {
+            Assert.IsFalse(CSGAuthoringGizmo.ShouldArmDirectTranslation(false, false));
+            Assert.IsTrue(CSGAuthoringGizmo.ShouldArmDirectTranslation(true, false));
+            Assert.IsFalse(CSGAuthoringGizmo.ShouldArmDirectTranslation(true, true));
+        }
+
+        [Test]
         public void TestBoxBrushCanFlipGeneratedNormals()
         {
             var brush = new BoxBrush();
@@ -1116,6 +1124,31 @@ namespace FlaxEditor.Tests
                 FlaxEngine.Object.Destroy(actor);
                 mode.Dispose();
                 owner.Gizmos.Clear();
+            }
+        }
+
+        [Test]
+        public void TestCSGEditBodyActivationSupportsMultiSelectedBrushes()
+        {
+            var firstActor = new BoxBrush();
+            var secondActor = new BoxBrush();
+            var firstBrush = new BoxBrushNode(firstActor);
+            var secondBrush = new BoxBrushNode(secondActor);
+            try
+            {
+                SceneGraphNode[] selection = { firstBrush, secondBrush };
+
+                Assert.IsTrue(CSGAuthoringGizmo.ShouldActivateBodyTransform(true, false, selection, firstBrush));
+                Assert.IsTrue(CSGAuthoringGizmo.ShouldActivateBodyTransform(true, false, selection, secondBrush));
+                Assert.IsFalse(CSGAuthoringGizmo.ShouldActivateBodyTransform(true, true, selection, firstBrush));
+                Assert.IsFalse(CSGAuthoringGizmo.ShouldActivateBodyTransform(false, false, selection, firstBrush));
+            }
+            finally
+            {
+                firstBrush.Dispose();
+                secondBrush.Dispose();
+                FlaxEngine.Object.Destroy(firstActor);
+                FlaxEngine.Object.Destroy(secondActor);
             }
         }
 

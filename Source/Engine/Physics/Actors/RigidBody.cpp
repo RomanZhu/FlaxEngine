@@ -425,6 +425,11 @@ void RigidBody::OnCollisionEnter(const Collision& c)
     CollisionEnter(c);
 }
 
+void RigidBody::OnCollisionHit(const Collision& c)
+{
+    CollisionHit(c);
+}
+
 void RigidBody::OnCollisionExit(const Collision& c)
 {
     CollisionExit(c);

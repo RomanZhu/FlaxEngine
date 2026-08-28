@@ -4,6 +4,44 @@
 #include "AudioEventCatalog.h"
 #include "Assets/AudioEvent.h"
 #include "Engine/Engine/Engine.h"
+#include "Engine/Level/Actor.h"
+#include "Engine/Scripting/ScriptingObjectReference.h"
+
+namespace
+{
+    struct TrackedAudioEventInstance
+    {
+        Guid EventAssetId = Guid::Empty;
+        Guid OwnerId = Guid::Empty;
+        ScriptingObjectReference<Actor> Owner;
+        AudioEventHandle Handle;
+        Vector3 PreviousPosition = Vector3::Zero;
+        bool FollowOwner = false;
+    };
+
+    Array<TrackedAudioEventInstance> TrackedInstances;
+
+    int32 FindTrackedInstance(const AudioEvent* audioEvent, const Actor* owner)
+    {
+        if (!audioEvent || !owner)
+            return -1;
+        const Guid eventAssetId = audioEvent->GetID();
+        const Guid ownerId = owner->GetID();
+        for (int32 i = 0; i < TrackedInstances.Count(); i++)
+        {
+            const auto& instance = TrackedInstances[i];
+            if (instance.FollowOwner && instance.EventAssetId == eventAssetId && instance.OwnerId == ownerId)
+                return i;
+        }
+        return -1;
+    }
+
+    void AddInitialParameters(AudioEventCreateOptions& options, const Span<AudioParameterValue>& initialParameters)
+    {
+        if (initialParameters.Length() != 0)
+            options.InitialParameters.Add(initialParameters.Get(), initialParameters.Length());
+    }
+}
 
 IAudioEventBackend* AudioEventSystem::_backend = nullptr;
 Delegate<const AudioEventCallback&> AudioEventSystem::EventCallback;
@@ -15,6 +53,8 @@ IAudioEventBackend* AudioEventSystem::GetBackend()
 
 void AudioEventSystem::SetBackend(IAudioEventBackend* backend)
 {
+    if (_backend != backend)
+        TrackedInstances.Clear();
     _backend = backend;
 }
 
@@ -125,15 +165,127 @@ AudioEventHandle AudioEventSystem::CreateInstanceFromAsset(AudioEvent* audioEven
     return CreateInstance(audioEvent->BackendId, audioEvent->Path, options);
 }
 
+AudioEventHandle AudioEventSystem::Play(AudioEvent* audioEvent, Actor* owner)
+{
+    return Play(audioEvent, owner, Span<AudioParameterValue>());
+}
+
+AudioEventHandle AudioEventSystem::Play(AudioEvent* audioEvent, Actor* owner, const Array<AudioParameterValue>& initialParameters)
+{
+    return Play(audioEvent, owner, Span<AudioParameterValue>(initialParameters.Get(), initialParameters.Count()));
+}
+
+AudioEventHandle AudioEventSystem::Play(AudioEvent* audioEvent, Actor* owner, const Span<AudioParameterValue>& initialParameters)
+{
+    if (!audioEvent || !owner || !owner->IsDuringPlay() || !Engine::IsPlayMode())
+        return AudioEventHandle();
+
+    const int32 existingIndex = FindTrackedInstance(audioEvent, owner);
+    if (existingIndex != -1)
+    {
+        auto& existing = TrackedInstances[existingIndex];
+        AudioEventInstanceState state;
+        if (QueryInstance(existing.Handle, state))
+        {
+            const Vector3 position = owner->GetPosition();
+            existing.PreviousPosition = position;
+            Set3DAttributes(existing.Handle, Audio3DAttributes(owner->GetTransform()));
+            if (initialParameters.Length() == 0 || SetParameters(existing.Handle, initialParameters, true))
+            {
+                if (AudioEventSystem::Play(existing.Handle))
+                    return existing.Handle;
+            }
+            const AudioEventHandle staleHandle = existing.Handle;
+            TrackedInstances.RemoveAt(existingIndex);
+            StopAndRelease(staleHandle, AudioStopMode::Immediate);
+        }
+        else
+        {
+            TrackedInstances.RemoveAt(existingIndex);
+        }
+    }
+
+    AudioEventCreateOptions options;
+    options.Attributes = Audio3DAttributes(owner->GetTransform());
+    options.OwnerId = owner->GetID();
+    AddInitialParameters(options, initialParameters);
+    const AudioEventHandle handle = CreateInstanceFromAsset(audioEvent, options);
+    if (!handle.IsValid())
+        return AudioEventHandle();
+    if (!AudioEventSystem::Play(handle))
+    {
+        ReleaseInstance(handle);
+        return AudioEventHandle();
+    }
+
+    TrackedAudioEventInstance instance;
+    instance.EventAssetId = audioEvent->GetID();
+    instance.OwnerId = owner->GetID();
+    instance.Owner = owner;
+    instance.Handle = handle;
+    instance.PreviousPosition = owner->GetPosition();
+    instance.FollowOwner = true;
+    TrackedInstances.Add(MoveTemp(instance));
+    return handle;
+}
+
+AudioEventHandle AudioEventSystem::PlayAt(AudioEvent* audioEvent, const Vector3& position)
+{
+    return PlayAt(audioEvent, position, Span<AudioParameterValue>());
+}
+
+AudioEventHandle AudioEventSystem::PlayAt(AudioEvent* audioEvent, const Vector3& position, const Array<AudioParameterValue>& initialParameters)
+{
+    return PlayAt(audioEvent, position, Span<AudioParameterValue>(initialParameters.Get(), initialParameters.Count()));
+}
+
+AudioEventHandle AudioEventSystem::PlayAt(AudioEvent* audioEvent, const Vector3& position, const Span<AudioParameterValue>& initialParameters)
+{
+    if (!audioEvent || !Engine::IsPlayMode())
+        return AudioEventHandle();
+
+    AudioEventCreateOptions options;
+    options.Attributes = Audio3DAttributes(position, Vector3::Zero, Vector3::Forward, Vector3::Up);
+    AddInitialParameters(options, initialParameters);
+    const AudioEventHandle handle = CreateInstanceFromAsset(audioEvent, options);
+    if (!handle.IsValid())
+        return AudioEventHandle();
+    if (!AudioEventSystem::Play(handle))
+    {
+        ReleaseInstance(handle);
+        return AudioEventHandle();
+    }
+
+    TrackedAudioEventInstance instance;
+    instance.EventAssetId = audioEvent->GetID();
+    instance.Handle = handle;
+    instance.PreviousPosition = position;
+    TrackedInstances.Add(MoveTemp(instance));
+    return handle;
+}
+
 #if USE_EDITOR
 AudioEventHandle AudioEventSystem::CreatePreviewInstance(const Guid& eventId, const StringView& path, const AudioEventCreateOptions& options)
 {
+    // Edit mode deliberately suspends and unloads the runtime bank set. A preview
+    // is an explicit request to wake the backend; otherwise FMOD can report the
+    // instance as Playing while the global Studio system remains paused.
+    if (_backend && !Engine::IsPlayMode())
+        _backend->SetPaused(false);
     return _backend ? _backend->CreateInstance(eventId, path, options) : AudioEventHandle();
 }
 
 bool AudioEventSystem::PlayPreview(AudioEventHandle handle)
 {
     return _backend ? _backend->Play(handle) : false;
+}
+
+void AudioEventSystem::SetPreviewListener(const Audio3DAttributes& attributes)
+{
+    if (!_backend || Engine::IsPlayMode())
+        return;
+    const AudioListenerState listener(Guid::Empty, attributes, 1.0f, 0);
+    _backend->UpdateListeners(Span<AudioListenerState>(&listener, 1));
 }
 #endif
 
@@ -159,9 +311,21 @@ bool AudioEventSystem::Stop(AudioEventHandle handle, AudioStopMode stopMode)
     return _backend ? _backend->Stop(handle, stopMode) : false;
 }
 
+bool AudioEventSystem::Stop(AudioEvent* audioEvent, Actor* owner, AudioStopMode stopMode)
+{
+    const int32 index = FindTrackedInstance(audioEvent, owner);
+    if (index == -1)
+        return false;
+    const AudioEventHandle handle = TrackedInstances[index].Handle;
+    TrackedInstances.RemoveAt(index);
+    return StopAndRelease(handle, stopMode);
+}
+
 bool AudioEventSystem::StopAll(AudioStopMode stopMode)
 {
-    return _backend ? _backend->StopAll(stopMode) : false;
+    const bool result = _backend ? _backend->StopAll(stopMode) : false;
+    TrackedInstances.Clear();
+    return result;
 }
 
 bool AudioEventSystem::ReleaseInstance(AudioEventHandle handle)
@@ -228,14 +392,31 @@ bool AudioEventSystem::ResolveParameterId(const Guid& eventId, const StringView&
     return _backend ? _backend->ResolveParameterId(eventId, eventPath, name, id) : false;
 }
 
+bool AudioEventSystem::GetEventParameters(const Guid& eventId, const StringView& eventPath, Array<AudioParameterDescription>& result)
+{
+    result.Clear();
+    return _backend ? _backend->GetEventParameters(eventId, eventPath, result) : false;
+}
+
 bool AudioEventSystem::SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed)
 {
     return _backend ? _backend->SetParameter(handle, id, value, ignoreSeekSpeed) : false;
 }
 
+bool AudioEventSystem::SetParameter(AudioEvent* audioEvent, Actor* owner, const AudioParameterId& id, float value, bool ignoreSeekSpeed)
+{
+    const int32 index = FindTrackedInstance(audioEvent, owner);
+    return index != -1 && SetParameter(TrackedInstances[index].Handle, id, value, ignoreSeekSpeed);
+}
+
 bool AudioEventSystem::SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed)
 {
     return _backend ? _backend->SetParameters(handle, values, ignoreSeekSpeed) : false;
+}
+
+bool AudioEventSystem::SetParameters(AudioEventHandle handle, const Array<AudioParameterValue>& values, bool ignoreSeekSpeed)
+{
+    return SetParameters(handle, Span<AudioParameterValue>(values.Get(), values.Count()), ignoreSeekSpeed);
 }
 
 bool AudioEventSystem::SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed)
@@ -340,4 +521,55 @@ void AudioEventSystem::CaptureDiagnostics(AudioDiagnosticsSnapshot& outSnapshot)
         _backend->CaptureDiagnostics(outSnapshot);
     else
         outSnapshot = AudioDiagnosticsSnapshot();
+}
+
+void AudioEventSystem::UpdateTrackedInstances(float dt)
+{
+    for (int32 i = TrackedInstances.Count() - 1; i >= 0; i--)
+    {
+        auto& instance = TrackedInstances[i];
+        AudioEventInstanceState state;
+        if (!QueryInstance(instance.Handle, state))
+        {
+            TrackedInstances.RemoveAt(i);
+            continue;
+        }
+        if (state.PlaybackState == AudioEventPlaybackState::Stopped)
+        {
+            ReleaseInstance(instance.Handle);
+            TrackedInstances.RemoveAt(i);
+            continue;
+        }
+        if (!instance.FollowOwner)
+            continue;
+
+        Actor* owner = instance.Owner;
+        if (!owner || !owner->IsDuringPlay())
+        {
+            const AudioEventHandle handle = instance.Handle;
+            TrackedInstances.RemoveAt(i);
+            StopAndRelease(handle, AudioStopMode::Immediate);
+            continue;
+        }
+
+        const Vector3 position = owner->GetPosition();
+        Vector3 velocity = Vector3::Zero;
+        if (dt > 0.00001f)
+        {
+            velocity = (position - instance.PreviousPosition) / dt;
+            const float maxVelocity = 10000.0f;
+            const float velocityLength = (float)velocity.Length();
+            if (velocityLength > maxVelocity)
+                velocity *= maxVelocity / velocityLength;
+            if (velocity.IsNanOrInfinity())
+                velocity = Vector3::Zero;
+        }
+        instance.PreviousPosition = position;
+        if (!Set3DAttributes(instance.Handle, Audio3DAttributes(owner->GetTransform(), velocity)))
+        {
+            const AudioEventHandle handle = instance.Handle;
+            TrackedInstances.RemoveAt(i);
+            StopAndRelease(handle, AudioStopMode::Immediate);
+        }
+    }
 }

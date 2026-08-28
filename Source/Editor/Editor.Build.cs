@@ -107,12 +107,13 @@ public class Editor : EditorModule
         var dotnetSdk = DotNetSdk.Instance;
         if (dotnetSdk.IsValid)
         {
-            var sdkVer = dotnetSdk.Version.Major;
-            var minVer = Math.Max(DotNetSdk.MinimumVersion.Major, sdkVer);
+            var runtimeVer = Version.Parse(dotnetSdk.RuntimeVersionName).Major;
+            var minVer = Math.Max(DotNetSdk.MinimumVersion.Major, runtimeVer);
             var maxVer = DotNetSdk.MaximumVersion.Major;
+            options.PrivateDefinitions.Add("GAME_BUILD_DOTNET_RUNTIME_VER=" + runtimeVer);
             options.PrivateDefinitions.Add("GAME_BUILD_DOTNET_RUNTIME_MIN_VER=" + minVer);
             options.PrivateDefinitions.Add("GAME_BUILD_DOTNET_RUNTIME_MAX_VER=" + DotNetSdk.MaximumVersion.Major);
-            Log.Verbose($"Using Dotnet runtime versions range {minVer}-{maxVer} for Game Cooker");
+            Log.Verbose($"Using Dotnet runtime {runtimeVer} and supported versions range {minVer}-{maxVer} for Game Cooker");
         }
     }
 

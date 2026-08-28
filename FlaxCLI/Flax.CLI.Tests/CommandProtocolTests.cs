@@ -148,6 +148,7 @@ public sealed class CommandProtocolTests
     [TestCase("actors", "component.set", "actors.component.set")]
     [TestCase("actors", "primitive.create", "actors.primitive.create")]
     [TestCase("actors", "property.set", "actors.property.set")]
+    [TestCase("colliders", "normalize-center", "colliders.normalize-center")]
     [TestCase("prefabs", "instantiate", "prefabs.instantiate")]
     [TestCase("history", "undo", "history.undo")]
     public void AuthoringGroupsRouteToTypedCommandNames(string group, string action, string expected)

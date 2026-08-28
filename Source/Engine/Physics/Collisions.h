@@ -39,7 +39,7 @@ struct TIsPODType<ContactPoint>
 #define COLLISION_NAX_CONTACT_POINTS 8
 
 /// <summary>
-/// Contains a collision information passed to the OnCollisionEnter/OnCollisionExit events.
+/// Contains collision information passed to the OnCollisionEnter, OnCollisionHit, and OnCollisionExit events.
 /// </summary>
 API_STRUCT(NoDefault) struct FLAXENGINE_API Collision
 {
@@ -60,6 +60,12 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API Collision
     /// </summary>
     /// <remarks>The total impulse is obtained by summing up impulses applied at all contact points in this collision pair.</remarks>
     API_FIELD() Vector3 Impulse;
+
+    /// <summary>
+    /// The maximum pre-solver speed at which the colliders approached along the contact normal.
+    /// </summary>
+    /// <remarks>Positive for an impact and zero when no impact was reported.</remarks>
+    API_FIELD() float ApproachSpeed;
 
     /// <summary>
     /// The linear velocity of the first colliding object (this instance).

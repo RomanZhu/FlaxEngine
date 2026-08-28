@@ -263,6 +263,7 @@ namespace FlaxEditor.Windows
             set
             {
                 Audio.MasterVolume = value ? 0 : AudioVolume;
+                AudioEventSystem.SetMuted(value);
                 _audioMuted = value;
                 MuteAudio?.Invoke();
                 UpdateToolStrip();
@@ -529,6 +530,8 @@ namespace FlaxEditor.Windows
             };
             RootControl.GameRoot = _guiRoot.UIRoot;
             InitToolStrip();
+            if (MultiplayerPlayMode.IsReplica)
+                AudioMuted = true;
 
             SizeChanged += control => { ResizeViewport(); };
 

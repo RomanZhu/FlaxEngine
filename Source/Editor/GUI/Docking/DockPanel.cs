@@ -714,9 +714,9 @@ namespace FlaxEditor.GUI.Docking
             {
                 if (container.Children[i] is SplitPanel splitter)
                 {
-                    var panel1HasEditor = ContainsDockWindow(splitter.Panel1, "Editor");
+                    var panel1HasEditor = ContainsDockWindow(splitter.Panel1, "Scene");
                     var panel1HasGame = ContainsDockWindow(splitter.Panel1, "Game");
-                    var panel2HasEditor = ContainsDockWindow(splitter.Panel2, "Editor");
+                    var panel2HasEditor = ContainsDockWindow(splitter.Panel2, "Scene");
                     var panel2HasGame = ContainsDockWindow(splitter.Panel2, "Game");
                     if ((panel1HasEditor && panel2HasGame) || (panel1HasGame && panel2HasEditor))
                     {

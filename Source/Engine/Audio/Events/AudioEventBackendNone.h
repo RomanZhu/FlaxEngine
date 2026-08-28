@@ -93,6 +93,7 @@ public:
     bool SetGlobalParameterLabel(const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) override;
 
     bool QueryInstance(AudioEventHandle handle, AudioEventInstanceState& outState) const override;
+    bool GetParameter(AudioEventHandle handle, const AudioParameterId& id, AudioParameterState& outState) const override;
 
     bool SetSnapshotWeight(AudioEventHandle handle, float weight) override;
     bool SetBusVolume(const Guid& busId, const StringView& path, float volume) override;

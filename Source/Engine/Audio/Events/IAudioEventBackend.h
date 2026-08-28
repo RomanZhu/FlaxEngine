@@ -86,6 +86,7 @@ public:
     virtual bool SetTimelinePosition(AudioEventHandle handle, int32 milliseconds) = 0;
     virtual bool SetListenerMask(AudioEventHandle handle, uint32 listenerMask) = 0;
     virtual bool ResolveParameterId(const Guid& eventId, const StringView& eventPath, const StringView& name, AudioParameterId& id) = 0;
+    virtual bool GetEventParameters(const Guid& eventId, const StringView& eventPath, Array<AudioParameterDescription>& result) { result.Clear(); return false; }
     virtual bool SetParameter(AudioEventHandle handle, const AudioParameterId& id, float value, bool ignoreSeekSpeed = false) = 0;
     virtual bool SetParameters(AudioEventHandle handle, const Span<AudioParameterValue>& values, bool ignoreSeekSpeed = false) = 0;
     virtual bool SetParameterLabel(AudioEventHandle handle, const AudioParameterId& id, const StringView& label, bool ignoreSeekSpeed = false) = 0;

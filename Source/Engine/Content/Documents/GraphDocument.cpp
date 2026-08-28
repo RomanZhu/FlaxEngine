@@ -1618,8 +1618,10 @@ namespace
         return typeName == MaterialFunction::TypeName || typeName == AnimationGraphFunction::TypeName || IsParticleEmitterFunctionType(typeName);
     }
 
+#if USE_EDITOR
     Dictionary<Guid, ArtifactLease> PreviewLeases;
     CriticalSection PreviewLocker;
+#endif
 }
 
 StringAnsi GraphDocumentNode::GetStableID() const
@@ -2573,6 +2575,7 @@ bool GraphDocumentSession::Save(bool allowOverwriteConflict, AssetPipelineDiagno
     return false;
 }
 
+#if USE_EDITOR
 bool GraphDocumentPreview::Publish(const Guid& assetID, const StringView& typeName, const Span<byte>& surface,
     String& storagePath, ArtifactLease& lease, AssetPipelineDiagnostic& diagnostic)
 {
@@ -2603,6 +2606,7 @@ void GraphDocumentPreview::Release(const Guid& assetID)
     ScopeLock lock(PreviewLocker);
     PreviewLeases.Remove(assetID);
 }
+#endif
 
 bool GraphDocumentPreview::IsPreviewPath(const StringView& path)
 {

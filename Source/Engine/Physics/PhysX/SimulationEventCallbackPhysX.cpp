@@ -161,6 +161,7 @@ void SimulationEventCallback::onContact(const PxContactPairHeader& pairHeader, c
             }
         }
         c.Impulse = P2C(totalImpulse);
+        c.ApproachSpeed = 0.0f;
 
         // Extract velocities
         c.ThisVelocity = c.OtherVelocity = Vector3::Zero;

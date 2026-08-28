@@ -37,7 +37,9 @@ namespace FlaxEditor.Gizmo
         private readonly List<SceneGraphNode> _pickAncestry = new List<SceneGraphNode>();
         private readonly List<SceneGraphNode> _pickSelectionChain = new List<SceneGraphNode>();
         private readonly List<ActorNode> _brushPickNodes = new List<ActorNode>(32);
+        private readonly List<ActorNode> _audioVolumePickNodes = new List<ActorNode>(32);
         private readonly List<Scene> _csgRebuildScenes = new List<Scene>(4);
+        private readonly List<ResizeBoundsObjectsAction.Entry> _boundsResizeEntries = new List<ResizeBoundsObjectsAction.Entry>();
         private TerrainNode _terrainDisplayPivotNode;
         private Vector3 _terrainDisplayPivotLocal;
         private bool _hasTerrainDisplayPivot;
@@ -524,6 +526,13 @@ namespace FlaxEditor.Gizmo
 
             var hit = root.RayCast(ref ray, ref view, out var hitDistance, rayCastFlags);
 
+            // Audio volume wires are rendered through scene geometry. Give an explicit
+            // wire hit the same selection priority so all twelve visible edges behave
+            // consistently instead of only the three nearest edges winning the depth test.
+            var audioVolumeHit = PickAudioVolumeWire(root, ref ray, ref view);
+            if (audioVolumeHit != null)
+                return audioVolumeHit;
+
             // Source brushes overlap the generated CSG result. Treat the visible
             // face of an additive brush as the stable target at the same depth;
             // subtractive volumes remain wire-only because their interior is a hole.
@@ -551,6 +560,26 @@ namespace FlaxEditor.Gizmo
                 }
             }
             return hit;
+        }
+
+        private AudioVolumeNodeBase PickAudioVolumeWire(ActorNode root, ref Ray ray, ref Ray view)
+        {
+            _audioVolumePickNodes.Clear();
+            if (root is AudioVolumeNodeBase rootAudioVolume)
+                _audioVolumePickNodes.Add(rootAudioVolume);
+            root.GetAllChildActorNodes(_audioVolumePickNodes);
+            AudioVolumeNodeBase closest = null;
+            Real closestDistance = Real.MaxValue;
+            for (int i = 0; i < _audioVolumePickNodes.Count; i++)
+            {
+                if (_audioVolumePickNodes[i] is not AudioVolumeNodeBase node || !node.IsActiveInHierarchy)
+                    continue;
+                if (!node.RayCastWire(ref ray, ref view.Position, out var distance) || distance < 0.0f || distance >= closestDistance)
+                    continue;
+                closest = node;
+                closestDistance = distance;
+            }
+            return closest;
         }
 
         private BoxBrushNode PickBrushSource(ActorNode root, ref Ray ray, ref Ray view, out Real closestDistance, out bool closestIsWireHit)
@@ -701,6 +730,68 @@ namespace FlaxEditor.Gizmo
             ApplyTransformation(_selectionParents, ref translationDelta, ref rotationDelta, ref scaleDelta);
         }
 
+        /// <summary>
+        /// Applies a selection-bounds scale delta to an authored box shape instead of its actor scale.
+        /// </summary>
+        /// <param name="node">The node being resized.</param>
+        /// <param name="transform">The node transform restored to the transaction origin.</param>
+        /// <param name="scaleDelta">The world-space bounds scale delta.</param>
+        /// <returns>True if the node owns a supported authored box shape.</returns>
+        internal bool TryApplyBoundsShapeResize(SceneGraphNode node, ref Transform transform, Vector3 scaleDelta)
+        {
+            if (_boundsResizeEntries.Count == 0 || node is not ActorNode actorNode)
+                return false;
+
+            int index = _boundsResizeEntries.FindIndex(x => x.ActorId == actorNode.Actor.ID);
+            if (index < 0)
+                return false;
+
+            var entry = _boundsResizeEntries[index];
+            Float3 sizeFactor = ApplyWorldScaleDelta(Float3.One, transform.Orientation, scaleDelta);
+            entry.Apply(entry.Before * (Vector3)sizeFactor);
+            return true;
+        }
+
+        /// <inheritdoc />
+        protected override void OnStartTransforming()
+        {
+            base.OnStartTransforming();
+
+            _boundsResizeEntries.Clear();
+            var origin = TransactionOrigin;
+            if (origin == null || origin.InitialMode != Mode.Bounds || !IsBoundsFaceAxis(origin.Handle.Axis))
+                return;
+
+            for (int i = 0; i < TransactionObjects.Count; i++)
+            {
+                if (TransactionObjects[i] is ActorNode actorNode && ResizeBoundsObjectsAction.Entry.TryCreate(actorNode.Actor, out var entry))
+                    _boundsResizeEntries.Add(entry);
+            }
+        }
+
+        /// <inheritdoc />
+        protected override void OnCancelTransforming()
+        {
+            for (int i = 0; i < _boundsResizeEntries.Count; i++)
+                _boundsResizeEntries[i].Apply(_boundsResizeEntries[i].Before);
+            _boundsResizeEntries.Clear();
+            base.OnCancelTransforming();
+        }
+
+        /// <inheritdoc />
+        protected override bool HasAdditionalWorkingChanges
+        {
+            get
+            {
+                for (int i = 0; i < _boundsResizeEntries.Count; i++)
+                {
+                    if (_boundsResizeEntries[i].HasChanged())
+                        return true;
+                }
+                return false;
+            }
+        }
+
         /// <inheritdoc />
         protected override void OnApplyInteractionResult(InteractionResult result)
         {
@@ -734,17 +825,26 @@ namespace FlaxEditor.Gizmo
         {
             base.OnEndTransforming();
 
-            if (!HasTransformChanges || TransactionObjects.Count == 0)
+            if ((!HasTransformChanges && !HasAdditionalWorkingChanges) || TransactionObjects.Count == 0)
+            {
+                _boundsResizeEntries.Clear();
                 return;
+            }
 
             // Record one transform action. Transaction-aware duplication is
             // composed into the same history item by the lifecycle layer.
             var selection = new List<SceneGraphNode>(TransactionObjects);
-            var action = new TransformObjectsAction(selection, _startTransforms, ref _startBounds, _navigationDirty);
+            IUndoAction action = new TransformObjectsAction(selection, _startTransforms, ref _startBounds, _navigationDirty);
+            if (_boundsResizeEntries.Count != 0)
+            {
+                var resizeAction = new ResizeBoundsObjectsAction(_boundsResizeEntries);
+                action = new MultiUndoAction(new[] { action, resizeAction }, "Resize object bounds");
+            }
             AddTransformUndoAction(action);
 
             // Ensure the committed state wins over any queued interactive update.
             RequestCSGRebuilds(true);
+            _boundsResizeEntries.Clear();
         }
 
         private void RequestCSGRebuilds(bool final)

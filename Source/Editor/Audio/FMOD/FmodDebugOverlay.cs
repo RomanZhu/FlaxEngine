@@ -150,6 +150,12 @@ namespace FlaxEditor.FMOD
                 .Append(FormatBytes(snapshot.MemoryPeak)).Append(" | Output: ").Append(snapshot.OutputSampleRate)
                 .Append(" Hz ").Append(snapshot.OutputChannels).Append("ch, DSP ").Append(snapshot.DspBufferLength)
                 .Append('x').Append(snapshot.DspBufferCount).Append('\n');
+            builder.Append("Master: RMS ").Append(snapshot.CombinedOutputRms.ToString("0.000000"))
+                .Append(" (").Append(snapshot.CombinedOutputDbfs.ToString("0.0")).Append(" dBFS), peak ")
+                .Append(snapshot.CombinedOutputPeak.ToString("0.000")).Append(snapshot.OutputClipping ? " CLIPPING" : string.Empty)
+                .Append(" | listeners ").Append(snapshot.ListenerCount).Append('\n');
+            if (snapshot.LastErrorCode != 0)
+                builder.Append("Last FMOD error: ").Append(snapshot.LastErrorCode).Append(' ').Append(snapshot.LastError).Append('\n');
             builder.Append("Callbacks: queue ").Append(snapshot.CallbackQueueDepth).Append(", dropped ")
                 .Append(snapshot.DroppedCallbacks).Append(" | Occlusion: ").Append(scene.OcclusionQueries)
                 .Append(" queries, ").Append(scene.OcclusionDeferred).Append(" deferred\n");
@@ -204,7 +210,7 @@ namespace FlaxEditor.FMOD
             });
 
             var builder = new StringBuilder(256);
-            builder.Append("Voices | Name | Plays | Volume | Time\n");
+            builder.Append("State | Name | Voices | Gain/Audibility | Distance | Silence cause\n");
             foreach (var eventInfo in events)
             {
                 var voices = eventInfo.RealVoices + eventInfo.VirtualVoices;
@@ -214,10 +220,16 @@ namespace FlaxEditor.FMOD
                 if (plays == 0 && eventInfo.PlaybackState != AudioEventPlaybackState.Stopped)
                     plays = 1;
                 var time = eventInfo.TimeSeconds > 0.0f ? eventInfo.TimeSeconds : eventInfo.TimelinePosition / 1000.0f;
-                builder.Append(voices).Append(" (real ").Append(eventInfo.RealVoices).Append("/virtual ")
-                    .Append(eventInfo.VirtualVoices).Append(") | ").Append(eventInfo.Path ?? "<unnamed>")
-                    .Append(" | ").Append(plays).Append(" | ").Append(eventInfo.Volume.ToString("0.00"))
-                    .Append(" | ").Append(time.ToString("0.0")).Append("s\n");
+                builder.Append(eventInfo.ReachingOutput ? "OUTPUT" : eventInfo.Audible ? "AUDIBLE" : eventInfo.IsVirtual ? "VIRTUAL" : eventInfo.Playing ? "PLAYING" : eventInfo.Started ? "STARTED" : "CREATED")
+                    .Append(" | ").Append(eventInfo.Path ?? "<unnamed>")
+                    .Append(" | ").Append(voices).Append(" (real ").Append(eventInfo.RealVoices).Append("/virtual ")
+                    .Append(eventInfo.VirtualVoices).Append(") | ").Append(eventInfo.FinalVolume.ToString("0.00"))
+                    .Append('/').Append(eventInfo.Audibility.ToString("0.000"))
+                    .Append(" | ").Append(eventInfo.DistanceMeters.ToString("0.00")).Append("m [")
+                    .Append(eventInfo.MinimumDistanceMeters.ToString("0.00")).Append('-')
+                    .Append(eventInfo.MaximumDistanceMeters.ToString("0.00")).Append("m] | ")
+                    .Append(string.IsNullOrEmpty(eventInfo.SilenceCause) ? "reaching output" : eventInfo.SilenceCause)
+                    .Append(" | plays ").Append(plays).Append(" @ ").Append(time.ToString("0.0")).Append("s\n");
             }
             if (events.Count == 0)
                 builder.Append("<no active instances>\n");
@@ -235,21 +247,12 @@ namespace FlaxEditor.FMOD
 
         private static void OnEventCallback(AudioEventCallback callback)
         {
-            foreach (var emitter in Level.GetActors<AudioEmitter>())
+            var key = MakeKey(callback.Handle);
+            if (_labels.TryGetValue(key, out var tracked))
             {
-                if (emitter.Handle.Index != callback.Handle.Index || emitter.Handle.Generation != callback.Handle.Generation)
-                    continue;
-                var key = MakeKey(callback.Handle);
-                if (!_labels.TryGetValue(key, out var tracked))
-                {
-                    tracked = new TrackedLabel { Handle = callback.Handle, Name = emitter.EventPath };
-                    _labels[key] = tracked;
-                }
-                tracked.Position = emitter.Position;
                 tracked.LastSeen = _clock;
                 tracked.PulseUntil = _clock + 0.75f;
                 tracked.StoppedPulse = callback.Type == AudioEventCallbackType.Stopped;
-                break;
             }
         }
 
@@ -265,51 +268,78 @@ namespace FlaxEditor.FMOD
             if (manager == null || !manager.ShowEventLabels)
                 return;
 
-            var emitters = new List<AudioEmitter>(Level.GetActors<AudioEmitter>());
-            var selectedEmitters = new HashSet<AudioEmitter>();
-            var queryBudget = Math.Max(0, manager.MaxLabels);
-            if (manager.ShowSceneOverlay)
-            {
-                emitters.Sort((a, b) => GetLabelDistance(a.Position, true).CompareTo(GetLabelDistance(b.Position, true)));
-                for (var i = 0; i < Math.Min(queryBudget, emitters.Count); i++)
-                    selectedEmitters.Add(emitters[i]);
-            }
-            if (manager.ShowGameOverlay)
-            {
-                emitters.Sort((a, b) => GetLabelDistance(a.Position, false).CompareTo(GetLabelDistance(b.Position, false)));
-                for (var i = 0; i < Math.Min(queryBudget, emitters.Count); i++)
-                    selectedEmitters.Add(emitters[i]);
-            }
-            var runtime = new Dictionary<ulong, AudioEventRuntimeInfo>();
+            // FMOD instances are the source of truth here. Gameplay events can be
+            // attached directly to an owner (for example player footsteps) without
+            // having an AudioEmitter actor, just like Sonity draws its live voice pool.
             if (snapshot.Events != null)
                 foreach (var eventInfo in snapshot.Events)
-                    runtime[MakeKey(eventInfo.Handle)] = eventInfo;
-            foreach (var emitter in selectedEmitters)
-            {
-                if (emitter == null || emitter.Handle.Generation == 0)
-                    continue;
-                var key = MakeKey(emitter.Handle);
-                if (!_labels.TryGetValue(key, out var tracked))
                 {
-                    tracked = new TrackedLabel { Handle = emitter.Handle, Name = emitter.EventPath, State = AudioEventPlaybackState.Stopped };
-                    _labels[key] = tracked;
-                }
-                AudioEventSystem.QueryInstance(emitter.Handle, out var state);
-                if (state.PlaybackState != AudioEventPlaybackState.Stopped && tracked.State == AudioEventPlaybackState.Stopped)
-                    tracked.Plays++;
-                tracked.Position = emitter.Position;
-                tracked.Name = emitter.EventPath;
-                tracked.State = state.PlaybackState;
-                tracked.Volume = state.Volume;
-                tracked.TimelinePosition = state.TimelinePosition;
-                if (runtime.TryGetValue(key, out var eventInfo))
-                {
+                    if (eventInfo.Handle.Generation == 0)
+                        continue;
+                    var key = MakeKey(eventInfo.Handle);
+                    var wasStopped = false;
+                    if (_labels.TryGetValue(key, out var tracked))
+                        wasStopped = tracked.State == AudioEventPlaybackState.Stopped;
+                    else
+                    {
+                        tracked = new TrackedLabel { Handle = eventInfo.Handle, State = AudioEventPlaybackState.Stopped };
+                        _labels[key] = tracked;
+                        wasStopped = true;
+                    }
+
+                    tracked.Name = eventInfo.Path;
+                    tracked.State = eventInfo.PlaybackState;
+                    tracked.Volume = eventInfo.FinalVolume;
+                    tracked.TimelinePosition = eventInfo.TimelinePosition;
                     tracked.IsVirtual = eventInfo.IsVirtual;
                     tracked.Plays = Math.Max(tracked.Plays, eventInfo.PlayCount);
+                    var owner = eventInfo.OwnerId != Guid.Empty ? Level.FindActor(eventInfo.OwnerId) : null;
+                    // Area voices follow the listener or closest point, but their label belongs at the volume pivot.
+                    if (owner is AudioAreaEmitter)
+                        tracked.Position = owner.Position;
+                    else if (eventInfo.Has3DAttributes)
+                        tracked.Position = eventInfo.SourcePositionCentimeters;
+                    else if (owner != null)
+                        tracked.Position = owner.Position;
+
+                    var playing = eventInfo.PlaybackState != AudioEventPlaybackState.Stopped;
+                    if (playing)
+                    {
+                        tracked.Visible = true;
+                        tracked.LastSeen = _clock;
+                        if (wasStopped)
+                        {
+                            tracked.PulseUntil = _clock + 0.75f;
+                            tracked.StoppedPulse = false;
+                        }
+                    }
                 }
-                var playing = state.PlaybackState != AudioEventPlaybackState.Stopped;
-                if (playing || manager.ShowInactiveEmitters)
+
+            // Scene emitters remain useful as an optional inactive-authoring view.
+            // Active emitters are already represented by their runtime instances.
+            if (manager.ShowInactiveEmitters)
+            {
+                foreach (var emitter in Level.GetActors<AudioEmitter>())
                 {
+                    if (emitter == null || emitter.Handle.Generation == 0)
+                        continue;
+                    var key = MakeKey(emitter.Handle);
+                    if (_labels.TryGetValue(key, out var existing) && existing.Visible)
+                        continue;
+                    AudioEventSystem.QueryInstance(emitter.Handle, out var state);
+                    if (state.PlaybackState != AudioEventPlaybackState.Stopped)
+                        continue;
+                    var tracked = existing;
+                    if (tracked == null)
+                    {
+                        tracked = new TrackedLabel { Handle = emitter.Handle };
+                        _labels[key] = tracked;
+                    }
+                    tracked.Position = emitter.Position;
+                    tracked.Name = emitter.EventPath;
+                    tracked.State = state.PlaybackState;
+                    tracked.Volume = state.Volume;
+                    tracked.TimelinePosition = state.TimelinePosition;
                     tracked.Visible = true;
                     tracked.LastSeen = _clock;
                 }
@@ -370,10 +400,13 @@ namespace FlaxEditor.FMOD
         private static bool TryProjectLabel(Vector3 position, bool sceneView, Control overlay, out Float2 screen)
         {
             screen = Float2.Minimum;
+            // Perspective projection can mirror points behind the view into valid screen coordinates.
             if (sceneView)
             {
                 var viewport = Editor.Instance?.Windows?.EditWin?.Viewport;
                 if (viewport == null)
+                    return false;
+                if (Vector3.Dot(position - viewport.ViewPosition, (Vector3)viewport.ViewDirection) <= 0.0f)
                     return false;
                 viewport.ProjectPoint(position, out screen);
             }
@@ -381,6 +414,8 @@ namespace FlaxEditor.FMOD
             {
                 var camera = Camera.MainCamera;
                 if (camera == null)
+                    return false;
+                if (Vector3.Dot(position - camera.Position, (Vector3)camera.Forward) <= 0.0f)
                     return false;
                 var viewport = new FlaxEngine.Viewport(Float2.Zero, overlay.Size);
                 camera.ProjectPoint(position, out screen, ref viewport);

@@ -170,7 +170,7 @@ namespace FlaxEditor.Windows.Assets
                     b = cmAccess.ContextMenu.AddButton("Private", () => window.SetParamAccess(index, false));
                     b.Checked = !param.IsPublic;
                     b.Enabled = window._canEdit;
-                    b.TooltipText = "Sets the parameter access level to Private. It will be accessible only within this script and won't be visible outside (eg. in script properties panel).";
+                    b.TooltipText = "Sets the parameter access level to Private. It will be accessible only within this script and won't be visible outside (eg. in the Inspector).";
                 }
 
                 // Parameter type editing

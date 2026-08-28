@@ -40,6 +40,16 @@ TEST_CASE("AudioVolumesAndSurfaces")
         CHECK(!farOutside.IsInside);
         CHECK(farOutside.Weight == 0.0f);
 
+        // Runtime bounds and debug drawing must use the same centered box as
+        // Evaluate. This catches accidentally selecting the OBB min/max ctor.
+        const BoundingBox bounds = emitter->GetBox();
+        CHECK(bounds.Minimum.X == Approx(-100.0f));
+        CHECK(bounds.Minimum.Y == Approx(-100.0f));
+        CHECK(bounds.Minimum.Z == Approx(-100.0f));
+        CHECK(bounds.Maximum.X == Approx(100.0f));
+        CHECK(bounds.Maximum.Y == Approx(100.0f));
+        CHECK(bounds.Maximum.Z == Approx(100.0f));
+
         Delete(emitter);
     }
 
@@ -61,6 +71,30 @@ TEST_CASE("AudioVolumesAndSurfaces")
         emitter->SetCapsuleHeight(100.0f);
         AudioVolumeSample capSample = emitter->Evaluate(Vector3(0.0f, 50.0f, 0.0f));
         CHECK(capSample.IsInside);
+
+        Delete(emitter);
+    }
+
+    SECTION("Scaled Volume Uses World-Space Blend Distance")
+    {
+        AudioAreaEmitter* emitter = New<AudioAreaEmitter>(ScriptingObject::SpawnParams(Guid::New(), AudioAreaEmitter::TypeInitializer));
+        emitter->SetShape(AudioVolumeShape::Box);
+        emitter->SetBoxSize(Vector3(200.0f, 200.0f, 200.0f));
+        emitter->SetBlendDistanceOutside(10.0f);
+        emitter->SetScale(Float3(10.0f));
+        emitter->SetPosition(Vector3::Zero);
+
+        // The scaled box ends at X=1000. Blend distance remains 10 world units,
+        // rather than being multiplied by the actor scale.
+        AudioVolumeSample blend = emitter->Evaluate(Vector3(1005.0f, 0.0f, 0.0f));
+        CHECK(!blend.IsInside);
+        CHECK(blend.SignedDistance == Approx(5.0f));
+        CHECK(blend.Weight == Approx(0.5f));
+
+        AudioVolumeSample outside = emitter->Evaluate(Vector3(1011.0f, 0.0f, 0.0f));
+        CHECK(!outside.IsInside);
+        CHECK(outside.SignedDistance == Approx(11.0f));
+        CHECK(outside.Weight == 0.0f);
 
         Delete(emitter);
     }

@@ -175,12 +175,12 @@ namespace FlaxEditor.Modules
         public bool CanNavigateForward => _windowNavigationHistory.CanGoForward;
 
         /// <summary>
-        /// The content window.
+        /// The Project window.
         /// </summary>
         public ContentWindow ContentWin;
 
         /// <summary>
-        /// The edit game window.
+        /// The Scene window.
         /// </summary>
         public EditGameWindow EditWin;
 
@@ -190,12 +190,12 @@ namespace FlaxEditor.Modules
         public GameWindow GameWin;
 
         /// <summary>
-        /// The properties window.
+        /// The Inspector window.
         /// </summary>
         public PropertiesWindow PropertiesWin;
 
         /// <summary>
-        /// The scene tree window.
+        /// The Hierarchy window.
         /// </summary>
         public SceneTreeWindow SceneWin;
 

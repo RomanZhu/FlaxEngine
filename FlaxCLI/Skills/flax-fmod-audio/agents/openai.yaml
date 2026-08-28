@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flax FMOD Audio"
+  short_description: "Configure and author typed FMOD audio in Flax"
+  default_prompt: "Use $flax-fmod-audio to configure, diagnose, or author FMOD audio for this Flax project."

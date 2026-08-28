@@ -54,13 +54,18 @@ TEST_CASE("AudioEmitter")
         CHECK(!emitter->IsActuallyPlaying());
         CHECK(emitter->GetPlaybackState() == AudioEventPlaybackState::Stopped);
 
+        // Parameters assigned before Play are retained and applied to the newly
+        // created instance before the backend starts it.
+        CHECK(emitter->SetParameter(TEXT("PitchShift"), 2.0f));
+
         emitter->Play();
         CHECK(emitter->GetHandle().IsValid());
         CHECK(emitter->IsActuallyPlaying());
         CHECK(emitter->GetPlaybackState() == AudioEventPlaybackState::Playing);
 
-        // Parameters
-        CHECK(emitter->SetParameter(TEXT("PitchShift"), 2.0f));
+        AudioParameterState parameterState;
+        CHECK(backend.GetParameter(emitter->GetHandle(), AudioParameterId(TEXT("PitchShift")), parameterState));
+        CHECK(parameterState.Value == 2.0f);
 
         emitter->Pause();
         CHECK(emitter->GetPlaybackState() == AudioEventPlaybackState::Paused);

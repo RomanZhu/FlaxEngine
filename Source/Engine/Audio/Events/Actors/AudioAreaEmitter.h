@@ -141,6 +141,7 @@ public:
     void Deserialize(DeserializeStream& stream, ISerializeModifier* modifier) override;
 
 private:
+    bool ResolveParameter(const StringView& name, AudioParameterId& result) const;
     AudioEventHandle CreateVoice(const Vector3& position, uint32 listenerMask);
     void UpdateVoice(AudioListener* listener, uint32 listenerMask, const Vector3& listenerPosition, const AudioVolumeSample& sample);
     void UpdateAllListeners();

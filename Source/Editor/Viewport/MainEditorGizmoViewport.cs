@@ -370,7 +370,7 @@ namespace FlaxEditor.Viewport
 
             // Hover highlights
             ContextMenuButton objectHoverHighlights = null;
-            objectHoverHighlights = ViewWidgetShowMenu.AddButton("Highlight Scene Items from Editor", () =>
+            objectHoverHighlights = ViewWidgetShowMenu.AddButton("Highlight Hierarchy Items from Scene", () =>
             {
                 _editor.Options.Options.Interface.HighlightViewportObjectHover = !_editor.Options.Options.Interface.HighlightViewportObjectHover;
                 if (!_editor.Options.Options.Interface.HighlightViewportObjectHover)
@@ -379,7 +379,7 @@ namespace FlaxEditor.Viewport
                 _editor.Options.SaveOptions();
             });
             objectHoverHighlights.CloseMenuOnClick = false;
-            objectHoverHighlights.TooltipText = "When hovered Editor items will highlight items in Scene.";
+            objectHoverHighlights.TooltipText = "When hovered Scene items will highlight items in Hierarchy.";
             objectHoverHighlights.Checked = _editor.Options.Options.Interface.HighlightViewportObjectHover;
 
             // Direction gizmo
@@ -1866,9 +1866,12 @@ namespace FlaxEditor.Viewport
                 }
 
                 // Apply scale
-                trans.Scale = applyWorldBoundsScale
-                    ? TransformGizmoBase.ApplyWorldScaleDelta(trans.Scale, trans.Orientation, scaleDelta)
-                    : TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
+                if (!applyWorldBoundsScale || !TransformGizmo.TryApplyBoundsShapeResize(obj, ref trans, scaleDelta))
+                {
+                    trans.Scale = applyWorldBoundsScale
+                        ? TransformGizmoBase.ApplyWorldScaleDelta(trans.Scale, trans.Orientation, scaleDelta)
+                        : TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
+                }
 
                 // Apply translation
                 trans.Translation += translationDelta;

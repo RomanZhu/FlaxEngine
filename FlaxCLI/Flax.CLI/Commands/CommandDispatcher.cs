@@ -77,7 +77,7 @@ internal sealed class CommandDispatcher(
             "feeds" => Feeds(args, context),
             "player" => await Player(args, context),
             "runtime" => await Runtime(args, context),
-            "scenes" or "actors" or "prefabs" or "history" or "settings" or "bake" or "dev" or "visject" => await Authoring(command, args, context),
+            "scenes" or "actors" or "colliders" or "prefabs" or "history" or "settings" or "bake" or "dev" or "visject" => await Authoring(command, args, context),
             "templates" => Templates(args),
             "new" => CreateProject(args, context),
             "test" => await Tests(args, context),
@@ -1618,8 +1618,8 @@ internal sealed class CommandDispatcher(
         args.Complete();
         return shell switch
         {
-            "powershell" or "pwsh" => CliResult.Ok("Register-ArgumentCompleter -Native -CommandName flax -ScriptBlock { param($wordToComplete) 'engines','engine','projects','templates','new','open','play','generate','compile','build','assets','scenes','actors','prefabs','settings','bake','dev','visject','jobs','feeds','player','runtime','commands','command','generators','editor','console','performance','selection','capture','playtest','mcp','test','doctor','diagnose','logs','env','config','status','completion' | Where-Object { $_ -like \"$wordToComplete*\" } | ForEach-Object { $_ } }"),
-            "bash" => CliResult.Ok("complete -W 'engines engine projects templates new open play generate compile build assets scenes actors prefabs settings bake dev visject jobs feeds player runtime commands command generators editor console performance selection capture playtest mcp test doctor diagnose logs env config status completion' flax"),
+            "powershell" or "pwsh" => CliResult.Ok("Register-ArgumentCompleter -Native -CommandName flax -ScriptBlock { param($wordToComplete) 'engines','engine','projects','templates','new','open','play','generate','compile','build','assets','scenes','actors','colliders','prefabs','settings','bake','dev','visject','jobs','feeds','player','runtime','commands','command','generators','editor','console','performance','selection','capture','playtest','mcp','test','doctor','diagnose','logs','env','config','status','completion' | Where-Object { $_ -like \"$wordToComplete*\" } | ForEach-Object { $_ } }"),
+            "bash" => CliResult.Ok("complete -W 'engines engine projects templates new open play generate compile build assets scenes actors colliders prefabs settings bake dev visject jobs feeds player runtime commands command generators editor console performance selection capture playtest mcp test doctor diagnose logs env config status completion' flax"),
             _ => throw CommandLine.Usage($"Unsupported completion shell '{shell}'."),
         };
     }
@@ -1774,7 +1774,7 @@ internal sealed class CommandDispatcher(
         "build" => "flax build [project] --preset name --target platform [--output path] [--define value] [--clean] [--run]",
         "assets" or "asset" => AssetsHelp,
         "authoring-root" => "flax authoring-root <get|set> [path] [--project path]",
-        "scenes" or "actors" or "prefabs" => AuthoringHelp,
+        "scenes" or "actors" or "colliders" or "prefabs" => AuthoringHelp,
         "settings" => SettingsHelp,
         "bake" => BakeHelp,
         "dev" => DevHelp,
@@ -1848,6 +1848,7 @@ flax actors <find|get|create|create-batch|copy|cut|paste|delete|rename|transform
 flax actors component <add|remove|get|set> [options]
 flax actors primitive <list|create> [--shape cube|sphere|plane|cylinder|cone|capsule] [options]
 flax actors property <list|get|set> [options]
+flax colliders <create|inspect|offset-local|normalize-center> [options]
 flax prefabs <create|instantiate|variant|apply|revert|unpack|save> [options]
 flax history <list|undo|redo>
 flax settings <list|get|schema|diff|set> [options]
@@ -1903,6 +1904,7 @@ Local engine commands:
   authoring-root get|set
   scenes list|create|open|close|reload|save|dirty|hierarchy|active|build-list
   actors find|get|create|create-batch|delete|rename|transform|parent|active|tag|layer|component
+  colliders create|inspect|offset-local|normalize-center
   prefabs create|instantiate|variant|apply|revert|unpack|save
   settings list|get|schema|diff|set
   bake status, lighting|navmesh|probes|csg|scenes|sdf start|cancel|clear

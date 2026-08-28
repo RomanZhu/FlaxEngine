@@ -546,12 +546,13 @@ namespace FlaxEditor
             }
         }
 
-        [CliCommand("actors.find", Description = "Find Actors using stable filters.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
-        public static CliCommandOperation FindActors([CliOption("name")] string name = null, [CliOption("type")] string type = null, [CliOption("scene")] Guid? scene = null, [CliOption("active")] bool? active = null, CliCommandContext context = null)
+        [CliCommand("actors.find", Description = "Find Actors using stable Actor and attached Script filters.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
+        public static CliCommandOperation FindActors([CliOption("name")] string name = null, [CliOption("type")] string type = null, [CliOption("component", Description = "Optional attached Script type name.")] string component = null, [CliOption("scene")] Guid? scene = null, [CliOption("active")] bool? active = null, CliCommandContext context = null)
         {
             var actorType = string.IsNullOrWhiteSpace(type) ? null : RequireType(type, typeof(Actor));
+            var componentType = string.IsNullOrWhiteSpace(component) ? null : RequireType(component, typeof(Script));
             var roots = scene.HasValue ? new Actor[] { RequireScene(scene.Value) } : Level.Scenes.Cast<Actor>().ToArray();
-            return new FindActorsOperation(roots, name, actorType, active, context);
+            return new FindActorsOperation(roots, name, actorType, componentType, active, context);
         }
 
         private sealed class FindActorsOperation : CliCommandOperation
@@ -560,15 +561,17 @@ namespace FlaxEditor
             private readonly List<object> _matches = new List<object>();
             private readonly string _name;
             private readonly Type _type;
+            private readonly Type _componentType;
             private readonly bool? _active;
             private readonly CliCommandContext _context;
             private CliCommandResult _result;
             private int _visited;
 
-            public FindActorsOperation(Actor[] roots, string name, Type type, bool? active, CliCommandContext context)
+            public FindActorsOperation(Actor[] roots, string name, Type type, Type componentType, bool? active, CliCommandContext context)
             {
                 _name = name;
                 _type = type;
+                _componentType = componentType;
                 _active = active;
                 _context = context;
                 for (var i = roots.Length - 1; i >= 0; i--)
@@ -601,11 +604,17 @@ namespace FlaxEditor
                         _pending.Push(actor.GetChild(i));
                     _visited++;
 
+                    var matchingComponents = _componentType == null
+                        ? null
+                        : actor.Scripts.Where(x => _componentType.IsAssignableFrom(x.GetType())).ToArray();
                     if ((string.IsNullOrWhiteSpace(_name) || string.Equals(actor.Name, _name, StringComparison.OrdinalIgnoreCase)) &&
                         (_type == null || _type.IsAssignableFrom(actor.GetType())) &&
+                        (_componentType == null || matchingComponents.Length != 0) &&
                         (!_active.HasValue || actor.IsActive == _active.Value))
                     {
-                        _matches.Add(DescribeActor(actor));
+                        _matches.Add(_componentType == null
+                            ? DescribeActor(actor)
+                            : new { actor = DescribeActor(actor), components = matchingComponents.Select(DescribeScript).ToArray() });
                     }
                 } while (timer.Elapsed < timeBudget);
 
@@ -677,6 +686,7 @@ namespace FlaxEditor
                 if (value != null)
                     created.Add(DescribeActor(value));
             }
+            var saved = SaveSceneIfEdited(destinationScene);
             return new
             {
                 transactionId = result.TransactionId,
@@ -686,7 +696,7 @@ namespace FlaxEditor
                 rootIds = roots.Select(x => x.ID).ToArray(),
                 createdObjectIds = result.CreatedObjectIds,
                 actors = created.ToArray(),
-                saved = false,
+                saved,
                 dirty = Editor.Instance.Scene.IsEdited(destinationScene),
             };
         }
@@ -768,7 +778,11 @@ namespace FlaxEditor
             if (nodes.Count != created.Count)
                 throw new InvalidOperationException("One or more created Actors are missing from the Editor scene graph.");
             undo.AddAction(new DeleteActorsAction(nodes, true));
-            return new { actors = created.Select(DescribeActor).ToArray(), saved = false, dirty = created.Any(x => Editor.Instance.Scene.IsEdited(x.Scene)) };
+            var scenes = created.Select(x => x.Scene).Where(x => x != null).Distinct().ToArray();
+            var saved = false;
+            foreach (var scene in scenes)
+                saved |= SaveSceneIfEdited(scene);
+            return new { actors = created.Select(DescribeActor).ToArray(), saved, dirty = created.Any(x => Editor.Instance.Scene.IsEdited(x.Scene)) };
         }
 
         [CliCommand("actors.primitive.list", Description = "List the built-in Editor primitive models and their native bounds.", Access = CliCommandAccess.ReadOnly)]
@@ -798,11 +812,12 @@ namespace FlaxEditor
             if (scale.HasValue) actor.LocalScale = scale.Value;
             var actorParent = parent.HasValue ? RequireActor(parent.Value) : RequireActiveScene();
             Editor.Instance.SceneEditing.Spawn(actor, actorParent, -1, false);
+            var saved = SaveSceneIfEdited(actor.Scene);
             return new
             {
                 actor = DescribeActor(actor),
                 primitive = DescribePrimitive(primitiveName, model),
-                saved = false,
+                saved,
                 dirty = Editor.Instance.Scene.IsEdited(actor.Scene),
             };
         }
@@ -822,7 +837,8 @@ namespace FlaxEditor
             if (!action.TryDo())
                 throw new InvalidOperationException($"Failed to delete Actor: {action.LastResult?.ErrorCode} {action.LastResult?.Message}");
             Editor.Instance.Undo.AddAction(action);
-            return new { actor = handle, deleted = true, saved = false, dirty = Editor.Instance.Scene.IsEdited(scene) };
+            var saved = SaveSceneIfEdited(scene);
+            return new { actor = handle, deleted = true, saved, dirty = Editor.Instance.Scene.IsEdited(scene) };
         }
 
         [CliCommand("actors.rename", Description = "Rename an Actor with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -837,20 +853,466 @@ namespace FlaxEditor
             return MutationResult(value);
         }
 
-        [CliCommand("actors.transform", Description = "Set only the supplied local transform channels.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
-        public static object TransformActor([CliOption("actor", Required = true)] Guid actor, [CliOption("position")] Vector3? position = null, [CliOption("rotation")] Float3? rotation = null, [CliOption("scale")] Float3? scale = null)
+        [CliCommand("actors.transform", Description = "Set only the supplied local or world transform channels.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object TransformActor([CliOption("actor", Required = true)] Guid actor, [CliOption("position")] Vector3? position = null, [CliOption("rotation")] Float3? rotation = null, [CliOption("scale")] Float3? scale = null, [CliOption("space", Description = "Transform space: local or world.")] string space = "local")
         {
             if (!position.HasValue && !rotation.HasValue && !scale.HasValue)
                 throw new ArgumentException("At least one transform channel is required.");
             var value = RequireActor(actor);
+            var world = string.Equals(space, "world", StringComparison.OrdinalIgnoreCase);
+            if (!world && !string.Equals(space, "local", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Transform space must be 'local' or 'world'.", nameof(space));
             using (new UndoBlock(Editor.Instance.Undo, value, "Transform actor"))
             {
-                if (position.HasValue) value.LocalPosition = position.Value;
-                if (rotation.HasValue) value.LocalEulerAngles = rotation.Value;
-                if (scale.HasValue) value.LocalScale = scale.Value;
+                if (position.HasValue)
+                {
+                    if (world) value.Position = position.Value;
+                    else value.LocalPosition = position.Value;
+                }
+                if (rotation.HasValue)
+                {
+                    if (world) value.EulerAngles = rotation.Value;
+                    else value.LocalEulerAngles = rotation.Value;
+                }
+                if (scale.HasValue)
+                {
+                    if (world) value.Scale = scale.Value;
+                    else value.LocalScale = scale.Value;
+                }
             }
             MarkEdited(value);
             return MutationResult(value);
+        }
+
+        [CliCommand("actors.place", Description = "Place an Actor against another Actor's world bounds using an explicit spatial relation.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object PlaceActor([CliOption("actor", Required = true)] Guid actor, [CliOption("relative-to", Required = true)] Guid relativeTo, [CliOption("relation", Description = "centered-on, beside, left, right, below, above, behind, in-front-of, inside, or at-edge.", Required = true)] string relation, [CliOption("gap", Description = "World-space gap between bounds.")] float gap = 0.0f, [CliOption("edge", Description = "Edge for at-edge: left, right, below, above, behind, or in-front.")] string edge = "right", [CliOption("face", Description = "Optional face-toward or face-away orientation.")] string face = null, [CliOption("dry-run")] bool dryRun = false)
+        {
+            if (gap < 0.0f)
+                throw new ArgumentOutOfRangeException(nameof(gap), "Gap cannot be negative.");
+            var value = RequireActor(actor);
+            var anchor = RequireActor(relativeTo);
+            if (value == anchor)
+                throw new InvalidOperationException("An Actor cannot be placed relative to itself.");
+
+            var valueBounds = EffectiveBounds(value);
+            var anchorBounds = EffectiveBounds(anchor);
+            var destination = anchorBounds.Center;
+            var relationName = relation?.Trim().ToLowerInvariant();
+            switch (relationName)
+            {
+            case "center":
+            case "centered-on":
+            case "inside":
+                break;
+            case "left":
+                destination.X = anchorBounds.Minimum.X - gap - valueBounds.Size.X * 0.5f;
+                break;
+            case "right":
+            case "beside":
+                destination.X = anchorBounds.Maximum.X + gap + valueBounds.Size.X * 0.5f;
+                break;
+            case "below":
+                destination.Y = anchorBounds.Minimum.Y - gap - valueBounds.Size.Y * 0.5f;
+                break;
+            case "above":
+                destination.Y = anchorBounds.Maximum.Y + gap + valueBounds.Size.Y * 0.5f;
+                break;
+            case "behind":
+                destination.Z = anchorBounds.Minimum.Z - gap - valueBounds.Size.Z * 0.5f;
+                break;
+            case "in-front":
+            case "in-front-of":
+            case "front":
+                destination.Z = anchorBounds.Maximum.Z + gap + valueBounds.Size.Z * 0.5f;
+                break;
+            case "at-edge":
+                var edgeName = edge?.Trim().ToLowerInvariant();
+                switch (edgeName)
+                {
+                case "left": destination.X = anchorBounds.Minimum.X + valueBounds.Size.X * 0.5f + gap; break;
+                case "right": destination.X = anchorBounds.Maximum.X - valueBounds.Size.X * 0.5f - gap; break;
+                case "below": destination.Y = anchorBounds.Minimum.Y + valueBounds.Size.Y * 0.5f + gap; break;
+                case "above": destination.Y = anchorBounds.Maximum.Y - valueBounds.Size.Y * 0.5f - gap; break;
+                case "behind": destination.Z = anchorBounds.Minimum.Z + valueBounds.Size.Z * 0.5f + gap; break;
+                case "in-front": destination.Z = anchorBounds.Maximum.Z - valueBounds.Size.Z * 0.5f - gap; break;
+                default: throw new ArgumentException("Edge must be left, right, below, above, behind, or in-front.", nameof(edge));
+                }
+                break;
+            default:
+                throw new ArgumentException("Unsupported spatial relation.", nameof(relation));
+            }
+
+            var delta = destination - valueBounds.Center;
+            var resultPosition = value.Position + delta;
+            var resultOrientation = value.Orientation;
+            if (!string.IsNullOrWhiteSpace(face))
+            {
+                var direction = anchorBounds.Center - destination;
+                if (string.Equals(face, "face-away", StringComparison.OrdinalIgnoreCase)) direction = -direction;
+                else if (!string.Equals(face, "face-toward", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Face must be face-toward or face-away.", nameof(face));
+                if (direction.LengthSquared > 0.0001f)
+                    resultOrientation = Quaternion.LookRotation((Float3)Vector3.Normalize(direction), Float3.Up);
+            }
+            if (!dryRun)
+            {
+                using (new UndoBlock(Editor.Instance.Undo, value, "Place actor spatially"))
+                {
+                    value.Position = resultPosition;
+                    value.Orientation = resultOrientation;
+                }
+                MarkEdited(value);
+            }
+            var saved = !dryRun && SaveSceneIfEdited(value.Scene);
+            var resultingBounds = dryRun ? new BoundingBox(valueBounds.Minimum + delta, valueBounds.Maximum + delta) : EffectiveBounds(value);
+            return new
+            {
+                actor = DescribeActor(value),
+                relativeTo = DescribeActor(anchor),
+                relation = relationName,
+                gap,
+                dryRun,
+                resultingPosition = DescribeVector(resultPosition),
+                worldBounds = DescribeBounds(resultingBounds),
+                centerDistance = Vector3.Distance(resultingBounds.Center, anchorBounds.Center),
+                saved,
+                dirty = Editor.Instance.Scene.IsEdited(value.Scene),
+            };
+        }
+
+        [CliCommand("actors.distribute", Description = "Distribute Actors along an axis using world bounds and explicit edge-to-edge spacing.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object DistributeActors([CliOption("actor", Required = true)] Guid[] actor, [CliOption("axis", Description = "x, y, or z.")] string axis = "x", [CliOption("spacing")] float spacing = 100.0f, [CliOption("dry-run")] bool dryRun = false)
+        {
+            if (actor == null || actor.Length < 2) throw new ArgumentException("At least two Actors are required.", nameof(actor));
+            if (spacing < 0) throw new ArgumentOutOfRangeException(nameof(spacing));
+            var values = actor.Distinct().Select(RequireActor).ToArray();
+            if (values.Select(x => x.Scene).Distinct().Count() != 1) throw new InvalidOperationException("All Actors must belong to the same Scene.");
+            var axisName = axis?.Trim().ToLowerInvariant();
+            int component = axisName == "x" ? 0 : axisName == "y" ? 1 : axisName == "z" ? 2 : throw new ArgumentException("Axis must be x, y, or z.", nameof(axis));
+            float Read(Vector3 v) => component == 0 ? (float)v.X : component == 1 ? (float)v.Y : (float)v.Z;
+            Vector3 Along(float amount) => component == 0 ? new Vector3(amount, 0, 0) : component == 1 ? new Vector3(0, amount, 0) : new Vector3(0, 0, amount);
+            values = values.OrderBy(x => Read(EffectiveBounds(x).Center)).ThenBy(x => x.ID).ToArray();
+            var evidence = new List<object>();
+            var cursor = Read(EffectiveBounds(values[0]).Maximum);
+            evidence.Add(new { actor = values[0].ID, position = DescribeVector(values[0].Position), bounds = DescribeBounds(EffectiveBounds(values[0])) });
+            for (int i = 1; i < values.Length; i++)
+            {
+                var value = values[i];
+                var bounds = EffectiveBounds(value);
+                var delta = cursor + spacing - Read(bounds.Minimum);
+                var position = value.Position + Along(delta);
+                if (!dryRun)
+                {
+                    using (new UndoBlock(Editor.Instance.Undo, value, "Distribute actors")) value.Position = position;
+                    MarkEdited(value);
+                    bounds = EffectiveBounds(value);
+                }
+                else bounds = new BoundingBox(bounds.Minimum + Along(delta), bounds.Maximum + Along(delta));
+                cursor = Read(bounds.Maximum);
+                evidence.Add(new { actor = value.ID, position = DescribeVector(position), bounds = DescribeBounds(bounds), spacing });
+            }
+            var saved = !dryRun && SaveSceneIfEdited(values[0].Scene);
+            return new { axis = axisName, spacing, dryRun, saved, actors = evidence.ToArray() };
+        }
+
+        [CliCommand("actors.grid-layout", Description = "Lay Actors out in a bounds-aware grid with explicit horizontal and row spacing.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object GridLayoutActors([CliOption("actor", Required = true)] Guid[] actor, [CliOption("columns")] int columns = 4, [CliOption("column-spacing")] float columnSpacing = 100.0f, [CliOption("row-spacing")] float rowSpacing = 100.0f, [CliOption("dry-run")] bool dryRun = false)
+        {
+            if (actor == null || actor.Length == 0) throw new ArgumentException("At least one Actor is required.", nameof(actor));
+            if (columns < 1) throw new ArgumentOutOfRangeException(nameof(columns));
+            if (columnSpacing < 0 || rowSpacing < 0) throw new ArgumentOutOfRangeException("Grid spacing cannot be negative.");
+            var values = actor.Distinct().Select(RequireActor).ToArray();
+            if (values.Select(x => x.Scene).Distinct().Count() != 1) throw new InvalidOperationException("All Actors must belong to the same Scene.");
+            var origin = EffectiveBounds(values[0]).Minimum;
+            var columnWidths = new float[columns];
+            var rows = (values.Length + columns - 1) / columns;
+            var rowDepths = new float[rows];
+            for (int i = 0; i < values.Length; i++)
+            {
+                var size = EffectiveBounds(values[i]).Size;
+                columnWidths[i % columns] = Math.Max(columnWidths[i % columns], (float)size.X);
+                rowDepths[i / columns] = Math.Max(rowDepths[i / columns], (float)size.Z);
+            }
+            var evidence = new List<object>();
+            for (int i = 0; i < values.Length; i++)
+            {
+                var column = i % columns;
+                var row = i / columns;
+                var x = (float)origin.X + columnWidths.Take(column).Sum() + columnSpacing * column;
+                var z = (float)origin.Z + rowDepths.Take(row).Sum() + rowSpacing * row;
+                var value = values[i];
+                var bounds = EffectiveBounds(value);
+                var delta = new Vector3(x - bounds.Minimum.X, 0, z - bounds.Minimum.Z);
+                var position = value.Position + delta;
+                if (!dryRun)
+                {
+                    using (new UndoBlock(Editor.Instance.Undo, value, "Grid layout actors")) value.Position = position;
+                    MarkEdited(value);
+                    bounds = EffectiveBounds(value);
+                }
+                else bounds = new BoundingBox(bounds.Minimum + delta, bounds.Maximum + delta);
+                evidence.Add(new { actor = value.ID, row, column, position = DescribeVector(position), bounds = DescribeBounds(bounds) });
+            }
+            var saved = !dryRun && SaveSceneIfEdited(values[0].Scene);
+            return new { columns, columnSpacing, rowSpacing, dryRun, saved, actors = evidence.ToArray() };
+        }
+
+        [CliCommand("audio.place-emitter", Description = "Place an emitter at a measured distance from a listener and reject positions outside the authored audible radius.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object PlaceAudioEmitter([CliOption("emitter", Required = true)] Guid emitter, [CliOption("listener", Required = true)] Guid listener, [CliOption("distance-meters")] float distanceMeters = 2.0f, [CliOption("maximum-meters")] float maximumMeters = 20.0f, [CliOption("allow-outside")] bool allowOutside = false, [CliOption("dry-run")] bool dryRun = false)
+        {
+            if (distanceMeters < 0 || maximumMeters <= 0) throw new ArgumentOutOfRangeException("Distances must be positive.");
+            if (!allowOutside && distanceMeters > maximumMeters) throw new InvalidOperationException($"Requested distance {distanceMeters:0.###} m exceeds event maximum attenuation {maximumMeters:0.###} m.");
+            var source = RequireActor(emitter) as AudioEmitter ?? throw new InvalidOperationException($"Actor '{emitter}' is not an AudioEmitter.");
+            var ear = RequireActor(listener);
+            var position = ear.Position + Vector3.Forward * (distanceMeters * 100.0f);
+            if (!dryRun)
+            {
+                using (new UndoBlock(Editor.Instance.Undo, source, "Place audible emitter")) source.Position = position;
+                MarkEdited(source);
+            }
+            var saved = !dryRun && SaveSceneIfEdited(source.Scene);
+            return new { emitter, listener, distanceMeters, maximumMeters, insideAudibleRadius = distanceMeters <= maximumMeters, position = DescribeVector(position), dryRun, saved };
+        }
+
+        [CliCommand("audio.place-trigger-around", Description = "Fit a box trigger around station contents using Actor transform placement and a zero local Center.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object PlaceAudioTriggerAround([CliOption("trigger", Required = true)] Guid trigger, [CliOption("content", Required = true)] Guid[] content, [CliOption("margin")] float margin = 100.0f, [CliOption("dry-run")] bool dryRun = false)
+        {
+            var volume = RequireActor(trigger) as BoxCollider ?? throw new InvalidOperationException($"Actor '{trigger}' is not a BoxCollider.");
+            if (content == null || content.Length == 0) throw new ArgumentException("Station content is required.", nameof(content));
+            if (margin < 0) throw new ArgumentOutOfRangeException(nameof(margin));
+            var bounds = EffectiveBounds(RequireActor(content[0]));
+            for (int i = 1; i < content.Length; i++) bounds = BoundingBox.Merge(bounds, EffectiveBounds(RequireActor(content[i])));
+            var size = (Float3)(bounds.Size + Vector3.One * (margin * 2.0f));
+            if (!dryRun)
+            {
+                using (new UndoBlock(Editor.Instance.Undo, volume, "Fit station trigger"))
+                {
+                    volume.Position = bounds.Center;
+                    volume.Center = Float3.Zero;
+                    volume.Size = size;
+                    volume.IsTrigger = true;
+                }
+                MarkEdited(volume);
+            }
+            var saved = !dryRun && SaveSceneIfEdited(volume.Scene);
+            return new { trigger, content, margin, position = DescribeVector(bounds.Center), localCenter = DescribeVector(Float3.Zero), size = DescribeVector(size), dryRun, saved };
+        }
+
+        [CliCommand("audio.place-occluder", Description = "Place an occluder between a source and listener with measured endpoint distances.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object PlaceAudioOccluder([CliOption("occluder", Required = true)] Guid occluder, [CliOption("source", Required = true)] Guid source, [CliOption("listener", Required = true)] Guid listener, [CliOption("fraction")] float fraction = 0.5f, [CliOption("dry-run")] bool dryRun = false)
+        {
+            if (fraction <= 0 || fraction >= 1) throw new ArgumentOutOfRangeException(nameof(fraction), "Fraction must be between zero and one.");
+            var wall = RequireActor(occluder);
+            var sourceActor = RequireActor(source);
+            var listenerActor = RequireActor(listener);
+            var position = Vector3.Lerp(sourceActor.Position, listenerActor.Position, fraction);
+            var direction = listenerActor.Position - sourceActor.Position;
+            var orientation = direction.LengthSquared > 0.0001f ? Quaternion.LookRotation((Float3)Vector3.Normalize(direction), Float3.Up) : wall.Orientation;
+            if (!dryRun)
+            {
+                using (new UndoBlock(Editor.Instance.Undo, wall, "Place audio occluder")) { wall.Position = position; wall.Orientation = orientation; }
+                MarkEdited(wall);
+            }
+            var saved = !dryRun && SaveSceneIfEdited(wall.Scene);
+            return new { occluder, source, listener, fraction, position = DescribeVector(position), sourceDistanceMeters = Vector3.Distance(position, sourceActor.Position) * 0.01f, listenerDistanceMeters = Vector3.Distance(position, listenerActor.Position) * 0.01f, dryRun, saved };
+        }
+
+        [CliCommand("audio.place-sign", Description = "Place a station sign at an Actor bounds edge and face the route approach Actor.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object PlaceAudioSign([CliOption("sign", Required = true)] Guid sign, [CliOption("station", Required = true)] Guid station, [CliOption("approach", Required = true)] Guid approach, [CliOption("gap")] float gap = 25.0f, [CliOption("dry-run")] bool dryRun = false)
+        {
+            var value = RequireActor(sign);
+            var stationActor = RequireActor(station);
+            var approachActor = RequireActor(approach);
+            var stationBounds = EffectiveBounds(stationActor);
+            var signBounds = EffectiveBounds(value);
+            var direction = approachActor.Position - stationBounds.Center;
+            var normalized = direction.LengthSquared > 0.0001f ? Vector3.Normalize(direction) : Vector3.Backward;
+            var radius = Math.Max((float)stationBounds.Size.X, (float)stationBounds.Size.Z) * 0.5f + Math.Max((float)signBounds.Size.X, (float)signBounds.Size.Z) * 0.5f + gap;
+            var destination = stationBounds.Center + normalized * radius;
+            var position = value.Position + destination - signBounds.Center;
+            var faceDirection = approachActor.Position - destination;
+            var orientation = faceDirection.LengthSquared > 0.0001f ? Quaternion.LookRotation((Float3)Vector3.Normalize(faceDirection), Float3.Up) : value.Orientation;
+            if (!dryRun)
+            {
+                using (new UndoBlock(Editor.Instance.Undo, value, "Place station sign")) { value.Position = position; value.Orientation = orientation; }
+                MarkEdited(value);
+            }
+            var saved = !dryRun && SaveSceneIfEdited(value.Scene);
+            return new { sign, station, approach, gap, position = DescribeVector(position), approachDistance = Vector3.Distance(destination, approachActor.Position), dryRun, saved };
+        }
+
+        [CliCommand("colliders.create", Description = "Create a primitive Collider placed by its Actor transform with a zero local shape center.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object CreateCollider(
+            [CliOption("shape", Description = "Collider shape: box, sphere, or capsule.")] string shape = "box",
+            [CliOption("name")] string name = null,
+            [CliOption("parent")] Guid? parent = null,
+            [CliOption("position", Description = "Actor position in the selected transform space.")] Vector3? position = null,
+            [CliOption("rotation", Description = "Actor Euler rotation in degrees in the selected transform space.")] Float3? rotation = null,
+            [CliOption("scale", Description = "Actor scale in the selected transform space.")] Float3? scale = null,
+            [CliOption("space", Description = "Transform space: world or local.")] string space = "world",
+            [CliOption("size", Description = "Box size in local centimeters.")] Float3? size = null,
+            [CliOption("radius", Description = "Sphere or capsule radius in local centimeters.")] float? radius = null,
+            [CliOption("height", Description = "Capsule cylinder height in local centimeters.")] float? height = null,
+            [CliOption("trigger", Description = "Create the collider as a trigger.")] bool trigger = false)
+        {
+            var shapeName = shape?.Trim().ToLowerInvariant();
+            if (shapeName == "box" && (radius.HasValue || height.HasValue))
+                throw new ArgumentException("Box colliders use --size; --radius and --height are not applicable.");
+            if (shapeName == "sphere" && (size.HasValue || height.HasValue))
+                throw new ArgumentException("Sphere colliders use --radius; --size and --height are not applicable.");
+            if (shapeName == "capsule" && size.HasValue)
+                throw new ArgumentException("Capsule colliders use --radius and --height; --size is not applicable.");
+            Collider collider;
+            switch (shapeName)
+            {
+            case "box":
+                if (size.HasValue)
+                {
+                    if (size.Value.X <= 0.0f || size.Value.Y <= 0.0f || size.Value.Z <= 0.0f)
+                        throw new ArgumentOutOfRangeException(nameof(size), "Box size components must be positive.");
+                }
+                collider = new BoxCollider();
+                break;
+            case "sphere":
+                if (radius.HasValue)
+                {
+                    if (radius.Value <= 0.0f)
+                        throw new ArgumentOutOfRangeException(nameof(radius), "Sphere radius must be positive.");
+                }
+                collider = new SphereCollider();
+                break;
+            case "capsule":
+                if (radius.HasValue)
+                {
+                    if (radius.Value <= 0.0f)
+                        throw new ArgumentOutOfRangeException(nameof(radius), "Capsule radius must be positive.");
+                }
+                if (height.HasValue)
+                {
+                    if (height.Value < 0.0f)
+                        throw new ArgumentOutOfRangeException(nameof(height), "Capsule height cannot be negative.");
+                }
+                collider = new CapsuleCollider();
+                break;
+            default:
+                throw new ArgumentException("Collider shape must be box, sphere, or capsule.", nameof(shape));
+            }
+
+            var world = string.Equals(space, "world", StringComparison.OrdinalIgnoreCase);
+            if (!world && !string.Equals(space, "local", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Transform space must be 'world' or 'local'.", nameof(space));
+            collider.Name = string.IsNullOrWhiteSpace(name) ? $"{char.ToUpperInvariant(shapeName[0])}{shapeName.Substring(1)} Collider" : name;
+            var actorParent = parent.HasValue ? RequireActor(parent.Value) : RequireActiveScene();
+            Editor.Instance.SceneEditing.Spawn(collider, actorParent, -1, false);
+            // BoxColliderNode.PostSpawn auto-fits parent bounds and can introduce a
+            // local Center offset. Typed CLI creation is transform-first, so restore
+            // explicit/default geometry after the Editor spawn hook.
+            collider.Center = Vector3.Zero;
+            collider.IsTrigger = trigger;
+            if (collider is BoxCollider createdBox)
+                createdBox.Size = size ?? new Float3(100.0f);
+            else if (collider is SphereCollider createdSphere)
+                createdSphere.Radius = radius ?? 50.0f;
+            else if (collider is CapsuleCollider createdCapsule)
+            {
+                createdCapsule.Radius = radius ?? 20.0f;
+                createdCapsule.Height = height ?? 100.0f;
+            }
+            if (position.HasValue)
+            {
+                if (world) collider.Position = position.Value;
+                else collider.LocalPosition = position.Value;
+            }
+            if (rotation.HasValue)
+            {
+                if (world) collider.EulerAngles = rotation.Value;
+                else collider.LocalEulerAngles = rotation.Value;
+            }
+            if (scale.HasValue)
+            {
+                if (world) collider.Scale = scale.Value;
+                else collider.LocalScale = scale.Value;
+            }
+            MarkEdited(collider);
+            var saved = SaveSceneIfEdited(collider.Scene);
+            return new
+            {
+                collider = DescribeCollider(collider),
+                centerPolicy = "Actor transform places the collider; Center remains a local shape offset and defaults to zero.",
+                saved,
+                dirty = Editor.Instance.Scene.IsEdited(collider.Scene),
+            };
+        }
+
+        [CliCommand("colliders.inspect", Description = "Inspect Collider transform placement, local center, world shape center, and bounds.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
+        public static object InspectCollider([CliOption("actor", Required = true)] Guid actor)
+        {
+            return DescribeCollider(RequireCollider(actor));
+        }
+
+        [CliCommand("colliders.offset-local", Description = "Explicitly set a Collider local shape offset without using it as world placement.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object OffsetColliderLocal([CliOption("actor", Required = true)] Guid actor, [CliOption("center", Required = true)] Vector3 center)
+        {
+            var collider = RequireCollider(actor);
+            using (new UndoBlock(Editor.Instance.Undo, collider, "Offset collider shape locally"))
+                collider.Center = center;
+            MarkEdited(collider);
+            var saved = SaveSceneIfEdited(collider.Scene);
+            return new
+            {
+                collider = DescribeCollider(collider),
+                intent = "explicit-local-shape-offset",
+                saved,
+                dirty = Editor.Instance.Scene.IsEdited(collider.Scene),
+            };
+        }
+
+        [CliCommand("colliders.normalize-center", Description = "Move a Collider Actor to its current world shape center and zero the local Center while preserving collider world bounds.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object NormalizeColliderCenter(
+            [CliOption("actor", Required = true)] Guid actor,
+            [CliOption("allow-hierarchy-motion", Description = "Allow moving an Actor that has children; child world positions will change.")] bool allowHierarchyMotion = false,
+            [CliOption("allow-prefab-override", Description = "Allow creating transform and Center overrides on a Prefab-linked Actor.")] bool allowPrefabOverride = false)
+        {
+            var collider = RequireCollider(actor);
+            if (collider.Center == Vector3.Zero)
+            {
+                return new
+                {
+                    collider = DescribeCollider(collider),
+                    changed = false,
+                    reason = "Center is already zero.",
+                    saved = false,
+                    dirty = Editor.Instance.Scene.IsEdited(collider.Scene),
+                };
+            }
+            if (collider.ChildrenCount != 0 && !allowHierarchyMotion)
+                throw new InvalidOperationException("Collider normalization would move child Actors. Re-run with --allow-hierarchy-motion only after reviewing the hierarchy.");
+            if (collider.HasPrefabLink && !allowPrefabOverride)
+                throw new InvalidOperationException("Collider normalization would create Prefab overrides. Re-run with --allow-prefab-override only when those overrides are intended.");
+
+            var beforeBounds = EffectiveBounds(collider);
+            var oldActorPosition = collider.Position;
+            var oldCenter = collider.Center;
+            var worldShapeCenter = collider.Transform.LocalToWorld(oldCenter);
+            using (new UndoBlock(Editor.Instance.Undo, collider, "Normalize collider center"))
+            {
+                collider.Position = worldShapeCenter;
+                collider.Center = Vector3.Zero;
+            }
+            MarkEdited(collider);
+            var afterBounds = EffectiveBounds(collider);
+            var saved = SaveSceneIfEdited(collider.Scene);
+            return new
+            {
+                collider = DescribeCollider(collider),
+                changed = true,
+                oldActorPosition = DescribeVector(oldActorPosition),
+                oldLocalCenter = DescribeVector(oldCenter),
+                newActorPosition = DescribeVector(collider.Position),
+                beforeWorldBounds = DescribeBounds(beforeBounds),
+                afterWorldBounds = DescribeBounds(afterBounds),
+                saved,
+                dirty = Editor.Instance.Scene.IsEdited(collider.Scene),
+            };
         }
 
         [CliCommand("actors.parent", Description = "Reparent an Actor with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -865,7 +1327,10 @@ namespace FlaxEditor
             if (!action.TryDo())
                 throw new InvalidOperationException($"Failed to reparent Actor: {action.LastResult?.ErrorCode} {action.LastResult?.Message}");
             Editor.Instance.Undo.AddAction(action);
-            return new { actor = DescribeActor(value), saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) || Editor.Instance.Scene.IsEdited(oldScene) };
+            var saved = SaveSceneIfEdited(value.Scene);
+            if (oldScene != value.Scene)
+                saved |= SaveSceneIfEdited(oldScene);
+            return new { actor = DescribeActor(value), saved, dirty = Editor.Instance.Scene.IsEdited(value.Scene) || Editor.Instance.Scene.IsEdited(oldScene) };
         }
 
         [CliCommand("actors.active", Description = "Set Actor active state with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -882,9 +1347,10 @@ namespace FlaxEditor
         public static object SetActorTags([CliOption("actor", Required = true)] Guid actor, [CliOption("tags", Required = true)] string[] tags)
         {
             var value = RequireActor(actor);
-            tags = tags ?? Array.Empty<string>();
+            tags = (tags ?? Array.Empty<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            CliAssetPersistence.PersistTags(tags);
             using (new UndoBlock(Editor.Instance.Undo, value, "Set actor tags"))
-                value.Tags = tags.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Select(Tags.Get).ToArray();
+                value.Tags = tags.Select(Tags.Get).ToArray();
             MarkEdited(value);
             return MutationResult(value);
         }
@@ -949,23 +1415,54 @@ namespace FlaxEditor
         }
 
         [CliCommand("actors.property.set", Description = "Set one direct public Actor field or property with undo, including Actor and asset references.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
-        public static object SetActorProperty([CliOption("actor", Required = true)] Guid actor, [CliOption("property", Required = true)] string property, [CliOption("value", Required = true)] JToken value)
+        public static object SetActorProperty([CliOption("actor", Required = true)] Guid actor, [CliOption("property", Required = true)] string property, [CliOption("value", Required = true)] JToken value, [CliOption("persist", Description = "Synchronously save and verify the assigned value.")] bool persist = true)
         {
             var actorValue = RequireActor(actor);
             var member = RequirePublicMember(actorValue, property, true);
+            if (actorValue is Collider && string.Equals(member.Name, nameof(Collider.Center), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Collider.Center is a local shape offset, not a placement transform. Use actors.transform or actors.place for placement, or colliders.offset-local for an intentional local offset.");
             var memberType = GetMemberType(member);
             var converted = ConvertMemberValue(value, memberType);
-            using (new UndoBlock(Editor.Instance.Undo, actorValue, "Set actor property"))
+            // Reload verification necessarily destroys live SceneObject instances.
+            // A live-object Undo action cannot remain valid across that boundary,
+            // so only non-persisting edits enter the current Editor undo stack.
+            if (persist)
                 SetMemberValue(member, actorValue, converted);
+            else
+                using (new UndoBlock(Editor.Instance.Undo, actorValue, "Set actor property"))
+                    SetMemberValue(member, actorValue, converted);
             MarkEdited(actorValue);
+            var observed = SerializeMemberValue(GetMemberValue(member, actorValue), memberType);
+            var saved = persist && SaveSceneIfEdited(actorValue.Scene);
+            var persisted = !persist;
+            JToken reloadedValue = null;
+            Actor reloadedActor = actorValue;
+            if (persist)
+            {
+                var scene = actorValue.Scene;
+                var sceneId = scene.ID;
+                Level.UnloadScene(scene);
+                if (Level.LoadScene(sceneId))
+                    throw new InvalidOperationException($"Failed to reload Scene '{sceneId}' for persistence verification.");
+                reloadedActor = Object.Find<Actor>(ref actor);
+                if (reloadedActor != null)
+                {
+                    var reloadedMember = RequirePublicMember(reloadedActor, member.Name, false);
+                    reloadedValue = SerializeMemberValue(GetMemberValue(reloadedMember, reloadedActor), GetMemberType(reloadedMember));
+                    persisted = JToken.DeepEquals(observed, reloadedValue);
+                }
+            }
             return new
             {
-                actor = DescribeActor(actorValue),
+                actor = DescribeActor(reloadedActor ?? actorValue),
                 property = member.Name,
                 type = memberType.FullName,
-                value = SerializeMemberValue(GetMemberValue(member, actorValue), memberType),
-                saved = false,
-                dirty = Editor.Instance.Scene.IsEdited(actorValue.Scene),
+                value = observed,
+                reloadedValue,
+                verified = persisted,
+                persisted,
+                saved,
+                dirty = reloadedActor != null && Editor.Instance.Scene.IsEdited(reloadedActor.Scene),
             };
         }
 
@@ -981,7 +1478,8 @@ namespace FlaxEditor
                 throw new InvalidOperationException("Failed to add the Script without changing history.");
             Editor.Instance.Undo.AddAction(action);
             var script = value.Scripts.LastOrDefault(x => string.Equals(x.TypeName, scriptType.TypeName, StringComparison.Ordinal));
-            return new { actor = DescribeActor(value), component = DescribeScript(script), saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
+            var saved = SaveSceneIfEdited(value.Scene);
+            return new { actor = DescribeActor(value), component = DescribeScript(script), saved, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
         }
 
         [CliCommand("actors.component.remove", Description = "Remove a Script component with undo.", Access = CliCommandAccess.Destructive, RequiresScene = true)]
@@ -994,7 +1492,8 @@ namespace FlaxEditor
             if (!action.TryDo())
                 throw new InvalidOperationException("Failed to remove the Script without changing history.");
             Editor.Instance.Undo.AddAction(action);
-            return new { actor = DescribeActor(value), component = description, deleted = true, saved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
+            var saved = SaveSceneIfEdited(value.Scene);
+            return new { actor = DescribeActor(value), component = description, deleted = true, saved, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
         }
 
         [CliCommand("actors.component.get", Description = "Get a Script component or one public field or property.", Access = CliCommandAccess.ReadOnly, RequiresScene = true)]
@@ -1007,17 +1506,54 @@ namespace FlaxEditor
             return new { component = DescribeScript(script), property = member.Name, value = SerializeMemberValue(GetMemberValue(member, script), GetMemberType(member)) };
         }
 
-        [CliCommand("actors.component.set", Description = "Set one public Script field or property with undo.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
-        public static object SetComponent([CliOption("actor", Required = true)] Guid actor, [CliOption("component", Required = true)] Guid component, [CliOption("property", Required = true)] string property, [CliOption("value", Required = true)] JToken value)
+        [CliCommand("actors.component.set", Description = "Set one public Script field or property with undo and durable persistence by default.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
+        public static object SetComponent([CliOption("actor", Required = true)] Guid actor, [CliOption("component", Required = true)] Guid component, [CliOption("property", Required = true)] string property, [CliOption("value", Required = true)] JToken value, [CliOption("persist", Description = "Synchronously save and verify the assigned value.")] bool persist = true)
         {
             var actorValue = RequireActor(actor);
             var script = RequireScript(actorValue, component);
             var member = RequirePublicMember(script, property, true);
-            var converted = ConvertMemberValue(value, GetMemberType(member));
-            using (new UndoBlock(Editor.Instance.Undo, script, "Set component property"))
+            var memberType = GetMemberType(member);
+            var converted = ConvertMemberValue(value, memberType);
+            if (persist)
                 SetMemberValue(member, script, converted);
+            else
+                using (new UndoBlock(Editor.Instance.Undo, script, "Set component property"))
+                    SetMemberValue(member, script, converted);
             MarkEdited(actorValue);
-            return new { actor = DescribeActor(actorValue), component = DescribeScript(script), property = member.Name, value, saved = false, dirty = Editor.Instance.Scene.IsEdited(actorValue.Scene) };
+            var observed = SerializeMemberValue(GetMemberValue(member, script), memberType);
+            var saved = persist && SaveSceneIfEdited(actorValue.Scene);
+            var persisted = !persist;
+            JToken reloadedValue = null;
+            Actor reloadedActor = actorValue;
+            Script reloadedScript = script;
+            if (persist)
+            {
+                var scene = actorValue.Scene;
+                var sceneId = scene.ID;
+                Level.UnloadScene(scene);
+                if (Level.LoadScene(sceneId))
+                    throw new InvalidOperationException($"Failed to reload Scene '{sceneId}' for persistence verification.");
+                reloadedActor = Object.Find<Actor>(ref actor);
+                reloadedScript = reloadedActor?.Scripts.FirstOrDefault(x => x.ID == component);
+                if (reloadedScript != null)
+                {
+                    var reloadedMember = RequirePublicMember(reloadedScript, member.Name, false);
+                    reloadedValue = SerializeMemberValue(GetMemberValue(reloadedMember, reloadedScript), GetMemberType(reloadedMember));
+                    persisted = JToken.DeepEquals(observed, reloadedValue);
+                }
+            }
+            return new
+            {
+                actor = DescribeActor(reloadedActor ?? actorValue),
+                component = DescribeScript(reloadedScript ?? script),
+                property = member.Name,
+                value = observed,
+                reloadedValue,
+                verified = persisted,
+                persisted,
+                saved,
+                dirty = reloadedActor != null && Editor.Instance.Scene.IsEdited(reloadedActor.Scene),
+            };
         }
 
         [CliCommand("prefabs.create", Description = "Create a Prefab from an Actor and link the Actor to it.", Access = CliCommandAccess.MutatesProject, RequiresScene = true)]
@@ -1157,6 +1693,15 @@ namespace FlaxEditor
             if (options.Scale.HasValue) actor.LocalScale = options.Scale.Value;
             var parent = options.Parent.HasValue ? RequireActor(options.Parent.Value) : RequireActiveScene();
             Editor.Instance.SceneEditing.Spawn(actor, parent, -1, false);
+            if (actor is Collider collider)
+            {
+                // Editor BoxCollider spawning may auto-fit the parent and offset
+                // Center. Generic CLI creation preserves constructor defaults and
+                // uses the Actor transform as the spatial authority.
+                collider.Center = Vector3.Zero;
+                if (collider is BoxCollider box)
+                    box.Size = new Float3(100.0f);
+            }
             return actor;
         }
 
@@ -1209,6 +1754,12 @@ namespace FlaxEditor
             if (value == null || !value.HasScene)
                 throw new KeyNotFoundException($"Actor '{id}' was not found in a loaded scene.");
             return value;
+        }
+
+        private static Collider RequireCollider(Guid id)
+        {
+            var actor = RequireActor(id);
+            return actor as Collider ?? throw new ArgumentException($"Actor '{id}' is a '{actor.TypeName}', not a Collider.", nameof(id));
         }
 
         private static Scene RequireScene(Guid id)
@@ -1304,6 +1855,63 @@ namespace FlaxEditor
 
         private static object ConvertMemberValue(JToken value, Type type)
         {
+            if (type.IsArray)
+            {
+                if (value.Type == JTokenType.Null)
+                    return null;
+                // Command-line shells necessarily transport complex option
+                // values as strings. Accept a JSON array encoded in that string
+                // so typed component arrays can be authored without arbitrary
+                // in-process C# evaluation.
+                if (value.Type == JTokenType.String)
+                {
+                    var encoded = value.Value<string>();
+                    try
+                    {
+                        value = JToken.Parse(encoded);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new ArgumentException($"A '{type.FullName}' value requires a JSON array; '{encoded}' is not valid JSON: {ex.Message}", nameof(value));
+                    }
+                }
+                if (value is not JArray values)
+                    throw new ArgumentException($"A '{type.FullName}' value requires a JSON array.", nameof(value));
+                var elementType = type.GetElementType();
+                var result = Array.CreateInstance(elementType, values.Count);
+                for (var i = 0; i < values.Count; i++)
+                    result.SetValue(ConvertMemberValue(values[i], elementType), i);
+                return result;
+            }
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(JsonAssetReference<>))
+            {
+                if (value.Type == JTokenType.Null)
+                    return Activator.CreateInstance(type);
+                if (value.Type != JTokenType.String)
+                    throw new ArgumentException($"A '{type.FullName}' reference requires an asset GUID, asset URI, or null.", nameof(value));
+                var reference = value.Value<string>();
+                JsonAsset asset;
+                if (Guid.TryParse(reference, out var id))
+                {
+                    asset = FlaxEngine.Content.LoadAsync<JsonAsset>(id);
+                }
+                else
+                {
+                    var path = ResolveAssetReference(reference);
+                    if (Editor.Instance.ContentDatabase.Find(path) is FlaxEditor.Content.AssetItem item)
+                        id = item.ID;
+                    else if (FlaxEngine.Content.GetAssetInfo(path, out var info) && info.ID != Guid.Empty)
+                        id = info.ID;
+                    else
+                        throw new KeyNotFoundException($"Asset reference '{reference}' was not found in the Content database.");
+                    asset = FlaxEngine.Content.LoadAsync<JsonAsset>(id);
+                }
+                if (!asset || asset.WaitForLoaded())
+                    throw new InvalidOperationException($"Json asset reference '{reference}' failed to load.");
+                var result = Activator.CreateInstance(type);
+                type.GetField("Asset").SetValue(result, asset);
+                return result;
+            }
             if (typeof(Object).IsAssignableFrom(type))
             {
                 if (value.Type == JTokenType.Null)
@@ -1345,7 +1953,23 @@ namespace FlaxEditor
                     throw new InvalidOperationException($"Asset reference '{reference}' failed to load.");
                 return result;
             }
-            return value.ToObject(type, JsonSerializer.Create(FlaxJsonSerializer.Settings));
+            var converted = value.ToObject(type, JsonSerializer.Create(FlaxJsonSerializer.Settings));
+            // Newtonsoft cannot resolve Flax object references nested inside
+            // authoring structs (for example AudioPhysicsRule.Events). Populate
+            // those public members through the same stable-ID conversion path.
+            if (converted != null && value is JObject objectValue &&
+                !type.IsPrimitive && !type.IsEnum && type != typeof(string) && type != typeof(Guid))
+            {
+                foreach (var property in objectValue.Properties())
+                {
+                    var member = type.GetMember(property.Name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase).FirstOrDefault();
+                    if (member is PropertyInfo memberProperty && memberProperty.CanWrite && memberProperty.GetIndexParameters().Length == 0)
+                        memberProperty.SetValue(converted, ConvertMemberValue(property.Value, memberProperty.PropertyType));
+                    else if (member is FieldInfo memberField && !memberField.IsInitOnly && !memberField.IsLiteral)
+                        memberField.SetValue(converted, ConvertMemberValue(property.Value, memberField.FieldType));
+                }
+            }
+            return converted;
         }
 
         private static string ResolveAssetReference(string reference)
@@ -1536,6 +2160,7 @@ namespace FlaxEditor
 
         private static object DescribeActorDetails(Actor actor)
         {
+            var world = actor.Transform;
             return new
             {
                 handle = DescribeActor(actor),
@@ -1549,10 +2174,69 @@ namespace FlaxEditor
                     rotation = new { x = actor.LocalEulerAngles.X, y = actor.LocalEulerAngles.Y, z = actor.LocalEulerAngles.Z },
                     scale = new { x = actor.LocalScale.X, y = actor.LocalScale.Y, z = actor.LocalScale.Z },
                 },
+                worldTransform = new
+                {
+                    position = new { x = world.Translation.X, y = world.Translation.Y, z = world.Translation.Z },
+                    rotation = new { x = actor.EulerAngles.X, y = actor.EulerAngles.Y, z = actor.EulerAngles.Z },
+                    scale = new { x = world.Scale.X, y = world.Scale.Y, z = world.Scale.Z },
+                },
+                worldBounds = DescribeBounds(EffectiveBounds(actor)),
                 prefab = actor.HasPrefabLink ? new { id = actor.PrefabID, objectId = actor.PrefabObjectID, root = actor.IsPrefabRoot } : null,
                 components = actor.Scripts.Select(DescribeScript).ToArray(),
                 children = EnumerateChildren(actor).Select(DescribeActor).ToArray(),
             };
+        }
+
+        private static object DescribeCollider(Collider collider)
+        {
+            object shape;
+            if (collider is BoxCollider box)
+                shape = new { type = "box", size = DescribeVector(box.Size) };
+            else if (collider is SphereCollider sphere)
+                shape = new { type = "sphere", radius = sphere.Radius };
+            else if (collider is CapsuleCollider capsule)
+                shape = new { type = "capsule", radius = capsule.Radius, height = capsule.Height };
+            else
+                shape = new { type = collider.TypeName };
+            var center = collider.Center;
+            return new
+            {
+                actor = DescribeActorDetails(collider),
+                collider.IsTrigger,
+                localCenter = DescribeVector(center),
+                worldShapeCenter = DescribeVector(collider.Transform.LocalToWorld(center)),
+                usesLocalOffset = center != Vector3.Zero,
+                shape,
+            };
+        }
+
+        private static BoundingBox EffectiveBounds(Actor actor)
+        {
+            var bounds = actor.Box;
+            if (bounds.Minimum.X > bounds.Maximum.X || bounds.Minimum.Y > bounds.Maximum.Y || bounds.Minimum.Z > bounds.Maximum.Z)
+                return new BoundingBox(actor.Position, actor.Position);
+            return bounds;
+        }
+
+        private static object DescribeBounds(BoundingBox bounds)
+        {
+            return new
+            {
+                minimum = new { x = bounds.Minimum.X, y = bounds.Minimum.Y, z = bounds.Minimum.Z },
+                maximum = new { x = bounds.Maximum.X, y = bounds.Maximum.Y, z = bounds.Maximum.Z },
+                center = new { x = bounds.Center.X, y = bounds.Center.Y, z = bounds.Center.Z },
+                size = new { x = bounds.Size.X, y = bounds.Size.Y, z = bounds.Size.Z },
+            };
+        }
+
+        private static object DescribeVector(Vector3 value)
+        {
+            return new { x = value.X, y = value.Y, z = value.Z };
+        }
+
+        private static object DescribeVector(Float3 value)
+        {
+            return new { x = value.X, y = value.Y, z = value.Z };
         }
 
         private static object DescribeScript(Script script)
@@ -1562,7 +2246,8 @@ namespace FlaxEditor
 
         private static object MutationResult(Actor actor)
         {
-            return new { actor = DescribeActor(actor), saved = false, dirty = Editor.Instance.Scene.IsEdited(actor.Scene) };
+            var saved = SaveSceneIfEdited(actor.Scene);
+            return new { actor = DescribeActor(actor), saved, dirty = Editor.Instance.Scene.IsEdited(actor.Scene) };
         }
 
         private static Guid[] SaveEditedScenes()

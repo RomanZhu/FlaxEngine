@@ -2,6 +2,7 @@
 
 #include "Engine/Content/AssetPipeline/ConvertedTypePolicy.h"
 #include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
+#include "Engine/Engine/Globals.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 TEST_CASE("Converted type lockout forbids new flax authoring and keeps legacy exceptions")
@@ -27,4 +28,5 @@ TEST_CASE("Converted type lockout forbids new flax authoring and keeps legacy ex
     CHECK_FALSE(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.ParticleEmitter"), TEXT("Content/E.flax")));
     CHECK_FALSE(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.ParticleSystem"), TEXT("Content/S.flax")));
     CHECK_FALSE(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.CollisionData"), TEXT("Content/C.flax")));
+    CHECK(ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(settings, TEXT("FlaxEngine.Shader"), Globals::EngineContentFolder / TEXT("Shaders/Internal.flax")));
 }

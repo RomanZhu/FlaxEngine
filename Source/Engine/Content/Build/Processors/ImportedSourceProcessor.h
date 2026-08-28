@@ -32,7 +32,7 @@ public:
 class FLAXENGINE_API ImportedSourceProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 3;
+    static constexpr uint32 ImplementationVersion = 4;
     static constexpr uint32 RuntimeFormatVersion = 1;
 
     static bool Owns(const StringView& processorID);

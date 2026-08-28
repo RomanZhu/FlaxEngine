@@ -269,7 +269,7 @@ namespace FlaxEditor.Options
         /// Gets or sets a value indicating whether show selected camera preview in the editor window.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface"), EditorOrder(80), Tooltip("Determines whether show selected camera preview in the edit window.")]
+        [EditorDisplay("Interface"), EditorOrder(80), Tooltip("Determines whether show selected camera preview in the Scene viewport.")]
         public bool ShowSelectedCameraPreview { get; set; } = true;
 
         /// <summary>
@@ -297,21 +297,21 @@ namespace FlaxEditor.Options
         /// Gets or sets a value indicating whether editor viewport rendering should be disabled while a viewport is fullscreened.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface", "Disable Editor Rendering In Fullscreen"), EditorOrder(262), Tooltip("Disables non-fullscreen editor viewport rendering while a viewport is fullscreened to improve fullscreen performance.")]
+        [EditorDisplay("Interface", "Disable Scene Rendering In Fullscreen"), EditorOrder(262), Tooltip("Disables non-fullscreen Scene viewport rendering while a viewport is fullscreened to improve fullscreen performance.")]
         public bool DisableEditorRenderingInFullscreen { get; set; } = true;
 
         /// <summary>
-        /// Gets or sets a value indicating whether hovering Scene window items highlights their actors in the editor viewport.
+        /// Gets or sets a value indicating whether hovering Hierarchy window items highlights their actors in the Scene viewport.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface", "Highlight in Editor"), EditorOrder(263), Tooltip("When hovered Scene items will highlight items in Editor.")]
+        [EditorDisplay("Interface", "Highlight in Scene"), EditorOrder(263), Tooltip("When hovered Hierarchy items will highlight items in Scene.")]
         public bool HighlightSceneTreeHoverInViewport { get; set; } = true;
 
         /// <summary>
-        /// Gets or sets a value indicating whether hovering editor viewport objects highlights them and their Scene window rows.
+        /// Gets or sets a value indicating whether hovering Scene viewport objects highlights them and their Hierarchy window rows.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface", "Highlight Scene Items from Editor"), EditorOrder(264), Tooltip("When hovered Editor items will highlight items in Scene.")]
+        [EditorDisplay("Interface", "Highlight Hierarchy Items from Scene"), EditorOrder(264), Tooltip("When hovered Scene items will highlight items in Hierarchy.")]
         public bool HighlightViewportObjectHover { get; set; } = true;
 
         /// <summary>
@@ -339,10 +339,10 @@ namespace FlaxEditor.Options
         public string GameViewToolStripLayout { get; set; } = string.Empty;
 
         /// <summary>
-        /// Gets or sets the editor content window orientation.
+        /// Gets or sets the Project window orientation.
         /// </summary>
         [DefaultValue(FlaxEngine.GUI.Orientation.Horizontal)]
-        [EditorDisplay("Interface"), EditorOrder(280), Tooltip("Editor content window orientation.")]
+        [EditorDisplay("Interface", "Project Window Orientation"), EditorOrder(280), Tooltip("Project window orientation.")]
         public FlaxEngine.GUI.Orientation ContentWindowOrientation { get; set; } = FlaxEngine.GUI.Orientation.Horizontal;
 
         /// <summary>
@@ -360,24 +360,24 @@ namespace FlaxEditor.Options
         public bool SeparateValueAndUnit { get; set; }
 
         /// <summary>
-        /// Gets or sets the option to auto size the Properties panel splitter based on the longest property name. Editor restart recommended.
+        /// Gets or sets the option to auto size the Inspector panel splitter based on the longest property name. Editor restart recommended.
         /// </summary>
         [DefaultValue(false)]
-        [EditorDisplay("Interface"), EditorOrder(311)]
+        [EditorDisplay("Interface", "Auto Size Inspector Panel Splitter"), EditorOrder(311)]
         public bool AutoSizePropertiesPanelSplitter { get; set; }
 
         /// <summary>
-        /// Gets or sets the option to show asset thumbnails next to compact reference fields in the Properties panel.
+        /// Gets or sets the option to show asset thumbnails next to compact reference fields in the Inspector panel.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface", "Show Reference Previews in Properties"), EditorOrder(312), Tooltip("Shows asset thumbnails next to compact asset reference fields in the Properties panel.")]
+        [EditorDisplay("Interface", "Show Reference Previews in Inspector"), EditorOrder(312), Tooltip("Shows asset thumbnails next to compact asset reference fields in the Inspector panel.")]
         public bool ShowReferencePreviewsInProperties { get; set; } = true;
 
         /// <summary>
         /// Gets or sets tree line visibility.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface"), EditorOrder(320), Tooltip("Toggles tree line visibility in places like the Scene or Content Panel.")]
+        [EditorDisplay("Interface"), EditorOrder(320), Tooltip("Toggles tree line visibility in places like the Hierarchy or Project panel.")]
         public bool ShowTreeLines { get; set; } = true;
 
         /// <summary>

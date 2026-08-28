@@ -6,6 +6,7 @@
 #include "Engine/Content/JsonAssetReference.h"
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Audio/Events/Assets/AudioBank.h"
+#include "Engine/Audio/Events/AudioActivation.h"
 
 /// <summary>
 /// Scene actor that loads and manages the lifetime of sound banks for the scene or level.
@@ -14,6 +15,10 @@ API_CLASS(Attributes="ActorContextMenu(\"New/Audio/Audio Bank Loader\"), ActorTo
 class FLAXENGINE_API AudioBankLoader : public Actor
 {
     DECLARE_SCENE_OBJECT(AudioBankLoader);
+
+private:
+    AudioActivationState _loadActivationState;
+    AudioActivationState _unloadActivationState;
 
 public:
     /// <summary>
@@ -40,6 +45,16 @@ public:
     API_FIELD(Attributes="EditorOrder(30), EditorDisplay(\"Loading\")")
     bool UnloadOnDisable = true;
 
+    /// <summary>Loads sample data after each bank finishes loading.</summary>
+    API_FIELD(Attributes="EditorOrder(40), EditorDisplay(\"Loading\")")
+    bool PreloadSampleData = false;
+
+    API_FIELD(Attributes="EditorOrder(50), EditorDisplay(\"Activation\", \"Load Event\")")
+    AudioActivationBinding LoadActivation;
+
+    API_FIELD(Attributes="EditorOrder(60), EditorDisplay(\"Activation\", \"Unload Event\")")
+    AudioActivationBinding UnloadActivation;
+
 public:
     /// <summary>
     /// Loads all configured sound banks.
@@ -50,6 +65,8 @@ public:
     /// Unloads all configured sound banks.
     /// </summary>
     API_FUNCTION() void UnloadBanks();
+
+    API_FUNCTION() bool SignalActivation(AudioActivationEvent activationEvent, Actor* source = nullptr, Actor* target = nullptr);
 
 public:
     // [Actor]
@@ -69,4 +86,5 @@ protected:
     void OnEnable() override;
     void OnDisable() override;
     void BeginPlay(SceneBeginData* data) override;
+    void EndPlay() override;
 };

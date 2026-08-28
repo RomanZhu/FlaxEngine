@@ -13,14 +13,15 @@ namespace FlaxEditor.Windows.Profiler
     internal sealed class Overall : ProfilerMode
     {
         private readonly SingleChart _fpsChart;
+        private readonly SingleChart _frameTimeChart;
         private readonly SingleChart _updateTimeChart;
         private readonly SingleChart _drawTimeCPUChart;
         private readonly SingleChart _drawTimeGPUChart;
         private readonly SingleChart _cpuMemChart;
         private readonly SingleChart _gpuMemChart;
 
-        public Overall()
-        : base("Overall")
+        public Overall(ProfilerHistoryView historyView)
+        : base("Overall", historyView)
         {
             // Layout
             var panel = new Panel(ScrollBars.Vertical)
@@ -39,41 +40,56 @@ namespace FlaxEditor.Windows.Profiler
             };
 
             // Charts
-            _fpsChart = new SingleChart
+            _fpsChart = new SingleChart(historyView)
             {
                 Title = "FPS",
                 Parent = layout,
             };
             _fpsChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _updateTimeChart = new SingleChart
+            _frameTimeChart = new SingleChart(historyView)
+            {
+                Title = "Frame Time",
+                DrawBars = true,
+                UseFrameBudget = true,
+                FormatSample = v => (Mathf.RoundToInt(v * 10.0f) / 10.0f) + " ms",
+                Parent = layout,
+            };
+            _frameTimeChart.SelectedSampleChanged += OnSelectedSampleChanged;
+            _updateTimeChart = new SingleChart(historyView)
             {
                 Title = "Update Time",
+                DrawBars = true,
+                UseFrameBudget = true,
                 FormatSample = v => (Mathf.RoundToInt(v * 10.0f) / 10.0f) + " ms",
                 Parent = layout,
             };
             _updateTimeChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _drawTimeCPUChart = new SingleChart
+            _drawTimeCPUChart = new SingleChart(historyView)
             {
                 Title = "Draw Time (CPU)",
+                DrawBars = true,
+                UseFrameBudget = true,
                 FormatSample = v => (Mathf.RoundToInt(v * 10.0f) / 10.0f) + " ms",
                 Parent = layout,
             };
             _drawTimeCPUChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _drawTimeGPUChart = new SingleChart
+            _drawTimeGPUChart = new SingleChart(historyView)
             {
                 Title = "Draw Time (GPU)",
+                DrawBars = true,
+                UseFrameBudget = true,
                 FormatSample = v => (Mathf.RoundToInt(v * 10.0f) / 10.0f) + " ms",
                 Parent = layout,
             };
             _drawTimeGPUChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _cpuMemChart = new SingleChart
+            _cpuMemChart = new SingleChart(historyView)
             {
                 Title = "CPU Memory",
                 FormatSample = v => ((int)v) + " MB",
                 Parent = layout,
             };
             _cpuMemChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _gpuMemChart = new SingleChart
+            _gpuMemChart = new SingleChart(historyView)
             {
                 Title = "GPU Memory",
                 FormatSample = v => ((int)v) + " MB",
@@ -86,6 +102,7 @@ namespace FlaxEditor.Windows.Profiler
         public override void Clear()
         {
             _fpsChart.Clear();
+            _frameTimeChart.Clear();
             _updateTimeChart.Clear();
             _drawTimeCPUChart.Clear();
             _drawTimeGPUChart.Clear();
@@ -97,6 +114,7 @@ namespace FlaxEditor.Windows.Profiler
         public override void Update(ref SharedUpdateData sharedData)
         {
             _fpsChart.AddSample(sharedData.Stats.FPS);
+            _frameTimeChart.AddSample(Mathf.Max(sharedData.Stats.UpdateTimeMs + sharedData.Stats.DrawCPUTimeMs, sharedData.Stats.DrawGPUTimeMs));
             _updateTimeChart.AddSample(sharedData.Stats.UpdateTimeMs);
             _drawTimeCPUChart.AddSample(sharedData.Stats.DrawCPUTimeMs);
             _drawTimeGPUChart.AddSample(sharedData.Stats.DrawGPUTimeMs);
@@ -108,6 +126,7 @@ namespace FlaxEditor.Windows.Profiler
         public override void UpdateView(int selectedFrame, bool showOnlyLastUpdateEvents)
         {
             _fpsChart.SelectedSampleIndex = selectedFrame;
+            _frameTimeChart.SelectedSampleIndex = selectedFrame;
             _updateTimeChart.SelectedSampleIndex = selectedFrame;
             _drawTimeCPUChart.SelectedSampleIndex = selectedFrame;
             _drawTimeGPUChart.SelectedSampleIndex = selectedFrame;

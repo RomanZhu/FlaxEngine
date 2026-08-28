@@ -14,7 +14,7 @@ metadata separately, resolves and pins engines deterministically, launches the
 Editor, invokes Flax.Build out of process, exposes the legacy Game Cooker
 adapter, negotiates versioned one-shot Game Cooker requests with compatible
 Editors, manages project assets through typed live-or-one-shot Editor commands,
-discovers and executes project-defined typed commands through one-shot or authenticated live-Editor requests,
+discovers and executes project-defined typed commands through one-shot or authenticated live-Editor requests, including fail-fast FMOD authoring migrations, diagnostics, bank builds, and typed-asset synchronization,
 provides native scene, Actor, Script component, Prefab, and Visject graph authoring
 command groups, discovers compatible running Editors and development Players,
 controls play mode/Player state and virtual keyboard/mouse input, reads console

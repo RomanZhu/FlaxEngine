@@ -8,6 +8,8 @@ using System.Reflection;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Import;
+using FlaxEditor.Content.Settings;
+using FlaxEditor.Windows.Assets;
 using FlaxEngine;
 using FlaxEngine.Tools;
 using Newtonsoft.Json;
@@ -16,6 +18,66 @@ using FlaxJsonSerializer = FlaxEngine.Json.JsonSerializer;
 
 namespace FlaxEditor
 {
+    internal static class CliAssetPersistence
+    {
+        public static void PrepareForSave(Asset asset, string propertyPath)
+        {
+            if (asset is not JsonAsset jsonAsset || string.IsNullOrWhiteSpace(propertyPath))
+                return;
+
+            var separator = propertyPath.IndexOf('.');
+            var rootMember = separator == -1 ? propertyPath : propertyPath.Substring(0, separator);
+            if (string.Equals(rootMember, nameof(JsonAsset.Instance), StringComparison.OrdinalIgnoreCase))
+                jsonAsset.SetInstance(jsonAsset.Instance);
+        }
+
+        public static void PersistTags(IEnumerable<string> tagNames)
+        {
+            var names = tagNames?
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .SelectMany(EnumerateTagHierarchy)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray() ?? Array.Empty<string>();
+            if (names.Length == 0)
+                return;
+
+            var settingsAsset = GameSettings.LoadAsset<LayersAndTagsSettings>();
+            if (!settingsAsset || settingsAsset.WaitForLoaded())
+                throw new InvalidOperationException("Failed to load the Layers and Tags settings asset.");
+
+            // Preserve pending edits owned by an open settings window before updating the same asset.
+            var settingsItem = Editor.Instance.ContentDatabase.FindAsset(settingsAsset.ID) as JsonAssetItem;
+            var assetWindow = Editor.Instance.Windows.FindEditor(settingsItem) as JsonAssetWindow;
+            assetWindow?.Save();
+
+            var settings = (LayersAndTagsSettings)settingsAsset.Instance;
+            var missing = names.Where(x => !settings.Tags.Contains(x)).ToArray();
+            if (missing.Length == 0)
+                return;
+            foreach (var name in missing)
+            {
+                if (!settings.Tags.Contains(name))
+                    settings.Tags.Add(name);
+            }
+            settings.Tags.Sort(StringComparer.Ordinal);
+            settingsAsset.SetInstance(settings);
+            if (Editor.Instance.ContentDatabase.SaveAsset(settingsAsset))
+                throw new InvalidOperationException("Failed to save the Layers and Tags settings asset.");
+            assetWindow?.RefreshAsset();
+        }
+
+        private static IEnumerable<string> EnumerateTagHierarchy(string tagName)
+        {
+            tagName = tagName.Trim();
+            for (int i = 0; i < tagName.Length; i++)
+            {
+                if (tagName[i] == '.' && i != 0)
+                    yield return tagName.Substring(0, i);
+            }
+            yield return tagName;
+        }
+    }
+
     /// <summary>
     /// Describes one asset operation for the typed CLI asset commands.
     /// </summary>
@@ -138,13 +200,20 @@ namespace FlaxEditor
 
         private sealed class AssetBatchOperation : CliCommandOperation
         {
+            private sealed class AssetVerification
+            {
+                public string Path;
+                public string PropertyPath;
+                public JToken ExpectedValue;
+            }
+
             private readonly CliCommandContext _context;
             private readonly CliAssetOperationOptions[] _operations;
             private readonly bool _continueOnError;
             private readonly bool _verifyReload;
             private readonly bool _single;
             private readonly List<object> _results = new List<object>();
-            private readonly List<string> _verificationPaths = new List<string>();
+            private readonly List<AssetVerification> _verifications = new List<AssetVerification>();
             private readonly object _importLocker = new object();
             private readonly List<object> _importedAssets = new List<object>();
             private CliCommandResult _result;
@@ -197,7 +266,7 @@ namespace FlaxEditor
                     return;
                 }
 
-                if (_verifyReload && _verifyIndex < _verificationPaths.Count)
+                if (_verifyReload && _verifyIndex < _verifications.Count)
                 {
                     VerifyNext();
                     return;
@@ -572,10 +641,16 @@ namespace FlaxEditor
                     throw new InvalidOperationException("Asset property assignment requires a JSON value.");
                 var asset = LoadAsset(options.Path);
                 var member = SetMemberPathValue(asset, options.PropertyPath, options.Value);
-                if (options.Save && Editor.Instance.ContentDatabase.SaveAsset(asset))
-                    throw new InvalidOperationException($"Failed to save asset '{options.Path}'.");
+                var assignedValue = GetMemberPathValue(asset, options.PropertyPath);
                 if (options.Save)
-                    TrackVerification(options.Path);
+                {
+                    if (assignedValue is Tag tag)
+                        CliAssetPersistence.PersistTags(new[] { tag.ToString() });
+                    CliAssetPersistence.PrepareForSave(asset, options.PropertyPath);
+                    if (Editor.Instance.ContentDatabase.SaveAsset(asset))
+                        throw new InvalidOperationException($"Failed to save asset '{options.Path}'.");
+                    TrackVerification(options.Path, options.PropertyPath, assignedValue);
+                }
                 return new { path = RequireItem(options.Path).Path, property = options.PropertyPath, value = options.Value, valueType = GetMemberType(member).FullName, saved = options.Save };
             }
 
@@ -667,16 +742,24 @@ namespace FlaxEditor
 
             private void VerifyNext()
             {
-                var path = _verificationPaths[_verifyIndex];
+                var verification = _verifications[_verifyIndex];
                 try
                 {
-                    VerifyAsset(path, true);
+                    VerifyAsset(verification.Path, true);
+                    if (verification.PropertyPath != null)
+                    {
+                        var asset = LoadAsset(verification.Path);
+                        var value = GetMemberPathValue(asset, verification.PropertyPath);
+                        var actual = value == null ? JValue.CreateNull() : JToken.Parse(FlaxJsonSerializer.Serialize(value));
+                        if (!JToken.DeepEquals(actual, verification.ExpectedValue))
+                            throw new InvalidOperationException($"Asset property '{verification.PropertyPath}' did not persist. Expected {verification.ExpectedValue}, reloaded {actual}.");
+                    }
                     _verifyIndex++;
-                    _context.ReportProgress($"Verified {_verifyIndex}/{_verificationPaths.Count} assets", _operations.Length == 0 ? 1.0f : 0.9f + 0.1f * _verifyIndex / _verificationPaths.Count);
+                    _context.ReportProgress($"Verified {_verifyIndex}/{_verifications.Count} assets", _operations.Length == 0 ? 1.0f : 0.9f + 0.1f * _verifyIndex / _verifications.Count);
                 }
                 catch (Exception ex)
                 {
-                    _results.Add(new { index = _operations.Length + _verifyIndex, action = "verify", success = false, error = new { code = "FLX-ASSET-VERIFY-0006", message = ex.Message }, path });
+                    _results.Add(new { index = _operations.Length + _verifyIndex, action = "verify", success = false, error = new { code = "FLX-ASSET-VERIFY-0006", message = ex.Message }, path = verification.Path, property = verification.PropertyPath });
                     _failed++;
                     _verifyIndex++;
                     if (!_continueOnError)
@@ -705,8 +788,23 @@ namespace FlaxEditor
                 path = System.IO.Path.GetFullPath(path);
                 lock (_importLocker)
                 {
-                    if (!_verificationPaths.Any(x => PathEquals(x, path)))
-                        _verificationPaths.Add(path);
+                    if (!_verifications.Any(x => x.PropertyPath == null && PathEquals(x.Path, path)))
+                        _verifications.Add(new AssetVerification { Path = path });
+                }
+            }
+
+            private void TrackVerification(string path, string propertyPath, object expectedValue)
+            {
+                path = System.IO.Path.GetFullPath(path);
+                var expected = expectedValue == null ? JValue.CreateNull() : JToken.Parse(FlaxJsonSerializer.Serialize(expectedValue));
+                lock (_importLocker)
+                {
+                    var existing = _verifications.FirstOrDefault(x =>
+                        string.Equals(x.PropertyPath, propertyPath, StringComparison.OrdinalIgnoreCase) && PathEquals(x.Path, path));
+                    if (existing != null)
+                        existing.ExpectedValue = expected;
+                    else
+                        _verifications.Add(new AssetVerification { Path = path, PropertyPath = propertyPath, ExpectedValue = expected });
                 }
             }
 

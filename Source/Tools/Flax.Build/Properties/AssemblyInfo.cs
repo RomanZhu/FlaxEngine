@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 [assembly: AssemblyTitle("Flax.Build")]
@@ -15,3 +16,4 @@ using System.Runtime.InteropServices;
 [assembly: Guid("c99aaf92-d4ad-4847-9ee0-b11e68e93e1e")]
 [assembly: AssemblyVersion("1.0.0.0")]
 [assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: InternalsVisibleTo("Flax.Build.Tests")]

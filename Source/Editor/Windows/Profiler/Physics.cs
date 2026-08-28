@@ -19,8 +19,8 @@ namespace FlaxEditor.Windows.Profiler
         private readonly SingleChart _newPairsChart;
         private readonly SingleChart _newTouchesChart;
 
-        public Physics()
-        : base("Physics")
+        public Physics(ProfilerHistoryView historyView)
+        : base("Physics", historyView)
         {
             // Layout
             var panel = new Panel(ScrollBars.Vertical)
@@ -39,37 +39,37 @@ namespace FlaxEditor.Windows.Profiler
             };
 
             // Charts
-            _activeBodiesChart = new SingleChart
+            _activeBodiesChart = new SingleChart(historyView)
             {
                 Title = "Active Bodies",
                 Parent = layout,
             };
             _activeBodiesChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _activeJointsChart = new SingleChart
+            _activeJointsChart = new SingleChart(historyView)
             {
                 Title = "Active Joints",
                 Parent = layout,
             };
             _activeJointsChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _dynamicBodiesChart = new SingleChart
+            _dynamicBodiesChart = new SingleChart(historyView)
             {
                 Title = "Dynamic Bodies",
                 Parent = layout,
             };
             _dynamicBodiesChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _staticBodiesChart = new SingleChart
+            _staticBodiesChart = new SingleChart(historyView)
             {
                 Title = "Static Bodies",
                 Parent = layout,
             };
             _staticBodiesChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _newPairsChart = new SingleChart
+            _newPairsChart = new SingleChart(historyView)
             {
                 Title = "New Pairs",
                 Parent = layout,
             };
             _newPairsChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _newTouchesChart = new SingleChart
+            _newTouchesChart = new SingleChart(historyView)
             {
                 Title = "New Touches",
                 Parent = layout,

@@ -232,7 +232,7 @@ namespace FlaxEditor.Modules
         }
 
         /// <summary>
-        /// Selects in Content Window the prefab asset used by the selected objects.
+        /// Selects in the Project window the prefab asset used by the selected objects.
         /// </summary>
         public void SelectPrefab()
         {

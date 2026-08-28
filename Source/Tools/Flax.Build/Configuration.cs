@@ -244,6 +244,12 @@ namespace Flax.Build
         public static string Dotnet = null;
 
         /// <summary>
+        /// Disables the persistent C# compiler server for managed compilation tasks.
+        /// </summary>
+        [CommandLine("disableCompilerServer", "Disables the persistent C# compiler server.")]
+        public static bool DisableCompilerServer = false;
+
+        /// <summary>
         /// Custom configuration defines provided via command line for the build tool.
         /// </summary>
         public static List<string> CustomDefines = new List<string>();
@@ -254,6 +260,8 @@ namespace Flax.Build
                 cmdLine += " -compiler=" + Compiler;
             if (!string.IsNullOrEmpty(Dotnet))
                 cmdLine += " -dotnet=" + Dotnet;
+            if (DisableCompilerServer)
+                cmdLine += " -disableCompilerServer";
             if (Sanitizers != Flax.Build.NativeCpp.Sanitizer.None)
                 cmdLine += " -sanitizers=" + Sanitizers.ToString();
         }

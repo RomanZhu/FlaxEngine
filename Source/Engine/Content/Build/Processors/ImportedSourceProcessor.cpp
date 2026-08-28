@@ -159,7 +159,7 @@ bool ImportedSourceProcessor::Prepare(PrepareAssetContext& context, PreparedAsse
     if (record.ProcessorID == ShaderID() && bytes.Count() < 10)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Shader source is too short."));
-    static const char ToolIdentity[] = "flax-imported-source-tool-v1";
+    static const char ToolIdentity[] = "flax-imported-source-tool-v2";
     if (context.DeclareToolchain(TEXT("imported-source"), ContentHash::Compute(ToolIdentity, ARRAY_COUNT(ToolIdentity) - 1), origin, diagnostic) ||
         context.DeclareOutput(StringAnsiView("runtime"), record.ID, diagnostic))
         return true;

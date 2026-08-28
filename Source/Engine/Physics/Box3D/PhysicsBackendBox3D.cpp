@@ -29,6 +29,7 @@
 #include <box3d/constants.h>
 
 #define BOX3D_LENGTH_UNITS_PER_METER 100.0f
+#define BOX3D_HIT_EVENT_THRESHOLD 5.0f
 #define BOX3D_DEFAULT_SUBSTEPS 4
 #define BOX3D_COOKED_MAGIC 0x33425846u
 #define BOX3D_COOKED_VERSION 1u
@@ -967,11 +968,12 @@ namespace
         }
     }
 
-    void FillCollision(Collision& collision, b3ShapeId shapeA, b3ShapeId shapeB, b3ContactId contactId)
+    void FillCollision(Collision& collision, b3ShapeId shapeA, b3ShapeId shapeB, b3ContactId contactId, float approachSpeed)
     {
         collision.ThisActor = GetCollider(shapeA);
         collision.OtherActor = GetCollider(shapeB);
         collision.Impulse = Vector3::Zero;
+        collision.ApproachSpeed = approachSpeed;
         collision.ThisVelocity = Vector3::Zero;
         collision.OtherVelocity = Vector3::Zero;
         collision.ContactsCount = 0;
@@ -1003,10 +1005,10 @@ namespace
         }
     }
 
-    void SendCollisionEvent(b3ShapeId shapeA, b3ShapeId shapeB, b3ContactId contactId, bool enter)
+    void SendCollisionEvent(b3ShapeId shapeA, b3ShapeId shapeB, b3ContactId contactId, bool enter, float approachSpeed)
     {
         Collision collision;
-        FillCollision(collision, shapeA, shapeB, contactId);
+        FillCollision(collision, shapeA, shapeB, contactId, approachSpeed);
         if (!collision.ThisActor || !collision.OtherActor)
             return;
 
@@ -1022,6 +1024,37 @@ namespace
             collision.SwapObjects();
             collision.ThisActor->OnCollisionExit(collision);
         }
+    }
+
+    void SendCollisionHit(const b3ContactHitEvent& hit)
+    {
+        Collision collision;
+        FillCollision(collision, hit.shapeIdA, hit.shapeIdB, hit.contactId, hit.approachSpeed);
+        if (!collision.ThisActor || !collision.OtherActor)
+            return;
+
+        // The hit event contains the point and normal at the beginning of the
+        // step, which is the most useful location for impact audio and effects.
+        collision.ContactsCount = 1;
+        collision.Contacts[0].Point = B2C(hit.point);
+        collision.Contacts[0].Normal = B2C(hit.normal);
+        collision.Contacts[0].Separation = 0.0f;
+
+        collision.ThisActor->OnCollisionHit(collision);
+        collision.SwapObjects();
+        collision.ThisActor->OnCollisionHit(collision);
+    }
+
+    float GetApproachSpeed(const b3ContactEvents& events, b3ContactId contactId)
+    {
+        float result = 0.0f;
+        for (int32 i = 0; i < events.hitCount; i++)
+        {
+            const b3ContactHitEvent& hit = events.hitEvents[i];
+            if (B3_ID_EQUALS(hit.contactId, contactId))
+                result = Math::Max(result, hit.approachSpeed);
+        }
+        return result;
     }
 
     struct QueryContext
@@ -1374,6 +1407,7 @@ void* PhysicsBackend::CreateScene(const PhysicsSettings& settings)
     b3WorldDef def = b3DefaultWorldDef();
     def.gravity = C2BVec(settings.DefaultGravity);
     def.restitutionThreshold = settings.BounceThresholdVelocity;
+    def.hitEventThreshold = BOX3D_HIT_EVENT_THRESHOLD;
     def.enableContinuous = scene->EnableCCD;
     def.userData = scene;
     scene->World = b3CreateWorld(&def);
@@ -1440,9 +1474,14 @@ void PhysicsBackend::EndSimulateScene(void* scene)
 
     b3ContactEvents contactEvents = b3World_GetContactEvents(sceneBox3D->World);
     for (int32 i = 0; i < contactEvents.beginCount; i++)
-        SendCollisionEvent(contactEvents.beginEvents[i].shapeIdA, contactEvents.beginEvents[i].shapeIdB, contactEvents.beginEvents[i].contactId, true);
+    {
+        const b3ContactBeginTouchEvent& contact = contactEvents.beginEvents[i];
+        SendCollisionEvent(contact.shapeIdA, contact.shapeIdB, contact.contactId, true, GetApproachSpeed(contactEvents, contact.contactId));
+    }
     for (int32 i = 0; i < contactEvents.endCount; i++)
-        SendCollisionEvent(contactEvents.endEvents[i].shapeIdA, contactEvents.endEvents[i].shapeIdB, contactEvents.endEvents[i].contactId, false);
+        SendCollisionEvent(contactEvents.endEvents[i].shapeIdA, contactEvents.endEvents[i].shapeIdB, contactEvents.endEvents[i].contactId, false, 0.0f);
+    for (int32 i = 0; i < contactEvents.hitCount; i++)
+        SendCollisionHit(contactEvents.hitEvents[i]);
 
     sceneBox3D->LastDeltaTime = 0.0f;
 }

@@ -54,6 +54,11 @@ API_STRUCT(NoDefault) struct CreateProcessSettings
     API_FIELD() bool ShellExecute = false;
 
     /// <summary>
+    /// True if the child process tree should be terminated when this process exits or stops waiting for it. Supported only on Windows without ShellExecute.
+    /// </summary>
+    API_FIELD() bool KillTreeOnExit = false;
+
+    /// <summary>
     /// Custom environment variables to set for the process. Empty if unused. Additionally newly spawned process inherits this process vars which can be overriden here.
     /// </summary>
     API_FIELD() Dictionary<String, String> Environment;

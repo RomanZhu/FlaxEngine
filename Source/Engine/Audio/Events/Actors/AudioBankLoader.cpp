@@ -55,13 +55,19 @@ void AudioBankLoader::LoadBanks()
                 LOG(Warning, "AudioBankLoader '{0}' ignored non-AudioBank asset '{1}'.", GetName(), asset->GetPath());
             }
 
-            // AudioBank.Path may be a middleware object path (for example bank:/Master),
-            // not a filesystem bank filename. Use explicit BankPaths for file loading.
+            // Older synchronized assets stored bank:/Name instead of a bank file.
+            // Keep those projects audible while reporting the required migration.
             if (path.StartsWith(TEXT("bank:/")))
-                path.Clear();
+            {
+                LOG(Warning, "AudioBank '{0}' uses obsolete middleware path metadata. Resynchronize it with a .bank file path.", asset->GetPath());
+                path = path.Substring(6) + TEXT(".bank");
+            }
             if (path.HasChars())
             {
-                AudioEventSystem::LoadBank(bankId, path, nonBlocking);
+                if (!AudioEventSystem::LoadBank(bankId, path, nonBlocking))
+                    LOG(Error, "AudioBankLoader '{0}' failed to load bank '{1}'.", GetName(), path);
+                else if (PreloadSampleData && bankId.IsValid() && !AudioEventSystem::LoadBankSampleData(bankId))
+                    LOG(Error, "AudioBankLoader '{0}' failed to preload bank sample data '{1}'.", GetName(), path);
             }
         }
     }
@@ -108,7 +114,7 @@ void AudioBankLoader::UnloadBanks()
             }
 
             if (path.StartsWith(TEXT("bank:/")))
-                path.Clear();
+                path = path.Substring(6) + TEXT(".bank");
             if (bankId.IsValid() || path.HasChars())
             {
                 AudioEventSystem::UnloadBank(bankId, path);
@@ -124,6 +130,27 @@ void AudioBankLoader::UnloadBanks()
     }
 }
 
+bool AudioBankLoader::SignalActivation(AudioActivationEvent activationEvent, Actor* source, Actor* target)
+{
+    bool handled = false;
+    if (_loadActivationState.TryActivate(LoadActivation, activationEvent, source, target))
+    {
+        LoadBanks();
+        handled = true;
+    }
+    if (_unloadActivationState.TryActivate(UnloadActivation, activationEvent, source, target))
+    {
+        UnloadBanks();
+        handled = true;
+    }
+    if (activationEvent == AudioActivationEvent::TriggerExit || activationEvent == AudioActivationEvent::CollisionExit || activationEvent == AudioActivationEvent::PointerExit)
+    {
+        _loadActivationState.NotifyExit(LoadActivation);
+        _unloadActivationState.NotifyExit(UnloadActivation);
+    }
+    return handled;
+}
+
 bool AudioBankLoader::IntersectsItself(const Ray& ray, Real& distance, Vector3& normal)
 {
     return false;
@@ -136,6 +163,8 @@ void AudioBankLoader::OnEnable()
 #endif
 
     Actor::OnEnable();
+    if (IsDuringPlay())
+        SignalActivation(AudioActivationEvent::ActorEnable, this, this);
 }
 
 void AudioBankLoader::OnDisable()
@@ -144,6 +173,8 @@ void AudioBankLoader::OnDisable()
     GetSceneRendering()->RemoveViewportIcon(this);
 #endif
 
+    if (IsDuringPlay())
+        SignalActivation(AudioActivationEvent::ActorDisable, this, this);
     if (UnloadOnDisable)
         UnloadBanks();
 
@@ -154,8 +185,17 @@ void AudioBankLoader::BeginPlay(SceneBeginData* data)
 {
     Actor::BeginPlay(data);
 
+    _loadActivationState.Reset();
+    _unloadActivationState.Reset();
     if (LoadOnStart && IsDuringPlay())
         LoadBanks();
+    SignalActivation(AudioActivationEvent::BeginPlay, this, this);
+}
+
+void AudioBankLoader::EndPlay()
+{
+    SignalActivation(AudioActivationEvent::EndPlay, this, this);
+    Actor::EndPlay();
 }
 
 void AudioBankLoader::Serialize(SerializeStream& stream, const void* otherObj)
@@ -168,6 +208,9 @@ void AudioBankLoader::Serialize(SerializeStream& stream, const void* otherObj)
     SERIALIZE(BankPaths);
     SERIALIZE(LoadOnStart);
     SERIALIZE(UnloadOnDisable);
+    SERIALIZE(PreloadSampleData);
+    SERIALIZE(LoadActivation);
+    SERIALIZE(UnloadActivation);
 }
 
 void AudioBankLoader::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
@@ -178,4 +221,7 @@ void AudioBankLoader::Deserialize(DeserializeStream& stream, ISerializeModifier*
     DESERIALIZE(BankPaths);
     DESERIALIZE(LoadOnStart);
     DESERIALIZE(UnloadOnDisable);
+    DESERIALIZE(PreloadSampleData);
+    DESERIALIZE(LoadActivation);
+    DESERIALIZE(UnloadActivation);
 }

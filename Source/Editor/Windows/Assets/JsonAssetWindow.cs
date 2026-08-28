@@ -802,7 +802,7 @@ namespace FlaxEditor.Windows.Assets
                 {
                     Editor.Instance.ContentEditing.Open(item);
                 });
-                _optionsCM.AddButton("Show asset code item in content window", () =>
+                _optionsCM.AddButton("Show asset code item in Project", () =>
                 {
                     Editor.Instance.Windows.ContentWin.Select(item);
                 });

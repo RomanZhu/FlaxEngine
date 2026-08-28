@@ -5,7 +5,7 @@ using System;
 namespace FlaxEngine
 {
     /// <summary>
-    /// Displays the method in the properties panel where user can click and invoke this method.
+    /// Displays the method in the Inspector where user can click and invoke this method.
     /// </summary>
     /// <remarks>Supported on both static and member methods that are parameterless.</remarks>
     [AttributeUsage(AttributeTargets.Method)]

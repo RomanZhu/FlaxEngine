@@ -2,6 +2,9 @@
 
 #include "Engine/Audio/Events/AudioEventBackendNone.h"
 #include "Engine/Audio/Events/AudioEventSystem.h"
+#include "Engine/Audio/Events/Actors/AudioEmitter.h"
+#include "Engine/Audio/Events/Assets/AudioEvent.h"
+#include "Engine/Scripting/ScriptingObject.h"
 #if USE_EDITOR
 #include "Editor/Editor.h"
 #endif
@@ -128,6 +131,57 @@ TEST_CASE("AudioEventBackendNone")
 #endif
 
         AudioEventSystem::SetBackend(nullptr);
+        backend.Dispose();
+    }
+
+    SECTION("Persistent Asset and Owner Operations")
+    {
+#if USE_EDITOR
+        AudioTestPlayModeScope playMode(true);
+#endif
+        AudioEventBackendNone backend;
+        CHECK(!backend.Init());
+        AudioEventSystem::SetBackend(&backend);
+
+        AudioEvent* audioEvent = New<AudioEvent>(ScriptingObject::SpawnParams(Guid::New(), AudioEvent::TypeInitializer));
+        audioEvent->BackendId = Guid::New();
+        audioEvent->Path = TEXT("event:/Test/Motor");
+        AudioEmitter* owner = New<AudioEmitter>(ScriptingObject::SpawnParams(Guid::New(), AudioEmitter::TypeInitializer));
+        owner->Flags |= ObjectFlags::IsDuringPlay;
+        owner->SetPosition(Vector3(100.0f, 200.0f, 300.0f));
+
+        AudioParameterValue initialSpeed;
+        initialSpeed.Id = AudioParameterId(TEXT("Speed"));
+        initialSpeed.Value = 0.25f;
+        const AudioEventHandle handle = AudioEventSystem::Play(audioEvent, owner, Span<AudioParameterValue>(&initialSpeed, 1));
+        CHECK(handle.IsValid());
+
+        AudioEventInstanceState state;
+        CHECK(AudioEventSystem::QueryInstance(handle, state));
+        CHECK(state.PlaybackState == AudioEventPlaybackState::Playing);
+        AudioParameterState parameterState;
+        CHECK(AudioEventSystem::GetParameter(handle, initialSpeed.Id, parameterState));
+        CHECK(parameterState.Value == 0.25f);
+
+        // Repeated owner-addressed play retriggers the same logical instance.
+        CHECK(AudioEventSystem::Play(audioEvent, owner) == handle);
+        CHECK(AudioEventSystem::SetParameter(audioEvent, owner, initialSpeed.Id, 0.75f));
+        CHECK(AudioEventSystem::GetParameter(handle, initialSpeed.Id, parameterState));
+        CHECK(parameterState.Value == 0.75f);
+
+        CHECK(AudioEventSystem::Stop(audioEvent, owner, AudioStopMode::Immediate));
+        CHECK(!AudioEventSystem::QueryInstance(handle, state));
+        CHECK(!AudioEventSystem::SetParameter(audioEvent, owner, initialSpeed.Id, 1.0f));
+
+        const AudioEventHandle positioned = AudioEventSystem::PlayAt(audioEvent, Vector3(400.0f, 500.0f, 600.0f));
+        CHECK(positioned.IsValid());
+        CHECK(AudioEventSystem::QueryInstance(positioned, state));
+        CHECK(state.PlaybackState == AudioEventPlaybackState::Playing);
+        CHECK(AudioEventSystem::StopAndRelease(positioned, AudioStopMode::Immediate));
+
+        AudioEventSystem::SetBackend(nullptr);
+        Delete(owner);
+        Delete(audioEvent);
         backend.Dispose();
     }
 }

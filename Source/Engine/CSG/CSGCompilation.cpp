@@ -65,14 +65,17 @@ bool CSGCompilation::CompileStack(const Array<Brush*>& brushes, Mesh& outMesh, S
     return CSGStackEvaluator::EvaluateStack(Span<const Operand>(operands.Get(), operands.Count()), outMesh, stats);
 }
 
-bool CSGCompilation::CompileTargetMeshes(Scene* scene, Mesh& outCombinedMesh)
+bool CSGCompilation::CompileTargetMeshes(Actor* targetRoot, Mesh& outCombinedMesh)
 {
-    if (scene == nullptr)
+    if (targetRoot == nullptr)
         return false;
 
     Array<Actor*> explicitStacks;
     Array<Brush*> implicitBrushes;
-    CSGHierarchy::CollectTargetScopes(scene, explicitStacks, implicitBrushes);
+    CSGHierarchy::CollectTargetScopes(targetRoot, explicitStacks, implicitBrushes);
+    auto rootBrush = dynamic_cast<Brush*>(targetRoot);
+    if (rootBrush && rootBrush->CanUseCSG())
+        implicitBrushes.Insert(0, rootBrush);
 
     if (implicitBrushes.HasItems())
     {
@@ -98,6 +101,11 @@ bool CSGCompilation::CompileTargetMeshes(Scene* scene, Mesh& outCombinedMesh)
     }
 
     return true;
+}
+
+bool CSGCompilation::CompileTargetMeshes(Scene* scene, Mesh& outCombinedMesh)
+{
+    return CompileTargetMeshes(static_cast<Actor*>(scene), outCombinedMesh);
 }
 
 #endif

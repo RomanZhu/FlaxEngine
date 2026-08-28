@@ -61,7 +61,7 @@ namespace
     float MasterVolume = 1.0f;
     float Volume = 1.0f;
     int32 ActiveDeviceIndex = -1;
-    bool MuteOnFocusLoss = true;
+    bool MuteOnFocusLoss = false;
     bool EnableHRTF = true;
 }
 
@@ -84,6 +84,22 @@ public:
 
 AudioService AudioServiceInstance;
 
+// Spatial attributes must be submitted after scene LateUpdate. Camera rigs and
+// gameplay scripts often finalize their transforms there, while the main audio
+// service intentionally initializes and performs non-spatial work much earlier.
+class AudioSpatialService : public EngineService
+{
+public:
+    AudioSpatialService()
+        : EngineService(TEXT("Audio Spatial"), 300)
+    {
+    }
+
+    void LateUpdate() override;
+};
+
+AudioSpatialService AudioSpatialServiceInstance;
+
 namespace
 {
     void OnEnginePause()
@@ -98,7 +114,7 @@ namespace
     {
         AudioBackend::SetVolume(Volume);
 #if COMPILE_WITH_AUDIO_EVENTS
-        AudioEventSystem::SetPaused(!Engine::IsPlayMode());
+        AudioEventSystem::SetPaused(!Engine::IsPlayMode() || Time::GetGamePaused());
 #endif
     }
 
@@ -346,7 +362,10 @@ bool AudioService::Init()
         LoadConfiguredBank(settings->MasterStringsBank, false, true);
         LoadConfiguredBank(settings->MasterBank, false, true);
         for (const auto& bank : settings->StartupBanks)
-            LoadConfiguredBank(bank, settings->PreloadStartupBankSampleData);
+            // Startup banks are part of the scene's runtime contract. Complete
+            // their metadata load before BeginPlay so emitters cannot race an
+            // FMOD non-blocking load during their first OnEnable/OnBeginPlay.
+            LoadConfiguredBank(bank, settings->PreloadStartupBankSampleData, true);
     }
     AudioSurfaceLibrary* surfaceLibrary = nullptr;
     if (settings->SurfaceLibrary && !settings->SurfaceLibrary->WaitForLoaded())
@@ -391,8 +410,8 @@ void AudioService::Update()
         if (!playMode)
         {
             AudioEventSystem::StopAll(AudioStopMode::Immediate);
-            AudioEventSystem::UnloadAllBanks();
             AudioEventSystem::SetPaused(true);
+            AudioEventSystem::UnloadAllBanks();
         }
         else
         {
@@ -400,13 +419,22 @@ void AudioService::Update()
             LoadConfiguredBank(settings->MasterStringsBank, false, true);
             LoadConfiguredBank(settings->MasterBank, false, true);
             for (const auto& bank : settings->StartupBanks)
-                LoadConfiguredBank(bank, settings->PreloadStartupBankSampleData);
+                LoadConfiguredBank(bank, settings->PreloadStartupBankSampleData, true);
             AudioEventSystem::SetPaused(false);
         }
         _wasPlayMode = playMode;
     }
 #endif
 
+}
+
+void AudioSpatialService::LateUpdate()
+{
+    PROFILE_CPU_NAMED("Audio.SpatialUpdate");
+    PROFILE_MEM(Audio);
+
+    // Native backends also consume listener/source state here (for example,
+    // XAudio2 calculates its spatial mix during this call).
     AudioBackend::Update();
 
 #if COMPILE_WITH_AUDIO_EVENTS
@@ -422,8 +450,8 @@ void AudioService::Update()
                 auto* listener = Audio::Listeners[i];
                 if (listener && listener->IsActiveInHierarchy() && listener->IsDuringPlay())
                 {
-                    Audio3DAttributes attrs(listener->GetPosition(), listener->GetVelocity(), listener->GetForward(), listener->GetTransform().GetUp());
-                    listenerStates.Add(AudioListenerState(listener->GetID(), attrs, 1.0f));
+                    Audio3DAttributes attrs(listener->GetAttenuationPosition(), listener->GetVelocity(), listener->GetForward(), listener->GetTransform().GetUp());
+                    listenerStates.Add(AudioListenerState(listener->GetID(), attrs, listener->ListenerWeight, listener->ListenerIndex));
                 }
             }
             AudioEventSystem::GetBackend()->UpdateListeners(Span<AudioListenerState>(listenerStates.Get(), listenerStates.Count()));

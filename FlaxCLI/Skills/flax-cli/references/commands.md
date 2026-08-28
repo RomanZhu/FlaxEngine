@@ -42,6 +42,7 @@ assuming remote services.
 - Visject graphs: `visject groups list`, `asset inspect|validate`, node add/remove/set, and connect/disconnect for Material and Animation Graph assets.
 - Player/runtime: `player status|pause|resume|step|quit` and virtual keyboard/mouse `player input`; use pointer `--state relative --dx ... --dy ...` for mouse-look deltas and `input inspect` for device/mapping/state diagnostics. Gamepad/action synthesis is unsupported.
 - Authoring: `authoring-root`, `scenes`, `actors`, `prefabs`
+- FMOD audio: `audio.authoring.inspect|diagnose|run` for contained JavaScript migrations, clean diagnostics, bank builds, and typed-asset synchronization; use the companion `flax-fmod-audio` skill for complete authoring and gameplay hookup workflows.
 
 The stable settings groups are `game`, `time`, `audio`, `layers`, `physics`,
 `input`, `graphics`, `network`, `navigation`, `localization`, `build`, and

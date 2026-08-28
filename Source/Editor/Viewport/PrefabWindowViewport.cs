@@ -68,6 +68,11 @@ namespace FlaxEditor.Viewport
         private readonly List<Actor> _debugDrawActors = new List<Actor>();
         private PrefabSpritesRenderer _spritesRenderer;
         private IntPtr _tempDebugDrawContext;
+        private StaticModel _csgPreviewActor;
+        private Model _csgPreviewModel;
+        private Model _csgPreviewModelCache;
+        private bool _csgPreviewRequested;
+        private DateTime _csgPreviewRequestTime;
 
         private PrefabUIEditorRoot _uiRoot;
         private bool _showUI = false;
@@ -196,6 +201,13 @@ namespace FlaxEditor.Viewport
             Task.CollectDrawCalls += OnCollectDrawCalls;
             Task.PostRender += OnPostRender;
 
+            // CSG brushes are not part of a gameplay Scene in this viewport, so render
+            // their resolved geometry through a transient model owned by the preview.
+            _csgPreviewActor = FlaxEngine.Object.New<StaticModel>();
+            _csgPreviewActor.Name = "CSG Preview";
+            _csgPreviewActor.IsActive = false;
+            Task.AddCustomActor(_csgPreviewActor);
+
             // Create post effects
             SelectionOutline = FlaxEngine.Object.New<SelectionOutline>();
             SelectionOutline.SelectionGetter = () => TransformGizmo.SelectedParents;
@@ -316,10 +328,50 @@ namespace FlaxEditor.Viewport
 
         private void OnUpdate(float deltaTime)
         {
+            if (_csgPreviewRequested && (DateTime.UtcNow - _csgPreviewRequestTime).TotalMilliseconds >= 50.0)
+                RebuildCSGPreview();
+
             for (int i = 0; i < Gizmos.Count; i++)
             {
                 Gizmos[i].Update(deltaTime);
             }
+        }
+
+        /// <summary>
+        /// Requests a transient CSG preview rebuild after interactive edits settle.
+        /// </summary>
+        public void RequestCSGPreview()
+        {
+            _csgPreviewRequested = true;
+            _csgPreviewRequestTime = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Rebuilds the transient CSG preview immediately.
+        /// </summary>
+        public void RebuildCSGPreview()
+        {
+            _csgPreviewRequested = false;
+            var nextModel = Instance ? CSGPreviewBuilder.Build(Instance, _csgPreviewModelCache) : null;
+            _csgPreviewModelCache = _csgPreviewModel;
+            _csgPreviewModel = nextModel;
+            _csgPreviewActor.Model = nextModel;
+            _csgPreviewActor.IsActive = nextModel != null;
+        }
+
+        /// <summary>
+        /// Clears the transient CSG preview.
+        /// </summary>
+        public void ClearCSGPreview()
+        {
+            _csgPreviewRequested = false;
+            if (_csgPreviewActor)
+            {
+                _csgPreviewActor.IsActive = false;
+                _csgPreviewActor.Model = null;
+            }
+            _csgPreviewModel = null;
+            _csgPreviewModelCache = null;
         }
 
         private void OnBegin(RenderTask task, GPUContext context)
@@ -548,9 +600,12 @@ namespace FlaxEditor.Viewport
                 }
 
                 // Apply scale
-                trans.Scale = applyWorldBoundsScale
-                    ? TransformGizmoBase.ApplyWorldScaleDelta(trans.Scale, trans.Orientation, scaleDelta)
-                    : TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
+                if (!applyWorldBoundsScale || !TransformGizmo.TryApplyBoundsShapeResize(obj, ref trans, scaleDelta))
+                {
+                    trans.Scale = applyWorldBoundsScale
+                        ? TransformGizmoBase.ApplyWorldScaleDelta(trans.Scale, trans.Orientation, scaleDelta)
+                        : TransformGizmoBase.ApplyScaleDelta(trans.Scale, scaleDelta);
+                }
 
                 // Apply translation
                 trans.Translation += translationDelta;
@@ -558,6 +613,8 @@ namespace FlaxEditor.Viewport
                 obj.Transform = trans;
 
             }
+
+            RequestCSGPreview();
         }
 
         /// <inheritdoc />
@@ -786,6 +843,12 @@ namespace FlaxEditor.Viewport
         {
             if (IsDisposing)
                 return;
+            ClearCSGPreview();
+            if (_csgPreviewActor)
+            {
+                Task.RemoveCustomActor(_csgPreviewActor);
+                FlaxEngine.Object.Destroy(ref _csgPreviewActor);
+            }
             Gizmos.Clear();
             if (_tempDebugDrawContext != IntPtr.Zero)
             {

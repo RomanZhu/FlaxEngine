@@ -1685,7 +1685,7 @@ namespace FlaxEditor.Modules
                     if (ShouldRemoveMissingContentItem(child))
                     {
                         // Item doesn't exist anymore
-                        Editor.Log(string.Format($"Content item \'{child.Path}\' has been removed"));
+                        Editor.Log($"Content item \'{child.Path}\' has been removed");
                         Delete(child);
                         i--;
                     }

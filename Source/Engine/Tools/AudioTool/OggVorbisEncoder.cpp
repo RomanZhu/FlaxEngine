@@ -42,7 +42,8 @@ bool OggVorbisEncoder::Open(WriteCallback writeCallback, uint32 sampleRate, uint
     _userData = userData;
     _closed = false;
 
-    ogg_stream_init(&_oggState, rand());
+    // Keep encoded output deterministic so identical imports produce identical artifacts.
+    ogg_stream_init(&_oggState, 0x464C4158);
     vorbis_info_init(&_vorbisInfo);
 
     int32 status = vorbis_encode_init_vbr(&_vorbisInfo, numChannels, sampleRate, quality);

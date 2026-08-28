@@ -89,6 +89,10 @@ public:
     /// </summary>
     API_FUNCTION() void StopAllEvents();
 
+    // [Actor]
+    void Serialize(SerializeStream& stream, const void* otherObj) override;
+    void Deserialize(DeserializeStream& stream, ISerializeModifier* modifier) override;
+
 protected:
     void OnEnable() override;
     void OnDisable() override;

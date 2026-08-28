@@ -260,7 +260,7 @@ namespace FlaxEditor.Windows
         public ContentWindow(Editor editor)
         : base(editor, true, ScrollBars.None)
         {
-            Title = "Content";
+            Title = "Project";
             Icon = editor.Icons.Folder32;
             var style = Style.Current;
             var controlHeight = style.ControlHeight > 0.0f ? style.ControlHeight : 18.0f;

@@ -31,8 +31,8 @@ namespace FlaxEditor.Windows.Profiler
         private int[] _groupOrder;
         private Label _warningText;
         
-        public Memory()
-        : base("Memory")
+        public Memory(ProfilerHistoryView historyView)
+        : base("Memory", historyView)
         {
             // Layout
             var panel = new Panel(ScrollBars.Vertical)
@@ -51,14 +51,14 @@ namespace FlaxEditor.Windows.Profiler
             };
 
             // Chart
-            _nativeAllocationsChart = new SingleChart
+            _nativeAllocationsChart = new SingleChart(historyView)
             {
                 Title = "Native Memory Allocation",
                 FormatSample = v => Utilities.Utils.FormatBytesCount((ulong)v),
                 Parent = layout,
             };
             _nativeAllocationsChart.SelectedSampleChanged += OnSelectedSampleChanged;
-            _managedAllocationsChart = new SingleChart
+            _managedAllocationsChart = new SingleChart(historyView)
             {
                 Title = "Managed Memory Allocation",
                 FormatSample = v => Utilities.Utils.FormatBytesCount((ulong)v),

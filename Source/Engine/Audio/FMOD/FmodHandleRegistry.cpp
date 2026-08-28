@@ -72,7 +72,14 @@ bool FmodHandleRegistry::Free(AudioEventHandle handle, FMOD::Studio::EventInstan
 FMOD::Studio::EventInstance* FmodHandleRegistry::Get(AudioEventHandle handle) const
 {
     if (Validate(handle))
-        return _slots[handle.Index].Instance;
+    {
+        auto* instance = _slots[handle.Index].Instance;
+        // FMOD can invalidate an instance when its owning bank is unloaded or
+        // after middleware-side one-shot cleanup. Never issue API calls through
+        // a registry entry whose native handle has already expired.
+        if (instance && instance->isValid())
+            return instance;
+    }
     return nullptr;
 }
 

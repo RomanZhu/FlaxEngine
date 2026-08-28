@@ -27,12 +27,18 @@ public:
         AudioBankState State = AudioBankState::Unloaded;
         FMOD_RESULT LastResult = FMOD_OK;
         uint64 FileRevision = 0;
+        // Path-only non-blocking loads need a temporary internal dictionary key
+        // until a typed bank ID is supplied or FMOD metadata becomes available.
+        bool SyntheticKey = false;
     };
 
 private:
     FMOD::Studio::System* _system = nullptr;
     Dictionary<Guid, BankEntry> _banksByGuid;
     Dictionary<String, Guid> _guidByPath;
+    Dictionary<Guid, Guid> _aliases;
+
+    Guid ResolveBankId(const Guid& bankId) const;
 
 public:
     FmodBankRegistry() = default;

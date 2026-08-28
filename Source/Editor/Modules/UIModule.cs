@@ -1103,12 +1103,12 @@ namespace FlaxEditor.Modules
             MenuWindow = MainMenu.AddButton("Window");
             cm = MenuWindow.ContextMenu;
             cm.VisibleChanged += OnMenuWindowVisibleChanged;
-            cm.AddButton("Content", inputOptions.ContentWindow, Editor.Windows.ContentWin.FocusOrShow);
-            cm.AddButton("Scene", inputOptions.SceneWindow, Editor.Windows.SceneWin.FocusOrShow);
+            cm.AddButton("Project", inputOptions.ContentWindow, Editor.Windows.ContentWin.FocusOrShow);
+            cm.AddButton("Hierarchy", inputOptions.SceneWindow, Editor.Windows.SceneWin.FocusOrShow);
             cm.AddButton("Toolbox", inputOptions.ToolboxWindow, Editor.Windows.ToolboxWin.FocusOrShow);
-            cm.AddButton("Properties", inputOptions.PropertiesWindow, Editor.Windows.PropertiesWin.FocusOrShow);
+            cm.AddButton("Inspector", inputOptions.PropertiesWindow, Editor.Windows.PropertiesWin.FocusOrShow);
             cm.AddButton("Game", inputOptions.GameWindow, Editor.Windows.GameWin.FocusOrShow);
-            cm.AddButton("Editor", inputOptions.EditorWindow, Editor.Windows.EditWin.FocusOrShow);
+            cm.AddButton("Scene", inputOptions.EditorWindow, Editor.Windows.EditWin.FocusOrShow);
             cm.AddButton("Editor Console", inputOptions.OutputLogWindow, Editor.Windows.EditorConsoleWin.FocusOrShow);
             cm.AddButton("Graphics Quality", inputOptions.GraphicsQualityWindow, Editor.Windows.GraphicsQualityWin.FocusOrShow);
             cm.AddButton("Game Cooker", inputOptions.GameCookerWindow, Editor.Windows.GameCookerWin.FocusOrShow);
