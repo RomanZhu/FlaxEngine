@@ -263,6 +263,7 @@ bool ScriptsBuilder::RunBuildTool(const StringView& args, const StringView& work
     procSettings.FileName = StringView(*cmdLine, cmdLine.Length());
     procSettings.Arguments = args.Get();
     procSettings.WorkingDirectory = workingDir;
+    procSettings.KillTreeOnExit = true;
     const int32 result = Platform::CreateProcess(procSettings);
     if (result != 0)
         LOG(Error, "Failed to run build tool, result: {0:x}", (uint32)result);
@@ -433,7 +434,7 @@ bool ScriptsBuilderImpl::compileGameScriptsAsyncInner()
         return false;
     }
     auto args = String::Format(
-        TEXT("-log -logfile= -build -mutex -buildtargets={0} -skiptargets=FlaxEditor -platform={1} -arch={2} -configuration={3}"),
+        TEXT("-log -logfile= -build -mutex -disableCompilerServer -buildtargets={0} -skiptargets=FlaxEditor -platform={1} -arch={2} -configuration={3}"),
         target, platform, architecture, configuration);
     if (Scripting::HasGameModulesLoaded())
     {

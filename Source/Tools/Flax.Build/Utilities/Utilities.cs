@@ -412,7 +412,7 @@ namespace Flax.Build
         {
             if (e.Data != null)
             {
-                Log.Info(e.Data);
+                Log.ToolOutput(e.Data);
             }
         }
 

@@ -1244,6 +1244,8 @@ int32 WindowsPlatform::CreateProcess(CreateProcessSettings& settings)
 
         HANDLE stdOutRead = nullptr;
         HANDLE stdErrRead = nullptr;
+        HANDLE processJob = nullptr;
+        PROCESS_INFORMATION procInfo = { };
 
         if (captureStdOut)
         {
@@ -1281,11 +1283,42 @@ int32 WindowsPlatform::CreateProcess(CreateProcessSettings& settings)
             }
         }
 
+        if (settings.KillTreeOnExit)
+        {
+            processJob = CreateJobObjectW(nullptr, nullptr);
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobInfo = { };
+            jobInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if (processJob == nullptr || !SetInformationJobObject(processJob, JobObjectExtendedLimitInformation, &jobInfo, sizeof(jobInfo)))
+            {
+                LOG(Warning, "Cannot create child process job. Error code: 0x{0:x}", (uint64)GetLastError());
+                goto ERROR_EXIT;
+            }
+            dwCreationFlags |= CREATE_SUSPENDED;
+        }
+
         // Create the process
-        PROCESS_INFORMATION procInfo;
         if (!CreateProcessW(nullptr, const_cast<LPWSTR>(cmdLine.GetText()), nullptr, nullptr, TRUE, dwCreationFlags, (LPVOID)environmentStr, settings.WorkingDirectory.HasChars() ? settings.WorkingDirectory.Get() : nullptr, &startupInfoEx.StartupInfo, &procInfo))
         {
             LOG(Warning, "Cannot start process. Error code: 0x{0:x}", (uint64)GetLastError());
+            goto ERROR_EXIT;
+        }
+
+        if (processJob != nullptr && !AssignProcessToJobObject(processJob, procInfo.hProcess))
+        {
+            LOG(Warning, "Cannot assign child process to job. Error code: 0x{0:x}", (uint64)GetLastError());
+            TerminateProcess(procInfo.hProcess, 1);
+            WaitForSingleObject(procInfo.hProcess, INFINITE);
+            CloseHandle(procInfo.hProcess);
+            CloseHandle(procInfo.hThread);
+            goto ERROR_EXIT;
+        }
+        if (processJob != nullptr && ResumeThread(procInfo.hThread) == (DWORD)-1)
+        {
+            LOG(Warning, "Cannot resume child process. Error code: 0x{0:x}", (uint64)GetLastError());
+            TerminateProcess(procInfo.hProcess, 1);
+            WaitForSingleObject(procInfo.hProcess, INFINITE);
+            CloseHandle(procInfo.hProcess);
+            CloseHandle(procInfo.hThread);
             goto ERROR_EXIT;
         }
 
@@ -1317,6 +1350,8 @@ int32 WindowsPlatform::CreateProcess(CreateProcessSettings& settings)
 
         // Cleanup
     ERROR_EXIT:
+        if (processJob != nullptr)
+            CloseHandle(processJob);
         if (startupInfoEx.StartupInfo.hStdOutput != nullptr)
             CloseHandle(startupInfoEx.StartupInfo.hStdOutput);
         if (startupInfoEx.StartupInfo.hStdError != nullptr)

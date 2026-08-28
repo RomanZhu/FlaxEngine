@@ -329,11 +329,12 @@ namespace Flax.Build
             task.InfoMessage = "Compiling " + outputFile;
             task.Cost = task.PrerequisiteFiles.Count;
 
-            // The "/shared" flag enables the compiler server support:
+            // The "/shared" flag controls compiler server support:
             // https://github.com/dotnet/roslyn/blob/main/docs/compilers/Compiler%20Server.md
+            var sharedCompilerArgument = Configuration.DisableCompilerServer ? string.Empty : "/shared";
 #if USE_NETCORE
             task.CommandPath = dotnetPath;
-            task.CommandArguments = $"exec \"{cscPath}\" /noconfig /shared @\"{responseFile}\"";
+            task.CommandArguments = $"exec \"{cscPath}\" /noconfig {sharedCompilerArgument} @\"{responseFile}\"";
 #else
             if (monoPath != null)
             {
@@ -343,7 +344,7 @@ namespace Flax.Build
             else
             {
                 task.CommandPath = cscPath;
-                task.CommandArguments = $"/noconfig /shared @\"{responseFile}\"";
+                task.CommandArguments = $"/noconfig {sharedCompilerArgument} @\"{responseFile}\"";
             }
 #endif
 

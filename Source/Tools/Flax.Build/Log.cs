@@ -10,6 +10,13 @@ namespace Flax.Build
     /// </summary>
     public static class Log
     {
+        internal enum ToolOutputType
+        {
+            Info,
+            Warning,
+            Error,
+        }
+
         private static object _consoleLocker = new object();
         private static FileStream _logFile;
         private static StreamWriter _logFileWriter;
@@ -111,6 +118,51 @@ namespace Flax.Build
         public static void Info(string message)
         {
             Write(message, _defaultColor, Configuration.ConsoleLog && !Configuration.LogMessagesOnly);
+        }
+
+        internal static void ToolOutput(string message)
+        {
+            switch (ClassifyToolOutput(message))
+            {
+            case ToolOutputType.Error:
+                Error(message);
+                break;
+            case ToolOutputType.Warning:
+                Warning(message);
+                break;
+            default:
+                Info(message);
+                break;
+            }
+        }
+
+        internal static ToolOutputType ClassifyToolOutput(string message)
+        {
+            if (ContainsDiagnostic(message, "error") || ContainsDiagnostic(message, "fatal error"))
+                return ToolOutputType.Error;
+            if (ContainsDiagnostic(message, "warning"))
+                return ToolOutputType.Warning;
+            return ToolOutputType.Info;
+        }
+
+        private static bool ContainsDiagnostic(string message, string severity)
+        {
+            string marker = ": " + severity;
+            int searchStart = 0;
+            while (searchStart < message.Length)
+            {
+                int index = message.IndexOf(marker, searchStart, StringComparison.OrdinalIgnoreCase);
+                if (index == -1)
+                    break;
+                int suffixIndex = index + marker.Length;
+                if (suffixIndex == message.Length || message[suffixIndex] == ':' || char.IsWhiteSpace(message[suffixIndex]))
+                    return true;
+                searchStart = suffixIndex;
+            }
+
+            string trimmed = message.TrimStart();
+            return trimmed.StartsWith(severity + " ", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith(severity + ":", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
