@@ -24,6 +24,7 @@ public class Tests : EngineModule
         options.PrivateDependencies.Add("CSG");
         options.PrivateDependencies.Add("ModelTool");
         options.PrivateDependencies.Add("Audio");
+        options.PrivateDependencies.Add("ShadersCompilation");
 
         // FMOD-specific tests are compiled only when the SDK is available. The
         // generic/no-FMOD test target continues to build without this branch.
