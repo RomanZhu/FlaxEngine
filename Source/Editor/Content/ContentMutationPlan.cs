@@ -175,6 +175,9 @@ namespace FlaxEditor.Content
 
         public ContentMutationResult VerifyBeforeCommit(int[] entryIndices)
         {
+            if (entryIndices == null || entryIndices.Length == 0)
+                return ContentMutationResult.Prepared(Entries[0].SourcePath, Entries[0].DestinationPath, Id);
+
             for (int i = 0; i < entryIndices.Length; i++)
             {
                 var entry = Entries[entryIndices[i]];

@@ -23,9 +23,98 @@
 #endif
 
 #include <algorithm>
+#include <future>
+#include <mutex>
 
 namespace
 {
+    constexpr int32 ModelAnalysisCacheCapacity = 64;
+#if COMPILE_WITH_ASSETS_IMPORTER
+    constexpr int32 ModelBuildCacheCapacity = 16;
+    constexpr uint64 ModelBuildCacheByteCapacity = 512ull * 1024ull * 1024ull;
+#endif
+
+    struct ModelSourceAnalysisResult
+    {
+        ModelSourceAnalysis Analysis;
+        AssetPipelineDiagnostic Diagnostic;
+        bool Failed = false;
+    };
+
+#if COMPILE_WITH_ASSETS_IMPORTER
+    struct ModelBuildData
+    {
+        ModelData Data;
+        ModelTool::Options Options;
+        Array<ModelSubAssetInfo> SubAssets;
+        uint64 MemoryBytes = 0;
+
+        ~ModelBuildData();
+    };
+
+    struct ModelBuildDataResult
+    {
+        std::shared_ptr<ModelBuildData> Value;
+        AssetPipelineDiagnostic Diagnostic;
+        bool Failed = false;
+    };
+
+    struct ModelBuildCacheEntry
+    {
+        std::shared_future<std::shared_ptr<ModelBuildDataResult>> Future;
+        uint64 MemoryBytes = 0;
+    };
+#endif
+
+    struct ModelProcessorCache
+    {
+        std::mutex Locker;
+        Dictionary<StringAnsi, std::shared_future<std::shared_ptr<ModelSourceAnalysisResult>>> Analyses;
+        Array<StringAnsi> AnalysisOrder;
+#if COMPILE_WITH_ASSETS_IMPORTER
+        Dictionary<StringAnsi, std::shared_ptr<ModelBuildCacheEntry>> Builds;
+        Array<StringAnsi> BuildOrder;
+        uint64 BuildBytes = 0;
+#endif
+    };
+
+    ModelProcessorCache& Cache()
+    {
+        static ModelProcessorCache cache;
+        return cache;
+    }
+
+    void ReleaseModelMeshes(ModelData& data)
+    {
+        HashSet<MeshData*> released;
+        for (ModelLodData& lod : data.LODs)
+        {
+            for (MeshData* mesh : lod.Meshes)
+            {
+                if (mesh && released.Add(mesh))
+                    Delete(mesh);
+            }
+            lod.Meshes.Clear();
+        }
+    }
+
+#if COMPILE_WITH_ASSETS_IMPORTER
+    ModelBuildData::~ModelBuildData()
+    {
+        ReleaseModelMeshes(Data);
+    }
+#endif
+
+    struct ScopedModelData
+    {
+        ModelData Data;
+
+        ~ScopedModelData()
+        {
+            ReleaseModelMeshes(Data);
+        }
+    };
+
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, AssetPipelineDiagnosticStage stage,
         const Guid& assetID, const StringView& path, const StringView& message)
     {
@@ -73,7 +162,8 @@ namespace
     }
 
     bool DeclareGltfDependencies(PrepareAssetContext& context, const Array<byte>& source, const StringView& sourcePath,
-        HashSet<String>& declaredPaths, AssetPipelineDiagnostic& diagnostic)
+        HashSet<String>& declaredPaths, ArtifactKeyBuilder& analysisKeyBuilder, int32& analysisDependencyIndex,
+        AssetPipelineDiagnostic& diagnostic)
     {
         rapidjson_flax::Document document;
         document.Parse(reinterpret_cast<const char*>(source.Get()), source.Count());
@@ -114,6 +204,9 @@ namespace
                     diagnostic.Message = String::Format(TEXT("Missing or unreadable glTF external dependency '{0}' declared by '{1}'."), path, sourcePath);
                     return true;
                 }
+                const StringAnsi prefix = StringAnsi::Format("gltf-dependency-{0}-", analysisDependencyIndex++);
+                analysisKeyBuilder.AddString(prefix + "path", path.ToLower());
+                analysisKeyBuilder.AddHash(prefix + "content", hash);
             }
             return false;
         };
@@ -129,6 +222,143 @@ namespace
         }
         return nullptr;
     }
+
+    bool GetCachedSourceAnalysis(const StringAnsi& key, const StringView& sourcePath, const ModelProcessorSettings& settings,
+        std::shared_ptr<const ModelSourceAnalysis>& analysis, AssetPipelineDiagnostic& diagnostic)
+    {
+        ModelProcessorCache& cache = Cache();
+        std::shared_future<std::shared_ptr<ModelSourceAnalysisResult>> future;
+        std::shared_ptr<std::promise<std::shared_ptr<ModelSourceAnalysisResult>>> producer;
+        {
+            std::lock_guard<std::mutex> lock(cache.Locker);
+            auto* existing = cache.Analyses.TryGet(key);
+            if (existing)
+            {
+                future = *existing;
+            }
+            else
+            {
+                producer = std::make_shared<std::promise<std::shared_ptr<ModelSourceAnalysisResult>>>();
+                future = producer->get_future().share();
+                cache.Analyses.Add(key, future);
+                cache.AnalysisOrder.Add(key);
+                while (cache.AnalysisOrder.Count() > ModelAnalysisCacheCapacity)
+                {
+                    const StringAnsi oldest = cache.AnalysisOrder[0];
+                    cache.AnalysisOrder.RemoveAtKeepOrder(0);
+                    cache.Analyses.Remove(oldest);
+                }
+            }
+        }
+        if (producer)
+        {
+            auto result = std::make_shared<ModelSourceAnalysisResult>();
+            result->Failed = ModelProcessor::AnalyzeSource(sourcePath, settings, result->Analysis, result->Diagnostic);
+            producer->set_value(result);
+        }
+        const std::shared_ptr<ModelSourceAnalysisResult> result = future.get();
+        if (result->Failed)
+        {
+            diagnostic = result->Diagnostic;
+            return true;
+        }
+        analysis = std::shared_ptr<const ModelSourceAnalysis>(result, &result->Analysis);
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+
+#if COMPILE_WITH_ASSETS_IMPORTER
+    void TrimBuildCache(ModelProcessorCache& cache, const StringAnsi& retainedKey)
+    {
+        while (cache.BuildOrder.Count() > ModelBuildCacheCapacity || cache.BuildBytes > ModelBuildCacheByteCapacity)
+        {
+            int32 removeIndex = 0;
+            if (cache.BuildOrder[removeIndex] == retainedKey && cache.BuildOrder.Count() > 1)
+                removeIndex = 1;
+            const StringAnsi key = cache.BuildOrder[removeIndex];
+            if (key == retainedKey && cache.BuildOrder.Count() == 1)
+                break;
+            const std::shared_ptr<ModelBuildCacheEntry>* entry = cache.Builds.TryGet(key);
+            if (entry)
+            {
+                cache.BuildBytes = cache.BuildBytes >= (*entry)->MemoryBytes ? cache.BuildBytes - (*entry)->MemoryBytes : 0;
+                cache.Builds.Remove(key);
+            }
+            cache.BuildOrder.RemoveAtKeepOrder(removeIndex);
+        }
+    }
+
+    bool GetCachedBuildData(const StringAnsi& key, const StringView& sourcePath, ModelTool::Options options,
+        std::shared_ptr<const ModelBuildData>& data, AssetPipelineDiagnostic& diagnostic)
+    {
+        ModelProcessorCache& cache = Cache();
+        std::shared_ptr<ModelBuildCacheEntry> entry;
+        std::shared_ptr<std::promise<std::shared_ptr<ModelBuildDataResult>>> producer;
+        {
+            std::lock_guard<std::mutex> lock(cache.Locker);
+            auto* existing = cache.Builds.TryGet(key);
+            if (existing)
+            {
+                entry = *existing;
+            }
+            else
+            {
+                producer = std::make_shared<std::promise<std::shared_ptr<ModelBuildDataResult>>>();
+                entry = std::make_shared<ModelBuildCacheEntry>();
+                entry->Future = producer->get_future().share();
+                cache.Builds.Add(key, entry);
+                cache.BuildOrder.Add(key);
+                TrimBuildCache(cache, key);
+            }
+        }
+        if (producer)
+        {
+            auto result = std::make_shared<ModelBuildDataResult>();
+            auto value = std::make_shared<ModelBuildData>();
+            String importError;
+            if (ModelTool::ImportModel(String(sourcePath), value->Data, options, importError, String::Empty))
+            {
+                result->Failed = Fail(result->Diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                    Guid::Empty, sourcePath, importError.IsEmpty() ? TEXT("Model compatibility importer rejected the verified source.") : importError);
+            }
+            else
+            {
+                if (value->Data.PositionFormat == ModelData::PositionFormats::Automatic)
+                    value->Data.PositionFormat = ModelData::PositionFormats::Float32;
+                value->Options = options;
+                Array<SubAssetCandidate> candidates;
+                result->Failed = ModelSubAssetKeys::Enumerate(value->Data, value->SubAssets, candidates, result->Diagnostic);
+                if (!result->Failed)
+                {
+                    value->MemoryBytes = EstimateData(value->Data);
+                    result->Value = MoveTemp(value);
+                }
+            }
+            if (result->Failed)
+                result->Diagnostic.SourcePath = sourcePath;
+            {
+                std::lock_guard<std::mutex> lock(cache.Locker);
+                const std::shared_ptr<ModelBuildCacheEntry>* current = cache.Builds.TryGet(key);
+                if (current && *current == entry && result->Value)
+                {
+                    entry->MemoryBytes = result->Value->MemoryBytes;
+                    cache.BuildBytes += entry->MemoryBytes;
+                    TrimBuildCache(cache, key);
+                }
+            }
+            producer->set_value(result);
+        }
+        const std::shared_ptr<ModelBuildDataResult> result = entry->Future.get();
+        if (result->Failed || !result->Value)
+        {
+            diagnostic = result->Diagnostic;
+            return true;
+        }
+        data = result->Value;
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+#endif
 }
 
 uint64 ModelPreparedPayload::GetMemoryUsage() const
@@ -190,6 +420,55 @@ AssetProcessorDescriptor ModelProcessor::CreateDescriptor()
     return descriptor;
 }
 
+bool ModelProcessor::AnalyzeSource(const StringView& sourcePath, const ModelProcessorSettings& settings,
+    ModelSourceAnalysis& analysis, AssetPipelineDiagnostic& diagnostic)
+{
+    analysis = ModelSourceAnalysis();
+    ScopedModelData ownedData;
+    ModelTool::Options probeOptions = settings.Import;
+    probeOptions.Type = ModelTool::ModelType::Prefab;
+    probeOptions.ImportTypes = ImportDataTypes::Geometry | ImportDataTypes::Skeleton | ImportDataTypes::Animations |
+                               ImportDataTypes::Nodes | ImportDataTypes::Materials | ImportDataTypes::Textures;
+    probeOptions.Cached = nullptr;
+    String error;
+    if (ModelTool::ImportData(String(sourcePath), ownedData.Data, probeOptions, error))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Prepare,
+            Guid::Empty, sourcePath, error.IsEmpty() ? TEXT("Model structure parser rejected the source.") : error);
+
+    if (ModelSubAssetKeys::Enumerate(ownedData.Data, analysis.SubAssets, analysis.Candidates, diagnostic))
+    {
+        diagnostic.SourcePath = sourcePath;
+        return true;
+    }
+    for (const TextureEntry& texture : ownedData.Data.Textures)
+    {
+        if (!texture.FilePath.IsEmpty())
+            analysis.ReferencedTexturePaths.Add(texture.FilePath);
+    }
+    analysis.SourceLodCount = ownedData.Data.LODs.Count();
+    analysis.SourceMeshCount = ownedData.Data.LODs.HasItems() ? ownedData.Data.LODs[0].Meshes.Count() : 0;
+    analysis.SourceAnimationCount = ownedData.Data.Animations.Count();
+    analysis.SourceMaterialCount = ownedData.Data.Materials.Count();
+    analysis.SourceSkeletonBoneCount = ownedData.Data.Skeleton.Bones.Count();
+    analysis.SourceSkeletonNodeCount = ownedData.Data.Skeleton.Nodes.Count();
+    analysis.EstimatedMemoryBytes = EstimateData(ownedData.Data);
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+void ModelProcessor::ClearCaches()
+{
+    ModelProcessorCache& cache = Cache();
+    std::lock_guard<std::mutex> lock(cache.Locker);
+    cache.Analyses.Clear();
+    cache.AnalysisOrder.Clear();
+#if COMPILE_WITH_ASSETS_IMPORTER
+    cache.Builds.Clear();
+    cache.BuildOrder.Clear();
+    cache.BuildBytes = 0;
+#endif
+}
+
 bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
 {
     prepared = PreparedAsset();
@@ -214,25 +493,29 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
     HashSet<String> dependencyPaths;
     dependencyPaths.Add(String(context.GetRecord().SourcePath.Get()).ToLower());
     const String extension = FileSystem::GetExtension(context.GetRecord().SourcePath.Get()).ToLower();
-    if (extension == TEXT("gltf") && DeclareGltfDependencies(context, source, context.GetRecord().SourcePath.Get(), dependencyPaths, diagnostic))
+    StringAnsi settingsJson;
+    if (settings.ToJson(settingsJson, diagnostic))
+        return true;
+    ArtifactKeyBuilder analysisKeyBuilder(StringAnsiView("flax-model-source-analysis-v1"));
+    analysisKeyBuilder.AddHash(StringAnsiView("source"), sourceHash);
+    analysisKeyBuilder.AddHash(StringAnsiView("settings"), ContentHash::Compute(settingsJson.Get(), settingsJson.Length()));
+    analysisKeyBuilder.AddString(StringAnsiView("extension"), extension);
+    int32 analysisDependencyIndex = 0;
+    if (extension == TEXT("gltf") && DeclareGltfDependencies(context, source, context.GetRecord().SourcePath.Get(), dependencyPaths,
+        analysisKeyBuilder, analysisDependencyIndex, diagnostic))
         return true;
 
-    ModelTool::Options probeOptions = settings.Import;
-    probeOptions.Type = ModelTool::ModelType::Prefab;
-    probeOptions.ImportTypes = ImportDataTypes::Geometry | ImportDataTypes::Skeleton | ImportDataTypes::Animations |
-                               ImportDataTypes::Nodes | ImportDataTypes::Materials | ImportDataTypes::Textures;
-    probeOptions.Cached = nullptr;
-    ModelData data;
-    String error;
-    if (ModelTool::ImportData(context.GetRecord().SourcePath.Get(), data, probeOptions, error))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Prepare,
-            context.GetRecord().ID, context.GetRecord().SourcePath.Get(), error.IsEmpty() ? TEXT("Model structure parser rejected the source.") : error);
-
-    for (const TextureEntry& texture : data.Textures)
+    std::shared_ptr<const ModelSourceAnalysis> analysis;
+    const StringAnsi analysisKey = analysisKeyBuilder.Finalize().ToString();
+    if (GetCachedSourceAnalysis(analysisKey, context.GetRecord().SourcePath.Get(), settings, analysis, diagnostic))
     {
-        if (texture.FilePath.IsEmpty())
-            continue;
-        String path = texture.FilePath;
+        diagnostic.AssetGuid = context.GetRecord().ID;
+        return true;
+    }
+
+    for (const String& texturePath : analysis->ReferencedTexturePaths)
+    {
+        String path = texturePath;
         FileSystem::NormalizePath(path);
         if (!dependencyPaths.Add(path.ToLower()))
             continue;
@@ -248,15 +531,7 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
         }
     }
 
-    Array<ModelSubAssetInfo> infos;
-    Array<SubAssetCandidate> candidates;
-    if (ModelSubAssetKeys::Enumerate(data, infos, candidates, diagnostic))
-    {
-        diagnostic.AssetGuid = context.GetRecord().ID;
-        diagnostic.SourcePath = context.GetRecord().SourcePath.Get();
-        return true;
-    }
-    prepared.SubAssets = candidates;
+    prepared.SubAssets = analysis->Candidates;
 
     const String parserIdentity = TEXT("flax-model-parser-v1-") + extension;
     const String lodIdentity = TEXT("flax-model-meshoptimizer-v1");
@@ -272,7 +547,7 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
     const String stableKey = context.GetRecord().SubAsset.Get();
     if (stableKey.HasChars())
     {
-        selected = ModelSubAssetKeys::Find(infos, stableKey);
+        selected = ModelSubAssetKeys::Find(analysis->SubAssets, stableKey);
         if (!selected || selected->TypeName != context.GetRecord().TypeName)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Prepare,
                 context.GetRecord().ID, context.GetRecord().SourcePath.Get(), TEXT("Model child record no longer matches a prepared stable candidate."));
@@ -283,7 +558,7 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
     const bool animationOutput = (selected && selected->Kind == ModelSubAssetKind::Animation) ||
         (!selected && context.GetRecord().TypeName == Animation::TypeName);
     const bool materialOutput = selected && selected->Kind == ModelSubAssetKind::Material;
-    const bool hasGeometry = data.LODs.HasItems() && data.LODs[0].Meshes.HasItems();
+    const bool hasGeometry = analysis->SourceMeshCount > 0;
     if (!animationOutput && !materialOutput)
     {
         if (hasGeometry)
@@ -314,19 +589,19 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
     payload->Settings = settings;
     payload->RootTypeName = context.GetRecord().IsMainAsset() ? context.GetRecord().TypeName : String::Empty;
     if (payload->RootTypeName.IsEmpty())
-        payload->RootTypeName = data.Skeleton.Bones.HasItems() ? SkinnedModel::TypeName : Model::TypeName;
+        payload->RootTypeName = analysis->SourceSkeletonBoneCount > 0 ? SkinnedModel::TypeName : Model::TypeName;
     payload->RootSourcePath = context.GetRecord().SourcePath.Get();
     payload->SelectedStableKey = stableKey;
     payload->RootSourceHash = sourceHash;
-    payload->SubAssets = MoveTemp(infos);
-    payload->SourceLodCount = data.LODs.Count();
-    payload->SourceMeshCount = data.LODs.HasItems() ? data.LODs[0].Meshes.Count() : 0;
-    payload->SourceAnimationCount = data.Animations.Count();
-    payload->SourceMaterialCount = data.Materials.Count();
-    payload->SourceSkeletonNodeCount = data.Skeleton.Nodes.Count();
+    payload->SubAssets = analysis->SubAssets;
+    payload->SourceLodCount = analysis->SourceLodCount;
+    payload->SourceMeshCount = analysis->SourceMeshCount;
+    payload->SourceAnimationCount = analysis->SourceAnimationCount;
+    payload->SourceMaterialCount = analysis->SourceMaterialCount;
+    payload->SourceSkeletonNodeCount = analysis->SourceSkeletonNodeCount;
     payload->EstimatedOutputBytes = Math::Max<uint64>(source.Count() * 3ull, 1024ull * 1024ull);
     prepared.Payload = payload;
-    prepared.MemoryEstimate = Math::Max<uint64>(EstimateData(data), payload->EstimatedOutputBytes);
+    prepared.MemoryEstimate = Math::Max<uint64>(analysis->EstimatedMemoryBytes, payload->EstimatedOutputBytes);
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
@@ -443,7 +718,7 @@ namespace
 {
     struct ModelArtifactArguments
     {
-        ModelData* Data = nullptr;
+        const ModelData* Data = nullptr;
         ModelTool::Options* Options = nullptr;
     };
 
@@ -473,41 +748,42 @@ namespace
             destination.Info.BlendMode = MaterialBlendMode::Transparent;
     }
 
-    bool SelectMeshGroup(ModelData& data, const StringView& name)
+    bool CopyMeshGroup(const ModelData& source, const StringView& name, const Dictionary<int32, Guid>& assignedMaterials, ModelData& destination)
     {
         bool retained = false;
-        for (ModelLodData& lod : data.LODs)
-        {
-            for (int32 index = lod.Meshes.Count() - 1; index >= 0; index--)
-            {
-                MeshData* mesh = lod.Meshes[index];
-                if (mesh->Name == name)
-                {
-                    retained = true;
-                    continue;
-                }
-                lod.Meshes.RemoveAtKeepOrder(index);
-                Delete(mesh);
-            }
-        }
-        if (!retained)
-            return true;
-
-        const Array<MaterialSlotEntry> oldMaterials = data.Materials;
-        data.Materials.Clear();
+        destination.MinScreenSize = source.MinScreenSize;
+        destination.Textures = source.Textures;
+        destination.Skeleton = source.Skeleton;
+        destination.Nodes = source.Nodes;
+        destination.Animations = source.Animations;
+        destination.PositionFormat = source.PositionFormat;
+        destination.TexCoordFormat = source.TexCoordFormat;
         Dictionary<int32, int32> remap;
-        for (ModelLodData& lod : data.LODs)
+        for (const ModelLodData& sourceLod : source.LODs)
         {
-            for (MeshData* mesh : lod.Meshes)
+            ModelLodData& destinationLod = destination.LODs.AddOne();
+            destinationLod.ScreenSize = sourceLod.ScreenSize;
+            for (const MeshData* sourceMesh : sourceLod.Meshes)
             {
-                int32* mapped = remap.TryGet(mesh->MaterialSlotIndex);
+                if (!sourceMesh || sourceMesh->Name != name)
+                    continue;
+                retained = true;
+                auto* mesh = New<MeshData>(*sourceMesh);
+                int32* mapped = remap.TryGet(sourceMesh->MaterialSlotIndex);
                 if (!mapped)
                 {
-                    const int32 oldIndex = mesh->MaterialSlotIndex;
-                    const int32 newIndex = data.Materials.Count();
-                    if (oldIndex < 0 || oldIndex >= oldMaterials.Count())
+                    const int32 oldIndex = sourceMesh->MaterialSlotIndex;
+                    const int32 newIndex = destination.Materials.Count();
+                    if (oldIndex < 0 || oldIndex >= source.Materials.Count())
+                    {
+                        Delete(mesh);
                         return true;
-                    data.Materials.Add(oldMaterials[oldIndex]);
+                    }
+                    MaterialSlotEntry material = source.Materials[oldIndex];
+                    const Guid* assigned = assignedMaterials.TryGet(oldIndex);
+                    if (assigned)
+                        material.AssetID = *assigned;
+                    destination.Materials.Add(MoveTemp(material));
                     remap.Add(oldIndex, newIndex);
                     mesh->MaterialSlotIndex = newIndex;
                 }
@@ -515,9 +791,10 @@ namespace
                 {
                     mesh->MaterialSlotIndex = *mapped;
                 }
+                destinationLod.Meshes.Add(mesh);
             }
         }
-        return false;
+        return !retained;
     }
 
     bool WriteOutput(ArtifactBuildContext& context, const StringAnsiView& kind, const StringView& filename,
@@ -610,39 +887,82 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     if (selected && selected->Kind == ModelSubAssetKind::Mesh)
         options.MergeMeshes = false;
 
-    ModelData data;
-    String importError;
-    if (ModelTool::ImportModel(sourcePath, data, options, importError, String::Empty))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
-            prepared.AssetID, sourcePath, importError.IsEmpty() ? TEXT("Model compatibility importer rejected the verified source.") : importError);
-    // Canonical artifacts cannot consult mutable editor Build Settings during serialization.
-    // Resolve Automatic to the stable full-precision representation for every build target.
-    if (data.PositionFormat == ModelData::PositionFormats::Automatic)
-        data.PositionFormat = ModelData::PositionFormats::Float32;
+    ScopedModelData ownedData;
+    ScopedModelData selectedData;
+    std::shared_ptr<const ModelBuildData> sharedData;
+    const ModelData* buildData = nullptr;
+    const Array<ModelSubAssetInfo>* builtInfos = nullptr;
+    Array<ModelSubAssetInfo> ownedInfos;
+    if (selected)
+    {
+        ArtifactKeyBuilder sharedKeyBuilder(StringAnsiView("flax-model-shared-build-data-v1"));
+        sharedKeyBuilder.AddHash(StringAnsiView("settings"), prepared.SettingsHash);
+        sharedKeyBuilder.AddUInt32(StringAnsiView("type"), static_cast<uint32>(options.Type));
+        sharedKeyBuilder.AddUInt32(StringAnsiView("kind"), static_cast<uint32>(selected->Kind));
+        int32 dependencyIndex = 0;
+        for (const AssetDependency& dependency : prepared.Dependencies)
+        {
+            if (dependency.Kind != AssetDependencyKind::SourceFile)
+                continue;
+            const StringAnsi prefix = StringAnsi::Format("source-{0}-", dependencyIndex++);
+            sharedKeyBuilder.AddString(prefix + "identity", dependency.StableIdentity);
+            sharedKeyBuilder.AddHash(prefix + "content", dependency.Content);
+        }
+        if (GetCachedBuildData(sharedKeyBuilder.Finalize().ToString(), sourcePath, options, sharedData, diagnostic))
+        {
+            diagnostic.AssetGuid = prepared.AssetID;
+            return true;
+        }
+        options = sharedData->Options;
+        buildData = &sharedData->Data;
+        builtInfos = &sharedData->SubAssets;
+    }
+    else
+    {
+        String importError;
+        if (ModelTool::ImportModel(sourcePath, ownedData.Data, options, importError, String::Empty))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, sourcePath, importError.IsEmpty() ? TEXT("Model compatibility importer rejected the verified source.") : importError);
+        // Canonical artifacts cannot consult mutable editor Build Settings during serialization.
+        // Resolve Automatic to the stable full-precision representation for every build target.
+        if (ownedData.Data.PositionFormat == ModelData::PositionFormats::Automatic)
+            ownedData.Data.PositionFormat = ModelData::PositionFormats::Float32;
+        Array<SubAssetCandidate> builtCandidates;
+        if (ModelSubAssetKeys::Enumerate(ownedData.Data, ownedInfos, builtCandidates, diagnostic))
+            return true;
+        buildData = &ownedData.Data;
+        builtInfos = &ownedInfos;
+    }
     if (context.GetCancellation().IsCancellationRequested())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, AssetPipelineDiagnosticStage::Build,
             prepared.AssetID, sourcePath, TEXT("Model build was cancelled after source processing."));
 
-    Array<ModelSubAssetInfo> builtInfos;
-    Array<SubAssetCandidate> builtCandidates;
-    if (ModelSubAssetKeys::Enumerate(data, builtInfos, builtCandidates, diagnostic))
-        return true;
-    for (const ModelSubAssetInfo& info : builtInfos)
+    Dictionary<int32, Guid> assignedMaterials;
+    for (const ModelSubAssetInfo& info : *builtInfos)
     {
-        if (info.Kind != ModelSubAssetKind::Material || info.SourceIndex < 0 || info.SourceIndex >= data.Materials.Count())
+        if (info.Kind != ModelSubAssetKind::Material || info.SourceIndex < 0 || info.SourceIndex >= buildData->Materials.Count())
             continue;
         const Guid* assigned = payload->AssignedIDs.TryGet(info.StableKey);
         if (assigned)
-            data.Materials[info.SourceIndex].AssetID = *assigned;
+        {
+            if (selected)
+                assignedMaterials[info.SourceIndex] = *assigned;
+            else
+                ownedData.Data.Materials[info.SourceIndex].AssetID = *assigned;
+        }
     }
 
-    if (selected && selected->Kind == ModelSubAssetKind::Mesh && SelectMeshGroup(data, selected->DisplayName))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
-            prepared.AssetID, sourcePath, TEXT("Stable mesh group could not be selected after source processing."));
+    if (selected && selected->Kind == ModelSubAssetKind::Mesh)
+    {
+        if (CopyMeshGroup(*buildData, selected->DisplayName, assignedMaterials, selectedData.Data))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, sourcePath, TEXT("Stable mesh group could not be selected after source processing."));
+        buildData = &selectedData.Data;
+    }
     if (selected && selected->Kind == ModelSubAssetKind::Animation)
     {
-        const ModelSubAssetInfo* rebuilt = ResolveBuiltSelection(builtInfos, *selected);
-        if (!rebuilt || rebuilt->SourceIndex < 0 || rebuilt->SourceIndex >= data.Animations.Count())
+        const ModelSubAssetInfo* rebuilt = ResolveBuiltSelection(*builtInfos, *selected);
+        if (!rebuilt || rebuilt->SourceIndex < 0 || rebuilt->SourceIndex >= buildData->Animations.Count())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, sourcePath, TEXT("Stable animation selection became ambiguous after processing."));
         options.ObjectIndex = rebuilt->SourceIndex;
@@ -660,12 +980,12 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     CreateAssetResult createResult;
     if (selected && selected->Kind == ModelSubAssetKind::Material)
     {
-        const ModelSubAssetInfo* rebuilt = ResolveBuiltSelection(builtInfos, *selected);
-        if (!rebuilt || rebuilt->SourceIndex < 0 || rebuilt->SourceIndex >= data.Materials.Count())
+        const ModelSubAssetInfo* rebuilt = ResolveBuiltSelection(*builtInfos, *selected);
+        if (!rebuilt || rebuilt->SourceIndex < 0 || rebuilt->SourceIndex >= buildData->Materials.Count())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, sourcePath, TEXT("Stable material selection became ambiguous after processing."));
         CreateMaterial::Options materialOptions;
-        FillMaterialOptions(data.Materials[rebuilt->SourceIndex], materialOptions);
+        FillMaterialOptions(buildData->Materials[rebuilt->SourceIndex], materialOptions);
         CreateAssetContext importerContext(sourcePath, runtimeScratchPath, prepared.AssetID, &materialOptions, true, Material::TypeName);
         CreateAssetFunction callback = &CreateMaterial::Create;
         createResult = importerContext.Run(callback);
@@ -673,7 +993,7 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     else
     {
         ModelArtifactArguments arguments;
-        arguments.Data = &data;
+        arguments.Data = buildData;
         arguments.Options = &options;
         CreateAssetContext importerContext(sourcePath, runtimeScratchPath, prepared.AssetID, &arguments, true, prepared.OutputType);
         CreateAssetFunction callback = &CreateModelArtifact;
@@ -714,8 +1034,8 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
             return true;
 
         MemoryWriteStream lodStream(1024);
-        lodStream.WriteInt32(data.LODs.Count());
-        for (int32 lodIndex = 0; lodIndex < data.LODs.Count(); lodIndex++)
+        lodStream.WriteInt32(buildData->LODs.Count());
+        for (int32 lodIndex = 0; lodIndex < buildData->LODs.Count(); lodIndex++)
         {
             const int32 chunkIndex = MODEL_LOD_TO_CHUNK_INDEX(lodIndex);
             if (LoadChunk(storage.Get(), initData, chunkIndex, diagnostic, prepared, runtimeScratchPath))

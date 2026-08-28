@@ -43,7 +43,9 @@
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Content/Assets/SkinnedModel.h"
 #include "Engine/Content/Build/Processors/ModelProcessorSettings.h"
+#include "Engine/Content/Build/Processors/ModelProcessor.h"
 #include "Engine/Content/Build/Processors/ModelSubAssetKeys.h"
+#include "Engine/Content/AssetDatabase/SubAssetReconciler.h"
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/Content/Build/Processors/ModelPipelineService.h"
 #endif
@@ -51,6 +53,7 @@
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
 #include "Engine/Content/Build/Processors/GraphDocumentProcessor.h"
 #include "Engine/Content/Build/Processors/GraphPipelineService.h"
+#include "Engine/Content/Build/Processors/ImportedSourceProcessor.h"
 #include "Engine/ContentImporters/CreateMaterialInstance.h"
 #include "Engine/ContentImporters/CreateSkeletonMask.h"
 #include "Engine/ContentImporters/CreateSceneAnimation.h"
@@ -59,6 +62,8 @@
 #include "Engine/ContentImporters/Types.h"
 #endif
 #include <algorithm>
+#include <future>
+#include <vector>
 
 Delegate<uint64> AssetDatabaseFacade::DatabaseChanged;
 
@@ -156,6 +161,160 @@ namespace
         ScopeLock lock(StateLocker);
         LastDiagnostics = diagnostics;
     }
+
+#if USE_EDITOR
+    enum class CanonicalBatchBuildKind : byte
+    {
+        None,
+        Texture,
+        Model,
+        Imported,
+    };
+
+    struct CanonicalBatchWork
+    {
+        String SourcePath;
+        String StagingPath;
+        AssetMeta Meta;
+        AssetPipelineDiagnostic Diagnostic;
+        CanonicalBatchBuildKind BuildKind = CanonicalBatchBuildKind::None;
+        bool Failed = false;
+    };
+
+    bool FailCanonicalBatchWork(CanonicalBatchWork& work, AssetPipelineDiagnosticCode code, const StringView& message)
+    {
+        work.Diagnostic = AssetPipelineDiagnostic();
+        work.Diagnostic.Code = code;
+        work.Diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        work.Diagnostic.SourcePath = work.SourcePath;
+        work.Diagnostic.Message = message;
+        return true;
+    }
+
+    bool PrepareDefaultCanonicalMetadata(CanonicalBatchWork& work)
+    {
+        if (!FileSystem::FileExists(work.SourcePath))
+            return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::SourceMissing, TEXT("Canonical source does not exist."));
+        if (FileSystem::FileExists(work.StagingPath))
+            return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::PathCollision, TEXT("Canonical metadata staging path already exists."));
+
+        const String extension = FileSystem::GetExtension(work.SourcePath).ToLower();
+        AssetMeta& meta = work.Meta;
+        meta.ID = Guid::New();
+        meta.SourceKind = AssetSourceKind::ImportedSource;
+
+#if COMPILE_WITH_TEXTURE_TOOL
+        const bool isTexture = extension == TEXT("png") || extension == TEXT("tga") || extension == TEXT("exr") ||
+            extension == TEXT("bmp") || extension == TEXT("gif") || extension == TEXT("tiff") || extension == TEXT("tif") ||
+            extension == TEXT("jpeg") || extension == TEXT("jpg") || extension == TEXT("dds") || extension == TEXT("hdr") ||
+            extension == TEXT("raw");
+        if (isTexture)
+        {
+            TextureTool::Options options;
+            TextureProcessorSettings settings = TextureProcessorSettings::FromLegacyOptions(options);
+            if (settings.Validate(work.Diagnostic))
+                return true;
+            meta.AssetType = options.IsAtlas ? SpriteAtlas::TypeName : Texture::TypeName;
+            if (!options.IsAtlas)
+            {
+                TextureData sourceData;
+                if (!TextureTool::ImportTexture(work.SourcePath, sourceData) && sourceData.GetArraySize() == 6)
+                    meta.AssetType = CubeTexture::TypeName;
+            }
+            meta.Processor.ID = TextureProcessorSettings::ProcessorID();
+            meta.Processor.SettingsVersion = TextureProcessorSettings::CurrentVersion;
+            work.BuildKind = CanonicalBatchBuildKind::Texture;
+            return settings.ToJson(meta.Processor.SettingsJson, work.Diagnostic);
+        }
+#endif
+
+#if COMPILE_WITH_MODEL_TOOL
+        const bool isModel = extension == TEXT("obj") || extension == TEXT("fbx") || extension == TEXT("x") ||
+            extension == TEXT("dae") || extension == TEXT("gltf") || extension == TEXT("glb") || extension == TEXT("blend") ||
+            extension == TEXT("bvh") || extension == TEXT("ase") || extension == TEXT("ply") || extension == TEXT("dxf") ||
+            extension == TEXT("ifc") || extension == TEXT("nff") || extension == TEXT("smd") || extension == TEXT("vta") ||
+            extension == TEXT("mdl") || extension == TEXT("md2") || extension == TEXT("md3") || extension == TEXT("md5mesh") ||
+            extension == TEXT("q3o") || extension == TEXT("q3s") || extension == TEXT("ac") || extension == TEXT("stl") ||
+            extension == TEXT("lwo") || extension == TEXT("lws") || extension == TEXT("lxo");
+        if (isModel)
+        {
+            ModelTool::Options options;
+            ModelProcessorSettings settings = ModelProcessorSettings::FromLegacyOptions(options);
+            if (settings.Validate(work.Diagnostic))
+                return true;
+            ModelSourceAnalysis analysis;
+            if (ModelProcessor::AnalyzeSource(work.SourcePath, settings, analysis, work.Diagnostic))
+                return true;
+            options.Type = analysis.SourceSkeletonBoneCount > 0 || analysis.SourceAnimationCount > 0
+                ? ModelTool::ModelType::SkinnedModel
+                : ModelTool::ModelType::Model;
+            settings = ModelProcessorSettings::FromLegacyOptions(options);
+            meta.AssetType = options.Type == ModelTool::ModelType::SkinnedModel ? SkinnedModel::TypeName : Model::TypeName;
+            meta.Processor.ID = ModelProcessorSettings::ProcessorID();
+            meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
+            if (settings.ToJson(meta.Processor.SettingsJson, work.Diagnostic))
+                return true;
+            const String flaxSibling = String(StringUtils::GetDirectoryName(work.SourcePath)) /
+                String(StringUtils::GetFileNameWithoutExtension(work.SourcePath)) + TEXT(".flax");
+            if (FileSystem::FileExists(flaxSibling) && LegacyAssetMigrator::SeedModelSubAssets(flaxSibling, meta, work.Diagnostic))
+                return true;
+            SubAssetReconcileResult reconciliation = SubAssetReconciler::Reconcile(meta, analysis.Candidates, true);
+            if (reconciliation.RequiresUserReconciliation)
+            {
+                work.Diagnostic = reconciliation.Diagnostics.HasItems() ? reconciliation.Diagnostics[0] : work.Diagnostic;
+                work.Diagnostic.AssetGuid = meta.ID;
+                work.Diagnostic.SourcePath = work.SourcePath;
+                return true;
+            }
+            meta.SubAssets = MoveTemp(reconciliation.Resolved);
+            work.BuildKind = CanonicalBatchBuildKind::Model;
+            return false;
+        }
+#endif
+
+#if COMPILE_WITH_AUDIO_TOOL
+        if (extension == TEXT("wav") || extension == TEXT("mp3") || extension == TEXT("ogg"))
+        {
+            rapidjson_flax::StringBuffer settingsBuffer;
+            CompactJsonWriter settingsWriter(settingsBuffer);
+            settingsWriter.StartObject();
+            AudioTool::Options options;
+            options.Serialize(settingsWriter, nullptr);
+            settingsWriter.EndObject();
+            meta.AssetType = TEXT("FlaxEngine.AudioClip");
+            meta.Processor.ID = TEXT("Flax.Audio");
+            meta.Processor.SettingsVersion = 1;
+            meta.Processor.SettingsJson = StringAnsi(settingsBuffer.GetString(), static_cast<int32>(settingsBuffer.GetSize()));
+            work.BuildKind = CanonicalBatchBuildKind::Imported;
+            return false;
+        }
+#endif
+
+        if (extension == TEXT("ttf") || extension == TEXT("otf"))
+        {
+            meta.AssetType = TEXT("FlaxEngine.FontAsset");
+            meta.Processor.ID = TEXT("Flax.Font");
+        }
+        else if (extension == TEXT("shader"))
+        {
+            meta.AssetType = TEXT("FlaxEngine.Shader");
+            meta.Processor.ID = TEXT("Flax.ShaderSource");
+        }
+        else if (extension == TEXT("mp4") || extension == TEXT("webm") || extension == TEXT("mov") || extension == TEXT("mkv"))
+        {
+            meta.AssetType = TEXT("FlaxEngine.Video");
+            meta.Processor.ID = TEXT("Flax.Video");
+        }
+        else
+        {
+            return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::ProcessorMissing, TEXT("No default canonical processor supports this source extension."));
+        }
+        meta.Processor.SettingsVersion = 1;
+        meta.Processor.SettingsJson = "{}\n";
+        work.BuildKind = CanonicalBatchBuildKind::Imported;
+        return false;
+    }
+#endif
 
     bool StageImportedFiles(const StringView& legacyPath, const StringView& extractedPath, const StringView& destinationPath,
         const StringView& backupPath, const AssetMeta& meta, AssetPipelineDiagnostic& diagnostic)
@@ -354,6 +513,127 @@ bool AssetDatabaseFacade::CloneMetadata(const StringView& sourceMetaPath, const 
     }
     return false;
 }
+
+#if USE_EDITOR
+Array<Guid> AssetDatabaseFacade::StageDefaultCanonicalMetadataBatch(const Array<String>& sourcePaths, const Array<String>& stagingPaths)
+{
+    Array<Guid> result;
+    result.Resize(sourcePaths.Count());
+    Array<AssetPipelineDiagnostic> diagnostics;
+    if (sourcePaths.Count() != stagingPaths.Count())
+    {
+        AssetPipelineDiagnostic diagnostic;
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        diagnostic.Message = TEXT("Canonical metadata batch source and staging path counts do not match.");
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return result;
+    }
+
+    Array<CanonicalBatchWork> work;
+    work.Resize(sourcePaths.Count());
+    for (int32 i = 0; i < work.Count(); i++)
+    {
+        work[i].SourcePath = sourcePaths[i];
+        work[i].StagingPath = stagingPaths[i];
+    }
+
+    constexpr int32 MaxPreparationConcurrency = 4;
+    for (int32 begin = 0; begin < work.Count(); begin += MaxPreparationConcurrency)
+    {
+        const int32 end = Math::Min(begin + MaxPreparationConcurrency, work.Count());
+        std::vector<std::future<void>> tasks;
+        tasks.reserve(end - begin);
+        for (int32 i = begin; i < end; i++)
+        {
+            tasks.emplace_back(std::async(std::launch::async, [&work, i]
+            {
+                work[i].Failed = PrepareDefaultCanonicalMetadata(work[i]);
+                if (work[i].Failed)
+                {
+                    if (work[i].Diagnostic.SourcePath.IsEmpty())
+                        work[i].Diagnostic.SourcePath = work[i].SourcePath;
+                    if (work[i].Diagnostic.AssetGuid == Guid::Empty)
+                        work[i].Diagnostic.AssetGuid = work[i].Meta.ID;
+                }
+            }));
+        }
+        for (std::future<void>& task : tasks)
+            task.get();
+    }
+
+    for (int32 i = 0; i < work.Count(); i++)
+    {
+        CanonicalBatchWork& item = work[i];
+        if (!item.Failed && AssetMeta::SaveAtomic(item.StagingPath, item.Meta, item.Diagnostic))
+            item.Failed = true;
+        if (item.Failed)
+        {
+            diagnostics.Add(item.Diagnostic);
+            continue;
+        }
+        result[i] = item.Meta.ID;
+    }
+    SetDiagnostics(diagnostics);
+    return result;
+}
+
+bool AssetDatabaseFacade::PublishDefaultCanonicalMetadataBatch(const Array<Guid>& assetIDs)
+{
+    if (Scan(false))
+        return true;
+#if COMPILE_WITH_ASSETS_IMPORTER
+    Array<AssetPipelineDiagnostic> diagnostics;
+    bool failed = false;
+    for (const Guid& assetID : assetIDs)
+    {
+        AssetRecord record;
+        AssetPipelineDiagnostic diagnostic;
+        if (!assetID.IsValid() || !AssetDatabase::Get().TryGetRecord(assetID, record))
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.AssetGuid = assetID;
+            diagnostic.Message = TEXT("Staged canonical metadata was not published into the asset database.");
+            diagnostics.Add(MoveTemp(diagnostic));
+            failed = true;
+            continue;
+        }
+
+#if COMPILE_WITH_TEXTURE_TOOL
+        if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+            failed = TexturePipelineService::RequestBuild(assetID, false, diagnostic);
+        else
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+        if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
+            failed = ModelPipelineService::RequestBuild(assetID, false, diagnostic);
+        else
+#endif
+        if (ImportedSourceProcessor::Owns(record.ProcessorID) || record.ProcessorID == GraphDocumentProcessor::ProcessorID())
+            failed = GraphPipelineService::RequestBuild(assetID, true, diagnostic);
+        else
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.AssetGuid = assetID;
+            diagnostic.SourcePath = record.SourcePath.Get();
+            diagnostic.ProcessorId = record.ProcessorID;
+            diagnostic.Message = TEXT("Published canonical metadata has no supported build pipeline.");
+            failed = true;
+        }
+        if (failed)
+            diagnostics.Add(MoveTemp(diagnostic));
+    }
+    if (diagnostics.HasItems())
+        SetDiagnostics(diagnostics);
+    return diagnostics.HasItems();
+#else
+    return false;
+#endif
+}
+#endif
 
 #if COMPILE_WITH_TEXTURE_TOOL
 Guid AssetDatabaseFacade::CreateTextureMetadata(const StringView& sourcePath, const TextureTool::Options& options)
@@ -1225,79 +1505,85 @@ bool AssetDatabaseFacade::LoadAudioMetadata(const StringView& sourcePath, AudioT
 #endif
 
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
-Guid AssetDatabaseFacade::CreateDefaultModelMetadata(const StringView& sourcePath)
+namespace
 {
-    ModelTool::Options probeOptions;
-    probeOptions.Type = ModelTool::ModelType::Prefab;
-    probeOptions.ImportTypes = ImportDataTypes::Geometry | ImportDataTypes::Skeleton | ImportDataTypes::Animations |
-                               ImportDataTypes::Nodes | ImportDataTypes::Materials | ImportDataTypes::Textures;
-    ModelData data;
-    String error;
-    if (ModelTool::ImportData(String(sourcePath), data, probeOptions, error))
+    Guid CreateModelMetadataInternal(const StringView& sourcePath, const ModelTool::Options& requestedOptions, bool inferRootType)
     {
         AssetPipelineDiagnostic diagnostic;
-        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
-        diagnostic.SourcePath = sourcePath;
-        diagnostic.Message = error.IsEmpty() ? TEXT("Model structure parser rejected the source.") : error;
-        Array<AssetPipelineDiagnostic> diagnostics;
-        diagnostics.Add(MoveTemp(diagnostic));
-        SetDiagnostics(diagnostics);
-        return Guid::Empty;
-    }
+        auto fail = [&diagnostic]()
+        {
+            Array<AssetPipelineDiagnostic> diagnostics;
+            diagnostics.Add(diagnostic);
+            SetDiagnostics(diagnostics);
+            return Guid::Empty;
+        };
+        const String metaPath = String(sourcePath) + TEXT(".meta");
+        if (!FileSystem::FileExists(sourcePath) || FileSystem::FileExists(metaPath))
+        {
+            diagnostic.Code = FileSystem::FileExists(metaPath) ? AssetPipelineDiagnosticCode::PathCollision : AssetPipelineDiagnosticCode::SourceMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.Message = FileSystem::FileExists(metaPath) ? TEXT("Model metadata already exists.") : TEXT("Model source does not exist.");
+            return fail();
+        }
 
+        ModelTool::Options options = requestedOptions;
+        ModelProcessorSettings settings = ModelProcessorSettings::FromLegacyOptions(options);
+        if (settings.Validate(diagnostic))
+            return fail();
+        ModelSourceAnalysis analysis;
+        if (ModelProcessor::AnalyzeSource(sourcePath, settings, analysis, diagnostic))
+            return fail();
+        if (inferRootType)
+        {
+            options.Type = analysis.SourceSkeletonBoneCount > 0 || analysis.SourceAnimationCount > 0
+                ? ModelTool::ModelType::SkinnedModel
+                : ModelTool::ModelType::Model;
+            settings = ModelProcessorSettings::FromLegacyOptions(options);
+        }
+
+        AssetMeta meta;
+        meta.ID = Guid::New();
+        meta.AssetType = options.Type == ModelTool::ModelType::SkinnedModel || options.Type == ModelTool::ModelType::Animation
+            ? SkinnedModel::TypeName
+            : Model::TypeName;
+        meta.SourceKind = AssetSourceKind::ImportedSource;
+        meta.Processor.ID = ModelProcessorSettings::ProcessorID();
+        meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
+        if (settings.ToJson(meta.Processor.SettingsJson, diagnostic))
+            return fail();
+        const String flaxSibling = String(StringUtils::GetDirectoryName(sourcePath)) / String(StringUtils::GetFileNameWithoutExtension(sourcePath)) + TEXT(".flax");
+        if (FileSystem::FileExists(flaxSibling) && LegacyAssetMigrator::SeedModelSubAssets(flaxSibling, meta, diagnostic))
+            return fail();
+
+        SubAssetReconcileResult reconciliation = SubAssetReconciler::Reconcile(meta, analysis.Candidates, true);
+        if (reconciliation.RequiresUserReconciliation)
+        {
+            diagnostic = reconciliation.Diagnostics.HasItems() ? reconciliation.Diagnostics[0] : diagnostic;
+            diagnostic.AssetGuid = meta.ID;
+            diagnostic.SourcePath = sourcePath;
+            return fail();
+        }
+        meta.SubAssets = MoveTemp(reconciliation.Resolved);
+        if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || AssetDatabaseFacade::Scan(false))
+            return fail();
+#if COMPILE_WITH_ASSETS_IMPORTER
+        if (ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
+            return fail();
+#endif
+        return meta.ID;
+    }
+}
+
+Guid AssetDatabaseFacade::CreateDefaultModelMetadata(const StringView& sourcePath)
+{
     ModelTool::Options options;
-    options.Type = data.Skeleton.Bones.HasItems() || data.Animations.HasItems()
-        ? ModelTool::ModelType::SkinnedModel
-        : ModelTool::ModelType::Model;
-    return CreateModelMetadata(sourcePath, options);
+    return CreateModelMetadataInternal(sourcePath, options, true);
 }
 
 Guid AssetDatabaseFacade::CreateModelMetadata(const StringView& sourcePath, const ModelTool::Options& options)
 {
-    const String metaPath = String(sourcePath) + TEXT(".meta");
-    AssetPipelineDiagnostic diagnostic;
-    auto fail = [&diagnostic]()
-    {
-        Array<AssetPipelineDiagnostic> diagnostics;
-        diagnostics.Add(diagnostic);
-        SetDiagnostics(diagnostics);
-        return Guid::Empty;
-    };
-    if (!FileSystem::FileExists(sourcePath) || FileSystem::FileExists(metaPath))
-    {
-        diagnostic.Code = FileSystem::FileExists(metaPath) ? AssetPipelineDiagnosticCode::PathCollision : AssetPipelineDiagnosticCode::SourceMissing;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
-        diagnostic.SourcePath = sourcePath;
-        diagnostic.Message = FileSystem::FileExists(metaPath) ? TEXT("Model metadata already exists.") : TEXT("Model source does not exist.");
-        return fail();
-    }
-    ModelProcessorSettings settings = ModelProcessorSettings::FromLegacyOptions(options);
-    if (settings.Validate(diagnostic))
-        return fail();
-    AssetMeta meta;
-    meta.ID = Guid::New();
-    meta.AssetType = options.Type == ModelTool::ModelType::SkinnedModel || options.Type == ModelTool::ModelType::Animation
-        ? SkinnedModel::TypeName
-        : Model::TypeName;
-    meta.SourceKind = AssetSourceKind::ImportedSource;
-    meta.Processor.ID = ModelProcessorSettings::ProcessorID();
-    meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
-    if (settings.ToJson(meta.Processor.SettingsJson, diagnostic))
-        return fail();
-    const String flaxSibling = String(StringUtils::GetDirectoryName(sourcePath)) / String(StringUtils::GetFileNameWithoutExtension(sourcePath)) + TEXT(".flax");
-    if (FileSystem::FileExists(flaxSibling) && LegacyAssetMigrator::SeedModelSubAssets(flaxSibling, meta, diagnostic))
-        return fail();
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || Scan(false))
-        return fail();
-#if COMPILE_WITH_ASSETS_IMPORTER
-    Array<SubAssetReconcileChange> changes;
-    if (ModelPipelineService::ReconcileMetadata(meta.ID, changes, diagnostic))
-        return fail();
-    if (ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
-        return fail();
-#endif
-    return meta.ID;
+    return CreateModelMetadataInternal(sourcePath, options, false);
 }
 
 Guid AssetDatabaseFacade::StageLegacyModelMigration(const StringView& legacyPath, const StringView& extractedPath,

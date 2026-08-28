@@ -2295,6 +2295,42 @@ namespace FlaxEditor.Modules
             }
         }
 
+        private bool TrySuppressSelfAuthoredDiskChange(string path, DateTime now)
+        {
+            if (!_selfAuthoredAssetDiskChanges.TryGetValue(path, out var write))
+                return false;
+            FileInfo fileInfo = null;
+            try
+            {
+                if (File.Exists(path))
+                    fileInfo = new FileInfo(path);
+            }
+            catch
+            {
+                // A locked or replaced file is an external change and must not be suppressed.
+            }
+            var exactSelfWrite = false;
+            if (now <= write.ExpiresAtUtc && fileInfo != null && fileInfo.LastWriteTimeUtc == write.LastWriteTimeUtc && fileInfo.Length == write.Length)
+            {
+                try
+                {
+                    exactSelfWrite = string.Equals(ComputeAssetDiskHash(path), write.ContentHash, StringComparison.Ordinal);
+                }
+                catch
+                {
+                    // A locked or replaced file is an external change and must not be suppressed.
+                }
+            }
+            if (exactSelfWrite)
+            {
+                ContentMutationDiagnostics.Log("watcher.self-save-suppressed", $"path='{path}'; generation={write.Generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}");
+                return true;
+            }
+            ContentMutationDiagnostics.Log("watcher.self-save-mismatch", $"path='{path}'; generation={write.Generation}; exists={fileInfo != null}; expectedLength={write.Length}; actualLength={fileInfo?.Length}; expectedWriteTime={write.LastWriteTimeUtc:O}; actualWriteTime={fileInfo?.LastWriteTimeUtc:O}");
+            _selfAuthoredAssetDiskChanges.Remove(path);
+            return false;
+        }
+
         internal void OnDirectoryEvent(MainContentFolderTreeNode node, FileSystemEventArgs e)
         {
             // Ensure to be ready for external events
@@ -2314,7 +2350,13 @@ namespace FlaxEditor.Modules
             case WatcherChangeTypes.Deleted:
             case WatcherChangeTypes.Renamed:
             {
-                QueueAssetDiskChange(e.FullPath, e.ChangeType == WatcherChangeTypes.Renamed);
+                var path = StringUtils.NormalizePath(e.FullPath);
+                lock (_assetDiskChangesLock)
+                {
+                    if (e.ChangeType != WatcherChangeTypes.Deleted && TrySuppressSelfAuthoredDiskChange(path, DateTime.UtcNow))
+                        break;
+                    QueueAssetDiskChange(path, e.ChangeType == WatcherChangeTypes.Renamed);
+                }
                 if (e is RenamedEventArgs renamed)
                     QueueAssetDiskChange(renamed.OldFullPath, true);
                 lock (_dirtyNodes)
@@ -2327,40 +2369,10 @@ namespace FlaxEditor.Modules
             {
                 var path = StringUtils.NormalizePath(e.FullPath);
                 var now = DateTime.UtcNow;
-                FileInfo fileInfo = null;
-                try
-                {
-                    if (File.Exists(path))
-                        fileInfo = new FileInfo(path);
-                }
-                catch
-                {
-                    // The file can still be locked or replaced while its watcher event is being delivered.
-                }
                 lock (_assetDiskChangesLock)
                 {
-                    if (_selfAuthoredAssetDiskChanges.TryGetValue(path, out var write))
-                    {
-                        var exactSelfWrite = false;
-                        if (now <= write.ExpiresAtUtc && fileInfo != null && fileInfo.LastWriteTimeUtc == write.LastWriteTimeUtc && fileInfo.Length == write.Length)
-                        {
-                            try
-                            {
-                                exactSelfWrite = string.Equals(ComputeAssetDiskHash(path), write.ContentHash, StringComparison.Ordinal);
-                            }
-                            catch
-                            {
-                                // A locked or replaced file is an external change and must not be suppressed.
-                            }
-                        }
-                        if (exactSelfWrite)
-                        {
-                            ContentMutationDiagnostics.Log("watcher.self-save-suppressed", $"path='{path}'; generation={write.Generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}");
-                            break;
-                        }
-                        ContentMutationDiagnostics.Log("watcher.self-save-mismatch", $"path='{path}'; generation={write.Generation}; exists={fileInfo != null}; expectedLength={write.Length}; actualLength={fileInfo?.Length}; expectedWriteTime={write.LastWriteTimeUtc:O}; actualWriteTime={fileInfo?.LastWriteTimeUtc:O}");
-                        _selfAuthoredAssetDiskChanges.Remove(path);
-                    }
+                    if (TrySuppressSelfAuthoredDiskChange(path, now))
+                        break;
                     QueueAssetDiskChange(path, false);
                     var saveInProgress = _assetSaves.TryGetValue(path, out var saveState);
                     ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}; saveInProgress={saveInProgress}; generation={(saveInProgress ? saveState.Generation : 0)}; depth={(saveInProgress ? saveState.Depth : 0)}");
@@ -2465,6 +2477,14 @@ namespace FlaxEditor.Modules
                     // A watcher event can race the save completion. Remove anything queued during the write,
                     // then ignore trailing notifications only while the file still matches this exact save.
                     _pendingAssetDiskChanges.Remove(path);
+                    var sourcePath = GetCanonicalSourcePathForDiskEvent(path);
+                    _pendingTextureBuildSources.Remove(sourcePath);
+                    if (_sourceAssetRecords.TryGetValue(sourcePath, out var record))
+                    {
+                        _pendingTextureBuildIds.Remove(record.ID);
+                        _renameOnlyTextureIds.Remove(record.ID);
+                        _textureRecordsBeforeWatcherScan.Remove(record.ID);
+                    }
                     _selfAuthoredAssetDiskChanges[path] = write;
                 }
                 ContentMutationDiagnostics.Log("save.self-write-recorded", $"path='{path}'; generation={generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}; expires={write.ExpiresAtUtc:O}");

@@ -21,6 +21,7 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Scripting/Scripting.h"
+#include <algorithm>
 #include <memory>
 #include <mutex>
 
@@ -35,16 +36,18 @@ namespace
         Array<ArtifactPublicationOutputPlan> Outputs;
         ArtifactOutputValidatorRegistry Validators;
         std::unique_ptr<ArtifactBuildContext> Context;
+        std::shared_ptr<std::mutex> SourceLocker;
     };
 
     struct ModelPipelineState
     {
         std::mutex Locker;
-        std::mutex InvocationLocker;
         AssetProcessorRegistration Registration;
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
+        Dictionary<Guid, Array<AssetBuildRequestHandle>> FamilyHandles;
         Dictionary<Guid, ArtifactKey> Fingerprints;
+        Dictionary<Guid, std::shared_ptr<std::mutex>> SourceLockers;
         uint64 ForceGeneration = 0;
         bool Initialized = false;
     };
@@ -139,17 +142,16 @@ namespace
     bool PrepareRecord(const AssetRecord& record, const AssetMeta& meta, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
     {
         ModelPipelineState& state = State();
-        std::lock_guard<std::mutex> invocationLock(state.InvocationLocker);
         AssetProcessorLease lease;
         if (AssetProcessorRegistry::Get().TryAcquire(record.ProcessorID, AssetProcessorInvocationStage::Prepare, lease, diagnostic))
             return true;
         AssetCancellationSource cancellation;
+        PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
+            record, lease.Get(), meta.Processor.SettingsJson, state.HashCache, cancellation.GetToken());
+        if (lease.Get().Prepare(context, prepared, diagnostic) || context.Finalize(record.DatabaseRevision, prepared, diagnostic))
+            return true;
         {
             std::lock_guard<std::mutex> lock(state.Locker);
-            PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
-                record, lease.Get(), meta.Processor.SettingsJson, state.HashCache, cancellation.GetToken());
-            if (lease.Get().Prepare(context, prepared, diagnostic) || context.Finalize(record.DatabaseRevision, prepared, diagnostic))
-                return true;
             state.Fingerprints[record.ID] = prepared.InputFingerprint;
         }
         auto* payload = static_cast<ModelPreparedPayload*>(prepared.Payload.get());
@@ -195,6 +197,20 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     auto execution = std::make_shared<ModelExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
+    {
+        ModelPipelineState& state = State();
+        std::lock_guard<std::mutex> lock(state.Locker);
+        auto* existing = state.SourceLockers.TryGet(record.SourceAssetID);
+        if (existing)
+        {
+            execution->SourceLocker = *existing;
+        }
+        else
+        {
+            execution->SourceLocker = std::make_shared<std::mutex>();
+            state.SourceLockers.Add(record.SourceAssetID, execution->SourceLocker);
+        }
+    }
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
         if (dependency.Kind != AssetDependencyKind::SourceFile)
@@ -236,15 +252,14 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     plan.BuildRequest.ProcessorID = record.ProcessorID;
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     plan.BuildRequest.MemoryBytes = Math::Max<uint64>(1, prepared.MemoryEstimate);
-    plan.BuildRequest.ProcessorConcurrencyLimit = 1;
+    plan.BuildRequest.ProcessorConcurrencyLimit = 2;
     plan.BuildRequest.RebuildReason = TEXT("Model canonical inputs, stable mappings, or target outputs changed.");
     for (const DeclaredArtifactOutput& output : prepared.Outputs)
         plan.BuildRequest.OutputKinds.Add(output.Kind);
 
     plan.BuildRequest.Build = [execution](const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& buildDiagnostic)
     {
-        ModelPipelineState& state = State();
-        std::lock_guard<std::mutex> invocationLock(state.InvocationLocker);
+        std::lock_guard<std::mutex> sourceLock(*execution->SourceLocker);
         execution->Context = std::make_unique<ArtifactBuildContext>(Globals::ProjectFolder, Globals::ProjectContentFolder,
             Globals::ProjectLibraryFolder, execution->JobID, execution->Prepared, execution->Inputs, cancellation, execution->Target);
         if (execution->Context->Initialize(buildDiagnostic))
@@ -299,44 +314,77 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
             assetID, TEXT("Model asset is not registered."));
 
+    Array<AssetRecord> records;
+    records.Add(record);
+    if (record.IsMainAsset())
+    {
+        Array<AssetRecord> children;
+        AssetDatabase::Get().GetSubAssets(record.SourceAssetID, children);
+        if (children.Count() > 1)
+        {
+            std::sort(children.Get(), children.Get() + children.Count(), [](const AssetRecord& a, const AssetRecord& b)
+            {
+                return a.SubAsset.Get() < b.SubAsset.Get();
+            });
+        }
+        records.Add(children);
+    }
+
     ArtifactRequest request;
-    request.AssetID = assetID;
     request.Target = TexturePipelineService::GetHostTarget();
     request.OutputKind = "runtime";
     request.RequiredCompatibility = "flax-model-runtime-v1";
     request.Policy = ArtifactResolvePolicy::Exact;
-    ArtifactResolutionPlan plan;
-    if (CreatePlan(record, request, plan, diagnostic))
-        return true;
+    uint64 forceGeneration = 0;
     if (force)
-    {
-        uint64 generation;
-        {
-            ModelPipelineState& state = State();
-            std::lock_guard<std::mutex> lock(state.Locker);
-            generation = ++state.ForceGeneration;
-        }
-        ArtifactKeyBuilder builder(StringAnsiView("flax-model-forced-build-v1"));
-        builder.AddKey(StringAnsiView("exact-plan"), plan.BuildRequest.Key.ExactPlan);
-        builder.AddUInt64(StringAnsiView("generation"), generation);
-        plan.BuildRequest.Key.ExactPlan = builder.Finalize();
-        plan.BuildRequest.RebuildReason = TEXT("Explicit model rebuild.");
-    }
-
-    const AssetBuildRequestHandle handle = builds->Request(plan.BuildRequest);
-    if (!handle.IsValid())
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
-            assetID, TEXT("Model build request was not accepted."));
     {
         ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
-        state.Handles[assetID] = handle;
+        forceGeneration = ++state.ForceGeneration;
     }
-    AssetBuildJobResult immediate;
-    if (handle.TryGetResult(immediate) && immediate.Status == AssetBuildJobStatus::Failed)
+
+    Array<ArtifactResolutionPlan> plans;
+    plans.EnsureCapacity(records.Count());
+    for (const AssetRecord& current : records)
     {
-        diagnostic = immediate.Diagnostic;
-        return true;
+        request.AssetID = current.ID;
+        ArtifactResolutionPlan plan;
+        if (CreatePlan(current, request, plan, diagnostic))
+            return true;
+        if (force)
+        {
+            ArtifactKeyBuilder builder(StringAnsiView("flax-model-forced-build-v1"));
+            builder.AddKey(StringAnsiView("exact-plan"), plan.BuildRequest.Key.ExactPlan);
+            builder.AddUInt64(StringAnsiView("generation"), forceGeneration);
+            plan.BuildRequest.Key.ExactPlan = builder.Finalize();
+            plan.BuildRequest.RebuildReason = TEXT("Explicit model family rebuild.");
+        }
+        plans.Add(MoveTemp(plan));
+    }
+
+    Array<AssetBuildRequestHandle> familyHandles;
+    familyHandles.EnsureCapacity(plans.Count());
+    for (int32 i = 0; i < plans.Count(); i++)
+    {
+        const AssetBuildRequestHandle handle = builds->Request(plans[i].BuildRequest);
+        if (!handle.IsValid())
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                records[i].ID, TEXT("Model family build request was not accepted."));
+        familyHandles.Add(handle);
+        AssetBuildJobResult immediate;
+        if (handle.TryGetResult(immediate) && immediate.Status == AssetBuildJobStatus::Failed)
+        {
+            diagnostic = immediate.Diagnostic;
+            return true;
+        }
+    }
+    {
+        ModelPipelineState& state = State();
+        std::lock_guard<std::mutex> lock(state.Locker);
+        for (int32 i = 0; i < records.Count(); i++)
+            state.Handles[records[i].ID] = familyHandles[i];
+        if (record.IsMainAsset())
+            state.FamilyHandles[record.ID] = familyHandles;
     }
     diagnostic = AssetPipelineDiagnostic();
     return false;
@@ -344,24 +392,50 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
 
 AssetBuildJobStatus ModelPipelineService::GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
 {
-    AssetBuildRequestHandle handle;
+    Array<AssetBuildRequestHandle> handles;
     {
         ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
-        const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID);
-        if (!value)
+        const Array<AssetBuildRequestHandle>* family = state.FamilyHandles.TryGet(assetID);
+        if (family)
         {
-            diagnostic = AssetPipelineDiagnostic();
-            return AssetBuildJobStatus::Invalid;
+            handles = *family;
         }
-        handle = *value;
+        else
+        {
+            const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID);
+            if (value)
+                handles.Add(*value);
+        }
     }
-    AssetBuildJobResult result;
-    if (handle.TryGetResult(result))
-        diagnostic = result.Diagnostic;
-    else
+    if (handles.IsEmpty())
+    {
         diagnostic = AssetPipelineDiagnostic();
-    return handle.GetStatus();
+        return AssetBuildJobStatus::Invalid;
+    }
+
+    AssetBuildJobStatus aggregate = AssetBuildJobStatus::Succeeded;
+    diagnostic = AssetPipelineDiagnostic();
+    for (const AssetBuildRequestHandle& handle : handles)
+    {
+        const AssetBuildJobStatus status = handle.GetStatus();
+        if (status == AssetBuildJobStatus::Failed)
+        {
+            AssetBuildJobResult result;
+            if (handle.TryGetResult(result))
+                diagnostic = result.Diagnostic;
+            return status;
+        }
+        if (status == AssetBuildJobStatus::Cancelled)
+            aggregate = AssetBuildJobStatus::Cancelled;
+        else if (status == AssetBuildJobStatus::Publishing && aggregate != AssetBuildJobStatus::Cancelled)
+            aggregate = AssetBuildJobStatus::Publishing;
+        else if (status == AssetBuildJobStatus::Building && aggregate != AssetBuildJobStatus::Cancelled && aggregate != AssetBuildJobStatus::Publishing)
+            aggregate = AssetBuildJobStatus::Building;
+        else if ((status == AssetBuildJobStatus::Queued || status == AssetBuildJobStatus::Invalid) && aggregate == AssetBuildJobStatus::Succeeded)
+            aggregate = status == AssetBuildJobStatus::Invalid ? AssetBuildJobStatus::Invalid : AssetBuildJobStatus::Queued;
+    }
+    return aggregate;
 }
 
 bool ModelPipelineService::ReconcileMetadata(const Guid& rootAssetID, Array<SubAssetReconcileChange>& changes,
@@ -412,11 +486,14 @@ void ModelPipelineService::Shutdown()
         if (!state.Initialized)
             return;
         state.Handles.Clear();
+        state.FamilyHandles.Clear();
         state.Fingerprints.Clear();
+        state.SourceLockers.Clear();
         registration = MoveTemp(state.Registration);
         state.Initialized = false;
     }
     registration.Reset();
+    ModelProcessor::ClearCaches();
 }
 
 #endif

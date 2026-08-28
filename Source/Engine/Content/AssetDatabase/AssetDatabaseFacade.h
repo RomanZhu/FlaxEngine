@@ -72,6 +72,16 @@ public:
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool CloneMetadata(const StringView& sourceMetaPath, const StringView& destinationMetaPath);
 
+#if USE_EDITOR
+    /// <summary>Prepares default canonical metadata concurrently at caller-owned staging paths without publishing the database.</summary>
+    /// <returns>Asset identifiers aligned with the input paths; invalid identifiers report per-source preparation failures.</returns>
+    API_FUNCTION() static Array<Guid> StageDefaultCanonicalMetadataBatch(const Array<String>& sourcePaths, const Array<String>& stagingPaths);
+
+    /// <summary>Publishes one staged canonical metadata batch and queues the corresponding exact builds.</summary>
+    /// <returns>True on failure.</returns>
+    API_FUNCTION() static bool PublishDefaultCanonicalMetadataBatch(const Array<Guid>& assetIDs);
+#endif
+
 #if COMPILE_WITH_TEXTURE_TOOL
     /// <summary>Creates and registers canonical texture metadata beside an imported source image.</summary>
     /// <returns>The new asset identifier, or an invalid identifier on failure.</returns>
