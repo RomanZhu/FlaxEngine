@@ -11,6 +11,7 @@
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/AssetDatabase/AssetSourceRoots.h"
 #include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Build/ArtifactBuildContext.h"
@@ -34,6 +35,8 @@ namespace
         ArtifactTarget Target;
         Guid JobID = Guid::New();
         String ProcessorID;
+        String ProjectRoot;
+        String ContentRoot;
         uint32 ImplementationVersion = 1;
         bool ValidateFlaxStorage = true;
         Array<ArtifactBuildInput> Inputs;
@@ -212,10 +215,13 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
 
     AssetCancellationSource preparationCancellation;
     PreparedAsset prepared;
+    String projectRoot;
+    String contentRoot;
+    AssetSourceRoots::Resolve(record.SourcePath.Get(), projectRoot, contentRoot);
     GraphPipelineState& state = State();
     {
         std::lock_guard<std::mutex> lock(state.Locker);
-        PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
+        PrepareAssetContext context(projectRoot, contentRoot, Globals::ProjectLibraryFolder,
             record, prepareLease.Get(), meta.Processor.SettingsJson, state.HashCache, preparationCancellation.GetToken());
         if (prepareLease.Get().Prepare(context, prepared, diagnostic) ||
             context.Finalize(record.DatabaseRevision, prepared, diagnostic))
@@ -227,6 +233,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     execution->Prepared = prepared;
     execution->Target = request.Target;
     execution->ProcessorID = record.ProcessorID;
+    execution->ProjectRoot = projectRoot;
+    execution->ContentRoot = contentRoot;
     execution->ValidateFlaxStorage = record.ProcessorID != ImportedSourceProcessor::VideoID();
     AssetProcessorDescriptor processorDescriptor;
     if (AssetProcessorRegistry::Get().TryGetDescriptor(record.ProcessorID, processorDescriptor))
@@ -319,7 +327,7 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
 
     plan.BuildRequest.Build = [execution](const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& buildDiagnostic)
     {
-        execution->Context = std::make_unique<ArtifactBuildContext>(Globals::ProjectFolder, Globals::ProjectContentFolder,
+        execution->Context = std::make_unique<ArtifactBuildContext>(execution->ProjectRoot, execution->ContentRoot,
             Globals::ProjectLibraryFolder, execution->JobID, execution->Prepared, execution->Inputs, cancellation, execution->Target);
         if (execution->Context->Initialize(buildDiagnostic))
             return true;

@@ -187,7 +187,23 @@ bool AssetDatabaseScanResult::HasBlockingDiagnostics() const
 
 bool AssetDatabaseScanner::Scan(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const AssetDatabaseScanOptions& options, AssetDatabase& database, AssetDatabaseScanResult& result)
 {
+    Array<AssetRecord> records;
+    if (Collect(projectRoot, contentRoot, libraryRoot, options, database.GetSnapshot(), records, result))
+        return true;
+    AssetPipelineDiagnostic publishDiagnostic;
+    if (database.PublishFullSnapshot(records, publishDiagnostic))
+    {
+        result.Diagnostics.Add(publishDiagnostic);
+        return true;
+    }
+    result.Revision = database.GetRevision();
+    return false;
+}
+
+bool AssetDatabaseScanner::Collect(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const AssetDatabaseScanOptions& options, const AssetDatabaseSnapshot& previous, Array<AssetRecord>& records, AssetDatabaseScanResult& result)
+{
     result = AssetDatabaseScanResult();
+    records.Clear();
     Array<String> files;
     if (FileSystem::DirectoryGetFiles(files, String(contentRoot), TEXT("*"), DirectorySearchOption::AllDirectories))
     {
@@ -200,7 +216,6 @@ bool AssetDatabaseScanner::Scan(const StringView& projectRoot, const StringView&
         return true;
     }
 
-    const AssetDatabaseSnapshot previous = database.GetSnapshot();
     SourceHashCache localHashCache;
     SourceHashCache& hashCache = options.HashCache ? *options.HashCache : localHashCache;
     HashSet<String> fileSet;
@@ -219,7 +234,6 @@ bool AssetDatabaseScanner::Scan(const StringView& projectRoot, const StringView&
         }
     }
 
-    Array<AssetRecord> records;
     Dictionary<Guid, int32> recordIndices;
     Dictionary<String, int32> mainPathIndices;
     HashSet<String> consumedMeta;
@@ -358,12 +372,5 @@ bool AssetDatabaseScanner::Scan(const StringView& projectRoot, const StringView&
             AddRecordWithDuplicateCheck(MoveTemp(record), records, recordIndices, result.Diagnostics);
     }
 
-    AssetPipelineDiagnostic publishDiagnostic;
-    if (database.PublishFullSnapshot(records, publishDiagnostic))
-    {
-        result.Diagnostics.Add(publishDiagnostic);
-        return true;
-    }
-    result.Revision = database.GetRevision();
     return false;
 }

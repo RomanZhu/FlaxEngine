@@ -2,6 +2,7 @@
 
 #include "AssetDatabaseFacade.h"
 #include "AssetDatabaseSnapshot.h"
+#include "AssetSourceRoots.h"
 #include "AssetMeta.h"
 #include "MigrationInventory.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
@@ -116,25 +117,36 @@ namespace
 
     bool FileStatesStillMatch(const Array<AssetDatabaseFileState>& states)
     {
-        Array<String> files;
-        if (FileSystem::DirectoryGetFiles(files, Globals::ProjectContentFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
-            return false;
         Dictionary<String, const AssetDatabaseFileState*> byPath;
         for (const AssetDatabaseFileState& state : states)
             byPath.Add(state.Path.ToLower(), &state);
         int32 matched = 0;
-        for (const String& file : files)
+        const auto checkRoot = [&byPath, &matched](const StringView& root)
         {
-            String normalized = file.ToLower();
-            normalized.Replace(TEXT('\\'), TEXT('/'));
-            if (normalized.Contains(TEXT("/cache/")) || normalized.Contains(TEXT("/output/")) || normalized.Contains(TEXT("/generated/")) ||
-                normalized.Contains(TEXT("/migrationbackup/")) || normalized.Contains(TEXT("/.asset-pipeline/")) || normalized.Contains(TEXT("/.git/")))
-                continue;
-            const AssetDatabaseFileState* const* state = byPath.TryGet(file.ToLower());
-            if (!state || !SourceHashCache::IsStateCurrent(**state))
+            if (!FileSystem::DirectoryExists(root))
                 return false;
-            matched++;
-        }
+            Array<String> files;
+            if (FileSystem::DirectoryGetFiles(files, String(root), TEXT("*"), DirectorySearchOption::AllDirectories))
+                return false;
+            for (const String& file : files)
+            {
+                String normalized = file.ToLower();
+                normalized.Replace(TEXT('\\'), TEXT('/'));
+                if (normalized.Contains(TEXT("/cache/")) || normalized.Contains(TEXT("/output/")) || normalized.Contains(TEXT("/generated/")) ||
+                    normalized.Contains(TEXT("/migrationbackup/")) || normalized.Contains(TEXT("/.asset-pipeline/")) || normalized.Contains(TEXT("/.git/")))
+                    continue;
+                const AssetDatabaseFileState* const* state = byPath.TryGet(file.ToLower());
+                if (!state || !SourceHashCache::IsStateCurrent(**state))
+                    return false;
+                matched++;
+            }
+            return true;
+        };
+        if (!checkRoot(Globals::ProjectContentFolder))
+            return false;
+        const String engineRoot = AssetSourceRoots::GetEngineRoot();
+        if (FileSystem::DirectoryExists(engineRoot) && !checkRoot(engineRoot))
+            return false;
         return matched == states.Count();
     }
 
@@ -192,7 +204,35 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
     options.StrictMetadata = strictMetadata;
     options.HashCache = &HashCache;
     AssetDatabaseScanResult result;
-    const bool failed = AssetDatabaseScanner::Scan(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, options, AssetDatabase::Get(), result);
+    Array<AssetRecord> records;
+    const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
+    bool failed = AssetDatabaseScanner::Collect(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, options, previous, records, result);
+    const String engineRoot = AssetSourceRoots::GetEngineRoot();
+    if (!failed && FileSystem::DirectoryExists(engineRoot))
+    {
+        AssetDatabaseScanResult engineResult;
+        Array<AssetRecord> engineRecords;
+        failed = AssetDatabaseScanner::Collect(Globals::StartupFolder, engineRoot, Globals::ProjectLibraryFolder, options, previous, engineRecords, engineResult);
+        for (AssetRecord& record : engineRecords)
+        {
+            record.PortabilityKey = String(TEXT("engine/")) + record.PortabilityKey;
+            records.Add(MoveTemp(record));
+        }
+        result.FilesExamined += engineResult.FilesExamined;
+        result.SidecarsParsed += engineResult.SidecarsParsed;
+        result.Cancelled |= engineResult.Cancelled;
+        result.Diagnostics.Add(engineResult.Diagnostics);
+        result.FileStates.Add(engineResult.FileStates);
+    }
+    if (!failed)
+    {
+        AssetPipelineDiagnostic publishDiagnostic;
+        failed = AssetDatabase::Get().PublishFullSnapshot(records, publishDiagnostic);
+        if (failed)
+            result.Diagnostics.Add(MoveTemp(publishDiagnostic));
+        else
+            result.Revision = AssetDatabase::Get().GetRevision();
+    }
     SetDiagnostics(result.Diagnostics);
     if (!failed)
     {

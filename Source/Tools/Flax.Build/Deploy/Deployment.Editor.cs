@@ -112,6 +112,9 @@ namespace Flax.Deploy
                         DeployFile(shader, Path.Combine(OutputPath, localPath));
                     }
 
+                    // Canonical engine assets are cooked into each project's Library like project Content.
+                    DeployFolder(RootPath, OutputPath, "Source/Editor/Assets");
+
                     // Custom engine files
                     DeployFile(RootPath, OutputPath, "Source/ThirdParty", "concurrentqueue.h");
                     DeployFile(RootPath, OutputPath, "Source", ".editorconfig");

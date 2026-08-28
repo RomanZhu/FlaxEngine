@@ -31,6 +31,10 @@ struct FLAXENGINE_API AssetDatabaseScanResult
 class FLAXENGINE_API AssetDatabaseScanner
 {
 public:
+    /// <summary>Collects records for one source root without publishing them.</summary>
+    /// <returns>True if enumeration failed. Content diagnostics are returned in result.</returns>
+    static bool Collect(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const AssetDatabaseScanOptions& options, const AssetDatabaseSnapshot& previous, Array<AssetRecord>& records, AssetDatabaseScanResult& result);
+
     /// <returns>True if enumeration or publication itself failed. Content diagnostics are returned in result.</returns>
     static bool Scan(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const AssetDatabaseScanOptions& options, AssetDatabase& database, AssetDatabaseScanResult& result);
 };
