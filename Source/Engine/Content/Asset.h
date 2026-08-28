@@ -62,6 +62,7 @@ protected:
 
     int8 _deleteFileOnUnload : 1; // Indicates that asset source file should be removed on asset unload
     int8 _isVirtual : 1; // Indicates that asset is pure virtual (generated or temporary, has no storage so won't be saved)
+    int8 _isPassiveLoad : 1; // Indicates that dependencies must use already-published artifacts without scheduling builds
 
     HashSet<IAssetReference*> _references;
     CriticalSection _referencesLocker; // TODO: convert into a single interlocked exchange for the current thread owning lock
@@ -164,6 +165,14 @@ public:
     API_PROPERTY() bool LastLoadFailed() const
     {
         return Platform::AtomicRead(&_loadState) == (int64)LoadState::LoadFailed;
+    }
+
+    /// <summary>
+    /// Returns true while an asynchronous asset loading task is attached.
+    /// </summary>
+    FORCE_INLINE bool IsLoading() const
+    {
+        return Platform::AtomicRead(&_loadingTask) != 0;
     }
 
     /// <summary>

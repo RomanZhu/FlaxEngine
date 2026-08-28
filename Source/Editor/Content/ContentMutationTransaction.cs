@@ -284,6 +284,11 @@ namespace FlaxEditor.Content
 
         internal static int RecoverPendingTransactions(string journalRoot = null)
         {
+            return RecoverPendingTransactions(null, journalRoot);
+        }
+
+        internal static int RecoverPendingTransactions(List<string> recoveredImportSources, string journalRoot = null)
+        {
             journalRoot ??= StringUtils.CombinePaths(Globals.ProjectCacheFolder, RecoveryFolderName);
             if (!Directory.Exists(journalRoot))
                 return 0;
@@ -315,7 +320,7 @@ namespace FlaxEditor.Content
                     continue;
                 }
 
-                if (TryRecoverJournal(journal))
+                if (TryRecoverJournal(journal, recoveredImportSources))
                 {
                     TryDeleteRecoveredJournal(journalPath);
                     ContentMutationDiagnostics.Log("transaction.startup-recovered", $"id={journal.Plan.Id:N}; operation={journal.Plan.Operation}; journal='{journalPath}'");
@@ -325,6 +330,8 @@ namespace FlaxEditor.Content
                 recoveryRequired++;
                 journal.State = ContentMutationJournalState.RecoveryRequired;
                 journal.UpdatedUtc = DateTime.UtcNow;
+                if (string.IsNullOrWhiteSpace(journal.LastError))
+                    journal.LastError = $"Automatic startup recovery could not safely resolve the {journal.Plan.Operation} transaction.";
                 try
                 {
                     File.WriteAllText(journalPath, JsonConvert.SerializeObject(journal, Formatting.Indented));
@@ -390,7 +397,7 @@ namespace FlaxEditor.Content
             }
         }
 
-        private static bool TryRecoverJournal(JournalDocument journal)
+        private static bool TryRecoverJournal(JournalDocument journal, List<string> recoveredImportSources)
         {
             switch (journal.Plan.Operation)
             {
@@ -403,9 +410,21 @@ namespace FlaxEditor.Content
             case ContentMutationOperationKind.Create:
                 return TryRemoveCreatedDestinations(journal);
             case ContentMutationOperationKind.ImportOutput:
-                return TryRecoverImportJournal(journal);
+            {
+                if (!TryRecoverImportJournal(journal, out var sourcePaths))
+                    return false;
+                if (recoveredImportSources != null)
+                {
+                    for (int i = 0; i < sourcePaths.Length; i++)
+                    {
+                        if (!recoveredImportSources.Contains(sourcePaths[i], ContentMutationPathUtils.Comparer))
+                            recoveredImportSources.Add(sourcePaths[i]);
+                    }
+                }
+                return true;
+            }
             case ContentMutationOperationKind.Cleanup:
-                return false;
+                return TryRecoverCleanupJournal(journal);
             default:
                 return false;
             }
@@ -469,14 +488,26 @@ namespace FlaxEditor.Content
             }
         }
 
-        private static bool TryRecoverImportJournal(JournalDocument journal)
+        private static bool TryRecoverImportJournal(JournalDocument journal, out string[] recoveredSourcePaths)
         {
+            recoveredSourcePaths = Array.Empty<string>();
             try
             {
                 var output = journal.Plan.Entries.FirstOrDefault(x => x.Role == ContentMutationPathRole.Main);
                 var backup = journal.Plan.Entries.FirstOrDefault(x => x.Role == ContentMutationPathRole.ReplacementBackup);
                 if (output == null)
-                    return false;
+                    return TryRecoverMetadataOnlyImportJournal(journal, out recoveredSourcePaths);
+
+                // A normal import transaction rolls back its generated metadata
+                // before restoring or removing the interrupted main output.
+                for (int i = journal.Plan.Entries.Count - 1; i >= 0; i--)
+                {
+                    var entry = journal.Plan.Entries[i];
+                    if (entry.Role != ContentMutationPathRole.MetadataSidecar || entry.State == ContentMutationEntryState.Prepared)
+                        continue;
+                    if (ContentMutationPathUtils.Exists(entry.DestinationPath) && !TryDeletePath(entry.DestinationPath))
+                        return false;
+                }
 
                 if (output.State != ContentMutationEntryState.Prepared)
                 {
@@ -499,6 +530,105 @@ namespace FlaxEditor.Content
                 if (backup != null && ContentMutationPathUtils.Exists(backup.DestinationPath) && !TryDeletePath(backup.DestinationPath))
                     return false;
                 return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryRecoverMetadataOnlyImportJournal(JournalDocument journal, out string[] recoveredSourcePaths)
+        {
+            recoveredSourcePaths = Array.Empty<string>();
+            var metadataEntries = journal.Plan.Entries.Where(x => x.Role == ContentMutationPathRole.MetadataSidecar).ToArray();
+            if (metadataEntries.Length == 0)
+                return false;
+
+            var recovered = new HashSet<string>(ContentMutationPathUtils.Comparer);
+            for (int i = 0; i < metadataEntries.Length; i++)
+            {
+                var entry = metadataEntries[i];
+                var metadataPath = ContentMutationPathUtils.Normalize(entry.DestinationPath);
+                if (metadataPath == null || !metadataPath.EndsWith(".meta", ContentMutationPathUtils.Comparison))
+                    return false;
+                var sourcePath = metadataPath.Substring(0, metadataPath.Length - 5);
+                var backup = journal.Plan.Entries.FirstOrDefault(x =>
+                    x.Role == ContentMutationPathRole.ReplacementBackup && ContentMutationPathUtils.AreEquivalent(x.SourcePath, metadataPath));
+
+                if (entry.State == ContentMutationEntryState.Prepared)
+                {
+                    if (backup != null && ContentMutationPathUtils.Exists(backup.DestinationPath) && !TryRestoreRecoveryPath(backup.DestinationPath, metadataPath))
+                        return false;
+                    if (!ContentMutationPathUtils.AreEquivalent(entry.SourcePath, sourcePath) && File.Exists(entry.SourcePath) && !TryDeletePath(entry.SourcePath))
+                        return false;
+                    continue;
+                }
+
+                if (!File.Exists(sourcePath))
+                    return false;
+                if (!File.Exists(metadataPath))
+                {
+                    var stagedMetadata = !ContentMutationPathUtils.AreEquivalent(entry.SourcePath, sourcePath) && File.Exists(entry.SourcePath);
+                    if (stagedMetadata)
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(metadataPath));
+                        File.Move(entry.SourcePath, metadataPath);
+                    }
+                    else if (backup != null && ContentMutationPathUtils.Exists(backup.DestinationPath))
+                    {
+                        if (!TryRestoreRecoveryPath(backup.DestinationPath, metadataPath))
+                            return false;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+
+                // Database state and generated artifacts are reconstructed after
+                // the startup scan. Staging files and superseded metadata backups
+                // are no longer authoritative once a sidecar is present.
+                if (!ContentMutationPathUtils.AreEquivalent(entry.SourcePath, sourcePath) && File.Exists(entry.SourcePath) && !TryDeletePath(entry.SourcePath))
+                    return false;
+                if (backup != null && ContentMutationPathUtils.Exists(backup.DestinationPath) && !TryDeletePath(backup.DestinationPath))
+                    return false;
+                recovered.Add(sourcePath);
+            }
+
+            recoveredSourcePaths = recovered.ToArray();
+            return true;
+        }
+
+        private static bool TryRecoverCleanupJournal(JournalDocument journal)
+        {
+            try
+            {
+                for (int i = journal.Plan.Entries.Count - 1; i >= 0; i--)
+                {
+                    var entry = journal.Plan.Entries[i];
+                    if (ContentMutationPathUtils.Exists(entry.SourcePath) && !TryDeletePath(entry.SourcePath))
+                        return false;
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryRestoreRecoveryPath(string backupPath, string destinationPath)
+        {
+            try
+            {
+                var parent = Path.GetDirectoryName(destinationPath);
+                if (!Directory.Exists(parent))
+                    Directory.CreateDirectory(parent);
+                if (File.Exists(destinationPath))
+                    File.Replace(backupPath, destinationPath, null);
+                else
+                    File.Move(backupPath, destinationPath);
+                return File.Exists(destinationPath) && !File.Exists(backupPath);
             }
             catch
             {

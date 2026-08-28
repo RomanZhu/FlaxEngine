@@ -320,6 +320,15 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     if (Inject(request.FailurePoint, ArtifactPublicationFailurePoint::AfterAllImmutableMoves, prepared, diagnostic))
         return true;
 
+    // Output kinds may be built independently. Serialize manifest updates per asset so
+    // concurrent output publications can merge without dropping each other's entries.
+    ArtifactKeyBuilder manifestLockBuilder(StringAnsiView("flax-artifact-manifest-lock-v1"));
+    manifestLockBuilder.AddGuid(StringAnsiView("asset"), prepared.AssetID);
+    manifestLockBuilder.AddKey(StringAnsiView("target"), request.Target.BuildKey(ArtifactTargetDimension::All));
+    ArtifactLock manifestLock;
+    if (manifestLock.Acquire(libraryRoot, manifestLockBuilder.Finalize(), context.GetJobID(), context.GetCancellation(), diagnostic))
+        return true;
+
     uint64 currentRevision = 0;
     ArtifactKey currentFingerprint;
     request.QueryCurrentState(currentRevision, currentFingerprint);
@@ -376,7 +385,36 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         const String readableManifestPath = manifestPath.Get();
 #endif
         if (!File::ReadAllText(readableManifestPath, oldJson) && !ArtifactManifest::Parse(oldJson, manifestPath.Get(), oldManifest, ignored) && oldManifest.AssetID == prepared.AssetID)
-            manifest.PreviousSuccessfulInputFingerprint = oldManifest.InputFingerprint;
+        {
+            const bool sameBuildInputs = oldManifest.DatabaseRevision == manifest.DatabaseRevision &&
+                oldManifest.ProcessorID == manifest.ProcessorID &&
+                oldManifest.ProcessorImplementationVersion == manifest.ProcessorImplementationVersion &&
+                oldManifest.Target.BuildKey(ArtifactTargetDimension::All) == manifest.Target.BuildKey(ArtifactTargetDimension::All) &&
+                oldManifest.InputFingerprint == manifest.InputFingerprint &&
+                oldManifest.SourceHash == manifest.SourceHash && oldManifest.SettingsHash == manifest.SettingsHash;
+            if (sameBuildInputs)
+            {
+                for (const ArtifactManifestOutput& oldOutput : oldManifest.Outputs)
+                {
+                    bool replaced = false;
+                    for (const ArtifactManifestOutput& output : manifest.Outputs)
+                    {
+                        if (output.Kind == oldOutput.Kind)
+                        {
+                            replaced = true;
+                            break;
+                        }
+                    }
+                    if (!replaced)
+                        manifest.Outputs.Add(oldOutput);
+                }
+                manifest.PreviousSuccessfulInputFingerprint = oldManifest.PreviousSuccessfulInputFingerprint;
+            }
+            else
+            {
+                manifest.PreviousSuccessfulInputFingerprint = oldManifest.InputFingerprint;
+            }
+        }
     }
     StringAnsi manifestJson;
     if (manifest.ToJson(manifestJson, diagnostic))

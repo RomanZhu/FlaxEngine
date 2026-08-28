@@ -47,7 +47,7 @@ class FLAXENGINE_API TextureProcessor
 public:
     static constexpr uint32 ImplementationVersion = 2;
     static constexpr uint32 RuntimeFormatVersion = 4;
-    static constexpr uint32 ThumbnailFormatVersion = 1;
+    static constexpr uint32 ThumbnailFormatVersion = 2;
     static constexpr int32 MaximumDimension = 32768;
     static constexpr uint64 MaximumDecodedBytes = 2ull * 1024ull * 1024ull * 1024ull;
 

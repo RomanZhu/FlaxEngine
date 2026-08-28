@@ -39,10 +39,12 @@ namespace FlaxEditor.Content
         /// <returns>True if fails, otherwise false.</returns>
         public bool GetImportPath(out string importPath)
         {
-            // TODO: add internal call to content backend with fast import asset metadata gather (without asset loading)
+            importPath = AssetDatabaseFacade.GetCanonicalSourcePath(ID);
+            if (!string.IsNullOrEmpty(importPath))
+                return false;
 
             var asset = FlaxEngine.Content.Load<BinaryAsset>(ID, 100);
-            if (asset)
+            if (asset && asset.IsLoaded)
             {
                 // Get meta from loaded asset
                 importPath = asset.ImportPath;
@@ -86,8 +88,8 @@ namespace FlaxEditor.Content
         {
             base.OnBuildTooltipText(sb);
 
-            var asset = FlaxEngine.Content.Load<TextureBase>(ID, 100);
-            if (asset)
+            var asset = FlaxEngine.Content.GetAsset(ID) as TextureBase;
+            if (asset && asset.IsLoaded)
             {
                 sb.Append("Format: ").Append(asset.Format).AppendLine();
                 sb.Append("Size: ").Append(asset.Width).Append('x').Append(asset.Height);
@@ -128,8 +130,8 @@ namespace FlaxEditor.Content
         {
             base.OnBuildTooltipText(sb);
 
-            var asset = FlaxEngine.Content.Load<Model>(ID, 100);
-            if (asset)
+            var asset = FlaxEngine.Content.GetAsset(ID) as Model;
+            if (asset && asset.IsLoaded)
             {
                 var lods = asset.LODs;
                 int triangleCount = 0, vertexCount = 0;
@@ -179,8 +181,8 @@ namespace FlaxEditor.Content
         {
             base.OnBuildTooltipText(sb);
 
-            var asset = FlaxEngine.Content.Load<SkinnedModel>(ID, 100);
-            if (asset)
+            var asset = FlaxEngine.Content.GetAsset(ID) as SkinnedModel;
+            if (asset && asset.IsLoaded)
             {
                 var lods = asset.LODs;
                 int triangleCount = 0, vertexCount = 0;

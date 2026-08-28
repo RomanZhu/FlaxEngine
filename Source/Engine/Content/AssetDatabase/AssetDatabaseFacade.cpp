@@ -5,8 +5,11 @@
 #include "AssetSourceRoots.h"
 #include "AssetMeta.h"
 #include "MigrationInventory.h"
+#include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/BinaryAsset.h"
+#include "Engine/Content/Content.h"
+#include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
@@ -27,11 +30,17 @@
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
 #include "Engine/Serialization/JsonWriters.h"
+#include "Engine/Serialization/MemoryReadStream.h"
+#include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Threading/Threading.h"
+#if COMPILE_WITH_MATERIAL_GRAPH
+#include "Engine/Tools/MaterialGenerator/Types.h"
+#endif
 #if COMPILE_WITH_TEXTURE_TOOL
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Assets/Texture.h"
 #include "Engine/Content/Assets/CubeTexture.h"
+#include "Engine/Graphics/PixelFormatExtensions.h"
 #include "Engine/Graphics/Textures/TextureData.h"
 #include "Engine/Render2D/SpriteAtlas.h"
 #include "Engine/Content/Build/Processors/TextureProcessorSettings.h"
@@ -66,6 +75,12 @@
 #include <vector>
 
 Delegate<uint64> AssetDatabaseFacade::DatabaseChanged;
+Delegate<Guid> AssetDatabaseFacade::ArtifactPublished;
+
+void AssetDatabaseFacade::NotifyArtifactPublished(const Guid& assetID)
+{
+    ArtifactPublished(assetID);
+}
 
 namespace
 {
@@ -218,7 +233,7 @@ namespace
             if (!options.IsAtlas)
             {
                 TextureData sourceData;
-                if (!TextureTool::ImportTexture(work.SourcePath, sourceData) && sourceData.GetArraySize() == 6)
+                if (!TextureTool::ImportTexture(work.SourcePath, sourceData, false) && sourceData.GetArraySize() == 6)
                     meta.AssetType = CubeTexture::TypeName;
             }
             meta.Processor.ID = TextureProcessorSettings::ProcessorID();
@@ -398,6 +413,37 @@ String AssetDatabaseFacade::GetCanonicalSourcePath(const Guid& assetID)
     return assetID.IsValid() && AssetDatabase::Get().TryGetRecord(assetID, record)
         ? String(record.SourcePath.Get())
         : String::Empty;
+}
+
+Asset* AssetDatabaseFacade::LoadAssetPreview(const Guid& assetID)
+{
+#if USE_EDITOR
+    return Content::LoadAsyncPreview(assetID, Asset::TypeInitializer);
+#else
+    return nullptr;
+#endif
+}
+
+Guid AssetDatabaseFacade::GetPublishedArtifactCacheID(const Guid& assetID, const StringView& outputKind)
+{
+#if USE_EDITOR
+    ArtifactResolver& resolver = ArtifactResolver::Get();
+    if (!resolver.IsConfigured() || !assetID.IsValid() || outputKind.IsEmpty())
+        return Guid::Empty;
+    ArtifactRequest request;
+    request.AssetID = assetID;
+    request.Target = resolver.GetDefaultTarget();
+    request.OutputKind = StringAnsi(outputKind);
+    request.Policy = ArtifactResolvePolicy::PublishedOnly;
+    ResolvedArtifact artifact;
+    AssetPipelineDiagnostic diagnostic;
+    ArtifactKey key;
+    if (resolver.Resolve(request, artifact, diagnostic) || ArtifactKey::Parse(artifact.Key, key))
+        return Guid::Empty;
+    return Guid(key.Digest.Values[0], key.Digest.Values[1], key.Digest.Values[2], key.Digest.Values[3]);
+#else
+    return Guid::Empty;
+#endif
 }
 
 bool AssetDatabaseFacade::Scan(bool strictMetadata)
@@ -667,7 +713,7 @@ Guid AssetDatabaseFacade::CreateTextureMetadata(const StringView& sourcePath, co
     if (!options.IsAtlas)
     {
         TextureData sourceData;
-        if (!TextureTool::ImportTexture(sourcePath, sourceData) && sourceData.GetArraySize() == 6)
+        if (!TextureTool::ImportTexture(sourcePath, sourceData, false) && sourceData.GetArraySize() == 6)
             meta.AssetType = CubeTexture::TypeName;
     }
     meta.SourceKind = AssetSourceKind::ImportedSource;
@@ -773,7 +819,7 @@ bool AssetDatabaseFacade::ApplyTextureMetadata(const StringView& sourcePath, con
         if (!options.IsAtlas)
         {
             TextureData sourceData;
-            if (!TextureTool::ImportTexture(sourcePath, sourceData) && sourceData.GetArraySize() == 6)
+            if (!TextureTool::ImportTexture(sourcePath, sourceData, false) && sourceData.GetArraySize() == 6)
                 meta.AssetType = CubeTexture::TypeName;
         }
         meta.Processor.ID = TextureProcessorSettings::ProcessorID();
@@ -854,18 +900,39 @@ Texture* AssetDatabaseFacade::LoadTextureThumbnail(const Guid& assetID)
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (!ArtifactResolver::Get().IsConfigured())
         return nullptr;
+    AssetPipelineDiagnostic diagnostic;
+    const AssetBuildJobStatus thumbnailStatus = TexturePipelineService::GetThumbnailStatus(assetID, diagnostic);
+    if (thumbnailStatus == AssetBuildJobStatus::Queued || thumbnailStatus == AssetBuildJobStatus::Building ||
+        thumbnailStatus == AssetBuildJobStatus::Publishing || thumbnailStatus == AssetBuildJobStatus::Failed ||
+        thumbnailStatus == AssetBuildJobStatus::Cancelled)
+        return nullptr;
     ArtifactRequest request;
     request.AssetID = assetID;
     request.Target = TexturePipelineService::GetHostTarget();
     request.OutputKind = "thumbnail";
-    request.RequiredCompatibility = "flax-texture-thumbnail-v1";
+    request.RequiredCompatibility = "flax-texture-thumbnail-v2";
     request.Policy = ArtifactResolvePolicy::NoBuild;
     ResolvedArtifact artifact;
-    AssetPipelineDiagnostic diagnostic;
     if (ArtifactResolver::Get().Resolve(request, artifact, diagnostic))
+    {
+        TexturePipelineService::RequestThumbnailBuild(assetID, diagnostic);
         return nullptr;
+    }
     const ArtifactLease lease = ArtifactLease::Acquire(artifact.StoragePath.Get());
-    return Texture::FromFile(artifact.StoragePath.Get(), false);
+    TextureData textureData;
+    if (TextureTool::ImportTexture(artifact.StoragePath.Get(), textureData, false))
+        return nullptr;
+    if (PixelFormatExtensions::IsSRGB(textureData.Format))
+        textureData.Format = PixelFormatExtensions::ToNonsRGB(textureData.Format);
+    auto* texture = Content::CreateVirtualAsset<Texture>();
+    auto* initData = New<TextureBase::InitData>();
+    initData->FromTextureData(textureData, false);
+    if (texture->Init(initData))
+    {
+        texture->DeleteObject();
+        return nullptr;
+    }
+    return texture;
 #else
     return nullptr;
 #endif
@@ -1270,6 +1337,82 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
     if (Scan(false) || GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
         return fail();
     return false;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::SaveMaterialDocument(Material* asset, const Guid& canonicalAssetID)
+{
+#if USE_EDITOR && COMPILE_WITH_ASSETS_IMPORTER && COMPILE_WITH_MATERIAL_GRAPH
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    };
+    AssetRecord record;
+    if (!asset || !canonicalAssetID.IsValid() || !AssetDatabase::Get().TryGetRecord(canonicalAssetID, record) ||
+        record.SourceKind != AssetSourceKind::TextDocument || record.ProcessorID != TEXT("Flax.GraphDocument") ||
+        record.TypeName != Material::TypeName)
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = canonicalAssetID;
+        diagnostic.Message = TEXT("The edited material is not backed by a canonical graph document.");
+        return fail();
+    }
+
+    const BytesContainer existingSurface = asset->LoadSurface(true);
+    if (existingSurface.IsInvalid())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+        diagnostic.AssetGuid = canonicalAssetID;
+        diagnostic.SourcePath = record.SourcePath.Get();
+        diagnostic.Message = TEXT("The edited material graph could not be loaded.");
+        return fail();
+    }
+
+    MaterialGraph graph;
+    MemoryReadStream readStream(existingSurface);
+    if (graph.Load(&readStream, true))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+        diagnostic.AssetGuid = canonicalAssetID;
+        diagnostic.SourcePath = record.SourcePath.Get();
+        diagnostic.Message = TEXT("The edited material graph could not be decoded.");
+        return fail();
+    }
+    for (const MaterialParameter& materialParameter : asset->Params)
+    {
+        GraphParameter* graphParameter = graph.GetParameter(materialParameter.GetParameterID());
+        if (!graphParameter)
+            continue;
+
+        graphParameter->Value = materialParameter.GetValue();
+        if (graphParameter->Value.Type == VariantType::Object)
+            graphParameter->Value = graphParameter->Value.AsObject ? graphParameter->Value.AsObject->GetID() : Guid::Empty;
+        else if (graphParameter->Value.Type == VariantType::Asset)
+            graphParameter->Value = graphParameter->Value.AsObject ? graphParameter->Value.AsObject->GetID() : Guid::Empty;
+    }
+
+    MemoryWriteStream writeStream(existingSurface.Length());
+    if (graph.Save(&writeStream, true))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+        diagnostic.AssetGuid = canonicalAssetID;
+        diagnostic.SourcePath = record.SourcePath.Get();
+        diagnostic.Message = TEXT("The edited material graph could not be encoded.");
+        return fail();
+    }
+    BytesContainer surface;
+    surface.Link(ToSpan(writeStream));
+    return SaveGraphSurface(record.SourcePath.Get(), surface);
 #else
     return true;
 #endif

@@ -1007,7 +1007,7 @@ namespace FlaxEditor.Windows
                 if (selection[i] is not AssetItem assetItem)
                     return false;
 
-                var asset = assetItem.LoadAsync();
+                var asset = assetItem.LoadPreviewAsync();
                 if (asset is not MaterialBase material)
                     return false;
                 if (!asset.IsLoaded && !asset.LastLoadFailed)
@@ -1077,7 +1077,7 @@ namespace FlaxEditor.Windows
                         continue;
                     }
 
-                    var asset = assetItem.LoadAsync();
+                    var asset = assetItem.LoadPreviewAsync();
                     if (asset == null)
                         continue;
 
@@ -1713,7 +1713,7 @@ namespace FlaxEditor.Windows
 
                 var path = Material.Path;
                 var contentDatabase = Editor.Instance.ContentDatabase;
-                var failed = contentDatabase != null ? contentDatabase.SaveAsset(Material) : Material.Save();
+                var failed = contentDatabase == null || contentDatabase.SaveAsset(Material);
                 if (failed)
                     Editor.LogError("Cannot save material asset '" + path + "'.");
             }

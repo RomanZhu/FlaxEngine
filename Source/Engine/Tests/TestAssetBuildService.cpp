@@ -128,6 +128,45 @@ TEST_CASE("AssetBuildService deduplicates exact work without coupling requester 
     CHECK(jobs[0].RebuildReason == TEXT("source content changed"));
 }
 
+TEST_CASE("AssetBuildService replays terminal publication when requested")
+{
+    const String library = BuildServiceLibrary(TEXT("AssetBuildServiceReplayPublication"));
+    const String root = StringUtils::GetDirectoryName(library);
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    AssetBuildService service;
+    AssetBuildServiceLimits limits;
+    limits.MaximumWorkers = 1;
+    limits.MaximumMemoryBytes = 64;
+    limits.MaximumExternalTools = 1;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
+
+    std::atomic<int32> executions { 0 };
+    std::atomic<int32> publications { 0 };
+    AssetBuildJobRequest request = BasicRequest(JobKey("replay-publication"), Guid::New());
+    request.AllowTerminalDeduplication = false;
+    request.Build = [&](const AssetCancellationToken&, AssetPipelineDiagnostic&)
+    {
+        executions++;
+        return false;
+    };
+    request.Publish = [&](const AssetCancellationToken&, AssetPipelineDiagnostic&)
+    {
+        publications++;
+        return false;
+    };
+
+    const AssetBuildRequestHandle first = service.Request(request);
+    REQUIRE(first.Wait(5000));
+    REQUIRE(first.GetStatus() == AssetBuildJobStatus::Succeeded);
+    const AssetBuildRequestHandle second = service.Request(request);
+    REQUIRE(second.Wait(5000));
+    REQUIRE(second.GetStatus() == AssetBuildJobStatus::Succeeded);
+    CHECK(executions.load() == 2);
+    CHECK(publications.load() == 2);
+    CHECK(service.GetMetrics().DeduplicationHits == 0);
+}
+
 TEST_CASE("AssetBuildService schedules dependencies and bounds independent fanout")
 {
     const String library = BuildServiceLibrary(TEXT("AssetBuildServiceLimits"));

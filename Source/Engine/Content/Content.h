@@ -180,6 +180,9 @@ public:
     /// <returns>Loaded asset or null if cannot</returns>
     static Asset* LoadAsync(const Guid& id, const ScriptingTypeHandle& type);
 
+    /// <summary>Loads an asset for passive editor presentation without scheduling artifact builds, including dependencies.</summary>
+    static Asset* LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type);
+
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
     /// </summary>
@@ -296,6 +299,11 @@ public:
     /// <param name="assetType">The actual type of the asset.</param>
     /// <returns><c>true</c> if asset type identifier is invalid otherwise, <c>false</c>.</returns>
     static bool IsAssetTypeIdInvalid(const ScriptingTypeHandle& type, const ScriptingTypeHandle& assetType);
+
+private:
+    static void BeginPassiveLoad();
+    static void EndPassiveLoad();
+    static bool IsPassiveLoad();
 
 public:
     /// <summary>

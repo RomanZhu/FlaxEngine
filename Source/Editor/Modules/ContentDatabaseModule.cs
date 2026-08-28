@@ -226,6 +226,29 @@ namespace FlaxEditor.Modules
             }
         }
 
+        private void QueueRecoveredCanonicalImports(List<string> sourcePaths)
+        {
+            for (int i = 0; i < sourcePaths.Count; i++)
+            {
+                var sourcePath = ContentMutationPathUtils.Normalize(sourcePaths[i]);
+                if (!_sourceAssetRecords.TryGetValue(sourcePath, out var record) || record.Status != AssetRecordStatus.Ready || !CanBuildCanonicalRecord(record))
+                {
+                    Editor.LogWarning($"Recovered imported source '{sourcePath}' requires metadata reconciliation before it can be rebuilt.");
+                    continue;
+                }
+
+                var failed = IsTextureRecord(record)
+                    ? AssetDatabaseFacade.BuildTexture(record.ID)
+                    : IsModelRecord(record)
+                        ? AssetDatabaseFacade.BuildModel(record.ID)
+                        : AssetDatabaseFacade.BuildGraph(record.ID);
+                if (failed)
+                    Editor.LogError($"Cannot queue recovered canonical asset rebuild: {sourcePath}");
+                else
+                    Editor.Log($"Recovered interrupted import and queued exact artifact resolution: {sourcePath}");
+            }
+        }
+
         private void OnAssetDatabaseChanged(ulong revision)
         {
             RefreshAssetDatabaseRecords(revision);
@@ -244,6 +267,14 @@ namespace FlaxEditor.Modules
                     }
                 }
             }
+        }
+
+        private void OnArtifactPublished(Guid assetId)
+        {
+            if (Find(assetId) is AssetItem item)
+                item.RefreshThumbnail();
+            else
+                Editor.Thumbnails.DeletePreview(assetId);
         }
 
         /// <summary>Gets the immutable canonical database record for an asset identity.</summary>
@@ -2006,7 +2037,8 @@ namespace FlaxEditor.Modules
             FlaxEngine.Content.AssetDisposing += OnContentAssetDisposing;
 
             // Recover or surface any mutation that was interrupted before the previous Editor process exited.
-            var recoveryRequired = ContentMutationTransaction.RecoverPendingTransactions();
+            var recoveredImportSources = new List<string>();
+            var recoveryRequired = ContentMutationTransaction.RecoverPendingTransactions(recoveredImportSources);
             if (recoveryRequired != 0)
                 Editor.LogError($"{recoveryRequired} interrupted Content transaction(s) require manual recovery. See the log for exact paths.");
 
@@ -2014,9 +2046,11 @@ namespace FlaxEditor.Modules
             if (_useNewAssetDatabase)
             {
                 AssetDatabaseFacade.DatabaseChanged += OnAssetDatabaseChanged;
+                AssetDatabaseFacade.ArtifactPublished += OnArtifactPublished;
                 if (AssetDatabaseFacade.LoadOrScan(true))
                     Editor.LogError("Failed to initialize the canonical asset database. See asset pipeline diagnostics.");
                 RefreshAssetDatabaseRecords(AssetDatabaseFacade.Revision);
+                QueueRecoveredCanonicalImports(recoveredImportSources);
                 QueueMissingMetadataRegistrations();
             }
 
@@ -2413,6 +2447,18 @@ namespace FlaxEditor.Modules
         {
             if (asset == null)
                 throw new ArgumentNullException(nameof(asset));
+            if (TryGetAssetDatabaseRecord(asset.ID, out var record) && record.SourceKind == AssetSourceKind.TextDocument)
+            {
+                if (asset is Material or MaterialInstance or SkeletonMask or SceneAnimation or ParticleSystem)
+                {
+                    using var canonicalScope = TrackAssetSave(record.SourcePath);
+                    var canonicalFailed = asset is Material material
+                        ? AssetDatabaseFacade.SaveMaterialDocument(material, asset.ID)
+                        : AssetDatabaseFacade.SaveAuthoredDocument((BinaryAsset)asset, asset.ID);
+                    canonicalScope.Complete(!canonicalFailed);
+                    return canonicalFailed;
+                }
+            }
             if (!ConvertedTypePolicy.AllowsLegacyBinaryAuthoring(asset.GetType().FullName, asset.Path))
             {
                 Editor.LogError("Legacy .flax saving is disabled for converted asset types. Migrate the asset before editing it.");
@@ -2639,7 +2685,10 @@ namespace FlaxEditor.Modules
         {
             FlaxEngine.Content.AssetDisposing -= OnContentAssetDisposing;
             if (_useNewAssetDatabase)
+            {
                 AssetDatabaseFacade.DatabaseChanged -= OnAssetDatabaseChanged;
+                AssetDatabaseFacade.ArtifactPublished -= OnArtifactPublished;
+            }
             ScriptsBuilder.ScriptsReload -= OnScriptsReload;
             ScriptsBuilder.ScriptsReloadEnd -= OnScriptsReloadEnd;
 

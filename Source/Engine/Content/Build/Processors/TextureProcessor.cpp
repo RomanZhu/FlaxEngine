@@ -12,6 +12,7 @@
 #include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Graphics/Textures/TextureData.h"
+#include "Engine/Graphics/PixelFormatExtensions.h"
 #endif
 
 #if COMPILE_WITH_TEXTURE_TOOL
@@ -567,7 +568,7 @@ AssetProcessorDescriptor TextureProcessor::CreateDescriptor()
     thumbnail.Extension = ".png";
     thumbnail.FormatVersion = ThumbnailFormatVersion;
     thumbnail.TargetDimensions = ArtifactTargetDimension::None;
-    thumbnail.CompatibilityTag = "flax-texture-thumbnail-v1";
+    thumbnail.CompatibilityTag = "flax-texture-thumbnail-v2";
     thumbnail.IndependentlyReusable = true;
     descriptor.Outputs.Add(thumbnail);
     return descriptor;
@@ -628,7 +629,7 @@ bool TextureProcessor::BuildOutputKey(const PreparedAsset& prepared, const Artif
     }
     else
     {
-        builder.AddString(StringAnsiView("thumbnail-encoder"), StringAnsiView("flax-png-thumbnail-v1"));
+        builder.AddString(StringAnsiView("thumbnail-encoder"), StringAnsiView("flax-png-thumbnail-v2"));
     }
     builder.AddTarget(target, output->TargetDimensions);
     key = builder.Finalize();
@@ -746,6 +747,16 @@ bool TextureProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnos
     if (context.GetCancellation().IsCancellationRequested())
         return fail(AssetPipelineDiagnosticCode::BuildCancelled, StringView::Empty, TEXT("Texture build was cancelled before decode."));
 
+    bool buildRuntime = false;
+    bool buildThumbnail = false;
+    for (const DeclaredArtifactOutput& output : prepared.Outputs)
+    {
+        buildRuntime |= output.Kind == StringAnsiView("runtime");
+        buildThumbnail |= output.Kind == StringAnsiView("thumbnail");
+    }
+    if (!buildRuntime && !buildThumbnail)
+        return fail(AssetPipelineDiagnosticCode::ArtifactMissing, StringView::Empty, TEXT("Texture build declares no supported output."));
+
     const AssetDependency* sourceDependency = nullptr;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
@@ -776,58 +787,69 @@ bool TextureProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnos
         FileSystem::DeleteFile(verifiedSourcePath);
     };
 
-    TextureTool::Options options = payload->Settings.ToImportOptions(context.GetTarget().Platform);
-    ImportTexture::NormalizeOptions(options);
-    TextureData textureData;
-    String errorMessage;
-    if (TextureTool::ImportTexture(verifiedSourcePath, textureData, options, errorMessage))
+    if (buildRuntime)
     {
-        const String message = errorMessage.IsEmpty()
-            ? TEXT("Texture decoder rejected the verified source snapshot.")
-            : TEXT("Texture decoder rejected the verified source snapshot: ") + errorMessage;
-        return fail(AssetPipelineDiagnosticCode::BuildFailed, sourcePath, message);
-    }
-    if (context.GetCancellation().IsCancellationRequested())
-        return fail(AssetPipelineDiagnosticCode::BuildCancelled, sourcePath, TEXT("Texture build was cancelled after decode."));
+        TextureTool::Options options = payload->Settings.ToImportOptions(context.GetTarget().Platform);
+        ImportTexture::NormalizeOptions(options);
+        TextureData textureData;
+        String errorMessage;
+        if (TextureTool::ImportTexture(verifiedSourcePath, textureData, options, errorMessage, false))
+        {
+            const String message = errorMessage.IsEmpty()
+                ? TEXT("Texture decoder rejected the verified source snapshot.")
+                : TEXT("Texture decoder rejected the verified source snapshot: ") + errorMessage;
+            return fail(AssetPipelineDiagnosticCode::BuildFailed, sourcePath, message);
+        }
+        if (context.GetCancellation().IsCancellationRequested())
+            return fail(AssetPipelineDiagnosticCode::BuildCancelled, sourcePath, TEXT("Texture build was cancelled after decode."));
 
-    String runtimeScratchPath;
-    if (context.CreateScratchFilePath(TEXT(".flax"), runtimeScratchPath, diagnostic))
-        return true;
-    SCOPE_EXIT
-    {
-        ContentStorageManager::EnsureAccess(runtimeScratchPath);
-        FileSystem::DeleteFile(runtimeScratchPath);
-    };
-    TextureArtifactAdapterArguments adapterArguments;
-    adapterArguments.Data = &textureData;
-    adapterArguments.Options = &options;
-    CreateAssetContext importerContext(verifiedSourcePath, runtimeScratchPath, prepared.AssetID, &adapterArguments, true, prepared.OutputType);
-    CreateAssetFunction importerCallback = &CreateTextureArtifact;
-    const CreateAssetResult importResult = importerContext.Run(importerCallback);
-    if (importResult != CreateAssetResult::Ok)
-    {
-        diagnostic.Related.Add(::ToString(importResult));
-        return fail(importResult == CreateAssetResult::Abort ? AssetPipelineDiagnosticCode::BuildCancelled : AssetPipelineDiagnosticCode::BuildFailed,
-            sourcePath, TEXT("Texture compatibility importer failed while writing job staging."));
+        String runtimeScratchPath;
+        if (context.CreateScratchFilePath(TEXT(".flax"), runtimeScratchPath, diagnostic))
+            return true;
+        SCOPE_EXIT
+        {
+            ContentStorageManager::EnsureAccess(runtimeScratchPath);
+            FileSystem::DeleteFile(runtimeScratchPath);
+        };
+        TextureArtifactAdapterArguments adapterArguments;
+        adapterArguments.Data = &textureData;
+        adapterArguments.Options = &options;
+        CreateAssetContext importerContext(verifiedSourcePath, runtimeScratchPath, prepared.AssetID, &adapterArguments, true, prepared.OutputType);
+        CreateAssetFunction importerCallback = &CreateTextureArtifact;
+        const CreateAssetResult importResult = importerContext.Run(importerCallback);
+        if (importResult != CreateAssetResult::Ok)
+        {
+            diagnostic.Related.Add(::ToString(importResult));
+            return fail(importResult == CreateAssetResult::Abort ? AssetPipelineDiagnosticCode::BuildCancelled : AssetPipelineDiagnosticCode::BuildFailed,
+                sourcePath, TEXT("Texture compatibility importer failed while writing job staging."));
+        }
+        Array<byte> runtimeBytes;
+        if (File::ReadAllBytes(runtimeScratchPath, runtimeBytes))
+            return fail(AssetPipelineDiagnosticCode::ArtifactInvalid, runtimeScratchPath, TEXT("Texture compatibility output is unreadable."));
+        ArtifactWriter runtimeWriter;
+        if (context.OpenOutput(StringAnsiView("runtime"), runtimeWriter, diagnostic) ||
+            runtimeWriter.WriteFile(TEXT("texture.flax"), runtimeBytes.Get(), runtimeBytes.Count(), diagnostic))
+            return true;
     }
-    Array<byte> runtimeBytes;
-    if (File::ReadAllBytes(runtimeScratchPath, runtimeBytes))
-        return fail(AssetPipelineDiagnosticCode::ArtifactInvalid, runtimeScratchPath, TEXT("Texture compatibility output is unreadable."));
-    ArtifactWriter runtimeWriter;
-    if (context.OpenOutput(StringAnsiView("runtime"), runtimeWriter, diagnostic) ||
-        runtimeWriter.WriteFile(TEXT("texture.flax"), runtimeBytes.Get(), runtimeBytes.Count(), diagnostic))
-        return true;
+
+    if (!buildThumbnail)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
 
     if (context.GetCancellation().IsCancellationRequested())
         return fail(AssetPipelineDiagnosticCode::BuildCancelled, sourcePath, TEXT("Texture build was cancelled before thumbnail generation."));
     TextureData thumbnailSource;
-    if (TextureTool::ImportTexture(verifiedSourcePath, thumbnailSource))
+    if (TextureTool::ImportTexture(verifiedSourcePath, thumbnailSource, false))
         return fail(AssetPipelineDiagnosticCode::BuildFailed, sourcePath, TEXT("Texture thumbnail decoder rejected the verified source snapshot."));
     TextureData converted;
     TextureData* thumbnail = &thumbnailSource;
-    if (thumbnailSource.Format != PixelFormat::R8G8B8A8_UNorm)
+    const bool thumbnailIsSrgb = PixelFormatExtensions::IsSRGB(thumbnailSource.Format);
+    const PixelFormat thumbnailWorkingFormat = thumbnailIsSrgb ? PixelFormat::R8G8B8A8_UNorm_sRGB : PixelFormat::R8G8B8A8_UNorm;
+    if (thumbnailSource.Format != thumbnailWorkingFormat)
     {
-        if (TextureTool::Convert(converted, thumbnailSource, PixelFormat::R8G8B8A8_UNorm))
+        if (TextureTool::Convert(converted, thumbnailSource, thumbnailWorkingFormat))
             return fail(AssetPipelineDiagnosticCode::BuildFailed, sourcePath, TEXT("Texture thumbnail conversion failed."));
         thumbnail = &converted;
     }
@@ -840,11 +862,15 @@ bool TextureProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnos
             return fail(AssetPipelineDiagnosticCode::BuildFailed, sourcePath, TEXT("Texture thumbnail resize failed."));
         thumbnail = &resized;
     }
+    // PNG stores display-encoded samples. Keep sRGB filtering during conversion/resize, then
+    // re-tag the pixels without converting them to linear values before the PNG encoder.
+    if (thumbnailIsSrgb)
+        thumbnail->Format = PixelFormatExtensions::ToNonsRGB(thumbnail->Format);
     String thumbnailScratchPath;
     if (context.CreateScratchFilePath(TEXT(".png"), thumbnailScratchPath, diagnostic))
         return true;
     SCOPE_EXIT { FileSystem::DeleteFile(thumbnailScratchPath); };
-    if (TextureTool::ExportTexture(thumbnailScratchPath, *thumbnail))
+    if (TextureTool::ExportTexture(thumbnailScratchPath, *thumbnail, false))
         return fail(AssetPipelineDiagnosticCode::BuildFailed, thumbnailScratchPath, TEXT("Texture thumbnail encoding failed."));
     Array<byte> thumbnailBytes;
     if (File::ReadAllBytes(thumbnailScratchPath, thumbnailBytes))

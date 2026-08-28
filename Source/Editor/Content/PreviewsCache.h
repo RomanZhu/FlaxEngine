@@ -51,6 +51,7 @@ private:
 private:
 
     Array<Guid> _assets;
+    Array<Guid> _versions;
     bool _isDirty = false;
     FlushTask* _flushTask = nullptr;
 
@@ -68,6 +69,9 @@ public:
     /// <returns>The output sprite slot handle or invalid if invalid in nothing found.</returns>
     API_FUNCTION() SpriteHandle FindSlot(const Guid& id);
 
+    /// <summary>Finds the preview icon for the given asset and immutable artifact version.</summary>
+    API_FUNCTION() SpriteHandle FindSlotVersioned(const Guid& id, const Guid& version);
+
     /// <summary>
     /// Determines whether this atlas has one or more free slots for the asset preview.
     /// </summary>
@@ -80,6 +84,9 @@ public:
     /// <param name="id">The asset identifier.</param>
     /// <returns>The added sprite slot handle or invalid if invalid in failed to occupy slot.</returns>
     API_FUNCTION() SpriteHandle OccupySlot(GPUTexture* source, const Guid& id);
+
+    /// <summary>Occupies a slot for the given asset and immutable artifact version.</summary>
+    API_FUNCTION() SpriteHandle OccupySlotVersioned(GPUTexture* source, const Guid& id, const Guid& version);
 
     /// <summary>
     /// Releases the used slot.

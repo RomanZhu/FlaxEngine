@@ -10,6 +10,7 @@
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/AssetDatabase/AssetSourceRoots.h"
 #include "Engine/Content/BinaryAsset.h"
@@ -92,8 +93,35 @@ namespace
         fingerprint = value ? *value : ArtifactKey();
     }
 
+    void ApplyHotSwap(const Guid assetID, const ResolvedArtifact artifact, const bool hasRuntime)
+    {
+        if (hasRuntime)
+        {
+            Asset* asset = Content::GetAsset(assetID);
+            auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
+            if (binary && binary->GetTypeName() == artifact.TypeName && binary->IsLoading() && !binary->IsLoaded() && !binary->LastLoadFailed())
+            {
+                Scripting::InvokeOnUpdate([assetID, artifact, hasRuntime]()
+                {
+                    ApplyHotSwap(assetID, artifact, hasRuntime);
+                });
+                return;
+            }
+            if (binary && binary->GetTypeName() == artifact.TypeName &&
+                (binary->IsLoaded() || binary->LastLoadFailed()) &&
+                !(binary->GetArtifactKey() == artifact.Key && binary->IsUsingExactArtifact() && binary->IsLoaded()))
+            {
+                const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
+                if (result != BinaryAssetStorageSwitchResult::Success)
+                    LOG(Error, "Failed to hot-swap graph artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
+            }
+        }
+        AssetDatabaseFacade::NotifyArtifactPublished(assetID);
+    }
+
     void QueueHotSwap(const ArtifactManifest& manifest, const String& typeName)
     {
+        const Guid assetID = manifest.AssetID;
         const ArtifactManifestOutput* runtime = nullptr;
         for (const ArtifactManifestOutput& output : manifest.Outputs)
         {
@@ -103,31 +131,27 @@ namespace
                 break;
             }
         }
-        if (!runtime)
-            return;
-        ArtifactStoragePath storagePath;
-        AssetPipelineDiagnostic diagnostic;
-        if (ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
-            return;
         ResolvedArtifact artifact;
-        artifact.AssetID = manifest.AssetID;
-        artifact.TypeName = typeName;
-        artifact.StoragePath = storagePath;
-        artifact.OutputKind = TEXT("runtime");
-        artifact.Key = String(runtime->Key.ToString());
-        artifact.StorageKind = ArtifactStorageKind::Generated;
-        artifact.IsExact = true;
-        Scripting::InvokeOnUpdate([artifact]()
+        bool hasRuntime = false;
+        if (runtime)
         {
-            Asset* asset = Content::GetAsset(artifact.AssetID);
-            auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
-            if (!binary || binary->GetTypeName() != artifact.TypeName ||
-                (!binary->IsLoaded() && !binary->LastLoadFailed()) ||
-                (binary->GetArtifactKey() == artifact.Key && binary->IsUsingExactArtifact() && binary->IsLoaded()))
-                return;
-            const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
-            if (result != BinaryAssetStorageSwitchResult::Success)
-                LOG(Error, "Failed to hot-swap graph artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
+            ArtifactStoragePath storagePath;
+            AssetPipelineDiagnostic diagnostic;
+            if (!ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
+            {
+                artifact.AssetID = assetID;
+                artifact.TypeName = typeName;
+                artifact.StoragePath = storagePath;
+                artifact.OutputKind = TEXT("runtime");
+                artifact.Key = String(runtime->Key.ToString());
+                artifact.StorageKind = ArtifactStorageKind::Generated;
+                artifact.IsExact = true;
+                hasRuntime = true;
+            }
+        }
+        Scripting::InvokeOnUpdate([assetID, artifact, hasRuntime]()
+        {
+            ApplyHotSwap(assetID, artifact, hasRuntime);
         });
     }
 }
@@ -321,6 +345,7 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     plan.BuildRequest.MemoryBytes = Math::Max<uint64>(1, prepared.MemoryEstimate);
     plan.BuildRequest.ProcessorConcurrencyLimit = 2;
+    plan.BuildRequest.AllowTerminalDeduplication = false;
     plan.BuildRequest.RebuildReason = TEXT("Graph canonical inputs changed or rebuild was requested.");
     for (const DeclaredArtifactOutput& output : prepared.Outputs)
         plan.BuildRequest.OutputKinds.Add(output.Kind);

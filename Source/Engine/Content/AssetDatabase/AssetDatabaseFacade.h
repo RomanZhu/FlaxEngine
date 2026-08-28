@@ -19,6 +19,8 @@ class Texture;
 #endif
 
 class BinaryAsset;
+class Asset;
+class Material;
 
 /// <summary>Managed-safe immutable asset database record projection.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
@@ -49,12 +51,24 @@ public:
     /// <summary>Emitted once per coherent native database batch.</summary>
     API_EVENT() static Delegate<uint64> DatabaseChanged;
 
+    /// <summary>Emitted on the main thread after a generated artifact has been published and hot-swapped.</summary>
+    API_EVENT() static Delegate<Guid> ArtifactPublished;
+
+    /// <summary>Notifies editor consumers that an exact generated artifact is ready.</summary>
+    static void NotifyArtifactPublished(const Guid& assetID);
+
     API_PROPERTY() static uint64 GetRevision();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
 
     /// <summary>Returns the canonical source path for an asset identifier, or an empty string when it is not registered.</summary>
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
+
+    /// <summary>Loads an asset for passive editor presentation without scheduling source or dependency builds.</summary>
+    API_FUNCTION() static Asset* LoadAssetPreview(const Guid& assetID);
+
+    /// <summary>Gets a stable cache version derived from the currently published artifact key.</summary>
+    API_FUNCTION() static Guid GetPublishedArtifactCacheID(const Guid& assetID, const StringView& outputKind);
 
     /// <summary>Loads a still-current disposable snapshot or performs one full scan.</summary>
     /// <returns>True if the scan infrastructure failed. Content diagnostics remain queryable.</returns>
@@ -111,6 +125,7 @@ public:
 
     /// <summary>Loads the exact Library thumbnail into a virtual texture, or returns null when unavailable.</summary>
     API_FUNCTION() static Texture* LoadTextureThumbnail(const Guid& assetID);
+
 #endif
 
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
@@ -144,6 +159,9 @@ public:
 
     /// <summary>Saves an edited authored compatibility asset back into its canonical text document.</summary>
     API_FUNCTION() static bool SaveAuthoredDocument(BinaryAsset* asset, const Guid& canonicalAssetID);
+
+    /// <summary>Saves edited material parameter defaults back into the canonical graph document.</summary>
+    API_FUNCTION() static bool SaveMaterialDocument(Material* asset, const Guid& canonicalAssetID);
 
     /// <summary>Writes particle-system timeline bytes back into the canonical text document.</summary>
     API_FUNCTION() static bool SaveParticleSystemTimeline(const StringView& path, const BytesContainer& timeline);

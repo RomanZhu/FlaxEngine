@@ -154,6 +154,26 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
 
     ArtifactInspection inspection;
     Inspect(_libraryRoot, record, request, inspection);
+    if (request.Policy == ArtifactResolvePolicy::PublishedOnly)
+    {
+        if (inspection.HasOutput && inspection.IsCompatible)
+        {
+            result = inspection.Artifact;
+            result.IsExact = false;
+            result.IsLastGood = true;
+            return false;
+        }
+        if (inspection.InvalidDiagnostic.Code != AssetPipelineDiagnosticCode::None)
+        {
+            diagnostic = inspection.InvalidDiagnostic;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+            return true;
+        }
+        const AssetPipelineDiagnosticCode code = inspection.HasOutput
+            ? AssetPipelineDiagnosticCode::ArtifactIncompatible
+            : AssetPipelineDiagnosticCode::ArtifactMissing;
+        return ResolveFail(diagnostic, code, request, record.SourcePath.Get(), TEXT("No compatible published artifact is available."));
+    }
     if (!IsBuildableStatus(record.Status))
     {
         if (request.Policy == ArtifactResolvePolicy::Interactive && inspection.HasOutput && inspection.IsCompatible)

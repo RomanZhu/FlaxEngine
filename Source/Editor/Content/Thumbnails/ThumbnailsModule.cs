@@ -16,6 +16,8 @@ namespace FlaxEditor.Content.Thumbnails
     /// <seealso cref="FlaxEditor.Modules.EditorModule" />
     public sealed class ThumbnailsModule : EditorModule, IContentItemOwner
     {
+        private const int CacheVersion = 5;
+
         /// <summary>
         /// The minimum required quality (in range [0;1]) for content streaming resources to be loaded in order to generate thumbnail for them.
         /// </summary>
@@ -33,7 +35,7 @@ namespace FlaxEditor.Content.Thumbnails
         internal ThumbnailsModule(Editor editor)
         : base(editor)
         {
-            _cacheFolder = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "Thumbnails");
+            _cacheFolder = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "Thumbnails", $"v{CacheVersion}");
             _lastFlushTime = DateTime.UtcNow;
         }
 
@@ -72,16 +74,18 @@ namespace FlaxEditor.Content.Thumbnails
                 Editor.LogWarning($"Cannot generate preview for item {item.Path}. Cannot find proxy for it.");
                 return;
             }
+            var cacheVersion = GetCacheVersion(assetItem, proxy);
 
             lock (_requests)
             {
                 // Check if element hasn't been already processed for generating preview
                 if (FindRequest(assetItem) == null)
                 {
-                    // Check each cache atlas
-                    for (int i = 0; i < _cache.Count; i++)
+                    // Check each cache atlas. A canonical entry without a published artifact
+                    // version cannot safely reuse persistent pixels.
+                    for (int i = 0; (!assetItem.IsCanonicalSource || cacheVersion != Guid.Empty) && i < _cache.Count; i++)
                     {
-                        var sprite = _cache[i].FindSlot(assetItem.ID);
+                        var sprite = _cache[i].FindSlotVersioned(assetItem.ID, cacheVersion);
                         if (sprite.IsValid)
                         {
                             // Found!
@@ -90,9 +94,17 @@ namespace FlaxEditor.Content.Thumbnails
                         }
                     }
 
-                    AddRequest(assetItem, proxy);
+                    AddRequest(assetItem, proxy, cacheVersion);
                 }
             }
+        }
+
+        private static Guid GetCacheVersion(AssetItem item, AssetProxy proxy)
+        {
+            if (!item.IsCanonicalSource)
+                return Guid.Empty;
+            var outputKind = !item.IsCanonicalSubAsset && proxy is TextureProxy ? "thumbnail" : "runtime";
+            return AssetDatabaseFacade.GetPublishedArtifactCacheID(item.ID, outputKind);
         }
 
         /// <summary>
@@ -110,15 +122,30 @@ namespace FlaxEditor.Content.Thumbnails
             if (assetItem == null)
                 return;
 
+            _pendingRequests.Remove(item);
+            DeletePreview(assetItem.ID);
+            item.Thumbnail = SpriteHandle.Invalid;
+        }
+
+        /// <summary>
+        /// Deletes an asset preview from the cache by identity.
+        /// </summary>
+        /// <param name="assetId">The asset identity.</param>
+        public void DeletePreview(Guid assetId)
+        {
             lock (_requests)
             {
                 // Cancel loading
-                RemoveRequest(assetItem);
+                for (int i = _requests.Count - 1; i >= 0; i--)
+                {
+                    if (_requests[i].Item.ID == assetId)
+                        RemoveRequest(_requests[i]);
+                }
 
                 // Find atlas with preview and remove it
                 for (int i = 0; i < _cache.Count; i++)
                 {
-                    if (_cache[i].ReleaseSlot(assetItem.ID))
+                    if (_cache[i].ReleaseSlot(assetId))
                         break;
                 }
             }
@@ -401,7 +428,7 @@ namespace FlaxEditor.Content.Thumbnails
                 }
 
                 // Copy backbuffer with rendered preview into atlas
-                SpriteHandle icon = atlas.OccupySlot(_output, request.Item.ID);
+                SpriteHandle icon = atlas.OccupySlotVersioned(_output, request.Item.ID, request.CacheVersion);
                 if (!icon.IsValid)
                 {
                     // Error
@@ -438,9 +465,9 @@ namespace FlaxEditor.Content.Thumbnails
             return null;
         }
 
-        private void AddRequest(AssetItem item, AssetProxy proxy)
+        private void AddRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion)
         {
-            var request = new ThumbnailRequest(item, proxy);
+            var request = new ThumbnailRequest(item, proxy, cacheVersion);
             _requests.Add(request);
             item.AddReference(this);
         }

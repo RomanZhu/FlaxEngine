@@ -82,11 +82,11 @@ bool TextureArtifactValidator::ValidateRuntime(const StringView& path, const Art
 
 bool TextureArtifactValidator::ValidateThumbnail(const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& diagnostic)
 {
-    if (output.FormatVersion != TextureProcessor::ThumbnailFormatVersion || output.Compatibility != "flax-texture-thumbnail-v1" ||
+    if (output.FormatVersion != TextureProcessor::ThumbnailFormatVersion || output.Compatibility != "flax-texture-thumbnail-v2" ||
         output.Size == 0 || output.Size > 16ull * 1024ull * 1024ull || output.Size != FileSystem::GetFileSize(path))
         return Invalid(diagnostic, TEXT("Texture thumbnail format metadata or size is invalid."));
     TextureData image;
-    if (TextureTool::ImportTexture(path, image) || image.Width < 1 || image.Height < 1 || image.Width > 256 || image.Height > 256)
+    if (TextureTool::ImportTexture(path, image, false) || image.Width < 1 || image.Height < 1 || image.Width > 256 || image.Height > 256)
         return Invalid(diagnostic, TEXT("Texture thumbnail is not a valid bounded PNG image."));
     diagnostic = AssetPipelineDiagnostic();
     return false;

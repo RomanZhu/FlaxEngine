@@ -18,6 +18,7 @@
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Build/AssetProcessorRegistry.h"
@@ -49,6 +50,8 @@ namespace
         AssetProcessorRegistration Registration;
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
+        Dictionary<Guid, AssetBuildRequestHandle> ThumbnailHandles;
+        Dictionary<Guid, ArtifactKey> ThumbnailPlans;
         Dictionary<Guid, ArtifactKey> Fingerprints;
         uint64 ForceGeneration = 0;
         bool Initialized = false;
@@ -136,8 +139,34 @@ namespace
         fingerprint = current ? *current : ArtifactKey();
     }
 
+    void ApplyTextureHotSwap(const Guid assetID, const ResolvedArtifact artifact, const bool hasRuntime)
+    {
+        if (hasRuntime)
+        {
+            Asset* asset = Content::GetAsset(assetID);
+            auto* texture = asset && asset->GetTypeName() == Texture::TypeName ? static_cast<Texture*>(asset) : nullptr;
+            if (texture && texture->IsLoading() && !texture->IsLoaded() && !texture->LastLoadFailed())
+            {
+                Scripting::InvokeOnUpdate([assetID, artifact, hasRuntime]()
+                {
+                    ApplyTextureHotSwap(assetID, artifact, hasRuntime);
+                });
+                return;
+            }
+            if (texture && (texture->IsLoaded() || texture->LastLoadFailed()) &&
+                !(texture->GetArtifactKey() == artifact.Key && texture->IsUsingExactArtifact() && texture->IsLoaded()))
+            {
+                const BinaryAssetStorageSwitchResult result = texture->SwitchStorage(artifact);
+                if (result != BinaryAssetStorageSwitchResult::Success)
+                    LOG(Error, "Failed to hot-swap texture artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
+            }
+        }
+        AssetDatabaseFacade::NotifyArtifactPublished(assetID);
+    }
+
     void QueueTextureHotSwap(const ArtifactManifest& manifest)
     {
+        const Guid assetID = manifest.AssetID;
         const ArtifactManifestOutput* runtime = nullptr;
         for (const ArtifactManifestOutput& output : manifest.Outputs)
         {
@@ -147,35 +176,28 @@ namespace
                 break;
             }
         }
-        if (!runtime)
-            return;
-
-        ArtifactStoragePath storagePath;
-        AssetPipelineDiagnostic diagnostic;
-        if (ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
-            return;
         ResolvedArtifact artifact;
-        artifact.AssetID = manifest.AssetID;
-        artifact.TypeName = Texture::TypeName;
-        artifact.StoragePath = storagePath;
-        artifact.OutputKind = TEXT("runtime");
-        artifact.Key = String(runtime->Key.ToString());
-        artifact.StorageKind = ArtifactStorageKind::Generated;
-        artifact.IsExact = true;
-        artifact.IsLastGood = false;
-        Scripting::InvokeOnUpdate([artifact]()
+        bool hasRuntime = false;
+        if (runtime)
         {
-            Asset* asset = Content::GetAsset(artifact.AssetID);
-            if (!asset || asset->GetTypeName() != Texture::TypeName)
-                return;
-            auto* texture = static_cast<Texture*>(asset);
-            if (!texture->IsLoaded() && !texture->LastLoadFailed())
-                return;
-            if (texture->GetArtifactKey() == artifact.Key && texture->IsUsingExactArtifact() && texture->IsLoaded())
-                return;
-            const BinaryAssetStorageSwitchResult result = texture->SwitchStorage(artifact);
-            if (result != BinaryAssetStorageSwitchResult::Success)
-                LOG(Error, "Failed to hot-swap texture artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
+            ArtifactStoragePath storagePath;
+            AssetPipelineDiagnostic diagnostic;
+            if (!ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
+            {
+                artifact.AssetID = assetID;
+                artifact.TypeName = Texture::TypeName;
+                artifact.StoragePath = storagePath;
+                artifact.OutputKind = TEXT("runtime");
+                artifact.Key = String(runtime->Key.ToString());
+                artifact.StorageKind = ArtifactStorageKind::Generated;
+                artifact.IsExact = true;
+                artifact.IsLastGood = false;
+                hasRuntime = true;
+            }
+        }
+        Scripting::InvokeOnUpdate([assetID, artifact, hasRuntime]()
+        {
+            ApplyTextureHotSwap(assetID, artifact, hasRuntime);
         });
     }
 
@@ -265,6 +287,22 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     auto execution = std::make_shared<TextureExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
+    DeclaredArtifactOutput selectedOutput;
+    bool hasSelectedOutput = false;
+    for (const DeclaredArtifactOutput& output : prepared.Outputs)
+    {
+        if (output.Kind == request.OutputKind)
+        {
+            selectedOutput = output;
+            hasSelectedOutput = true;
+            break;
+        }
+    }
+    if (!hasSelectedOutput)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, AssetPipelineDiagnosticStage::Prepare,
+            record.ID, TEXT("Texture processor does not declare the requested output kind."));
+    execution->Prepared.Outputs.Clear();
+    execution->Prepared.Outputs.Add(selectedOutput);
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
         if (dependency.Kind != AssetDependencyKind::SourceFile)
@@ -286,7 +324,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     jobBuilder.AddUInt64(StringAnsiView("database-revision"), prepared.DatabaseRevision);
     jobBuilder.AddKey(StringAnsiView("prepared-input"), prepared.InputFingerprint);
     jobBuilder.AddKey(StringAnsiView("manifest-target"), request.Target.BuildKey(ArtifactTargetDimension::All));
-    for (const DeclaredArtifactOutput& output : prepared.Outputs)
+    for (const DeclaredArtifactOutput& output : execution->Prepared.Outputs)
     {
         ArtifactPublicationOutputPlan outputPlan;
         outputPlan.Kind = output.Kind;
@@ -306,8 +344,9 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     plan.BuildRequest.MemoryBytes = Math::Max<uint64>(1, prepared.MemoryEstimate);
     plan.BuildRequest.ProcessorConcurrencyLimit = 2;
+    plan.BuildRequest.AllowTerminalDeduplication = false;
     plan.BuildRequest.RebuildReason = TEXT("Texture canonical inputs changed or rebuild was requested.");
-    for (const DeclaredArtifactOutput& output : prepared.Outputs)
+    for (const DeclaredArtifactOutput& output : execution->Prepared.Outputs)
         plan.BuildRequest.OutputKinds.Add(output.Kind);
 
     plan.BuildRequest.Build = [execution](const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& buildDiagnostic)
@@ -407,6 +446,57 @@ bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, Asset
     return false;
 }
 
+bool TexturePipelineService::RequestThumbnailBuild(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
+{
+    AssetBuildService* builds = GetBuildService(diagnostic);
+    if (!builds)
+        return true;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(assetID, record))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+            assetID, TEXT("Texture asset is not registered."));
+
+    ArtifactRequest request;
+    request.AssetID = assetID;
+    request.Target = GetHostTarget();
+    request.OutputKind = "thumbnail";
+    request.RequiredCompatibility = "flax-texture-thumbnail-v2";
+    request.Policy = ArtifactResolvePolicy::Exact;
+    ArtifactResolutionPlan plan;
+    if (CreatePlan(record, request, plan, diagnostic))
+        return true;
+
+    TexturePipelineState& state = State();
+    {
+        std::lock_guard<std::mutex> lock(state.Locker);
+        const ArtifactKey* existingPlan = state.ThumbnailPlans.TryGet(assetID);
+        const AssetBuildRequestHandle* existingHandle = state.ThumbnailHandles.TryGet(assetID);
+        if (existingPlan && existingHandle && *existingPlan == plan.BuildRequest.Key.ExactPlan && existingHandle->IsValid())
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+    }
+
+    const AssetBuildRequestHandle handle = builds->Request(plan.BuildRequest);
+    if (!handle.IsValid())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+            assetID, TEXT("Texture thumbnail build request was not accepted."));
+    {
+        std::lock_guard<std::mutex> lock(state.Locker);
+        state.ThumbnailPlans[assetID] = plan.BuildRequest.Key.ExactPlan;
+        state.ThumbnailHandles[assetID] = handle;
+    }
+    AssetBuildJobResult immediate;
+    if (handle.TryGetResult(immediate) && immediate.Status == AssetBuildJobStatus::Failed)
+    {
+        diagnostic = immediate.Diagnostic;
+        return true;
+    }
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
 AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
 {
     AssetBuildRequestHandle handle;
@@ -414,6 +504,28 @@ AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, Asset
         TexturePipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
         const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID);
+        if (!value)
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            return AssetBuildJobStatus::Invalid;
+        }
+        handle = *value;
+    }
+    AssetBuildJobResult result;
+    if (handle.TryGetResult(result))
+        diagnostic = result.Diagnostic;
+    else
+        diagnostic = AssetPipelineDiagnostic();
+    return handle.GetStatus();
+}
+
+AssetBuildJobStatus TexturePipelineService::GetThumbnailStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
+{
+    AssetBuildRequestHandle handle;
+    {
+        TexturePipelineState& state = State();
+        std::lock_guard<std::mutex> lock(state.Locker);
+        const AssetBuildRequestHandle* value = state.ThumbnailHandles.TryGet(assetID);
         if (!value)
         {
             diagnostic = AssetPipelineDiagnostic();
@@ -446,6 +558,8 @@ void TexturePipelineService::Shutdown()
         if (!state.Initialized)
             return;
         state.Handles.Clear();
+        state.ThumbnailHandles.Clear();
+        state.ThumbnailPlans.Clear();
         state.Fingerprints.Clear();
         builds = MoveTemp(state.Builds);
         registration = MoveTemp(state.Registration);

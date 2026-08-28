@@ -226,7 +226,7 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
         request.ProcessorConcurrencyLimit < 1)
         return fail(AssetPipelineDiagnosticCode::ResourceLimitExceeded, TEXT("Asset build request identity, callback, or resource declaration is invalid."));
 
-    const auto existing = _impl->Jobs.find(request.Key);
+    auto existing = _impl->Jobs.find(request.Key);
     if (existing != _impl->Jobs.end())
     {
         const auto& state = existing->second;
@@ -242,9 +242,16 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
                 state->Request.KeyComponents[i].Type == request.KeyComponents[i].Type && state->Request.KeyComponents[i].Value == request.KeyComponents[i].Value;
         if (!samePlan)
             return fail(AssetPipelineDiagnosticCode::BuildFailed, TEXT("An exact build key was reused for a different build plan."));
-        _impl->Metrics.DeduplicationHits++;
-        state->Requesters.insert(requester);
-        return AssetBuildRequestHandle(state, requester);
+        if (!request.AllowTerminalDeduplication && IsTerminal(state->Status.load(std::memory_order_acquire)))
+        {
+            _impl->Jobs.erase(existing);
+        }
+        else
+        {
+            _impl->Metrics.DeduplicationHits++;
+            state->Requesters.insert(requester);
+            return AssetBuildRequestHandle(state, requester);
+        }
     }
 
     auto state = std::make_shared<AssetBuildSharedState>();

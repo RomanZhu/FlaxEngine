@@ -183,6 +183,14 @@ namespace FlaxEditor.Content
         }
 
         /// <summary>
+        /// Loads the asset for passive editor presentation without scheduling canonical builds.
+        /// </summary>
+        public Asset LoadPreviewAsync()
+        {
+            return IsCanonicalSource ? AssetDatabaseFacade.LoadAssetPreview(ID) : LoadAsync();
+        }
+
+        /// <summary>
         /// Reloads the asset (if it's loaded or failed to load).
         /// </summary>
         public void Reload()

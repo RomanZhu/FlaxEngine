@@ -96,7 +96,7 @@ namespace FlaxEditor.Windows
                 if (assetItem != null)
                     continue;
 
-                var candidateAsset = candidateItem.LoadAsync();
+                var candidateAsset = candidateItem.LoadPreviewAsync();
                 if (SupportsAssetPreview(candidateAsset) && !candidateAsset.LastLoadFailed)
                 {
                     assetItem = candidateItem;

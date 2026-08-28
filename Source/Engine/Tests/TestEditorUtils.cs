@@ -621,6 +621,163 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestContentTransactionStartupRecoveryRebuildsMetadataOnlyImport()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
+            var journalRoot = Path.Combine(root, "Journal");
+            var source = Path.Combine(root, "Model.glb");
+            var metadata = source + ".meta";
+            Directory.CreateDirectory(root);
+            File.WriteAllText(source, "source");
+            try
+            {
+                var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
+                plan.Entries.Add(new ContentMutationEntry(source, metadata, ContentMutationPathRole.MetadataSidecar, false));
+                ContentMutationTransaction.FaultInjector = point => point == "after-register-in-place" ? new IOException("Injected process interruption") : null;
+                var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
+                {
+                    new ContentMutationStep("register-in-place", new[] { 0 }, () =>
+                    {
+                        File.WriteAllText(metadata, "metadata");
+                        return ContentMutationResult.Success(source, metadata);
+                    }, () => false, () => File.Exists(metadata))
+                });
+
+                Assert.IsTrue(result.RequiresRecovery);
+                ContentMutationTransaction.FaultInjector = null;
+                var recoveredSources = new List<string>();
+                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(recoveredSources, journalRoot));
+                Assert.AreEqual(new[] { StringUtils.NormalizePath(source) }, recoveredSources);
+                Assert.AreEqual("source", File.ReadAllText(source));
+                Assert.AreEqual("metadata", File.ReadAllText(metadata));
+                Assert.IsFalse(Directory.EnumerateFiles(journalRoot, "*.json").Any());
+            }
+            finally
+            {
+                ContentMutationTransaction.FaultInjector = null;
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
+        public void TestContentTransactionStartupRecoveryCleansPartialMetadataBatch()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
+            var journalRoot = Path.Combine(root, "Journal");
+            var sourceA = Path.Combine(root, "A.glb");
+            var sourceB = Path.Combine(root, "B.glb");
+            var stagedA = Path.Combine(root, "A.staged.meta");
+            var stagedB = Path.Combine(root, "B.staged.meta");
+            Directory.CreateDirectory(root);
+            File.WriteAllText(sourceA, "a");
+            File.WriteAllText(sourceB, "b");
+            File.WriteAllText(stagedA, "meta-a");
+            File.WriteAllText(stagedB, "meta-b");
+            try
+            {
+                var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
+                plan.Entries.Add(new ContentMutationEntry(stagedA, sourceA + ".meta", ContentMutationPathRole.MetadataSidecar, false));
+                plan.Entries.Add(new ContentMutationEntry(stagedB, sourceB + ".meta", ContentMutationPathRole.MetadataSidecar, false));
+                ContentMutationTransaction.FaultInjector = point => point == "after-commit-a" ? new IOException("Injected process interruption") : null;
+                var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
+                {
+                    new ContentMutationStep("commit-a", new[] { 0 }, () =>
+                    {
+                        File.Move(stagedA, sourceA + ".meta");
+                        return ContentMutationResult.Success(stagedA, sourceA + ".meta");
+                    }, () => false),
+                    new ContentMutationStep("commit-b", new[] { 1 }, () => ContentMutationResult.Success(stagedB, sourceB + ".meta"), () => false)
+                });
+
+                Assert.IsTrue(result.RequiresRecovery);
+                ContentMutationTransaction.FaultInjector = null;
+                var recoveredSources = new List<string>();
+                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(recoveredSources, journalRoot));
+                Assert.AreEqual(new[] { StringUtils.NormalizePath(sourceA) }, recoveredSources);
+                Assert.IsTrue(File.Exists(sourceA + ".meta"));
+                Assert.IsFalse(File.Exists(stagedA));
+                Assert.IsFalse(File.Exists(stagedB));
+            }
+            finally
+            {
+                ContentMutationTransaction.FaultInjector = null;
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
+        public void TestContentTransactionStartupRecoveryRemovesInterruptedImportSidecar()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
+            var journalRoot = Path.Combine(root, "Journal");
+            var source = Path.Combine(root, "Source.glb");
+            var output = Path.Combine(root, "Imported.glb");
+            var metadata = output + ".meta";
+            Directory.CreateDirectory(root);
+            File.WriteAllText(source, "source");
+            try
+            {
+                var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
+                plan.Entries.Add(new ContentMutationEntry(source, output, ContentMutationPathRole.Main, false));
+                plan.Entries.Add(new ContentMutationEntry(output, metadata, ContentMutationPathRole.MetadataSidecar, false) { SourceProducedByTransaction = true });
+                ContentMutationTransaction.FaultInjector = point => point == "after-metadata" ? new IOException("Injected process interruption") : null;
+                var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
+                {
+                    new ContentMutationStep("output", new[] { 0 }, () =>
+                    {
+                        File.Copy(source, output);
+                        return ContentMutationResult.Success(source, output);
+                    }, () => false),
+                    new ContentMutationStep("metadata", new[] { 1 }, () =>
+                    {
+                        File.WriteAllText(metadata, "metadata");
+                        return ContentMutationResult.Success(output, metadata);
+                    }, () => false)
+                });
+
+                Assert.IsTrue(result.RequiresRecovery);
+                ContentMutationTransaction.FaultInjector = null;
+                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(journalRoot));
+                Assert.AreEqual("source", File.ReadAllText(source));
+                Assert.IsFalse(File.Exists(output));
+                Assert.IsFalse(File.Exists(metadata));
+            }
+            finally
+            {
+                ContentMutationTransaction.FaultInjector = null;
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
+        public void TestContentTransactionStartupRecoveryCompletesCleanupJournal()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
+            var journalRoot = Path.Combine(root, "Journal");
+            var staged = Path.Combine(root, "Trash", "Asset.flax");
+            var original = Path.Combine(root, "Content", "Asset.flax");
+            Directory.CreateDirectory(Path.GetDirectoryName(staged));
+            Directory.CreateDirectory(Path.GetDirectoryName(original));
+            File.WriteAllText(staged, "staged");
+            File.WriteAllText(original, "current");
+            try
+            {
+                var plan = new ContentMutationPlan(ContentMutationOperationKind.Cleanup);
+                plan.Entries.Add(new ContentMutationEntry(staged, original, ContentMutationPathRole.UndoTrash, false));
+                Assert.IsNotNull(ContentMutationTransaction.PreserveRecoveryRecord(plan, "Injected cleanup failure.", journalRoot));
+
+                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(journalRoot));
+                Assert.IsFalse(File.Exists(staged));
+                Assert.AreEqual("current", File.ReadAllText(original));
+                Assert.IsFalse(Directory.EnumerateFiles(journalRoot, "*.json").Any());
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
         public void TestContentCreateTransactionDoesNotRequireSourcePath()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));

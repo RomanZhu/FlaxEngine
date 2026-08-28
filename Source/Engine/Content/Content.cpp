@@ -87,6 +87,7 @@ namespace
 
     // Loading assets
     THREADLOCAL LoadingThread* ThisLoadThread = nullptr;
+    THREADLOCAL int32 PassiveLoadDepth = 0;
     LoadingThread* MainLoadThread = nullptr;
 #if PLATFORM_THREADS_LIMIT > 1
     Array<LoadingThread*> LoadThreads;
@@ -2294,11 +2295,36 @@ bool Content::IsAssetTypeIdInvalid(const ScriptingTypeHandle& type, const Script
     return true;
 }
 
+void Content::BeginPassiveLoad()
+{
+    PassiveLoadDepth++;
+}
+
+void Content::EndPassiveLoad()
+{
+    ASSERT(PassiveLoadDepth > 0);
+    PassiveLoadDepth--;
+}
+
+bool Content::IsPassiveLoad()
+{
+    return PassiveLoadDepth > 0;
+}
+
+Asset* Content::LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type)
+{
+    BeginPassiveLoad();
+    Asset* result = LoadAsync(id, type);
+    EndPassiveLoad();
+    return result;
+}
+
 Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
 {
     if (!id.IsValid())
         return nullptr;
     PROFILE_MEM(Content);
+    const bool passiveLoad = IsPassiveLoad();
 
     // Check if asset has been already loaded
     Asset* result = nullptr;
@@ -2367,7 +2393,7 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
             request.AssetID = id;
             request.Target = ArtifactResolver::Get().GetDefaultTarget();
             request.OutputKind = "runtime";
-            request.Policy = ArtifactResolvePolicy::Interactive;
+            request.Policy = passiveLoad ? ArtifactResolvePolicy::PublishedOnly : ArtifactResolvePolicy::Interactive;
             AssetPipelineDiagnostic diagnostic;
             if (pipelineRecord.ProcessorID == TEXT("Flax.Texture"))
                 request.RequiredCompatibility = "flax-texture-v4";
@@ -2395,7 +2421,8 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
             }
             else if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))
             {
-                LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, id, diagnostic.SourcePath);
+                if (!passiveLoad)
+                    LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, id, diagnostic.SourcePath);
                 LOAD_FAILED();
             }
             assetInfo = loadLocation.Info;
@@ -2435,6 +2462,7 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
         LOG(Error, "Cannot create asset object. Info: {0}", assetInfo.ToString());
         LOAD_FAILED();
     }
+    result->_isPassiveLoad = passiveLoad;
     ASSERT(result->GetID() == id);
 #if ASSETS_LOADING_EXTRA_VERIFICATION
     if (IsAssetTypeIdInvalid(type, result->GetTypeHandle()) && !result->Is(type))
