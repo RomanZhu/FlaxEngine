@@ -94,7 +94,15 @@ bool PreviewsCache::IsReady() const
 
 SpriteHandle PreviewsCache::FindSlot(const Guid& id)
 {
-    return FindSlotVersioned(id, Guid::Empty);
+    if (WaitForLoaded())
+        return SpriteHandle::Invalid;
+    const int32 index = _assets.Find(id);
+    if (index != INVALID_INDEX)
+    {
+        const String spriteName = StringUtils::ToString(index);
+        return FindSprite(spriteName);
+    }
+    return SpriteHandle::Invalid;
 }
 
 SpriteHandle PreviewsCache::FindSlotVersioned(const Guid& id, const Guid& version)

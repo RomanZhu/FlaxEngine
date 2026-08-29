@@ -78,24 +78,35 @@ namespace FlaxEditor.Content.Thumbnails
 
             lock (_requests)
             {
-                // Check if element hasn't been already processed for generating preview
-                if (FindRequest(assetItem) == null)
+                var existingRequest = FindRequest(assetItem);
+                if (existingRequest != null)
                 {
-                    // Check each cache atlas. A canonical entry without a published artifact
-                    // version cannot safely reuse persistent pixels.
-                    for (int i = 0; (!assetItem.IsCanonicalSource || cacheVersion != Guid.Empty) && i < _cache.Count; i++)
+                    if (existingRequest.CacheVersion == cacheVersion || cacheVersion == Guid.Empty)
+                        return;
+                    RemoveRequest(existingRequest);
+                }
+
+                SpriteHandle staleThumbnail = SpriteHandle.Invalid;
+                for (int i = 0; i < _cache.Count; i++)
+                {
+                    if (!assetItem.IsCanonicalSource || cacheVersion != Guid.Empty)
                     {
                         var sprite = _cache[i].FindSlotVersioned(assetItem.ID, cacheVersion);
                         if (sprite.IsValid)
                         {
-                            // Found!
                             item.Thumbnail = sprite;
                             return;
                         }
                     }
 
-                    AddRequest(assetItem, proxy, cacheVersion);
+                    if (!staleThumbnail.IsValid)
+                        staleThumbnail = _cache[i].FindSlot(assetItem.ID);
                 }
+
+                // Keep the previous pixels visible while a newer artifact is rendered.
+                if (staleThumbnail.IsValid)
+                    item.Thumbnail = staleThumbnail;
+                AddRequest(assetItem, proxy, cacheVersion);
             }
         }
 
@@ -382,7 +393,7 @@ namespace FlaxEditor.Content.Thumbnails
                 }
 
                 // Find atlas with an free slot
-                var atlas = GetValidAtlas();
+                var atlas = GetValidAtlas(request.Item.ID);
                 if (atlas == null)
                 {
                     // Error
@@ -561,10 +572,10 @@ namespace FlaxEditor.Content.Thumbnails
 
         private PreviewsCache GetValidAtlas()
         {
-            // Check if has no free slots
             for (int i = 0; i < _cache.Count; i++)
             {
-                if (_cache[i].HasFreeSlot)
+                // A newly created atlas has no slot metadata until it finishes loading.
+                if (!_cache[i].IsReady || _cache[i].HasFreeSlot)
                 {
                     return _cache[i];
                 }
@@ -572,6 +583,17 @@ namespace FlaxEditor.Content.Thumbnails
 
             // Create new atlas
             return CreateAtlas();
+        }
+
+        private PreviewsCache GetValidAtlas(Guid assetId)
+        {
+            // Reuse the existing slot so its sprite stays valid during regeneration.
+            for (int i = 0; i < _cache.Count; i++)
+            {
+                if (_cache[i].FindSlot(assetId).IsValid)
+                    return _cache[i];
+            }
+            return GetValidAtlas();
         }
 
         #endregion

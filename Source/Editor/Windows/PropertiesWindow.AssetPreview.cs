@@ -96,7 +96,8 @@ namespace FlaxEditor.Windows
                 if (assetItem != null)
                     continue;
 
-                var candidateAsset = candidateItem.LoadPreviewAsync();
+                // Inspector selection is explicit, so ensure the preview artifact is available.
+                var candidateAsset = candidateItem.LoadAsync();
                 if (SupportsAssetPreview(candidateAsset) && !candidateAsset.LastLoadFailed)
                 {
                     assetItem = candidateItem;
@@ -109,6 +110,9 @@ namespace FlaxEditor.Windows
                 ClearAssetPreview();
                 return;
             }
+
+            if (!asset.IsLoaded && !_waitingForContentAssets.Contains(asset))
+                _waitingForContentAssets.Add(asset);
 
             if (_assetPreviewAsset != asset)
             {

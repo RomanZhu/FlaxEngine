@@ -272,7 +272,10 @@ namespace FlaxEditor.Modules
         private void OnArtifactPublished(Guid assetId)
         {
             if (Find(assetId) is AssetItem item)
-                item.RefreshThumbnail();
+            {
+                if (item.ReferencesCount > 0)
+                    Editor.Thumbnails.RequestPreview(item);
+            }
             else
                 Editor.Thumbnails.DeletePreview(assetId);
         }

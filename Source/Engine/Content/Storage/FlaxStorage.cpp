@@ -1492,10 +1492,6 @@ void FlaxStorage::UnlockFileAccess()
 
 bool FlaxStorage::CloseFileHandles()
 {
-    // Guard the whole process so if new thread wants to lock the chunks will need to wait for this to end
-    Platform::InterlockedIncrement(&_isUnloadingData);
-    SCOPE_EXIT{ Platform::InterlockedDecrement(&_isUnloadingData); };
-
     if (Platform::AtomicRead(&_chunksLock) == 0 && Platform::AtomicRead(&_files) == 0)
         return false; // Early out when no files are opened
     PROFILE_CPU();
@@ -1523,6 +1519,12 @@ bool FlaxStorage::CloseFileHandles()
             }
         }
     }
+
+    // Block new chunk access only after canceling streaming because cancellation takes the asset lock,
+    // which can already be held by a loading task waiting to lock these chunks.
+    Platform::InterlockedIncrement(&_isUnloadingData);
+    SCOPE_EXIT{ Platform::InterlockedDecrement(&_isUnloadingData); };
+
     // Explicit asset moves should tolerate longer-running thumbnail/streaming reads.
     waitTime = 1000;
     while (Platform::AtomicRead(&_chunksLock) != 0 && waitTime-- > 0)
