@@ -188,7 +188,7 @@ public:
     /// <param name="path">The file path.</param>
     /// <param name="textureData">The output data.</param>
     /// <returns>True if fails, otherwise false.</returns>
-    static bool ImportTexture(const StringView& path, TextureData& textureData);
+    static bool ImportTexture(const StringView& path, TextureData& textureData, bool logProgress = true);
 
     /// <summary>
     /// Imports the texture.
@@ -198,7 +198,7 @@ public:
     /// <param name="options">The import options.</param>
     /// <param name="errorMsg">The error message container.</param>
     /// <returns>True if fails, otherwise false.</returns>
-    static bool ImportTexture(const StringView& path, TextureData& textureData, Options options, String& errorMsg);
+    static bool ImportTexture(const StringView& path, TextureData& textureData, Options options, String& errorMsg, bool logProgress = true);
 
     /// <summary>
     /// Exports the texture.
@@ -206,7 +206,7 @@ public:
     /// <param name="path">The output file path.</param>
     /// <param name="textureData">The output data.</param>
     /// <returns>True if fails, otherwise false.</returns>
-    static bool ExportTexture(const StringView& path, const TextureData& textureData);
+    static bool ExportTexture(const StringView& path, const TextureData& textureData, bool logProgress = true);
 
     /// <summary>
     /// Converts the specified source texture data into another format.

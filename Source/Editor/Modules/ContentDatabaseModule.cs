@@ -228,6 +228,29 @@ namespace FlaxEditor.Modules
             }
         }
 
+        private void QueueRecoveredCanonicalImports(List<string> sourcePaths)
+        {
+            for (int i = 0; i < sourcePaths.Count; i++)
+            {
+                var sourcePath = ContentMutationPathUtils.Normalize(sourcePaths[i]);
+                if (!_sourceAssetRecords.TryGetValue(sourcePath, out var record) || record.Status != AssetRecordStatus.Ready || !CanBuildCanonicalRecord(record))
+                {
+                    Editor.LogWarning($"Recovered imported source '{sourcePath}' requires metadata reconciliation before it can be rebuilt.");
+                    continue;
+                }
+
+                var failed = IsTextureRecord(record)
+                    ? AssetDatabaseFacade.BuildTexture(record.ID)
+                    : IsModelRecord(record)
+                        ? AssetDatabaseFacade.BuildModel(record.ID)
+                        : AssetDatabaseFacade.BuildGraph(record.ID);
+                if (failed)
+                    Editor.LogError($"Cannot queue recovered canonical asset rebuild: {sourcePath}");
+                else
+                    Editor.Log($"Recovered interrupted import and queued exact artifact resolution: {sourcePath}");
+            }
+        }
+
         private void OnAssetDatabaseChanged(ulong revision)
         {
             RefreshAssetDatabaseRecords(revision);
@@ -246,6 +269,17 @@ namespace FlaxEditor.Modules
                     }
                 }
             }
+        }
+
+        private void OnArtifactPublished(Guid assetId)
+        {
+            if (Find(assetId) is AssetItem item)
+            {
+                if (item.ReferencesCount > 0)
+                    Editor.Thumbnails.RequestPreview(item);
+            }
+            else
+                Editor.Thumbnails.DeletePreview(assetId);
         }
 
         /// <summary>Gets the immutable canonical database record for an asset identity.</summary>
@@ -2039,7 +2073,8 @@ namespace FlaxEditor.Modules
             FlaxEngine.Content.AssetDisposing += OnContentAssetDisposing;
 
             // Recover or surface any mutation that was interrupted before the previous Editor process exited.
-            var recoveryRequired = ContentMutationTransaction.RecoverPendingTransactions();
+            var recoveredImportSources = new List<string>();
+            var recoveryRequired = ContentMutationTransaction.RecoverPendingTransactions(recoveredImportSources);
             if (recoveryRequired != 0)
                 Editor.LogError($"{recoveryRequired} interrupted Content transaction(s) require manual recovery. See the log for exact paths.");
 
@@ -2047,9 +2082,11 @@ namespace FlaxEditor.Modules
             if (_useNewAssetDatabase)
             {
                 AssetDatabaseFacade.DatabaseChanged += OnAssetDatabaseChanged;
+                AssetDatabaseFacade.ArtifactPublished += OnArtifactPublished;
                 if (AssetDatabaseFacade.LoadOrScan(true))
                     Editor.LogError("Failed to initialize the canonical asset database. See asset pipeline diagnostics.");
                 RefreshAssetDatabaseRecords(AssetDatabaseFacade.Revision);
+                QueueRecoveredCanonicalImports(recoveredImportSources);
                 QueueMissingMetadataRegistrations();
             }
 
@@ -2328,6 +2365,42 @@ namespace FlaxEditor.Modules
             }
         }
 
+        private bool TrySuppressSelfAuthoredDiskChange(string path, DateTime now)
+        {
+            if (!_selfAuthoredAssetDiskChanges.TryGetValue(path, out var write))
+                return false;
+            FileInfo fileInfo = null;
+            try
+            {
+                if (File.Exists(path))
+                    fileInfo = new FileInfo(path);
+            }
+            catch
+            {
+                // A locked or replaced file is an external change and must not be suppressed.
+            }
+            var exactSelfWrite = false;
+            if (now <= write.ExpiresAtUtc && fileInfo != null && fileInfo.LastWriteTimeUtc == write.LastWriteTimeUtc && fileInfo.Length == write.Length)
+            {
+                try
+                {
+                    exactSelfWrite = string.Equals(ComputeAssetDiskHash(path), write.ContentHash, StringComparison.Ordinal);
+                }
+                catch
+                {
+                    // A locked or replaced file is an external change and must not be suppressed.
+                }
+            }
+            if (exactSelfWrite)
+            {
+                ContentMutationDiagnostics.Log("watcher.self-save-suppressed", $"path='{path}'; generation={write.Generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}");
+                return true;
+            }
+            ContentMutationDiagnostics.Log("watcher.self-save-mismatch", $"path='{path}'; generation={write.Generation}; exists={fileInfo != null}; expectedLength={write.Length}; actualLength={fileInfo?.Length}; expectedWriteTime={write.LastWriteTimeUtc:O}; actualWriteTime={fileInfo?.LastWriteTimeUtc:O}");
+            _selfAuthoredAssetDiskChanges.Remove(path);
+            return false;
+        }
+
         internal void OnDirectoryEvent(MainContentFolderTreeNode node, FileSystemEventArgs e)
         {
             // Ensure to be ready for external events
@@ -2347,7 +2420,13 @@ namespace FlaxEditor.Modules
             case WatcherChangeTypes.Deleted:
             case WatcherChangeTypes.Renamed:
             {
-                QueueAssetDiskChange(e.FullPath, e.ChangeType == WatcherChangeTypes.Renamed);
+                var path = StringUtils.NormalizePath(e.FullPath);
+                lock (_assetDiskChangesLock)
+                {
+                    if (e.ChangeType != WatcherChangeTypes.Deleted && TrySuppressSelfAuthoredDiskChange(path, DateTime.UtcNow))
+                        break;
+                    QueueAssetDiskChange(path, e.ChangeType == WatcherChangeTypes.Renamed);
+                }
                 if (e is RenamedEventArgs renamed)
                     QueueAssetDiskChange(renamed.OldFullPath, true);
                 lock (_dirtyNodes)
@@ -2360,40 +2439,10 @@ namespace FlaxEditor.Modules
             {
                 var path = StringUtils.NormalizePath(e.FullPath);
                 var now = DateTime.UtcNow;
-                FileInfo fileInfo = null;
-                try
-                {
-                    if (File.Exists(path))
-                        fileInfo = new FileInfo(path);
-                }
-                catch
-                {
-                    // The file can still be locked or replaced while its watcher event is being delivered.
-                }
                 lock (_assetDiskChangesLock)
                 {
-                    if (_selfAuthoredAssetDiskChanges.TryGetValue(path, out var write))
-                    {
-                        var exactSelfWrite = false;
-                        if (now <= write.ExpiresAtUtc && fileInfo != null && fileInfo.LastWriteTimeUtc == write.LastWriteTimeUtc && fileInfo.Length == write.Length)
-                        {
-                            try
-                            {
-                                exactSelfWrite = string.Equals(ComputeAssetDiskHash(path), write.ContentHash, StringComparison.Ordinal);
-                            }
-                            catch
-                            {
-                                // A locked or replaced file is an external change and must not be suppressed.
-                            }
-                        }
-                        if (exactSelfWrite)
-                        {
-                            ContentMutationDiagnostics.Log("watcher.self-save-suppressed", $"path='{path}'; generation={write.Generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}");
-                            break;
-                        }
-                        ContentMutationDiagnostics.Log("watcher.self-save-mismatch", $"path='{path}'; generation={write.Generation}; exists={fileInfo != null}; expectedLength={write.Length}; actualLength={fileInfo?.Length}; expectedWriteTime={write.LastWriteTimeUtc:O}; actualWriteTime={fileInfo?.LastWriteTimeUtc:O}");
-                        _selfAuthoredAssetDiskChanges.Remove(path);
-                    }
+                    if (TrySuppressSelfAuthoredDiskChange(path, now))
+                        break;
                     QueueAssetDiskChange(path, false);
                     var saveInProgress = _assetSaves.TryGetValue(path, out var saveState);
                     ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}; saveInProgress={saveInProgress}; generation={(saveInProgress ? saveState.Generation : 0)}; depth={(saveInProgress ? saveState.Depth : 0)}");
@@ -2434,6 +2483,18 @@ namespace FlaxEditor.Modules
         {
             if (asset == null)
                 throw new ArgumentNullException(nameof(asset));
+            if (TryGetAssetDatabaseRecord(asset.ID, out var record) && record.SourceKind == AssetSourceKind.TextDocument)
+            {
+                if (asset is Material or MaterialInstance or SkeletonMask or SceneAnimation or ParticleSystem)
+                {
+                    using var canonicalScope = TrackAssetSave(record.SourcePath);
+                    var canonicalFailed = asset is Material material
+                        ? AssetDatabaseFacade.SaveMaterialDocument(material, asset.ID)
+                        : AssetDatabaseFacade.SaveAuthoredDocument((BinaryAsset)asset, asset.ID);
+                    canonicalScope.Complete(!canonicalFailed);
+                    return canonicalFailed;
+                }
+            }
             if (!ConvertedTypePolicy.AllowsLegacyBinaryAuthoring(asset.GetType().FullName, asset.Path))
             {
                 Editor.LogError("Legacy .flax saving is disabled for converted asset types. Migrate the asset before editing it.");
@@ -2498,6 +2559,14 @@ namespace FlaxEditor.Modules
                     // A watcher event can race the save completion. Remove anything queued during the write,
                     // then ignore trailing notifications only while the file still matches this exact save.
                     _pendingAssetDiskChanges.Remove(path);
+                    var sourcePath = GetCanonicalSourcePathForDiskEvent(path);
+                    _pendingTextureBuildSources.Remove(sourcePath);
+                    if (_sourceAssetRecords.TryGetValue(sourcePath, out var record))
+                    {
+                        _pendingTextureBuildIds.Remove(record.ID);
+                        _renameOnlyTextureIds.Remove(record.ID);
+                        _textureRecordsBeforeWatcherScan.Remove(record.ID);
+                    }
                     _selfAuthoredAssetDiskChanges[path] = write;
                 }
                 ContentMutationDiagnostics.Log("save.self-write-recorded", $"path='{path}'; generation={generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}; expires={write.ExpiresAtUtc:O}");
@@ -2652,7 +2721,10 @@ namespace FlaxEditor.Modules
         {
             FlaxEngine.Content.AssetDisposing -= OnContentAssetDisposing;
             if (_useNewAssetDatabase)
+            {
                 AssetDatabaseFacade.DatabaseChanged -= OnAssetDatabaseChanged;
+                AssetDatabaseFacade.ArtifactPublished -= OnArtifactPublished;
+            }
             ScriptsBuilder.ScriptsReload -= OnScriptsReload;
             ScriptsBuilder.ScriptsReloadEnd -= OnScriptsReloadEnd;
 

@@ -13,6 +13,8 @@
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Assets/Texture.h"
 #include "Engine/Graphics/Textures/Types.h"
+#include "Engine/Graphics/Textures/TextureData.h"
+#include "Engine/Tools/TextureTool/TextureTool.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
@@ -78,6 +80,30 @@ namespace
         Array<byte> result;
         result.Add(bytes, ARRAY_COUNT(bytes));
         return result;
+    }
+
+    bool WriteMidtonePng(const StringView& path)
+    {
+        TextureData data;
+        data.Width = 2;
+        data.Height = 1;
+        data.Depth = 1;
+        data.Format = PixelFormat::R8G8B8A8_UNorm;
+        data.Items.Resize(1);
+        data.Items[0].Mips.Resize(1);
+        TextureMipData* mip = data.GetData(0, 0);
+        mip->RowPitch = data.Width * 4;
+        mip->DepthPitch = mip->RowPitch;
+        mip->Lines = data.Height;
+        mip->Data.Allocate(mip->DepthPitch);
+        for (int32 i = 0; i < data.Width; i++)
+        {
+            mip->Data[i * 4 + 0] = 64;
+            mip->Data[i * 4 + 1] = 64;
+            mip->Data[i * 4 + 2] = 64;
+            mip->Data[i * 4 + 3] = 255;
+        }
+        return TextureTool::ExportTexture(path, data);
     }
 
     Array<byte> MakeTga(uint16 width, uint16 height)
@@ -379,8 +405,9 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
 
     const String sourcePath = content / TEXT("source.png");
-    const Array<byte> sourceBytes = MakeValidPng();
-    REQUIRE_FALSE(File::WriteAllBytes(sourcePath, sourceBytes.Get(), sourceBytes.Count()));
+    REQUIRE_FALSE(WriteMidtonePng(sourcePath));
+    TextureData sourceThumbnailReference;
+    REQUIRE_FALSE(TextureTool::ImportTexture(sourcePath, sourceThumbnailReference));
     const AssetRecord record = MakeTextureRecord(sourcePath);
     const AssetProcessorDescriptor descriptor = TextureProcessor::CreateDescriptor();
     StringAnsi settingsJson;
@@ -450,7 +477,7 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     REQUIRE(initData.CustomData.Length() == sizeof(TextureHeader));
     TextureHeader header;
     Platform::MemoryCopy(&header, initData.CustomData.Get(), sizeof(TextureHeader));
-    CHECK(header.Width == 1);
+    CHECK(header.Width == 2);
     CHECK(header.Height == 1);
     CHECK(header.MipLevels >= 1);
     CHECK(initData.Header.Chunks[0] != nullptr);
@@ -478,6 +505,13 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     static const byte pngSignature[] = { 137, 80, 78, 71, 13, 10, 26, 10 };
     REQUIRE(thumbnailBytes.Count() >= ARRAY_COUNT(pngSignature));
     CHECK(Platform::MemoryCompare(thumbnailBytes.Get(), pngSignature, ARRAY_COUNT(pngSignature)) == 0);
+    TextureData decodedThumbnail;
+    REQUIRE_FALSE(TextureTool::ImportTexture(thumbnailPath, decodedThumbnail));
+    REQUIRE(decodedThumbnail.GetData(0, 0)->Data.IsValid());
+    REQUIRE(sourceThumbnailReference.GetData(0, 0)->Data.IsValid());
+    const int32 thumbnailRed = decodedThumbnail.GetData(0, 0)->Data[0];
+    const int32 sourceRed = sourceThumbnailReference.GetData(0, 0)->Data[0];
+    CHECK(Math::Abs(thumbnailRed - sourceRed) <= 4);
 
     ArtifactManifestOutput runtimeOutput;
     runtimeOutput.Kind = "runtime";
@@ -491,10 +525,35 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     thumbnailOutput.Kind = "thumbnail";
     thumbnailOutput.FormatVersion = TextureProcessor::ThumbnailFormatVersion;
     thumbnailOutput.Size = FileSystem::GetFileSize(thumbnailPath);
-    thumbnailOutput.Compatibility = "flax-texture-thumbnail-v1";
+    thumbnailOutput.Compatibility = "flax-texture-thumbnail-v2";
     REQUIRE_FALSE(TextureArtifactValidator::ValidateThumbnail(thumbnailPath, thumbnailOutput, diagnostic));
     storage = nullptr;
     ContentStorageManager::EnsureAccess(runtimePath);
+
+    for (const StringAnsiView outputKind : { StringAnsiView("runtime"), StringAnsiView("thumbnail") })
+    {
+        PreparedAsset singleOutputPrepared = prepared;
+        DeclaredArtifactOutput selected;
+        bool found = false;
+        for (const DeclaredArtifactOutput& output : prepared.Outputs)
+        {
+            if (output.Kind == outputKind)
+            {
+                selected = output;
+                found = true;
+                break;
+            }
+        }
+        REQUIRE(found);
+        singleOutputPrepared.Outputs.Clear();
+        singleOutputPrepared.Outputs.Add(selected);
+        ArtifactBuildContext singleOutputContext(root, content, library, Guid::New(), singleOutputPrepared, inputs, cancellation.GetToken(), target);
+        REQUIRE_FALSE(singleOutputContext.Initialize(diagnostic));
+        REQUIRE_FALSE(descriptor.Build(singleOutputContext, diagnostic));
+        REQUIRE_FALSE(singleOutputContext.Close(diagnostic));
+        REQUIRE(singleOutputContext.GetFiles().Count() == 1);
+        CHECK(singleOutputContext.GetFiles()[0].OutputKind == outputKind);
+    }
 }
 
 TEST_CASE("Texture processor output keys isolate target overrides and thumbnail dimensions")

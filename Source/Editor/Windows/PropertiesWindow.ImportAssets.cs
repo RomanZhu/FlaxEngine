@@ -521,7 +521,7 @@ namespace FlaxEditor.Windows
                     return false;
                 }
 
-                var asset = binaryAssetItem.LoadAsync();
+                var asset = binaryAssetItem.LoadPreviewAsync();
                 if (asset == null || !TryCreateImportAssetPropertiesProxy(binaryAssetItem, asset, out var proxy, out var prefabState))
                 {
                     DisposePrefabStates(prefabStates);
@@ -572,7 +572,7 @@ namespace FlaxEditor.Windows
                     continue;
                 }
 
-                var prefab = assetItem.LoadAsync() as Prefab;
+                var prefab = assetItem.LoadPreviewAsync() as Prefab;
                 if (prefab == null || !prefab.IsLoaded)
                 {
                     DisposePrefabStates(prefabStates);

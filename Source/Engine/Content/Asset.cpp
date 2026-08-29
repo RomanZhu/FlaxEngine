@@ -224,6 +224,7 @@ Asset::Asset(const SpawnParams& params, const AssetInfo* info)
     , _loadingTask(0)
     , _deleteFileOnUnload(false)
     , _isVirtual(false)
+    , _isPassiveLoad(false)
 {
 }
 
@@ -621,7 +622,11 @@ bool Asset::onLoad(LoadAssetTask* task)
 #endif
     {
         PROFILE_CPU_ASSET(this);
+        if (_isPassiveLoad)
+            Content::BeginPassiveLoad();
         result = loadAsset();
+        if (_isPassiveLoad)
+            Content::EndPassiveLoad();
     }
     const bool isLoaded = result == LoadResult::Ok;
     const bool failed = !isLoaded;

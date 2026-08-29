@@ -64,6 +64,8 @@ struct FLAXENGINE_API AssetBuildJobRequest
     uint64 MemoryBytes = 0;
     int32 ExternalToolSlots = 0;
     int32 ProcessorConcurrencyLimit = MAX_int32;
+    // Disable when a repeated exact plan must run publication again because its mutable manifest may now point at another plan.
+    bool AllowTerminalDeduplication = true;
     Array<AssetBuildJobKey> Dependencies;
     AssetBuildJobAction Build;
     AssetBuildJobAction Publish;

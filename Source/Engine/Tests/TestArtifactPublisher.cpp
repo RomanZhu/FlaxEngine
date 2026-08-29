@@ -79,6 +79,15 @@ namespace
         REQUIRE_FALSE(context.OpenOutput(StringAnsiView("runtime"), writer, diagnostic));
         REQUIRE_FALSE(writer.WriteFile(TEXT("result.bin"), bytes, length, diagnostic));
     }
+
+    void AddStagedThumbnail(ArtifactBuildContext& context, const byte* bytes, int32 length)
+    {
+        AssetPipelineDiagnostic diagnostic;
+        REQUIRE_FALSE(context.Initialize(diagnostic));
+        ArtifactWriter writer;
+        REQUIRE_FALSE(context.OpenOutput(StringAnsiView("thumbnail"), writer, diagnostic));
+        REQUIRE_FALSE(writer.WriteFile(TEXT("thumbnail.bin"), bytes, length, diagnostic));
+    }
 }
 
 TEST_CASE("ArtifactPublisher atomically selects validated immutable outputs")
@@ -130,6 +139,31 @@ TEST_CASE("ArtifactPublisher atomically selects validated immutable outputs")
     notified = false;
     REQUIRE_FALSE(ArtifactPublisher::Publish(library, prepared, duplicate, request, validators, result, diagnostic));
     CHECK(notified);
+
+    // An independently published output merges into the same exact manifest.
+    PreparedAsset thumbnailPrepared = prepared;
+    DeclaredArtifactOutput thumbnailOutput = thumbnailPrepared.Outputs[0];
+    thumbnailOutput.Kind = "thumbnail";
+    thumbnailOutput.CompatibilityTag = "Tests.Thumbnail.v1";
+    thumbnailPrepared.Outputs.Clear();
+    thumbnailPrepared.Outputs.Add(thumbnailOutput);
+    const byte thumbnailBytes[] = { 8, 9 };
+    ArtifactBuildContext thumbnailContext(root, content, library, Guid::New(), thumbnailPrepared, inputs, cancellation.GetToken());
+    AddStagedThumbnail(thumbnailContext, thumbnailBytes, ARRAY_COUNT(thumbnailBytes));
+    REQUIRE_FALSE(validators.Register(StringAnsiView("thumbnail"), StringView::Empty, &AcceptPublishedBytes, diagnostic));
+    ArtifactPublicationRequest thumbnailRequest = PublicationRequest(thumbnailPrepared, ArtifactKey(ContentHash::Compute("thumbnail-key", 13)), notified);
+    thumbnailRequest.Outputs[0].Kind = "thumbnail";
+    REQUIRE_FALSE(ArtifactPublisher::Publish(library, thumbnailPrepared, thumbnailContext, thumbnailRequest, validators, result, diagnostic));
+    REQUIRE(result.Manifest.Outputs.Count() == 2);
+    bool hasRuntime = false;
+    bool hasThumbnail = false;
+    for (const ArtifactManifestOutput& output : result.Manifest.Outputs)
+    {
+        hasRuntime |= output.Kind == StringAnsiView("runtime");
+        hasThumbnail |= output.Kind == StringAnsiView("thumbnail");
+    }
+    CHECK(hasRuntime);
+    CHECK(hasThumbnail);
 
     // Corruption at an existing immutable key is rejected rather than overwritten.
     const byte corrupt[] = { 9, 9, 9, 9 };

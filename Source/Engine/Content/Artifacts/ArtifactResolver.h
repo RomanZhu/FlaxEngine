@@ -12,6 +12,7 @@ enum class ArtifactResolvePolicy : byte
     Interactive,
     Exact,
     NoBuild,
+    PublishedOnly,
 };
 
 struct FLAXENGINE_API ArtifactRequest

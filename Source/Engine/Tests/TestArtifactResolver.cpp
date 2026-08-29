@@ -132,10 +132,12 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
 
     std::atomic<int32> builds { 0 };
     std::atomic<int32> publications { 0 };
+    std::atomic<int32> plans { 0 };
     ArtifactResolver resolver;
     ArtifactResolutionPlanProvider provider = [&](const AssetRecord& plannedRecord, const ArtifactRequest& request,
         ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& planDiagnostic)
     {
+        plans++;
         plan.CurrentInputFingerprint = currentFingerprint;
         ArtifactKeyBuilder builder(StringAnsiView("resolver-job-v1"));
         builder.AddGuid(StringAnsiView("asset"), plannedRecord.ID);
@@ -162,6 +164,13 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
 
     ResolvedArtifact artifact;
     ArtifactRequest request = baseRequest;
+    request.Policy = ArtifactResolvePolicy::PublishedOnly;
+    REQUIRE_FALSE(resolver.Resolve(request, artifact, diagnostic));
+    CHECK(artifact.IsLastGood);
+    CHECK_FALSE(artifact.IsExact);
+    CHECK(plans.load() == 0);
+    CHECK(builds.load() == 0);
+
     request.Policy = ArtifactResolvePolicy::NoBuild;
     CHECK(resolver.Resolve(request, artifact, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactRebuildRequired);

@@ -7,6 +7,7 @@
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Core/Types/TimeSpan.h"
 #include "Engine/Core/Math/Vector2.h"
+#include "Engine/Threading/Threading.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Serialization/JsonWriter.h"
 #include "Engine/Serialization/JsonTools.h"
@@ -25,6 +26,7 @@
 namespace
 {
     Dictionary<String, bool> TexturesHasAlphaCache;
+    CriticalSection TexturesHasAlphaCacheLocker;
 }
 #endif
 
@@ -229,22 +231,28 @@ void TextureTool::Options::Deserialize(DeserializeStream& stream, ISerializeModi
 bool TextureTool::HasAlpha(const StringView& path)
 {
     // Try to hit the cache (eg. if texture was already imported before)
-    if (!TexturesHasAlphaCache.ContainsKey(path))
     {
-        TextureData textureData;
-        if (ImportTexture(path, textureData))
-            return false;
+        ScopeLock lock(TexturesHasAlphaCacheLocker);
+        const bool* cached = TexturesHasAlphaCache.TryGet(path);
+        if (cached)
+            return *cached;
     }
-    return TexturesHasAlphaCache[path];
+    TextureData textureData;
+    if (ImportTexture(path, textureData, false))
+        return false;
+    ScopeLock lock(TexturesHasAlphaCacheLocker);
+    const bool* cached = TexturesHasAlphaCache.TryGet(path);
+    return cached && *cached;
 }
 
 #endif
 
-bool TextureTool::ImportTexture(const StringView& path, TextureData& textureData)
+bool TextureTool::ImportTexture(const StringView& path, TextureData& textureData, bool logProgress)
 {
     PROFILE_CPU();
     PROFILE_MEM(GraphicsTextures);
-    LOG(Info, "Importing texture from \'{0}\'", path);
+    if (logProgress)
+        LOG(Info, "Importing texture from \'{0}\'", path);
     const auto startTime = DateTime::NowUTC();
 
     // Detect texture format type
@@ -270,19 +278,22 @@ bool TextureTool::ImportTexture(const StringView& path, TextureData& textureData
     else
     {
 #if USE_EDITOR
+        ScopeLock lock(TexturesHasAlphaCacheLocker);
         TexturesHasAlphaCache[path] = hasAlpha;
 #endif
-        LOG(Info, "Texture imported in {0} ms", static_cast<int32>((DateTime::NowUTC() - startTime).GetTotalMilliseconds()));
+        if (logProgress)
+            LOG(Info, "Texture imported in {0} ms", static_cast<int32>((DateTime::NowUTC() - startTime).GetTotalMilliseconds()));
     }
 
     return failed;
 }
 
-bool TextureTool::ImportTexture(const StringView& path, TextureData& textureData, Options options, String& errorMsg)
+bool TextureTool::ImportTexture(const StringView& path, TextureData& textureData, Options options, String& errorMsg, bool logProgress)
 {
     PROFILE_CPU();
     PROFILE_MEM(GraphicsTextures);
-    LOG(Info, "Importing texture from \'{0}\'. Options: {1}", path, options.ToString());
+    if (logProgress)
+        LOG(Info, "Importing texture from \'{0}\'. Options: {1}", path, options.ToString());
     const auto startTime = DateTime::NowUTC();
 
     // Detect texture format type
@@ -320,19 +331,22 @@ bool TextureTool::ImportTexture(const StringView& path, TextureData& textureData
     else
     {
 #if USE_EDITOR
+        ScopeLock lock(TexturesHasAlphaCacheLocker);
         TexturesHasAlphaCache[path] = hasAlpha;
 #endif
-        LOG(Info, "Texture imported in {0} ms", static_cast<int32>((DateTime::NowUTC() - startTime).GetTotalMilliseconds()));
+        if (logProgress)
+            LOG(Info, "Texture imported in {0} ms", static_cast<int32>((DateTime::NowUTC() - startTime).GetTotalMilliseconds()));
     }
 
     return failed;
 }
 
-bool TextureTool::ExportTexture(const StringView& path, const TextureData& textureData)
+bool TextureTool::ExportTexture(const StringView& path, const TextureData& textureData, bool logProgress)
 {
     PROFILE_CPU();
     PROFILE_MEM(GraphicsTextures);
-    LOG(Info, "Exporting texture to \'{0}\'.", path);
+    if (logProgress)
+        LOG(Info, "Exporting texture to \'{0}\'.", path);
     const auto startTime = DateTime::NowUTC();
     ImageType type;
     if (GetImageType(path, type))
@@ -358,7 +372,8 @@ bool TextureTool::ExportTexture(const StringView& path, const TextureData& textu
     }
     else
     {
-        LOG(Info, "Texture exported in {0} ms", static_cast<int32>((DateTime::NowUTC() - startTime).GetTotalMilliseconds()));
+        if (logProgress)
+            LOG(Info, "Texture exported in {0} ms", static_cast<int32>((DateTime::NowUTC() - startTime).GetTotalMilliseconds()));
     }
 
     return failed;

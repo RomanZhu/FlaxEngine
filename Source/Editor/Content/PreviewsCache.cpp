@@ -43,8 +43,10 @@ bool PreviewsCache::FlushTask::Run()
 
     // Link chunks (don't allocate additional memory)
     auto mipChunk = _cache->GetOrCreateChunk(0);
+    auto versionChunk = _cache->GetOrCreateChunk(14);
     auto dataChunk = _cache->GetOrCreateChunk(15);
     mipChunk->Data.Link(mipData->Data);
+    versionChunk->Data.Link((byte*)_cache->_versions.Get(), sizeof(Guid) * _cache->_versions.Count());
     dataChunk->Data.Link((byte*)_cache->_assets.Get(), sizeof(Guid) * _cache->_assets.Count());
 
     // Prepare asset data
@@ -55,6 +57,7 @@ bool PreviewsCache::FlushTask::Run()
     // Save (use silent mode to prevent asset reloading)
     bool saveResult = _cache->SaveAsset(data, true);
     mipChunk->Data.Release();
+    versionChunk->Data.Release();
     dataChunk->Data.Release();
     if (saveResult)
     {
@@ -93,8 +96,21 @@ SpriteHandle PreviewsCache::FindSlot(const Guid& id)
 {
     if (WaitForLoaded())
         return SpriteHandle::Invalid;
+    const int32 index = _assets.Find(id);
+    if (index != INVALID_INDEX)
+    {
+        const String spriteName = StringUtils::ToString(index);
+        return FindSprite(spriteName);
+    }
+    return SpriteHandle::Invalid;
+}
+
+SpriteHandle PreviewsCache::FindSlotVersioned(const Guid& id, const Guid& version)
+{
+    if (WaitForLoaded())
+        return SpriteHandle::Invalid;
     int32 index;
-    if (_assets.Find(id, index))
+    if (_assets.Find(id, index) && _versions[index] == version)
     {
         const String spriteName = StringUtils::ToString(index);
         return FindSprite(spriteName);
@@ -105,20 +121,24 @@ SpriteHandle PreviewsCache::FindSlot(const Guid& id)
 Asset::LoadResult PreviewsCache::load()
 {
     // Load previews data
+    auto versionsMetaChunk = GetChunk(14);
     auto previewsMetaChunk = GetChunk(15);
-    if (previewsMetaChunk == nullptr || previewsMetaChunk->IsMissing())
+    if (versionsMetaChunk == nullptr || versionsMetaChunk->IsMissing() || previewsMetaChunk == nullptr || previewsMetaChunk->IsMissing())
         return LoadResult::MissingDataChunk;
-    if (previewsMetaChunk->Size() != ASSETS_ICONS_PER_ATLAS * sizeof(Guid))
+    if (versionsMetaChunk->Size() != ASSETS_ICONS_PER_ATLAS * sizeof(Guid) || previewsMetaChunk->Size() != ASSETS_ICONS_PER_ATLAS * sizeof(Guid))
         return LoadResult::Failed;
+    _versions.Set(versionsMetaChunk->Get<Guid>(), ASSETS_ICONS_PER_ATLAS);
     _assets.Set(previewsMetaChunk->Get<Guid>(), ASSETS_ICONS_PER_ATLAS);
 
     // Verify if cached assets still exist (don't store thumbnails for removed files)
     AssetInfo assetInfo;
-    for (Guid& id : _assets)
+    for (int32 i = 0; i < _assets.Count(); i++)
     {
+        Guid& id = _assets[i];
         if (id.IsValid() && Content::GetAsset(id) == nullptr && !Content::GetAssetInfo(id, assetInfo))
         {
             // Free slot (no matter the texture contents)
+            _versions[i] = Guid::Empty;
             id = Guid::Empty;
         }
     }
@@ -149,14 +169,15 @@ void PreviewsCache::unload(bool isReloading)
 
     // Release data
     _assets.Clear();
+    _versions.Clear();
 
     SpriteAtlas::unload(isReloading);
 }
 
 AssetChunksFlag PreviewsCache::getChunksToPreload() const
 {
-    // Preload previews ids data chunk
-    return GET_CHUNK_FLAG(15);
+    // Preload preview artifact versions and IDs data chunks
+    return GET_CHUNK_FLAG(14) | GET_CHUNK_FLAG(15);
 }
 
 bool PreviewsCache::HasFreeSlot() const
@@ -167,6 +188,11 @@ bool PreviewsCache::HasFreeSlot() const
 }
 
 SpriteHandle PreviewsCache::OccupySlot(GPUTexture* source, const Guid& id)
+{
+    return OccupySlotVersioned(source, id, Guid::Empty);
+}
+
+SpriteHandle PreviewsCache::OccupySlotVersioned(GPUTexture* source, const Guid& id, const Guid& version)
 {
     if (WaitForLoaded())
         return SpriteHandle::Invalid;
@@ -190,6 +216,7 @@ SpriteHandle PreviewsCache::OccupySlot(GPUTexture* source, const Guid& id)
 
     // Occupy slot
     _assets[index] = id;
+    _versions[index] = version;
 
     // Get sprite handle
     const String spriteName = StringUtils::ToString(index);
@@ -214,6 +241,7 @@ bool PreviewsCache::ReleaseSlot(const Guid& id)
     if (index != INVALID_INDEX)
     {
         _assets[index] = Guid::Empty;
+        _versions[index] = Guid::Empty;
         result = true;
     }
     return result;
@@ -265,8 +293,15 @@ CreateAssetResult PreviewsCache::create(CreateAssetContext& context)
     mipChunk->Data.Allocate((int32)imageSize);
     Platform::MemoryClear(mipChunk->Get(), mipChunk->Size());
 
-    // Create IDs cache array (chunk 15)
+    // Create artifact versions cache array (chunk 14)
     int32 idsSize = sizeof(Guid) * ASSETS_ICONS_PER_ATLAS;
+    if (context.AllocateChunk(14))
+        return CreateAssetResult::CannotAllocateChunk;
+    auto versionsChunk = context.Data.Header.Chunks[14];
+    versionsChunk->Data.Allocate(idsSize);
+    Platform::MemoryClear(versionsChunk->Get(), versionsChunk->Size());
+
+    // Create IDs cache array (chunk 15)
     if (context.AllocateChunk(15))
         return CreateAssetResult::CannotAllocateChunk;
     auto dataChunk = context.Data.Header.Chunks[15];

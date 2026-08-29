@@ -22,6 +22,11 @@ namespace FlaxEditor.Content.Thumbnails
             Created,
 
             /// <summary>
+            /// A lightweight canonical thumbnail artifact is being built.
+            /// </summary>
+            Waiting,
+
+            /// <summary>
             /// Request has been prepared for the rendering but still may wait for resources to load fully.
             /// </summary>
             Prepared,
@@ -68,6 +73,13 @@ namespace FlaxEditor.Content.Thumbnails
         public object Tag;
 
         /// <summary>
+        /// Immutable artifact version represented by this request.
+        /// </summary>
+        public Guid CacheVersion;
+
+        private DateTime _nextThumbnailLoadAttemptUtc;
+
+        /// <summary>
         /// Determines whether thumbnail can be drawn for the item.
         /// </summary>
         public bool IsReady => State == States.Prepared && Asset && Asset.IsLoaded && Proxy.CanDrawThumbnail(this);
@@ -77,14 +89,31 @@ namespace FlaxEditor.Content.Thumbnails
         /// </summary>
         /// <param name="item">The item.</param>
         /// <param name="proxy">The proxy.</param>
-        public ThumbnailRequest(AssetItem item, AssetProxy proxy)
+        /// <param name="cacheVersion">The immutable artifact version represented by the thumbnail.</param>
+        public ThumbnailRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion)
         {
             Item = item;
             Proxy = proxy;
+            CacheVersion = cacheVersion;
         }
 
         internal void Update()
         {
+            if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
+            {
+                Asset = AssetDatabaseFacade.LoadTextureThumbnail(Item.ID);
+                if (Asset)
+                {
+                    CacheVersion = AssetDatabaseFacade.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
+                    Proxy.OnThumbnailDrawPrepare(this);
+                    State = States.Prepared;
+                }
+                else
+                {
+                    _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
+                }
+                return;
+            }
             if (State == States.Prepared && (!Asset || Asset.LastLoadFailed))
             {
                 State = States.Failed;
@@ -99,8 +128,29 @@ namespace FlaxEditor.Content.Thumbnails
             if (State != States.Created)
                 throw new InvalidOperationException();
             if (Item.IsCanonicalSource && !Item.IsCanonicalSubAsset && Proxy is TextureProxy)
+            {
                 Asset = AssetDatabaseFacade.LoadTextureThumbnail(Item.ID);
-            Asset ??= FlaxEngine.Content.LoadAsync<Asset>(Item.ID);
+                if (!Asset)
+                {
+                    _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
+                    State = States.Waiting;
+                    return;
+                }
+                CacheVersion = AssetDatabaseFacade.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
+            }
+            else if (Item.IsCanonicalSource)
+            {
+                Asset = AssetDatabaseFacade.LoadAssetPreview(Item.ID);
+                if (!Asset)
+                {
+                    State = States.Failed;
+                    return;
+                }
+            }
+            else
+            {
+                Asset = FlaxEngine.Content.LoadAsync<Asset>(Item.ID);
+            }
             Proxy.OnThumbnailDrawPrepare(this);
             State = States.Prepared;
         }
@@ -125,7 +175,7 @@ namespace FlaxEditor.Content.Thumbnails
             if (State == States.Disposed)
                 throw new InvalidOperationException();
 
-            if (State != States.Created)
+            if (State != States.Created && State != States.Waiting)
             {
                 // Cleanup
                 Proxy.OnThumbnailDrawCleanup(this);
