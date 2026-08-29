@@ -139,7 +139,86 @@ does not emulate OS keyboard/mouse input or invent collision events.
 
 ## Prefabs
 
-Use `prefabs create|instantiate|variant|apply|revert|unpack|save`. Resolve Actor and Prefab IDs before mutation. `revert` and `unpack` are destructive and require `--yes`.
+Choose the command family based on ownership:
+
+- Use `prefab-assets` when the requested change belongs to the Prefab asset.
+  It spawns the Prefab under no Scene, edits that transient hierarchy, and saves
+  with the native Prefab serializer. Do not create a temporary scene or
+  instantiate the Prefab into a gameplay scene for this workflow.
+- Use `prefabs create|instantiate|variant|apply|revert|unpack|save` for Prefab
+  creation and scene-instance overrides. `revert` and `unpack` are destructive
+  and require `--yes`.
+
+### Native Prefab-asset commands
+
+```powershell
+flax prefab-assets hierarchy --prefab Prefabs\Player.prefab --project <project> --engine <engine> --json
+flax prefab-assets actor get --prefab Prefabs\Player.prefab --actor . --project <project> --engine <engine> --json
+flax prefab-assets actor add --prefab Prefabs\Player.prefab --parent . --type FlaxEngine.EmptyActor --name CameraMount --project <project> --engine <engine> --json
+flax prefab-assets actor set --prefab Prefabs\Player.prefab --actor CameraMount --position '{"X":0,"Y":10,"Z":20}' --project <project> --engine <engine> --json
+flax prefab-assets actor delete --prefab Prefabs\Player.prefab --actor CameraMount --yes --project <project> --engine <engine> --json
+
+flax prefab-assets component get --prefab Prefabs\Player.prefab --actor . --component Example.PlayerController --project <project> --engine <engine> --json
+flax prefab-assets component add --prefab Prefabs\Player.prefab --actor . --type Example.PlayerMarker --project <project> --engine <engine> --json
+flax prefab-assets component set --prefab Prefabs\Player.prefab --actor . --component Example.PlayerMarker --property Priority --value 5 --project <project> --engine <engine> --json
+flax prefab-assets component remove --prefab Prefabs\Player.prefab --actor . --component Example.PlayerMarker --yes --project <project> --engine <engine> --json
+
+flax prefab-assets reference set --prefab Prefabs\Player.prefab --actor . --component Example.PlayerController --property CameraMount --reference-actor CameraMount --project <project> --engine <engine> --json
+```
+
+Actor selectors accept `.`, a hierarchy path, Actor ID, or stable
+`PrefabObjectID`. Component selectors accept a type name plus `--index`, a
+component ID, or stable `PrefabObjectID`. Runtime IDs in command results belong
+to that transient spawn and may differ on the next invocation; paths and prefab
+object IDs are the durable selectors. The root Actor cannot be deleted or
+reparented. Actor and component property setters address one direct public field
+or property at a time.
+
+`reference set` targets either an Actor property or a Script property. Choose
+exactly one source: `--reference-actor` (optionally with
+`--reference-component`), `--reference-asset`, or `--clear`. Prefer GUID,
+`project://`, or `engine://` asset references for stable external wiring.
+
+Mutations are refused while the same Prefab is open in the Prefab editor. Close
+that asset editor first; no gameplay Scene needs to be closed or opened.
+
+### Atomic Prefab batches
+
+Use an input file for cross-shell reliability and when later operations refer to
+objects added earlier in the same batch:
+
+```json
+{
+  "prefab": "Prefabs/Anomalies/FloaterAnomaly.prefab",
+  "operations": [
+    {
+      "action": "component.add",
+      "actor": ".",
+      "type": "PhotographableSubject"
+    },
+    {
+      "action": "reference.set",
+      "actor": ".",
+      "component": "PhotographableSubject",
+      "property": "FloaterAnomaly",
+      "referenceActor": ".",
+      "referenceComponent": "FloaterAnomalyController"
+    }
+  ],
+  "verify-reload": true
+}
+```
+
+```powershell
+flax prefab-assets batch --input prefab-edit.json --yes --project <project> --engine <engine> --json
+```
+
+Supported batch actions are `actor.get|add|set|delete`,
+`component.get|add|set|remove`, and `reference.set`. The batch applies the asset
+once after all operations succeed; a failure before apply leaves the saved
+Prefab unchanged. With `verify-reload`, the result includes the hierarchy loaded
+back from disk. Confirm `saved: true`, `verified: true`, `sceneTouched: false`,
+and unchanged `flax scenes dirty` state.
 
 ## Assets and project commands
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Flax Editor Authoring"
-  short_description: "Author Flax scenes, graphs, and runtime state"
-  default_prompt: "Use $flax-editor-authoring to modify scenes, assets, graphs, or development runtime state through typed Editor commands."
+  short_description: "Author Flax scenes, Prefab assets, and graphs"
+  default_prompt: "Use $flax-editor-authoring to modify scenes, Prefab assets, graphs, or development runtime state through typed Editor commands."

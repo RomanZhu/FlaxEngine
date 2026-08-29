@@ -33,6 +33,7 @@ assuming remote services.
 ## Editor-owned commands
 
 - Assets: `assets list|types|info|create|mkdir|import|duplicate|move|rename|delete|reimport|export|get|set|save|refresh|verify|material-instance|batch`. Asset commands prefer a matching live Editor; use `assets batch --input <manifest.json> --verify-reload` to execute many operations in one Editor session.
+- Prefab assets: `prefab-assets hierarchy`, `actor get|add|set|delete`, `component get|add|set|remove`, `reference set`, and `batch`. These commands spawn a transient hierarchy with no Scene parent, persist through the native Prefab serializer, and report `sceneTouched: false`. Use them instead of scene instantiation when the requested change belongs to the Prefab asset.
 - Typed catalog: `commands list|info`, `command <name>`
 - Live Editor: `editor status|play|pause|resume|stop|step|focus|save-all|recompile|close`, `console`, `performance`, `selection`
 - Project settings: `settings list|get|schema|diff|set` (partial JSON patches; `--dry-run` is available on set)
@@ -41,7 +42,7 @@ assuming remote services.
 - Arbitrary C#: `dev unlock-csharp`, then `dev eval-csharp` or `dev eval-csharp-file` with the returned token. This is audited, in-process development code, not a sandbox.
 - Visject graphs: `visject groups list`, `asset inspect|validate`, node add/remove/set, and connect/disconnect for Material and Animation Graph assets.
 - Player/runtime: `player status|pause|resume|step|quit` and virtual keyboard/mouse `player input`; use pointer `--state relative --dx ... --dy ...` for mouse-look deltas and `input inspect` for device/mapping/state diagnostics. Gamepad/action synthesis is unsupported.
-- Authoring: `authoring-root`, `scenes`, `actors`, `prefabs`
+- Authoring: `authoring-root`, `scenes`, `actors`, `prefabs`, `prefab-assets`
 - FMOD audio: `audio.authoring.inspect|diagnose|run` for contained JavaScript migrations, clean diagnostics, bank builds, and typed-asset synchronization; use the companion `flax-fmod-audio` skill for complete authoring and gameplay hookup workflows.
 
 The stable settings groups are `game`, `time`, `audio`, `layers`, `physics`,
@@ -57,6 +58,14 @@ back to another transport. A standalone Player only appears after a valid
 Development Player starts and publishes its local manifest.
 
 Typed commands support `--one-shot`, `--live-only`, and `--instance`. Editor control commands are inherently live and do not accept a redundant `--live-only` option.
+
+`prefab-assets` accepts a project Content-relative `.prefab` path or asset GUID.
+Actor selectors accept `.`, a hierarchy path, a transient Actor ID from the same
+open operation, or a stable `PrefabObjectID`; component selectors accept type
+name, transient ID, or stable `PrefabObjectID`. Runtime Actor/component IDs may
+change each time the transient hierarchy is spawned, so use paths or prefab
+object IDs across separate invocations. Mutations are rejected while that
+Prefab is open in the Prefab editor.
 
 Editors started by `flax open` or `flax play` run in CLI automation mode. Loaded
 scenes changed on disk are reloaded automatically in this mode, without the

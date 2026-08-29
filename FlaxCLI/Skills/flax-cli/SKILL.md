@@ -1,6 +1,6 @@
 ---
 name: flax-cli
-description: Build, launch, inspect, and automate Flax Engine projects with the standalone Flax CLI. Use when Codex needs to select or pin an engine checkout, create a safe local project, register projects, generate project files, compile or clean targets, launch or close the Editor, run Game Cooker or bake operations, edit typed settings, capture evidence, run deterministic playtest observations, control a development Player and virtual keyboard/mouse input, detach durable jobs, verify signed feeds, run explicitly unlocked C# evaluation, author Visject graphs, invoke MCP stdio, inspect CLI health, discover typed commands, or troubleshoot Flax CLI routing and structured results.
+description: Build, launch, inspect, and automate Flax Engine projects with the standalone Flax CLI. Use when Codex needs to select or pin an engine checkout, create a safe local project, register projects, generate project files, compile or clean targets, launch or close the Editor, edit assets or Prefab assets without scene instantiation, run Game Cooker or bake operations, edit typed settings, capture evidence, run deterministic playtests, control a development Player, detach jobs, invoke MCP, inspect CLI health, or troubleshoot typed command routing.
 ---
 
 # Flax CLI
@@ -23,6 +23,7 @@ Read [references/commands.md](references/commands.md) when selecting commands or
 - Use typed one-shot Editor execution for CI or when no Editor should remain open.
 - Use the authenticated live bridge when a matching Editor is already open and repeated operations should avoid startup cost.
 - Use `flax assets batch --input <manifest.json>` for bulk imports, creation, material-instance configuration, refresh, and persistence checks. Add `--verify-reload` when the result must prove that changed assets reload from disk.
+- Use `flax prefab-assets` for Prefab hierarchy, Actor, Script component, property, and reference edits that belong in the Prefab asset. It operates on a transient off-scene hierarchy and must be preferred over instantiating a Prefab into a gameplay scene merely to edit the asset. Use a JSON input file for atomic batches and reload verification.
 - Never mutate Flax asset, scene, or project state by editing serialized engine files when an Editor-owned CLI operation exists.
 - Use `flax projects create`/`flax new` only for a missing or empty directory; the local empty template never overwrites existing content. Feed-backed install/update and non-empty template migration are not available.
 - Use `flax capture viewport|game --to <project-relative-path>` for Editor-owned PNG evidence. Output is confined below the selected project root.
@@ -59,5 +60,7 @@ Exercise the narrowest real operation, not just `--help`. For Editor integration
 verify `flax status --json`, a one-shot `cli.ping`, a relevant live command,
 `player input` or `player status`, and `visject groups list`. A standalone Player
 requires a valid Development Player/cooked project before its manifest can be
-tested. Inspect the project log for bridge startup or manifest warnings. Leave
-the Editor running only when requested.
+tested. For Prefab-asset mutations, query the saved component or hierarchy after
+reload and confirm `sceneTouched: false` and unchanged `scenes dirty` state.
+Inspect the project log for bridge startup or manifest warnings. Leave the
+Editor running only when requested.

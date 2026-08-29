@@ -1,4 +1,4 @@
 interface:
   display_name: "Flax CLI"
-  short_description: "Build, automate, and control Flax projects"
+  short_description: "Build and automate Flax projects and Prefab assets"
   default_prompt: "Use $flax-cli to build, inspect, automate, or control this Flax project."
