@@ -390,19 +390,32 @@ void AudioEmitter::OnTransformChanged()
     Push3DAttributes();
 }
 
+void AudioEmitter::FlushDeferredBeginPlayAudio()
+{
+    if (!_beginPlayAudioPending)
+        return;
+
+    _beginPlayAudioPending = false;
+    if (_playOnStart && IsDuringPlay())
+        Play();
+    SignalActivation(AudioActivationEvent::BeginPlay, this, this);
+}
+
 void AudioEmitter::BeginPlay(SceneBeginData* data)
 {
     Actor::BeginPlay(data);
 
     _playActivationState.Reset();
     _stopActivationState.Reset();
-    if (_playOnStart && IsDuringPlay())
-        Play();
-    SignalActivation(AudioActivationEvent::BeginPlay, this, this);
+    // AudioService reloads startup banks in its first play-mode Update. Defer
+    // begin-play audio until AudioWorld's late update so event descriptions are
+    // available before either PlayOnStart or a BeginPlay activation creates one.
+    _beginPlayAudioPending = IsDuringPlay();
 }
 
 void AudioEmitter::EndPlay()
 {
+    _beginPlayAudioPending = false;
     SignalActivation(AudioActivationEvent::EndPlay, this, this);
     Actor::EndPlay();
 }

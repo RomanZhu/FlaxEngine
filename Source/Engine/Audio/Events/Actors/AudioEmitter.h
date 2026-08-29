@@ -29,6 +29,7 @@ private:
     float _attenuation = 1.0f;
     float _dopplerFactor = 1.0f;
     bool _playOnStart = false;
+    bool _beginPlayAudioPending = false;
     bool _allowSpatialization = true;
     AudioStopMode _stopMode = AudioStopMode::AllowFadeOut;
     bool _stopOnDisable = true;
@@ -203,6 +204,7 @@ public:
     int32 GetOcclusionPriority() const { return OcclusionPriority; }
 
 private:
+    void FlushDeferredBeginPlayAudio();
     void UpdateVelocity(float dt);
     void Push3DAttributes();
     void HandleEventCallback(const AudioEventCallback& callback);

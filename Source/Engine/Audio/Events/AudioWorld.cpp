@@ -112,6 +112,7 @@ void AudioWorld::Update(float dt)
         auto* emitter = Emitters[i];
         if (emitter && emitter->IsActiveInHierarchy() && emitter->IsDuringPlay())
         {
+            emitter->FlushDeferredBeginPlayAudio();
             emitter->UpdateVelocity(dt);
             emitter->Push3DAttributes();
         }
