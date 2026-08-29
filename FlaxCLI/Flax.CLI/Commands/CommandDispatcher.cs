@@ -77,7 +77,7 @@ internal sealed class CommandDispatcher(
             "feeds" => Feeds(args, context),
             "player" => await Player(args, context),
             "runtime" => await Runtime(args, context),
-            "scenes" or "actors" or "colliders" or "prefabs" or "history" or "settings" or "bake" or "dev" or "visject" => await Authoring(command, args, context),
+            "scenes" or "actors" or "colliders" or "prefabs" or "prefab-assets" or "history" or "settings" or "bake" or "dev" or "visject" => await Authoring(command, args, context),
             "templates" => Templates(args),
             "new" => CreateProject(args, context),
             "test" => await Tests(args, context),
@@ -763,7 +763,9 @@ internal sealed class CommandDispatcher(
     private async Task<CliResult> Authoring(string group, CommandArguments args, CommandContext context)
     {
         var action = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"{group} requires a subcommand.");
-        if ((group == "actors" && (action == "component" || action == "primitive" || action == "property")) || (group == "scenes" && (action == "build-list" || action == "active")))
+        if ((group == "actors" && (action == "component" || action == "primitive" || action == "property")) ||
+            (group == "prefab-assets" && (action == "actor" || action == "component" || action == "reference")) ||
+            (group == "scenes" && (action == "build-list" || action == "active")))
         {
             var nested = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"{group} {action} requires a subcommand.");
             action += "." + nested;
@@ -1774,7 +1776,7 @@ internal sealed class CommandDispatcher(
         "build" => "flax build [project] --preset name --target platform [--output path] [--define value] [--clean] [--run]",
         "assets" or "asset" => AssetsHelp,
         "authoring-root" => "flax authoring-root <get|set> [path] [--project path]",
-        "scenes" or "actors" or "colliders" or "prefabs" => AuthoringHelp,
+        "scenes" or "actors" or "colliders" or "prefabs" or "prefab-assets" => AuthoringHelp,
         "settings" => SettingsHelp,
         "bake" => BakeHelp,
         "dev" => DevHelp,
@@ -1850,6 +1852,11 @@ flax actors primitive <list|create> [--shape cube|sphere|plane|cylinder|cone|cap
 flax actors property <list|get|set> [options]
 flax colliders <create|inspect|offset-local|normalize-center> [options]
 flax prefabs <create|instantiate|variant|apply|revert|unpack|save> [options]
+flax prefab-assets hierarchy --prefab <path-or-guid> [--max-depth number]
+flax prefab-assets actor <get|add|set|delete> --prefab <path-or-guid> [options]
+flax prefab-assets component <get|add|set|remove> --prefab <path-or-guid> [options]
+flax prefab-assets reference set --prefab <path-or-guid> --property <name> [options]
+flax prefab-assets batch [--input <request.json> | --prefab <path-or-guid> --operations <json-array>] [--verify-reload] --yes
 flax history <list|undo|redo>
 flax settings <list|get|schema|diff|set> [options]
 flax bake <lighting|navmesh|probes|csg|scenes|sdf> <start|cancel|clear> [options]

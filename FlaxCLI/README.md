@@ -56,6 +56,8 @@ flax authoring-root set Content\Generated --project F:\Games\Example
 flax scenes create --path Scenes\Automation.scene --open --project F:\Games\Example
 flax actors create --type FlaxEngine.EmptyActor --name SpawnPoint --project F:\Games\Example
 flax prefabs instantiate --prefab Prefabs\Player.prefab --project F:\Games\Example
+flax prefab-assets hierarchy --prefab Prefabs\Player.prefab --project F:\Games\Example --json
+flax prefab-assets component add --prefab Prefabs\Player.prefab --actor . --type Example.PlayerMarker --project F:\Games\Example
 flax status --project F:\Games\Example --json
 flax editor play --project F:\Games\Example
 flax console --project F:\Games\Example --cursor 0 --limit 100 --json
@@ -134,6 +136,20 @@ Mutating operations run inside the selected Editor so the content database,
 asset GUIDs, loaded objects, and import pipeline remain authoritative. Import
 and create operations refresh affected folders before later batch operations
 resolve the generated assets.
+
+`flax prefab-assets` reads and mutates Prefab hierarchy Actors, Script
+components, public properties, and internal or external references without
+opening or modifying a Scene. Mutations use a transient off-scene Prefab
+hierarchy and apply through the native Prefab serializer. The `batch` command
+executes every requested operation against one transient hierarchy and applies
+the asset once only after all operations succeed; `--verify-reload` reloads and
+returns the persisted hierarchy. Asset mutation is rejected while the same
+Prefab is open in the Prefab editor.
+
+For shell-safe batches, put the complete command argument object (including
+`prefab`, `operations`, and optional `verify-reload`) in JSON and run
+`flax prefab-assets batch --input request.json --yes`. Inline `--operations`
+remains available in shells that preserve JSON quoting.
 
 Visject commands resolve graph assets through the Editor Content database and
 load them by their registered GUID. Mutations are rejected while the same asset

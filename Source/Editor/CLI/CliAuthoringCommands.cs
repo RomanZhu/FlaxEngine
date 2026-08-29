@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using FlaxEditor.Actions;
+using FlaxEditor.Content;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.SceneEditing;
 using FlaxEditor.SceneGraph;
@@ -1564,6 +1565,7 @@ namespace FlaxEditor
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
             if (PrefabManager.CreatePrefab(value, outputPath, true))
                 throw new InvalidOperationException($"Failed to create Prefab '{outputPath}'.");
+            CreateCanonicalJsonMetadata(outputPath);
             RefreshCreatedContent(outputPath);
             FlaxEngine.Content.GetAssetInfo(outputPath, out var info);
             return new { prefabId = info.ID, path = outputPath, actor = DescribeActor(value), assetSaved = true, sceneSaved = false, dirty = Editor.Instance.Scene.IsEdited(value.Scene) };
@@ -1583,6 +1585,7 @@ namespace FlaxEditor
             {
                 if (PrefabManager.CreatePrefab(root, outputPath, true))
                     throw new InvalidOperationException($"Failed to create Prefab variant '{outputPath}'.");
+                CreateCanonicalJsonMetadata(outputPath);
             }
             finally
             {
@@ -2004,7 +2007,7 @@ namespace FlaxEditor
                 throw new InvalidOperationException("The path escapes the project Content authoring root.");
             if (!string.Equals(Path.GetExtension(result), extension, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Expected a '{extension}' path.");
-            if (requireNew && (File.Exists(result) || Directory.Exists(result) || Editor.Instance.ContentDatabase.Find(result) != null))
+            if (requireNew && (File.Exists(result) || File.Exists(result + ".meta") || Directory.Exists(result) || Editor.Instance.ContentDatabase.Find(result) != null))
                 throw new IOException($"Authoring path '{result}' already exists.");
             ValidateNoLinks(contentRoot, result);
             return result;
@@ -2027,6 +2030,12 @@ namespace FlaxEditor
             if (contentRoot == null)
                 throw new InvalidOperationException("The project Content folder is not available in the content database.");
             database.RefreshFolder(contentRoot, true);
+        }
+
+        private static void CreateCanonicalJsonMetadata(string path)
+        {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase && AssetDatabaseFacade.CreateExistingJsonMetadata(path) == Guid.Empty)
+                throw new IOException($"Failed to create canonical metadata for '{path}'.");
         }
 
         private static string GetAuthoringRoot(string contentRoot)

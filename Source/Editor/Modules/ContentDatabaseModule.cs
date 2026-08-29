@@ -11,6 +11,8 @@ using FlaxEditor.Content.Settings;
 using FlaxEditor.Scripting;
 using FlaxEngine;
 using FlaxEngine.Utilities;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor.Modules
 {
@@ -1296,9 +1298,20 @@ namespace FlaxEditor.Modules
         {
             if (item is AssetItem assetItem && assetItem.IsCanonicalSource)
             {
-                File.Copy(item.Path, targetPath, false);
-                if (AssetDatabaseFacade.CloneMetadata(item.Path + ".meta", targetPath + ".meta"))
+                var targetMetaPath = targetPath + ".meta";
+                if (AssetDatabaseFacade.CloneMetadata(item.Path + ".meta", targetMetaPath))
                     throw new IOException($"Cannot clone metadata for canonical source '{item.Path}'.");
+                if (FlaxEngine.Content.GetAssetInfo(item.Path, out var sourceInfo) && sourceInfo.ID != Guid.Empty)
+                {
+                    var cloneId = ReadCanonicalMetadataGuid(targetMetaPath);
+                    if (Editor.ContentEditing.CloneAssetFile(item.Path, targetPath, cloneId))
+                        throw new IOException($"The Content backend failed to clone canonical asset '{item.Path}'.");
+                    clonedAssets.Add(targetPath);
+                }
+                else
+                {
+                    File.Copy(item.Path, targetPath, false);
+                }
             }
             else if (UseContentBackendForFileOperation(item))
             {
@@ -1310,6 +1323,26 @@ namespace FlaxEditor.Modules
             {
                 File.Copy(item.Path, targetPath, false);
             }
+        }
+
+        internal static Guid ReadCanonicalMetadataGuid(string metadataPath)
+        {
+            try
+            {
+                var document = JObject.Parse(File.ReadAllText(metadataPath));
+                var value = document.Value<string>("guid");
+                if (value?.Length == 32 && Guid.TryParseExact(value, "N", out _))
+                {
+                    var id = FlaxEngine.Json.JsonSerializer.ParseID(value);
+                    if (id != Guid.Empty)
+                        return id;
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is JsonException)
+            {
+                throw new IOException($"Cannot read cloned canonical metadata '{metadataPath}'.", ex);
+            }
+            throw new IOException($"Cloned canonical metadata '{metadataPath}' has no valid root GUID.");
         }
 
         /// <summary>

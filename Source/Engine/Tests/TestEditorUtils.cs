@@ -175,6 +175,26 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestCanonicalMetadataGuidReaderUsesClonedRootIdentity()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxCanonicalCopyTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var expected = Guid.NewGuid();
+                var serializedId = FlaxEngine.Json.JsonSerializer.GetStringID(expected);
+                var metadataPath = Path.Combine(root, "Artifact.prefab.meta");
+                File.WriteAllText(metadataPath, "{\"metaVersion\":1,\"guid\":\"" + serializedId + "\"}");
+
+                Assert.AreEqual(expected, ContentDatabaseModule.ReadCanonicalMetadataGuid(metadataPath));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
         public void TestContentCopyRejectsFolderAndCrossTypeCollisions()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentCopyTests", Guid.NewGuid().ToString("N"));

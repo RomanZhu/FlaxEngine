@@ -150,6 +150,11 @@ public sealed class CommandProtocolTests
     [TestCase("actors", "property.set", "actors.property.set")]
     [TestCase("colliders", "normalize-center", "colliders.normalize-center")]
     [TestCase("prefabs", "instantiate", "prefabs.instantiate")]
+    [TestCase("prefab-assets", "hierarchy", "prefab-assets.hierarchy")]
+    [TestCase("prefab-assets", "actor.add", "prefab-assets.actor.add")]
+    [TestCase("prefab-assets", "component.set", "prefab-assets.component.set")]
+    [TestCase("prefab-assets", "reference.set", "prefab-assets.reference.set")]
+    [TestCase("prefab-assets", "batch", "prefab-assets.batch")]
     [TestCase("history", "undo", "history.undo")]
     public void AuthoringGroupsRouteToTypedCommandNames(string group, string action, string expected)
     {
