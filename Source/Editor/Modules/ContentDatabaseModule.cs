@@ -31,16 +31,17 @@ namespace FlaxEditor.Modules
         private bool _useNewAssetDatabase;
         private ulong _assetDatabaseRevision;
         private const double AssetDiskChangeQuietPeriodSeconds = 0.5;
+        private const int BulkAssetDiskChangeThreshold = 32;
+        private const int CanonicalBuildRequestsPerUpdate = 2;
         private const double SelfAuthoredAssetDiskChangeLifetimeSeconds = 5.0;
         private readonly HashSet<ContentFolderTreeNode> _dirtyNodes = new HashSet<ContentFolderTreeNode>();
         private readonly object _assetDiskChangesLock = new object();
         private readonly HashSet<string> _pendingAssetDiskChanges = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _pendingSourceRefresh = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Queue<FileSystemEventArgs> _pendingSceneDiskChanges = new Queue<FileSystemEventArgs>();
         private readonly HashSet<string> _pendingMissingMetadataRegistrations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _pendingTextureBuildSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<Guid> _pendingTextureBuildIds = new HashSet<Guid>();
-        private readonly HashSet<Guid> _renameOnlyTextureIds = new HashSet<Guid>();
-        private readonly Dictionary<Guid, AssetDatabaseRecordInfo> _textureRecordsBeforeWatcherScan = new Dictionary<Guid, AssetDatabaseRecordInfo>();
         private readonly Dictionary<string, AssetSaveState> _assetSaves = new Dictionary<string, AssetSaveState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, AssetDiskWrite> _selfAuthoredAssetDiskChanges = new Dictionary<string, AssetDiskWrite>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, AssetDatabaseRecordInfo> _sourceAssetRecords = new Dictionary<string, AssetDatabaseRecordInfo>(StringComparer.OrdinalIgnoreCase);
@@ -2299,7 +2300,6 @@ namespace FlaxEditor.Modules
             if (_useNewAssetDatabase)
             {
                 AssetDatabaseFacade.DatabaseChanged += OnAssetDatabaseChanged;
-                AssetDatabaseFacade.ArtifactPublished += OnArtifactPublished;
                 if (AssetDatabaseFacade.LoadOrScan(true))
                     Editor.LogError("Failed to initialize the canonical asset database. See asset pipeline diagnostics.");
                 RefreshAssetDatabaseRecords(AssetDatabaseFacade.Revision);
@@ -2490,6 +2490,38 @@ namespace FlaxEditor.Modules
             return path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase) ? path.Substring(0, path.Length - 5) : path;
         }
 
+        private static string[] CoalesceAssetDiskRefreshPaths(IReadOnlyList<string> paths)
+        {
+            if (paths.Count < BulkAssetDiskChangeThreshold)
+                return paths.Select(GetCanonicalSourcePathForDiskEvent).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+            string commonDirectory = null;
+            for (int i = 0; i < paths.Count; i++)
+            {
+                var sourcePath = GetCanonicalSourcePathForDiskEvent(paths[i]);
+                var directory = Directory.Exists(sourcePath) ? sourcePath : Path.GetDirectoryName(sourcePath);
+                if (string.IsNullOrEmpty(directory))
+                    continue;
+                directory = ContentMutationPathUtils.Normalize(directory);
+                if (commonDirectory == null)
+                {
+                    commonDirectory = directory;
+                    continue;
+                }
+                while (!string.Equals(directory, commonDirectory, StringComparison.OrdinalIgnoreCase) &&
+                       !directory.StartsWith(commonDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    commonDirectory = Path.GetDirectoryName(commonDirectory);
+                    if (string.IsNullOrEmpty(commonDirectory))
+                        return paths.Select(GetCanonicalSourcePathForDiskEvent).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                    commonDirectory = ContentMutationPathUtils.Normalize(commonDirectory);
+                }
+            }
+            return !string.IsNullOrEmpty(commonDirectory) && ContentMutationPathUtils.IsWithinRoot(commonDirectory, Globals.ProjectContentFolder, true)
+                ? new[] { commonDirectory }
+                : paths.Select(GetCanonicalSourcePathForDiskEvent).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
         private static bool IsTextureRecord(AssetDatabaseRecordInfo record)
         {
             return record.IsMain && string.Equals(record.ProcessorID, "Flax.Texture", StringComparison.Ordinal);
@@ -2522,7 +2554,7 @@ namespace FlaxEditor.Modules
             return IsTextureRecord(record) || IsModelRecord(record) || IsDocumentOrImportedSourceRecord(record);
         }
 
-        private void QueueAssetDiskChange(string path, bool renameOnly)
+        private void QueueAssetDiskChange(string path)
         {
             if (string.IsNullOrEmpty(path))
                 return;
@@ -2533,44 +2565,34 @@ namespace FlaxEditor.Modules
                 _pendingAssetDiskChanges.Add(path);
                 _pendingTextureBuildSources.Add(sourcePath);
                 _lastAssetDiskChangeTime = DateTime.UtcNow;
-                if (_sourceAssetRecords.TryGetValue(sourcePath, out var record) && CanBuildCanonicalRecord(record))
-                {
-                    _pendingTextureBuildIds.Add(record.ID);
-                    _textureRecordsBeforeWatcherScan[record.ID] = record;
-                    if (renameOnly)
-                        _renameOnlyTextureIds.Add(record.ID);
-                    else
-                        _renameOnlyTextureIds.Remove(record.ID);
-                }
             }
         }
 
         private void SchedulePendingTextureBuilds()
         {
-            HashSet<Guid> ids;
-            HashSet<Guid> renameOnlyIds;
-            Dictionary<Guid, AssetDatabaseRecordInfo> previousRecords;
             lock (_assetDiskChangesLock)
             {
-                ids = new HashSet<Guid>(_pendingTextureBuildIds);
                 foreach (var sourcePath in _pendingTextureBuildSources)
                 {
                     if (_sourceAssetRecords.TryGetValue(sourcePath, out var record) && CanBuildCanonicalRecord(record))
-                        ids.Add(record.ID);
+                        _pendingTextureBuildIds.Add(record.ID);
                 }
-                renameOnlyIds = new HashSet<Guid>(_renameOnlyTextureIds);
-                previousRecords = new Dictionary<Guid, AssetDatabaseRecordInfo>(_textureRecordsBeforeWatcherScan);
                 _pendingTextureBuildSources.Clear();
-                _pendingTextureBuildIds.Clear();
-                _renameOnlyTextureIds.Clear();
-                _textureRecordsBeforeWatcherScan.Clear();
             }
+        }
 
+        private void ProcessPendingCanonicalBuilds()
+        {
+            Guid[] ids;
+            lock (_assetDiskChangesLock)
+            {
+                ids = _pendingTextureBuildIds.Take(CanonicalBuildRequestsPerUpdate).ToArray();
+                for (int i = 0; i < ids.Length; i++)
+                    _pendingTextureBuildIds.Remove(ids[i]);
+            }
             foreach (var id in ids)
             {
                 if (!_assetRecordsById.TryGetValue(id, out var record) || !CanBuildCanonicalRecord(record) || record.Status != AssetRecordStatus.Ready)
-                    continue;
-                if (renameOnlyIds.Contains(id) && previousRecords.TryGetValue(id, out var previous) && previous.MetaSemanticHash == record.MetaSemanticHash)
                     continue;
                 var failed = IsTextureRecord(record)
                     ? AssetDatabaseFacade.BuildTexture(id)
@@ -2626,7 +2648,8 @@ namespace FlaxEditor.Modules
 
             ContentMutationDiagnostics.Log("watcher.event", $"change={e.ChangeType}; path='{e.FullPath}'; root='{node?.Path}'");
 
-            Editor.Scene.QueueSceneDiskChange(e);
+            lock (_assetDiskChangesLock)
+                _pendingSceneDiskChanges.Enqueue(e);
 
             // TODO: maybe we could make it faster! since we have a path so it would be easy to just create or delete given file. but remember about subdirectories
 
@@ -2645,15 +2668,12 @@ namespace FlaxEditor.Modules
                     suppressed = e.ChangeType != WatcherChangeTypes.Deleted &&
                                  (_assetSaves.ContainsKey(path) || TrySuppressSelfAuthoredDiskChange(path, DateTime.UtcNow));
                     if (!suppressed)
-                        QueueAssetDiskChange(path, e.ChangeType == WatcherChangeTypes.Renamed);
+                        QueueAssetDiskChange(path);
                 }
                 if (suppressed)
                     break;
                 if (e is RenamedEventArgs renamed)
-                    QueueAssetDiskChange(renamed.OldFullPath, true);
-                MarkSourceFolderDirty(path);
-                if (e is RenamedEventArgs renamedOld)
-                    MarkSourceFolderDirty(renamedOld.OldFullPath);
+                    QueueAssetDiskChange(renamed.OldFullPath);
                 break;
             }
             case WatcherChangeTypes.Changed:
@@ -2671,12 +2691,20 @@ namespace FlaxEditor.Modules
                     }
                     if (TrySuppressSelfAuthoredDiskChange(path, now))
                         break;
-                    QueueAssetDiskChange(path, false);
+                    QueueAssetDiskChange(path);
                     ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}");
                 }
                 break;
             }
             }
+        }
+
+        internal void OnDirectoryWatcherError(MainContentFolderTreeNode node, ErrorEventArgs e)
+        {
+            if (node == null || string.IsNullOrEmpty(node.Path))
+                return;
+            ContentMutationDiagnostics.Log("watcher.error", $"root='{node.Path}'; error='{ContentMutationDiagnostics.Sanitize(e?.GetException()?.Message)}'");
+            QueueAssetDiskChange(node.Path);
         }
 
         internal void BeginAssetSave(string path)
@@ -2805,11 +2833,7 @@ namespace FlaxEditor.Modules
                     var sourcePath = GetCanonicalSourcePathForDiskEvent(path);
                     _pendingTextureBuildSources.Remove(sourcePath);
                     if (_sourceAssetRecords.TryGetValue(sourcePath, out var record))
-                    {
                         _pendingTextureBuildIds.Remove(record.ID);
-                        _renameOnlyTextureIds.Remove(record.ID);
-                        _textureRecordsBeforeWatcherScan.Remove(record.ID);
-                    }
                     _selfAuthoredAssetDiskChanges[path] = write;
                 }
                 ContentMutationDiagnostics.Log("save.self-write-recorded", $"path='{path}'; generation={generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}; expires={write.ExpiresAtUtc:O}");
@@ -2833,6 +2857,7 @@ namespace FlaxEditor.Modules
 
             var now = DateTime.UtcNow;
             var readyPaths = new List<string>();
+            var sceneEvents = new List<FileSystemEventArgs>();
             lock (_assetDiskChangesLock)
             {
                 if (_selfAuthoredAssetDiskChanges.Count != 0)
@@ -2847,13 +2872,23 @@ namespace FlaxEditor.Modules
 
                 readyPaths.AddRange(_pendingAssetDiskChanges);
                 _pendingAssetDiskChanges.Clear();
+                sceneEvents.AddRange(_pendingSceneDiskChanges);
+                _pendingSceneDiskChanges.Clear();
             }
 
+            for (int i = 0; i < sceneEvents.Count; i++)
+                Editor.Scene.QueueSceneDiskChange(sceneEvents[i]);
+
+            var refreshPaths = CoalesceAssetDiskRefreshPaths(readyPaths);
             if (_useNewAssetDatabase)
-                QueueCanonicalSourceRefresh(readyPaths.ToArray());
+                QueueCanonicalSourceRefresh(refreshPaths);
+            for (int i = 0; i < refreshPaths.Length; i++)
+                MarkSourceFolderDirty(refreshPaths[i]);
 
             bool workspaceModified = false;
-            for (int i = 0; i < readyPaths.Count; i++)
+            // A bulk copy has no existing loaded items to reload and repeated tree lookups become
+            // quadratic. The database publication/build notifications handle the resulting assets.
+            for (int i = 0; readyPaths.Count < BulkAssetDiskChangeThreshold && i < readyPaths.Count; i++)
             {
                 var item = Find(readyPaths[i]) as AssetItem;
                 if (item == null || item.ItemType == ContentItemType.Scene)
@@ -2921,6 +2956,10 @@ namespace FlaxEditor.Modules
         /// <inheritdoc />
         public override void OnUpdate()
         {
+            var publishedAssets = AssetDatabaseFacade.DrainArtifactPublications();
+            for (int i = 0; i < publishedAssets.Length; i++)
+                OnArtifactPublished(publishedAssets[i]);
+
             ProcessPendingAssetDiskChanges();
 
             if (_assetDatabaseAutoRefreshDepth == 0 && _pendingMissingMetadataRegistrations.Count != 0 && !Editor.ContentImporting.IsImporting)
@@ -2948,18 +2987,22 @@ namespace FlaxEditor.Modules
                     QueueMissingMetadataRegistrations();
                 }
             }
+            ProcessPendingCanonicalBuilds();
 
-            // Update all dirty content tree nodes
+            // Recursive folder loading can dispatch more watcher/database work. Snapshot the queue so
+            // those callbacks never wait on a lock held by the recursive load itself.
+            ContentFolderTreeNode[] dirtyNodes;
             lock (_dirtyNodes)
             {
-                foreach (var node in _dirtyNodes)
-                {
-                    LoadFolder(node, true);
-
-                    if (_enableEvents)
-                        WorkspaceModified?.Invoke();
-                }
+                dirtyNodes = _dirtyNodes.ToArray();
                 _dirtyNodes.Clear();
+            }
+            foreach (var node in dirtyNodes)
+            {
+                LoadFolder(node, true);
+
+                if (_enableEvents)
+                    WorkspaceModified?.Invoke();
             }
 
             // Lazy-rebuilds
@@ -2976,7 +3019,6 @@ namespace FlaxEditor.Modules
             if (_useNewAssetDatabase)
             {
                 AssetDatabaseFacade.DatabaseChanged -= OnAssetDatabaseChanged;
-                AssetDatabaseFacade.ArtifactPublished -= OnArtifactPublished;
             }
             ScriptsBuilder.ScriptsReload -= OnScriptsReload;
             ScriptsBuilder.ScriptsReloadEnd -= OnScriptsReloadEnd;
@@ -2987,9 +3029,8 @@ namespace FlaxEditor.Modules
             {
                 _pendingAssetDiskChanges.Clear();
                 _pendingTextureBuildSources.Clear();
+                _pendingSceneDiskChanges.Clear();
                 _pendingTextureBuildIds.Clear();
-                _renameOnlyTextureIds.Clear();
-                _textureRecordsBeforeWatcherScan.Clear();
                 _assetSaves.Clear();
                 _selfAuthoredAssetDiskChanges.Clear();
             }

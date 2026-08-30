@@ -14,6 +14,7 @@ enum class ModelSubAssetKind : byte
     Mesh,
     Animation,
     Material,
+    Texture,
 };
 
 /// <summary>Processor-private routing data paired with one stable public subasset candidate.</summary>
@@ -31,7 +32,7 @@ struct FLAXENGINE_API ModelSubAssetInfo
 class FLAXENGINE_API ModelSubAssetKeys
 {
 public:
-    static constexpr uint32 AlgorithmVersion = 2;
+    static constexpr uint32 AlgorithmVersion = 3;
 
     /// <summary>Enumerates sorted stable candidates. Returns true on collision or invalid source structure.</summary>
     static bool Enumerate(const ModelData& data, Array<ModelSubAssetInfo>& infos, Array<SubAssetCandidate>& candidates, AssetPipelineDiagnostic& diagnostic);

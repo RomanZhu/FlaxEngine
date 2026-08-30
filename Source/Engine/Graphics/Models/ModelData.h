@@ -274,6 +274,26 @@ struct FLAXENGINE_API TextureEntry
     String FilePath;
 
     /// <summary>
+    /// The stable source name of an image embedded in the model.
+    /// </summary>
+    String EmbeddedName;
+
+    /// <summary>
+    /// The embedded image format (file extension for encoded data or rgba8888 for raw pixels).
+    /// </summary>
+    String EmbeddedFormat;
+
+    /// <summary>
+    /// The embedded image bytes. Empty for external texture files.
+    /// </summary>
+    Array<byte> EmbeddedData;
+
+    /// <summary>
+    /// The dimensions of raw embedded pixels. Zero for encoded image data.
+    /// </summary>
+    Int2 EmbeddedSize = Int2::Zero;
+
+    /// <summary>
     /// The texture contents hint based on the usage/context.
     /// </summary>
     TypeHint Type;

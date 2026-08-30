@@ -7,7 +7,6 @@
 #include "Engine/Core/Math/Matrix.h"
 #include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Platform/FileSystem.h"
-#include "Engine/Platform/File.h"
 #include "Engine/Tools/TextureTool/TextureTool.h"
 #include "Engine/Utilities/AnsiPathTempFile.h"
 
@@ -517,14 +516,60 @@ bool ImportMaterialTexture(ModelData& result, AssimpImporterData& data, const ai
         {
             const aiTexture* aTex = data.Scene->GetEmbeddedTexture(aFilename.C_Str());
             const StringView texIndexName(filename.Get() + (ARRAY_COUNT(AI_EMBEDDED_TEXNAME_PREFIX) - 1));
-            uint32 texIndex;
+            uint32 texIndex = MAX_uint32;
             if (!aTex && !StringUtils::Parse(texIndexName.Get(), texIndexName.Length(), &texIndex) && texIndex >= 0 && texIndex < data.Scene->mNumTextures)
                 aTex = data.Scene->mTextures[texIndex];
-            if (aTex && aTex->mHeight == 0 && aTex->mWidth > 0)
+            if (aTex && aTex->pcData && aTex->mWidth > 0)
             {
-                // Export embedded texture to temporary file
-                filename = String::Format(TEXT("{0}_tex_{1}.{2}"), StringUtils::GetFileNameWithoutExtension(data.Path), texIndexName, String(aTex->achFormatHint));
-                File::WriteAllBytes(String(StringUtils::GetDirectoryName(data.Path)) / filename, (const byte*)aTex->pcData, (int32)aTex->mWidth);
+                const String embeddedName = aTex->mFilename.length
+                    ? String(aTex->mFilename.C_Str()).TrimTrailing()
+                    : filename;
+
+                textureIndex = 0;
+                while (textureIndex < result.Textures.Count())
+                {
+                    const TextureEntry& existing = result.Textures[textureIndex];
+                    if (existing.EmbeddedData.HasItems() && existing.EmbeddedName == embeddedName)
+                        return true;
+                    textureIndex++;
+                }
+
+                TextureEntry& texture = result.Textures.AddOne();
+                texture.EmbeddedName = embeddedName;
+                texture.EmbeddedFormat = String(aTex->achFormatHint).TrimTrailing().ToLower();
+                texture.Type = type;
+                texture.sRGB = sRGB;
+                texture.AssetID = Guid::Empty;
+                if (aTex->mHeight == 0)
+                {
+                    if (texture.EmbeddedFormat.IsEmpty() && aTex->mFilename.length)
+                        texture.EmbeddedFormat = FileSystem::GetExtension(String(aTex->mFilename.C_Str())).ToLower();
+                    if (aTex->mWidth <= MAX_int32)
+                        texture.EmbeddedData.Set(reinterpret_cast<const byte*>(aTex->pcData), static_cast<int32>(aTex->mWidth));
+                }
+                else
+                {
+                    const uint64 pixelCount = static_cast<uint64>(aTex->mWidth) * aTex->mHeight;
+                    if (pixelCount <= MAX_int32 / 4)
+                    {
+                        texture.EmbeddedFormat = TEXT("rgba8888");
+                        texture.EmbeddedSize = Int2(static_cast<int32>(aTex->mWidth), static_cast<int32>(aTex->mHeight));
+                        texture.EmbeddedData.Resize(static_cast<int32>(pixelCount * 4));
+                        for (uint64 i = 0; i < pixelCount; i++)
+                        {
+                            const aiTexel& source = aTex->pcData[i];
+                            byte* destination = texture.EmbeddedData.Get() + i * 4;
+                            destination[0] = source.r;
+                            destination[1] = source.g;
+                            destination[2] = source.b;
+                            destination[3] = source.a;
+                        }
+                    }
+                }
+                const bool imported = texture.EmbeddedData.HasItems();
+                if (!imported)
+                    result.Textures.RemoveLast();
+                return imported;
             }
         }
 
@@ -610,7 +655,22 @@ bool ImportMaterials(ModelData& result, AssimpImporterData& data, String& errorM
                 if (materialSlot.Diffuse.TextureIndex != -1)
                 {
                     // Detect using alpha mask in diffuse texture
-                    materialSlot.Diffuse.HasAlphaMask = TextureTool::HasAlpha(result.Textures[materialSlot.Diffuse.TextureIndex].FilePath);
+                    const TextureEntry& diffuseTexture = result.Textures[materialSlot.Diffuse.TextureIndex];
+                    if (!diffuseTexture.FilePath.IsEmpty())
+                    {
+                        materialSlot.Diffuse.HasAlphaMask = TextureTool::HasAlpha(diffuseTexture.FilePath);
+                    }
+                    else if (diffuseTexture.EmbeddedFormat == TEXT("rgba8888"))
+                    {
+                        for (int32 pixel = 3; pixel < diffuseTexture.EmbeddedData.Count(); pixel += 4)
+                        {
+                            if (diffuseTexture.EmbeddedData[pixel] != MAX_uint8)
+                            {
+                                materialSlot.Diffuse.HasAlphaMask = true;
+                                break;
+                            }
+                        }
+                    }
                     if (materialSlot.Diffuse.HasAlphaMask)
                         result.Textures[materialSlot.Diffuse.TextureIndex].Type = TextureEntry::TypeHint::ColorRGBA;
                 }

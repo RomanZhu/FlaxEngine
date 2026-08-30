@@ -337,6 +337,15 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     if (!AssetDatabase::Get().TryGetRecord(assetID, record))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
             assetID, TEXT("Model asset is not registered."));
+    if (record.IsMainAsset())
+    {
+        Array<SubAssetReconcileChange> changes;
+        if (ReconcileMetadata(assetID, changes, diagnostic))
+            return true;
+        if (!AssetDatabase::Get().TryGetRecord(assetID, record))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+                assetID, TEXT("Model asset disappeared after subasset reconciliation."));
+    }
 
     Array<AssetRecord> records;
     records.Add(record);

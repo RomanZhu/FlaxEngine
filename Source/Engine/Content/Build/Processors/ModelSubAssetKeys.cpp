@@ -8,6 +8,7 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Content/Assets/SkinnedModel.h"
+#include "Engine/Content/Assets/Texture.h"
 #include <algorithm>
 
 namespace
@@ -103,6 +104,21 @@ namespace
         HashValue(hasher, material.Metalness.Value);
         HashValue(hasher, material.TwoSided);
         HashValue(hasher, material.Wireframe);
+        return hasher.Finalize();
+    }
+
+    ContentHash HashTexture(const TextureEntry& texture)
+    {
+        ContentHasher hasher;
+        static const char Domain[] = "flax-model-embedded-texture-semantic-v1";
+        hasher.Update(Domain, ARRAY_COUNT(Domain) - 1);
+        HashString(hasher, texture.EmbeddedName);
+        HashString(hasher, texture.EmbeddedFormat);
+        HashValue(hasher, texture.EmbeddedSize);
+        HashValue(hasher, texture.Type);
+        HashValue(hasher, texture.sRGB);
+        if (texture.EmbeddedData.HasItems())
+            hasher.Update(texture.EmbeddedData.Get(), texture.EmbeddedData.Count());
         return hasher.Finalize();
     }
 
@@ -207,6 +223,24 @@ bool ModelSubAssetKeys::Enumerate(const ModelData& data, Array<ModelSubAssetInfo
         const String baseKey = TEXT("material:") + Escape(material.Name);
         AddInfo(infos, ModelSubAssetKind::Material, baseKey, material.Name, Material::TypeName,
             HashMaterial(material), index, materialNames[baseKey] > 1);
+    }
+
+    Dictionary<String, int32> textureNames;
+    for (const TextureEntry& texture : data.Textures)
+    {
+        if (texture.EmbeddedData.IsEmpty())
+            continue;
+        const String key = TEXT("texture:") + Escape(texture.EmbeddedName);
+        textureNames[key] = textureNames.ContainsKey(key) ? textureNames[key] + 1 : 1;
+    }
+    for (int32 index = 0; index < data.Textures.Count(); index++)
+    {
+        const TextureEntry& texture = data.Textures[index];
+        if (texture.EmbeddedData.IsEmpty())
+            continue;
+        const String baseKey = TEXT("texture:") + Escape(texture.EmbeddedName);
+        AddInfo(infos, ModelSubAssetKind::Texture, baseKey, texture.EmbeddedName, Texture::TypeName,
+            HashTexture(texture), index, textureNames[baseKey] > 1);
     }
 
     Dictionary<String, int32> identicalKeys;

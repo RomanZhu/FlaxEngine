@@ -77,19 +77,38 @@
 #endif
 #include <algorithm>
 #include <future>
+#include <mutex>
 #include <vector>
 
 Delegate<uint64> AssetDatabaseFacade::DatabaseChanged;
-Delegate<Guid> AssetDatabaseFacade::ArtifactPublished;
+
+namespace
+{
+    std::mutex ArtifactPublicationLocker;
+    HashSet<Guid> PendingArtifactPublications;
+}
 
 void AssetDatabaseFacade::NotifyArtifactPublished(const Guid& assetID)
 {
-    ArtifactPublished(assetID);
+    std::lock_guard<std::mutex> lock(ArtifactPublicationLocker);
+    PendingArtifactPublications.Add(assetID);
+}
+
+Array<Guid> AssetDatabaseFacade::DrainArtifactPublications()
+{
+    std::lock_guard<std::mutex> lock(ArtifactPublicationLocker);
+    Array<Guid> result;
+    result.EnsureCapacity(PendingArtifactPublications.Count());
+    for (auto i = PendingArtifactPublications.Begin(); i.IsNotEnd(); ++i)
+        result.Add(i->Item);
+    PendingArtifactPublications.Clear();
+    return result;
 }
 
 namespace
 {
     CriticalSection StateLocker;
+    std::recursive_mutex RefreshLocker;
     Array<AssetPipelineDiagnostic> LastDiagnostics;
     AssetDatabaseChangeInfo LastChange;
     Array<AssetDatabaseFileState> LastFileStates;
@@ -984,6 +1003,7 @@ Guid AssetDatabaseFacade::GetPublishedArtifactCacheID(const Guid& assetID, const
 bool AssetDatabaseFacade::Scan(bool strictMetadata)
 {
 #if USE_EDITOR
+    std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
     EnsureBound();
     const int32 assetSystemVersion = AssetPipelineSettings::Get()->AssetSystemVersion;
     Array<AssetPipelineDiagnostic> metadataDiagnostics;
@@ -1072,6 +1092,7 @@ bool AssetDatabaseFacade::LoadOrScan(bool strictMetadata)
 bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
 {
 #if USE_EDITOR
+    std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
     EnsureBound();
     if (paths.IsEmpty())
         return false;
@@ -1241,6 +1262,7 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
 bool AssetDatabaseFacade::ImportAsset(const StringView& path, ImportAssetOptions options)
 {
 #if USE_EDITOR
+    std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
     if (path.IsEmpty())
         return true;
     String resolved = ResolveFacadeAssetPath(path);
@@ -1373,6 +1395,7 @@ bool AssetDatabaseFacade::ImportAsset(const StringView& path, ImportAssetOptions
 bool AssetDatabaseFacade::Refresh(ImportAssetOptions options)
 {
 #if USE_EDITOR
+    std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
     Array<String> sources;
     if (FileSystem::DirectoryGetFiles(sources, Globals::ProjectContentFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
         return true;

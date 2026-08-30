@@ -78,11 +78,11 @@ public:
     /// <summary>Emitted once per coherent native database batch.</summary>
     API_EVENT() static Delegate<uint64> DatabaseChanged;
 
-    /// <summary>Emitted on the main thread after a generated artifact has been published and hot-swapped.</summary>
-    API_EVENT() static Delegate<Guid> ArtifactPublished;
-
-    /// <summary>Notifies editor consumers that an exact generated artifact is ready.</summary>
+    /// <summary>Queues notification that an exact generated artifact is ready.</summary>
     static void NotifyArtifactPublished(const Guid& assetID);
+
+    /// <summary>Consumes generated artifact notifications for the managed editor update loop.</summary>
+    API_FUNCTION() static Array<Guid> DrainArtifactPublications();
 
     API_PROPERTY() static uint64 GetRevision();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
