@@ -35,6 +35,10 @@ public:
     /// <returns>True if enumeration failed. Content diagnostics are returned in result.</returns>
     static bool Collect(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const AssetDatabaseScanOptions& options, const AssetDatabaseSnapshot& previous, Array<AssetRecord>& records, AssetDatabaseScanResult& result);
 
+    /// <summary>Collects records for an explicit file list without enumerating the Content tree.</summary>
+    /// <returns>True if hashing failed fatally. Content diagnostics are returned in result.</returns>
+    static bool CollectFromFiles(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const Array<String>& files, const AssetDatabaseScanOptions& options, const AssetDatabaseSnapshot& previous, Array<AssetRecord>& records, AssetDatabaseScanResult& result);
+
     /// <returns>True if enumeration or publication itself failed. Content diagnostics are returned in result.</returns>
     static bool Scan(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const AssetDatabaseScanOptions& options, AssetDatabase& database, AssetDatabaseScanResult& result);
 };

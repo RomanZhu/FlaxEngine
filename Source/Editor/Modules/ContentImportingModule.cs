@@ -744,10 +744,11 @@ namespace FlaxEditor.Modules
             }
 
             var publishIds = validIndices.Select(index => assetIds[index]).ToArray();
+            var publishPaths = validIndices.Select(index => entries[index].SourceUrl).ToArray();
             steps.Add(new ContentMutationStep(
                 "publish-canonical-metadata-batch",
                 Array.Empty<int>(),
-                () => AssetDatabaseFacade.PublishDefaultCanonicalMetadataBatch(publishIds)
+                () => AssetDatabaseFacade.PublishDefaultCanonicalMetadataBatch(publishIds, publishPaths)
                     ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, null, "Canonical metadata batch database publication failed.")
                     : ContentMutationResult.Success(null, null),
                 () => true,
@@ -1252,7 +1253,12 @@ namespace FlaxEditor.Modules
         {
             var deleted = DeleteImportPath(path);
             if (deleted)
-                AssetDatabaseFacade.Scan(false);
+            {
+                var sourcePath = path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)
+                    ? path.Substring(0, path.Length - 5)
+                    : path;
+                AssetDatabaseFacade.RefreshSources(new[] { sourcePath });
+            }
             return deleted;
         }
 

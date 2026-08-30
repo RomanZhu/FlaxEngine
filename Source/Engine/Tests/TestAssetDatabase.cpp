@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseScanner.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Assets/Texture.h"
@@ -239,6 +240,140 @@ TEST_CASE("Asset database snapshot is disposable checksummed and project scoped"
     REQUIRE_FALSE(File::WriteAllBytes(path, bytes.Get(), bytes.Length()));
     CHECK(AssetDatabaseSnapshotStore::Load(path, root, content, loaded, loadedStates, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::SnapshotInvalid);
+}
+
+TEST_CASE("Asset database CollectFromFiles indexes an explicit file list")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseCollectFromFiles-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid firstId = Guid::New();
+    const Guid secondId = Guid::New();
+    const String first = content / TEXT("First.png");
+    const String second = content / TEXT("Second.png");
+    REQUIRE_FALSE(File::WriteAllText(first, TEXT("one"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(second, TEXT("two"), Encoding::ANSI));
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(first + TEXT(".meta"), MakeDatabaseMeta(firstId), diagnostic));
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(second + TEXT(".meta"), MakeDatabaseMeta(secondId), diagnostic));
+
+    AssetDatabaseScanOptions options;
+    AssetDatabaseSnapshot previous;
+    Array<AssetRecord> allRecords;
+    AssetDatabaseScanResult allScan;
+    REQUIRE_FALSE(AssetDatabaseScanner::Collect(root, content, library, options, previous, allRecords, allScan));
+    REQUIRE(allRecords.Count() == 2);
+
+    Array<String> subset;
+    subset.Add(first);
+    subset.Add(first + TEXT(".meta"));
+    Array<AssetRecord> subsetRecords;
+    AssetDatabaseScanResult subsetScan;
+    REQUIRE_FALSE(AssetDatabaseScanner::CollectFromFiles(root, content, library, subset, options, previous, subsetRecords, subsetScan));
+    REQUIRE(subsetRecords.Count() == 1);
+    CHECK(subsetRecords[0].ID == firstId);
+
+    bool matched = false;
+    for (const AssetRecord& record : allRecords)
+    {
+        if (record.ID != firstId)
+            continue;
+        CHECK(record.MetaSemanticHash == subsetRecords[0].MetaSemanticHash);
+        CHECK(record.Status == subsetRecords[0].Status);
+        CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), subsetRecords[0].SourcePath.Get()));
+        matched = true;
+    }
+    CHECK(matched);
+}
+
+TEST_CASE("Asset database RefreshSources patches known writes without a full scan")
+{
+    const String folder = Globals::ProjectContentFolder / (TEXT("__RefreshSources_") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(folder));
+    Array<String> cleanup;
+    cleanup.Add(folder);
+    SCOPE_EXIT
+    {
+        FileSystem::DeleteDirectory(folder, true);
+        AssetDatabaseFacade::RefreshSources(cleanup);
+    };
+
+    const Guid firstId = Guid::New();
+    const Guid secondId = Guid::New();
+    const String first = folder / TEXT("First.png");
+    const String second = folder / TEXT("Second.png");
+    REQUIRE_FALSE(File::WriteAllText(first, TEXT("one"), Encoding::ANSI));
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(first + TEXT(".meta"), MakeDatabaseMeta(firstId), diagnostic));
+
+    Array<String> refresh;
+    refresh.Add(first);
+    const uint64 revisionBeforeAdd = AssetDatabase::Get().GetRevision();
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(refresh));
+    CHECK(AssetDatabase::Get().GetRevision() == revisionBeforeAdd + 1);
+    AssetRecord found;
+    REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
+    CHECK(FileSystem::AreFilePathsEquivalent(found.SourcePath.Get(), first));
+    const uint64 firstRecordRevision = found.DatabaseRevision;
+    CHECK(AssetDatabaseFacade::GetLastChange().Added.Contains(firstId));
+    CHECK(AssetDatabaseFacade::GetLastChange().Added.Count() == 1);
+
+    Array<String> subset;
+    subset.Add(first);
+    subset.Add(first + TEXT(".meta"));
+    Array<AssetRecord> collected;
+    AssetDatabaseScanResult collectedScan;
+    AssetDatabaseScanOptions options;
+    REQUIRE_FALSE(AssetDatabaseScanner::CollectFromFiles(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
+        subset, options, AssetDatabase::Get().GetSnapshot(), collected, collectedScan));
+    REQUIRE(collected.Count() == 1);
+    CHECK(collected[0].ID == firstId);
+    CHECK(collected[0].MetaSemanticHash == found.MetaSemanticHash);
+
+    REQUIRE_FALSE(File::WriteAllText(first, TEXT("overwrite"), Encoding::ANSI));
+    const uint64 revisionBeforeOverwrite = AssetDatabase::Get().GetRevision();
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(refresh));
+    CHECK(AssetDatabase::Get().GetRevision() == revisionBeforeOverwrite);
+    REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
+    CHECK(found.DatabaseRevision == firstRecordRevision);
+
+    REQUIRE_FALSE(File::WriteAllText(second, TEXT("two"), Encoding::ANSI));
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(second + TEXT(".meta"), MakeDatabaseMeta(secondId), diagnostic));
+    refresh.Clear();
+    refresh.Add(second);
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(refresh));
+    CHECK(AssetDatabaseFacade::GetLastChange().Added.Contains(secondId));
+    CHECK(AssetDatabaseFacade::GetLastChange().Added.Count() == 1);
+    REQUIRE(AssetDatabase::Get().TryGetRecord(secondId, found));
+
+    AssetMeta meta;
+    REQUIRE_FALSE(AssetMeta::Load(first + TEXT(".meta"), meta, diagnostic));
+    REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
+    const uint64 previousHash = found.MetaSemanticHash;
+    meta.Processor.SettingsJson = "{\"refresh\":1}\n";
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(first + TEXT(".meta"), meta, diagnostic));
+    refresh.Clear();
+    refresh.Add(first);
+    const uint64 revisionBeforeMeta = AssetDatabase::Get().GetRevision();
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(refresh));
+    CHECK(AssetDatabase::Get().GetRevision() == revisionBeforeMeta + 1);
+    CHECK(AssetDatabaseFacade::GetLastChange().Changed.Contains(firstId));
+    CHECK(AssetDatabaseFacade::GetLastChange().Changed.Count() == 1);
+    REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
+    CHECK(found.MetaSemanticHash != previousHash);
+    CHECK(found.DatabaseRevision != firstRecordRevision);
+
+    FileSystem::DeleteFile(first);
+    FileSystem::DeleteFile(first + TEXT(".meta"));
+    FileSystem::DeleteFile(second);
+    FileSystem::DeleteFile(second + TEXT(".meta"));
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
+    CHECK_FALSE(AssetDatabase::Get().TryGetRecord(firstId, found));
+    CHECK_FALSE(AssetDatabase::Get().TryGetRecord(secondId, found));
 }
 
 #endif

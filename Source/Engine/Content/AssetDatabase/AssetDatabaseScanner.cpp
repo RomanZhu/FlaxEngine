@@ -215,7 +215,11 @@ bool AssetDatabaseScanner::Collect(const StringView& projectRoot, const StringVi
         result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::SourceBusy, contentRoot, TEXT("Content scan exceeds the configured bounded file count.")));
         return true;
     }
+    return CollectFromFiles(projectRoot, contentRoot, libraryRoot, files, options, previous, records, result);
+}
 
+bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const Array<String>& files, const AssetDatabaseScanOptions& options, const AssetDatabaseSnapshot& previous, Array<AssetRecord>& records, AssetDatabaseScanResult& result)
+{
     SourceHashCache localHashCache;
     SourceHashCache& hashCache = options.HashCache ? *options.HashCache : localHashCache;
     HashSet<String> fileSet;

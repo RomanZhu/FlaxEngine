@@ -57,4 +57,5 @@ struct FLAXENGINE_API AssetRecord
     static AssetRecord FromLegacy(const AssetInfo& info);
     AssetInfo ToAssetInfo() const;
     bool IsMainAsset() const;
+    bool HasSameIdentityAndContent(const AssetRecord& other) const;
 };
