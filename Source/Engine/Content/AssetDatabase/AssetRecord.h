@@ -13,6 +13,7 @@ API_ENUM() enum class AssetSourceKind : byte
     TextDocument,
     ExistingJson,
     LegacyBinary,
+    Folder,
 };
 
 /// <summary>Current registration/build state of an asset record.</summary>
@@ -40,6 +41,7 @@ struct FLAXENGINE_API AssetRecord
 {
     Guid ID;
     Guid SourceAssetID;
+    int64 LocalId = 1;
     String TypeName;
     CanonicalAssetPath CanonicalPath;
     SourceFilePath SourcePath;

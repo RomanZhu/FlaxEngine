@@ -10,6 +10,26 @@
 
 namespace
 {
+    bool CollectDirectories(const StringView& root, Array<String>& directories, int32 maximumEntries)
+    {
+        Array<String> pending;
+        pending.Add(String(root));
+        for (int32 index = 0; index < pending.Count(); index++)
+        {
+            Array<String> children;
+            if (FileSystem::GetChildDirectories(children, pending[index]))
+                return true;
+            for (String& child : children)
+            {
+                if (directories.Count() >= maximumEntries)
+                    return true;
+                directories.Add(child);
+                pending.Add(MoveTemp(child));
+            }
+        }
+        return false;
+    }
+
     bool IsMeta(const StringView& path)
     {
         return path.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase);
@@ -126,6 +146,7 @@ namespace
             AssetRecord subAsset;
             subAsset.ID = entry.Value.ID;
             subAsset.SourceAssetID = meta.ID;
+            subAsset.LocalId = entry.Value.LocalId;
             subAsset.TypeName = entry.Value.TypeName;
             subAsset.CanonicalPath = CanonicalAssetPath(sourcePath);
             subAsset.SourcePath = SourceFilePath(sourcePath);
@@ -215,6 +236,13 @@ bool AssetDatabaseScanner::Collect(const StringView& projectRoot, const StringVi
         result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::SourceBusy, contentRoot, TEXT("Content scan exceeds the configured bounded file count.")));
         return true;
     }
+    Array<String> directories;
+    if (CollectDirectories(contentRoot, directories, options.MaximumFiles - files.Count()))
+    {
+        result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::SourceBusy, contentRoot, TEXT("Content directory discovery failed or exceeded the configured bounded entry count.")));
+        return true;
+    }
+    files.Add(directories);
     return CollectFromFiles(projectRoot, contentRoot, libraryRoot, files, options, previous, records, result);
 }
 
@@ -230,6 +258,8 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         if (!IsExcluded(file, contentRoot, libraryRoot))
         {
             fileSet.Add(file);
+            if (!FileSystem::FileExists(file))
+                continue;
             AssetDatabaseFileState state;
             ContentHash hash;
             AssetPipelineDiagnostic hashDiagnostic;
@@ -255,8 +285,15 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             continue;
         }
         result.FilesExamined++;
-        if (FileSystem::GetExtension(sourcePath).ToLower() == TEXT("flax"))
+        const bool isFolder = FileSystem::DirectoryExists(sourcePath);
+        if (!isFolder && FileSystem::GetExtension(sourcePath).ToLower() == TEXT("flax"))
         {
+            if (options.AssetSystemVersion >= 3)
+            {
+                result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::ProcessorMissing, sourcePath, TEXT("Asset-system version 3 does not allow legacy cooked .flax files in Content.")));
+                consumedMeta.Add(sourcePath + TEXT(".meta"));
+                continue;
+            }
             AssetPipelineDiagnostic diagnostic;
             AssetPathPolicy::ProjectPath normalizedPath;
             if (AssetPathPolicy::TryNormalizeProjectPath(projectRoot, contentRoot, libraryRoot, sourcePath, normalizedPath, diagnostic))
@@ -276,6 +313,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
                 AssetRecord record;
                 record.ID = entries[i].ID;
                 record.SourceAssetID = rootID;
+                record.LocalId = i + 1;
                 record.TypeName = entries[i].TypeName;
                 record.CanonicalPath = CanonicalAssetPath(sourcePath);
                 record.SourcePath = SourceFilePath(sourcePath);
@@ -291,7 +329,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         const String metaPath = sourcePath + TEXT(".meta");
         if (!fileSet.Contains(metaPath))
         {
-            if (options.StrictMetadata && RequiresMetadata(sourcePath))
+            if (options.AssetSystemVersion >= 3 || (options.StrictMetadata && RequiresMetadata(sourcePath)))
                 result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::MissingMeta, sourcePath, TEXT("Canonical source is missing its adjacent metadata sidecar.")));
             continue;
         }
@@ -301,6 +339,12 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         if (AssetMeta::Load(metaPath, meta, diagnostic))
         {
             result.Diagnostics.Add(diagnostic);
+            RetainPreviousMalformedRecords(previous, metaPath, records, recordIndices);
+            continue;
+        }
+        if (meta.FolderAsset != isFolder)
+        {
+            result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::InvalidMeta, sourcePath, TEXT("Metadata folderAsset does not match the adjacent filesystem entry.")));
             RetainPreviousMalformedRecords(previous, metaPath, records, recordIndices);
             continue;
         }
@@ -318,7 +362,9 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             continue;
         }
         const uint64 semanticHash = Crc::MemCrc32(canonicalMeta.Get(), canonicalMeta.Length());
-        const AssetRecordStatus status = meta.MetaUpgradeRequired ? AssetRecordStatus::MetaUpgradeRequired : AssetRecordStatus::Ready;
+        const AssetRecordStatus status = meta.Processor.ID == TEXT("Flax.Unsupported")
+            ? AssetRecordStatus::UnsupportedProcessor
+            : options.AssetSystemVersion >= 3 && meta.MetaUpgradeRequired ? AssetRecordStatus::MetaUpgradeRequired : AssetRecordStatus::Ready;
         Array<AssetRecord> metaRecords;
         AddMetaRecords(meta, sourcePath, metaPath, normalizedPath, semanticHash, status, metaRecords);
         for (AssetRecord& record : metaRecords)

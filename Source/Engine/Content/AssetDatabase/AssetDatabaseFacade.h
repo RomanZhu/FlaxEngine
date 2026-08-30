@@ -5,6 +5,7 @@
 #include "AssetDatabaseScanner.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Scripting/ScriptingType.h"
+#include "Identity/AssetObjectId.h"
 #include "Engine/Physics/CollisionData.h"
 
 #if COMPILE_WITH_TEXTURE_TOOL
@@ -22,6 +23,19 @@ class BinaryAsset;
 class Asset;
 class Material;
 
+/// <summary>Controls generic asset import and refresh behavior.</summary>
+API_ENUM(Attributes="Flags") enum class ImportAssetOptions : uint32
+{
+    Default = 0,
+    ForceUpdate = 1 << 0,
+    ForceSynchronousImport = 1 << 1,
+    ImportRecursive = 1 << 2,
+    DontDownloadFromCacheServer = 1 << 3,
+    ForceUncompressedImport = 1 << 4,
+};
+
+DECLARE_ENUM_OPERATORS(ImportAssetOptions);
+
 /// <summary>Managed-safe immutable asset database record projection.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
 {
@@ -29,6 +43,7 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
 
     API_FIELD() Guid ID;
     API_FIELD() Guid SourceAssetID;
+    API_FIELD() int64 LocalId = 1;
     API_FIELD() String TypeName;
     API_FIELD() String CanonicalPath;
     API_FIELD() String SourcePath;
@@ -74,6 +89,21 @@ public:
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
     API_FUNCTION() static AssetDatabaseChangeInfo GetLastChange();
 
+    /// <summary>Returns the source GUID at a logical or absolute canonical asset path.</summary>
+    API_FUNCTION() static Guid AssetPathToGUID(const StringView& path);
+
+    /// <summary>Returns the canonical logical path for a live source or subasset GUID.</summary>
+    API_FUNCTION() static String GUIDToAssetPath(const Guid& assetID);
+
+    /// <summary>Returns all live main-asset paths in deterministic canonical order.</summary>
+    API_FUNCTION() static Array<String> GetAllAssetPaths();
+
+    /// <summary>Resolves a loaded main asset or subasset to its persistent source identity.</summary>
+    API_FUNCTION() static bool TryGetAssetObjectId(Asset* asset, API_PARAM(Out) AssetObjectId& result);
+
+    /// <summary>Resolves a persistent asset object identity to the current runtime backing asset GUID.</summary>
+    API_FUNCTION() static Guid GetBackingAssetID(const AssetObjectId& objectID);
+
     /// <summary>Returns the canonical source path for an asset identifier, or an empty string when it is not registered.</summary>
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
 
@@ -95,11 +125,19 @@ public:
     /// <returns>True if indexing failed. Content diagnostics remain queryable.</returns>
     API_FUNCTION() static bool RefreshSources(const Array<String>& paths);
 
+    /// <summary>Reconciles and builds one canonical source or a recursive source folder.</summary>
+    /// <returns>True on failure.</returns>
+    API_FUNCTION() static bool ImportAsset(const StringView& path, ImportAssetOptions options = ImportAssetOptions::Default);
+
+    /// <summary>Reconciles all mounted sources and queues their supported current builds.</summary>
+    /// <returns>True on failure.</returns>
+    API_FUNCTION() static bool Refresh(ImportAssetOptions options = ImportAssetOptions::Default);
+
     /// <summary>Safely clears and recreates the configured Project Library root.</summary>
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool CleanLibrary();
 
-    /// <summary>Clones a sidecar while regenerating the root, live subasset, and tombstone GUID tree.</summary>
+    /// <summary>Clones a sidecar with a new file GUID while preserving file-relative local IDs.</summary>
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool CloneMetadata(const StringView& sourceMetaPath, const StringView& destinationMetaPath);
 

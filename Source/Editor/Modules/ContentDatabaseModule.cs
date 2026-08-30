@@ -48,6 +48,19 @@ namespace FlaxEditor.Modules
         private readonly Dictionary<Guid, AssetDatabaseRecordInfo> _assetRecordsById = new Dictionary<Guid, AssetDatabaseRecordInfo>();
         private DateTime _lastAssetDiskChangeTime;
         private long _nextAssetSaveGeneration;
+        private int _assetDatabaseAutoRefreshDepth;
+
+        internal void SuspendAssetDatabaseAutoRefresh()
+        {
+            _assetDatabaseAutoRefreshDepth++;
+        }
+
+        internal void ResumeAssetDatabaseAutoRefresh()
+        {
+            if (_assetDatabaseAutoRefreshDepth == 0)
+                throw new InvalidOperationException("Asset database auto-refresh suppression is not balanced.");
+            _assetDatabaseAutoRefreshDepth--;
+        }
 
         private sealed class AssetSaveState
         {
@@ -330,13 +343,18 @@ namespace FlaxEditor.Modules
                 var diagnostic = diagnostics[i];
                 if (string.IsNullOrWhiteSpace(diagnostic.SourcePath))
                     continue;
+                var sourcePath = diagnostic.SourcePath.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)
+                    ? diagnostic.SourcePath.Substring(0, diagnostic.SourcePath.Length - 5)
+                    : diagnostic.SourcePath;
+                if (!ContentMutationPathUtils.IsWithinRoot(sourcePath, Globals.ProjectContentFolder, false))
+                    continue;
                 if (diagnostic.Code == AssetPipelineDiagnosticCode.MissingMeta)
                 {
-                    _pendingMissingMetadataRegistrations.Add(ContentMutationPathUtils.Normalize(diagnostic.SourcePath));
+                    _pendingMissingMetadataRegistrations.Add(ContentMutationPathUtils.Normalize(sourcePath));
                 }
                 else if (diagnostic.Code == AssetPipelineDiagnosticCode.MetaParseError && diagnostic.SourcePath.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
                 {
-                    _pendingMissingMetadataRegistrations.Add(ContentMutationPathUtils.Normalize(diagnostic.SourcePath.Substring(0, diagnostic.SourcePath.Length - 5)));
+                    _pendingMissingMetadataRegistrations.Add(ContentMutationPathUtils.Normalize(sourcePath));
                 }
             }
         }
@@ -1037,7 +1055,7 @@ namespace FlaxEditor.Modules
                 DestinationReleasedByTransaction = destinationReleased,
                 DestinationParentProducedByTransaction = descendant,
             });
-            if (!item.IsFolder && item is AssetItem assetItem && assetItem.IsCanonicalSource && (sourceProduced || File.Exists(sourcePath + ".meta")))
+            if ((item.IsFolder || item is AssetItem { IsCanonicalSource: true }) && (sourceProduced || File.Exists(sourcePath + ".meta")))
             {
                 plan.Entries.Add(new ContentMutationEntry(sourcePath + ".meta", destinationPath + ".meta", ContentMutationPathRole.MetadataSidecar, false)
                 {
@@ -1072,7 +1090,11 @@ namespace FlaxEditor.Modules
             {
                 bool failed;
                 if (item.IsFolder)
+                {
                     failed = FlaxEngine.Content.RenameAssetFolder(sourcePath, destinationPath);
+                    if (!failed && File.Exists(sourcePath + ".meta"))
+                        File.Move(sourcePath + ".meta", destinationPath + ".meta");
+                }
                 else if (UseContentBackendForFileOperation(item))
                     failed = FlaxEngine.Content.RenameAsset(sourcePath, destinationPath);
                 else
@@ -1276,7 +1298,7 @@ namespace FlaxEditor.Modules
                 AssetCloneExpected = !item.IsFolder && UseContentBackendForCopy(item),
             };
             plan.Entries.Add(entry);
-            if (!item.IsFolder && item is AssetItem assetItem && assetItem.IsCanonicalSource && File.Exists(item.Path + ".meta"))
+            if ((item.IsFolder || item is AssetItem { IsCanonicalSource: true }) && File.Exists(item.Path + ".meta"))
             {
                 plan.Entries.Add(new ContentMutationEntry(item.Path + ".meta", targetPath + ".meta", ContentMutationPathRole.MetadataSidecar, false)
                 {
@@ -1300,6 +1322,7 @@ namespace FlaxEditor.Modules
                 if (item.IsFolder)
                 {
                     Directory.CreateDirectory(targetPath);
+                    CloneFolderMetadata(item.Path, targetPath);
                     CopyFolderChildren((ContentFolder)item, targetPath, clonedAssets);
                 }
                 else
@@ -1439,6 +1462,7 @@ namespace FlaxEditor.Modules
                 if (child is ContentFolder childFolder)
                 {
                     Directory.CreateDirectory(childTargetPath);
+                    CloneFolderMetadata(child.Path, childTargetPath);
                     CopyFolderChildren(childFolder, childTargetPath, clonedAssets);
                 }
                 else
@@ -1446,6 +1470,15 @@ namespace FlaxEditor.Modules
                     CopyFileItem(child, childTargetPath, clonedAssets);
                 }
             }
+        }
+
+        private static void CloneFolderMetadata(string sourcePath, string targetPath)
+        {
+            var sourceMetaPath = sourcePath + ".meta";
+            if (!File.Exists(sourceMetaPath))
+                return;
+            if (AssetDatabaseFacade.CloneMetadata(sourceMetaPath, targetPath + ".meta"))
+                throw new IOException($"Cannot clone folder metadata for '{sourcePath}'.");
         }
 
         private void CopyFileItem(ContentItem item, string targetPath, List<string> clonedAssets)
@@ -1550,7 +1583,16 @@ namespace FlaxEditor.Modules
 
                     try
                     {
-                        Directory.Delete(path, true);
+                        var metadataPath = path + ".meta";
+                        if (File.Exists(metadataPath))
+                        {
+                            if (!DeleteCanonicalFolderPair(path))
+                                return;
+                        }
+                        else
+                        {
+                            Directory.Delete(path, true);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -1604,6 +1646,61 @@ namespace FlaxEditor.Modules
             ContentMutationDiagnostics.Log("mutation.delete.committed", $"path='{path}'; folder={item.IsFolder}; user={deletedByUser}");
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
+        }
+
+        private bool DeleteCanonicalFolderPair(string folderPath)
+        {
+            var metadataPath = folderPath + ".meta";
+            var trashRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationDelete", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(trashRoot);
+            var stagedFolder = Path.Combine(trashRoot, Path.GetFileName(folderPath));
+            var stagedMeta = stagedFolder + ".meta";
+            var plan = new ContentMutationPlan(ContentMutationOperationKind.Delete);
+            plan.Entries.Add(new ContentMutationEntry(folderPath, stagedFolder, ContentMutationPathRole.Main, true));
+            plan.Entries.Add(new ContentMutationEntry(metadataPath, stagedMeta, ContentMutationPathRole.MetadataSidecar, false));
+            var step = new ContentMutationStep(
+                "delete-canonical-folder-pair",
+                new[] { 0, 1 },
+                () =>
+                {
+                    Directory.Move(folderPath, stagedFolder);
+                    File.Move(metadataPath, stagedMeta);
+                    return ContentMutationResult.Success(folderPath, stagedFolder);
+                },
+                () =>
+                {
+                    try
+                    {
+                        if (File.Exists(stagedMeta) && !File.Exists(metadataPath))
+                            File.Move(stagedMeta, metadataPath);
+                        if (Directory.Exists(stagedFolder) && !Directory.Exists(folderPath))
+                            Directory.Move(stagedFolder, folderPath);
+                        return Directory.Exists(folderPath) && File.Exists(metadataPath) && !Directory.Exists(stagedFolder) && !File.Exists(stagedMeta);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                },
+                () => !Directory.Exists(folderPath) && !File.Exists(metadataPath) && Directory.Exists(stagedFolder) && File.Exists(stagedMeta));
+            var result = new ContentMutationTransaction(plan).Execute(new[] { step });
+            if (!result.Succeeded)
+            {
+                Editor.LogError($"Cannot delete canonical folder pair '{folderPath}': {result.Message}");
+                return false;
+            }
+            try
+            {
+                Directory.Delete(stagedFolder, true);
+                File.Delete(stagedMeta);
+                Directory.Delete(trashRoot);
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning($"Canonical folder was deleted but its recovery staging data could not be cleaned: {ex.Message}");
+            }
+            QueueCanonicalSourceRefresh(folderPath);
+            return true;
         }
 
         private bool DeleteCanonicalAssetPair(AssetItem item)
@@ -2726,6 +2823,9 @@ namespace FlaxEditor.Modules
 
         private void ProcessPendingAssetDiskChanges()
         {
+            if (_assetDatabaseAutoRefreshDepth != 0)
+                return;
+
             // Importing assets produces its own file watcher notifications and refreshes
             // the affected content items through OnImportFileDone.
             if (Editor.ContentImporting.IsImporting)
@@ -2823,7 +2923,7 @@ namespace FlaxEditor.Modules
         {
             ProcessPendingAssetDiskChanges();
 
-            if (_pendingMissingMetadataRegistrations.Count != 0 && !Editor.ContentImporting.IsImporting)
+            if (_assetDatabaseAutoRefreshDepth == 0 && _pendingMissingMetadataRegistrations.Count != 0 && !Editor.ContentImporting.IsImporting)
             {
                 var sourcePaths = _pendingMissingMetadataRegistrations.ToArray();
                 _pendingMissingMetadataRegistrations.Clear();
@@ -2831,7 +2931,7 @@ namespace FlaxEditor.Modules
             }
 
             // Only drain once the refresh can actually run, otherwise queued paths are lost for good.
-            if (!Editor.ContentImporting.IsImporting)
+            if (_assetDatabaseAutoRefreshDepth == 0 && !Editor.ContentImporting.IsImporting)
             {
                 string[] refreshPaths;
                 lock (_assetDiskChangesLock)

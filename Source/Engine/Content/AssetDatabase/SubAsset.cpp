@@ -23,6 +23,19 @@ bool SubAssetPolicy::IsKeyValid(const StringView& key)
     return NormalizeKey(key) == key;
 }
 
+int64 SubAssetPolicy::LocalIdFromGuid(const Guid& id)
+{
+    uint64 value = (static_cast<uint64>(id.A) << 32) | id.B;
+    value &= MAX_int64;
+    if (value <= 1)
+    {
+        value = ((static_cast<uint64>(id.C) << 32) | id.D) & MAX_int64;
+        if (value <= 1)
+            value = 2;
+    }
+    return static_cast<int64>(value);
+}
+
 void SubAssetPolicy::RegenerateGuids(Dictionary<String, SubAssetMeta>& mappings)
 {
     for (auto& entry : mappings)

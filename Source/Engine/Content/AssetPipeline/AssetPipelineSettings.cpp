@@ -20,9 +20,9 @@ namespace
 bool AssetPipelineSettings::IsValid(AssetPipelineDiagnostic& diagnostic) const
 {
     diagnostic = AssetPipelineDiagnostic();
-    if (DiskQuotaGigabytes < 1 || MinimumFreeSpaceGigabytes < 0 || GarbageCollectionGracePeriodHours < 0 ||
+    if (AssetSystemVersion < 2 || AssetSystemVersion > 3 || DiskQuotaGigabytes < 1 || MinimumFreeSpaceGigabytes < 0 || GarbageCollectionGracePeriodHours < 0 ||
         RetainedLastGoodCount < 0 || LogRetentionDays < 1 || WorkerLimit < 0 || MemoryLimitMegabytes < 128)
-        return Invalid(diagnostic, TEXT("One or more asset pipeline resource limits are outside their supported range."), TEXT("Restore positive Library limits and a memory limit of at least 128 MB."));
+        return Invalid(diagnostic, TEXT("The asset-system version or a resource limit is outside its supported range."), TEXT("Use asset-system version 2 or 3 and restore valid Library/build limits."));
     return true;
 }
 

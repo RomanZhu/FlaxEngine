@@ -7,6 +7,7 @@ AssetRecord AssetRecord::FromLegacy(const AssetInfo& info)
     AssetRecord result;
     result.ID = info.ID;
     result.SourceAssetID = info.ID;
+    result.LocalId = 1;
     result.TypeName = info.TypeName;
     result.CanonicalPath = CanonicalAssetPath(info.Path);
     result.SourcePath = SourceFilePath(info.Path);
@@ -27,7 +28,7 @@ bool AssetRecord::IsMainAsset() const
 
 bool AssetRecord::HasSameIdentityAndContent(const AssetRecord& other) const
 {
-    return ID == other.ID && SourceAssetID == other.SourceAssetID && TypeName == other.TypeName &&
+    return ID == other.ID && SourceAssetID == other.SourceAssetID && LocalId == other.LocalId && TypeName == other.TypeName &&
         CanonicalPath == other.CanonicalPath && SourcePath == other.SourcePath && MetaPath == other.MetaPath &&
         SubAsset == other.SubAsset && ProcessorID == other.ProcessorID && PortabilityKey == other.PortabilityKey &&
         MetaSemanticHash == other.MetaSemanticHash && SourceKind == other.SourceKind &&

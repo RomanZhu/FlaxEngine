@@ -14,6 +14,12 @@ API_CLASS(sealed, Namespace="FlaxEditor.Content.Settings") class FLAXENGINE_API 
     API_AUTO_SERIALIZATION();
 
 public:
+    /// <summary>
+    /// Project asset-system format. Version 3 enables source-only Content and universal adjacent metadata.
+    /// </summary>
+    API_FIELD(Attributes="EditorOrder(10), EditorDisplay(\"Asset System\"), Limit(2, 3)")
+    int32 AssetSystemVersion = 2;
+
     API_FIELD(Attributes="EditorOrder(100), EditorDisplay(\"Library\"), Limit(1, 1048576)")
     int32 DiskQuotaGigabytes = 100;
 

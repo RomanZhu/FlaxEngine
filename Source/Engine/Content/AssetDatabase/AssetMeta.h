@@ -28,10 +28,11 @@ enum class AssetMetaWriteFailurePoint : byte
 /// <summary>Universal tracked asset sidecar.</summary>
 struct FLAXENGINE_API AssetMeta
 {
-    static constexpr int32 CurrentMetaVersion = 1;
+    static constexpr int32 CurrentMetaVersion = 2;
 
     int32 MetaVersion = CurrentMetaVersion;
     Guid ID;
+    bool FolderAsset = false;
     String AssetType;
     AssetSourceKind SourceKind = AssetSourceKind::ImportedSource;
     AssetProcessorMeta Processor;

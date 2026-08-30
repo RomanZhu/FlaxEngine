@@ -21,7 +21,7 @@ namespace FlaxEditor.Windows
         public AssetPipelineWindow(Editor editor)
         : base(editor, true, ScrollBars.Vertical)
         {
-            Title = "Asset Pipeline";
+            Title = "Asset Import Activity";
 
             var toolbar = new HorizontalPanel
             {
@@ -33,13 +33,25 @@ namespace FlaxEditor.Windows
             var refresh = new Button
             {
                 Parent = toolbar,
-                Text = "Scan",
+                Text = "Refresh",
                 Width = 90,
-                TooltipText = "Rescan Content for canonical sources and sidecars.",
+                TooltipText = "Reconcile metadata and import changed canonical sources.",
             };
             refresh.Clicked += () =>
             {
-                AssetDatabaseFacade.Scan(false);
+                AssetDatabaseFacade.Refresh(ImportAssetOptions.Default);
+                RefreshView();
+            };
+            var reimport = new Button
+            {
+                Parent = toolbar,
+                Text = "Reimport All",
+                Width = 110,
+                TooltipText = "Force a fresh build for every supported source.",
+            };
+            reimport.Clicked += () =>
+            {
+                AssetDatabaseFacade.Refresh(ImportAssetOptions.ForceUpdate);
                 RefreshView();
             };
             var clean = new Button
@@ -118,7 +130,11 @@ namespace FlaxEditor.Windows
             for (int i = 0; i < limit; i++)
             {
                 var record = records[i];
-                recordsText.Append(record.Status).Append("  ").Append(record.SourceKind).Append("  ").Append(record.TypeName).Append("  ").AppendLine(record.CanonicalPath);
+                recordsText.Append(record.Status).Append("  ")
+                    .Append(record.SourceAssetID.ToString("N")).Append(':').Append(record.LocalId).Append("  ")
+                    .Append(record.SourceKind).Append("  ")
+                    .Append(record.ProcessorID).Append("  ")
+                    .AppendLine(record.CanonicalPath);
             }
             if (records.Length > limit)
                 recordsText.Append("… ").Append(records.Length - limit).AppendLine(" more");
@@ -131,7 +147,7 @@ namespace FlaxEditor.Windows
             for (int i = 0; i < diagnostics.Length && i < 50; i++)
             {
                 var diagnostic = diagnostics[i];
-                diagnosticsText.Append(diagnostic.Code).Append(": ").AppendLine(diagnostic.Message);
+                diagnosticsText.Append(diagnostic.Severity).Append("  ").Append(diagnostic.Code).Append(": ").AppendLine(diagnostic.Message);
             }
             _diagnostics.Text = diagnosticsText.ToString();
         }

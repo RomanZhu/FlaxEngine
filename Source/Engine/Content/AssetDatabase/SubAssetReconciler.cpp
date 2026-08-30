@@ -137,6 +137,7 @@ SubAssetReconcileResult SubAssetReconciler::Reconcile(const AssetMeta& currentMe
         }
         SubAssetMeta added;
         added.ID = Guid::New();
+        added.LocalId = SubAssetPolicy::LocalIdFromGuid(added.ID);
         added.TypeName = candidate.TypeName;
         added.DisplayName = candidate.DisplayName;
         result.Resolved.Add(candidate.StableKey, added);

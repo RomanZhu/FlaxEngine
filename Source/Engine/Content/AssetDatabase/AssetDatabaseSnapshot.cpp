@@ -53,6 +53,7 @@ namespace
     {
         stream.WriteBytes(&record.ID, sizeof(Guid));
         stream.WriteBytes(&record.SourceAssetID, sizeof(Guid));
+        stream.WriteInt64(record.LocalId);
         WriteString(stream, record.TypeName);
         WriteString(stream, record.CanonicalPath.Get());
         WriteString(stream, record.SourcePath.Get());
@@ -125,13 +126,13 @@ namespace
     {
         String canonicalPath, sourcePath, metaPath, subAsset;
         uint8 sourceKind, status;
-        if (reader.Read(record.ID) || reader.Read(record.SourceAssetID) || reader.ReadString(record.TypeName) ||
+        if (reader.Read(record.ID) || reader.Read(record.SourceAssetID) || reader.Read(record.LocalId) || reader.ReadString(record.TypeName) ||
             reader.ReadString(canonicalPath) || reader.ReadString(sourcePath) || reader.ReadString(metaPath) ||
             reader.ReadString(subAsset) || reader.ReadString(record.ProcessorID) || reader.ReadString(record.PortabilityKey) ||
             reader.Read(record.MetaSemanticHash) || reader.Read(sourceKind) || reader.Read(status) ||
             reader.ReadGuidArray(record.BuildInputDependencies) || reader.ReadGuidArray(record.RuntimeReferences))
             return true;
-        if (sourceKind > (uint8)AssetSourceKind::LegacyBinary || status > (uint8)AssetRecordStatus::PathCollision)
+        if (record.LocalId <= 0 || sourceKind > (uint8)AssetSourceKind::Folder || status > (uint8)AssetRecordStatus::PathCollision)
             return true;
         record.CanonicalPath = CanonicalAssetPath(canonicalPath);
         record.SourcePath = SourceFilePath(sourcePath);

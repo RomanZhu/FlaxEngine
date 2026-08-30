@@ -33,6 +33,11 @@ namespace
         }
         return result;
     }
+
+    StringAnsi ObjectKey(const AssetObjectId& id)
+    {
+        return StringAnsi::Format("{0}:{1}", GuidKey(id.Guid), id.LocalId);
+    }
 }
 
 bool RuntimeAssetIndex::ContainsLibraryPath(const StringView& path)
@@ -50,7 +55,9 @@ bool RuntimeAssetIndex::WriteCanonicalJson(const Array<RuntimeAssetIndexEntry>& 
     {
         std::sort(sorted.Get(), sorted.Get() + sorted.Count(), [](const RuntimeAssetIndexEntry& a, const RuntimeAssetIndexEntry& b)
         {
-            return GuidKey(a.ID) < GuidKey(b.ID);
+            const StringAnsi aGuid = GuidKey(a.ID.Guid);
+            const StringAnsi bGuid = GuidKey(b.ID.Guid);
+            return aGuid == bGuid ? a.ID.LocalId < b.ID.LocalId : aGuid < bGuid;
         });
     }
     JsonDocument json;
@@ -61,7 +68,7 @@ bool RuntimeAssetIndex::WriteCanonicalJson(const Array<RuntimeAssetIndexEntry>& 
     for (const RuntimeAssetIndexEntry& entry : sorted)
     {
         if (!entry.ID.IsValid() || entry.PackagedPath.IsEmpty())
-            return Fail(diagnostic, TEXT("Runtime asset index entries require a GUID and packaged path."));
+            return Fail(diagnostic, TEXT("Runtime asset index entries require an asset GUID, non-zero local file ID, and packaged path."));
         if (ContainsLibraryPath(entry.PackagedPath))
             return Fail(diagnostic, TEXT("Runtime asset index must not refer to project Library storage."));
         JsonValue item(rapidjson::kObjectType);
@@ -69,7 +76,8 @@ bool RuntimeAssetIndex::WriteCanonicalJson(const Array<RuntimeAssetIndexEntry>& 
         item.AddMember("type", JsonValue(typeName.Get(), typeName.Length(), allocator), allocator);
         const StringAnsi packaged(entry.PackagedPath);
         item.AddMember("path", JsonValue(packaged.Get(), packaged.Length(), allocator), allocator);
-        assets.AddMember(JsonValue(GuidKey(entry.ID).Get(), 32, allocator), item, allocator);
+        const StringAnsi key = ObjectKey(entry.ID);
+        assets.AddMember(JsonValue(key.Get(), key.Length(), allocator), item, allocator);
     }
     json.AddMember("assets", assets, allocator);
     CanonicalJsonError error;

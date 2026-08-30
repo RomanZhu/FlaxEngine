@@ -8,6 +8,7 @@
 /// <summary>Controls a canonical Content-root scan.</summary>
 struct FLAXENGINE_API AssetDatabaseScanOptions
 {
+    int32 AssetSystemVersion = 2;
     bool StrictMetadata = false;
     int32 MaximumFiles = 1000000;
     const bool* Cancel = nullptr;

@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetDatabase.h"
+#include "Identity/AssetObjectId.h"
 #include "Engine/Threading/Threading.h"
 
 namespace
@@ -121,6 +122,7 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
 {
     diagnostic = AssetPipelineDiagnostic();
     Dictionary<Guid, AssetRecord> nextRecords;
+    HashSet<AssetObjectId> nextObjectIds;
     Dictionary<String, Guid> nextMainByPath;
     Dictionary<Guid, Array<Guid>> nextSubAssetsBySource;
     Dictionary<String, Array<Guid>> nextRecordsByProcessor;
@@ -131,8 +133,12 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
     nextRecords.EnsureCapacity(records.Count());
     for (const AssetRecord& input : records)
     {
-        if (!input.ID.IsValid() || !input.SourceAssetID.IsValid())
+        if (!input.ID.IsValid() || !input.SourceAssetID.IsValid() || input.LocalId <= 0)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, input.SourcePath.Get(), TEXT("Asset database record has an invalid identity."));
+        if ((input.IsMainAsset() && input.LocalId != 1) || (!input.IsMainAsset() && input.LocalId == 1))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, input.SourcePath.Get(), TEXT("Main objects require local file ID 1 and subassets require a different positive ID."));
+        if (!nextObjectIds.Add(AssetObjectId(input.SourceAssetID, input.LocalId)))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, input.SourcePath.Get(), TEXT("Asset database input repeats a GUID/local file ID identity."));
         if (nextRecords.ContainsKey(input.ID))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::DuplicateGuid, input.SourcePath.Get(), TEXT("Asset database input contains a duplicate GUID."));
         AssetRecord record = input;
