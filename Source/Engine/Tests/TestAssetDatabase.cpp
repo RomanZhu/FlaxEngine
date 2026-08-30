@@ -33,6 +33,34 @@ namespace
         return result;
     }
 
+    bool ContainsDiagnostic(const Array<AssetPipelineDiagnostic>& diagnostics, AssetPipelineDiagnosticCode code, const StringView& sourcePath)
+    {
+        for (const AssetPipelineDiagnostic& diagnostic : diagnostics)
+        {
+            if (diagnostic.Code == code && FileSystem::AreFilePathsEquivalent(diagnostic.SourcePath, sourcePath))
+                return true;
+        }
+        return false;
+    }
+
+    // Reads the live persisted snapshot without touching the running database.
+    int32 PersistedFileStateCount(const StringView& folder)
+    {
+        const String snapshotPath = Globals::ProjectLibraryFolder / TEXT("AssetDatabase") / TEXT("index.bin");
+        AssetDatabase loaded;
+        Array<AssetDatabaseFileState> states;
+        AssetPipelineDiagnostic diagnostic;
+        if (AssetDatabaseSnapshotStore::Load(snapshotPath, Globals::ProjectFolder, Globals::ProjectContentFolder, loaded, states, diagnostic))
+            return -1;
+        int32 count = 0;
+        for (const AssetDatabaseFileState& state : states)
+        {
+            if (state.Path.StartsWith(folder, StringSearchCase::IgnoreCase))
+                count++;
+        }
+        return count;
+    }
+
     AssetMeta MakeDatabaseMeta(const Guid& id)
     {
         AssetMeta meta;
@@ -374,6 +402,109 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(secondId, found));
+}
+
+TEST_CASE("Asset database RefreshSources reports missing sidecars and keeps unaffected diagnostics")
+{
+    const String folder = Globals::ProjectContentFolder / (TEXT("__RefreshDiagnostics_") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(folder));
+    Array<String> cleanup;
+    cleanup.Add(folder);
+    SCOPE_EXIT
+    {
+        FileSystem::DeleteDirectory(folder, true);
+        AssetDatabaseFacade::RefreshSources(cleanup);
+    };
+
+    const String orphan = folder / TEXT("Orphan.png");
+    const String tracked = folder / TEXT("Tracked.png");
+    REQUIRE_FALSE(File::WriteAllText(orphan, TEXT("orphan"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(tracked, TEXT("tracked"), Encoding::ANSI));
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(tracked + TEXT(".meta"), MakeDatabaseMeta(Guid::New()), diagnostic));
+
+    // A source dropped in without a sidecar has to be reported, exactly as a full scan would.
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
+    CHECK(ContainsDiagnostic(AssetDatabaseFacade::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
+
+    // Refreshing one source must not discard what is already known about every other source.
+    Array<String> trackedOnly;
+    trackedOnly.Add(tracked);
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(trackedOnly));
+    CHECK(ContainsDiagnostic(AssetDatabaseFacade::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
+
+    // Once the sidecar exists the diagnostic for that source must not survive.
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(orphan + TEXT(".meta"), MakeDatabaseMeta(Guid::New()), diagnostic));
+    Array<String> orphanOnly;
+    orphanOnly.Add(orphan);
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(orphanOnly));
+    CHECK_FALSE(ContainsDiagnostic(AssetDatabaseFacade::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
+}
+
+TEST_CASE("Asset database clears a path collision once the conflict is resolved")
+{
+    AssetDatabase database;
+    const Guid firstId(11, 12, 13, 15);
+    const Guid secondId(21, 22, 23, 25);
+    Array<AssetRecord> records;
+    records.Add(MakeDatabaseRecord(firstId, firstId, TEXT("C:/Project/Content/Clash.png")));
+    records.Add(MakeDatabaseRecord(secondId, secondId, TEXT("C:/Project/Content/clash.png")));
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+    Array<AssetRecord> collisions;
+    database.GetByStatus(AssetRecordStatus::PathCollision, collisions);
+    REQUIRE(collisions.Count() == 2);
+
+    // Republish what the database now reports, with one of the two renamed away.
+    Array<AssetRecord> resolved;
+    AssetRecord carried;
+    REQUIRE(database.TryGetRecord(firstId, carried));
+    resolved.Add(carried);
+    REQUIRE(database.TryGetRecord(secondId, carried));
+    carried.CanonicalPath = CanonicalAssetPath(TEXT("C:/Project/Content/Distinct.png"));
+    carried.SourcePath = SourceFilePath(TEXT("C:/Project/Content/Distinct.png"));
+    carried.PortabilityKey = TEXT("c:/project/content/distinct.png");
+    resolved.Add(carried);
+    REQUIRE_FALSE(database.PublishFullSnapshot(resolved, diagnostic));
+
+    collisions.Clear();
+    database.GetByStatus(AssetRecordStatus::PathCollision, collisions);
+    CHECK(collisions.Count() == 0);
+    AssetRecord found;
+    REQUIRE(database.TryGetRecord(firstId, found));
+    CHECK(found.Status == AssetRecordStatus::Ready);
+    REQUIRE(database.TryGetRecord(secondId, found));
+    CHECK(found.Status == AssetRecordStatus::Ready);
+}
+
+TEST_CASE("Asset database RefreshSources prunes persisted file states under a deleted directory")
+{
+    const String folder = Globals::ProjectContentFolder / (TEXT("__RefreshFileStates_") + Guid::New().ToString(Guid::FormatType::N));
+    const String nested = folder / TEXT("Nested");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(nested));
+    Array<String> cleanup;
+    cleanup.Add(folder);
+    SCOPE_EXIT
+    {
+        FileSystem::DeleteDirectory(folder, true);
+        AssetDatabaseFacade::RefreshSources(cleanup);
+    };
+
+    const Guid trackedId = Guid::New();
+    const String tracked = nested / TEXT("Tracked.png");
+    REQUIRE_FALSE(File::WriteAllText(tracked, TEXT("tracked"), Encoding::ANSI));
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(tracked + TEXT(".meta"), MakeDatabaseMeta(trackedId), diagnostic));
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
+
+    AssetRecord found;
+    REQUIRE(AssetDatabase::Get().TryGetRecord(trackedId, found));
+    CHECK(PersistedFileStateCount(folder) > 0);
+
+    REQUIRE_FALSE(FileSystem::DeleteDirectory(folder, true));
+    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
+    CHECK_FALSE(AssetDatabase::Get().TryGetRecord(trackedId, found));
+    CHECK(PersistedFileStateCount(folder) == 0);
 }
 
 #endif

@@ -260,6 +260,57 @@ namespace
         return pathKey.Length() > rootKey.Length() && pathKey.StartsWith(rootKey) && pathKey[rootKey.Length()] == '/';
     }
 
+    // Both arguments must already be PathKey-normalized.
+    bool IsKeyUnderAnyRoot(const String& pathKey, const Array<String>& rootKeys)
+    {
+        for (const String& rootKey : rootKeys)
+        {
+            if (pathKey == rootKey)
+                return true;
+            if (pathKey.Length() > rootKey.Length() && pathKey.StartsWith(rootKey) && pathKey[rootKey.Length()] == '/')
+                return true;
+        }
+        return false;
+    }
+
+    // A scoped refresh only knows about the paths it was given, so diagnostics for every other
+    // source must survive. Unattributable entries are dropped so they cannot accumulate forever.
+    void MergeScopedDiagnostics(const HashSet<String>& affectedKeys, const Array<AssetPipelineDiagnostic>& fresh)
+    {
+        Array<AssetPipelineDiagnostic> merged;
+        {
+            ScopeLock lock(StateLocker);
+            merged.EnsureCapacity(LastDiagnostics.Count() + fresh.Count());
+            for (const AssetPipelineDiagnostic& diagnostic : LastDiagnostics)
+            {
+                if (diagnostic.SourcePath.IsEmpty() || affectedKeys.Contains(PathKey(diagnostic.SourcePath)))
+                    continue;
+                merged.Add(diagnostic);
+            }
+        }
+        merged.Add(fresh);
+        SetDiagnostics(merged);
+    }
+
+    // Sources that arrive without a sidecar are invisible to the database until one exists. A full
+    // Scan handles this through EnsureExistingJsonSidecars, so a scoped refresh must do the same.
+    void EnsureScopedJsonSidecars(HashSet<String>& keys, Array<String>& expanded)
+    {
+        const int32 count = expanded.Count();
+        for (int32 i = 0; i < count; i++)
+        {
+            const String path = expanded[i];
+            const String extension = FileSystem::GetExtension(path).ToLower();
+            if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json"))
+                continue;
+            const String metaPath = path + TEXT(".meta");
+            if (!FileSystem::FileExists(path) || FileSystem::FileExists(metaPath))
+                continue;
+            if (AssetDatabaseFacade::CreateExistingJsonMetadata(path).IsValid())
+                AddUniquePath(metaPath, keys, expanded);
+        }
+    }
+
     bool SnapshotIdentityChanged(const AssetDatabaseSnapshot& previous, const Array<AssetRecord>& merged)
     {
         if (previous.Records.Count() != merged.Count())
@@ -302,6 +353,16 @@ namespace
     bool RefreshPath(const String& path)
     {
         return RefreshPath(StringView(path));
+    }
+
+    // Migration is driven one asset at a time, and every conversion invalidates the persisted file
+    // states, so revalidating the whole snapshot per call is quadratic. Load once, then keep the
+    // database current through scoped refreshes.
+    bool EnsureDatabaseLoaded()
+    {
+        if (AssetDatabase::Get().GetRevision() != 0)
+            return false;
+        return AssetDatabaseFacade::LoadOrScan(false);
     }
 
 #if USE_EDITOR
@@ -668,11 +729,15 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
     HashSet<String> affectedKeys;
     Array<String> expanded;
+    Array<String> refreshedRootKeys;
     for (const String& path : paths)
     {
         ExpandRefreshPath(path, affectedKeys, expanded);
         const String normalized = NormalizeAbsolutePath(path);
-        if (normalized.IsEmpty() || (FileSystem::FileExists(normalized) && !FileSystem::DirectoryExists(normalized)))
+        if (normalized.IsEmpty())
+            continue;
+        refreshedRootKeys.Add(PathKey(normalized));
+        if (FileSystem::FileExists(normalized) && !FileSystem::DirectoryExists(normalized))
             continue;
         for (const AssetRecord& record : previous.Records)
         {
@@ -684,6 +749,20 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
                 AddUniquePath(record.MetaPath.Get(), affectedKeys, expanded);
         }
     }
+
+    // A conflict status is a statement about the whole database, so a record can never stop
+    // reporting one unless it is re-collected. Conflicts are normally absent, which makes pulling
+    // every one of them into each refresh cheap.
+    for (const AssetRecord& record : previous.Records)
+    {
+        if (record.Status != AssetRecordStatus::PathCollision && record.Status != AssetRecordStatus::DuplicateGuid)
+            continue;
+        AddUniquePath(record.SourcePath.Get(), affectedKeys, expanded);
+        if (!record.MetaPath.Get().IsEmpty())
+            AddUniquePath(record.MetaPath.Get(), affectedKeys, expanded);
+    }
+
+    EnsureScopedJsonSidecars(affectedKeys, expanded);
 
     Array<String> projectFiles;
     Array<String> engineFiles;
@@ -699,6 +778,9 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     }
     AssetDatabaseScanOptions options;
     options.HashCache = &HashCache;
+    // Matches a full editor Scan, so a source that shows up without a sidecar still reports
+    // MissingMeta and can be picked up by the metadata registration queue.
+    options.StrictMetadata = true;
     AssetDatabaseScanResult result;
     Array<AssetRecord> collected;
     if (projectFiles.Count() && AssetDatabaseScanner::CollectFromFiles(Globals::ProjectFolder, Globals::ProjectContentFolder,
@@ -732,26 +814,35 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     merged.Add(collected);
 
     const bool identityChanged = SnapshotIdentityChanged(previous, merged);
-    SetDiagnostics(result.Diagnostics);
+    Array<AssetPipelineDiagnostic> diagnostics;
+    diagnostics.Add(result.Diagnostics);
+    bool publishFailed = false;
     if (identityChanged)
     {
         AssetPipelineDiagnostic publishDiagnostic;
         if (AssetDatabase::Get().PublishFullSnapshot(merged, publishDiagnostic))
         {
-            Array<AssetPipelineDiagnostic> diagnostics;
-            diagnostics.Add(result.Diagnostics);
             diagnostics.Add(MoveTemp(publishDiagnostic));
-            SetDiagnostics(diagnostics);
-            return true;
+            publishFailed = true;
         }
     }
+    MergeScopedDiagnostics(affectedKeys, diagnostics);
+    if (publishFailed)
+        return true;
 
     Array<AssetDatabaseFileState> nextStates;
     nextStates.EnsureCapacity(LastFileStates.Count() + result.FileStates.Count());
     for (const AssetDatabaseFileState& state : LastFileStates)
     {
-        if (!affectedKeys.Contains(PathKey(state.Path)))
-            nextStates.Add(state);
+        const String key = PathKey(state.Path);
+        if (affectedKeys.Contains(key))
+            continue;
+        // Files that vanished under a refreshed root, such as a deleted directory, would otherwise
+        // be carried forever and keep invalidating the persisted snapshot. Existence is probed only
+        // for those, so an ordinary single-file refresh stays free of extra syscalls here.
+        if (IsKeyUnderAnyRoot(key, refreshedRootKeys) && !FileSystem::FileExists(state.Path))
+            continue;
+        nextStates.Add(state);
     }
     nextStates.Add(result.FileStates);
     LastFileStates = MoveTemp(nextStates);
@@ -2213,7 +2304,7 @@ bool AssetDatabaseFacade::MigrateLegacyAsset(const StringView& sourcePath)
         SetDiagnostics(diagnostics);
         return true;
     };
-    if (sourcePath.IsEmpty() || LoadOrScan(false))
+    if (sourcePath.IsEmpty() || EnsureDatabaseLoaded())
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::MigrationFailed;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Migration;
@@ -2315,6 +2406,22 @@ bool AssetDatabaseFacade::MigrateLegacyAsset(const StringView& sourcePath)
         return fail();
     }
     SetDiagnostics(Array<AssetPipelineDiagnostic>());
+
+    // The database is loaded once per migration run, so this conversion has to be folded back in
+    // here or the next asset would see a stale snapshot.
+    Array<String> refreshPaths;
+    refreshPaths.Add(record.SourcePath.Get());
+    refreshPaths.Add(destination);
+    refreshPaths.Add(destinationMeta);
+    if (RefreshSources(refreshPaths))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::MigrationFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Migration;
+        diagnostic.AssetGuid = assetID;
+        diagnostic.SourcePath = destination;
+        diagnostic.Message = TEXT("The asset database could not be updated after migration.");
+        return fail();
+    }
     return false;
 }
 
@@ -2332,8 +2439,13 @@ bool AssetDatabaseFacade::RollbackLegacyImportedMigration(const StringView& lega
     const String metaPath = String(destinationPath) + TEXT(".meta");
     ContentStorageManager::EnsureAccess(destinationPath);
     ContentStorageManager::EnsureAccess(backupPath);
+    Array<String> refreshPaths;
+    refreshPaths.Add(metaPath);
+    refreshPaths.Add(String(destinationPath));
+    refreshPaths.Add(String(legacyPath));
+    refreshPaths.Add(String(backupPath));
     const bool failed = FileSystem::DeleteFile(metaPath) || FileSystem::DeleteFile(destinationPath) ||
-                        FileSystem::MoveFile(legacyPath, backupPath, false) || Scan(false);
+                        FileSystem::MoveFile(legacyPath, backupPath, false) || RefreshSources(refreshPaths);
     if (failed)
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::MigrationFailed;

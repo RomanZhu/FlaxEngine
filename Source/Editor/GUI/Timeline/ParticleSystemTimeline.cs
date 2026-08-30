@@ -164,7 +164,7 @@ namespace FlaxEditor.GUI.Timeline
             var sourcePath = AssetDatabaseFacade.GetCanonicalSourcePath(asset.ID);
             var extension = Path.GetExtension(string.IsNullOrEmpty(sourcePath) ? asset.Path : sourcePath);
             var failed = extension.Equals(".particlesystem", StringComparison.OrdinalIgnoreCase)
-                ? AssetDatabaseFacade.SaveParticleSystemTimeline(sourcePath, data)
+                ? Editor.Instance.ContentDatabase.SaveAsset(sourcePath, () => AssetDatabaseFacade.SaveParticleSystemTimeline(sourcePath, data))
                 : asset.SaveTimeline(data);
             if (failed)
             {

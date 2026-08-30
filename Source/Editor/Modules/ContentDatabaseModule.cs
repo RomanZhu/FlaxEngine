@@ -29,7 +29,6 @@ namespace FlaxEditor.Modules
         private int _itemsCreated;
         private int _itemsDeleted;
         private bool _useNewAssetDatabase;
-        private bool _assetDatabaseRescanPending;
         private ulong _assetDatabaseRevision;
         private const double AssetDiskChangeQuietPeriodSeconds = 0.5;
         private const double SelfAuthoredAssetDiskChangeLifetimeSeconds = 5.0;
@@ -242,9 +241,33 @@ namespace FlaxEditor.Modules
             }
         }
 
+        private void MarkAllContentRootsDirty()
+        {
+            lock (_dirtyNodes)
+            {
+                foreach (var project in Projects)
+                {
+                    if (project.Content != null)
+                        _dirtyNodes.Add(project.Content);
+                }
+            }
+        }
+
         private void OnAssetDatabaseChanged(ulong revision)
         {
             var change = AssetDatabaseFacade.GetLastChange();
+
+            // Native keeps only the most recent batch, so a publish from a build worker can overwrite
+            // it between the event being raised and this read. Scoping the tree update to another
+            // revision's identifiers would leave stale items behind, so reconcile everything instead.
+            if (change.Revision != revision)
+            {
+                RefreshAssetDatabaseRecords(revision);
+                if (_enableEvents)
+                    MarkAllContentRootsDirty();
+                return;
+            }
+
             var previousPaths = new Dictionary<Guid, string>();
             void Capture(Guid[] ids)
             {
@@ -2507,7 +2530,9 @@ namespace FlaxEditor.Modules
                 var suppressed = false;
                 lock (_assetDiskChangesLock)
                 {
-                    suppressed = _assetSaves.ContainsKey(path) || TrySuppressSelfAuthoredDiskChange(path, DateTime.UtcNow);
+                    // A delete is never a self-authored write, so it must always reach the database.
+                    suppressed = e.ChangeType != WatcherChangeTypes.Deleted &&
+                                 (_assetSaves.ContainsKey(path) || TrySuppressSelfAuthoredDiskChange(path, DateTime.UtcNow));
                     if (!suppressed)
                         QueueAssetDiskChange(path, e.ChangeType == WatcherChangeTypes.Renamed);
                 }
@@ -2526,11 +2551,17 @@ namespace FlaxEditor.Modules
                 var now = DateTime.UtcNow;
                 lock (_assetDiskChangesLock)
                 {
+                    // An in-flight save writes the document itself, so its own notifications are not external changes.
+                    var saveInProgress = _assetSaves.TryGetValue(path, out var saveState);
+                    if (saveInProgress)
+                    {
+                        ContentMutationDiagnostics.Log("watcher.change-suppressed", $"path='{path}'; generation={saveState.Generation}; depth={saveState.Depth}");
+                        break;
+                    }
                     if (TrySuppressSelfAuthoredDiskChange(path, now))
                         break;
                     QueueAssetDiskChange(path, false);
-                    var saveInProgress = _assetSaves.TryGetValue(path, out var saveState);
-                    ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}; saveInProgress={saveInProgress}; generation={(saveInProgress ? saveState.Generation : 0)}; depth={(saveInProgress ? saveState.Depth : 0)}");
+                    ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}");
                 }
                 break;
             }
@@ -2597,6 +2628,22 @@ namespace FlaxEditor.Modules
                 throw new ArgumentNullException(nameof(save));
             using var scope = TrackAssetSave(path);
             var failed = save();
+            scope.Complete(!failed);
+            return failed;
+        }
+
+        /// <summary>
+        /// Saves a canonical authored document from an editor that works on a clone, whose asset identifier
+        /// differs from the tracked item. Tracking the write keeps the watcher from reprocessing it as external.
+        /// </summary>
+        internal bool SaveCanonicalAuthoredDocument(BinaryAsset asset, AssetItem item)
+        {
+            if (asset == null)
+                throw new ArgumentNullException(nameof(asset));
+            if (item == null)
+                throw new ArgumentNullException(nameof(item));
+            using var scope = TrackAssetSave(item.Path);
+            var failed = AssetDatabaseFacade.SaveAuthoredDocument(asset, item.ID);
             scope.Complete(!failed);
             return failed;
         }
@@ -2769,29 +2816,23 @@ namespace FlaxEditor.Modules
                 Editor.ContentImporting.RegisterInPlaceCanonicalSources(sourcePaths);
             }
 
-            string[] refreshPaths;
-            lock (_assetDiskChangesLock)
+            // Only drain once the refresh can actually run, otherwise queued paths are lost for good.
+            if (!Editor.ContentImporting.IsImporting)
             {
-                refreshPaths = _pendingSourceRefresh.Count == 0 ? Array.Empty<string>() : _pendingSourceRefresh.ToArray();
-                _pendingSourceRefresh.Clear();
-            }
-            if (refreshPaths.Length != 0 && !Editor.ContentImporting.IsImporting)
-            {
-                if (AssetDatabaseFacade.RefreshSources(refreshPaths))
-                    Editor.LogError("Canonical asset database refresh failed. See asset pipeline diagnostics.");
-                else
-                    SchedulePendingTextureBuilds();
-                QueueMissingMetadataRegistrations();
-            }
-
-            if (_assetDatabaseRescanPending && !Editor.ContentImporting.IsImporting)
-            {
-                _assetDatabaseRescanPending = false;
-                if (AssetDatabaseFacade.Scan(true))
-                    Editor.LogError("Canonical asset database reconciliation failed. See asset pipeline diagnostics.");
-                else
-                    SchedulePendingTextureBuilds();
-                QueueMissingMetadataRegistrations();
+                string[] refreshPaths;
+                lock (_assetDiskChangesLock)
+                {
+                    refreshPaths = _pendingSourceRefresh.Count == 0 ? Array.Empty<string>() : _pendingSourceRefresh.ToArray();
+                    _pendingSourceRefresh.Clear();
+                }
+                if (refreshPaths.Length != 0)
+                {
+                    if (AssetDatabaseFacade.RefreshSources(refreshPaths))
+                        Editor.LogError("Canonical asset database refresh failed. See asset pipeline diagnostics.");
+                    else
+                        SchedulePendingTextureBuilds();
+                    QueueMissingMetadataRegistrations();
+                }
             }
 
             // Update all dirty content tree nodes

@@ -682,12 +682,14 @@ namespace FlaxEditor.Modules
             var backupRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationBackups", plan.Id.ToString("N"));
             var backupPaths = new Dictionary<int, string>();
 
-            // This runs last during rollback, after metadata paths have been restored.
+            // This runs last during rollback, after metadata paths have been restored. Only the
+            // batch's own sources moved, so reindexing those is enough and avoids a full scan.
+            var rollbackPaths = validIndices.Select(index => entries[index].SourceUrl).ToArray();
             steps.Add(new ContentMutationStep(
                 "restore-database-after-batch-rollback",
                 Array.Empty<int>(),
                 () => ContentMutationResult.Success(null, null),
-                () => !AssetDatabaseFacade.Scan(false),
+                () => rollbackPaths.Length == 0 || !AssetDatabaseFacade.RefreshSources(rollbackPaths),
                 () => true));
 
             for (int position = 0; position < validIndices.Count; position++)

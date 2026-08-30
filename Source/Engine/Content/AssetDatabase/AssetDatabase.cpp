@@ -136,6 +136,10 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
         if (nextRecords.ContainsKey(input.ID))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::DuplicateGuid, input.SourcePath.Get(), TEXT("Asset database input contains a duplicate GUID."));
         AssetRecord record = input;
+        // The collision pass below is authoritative over the whole set being published, so a status
+        // carried in from an earlier publish has to be dropped or a resolved collision never clears.
+        if (record.Status == AssetRecordStatus::PathCollision)
+            record.Status = AssetRecordStatus::Ready;
         if (record.PortabilityKey.IsEmpty())
             record.PortabilityKey = record.CanonicalPath.Get().ToLower();
         else

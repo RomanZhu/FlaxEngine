@@ -220,6 +220,8 @@ bool AssetDatabaseScanner::Collect(const StringView& projectRoot, const StringVi
 
 bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const Array<String>& files, const AssetDatabaseScanOptions& options, const AssetDatabaseSnapshot& previous, Array<AssetRecord>& records, AssetDatabaseScanResult& result)
 {
+    result = AssetDatabaseScanResult();
+    records.Clear();
     SourceHashCache localHashCache;
     SourceHashCache& hashCache = options.HashCache ? *options.HashCache : localHashCache;
     HashSet<String> fileSet;

@@ -864,7 +864,7 @@ namespace FlaxEditor.Windows.Assets
         protected override bool SaveToOriginal()
         {
             if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return AssetDatabaseFacade.SaveAuthoredDocument(_asset, _item.ID);
+                return Editor.ContentDatabase.SaveCanonicalAuthoredDocument(_asset, _item);
             return base.SaveToOriginal();
         }
 
