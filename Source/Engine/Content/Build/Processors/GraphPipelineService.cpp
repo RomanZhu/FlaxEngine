@@ -243,13 +243,13 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     String contentRoot;
     AssetSourceRoots::Resolve(record.SourcePath.Get(), projectRoot, contentRoot);
     GraphPipelineState& state = State();
+    PrepareAssetContext context(projectRoot, contentRoot, Globals::ProjectLibraryFolder,
+        record, prepareLease.Get(), meta.Processor.SettingsJson, state.HashCache, preparationCancellation.GetToken());
+    if (prepareLease.Get().Prepare(context, prepared, diagnostic) ||
+        context.Finalize(record.DatabaseRevision, prepared, diagnostic))
+        return true;
     {
         std::lock_guard<std::mutex> lock(state.Locker);
-        PrepareAssetContext context(projectRoot, contentRoot, Globals::ProjectLibraryFolder,
-            record, prepareLease.Get(), meta.Processor.SettingsJson, state.HashCache, preparationCancellation.GetToken());
-        if (prepareLease.Get().Prepare(context, prepared, diagnostic) ||
-            context.Finalize(record.DatabaseRevision, prepared, diagnostic))
-            return true;
         state.Fingerprints[record.ID] = prepared.InputFingerprint;
     }
 
