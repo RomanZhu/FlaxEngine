@@ -11,6 +11,7 @@
 struct FLAXENGINE_API SubAssetMeta
 {
     Guid ID;
+    int64 LocalId = 0;
     String TypeName;
     String DisplayName;
     bool Removed = false;
@@ -34,5 +35,6 @@ class FLAXENGINE_API SubAssetPolicy
 public:
     static String NormalizeKey(const StringView& key);
     static bool IsKeyValid(const StringView& key);
+    static int64 LocalIdFromGuid(const Guid& id);
     static void RegenerateGuids(Dictionary<String, SubAssetMeta>& mappings);
 };

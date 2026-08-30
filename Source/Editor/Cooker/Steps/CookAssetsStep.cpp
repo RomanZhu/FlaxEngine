@@ -1516,7 +1516,10 @@ bool CookAssetsStep::Perform(CookingData& data)
         for (auto i = AssetsRegistry.Begin(); i.IsNotEnd(); ++i)
         {
             RuntimeAssetIndexEntry entry;
-            entry.ID = i->Key;
+            AssetRecord canonicalRecord;
+            entry.ID = AssetDatabase::Get().TryGetRecord(i->Key, canonicalRecord)
+                ? AssetObjectId(canonicalRecord.SourceAssetID, canonicalRecord.LocalId)
+                : AssetObjectId(i->Key, 1);
             entry.TypeName = i->Value.Info.TypeName;
             entry.PackagedPath = i->Value.Info.Path;
             indexEntries.Add(MoveTemp(entry));

@@ -29,6 +29,7 @@ namespace
     {
         switch (kind)
         {
+        case AssetSourceKind::Folder: return TEXT("Folder");
         case AssetSourceKind::ImportedSource: return TEXT("ImportedSource");
         case AssetSourceKind::TextDocument: return TEXT("TextDocument");
         case AssetSourceKind::ExistingJson: return TEXT("ExistingJson");
@@ -39,7 +40,8 @@ namespace
 
     bool TryParseSourceKind(const StringAnsiView& text, AssetSourceKind& kind)
     {
-        if (text == "ImportedSource") kind = AssetSourceKind::ImportedSource;
+        if (text == "Folder") kind = AssetSourceKind::Folder;
+        else if (text == "ImportedSource") kind = AssetSourceKind::ImportedSource;
         else if (text == "TextDocument") kind = AssetSourceKind::TextDocument;
         else if (text == "ExistingJson") kind = AssetSourceKind::ExistingJson;
         else if (text == "LegacyBinary") kind = AssetSourceKind::LegacyBinary;
@@ -163,6 +165,7 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
 
     const auto metaVersion = document.FindMember("metaVersion");
     const auto guid = document.FindMember("guid");
+    const auto folderAsset = document.FindMember("folderAsset");
     const auto assetType = document.FindMember("assetType");
     const auto sourceKind = document.FindMember("sourceKind");
     const auto processor = document.FindMember("processor");
@@ -182,8 +185,16 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
     if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), result.ID) || !result.ID.IsValid())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata GUID is invalid."));
     result.AssetType = String(StringAnsiView(assetType->value.GetString(), assetType->value.GetStringLength()));
+    if (folderAsset != document.MemberEnd())
+    {
+        if (!folderAsset->value.IsBool())
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata folderAsset must be a boolean."));
+        result.FolderAsset = folderAsset->value.GetBool();
+    }
     if (!TryParseSourceKind(StringAnsiView(sourceKind->value.GetString(), sourceKind->value.GetStringLength()), result.SourceKind))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata sourceKind is invalid."));
+    if (result.FolderAsset != (result.SourceKind == AssetSourceKind::Folder))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata folderAsset and sourceKind disagree."));
 
     const JsonValue& processorObject = processor->value;
     const auto processorId = processorObject.FindMember("id");
@@ -205,6 +216,8 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
 
     HashSet<Guid> ids;
     ids.Add(result.ID);
+    HashSet<int64> localIds;
+    localIds.Add(1);
     for (auto i = subAssets->value.MemberBegin(); i != subAssets->value.MemberEnd(); ++i)
     {
         const String rawKey(StringAnsiView(i->name.GetString(), i->name.GetStringLength()));
@@ -213,6 +226,7 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata contains an invalid or duplicate subasset key."));
         const JsonValue& object = i->value;
         const auto id = object.FindMember("guid");
+        const auto localId = object.FindMember("localId");
         const auto type = object.FindMember("type");
         const auto name = object.FindMember("name");
         const auto removed = object.FindMember("removed");
@@ -225,6 +239,23 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
         if (ids.Contains(subAsset.ID))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::DuplicateGuid, path, TEXT("Asset metadata repeats a root or subasset GUID."));
         ids.Add(subAsset.ID);
+        if (localId == object.MemberEnd())
+        {
+            if (result.MetaVersion >= 2)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata subasset localId is missing."));
+            subAsset.LocalId = SubAssetPolicy::LocalIdFromGuid(subAsset.ID);
+            result.MetaUpgradeRequired = true;
+        }
+        else if (!localId->value.IsInt64() || localId->value.GetInt64() <= 1)
+        {
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata subasset localId must be an integer greater than one."));
+        }
+        else
+        {
+            subAsset.LocalId = localId->value.GetInt64();
+        }
+        if (!localIds.Add(subAsset.LocalId))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata repeats a local file ID."));
         subAsset.TypeName = String(StringAnsiView(type->value.GetString(), type->value.GetStringLength()));
         subAsset.DisplayName = String(StringAnsiView(name->value.GetString(), name->value.GetStringLength()));
         subAsset.Removed = removed->value.GetBool();
@@ -245,7 +276,7 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
                 subAsset.PreviousKeys.Add(previousKey);
             }
         }
-        const char* subAssetKnown[] = { "guid", "type", "name", "removed", "previousKeys" };
+        const char* subAssetKnown[] = { "guid", "localId", "type", "name", "removed", "previousKeys" };
         if (CaptureUnknown(object, subAssetKnown, ARRAY_COUNT(subAssetKnown), subAsset.UnknownFields, diagnostic, path))
             return true;
         result.SubAssets.Add(stableKey, MoveTemp(subAsset));
@@ -270,7 +301,7 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
         if (!userData->value.IsObject() || CanonicalJsonWriter::Write(userData->value, result.UserDataJson, canonicalError))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata userData must be an object."));
     }
-    const char* rootKnown[] = { "metaVersion", "guid", "assetType", "sourceKind", "processor", "subAssets", "labels", "userData" };
+    const char* rootKnown[] = { "metaVersion", "guid", "folderAsset", "assetType", "sourceKind", "processor", "subAssets", "labels", "userData" };
     if (CaptureUnknown(document, rootKnown, ARRAY_COUNT(rootKnown), result.UnknownFields, diagnostic, path))
         return true;
     diagnostic.AssetGuid = result.ID;
@@ -294,6 +325,7 @@ bool AssetMeta::ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) 
     AddUnknownMembers(document, UnknownFields, allocator);
     document.AddMember("metaVersion", MetaVersion, allocator);
     AddStringMember(document, "guid", ID.ToString(Guid::FormatType::N).ToLower(), allocator);
+    document.AddMember("folderAsset", FolderAsset, allocator);
     AddStringMember(document, "assetType", AssetType, allocator);
     AddStringMember(document, "sourceKind", ToSourceKindName(SourceKind), allocator);
 
@@ -310,6 +342,7 @@ bool AssetMeta::ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) 
         JsonValue subAsset(rapidjson::kObjectType);
         AddUnknownMembers(subAsset, entry.Value.UnknownFields, allocator);
         AddStringMember(subAsset, "guid", entry.Value.ID.ToString(Guid::FormatType::N).ToLower(), allocator);
+        subAsset.AddMember("localId", entry.Value.LocalId > 1 ? entry.Value.LocalId : SubAssetPolicy::LocalIdFromGuid(entry.Value.ID), allocator);
         AddStringMember(subAsset, "type", entry.Value.TypeName, allocator);
         AddStringMember(subAsset, "name", entry.Value.DisplayName, allocator);
         subAsset.AddMember("removed", entry.Value.Removed, allocator);
@@ -346,6 +379,7 @@ bool AssetMeta::ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) 
     Array<StringAnsi> rootOrder;
     rootOrder.Add("metaVersion");
     rootOrder.Add("guid");
+    rootOrder.Add("folderAsset");
     rootOrder.Add("assetType");
     rootOrder.Add("sourceKind");
     rootOrder.Add("processor");
@@ -360,6 +394,7 @@ bool AssetMeta::ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) 
     objectOrders.Add("/processor", processorOrder);
     Array<StringAnsi> subAssetOrder;
     subAssetOrder.Add("guid");
+    subAssetOrder.Add("localId");
     subAssetOrder.Add("type");
     subAssetOrder.Add("name");
     subAssetOrder.Add("removed");

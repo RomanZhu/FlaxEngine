@@ -283,7 +283,7 @@ namespace FlaxEditor.Actions
 
         internal static string GetMetadataSidecarPath(string path, bool isFolder)
         {
-            return isFolder ? null : StringUtils.NormalizePath(path) + ".meta";
+            return StringUtils.NormalizePath(path) + ".meta";
         }
 
         internal static string GetSceneActorsFolderPath(string path, bool isFolder)

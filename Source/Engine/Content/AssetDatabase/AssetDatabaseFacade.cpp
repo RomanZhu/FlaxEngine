@@ -7,6 +7,8 @@
 #include "MigrationInventory.h"
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
+#include "Engine/Content/Asset.h"
+#include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
 #include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Assets/Material.h"
@@ -29,6 +31,7 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Platform/StringUtils.h"
 #include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Serialization/MemoryReadStream.h"
@@ -135,6 +138,7 @@ namespace
         AssetDatabaseRecordInfo result;
         result.ID = record.ID;
         result.SourceAssetID = record.SourceAssetID;
+        result.LocalId = record.LocalId;
         result.TypeName = record.TypeName;
         result.CanonicalPath = record.CanonicalPath.Get();
         result.SourcePath = record.SourcePath.Get();
@@ -199,6 +203,45 @@ namespace
         return result;
     }
 
+    String ResolveFacadeAssetPath(const StringView& path)
+    {
+        String result(path);
+        result.Replace('\\', '/');
+        const StringView enginePrefix(TEXT("EngineContent/"));
+        if (result.StartsWith(enginePrefix, StringSearchCase::IgnoreCase))
+            result = AssetSourceRoots::GetEngineRoot() / result.Substring(enginePrefix.Length());
+        else if (FileSystem::IsRelative(result))
+            result = Globals::ProjectFolder / result;
+        FileSystem::NormalizePath(result);
+        return result;
+    }
+
+    String ToLogicalAssetPath(const StringView& path)
+    {
+        const String engineRoot = AssetSourceRoots::GetEngineRoot();
+        String result;
+        if (AssetPathPolicy::IsSameOrChild(path, engineRoot))
+        {
+            result = String(TEXT("EngineContent/")) + FileSystem::ConvertAbsolutePathToRelative(engineRoot, path);
+        }
+        else if (AssetPathPolicy::IsSameOrChild(path, Globals::ProjectContentFolder))
+        {
+            result = FileSystem::ConvertAbsolutePathToRelative(Globals::ProjectFolder, path);
+        }
+        else
+        {
+            result = path;
+        }
+        result.Replace('\\', '/');
+        return result;
+    }
+
+    bool IsFacadeAssetPath(const StringView& path)
+    {
+        return AssetPathPolicy::IsSameOrChild(path, Globals::ProjectContentFolder) ||
+            AssetPathPolicy::IsSameOrChild(path, AssetSourceRoots::GetEngineRoot());
+    }
+
     String PathKey(const StringView& path)
     {
         String result = NormalizeAbsolutePath(path);
@@ -209,6 +252,29 @@ namespace
     bool IsMetaPath(const StringView& path)
     {
         return path.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase);
+    }
+
+    bool IsV3MetadataExcluded(const StringView& path)
+    {
+        String normalized(path);
+        FileSystem::NormalizePath(normalized);
+        normalized = normalized.ToLower();
+        String root(Globals::ProjectContentFolder);
+        FileSystem::NormalizePath(root);
+        root = root.ToLower();
+        String relative = normalized.StartsWith(root) ? normalized.Substring(root.Length()) : normalized;
+        relative = TEXT("/") + relative + TEXT("/");
+        const Char* excluded[] =
+        {
+            TEXT("/library/"), TEXT("/cache/"), TEXT("/output/"), TEXT("/generated/"),
+            TEXT("/migrationbackup/"), TEXT("/.asset-pipeline/"), TEXT("/.git/")
+        };
+        for (const Char* segment : excluded)
+        {
+            if (relative.Contains(segment))
+                return true;
+        }
+        return false;
     }
 
     void AddUniquePath(const StringView& path, HashSet<String>& keys, Array<String>& expanded)
@@ -524,6 +590,209 @@ namespace
         work.BuildKind = CanonicalBatchBuildKind::Imported;
         return false;
     }
+
+    bool HasDefaultCanonicalImporter(const StringView& sourcePath)
+    {
+        const String extension = FileSystem::GetExtension(sourcePath).ToLower();
+        return extension == TEXT("png") || extension == TEXT("tga") || extension == TEXT("exr") ||
+            extension == TEXT("bmp") || extension == TEXT("gif") || extension == TEXT("tiff") || extension == TEXT("tif") ||
+            extension == TEXT("jpeg") || extension == TEXT("jpg") || extension == TEXT("dds") || extension == TEXT("hdr") ||
+            extension == TEXT("raw") || extension == TEXT("obj") || extension == TEXT("fbx") || extension == TEXT("x") ||
+            extension == TEXT("dae") || extension == TEXT("gltf") || extension == TEXT("glb") || extension == TEXT("blend") ||
+            extension == TEXT("bvh") || extension == TEXT("ase") || extension == TEXT("ply") || extension == TEXT("dxf") ||
+            extension == TEXT("ifc") || extension == TEXT("nff") || extension == TEXT("smd") || extension == TEXT("vta") ||
+            extension == TEXT("mdl") || extension == TEXT("md2") || extension == TEXT("md3") || extension == TEXT("md5mesh") ||
+            extension == TEXT("q3o") || extension == TEXT("q3s") || extension == TEXT("ac") || extension == TEXT("stl") ||
+            extension == TEXT("lwo") || extension == TEXT("lws") || extension == TEXT("lxo") || extension == TEXT("wav") ||
+            extension == TEXT("mp3") || extension == TEXT("ogg") || extension == TEXT("ttf") || extension == TEXT("otf") ||
+            extension == TEXT("shader") || extension == TEXT("mp4") || extension == TEXT("webm") || extension == TEXT("mov") ||
+            extension == TEXT("mkv") || extension == TEXT("txt");
+    }
+
+    bool EnsureDefaultCanonicalMetadata(const StringView& sourcePath, AssetPipelineDiagnostic& diagnostic)
+    {
+        const String metaPath = String(sourcePath) + TEXT(".meta");
+        const bool isFolder = FileSystem::DirectoryExists(sourcePath);
+        const bool isFile = FileSystem::FileExists(sourcePath);
+        if (!isFile && !isFolder)
+            return false;
+        if (FileSystem::FileExists(metaPath))
+        {
+            if (AssetPipelineSettings::Get()->AssetSystemVersion < 3)
+                return false;
+            AssetMeta metadata;
+            if (AssetMeta::Load(metaPath, metadata, diagnostic))
+                return true;
+            if (!metadata.MetaUpgradeRequired)
+                return false;
+            metadata.MetaVersion = AssetMeta::CurrentMetaVersion;
+            metadata.MetaUpgradeRequired = false;
+            for (auto& entry : metadata.SubAssets)
+            {
+                if (entry.Value.LocalId <= 1)
+                    entry.Value.LocalId = SubAssetPolicy::LocalIdFromGuid(entry.Value.ID);
+            }
+            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+        }
+        AssetMeta metadata;
+        metadata.ID = Guid::New();
+        metadata.FolderAsset = isFolder;
+        if (isFolder)
+        {
+            metadata.AssetType = TEXT("FlaxEngine.Folder");
+            metadata.SourceKind = AssetSourceKind::Folder;
+            metadata.Processor.ID = TEXT("Flax.Folder");
+            metadata.Processor.SettingsVersion = 1;
+            metadata.Processor.SettingsJson = "{}\n";
+            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+        }
+        const String extension = FileSystem::GetExtension(sourcePath).ToLower();
+        if (extension == TEXT("flax"))
+            return false;
+        if (JsonStorageProxy::IsValidExtension(extension))
+        {
+            if (!JsonStorageProxy::GetAssetInfo(sourcePath, metadata.ID, metadata.AssetType) || !metadata.ID.IsValid() || metadata.AssetType.IsEmpty())
+            {
+                diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+                diagnostic.SourcePath = sourcePath;
+                diagnostic.Message = TEXT("Authored JSON source is missing a valid ID and TypeName header.");
+                return true;
+            }
+            metadata.SourceKind = AssetSourceKind::ExistingJson;
+            metadata.Processor.ID = TEXT("Flax.ExistingJson");
+            metadata.Processor.SettingsVersion = 1;
+            metadata.Processor.SettingsJson = "{}\n";
+            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+        }
+        if (!HasDefaultCanonicalImporter(sourcePath))
+        {
+            metadata.AssetType = RawDataAsset::TypeName;
+            metadata.SourceKind = AssetSourceKind::ImportedSource;
+            metadata.Processor.ID = TEXT("Flax.Unsupported");
+            metadata.Processor.SettingsVersion = 1;
+            metadata.Processor.SettingsJson = "{}\n";
+            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+        }
+        CanonicalBatchWork work;
+        work.SourcePath = sourcePath;
+        work.StagingPath = metaPath;
+        if (PrepareDefaultCanonicalMetadata(work) || AssetMeta::SaveAtomic(metaPath, work.Meta, work.Diagnostic))
+        {
+            diagnostic = work.Diagnostic;
+            return true;
+        }
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+
+    bool CollectSourceDirectories(const StringView& root, Array<String>& result)
+    {
+        Array<String> pending;
+        pending.Add(String(root));
+        for (int32 index = 0; index < pending.Count(); index++)
+        {
+            Array<String> children;
+            if (FileSystem::GetChildDirectories(children, pending[index]))
+                return true;
+            for (String& child : children)
+            {
+                result.Add(child);
+                pending.Add(MoveTemp(child));
+            }
+        }
+        return false;
+    }
+
+    void EnsureV3MetadataForRoot(const StringView& root, Array<AssetPipelineDiagnostic>& diagnostics)
+    {
+        Array<String> sources;
+        if (FileSystem::DirectoryGetFiles(sources, String(root), TEXT("*"), DirectorySearchOption::AllDirectories) ||
+            CollectSourceDirectories(root, sources))
+        {
+            AssetPipelineDiagnostic diagnostic;
+            diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.SourcePath = root;
+            diagnostic.Message = TEXT("Cannot enumerate the writable source root for metadata reconciliation.");
+            diagnostics.Add(MoveTemp(diagnostic));
+            return;
+        }
+        if (sources.Count() > 1)
+            std::sort(sources.Get(), sources.Get() + sources.Count());
+        for (const String& source : sources)
+        {
+            if (IsMetaPath(source) || IsV3MetadataExcluded(source))
+                continue;
+            AssetPipelineDiagnostic diagnostic;
+            if (EnsureDefaultCanonicalMetadata(source, diagnostic))
+                diagnostics.Add(MoveTemp(diagnostic));
+        }
+    }
+#endif
+
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    enum class GenericBuildRequestResult : byte
+    {
+        Unsupported,
+        Queued,
+        Failed,
+    };
+
+    bool WaitForGenericBuild(const Guid& assetID,
+        AssetBuildJobStatus (*getStatus)(const Guid&, AssetPipelineDiagnostic&), AssetPipelineDiagnostic& diagnostic)
+    {
+        for (;;)
+        {
+            const AssetBuildJobStatus status = getStatus(assetID, diagnostic);
+            if (status == AssetBuildJobStatus::Succeeded)
+                return false;
+            if (status == AssetBuildJobStatus::Failed || status == AssetBuildJobStatus::Cancelled || status == AssetBuildJobStatus::Invalid)
+            {
+                if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+                {
+                    diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+                    diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+                    diagnostic.AssetGuid = assetID;
+                    diagnostic.Message = TEXT("Synchronous asset import did not complete successfully.");
+                }
+                return true;
+            }
+            Platform::Sleep(1);
+        }
+    }
+
+    GenericBuildRequestResult RequestGenericBuild(const AssetRecord& record, bool force, bool synchronous,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+#if COMPILE_WITH_TEXTURE_TOOL
+        if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+        {
+            if (TexturePipelineService::RequestBuild(record.ID, force, diagnostic) ||
+                (synchronous && WaitForGenericBuild(record.ID, TexturePipelineService::GetStatus, diagnostic)))
+                return GenericBuildRequestResult::Failed;
+            return GenericBuildRequestResult::Queued;
+        }
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+        if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
+        {
+            if (ModelPipelineService::RequestBuild(record.ID, force, diagnostic) ||
+                (synchronous && WaitForGenericBuild(record.ID, ModelPipelineService::GetStatus, diagnostic)))
+                return GenericBuildRequestResult::Failed;
+            return GenericBuildRequestResult::Queued;
+        }
+#endif
+        if (GraphPipelineService::OwnsProcessor(record.ProcessorID))
+        {
+            const bool failed = synchronous
+                ? GraphPipelineService::RequestBuildAndWait(record.ID, force, diagnostic)
+                : GraphPipelineService::RequestBuild(record.ID, force, diagnostic);
+            return failed ? GenericBuildRequestResult::Failed : GenericBuildRequestResult::Queued;
+        }
+        diagnostic = AssetPipelineDiagnostic();
+        return GenericBuildRequestResult::Unsupported;
+    }
 #endif
 
     bool StageImportedFiles(const StringView& legacyPath, const StringView& extractedPath, const StringView& destinationPath,
@@ -608,6 +877,71 @@ AssetDatabaseChangeInfo AssetDatabaseFacade::GetLastChange()
     return LastChange;
 }
 
+Guid AssetDatabaseFacade::AssetPathToGUID(const StringView& path)
+{
+    if (path.IsEmpty() || EnsureDatabaseLoaded())
+        return Guid::Empty;
+    const String resolved = ResolveFacadeAssetPath(path);
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.IsMainAsset() && FileSystem::AreFilePathsEqual(record.CanonicalPath.Get(), resolved))
+            return record.ID;
+    }
+    return Guid::Empty;
+}
+
+String AssetDatabaseFacade::GUIDToAssetPath(const Guid& assetID)
+{
+    if (!assetID.IsValid() || EnsureDatabaseLoaded())
+        return String::Empty;
+    AssetRecord record;
+    return AssetDatabase::Get().TryGetRecord(assetID, record)
+        ? ToLogicalAssetPath(record.CanonicalPath.Get())
+        : String::Empty;
+}
+
+Array<String> AssetDatabaseFacade::GetAllAssetPaths()
+{
+    Array<String> result;
+    if (EnsureDatabaseLoaded())
+        return result;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.IsMainAsset())
+            result.Add(ToLogicalAssetPath(record.CanonicalPath.Get()));
+    }
+    if (result.Count() > 1)
+        std::sort(result.Get(), result.Get() + result.Count());
+    return result;
+}
+
+bool AssetDatabaseFacade::TryGetAssetObjectId(Asset* asset, AssetObjectId& result)
+{
+    result = AssetObjectId();
+    if (!asset || EnsureDatabaseLoaded())
+        return false;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(asset->GetID(), record))
+        return false;
+    result = AssetObjectId(record.SourceAssetID, record.LocalId);
+    return true;
+}
+
+Guid AssetDatabaseFacade::GetBackingAssetID(const AssetObjectId& objectID)
+{
+    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+        return Guid::Empty;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.SourceAssetID == objectID.Guid && record.LocalId == objectID.LocalId)
+            return record.ID;
+    }
+    return Guid::Empty;
+}
+
 String AssetDatabaseFacade::GetCanonicalSourcePath(const Guid& assetID)
 {
     AssetRecord record;
@@ -651,8 +985,14 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
 {
 #if USE_EDITOR
     EnsureBound();
-    EnsureExistingJsonSidecars();
+    const int32 assetSystemVersion = AssetPipelineSettings::Get()->AssetSystemVersion;
+    Array<AssetPipelineDiagnostic> metadataDiagnostics;
+    if (assetSystemVersion >= 3)
+        EnsureV3MetadataForRoot(Globals::ProjectContentFolder, metadataDiagnostics);
+    else
+        EnsureExistingJsonSidecars();
     AssetDatabaseScanOptions options;
+    options.AssetSystemVersion = assetSystemVersion;
     options.StrictMetadata = strictMetadata;
     options.HashCache = &HashCache;
     AssetDatabaseScanResult result;
@@ -676,6 +1016,7 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
         result.Diagnostics.Add(engineResult.Diagnostics);
         result.FileStates.Add(engineResult.FileStates);
     }
+    result.Diagnostics.Add(metadataDiagnostics);
     if (!failed)
     {
         AssetPipelineDiagnostic publishDiagnostic;
@@ -708,6 +1049,8 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
 bool AssetDatabaseFacade::LoadOrScan(bool strictMetadata)
 {
     EnsureBound();
+    if (AssetPipelineSettings::Get()->AssetSystemVersion >= 3)
+        return Scan(strictMetadata);
     Array<AssetDatabaseFileState> states;
     AssetPipelineDiagnostic diagnostic;
     if (!AssetDatabaseSnapshotStore::Load(SnapshotPath(), Globals::ProjectFolder, Globals::ProjectContentFolder, AssetDatabase::Get(), states, diagnostic))
@@ -733,6 +1076,25 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     if (paths.IsEmpty())
         return false;
 
+    const int32 assetSystemVersion = AssetPipelineSettings::Get()->AssetSystemVersion;
+    Array<AssetPipelineDiagnostic> metadataDiagnostics;
+    if (assetSystemVersion >= 3)
+    {
+        for (const String& requestedPath : paths)
+        {
+            String sourcePath = NormalizeAbsolutePath(requestedPath);
+            if (IsMetaPath(sourcePath))
+                sourcePath = sourcePath.Left(sourcePath.Length() - 5);
+            if (IsV3MetadataExcluded(sourcePath) || !AssetPathPolicy::IsSameOrChild(sourcePath, Globals::ProjectContentFolder))
+                continue;
+            if (FileSystem::DirectoryExists(sourcePath))
+                EnsureV3MetadataForRoot(sourcePath, metadataDiagnostics);
+            AssetPipelineDiagnostic diagnostic;
+            if (EnsureDefaultCanonicalMetadata(sourcePath, diagnostic))
+                metadataDiagnostics.Add(MoveTemp(diagnostic));
+        }
+    }
+
     const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
     HashSet<String> affectedKeys;
     Array<String> expanded;
@@ -743,6 +1105,20 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
         const String normalized = NormalizeAbsolutePath(path);
         if (normalized.IsEmpty())
             continue;
+        if (FileSystem::DirectoryExists(normalized))
+        {
+            AddUniquePath(normalized, affectedKeys, expanded);
+            AddUniquePath(normalized + TEXT(".meta"), affectedKeys, expanded);
+            Array<String> directories;
+            if (!CollectSourceDirectories(normalized, directories))
+            {
+                for (const String& directory : directories)
+                {
+                    AddUniquePath(directory, affectedKeys, expanded);
+                    AddUniquePath(directory + TEXT(".meta"), affectedKeys, expanded);
+                }
+            }
+        }
         refreshedRootKeys.Add(PathKey(normalized));
         if (FileSystem::FileExists(normalized) && !FileSystem::DirectoryExists(normalized))
             continue;
@@ -776,7 +1152,7 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     const String engineRoot = AssetSourceRoots::GetEngineRoot();
     for (const String& path : expanded)
     {
-        if (!FileSystem::FileExists(path))
+        if (!FileSystem::FileExists(path) && !FileSystem::DirectoryExists(path))
             continue;
         if (engineRoot.HasChars() && AssetPathPolicy::IsSameOrChild(path, engineRoot))
             engineFiles.Add(path);
@@ -784,6 +1160,7 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
             projectFiles.Add(path);
     }
     AssetDatabaseScanOptions options;
+    options.AssetSystemVersion = assetSystemVersion;
     options.HashCache = &HashCache;
     // Matches a full editor Scan, so a source that shows up without a sidecar still reports
     // MissingMeta and can be picked up by the metadata registration queue.
@@ -823,6 +1200,7 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     const bool identityChanged = SnapshotIdentityChanged(previous, merged);
     Array<AssetPipelineDiagnostic> diagnostics;
     diagnostics.Add(result.Diagnostics);
+    diagnostics.Add(metadataDiagnostics);
     bool publishFailed = false;
     if (identityChanged)
     {
@@ -854,6 +1232,186 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     nextStates.Add(result.FileStates);
     LastFileStates = MoveTemp(nextStates);
     PersistSnapshot();
+    return false;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::ImportAsset(const StringView& path, ImportAssetOptions options)
+{
+#if USE_EDITOR
+    if (path.IsEmpty())
+        return true;
+    String resolved = ResolveFacadeAssetPath(path);
+    if (IsMetaPath(resolved))
+        resolved = resolved.Left(resolved.Length() - 5);
+    if (!IsFacadeAssetPath(resolved))
+    {
+        AssetPipelineDiagnostic diagnostic;
+        diagnostic.Code = AssetPipelineDiagnosticCode::PathCollision;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Asset import path must be under Content or EngineContent.");
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return true;
+    }
+    if (!FileSystem::FileExists(resolved) && !FileSystem::DirectoryExists(resolved))
+    {
+        AssetPipelineDiagnostic diagnostic;
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Asset import source does not exist.");
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return true;
+    }
+    const bool isDirectory = FileSystem::DirectoryExists(resolved);
+    if (isDirectory && !EnumHasAnyFlags(options, ImportAssetOptions::ImportRecursive))
+    {
+        AssetPipelineDiagnostic diagnostic;
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Folder import requires ImportRecursive.");
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return true;
+    }
+
+    Array<String> sources;
+    if (isDirectory)
+    {
+        if (FileSystem::DirectoryGetFiles(sources, resolved, TEXT("*"), DirectorySearchOption::AllDirectories))
+            return true;
+        if (sources.Count() > 1)
+            std::sort(sources.Get(), sources.Get() + sources.Count());
+    }
+    else if (FileSystem::FileExists(resolved))
+    {
+        sources.Add(resolved);
+    }
+
+    Array<AssetPipelineDiagnostic> preparationDiagnostics;
+    for (const String& source : sources)
+    {
+        if (IsMetaPath(source) || IsV3MetadataExcluded(source) || !AssetPathPolicy::IsSameOrChild(source, Globals::ProjectContentFolder))
+            continue;
+        AssetPipelineDiagnostic diagnostic;
+        if (EnsureDefaultCanonicalMetadata(source, diagnostic))
+            preparationDiagnostics.Add(MoveTemp(diagnostic));
+    }
+    if (preparationDiagnostics.HasItems())
+    {
+        SetDiagnostics(preparationDiagnostics);
+        return true;
+    }
+
+    Array<String> refreshPaths;
+    refreshPaths.Add(resolved);
+    if (RefreshSources(refreshPaths))
+        return true;
+#if COMPILE_WITH_ASSETS_IMPORTER
+    const bool force = EnumHasAnyFlags(options, ImportAssetOptions::ForceUpdate) ||
+        EnumHasAnyFlags(options, ImportAssetOptions::ForceUncompressedImport);
+    const bool synchronous = EnumHasAnyFlags(options, ImportAssetOptions::ForceSynchronousImport);
+    bool matched = false;
+    Array<AssetPipelineDiagnostic> buildDiagnostics;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (!record.IsMainAsset())
+            continue;
+        const bool pathMatches = isDirectory
+            ? PathIsUnder(record.SourcePath.Get(), resolved)
+            : FileSystem::AreFilePathsEqual(record.SourcePath.Get(), resolved);
+        if (!pathMatches)
+            continue;
+        matched = true;
+        AssetPipelineDiagnostic diagnostic;
+        const GenericBuildRequestResult request = RequestGenericBuild(record, force, synchronous, diagnostic);
+        if (request == GenericBuildRequestResult::Failed)
+            buildDiagnostics.Add(MoveTemp(diagnostic));
+        else if (request == GenericBuildRequestResult::Unsupported && record.Status == AssetRecordStatus::UnsupportedProcessor)
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.AssetGuid = record.ID;
+            diagnostic.SourcePath = record.SourcePath.Get();
+            diagnostic.Message = TEXT("Imported source has no registered asset processor.");
+            buildDiagnostics.Add(MoveTemp(diagnostic));
+        }
+    }
+    if (buildDiagnostics.HasItems())
+    {
+        SetDiagnostics(buildDiagnostics);
+        return true;
+    }
+    if (!matched && FileSystem::FileExists(resolved))
+    {
+        AssetPipelineDiagnostic diagnostic;
+        diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Imported source has no registered asset processor.");
+        buildDiagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(buildDiagnostics);
+        return true;
+    }
+#endif
+    return false;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::Refresh(ImportAssetOptions options)
+{
+#if USE_EDITOR
+    Array<String> sources;
+    if (FileSystem::DirectoryGetFiles(sources, Globals::ProjectContentFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
+        return true;
+    Array<AssetPipelineDiagnostic> preparationDiagnostics;
+    for (const String& source : sources)
+    {
+        if (IsMetaPath(source) || IsV3MetadataExcluded(source))
+            continue;
+        AssetPipelineDiagnostic diagnostic;
+        if (EnsureDefaultCanonicalMetadata(source, diagnostic))
+            preparationDiagnostics.Add(MoveTemp(diagnostic));
+    }
+    if (preparationDiagnostics.HasItems())
+    {
+        SetDiagnostics(preparationDiagnostics);
+        return true;
+    }
+    if (Scan(false))
+        return true;
+#if COMPILE_WITH_ASSETS_IMPORTER
+    const bool force = EnumHasAnyFlags(options, ImportAssetOptions::ForceUpdate) ||
+        EnumHasAnyFlags(options, ImportAssetOptions::ForceUncompressedImport);
+    const bool synchronous = EnumHasAnyFlags(options, ImportAssetOptions::ForceSynchronousImport);
+    Array<AssetPipelineDiagnostic> buildDiagnostics;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (!record.IsMainAsset())
+            continue;
+        AssetPipelineDiagnostic diagnostic;
+        if (RequestGenericBuild(record, force, synchronous, diagnostic) == GenericBuildRequestResult::Failed)
+            buildDiagnostics.Add(MoveTemp(diagnostic));
+    }
+    if (buildDiagnostics.HasItems())
+    {
+        SetDiagnostics(buildDiagnostics);
+        return true;
+    }
+#endif
     return false;
 #else
     return true;
