@@ -29,9 +29,12 @@ namespace FlaxEditor.Actions
         {
             public string OriginalPath;
             public string TrashPath;
+            public string MetadataOriginalPath;
+            public string MetadataTrashPath;
             public string SidecarOriginalPath;
             public string SidecarTrashPath;
             public bool IsFolder;
+            public bool HasMetadataSidecar;
             public bool HasSidecarFolder;
             public Guid AssetId;
             public string TypeName;
@@ -199,6 +202,8 @@ namespace FlaxEditor.Actions
                 {
                     UnloadStagedAssets(_entries[i].TrashPath, _entries[i].IsFolder);
                     var cleanupSucceeded = DeletePath(_entries[i].TrashPath, _entries[i].IsFolder);
+                    if (_entries[i].HasMetadataSidecar)
+                        cleanupSucceeded &= DeletePath(_entries[i].MetadataTrashPath, false);
                     if (_entries[i].HasSidecarFolder)
                         cleanupSucceeded &= DeletePath(_entries[i].SidecarTrashPath, true);
                     if (!cleanupSucceeded)
@@ -212,6 +217,8 @@ namespace FlaxEditor.Actions
                         var entry = cleanupFailures[i];
                         if (ContentMutationPathUtils.Exists(entry.TrashPath))
                             plan.Entries.Add(new ContentMutationEntry(entry.TrashPath, entry.OriginalPath, ContentMutationPathRole.UndoTrash, entry.IsFolder));
+                        if (entry.HasMetadataSidecar && File.Exists(entry.MetadataTrashPath))
+                            plan.Entries.Add(new ContentMutationEntry(entry.MetadataTrashPath, entry.MetadataOriginalPath, ContentMutationPathRole.MetadataSidecar, false));
                         if (entry.HasSidecarFolder && ContentMutationPathUtils.Exists(entry.SidecarTrashPath))
                             plan.Entries.Add(new ContentMutationEntry(entry.SidecarTrashPath, entry.SidecarOriginalPath, ContentMutationPathRole.ExternalActorSidecar, true));
                     }
@@ -274,6 +281,11 @@ namespace FlaxEditor.Actions
             return string.Equals(Path.GetExtension(path), ".scene", StringComparison.OrdinalIgnoreCase);
         }
 
+        internal static string GetMetadataSidecarPath(string path, bool isFolder)
+        {
+            return isFolder ? null : StringUtils.NormalizePath(path) + ".meta";
+        }
+
         internal static string GetSceneActorsFolderPath(string path, bool isFolder)
         {
             if (!isFolder && !IsSceneFilePath(path))
@@ -300,9 +312,17 @@ namespace FlaxEditor.Actions
         {
             var trashRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "EditorTrash", Guid.NewGuid().ToString("N"));
             var originalPath = StringUtils.NormalizePath(item.Path);
+            var metadataOriginalPath = GetMetadataSidecarPath(originalPath, item.IsFolder);
             var sidecarOriginalPath = GetSceneActorsFolderPath(originalPath, item.IsFolder);
+            var hasMetadataSidecar = metadataOriginalPath != null && File.Exists(metadataOriginalPath);
             var hasSidecarFolder = sidecarOriginalPath != null && Directory.Exists(sidecarOriginalPath);
             var sizeInBytes = GetPathSize(originalPath, item.IsFolder);
+            if (hasMetadataSidecar)
+            {
+                var metadataSizeInBytes = GetPathSize(metadataOriginalPath, false);
+                if (metadataSizeInBytes >= 0)
+                    sizeInBytes = sizeInBytes >= 0 ? sizeInBytes + metadataSizeInBytes : metadataSizeInBytes;
+            }
             if (hasSidecarFolder)
             {
                 var sidecarSizeInBytes = GetPathSize(sidecarOriginalPath, true);
@@ -313,9 +333,12 @@ namespace FlaxEditor.Actions
             {
                 OriginalPath = originalPath,
                 TrashPath = StringUtils.CombinePaths(trashRoot, item.FileName),
+                MetadataOriginalPath = metadataOriginalPath,
+                MetadataTrashPath = metadataOriginalPath == null ? null : StringUtils.CombinePaths(trashRoot, item.FileName + ".meta"),
                 SidecarOriginalPath = sidecarOriginalPath,
                 SidecarTrashPath = StringUtils.CombinePaths(trashRoot, "SceneActors"),
                 IsFolder = item.IsFolder,
+                HasMetadataSidecar = hasMetadataSidecar,
                 HasSidecarFolder = hasSidecarFolder,
                 AssetId = item is AssetItem assetItem ? assetItem.ID : Guid.Empty,
                 TypeName = item is AssetItem typedAssetItem ? typedAssetItem.TypeName : null,
@@ -374,6 +397,13 @@ namespace FlaxEditor.Actions
                 {
                     DestinationParentProducedByTransaction = true,
                 });
+                if (_entries[i].HasMetadataSidecar)
+                {
+                    plan.Entries.Add(new ContentMutationEntry(_entries[i].MetadataOriginalPath, _entries[i].MetadataTrashPath, ContentMutationPathRole.MetadataSidecar, false)
+                    {
+                        DestinationParentProducedByTransaction = true,
+                    });
+                }
                 if (_entries[i].HasSidecarFolder)
                 {
                     plan.Entries.Add(new ContentMutationEntry(_entries[i].SidecarOriginalPath, _entries[i].SidecarTrashPath, ContentMutationPathRole.ExternalActorSidecar, true)
@@ -387,7 +417,10 @@ namespace FlaxEditor.Actions
                     planIndices,
                     () => CommitStageEntry(entryIndex, items != null ? items[entryIndex] : _editor.ContentDatabase.Find(_entries[entryIndex].OriginalPath)),
                     () => RollbackStageEntry(entryIndex),
-                    () => _entries[entryIndex].IsStaged && PathExists(_entries[entryIndex].TrashPath, _entries[entryIndex].IsFolder) && !PathExists(_entries[entryIndex].OriginalPath, _entries[entryIndex].IsFolder)));
+                    () => _entries[entryIndex].IsStaged &&
+                          PathExists(_entries[entryIndex].TrashPath, _entries[entryIndex].IsFolder) &&
+                          !PathExists(_entries[entryIndex].OriginalPath, _entries[entryIndex].IsFolder) &&
+                          (!_entries[entryIndex].HasMetadataSidecar || (File.Exists(_entries[entryIndex].MetadataTrashPath) && !File.Exists(_entries[entryIndex].MetadataOriginalPath)))));
             }
 
             ContentMutationDiagnostics.Log("mutation.stage.begin", $"transaction={plan.Id:N}; action='{ActionString}'; entries={_entries.Length}; source={source}");
@@ -409,6 +442,8 @@ namespace FlaxEditor.Actions
                 var entryIndex = i;
                 var firstPlanEntry = plan.Entries.Count;
                 plan.Entries.Add(new ContentMutationEntry(_entries[i].TrashPath, _entries[i].OriginalPath, ContentMutationPathRole.Main, _entries[i].IsFolder));
+                if (_entries[i].HasMetadataSidecar)
+                    plan.Entries.Add(new ContentMutationEntry(_entries[i].MetadataTrashPath, _entries[i].MetadataOriginalPath, ContentMutationPathRole.MetadataSidecar, false));
                 if (_entries[i].HasSidecarFolder)
                     plan.Entries.Add(new ContentMutationEntry(_entries[i].SidecarTrashPath, _entries[i].SidecarOriginalPath, ContentMutationPathRole.ExternalActorSidecar, true)
                     {
@@ -420,7 +455,10 @@ namespace FlaxEditor.Actions
                     planIndices,
                     () => CommitRestoreEntry(entryIndex),
                     () => RollbackRestoreEntry(entryIndex),
-                    () => !_entries[entryIndex].IsStaged && PathExists(_entries[entryIndex].OriginalPath, _entries[entryIndex].IsFolder) && !PathExists(_entries[entryIndex].TrashPath, _entries[entryIndex].IsFolder)));
+                    () => !_entries[entryIndex].IsStaged &&
+                          PathExists(_entries[entryIndex].OriginalPath, _entries[entryIndex].IsFolder) &&
+                          !PathExists(_entries[entryIndex].TrashPath, _entries[entryIndex].IsFolder) &&
+                          (!_entries[entryIndex].HasMetadataSidecar || (File.Exists(_entries[entryIndex].MetadataOriginalPath) && !File.Exists(_entries[entryIndex].MetadataTrashPath)))));
             }
 
             ContentMutationDiagnostics.Log("mutation.restore.begin", $"transaction={plan.Id:N}; action='{ActionString}'; entries={_entries.Length}");
@@ -483,6 +521,12 @@ namespace FlaxEditor.Actions
                     return false;
                 }
 
+                entry.HasMetadataSidecar = entry.MetadataOriginalPath != null && File.Exists(entry.MetadataOriginalPath);
+                if (entry.HasMetadataSidecar && (ContainsReparsePoint(entry.MetadataOriginalPath, false) || File.Exists(entry.MetadataTrashPath) || Directory.Exists(entry.MetadataTrashPath)))
+                {
+                    Editor.LogWarning("Cannot stage asset metadata because its recovery path is unsafe or already exists: " + entry.MetadataOriginalPath);
+                    return false;
+                }
                 entry.HasSidecarFolder = entry.SidecarOriginalPath != null && Directory.Exists(entry.SidecarOriginalPath);
                 if (entry.HasSidecarFolder && (ContainsReparsePoint(entry.SidecarOriginalPath, true) || File.Exists(entry.SidecarTrashPath) || Directory.Exists(entry.SidecarTrashPath)))
                 {
@@ -512,6 +556,11 @@ namespace FlaxEditor.Actions
                     Editor.LogWarning("Cannot restore staged content item because the original path already exists: " + entry.OriginalPath);
                     return false;
                 }
+                if (entry.HasMetadataSidecar && (!File.Exists(entry.MetadataTrashPath) || File.Exists(entry.MetadataOriginalPath) || Directory.Exists(entry.MetadataOriginalPath)))
+                {
+                    Editor.LogWarning("Cannot restore staged asset metadata because recovery data is missing or the original path exists: " + entry.MetadataOriginalPath);
+                    return false;
+                }
                 if (entry.HasSidecarFolder && (!Directory.Exists(entry.SidecarTrashPath) || File.Exists(entry.SidecarOriginalPath) || Directory.Exists(entry.SidecarOriginalPath)))
                 {
                     Editor.LogWarning("Cannot restore staged scene actors folder because recovery data is missing or the original path exists: " + entry.SidecarOriginalPath);
@@ -525,8 +574,19 @@ namespace FlaxEditor.Actions
         {
             if (!MoveContentPath(ref entry, entry.TrashPath, entry.OriginalPath))
                 return false;
+            if (entry.HasMetadataSidecar && !MovePath(entry.MetadataTrashPath, entry.MetadataOriginalPath, false))
+            {
+                if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
+                {
+                    _requiresRecovery = true;
+                    Editor.LogError("Failed to roll back a partial content restore. Recovery data: " + entry.TrashPath);
+                }
+                return false;
+            }
             if (entry.HasSidecarFolder && !MovePath(entry.SidecarTrashPath, entry.SidecarOriginalPath, true))
             {
+                if (entry.HasMetadataSidecar && !MovePath(entry.MetadataOriginalPath, entry.MetadataTrashPath, false))
+                    _requiresRecovery = true;
                 if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
                 {
                     _requiresRecovery = true;
@@ -577,12 +637,18 @@ namespace FlaxEditor.Actions
 
         private bool StageEntry(ContentItem item, ref Entry entry)
         {
+            entry.HasMetadataSidecar = entry.MetadataOriginalPath != null && File.Exists(entry.MetadataOriginalPath);
             entry.HasSidecarFolder = entry.SidecarOriginalPath != null && Directory.Exists(entry.SidecarOriginalPath);
             if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
                 return false;
+            if (entry.HasMetadataSidecar && !MovePath(entry.MetadataOriginalPath, entry.MetadataTrashPath, false))
+            {
+                RollbackFailedStage(ref entry);
+                return false;
+            }
             if (entry.HasSidecarFolder && !MovePath(entry.SidecarOriginalPath, entry.SidecarTrashPath, true))
             {
-                MoveContentPath(ref entry, entry.TrashPath, entry.OriginalPath);
+                RollbackFailedStage(ref entry);
                 return false;
             }
 
@@ -615,6 +681,13 @@ namespace FlaxEditor.Actions
             else
                 DeletePath(entry.TrashPath, entry.IsFolder);
 
+            if (entry.HasMetadataSidecar)
+            {
+                if (!File.Exists(entry.MetadataOriginalPath))
+                    rollbackSucceeded &= MovePath(entry.MetadataTrashPath, entry.MetadataOriginalPath, false);
+                else
+                    DeletePath(entry.MetadataTrashPath, false);
+            }
             if (entry.HasSidecarFolder)
             {
                 if (!Directory.Exists(entry.SidecarOriginalPath))

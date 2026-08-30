@@ -507,6 +507,7 @@ namespace FlaxEditor.Modules
             case ".webm":
             case ".mov":
             case ".mkv":
+            case ".txt":
                 return true;
             default:
                 return false;
@@ -570,7 +571,7 @@ namespace FlaxEditor.Modules
             case ".ac": case ".stl": case ".lwo": case ".lws": case ".lxo":
                 return CanonicalBuildKind.Model;
             case ".wav": case ".mp3": case ".ogg": case ".ttf": case ".otf": case ".shader":
-            case ".mp4": case ".webm": case ".mov": case ".mkv":
+            case ".mp4": case ".webm": case ".mov": case ".mkv": case ".txt":
                 return CanonicalBuildKind.Graph;
             default:
                 return CanonicalBuildKind.None;
@@ -1244,6 +1245,10 @@ namespace FlaxEditor.Modules
             case ".mkv":
                 typeName = "FlaxEngine.Video";
                 processorId = "Flax.Video";
+                break;
+            case ".txt":
+                typeName = typeof(RawDataAsset).FullName;
+                processorId = "Flax.Text";
                 break;
             default:
                 return Guid.Empty;

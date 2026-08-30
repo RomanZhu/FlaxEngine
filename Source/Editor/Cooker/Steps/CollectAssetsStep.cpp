@@ -49,6 +49,7 @@ bool CollectAssetsStep::Perform(CookingData& data)
             canonicalRecord.ProcessorID != TEXT("Flax.Audio") &&
             canonicalRecord.ProcessorID != TEXT("Flax.Font") &&
             canonicalRecord.ProcessorID != TEXT("Flax.Video") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.Text") &&
             canonicalRecord.ProcessorID != TEXT("Flax.ShaderSource"))
         {
             LOG(Warning, "Skipping canonical cooker root {0}; processor '{1}' is not converted yet.", assetId, canonicalRecord.ProcessorID);

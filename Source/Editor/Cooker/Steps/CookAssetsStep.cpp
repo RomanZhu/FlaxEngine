@@ -1242,11 +1242,13 @@ bool CookAssetsStep::Perform(CookingData& data)
                 canonicalRecord.ProcessorID == TEXT("Flax.SceneAnimation") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.ParticleSystem") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.CollisionData"));
+        const bool isCanonicalText = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
+            canonicalRecord.ProcessorID == TEXT("Flax.Text");
         const bool isCanonicalImported = hasImportedCanonical &&
             (canonicalRecord.ProcessorID == TEXT("Flax.Audio") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.Font") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.Video"));
+                canonicalRecord.ProcessorID == TEXT("Flax.Video")) || isCanonicalText;
         if (isCanonicalTexture || isCanonicalModel || isCanonicalGraph || isCanonicalImported)
         {
             ArtifactRequest request;

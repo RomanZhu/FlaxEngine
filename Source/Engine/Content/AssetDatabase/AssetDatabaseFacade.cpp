@@ -12,6 +12,7 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
+#include "Engine/Content/Assets/RawDataAsset.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
@@ -507,6 +508,12 @@ namespace
         {
             meta.AssetType = TEXT("FlaxEngine.Video");
             meta.Processor.ID = TEXT("Flax.Video");
+        }
+        else if (extension == TEXT("txt"))
+        {
+            meta.AssetType = RawDataAsset::TypeName;
+            meta.SourceKind = AssetSourceKind::TextDocument;
+            meta.Processor.ID = TEXT("Flax.Text");
         }
         else
         {
@@ -1872,7 +1879,7 @@ Guid AssetDatabaseFacade::CreateImportedSourceMetadata(const StringView& sourceP
     AssetMeta meta;
     meta.ID = Guid::New();
     meta.AssetType = typeName;
-    meta.SourceKind = AssetSourceKind::ImportedSource;
+    meta.SourceKind = processorId == TEXT("Flax.Text") ? AssetSourceKind::TextDocument : AssetSourceKind::ImportedSource;
     meta.Processor.ID = processorId;
     meta.Processor.SettingsVersion = 1;
     meta.Processor.SettingsJson = "{}\n";

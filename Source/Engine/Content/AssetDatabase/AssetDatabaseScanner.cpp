@@ -48,7 +48,7 @@ namespace
             TEXT("ac"), TEXT("stl"), TEXT("lwo"), TEXT("lws"), TEXT("lxo"),
             TEXT("wav"), TEXT("mp3"), TEXT("ogg"),
             TEXT("ttf"), TEXT("otf"),
-            TEXT("mp4"), TEXT("webm"), TEXT("mov"), TEXT("mkv"),
+            TEXT("mp4"), TEXT("webm"), TEXT("mov"), TEXT("mkv"), TEXT("txt"),
             TEXT("shader"),
             TEXT("materialfunction"), TEXT("animgraphfunction"), TEXT("animgraph"),
             TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction"), TEXT("material"),

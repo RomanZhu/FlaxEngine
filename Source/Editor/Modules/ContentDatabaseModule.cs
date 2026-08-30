@@ -392,6 +392,15 @@ namespace FlaxEditor.Modules
             return item != null && (item.IsAsset || item.ItemType == ContentItemType.Scene) && !(item is AssetItem assetItem && assetItem.IsCanonicalSource);
         }
 
+        internal static bool UseContentBackendForCopy(ContentItem item)
+        {
+            // Existing JSON assets embed their identity in the document. Other canonical
+            // sources keep identity only in metadata and must retain their source bytes.
+            if (item is AssetItem { IsCanonicalSource: true } assetItem)
+                return string.Equals(assetItem.ProcessorID, "Flax.ExistingJson", StringComparison.Ordinal);
+            return UseContentBackendForFileOperation(item);
+        }
+
         internal static bool ShouldRemoveMissingContentItem(ContentItem item)
         {
             return item is not NewItem && item?.Exists == false;
@@ -785,6 +794,7 @@ namespace FlaxEditor.Modules
         {
             try
             {
+                var metadataPath = path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase) ? null : path + ".meta";
                 if (Directory.Exists(path))
                     Directory.Delete(path, true);
                 else if (File.Exists(path))
@@ -794,10 +804,14 @@ namespace FlaxEditor.Modules
                     if (File.Exists(path))
                         File.Delete(path);
                 }
+                if (metadataPath != null && File.Exists(metadataPath))
+                    File.Delete(metadataPath);
                 var sidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(path, false, string.Equals(Path.GetExtension(path), ".scene", StringComparison.OrdinalIgnoreCase));
                 if (sidecar != null && Directory.Exists(sidecar))
                     Directory.Delete(sidecar, true);
-                return !ContentMutationPathUtils.Exists(path) && (sidecar == null || !Directory.Exists(sidecar));
+                return !ContentMutationPathUtils.Exists(path) &&
+                       (metadataPath == null || !File.Exists(metadataPath)) &&
+                       (sidecar == null || !Directory.Exists(sidecar));
             }
             catch (Exception ex)
             {
@@ -1259,6 +1273,7 @@ namespace FlaxEditor.Modules
             var entry = new ContentMutationEntry(item.Path, targetPath, descendant ? ContentMutationPathRole.Descendant : ContentMutationPathRole.Main, item.IsFolder)
             {
                 DestinationParentProducedByTransaction = descendant,
+                AssetCloneExpected = !item.IsFolder && UseContentBackendForCopy(item),
             };
             plan.Entries.Add(entry);
             if (!item.IsFolder && item is AssetItem assetItem && assetItem.IsCanonicalSource && File.Exists(item.Path + ".meta"))
@@ -1319,13 +1334,12 @@ namespace FlaxEditor.Modules
                     return false;
                 if (entry.Role == ContentMutationPathRole.MetadataSidecar)
                     continue;
-                if (!entry.IsDirectory && entry.SourceWasAsset)
+                if (!entry.IsDirectory && entry.AssetCloneExpected)
                 {
-                    // Asset cloning assigns a new ID and may rewrite/compress the package, so
-                    // byte length is not an identity invariant. Validate the cloned package
-                    // header and type instead, and make sure the clone did not retain the
-                    // source ID.
-                    if (!FlaxEngine.Content.GetAssetInfo(entry.DestinationPath, out var assetInfo) ||
+                    // Asset cloning assigns a new ID and may rewrite the storage, so byte
+                    // length is not an identity invariant. Validate its identity and type.
+                    if (!entry.SourceWasAsset ||
+                        !FlaxEngine.Content.GetAssetInfo(entry.DestinationPath, out var assetInfo) ||
                         assetInfo.ID == Guid.Empty ||
                         assetInfo.ID == entry.SourceAssetId ||
                         !string.Equals(assetInfo.TypeName, entry.SourceAssetType, StringComparison.Ordinal))
@@ -1441,7 +1455,7 @@ namespace FlaxEditor.Modules
                 var targetMetaPath = targetPath + ".meta";
                 if (AssetDatabaseFacade.CloneMetadata(item.Path + ".meta", targetMetaPath))
                     throw new IOException($"Cannot clone metadata for canonical source '{item.Path}'.");
-                if (FlaxEngine.Content.GetAssetInfo(item.Path, out var sourceInfo) && sourceInfo.ID != Guid.Empty)
+                if (UseContentBackendForCopy(item))
                 {
                     var cloneId = ReadCanonicalMetadataGuid(targetMetaPath);
                     if (Editor.ContentEditing.CloneAssetFile(item.Path, targetPath, cloneId))

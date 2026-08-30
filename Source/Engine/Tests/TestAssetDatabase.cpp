@@ -5,6 +5,7 @@
 #include "Engine/Content/AssetDatabase/AssetDatabaseScanner.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Assets/Texture.h"
+#include "Engine/Content/Assets/RawDataAsset.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
@@ -154,10 +155,12 @@ TEST_CASE("Asset database scan pairs exact sidecars and diagnoses duplicates orp
     const String first = content / TEXT("First.png");
     const String second = content / TEXT("Second.png");
     const String missing = content / TEXT("Missing.png");
+    const String missingText = content / TEXT("Notes.txt");
     const String orphanMeta = content / TEXT("Orphan.png.meta");
     REQUIRE_FALSE(File::WriteAllText(first, TEXT("one"), Encoding::ANSI));
     REQUIRE_FALSE(File::WriteAllText(second, TEXT("two"), Encoding::ANSI));
     REQUIRE_FALSE(File::WriteAllText(missing, TEXT("missing"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(missingText, TEXT("notes"), Encoding::ANSI));
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(AssetMeta::SaveAtomic(first + TEXT(".meta"), MakeDatabaseMeta(sharedId), diagnostic));
     REQUIRE_FALSE(AssetMeta::SaveAtomic(second + TEXT(".meta"), MakeDatabaseMeta(sharedId), diagnostic));
@@ -171,21 +174,50 @@ TEST_CASE("Asset database scan pairs exact sidecars and diagnoses duplicates orp
     CHECK(scan.Revision == 1);
     bool duplicate = false;
     bool missingMeta = false;
+    bool missingTextMeta = false;
     bool orphan = false;
     for (const AssetPipelineDiagnostic& item : scan.Diagnostics)
     {
         duplicate |= item.Code == AssetPipelineDiagnosticCode::DuplicateGuid;
         missingMeta |= item.Code == AssetPipelineDiagnosticCode::MissingMeta;
+        missingTextMeta |= item.Code == AssetPipelineDiagnosticCode::MissingMeta && item.SourcePath.EndsWith(TEXT("Notes.txt"));
         orphan |= item.Code == AssetPipelineDiagnosticCode::SourceMissing && item.SourcePath.EndsWith(TEXT("Orphan.png"));
     }
     CHECK(duplicate);
     CHECK(missingMeta);
+    CHECK(missingTextMeta);
     CHECK(orphan);
     AssetRecord record;
     REQUIRE(database.TryGetRecord(sharedId, record));
     CHECK(record.Status == AssetRecordStatus::DuplicateGuid);
     REQUIRE(database.TryGetRecord(Guid(41, 42, 43, 44), record));
     CHECK(record.Status == AssetRecordStatus::OrphanMeta);
+}
+
+TEST_CASE("Default canonical metadata supports text sources")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("TextMetadataBatch-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const String source = root / TEXT("Notes.txt");
+    const String staging = root / TEXT("Notes.txt.staged-meta");
+    REQUIRE_FALSE(File::WriteAllText(source, TEXT("notes"), Encoding::ANSI));
+    Array<String> sources;
+    sources.Add(source);
+    Array<String> stagingPaths;
+    stagingPaths.Add(staging);
+
+    const Array<Guid> ids = AssetDatabaseFacade::StageDefaultCanonicalMetadataBatch(sources, stagingPaths);
+    REQUIRE(ids.Count() == 1);
+    REQUIRE(ids[0].IsValid());
+    AssetMeta meta;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::Load(staging, meta, diagnostic));
+    CHECK(meta.ID == ids[0]);
+    CHECK(meta.AssetType == RawDataAsset::TypeName);
+    CHECK(meta.SourceKind == AssetSourceKind::TextDocument);
+    CHECK(meta.Processor.ID == TEXT("Flax.Text"));
 }
 
 TEST_CASE("Asset database scan registers legacy binary assets for mixed-mode loading and migration")
