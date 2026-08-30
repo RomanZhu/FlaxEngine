@@ -17,15 +17,6 @@ namespace
         values->Add(id);
     }
 
-    bool HasSameIdentityAndContent(const AssetRecord& a, const AssetRecord& b)
-    {
-        return a.ID == b.ID && a.SourceAssetID == b.SourceAssetID && a.TypeName == b.TypeName &&
-            a.CanonicalPath == b.CanonicalPath && a.SourcePath == b.SourcePath && a.MetaPath == b.MetaPath &&
-            a.SubAsset == b.SubAsset && a.ProcessorID == b.ProcessorID && a.PortabilityKey == b.PortabilityKey &&
-            a.MetaSemanticHash == b.MetaSemanticHash && a.SourceKind == b.SourceKind &&
-            a.BuildInputDependencies == b.BuildInputDependencies && a.RuntimeReferences == b.RuntimeReferences;
-    }
-
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const StringView& path, const StringView& message)
     {
         diagnostic = AssetPipelineDiagnostic();
@@ -145,6 +136,10 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
         if (nextRecords.ContainsKey(input.ID))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::DuplicateGuid, input.SourcePath.Get(), TEXT("Asset database input contains a duplicate GUID."));
         AssetRecord record = input;
+        // The collision pass below is authoritative over the whole set being published, so a status
+        // carried in from an earlier publish has to be dropped or a resolved collision never clears.
+        if (record.Status == AssetRecordStatus::PathCollision)
+            record.Status = AssetRecordStatus::Ready;
         if (record.PortabilityKey.IsEmpty())
             record.PortabilityKey = record.CanonicalPath.Get().ToLower();
         else
@@ -195,7 +190,7 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
             }
             else
             {
-                const bool contentChanged = !HasSameIdentityAndContent(*previous, entry.Value);
+                const bool contentChanged = !previous->HasSameIdentityAndContent(entry.Value);
                 const bool statusChanged = previous->Status != entry.Value.Status;
                 entry.Value.DatabaseRevision = contentChanged || statusChanged ? changes.Revision : previous->DatabaseRevision;
                 if (contentChanged)

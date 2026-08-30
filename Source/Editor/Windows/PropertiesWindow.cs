@@ -2032,7 +2032,7 @@ namespace FlaxEditor.Windows
                     {
                         var sourcePath = AssetDatabaseFacade.GetCanonicalSourcePath(_asset.ID);
                         var failed = !string.IsNullOrEmpty(sourcePath) && CanonicalGraphDocuments.IsGraphDocumentPath(sourcePath)
-                            ? AssetDatabaseFacade.SaveGraphSurface(sourcePath, value)
+                            ? Editor.Instance.ContentDatabase.SaveAsset(sourcePath, () => AssetDatabaseFacade.SaveGraphSurface(sourcePath, value))
                             : _asset.SaveSurface(value);
                         if (failed)
                         {

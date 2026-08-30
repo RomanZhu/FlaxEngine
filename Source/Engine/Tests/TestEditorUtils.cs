@@ -83,6 +83,41 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestCanonicalSourceCopyBackendClassification()
+        {
+            var textureId = Guid.NewGuid();
+            var textureItem = new BinaryAssetItem("C:/Project/Content/Texture.jpg", ref textureId,
+                typeof(Texture).FullName, typeof(Texture), ContentItemSearchFilter.Texture);
+            textureItem.SetAssetDatabaseRecord(new AssetDatabaseRecordInfo
+            {
+                ID = textureId,
+                SourceAssetID = textureId,
+                SourcePath = textureItem.Path,
+                MetaPath = textureItem.Path + ".meta",
+                ProcessorID = "Flax.Texture",
+                SourceKind = AssetSourceKind.ImportedSource,
+                IsMain = true,
+            });
+
+            var prefabId = Guid.NewGuid();
+            var prefabItem = new BinaryAssetItem("C:/Project/Content/Prefab.prefab", ref prefabId,
+                typeof(Prefab).FullName, typeof(Prefab), ContentItemSearchFilter.Prefab);
+            prefabItem.SetAssetDatabaseRecord(new AssetDatabaseRecordInfo
+            {
+                ID = prefabId,
+                SourceAssetID = prefabId,
+                SourcePath = prefabItem.Path,
+                MetaPath = prefabItem.Path + ".meta",
+                ProcessorID = "Flax.ExistingJson",
+                SourceKind = AssetSourceKind.ExistingJson,
+                IsMain = true,
+            });
+
+            Assert.IsFalse(ContentDatabaseModule.UseContentBackendForCopy(textureItem));
+            Assert.IsTrue(ContentDatabaseModule.UseContentBackendForCopy(prefabItem));
+        }
+
+        [Test]
         public void TestCanonicalSubAssetIsReferenceableButNotIndependentlyMutable()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxCanonicalSubAssetTests", Guid.NewGuid().ToString("N"));
@@ -1072,6 +1107,39 @@ namespace FlaxEngine.Tests
                 StringUtils.NormalizePath(Path.Combine(Globals.ProjectFolder, "SceneActors", "Scenes")),
                 StringUtils.NormalizePath(ContentItemFilesystemAction.GetSceneActorsFolderPath(folderPath, true)));
             Assert.IsNull(ContentItemFilesystemAction.GetSceneActorsFolderPath(filePath, false));
+        }
+
+        [Test]
+        public void TestMetadataSidecarPathForStagedContentDelete()
+        {
+            var filePath = Path.Combine(Globals.ProjectContentFolder, "Notes.txt");
+
+            Assert.AreEqual(
+                StringUtils.NormalizePath(filePath + ".meta"),
+                ContentItemFilesystemAction.GetMetadataSidecarPath(filePath, false));
+            Assert.IsNull(ContentItemFilesystemAction.GetMetadataSidecarPath(filePath, true));
+        }
+
+        [Test]
+        public void TestCanonicalTextUsesFileProxy()
+        {
+            var id = Guid.NewGuid();
+            var path = Path.Combine(Globals.ProjectContentFolder, "Notes.txt");
+            var item = new BinaryAssetItem(path, ref id, typeof(RawDataAsset).FullName, typeof(RawDataAsset), ContentItemSearchFilter.Other);
+            item.SetAssetDatabaseRecord(new AssetDatabaseRecordInfo
+            {
+                ID = id,
+                SourceAssetID = id,
+                TypeName = typeof(RawDataAsset).FullName,
+                SourcePath = path,
+                MetaPath = path + ".meta",
+                ProcessorID = "Flax.Text",
+                SourceKind = AssetSourceKind.TextDocument,
+                Status = AssetRecordStatus.Ready,
+                IsMain = true,
+            });
+
+            Assert.IsTrue(new FileProxy().IsProxyFor(item));
         }
 
         [Test]

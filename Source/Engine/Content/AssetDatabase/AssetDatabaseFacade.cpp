@@ -12,6 +12,7 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
+#include "Engine/Content/Assets/RawDataAsset.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
@@ -33,6 +34,7 @@
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Threading/Threading.h"
+#include "Engine/Core/Collections/HashSet.h"
 #if COMPILE_WITH_MATERIAL_GRAPH
 #include "Engine/Tools/MaterialGenerator/Types.h"
 #endif
@@ -86,6 +88,8 @@ namespace
 {
     CriticalSection StateLocker;
     Array<AssetPipelineDiagnostic> LastDiagnostics;
+    AssetDatabaseChangeInfo LastChange;
+    Array<AssetDatabaseFileState> LastFileStates;
     SourceHashCache HashCache;
     bool IsBound = false;
 
@@ -105,6 +109,15 @@ namespace
 
     void OnDatabaseChanged(const AssetDatabaseChangeBatch& change)
     {
+        {
+            ScopeLock lock(StateLocker);
+            LastChange = AssetDatabaseChangeInfo();
+            LastChange.Revision = change.Revision;
+            LastChange.Added = change.Added;
+            LastChange.Removed = change.Removed;
+            LastChange.Changed = change.Changed;
+            LastChange.StatusChanged = change.StatusChanged;
+        }
         AssetDatabaseFacade::DatabaseChanged(change.Revision);
     }
 
@@ -175,6 +188,182 @@ namespace
     {
         ScopeLock lock(StateLocker);
         LastDiagnostics = diagnostics;
+    }
+
+    String NormalizeAbsolutePath(const StringView& path)
+    {
+        String result(path);
+        if (result.IsEmpty())
+            return result;
+        FileSystem::NormalizePath(result);
+        return result;
+    }
+
+    String PathKey(const StringView& path)
+    {
+        String result = NormalizeAbsolutePath(path);
+        result.Replace(TEXT('\\'), TEXT('/'));
+        return result.ToLower();
+    }
+
+    bool IsMetaPath(const StringView& path)
+    {
+        return path.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase);
+    }
+
+    void AddUniquePath(const StringView& path, HashSet<String>& keys, Array<String>& expanded)
+    {
+        const String normalized = NormalizeAbsolutePath(path);
+        if (normalized.IsEmpty())
+            return;
+        const String key = PathKey(normalized);
+        if (!keys.Add(key))
+            return;
+        expanded.Add(normalized);
+    }
+
+    void ExpandRefreshPath(const StringView& path, HashSet<String>& keys, Array<String>& expanded)
+    {
+        const String normalized = NormalizeAbsolutePath(path);
+        if (normalized.IsEmpty())
+            return;
+        if (FileSystem::DirectoryExists(normalized))
+        {
+            Array<String> nested;
+            if (!FileSystem::DirectoryGetFiles(nested, normalized, TEXT("*"), DirectorySearchOption::AllDirectories))
+            {
+                for (const String& nestedPath : nested)
+                    AddUniquePath(nestedPath, keys, expanded);
+            }
+            return;
+        }
+        AddUniquePath(normalized, keys, expanded);
+        if (IsMetaPath(normalized))
+            AddUniquePath(normalized.Left(normalized.Length() - 5), keys, expanded);
+        else
+            AddUniquePath(normalized + TEXT(".meta"), keys, expanded);
+    }
+
+    bool RecordPathAffected(const AssetRecord& record, const HashSet<String>& keys)
+    {
+        return keys.Contains(PathKey(record.SourcePath.Get())) ||
+            (!record.MetaPath.Get().IsEmpty() && keys.Contains(PathKey(record.MetaPath.Get())));
+    }
+
+    bool PathIsUnder(const StringView& path, const StringView& root)
+    {
+        if (path.IsEmpty() || root.IsEmpty())
+            return false;
+        const String pathKey = PathKey(path);
+        const String rootKey = PathKey(root);
+        if (pathKey == rootKey)
+            return true;
+        return pathKey.Length() > rootKey.Length() && pathKey.StartsWith(rootKey) && pathKey[rootKey.Length()] == '/';
+    }
+
+    // Both arguments must already be PathKey-normalized.
+    bool IsKeyUnderAnyRoot(const String& pathKey, const Array<String>& rootKeys)
+    {
+        for (const String& rootKey : rootKeys)
+        {
+            if (pathKey == rootKey)
+                return true;
+            if (pathKey.Length() > rootKey.Length() && pathKey.StartsWith(rootKey) && pathKey[rootKey.Length()] == '/')
+                return true;
+        }
+        return false;
+    }
+
+    // A scoped refresh only knows about the paths it was given, so diagnostics for every other
+    // source must survive. Unattributable entries are dropped so they cannot accumulate forever.
+    void MergeScopedDiagnostics(const HashSet<String>& affectedKeys, const Array<AssetPipelineDiagnostic>& fresh)
+    {
+        Array<AssetPipelineDiagnostic> merged;
+        {
+            ScopeLock lock(StateLocker);
+            merged.EnsureCapacity(LastDiagnostics.Count() + fresh.Count());
+            for (const AssetPipelineDiagnostic& diagnostic : LastDiagnostics)
+            {
+                if (diagnostic.SourcePath.IsEmpty() || affectedKeys.Contains(PathKey(diagnostic.SourcePath)))
+                    continue;
+                merged.Add(diagnostic);
+            }
+        }
+        merged.Add(fresh);
+        SetDiagnostics(merged);
+    }
+
+    // Sources that arrive without a sidecar are invisible to the database until one exists. A full
+    // Scan handles this through EnsureExistingJsonSidecars, so a scoped refresh must do the same.
+    void EnsureScopedJsonSidecars(HashSet<String>& keys, Array<String>& expanded)
+    {
+        const int32 count = expanded.Count();
+        for (int32 i = 0; i < count; i++)
+        {
+            const String path = expanded[i];
+            const String extension = FileSystem::GetExtension(path).ToLower();
+            if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json"))
+                continue;
+            const String metaPath = path + TEXT(".meta");
+            if (!FileSystem::FileExists(path) || FileSystem::FileExists(metaPath))
+                continue;
+            if (AssetDatabaseFacade::CreateExistingJsonMetadata(path).IsValid())
+                AddUniquePath(metaPath, keys, expanded);
+        }
+    }
+
+    bool SnapshotIdentityChanged(const AssetDatabaseSnapshot& previous, const Array<AssetRecord>& merged)
+    {
+        if (previous.Records.Count() != merged.Count())
+            return true;
+        Dictionary<Guid, const AssetRecord*> previousById;
+        for (const AssetRecord& record : previous.Records)
+            previousById.Add(record.ID, &record);
+        for (const AssetRecord& record : merged)
+        {
+            const AssetRecord* const* previousRecord = previousById.TryGet(record.ID);
+            if (!previousRecord || !(*previousRecord)->HasSameIdentityAndContent(record) || (*previousRecord)->Status != record.Status)
+                return true;
+        }
+        return false;
+    }
+
+    bool PersistSnapshot()
+    {
+        const String directory = SnapshotDirectory();
+        if (!FileSystem::DirectoryExists(directory))
+            FileSystem::CreateDirectory(directory);
+        AssetPipelineDiagnostic diagnostic;
+        if (AssetDatabaseSnapshotStore::SaveAtomic(SnapshotPath(), Globals::ProjectFolder, Globals::ProjectContentFolder,
+            AssetDatabase::Get().GetSnapshot(), LastFileStates, diagnostic))
+        {
+            ScopeLock lock(StateLocker);
+            LastDiagnostics.Add(diagnostic);
+            return true;
+        }
+        return false;
+    }
+
+    bool RefreshPath(const StringView& path)
+    {
+        Array<String> paths;
+        paths.Add(String(path));
+        return AssetDatabaseFacade::RefreshSources(paths);
+    }
+
+    bool RefreshPath(const String& path)
+    {
+        return RefreshPath(StringView(path));
+    }
+
+    // Migration is driven one asset at a time, and every conversion invalidates the persisted file
+    // states, so revalidating the whole snapshot per call is quadratic. Load once, then keep the
+    // database current through scoped refreshes.
+    bool EnsureDatabaseLoaded()
+    {
+        if (AssetDatabase::Get().GetRevision() != 0)
+            return false;
+        return AssetDatabaseFacade::LoadOrScan(false);
     }
 
 #if USE_EDITOR
@@ -320,6 +509,12 @@ namespace
             meta.AssetType = TEXT("FlaxEngine.Video");
             meta.Processor.ID = TEXT("Flax.Video");
         }
+        else if (extension == TEXT("txt"))
+        {
+            meta.AssetType = RawDataAsset::TypeName;
+            meta.SourceKind = AssetSourceKind::TextDocument;
+            meta.Processor.ID = TEXT("Flax.Text");
+        }
         else
         {
             return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::ProcessorMissing, TEXT("No default canonical processor supports this source extension."));
@@ -407,6 +602,12 @@ Array<AssetPipelineDiagnostic> AssetDatabaseFacade::GetDiagnostics()
     return LastDiagnostics;
 }
 
+AssetDatabaseChangeInfo AssetDatabaseFacade::GetLastChange()
+{
+    ScopeLock lock(StateLocker);
+    return LastChange;
+}
+
 String AssetDatabaseFacade::GetCanonicalSourcePath(const Guid& assetID)
 {
     AssetRecord record;
@@ -487,11 +688,12 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
     SetDiagnostics(result.Diagnostics);
     if (!failed)
     {
+        LastFileStates = result.FileStates;
         const String directory = SnapshotDirectory();
         if (!FileSystem::DirectoryExists(directory))
             FileSystem::CreateDirectory(directory);
         AssetPipelineDiagnostic diagnostic;
-        if (AssetDatabaseSnapshotStore::SaveAtomic(SnapshotPath(), Globals::ProjectFolder, Globals::ProjectContentFolder, AssetDatabase::Get().GetSnapshot(), result.FileStates, diagnostic))
+        if (AssetDatabaseSnapshotStore::SaveAtomic(SnapshotPath(), Globals::ProjectFolder, Globals::ProjectContentFolder, AssetDatabase::Get().GetSnapshot(), LastFileStates, diagnostic))
         {
             ScopeLock lock(StateLocker);
             LastDiagnostics.Add(diagnostic);
@@ -511,6 +713,7 @@ bool AssetDatabaseFacade::LoadOrScan(bool strictMetadata)
     if (!AssetDatabaseSnapshotStore::Load(SnapshotPath(), Globals::ProjectFolder, Globals::ProjectContentFolder, AssetDatabase::Get(), states, diagnostic))
     {
         HashCache.Seed(states);
+        LastFileStates = states;
         if (FileStatesStillMatch(states))
         {
             if (!strictMetadata)
@@ -521,6 +724,140 @@ bool AssetDatabaseFacade::LoadOrScan(bool strictMetadata)
         }
     }
     return Scan(strictMetadata);
+}
+
+bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
+{
+#if USE_EDITOR
+    EnsureBound();
+    if (paths.IsEmpty())
+        return false;
+
+    const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
+    HashSet<String> affectedKeys;
+    Array<String> expanded;
+    Array<String> refreshedRootKeys;
+    for (const String& path : paths)
+    {
+        ExpandRefreshPath(path, affectedKeys, expanded);
+        const String normalized = NormalizeAbsolutePath(path);
+        if (normalized.IsEmpty())
+            continue;
+        refreshedRootKeys.Add(PathKey(normalized));
+        if (FileSystem::FileExists(normalized) && !FileSystem::DirectoryExists(normalized))
+            continue;
+        for (const AssetRecord& record : previous.Records)
+        {
+            if (!PathIsUnder(record.SourcePath.Get(), normalized) &&
+                (record.MetaPath.Get().IsEmpty() || !PathIsUnder(record.MetaPath.Get(), normalized)))
+                continue;
+            AddUniquePath(record.SourcePath.Get(), affectedKeys, expanded);
+            if (!record.MetaPath.Get().IsEmpty())
+                AddUniquePath(record.MetaPath.Get(), affectedKeys, expanded);
+        }
+    }
+
+    // A conflict status is a statement about the whole database, so a record can never stop
+    // reporting one unless it is re-collected. Conflicts are normally absent, which makes pulling
+    // every one of them into each refresh cheap.
+    for (const AssetRecord& record : previous.Records)
+    {
+        if (record.Status != AssetRecordStatus::PathCollision && record.Status != AssetRecordStatus::DuplicateGuid)
+            continue;
+        AddUniquePath(record.SourcePath.Get(), affectedKeys, expanded);
+        if (!record.MetaPath.Get().IsEmpty())
+            AddUniquePath(record.MetaPath.Get(), affectedKeys, expanded);
+    }
+
+    EnsureScopedJsonSidecars(affectedKeys, expanded);
+
+    Array<String> projectFiles;
+    Array<String> engineFiles;
+    const String engineRoot = AssetSourceRoots::GetEngineRoot();
+    for (const String& path : expanded)
+    {
+        if (!FileSystem::FileExists(path))
+            continue;
+        if (engineRoot.HasChars() && AssetPathPolicy::IsSameOrChild(path, engineRoot))
+            engineFiles.Add(path);
+        else
+            projectFiles.Add(path);
+    }
+    AssetDatabaseScanOptions options;
+    options.HashCache = &HashCache;
+    // Matches a full editor Scan, so a source that shows up without a sidecar still reports
+    // MissingMeta and can be picked up by the metadata registration queue.
+    options.StrictMetadata = true;
+    AssetDatabaseScanResult result;
+    Array<AssetRecord> collected;
+    if (projectFiles.Count() && AssetDatabaseScanner::CollectFromFiles(Globals::ProjectFolder, Globals::ProjectContentFolder,
+        Globals::ProjectLibraryFolder, projectFiles, options, previous, collected, result))
+        return true;
+    if (engineFiles.Count())
+    {
+        AssetDatabaseScanResult engineResult;
+        Array<AssetRecord> engineRecords;
+        if (AssetDatabaseScanner::CollectFromFiles(Globals::StartupFolder, engineRoot, Globals::ProjectLibraryFolder,
+            engineFiles, options, previous, engineRecords, engineResult))
+            return true;
+        for (AssetRecord& record : engineRecords)
+        {
+            record.PortabilityKey = String(TEXT("engine/")) + record.PortabilityKey;
+            collected.Add(MoveTemp(record));
+        }
+        result.FilesExamined += engineResult.FilesExamined;
+        result.SidecarsParsed += engineResult.SidecarsParsed;
+        result.Diagnostics.Add(engineResult.Diagnostics);
+        result.FileStates.Add(engineResult.FileStates);
+    }
+
+    Array<AssetRecord> merged;
+    merged.EnsureCapacity(previous.Records.Count() + collected.Count());
+    for (const AssetRecord& record : previous.Records)
+    {
+        if (!RecordPathAffected(record, affectedKeys))
+            merged.Add(record);
+    }
+    merged.Add(collected);
+
+    const bool identityChanged = SnapshotIdentityChanged(previous, merged);
+    Array<AssetPipelineDiagnostic> diagnostics;
+    diagnostics.Add(result.Diagnostics);
+    bool publishFailed = false;
+    if (identityChanged)
+    {
+        AssetPipelineDiagnostic publishDiagnostic;
+        if (AssetDatabase::Get().PublishFullSnapshot(merged, publishDiagnostic))
+        {
+            diagnostics.Add(MoveTemp(publishDiagnostic));
+            publishFailed = true;
+        }
+    }
+    MergeScopedDiagnostics(affectedKeys, diagnostics);
+    if (publishFailed)
+        return true;
+
+    Array<AssetDatabaseFileState> nextStates;
+    nextStates.EnsureCapacity(LastFileStates.Count() + result.FileStates.Count());
+    for (const AssetDatabaseFileState& state : LastFileStates)
+    {
+        const String key = PathKey(state.Path);
+        if (affectedKeys.Contains(key))
+            continue;
+        // Files that vanished under a refreshed root, such as a deleted directory, would otherwise
+        // be carried forever and keep invalidating the persisted snapshot. Existence is probed only
+        // for those, so an ordinary single-file refresh stays free of extra syscalls here.
+        if (IsKeyUnderAnyRoot(key, refreshedRootKeys) && !FileSystem::FileExists(state.Path))
+            continue;
+        nextStates.Add(state);
+    }
+    nextStates.Add(result.FileStates);
+    LastFileStates = MoveTemp(nextStates);
+    PersistSnapshot();
+    return false;
+#else
+    return true;
+#endif
 }
 
 bool AssetDatabaseFacade::CleanLibrary()
@@ -625,9 +962,9 @@ Array<Guid> AssetDatabaseFacade::StageDefaultCanonicalMetadataBatch(const Array<
     return result;
 }
 
-bool AssetDatabaseFacade::PublishDefaultCanonicalMetadataBatch(const Array<Guid>& assetIDs)
+bool AssetDatabaseFacade::PublishDefaultCanonicalMetadataBatch(const Array<Guid>& assetIDs, const Array<String>& sourcePaths)
 {
-    if (Scan(false))
+    if (sourcePaths.Count() ? RefreshSources(sourcePaths) : Scan(false))
         return true;
 #if COMPILE_WITH_ASSETS_IMPORTER
     Array<AssetPipelineDiagnostic> diagnostics;
@@ -727,7 +1064,7 @@ Guid AssetDatabaseFacade::CreateTextureMetadata(const StringView& sourcePath, co
         return Guid::Empty;
     }
 
-    if (Scan(false))
+    if (RefreshPath(sourcePath))
         return Guid::Empty;
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (TexturePipelineService::RequestBuild(meta.ID, false, diagnostic))
@@ -825,7 +1162,7 @@ bool AssetDatabaseFacade::ApplyTextureMetadata(const StringView& sourcePath, con
         meta.Processor.ID = TextureProcessorSettings::ProcessorID();
         meta.Processor.SettingsVersion = TextureProcessorSettings::CurrentVersion;
     }
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || Scan(false))
+    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
         goto Failed;
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (TexturePipelineService::RequestBuild(meta.ID, false, diagnostic))
@@ -989,7 +1326,7 @@ bool AssetDatabaseFacade::ApplyModelMetadata(const StringView& sourcePath, const
         meta.Processor.ID = ModelProcessorSettings::ProcessorID();
         meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
     }
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || Scan(false))
+    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
         goto Failed;
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
@@ -1142,7 +1479,7 @@ Guid AssetDatabaseFacade::CreateGraphDocumentFromSurface(const StringView& outpu
     meta.Processor.ID = TEXT("Flax.GraphDocument");
     meta.Processor.SettingsVersion = 1;
     meta.Processor.SettingsJson = "{}\n";
-    if (AssetMeta::SaveAtomic(String(outputPath) + TEXT(".meta"), meta, diagnostic) || Scan(false))
+    if (AssetMeta::SaveAtomic(String(outputPath) + TEXT(".meta"), meta, diagnostic) || RefreshPath(outputPath))
         return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
     if (GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
@@ -1205,7 +1542,7 @@ Guid AssetDatabaseFacade::CreateAuthoredDocument(const StringView& outputPath, c
         return fail();
     }
     FileSystem::DeleteFile(tempPath);
-    if (Scan(false))
+    if (RefreshPath(outputPath))
         return fail();
     if (GraphPipelineService::RequestBuild(id, true, diagnostic))
         return fail();
@@ -1334,7 +1671,7 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
         diagnostic.Message = TEXT("Cannot atomically replace the canonical authored document.");
         return fail();
     }
-    if (Scan(false) || GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
+    if (RefreshPath(record.SourcePath.Get()) || GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
         return fail();
     return false;
 #else
@@ -1459,7 +1796,7 @@ bool AssetDatabaseFacade::SaveCollisionDataDocument(const StringView& path, Coll
     order.Add("materialSlotsMask");
     order.Add("convexFlags");
     order.Add("convexVertexLimit");
-    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || Scan(false))
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || RefreshPath(path))
         return fail();
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.CollisionData"))
@@ -1502,7 +1839,7 @@ bool AssetDatabaseFacade::SaveParticleSystemTimeline(const StringView& path, con
     order.Add("durationFrames");
     order.Add("tracks");
     order.Add("parameterOverrides");
-    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || Scan(false))
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || RefreshPath(path))
         return fail();
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.ParticleSystem"))
@@ -1542,11 +1879,11 @@ Guid AssetDatabaseFacade::CreateImportedSourceMetadata(const StringView& sourceP
     AssetMeta meta;
     meta.ID = Guid::New();
     meta.AssetType = typeName;
-    meta.SourceKind = AssetSourceKind::ImportedSource;
+    meta.SourceKind = processorId == TEXT("Flax.Text") ? AssetSourceKind::TextDocument : AssetSourceKind::ImportedSource;
     meta.Processor.ID = processorId;
     meta.Processor.SettingsVersion = 1;
     meta.Processor.SettingsJson = "{}\n";
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || Scan(false))
+    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
     {
         Array<AssetPipelineDiagnostic> diagnostics;
         diagnostics.Add(diagnostic);
@@ -1600,7 +1937,7 @@ Guid AssetDatabaseFacade::CreateAudioMetadata(const StringView& sourcePath, cons
     meta.Processor.ID = TEXT("Flax.Audio");
     meta.Processor.SettingsVersion = 1;
     meta.Processor.SettingsJson = StringAnsi(settingsBuffer.GetString(), static_cast<int32>(settingsBuffer.GetSize()));
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || Scan(false))
+    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
         return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
@@ -1708,7 +2045,7 @@ namespace
             return fail();
         }
         meta.SubAssets = MoveTemp(reconciliation.Resolved);
-        if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || AssetDatabaseFacade::Scan(false))
+        if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
             return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER
         if (ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
@@ -1881,7 +2218,7 @@ bool AssetDatabaseFacade::SaveGraphSurface(const StringView& path, const BytesCo
         if (!File::ReadAllBytes(path, existing))
             previous = ContentHash::Compute(existing.Get(), existing.Count());
     }
-    if (GraphDocumentCodec::SaveAtomic(path, json, diagnostic, previous.IsZero() ? nullptr : &previous) || Scan(false))
+    if (GraphDocumentCodec::SaveAtomic(path, json, diagnostic, previous.IsZero() ? nullptr : &previous) || RefreshPath(path))
         return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
     AssetMeta meta;
@@ -1974,7 +2311,7 @@ bool AssetDatabaseFacade::MigrateLegacyAsset(const StringView& sourcePath)
         SetDiagnostics(diagnostics);
         return true;
     };
-    if (sourcePath.IsEmpty() || LoadOrScan(false))
+    if (sourcePath.IsEmpty() || EnsureDatabaseLoaded())
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::MigrationFailed;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Migration;
@@ -2076,6 +2413,22 @@ bool AssetDatabaseFacade::MigrateLegacyAsset(const StringView& sourcePath)
         return fail();
     }
     SetDiagnostics(Array<AssetPipelineDiagnostic>());
+
+    // The database is loaded once per migration run, so this conversion has to be folded back in
+    // here or the next asset would see a stale snapshot.
+    Array<String> refreshPaths;
+    refreshPaths.Add(record.SourcePath.Get());
+    refreshPaths.Add(destination);
+    refreshPaths.Add(destinationMeta);
+    if (RefreshSources(refreshPaths))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::MigrationFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Migration;
+        diagnostic.AssetGuid = assetID;
+        diagnostic.SourcePath = destination;
+        diagnostic.Message = TEXT("The asset database could not be updated after migration.");
+        return fail();
+    }
     return false;
 }
 
@@ -2093,8 +2446,13 @@ bool AssetDatabaseFacade::RollbackLegacyImportedMigration(const StringView& lega
     const String metaPath = String(destinationPath) + TEXT(".meta");
     ContentStorageManager::EnsureAccess(destinationPath);
     ContentStorageManager::EnsureAccess(backupPath);
+    Array<String> refreshPaths;
+    refreshPaths.Add(metaPath);
+    refreshPaths.Add(String(destinationPath));
+    refreshPaths.Add(String(legacyPath));
+    refreshPaths.Add(String(backupPath));
     const bool failed = FileSystem::DeleteFile(metaPath) || FileSystem::DeleteFile(destinationPath) ||
-                        FileSystem::MoveFile(legacyPath, backupPath, false) || Scan(false);
+                        FileSystem::MoveFile(legacyPath, backupPath, false) || RefreshSources(refreshPaths);
     if (failed)
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::MigrationFailed;

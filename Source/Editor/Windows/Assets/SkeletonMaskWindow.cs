@@ -252,10 +252,7 @@ namespace FlaxEditor.Windows.Assets
                 }
             }
             _asset.MaskedNodes = nodes;
-            var failed = _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path)
-                ? AssetDatabaseFacade.SaveAuthoredDocument(_asset, _item.ID)
-                : Editor.ContentDatabase.SaveAsset(_asset);
-            if (failed)
+            if (Editor.ContentDatabase.SaveAsset(_asset))
             {
                 Editor.LogError("Cannot save asset.");
                 return;

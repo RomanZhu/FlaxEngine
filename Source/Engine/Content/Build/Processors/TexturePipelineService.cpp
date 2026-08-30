@@ -274,13 +274,13 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     AssetCancellationSource preparationCancellation;
     PreparedAsset prepared;
     TexturePipelineState& state = State();
+    PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
+        record, prepareLease.Get(), meta.Processor.SettingsJson, state.HashCache, preparationCancellation.GetToken());
+    if (prepareLease.Get().Prepare(context, prepared, diagnostic) ||
+        context.Finalize(record.DatabaseRevision, prepared, diagnostic))
+        return true;
     {
         std::lock_guard<std::mutex> lock(state.Locker);
-        PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
-            record, prepareLease.Get(), meta.Processor.SettingsJson, state.HashCache, preparationCancellation.GetToken());
-        if (prepareLease.Get().Prepare(context, prepared, diagnostic) ||
-            context.Finalize(record.DatabaseRevision, prepared, diagnostic))
-            return true;
         state.Fingerprints[record.ID] = prepared.InputFingerprint;
     }
 

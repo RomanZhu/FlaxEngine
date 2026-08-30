@@ -29,13 +29,13 @@ namespace FlaxEditor.Modules
         private int _itemsCreated;
         private int _itemsDeleted;
         private bool _useNewAssetDatabase;
-        private bool _assetDatabaseRescanPending;
         private ulong _assetDatabaseRevision;
         private const double AssetDiskChangeQuietPeriodSeconds = 0.5;
         private const double SelfAuthoredAssetDiskChangeLifetimeSeconds = 5.0;
-        private readonly HashSet<MainContentFolderTreeNode> _dirtyNodes = new HashSet<MainContentFolderTreeNode>();
+        private readonly HashSet<ContentFolderTreeNode> _dirtyNodes = new HashSet<ContentFolderTreeNode>();
         private readonly object _assetDiskChangesLock = new object();
         private readonly HashSet<string> _pendingAssetDiskChanges = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _pendingSourceRefresh = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _pendingMissingMetadataRegistrations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _pendingTextureBuildSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<Guid> _pendingTextureBuildIds = new HashSet<Guid>();
@@ -209,6 +209,119 @@ namespace FlaxEditor.Modules
             _assetDatabaseRevision = revision;
         }
 
+        private void QueueCanonicalSourceRefresh(params string[] paths)
+        {
+            if (paths == null || paths.Length == 0)
+                return;
+            lock (_assetDiskChangesLock)
+            {
+                for (int i = 0; i < paths.Length; i++)
+                {
+                    if (!string.IsNullOrEmpty(paths[i]))
+                        _pendingSourceRefresh.Add(ContentMutationPathUtils.Normalize(paths[i]));
+                }
+            }
+        }
+
+        private void MarkSourceFolderDirty(string fileOrFolderPath)
+        {
+            if (string.IsNullOrEmpty(fileOrFolderPath))
+                return;
+            fileOrFolderPath = StringUtils.NormalizePath(fileOrFolderPath);
+            var directory = Directory.Exists(fileOrFolderPath) ? fileOrFolderPath : Path.GetDirectoryName(fileOrFolderPath);
+            while (!string.IsNullOrEmpty(directory))
+            {
+                if (Find(directory) is ContentFolder folder && folder.Node != null)
+                {
+                    lock (_dirtyNodes)
+                        _dirtyNodes.Add(folder.Node);
+                    return;
+                }
+                directory = Path.GetDirectoryName(directory);
+            }
+        }
+
+        private void MarkAllContentRootsDirty()
+        {
+            lock (_dirtyNodes)
+            {
+                foreach (var project in Projects)
+                {
+                    if (project.Content != null)
+                        _dirtyNodes.Add(project.Content);
+                }
+            }
+        }
+
+        private void OnAssetDatabaseChanged(ulong revision)
+        {
+            var change = AssetDatabaseFacade.GetLastChange();
+
+            // Native keeps only the most recent batch, so a publish from a build worker can overwrite
+            // it between the event being raised and this read. Scoping the tree update to another
+            // revision's identifiers would leave stale items behind, so reconcile everything instead.
+            if (change.Revision != revision)
+            {
+                RefreshAssetDatabaseRecords(revision);
+                if (_enableEvents)
+                    MarkAllContentRootsDirty();
+                return;
+            }
+
+            var previousPaths = new Dictionary<Guid, string>();
+            void Capture(Guid[] ids)
+            {
+                if (ids == null)
+                    return;
+                for (int i = 0; i < ids.Length; i++)
+                {
+                    if (_assetRecordsById.TryGetValue(ids[i], out var record) && !string.IsNullOrEmpty(record.SourcePath))
+                        previousPaths[ids[i]] = record.SourcePath;
+                }
+            }
+            Capture(change.Removed);
+            Capture(change.Changed);
+            Capture(change.StatusChanged);
+
+            RefreshAssetDatabaseRecords(revision);
+            if (!_enableEvents)
+                return;
+
+            if (change.Removed != null)
+            {
+                for (int i = 0; i < change.Removed.Length; i++)
+                {
+                    if (previousPaths.TryGetValue(change.Removed[i], out var removedPath))
+                        MarkSourceFolderDirty(removedPath);
+                }
+            }
+            void Visit(Guid[] ids, bool allowInPlace)
+            {
+                if (ids == null)
+                    return;
+                for (int i = 0; i < ids.Length; i++)
+                {
+                    if (!_assetRecordsById.TryGetValue(ids[i], out var record))
+                        continue;
+                    previousPaths.TryGetValue(ids[i], out var previousPath);
+                    var samePath = !string.IsNullOrEmpty(previousPath) &&
+                        string.Equals(ContentMutationPathUtils.Normalize(previousPath), ContentMutationPathUtils.Normalize(record.SourcePath), StringComparison.OrdinalIgnoreCase);
+                    if (allowInPlace && samePath && Find(record.ID) is AssetItem item &&
+                        string.Equals(ContentMutationPathUtils.Normalize(item.Path), ContentMutationPathUtils.Normalize(record.SourcePath), StringComparison.OrdinalIgnoreCase))
+                    {
+                        item.SetAssetDatabaseRecord(record);
+                        continue;
+                    }
+                    if (!string.IsNullOrEmpty(previousPath) && !samePath)
+                        MarkSourceFolderDirty(previousPath);
+                    MarkSourceFolderDirty(record.SourcePath);
+                }
+            }
+            Visit(change.Added, false);
+            Visit(change.Changed, true);
+            Visit(change.StatusChanged, true);
+        }
+
         private void QueueMissingMetadataRegistrations()
         {
             var diagnostics = AssetDatabaseFacade.GetDiagnostics();
@@ -251,26 +364,6 @@ namespace FlaxEditor.Modules
             }
         }
 
-        private void OnAssetDatabaseChanged(ulong revision)
-        {
-            RefreshAssetDatabaseRecords(revision);
-            if (_enableEvents)
-            {
-                // Reconcile the visible tree incrementally. A full rebuild disposes
-                // every AssetItem, which also closes editors for assets that merely
-                // changed their canonical document contents.
-                lock (_dirtyNodes)
-                {
-                    for (int i = 0; i < Projects.Count; i++)
-                    {
-                        var content = Projects[i].Content;
-                        if (content != null)
-                            _dirtyNodes.Add(content);
-                    }
-                }
-            }
-        }
-
         private void OnArtifactPublished(Guid assetId)
         {
             if (Find(assetId) is AssetItem item)
@@ -297,6 +390,15 @@ namespace FlaxEditor.Modules
         internal static bool UseContentBackendForFileOperation(ContentItem item)
         {
             return item != null && (item.IsAsset || item.ItemType == ContentItemType.Scene) && !(item is AssetItem assetItem && assetItem.IsCanonicalSource);
+        }
+
+        internal static bool UseContentBackendForCopy(ContentItem item)
+        {
+            // Existing JSON assets embed their identity in the document. Other canonical
+            // sources keep identity only in metadata and must retain their source bytes.
+            if (item is AssetItem { IsCanonicalSource: true } assetItem)
+                return string.Equals(assetItem.ProcessorID, "Flax.ExistingJson", StringComparison.Ordinal);
+            return UseContentBackendForFileOperation(item);
         }
 
         internal static bool ShouldRemoveMissingContentItem(ContentItem item)
@@ -692,6 +794,7 @@ namespace FlaxEditor.Modules
         {
             try
             {
+                var metadataPath = path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase) ? null : path + ".meta";
                 if (Directory.Exists(path))
                     Directory.Delete(path, true);
                 else if (File.Exists(path))
@@ -701,10 +804,14 @@ namespace FlaxEditor.Modules
                     if (File.Exists(path))
                         File.Delete(path);
                 }
+                if (metadataPath != null && File.Exists(metadataPath))
+                    File.Delete(metadataPath);
                 var sidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(path, false, string.Equals(Path.GetExtension(path), ".scene", StringComparison.OrdinalIgnoreCase));
                 if (sidecar != null && Directory.Exists(sidecar))
                     Directory.Delete(sidecar, true);
-                return !ContentMutationPathUtils.Exists(path) && (sidecar == null || !Directory.Exists(sidecar));
+                return !ContentMutationPathUtils.Exists(path) &&
+                       (metadataPath == null || !File.Exists(metadataPath)) &&
+                       (sidecar == null || !Directory.Exists(sidecar));
             }
             catch (Exception ex)
             {
@@ -841,7 +948,15 @@ namespace FlaxEditor.Modules
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
             if (_useNewAssetDatabase)
-                _assetDatabaseRescanPending = true;
+            {
+                var refresh = new string[moves.Count * 2];
+                for (int i = 0; i < moves.Count; i++)
+                {
+                    refresh[i * 2] = moves[i].Source;
+                    refresh[i * 2 + 1] = moves[i].Destination;
+                }
+                QueueCanonicalSourceRefresh(refresh);
+            }
             ContentMutationDiagnostics.Log("mutation.move.committed", $"transaction={plan.Id:N}; operation={operation}; items={moves.Count}; entries={plan.Entries.Count}");
             return result;
         }
@@ -1098,7 +1213,12 @@ namespace FlaxEditor.Modules
             if (result.Succeeded)
             {
                 if (_useNewAssetDatabase)
-                    _assetDatabaseRescanPending = true;
+                {
+                    var refresh = new string[requests.Count];
+                    for (int i = 0; i < requests.Count; i++)
+                        refresh[i] = requests[i].Destination;
+                    QueueCanonicalSourceRefresh(refresh);
+                }
                 ContentMutationDiagnostics.Log("mutation.copy.committed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}");
             }
             else
@@ -1153,6 +1273,7 @@ namespace FlaxEditor.Modules
             var entry = new ContentMutationEntry(item.Path, targetPath, descendant ? ContentMutationPathRole.Descendant : ContentMutationPathRole.Main, item.IsFolder)
             {
                 DestinationParentProducedByTransaction = descendant,
+                AssetCloneExpected = !item.IsFolder && UseContentBackendForCopy(item),
             };
             plan.Entries.Add(entry);
             if (!item.IsFolder && item is AssetItem assetItem && assetItem.IsCanonicalSource && File.Exists(item.Path + ".meta"))
@@ -1213,13 +1334,12 @@ namespace FlaxEditor.Modules
                     return false;
                 if (entry.Role == ContentMutationPathRole.MetadataSidecar)
                     continue;
-                if (!entry.IsDirectory && entry.SourceWasAsset)
+                if (!entry.IsDirectory && entry.AssetCloneExpected)
                 {
-                    // Asset cloning assigns a new ID and may rewrite/compress the package, so
-                    // byte length is not an identity invariant. Validate the cloned package
-                    // header and type instead, and make sure the clone did not retain the
-                    // source ID.
-                    if (!FlaxEngine.Content.GetAssetInfo(entry.DestinationPath, out var assetInfo) ||
+                    // Asset cloning assigns a new ID and may rewrite the storage, so byte
+                    // length is not an identity invariant. Validate its identity and type.
+                    if (!entry.SourceWasAsset ||
+                        !FlaxEngine.Content.GetAssetInfo(entry.DestinationPath, out var assetInfo) ||
                         assetInfo.ID == Guid.Empty ||
                         assetInfo.ID == entry.SourceAssetId ||
                         !string.Equals(assetInfo.TypeName, entry.SourceAssetType, StringComparison.Ordinal))
@@ -1335,7 +1455,7 @@ namespace FlaxEditor.Modules
                 var targetMetaPath = targetPath + ".meta";
                 if (AssetDatabaseFacade.CloneMetadata(item.Path + ".meta", targetMetaPath))
                     throw new IOException($"Cannot clone metadata for canonical source '{item.Path}'.");
-                if (FlaxEngine.Content.GetAssetInfo(item.Path, out var sourceInfo) && sourceInfo.ID != Guid.Empty)
+                if (UseContentBackendForCopy(item))
                 {
                     var cloneId = ReadCanonicalMetadataGuid(targetMetaPath);
                     if (Editor.ContentEditing.CloneAssetFile(item.Path, targetPath, cloneId))
@@ -1545,7 +1665,7 @@ namespace FlaxEditor.Modules
             {
                 Editor.LogWarning($"Canonical source was deleted but its recovery staging data could not be cleaned: {ex.Message}");
             }
-            _assetDatabaseRescanPending = true;
+            QueueCanonicalSourceRefresh(sourcePath);
             return true;
         }
 
@@ -2421,18 +2541,22 @@ namespace FlaxEditor.Modules
             case WatcherChangeTypes.Renamed:
             {
                 var path = StringUtils.NormalizePath(e.FullPath);
+                var suppressed = false;
                 lock (_assetDiskChangesLock)
                 {
-                    if (e.ChangeType != WatcherChangeTypes.Deleted && TrySuppressSelfAuthoredDiskChange(path, DateTime.UtcNow))
-                        break;
-                    QueueAssetDiskChange(path, e.ChangeType == WatcherChangeTypes.Renamed);
+                    // A delete is never a self-authored write, so it must always reach the database.
+                    suppressed = e.ChangeType != WatcherChangeTypes.Deleted &&
+                                 (_assetSaves.ContainsKey(path) || TrySuppressSelfAuthoredDiskChange(path, DateTime.UtcNow));
+                    if (!suppressed)
+                        QueueAssetDiskChange(path, e.ChangeType == WatcherChangeTypes.Renamed);
                 }
+                if (suppressed)
+                    break;
                 if (e is RenamedEventArgs renamed)
                     QueueAssetDiskChange(renamed.OldFullPath, true);
-                lock (_dirtyNodes)
-                {
-                    _dirtyNodes.Add(node);
-                }
+                MarkSourceFolderDirty(path);
+                if (e is RenamedEventArgs renamedOld)
+                    MarkSourceFolderDirty(renamedOld.OldFullPath);
                 break;
             }
             case WatcherChangeTypes.Changed:
@@ -2441,11 +2565,17 @@ namespace FlaxEditor.Modules
                 var now = DateTime.UtcNow;
                 lock (_assetDiskChangesLock)
                 {
+                    // An in-flight save writes the document itself, so its own notifications are not external changes.
+                    var saveInProgress = _assetSaves.TryGetValue(path, out var saveState);
+                    if (saveInProgress)
+                    {
+                        ContentMutationDiagnostics.Log("watcher.change-suppressed", $"path='{path}'; generation={saveState.Generation}; depth={saveState.Depth}");
+                        break;
+                    }
                     if (TrySuppressSelfAuthoredDiskChange(path, now))
                         break;
                     QueueAssetDiskChange(path, false);
-                    var saveInProgress = _assetSaves.TryGetValue(path, out var saveState);
-                    ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}; saveInProgress={saveInProgress}; generation={(saveInProgress ? saveState.Generation : 0)}; depth={(saveInProgress ? saveState.Depth : 0)}");
+                    ContentMutationDiagnostics.Log("watcher.change-queued", $"path='{path}'; pending={_pendingAssetDiskChanges.Count}");
                 }
                 break;
             }
@@ -2516,6 +2646,22 @@ namespace FlaxEditor.Modules
             return failed;
         }
 
+        /// <summary>
+        /// Saves a canonical authored document from an editor that works on a clone, whose asset identifier
+        /// differs from the tracked item. Tracking the write keeps the watcher from reprocessing it as external.
+        /// </summary>
+        internal bool SaveCanonicalAuthoredDocument(BinaryAsset asset, AssetItem item)
+        {
+            if (asset == null)
+                throw new ArgumentNullException(nameof(asset));
+            if (item == null)
+                throw new ArgumentNullException(nameof(item));
+            using var scope = TrackAssetSave(item.Path);
+            var failed = AssetDatabaseFacade.SaveAuthoredDocument(asset, item.ID);
+            scope.Complete(!failed);
+            return failed;
+        }
+
         internal bool IsAssetSaveInProgress(string path)
         {
             path = StringUtils.NormalizePath(path);
@@ -2570,8 +2716,6 @@ namespace FlaxEditor.Modules
                     _selfAuthoredAssetDiskChanges[path] = write;
                 }
                 ContentMutationDiagnostics.Log("save.self-write-recorded", $"path='{path}'; generation={generation}; length={fileInfo.Length}; writeTime={fileInfo.LastWriteTimeUtc:O}; expires={write.ExpiresAtUtc:O}");
-                if (_useNewAssetDatabase)
-                    _assetDatabaseRescanPending = true;
             }
             catch
             {
@@ -2606,7 +2750,7 @@ namespace FlaxEditor.Modules
             }
 
             if (_useNewAssetDatabase)
-                _assetDatabaseRescanPending = true;
+                QueueCanonicalSourceRefresh(readyPaths.ToArray());
 
             bool workspaceModified = false;
             for (int i = 0; i < readyPaths.Count; i++)
@@ -2686,14 +2830,23 @@ namespace FlaxEditor.Modules
                 Editor.ContentImporting.RegisterInPlaceCanonicalSources(sourcePaths);
             }
 
-            if (_assetDatabaseRescanPending && !Editor.ContentImporting.IsImporting)
+            // Only drain once the refresh can actually run, otherwise queued paths are lost for good.
+            if (!Editor.ContentImporting.IsImporting)
             {
-                _assetDatabaseRescanPending = false;
-                if (AssetDatabaseFacade.Scan(true))
-                    Editor.LogError("Canonical asset database reconciliation failed. See asset pipeline diagnostics.");
-                else
-                    SchedulePendingTextureBuilds();
-                QueueMissingMetadataRegistrations();
+                string[] refreshPaths;
+                lock (_assetDiskChangesLock)
+                {
+                    refreshPaths = _pendingSourceRefresh.Count == 0 ? Array.Empty<string>() : _pendingSourceRefresh.ToArray();
+                    _pendingSourceRefresh.Clear();
+                }
+                if (refreshPaths.Length != 0)
+                {
+                    if (AssetDatabaseFacade.RefreshSources(refreshPaths))
+                        Editor.LogError("Canonical asset database refresh failed. See asset pipeline diagnostics.");
+                    else
+                        SchedulePendingTextureBuilds();
+                    QueueMissingMetadataRegistrations();
+                }
             }
 
             // Update all dirty content tree nodes

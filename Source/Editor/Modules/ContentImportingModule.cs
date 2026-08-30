@@ -507,6 +507,7 @@ namespace FlaxEditor.Modules
             case ".webm":
             case ".mov":
             case ".mkv":
+            case ".txt":
                 return true;
             default:
                 return false;
@@ -570,7 +571,7 @@ namespace FlaxEditor.Modules
             case ".ac": case ".stl": case ".lwo": case ".lws": case ".lxo":
                 return CanonicalBuildKind.Model;
             case ".wav": case ".mp3": case ".ogg": case ".ttf": case ".otf": case ".shader":
-            case ".mp4": case ".webm": case ".mov": case ".mkv":
+            case ".mp4": case ".webm": case ".mov": case ".mkv": case ".txt":
                 return CanonicalBuildKind.Graph;
             default:
                 return CanonicalBuildKind.None;
@@ -682,12 +683,14 @@ namespace FlaxEditor.Modules
             var backupRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationBackups", plan.Id.ToString("N"));
             var backupPaths = new Dictionary<int, string>();
 
-            // This runs last during rollback, after metadata paths have been restored.
+            // This runs last during rollback, after metadata paths have been restored. Only the
+            // batch's own sources moved, so reindexing those is enough and avoids a full scan.
+            var rollbackPaths = validIndices.Select(index => entries[index].SourceUrl).ToArray();
             steps.Add(new ContentMutationStep(
                 "restore-database-after-batch-rollback",
                 Array.Empty<int>(),
                 () => ContentMutationResult.Success(null, null),
-                () => !AssetDatabaseFacade.Scan(false),
+                () => rollbackPaths.Length == 0 || !AssetDatabaseFacade.RefreshSources(rollbackPaths),
                 () => true));
 
             for (int position = 0; position < validIndices.Count; position++)
@@ -744,10 +747,11 @@ namespace FlaxEditor.Modules
             }
 
             var publishIds = validIndices.Select(index => assetIds[index]).ToArray();
+            var publishPaths = validIndices.Select(index => entries[index].SourceUrl).ToArray();
             steps.Add(new ContentMutationStep(
                 "publish-canonical-metadata-batch",
                 Array.Empty<int>(),
-                () => AssetDatabaseFacade.PublishDefaultCanonicalMetadataBatch(publishIds)
+                () => AssetDatabaseFacade.PublishDefaultCanonicalMetadataBatch(publishIds, publishPaths)
                     ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, null, "Canonical metadata batch database publication failed.")
                     : ContentMutationResult.Success(null, null),
                 () => true,
@@ -1242,6 +1246,10 @@ namespace FlaxEditor.Modules
                 typeName = "FlaxEngine.Video";
                 processorId = "Flax.Video";
                 break;
+            case ".txt":
+                typeName = typeof(RawDataAsset).FullName;
+                processorId = "Flax.Text";
+                break;
             default:
                 return Guid.Empty;
             }
@@ -1252,7 +1260,12 @@ namespace FlaxEditor.Modules
         {
             var deleted = DeleteImportPath(path);
             if (deleted)
-                AssetDatabaseFacade.Scan(false);
+            {
+                var sourcePath = path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)
+                    ? path.Substring(0, path.Length - 5)
+                    : path;
+                AssetDatabaseFacade.RefreshSources(new[] { sourcePath });
+            }
             return deleted;
         }
 

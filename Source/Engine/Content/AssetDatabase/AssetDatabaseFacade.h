@@ -42,6 +42,18 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
     API_FIELD() bool IsMain = false;
 };
 
+/// <summary>Last published asset-database identity change, for scoped editor tree refresh.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetDatabaseChangeInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDatabaseChangeInfo);
+
+    API_FIELD() uint64 Revision = 0;
+    API_FIELD() Array<Guid> Added;
+    API_FIELD() Array<Guid> Removed;
+    API_FIELD() Array<Guid> Changed;
+    API_FIELD() Array<Guid> StatusChanged;
+};
+
 /// <summary>Coarse managed boundary for the canonical source/sidecar database.</summary>
 API_CLASS(Static) class FLAXENGINE_API AssetDatabaseFacade
 {
@@ -60,6 +72,7 @@ public:
     API_PROPERTY() static uint64 GetRevision();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
+    API_FUNCTION() static AssetDatabaseChangeInfo GetLastChange();
 
     /// <summary>Returns the canonical source path for an asset identifier, or an empty string when it is not registered.</summary>
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
@@ -78,6 +91,10 @@ public:
     /// <returns>True if the scan infrastructure failed. Content diagnostics remain queryable.</returns>
     API_FUNCTION() static bool Scan(bool strictMetadata = false);
 
+    /// <summary>Reindexes an explicit set of source or sidecar paths without enumerating the Content tree.</summary>
+    /// <returns>True if indexing failed. Content diagnostics remain queryable.</returns>
+    API_FUNCTION() static bool RefreshSources(const Array<String>& paths);
+
     /// <summary>Safely clears and recreates the configured Project Library root.</summary>
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool CleanLibrary();
@@ -93,7 +110,7 @@ public:
 
     /// <summary>Publishes one staged canonical metadata batch and queues the corresponding exact builds.</summary>
     /// <returns>True on failure.</returns>
-    API_FUNCTION() static bool PublishDefaultCanonicalMetadataBatch(const Array<Guid>& assetIDs);
+    API_FUNCTION() static bool PublishDefaultCanonicalMetadataBatch(const Array<Guid>& assetIDs, const Array<String>& sourcePaths);
 #endif
 
 #if COMPILE_WITH_TEXTURE_TOOL

@@ -494,7 +494,9 @@ bool ModelPipelineService::ReconcileMetadata(const Guid& rootAssetID, Array<SubA
     meta.SubAssets = MoveTemp(result.Resolved);
     if (AssetMeta::SaveAtomic(record.MetaPath.Get(), meta, diagnostic))
         return true;
-    if (AssetDatabaseFacade::Scan(false))
+    Array<String> refreshPaths;
+    refreshPaths.Add(record.SourcePath.Get());
+    if (AssetDatabaseFacade::RefreshSources(refreshPaths))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, AssetPipelineDiagnosticStage::DatabaseScan,
             rootAssetID, TEXT("Model metadata was reconciled but the database rescan failed."));
     diagnostic = AssetPipelineDiagnostic();

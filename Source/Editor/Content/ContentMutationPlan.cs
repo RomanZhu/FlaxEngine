@@ -64,6 +64,7 @@ namespace FlaxEditor.Content
         public long SourceLength = -1;
         public DateTime SourceWriteTimeUtc;
         public bool SourceWasAsset;
+        public bool AssetCloneExpected;
         public Guid SourceAssetId;
         public string SourceAssetType;
         public ContentMutationEntryState State;

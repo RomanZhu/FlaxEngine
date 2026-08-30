@@ -17,7 +17,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool IsProxyFor(ContentItem item)
         {
-            return item is FileItem;
+            return item is FileItem || item is AssetItem { IsCanonicalSource: true, ProcessorID: "Flax.Text" };
         }
 
         /// <inheritdoc />
