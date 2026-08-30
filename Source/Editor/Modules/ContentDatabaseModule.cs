@@ -2299,7 +2299,6 @@ namespace FlaxEditor.Modules
             _useNewAssetDatabase = true;
             if (_useNewAssetDatabase)
             {
-                AssetDatabaseFacade.DatabaseChanged += OnAssetDatabaseChanged;
                 if (AssetDatabaseFacade.LoadOrScan(true))
                     Editor.LogError("Failed to initialize the canonical asset database. See asset pipeline diagnostics.");
                 RefreshAssetDatabaseRecords(AssetDatabaseFacade.Revision);
@@ -2956,6 +2955,13 @@ namespace FlaxEditor.Modules
         /// <inheritdoc />
         public override void OnUpdate()
         {
+            if (_useNewAssetDatabase)
+            {
+                var revision = AssetDatabaseFacade.Revision;
+                if (revision != _assetDatabaseRevision)
+                    OnAssetDatabaseChanged(revision);
+            }
+
             var publishedAssets = AssetDatabaseFacade.DrainArtifactPublications();
             for (int i = 0; i < publishedAssets.Length; i++)
                 OnArtifactPublished(publishedAssets[i]);
@@ -3016,10 +3022,6 @@ namespace FlaxEditor.Modules
         public override void OnExit()
         {
             FlaxEngine.Content.AssetDisposing -= OnContentAssetDisposing;
-            if (_useNewAssetDatabase)
-            {
-                AssetDatabaseFacade.DatabaseChanged -= OnAssetDatabaseChanged;
-            }
             ScriptsBuilder.ScriptsReload -= OnScriptsReload;
             ScriptsBuilder.ScriptsReloadEnd -= OnScriptsReloadEnd;
 
