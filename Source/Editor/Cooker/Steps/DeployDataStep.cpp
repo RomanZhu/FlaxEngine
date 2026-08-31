@@ -489,9 +489,9 @@ bool DeployDataStep::Perform(CookingData& data)
     // Register game assets
     data.StepProgress(TEXT("Deploying game data"), 50);
     for (auto& e : buildSettings.AdditionalAssets)
-        data.AddRootAsset(e.GetID());
+        data.AddRootAsset(e.GetRuntimeInstanceId());
     for (auto& e : buildSettings.AdditionalScenes)
-        data.AddRootAsset(e.ID);
+        data.AddRootAsset(e.ID.ToRuntimeObjectGuid());
     Array<String> files;
     for (auto& e : buildSettings.AdditionalAssetFolders)
     {

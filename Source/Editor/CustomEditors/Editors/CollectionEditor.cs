@@ -1041,7 +1041,7 @@ namespace FlaxEditor.CustomEditors.Editors
                                 else if (ElementType.Type == typeof(Guid))
                                     array.SetValue(validator.SelectedID, i);
                                 else if (ElementType.Type == typeof(SceneReference))
-                                    array.SetValue(new SceneReference(validator.SelectedID), i);
+                                    array.SetValue(new SceneReference(validator.SelectedObjectID), i);
                                 else if (ElementType.Type == typeof(string))
                                     array.SetValue(validator.SelectedPath, i);
                                 else
@@ -1067,7 +1067,7 @@ namespace FlaxEditor.CustomEditors.Editors
                                 else if (ElementType.Type == typeof(Guid))
                                     list.Add(validator.SelectedID);
                                 else if (ElementType.Type == typeof(SceneReference))
-                                    list.Add(new SceneReference(validator.SelectedID));
+                                    list.Add(new SceneReference(validator.SelectedObjectID));
                                 else if (ElementType.Type == typeof(string))
                                     list.Add(validator.SelectedPath);
                                 else

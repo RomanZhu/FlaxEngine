@@ -7,6 +7,8 @@
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Scripting/ScriptingObject.h"
+#include "Engine/Content/Asset.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetIdentitySerialization.h"
 #include "Engine/Utilities/Encryption.h"
 
 struct Version;
@@ -460,22 +462,44 @@ namespace Serialization
     FLAXENGINE_API bool ShouldSerializeRef(const SceneObject* v, const SceneObject* other);
 
     template<typename T>
-    inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<SceneObject, T>>>::Value, bool>::Type ShouldSerialize(const T* v, const void* otherObj)
+    inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<SceneObject, T>>, TNot<TIsBaseOf<Asset, T>>>::Value, bool>::Type ShouldSerialize(const T* v, const void* otherObj)
     {
         return !otherObj || v != *(const T**)otherObj;
     }
     template<typename T>
-    inline typename TEnableIf<TIsBaseOf<ScriptingObject, T>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const T* v, const void* otherObj)
+    inline typename TEnableIf<TIsBaseOf<Asset, T>::Value, bool>::Type ShouldSerialize(const T* v, const void* otherObj)
+    {
+        if (!otherObj)
+            return true;
+        const T* other = *static_cast<const T* const*>(otherObj);
+        return (v ? v->GetPersistentObjectId() : AssetObjectId()) !=
+               (other ? other->GetPersistentObjectId() : AssetObjectId());
+    }
+    template<typename T>
+    inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const T* v, const void* otherObj)
     {
         stream.Guid(v ? v->GetID() : Guid::Empty);
     }
     template<typename T>
-    inline typename TEnableIf<TIsBaseOf<ScriptingObject, T>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, T*& v, ISerializeModifier* modifier)
+    inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, T*& v, ISerializeModifier* modifier)
     {
         Guid id;
         Deserialize(stream, id, modifier);
 		modifier->IdsMapping.TryGet(id, id);
         v = (T*)::FindObject(id, T::GetStaticClass());
+    }
+
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<Asset, T>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const T* v, const void* otherObj)
+    {
+        Serialize(stream, v ? v->GetPersistentObjectId() : AssetObjectId(), nullptr);
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<Asset, T>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, T*& v, ISerializeModifier* modifier)
+    {
+        AssetObjectId id;
+        Deserialize(stream, id, modifier);
+        v = (T*)::LoadAsset(id, T::TypeInitializer);
     }
 
     template<typename T>
@@ -531,17 +555,17 @@ namespace Serialization
     template<typename T>
     inline bool ShouldSerialize(const AssetReference<T>& v, const void* otherObj)
     {
-        return !otherObj || v.Get() != ((AssetReference<T>*)otherObj)->Get();
+        return !otherObj || v.GetID() != ((AssetReference<T>*)otherObj)->GetID();
     }
     template<typename T>
     inline void Serialize(ISerializable::SerializeStream& stream, const AssetReference<T>& v, const void* otherObj)
     {
-        stream.Guid(v.GetID());
+        Serialize(stream, v.GetID(), nullptr);
     }
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, AssetReference<T>& v, ISerializeModifier* modifier)
     {
-        Guid id;
+        AssetObjectId id;
         Deserialize(stream, id, modifier);
         v = id;
     }
@@ -551,17 +575,17 @@ namespace Serialization
     template<typename T>
     inline bool ShouldSerialize(const WeakAssetReference<T>& v, const void* otherObj)
     {
-        return !otherObj || v.Get() != ((WeakAssetReference<T>*)otherObj)->Get();
+        return !otherObj || v.GetID() != ((WeakAssetReference<T>*)otherObj)->GetID();
     }
     template<typename T>
     inline void Serialize(ISerializable::SerializeStream& stream, const WeakAssetReference<T>& v, const void* otherObj)
     {
-        stream.Guid(v.GetID());
+        Serialize(stream, v.GetID(), nullptr);
     }
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, WeakAssetReference<T>& v, ISerializeModifier* modifier)
     {
-        Guid id;
+        AssetObjectId id;
         Deserialize(stream, id, modifier);
         v = id;
     }
@@ -571,17 +595,17 @@ namespace Serialization
     template<typename T>
     inline bool ShouldSerialize(const SoftAssetReference<T>& v, const void* otherObj)
     {
-        return !otherObj || v.Get() != ((SoftAssetReference<T>*)otherObj)->Get();
+        return !otherObj || v.GetID() != ((SoftAssetReference<T>*)otherObj)->GetID();
     }
     template<typename T>
     inline void Serialize(ISerializable::SerializeStream& stream, const SoftAssetReference<T>& v, const void* otherObj)
     {
-        stream.Guid(v.GetID());
+        Serialize(stream, v.GetID(), nullptr);
     }
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, SoftAssetReference<T>& v, ISerializeModifier* modifier)
     {
-        Guid id;
+        AssetObjectId id;
         Deserialize(stream, id, modifier);
         v = id;
     }

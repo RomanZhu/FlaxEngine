@@ -46,6 +46,7 @@ namespace
         if (ArtifactStore::TryMakeLibraryRelative(library, outputPath.Get(), relative, diagnostic))
             return true;
         ArtifactManifest manifest;
+        manifest.ObjectID = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
         manifest.AssetID = record.ID;
         manifest.DatabaseRevision = record.DatabaseRevision;
         manifest.ProcessorID = record.ProcessorID;

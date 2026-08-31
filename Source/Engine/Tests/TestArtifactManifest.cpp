@@ -8,7 +8,8 @@ namespace
     ArtifactManifest ValidManifest()
     {
         ArtifactManifest manifest;
-        manifest.AssetID = Guid(1, 2, 3, 4);
+        manifest.ObjectID = AssetObjectId::Main(AssetGuid(Guid(1, 2, 3, 4)));
+        manifest.AssetID = manifest.ObjectID.ToRuntimeObjectGuid();
         manifest.DatabaseRevision = 42;
         manifest.ProcessorID = TEXT("Tests.Manifest");
         manifest.ProcessorImplementationVersion = 3;
@@ -55,12 +56,14 @@ TEST_CASE("ArtifactManifest canonical JSON round-trips coherently")
     StringAnsi first;
     REQUIRE_FALSE(manifest.ToJson(first, diagnostic));
     CHECK(first.EndsWith("\n"));
-    CHECK(first.Contains("\"manifestVersion\": 1"));
+    CHECK(first.Contains("\"manifestVersion\": 2"));
+    CHECK(first.Contains("\"fileId\": 1"));
     CHECK(first.Contains("\"relativePath\": \"Artifacts/"));
 
     ArtifactManifest parsed;
     REQUIRE_FALSE(ArtifactManifest::Parse(first, TEXT("manifest.json"), parsed, diagnostic));
     CHECK(parsed.AssetID == manifest.AssetID);
+    CHECK(parsed.ObjectID == manifest.ObjectID);
     CHECK(parsed.InputFingerprint == manifest.InputFingerprint);
     REQUIRE(parsed.Outputs.Count() == 1);
     CHECK(parsed.Outputs[0].Content == manifest.Outputs[0].Content);
@@ -96,8 +99,8 @@ TEST_CASE("ArtifactManifest parser rejects malformed field shapes")
         "[]",
         "not-json",
         "{\"manifestVersion\":\"1\"}",
-        "{\"manifestVersion\":1,\"assetGuid\":null}",
-        "{\"manifestVersion\":1,\"assetGuid\":\"xyz\"}",
+        "{\"manifestVersion\":2,\"objectId\":null}",
+        "{\"manifestVersion\":2,\"objectId\":{\"guid\":\"xyz\",\"fileId\":1}}",
     };
     AssetPipelineDiagnostic diagnostic;
     ArtifactManifest parsed;

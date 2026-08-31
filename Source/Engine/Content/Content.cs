@@ -57,6 +57,18 @@ namespace FlaxEngine
             return LoadAsync<Asset>(id);
         }
 
+        /// <summary>Loads one persistent imported object without dropping its local file identity.</summary>
+        public static T LoadAssetAsync<T>(AssetObjectId id) where T : Asset
+        {
+            return (T)LoadAssetAsync(id, typeof(T));
+        }
+
+        /// <summary>Loads one persistent imported object without dropping its local file identity.</summary>
+        public static Asset LoadAssetAsync(AssetObjectId id)
+        {
+            return LoadAssetAsync<Asset>(id);
+        }
+
         /// <summary>
         /// Loads asset to the Content Pool and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
         /// </summary>

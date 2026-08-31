@@ -62,7 +62,7 @@ void SceneAnimation::SaveData(MemoryWriteStream& stream) const
         case Track::Types::PostProcessMaterial:
         {
             auto trackData = stream.Move<PostProcessMaterialTrack::Data>();
-            trackData->AssetID = track.Asset.GetID();
+            trackData->AssetID = track.Asset.GetRuntimeInstanceId();
             const auto trackRuntime = track.GetRuntimeData<PostProcessMaterialTrack::Runtime>();
             stream.Write((int32)trackRuntime->Count);
             stream.WriteBytes(trackRuntime->Media, sizeof(Media) * trackRuntime->Count);
@@ -72,7 +72,7 @@ void SceneAnimation::SaveData(MemoryWriteStream& stream) const
         {
             auto trackData = stream.Move<NestedSceneAnimationTrack::Data>();
             *trackData = *track.GetData<NestedSceneAnimationTrack::Data>();
-            trackData->AssetID = track.Asset.GetID();
+            trackData->AssetID = track.Asset.GetRuntimeInstanceId();
             break;
         }
         case Track::Types::ScreenFade:
@@ -86,7 +86,7 @@ void SceneAnimation::SaveData(MemoryWriteStream& stream) const
         case Track::Types::Audio:
         {
             auto trackData = stream.Move<AudioTrack::Data>();
-            trackData->AssetID = track.Asset.GetID();
+            trackData->AssetID = track.Asset.GetRuntimeInstanceId();
             const auto trackRuntime = track.GetRuntimeData<AudioTrack::Runtime>();
             stream.Write((int32)trackRuntime->Count);
             stream.WriteBytes(trackRuntime->Media, sizeof(AudioTrack::Media) * trackRuntime->Count);

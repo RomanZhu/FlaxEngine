@@ -77,6 +77,9 @@ public:
     /// <returns>True if found any asset, otherwise false.</returns>
     API_FUNCTION() static bool GetAssetInfo(const Guid& id, API_PARAM(Out) AssetInfo& info);
 
+    /// <summary>Finds asset information by persistent source and local file identity.</summary>
+    API_FUNCTION() static bool GetAssetInfo(const AssetObjectId& id, API_PARAM(Out) AssetInfo& info);
+
     /// <summary>
     /// Finds the asset info by path.
     /// </summary>
@@ -179,6 +182,18 @@ public:
     /// <param name="type">The asset type. If loaded object has different type (excluding types derived from the given) the loading fails.</param>
     /// <returns>Loaded asset or null if cannot</returns>
     static Asset* LoadAsync(const Guid& id, const ScriptingTypeHandle& type);
+
+    /// <summary>Loads one persistent imported object without collapsing its local file identity.</summary>
+    API_FUNCTION() static Asset* LoadAssetAsync(const AssetObjectId& objectId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
+
+    /// <summary>Loads one persistent imported object without collapsing its local file identity.</summary>
+    static Asset* LoadAssetAsync(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
+
+    /// <summary>Loads the explicit main object for a source asset.</summary>
+    API_FUNCTION() static Asset* LoadMainAssetAsync(const AssetGuid& asset, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
+
+    /// <summary>Loads the explicit main object for a source asset.</summary>
+    static Asset* LoadMainAssetAsync(const AssetGuid& asset, const ScriptingTypeHandle& type);
 
     /// <summary>Loads an asset for passive editor presentation without scheduling artifact builds, including dependencies.</summary>
     static Asset* LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type);

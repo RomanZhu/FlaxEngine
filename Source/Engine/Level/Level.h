@@ -9,6 +9,7 @@
 #include "Engine/Platform/CriticalSection.h"
 #include "Engine/Scripting/ScriptingType.h"
 #include "Engine/Serialization/JsonFwd.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Types.h"
 
 class JsonWriter;
@@ -303,6 +304,9 @@ public:
     /// <returns>True if loading cannot be done, otherwise false.</returns>
     API_FUNCTION() static bool LoadScene(const Guid& id);
 
+    /// <summary>Loads a scene by persistent source and local file identity.</summary>
+    API_FUNCTION() static bool LoadScene(const AssetObjectId& id);
+
     /// <summary>
     /// Loads scene from the bytes.
     /// </summary>
@@ -316,6 +320,9 @@ public:
     /// <param name="id">Scene ID</param>
     /// <returns>True if loading cannot be done, otherwise false.</returns>
     API_FUNCTION() static bool LoadSceneAsync(const Guid& id);
+
+    /// <summary>Loads a scene asynchronously by persistent source and local file identity.</summary>
+    API_FUNCTION() static bool LoadSceneAsync(const AssetObjectId& id);
 
     /// <summary>
     /// Unloads given scene.

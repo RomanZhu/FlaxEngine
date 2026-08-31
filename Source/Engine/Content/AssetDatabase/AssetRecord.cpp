@@ -18,7 +18,7 @@ AssetRecord AssetRecord::FromLegacy(const AssetInfo& info)
 
 AssetInfo AssetRecord::ToAssetInfo() const
 {
-    return AssetInfo(ID, TypeName, CanonicalPath.Get());
+    return AssetInfo(ID, AssetObjectId(AssetGuid(SourceAssetID), LocalId), TypeName, CanonicalPath.Get(), DatabaseRevision);
 }
 
 bool AssetRecord::IsMainAsset() const

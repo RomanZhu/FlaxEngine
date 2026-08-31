@@ -41,6 +41,8 @@ public:
     static const String& ShaderID();
     static const String& VideoID();
     static const String& TextID();
+    static const String& BinaryID();
+    static const String& IESID();
     static AssetProcessorDescriptor CreateDescriptor(const StringView& processorID);
     static bool Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic);
     static bool BuildOutputKey(const PreparedAsset& prepared, const ArtifactTarget& target, const StringAnsiView& outputKind,

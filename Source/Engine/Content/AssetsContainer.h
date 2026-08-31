@@ -18,7 +18,7 @@ public:
     /// <param name="id">The asset id.</param>
     /// <returns>Loaded asset of null.</returns>
     template<typename T>
-    T* Load(const Guid& id)
+    T* Load(const AssetObjectId& id)
     {
         for (auto& e : *this)
         {

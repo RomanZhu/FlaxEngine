@@ -82,7 +82,7 @@ BytesContainer ParticleSystem::LoadTimeline() const
             switch (track.Type)
             {
             case Track::Types::Emitter:
-                id = Emitters[track.AsEmitter.Index].GetID();
+                id = Emitters[track.AsEmitter.Index].GetRuntimeInstanceId();
                 stream.Write(id);
                 stream.WriteInt32(track.AsEmitter.Index);
                 stream.WriteInt32(track.AsEmitter.StartFrame);
@@ -180,7 +180,7 @@ void ParticleSystem::GetReferences(Array<Guid>& assets, Array<String>& files) co
     BinaryAsset::GetReferences(assets, files);
 
     for (int32 i = 0; i < Emitters.Count(); i++)
-        assets.Add(Emitters[i].GetID());
+        assets.Add(Emitters[i].GetRuntimeInstanceId());
 
     for (auto i = EmittersParametersOverrides.Begin(); i.IsNotEnd(); ++i)
     {
@@ -267,7 +267,7 @@ Asset::LoadResult ParticleSystem::load()
                 stream.ReadInt32(&track.AsEmitter.Index);
                 stream.ReadInt32(&track.AsEmitter.StartFrame);
                 stream.ReadInt32(&track.AsEmitter.DurationFrames);
-                Emitters[track.AsEmitter.Index] = id;
+                Emitters[track.AsEmitter.Index] = AssetObjectId::Main(AssetGuid(id));
                 break;
             case Track::Types::Folder:
                 break;

@@ -61,7 +61,7 @@ public class AssetPickerValidator : IContentItemOwner
             }
             else if (value is AssetItem assetItem)
             {
-                SelectedAsset = FlaxEngine.Content.LoadAsync(assetItem.ID);
+                SelectedAsset = FlaxEngine.Content.LoadAssetAsync(assetItem.ObjectID);
             }
             else
             {
@@ -88,6 +88,26 @@ public class AssetPickerValidator : IContentItemOwner
             return Guid.Empty;
         }
         set => SelectedItem = Editor.Instance.ContentDatabase.FindAsset(value);
+    }
+
+    /// <summary>Gets or sets the selected persistent asset object identity.</summary>
+    public AssetObjectId SelectedObjectID
+    {
+        get
+        {
+            if (_selected != null)
+                return _selected.PersistentObjectId;
+            return _selectedItem is AssetItem assetItem ? assetItem.ObjectID : default;
+        }
+        set
+        {
+            if (value.IsNull || !AssetWorkspaceQuery.TryGet(value, out var entry))
+            {
+                SelectedItem = null;
+                return;
+            }
+            SelectedItem = Editor.Instance.ContentDatabase.FindAsset(entry.RuntimeID);
+        }
     }
 
     /// <summary>

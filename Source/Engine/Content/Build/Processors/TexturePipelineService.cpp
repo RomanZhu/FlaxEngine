@@ -24,6 +24,7 @@
 #include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
+#include "Engine/Content/Importing/AssetImportService.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Scripting/Scripting.h"
@@ -86,6 +87,8 @@ namespace
         if (!AssetProcessorRegistry::Get().TryGetDescriptor(TextureProcessorSettings::ProcessorID(), existing) &&
             AssetProcessorRegistry::Get().Register(TextureProcessor::CreateDescriptor(), state.Registration, diagnostic))
             return true;
+        if (AssetImportService::EnsureInitialized(diagnostic))
+            return true;
 
         state.Builds = std::make_unique<AssetBuildService>();
         AssetBuildServiceLimits limits;
@@ -98,9 +101,18 @@ namespace
             state.Registration.Reset();
             return true;
         }
+        if (AssetImportService::AttachBuildService(*state.Builds, diagnostic))
+        {
+            state.Builds->Shutdown();
+            state.Builds.reset();
+            AssetImportService::Shutdown();
+            state.Registration.Reset();
+            return true;
+        }
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
         if (GraphPipelineService::EnsureInitialized(diagnostic))
         {
+            AssetImportService::Shutdown();
             state.Builds.reset();
             state.Registration.Reset();
             return true;
@@ -543,12 +555,6 @@ AssetBuildJobStatus TexturePipelineService::GetThumbnailStatus(const Guid& asset
 
 void TexturePipelineService::Shutdown()
 {
-#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
-    ModelPipelineService::Shutdown();
-#endif
-#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
-    GraphPipelineService::Shutdown();
-#endif
     ArtifactResolver::Get().Reset();
     TexturePipelineState& state = State();
     std::unique_ptr<AssetBuildService> builds;
@@ -567,6 +573,13 @@ void TexturePipelineService::Shutdown()
     }
     if (builds)
         builds->Shutdown();
+    AssetImportService::Shutdown();
+#if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
+    ModelPipelineService::Shutdown();
+#endif
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    GraphPipelineService::Shutdown();
+#endif
     registration.Reset();
 }
 

@@ -268,7 +268,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
 
             // Import model data to the asset
             {
-                Guid modelDataAssetId = scene->CSGData.Model.GetID();
+                Guid modelDataAssetId = scene->CSGData.Model.GetRuntimeInstanceId();
                 if (!modelDataAssetId.IsValid())
                     modelDataAssetId = Guid::New();
                 const String modelDataAssetPath = sceneDataFolderPath / TEXT("CSG_Mesh") + ASSET_FILES_EXTENSION_WITH_DOT;
@@ -284,7 +284,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
 
             // Generate asset with CSG mesh metadata (for collisions and brush queries)
             {
-                Guid rawDataAssetId = scene->CSGData.Data.GetID();
+                Guid rawDataAssetId = scene->CSGData.Data.GetRuntimeInstanceId();
                 if (!rawDataAssetId.IsValid())
                     rawDataAssetId = Guid::New();
                 const String rawDataAssetPath = sceneDataFolderPath / TEXT("CSG_Data") + ASSET_FILES_EXTENSION_WITH_DOT;
@@ -321,8 +321,8 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 CollisionCooking::Argument arg;
                 arg.Type = CollisionDataType::TriangleMesh;
                 arg.OverrideModelData = &modelData;
-                arg.Model = data.outputModelAssetId;
-                Guid collisionDataAssetId = scene->CSGData.CollisionData.GetID();
+                arg.Model = AssetObjectId::Main(AssetGuid(data.outputModelAssetId));
+                Guid collisionDataAssetId = scene->CSGData.CollisionData.GetRuntimeInstanceId();
                 if (!collisionDataAssetId.IsValid())
                     collisionDataAssetId = Guid::New();
                 const String collisionDataAssetPath = sceneDataFolderPath / TEXT("CSG_Collision") + ASSET_FILES_EXTENSION_WITH_DOT;

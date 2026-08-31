@@ -14,6 +14,7 @@ public:
 
 protected:
     Asset* _asset = nullptr;
+    AssetObjectId _objectId;
 
 public:
     /// <summary>
@@ -36,11 +37,16 @@ public:
 
 public:
     /// <summary>
-    /// Gets the asset ID or Guid::Empty if not set.
+    /// Gets the persistent asset object ID.
     /// </summary>
-    FORCE_INLINE Guid GetID() const
+    FORCE_INLINE AssetObjectId GetID() const
     {
-        return _asset ? _asset->GetID() : Guid::Empty;
+        return _objectId;
+    }
+
+    FORCE_INLINE Guid GetRuntimeInstanceId() const
+    {
+        return _asset ? _asset->GetRuntimeInstanceId() : Guid::Empty;
     }
 
     /// <summary>
@@ -64,6 +70,7 @@ public:
 
 protected:
     void OnSet(Asset* asset);
+    void OnSet(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
 };
 
 /// <summary>
@@ -96,6 +103,11 @@ public:
         OnSet(asset);
     }
 
+    WeakAssetReference(const AssetObjectId& objectId)
+    {
+        OnSet(objectId, T::TypeInitializer);
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="WeakAssetReference"/> class.
     /// </summary>
@@ -107,7 +119,7 @@ public:
 
     WeakAssetReference(WeakAssetReference&& other)
     {
-        OnSet(other.Get());
+        OnSet(other.GetID(), T::TypeInitializer);
         other.OnSet(nullptr);
     }
 
@@ -115,7 +127,7 @@ public:
     {
         if (&other != this)
         {
-            OnSet(other.Get());
+            OnSet(other.GetID(), T::TypeInitializer);
             other.OnSet(nullptr);
         }
         return *this;
@@ -131,7 +143,7 @@ public:
 public:
     FORCE_INLINE WeakAssetReference& operator=(const WeakAssetReference& other)
     {
-        OnSet(other.Get());
+        OnSet(other.GetID(), T::TypeInitializer);
         return *this;
     }
 
@@ -141,9 +153,9 @@ public:
         return *this;
     }
 
-    FORCE_INLINE WeakAssetReference& operator=(const Guid& id)
+    FORCE_INLINE WeakAssetReference& operator=(const AssetObjectId& id)
     {
-        OnSet((Asset*)::LoadAsset(id, T::TypeInitializer));
+        OnSet(id, T::TypeInitializer);
         return *this;
     }
 

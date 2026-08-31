@@ -23,21 +23,51 @@ bool SubAssetPolicy::IsKeyValid(const StringView& key)
     return NormalizeKey(key) == key;
 }
 
-int64 SubAssetPolicy::LocalIdFromGuid(const Guid& id)
+namespace
 {
-    uint64 value = (static_cast<uint64>(id.A) << 32) | id.B;
-    value &= MAX_int64;
-    if (value <= 1)
+    constexpr uint64 FnvOffset = 14695981039346656037ull;
+    constexpr uint64 FnvPrime = 1099511628211ull;
+
+    void HashByte(uint64& hash, byte value)
     {
-        value = ((static_cast<uint64>(id.C) << 32) | id.D) & MAX_int64;
-        if (value <= 1)
-            value = 2;
+        hash ^= value;
+        hash *= FnvPrime;
     }
-    return static_cast<int64>(value);
+
+    void HashString(uint64& hash, const StringView& value)
+    {
+        const uint32 length = static_cast<uint32>(value.Length());
+        for (int32 i = 0; i < 4; i++)
+            HashByte(hash, static_cast<byte>(length >> (i * 8)));
+        for (int32 i = 0; i < value.Length(); i++)
+        {
+            const uint16 codeUnit = static_cast<uint16>(value[i]);
+            HashByte(hash, static_cast<byte>(codeUnit));
+            HashByte(hash, static_cast<byte>(codeUnit >> 8));
+        }
+    }
 }
 
-void SubAssetPolicy::RegenerateGuids(Dictionary<String, SubAssetMeta>& mappings)
+int64 SubAssetPolicy::CalculateLocalId(const StringView& importerNamespace, const StringView& stableIdentifier, const StringView& objectCategory, uint32 collisionSalt)
 {
-    for (auto& entry : mappings)
-        entry.Value.ID = Guid::New();
+    uint64 hash = FnvOffset;
+    HashString(hash, importerNamespace);
+    HashString(hash, stableIdentifier);
+    HashString(hash, objectCategory);
+    for (int32 i = 0; i < 4; i++)
+        HashByte(hash, static_cast<byte>(collisionSalt >> (i * 8)));
+    int64 result = static_cast<int64>(hash & MAX_int64);
+    if (result <= 1)
+        result = 2;
+    return result;
+}
+
+int64 SubAssetPolicy::AllocateLocalId(const StringView& importerNamespace, const StringView& stableIdentifier, const StringView& objectCategory, const HashSet<int64>& reserved, uint32& collisionSalt)
+{
+    for (;; collisionSalt++)
+    {
+        const int64 candidate = CalculateLocalId(importerNamespace, stableIdentifier, objectCategory, collisionSalt);
+        if (!reserved.Contains(candidate))
+            return candidate;
+    }
 }

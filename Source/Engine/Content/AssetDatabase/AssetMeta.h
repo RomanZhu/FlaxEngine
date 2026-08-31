@@ -28,15 +28,16 @@ enum class AssetMetaWriteFailurePoint : byte
 /// <summary>Universal tracked asset sidecar.</summary>
 struct FLAXENGINE_API AssetMeta
 {
-    static constexpr int32 CurrentMetaVersion = 2;
+    static constexpr int32 CurrentFileFormatVersion = 1;
 
-    int32 MetaVersion = CurrentMetaVersion;
+    int32 FileFormatVersion = CurrentFileFormatVersion;
     Guid ID;
     bool FolderAsset = false;
     String AssetType;
     AssetSourceKind SourceKind = AssetSourceKind::ImportedSource;
     AssetProcessorMeta Processor;
     Dictionary<String, SubAssetMeta> SubAssets;
+    Dictionary<StringAnsi, StringAnsi> MainObjectUnknownFields;
     Array<String> Labels;
     StringAnsi UserDataJson;
     Dictionary<StringAnsi, StringAnsi> UnknownFields;
@@ -58,6 +59,6 @@ struct FLAXENGINE_API AssetMeta
     /// <returns>True on failure.</returns>
     bool ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) const;
 
-    /// <summary>Clones tracked identity, assigning a new root and all-new subasset/tombstone GUIDs.</summary>
+    /// <summary>Clones importer settings and object mappings while assigning only a new source GUID.</summary>
     AssetMeta CloneWithNewIdentities() const;
 };

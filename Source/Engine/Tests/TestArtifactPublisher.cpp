@@ -13,7 +13,8 @@ namespace
     PreparedAsset PublicationPrepared(const byte* sourceBytes, int32 sourceLength, int32 fingerprintSalt = 0)
     {
         PreparedAsset prepared;
-        prepared.AssetID = Guid(1, 2, 3, 4);
+        prepared.ObjectID = AssetObjectId::Main(AssetGuid(Guid(1, 2, 3, 4)));
+        prepared.AssetID = prepared.ObjectID.ToRuntimeObjectGuid();
         prepared.OutputType = TEXT("Tests.PublishedAsset");
         prepared.DatabaseRevision = 12;
         prepared.SettingsHash = ContentHash::Compute("settings", 8);

@@ -3,6 +3,8 @@
 #include "ArtifactPublisher.h"
 #include "ArtifactLock.h"
 #include "ArtifactStore.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Core/Types/DateTime.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -100,6 +102,62 @@ namespace
         size = bytes.Count();
         hash = ContentHash::Compute(bytes.Get(), bytes.Count());
         return false;
+    }
+
+    bool PersistPublication(const ArtifactManifest& manifest, const StringAnsiView& manifestJson,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        AssetDatabase& database = AssetDatabase::Get();
+        if (!database.IsOpen())
+            return false;
+
+        const String targetId(manifest.Target.BuildKey(ArtifactTargetDimension::All).ToString());
+        SourceAssetPublicationRow publication;
+        publication.AssetGuid = manifest.ObjectID.Asset.Value;
+        publication.LocalFileId = manifest.ObjectID.LocalId;
+        publication.TargetId = targetId;
+        publication.ManifestHash = ContentHash::Compute(manifestJson.Get(), manifestJson.Length());
+        publication.Artifact = ArtifactKey(publication.ManifestHash);
+        publication.InputFingerprint = manifest.InputFingerprint;
+        publication.SourceRevision = manifest.DatabaseRevision;
+        publication.ImporterRegistryGeneration = database.GetDurableSnapshot().GetState().Database.ImporterRegistryGeneration;
+        publication.PublishedUtcTicks = DateTime::NowUTC().Ticks;
+        publication.IsLastKnownGood = true;
+
+        Array<SourceAssetDependencyRow> dependencies;
+        dependencies.EnsureCapacity(manifest.Dependencies.Count());
+        for (const ArtifactManifestDependency& source : manifest.Dependencies)
+        {
+            SourceAssetDependencyRow dependency;
+            dependency.OwnerAssetGuid = publication.AssetGuid;
+            dependency.OwnerLocalFileId = publication.LocalFileId;
+            dependency.TargetId = targetId;
+            dependency.Kind = source.Kind;
+            dependency.ExactArtifact = source.ExactArtifact;
+            dependency.Content = source.Hash;
+            dependency.OriginPath = source.Origin;
+            if (source.Kind == AssetDependencyKind::SourceFile)
+                dependency.SourcePath = source.Identity;
+            else if (source.Kind == AssetDependencyKind::Toolchain)
+                dependency.CustomDependency = source.Identity;
+            else
+            {
+                if (!source.ObjectID.IsValid())
+                {
+                    diagnostic = AssetPipelineDiagnostic();
+                    diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactMissing;
+                    diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+                    diagnostic.AssetGuid = manifest.AssetID;
+                    diagnostic.SourcePath = source.Identity;
+                    diagnostic.Message = TEXT("Cannot persist an artifact dependency that has no asset-object database record.");
+                    return true;
+                }
+                dependency.TargetAssetGuid = source.ObjectID.Asset.Value;
+                dependency.TargetLocalFileId = source.ObjectID.LocalId;
+            }
+            dependencies.Add(MoveTemp(dependency));
+        }
+        return database.RecordPublication(publication, dependencies, diagnostic);
     }
 
     String DescribeDifference(const StringView& existingPath, const StringView& stagedPath)
@@ -341,6 +399,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     }
 
     ArtifactManifest manifest;
+    manifest.ObjectID = prepared.ObjectID;
     manifest.AssetID = prepared.AssetID;
     manifest.DatabaseRevision = prepared.DatabaseRevision;
     manifest.ProcessorID = request.ProcessorID;
@@ -358,6 +417,15 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         dependency.Kind = source.Kind;
         dependency.Identity = source.StableIdentity;
         dependency.AssetID = source.AssetID;
+        if (source.Kind == AssetDependencyKind::BuildInput || source.Kind == AssetDependencyKind::RuntimeReference)
+        {
+            AssetRecord dependencyRecord;
+            if (AssetDatabase::Get().TryGetRecord(source.AssetID, dependencyRecord))
+                dependency.ObjectID = AssetObjectId(AssetGuid(dependencyRecord.SourceAssetID), dependencyRecord.LocalId);
+            else
+                dependency.ObjectID = AssetObjectId::Main(AssetGuid(source.AssetID));
+            dependency.AssetID = dependency.ObjectID.ToRuntimeObjectGuid();
+        }
         dependency.Hash = source.Content;
         dependency.ExactArtifact = source.ExactArtifact;
         dependency.InterfaceHash = source.SemanticInterface;
@@ -384,7 +452,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
 #else
         const String readableManifestPath = manifestPath.Get();
 #endif
-        if (!File::ReadAllText(readableManifestPath, oldJson) && !ArtifactManifest::Parse(oldJson, manifestPath.Get(), oldManifest, ignored) && oldManifest.AssetID == prepared.AssetID)
+        if (!File::ReadAllText(readableManifestPath, oldJson) && !ArtifactManifest::Parse(oldJson, manifestPath.Get(), oldManifest, ignored) && oldManifest.ObjectID == prepared.ObjectID)
         {
             const bool sameBuildInputs = oldManifest.DatabaseRevision == manifest.DatabaseRevision &&
                 oldManifest.ProcessorID == manifest.ProcessorID &&
@@ -440,7 +508,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     StringAnsi reparsedJson;
     ArtifactManifest reparsed;
     if (File::ReadAllText(stagingManifestIo, reparsedJson) || ArtifactManifest::Parse(reparsedJson, stagingManifest, reparsed, diagnostic) ||
-        reparsed.AssetID != manifest.AssetID || reparsed.InputFingerprint != manifest.InputFingerprint || reparsed.Outputs.Count() != manifest.Outputs.Count())
+        reparsed.ObjectID != manifest.ObjectID || reparsed.InputFingerprint != manifest.InputFingerprint || reparsed.Outputs.Count() != manifest.Outputs.Count())
         return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, stagingManifest, TEXT("Artifact manifest staging validation failed."));
     request.QueryCurrentState(currentRevision, currentFingerprint);
     if (currentRevision != prepared.DatabaseRevision || currentFingerprint != prepared.InputFingerprint)
@@ -454,6 +522,8 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         return true;
     if (AtomicReplace(manifestPath.Get(), stagingManifest))
         return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, manifestPath.Get(), TEXT("Cannot atomically replace current artifact manifest."));
+    if (PersistPublication(manifest, manifestJson, diagnostic))
+        return true;
     result.Manifest = manifest;
     if (Inject(request.FailurePoint, ArtifactPublicationFailurePoint::AfterAtomicReplaceBeforeNotification, prepared, diagnostic))
         return true;

@@ -3,7 +3,7 @@
 #pragma once
 
 #include "Settings.h"
-#include "Engine/Core/Types/Guid.h"
+#include "Engine/Content/SceneReference.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Collections/Dictionary.h"
 
@@ -47,7 +47,7 @@ public:
     /// <summary>
     /// Reference to the first scene to load on a game startup.
     /// </summary>
-    Guid FirstScene = Guid::Empty;
+    SceneReference FirstScene;
 
     /// <summary>
     /// True if skip showing splash screen image on the game startup.

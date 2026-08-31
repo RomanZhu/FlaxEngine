@@ -11,7 +11,7 @@ class FLAXENGINE_API SoftAssetReferenceBase : public IAssetReference
 {
 protected:
     Asset* _asset = nullptr;
-    Guid _id = Guid::Empty;
+    AssetObjectId _id;
 
 public:
     /// <summary>
@@ -34,11 +34,16 @@ public:
 
 public:
     /// <summary>
-    /// Gets the asset ID or Guid::Empty if not set.
+    /// Gets the persistent asset object ID.
     /// </summary>
-    FORCE_INLINE Guid GetID() const
+    FORCE_INLINE AssetObjectId GetID() const
     {
         return _id;
+    }
+
+    FORCE_INLINE Guid GetRuntimeInstanceId() const
+    {
+        return _asset ? _asset->GetRuntimeInstanceId() : Guid::Empty;
     }
 
     /// <summary>
@@ -54,7 +59,7 @@ public:
 
 protected:
     void OnSet(Asset* asset);
-    void OnSet(const Guid& id);
+    void OnSet(const AssetObjectId& id);
     void OnResolve(const ScriptingTypeHandle& type);
 };
 
@@ -101,7 +106,7 @@ public:
         OnSet(other.GetID());
     }
 
-    SoftAssetReference(const Guid& id)
+    SoftAssetReference(const AssetObjectId& id)
     {
         OnSet(id);
     }
@@ -109,7 +114,7 @@ public:
     SoftAssetReference(SoftAssetReference&& other)
     {
         OnSet(other.GetID());
-        other.OnSet(Guid::Empty);
+        other.OnSet(AssetObjectId());
     }
 
     /// <summary>
@@ -128,7 +133,7 @@ public:
     {
         return GetID() == other.GetID();
     }
-    FORCE_INLINE bool operator==(const Guid& other) const
+    FORCE_INLINE bool operator==(const AssetObjectId& other) const
     {
         return GetID() == other;
     }
@@ -140,7 +145,7 @@ public:
     {
         return GetID() != other.GetID();
     }
-    FORCE_INLINE bool operator!=(const Guid& other) const
+    FORCE_INLINE bool operator!=(const AssetObjectId& other) const
     {
         return GetID() != other;
     }
@@ -169,7 +174,7 @@ public:
         OnSet((Asset*)other);
         return *this;
     }
-    FORCE_INLINE SoftAssetReference& operator=(const Guid& id)
+    FORCE_INLINE SoftAssetReference& operator=(const AssetObjectId& id)
     {
         OnSet(id);
         return *this;
@@ -234,7 +239,7 @@ public:
     /// Sets the asset.
     /// </summary>
     /// <param name="id">The object ID. Uses Scripting to find the registered asset of the given ID.</param>
-    FORCE_INLINE void Set(const Guid& id)
+    FORCE_INLINE void Set(const AssetObjectId& id)
     {
         OnSet(id);
     }

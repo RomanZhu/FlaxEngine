@@ -4,6 +4,7 @@
 
 #include "Stream.h"
 #include "Engine/Core/Templates.h"
+#include "Engine/Content/Asset.h"
 
 /// <summary>
 /// Base class for all data write streams
@@ -143,12 +144,18 @@ public:
     }
 
     template<typename T>
-    typename TEnableIf<TIsBaseOf<ScriptingObject, T>::Value>::Type Write(const T* data)
+    typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Write(const T* data)
     {
         uint32 id[4] = { 0 };
         if (data)
             memcpy(id, &data->GetID(), sizeof(id));
         WriteBytes(id, sizeof(id));
+    }
+
+    template<typename T>
+    typename TEnableIf<TIsBaseOf<Asset, T>::Value>::Type Write(const T* data)
+    {
+        Write(data ? data->GetPersistentObjectId() : AssetObjectId());
     }
 
     template<typename T>
@@ -164,17 +171,17 @@ public:
     template<typename T>
     FORCE_INLINE void Write(const AssetReference<T>& v)
     {
-        Write(v.Get());
+        Write(v.GetID());
     }
     template<typename T>
     FORCE_INLINE void Write(const WeakAssetReference<T>& v)
     {
-        Write(v.Get());
+        Write(v.GetID());
     }
     template<typename T>
     FORCE_INLINE void Write(const SoftAssetReference<T>& v)
     {
-        Write(v.Get());
+        Write(v.GetID());
     }
 
     template<typename T>

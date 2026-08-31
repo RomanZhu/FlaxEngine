@@ -144,7 +144,7 @@ namespace
         for (const auto& entry : meta.SubAssets)
         {
             AssetRecord subAsset;
-            subAsset.ID = entry.Value.ID;
+            subAsset.ID = AssetObjectId(AssetGuid(meta.ID), entry.Value.LocalId).ToRuntimeObjectGuid();
             subAsset.SourceAssetID = meta.ID;
             subAsset.LocalId = entry.Value.LocalId;
             subAsset.TypeName = entry.Value.TypeName;
@@ -212,7 +212,7 @@ bool AssetDatabaseScanner::Scan(const StringView& projectRoot, const StringView&
     if (Collect(projectRoot, contentRoot, libraryRoot, options, database.GetSnapshot(), records, result))
         return true;
     AssetPipelineDiagnostic publishDiagnostic;
-    if (database.PublishFullSnapshot(records, publishDiagnostic))
+    if (database.PublishFullSnapshot(records, result.Diagnostics, publishDiagnostic))
     {
         result.Diagnostics.Add(publishDiagnostic);
         return true;

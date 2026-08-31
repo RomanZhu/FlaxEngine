@@ -36,7 +36,7 @@ namespace
 
     StringAnsi ObjectKey(const AssetObjectId& id)
     {
-        return StringAnsi::Format("{0}:{1}", GuidKey(id.Guid), id.LocalId);
+        return StringAnsi::Format("{0}:{1}", GuidKey(id.Asset.Value), id.LocalId);
     }
 }
 
@@ -55,8 +55,8 @@ bool RuntimeAssetIndex::WriteCanonicalJson(const Array<RuntimeAssetIndexEntry>& 
     {
         std::sort(sorted.Get(), sorted.Get() + sorted.Count(), [](const RuntimeAssetIndexEntry& a, const RuntimeAssetIndexEntry& b)
         {
-            const StringAnsi aGuid = GuidKey(a.ID.Guid);
-            const StringAnsi bGuid = GuidKey(b.ID.Guid);
+            const StringAnsi aGuid = GuidKey(a.ID.Asset.Value);
+            const StringAnsi bGuid = GuidKey(b.ID.Asset.Value);
             return aGuid == bGuid ? a.ID.LocalId < b.ID.LocalId : aGuid < bGuid;
         });
     }

@@ -987,7 +987,7 @@ void MaterialParams::Save(WriteStream* stream)
         case MaterialParameterType::Texture:
         case MaterialParameterType::CubeTexture:
         case MaterialParameterType::GameplayGlobal:
-            id = param->_asAsset.GetID();
+            id = param->_asAsset.GetRuntimeInstanceId();
             stream->Write(id);
             break;
         case MaterialParameterType::GPUTextureVolume:

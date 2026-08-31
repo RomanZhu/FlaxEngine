@@ -243,7 +243,9 @@ void GameSettings::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
     CopyrightNotice = JsonTools::GetString(stream, "CopyrightNotice");
     Version = JsonTools::GetString(stream, "Version");
     Icon = JsonTools::GetGuid(stream, "Icon");
-    FirstScene = JsonTools::GetGuid(stream, "FirstScene");
+    const auto firstScene = stream.FindMember("FirstScene");
+    if (firstScene != stream.MemberEnd())
+        Serialization::Deserialize(firstScene->value, FirstScene, modifier);
     NoSplashScreen = JsonTools::GetBool(stream, "NoSplashScreen", NoSplashScreen);
     SplashScreen = JsonTools::GetGuid(stream, "SplashScreen");
     CustomSettings.Clear();

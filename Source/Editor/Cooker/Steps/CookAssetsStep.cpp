@@ -1518,8 +1518,8 @@ bool CookAssetsStep::Perform(CookingData& data)
             RuntimeAssetIndexEntry entry;
             AssetRecord canonicalRecord;
             entry.ID = AssetDatabase::Get().TryGetRecord(i->Key, canonicalRecord)
-                ? AssetObjectId(canonicalRecord.SourceAssetID, canonicalRecord.LocalId)
-                : AssetObjectId(i->Key, 1);
+                ? AssetObjectId(AssetGuid(canonicalRecord.SourceAssetID), canonicalRecord.LocalId)
+                : AssetObjectId::Main(AssetGuid(i->Key));
             entry.TypeName = i->Value.Info.TypeName;
             entry.PackagedPath = i->Value.Info.Path;
             indexEntries.Add(MoveTemp(entry));

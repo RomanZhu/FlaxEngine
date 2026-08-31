@@ -364,6 +364,9 @@ void AssetBuildService::Impl::WriteLogLocked(const std::shared_ptr<AssetBuildSha
 
 void AssetBuildService::Impl::FinishLocked(const std::shared_ptr<AssetBuildSharedState>& job, AssetBuildJobStatus status, const AssetPipelineDiagnostic& diagnostic)
 {
+    AssetPipelineDiagnostic resultDiagnostic = diagnostic;
+    if (status == AssetBuildJobStatus::Cancelled)
+        resultDiagnostic.Severity = AssetPipelineDiagnosticSeverity::Info;
     if (status == AssetBuildJobStatus::Succeeded)
         Metrics.Succeeded++;
     else if (status == AssetBuildJobStatus::Failed)
@@ -373,7 +376,7 @@ void AssetBuildService::Impl::FinishLocked(const std::shared_ptr<AssetBuildShare
     {
         std::lock_guard<std::mutex> completionLock(job->CompletionMutex);
         job->Result.Status = status;
-        job->Result.Diagnostic = diagnostic;
+        job->Result.Diagnostic = MoveTemp(resultDiagnostic);
         job->Status.store(status, std::memory_order_release);
     }
     WriteLogLocked(job, status);

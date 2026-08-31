@@ -254,7 +254,7 @@ bool AnimGraph::onParamCreated(Parameter* p)
         }
 
         // Peek the value
-        BaseModel = (Guid)p->Value;
+        BaseModel = AssetObjectId::Main(AssetGuid((Guid)p->Value));
     }
 
     return Graph::onParamCreated(p);

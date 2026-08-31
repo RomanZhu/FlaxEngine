@@ -20,6 +20,9 @@ namespace FlaxEditor.Content
         /// </summary>
         public Guid ID { get; protected set; }
 
+        /// <summary>Gets the persistent source and local file identity.</summary>
+        public AssetObjectId ObjectID { get; private set; }
+
         /// <summary>
         /// Gets the asset type identifier.
         /// </summary>
@@ -65,11 +68,13 @@ namespace FlaxEditor.Content
         {
             TypeName = typeName;
             ID = id;
+            ObjectID = AssetObjectId.Main(new AssetGuid(id));
         }
 
         internal void SetAssetDatabaseRecord(AssetDatabaseRecordInfo record)
         {
             IsCanonicalSource = true;
+            ObjectID = new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId);
             IsCanonicalSubAsset = !record.IsMain;
             DatabaseStatus = record.Status;
             MetadataPath = record.MetaPath;
@@ -179,7 +184,7 @@ namespace FlaxEditor.Content
         /// <returns>The asset object.</returns>
         public Asset LoadAsync()
         {
-            return FlaxEngine.Content.LoadAsync<Asset>(ID);
+            return FlaxEngine.Content.LoadAssetAsync<Asset>(ObjectID);
         }
 
         /// <summary>

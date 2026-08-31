@@ -7,6 +7,7 @@
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
 #include "Engine/Content/Assets/RawDataAsset.h"
+#include "Engine/Content/Assets/IESProfile.h"
 #include "Engine/Content/Assets/Shader.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
@@ -21,6 +22,7 @@
 #endif
 #include "Engine/ContentImporters/ImportFont.h"
 #include "Engine/ContentImporters/ImportShader.h"
+#include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/ContentImporters/Types.h"
 
 namespace
@@ -45,7 +47,8 @@ bool ImportedSourceProcessor::Owns(const StringView& processorID)
 #if COMPILE_WITH_AUDIO_TOOL
         processorID == AudioID() ||
 #endif
-        processorID == FontID() || processorID == ShaderID() || processorID == VideoID() || processorID == TextID();
+        processorID == FontID() || processorID == ShaderID() || processorID == VideoID() || processorID == TextID() ||
+        processorID == BinaryID() || processorID == IESID();
 }
 
 const String& ImportedSourceProcessor::AudioID()
@@ -75,6 +78,18 @@ const String& ImportedSourceProcessor::VideoID()
 const String& ImportedSourceProcessor::TextID()
 {
     static const String value(TEXT("Flax.Text"));
+    return value;
+}
+
+const String& ImportedSourceProcessor::BinaryID()
+{
+    static const String value(TEXT("Flax.Binary"));
+    return value;
+}
+
+const String& ImportedSourceProcessor::IESID()
+{
+    static const String value(TEXT("Flax.IES"));
     return value;
 }
 
@@ -114,9 +129,16 @@ AssetProcessorDescriptor ImportedSourceProcessor::CreateDescriptor(const StringV
         descriptor.DocumentTypes.Add(Shader::TypeName);
         descriptor.MainOutputType = Shader::TypeName;
     }
-    else if (processorID == TextID())
+    else if (processorID == IESID())
     {
-        descriptor.SourceExtensions.Add(TEXT(".txt"));
+        descriptor.SourceExtensions.Add(TEXT(".ies"));
+        descriptor.DocumentTypes.Add(IESProfile::TypeName);
+        descriptor.MainOutputType = IESProfile::TypeName;
+    }
+    else if (processorID == TextID() || processorID == BinaryID())
+    {
+        if (processorID == TextID())
+            descriptor.SourceExtensions.Add(TEXT(".txt"));
         descriptor.DocumentTypes.Add(RawDataAsset::TypeName);
         descriptor.MainOutputType = RawDataAsset::TypeName;
     }
@@ -153,7 +175,7 @@ bool ImportedSourceProcessor::Prepare(PrepareAssetContext& context, PreparedAsse
     origin.Path = record.SourcePath.Get();
     if (context.ReadSourceFile(record.SourcePath.Get(), bytes, sourceHash, origin, diagnostic))
         return true;
-    if (bytes.IsEmpty() && record.ProcessorID != TextID())
+    if (bytes.IsEmpty() && record.ProcessorID != TextID() && record.ProcessorID != BinaryID())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Imported source file is empty."));
     if (record.ProcessorID == ShaderID() && bytes.Count() < 10)
@@ -239,7 +261,7 @@ bool ImportedSourceProcessor::Build(ArtifactBuildContext& context, AssetPipeline
     if (context.ReadInput(sourceDependency->StableIdentity, sourceBytes, sourceHash, diagnostic))
         return true;
     const bool video = prepared.OutputType == TEXT("FlaxEngine.Video");
-    const bool rawText = prepared.OutputType == RawDataAsset::TypeName;
+    const bool rawData = prepared.OutputType == RawDataAsset::TypeName;
     String scratchPath;
     if (context.CreateScratchFilePath(video ? payload->SourceExtension : String(TEXT(".flax")), scratchPath, diagnostic))
         return true;
@@ -254,7 +276,7 @@ bool ImportedSourceProcessor::Build(ArtifactBuildContext& context, AssetPipeline
             return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, scratchPath, TEXT("Video source snapshot could not be written."));
     }
-    else if (rawText)
+    else if (rawData)
     {
         FlaxChunk chunk;
         chunk.Data.Copy(sourceBytes.Get(), sourceBytes.Count());
@@ -300,6 +322,8 @@ bool ImportedSourceProcessor::Build(ArtifactBuildContext& context, AssetPipeline
             callback.Bind(&ImportFont::Import);
         else if (payload->SourceExtension == TEXT(".shader"))
             callback.Bind(&ImportShader::Import);
+        else if (payload->SourceExtension == TEXT(".ies"))
+            callback.Bind(&ImportTexture::ImportIES);
         if (!callback.IsBinded())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, verifiedSourcePath, TEXT("No importer is registered for this source extension."));

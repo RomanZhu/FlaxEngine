@@ -4,9 +4,11 @@
 
 #include "Stream.h"
 #include "Engine/Core/Templates.h"
+#include "Engine/Content/Asset.h"
 
 extern FLAXENGINE_API class ScriptingObject* FindObject(const Guid& id, class MClass* type);
 extern FLAXENGINE_API class Asset* LoadAsset(const Guid& id, const struct ScriptingTypeHandle& type);
+extern FLAXENGINE_API class Asset* LoadAsset(const AssetObjectId& id, const struct ScriptingTypeHandle& type);
 
 /// <summary>
 /// Base class for all data read streams
@@ -118,11 +120,19 @@ public:
     }
 
     template<typename T>
-    typename TEnableIf<TIsBaseOf<ScriptingObject, T>::Value>::Type Read(T*& data)
+    typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Read(T*& data)
     {
         uint32 id[4];
         ReadBytes(id, sizeof(id));
         data = (T*)::FindObject(*(Guid*)id, T::GetStaticClass());
+    }
+
+    template<typename T>
+    typename TEnableIf<TIsBaseOf<Asset, T>::Value>::Type Read(T*& data)
+    {
+        AssetObjectId id;
+        Read(id);
+        data = (T*)::LoadAsset(id, T::TypeInitializer);
     }
 
     template<typename T>
@@ -138,30 +148,30 @@ public:
     {
         uint32 id[4];
         ReadBytes(id, sizeof(id));
-        v.Set(*(Guid*)id);
+        v.Set(id);
     }
 
     template<typename T>
     FORCE_INLINE void Read(AssetReference<T>& v)
     {
-        uint32 id[4];
-        ReadBytes(id, sizeof(id));
-        v = (T*)::LoadAsset(*(Guid*)id, T::TypeInitializer);
+        AssetObjectId id;
+        Read(id);
+        v = id;
     }
 
     template<typename T>
     FORCE_INLINE void Read(WeakAssetReference<T>& v)
     {
-        uint32 id[4];
-        ReadBytes(id, sizeof(id));
-        v = (T*)::LoadAsset(*(Guid*)id, T::TypeInitializer);
+        AssetObjectId id;
+        Read(id);
+        v = id;
     }
 
     template<typename T>
     FORCE_INLINE void Read(SoftAssetReference<T>& v)
     {
-        uint32 id[4];
-        ReadBytes(id, sizeof(id));
+        AssetObjectId id;
+        Read(id);
         v.Set(*(Guid*)id);
     }
 

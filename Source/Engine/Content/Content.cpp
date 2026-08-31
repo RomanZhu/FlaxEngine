@@ -8,6 +8,7 @@
 #include "Storage/JsonStorageProxy.h"
 #include "Factories/IAssetFactory.h"
 #include "Artifacts/ResolvedArtifact.h"
+#include "AssetDatabase/Identity/AssetIdentitySerialization.h"
 #include "Artifacts/ArtifactResolver.h"
 #include "AssetDatabase/AssetPath.h"
 #include "AssetDatabase/AssetDatabase.h"
@@ -59,7 +60,7 @@ Delegate<Asset*> Content::AssetArtifactReloading;
 
 String AssetInfo::ToString() const
 {
-    return String::Format(TEXT("ID: {0}, TypeName: {1}, Path: \'{2}\'"), ID, TypeName, Path);
+    return String::Format(TEXT("InstanceID: {0}, ObjectID: {1}, Revision: {2}, TypeName: {3}, Path: \'{4}\'"), ID, ObjectID.ToString(), Revision, TypeName, Path);
 }
 
 void FLAXENGINE_API Serialization::Serialize(ISerializable::SerializeStream& stream, const SceneReference& v, const void* otherObj)
@@ -912,7 +913,7 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
         AssetRecord record;
         if (AssetDatabase::Get().TryGetRecord(id, record))
         {
-            info = AssetInfo(record.ID, record.TypeName, record.CanonicalPath.Get());
+            info = record.ToAssetInfo();
             return true;
         }
     }
@@ -963,6 +964,15 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 #endif
 }
 
+bool Content::GetAssetInfo(const AssetObjectId& id, AssetInfo& info)
+{
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(id, record))
+        return false;
+    info = record.ToAssetInfo();
+    return true;
+}
+
 bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 {
 #if ENABLE_ASSETS_DISCOVERY
@@ -977,7 +987,7 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
                 formattedPath, projectPath, diagnostic) &&
             AssetDatabase::Get().TryGetMainRecordByPath(projectPath.PortabilityKey, record))
         {
-            info = AssetInfo(record.ID, record.TypeName, record.CanonicalPath.Get());
+            info = record.ToAssetInfo();
             return true;
         }
     }
@@ -1163,6 +1173,38 @@ Asset* Content::LoadAsyncInternal(const Char* internalPath, const ScriptingTypeH
 FLAXENGINE_API Asset* LoadAsset(const Guid& id, const ScriptingTypeHandle& type)
 {
     return Content::LoadAsync(id, type);
+}
+
+FLAXENGINE_API Asset* LoadAsset(const AssetObjectId& id, const ScriptingTypeHandle& type)
+{
+    return Content::LoadAssetAsync(id, type);
+}
+
+Asset* Content::LoadAssetAsync(const AssetObjectId& objectId, const MClass* type)
+{
+    CHECK_RETURN(type, nullptr);
+    const auto scriptingType = Scripting::FindScriptingType(type->GetFullName());
+    return scriptingType ? LoadAssetAsync(objectId, scriptingType) : nullptr;
+}
+
+Asset* Content::LoadAssetAsync(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+{
+    if (objectId.IsNull())
+        return nullptr;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(objectId, record))
+        return nullptr;
+    return LoadAsync(record.ID, type);
+}
+
+Asset* Content::LoadMainAssetAsync(const AssetGuid& asset, const MClass* type)
+{
+    return LoadAssetAsync(AssetObjectId::Main(asset), type);
+}
+
+Asset* Content::LoadMainAssetAsync(const AssetGuid& asset, const ScriptingTypeHandle& type)
+{
+    return LoadAssetAsync(AssetObjectId::Main(asset), type);
 }
 
 Asset* Content::LoadAsync(const StringView& path, const MClass* type)
@@ -2411,7 +2453,8 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
                 pipelineRecord.ProcessorID == TEXT("Flax.Font") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.Video") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.Text"))
+                pipelineRecord.ProcessorID == TEXT("Flax.Text") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.Binary"))
                 request.RequiredCompatibility = "flax-imported-source-v1";
             if (pipelineRecord.SourceKind == AssetSourceKind::ExistingJson)
             {

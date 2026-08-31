@@ -329,7 +329,7 @@ bool ModelBase::LoadHeader(ReadStream& stream, byte& headerVersion)
     for (auto& slot : MaterialSlots)
     {
         stream.Read(materialId);
-        slot.Material = materialId;
+        slot.Material = AssetObjectId::Main(AssetGuid(materialId));
         slot.ShadowsMode = (ShadowsCastingMode)stream.ReadByte();
         stream.Read(slot.Name, 11);
     }
@@ -408,7 +408,7 @@ bool ModelBase::SaveHeader(WriteStream& stream) const
     stream.Write(MaterialSlots.Count());
     for (const auto& slot : MaterialSlots)
     {
-        stream.Write(slot.Material.GetID());
+        stream.Write(slot.Material.GetRuntimeInstanceId());
         stream.Write((byte)slot.ShadowsMode);
         stream.Write(slot.Name, 11);
     }
@@ -929,7 +929,7 @@ void ModelBase::GetReferences(Array<Guid>& assets, Array<String>& files) const
     BinaryAsset::GetReferences(assets, files);
 
     for (auto& slot : MaterialSlots)
-        assets.Add(slot.Material.GetID());
+        assets.Add(slot.Material.GetRuntimeInstanceId());
 }
 
 bool ModelBase::Save(const StringView& path)

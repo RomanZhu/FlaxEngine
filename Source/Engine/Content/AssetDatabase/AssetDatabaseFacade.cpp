@@ -1,7 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetDatabaseFacade.h"
-#include "AssetDatabaseSnapshot.h"
 #include "AssetSourceRoots.h"
 #include "AssetMeta.h"
 #include "MigrationInventory.h"
@@ -65,6 +64,7 @@
 #endif
 #endif
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+#include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/Processors/GraphDocumentProcessor.h"
 #include "Engine/Content/Build/Processors/GraphPipelineService.h"
 #include "Engine/Content/Build/Processors/ImportedSourceProcessor.h"
@@ -110,36 +110,12 @@ namespace
     CriticalSection StateLocker;
     std::recursive_mutex RefreshLocker;
     Array<AssetPipelineDiagnostic> LastDiagnostics;
-    AssetDatabaseChangeInfo LastChange;
     Array<AssetDatabaseFileState> LastFileStates;
     SourceHashCache HashCache;
     bool IsBound = false;
 
-    String SnapshotDirectory()
-    {
-#if USE_EDITOR
-        return Globals::ProjectLibraryFolder / TEXT("AssetDatabase");
-#else
-        return String::Empty;
-#endif
-    }
-
-    String SnapshotPath()
-    {
-        return SnapshotDirectory() / TEXT("index.bin");
-    }
-
     void OnDatabaseChanged(const AssetDatabaseChangeBatch& change)
     {
-        {
-            ScopeLock lock(StateLocker);
-            LastChange = AssetDatabaseChangeInfo();
-            LastChange.Revision = change.Revision;
-            LastChange.Added = change.Added;
-            LastChange.Removed = change.Removed;
-            LastChange.Changed = change.Changed;
-            LastChange.StatusChanged = change.StatusChanged;
-        }
         AssetDatabaseFacade::DatabaseChanged(change.Revision);
     }
 
@@ -150,6 +126,36 @@ namespace
             AssetDatabase::Get().Changed.BindUnique<OnDatabaseChanged>();
             IsBound = true;
         }
+    }
+
+    Guid CurrentProjectId()
+    {
+        String path = Globals::ProjectFolder;
+        FileSystem::NormalizePath(path);
+        path = path.ToLower();
+        const ContentHash hash = ContentHash::Compute(*path, path.Length() * sizeof(Char));
+        return Guid(hash.Values[0], hash.Values[1], hash.Values[2], hash.Values[3]);
+    }
+
+    AssetDatabaseChangeInfo ToChangeInfo(const AssetChangeSet& change)
+    {
+        AssetDatabaseChangeInfo result;
+        result.Revision = change.Revision;
+        for (const AssetAddedChange& value : change.Added)
+            result.Added.Add(value.AssetGuid);
+        for (const AssetRemovedChange& value : change.Removed)
+            result.Removed.Add(value.AssetGuid);
+        for (const AssetMovedChange& value : change.Moved)
+            result.Changed.Add(value.AssetGuid);
+        for (const AssetSourceChangedChange& value : change.SourceChanged)
+            result.Changed.Add(value.AssetGuid);
+        for (const AssetMetadataChangedChange& value : change.MetadataChanged)
+            result.Changed.Add(value.AssetGuid);
+        for (const AssetObjectsChangedChange& value : change.ObjectsChanged)
+            result.Changed.Add(value.AssetGuid);
+        for (const AssetStatusChangedChange& value : change.StatusChanged)
+            result.StatusChanged.Add(value.AssetGuid);
+        return result;
     }
 
     AssetDatabaseRecordInfo ToInfo(const AssetRecord& record)
@@ -170,41 +176,6 @@ namespace
         result.Revision = record.DatabaseRevision;
         result.IsMain = record.IsMainAsset();
         return result;
-    }
-
-    bool FileStatesStillMatch(const Array<AssetDatabaseFileState>& states)
-    {
-        Dictionary<String, const AssetDatabaseFileState*> byPath;
-        for (const AssetDatabaseFileState& state : states)
-            byPath.Add(state.Path.ToLower(), &state);
-        int32 matched = 0;
-        const auto checkRoot = [&byPath, &matched](const StringView& root)
-        {
-            if (!FileSystem::DirectoryExists(root))
-                return false;
-            Array<String> files;
-            if (FileSystem::DirectoryGetFiles(files, String(root), TEXT("*"), DirectorySearchOption::AllDirectories))
-                return false;
-            for (const String& file : files)
-            {
-                String normalized = file.ToLower();
-                normalized.Replace(TEXT('\\'), TEXT('/'));
-                if (normalized.Contains(TEXT("/cache/")) || normalized.Contains(TEXT("/output/")) || normalized.Contains(TEXT("/generated/")) ||
-                    normalized.Contains(TEXT("/migrationbackup/")) || normalized.Contains(TEXT("/.asset-pipeline/")) || normalized.Contains(TEXT("/.git/")))
-                    continue;
-                const AssetDatabaseFileState* const* state = byPath.TryGet(file.ToLower());
-                if (!state || !SourceHashCache::IsStateCurrent(**state))
-                    return false;
-                matched++;
-            }
-            return true;
-        };
-        if (!checkRoot(Globals::ProjectContentFolder))
-            return false;
-        const String engineRoot = AssetSourceRoots::GetEngineRoot();
-        if (FileSystem::DirectoryExists(engineRoot) && !checkRoot(engineRoot))
-            return false;
-        return matched == states.Count();
     }
 
     void SetDiagnostics(const Array<AssetPipelineDiagnostic>& diagnostics)
@@ -397,38 +368,6 @@ namespace
         }
     }
 
-    bool SnapshotIdentityChanged(const AssetDatabaseSnapshot& previous, const Array<AssetRecord>& merged)
-    {
-        if (previous.Records.Count() != merged.Count())
-            return true;
-        Dictionary<Guid, const AssetRecord*> previousById;
-        for (const AssetRecord& record : previous.Records)
-            previousById.Add(record.ID, &record);
-        for (const AssetRecord& record : merged)
-        {
-            const AssetRecord* const* previousRecord = previousById.TryGet(record.ID);
-            if (!previousRecord || !(*previousRecord)->HasSameIdentityAndContent(record) || (*previousRecord)->Status != record.Status)
-                return true;
-        }
-        return false;
-    }
-
-    bool PersistSnapshot()
-    {
-        const String directory = SnapshotDirectory();
-        if (!FileSystem::DirectoryExists(directory))
-            FileSystem::CreateDirectory(directory);
-        AssetPipelineDiagnostic diagnostic;
-        if (AssetDatabaseSnapshotStore::SaveAtomic(SnapshotPath(), Globals::ProjectFolder, Globals::ProjectContentFolder,
-            AssetDatabase::Get().GetSnapshot(), LastFileStates, diagnostic))
-        {
-            ScopeLock lock(StateLocker);
-            LastDiagnostics.Add(diagnostic);
-            return true;
-        }
-        return false;
-    }
-
     bool RefreshPath(const StringView& path)
     {
         Array<String> paths;
@@ -600,9 +539,15 @@ namespace
             meta.SourceKind = AssetSourceKind::TextDocument;
             meta.Processor.ID = TEXT("Flax.Text");
         }
+        else if (extension == TEXT("ies"))
+        {
+            meta.AssetType = TEXT("FlaxEngine.IESProfile");
+            meta.Processor.ID = TEXT("Flax.IES");
+        }
         else
         {
-            return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::ProcessorMissing, TEXT("No default canonical processor supports this source extension."));
+            meta.AssetType = RawDataAsset::TypeName;
+            meta.Processor.ID = TEXT("Flax.Binary");
         }
         meta.Processor.SettingsVersion = 1;
         meta.Processor.SettingsJson = "{}\n";
@@ -625,7 +570,7 @@ namespace
             extension == TEXT("lwo") || extension == TEXT("lws") || extension == TEXT("lxo") || extension == TEXT("wav") ||
             extension == TEXT("mp3") || extension == TEXT("ogg") || extension == TEXT("ttf") || extension == TEXT("otf") ||
             extension == TEXT("shader") || extension == TEXT("mp4") || extension == TEXT("webm") || extension == TEXT("mov") ||
-            extension == TEXT("mkv") || extension == TEXT("txt");
+            extension == TEXT("mkv") || extension == TEXT("txt") || extension == TEXT("ies");
     }
 
     bool EnsureDefaultCanonicalMetadata(const StringView& sourcePath, AssetPipelineDiagnostic& diagnostic)
@@ -644,13 +589,8 @@ namespace
                 return true;
             if (!metadata.MetaUpgradeRequired)
                 return false;
-            metadata.MetaVersion = AssetMeta::CurrentMetaVersion;
+            metadata.FileFormatVersion = AssetMeta::CurrentFileFormatVersion;
             metadata.MetaUpgradeRequired = false;
-            for (auto& entry : metadata.SubAssets)
-            {
-                if (entry.Value.LocalId <= 1)
-                    entry.Value.LocalId = SubAssetPolicy::LocalIdFromGuid(entry.Value.ID);
-            }
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
         }
         AssetMeta metadata;
@@ -688,7 +628,7 @@ namespace
         {
             metadata.AssetType = RawDataAsset::TypeName;
             metadata.SourceKind = AssetSourceKind::ImportedSource;
-            metadata.Processor.ID = TEXT("Flax.Unsupported");
+            metadata.Processor.ID = TEXT("Flax.Binary");
             metadata.Processor.SettingsVersion = 1;
             metadata.Processor.SettingsJson = "{}\n";
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
@@ -865,6 +805,44 @@ uint64 AssetDatabaseFacade::GetRevision()
     return AssetDatabase::Get().GetRevision();
 }
 
+bool AssetDatabaseFacade::Initialize()
+{
+#if USE_EDITOR
+    EnsureBound();
+    if (AssetDatabase::Get().IsOpen())
+        return false;
+    AssetPipelineDiagnostic diagnostic;
+    if (AssetDatabase::Get().Open(Globals::ProjectLibraryFolder, CurrentProjectId(), diagnostic))
+    {
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    Array<AssetPipelineDiagnostic> diagnostics;
+    const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+    if (snapshot.IsValid())
+    {
+        for (const SourceAssetDiagnosticRow& row : snapshot.GetState().Diagnostics)
+        {
+            if (row.IsActive)
+                diagnostics.Add(row.Diagnostic);
+        }
+    }
+    SetDiagnostics(diagnostics);
+    return false;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::Shutdown()
+{
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = AssetDatabase::Get().Close(&diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+}
+
 Array<AssetDatabaseRecordInfo> AssetDatabaseFacade::GetRecords()
 {
     const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
@@ -892,8 +870,24 @@ Array<AssetPipelineDiagnostic> AssetDatabaseFacade::GetDiagnostics()
 
 AssetDatabaseChangeInfo AssetDatabaseFacade::GetLastChange()
 {
-    ScopeLock lock(StateLocker);
-    return LastChange;
+    const uint64 revision = GetRevision();
+    bool requiresSnapshot;
+    Array<AssetDatabaseChangeInfo> changes = GetChangesAfter(revision ? revision - 1 : 0, requiresSnapshot);
+    return changes.HasItems() ? changes.Last() : AssetDatabaseChangeInfo();
+}
+
+Array<AssetDatabaseChangeInfo> AssetDatabaseFacade::GetChangesAfter(uint64 revision, bool& requiresSnapshot)
+{
+    Array<AssetDatabaseChangeInfo> result;
+    Array<AssetChangeSet> changes;
+    AssetPipelineDiagnostic diagnostic;
+    requiresSnapshot = false;
+    if (AssetDatabase::Get().ReadChangesAfter(revision, changes, requiresSnapshot, diagnostic))
+        return result;
+    result.EnsureCapacity(changes.Count());
+    for (const AssetChangeSet& change : changes)
+        result.Add(ToChangeInfo(change));
+    return result;
 }
 
 Guid AssetDatabaseFacade::AssetPathToGUID(const StringView& path)
@@ -944,7 +938,7 @@ bool AssetDatabaseFacade::TryGetAssetObjectId(Asset* asset, AssetObjectId& resul
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(asset->GetID(), record))
         return false;
-    result = AssetObjectId(record.SourceAssetID, record.LocalId);
+    result = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
     return true;
 }
 
@@ -955,7 +949,7 @@ Guid AssetDatabaseFacade::GetBackingAssetID(const AssetObjectId& objectID)
     const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
     for (const AssetRecord& record : snapshot.Records)
     {
-        if (record.SourceAssetID == objectID.Guid && record.LocalId == objectID.LocalId)
+        if (record.SourceAssetID == objectID.Asset.Value && record.LocalId == objectID.LocalId)
             return record.ID;
     }
     return Guid::Empty;
@@ -1005,6 +999,8 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
 #if USE_EDITOR
     std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
     EnsureBound();
+    if (Initialize())
+        return true;
     const int32 assetSystemVersion = AssetPipelineSettings::Get()->AssetSystemVersion;
     Array<AssetPipelineDiagnostic> metadataDiagnostics;
     if (assetSystemVersion >= 3)
@@ -1040,7 +1036,7 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
     if (!failed)
     {
         AssetPipelineDiagnostic publishDiagnostic;
-        failed = AssetDatabase::Get().PublishFullSnapshot(records, publishDiagnostic);
+        failed = AssetDatabase::Get().PublishFullSnapshot(records, result.Diagnostics, publishDiagnostic);
         if (failed)
             result.Diagnostics.Add(MoveTemp(publishDiagnostic));
         else
@@ -1048,18 +1044,7 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
     }
     SetDiagnostics(result.Diagnostics);
     if (!failed)
-    {
         LastFileStates = result.FileStates;
-        const String directory = SnapshotDirectory();
-        if (!FileSystem::DirectoryExists(directory))
-            FileSystem::CreateDirectory(directory);
-        AssetPipelineDiagnostic diagnostic;
-        if (AssetDatabaseSnapshotStore::SaveAtomic(SnapshotPath(), Globals::ProjectFolder, Globals::ProjectContentFolder, AssetDatabase::Get().GetSnapshot(), LastFileStates, diagnostic))
-        {
-            ScopeLock lock(StateLocker);
-            LastDiagnostics.Add(diagnostic);
-        }
-    }
     return failed;
 #else
     return true;
@@ -1069,23 +1054,8 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
 bool AssetDatabaseFacade::LoadOrScan(bool strictMetadata)
 {
     EnsureBound();
-    if (AssetPipelineSettings::Get()->AssetSystemVersion >= 3)
-        return Scan(strictMetadata);
-    Array<AssetDatabaseFileState> states;
-    AssetPipelineDiagnostic diagnostic;
-    if (!AssetDatabaseSnapshotStore::Load(SnapshotPath(), Globals::ProjectFolder, Globals::ProjectContentFolder, AssetDatabase::Get(), states, diagnostic))
-    {
-        HashCache.Seed(states);
-        LastFileStates = states;
-        if (FileStatesStillMatch(states))
-        {
-            if (!strictMetadata)
-            {
-                SetDiagnostics(Array<AssetPipelineDiagnostic>());
-                return false;
-            }
-        }
-    }
+    if (Initialize())
+        return true;
     return Scan(strictMetadata);
 }
 
@@ -1094,6 +1064,8 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
 #if USE_EDITOR
     std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
     EnsureBound();
+    if (Initialize())
+        return true;
     if (paths.IsEmpty())
         return false;
 
@@ -1218,23 +1190,18 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     }
     merged.Add(collected);
 
-    const bool identityChanged = SnapshotIdentityChanged(previous, merged);
     Array<AssetPipelineDiagnostic> diagnostics;
     diagnostics.Add(result.Diagnostics);
     diagnostics.Add(metadataDiagnostics);
-    bool publishFailed = false;
-    if (identityChanged)
-    {
-        AssetPipelineDiagnostic publishDiagnostic;
-        if (AssetDatabase::Get().PublishFullSnapshot(merged, publishDiagnostic))
-        {
-            diagnostics.Add(MoveTemp(publishDiagnostic));
-            publishFailed = true;
-        }
-    }
     MergeScopedDiagnostics(affectedKeys, diagnostics);
-    if (publishFailed)
+    diagnostics = GetDiagnostics();
+    AssetPipelineDiagnostic publishDiagnostic;
+    if (AssetDatabase::Get().PublishFullSnapshot(merged, diagnostics, publishDiagnostic))
+    {
+        diagnostics.Add(MoveTemp(publishDiagnostic));
+        SetDiagnostics(diagnostics);
         return true;
+    }
 
     Array<AssetDatabaseFileState> nextStates;
     nextStates.EnsureCapacity(LastFileStates.Count() + result.FileStates.Count());
@@ -1252,7 +1219,6 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     }
     nextStates.Add(result.FileStates);
     LastFileStates = MoveTemp(nextStates);
-    PersistSnapshot();
     return false;
 #else
     return true;
@@ -1438,6 +1404,55 @@ bool AssetDatabaseFacade::Refresh(ImportAssetOptions options)
     return false;
 #else
     return true;
+#endif
+}
+
+bool AssetDatabaseFacade::IsCanonicalArtifactCurrent(const Guid& assetID)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    if (!ArtifactResolver::Get().IsConfigured())
+        return false;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(assetID, record) || !record.IsMainAsset() || record.Status != AssetRecordStatus::Ready)
+        return false;
+
+    Array<AssetRecord> records;
+    records.Add(record);
+#if COMPILE_WITH_MODEL_TOOL
+    if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
+    {
+        Array<AssetRecord> children;
+        AssetDatabase::Get().GetSubAssets(record.SourceAssetID, children);
+        records.Add(children);
+    }
+#endif
+    for (const AssetRecord& current : records)
+    {
+        ArtifactRequest request;
+        request.AssetID = current.ID;
+        request.Target = ArtifactResolver::Get().GetDefaultTarget();
+        request.OutputKind = "runtime";
+        request.Policy = ArtifactResolvePolicy::NoBuild;
+#if COMPILE_WITH_TEXTURE_TOOL
+        if (current.ProcessorID == TextureProcessorSettings::ProcessorID())
+            request.RequiredCompatibility = "flax-texture-v4";
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+        if (current.ProcessorID == ModelProcessorSettings::ProcessorID())
+            request.RequiredCompatibility = "flax-model-runtime-v1";
+#endif
+        AssetProcessorDescriptor processorDescriptor;
+        if (request.RequiredCompatibility.IsEmpty() &&
+            AssetProcessorRegistry::Get().TryGetDescriptor(current.ProcessorID, processorDescriptor) && processorDescriptor.Outputs.Count())
+            request.RequiredCompatibility = processorDescriptor.Outputs[0].CompatibilityTag;
+        ResolvedArtifact artifact;
+        AssetPipelineDiagnostic diagnostic;
+        if (ArtifactResolver::Get().Resolve(request, artifact, diagnostic) || !artifact.IsExact)
+            return false;
+    }
+    return true;
+#else
+    return false;
 #endif
 }
 
@@ -2687,13 +2702,13 @@ Guid AssetDatabaseFacade::StageLegacyModelMigration(const StringView& legacyPath
         return fail();
     const Dictionary<String, SubAssetMeta> legacyMappings = meta.SubAssets;
     Dictionary<String, SubAssetMeta> mapped;
-    HashSet<Guid> used;
+    HashSet<int64> used;
     for (const SubAssetCandidate& candidate : candidates)
     {
         const SubAssetMeta* selected = nullptr;
         for (const auto& existing : legacyMappings)
         {
-            if (!used.Contains(existing.Value.ID) && existing.Value.TypeName == candidate.TypeName && existing.Value.DisplayName == candidate.DisplayName)
+            if (!used.Contains(existing.Value.LocalId) && existing.Value.TypeName == candidate.TypeName && existing.Value.DisplayName == candidate.DisplayName)
             {
                 selected = &existing.Value;
                 break;
@@ -2703,7 +2718,7 @@ Guid AssetDatabaseFacade::StageLegacyModelMigration(const StringView& legacyPath
         {
             for (const auto& existing : legacyMappings)
             {
-                if (!used.Contains(existing.Value.ID) && existing.Value.TypeName == candidate.TypeName)
+                if (!used.Contains(existing.Value.LocalId) && existing.Value.TypeName == candidate.TypeName)
                 {
                     selected = &existing.Value;
                     break;
@@ -2716,16 +2731,16 @@ Guid AssetDatabaseFacade::StageLegacyModelMigration(const StringView& legacyPath
             value.DisplayName = candidate.DisplayName;
             value.Removed = false;
             mapped.Add(candidate.StableKey, MoveTemp(value));
-            used.Add(selected->ID);
+            used.Add(selected->LocalId);
         }
     }
     for (const auto& existing : legacyMappings)
     {
-        if (used.Contains(existing.Value.ID))
+        if (used.Contains(existing.Value.LocalId))
             continue;
         SubAssetMeta tombstone = existing.Value;
         tombstone.Removed = true;
-        mapped.Add(TEXT("legacy:") + tombstone.ID.ToString(Guid::FormatType::N), MoveTemp(tombstone));
+        mapped.Add(String::Format(TEXT("legacy:{0}"), tombstone.LocalId), MoveTemp(tombstone));
     }
     meta.SubAssets = MoveTemp(mapped);
     if (StageImportedFiles(legacyPath, extractedPath, destinationPath, backupPath, meta, diagnostic))

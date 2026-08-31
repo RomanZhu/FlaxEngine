@@ -53,7 +53,7 @@ namespace Flax.Build
 
                         if (!platform.CanBuildArchitecture(architecture))
                             continue;
-                        var toolchain = platform.TryGetToolchain(architecture);
+                        var toolchain = projectInfo.IsCSharpOnlyProject ? null : platform.TryGetToolchain(architecture);
 
                         var configuration = TargetConfiguration.Debug;
                         var configurationName = "Debug";
@@ -147,7 +147,9 @@ namespace Flax.Build
                             if (platform is IProjectCustomizer customizer)
                                 customizer.GetProjectArchitectureName(project, platform, architecture, ref architectureName);
 
-                            var toolchain = platform.TryGetToolchain(architecture);
+                            var toolchain = projectInfo.IsCSharpOnlyProject ? null : platform.TryGetToolchain(architecture);
+                            if (!projectInfo.IsCSharpOnlyProject && toolchain == null)
+                                continue;
                             var targetBuildOptions = GetBuildOptions(target, platform, toolchain, architecture, configuration, project.WorkspaceRootPath);
                             targetBuildOptions.Flags |= BuildFlags.GenerateProject;
                             var modules = CollectModules(rules, platform, target, targetBuildOptions, toolchain, architecture, configuration);

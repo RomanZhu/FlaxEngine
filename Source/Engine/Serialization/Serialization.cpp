@@ -201,7 +201,7 @@ void Serialization::Serialize(ISerializable::SerializeStream& stream, const Vari
         stream.Guid(v.AsObject ? v.AsObject->GetID() : Guid::Empty);
         break;
     case VariantType::Asset:
-        stream.Guid(v.AsAsset ? v.AsAsset->GetID() : Guid::Empty);
+        Serialize(stream, v.AsAsset ? v.AsAsset->GetPersistentObjectId() : AssetObjectId(), nullptr);
         break;
     case VariantType::Float2:
         stream.Float2(*(Float2*)v.AsData);
@@ -347,9 +347,12 @@ void Serialization::Deserialize(ISerializable::DeserializeStream& stream, Varian
         v.SetObject(FindObject(id, ScriptingObject::GetStaticClass()));
         break;
     case VariantType::Asset:
-        Deserialize(value, id, modifier);
-        v.SetAsset(LoadAsset(id, Asset::TypeInitializer));
+    {
+        AssetObjectId objectId;
+        Deserialize(value, objectId, modifier);
+        v.SetAsset(LoadAsset(objectId, Asset::TypeInitializer));
         break;
+    }
     case VariantType::Blob:
         CHECK(value.IsString());
         id.A = value.GetStringLength();

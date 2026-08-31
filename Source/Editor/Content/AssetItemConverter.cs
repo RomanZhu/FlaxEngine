@@ -1,7 +1,9 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEngine;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor.Content
 {
@@ -14,20 +16,27 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
-            Guid id = Guid.Empty;
-            if (value is AssetItem obj)
-                id = obj.ID;
-
-            writer.WriteValue(FlaxEngine.Json.JsonSerializer.GetStringID(id));
+            var id = value is AssetItem obj ? obj.ObjectID : default;
+            writer.WriteStartObject();
+            writer.WritePropertyName("guid");
+            writer.WriteValue(id.Asset.ToString());
+            writer.WritePropertyName("fileId");
+            writer.WriteValue(id.LocalId);
+            writer.WriteEndObject();
         }
 
         /// <inheritdoc />
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, Newtonsoft.Json.JsonSerializer serializer)
         {
-            if (reader.TokenType == JsonToken.String)
+            if (reader.TokenType == JsonToken.StartObject)
             {
-                FlaxEngine.Json.JsonSerializer.ParseID((string)reader.Value, out Guid id);
-                return Editor.Instance.ContentDatabase.Find(id);
+                var json = JObject.Load(reader);
+                if (Guid.TryParseExact((string)json["guid"], "N", out var source) && json["fileId"]?.Type == JTokenType.Integer)
+                {
+                    var objectId = new AssetObjectId(new AssetGuid(source), (long)json["fileId"]);
+                    var backing = AssetDatabaseFacade.GetBackingAssetID(objectId);
+                    return backing == Guid.Empty ? null : Editor.Instance.ContentDatabase.Find(backing);
+                }
             }
 
             return null;

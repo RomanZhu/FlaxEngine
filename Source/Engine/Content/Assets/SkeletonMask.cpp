@@ -23,7 +23,7 @@ Asset::LoadResult SkeletonMask::load()
         return LoadResult::MissingDataChunk;
     MemoryReadStream stream(dataChunk->Get(), dataChunk->Size());
 
-    Guid skeletonId;
+    AssetObjectId skeletonId;
     stream.Read(skeletonId);
     int32 maskedNodesCount;
     stream.ReadInt32(&maskedNodesCount);

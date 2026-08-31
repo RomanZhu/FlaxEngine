@@ -11,6 +11,7 @@ class FLAXENGINE_API AssetReferenceBase : public IAssetReference
 {
 protected:
     Asset* _asset = nullptr;
+    AssetObjectId _objectId;
     IAssetReference* _owner = nullptr;
 
 public:
@@ -50,11 +51,16 @@ public:
 
 public:
     /// <summary>
-    /// Gets the asset ID or Guid::Empty if not set.
+    /// Gets the persistent asset object ID.
     /// </summary>
-    FORCE_INLINE Guid GetID() const
+    FORCE_INLINE AssetObjectId GetID() const
     {
-        return _asset ? _asset->GetID() : Guid::Empty;
+        return _objectId;
+    }
+
+    FORCE_INLINE Guid GetRuntimeInstanceId() const
+    {
+        return _asset ? _asset->GetRuntimeInstanceId() : Guid::Empty;
     }
 
     /// <summary>
@@ -78,6 +84,7 @@ public:
 
 protected:
     void OnSet(Asset* asset);
+    void OnSet(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
 };
 
 /// <summary>
@@ -114,6 +121,11 @@ public:
         OnSet((Asset*)asset);
     }
 
+    AssetReference(const AssetObjectId& objectId)
+    {
+        OnSet(objectId, T::TypeInitializer);
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="AssetReference"/> class.
     /// </summary>
@@ -129,12 +141,12 @@ public:
     /// <param name="other">The other.</param>
     AssetReference(const AssetReference& other)
     {
-        OnSet(other._asset);
+        OnSet(other.GetID(), Asset::TypeInitializer);
     }
 
     AssetReference(AssetReference&& other) noexcept
     {
-        OnSet(other._asset);
+        OnSet(other.GetID(), Asset::TypeInitializer);
         other.OnSet(nullptr);
     }
 
@@ -142,7 +154,7 @@ public:
     {
         if (&other != this)
         {
-            OnSet(other._asset);
+            OnSet(other.GetID(), Asset::TypeInitializer);
             other.OnSet(nullptr);
         }
         return *this;
@@ -158,7 +170,7 @@ public:
 public:
     FORCE_INLINE AssetReference& operator=(const AssetReference& other)
     {
-        OnSet(other._asset);
+        OnSet(other.GetID(), Asset::TypeInitializer);
         return *this;
     }
 
@@ -168,9 +180,9 @@ public:
         return *this;
     }
 
-    FORCE_INLINE AssetReference& operator=(const Guid& id)
+    FORCE_INLINE AssetReference& operator=(const AssetObjectId& id)
     {
-        OnSet(::LoadAsset(id, T::TypeInitializer));
+        OnSet(id, T::TypeInitializer);
         return *this;
     }
 

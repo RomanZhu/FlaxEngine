@@ -89,7 +89,7 @@ bool EditorUtilities::GetApplicationImage(const Guid& imageId, TextureData& imag
     }
     if (icon)
     {
-        return GetTexture(icon.GetID(), imageData);
+        return GetTexture(icon.GetRuntimeInstanceId(), imageData);
     }
     return true;
 }

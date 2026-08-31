@@ -89,6 +89,15 @@ public:
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
     API_FUNCTION() static AssetDatabaseChangeInfo GetLastChange();
 
+    /// <summary>Reads every durable ordered change after a revision.</summary>
+    API_FUNCTION() static Array<AssetDatabaseChangeInfo> GetChangesAfter(uint64 revision, API_PARAM(Out) bool& requiresSnapshot);
+
+    /// <summary>Opens durable source database state for the current project.</summary>
+    API_FUNCTION() static bool Initialize();
+
+    /// <summary>Writes the clean-shutdown marker after build services have stopped.</summary>
+    API_FUNCTION() static bool Shutdown();
+
     /// <summary>Returns the source GUID at a logical or absolute canonical asset path.</summary>
     API_FUNCTION() static Guid AssetPathToGUID(const StringView& path);
 
@@ -132,6 +141,9 @@ public:
     /// <summary>Reconciles all mounted sources and queues their supported current builds.</summary>
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool Refresh(ImportAssetOptions options = ImportAssetOptions::Default);
+
+    /// <summary>Returns true when the canonical asset and its owned subassets have exact host artifacts.</summary>
+    API_FUNCTION() static bool IsCanonicalArtifactCurrent(const Guid& assetID);
 
     /// <summary>Safely clears and recreates the configured Project Library root.</summary>
     /// <returns>True on failure.</returns>

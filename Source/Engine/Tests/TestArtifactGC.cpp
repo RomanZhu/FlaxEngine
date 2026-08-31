@@ -44,6 +44,7 @@ namespace
     {
         AssetPipelineDiagnostic diagnostic;
         ArtifactManifest manifest;
+        manifest.ObjectID = AssetObjectId::Main(AssetGuid(assetId));
         manifest.AssetID = assetId;
         manifest.DatabaseRevision = 1;
         manifest.ProcessorID = TEXT("test.gc");

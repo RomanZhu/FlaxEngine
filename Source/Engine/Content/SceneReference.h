@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "Engine/Core/Types/Guid.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Engine/Core/ISerializable.h"
 #include "Engine/Scripting/ScriptingType.h"
 
@@ -14,9 +14,9 @@ API_STRUCT(NoDefault) struct FLAXENGINE_API SceneReference
     DECLARE_SCRIPTING_TYPE_STRUCTURE(SceneReference);
 
     /// <summary>
-    /// The identifier of the scene asset (and the scene object).
+    /// Persistent identifier of the scene asset object.
     /// </summary>
-    API_FIELD() Guid ID;
+    API_FIELD() AssetObjectId ID;
 
     FORCE_INLINE bool operator==(const SceneReference& other) const
     {

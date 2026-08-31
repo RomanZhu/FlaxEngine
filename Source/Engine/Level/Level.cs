@@ -11,7 +11,7 @@ namespace FlaxEngine
         /// </summary>
         /// <param name="sceneAssetId">The scene asset identifier (scene to load).</param>
         /// <returns>True if action fails (given asset is not a scene asset, missing data, scene loading error), otherwise false.</returns>
-        public static bool ChangeSceneAsync(Guid sceneAssetId)
+        public static bool ChangeSceneAsync(AssetObjectId sceneAssetId)
         {
             UnloadAllScenesAsync();
             return LoadSceneAsync(sceneAssetId);

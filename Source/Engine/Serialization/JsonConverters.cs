@@ -3,6 +3,7 @@
 using System;
 using FlaxEngine.GUI;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEngine.Json
 {
@@ -15,6 +16,19 @@ namespace FlaxEngine.Json
         /// <inheritdoc />
         public override unsafe void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
+            if (value is Asset asset)
+            {
+                var persistentId = asset.PersistentObjectId;
+                writer.WriteStartObject();
+                writer.WritePropertyName("guid");
+                writer.WriteValue(persistentId.Asset.ToString());
+                writer.WritePropertyName("fileId");
+                writer.WriteValue(persistentId.LocalId);
+                writer.WritePropertyName("type");
+                writer.WriteValue(asset.GetType().FullName);
+                writer.WriteEndObject();
+                return;
+            }
             Guid id = Guid.Empty;
             if (value is Object obj)
                 id = obj.ID;
@@ -24,6 +38,14 @@ namespace FlaxEngine.Json
         /// <inheritdoc />
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, Newtonsoft.Json.JsonSerializer serializer)
         {
+            if (typeof(Asset).IsAssignableFrom(objectType) && reader.TokenType == JsonToken.StartObject)
+            {
+                var json = JObject.Load(reader);
+                if (Guid.TryParseExact((string)json["guid"], "N", out var guid) &&
+                    json["fileId"]?.Type == JTokenType.Integer)
+                    return Content.LoadAssetAsync(new AssetObjectId(new AssetGuid(guid), (long)json["fileId"]), objectType);
+                return null;
+            }
             if (reader.TokenType == JsonToken.String)
             {
                 JsonSerializer.ParseID((string)reader.Value, out var id);
@@ -46,16 +68,23 @@ namespace FlaxEngine.Json
     }
 
     /// <summary>
-    /// Serialize <see cref="SceneReference"/> as Guid in internal format.
+    /// Serialize <see cref="SceneReference"/> as a persistent asset object identifier.
     /// </summary>
     /// <seealso cref="Newtonsoft.Json.JsonConverter" />
     internal class SceneReferenceConverter : JsonConverter
     {
         /// <inheritdoc />
-        public override unsafe void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
+        public override void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
-            Guid id = ((SceneReference)value).ID;
-            writer.WriteValue(JsonSerializer.GetStringID(&id));
+            var id = ((SceneReference)value).ID;
+            writer.WriteStartObject();
+            writer.WritePropertyName("guid");
+            writer.WriteValue(id.Asset.ToString());
+            writer.WritePropertyName("fileId");
+            writer.WriteValue(id.LocalId);
+            writer.WritePropertyName("type");
+            writer.WriteValue("FlaxEngine.Scene");
+            writer.WriteEndObject();
         }
 
         /// <inheritdoc />
@@ -63,9 +92,12 @@ namespace FlaxEngine.Json
         {
             SceneReference result = new SceneReference();
 
-            if (reader.TokenType == JsonToken.String)
+            if (reader.TokenType == JsonToken.StartObject)
             {
-                JsonSerializer.ParseID((string)reader.Value, out result.ID);
+                var json = JObject.Load(reader);
+                if (Guid.TryParseExact((string)json["guid"], "N", out var guid) &&
+                    json["fileId"]?.Type == JTokenType.Integer)
+                    result.ID = new AssetObjectId(new AssetGuid(guid), (long)json["fileId"]);
             }
 
             return result;

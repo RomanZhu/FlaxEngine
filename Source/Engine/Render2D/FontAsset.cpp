@@ -7,6 +7,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Content/Upgraders/FontAssetUpgrader.h"
+#include "Engine/Engine/Engine.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Threading/Threading.h"
 #include "IncludeFreeType.h"
@@ -49,7 +50,10 @@ void FontAsset::unload(bool isReloading)
     // Ensure to cleanup child font objects
     if (_fonts.HasItems())
     {
-        LOG(Warning, "Font asset {0} is unloading but has {1} remaining font objects created", ToString(), _fonts.Count());
+        if (Engine::ShouldExit())
+            LOG(Info, "Font asset {0} is unloading with {1} editor font objects during shutdown", ToString(), _fonts.Count());
+        else
+            LOG(Warning, "Font asset {0} is unloading but has {1} remaining font objects created", ToString(), _fonts.Count());
         for (auto font : _fonts)
         {
             font->_asset = nullptr;

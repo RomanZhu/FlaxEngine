@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Scripting;
 using FlaxEngine;
@@ -42,6 +43,7 @@ namespace FlaxEditor.Modules
         private readonly HashSet<string> _pendingMissingMetadataRegistrations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _pendingTextureBuildSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<Guid> _pendingTextureBuildIds = new HashSet<Guid>();
+        private readonly HashSet<Guid> _pendingCanonicalStartupChecks = new HashSet<Guid>();
         private readonly Dictionary<string, AssetSaveState> _assetSaves = new Dictionary<string, AssetSaveState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, AssetDiskWrite> _selfAuthoredAssetDiskChanges = new Dictionary<string, AssetDiskWrite>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, AssetDatabaseRecordInfo> _sourceAssetRecords = new Dictionary<string, AssetDatabaseRecordInfo>(StringComparer.OrdinalIgnoreCase);
@@ -221,6 +223,7 @@ namespace FlaxEditor.Modules
                 }
             }
             _assetDatabaseRevision = revision;
+            AssetDocumentRegistry.RefreshAll();
         }
 
         private void QueueCanonicalSourceRefresh(params string[] paths)
@@ -2302,6 +2305,7 @@ namespace FlaxEditor.Modules
                 if (AssetDatabaseFacade.LoadOrScan(true))
                     Editor.LogError("Failed to initialize the canonical asset database. See asset pipeline diagnostics.");
                 RefreshAssetDatabaseRecords(AssetDatabaseFacade.Revision);
+                QueueCanonicalStartupChecks();
                 QueueRecoveredCanonicalImports(recoveredImportSources);
                 QueueMissingMetadataRegistrations();
             }
@@ -2577,6 +2581,39 @@ namespace FlaxEditor.Modules
                         _pendingTextureBuildIds.Add(record.ID);
                 }
                 _pendingTextureBuildSources.Clear();
+            }
+        }
+
+        private void QueueCanonicalStartupChecks()
+        {
+            lock (_assetDiskChangesLock)
+            {
+                foreach (var record in _sourceAssetRecords.Values)
+                {
+                    if (record.Status == AssetRecordStatus.Ready && CanBuildCanonicalRecord(record))
+                        _pendingCanonicalStartupChecks.Add(record.ID);
+                }
+            }
+        }
+
+        private void ProcessPendingCanonicalStartupChecks()
+        {
+            Guid[] ids;
+            lock (_assetDiskChangesLock)
+            {
+                ids = _pendingCanonicalStartupChecks.Take(CanonicalBuildRequestsPerUpdate).ToArray();
+                for (int i = 0; i < ids.Length; i++)
+                    _pendingCanonicalStartupChecks.Remove(ids[i]);
+            }
+            for (int i = 0; i < ids.Length; i++)
+            {
+                if (!_assetRecordsById.TryGetValue(ids[i], out var record) || record.Status != AssetRecordStatus.Ready || !CanBuildCanonicalRecord(record))
+                    continue;
+                if (!AssetDatabaseFacade.IsCanonicalArtifactCurrent(ids[i]))
+                {
+                    lock (_assetDiskChangesLock)
+                        _pendingTextureBuildIds.Add(ids[i]);
+                }
             }
         }
 
@@ -2993,6 +3030,7 @@ namespace FlaxEditor.Modules
                     QueueMissingMetadataRegistrations();
                 }
             }
+            ProcessPendingCanonicalStartupChecks();
             ProcessPendingCanonicalBuilds();
 
             // Recursive folder loading can dispatch more watcher/database work. Snapshot the queue so
@@ -3033,6 +3071,7 @@ namespace FlaxEditor.Modules
                 _pendingTextureBuildSources.Clear();
                 _pendingSceneDiskChanges.Clear();
                 _pendingTextureBuildIds.Clear();
+                _pendingCanonicalStartupChecks.Clear();
                 _assetSaves.Clear();
                 _selfAuthoredAssetDiskChanges.Clear();
             }
@@ -3052,6 +3091,11 @@ namespace FlaxEditor.Modules
                 Engine = null;
             }
             Proxy.Clear();
+
+            // Persist the clean-shutdown marker only after editor-side import/build requests
+            // and filesystem watchers have been stopped.
+            if (_useNewAssetDatabase && AssetDatabaseFacade.Shutdown())
+                Editor.LogError("Failed to close the source asset database cleanly. See asset pipeline diagnostics.");
         }
     }
 }

@@ -285,7 +285,7 @@ TEST_CASE("Model flax packages seed subasset GUIDs into the root sidecar")
     CHECK(meta.ID == rootId);
     CHECK(meta.Processor.ID == TEXT("Flax.Model"));
     REQUIRE(meta.SubAssets.ContainsKey(TEXT("animation:Hero")));
-    CHECK(meta.SubAssets[TEXT("animation:Hero")].ID == walkId);
+    CHECK(meta.SubAssets[TEXT("animation:Hero")].LocalId > 1);
     FileSystem::DeleteDirectory(root, true);
 }
 

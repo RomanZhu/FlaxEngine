@@ -820,7 +820,7 @@ bool ModelTool::ImportData(const String& path, ModelData& data, Options& options
                 // Remove whole channel if has no effective data
                 if (channel.Position.IsEmpty() && channel.Rotation.IsEmpty() && channel.Scale.IsEmpty())
                 {
-                    LOG(Warning, "Removing empty animation channel ({0}).", channel.NodeName);
+                    LOG(Info, "Removing empty animation channel ({0}).", channel.NodeName);
                     channels.RemoveAtKeepOrder(i);
                 }
             }

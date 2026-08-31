@@ -85,7 +85,7 @@ void DebugLog::Log(LogType type, const StringView& message)
         return;
 
     const uint64 threadId = Platform::GetCurrentThreadID();
-    auto scriptsDomain = Scripting::GetScriptsDomain();
+    auto scriptsDomain = Scripting::GetRootDomain();
     MainThreadManagedInvokeAction::ParamsBuilder params;
     params.AddParam(type);
     params.AddParam(message, scriptsDomain);
@@ -106,7 +106,7 @@ void OnLogMessageDetailed(const LogType type, const StringView& message, const S
     if (CacheMethods())
         return;
 
-    auto scriptsDomain = Scripting::GetScriptsDomain();
+    auto scriptsDomain = Scripting::GetRootDomain();
     MainThreadManagedInvokeAction::ParamsBuilder params;
     params.AddParam(type);
     params.AddParam(message, scriptsDomain);

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Engine/Content/AssetDatabase/AssetDependency.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Engine/Content/AssetDatabase/SubAsset.h"
 #include <atomic>
 #include <memory>
@@ -73,6 +74,7 @@ public:
 /// <summary>Deterministic Prepare result consumed by key planning and Build.</summary>
 struct FLAXENGINE_API PreparedAsset
 {
+    AssetObjectId ObjectID;
     Guid AssetID = Guid::Empty;
     String OutputType;
     uint64 DatabaseRevision = 0;

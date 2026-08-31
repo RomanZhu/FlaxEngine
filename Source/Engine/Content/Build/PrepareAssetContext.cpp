@@ -271,6 +271,7 @@ bool PrepareAssetContext::Finalize(uint64 currentDatabaseRevision, PreparedAsset
         return true;
     }
 
+    prepared.ObjectID = AssetObjectId(AssetGuid(_record.SourceAssetID), _record.LocalId);
     prepared.AssetID = _record.ID;
     prepared.OutputType = _record.TypeName.IsEmpty() ? _descriptor.MainOutputType : _record.TypeName;
     prepared.DatabaseRevision = _record.DatabaseRevision;
@@ -285,7 +286,8 @@ bool PrepareAssetContext::Finalize(uint64 currentDatabaseRevision, PreparedAsset
     prepared.MemoryEstimate = memoryEstimate;
 
     ArtifactKeyBuilder builder(StringAnsiView("flax-prepared-input-v1"));
-    builder.AddGuid(StringAnsiView("asset-id"), prepared.AssetID);
+    builder.AddGuid(StringAnsiView("asset-guid"), prepared.ObjectID.Asset.Value);
+    builder.AddUInt64(StringAnsiView("asset-file-id"), static_cast<uint64>(prepared.ObjectID.LocalId));
     builder.AddString(StringAnsiView("processor-id"), _descriptor.ID);
     builder.AddUInt32(StringAnsiView("processor-api"), _descriptor.EngineApiLevel);
     builder.AddUInt32(StringAnsiView("settings-schema-version"), _descriptor.SettingsSchemaVersion);

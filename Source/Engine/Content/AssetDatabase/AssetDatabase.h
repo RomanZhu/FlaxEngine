@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AssetRecord.h"
+#include "SourceAssetDatabase.h"
 #include "Engine/Core/Delegate.h"
 #include "Engine/Platform/CriticalSection.h"
 
@@ -28,23 +29,35 @@ class FLAXENGINE_API AssetDatabase
 {
 private:
     mutable CriticalSection _locker;
+    mutable CriticalSection _writeLocker;
     uint64 _revision = 0;
     Dictionary<Guid, AssetRecord> _records;
+    Dictionary<AssetObjectId, Guid> _recordByObject;
     Dictionary<String, Guid> _mainByPath;
     Dictionary<Guid, Array<Guid>> _subAssetsBySource;
     Dictionary<String, Array<Guid>> _recordsByProcessor;
     Dictionary<AssetRecordStatus, Array<Guid>> _recordsByStatus;
     Dictionary<Guid, Array<Guid>> _dependantsByBuildInput;
     Dictionary<Guid, Array<Guid>> _referencersByRuntimeReference;
+    SourceAssetDatabase _sourceDatabase;
+
+    bool PublishCache(const Array<AssetRecord>& records, uint64 revision, AssetDatabaseChangeBatch& changes, AssetPipelineDiagnostic& diagnostic);
+    void RebuildCacheFromDurable(AssetDatabaseChangeBatch* changes = nullptr);
 
 public:
     Delegate<const AssetDatabaseChangeBatch&> Changed;
 
     static AssetDatabase& Get();
 
+    /// <summary>Opens the authoritative database under the Project Library and imports its current snapshot.</summary>
+    bool Open(const StringView& libraryPath, const Guid& projectId, AssetPipelineDiagnostic& diagnostic);
+    bool Close(AssetPipelineDiagnostic* diagnostic = nullptr);
+    bool IsOpen() const;
+
     uint64 GetRevision() const;
     AssetDatabaseSnapshot GetSnapshot() const;
     bool TryGetRecord(const Guid& id, AssetRecord& result) const;
+    bool TryGetRecord(const AssetObjectId& id, AssetRecord& result) const;
     bool TryGetMainRecordByPath(const StringView& portabilityKey, AssetRecord& result) const;
     void GetSubAssets(const Guid& sourceId, Array<AssetRecord>& result) const;
     void GetByProcessor(const StringView& processorId, Array<AssetRecord>& result) const;
@@ -55,6 +68,14 @@ public:
     /// <summary>Atomically replaces database truth and emits one change batch outside the database lock.</summary>
     /// <returns>True if input records violate an invariant.</returns>
     bool PublishFullSnapshot(const Array<AssetRecord>& records, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Atomically publishes records and their current diagnostics into durable authority.</summary>
+    bool PublishFullSnapshot(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics, AssetPipelineDiagnostic& diagnostic);
+
+    AssetDatabaseReadSnapshot GetDurableSnapshot() const;
+    bool ReadChangesAfter(uint64 revision, Array<AssetChangeSet>& result, bool& requiresSnapshot, AssetPipelineDiagnostic& diagnostic) const;
+    bool RecordPublication(const SourceAssetPublicationRow& publication, const Array<SourceAssetDependencyRow>& dependencies,
+        AssetPipelineDiagnostic& diagnostic);
 
     void Clear();
 };

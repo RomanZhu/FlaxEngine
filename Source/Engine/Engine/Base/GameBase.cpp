@@ -126,7 +126,7 @@ bool GameBase::Init()
     const auto gameSettings = GameSettings::Get();
     if (!gameSettings)
         return true;
-    GameBaseImpl::FirstScene = gameSettings->FirstScene;
+    GameBaseImpl::FirstScene = gameSettings->FirstScene.ID;
 
     return false;
 }
@@ -267,8 +267,8 @@ void GameBaseImpl::OnSplashScreenEnd()
     MainRenderTask::Instance->PostRender.Unbind(&OnPostRender);
 
     // Load the first scene
-    const auto sceneId = FirstScene ? FirstScene.GetID() : Guid::Empty;
-    LOG(Info, "Loading the first scene ({})", sceneId);
+    const auto sceneId = FirstScene.GetID();
+    LOG(Info, "Loading the first scene ({})", sceneId.ToString());
     FirstScene = nullptr;
     if (Level::LoadSceneAsync(sceneId))
     {

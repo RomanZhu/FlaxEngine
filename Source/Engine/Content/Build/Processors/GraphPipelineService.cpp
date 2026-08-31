@@ -18,6 +18,7 @@
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
+#include "Engine/Content/Importing/AssetImportService.h"
 #include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Core/Log.h"
@@ -173,6 +174,8 @@ bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic
     if (!AssetProcessorRegistry::Get().TryGetDescriptor(GraphDocumentProcessor::ProcessorID(), existing) &&
         AssetProcessorRegistry::Get().Register(GraphDocumentProcessor::CreateDescriptor(), state.GraphRegistration, diagnostic))
         return true;
+    if (AssetImportService::SynchronizeProcessorDescriptors(diagnostic))
+        return true;
     state.Initialized = true;
     return false;
 }
@@ -195,6 +198,8 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     extraIds.Add(ImportedSourceProcessor::ShaderID());
     extraIds.Add(ImportedSourceProcessor::VideoID());
     extraIds.Add(ImportedSourceProcessor::TextID());
+    extraIds.Add(ImportedSourceProcessor::BinaryID());
+    extraIds.Add(ImportedSourceProcessor::IESID());
 #if COMPILE_WITH_AUDIO_TOOL
     extraIds.Add(ImportedSourceProcessor::AudioID());
 #endif
@@ -211,6 +216,8 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
             return true;
         state.ExtraRegistrations.Add(MoveTemp(registration));
     }
+    if (AssetImportService::SynchronizeProcessorDescriptors(diagnostic))
+        return true;
     state.ExtraInitialized = true;
     return false;
 }

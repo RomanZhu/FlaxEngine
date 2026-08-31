@@ -317,7 +317,7 @@ bool CollisionCooking::CookCollision(const Argument& arg, CollisionData::Seriali
     // Setup options
     Platform::MemoryClear(&outputOptions, sizeof(outputOptions));
     outputOptions.Type = arg.Type;
-    outputOptions.Model = arg.Model.GetID();
+    outputOptions.Model = arg.Model.GetRuntimeInstanceId();
     outputOptions.ModelLodIndex = arg.ModelLodIndex;
     outputOptions.ConvexFlags = arg.ConvexFlags;
     outputOptions.ConvexVertexLimit = arg.ConvexVertexLimit;

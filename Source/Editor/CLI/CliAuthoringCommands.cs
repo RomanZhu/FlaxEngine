@@ -356,24 +356,25 @@ namespace FlaxEditor
         public static object AddBuildScene([CliOption("scene", Description = "Scene ID or Content-relative path.", Required = true)] string scene, [CliOption("startup", Description = "Promote this scene to the startup slot.")] bool startup = false)
         {
             var id = ResolveAssetId(scene, ".scene");
+            var objectId = AssetObjectId.Main(new AssetGuid(id));
             var game = GameSettings.Load();
             var build = GameSettings.Load<BuildSettings>() ?? new BuildSettings();
-            var additional = (build.AdditionalScenes ?? Array.Empty<SceneReference>()).Where(x => x.ID != id).ToList();
+            var additional = (build.AdditionalScenes ?? Array.Empty<SceneReference>()).Where(x => x.ID != objectId).ToList();
             var changed = false;
 
-            if (startup || game.FirstScene.ID == Guid.Empty)
+            if (startup || game.FirstScene.ID.IsNull)
             {
-                if (game.FirstScene.ID != id)
+                if (game.FirstScene.ID != objectId)
                 {
-                    if (game.FirstScene.ID != Guid.Empty)
+                    if (!game.FirstScene.ID.IsNull)
                         additional.Insert(0, new SceneReference(game.FirstScene.ID));
-                    game.FirstScene = new SceneReference(id);
+                    game.FirstScene = new SceneReference(objectId);
                     changed = true;
                 }
             }
-            else if (game.FirstScene.ID != id && !(build.AdditionalScenes ?? Array.Empty<SceneReference>()).Any(x => x.ID == id))
+            else if (game.FirstScene.ID != objectId && !(build.AdditionalScenes ?? Array.Empty<SceneReference>()).Any(x => x.ID == objectId))
             {
-                additional.Add(new SceneReference(id));
+                additional.Add(new SceneReference(objectId));
                 changed = true;
             }
 
@@ -390,15 +391,16 @@ namespace FlaxEditor
         public static object RemoveBuildScene([CliOption("scene", Description = "Scene ID or Content-relative path.", Required = true)] string scene)
         {
             var id = ResolveAssetId(scene, ".scene");
+            var objectId = AssetObjectId.Main(new AssetGuid(id));
             var game = GameSettings.Load();
             var build = GameSettings.Load<BuildSettings>() ?? new BuildSettings();
-            var additional = (build.AdditionalScenes ?? Array.Empty<SceneReference>()).Where(x => x.ID != id).ToList();
+            var additional = (build.AdditionalScenes ?? Array.Empty<SceneReference>()).Where(x => x.ID != objectId).ToList();
             var changed = additional.Count != (build.AdditionalScenes?.Length ?? 0);
-            Guid promoted = Guid.Empty;
+            AssetObjectId promoted = default;
 
-            if (game.FirstScene.ID == id)
+            if (game.FirstScene.ID == objectId)
             {
-                promoted = additional.Count == 0 ? Guid.Empty : additional[0].ID;
+                promoted = additional.Count == 0 ? default : additional[0].ID;
                 if (additional.Count != 0)
                     additional.RemoveAt(0);
                 game.FirstScene = new SceneReference(promoted);
@@ -2123,15 +2125,15 @@ namespace FlaxEditor
             var game = GameSettings.Load();
             var build = GameSettings.Load<BuildSettings>() ?? new BuildSettings();
             var entries = new List<object>();
-            var seen = new HashSet<Guid>();
-            if (game.FirstScene.ID != Guid.Empty)
+            var seen = new HashSet<AssetObjectId>();
+            if (!game.FirstScene.ID.IsNull)
             {
                 entries.Add(DescribeBuildScene(game.FirstScene.ID, 0, true));
                 seen.Add(game.FirstScene.ID);
             }
             foreach (var reference in build.AdditionalScenes ?? Array.Empty<SceneReference>())
             {
-                if (reference.ID != Guid.Empty && seen.Add(reference.ID))
+                if (!reference.ID.IsNull && seen.Add(reference.ID))
                     entries.Add(DescribeBuildScene(reference.ID, entries.Count, false));
             }
             return new
@@ -2143,9 +2145,10 @@ namespace FlaxEditor
             };
         }
 
-        private static object DescribeBuildScene(Guid id, int index, bool startup)
+        private static object DescribeBuildScene(AssetObjectId id, int index, bool startup)
         {
-            FlaxEngine.Content.GetAssetInfo(id, out var info);
+            var backing = AssetDatabaseFacade.GetBackingAssetID(id);
+            FlaxEngine.Content.GetAssetInfo(backing, out var info);
             return new { index, id, path = info.Path, name = Path.GetFileNameWithoutExtension(info.Path), startup, valid = info.ID != Guid.Empty };
         }
 

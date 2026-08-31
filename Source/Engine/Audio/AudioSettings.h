@@ -39,7 +39,7 @@ public:
     /// Selects which audio subsystem owns the primary audio device and master output.
     /// </summary>
     API_FIELD(Attributes="EditorOrder(40), EditorDisplay(\"Backend\", \"Output Owner\")")
-    AudioOutputOwner OutputOwner = AudioOutputOwner::EventBackend;
+    AudioOutputOwner OutputOwner = AudioOutputOwner::NativeClipBackend;
 
     /// <summary>Master strings bank. Loaded before the master and startup banks.</summary>
     API_FIELD(Attributes="EditorOrder(50), EditorDisplay(\"FMOD Banks\")")

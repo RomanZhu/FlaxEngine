@@ -77,7 +77,8 @@ void AssetReferenceBase::OnAssetUnloaded(Asset* asset, void* caller)
     if (_asset != asset)
         return;
     Unload();
-    OnSet(nullptr);
+    asset->RemoveReference(this);
+    _asset = nullptr;
     if (_owner)
         _owner->OnAssetUnloaded(asset, this);
 }
@@ -90,6 +91,7 @@ void AssetReferenceBase::OnSet(Asset* asset)
         if (e)
             e->RemoveReference(this);
         _asset = e = asset;
+        _objectId = asset ? asset->GetPersistentObjectId() : AssetObjectId();
         if (e)
             e->AddReference(this);
         Changed();
@@ -102,6 +104,25 @@ void AssetReferenceBase::OnSet(Asset* asset)
                 _owner->OnAssetLoaded(asset, this);
         }
     }
+}
+
+void AssetReferenceBase::OnSet(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+{
+    if (_objectId == objectId && (_asset || !objectId.IsValid()))
+        return;
+    if (_asset)
+        _asset->RemoveReference(this);
+    _asset = nullptr;
+    _objectId = objectId;
+    if (objectId.IsValid())
+    {
+        _asset = ::LoadAsset(objectId, type);
+        if (_asset)
+            _asset->AddReference(this);
+    }
+    Changed();
+    if (_owner)
+        _owner->OnAssetChanged(_asset, this);
 }
 
 WeakAssetReferenceBase::~WeakAssetReferenceBase()
@@ -144,9 +165,22 @@ void WeakAssetReferenceBase::OnSet(Asset* asset)
         if (e)
             e->RemoveReference(this, true);
         _asset = e = asset;
+        _objectId = asset ? asset->GetPersistentObjectId() : AssetObjectId();
         if (e)
             e->AddReference(this, true);
     }
+}
+
+void WeakAssetReferenceBase::OnSet(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+{
+    if (_objectId == objectId && (_asset || !objectId.IsValid()))
+        return;
+    if (_asset)
+        _asset->RemoveReference(this, true);
+    _asset = objectId.IsValid() ? ::LoadAsset(objectId, type) : nullptr;
+    _objectId = objectId;
+    if (_asset)
+        _asset->AddReference(this, true);
 }
 
 SoftAssetReferenceBase::~SoftAssetReferenceBase()
@@ -158,7 +192,7 @@ SoftAssetReferenceBase::~SoftAssetReferenceBase()
         asset->RemoveReference(this);
     }
 #if !BUILD_RELEASE
-    _id = Guid::Empty;
+    _id = AssetObjectId();
 #endif
 }
 
@@ -181,7 +215,6 @@ void SoftAssetReferenceBase::OnAssetUnloaded(Asset* asset, void* caller)
         return;
     _asset->RemoveReference(this);
     _asset = nullptr;
-    _id = Guid::Empty;
     Changed();
 }
 
@@ -192,13 +225,13 @@ void SoftAssetReferenceBase::OnSet(Asset* asset)
     if (_asset)
         _asset->RemoveReference(this);
     _asset = asset;
-    _id = asset ? asset->GetID() : Guid::Empty;
+    _id = asset ? asset->GetPersistentObjectId() : AssetObjectId();
     if (asset)
         asset->AddReference(this);
     Changed();
 }
 
-void SoftAssetReferenceBase::OnSet(const Guid& id)
+void SoftAssetReferenceBase::OnSet(const AssetObjectId& id)
 {
     if (_id == id)
         return;
@@ -222,6 +255,9 @@ Asset::Asset(const SpawnParams& params, const AssetInfo* info)
     , _refCount(0)
     , _loadState(0)
     , _loadingTask(0)
+    , _persistentObjectId(info ? info->ObjectID : AssetObjectId())
+    , _loadedRevision(info ? info->Revision : 0)
+    , _instanceId(params.ID)
     , _deleteFileOnUnload(false)
     , _isVirtual(false)
     , _isPassiveLoad(false)

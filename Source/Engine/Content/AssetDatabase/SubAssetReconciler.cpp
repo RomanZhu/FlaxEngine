@@ -48,10 +48,23 @@ SubAssetReconcileResult SubAssetReconciler::Reconcile(const AssetMeta& currentMe
     }
 
     HashSet<String> candidateKeys;
+    HashSet<int64> reservedLocalIds;
+    reservedLocalIds.Add(1);
+    for (const auto& existing : currentMeta.SubAssets)
+    {
+        if (existing.Value.LocalId <= 1 || !reservedLocalIds.Add(existing.Value.LocalId))
+            RequireUser(result, currentMeta.ID, TEXT("Tracked subasset mappings contain an invalid or duplicate local file ID."));
+    }
     for (const SubAssetCandidate& candidate : normalized)
     {
         if (!SubAssetPolicy::IsKeyValid(candidate.StableKey) || candidate.TypeName.IsEmpty() || !candidateKeys.Add(candidate.StableKey))
             RequireUser(result, currentMeta.ID, TEXT("Prepared subassets contain an invalid or duplicate stable key."));
+        HashSet<String> aliases;
+        for (const String& previous : candidate.PreviousKeys)
+        {
+            if (!SubAssetPolicy::IsKeyValid(previous) || previous == candidate.StableKey || !aliases.Add(previous))
+                RequireUser(result, currentMeta.ID, TEXT("Prepared subassets contain an invalid or duplicate previous stable identifier."));
+        }
     }
     if (result.RequiresUserReconciliation)
         return result;
@@ -68,7 +81,7 @@ SubAssetReconcileResult SubAssetReconciler::Reconcile(const AssetMeta& currentMe
         {
             Array<String> related;
             related.Add(candidate.StableKey);
-            RequireUser(result, exact->ID, TEXT("An exact subasset key changed type and cannot inherit the prior identity."), &related);
+            RequireUser(result, currentMeta.ID, TEXT("An exact subasset key changed type and cannot inherit the prior identity."), &related);
             continue;
         }
         SubAssetMeta resolved = *exact;
@@ -81,10 +94,10 @@ SubAssetReconcileResult SubAssetReconciler::Reconcile(const AssetMeta& currentMe
             change.Kind = SubAssetChangeKind::Revive;
             change.OldKey = candidate.StableKey;
             change.NewKey = candidate.StableKey;
-            change.ID = resolved.ID;
+            change.LocalId = resolved.LocalId;
             result.Changes.Add(change);
             if (!mayStageTrackedMetadata)
-                RequireUser(result, resolved.ID, TEXT("Reviving a tombstoned subasset requires an explicit metadata update."));
+                RequireUser(result, currentMeta.ID, TEXT("Reviving a tombstoned subasset requires an explicit metadata update."));
         }
         result.Resolved.Add(candidate.StableKey, MoveTemp(resolved));
         claimedExisting.Add(candidate.StableKey);
@@ -104,14 +117,26 @@ SubAssetReconcileResult SubAssetReconciler::Reconcile(const AssetMeta& currentMe
             if (existing && !claimedExisting.Contains(previous) && !exactCandidateKeys.Contains(previous) && Compatible(*existing, candidate))
                 matches.Add(previous);
         }
+        for (const auto& existing : currentMeta.SubAssets)
+        {
+            if (!claimedExisting.Contains(existing.Key) && !exactCandidateKeys.Contains(existing.Key) &&
+                Compatible(existing.Value, candidate) && existing.Value.PreviousKeys.Contains(candidate.StableKey) && !matches.Contains(existing.Key))
+                matches.Add(existing.Key);
+        }
         if (matches.Count() == 1 && candidate.RenameEvidenceReliable)
         {
             const String oldKey = matches[0];
             SubAssetMeta moved = currentMeta.SubAssets[oldKey];
             moved.DisplayName = candidate.DisplayName;
             moved.Removed = false;
+            moved.PreviousKeys.Remove(candidate.StableKey);
             if (!moved.PreviousKeys.Contains(oldKey))
                 moved.PreviousKeys.Add(oldKey);
+            for (const String& previous : candidate.PreviousKeys)
+            {
+                if (previous != candidate.StableKey && !moved.PreviousKeys.Contains(previous))
+                    moved.PreviousKeys.Add(previous);
+            }
             result.Resolved.Add(candidate.StableKey, MoveTemp(moved));
             claimedExisting.Add(oldKey);
             result.HasTrackedChanges = true;
@@ -119,10 +144,10 @@ SubAssetReconcileResult SubAssetReconciler::Reconcile(const AssetMeta& currentMe
             change.Kind = SubAssetChangeKind::Move;
             change.OldKey = oldKey;
             change.NewKey = candidate.StableKey;
-            change.ID = result.Resolved[candidate.StableKey].ID;
+            change.LocalId = result.Resolved[candidate.StableKey].LocalId;
             result.Changes.Add(change);
             if (!mayStageTrackedMetadata)
-                RequireUser(result, change.ID, TEXT("A reliable subasset rename requires an explicit metadata update."));
+                RequireUser(result, currentMeta.ID, TEXT("A reliable subasset rename requires an explicit metadata update."));
             continue;
         }
         if (matches.HasItems())
@@ -136,16 +161,16 @@ SubAssetReconcileResult SubAssetReconciler::Reconcile(const AssetMeta& currentMe
             continue;
         }
         SubAssetMeta added;
-        added.ID = Guid::New();
-        added.LocalId = SubAssetPolicy::LocalIdFromGuid(added.ID);
+        added.LocalId = SubAssetPolicy::AllocateLocalId(currentMeta.Processor.ID, candidate.StableKey, candidate.TypeName, reservedLocalIds, added.CollisionSalt);
         added.TypeName = candidate.TypeName;
         added.DisplayName = candidate.DisplayName;
+        reservedLocalIds.Add(added.LocalId);
         result.Resolved.Add(candidate.StableKey, added);
         result.HasTrackedChanges = true;
         SubAssetReconcileChange change;
         change.Kind = SubAssetChangeKind::Add;
         change.NewKey = candidate.StableKey;
-        change.ID = added.ID;
+        change.LocalId = added.LocalId;
         result.Changes.Add(change);
     }
 
@@ -162,10 +187,10 @@ SubAssetReconcileResult SubAssetReconciler::Reconcile(const AssetMeta& currentMe
             change.Kind = SubAssetChangeKind::Tombstone;
             change.OldKey = existing.Key;
             change.NewKey = existing.Key;
-            change.ID = tombstone.ID;
+            change.LocalId = tombstone.LocalId;
             result.Changes.Add(change);
             if (!mayStageTrackedMetadata)
-                RequireUser(result, tombstone.ID, TEXT("Removing a subasset requires an explicit tombstone metadata update."));
+                RequireUser(result, currentMeta.ID, TEXT("Removing a subasset requires an explicit tombstone metadata update."));
         }
         result.Resolved.Add(existing.Key, MoveTemp(tombstone));
     }

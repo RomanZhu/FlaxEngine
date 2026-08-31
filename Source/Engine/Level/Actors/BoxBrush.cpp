@@ -157,7 +157,7 @@ void BoxBrush::GetSurfaces(CSG::Surface surfaces[6])
         auto& dst = surfaces[i];
         auto& src = Surfaces[i];
 
-        dst.Material = src.Material.GetID();
+        dst.Material = src.Material.GetRuntimeInstanceId();
         dst.TexCoordScale = src.TexCoordScale;
         dst.TexCoordOffset = src.TexCoordOffset;
         dst.TexCoordRotation = src.TexCoordRotation;

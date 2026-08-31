@@ -36,7 +36,7 @@ namespace FlaxEditor
         {
             if (obj is Asset asset && AssetDatabaseFacade.TryGetAssetObjectId(asset, out var id))
             {
-                guid = id.Guid.ToString("N");
+                guid = id.Asset.ToString();
                 localId = id.LocalId;
                 return true;
             }
@@ -55,7 +55,7 @@ namespace FlaxEditor
         public static T LoadAssetAtPath<T>(string path) where T : Asset
         {
             var id = AssetDatabaseFacade.AssetPathToGUID(path);
-            return id == Guid.Empty ? null : FlaxEngine.Content.LoadAsync<T>(id);
+            return id == Guid.Empty ? null : FlaxEngine.Content.LoadAssetAsync<T>(AssetObjectId.Main(new AssetGuid(id)));
         }
 
         /// <summary>Loads the main asset at a canonical source path.</summary>
@@ -67,8 +67,7 @@ namespace FlaxEditor
         /// <summary>Loads the object currently mapped to a persistent file GUID and local file ID.</summary>
         public static Asset LoadAssetObject(AssetObjectId objectID)
         {
-            var id = AssetDatabaseFacade.GetBackingAssetID(objectID);
-            return id == Guid.Empty ? null : FlaxEngine.Content.LoadAsync<Asset>(id);
+            return FlaxEngine.Content.LoadAssetAsync(objectID);
         }
 
         /// <summary>Loads the main object and all live subassets at a canonical source path.</summary>
@@ -82,7 +81,7 @@ namespace FlaxEditor
                 var record = records[i];
                 if (record.Status == AssetRecordStatus.MissingSource || !string.Equals(Path.GetFullPath(record.SourcePath), physicalPath, StringComparison.OrdinalIgnoreCase))
                     continue;
-                var asset = FlaxEngine.Content.LoadAsync<Asset>(record.ID);
+                var asset = FlaxEngine.Content.LoadAssetAsync<Asset>(new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId));
                 if (asset != null)
                     result.Add(asset);
             }

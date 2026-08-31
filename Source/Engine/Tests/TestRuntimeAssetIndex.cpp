@@ -7,12 +7,12 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
 {
     Array<RuntimeAssetIndexEntry> entries;
     RuntimeAssetIndexEntry first;
-    first.ID = AssetObjectId(Guid(2, 0, 0, 0), 1);
+    first.ID = AssetObjectId::Main(AssetGuid(Guid(2, 0, 0, 0)));
     first.TypeName = TEXT("FlaxEngine.Texture");
     first.PackagedPath = TEXT("Content/Data_1.flax");
     entries.Add(first);
     RuntimeAssetIndexEntry second;
-    second.ID = AssetObjectId(Guid(1, 0, 0, 0), 42);
+    second.ID = AssetObjectId(AssetGuid(Guid(1, 0, 0, 0)), 42);
     second.TypeName = TEXT("FlaxEngine.Material");
     second.PackagedPath = TEXT("Content/Data_0.flax");
     entries.Add(second);
@@ -34,7 +34,7 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
     CHECK_FALSE(json.Contains("Library"));
 
     RuntimeAssetIndexEntry libraryEntry;
-    libraryEntry.ID = AssetObjectId(Guid(3, 0, 0, 0), 1);
+    libraryEntry.ID = AssetObjectId::Main(AssetGuid(Guid(3, 0, 0, 0)));
     libraryEntry.TypeName = TEXT("FlaxEngine.Texture");
     libraryEntry.PackagedPath = TEXT("Library/Artifacts/runtime.flax");
     entries.Add(libraryEntry);

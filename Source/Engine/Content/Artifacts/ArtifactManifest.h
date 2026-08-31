@@ -4,12 +4,15 @@
 
 #include "ArtifactTarget.h"
 #include "Engine/Content/AssetDatabase/AssetDependency.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 
 /// <summary>Generated manifest dependency provenance.</summary>
 struct FLAXENGINE_API ArtifactManifestDependency
 {
     AssetDependencyKind Kind = AssetDependencyKind::SourceFile;
     String Identity;
+    AssetObjectId ObjectID;
+    /// <summary>Transient runtime/storage key derived from ObjectID.</summary>
     Guid AssetID = Guid::Empty;
     ContentHash Hash;
     ArtifactKey ExactArtifact;
@@ -33,9 +36,11 @@ struct FLAXENGINE_API ArtifactManifestOutput
 /// <summary>Canonical generated record selecting one coherent successful output set.</summary>
 struct FLAXENGINE_API ArtifactManifest
 {
-    static constexpr int32 CurrentVersion = 1;
+    static constexpr int32 CurrentVersion = 2;
 
     int32 ManifestVersion = CurrentVersion;
+    AssetObjectId ObjectID;
+    /// <summary>Transient artifact-storage identity. Never serialized as a persistent reference.</summary>
     Guid AssetID = Guid::Empty;
     uint64 DatabaseRevision = 0;
     String ProcessorID;

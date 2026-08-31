@@ -11,23 +11,48 @@ namespace FlaxEngine
         /// <summary>
         /// Initializes a new asset object identifier.
         /// </summary>
-        /// <param name="guid">The asset file identifier.</param>
+        /// <param name="asset">The asset file identifier.</param>
         /// <param name="localId">The stable object identifier within the asset file.</param>
-        public AssetObjectId(Guid guid, long localId)
+        public AssetObjectId(AssetGuid asset, long localId)
         {
-            Guid = guid;
+            Asset = asset;
             LocalId = localId;
+        }
+
+        /// <summary>Creates an identifier for a source's main imported object.</summary>
+        public static AssetObjectId Main(AssetGuid asset) => new AssetObjectId(asset, 1);
+
+        /// <summary>Gets whether this identifier is null.</summary>
+        public bool IsNull => !Asset.IsValid || LocalId == 0;
+
+        /// <summary>Parses the canonical guid:fileId representation.</summary>
+        public static bool TryParse(string value, out AssetObjectId result)
+        {
+            result = default;
+            if (string.IsNullOrEmpty(value))
+                return false;
+            int separator = value.LastIndexOf(':');
+            if (separator <= 0 || separator == value.Length - 1 ||
+                !Guid.TryParseExact(value.Substring(0, separator), "N", out var guid) ||
+                !long.TryParse(value.Substring(separator + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out var localId) ||
+                localId == 0)
+                return false;
+            result = new AssetObjectId(new AssetGuid(guid), localId);
+            return true;
         }
 
         /// <summary>
         /// Gets whether this identifier points to an asset object.
         /// </summary>
-        public bool IsValid => Guid != System.Guid.Empty && LocalId != 0;
+        public bool IsValid => Asset.IsValid && LocalId != 0;
+
+        /// <summary>Gets whether this is the main imported object.</summary>
+        public bool IsMainObject => Asset.IsValid && LocalId == 1;
 
         /// <inheritdoc />
         public bool Equals(AssetObjectId other)
         {
-            return Guid == other.Guid && LocalId == other.LocalId;
+            return Asset == other.Asset && LocalId == other.LocalId;
         }
 
         /// <inheritdoc />
@@ -41,7 +66,7 @@ namespace FlaxEngine
         {
             unchecked
             {
-                return (Guid.GetHashCode() * 397) ^ LocalId.GetHashCode();
+                return (Asset.GetHashCode() * 397) ^ LocalId.GetHashCode();
             }
         }
 
@@ -58,7 +83,7 @@ namespace FlaxEngine
         /// <inheritdoc />
         public override string ToString()
         {
-            return string.Concat(Guid.ToString("N"), ":", LocalId.ToString(CultureInfo.InvariantCulture));
+            return string.Concat(Asset.ToString(), ":", LocalId.ToString(CultureInfo.InvariantCulture));
         }
     }
 }

@@ -9,6 +9,7 @@
 #include "Engine/Scripting/ScriptingObject.h"
 #include "Config.h"
 #include "Types.h"
+#include "AssetDatabase/Identity/AssetObjectId.h"
 
 #define DECLARE_ASSET_HEADER(type) \
     DECLARE_SCRIPTING_TYPE_NO_SPAWN(type); \
@@ -60,6 +61,10 @@ protected:
     volatile int64 _loadState;
     volatile intptr _loadingTask;
 
+    AssetObjectId _persistentObjectId;
+    uint64 _loadedRevision = 0;
+    Guid _instanceId;
+
     int8 _deleteFileOnUnload : 1; // Indicates that asset source file should be removed on asset unload
     int8 _isVirtual : 1; // Indicates that asset is pure virtual (generated or temporary, has no storage so won't be saved)
     int8 _isPassiveLoad : 1; // Indicates that dependencies must use already-published artifacts without scheduling builds
@@ -103,6 +108,24 @@ public:
     /// Gets asset's reference count. Asset will be automatically unloaded when this reaches zero.
     /// </summary>
     API_PROPERTY() int32 GetReferencesCount() const;
+
+    /// <summary>Gets the persistent source and local file identity for this loaded asset object.</summary>
+    API_PROPERTY() FORCE_INLINE AssetObjectId GetPersistentObjectId() const
+    {
+        return _persistentObjectId;
+    }
+
+    /// <summary>Gets the artifact/database revision currently represented by this instance.</summary>
+    API_PROPERTY() FORCE_INLINE uint64 GetLoadedRevision() const
+    {
+        return _loadedRevision;
+    }
+
+    /// <summary>Gets the live scripting object identity. It is never a persistent asset reference.</summary>
+    API_PROPERTY() FORCE_INLINE Guid GetRuntimeInstanceId() const
+    {
+        return _instanceId;
+    }
 
     /// <summary>
     /// Adds reference to that asset.
@@ -337,3 +360,4 @@ public:
 
 // Don't include Content.h but just Load method
 extern FLAXENGINE_API Asset* LoadAsset(const Guid& id, const ScriptingTypeHandle& type);
+extern FLAXENGINE_API Asset* LoadAsset(const AssetObjectId& id, const ScriptingTypeHandle& type);

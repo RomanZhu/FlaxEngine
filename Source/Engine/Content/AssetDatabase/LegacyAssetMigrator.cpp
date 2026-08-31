@@ -343,12 +343,15 @@ bool LegacyAssetMigrator::SeedModelSubAssets(const StringView& flaxPath, AssetMe
         else if (entry.TypeName.Contains(TEXT("Model")))
             kind = TEXT("mesh");
         SubAssetMeta sub;
-        sub.ID = entry.ID;
         sub.TypeName = entry.TypeName;
         sub.DisplayName = StringUtils::GetFileNameWithoutExtension(flaxPath);
         if (i > 1)
             sub.DisplayName += String::Format(TEXT("-{0}"), i - 1);
         const String key = kind + TEXT(":") + sub.DisplayName;
+        HashSet<int64> reserved;
+        for (const auto& existing : meta.SubAssets)
+            reserved.Add(existing.Value.LocalId);
+        sub.LocalId = SubAssetPolicy::AllocateLocalId(meta.Processor.ID, key, kind, reserved, sub.CollisionSalt);
         meta.SubAssets.Add(key, sub);
     }
     diagnostic = AssetPipelineDiagnostic();

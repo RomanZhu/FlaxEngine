@@ -72,9 +72,9 @@ public:
     /// <param name="info">Lightmap info</param>
     void GetInfo(SavedLightmapInfo& info) const
     {
-        info.Lightmap0 = _textures[0].GetID();
-        info.Lightmap1 = _textures[1].GetID();
-        info.Lightmap2 = _textures[2].GetID();
+        info.Lightmap0 = _textures[0].GetRuntimeInstanceId();
+        info.Lightmap1 = _textures[1].GetRuntimeInstanceId();
+        info.Lightmap2 = _textures[2].GetRuntimeInstanceId();
     }
 
     /// <summary>

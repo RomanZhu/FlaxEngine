@@ -76,7 +76,7 @@ namespace FlaxEditor.CustomEditors.Editors
             else if (_valueType.Type == typeof(Guid))
                 SetValue(Picker.Validator.SelectedID);
             else if (_valueType.Type == typeof(SceneReference))
-                SetValue(new SceneReference(Picker.Validator.SelectedID));
+                SetValue(new SceneReference(Picker.Validator.SelectedObjectID));
             else if (_valueType.Type == typeof(string))
                 SetValue(Picker.Validator.SelectedPath);
             else if (_valueType.Type.Name == typeof(JsonAssetReference<>).Name)
@@ -138,7 +138,7 @@ namespace FlaxEditor.CustomEditors.Editors
                 else if (value is Guid guid)
                     Picker.Validator.SelectedID = guid;
                 else if (value is SceneReference sceneAsset)
-                    Picker.Validator.SelectedItem = Editor.Instance.ContentDatabase.FindAsset(sceneAsset.ID);
+                    Picker.Validator.SelectedObjectID = sceneAsset.ID;
                 else if (value is string path)
                     Picker.Validator.SelectedPath = path;
                 else if (value != null && value.GetType().Name == typeof(JsonAssetReference<>).Name)

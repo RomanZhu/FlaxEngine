@@ -18,6 +18,7 @@
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
+#include "Engine/Content/Importing/AssetImportService.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Scripting/Scripting.h"
@@ -79,6 +80,8 @@ namespace
         AssetProcessorDescriptor existing;
         if (!AssetProcessorRegistry::Get().TryGetDescriptor(ModelProcessorSettings::ProcessorID(), existing) &&
             AssetProcessorRegistry::Get().Register(ModelProcessor::CreateDescriptor(), state.Registration, diagnostic))
+            return true;
+        if (AssetImportService::SynchronizeProcessorDescriptors(diagnostic))
             return true;
         state.Initialized = true;
         return false;
@@ -185,7 +188,7 @@ namespace
         for (const auto& mapping : meta.SubAssets)
         {
             if (!mapping.Value.Removed)
-                payload->AssignedIDs[mapping.Key] = mapping.Value.ID;
+                payload->AssignedIDs[mapping.Key] = AssetObjectId(AssetGuid(meta.ID), mapping.Value.LocalId).ToRuntimeObjectGuid();
         }
         return false;
     }
