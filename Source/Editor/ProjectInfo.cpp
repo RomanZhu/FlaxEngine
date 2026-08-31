@@ -423,7 +423,7 @@ bool ProjectInfo::SaveProject()
 {
     if (AssetSystemReadOnly)
     {
-        LOG(Error, "Cannot save project descriptor because asset-system version {0} is newer than supported version {1}.", AssetSystemVersion, CurrentAssetSystemVersion);
+        LOG(Error, "Cannot save project descriptor because asset-system version {0} is not writable in this editor. Supported mutable version: {1}.", AssetSystemVersion, CurrentAssetSystemVersion);
         return true;
     }
     if (AssetSystemVersion == CurrentAssetSystemVersion &&
@@ -550,7 +550,7 @@ bool ProjectInfo::LoadProject(const String& projectPath)
     IdentityModel = JsonTools::GetString(document, "IdentityModel", String::Empty);
     ArtifactLayoutVersion = JsonTools::GetInt(document, "ArtifactLayoutVersion", 0);
     SourceDocumentVersion = JsonTools::GetInt(document, "SourceDocumentVersion", 0);
-    AssetSystemReadOnly = AssetSystemVersion > CurrentAssetSystemVersion;
+    AssetSystemReadOnly = AssetSystemVersion != CurrentAssetSystemVersion;
     if (AssetSystemVersion < CurrentAssetSystemVersion)
     {
         Name = JsonTools::GetString(document, "Name", String::Empty);
@@ -653,15 +653,10 @@ bool ProjectInfo::LoadProject(const String& projectPath)
         return true;
     }
     String markerError;
-    if (AssetSystemVersion >= CurrentAssetSystemVersion && !ValidateAssetSystemMarker(markerError))
+    if (AssetSystemVersion == CurrentAssetSystemVersion && !ValidateAssetSystemMarker(markerError))
     {
-        if (AssetSystemReadOnly)
-            LOG(Error, "Project opened read-only. {0}", markerError);
-        else
-        {
-            ShowProjectLoadError(*markerError, projectPath);
-            return true;
-        }
+        ShowProjectLoadError(*markerError, projectPath);
+        return true;
     }
 
     return false;
@@ -670,8 +665,6 @@ bool ProjectInfo::LoadProject(const String& projectPath)
 bool ProjectInfo::ValidateAssetSystemMarker(String& error) const
 {
     error = String::Empty;
-    if (AssetSystemVersion == 0)
-        return true;
     if (AssetSystemVersion < CurrentAssetSystemVersion)
     {
         error = String::Format(TEXT("Asset-system version {0} requires one-way migration to version {1}."), AssetSystemVersion, CurrentAssetSystemVersion);

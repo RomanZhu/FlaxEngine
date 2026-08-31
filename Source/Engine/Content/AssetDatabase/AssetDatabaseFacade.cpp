@@ -203,6 +203,9 @@ namespace
             ? Math::Clamp(bootstrap.WorkerLimit, 1, 64)
             : Math::Clamp(static_cast<int32>(Platform::GetCPUInfo().ProcessorCoreCount) - 1, 1, 64);
         ConfiguredMemoryLimitMegabytes = Math::Max(128, bootstrap.MemoryLimitMegabytes);
+        // Keep the shipping hard cut active for every recognized asset-system marker.
+        // Pre-v3 projects are opened for migration/read-only flows, not mutable legacy editing.
+        AssetDatabase::Get().SetHardCutEnabled(true);
         if (!bootstrap.Valid || bootstrap.ReadOnly || bootstrap.RequiresMigration)
             return true;
         return ActivateBootstrapMounts(bootstrap, diagnostics);
@@ -1965,9 +1968,7 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
         return true;
     }
     const int32 assetSystemVersion = ConfiguredAssetSystemVersion;
-    AssetDatabase::Get().SetHardCutEnabled(assetSystemVersion >= 3);
-    if (assetSystemVersion < 3)
-        EnsureExistingJsonSidecars();
+    AssetDatabase::Get().SetHardCutEnabled(true);
     AssetDatabaseScanOptions options;
     options.AssetSystemVersion = assetSystemVersion;
     options.StrictMetadata = strictMetadata;
@@ -2026,7 +2027,7 @@ bool AssetDatabaseFacade::LoadOrScan(bool strictMetadata)
         SetDiagnostics(bootstrapDiagnostics);
         return true;
     }
-    AssetDatabase::Get().SetHardCutEnabled(ConfiguredAssetSystemVersion >= 3);
+    AssetDatabase::Get().SetHardCutEnabled(true);
     const bool importerWorker = Engine::GetCommandLine().Contains(TEXT("-assetImportWorker"), StringSearchCase::IgnoreCase);
     if (importerWorker)
     {
@@ -2102,7 +2103,7 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     if (!MountTablesMatch(previousMounts, AssetMountRegistry::GetMounts()))
         return Scan(true);
     const int32 assetSystemVersion = ConfiguredAssetSystemVersion;
-    AssetDatabase::Get().SetHardCutEnabled(assetSystemVersion >= 3);
+    AssetDatabase::Get().SetHardCutEnabled(true);
     const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
     HashSet<String> affectedKeys;
     Array<String> expanded;

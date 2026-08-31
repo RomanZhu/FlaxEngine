@@ -33,6 +33,7 @@
 #include "Editor/Editor.h"
 #include "Editor/ProjectInfo.h"
 #include "Editor/Managed/ManagedEditor.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #else
 #include "Engine/Utilities/Encryption.h"
@@ -137,6 +138,9 @@ int32 Engine::OnInit(const Char* cmdLine)
     EngineImpl::InitLog();
 
 #if USE_EDITOR
+    // The shipping Editor never enables legacy asset discovery or mutation. Older
+    // projects may only continue through the explicit one-way migration entrypoint.
+    AssetDatabase::Get().SetHardCutEnabled(true);
     if (Editor::CheckProjectUpgrade())
     {
         LOG(Warning, "Loading project cancelled. Closing...");

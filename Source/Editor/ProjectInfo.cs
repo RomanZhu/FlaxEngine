@@ -389,8 +389,6 @@ namespace FlaxEditor
         public bool ValidateAssetSystemMarker(out string error)
         {
             error = null;
-            if (AssetSystemVersion == 0)
-                return true;
             if (AssetSystemVersion < CurrentAssetSystemVersion)
             {
                 error = $"Asset-system version {AssetSystemVersion} requires one-way migration to version {CurrentAssetSystemVersion}.";
@@ -454,7 +452,7 @@ namespace FlaxEditor
                 var project = JsonConvert.DeserializeObject<ProjectInfo>(contents, new JsonSerializerSettings() { Converters = new[] { new FlaxVersionConverter() } });
                 project.ProjectPath = path;
                 project.ProjectFolderPath = StringUtils.NormalizePath(Path.GetDirectoryName(path));
-                project.AssetSystemReadOnly = project.AssetSystemVersion > CurrentAssetSystemVersion;
+                project.AssetSystemReadOnly = project.AssetSystemVersion != CurrentAssetSystemVersion;
                 if (project.AssetSystemVersion == CurrentAssetSystemVersion)
                     project.LoadV3MutableSettings();
 
@@ -467,12 +465,9 @@ namespace FlaxEditor
                     project.Version = new Version(project.Version.Major, project.Version.Minor, project.Version.Build);
                 if (project.Version.Build == 0 && project.Version.Revision == -1)
                     project.Version = new Version(project.Version.Major, project.Version.Minor);
-                if (project.AssetSystemVersion >= CurrentAssetSystemVersion && !project.ValidateAssetSystemMarker(out var markerError))
+                if (project.AssetSystemVersion == CurrentAssetSystemVersion && !project.ValidateAssetSystemMarker(out var markerError))
                 {
-                    if (project.AssetSystemReadOnly)
-                        Editor.LogError($"Project opened read-only. {markerError}");
-                    else
-                        throw new InvalidDataException(markerError);
+                    throw new InvalidDataException(markerError);
                 }
                 foreach (var reference in project.References)
                 {

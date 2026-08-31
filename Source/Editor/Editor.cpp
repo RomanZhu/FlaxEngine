@@ -12,6 +12,7 @@
 #include "Engine/Scripting/ManagedCLR/MMethod.h"
 #include "Engine/Serialization/FileWriteStream.h"
 #include "Engine/Serialization/FileReadStream.h"
+#include "Engine/Serialization/Json.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/MessageBox.h"
@@ -33,6 +34,31 @@ namespace EditorImpl
     SplashScreen* Splash = nullptr;
 
     void OnUpdate();
+
+    bool IsAssetMigrationRequest()
+    {
+        if (!CommandLine::Options.CliRequest.HasValue())
+            return false;
+        StringAnsi contents;
+        if (File::ReadAllText(CommandLine::Options.CliRequest.GetValue(), contents))
+            return false;
+        rapidjson_flax::Document request;
+        request.Parse(contents.Get(), contents.Length());
+        if (request.HasParseError() || !request.IsObject())
+            return false;
+        const auto operation = request.FindMember("operation");
+        const auto command = request.FindMember("command");
+        if (operation == request.MemberEnd() || !operation->value.IsString() ||
+            StringAnsiView(operation->value.GetString(), operation->value.GetStringLength()) != "command" ||
+            command == request.MemberEnd() || !command->value.IsObject())
+            return false;
+        const auto action = command->value.FindMember("action");
+        const auto name = command->value.FindMember("name");
+        return action != command->value.MemberEnd() && action->value.IsString() &&
+               StringAnsiView(action->value.GetString(), action->value.GetStringLength()) == "invoke" &&
+               name != command->value.MemberEnd() && name->value.IsString() &&
+               StringAnsiView(name->value.GetString(), name->value.GetStringLength()).StartsWith("assets.migration.");
+    }
 }
 
 ManagedEditor* Editor::Managed = nullptr;
@@ -49,6 +75,22 @@ void Editor::CloseSplashScreen()
 bool Editor::CheckProjectUpgrade()
 {
     PROFILE_MEM(Editor);
+    if (Project->AssetSystemVersion != ProjectInfo::CurrentAssetSystemVersion)
+    {
+        if (Project->AssetSystemVersion < ProjectInfo::CurrentAssetSystemVersion && EditorImpl::IsAssetMigrationRequest())
+        {
+            LOG(Warning, "Opening asset-system version {0} in migration-only mode.", Project->AssetSystemVersion);
+        }
+        else
+        {
+            const String message = Project->AssetSystemVersion < ProjectInfo::CurrentAssetSystemVersion
+                ? String::Format(TEXT("Asset-system version {0} requires one-way migration to version {1}. Normal Editor operation is disabled; run an assets.migration.v3 command."), Project->AssetSystemVersion, ProjectInfo::CurrentAssetSystemVersion)
+                : String::Format(TEXT("Asset-system version {0} is newer than this Editor supports ({1}). The project cannot be opened mutably."), Project->AssetSystemVersion, ProjectInfo::CurrentAssetSystemVersion);
+            LOG(Error, "{0}", message);
+            Platform::Fatal(message);
+            return true;
+        }
+    }
     const auto versionFilePath = Globals::ProjectCacheFolder / TEXT("version");
 
     // Load version cache file

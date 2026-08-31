@@ -80,6 +80,7 @@ namespace FlaxEditor.Modules
         // Firstly service is collecting import requests and then performs actual importing in the background.
 
         private readonly Queue<IFileEntryAction> _importingQueue = new Queue<IFileEntryAction>();
+        private readonly HashSet<string> _queuedCanonicalSourceImports = new HashSet<string>(ContentMutationPathUtils.Comparer);
         private readonly List<Request> _requests = new List<Request>();
 
         private long _workerEndFlag;
@@ -500,12 +501,20 @@ namespace FlaxEditor.Modules
             if (entries.Count == 0)
                 return;
 
+            var queuedCount = 0;
             lock (_requests)
             {
-                _importBatchSize += entries.Count;
                 for (int i = 0; i < entries.Count; i++)
+                {
+                    if (!_queuedCanonicalSourceImports.Add(entries[i].SourceUrl))
+                        continue;
                     _importingQueue.Enqueue(entries[i]);
+                    queuedCount++;
+                }
+                _importBatchSize += queuedCount;
             }
+            if (queuedCount == 0)
+                return;
             StartWorker();
         }
 
@@ -646,6 +655,7 @@ namespace FlaxEditor.Modules
 
         private void ProcessInPlaceCanonicalBatch(List<InPlaceCanonicalImportEntry> entries, List<PendingCanonicalBuild> pendingBuilds)
         {
+            const int maxPendingCanonicalBuilds = 8;
             for (int i = 0; i < entries.Count; i++)
             {
                 var entry = entries[i];
@@ -665,7 +675,11 @@ namespace FlaxEditor.Modules
                     {
                         entry.SetPreparedBuild(result.AssetID);
                         if (entry.BuildKind != CanonicalBuildKind.None)
+                        {
                             pendingBuilds.Add(new PendingCanonicalBuild(result.AssetID, entry.BuildKind, entry.SourceUrl));
+                            if (pendingBuilds.Count >= maxPendingCanonicalBuilds)
+                                WaitForCanonicalBuilds(pendingBuilds);
+                        }
                         AssetPipelineCallbacks.PostprocessAll(new[] { logicalPath }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), false);
                     }
                     else if (!string.IsNullOrEmpty(result.Message))
@@ -679,6 +693,8 @@ namespace FlaxEditor.Modules
                 }
                 finally
                 {
+                    lock (_requests)
+                        _queuedCanonicalSourceImports.Remove(entry.SourceUrl);
                     Editor.ContentDatabase.EndAssetSave(metadataPath, !failed);
                     if (failed)
                         Editor.LogWarning("Failed to import " + entry.SourceUrl + " to " + entry.ResultUrl);

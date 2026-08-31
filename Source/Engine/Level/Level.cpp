@@ -2148,7 +2148,7 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     Array<AssetMutationSidecar> externalActorMutations;
     Array<AssetMutationSidecar>* externalActorMutationTarget = nullptr;
 #if USE_EDITOR
-    if (AssetDatabase::Get().IsHardCutEnabled() && scene->UseExternalActors)
+    if (scene->UseExternalActors)
         externalActorMutationTarget = &externalActorMutations;
 #endif
     if (saveScene(scene, buffer, true, true, externalActorMutationTarget) && buffer.GetSize() > 0)
@@ -2158,44 +2158,18 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     }
 
 #if USE_EDITOR
-    if (AssetDatabase::Get().IsHardCutEnabled())
+    const StringAnsiView source(buffer.GetString(), static_cast<int32>(buffer.GetSize()));
+    const bool failed = externalActorMutationTarget
+                            ? AssetDatabaseFacade::SaveExistingJsonSourceWithExternalActors(path, source, sceneId,
+                                TEXT("FlaxEngine.SceneAsset"), externalActorMutations)
+                            : AssetDatabaseFacade::SaveExistingJsonSource(path, source, sceneId, TEXT("FlaxEngine.SceneAsset"));
+    if (failed)
     {
-        const StringAnsiView source(buffer.GetString(), static_cast<int32>(buffer.GetSize()));
-        const bool failed = externalActorMutationTarget
-                                ? AssetDatabaseFacade::SaveExistingJsonSourceWithExternalActors(path, source, sceneId,
-                                    TEXT("FlaxEngine.SceneAsset"), externalActorMutations)
-                                : AssetDatabaseFacade::SaveExistingJsonSource(path, source, sceneId, TEXT("FlaxEngine.SceneAsset"));
-        if (failed)
-        {
-            LOG(Error, "Cannot publish scene source pair '{0}' through the asset database.", path);
-            CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
-            return true;
-        }
+        LOG(Error, "Cannot publish scene source pair '{0}' through the asset database.", path);
+        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+        return true;
     }
-    else
 #endif
-    {
-        // Legacy projects publish the scene through a same-directory staging file.
-        String stagingPath(path);
-        stagingPath += TEXT(".tmp-");
-        stagingPath += Guid::New().ToString(Guid::FormatType::N);
-        if (File::WriteAllBytes(stagingPath, (byte*)buffer.GetString(), (int32)buffer.GetSize()))
-        {
-            LOG(Error, "Cannot write staged scene file '{0}'", stagingPath);
-            if (FileSystem::FileExists(stagingPath))
-                FileSystem::DeleteFile(stagingPath);
-            CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
-            return true;
-        }
-        if (FileSystem::MoveFile(path, stagingPath, true))
-        {
-            LOG(Error, "Cannot replace scene file '{0}' with completed staging file '{1}'", path, stagingPath);
-            if (FileSystem::FileExists(stagingPath))
-                FileSystem::DeleteFile(stagingPath);
-            CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
-            return true;
-        }
-    }
 
     stopwatch.Stop();
     LOG(Info, "Scene saved! Time {0}ms", stopwatch.GetMilliseconds());

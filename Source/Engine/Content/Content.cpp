@@ -926,24 +926,6 @@ AssetsCache* Content::GetRegistry()
     return &Cache;
 }
 
-#if USE_EDITOR
-
-bool FindAssets(const ProjectInfo* project, HashSet<const ProjectInfo*>& projects, const Guid& id, Array<String>& tmpCache, AssetInfo& info)
-{
-    if (projects.Contains(project))
-        return false;
-    projects.Add(project);
-    bool found = findAsset(id, project->ProjectFolderPath / TEXT("Content"), tmpCache, info);
-    for (const auto& reference : project->References)
-    {
-        if (reference.Project)
-            found |= FindAssets(reference.Project, projects, id, tmpCache, info);
-    }
-    return found;
-}
-
-#endif
-
 bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 {
     if (!id.IsValid())
@@ -958,22 +940,20 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
         }
     }
 
-    if (AssetDatabase::Get().IsHardCutEnabled())
+#if USE_EDITOR
+    // Session-only assets outside source mounts (for example editor preview clones)
+    // may be registered explicitly. A mounted source identity must come from the
+    // durable database and can never fall back to the legacy cache.
+    if (Cache.FindAsset(id, info))
     {
-        // Session-only assets outside source mounts (for example editor preview clones)
-        // may be registered explicitly. A mounted source identity must come from the
-        // durable database and can never fall back to the legacy cache.
-        if (Cache.FindAsset(id, info))
-        {
-            AssetMountResolution resolution;
-            const bool mounted = FileSystem::IsRelative(info.Path)
-                ? AssetMountRegistry::TryResolveLogical(info.Path, resolution)
-                : AssetMountRegistry::TryResolvePhysical(info.Path, resolution);
-            return !mounted;
-        }
-        return false;
+        AssetMountResolution resolution;
+        const bool mounted = FileSystem::IsRelative(info.Path)
+            ? AssetMountRegistry::TryResolveLogical(info.Path, resolution)
+            : AssetMountRegistry::TryResolvePhysical(info.Path, resolution);
+        return !mounted;
     }
-
+    return false;
+#else
 #if ENABLE_ASSETS_DISCOVERY
     // Find asset in registry
     if (Cache.FindAsset(id, info))
@@ -1000,12 +980,7 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
     DateTime startTime = now;
     int32 startCount = Cache.Size();
     Array<String> tmpCache(1024);
-#if USE_EDITOR
-    HashSet<const ProjectInfo*> projects;
-    bool found = FindAssets(Editor::Project, projects, id, tmpCache, info);
-#else
     bool found = findAsset(id, Globals::ProjectContentFolder, tmpCache, info);
-#endif
     if (found)
     {
         LOG(Info, "Workspace searching time: {0} ms, new assets found: {1}", static_cast<int32>((DateTime::NowUTC() - startTime).GetTotalMilliseconds()), Cache.Size() - startCount);
@@ -1017,6 +992,7 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 #else
     // Find asset in registry
     return Cache.FindAsset(id, info);
+#endif
 #endif
 }
 
@@ -1057,7 +1033,7 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
     String formattedPath(path);
     FileSystem::NormalizePath(formattedPath);
 
-    if (AssetDatabase::Get().IsHardCutEnabled())
+#if USE_EDITOR
     {
         AssetMountResolution resolution;
         const bool mounted = FileSystem::IsRelative(formattedPath)
@@ -1072,6 +1048,7 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
             return true;
         }
     }
+#endif
 
     AssetPathPolicy::ProjectPath projectPath;
     AssetPipelineDiagnostic pathDiagnostic;
@@ -1086,8 +1063,22 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
             return true;
         }
     }
-    if (AssetDatabase::Get().IsHardCutEnabled() && isCanonicalProjectPath)
+#if USE_EDITOR
+    if (isCanonicalProjectPath)
         return false;
+
+    // The editor only permits explicitly registered session content outside the
+    // source mounts. Project asset lookup is database-only.
+    if (Cache.FindAsset(formattedPath, info))
+    {
+        AssetMountResolution resolution;
+        const bool mounted = FileSystem::IsRelative(info.Path)
+            ? AssetMountRegistry::TryResolveLogical(info.Path, resolution)
+            : AssetMountRegistry::TryResolvePhysical(info.Path, resolution);
+        return !mounted;
+    }
+    return false;
+#else
 
     // Find asset in registry
     if (Cache.FindAsset(formattedPath, info))
@@ -1136,6 +1127,7 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
     }
 
     return false;
+#endif
 #else
     // Find asset in registry
     return Cache.FindAsset(path, info);

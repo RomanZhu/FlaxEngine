@@ -2686,7 +2686,9 @@ MoveCompleted:
 
             FlaxEngine.Content.AssetDisposing += OnContentAssetDisposing;
 
-            _useNewAssetDatabase = Editor.GameProject?.AssetSystemVersion == ProjectInfo.CurrentAssetSystemVersion;
+            _useNewAssetDatabase = Editor.GameProject != null &&
+                                  (Editor.GameProject.AssetSystemVersion == ProjectInfo.CurrentAssetSystemVersion ||
+                                   Editor.GameProject.AssetSystemReadOnly);
 
             var recoveredImportSources = new List<string>();
 
