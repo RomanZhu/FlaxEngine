@@ -138,6 +138,45 @@ bool CommandLine::Parse(const Char* cmdLine)
 			} \
 		}
 
+#define PARSE_ASSET_BOOL_SWITCH(text, command) \
+        pos = (Char*)StringUtils::FindIgnoreCase(buffer.Get(), TEXT(text)); \
+        if (pos) \
+        { \
+            if (Options.AssetCommand.HasValue()) \
+            { \
+                PARSE_ERROR("Only one --asset-* command can be specified."); \
+                return true; \
+            } \
+            len = ARRAY_COUNT(text) - 1; \
+            Utilities::UnsafeMemoryCopy(pos, pos + len, (end - pos - len) * 2); \
+            *(end - len) = 0; \
+            end -= len; \
+            Options.AssetCommand = String(TEXT(command)); \
+        }
+
+#define PARSE_ASSET_ARG_SWITCH(text, command) \
+        pos = (Char*)StringUtils::FindIgnoreCase(buffer.Get(), TEXT(text)); \
+        if (pos) \
+        { \
+            if (Options.AssetCommand.HasValue()) \
+            { \
+                PARSE_ERROR("Only one --asset-* command can be specified."); \
+                return true; \
+            } \
+            len = ARRAY_COUNT(text) - 1; \
+            if (ParseArg(pos + len, argStart, argEnd)) \
+            { \
+                PARSE_ERROR("The --asset-* command requires a guid[:fileId] argument."); \
+                return true; \
+            } \
+            Options.AssetCommand = String(TEXT(command)); \
+            Options.AssetCommandArgument = String(argStart, static_cast<int32>(argEnd - argStart)); \
+            len = static_cast<int32>((argEnd - pos) + 1); \
+            Utilities::UnsafeMemoryCopy(pos, pos + len, (end - pos - len) * 2); \
+            *(end - len) = 0; \
+            end -= len; \
+        }
+
     PARSE_BOOL_SWITCH("-windowed ", Windowed);
     PARSE_BOOL_SWITCH("-fullscreen ", Fullscreen);
     PARSE_BOOL_SWITCH("-vsync ", VSync);
@@ -178,6 +217,22 @@ bool CommandLine::Parse(const Char* cmdLine)
     PARSE_ARG_SWITCH("-build ", Build);
     PARSE_ARG_SWITCH("-clirequest ", CliRequest);
     PARSE_BOOL_SWITCH("-climode ", CliMode);
+    PARSE_ASSET_BOOL_SWITCH("--asset-refresh ", "asset-refresh");
+    PARSE_ASSET_BOOL_SWITCH("--asset-rebuild-database ", "asset-rebuild-database");
+    PARSE_ASSET_BOOL_SWITCH("--asset-reimport-all ", "asset-reimport-all");
+    PARSE_ASSET_BOOL_SWITCH("--asset-verify-determinism ", "asset-verify-determinism");
+    PARSE_ASSET_ARG_SWITCH("--asset-dump ", "asset-dump");
+    PARSE_ASSET_ARG_SWITCH("--asset-dependencies ", "asset-dependencies");
+    PARSE_ASSET_ARG_SWITCH("--asset-referencers ", "asset-referencers");
+    PARSE_ASSET_BOOL_SWITCH("--asset-validate-project ", "asset-validate-project");
+    PARSE_ASSET_BOOL_SWITCH("--asset-clean-unused-artifacts ", "asset-clean-unused-artifacts");
+    if (Options.AssetCommand.HasValue())
+    {
+        Options.CliMode = true;
+#if PLATFORM_HAS_HEADLESS_MODE
+        Options.Headless = true;
+#endif
+    }
     PARSE_BOOL_SWITCH("-skipcompile ", SkipCompile);
     PARSE_BOOL_SWITCH("-shaderdebug ", ShaderDebug);
     PARSE_BOOL_SWITCH("-exit ", Exit);
@@ -186,6 +241,9 @@ bool CommandLine::Parse(const Char* cmdLine)
 #if USE_EDITOR || !BUILD_RELEASE
     PARSE_BOOL_SWITCH("-shaderprofile ", ShaderProfile);
 #endif
+
+#undef PARSE_ASSET_BOOL_SWITCH
+#undef PARSE_ASSET_ARG_SWITCH
 
     return false;
 }

@@ -116,7 +116,6 @@ namespace FlaxEditor
         }
 
         /// <summary>Reports legacy texture data needed for a future source/sidecar migration.</summary>
-        [CliCommand("assets.texture.migration-inventory", Description = "Describe legacy texture source locations and embedded import settings.", Access = CliCommandAccess.ReadOnly)]
         public static CliCommandResult TextureMigrationInventory()
         {
             if (AssetDatabaseFacade.LoadOrScan(false))
@@ -138,7 +137,6 @@ namespace FlaxEditor
         }
 
         /// <summary>Describes mixed-mode migration eligibility without writing Content.</summary>
-        [CliCommand("assets.migration.inventory", Description = "Describe mixed-mode migration eligibility without tracked writes.", Access = CliCommandAccess.ReadOnly)]
         public static CliCommandResult MigrationInventory()
         {
             var before = HashContentTree();
@@ -156,7 +154,6 @@ namespace FlaxEditor
         }
 
         /// <summary>Converts one eligible legacy binary to its canonical text document.</summary>
-        [CliCommand("assets.migration.convert", Description = "Convert one eligible legacy flax asset to canonical text.", Access = CliCommandAccess.MutatesProject)]
         public static CliCommandResult MigrateLegacyAsset(string sourcePath)
         {
             if (AssetDatabaseFacade.MigrateLegacyAsset(sourcePath))

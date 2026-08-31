@@ -12,7 +12,6 @@ namespace FlaxEditor
     public static class CliAssetMigrationRecoveryCommands
     {
         /// <summary>Builds and verifies staged canonical replacements before deleting migration backups.</summary>
-        [CliCommand("assets.migration.resume-project", Description = "Resume and verify an interrupted project asset migration.", Access = CliCommandAccess.MutatesProject)]
         public static CliCommandOperation ResumeProject()
         {
             return new RecoveryOperation();

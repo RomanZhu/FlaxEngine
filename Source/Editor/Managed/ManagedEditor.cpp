@@ -209,7 +209,7 @@ void ManagedEditor::Init()
         flags |= StartupFlags::SkipCompile;
     if (CommandLine::Options.NewProject.IsTrue())
         flags |= StartupFlags::NewProject;
-    if (CommandLine::Options.CliMode.IsTrue() || CommandLine::Options.CliRequest.HasValue())
+    if (CommandLine::Options.CliMode.IsTrue() || CommandLine::Options.CliRequest.HasValue() || CommandLine::Options.AssetCommand.HasValue())
         flags |= StartupFlags::CliMode;
     // Typed CLI requests own their lifetime. Keeping -exit available as an old-Editor
     // compatibility fallback prevents an unsupported request from hanging forever.
@@ -255,7 +255,7 @@ void ManagedEditor::Init()
         }
     }
 
-    // Execute a typed CLI request if present, otherwise use the legacy build command
+    // Execute a typed CLI request or exact one-shot asset command, otherwise use the legacy build command
     if (CommandLine::Options.CliRequest.HasValue())
     {
         const auto cliRequestMethod = GetClass()->GetMethod("CliRequestCommand", 1);
@@ -269,6 +269,24 @@ void ManagedEditor::Init()
         if (exception)
         {
             LOG(Fatal, "CLI request failed!");
+        }
+    }
+    else if (CommandLine::Options.AssetCommand.HasValue())
+    {
+        const auto assetCommandMethod = GetClass()->GetMethod("AssetHeadlessCommand", 2);
+        if (assetCommandMethod == nullptr)
+        {
+            LOG(Fatal, "Missing headless asset command method!");
+        }
+        args[0] = MUtils::ToString(CommandLine::Options.AssetCommand.GetValue());
+        args[1] = MUtils::ToString(CommandLine::Options.AssetCommandArgument.HasValue()
+            ? CommandLine::Options.AssetCommandArgument.GetValue()
+            : String::Empty);
+        exception = nullptr;
+        assetCommandMethod->Invoke(GetManagedInstance(), args, &exception);
+        if (exception)
+        {
+            LOG(Fatal, "Headless asset command failed!");
         }
     }
     else if (CommandLine::Options.Build.HasValue())

@@ -14,7 +14,6 @@ namespace FlaxEditor
     public static class CliAssetMigrationCommands
     {
         /// <summary>Extracts eligible legacy project assets into canonical sources while preserving identities.</summary>
-        [CliCommand("assets.migration.convert-project", Description = "Convert eligible legacy project assets to text, PNG/DDS, and GLB sources.", Access = CliCommandAccess.MutatesProject)]
         public static CliCommandOperation ConvertProject()
         {
             return new ProjectMigrationOperation();

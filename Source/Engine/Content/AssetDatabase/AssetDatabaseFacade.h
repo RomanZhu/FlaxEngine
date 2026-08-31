@@ -57,6 +57,59 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
     API_FIELD() bool IsMain = false;
 };
 
+/// <summary>Managed-safe normalized asset dependency projection.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetDatabaseDependencyInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDatabaseDependencyInfo);
+
+    API_FIELD() AssetObjectId Owner;
+    API_FIELD() String TargetID;
+    API_FIELD() String Kind;
+    API_FIELD() AssetObjectId TargetObject;
+    API_FIELD() String SourcePath;
+    API_FIELD() String ExactArtifact;
+    API_FIELD() String CustomDependency;
+    API_FIELD() String ContentHash;
+    API_FIELD() String OriginPath;
+    API_FIELD() int32 OriginLine = -1;
+    API_FIELD() int32 OriginColumn = -1;
+};
+
+/// <summary>Managed-safe immutable artifact publication projection.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetDatabasePublicationInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDatabasePublicationInfo);
+
+    API_FIELD() AssetObjectId Object;
+    API_FIELD() String TargetID;
+    API_FIELD() String Artifact;
+    API_FIELD() String ManifestHash;
+    API_FIELD() String InputFingerprint;
+    API_FIELD() uint64 SourceRevision = 0;
+    API_FIELD() uint64 ImporterRegistryGeneration = 0;
+    API_FIELD() int64 PublishedUtcTicks = 0;
+    API_FIELD() bool IsLastKnownGood = false;
+};
+
+/// <summary>Managed-safe result of one immutable artifact garbage collection pass.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetArtifactCleanupInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetArtifactCleanupInfo);
+
+    API_FIELD() uint64 TotalArtifactBytes = 0;
+    API_FIELD() uint64 ReachableBytes = 0;
+    API_FIELD() uint64 CandidateBytes = 0;
+    API_FIELD() uint64 ReclaimedBytes = 0;
+    API_FIELD() int32 ScannedFiles = 0;
+    API_FIELD() int32 ReachableFiles = 0;
+    API_FIELD() int32 LeasedFiles = 0;
+    API_FIELD() int32 CandidateFiles = 0;
+    API_FIELD() int32 DeletedFiles = 0;
+    API_FIELD() bool BlockedByInvalidManifest = false;
+    API_FIELD() String DeletedPaths;
+    API_FIELD() Array<AssetPipelineDiagnostic> Diagnostics;
+};
+
 /// <summary>Last published asset-database identity change, for scoped editor tree refresh.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetDatabaseChangeInfo
 {
@@ -92,6 +145,9 @@ public:
 
     API_PROPERTY() static uint64 GetRevision();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
+    API_FUNCTION() static Array<AssetDatabaseDependencyInfo> GetDependencies(const AssetObjectId& objectID);
+    API_FUNCTION() static Array<AssetDatabaseDependencyInfo> GetReferencers(const AssetObjectId& objectID);
+    API_FUNCTION() static Array<AssetDatabasePublicationInfo> GetPublications(const AssetObjectId& objectID);
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
     API_FUNCTION() static AssetDatabaseChangeInfo GetLastChange();
 
@@ -172,6 +228,10 @@ public:
     /// <summary>Safely clears and recreates the configured Project Library root.</summary>
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool CleanLibrary();
+
+    /// <summary>Deletes all unleased immutable artifacts not reachable from a current manifest.</summary>
+    /// <returns>True on infrastructure failure.</returns>
+    API_FUNCTION() static bool CleanUnusedArtifacts(API_PARAM(Out) AssetArtifactCleanupInfo& result);
 
     /// <summary>Clones a sidecar with a new file GUID while preserving file-relative local IDs.</summary>
     /// <returns>True on failure.</returns>

@@ -5,6 +5,7 @@
 #include "AssetMeta.h"
 #include "AssetOperations.h"
 #include "MigrationInventory.h"
+#include "Engine/Content/Artifacts/ArtifactGC.h"
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/Asset.h"
@@ -297,6 +298,45 @@ namespace
         result.Status = record.Status;
         result.Revision = record.DatabaseRevision;
         result.IsMain = record.IsMainAsset();
+        return result;
+    }
+
+    AssetDatabaseDependencyInfo ToInfo(const SourceAssetDependencyRow& dependency)
+    {
+        AssetDatabaseDependencyInfo result;
+        result.Owner = AssetObjectId(AssetGuid(dependency.OwnerAssetGuid), dependency.OwnerLocalFileId);
+        result.TargetID = dependency.TargetId;
+        switch (dependency.Kind)
+        {
+        case AssetDependencyKind::SourceFile: result.Kind = TEXT("SourceFile"); break;
+        case AssetDependencyKind::BuildInput: result.Kind = TEXT("BuildInput"); break;
+        case AssetDependencyKind::RuntimeReference: result.Kind = TEXT("RuntimeReference"); break;
+        case AssetDependencyKind::Toolchain: result.Kind = TEXT("Toolchain"); break;
+        default: result.Kind = TEXT("Unknown"); break;
+        }
+        result.TargetObject = AssetObjectId(AssetGuid(dependency.TargetAssetGuid), dependency.TargetLocalFileId);
+        result.SourcePath = dependency.SourcePath;
+        result.ExactArtifact = String(dependency.ExactArtifact.ToString());
+        result.CustomDependency = dependency.CustomDependency;
+        result.ContentHash = String(dependency.Content.ToString());
+        result.OriginPath = dependency.OriginPath;
+        result.OriginLine = dependency.OriginLine;
+        result.OriginColumn = dependency.OriginColumn;
+        return result;
+    }
+
+    AssetDatabasePublicationInfo ToInfo(const SourceAssetPublicationRow& publication)
+    {
+        AssetDatabasePublicationInfo result;
+        result.Object = AssetObjectId(AssetGuid(publication.AssetGuid), publication.LocalFileId);
+        result.TargetID = publication.TargetId;
+        result.Artifact = String(publication.Artifact.ToString());
+        result.ManifestHash = String(publication.ManifestHash.ToString());
+        result.InputFingerprint = String(publication.InputFingerprint.ToString());
+        result.SourceRevision = publication.SourceRevision;
+        result.ImporterRegistryGeneration = publication.ImporterRegistryGeneration;
+        result.PublishedUtcTicks = publication.PublishedUtcTicks;
+        result.IsLastKnownGood = publication.IsLastKnownGood;
         return result;
     }
 
@@ -769,18 +809,29 @@ namespace
             if (AssetMeta::Load(metaPath, metadata, diagnostic))
                 return true;
             const bool isSettings = extension == TEXT("settings");
-            if (isSettings && ValidateSettingsIdentity(sourcePath, metadata.ID, diagnostic))
+            const bool isJsonDocument = !isSettings && JsonStorageProxy::IsValidExtension(extension);
+            if ((isSettings || isJsonDocument) && ValidateSettingsIdentity(sourcePath, metadata.ID, diagnostic))
                 return true;
             const bool settingsUpgrade = isSettings &&
                 (metadata.AssetType != JsonAsset::TypeName || metadata.SourceKind != AssetSourceKind::TextDocument ||
                  metadata.Processor.ID != TEXT("Flax.Settings") || metadata.Processor.SettingsVersion != 1 ||
                  metadata.Processor.SettingsJson != StringAnsiView("{}\n"));
-            if (!metadata.MetaUpgradeRequired && !settingsUpgrade)
+            const bool jsonDocumentUpgrade = isJsonDocument &&
+                (metadata.SourceKind != AssetSourceKind::TextDocument || metadata.Processor.ID != TEXT("Flax.JsonDocument") ||
+                 metadata.Processor.SettingsVersion != 1 || metadata.Processor.SettingsJson != StringAnsiView("{}\n"));
+            if (!metadata.MetaUpgradeRequired && !settingsUpgrade && !jsonDocumentUpgrade)
                 return false;
             metadata.FileFormatVersion = AssetMeta::CurrentFileFormatVersion;
             metadata.MetaUpgradeRequired = false;
             if (isSettings)
                 ConfigureSettingsMetadata(metadata);
+            else if (isJsonDocument)
+            {
+                metadata.SourceKind = AssetSourceKind::TextDocument;
+                metadata.Processor.ID = TEXT("Flax.JsonDocument");
+                metadata.Processor.SettingsVersion = 1;
+                metadata.Processor.SettingsJson = "{}\n";
+            }
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
         }
         AssetMeta metadata;
@@ -811,8 +862,8 @@ namespace
                 ConfigureSettingsMetadata(metadata);
             else
             {
-                metadata.SourceKind = AssetSourceKind::ExistingJson;
-                metadata.Processor.ID = TEXT("Flax.ExistingJson");
+                metadata.SourceKind = AssetSourceKind::TextDocument;
+                metadata.Processor.ID = TEXT("Flax.JsonDocument");
                 metadata.Processor.SettingsVersion = 1;
                 metadata.Processor.SettingsJson = "{}\n";
             }
@@ -968,7 +1019,7 @@ namespace
             diagnostic = AssetPipelineDiagnostic();
             return false;
         }
-        if (AssetImportService::SynchronizeProcessorDescriptors(diagnostic))
+        if (AssetImportService::EnsureInitialized(diagnostic))
             return true;
         AssetRefreshCoordinator* coordinator = AssetImportService::GetRefreshCoordinator();
         if (!coordinator)
@@ -1221,6 +1272,87 @@ Array<AssetDatabaseRecordInfo> AssetDatabaseFacade::GetRecords()
             if (a.CanonicalPath != b.CanonicalPath)
                 return a.CanonicalPath < b.CanonicalPath;
             return a.SubAssetKey < b.SubAssetKey;
+        });
+    }
+    return result;
+}
+
+Array<AssetDatabaseDependencyInfo> AssetDatabaseFacade::GetDependencies(const AssetObjectId& objectID)
+{
+    Array<AssetDatabaseDependencyInfo> result;
+    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+        return result;
+    const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+    if (!snapshot.IsValid())
+        return result;
+    for (const SourceAssetDependencyRow& dependency : snapshot.GetState().Dependencies)
+    {
+        if (dependency.OwnerAssetGuid == objectID.Asset.Value && dependency.OwnerLocalFileId == objectID.LocalId)
+            result.Add(ToInfo(dependency));
+    }
+    if (result.Count() > 1)
+    {
+        std::sort(result.Get(), result.Get() + result.Count(), [](const AssetDatabaseDependencyInfo& a, const AssetDatabaseDependencyInfo& b)
+        {
+            if (a.Kind != b.Kind)
+                return a.Kind < b.Kind;
+            if (a.TargetID != b.TargetID)
+                return a.TargetID < b.TargetID;
+            if (a.TargetObject.Asset.Value != b.TargetObject.Asset.Value)
+                return a.TargetObject.Asset.ToString() < b.TargetObject.Asset.ToString();
+            return a.TargetObject.LocalId < b.TargetObject.LocalId;
+        });
+    }
+    return result;
+}
+
+Array<AssetDatabaseDependencyInfo> AssetDatabaseFacade::GetReferencers(const AssetObjectId& objectID)
+{
+    Array<AssetDatabaseDependencyInfo> result;
+    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+        return result;
+    const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+    if (!snapshot.IsValid())
+        return result;
+    for (const SourceAssetDependencyRow& dependency : snapshot.GetState().Dependencies)
+    {
+        if (dependency.TargetAssetGuid == objectID.Asset.Value && dependency.TargetLocalFileId == objectID.LocalId)
+            result.Add(ToInfo(dependency));
+    }
+    if (result.Count() > 1)
+    {
+        std::sort(result.Get(), result.Get() + result.Count(), [](const AssetDatabaseDependencyInfo& a, const AssetDatabaseDependencyInfo& b)
+        {
+            if (a.Owner.Asset.Value != b.Owner.Asset.Value)
+                return a.Owner.Asset.ToString() < b.Owner.Asset.ToString();
+            if (a.Owner.LocalId != b.Owner.LocalId)
+                return a.Owner.LocalId < b.Owner.LocalId;
+            if (a.Kind != b.Kind)
+                return a.Kind < b.Kind;
+            return a.TargetID < b.TargetID;
+        });
+    }
+    return result;
+}
+
+Array<AssetDatabasePublicationInfo> AssetDatabaseFacade::GetPublications(const AssetObjectId& objectID)
+{
+    Array<AssetDatabasePublicationInfo> result;
+    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+        return result;
+    const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+    if (!snapshot.IsValid())
+        return result;
+    for (const SourceAssetPublicationRow& publication : snapshot.GetState().Publications)
+    {
+        if (publication.AssetGuid == objectID.Asset.Value && publication.LocalFileId == objectID.LocalId)
+            result.Add(ToInfo(publication));
+    }
+    if (result.Count() > 1)
+    {
+        std::sort(result.Get(), result.Get() + result.Count(), [](const AssetDatabasePublicationInfo& a, const AssetDatabasePublicationInfo& b)
+        {
+            return a.TargetID < b.TargetID;
         });
     }
     return result;
@@ -1988,6 +2120,43 @@ bool AssetDatabaseFacade::CleanLibrary()
     SetDiagnostics(diagnostics);
     return failed;
 #else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::CleanUnusedArtifacts(AssetArtifactCleanupInfo& result)
+{
+#if USE_EDITOR
+    ArtifactGCOptions options;
+    options.GracePeriod = TimeSpan::Zero();
+    options.MaximumDeletes = MAX_int32;
+    options.MaximumDeleteBytes = MAX_uint64;
+    ArtifactGCResult gcResult;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = ArtifactGC::Run(Globals::ProjectLibraryFolder, options, gcResult, diagnostic);
+    result.TotalArtifactBytes = gcResult.TotalArtifactBytes;
+    result.ReachableBytes = gcResult.ReachableBytes;
+    result.CandidateBytes = gcResult.CandidateBytes;
+    result.ReclaimedBytes = gcResult.ReclaimedBytes;
+    result.ScannedFiles = gcResult.ScannedFiles;
+    result.ReachableFiles = gcResult.ReachableFiles;
+    result.LeasedFiles = gcResult.LeasedFiles;
+    result.CandidateFiles = gcResult.CandidateFiles;
+    result.DeletedFiles = gcResult.DeletedFiles;
+    result.BlockedByInvalidManifest = gcResult.BlockedByInvalidManifest;
+    for (const String& path : gcResult.DeletedPaths)
+    {
+        if (result.DeletedPaths.HasChars())
+            result.DeletedPaths += '\n';
+        result.DeletedPaths += path;
+    }
+    result.Diagnostics = MoveTemp(gcResult.Diagnostics);
+    if (diagnostic.Code != AssetPipelineDiagnosticCode::None)
+        result.Diagnostics.Add(diagnostic);
+    SetDiagnostics(result.Diagnostics);
+    return failed;
+#else
+    result = AssetArtifactCleanupInfo();
     return true;
 #endif
 }
@@ -3615,8 +3784,8 @@ Guid AssetDatabaseFacade::CreateExistingJsonMetadata(const StringView& sourcePat
     else
     {
         meta.AssetType = typeName;
-        meta.SourceKind = AssetSourceKind::ExistingJson;
-        meta.Processor.ID = TEXT("Flax.ExistingJson");
+        meta.SourceKind = AssetSourceKind::TextDocument;
+        meta.Processor.ID = TEXT("Flax.JsonDocument");
         meta.Processor.SettingsVersion = 1;
         meta.Processor.SettingsJson = "{}\n";
     }

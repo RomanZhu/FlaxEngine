@@ -189,6 +189,16 @@ public:
         Nullable<bool> CliMode;
 
         /// <summary>
+        /// Exact one-shot asset command selected by an --asset-* switch.
+        /// </summary>
+        Nullable<String> AssetCommand;
+
+        /// <summary>
+        /// Optional guid[:fileId] argument for the selected one-shot asset command.
+        /// </summary>
+        Nullable<String> AssetCommandArgument;
+
+        /// <summary>
         /// -skipcompile (skips the scripts compilation on editor startup, useful when launching engine from IDE)
         /// </summary>
         Nullable<bool> SkipCompile;
