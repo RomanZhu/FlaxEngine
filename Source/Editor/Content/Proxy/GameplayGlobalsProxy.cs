@@ -18,6 +18,9 @@ namespace FlaxEditor.Content
         public override string Name => "Gameplay Globals";
 
         /// <inheritdoc />
+        public override string FileExtension => CanonicalGraphDocuments.UseNewAssetDatabase ? "gameplayglobals" : Extension;
+
+        /// <inheritdoc />
         public override EditorWindow Open(Editor editor, ContentItem item)
         {
             return new GameplayGlobalsWindow(editor, (AssetItem)item);
@@ -38,6 +41,12 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+            {
+                if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(GameplayGlobals).FullName) == Guid.Empty)
+                    throw new Exception("Failed to create authored gameplay globals document.");
+                return;
+            }
             var asset = FlaxEngine.Content.CreateVirtualAsset<GameplayGlobals>();
             if (asset.Save(outputPath))
                 throw new Exception("Failed to create new asset.");

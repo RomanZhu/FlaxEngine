@@ -12,7 +12,9 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
+#include "Engine/Content/Assets/Animation.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
+#include "Engine/Engine/GameplayGlobals.h"
 #include "Engine/Particles/ParticleSystem.h"
 #include "Engine/Physics/CollisionData.h"
 #include "Engine/Graphics/Shaders/Cache/ShaderStorage.h"
@@ -27,6 +29,7 @@
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/ContentImporters/Types.h"
 #endif
+#include <algorithm>
 
 namespace
 {
@@ -80,6 +83,20 @@ namespace
     void AddAnsi(JsonValue& object, const char* key, const StringAnsiView& value, JsonAlloc& allocator)
     {
         object.AddMember(JsonValue(key, allocator), JsonValue(value.Get(), value.Length(), allocator), allocator);
+    }
+
+    StringAnsi EncodeHex(const void* data, int32 length)
+    {
+        static const char digits[] = "0123456789abcdef";
+        StringAnsi result;
+        result.Resize(length * 2);
+        const byte* bytes = static_cast<const byte*>(data);
+        for (int32 i = 0; i < length; i++)
+        {
+            result[i * 2] = digits[bytes[i] >> 4];
+            result[i * 2 + 1] = digits[bytes[i] & 15];
+        }
+        return result;
     }
 
     StringAnsi MaterialPropertiesFromHeader(const AssetInitData& data)
@@ -274,6 +291,50 @@ namespace
         return WriteSimpleDocument(destination, id, CollisionData::TypeName, TEXT("Flax.CollisionData"), json, order, diagnostic);
     }
 
+    bool ConvertRuntimePayload(const StringView& destination, const Guid& id, const StringView& typeName,
+        const StringView& processorId, const AssetInitData& data, const Array<Guid>* references, AssetPipelineDiagnostic& diagnostic)
+    {
+        const FlaxChunk* chunk = Chunk(data, 0);
+        if (!chunk)
+            return Fail(diagnostic, TEXT("Authored flax is missing its runtime data chunk."));
+        JsonDocument json;
+        json.SetObject();
+        JsonAlloc& allocator = json.GetAllocator();
+        json.AddMember("documentVersion", 1, allocator);
+        AddAnsi(json, "type", StringAnsi(typeName), allocator);
+        AddAnsi(json, "payloadEncoding", "hex", allocator);
+        AddAnsi(json, "runtimeChunk", EncodeHex(chunk->Get(), chunk->Size()), allocator);
+        JsonValue referenceValues(rapidjson::kArrayType);
+        if (references)
+        {
+            Array<StringAnsi> keys;
+            for (const Guid& reference : *references)
+            {
+                if (reference.IsValid())
+                    keys.Add(GuidKey(reference));
+            }
+            if (keys.Count() > 1)
+            {
+                std::sort(keys.Get(), keys.Get() + keys.Count(), [](const StringAnsi& a, const StringAnsi& b) { return a < b; });
+                for (int32 i = keys.Count() - 1; i > 0; i--)
+                {
+                    if (keys[i] == keys[i - 1])
+                        keys.RemoveAt(i);
+                }
+            }
+            for (const StringAnsi& key : keys)
+                referenceValues.PushBack(JsonValue(key.Get(), key.Length(), allocator), allocator);
+        }
+        json.AddMember("references", referenceValues, allocator);
+        Array<StringAnsi> order;
+        order.Add("documentVersion");
+        order.Add("type");
+        order.Add("payloadEncoding");
+        order.Add("runtimeChunk");
+        order.Add("references");
+        return WriteSimpleDocument(destination, id, typeName, processorId, json, order, diagnostic);
+    }
+
     bool ConvertShader(const StringView& destination, const Guid& id, const AssetInitData& data, AssetPipelineDiagnostic& diagnostic)
     {
         const FlaxChunk* chunk = Chunk(data, SHADER_FILE_CHUNK_SOURCE);
@@ -357,7 +418,8 @@ bool LegacyAssetMigrator::SeedModelSubAssets(const StringView& flaxPath, AssetMe
     return false;
 }
 
-bool LegacyAssetMigrator::ConvertFlax(const StringView& sourcePath, const StringView& destinationPath, const Guid& preservedId, const StringView& typeName, AssetPipelineDiagnostic& diagnostic)
+bool LegacyAssetMigrator::ConvertFlax(const StringView& sourcePath, const StringView& destinationPath, const Guid& preservedId, const StringView& typeName,
+    AssetPipelineDiagnostic& diagnostic, const Array<Guid>* references)
 {
     FlaxChunk ownedChunks[ASSET_FILE_DATA_CHUNKS];
     AssetInitData data;
@@ -405,6 +467,10 @@ bool LegacyAssetMigrator::ConvertFlax(const StringView& sourcePath, const String
         return ConvertParticleSystem(destinationPath, id, data, diagnostic);
     if (resolvedType == CollisionData::TypeName)
         return ConvertCollisionData(destinationPath, id, data, diagnostic);
+    if (resolvedType == Animation::TypeName)
+        return ConvertRuntimePayload(destinationPath, id, Animation::TypeName, TEXT("Flax.Animation"), data, references, diagnostic);
+    if (resolvedType == GameplayGlobals::TypeName)
+        return ConvertRuntimePayload(destinationPath, id, GameplayGlobals::TypeName, TEXT("Flax.GameplayGlobals"), data, references, diagnostic);
     if (resolvedType == Shader::TypeName)
         return ConvertShader(destinationPath, id, data, diagnostic);
     return Fail(diagnostic, TEXT("No flax-to-canonical converter is registered for this type."));

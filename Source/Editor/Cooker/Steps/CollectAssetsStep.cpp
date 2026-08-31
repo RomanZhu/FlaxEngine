@@ -31,11 +31,24 @@ namespace
             record.ProcessorID == TEXT("Flax.ShaderSource");
     }
 
-    void QueueRuntimeObjectClosure(const AssetRecord& record, Array<Guid>& queue)
+    bool QueueRuntimeObjectClosure(const AssetRecord& record, Array<Guid>& queue)
     {
-        queue.Add(record.RuntimeReferences);
+        if (record.RuntimeObjectReferences.HasItems())
+        {
+            for (const AssetObjectId& reference : record.RuntimeObjectReferences)
+            {
+                AssetRecord referencedRecord;
+                if (!AssetDatabase::Get().TryGetRecord(reference, referencedRecord))
+                    return true;
+                queue.Add(referencedRecord.ID);
+            }
+        }
+        else
+        {
+            queue.Add(record.RuntimeReferences);
+        }
         if (!record.IsMainAsset())
-            return;
+            return false;
         Array<AssetRecord> objects;
         AssetDatabase::Get().GetSubAssets(record.SourceAssetID, objects);
         for (const AssetRecord& object : objects)
@@ -45,6 +58,7 @@ namespace
             if (object.Status != AssetRecordStatus::MissingSource)
                 queue.Add(object.ID);
         }
+        return false;
     }
 }
 
@@ -89,7 +103,12 @@ bool CollectAssetsStep::Perform(CookingData& data)
             }
             LOG_STR(Info, canonicalRecord.CanonicalPath.Get());
             data.Assets.Add(assetId);
-            QueueRuntimeObjectClosure(canonicalRecord, assetsQueue);
+            if (QueueRuntimeObjectClosure(canonicalRecord, assetsQueue))
+            {
+                LOG(Error, "Hard-cut cook object {0}:{1} has an unresolved exact runtime reference.",
+                    canonicalRecord.SourceAssetID, canonicalRecord.LocalId);
+                return true;
+            }
             continue;
         }
         if (hasCanonicalRecord && canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary &&

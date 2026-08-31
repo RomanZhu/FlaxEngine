@@ -74,9 +74,12 @@ public:
 struct FLAXENGINE_API PreparedAsset
 {
     Guid AssetID = Guid::Empty;
+    AssetObjectId ObjectID;
     String OutputType;
     uint64 DatabaseRevision = 0;
     String AssetName;
+    String StableObjectKey;
+    bool IsMainObject = true;
     String SourcePath;
     ContentHash SourceHash;
     ContentHash SettingsHash;

@@ -11,6 +11,32 @@ using FlaxEngine;
 
 namespace FlaxEditor
 {
+    /// <summary>Requires this postprocessor to run before the specified postprocessor types.</summary>
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+    public sealed class AssetPostprocessorRunBeforeAttribute : Attribute
+    {
+        /// <summary>Creates an ordering constraint.</summary>
+        public AssetPostprocessorRunBeforeAttribute(params Type[] types)
+        {
+            Types = types ?? throw new ArgumentNullException(nameof(types));
+        }
+
+        internal Type[] Types { get; }
+    }
+
+    /// <summary>Requires this postprocessor to run after the specified postprocessor types.</summary>
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
+    public sealed class AssetPostprocessorRunAfterAttribute : Attribute
+    {
+        /// <summary>Creates an ordering constraint.</summary>
+        public AssetPostprocessorRunAfterAttribute(params Type[] types)
+        {
+            Types = types ?? throw new ArgumentNullException(nameof(types));
+        }
+
+        internal Type[] Types { get; }
+    }
+
     /// <summary>Base type for deterministic pre/post import callbacks.</summary>
     public abstract class AssetPostprocessor
     {
@@ -76,6 +102,8 @@ namespace FlaxEditor
             public string Identity;
             public int Order;
             public uint Version;
+            public string[] Before;
+            public string[] After;
         }
 
         public static string Preprocess(string path)
@@ -241,7 +269,80 @@ namespace FlaxEditor
                 }
                 result.Add(entry);
             }
-            return result.OrderBy(x => x.Order).ThenBy(x => x.Identity, StringComparer.Ordinal).ToArray();
+            var entries = result.ToArray();
+            var byType = entries.ToDictionary(x => x.Type);
+            foreach (var entry in entries)
+            {
+                entry.Before = ReadConstraints<AssetPostprocessorRunBeforeAttribute>(entry.Type, x => x.Types, byType);
+                entry.After = ReadConstraints<AssetPostprocessorRunAfterAttribute>(entry.Type, x => x.Types, byType);
+            }
+            return TopologicalSort(entries);
+        }
+
+        private static string[] ReadConstraints<T>(Type owner, Func<T, Type[]> selector, Dictionary<Type, PostprocessorEntry> entries)
+            where T : Attribute
+        {
+            var result = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var attribute in owner.GetCustomAttributes<T>(false))
+            {
+                foreach (var target in selector(attribute))
+                {
+                    if (target == null || !entries.TryGetValue(target, out var entry))
+                        throw new InvalidOperationException($"Postprocessor '{owner.FullName}' has an ordering constraint on an unregistered type '{target?.FullName ?? "<null>"}'.");
+                    result.Add(entry.Identity);
+                }
+            }
+            return result.ToArray();
+        }
+
+        private static PostprocessorEntry[] TopologicalSort(PostprocessorEntry[] entries)
+        {
+            var edges = entries.ToDictionary(x => x, _ => new HashSet<PostprocessorEntry>());
+            var incoming = entries.ToDictionary(x => x, _ => 0);
+            foreach (var entry in entries)
+            {
+                foreach (var identity in entry.Before)
+                {
+                    var target = entries.First(x => x.Identity == identity);
+                    if (edges[entry].Add(target))
+                        incoming[target]++;
+                }
+                foreach (var identity in entry.After)
+                {
+                    var source = entries.First(x => x.Identity == identity);
+                    if (edges[source].Add(entry))
+                        incoming[entry]++;
+                }
+            }
+            var comparer = Comparer<PostprocessorEntry>.Create((a, b) =>
+            {
+                var order = a.Order.CompareTo(b.Order);
+                return order != 0 ? order : string.CompareOrdinal(a.Identity, b.Identity);
+            });
+            var ready = new SortedSet<PostprocessorEntry>(comparer);
+            foreach (var entry in entries)
+            {
+                if (incoming[entry] == 0)
+                    ready.Add(entry);
+            }
+            var result = new List<PostprocessorEntry>(entries.Length);
+            while (ready.Count != 0)
+            {
+                var entry = ready.Min;
+                ready.Remove(entry);
+                result.Add(entry);
+                foreach (var target in edges[entry].OrderBy(x => x.Identity, StringComparer.Ordinal))
+                {
+                    if (--incoming[target] == 0)
+                        ready.Add(target);
+                }
+            }
+            if (result.Count != entries.Length)
+            {
+                var cycle = incoming.Where(x => x.Value != 0).Select(x => x.Key.Identity).OrderBy(x => x, StringComparer.Ordinal);
+                throw new InvalidOperationException("Asset postprocessor ordering contains a cycle: " + string.Join(" -> ", cycle));
+            }
+            return result.ToArray();
         }
 
         private static string GetFingerprint(PostprocessorEntry[] processors)
@@ -252,7 +353,9 @@ namespace FlaxEditor
             {
                 value.Append(entry.Identity.Length.ToString(CultureInfo.InvariantCulture)).Append(':').Append(entry.Identity).Append('|')
                     .Append(entry.Order.ToString(CultureInfo.InvariantCulture)).Append('|')
-                    .Append(entry.Version.ToString(CultureInfo.InvariantCulture)).Append('\n');
+                    .Append(entry.Version.ToString(CultureInfo.InvariantCulture)).Append('|')
+                    .Append(string.Join(",", entry.Before)).Append('|')
+                    .Append(string.Join(",", entry.After)).Append('\n');
             }
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToString()))).ToLowerInvariant();
         }

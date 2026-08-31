@@ -5,6 +5,8 @@
 #include "Engine/Core/DeleteMe.h"
 #include "Engine/Core/Utilities.h"
 #include "Engine/Core/Collections/Sorting.h"
+#include "Engine/Core/Collections/HashSet.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Asset.h"
@@ -14,6 +16,7 @@
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseStorage.h"
 #include "Engine/Content/AssetDatabase/RuntimeAssetIndex.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/Shader.h"
@@ -26,6 +29,7 @@
 #include "Engine/Utilities/Encryption.h"
 #include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Serialization/FileWriteStream.h"
+#include "Engine/Serialization/FileReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Core/Config/PlatformSettings.h"
 #include "Engine/Core/Config/GameSettings.h"
@@ -69,6 +73,12 @@ namespace
         uint64 Offset = 0;
         uint64 Size = 0;
         uint32 AssetFormatVersion = 0;
+    };
+
+    struct PendingRuntimePreload
+    {
+        AssetObjectId ID;
+        uint32 Depth = 0;
     };
 
     String MakeRuntimeLogicalPath(const StringView& path)
@@ -175,6 +185,48 @@ namespace
             ? "Mobile" : data.Platform == BuildPlatform::Web ? "Web" : "Desktop";
         target.Role = "Runtime";
         return target;
+    }
+
+    bool ComputeFileContentHash(const StringView& path, ContentHash& hash)
+    {
+        FileReadStream* stream = FileReadStream::Open(path);
+        if (!stream)
+            return true;
+        DeleteMe<FileReadStream> deleteStream(stream);
+        ContentHasher hasher;
+        byte buffer[64 * 1024];
+        uint32 remaining = stream->GetLength();
+        while (remaining != 0)
+        {
+            const uint32 size = Math::Min<uint32>(remaining, sizeof(buffer));
+            stream->ReadBytes(buffer, size);
+            if (stream->HasError())
+                return true;
+            hasher.Update(buffer, size);
+            remaining -= size;
+        }
+        hash = hasher.Finalize();
+        return hash.IsZero();
+    }
+
+    const Char* GetReproducibilityDependencyKind(const AssetDependencyKind kind)
+    {
+        switch (kind)
+        {
+        case AssetDependencyKind::ImporterProvider:
+            return TEXT("ImporterProvider");
+        case AssetDependencyKind::Toolchain:
+            return TEXT("Toolchain");
+        case AssetDependencyKind::Environment:
+            return TEXT("Environment");
+        default:
+            return nullptr;
+        }
+    }
+
+    bool LessGuid(const Guid& a, const Guid& b)
+    {
+        return StringAnsi(a.ToString(Guid::FormatType::N)) < StringAnsi(b.ToString(Guid::FormatType::N));
     }
 }
 
@@ -1031,6 +1083,7 @@ private:
 
     uint64 packagesSizeTotal;
     Dictionary<Guid, CookedPackageLocation>& packageLocations;
+    HashSet<ContentHash> emittedPackageContents;
 
 public:
     /// <summary>
@@ -1142,17 +1195,51 @@ public:
 
         // Create package
         // Note: FlaxStorage::Create overrides chunks locations in file so don't use files anymore (only readonly)
-        const String localPath = String::Format(TEXT("Content/Data_{0}.{1}"), _packageIndex, PACKAGE_FILES_EXTENSION);
-        const String path = data.DataOutputPath / localPath;
-        if (FlaxStorage::Create(path, assetsData, false, &CustomData))
+        const String stagingPath = data.DataOutputPath / String::Format(TEXT("Content/.PackageStage_{0}.{1}"), _packageIndex, PACKAGE_FILES_EXTENSION);
+        if (FlaxStorage::Create(stagingPath, assetsData, false, &CustomData))
         {
             data.Error(TEXT("Failed to create assets package."));
             return true;
         }
 
-        ArtifactKeyBuilder packageKeyBuilder(StringAnsiView("flax-cooked-package-v1"));
-        packageKeyBuilder.AddString(StringAnsiView("path"), localPath);
-        packageKeyBuilder.AddUInt64(StringAnsiView("size"), FileSystem::GetFileSize(path));
+        const uint64 packageFileSize = FileSystem::GetFileSize(stagingPath);
+        ContentHash packageContent;
+        if (packageFileSize == 0 || ComputeFileContentHash(stagingPath, packageContent))
+        {
+            FileSystem::DeleteFile(stagingPath);
+            data.Error(TEXT("Failed to hash the created assets package."));
+            return true;
+        }
+        const String packageHash(packageContent.ToString());
+        const String localPath = String::Format(TEXT("Content/Packages/{0}.{1}"), packageHash, PACKAGE_FILES_EXTENSION);
+        const String path = data.DataOutputPath / localPath;
+        if (FileSystem::CreateDirectory(StringUtils::GetDirectoryName(path)))
+        {
+            FileSystem::DeleteFile(stagingPath);
+            data.Error(TEXT("Failed to create content-addressed package directory."));
+            return true;
+        }
+        if (FileSystem::FileExists(path))
+        {
+            ContentHash existingContent;
+            if (FileSystem::GetFileSize(path) != packageFileSize || ComputeFileContentHash(path, existingContent) || existingContent != packageContent)
+            {
+                FileSystem::DeleteFile(stagingPath);
+                data.Error(TEXT("Content-addressed package collision or corrupt reusable package detected."));
+                return true;
+            }
+            FileSystem::DeleteFile(stagingPath);
+        }
+        else if (FileSystem::MoveFile(path, stagingPath, false))
+        {
+            FileSystem::DeleteFile(stagingPath);
+            data.Error(TEXT("Failed to publish content-addressed assets package."));
+            return true;
+        }
+
+        ArtifactKeyBuilder packageKeyBuilder(StringAnsiView("flax-cooked-package-v2"));
+        packageKeyBuilder.AddUInt64(StringAnsiView("size"), packageFileSize);
+        packageKeyBuilder.AddHash(StringAnsiView("content"), packageContent);
         for (const AssetInitData& assetData : assetsData)
             packageKeyBuilder.AddGuid(StringAnsiView("asset"), assetData.Header.ID);
         const ArtifactKey packageKey = packageKeyBuilder.Finalize();
@@ -1171,7 +1258,7 @@ public:
         {
             return a.Address < b.Address;
         });
-        const uint64 packageSize = FileSystem::GetFileSize(path);
+        const uint64 packageSize = packageFileSize;
         Dictionary<Guid, uint64> artifactSizes;
         for (int32 i = 0; i < count; i++)
             artifactSizes.Add(addedEntries[i]->Info.ID, FileSystem::GetFileSize(files[i]->GetPath()));
@@ -1207,7 +1294,8 @@ public:
             addedEntries[i]->Info.Path = localPath;
         }
 
-        packagesSizeTotal += FileSystem::GetFileSize(path);
+        if (emittedPackageContents.Add(packageContent))
+            packagesSizeTotal += packageFileSize;
 
         Reset();
 
@@ -1232,11 +1320,33 @@ bool CookAssetsStep::Perform(CookingData& data)
     // Prepare
     const auto gameSettings = GameSettings::Get();
     const auto buildSettings = BuildSettings::Get();
-    const int32 contentKey = buildSettings->ContentKey == 0 ? rand() : buildSettings->ContentKey;
+    const bool hardCut = AssetDatabase::Get().IsHardCutEnabled();
+    const ArtifactTarget cookArtifactTarget = GetCookArtifactTarget(data);
+    int32 contentKey = buildSettings->ContentKey;
+    if (contentKey == 0)
+    {
+        if (hardCut)
+        {
+            ArtifactKeyBuilder contentKeyBuilder(StringAnsiView("flax-cooked-content-key-v1"));
+            contentKeyBuilder.AddKey(StringAnsiView("target"), cookArtifactTarget.BuildKey(ArtifactTargetDimension::All));
+            Array<StringAnsi> roots;
+            roots.EnsureCapacity(data.RootAssets.Count());
+            for (auto root = data.RootAssets.Begin(); root.IsNotEnd(); ++root)
+                roots.Add(StringAnsi(root->Item.ToString(Guid::FormatType::N).ToLower()));
+            contentKeyBuilder.AddSortedStrings(StringAnsiView("roots"), roots);
+            contentKey = static_cast<int32>(contentKeyBuilder.Finalize().Digest.Values[0] & 0x7fffffff);
+            if (contentKey == 0)
+                contentKey = 1;
+        }
+        else
+        {
+            contentKey = rand();
+        }
+    }
     AssetsRegistry.Clear();
     AssetPathsMapping.Clear();
-    const bool hardCut = AssetDatabase::Get().IsHardCutEnabled();
     Dictionary<Guid, ArtifactKey> exactArtifacts;
+    Dictionary<Guid, RuntimeBuildArtifactEvidence> artifactEvidence;
     Dictionary<Guid, CookedPackageLocation> packageLocations;
 
     // Load incremental build cache
@@ -1284,7 +1394,6 @@ bool CookAssetsStep::Perform(CookingData& data)
     auto minDateTime = DateTime::MinValue();
 #endif
     int32 subStepIndex = 0;
-    const ArtifactTarget cookArtifactTarget = GetCookArtifactTarget(data);
     Array<ArtifactLease> cookArtifactLeases;
     AssetReference<Asset> assetRef;
     assetRef.Unload.Bind([]
@@ -1372,6 +1481,52 @@ bool CookAssetsStep::Perform(CookingData& data)
                 return true;
             }
             exactArtifacts.Add(assetId, exactArtifact);
+
+            const ArtifactKey targetFingerprint = cookArtifactTarget.BuildKey(ArtifactTargetDimension::All);
+            String manifestPath;
+            ArtifactManifest manifest;
+            StringAnsi manifestJson;
+            if (AssetDatabaseStorage::GetCurrentArtifactManifest(Globals::ProjectLibraryFolder, assetId, targetFingerprint, manifestPath, diagnostic) ||
+                manifestPath.IsEmpty() || File::ReadAllText(manifestPath, manifestJson) ||
+                ArtifactManifest::Parse(manifestJson, manifestPath, manifest, diagnostic) || manifest.AssetID != assetId ||
+                manifest.Target.BuildKey(ArtifactTargetDimension::All) != targetFingerprint)
+            {
+                LOG(Error, "Exact canonical artifact {0} has no matching immutable manifest evidence: {1}", assetId, diagnostic.Message);
+                return true;
+            }
+            bool manifestContainsOutput = false;
+            for (const ArtifactManifestOutput& output : manifest.Outputs)
+            {
+                if (output.Kind == request.OutputKind && output.Key == exactArtifact)
+                {
+                    manifestContainsOutput = true;
+                    break;
+                }
+            }
+            if (!manifestContainsOutput)
+            {
+                LOG(Error, "Exact canonical artifact {0} is not present in its selected immutable manifest.", assetId);
+                return true;
+            }
+            RuntimeBuildArtifactEvidence evidence;
+            evidence.ID = canonicalRecord.GetObjectId();
+            evidence.Artifact = exactArtifact;
+            evidence.InputFingerprint = manifest.InputFingerprint;
+            evidence.SettingsHash = manifest.SettingsHash;
+            evidence.ProcessorID = manifest.ProcessorID;
+            evidence.ProcessorVersion = manifest.ProcessorImplementationVersion;
+            for (const ArtifactManifestDependency& dependency : manifest.Dependencies)
+            {
+                const Char* dependencyKind = GetReproducibilityDependencyKind(dependency.Kind);
+                if (!dependencyKind)
+                    continue;
+                RuntimeBuildDependencyEvidence dependencyEvidence;
+                dependencyEvidence.Kind = dependencyKind;
+                dependencyEvidence.Identity = dependency.Identity;
+                dependencyEvidence.Hash = dependency.Hash;
+                evidence.Environment.Add(MoveTemp(dependencyEvidence));
+            }
+            artifactEvidence.Add(assetId, MoveTemp(evidence));
 
             cookArtifactLeases.Add(ArtifactLease::Acquire(artifact.StoragePath.Get()));
             String cachedFilePath;
@@ -1539,11 +1694,16 @@ bool CookAssetsStep::Perform(CookingData& data)
         PackageBuilder packageBuilder(buildSettings->MaxAssetsPerPackage, buildSettings->MaxPackageSizeMB, contentKey, packageLocations);
 
         subStepIndex = 0;
-        for (auto i = AssetsRegistry.Begin(); i.IsNotEnd(); ++i)
+        Array<Guid> packageAssetIds;
+        AssetsRegistry.GetKeys(packageAssetIds);
+        if (packageAssetIds.Count() > 1)
+            std::sort(packageAssetIds.Get(), packageAssetIds.Get() + packageAssetIds.Count(), LessGuid);
+        for (const Guid& assetId : packageAssetIds)
         {
             BUILD_STEP_CANCEL_CHECK;
             data.StepProgress(Step3Info, Math::Lerp(Step3ProgressStart, Step3ProgressEnd, (float)subStepIndex++ / AssetsRegistry.Count()));
-            const auto assetId = i->Key;
+            AssetsCache::Entry* registryEntry = AssetsRegistry.TryGet(assetId);
+            ASSERT(registryEntry);
 
             String cookedFilePath;
             cache.GetFilePath(assetId, cookedFilePath);
@@ -1558,11 +1718,11 @@ bool CookAssetsStep::Perform(CookingData& data)
                 continue;
             }
 
-            auto& assetStats = data.Stats.AssetStats[i->Value.Info.TypeName];
+            auto& assetStats = data.Stats.AssetStats[registryEntry->Info.TypeName];
             assetStats.Count++;
             assetStats.ContentSize += FileSystem::GetFileSize(cookedFilePath);
 
-            if (packageBuilder.Add(data, i->Value, cookedFilePath))
+            if (packageBuilder.Add(data, *registryEntry, cookedFilePath))
                 return true;
         }
         if (packageBuilder.Package(data))
@@ -1663,7 +1823,140 @@ bool CookAssetsStep::Perform(CookingData& data)
             }
             indexEntries.Add(MoveTemp(entry));
         }
+
+        Dictionary<AssetObjectId, int32> entryByObject;
+        Dictionary<Guid, int32> entryByBacking;
+        for (int32 i = 0; i < indexEntries.Count(); i++)
+        {
+            entryByObject.Add(indexEntries[i].ID, i);
+            entryByBacking.Add(indexEntries[i].BackingAssetID, i);
+        }
+        for (RuntimeAssetIndexEntry& entry : indexEntries)
+        {
+            AssetRecord canonicalRecord;
+            if (!AssetDatabase::Get().TryGetRecord(entry.ID, canonicalRecord))
+                continue;
+            HashSet<AssetObjectId> uniqueDependencies;
+            for (const AssetObjectId& reference : canonicalRecord.RuntimeObjectReferences)
+            {
+                const int32* referencedIndex = entryByObject.TryGet(reference);
+                if (!referencedIndex)
+                {
+                    data.Error(String::Format(TEXT("Runtime dependency {0}:{1} of object {2}:{3} was not packaged."),
+                        reference.Guid, reference.LocalId, entry.ID.Guid, entry.ID.LocalId));
+                    return true;
+                }
+                const AssetObjectId dependency = indexEntries[*referencedIndex].ID;
+                if (dependency != entry.ID && uniqueDependencies.Add(dependency))
+                    entry.Dependencies.Add(dependency);
+            }
+            if (canonicalRecord.RuntimeObjectReferences.IsEmpty())
+            {
+                for (const Guid& reference : canonicalRecord.RuntimeReferences)
+                {
+                    const int32* referencedIndex = entryByBacking.TryGet(reference);
+                    if (!referencedIndex)
+                    {
+                        data.Error(String::Format(TEXT("Legacy runtime dependency {0} of object {1}:{2} was not packaged."),
+                            reference, entry.ID.Guid, entry.ID.LocalId));
+                        return true;
+                    }
+                    const AssetObjectId dependency = indexEntries[*referencedIndex].ID;
+                    if (dependency != entry.ID && uniqueDependencies.Add(dependency))
+                        entry.Dependencies.Add(dependency);
+                }
+            }
+        }
+        for (RuntimeAssetIndexEntry& entry : indexEntries)
+        {
+            entry.PreloadBudgetBytes = RuntimeAssetIndex::DefaultPreloadBudgetBytes;
+            Array<PendingRuntimePreload> pending;
+            for (const AssetObjectId& dependency : entry.Dependencies)
+                pending.Add({ dependency, 1 });
+            Dictionary<AssetObjectId, uint32> bestDepth;
+            while (pending.HasItems())
+            {
+                const PendingRuntimePreload request = pending.Dequeue();
+                if (request.ID == entry.ID)
+                    continue;
+                const uint32* previousDepth = bestDepth.TryGet(request.ID);
+                if (previousDepth && *previousDepth <= request.Depth)
+                    continue;
+                if (previousDepth)
+                    bestDepth[request.ID] = request.Depth;
+                else
+                    bestDepth.Add(request.ID, request.Depth);
+                const int32* dependencyIndex = entryByObject.TryGet(request.ID);
+                if (!dependencyIndex)
+                {
+                    data.Error(String::Format(TEXT("Preload closure contains unpackaged object {0}:{1}."), request.ID.Guid, request.ID.LocalId));
+                    return true;
+                }
+                for (const AssetObjectId& transitive : indexEntries[*dependencyIndex].Dependencies)
+                    pending.Add({ transitive, request.Depth + 1 });
+            }
+            for (const auto& candidate : bestDepth)
+            {
+                const int32* dependencyIndex = entryByObject.TryGet(candidate.Key);
+                ASSERT(dependencyIndex);
+                RuntimeAssetPreload preload;
+                preload.ID = candidate.Key;
+                preload.Required = candidate.Value == 1;
+                preload.Priority = MAX_uint32 - candidate.Value;
+                preload.EstimatedBytes = indexEntries[*dependencyIndex].Size;
+                entry.Preload.Add(preload);
+            }
+        }
+
         AssetPipelineDiagnostic diagnostic;
+        RuntimeBuildReproducibility reproducibility;
+        reproducibility.EngineBuild = FLAXENGINE_VERSION_BUILD;
+        reproducibility.TargetFingerprint = cookArtifactTarget.BuildKey(ArtifactTargetDimension::All);
+        reproducibility.Deterministic = hardCut && artifactEvidence.Count() == indexEntries.Count();
+        for (auto root = data.RootAssets.Begin(); root.IsNotEnd(); ++root)
+        {
+            AssetRecord rootRecord;
+            reproducibility.Roots.Add(AssetDatabase::Get().TryGetRecord(root->Item, rootRecord)
+                ? rootRecord.GetObjectId()
+                : AssetObjectId(root->Item, 1));
+        }
+        artifactEvidence.GetValues(reproducibility.Artifacts);
+        Dictionary<Guid, RuntimeBuildPackageEvidence> packages;
+        for (auto location = packageLocations.Begin(); location.IsNotEnd(); ++location)
+        {
+            RuntimeBuildPackageEvidence* package = packages.TryGet(location->Value.PackageID);
+            if (package)
+            {
+                if (package->Path != location->Value.Path)
+                {
+                    data.Error(TEXT("Cooked package identity maps to more than one output path."));
+                    return true;
+                }
+                continue;
+            }
+            RuntimeBuildPackageEvidence evidence;
+            evidence.PackageID = location->Value.PackageID;
+            evidence.Path = location->Value.Path;
+            const String packagePath = data.DataOutputPath / evidence.Path;
+            evidence.Size = FileSystem::GetFileSize(packagePath);
+            if (evidence.Size == 0 || ComputeFileContentHash(packagePath, evidence.Content))
+            {
+                data.Error(String::Format(TEXT("Failed to hash cooked package '{0}'."), evidence.Path));
+                return true;
+            }
+            packages.Add(evidence.PackageID, MoveTemp(evidence));
+        }
+        packages.GetValues(reproducibility.Packages);
+        if (hardCut && !reproducibility.Deterministic)
+        {
+            data.Error(TEXT("Hard-cut cook cannot emit incomplete reproducibility evidence."));
+            return true;
+        }
+        if (RuntimeAssetIndex::SaveReproducibilityAtomic(data.DataOutputPath / TEXT("Content/BuildReproducibility.json"), reproducibility, diagnostic))
+        {
+            data.Error(String::Format(TEXT("Failed to create cook reproducibility manifest. {0}"), diagnostic.Message));
+            return true;
+        }
         if (RuntimeAssetIndex::SaveAtomic(data.DataOutputPath / TEXT("Content/RuntimeAssetIndex.json"), indexEntries, diagnostic))
         {
             data.Error(String::Format(TEXT("Failed to create runtime asset index. {0}"), diagnostic.Message));

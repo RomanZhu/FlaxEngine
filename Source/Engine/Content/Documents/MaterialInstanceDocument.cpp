@@ -2,6 +2,8 @@
 
 #include "MaterialInstanceDocument.h"
 #include "Engine/Graphics/Materials/MaterialParams.h"
+#include "Engine/Content/Content.h"
+#include "Engine/Content/AssetDatabase/SubAsset.h"
 #include "Engine/Core/Math/Matrix.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
@@ -33,8 +35,18 @@ namespace
     {
         JsonValue result(rapidjson::kObjectType);
         result.AddMember("$type", JsonValue(kind, allocator), allocator);
-        const StringAnsi text = GuidText(id);
-        result.AddMember("guid", StringValue(text, allocator), allocator);
+        AssetObjectId objectId;
+        if (StringAnsiView(kind) == "AssetReference" && Content::GetAssetObjectId(id, objectId))
+        {
+            const StringAnsi text = GuidText(objectId.Guid);
+            result.AddMember("guid", StringValue(text, allocator), allocator);
+            result.AddMember("localId", objectId.LocalId, allocator);
+        }
+        else
+        {
+            const StringAnsi text = GuidText(id);
+            result.AddMember("guid", StringValue(text, allocator), allocator);
+        }
         return result;
     }
 
@@ -191,11 +203,25 @@ namespace
             return true;
         const auto kind = value.FindMember("$type");
         const auto guid = value.FindMember("guid");
+        const auto localId = value.FindMember("localId");
         if (kind == value.MemberEnd() || !kind->value.IsString() ||
             guid == value.MemberEnd() || !guid->value.IsString() ||
             StringAnsiView(kind->value.GetString(), kind->value.GetStringLength()) != StringAnsiView(expectedKind))
             return true;
-        return Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), id);
+        Guid parsed;
+        if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), parsed))
+            return true;
+        if (StringAnsiView(expectedKind) == "AssetReference" && localId != value.MemberEnd())
+        {
+            if (!localId->value.IsInt64() || localId->value.GetInt64() == 0)
+                return true;
+            id = SubAssetPolicy::GetBackingAssetId(parsed, localId->value.GetInt64());
+        }
+        else
+        {
+            id = parsed;
+        }
+        return !id.IsValid() && parsed.IsValid();
     }
 
     bool ReadNumberArray(const JsonValue& value, float* output, int32 count)
@@ -274,7 +300,7 @@ bool MaterialInstanceDocument::DecodeLegacy(const Span<byte>& chunk, rapidjson_f
     document.AddMember("type", JsonValue("FlaxEngine.MaterialInstance", allocator), allocator);
     document.AddMember("baseMaterial", GuidReference(baseMaterial, "AssetReference", allocator), allocator);
     JsonValue overrides(rapidjson::kObjectType);
-    if (stream.GetPosition() < chunk.Length())
+    if (stream.GetPosition() < static_cast<uint64>(chunk.Length()))
     {
         uint16 version;
         uint16 count;

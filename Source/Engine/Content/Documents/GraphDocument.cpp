@@ -745,7 +745,16 @@ namespace
         {
             const Guid id = (Guid)value;
             AddString(object, "$type", VariantTypeName(value.Type.Type), allocator);
-            AddString(object, "guid", GuidToken(id), allocator);
+            AssetObjectId objectId;
+            if (value.Type.Type == VariantType::Asset && Content::GetAssetObjectId(id, objectId))
+            {
+                AddString(object, "guid", GuidToken(objectId.Guid), allocator);
+                object.AddMember("localId", objectId.LocalId, allocator);
+            }
+            else
+            {
+                AddString(object, "guid", GuidToken(id), allocator);
+            }
             if (value.Type.TypeName)
                 AddString(object, "typeName", StringAnsiView(value.Type.TypeName), allocator);
             break;
@@ -1099,7 +1108,19 @@ namespace
             if (ParseGuidToken(StringAnsiView(guidMember->value.GetString(), guidMember->value.GetStringLength()), id))
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph GUID value is invalid."));
             if (typeName == "AssetReference")
-                result.SetAsset(Content::LoadAsync<Asset>(id));
+            {
+                const auto localId = value.FindMember("localId");
+                if (localId != value.MemberEnd())
+                {
+                    if (!localId->value.IsInt64() || localId->value.GetInt64() == 0)
+                        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph asset local file ID is invalid."));
+                    result.SetAsset(Content::LoadAsync<Asset>(AssetObjectId(id, localId->value.GetInt64())));
+                }
+                else
+                {
+                    result.SetAsset(Content::LoadAsync<Asset>(id));
+                }
+            }
             else if (typeName == "ObjectReference")
                 result.SetObject(FindObject(id, ScriptingObject::GetStaticClass()));
             else
@@ -2163,7 +2184,10 @@ bool GraphDependencyExtractor::Extract(const GraphDocument& document, Array<Asse
             dependency.StableIdentity = String(GuidToken(id));
             dependency.Origin.GraphNode = String(node.GetStableID());
             AssetRecord record;
-            if (AssetDatabase::Get().TryGetRecord(id, record) && IsFunctionAssetType(record.TypeName))
+            const bool hasRecord = AssetDatabase::Get().TryGetRecord(id, record);
+            if (hasRecord)
+                dependency.ObjectID = record.GetObjectId();
+            if (hasRecord && IsFunctionAssetType(record.TypeName))
             {
                 dependency.Kind = AssetDependencyKind::BuildInput;
                 dependency.SemanticInterface = record.MetaSemanticHash != 0
@@ -2194,6 +2218,9 @@ bool GraphDependencyExtractor::Extract(const GraphDocument& document, Array<Asse
             AssetDependency dependency;
             dependency.Kind = AssetDependencyKind::RuntimeReference;
             dependency.AssetID = id;
+            AssetRecord record;
+            if (AssetDatabase::Get().TryGetRecord(id, record))
+                dependency.ObjectID = record.GetObjectId();
             dependency.StableIdentity = String(GuidToken(id));
             dependency.Origin.GraphPin = String(GuidToken(parameter.ID));
             dependencies.Add(MoveTemp(dependency));

@@ -10,13 +10,18 @@
 /// </summary>
 /// <typeparam name="T">Type of the asset instance type.</typeparam>
 template<typename T>
-API_STRUCT(NoDefault, Template, MarshalAs=JsonAsset*) struct JsonAssetReference : AssetReference<JsonAsset>
+API_STRUCT(NoDefault, Template, MarshalAs=AssetObjectId) struct JsonAssetReference : AssetReference<JsonAsset>
 {
     JsonAssetReference() = default;
 
     JsonAssetReference(JsonAsset* asset)
     {
         OnSet(asset);
+    }
+
+    JsonAssetReference(const AssetObjectId& objectId)
+        : AssetReference<JsonAsset>(objectId)
+    {
     }
 
     explicit JsonAssetReference(decltype(__nullptr))
@@ -46,5 +51,10 @@ API_STRUCT(NoDefault, Template, MarshalAs=JsonAsset*) struct JsonAssetReference 
     operator JsonAsset*() const
     {
         return Get();
+    }
+
+    operator AssetObjectId() const
+    {
+        return GetObjectId();
     }
 };

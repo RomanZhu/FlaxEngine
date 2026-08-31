@@ -32,6 +32,8 @@ API_ENUM(Attributes="Flags") enum class ImportAssetOptions : uint32
     ImportRecursive = 1 << 2,
     DontDownloadFromCacheServer = 1 << 3,
     ForceUncompressedImport = 1 << 4,
+    /// <summary>Runs isolated imports twice and blocks publication when outputs or dependencies differ.</summary>
+    VerifyDeterminism = 1 << 5,
 };
 
 DECLARE_ENUM_OPERATORS(ImportAssetOptions);
@@ -166,6 +168,11 @@ public:
     API_FUNCTION() static AssetMutationResultInfo CopyAssetPair(const StringView& sourcePath, const StringView& destinationPath);
     API_FUNCTION() static AssetMutationResultInfo DeleteAssetPairToRecovery(const StringView& sourcePath);
     API_FUNCTION() static AssetMutationResultInfo CreateAssetFolder(const StringView& path);
+    API_FUNCTION() static AssetMutationResultInfo PublishExternalSource(const StringView& externalSourcePath,
+        const StringView& destinationPath, const StringView& typeName, const StringView& processorId,
+        bool replaceExisting = false);
+    API_FUNCTION() static AssetMutationResultInfo RegisterCanonicalSource(const StringView& sourcePath,
+        bool replaceExistingMetadata = false);
     API_FUNCTION() static AssetMutationResultInfo RecoverAssetPair(const StringView& recoveryPath, const StringView& destinationPath);
 
     /// <summary>Resolves a loaded main asset or subasset to its persistent source identity.</summary>
@@ -228,8 +235,10 @@ public:
     /// <summary>Creates and registers canonical texture metadata beside an imported source image.</summary>
     /// <returns>The new asset identifier, or an invalid identifier on failure.</returns>
     API_FUNCTION() static Guid CreateTextureMetadata(const StringView& sourcePath, const TextureTool::Options& options);
+    API_FUNCTION() static AssetMutationResultInfo PublishExternalTexture(const StringView& externalSourcePath,
+        const StringView& destinationPath, const TextureTool::Options& options, bool replaceExisting = false);
 
-    /// <summary>Stages a GUID-preserving legacy texture extraction without publishing a database scan.</summary>
+    /// <summary>Pre-cutover only: stages a GUID-preserving legacy texture extraction without publishing a database scan.</summary>
     API_FUNCTION() static Guid StageLegacyTextureMigration(const StringView& legacyPath, const StringView& extractedPath,
         const StringView& destinationPath, const StringView& backupPath, const TextureTool::Options& options);
 
@@ -307,6 +316,8 @@ public:
 #if COMPILE_WITH_AUDIO_TOOL && USE_EDITOR
     /// <summary>Creates canonical audio metadata with the selected import settings.</summary>
     API_FUNCTION() static Guid CreateAudioMetadata(const StringView& sourcePath, const AudioTool::Options& options);
+    API_FUNCTION() static AssetMutationResultInfo PublishExternalAudio(const StringView& externalSourcePath,
+        const StringView& destinationPath, const AudioTool::Options& options, bool replaceExisting = false);
 
     /// <summary>Loads tracked canonical audio import settings without writing the sidecar.</summary>
     API_FUNCTION() static bool LoadAudioMetadata(const StringView& sourcePath, API_PARAM(Out) AudioTool::Options& options);
@@ -315,8 +326,10 @@ public:
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
     /// <summary>Creates canonical model metadata beside an imported source and seeds subasset GUIDs from a sibling flax package when present.</summary>
     API_FUNCTION() static Guid CreateModelMetadata(const StringView& sourcePath, const ModelTool::Options& options);
+    API_FUNCTION() static AssetMutationResultInfo PublishExternalModel(const StringView& externalSourcePath,
+        const StringView& destinationPath, const ModelTool::Options& options, bool replaceExisting = false);
 
-    /// <summary>Stages a GUID-preserving legacy model extraction without publishing a database scan.</summary>
+    /// <summary>Pre-cutover only: stages a GUID-preserving legacy model extraction without publishing a database scan.</summary>
     API_FUNCTION() static Guid StageLegacyModelMigration(const StringView& legacyPath, const StringView& extractedPath,
         const StringView& destinationPath, const StringView& backupPath, const ModelTool::Options& options);
 
@@ -342,19 +355,24 @@ public:
     /// <summary>Creates a sidecar for an existing JSON scene/prefab, preserving the in-file GUID.</summary>
     API_FUNCTION() static Guid CreateExistingJsonMetadata(const StringView& sourcePath);
 
+    /// <summary>Creates or replaces an existing-JSON source through the journaled source/metadata mutation owner.</summary>
+    /// <returns>True on failure.</returns>
+    static bool SaveExistingJsonSource(const StringView& sourcePath, const StringAnsiView& sourceContents,
+        const Guid& sourceID, const StringView& typeName);
+
     /// <summary>Writes missing scene/prefab sidecars without changing document bytes.</summary>
     API_FUNCTION() static bool EnsureExistingJsonSidecars();
 
     /// <summary>Builds a read-only mixed-mode migration inventory JSON without writing Content.</summary>
     API_FUNCTION() static String GetMigrationInventoryJson();
 
-    /// <summary>Converts one eligible legacy flax asset to its canonical source and removes the legacy binary.</summary>
+    /// <summary>Pre-cutover only: converts one eligible legacy flax asset to its canonical source and removes the legacy binary.</summary>
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool MigrateLegacyAsset(const StringView& sourcePath);
 
-    /// <summary>Deletes a staged legacy backup after its canonical replacement has been verified.</summary>
+    /// <summary>Pre-cutover only: deletes a staged legacy backup after its canonical replacement has been verified.</summary>
     API_FUNCTION() static bool FinalizeLegacyImportedMigration(const StringView& backupPath);
 
-    /// <summary>Restores a staged imported migration after validation fails.</summary>
+    /// <summary>Pre-cutover only: restores a staged imported migration after validation fails.</summary>
     API_FUNCTION() static bool RollbackLegacyImportedMigration(const StringView& legacyPath, const StringView& destinationPath, const StringView& backupPath);
 };

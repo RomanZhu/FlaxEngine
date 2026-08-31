@@ -22,6 +22,13 @@ namespace
         manifest.InputFingerprint = ArtifactKey(ContentHash::Compute("input", 5));
         manifest.SourceHash = ContentHash::Compute("source", 6);
         manifest.SettingsHash = ContentHash::Compute("settings", 8);
+        ArtifactManifestObject object;
+        object.ObjectID = AssetObjectId(manifest.AssetID, 1);
+        object.BackingAssetID = manifest.AssetID;
+        object.TypeName = TEXT("Tests.PublishedAsset");
+        object.Name = TEXT("PublishedAsset");
+        object.IsMainObject = true;
+        manifest.Objects.Add(object);
         ArtifactManifestDependency dependency;
         dependency.Kind = AssetDependencyKind::SourceFile;
         dependency.Identity = TEXT("Content/source.synthetic");
@@ -55,7 +62,7 @@ TEST_CASE("ArtifactManifest canonical JSON round-trips coherently")
     StringAnsi first;
     REQUIRE_FALSE(manifest.ToJson(first, diagnostic));
     CHECK(first.EndsWith("\n"));
-    CHECK(first.Contains("\"manifestVersion\": 1"));
+    CHECK(first.Contains("\"manifestVersion\": 2"));
     CHECK(first.Contains("\"relativePath\": \"Artifacts/"));
 
     ArtifactManifest parsed;

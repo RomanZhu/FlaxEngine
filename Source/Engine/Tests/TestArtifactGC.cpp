@@ -5,6 +5,7 @@
 #include "Engine/Content/Artifacts/ArtifactGC.h"
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseStorage.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
@@ -53,6 +54,13 @@ namespace
         manifest.SourceHash = ContentHash::Compute("source", 6);
         manifest.SettingsHash = ContentHash::Compute("settings", 8);
         manifest.BuildID = Guid::New().ToString(Guid::FormatType::N);
+        ArtifactManifestObject object;
+        object.ObjectID = AssetObjectId(assetId, 1);
+        object.BackingAssetID = assetId;
+        object.TypeName = TEXT("Tests.GCAsset");
+        object.Name = TEXT("GCAsset");
+        object.IsMainObject = true;
+        manifest.Objects.Add(object);
         ArtifactManifestOutput output;
         output.Kind = "Runtime";
         output.Key = GCKey(bytes);
@@ -61,14 +69,7 @@ namespace
         output.Size = StringUtils::Length(bytes);
         output.Compatibility = "runtime-v1";
         manifest.Outputs.Add(output);
-        StringAnsi json;
-        REQUIRE_FALSE(manifest.ToJson(json, diagnostic));
-        ArtifactStoragePath manifestPath;
-        REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, target, assetId, manifestPath, diagnostic));
-        const String directory = StringUtils::GetDirectoryName(manifestPath.Get());
-        if (!FileSystem::DirectoryExists(directory))
-            REQUIRE_FALSE(FileSystem::CreateDirectory(directory));
-        REQUIRE_FALSE(File::WriteAllBytes(manifestPath.Get(), json.Get(), json.Length()));
+        REQUIRE_FALSE(AssetDatabaseStorage::PublishArtifact(library, manifest, diagnostic));
     }
 }
 
@@ -109,7 +110,7 @@ TEST_CASE("ArtifactGC preserves manifests leases and staging while reclaiming on
     CHECK(FileSystem::FileExists(leasedPath));
     CHECK_FALSE(FileSystem::FileExists(orphan));
     CHECK(FileSystem::FileExists(stagedFile));
-    CHECK(result.ReachableFiles == 1);
+    CHECK(result.ReachableFiles == 2);
     CHECK(result.LeasedFiles == 1);
     CHECK(result.DeletedFiles == 1);
 
@@ -127,10 +128,14 @@ TEST_CASE("ArtifactGC blocks on corrupt selection and reports safe disk pressure
     SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(ArtifactStore::EnsureLayout(library, diagnostic));
-    const String orphan = WriteGCArtifact(library, GCTarget(), Guid::New(), "blocked-orphan");
-    const String corruptDirectory = ArtifactStore::GetManifestsPath(library) / TEXT("corrupt");
-    REQUIRE_FALSE(FileSystem::CreateDirectory(corruptDirectory));
-    REQUIRE_FALSE(File::WriteAllText(corruptDirectory / TEXT("selection.json"), TEXT("{bad"), Encoding::ANSI));
+    const ArtifactTarget target = GCTarget();
+    const Guid currentId = Guid::New();
+    const String orphan = WriteGCArtifact(library, target, currentId, "blocked-orphan");
+    WriteGCManifest(library, target, currentId, orphan, "blocked-orphan");
+    String corruptManifest;
+    REQUIRE_FALSE(AssetDatabaseStorage::GetCurrentArtifactManifest(library, currentId,
+        target.BuildKey(ArtifactTargetDimension::All), corruptManifest, diagnostic));
+    REQUIRE_FALSE(File::WriteAllText(corruptManifest, TEXT("{bad"), Encoding::ANSI));
 
     ArtifactGCOptions options;
     options.GracePeriod = TimeSpan::Zero();
@@ -150,7 +155,7 @@ TEST_CASE("ArtifactGC blocks on corrupt selection and reports safe disk pressure
     CHECK(ArtifactGC::CheckBuildCapacity(library, 1, options, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ResourceLimitExceeded);
 
-    FileSystem::DeleteFile(corruptDirectory / TEXT("selection.json"));
+    FileSystem::DeleteFile(corruptManifest);
     AssetCancellationSource cancellation;
     cancellation.Cancel();
     options.Cancellation = cancellation.GetToken();

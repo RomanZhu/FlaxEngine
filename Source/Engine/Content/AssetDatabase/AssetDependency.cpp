@@ -19,7 +19,7 @@ namespace
 
     bool SameIdentity(const AssetDependency& a, const AssetDependency& b)
     {
-        return a.Kind == b.Kind && a.StableIdentity == b.StableIdentity && a.AssetID == b.AssetID;
+        return a.Kind == b.Kind && a.StableIdentity == b.StableIdentity && a.ObjectID == b.ObjectID && a.AssetID == b.AssetID;
     }
 
     const char* StateName(AssetDependencyState state)
@@ -48,6 +48,11 @@ void AssetDependency::AppendKeyComponents(ArtifactKeyBuilder& builder, int32 ind
     builder.AddUInt32(prefix + "kind", static_cast<uint32>(Kind));
     builder.AddUInt32(prefix + "state", static_cast<uint32>(State));
     builder.AddString(prefix + "identity", StableIdentity);
+    if (ObjectID.IsValid())
+    {
+        builder.AddGuid(prefix + "file-guid", ObjectID.Guid);
+        builder.AddUInt64(prefix + "local-id", static_cast<uint64>(ObjectID.LocalId));
+    }
     if (AssetID.IsValid())
         builder.AddGuid(prefix + "asset", AssetID);
     switch (Kind)
@@ -107,6 +112,8 @@ StringAnsi AssetDependency::DescribeFingerprint() const
         result += "|artifact=" + ExactArtifact.ToString();
     if (!SemanticInterface.IsZero())
         result += StringAnsi::Format("|interface={0}:{1}", InterfaceVersion, SemanticInterface.ToString());
+    if (ObjectID.IsValid())
+        result += StringAnsi::Format("|object={0}:{1}", StringAnsi(ObjectID.Guid.ToString(Guid::FormatType::N)), ObjectID.LocalId);
     return result;
 }
 
@@ -123,7 +130,7 @@ bool AssetDependency::NormalizeAndSort(Array<AssetDependency>& dependencies, Ass
         const bool artifactKind = dependency.Kind == AssetDependencyKind::Artifact;
         const bool missingAllowed = sourceKind || artifactKind;
         if (dependency.StableIdentity.IsEmpty() ||
-            ((artifactKind || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.AssetID.IsValid()) ||
+            ((artifactKind || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.AssetID.IsValid() && !dependency.ObjectID.IsValid()) ||
             (dependency.State == AssetDependencyState::Missing && !missingAllowed) ||
             (dependency.State != AssetDependencyState::Missing && hashedKind && dependency.Content.IsZero()) ||
             (artifactKind && dependency.State != AssetDependencyState::Missing && dependency.ExactArtifact.IsZero() && dependency.SemanticInterface.IsZero()) ||
@@ -143,6 +150,11 @@ bool AssetDependency::NormalizeAndSort(Array<AssetDependency>& dependencies, Ass
             return static_cast<byte>(a.Kind) < static_cast<byte>(b.Kind);
         if (a.StableIdentity != b.StableIdentity)
             return a.StableIdentity < b.StableIdentity;
+        const int32 objectGuid = CompareGuid(a.ObjectID.Guid, b.ObjectID.Guid);
+        if (objectGuid != 0)
+            return objectGuid < 0;
+        if (a.ObjectID.LocalId != b.ObjectID.LocalId)
+            return a.ObjectID.LocalId < b.ObjectID.LocalId;
         return CompareGuid(a.AssetID, b.AssetID) < 0;
     });
     for (int32 i = 1; i < dependencies.Count(); i++)

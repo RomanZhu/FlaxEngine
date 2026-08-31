@@ -3,6 +3,7 @@
 #include "ArtifactGC.h"
 #include "ArtifactLease.h"
 #include "ArtifactStore.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseStorage.h"
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Platform/File.h"
@@ -67,9 +68,13 @@ namespace
     bool ScanReachable(const StringView& libraryRoot, HashSet<String>& reachable, ArtifactGCResult& result)
     {
         Array<String> manifests;
-        const String manifestsRoot = ArtifactStore::GetManifestsPath(libraryRoot);
-        if (FileSystem::DirectoryGetFiles(manifests, manifestsRoot, TEXT("*.json"), DirectorySearchOption::AllDirectories))
+        AssetPipelineDiagnostic databaseDiagnostic;
+        if (AssetDatabaseStorage::GetReachableArtifactManifests(libraryRoot, manifests, databaseDiagnostic))
+        {
+            result.Diagnostics.Add(databaseDiagnostic);
+            result.BlockedByInvalidManifest = true;
             return true;
+        }
         for (const String& path : manifests)
         {
             StringAnsi json;
@@ -83,6 +88,7 @@ namespace
                 result.BlockedByInvalidManifest = true;
                 continue;
             }
+            reachable.Add(NormalizeGCPath(path));
             for (const ArtifactManifestOutput& output : manifest.Outputs)
             {
                 ArtifactStoragePath resolved;
@@ -109,7 +115,7 @@ bool ArtifactGC::Run(const StringView& libraryRoot, const ArtifactGCOptions& opt
         return true;
     HashSet<String> reachable;
     if (ScanReachable(libraryRoot, reachable, result))
-        return GCFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, ArtifactStore::GetManifestsPath(libraryRoot), TEXT("Cannot enumerate current artifact manifests."));
+        return GCFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, libraryRoot, TEXT("Cannot enumerate retained artifact manifests."));
 
     Array<String> files;
     const String artifactsRoot = ArtifactStore::GetArtifactsPath(libraryRoot);

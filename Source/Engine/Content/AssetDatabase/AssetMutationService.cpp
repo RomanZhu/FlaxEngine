@@ -140,6 +140,8 @@ namespace
         switch (operation)
         {
         case AssetMutationOperation::CreateAsset: return TEXT("CreateAsset");
+        case AssetMutationOperation::PublishExternal: return TEXT("PublishExternal");
+        case AssetMutationOperation::RegisterExisting: return TEXT("RegisterExisting");
         case AssetMutationOperation::CreateFolder: return TEXT("CreateFolder");
         case AssetMutationOperation::Copy: return TEXT("Copy");
         case AssetMutationOperation::Move: return TEXT("Move");
@@ -326,7 +328,8 @@ namespace
 
     String StagePath(const StringView& path, const Guid& id, const Char* role)
     {
-        return String(path) + TEXT(".mutation-") + role + TEXT("-") + GuidText(id);
+        const String directory = StringUtils::GetDirectoryName(path);
+        return directory / (TEXT(".flax-mutation-") + String(role) + TEXT("-") + GuidText(id));
     }
 
     void AddString(JsonValue& object, const char* key, const StringView& value, JsonAlloc& allocator)
@@ -576,6 +579,8 @@ namespace
         switch (operation)
         {
         case AssetMutationOperation::CreateAsset:
+        case AssetMutationOperation::PublishExternal:
+        case AssetMutationOperation::RegisterExisting:
         case AssetMutationOperation::CreateFolder:
         case AssetMutationOperation::Copy:
             return PairExists(destination);
@@ -865,6 +870,43 @@ namespace
             }
             failed |= journal.Entries.HasItems() && !PairExists(journal.Entries[0].SourcePath);
             break;
+        case AssetMutationOperation::PublishExternal:
+            if (journal.Entries.Count() != 2)
+            {
+                failed = true;
+            }
+            else
+            {
+                for (const JournalEntry& entry : journal.Entries)
+                {
+                    if (entry.BeforeHash.HasChars())
+                        failed |= RestoreReplacement(entry);
+                    else
+                        failed |= Exists(entry.SourcePath) && DeletePath(entry.SourcePath);
+                    failed |= entry.StagingPath.HasChars() && Exists(entry.StagingPath) && DeletePath(entry.StagingPath);
+                    failed |= entry.PreimagePath.HasChars() && Exists(entry.PreimagePath) && DeletePath(entry.PreimagePath);
+                }
+            }
+            break;
+        case AssetMutationOperation::RegisterExisting:
+            if (journal.Entries.Count() != 2)
+            {
+                failed = true;
+            }
+            else
+            {
+                const JournalEntry& source = journal.Entries[0];
+                const JournalEntry& metadata = journal.Entries[1];
+                if (!Exists(source.SourcePath))
+                    failed = true;
+                if (metadata.BeforeHash.HasChars())
+                    failed |= RestoreReplacement(metadata);
+                else
+                    failed |= Exists(metadata.SourcePath) && DeletePath(metadata.SourcePath);
+                failed |= metadata.StagingPath.HasChars() && Exists(metadata.StagingPath) && DeletePath(metadata.StagingPath);
+                failed |= metadata.PreimagePath.HasChars() && Exists(metadata.PreimagePath) && DeletePath(metadata.PreimagePath);
+            }
+            break;
         case AssetMutationOperation::ReplaceAsset:
             if (journal.Entries.Count() != 2)
                 failed = true;
@@ -895,7 +937,8 @@ namespace
     bool CompleteCommittedState(const AssetMutationService& service, Journal& journal)
     {
         bool failed = false;
-        if (journal.Operation == AssetMutationOperation::ReplaceContents || journal.Operation == AssetMutationOperation::ReplaceAsset)
+        if (journal.Operation == AssetMutationOperation::ReplaceContents || journal.Operation == AssetMutationOperation::ReplaceAsset ||
+            journal.Operation == AssetMutationOperation::PublishExternal || journal.Operation == AssetMutationOperation::RegisterExisting)
         {
             if (journal.Entries.IsEmpty() || !PairExists(journal.Entries[0].SourcePath))
                 failed = true;
@@ -1104,8 +1147,9 @@ bool AssetMutationService::CreateAsset(const StringView& path, const StringAnsiV
         destination = adjusted;
     }
     if (!meta.ID.IsValid() || meta.FolderAsset || meta.AssetType.IsEmpty() ||
-        (meta.SourceKind != AssetSourceKind::TextDocument && meta.SourceKind != AssetSourceKind::ExistingJson))
-        return Fail(result, AssetMutationFailure::InvalidMetadata, id, StringView(), destination, TEXT("Authored asset metadata is invalid or not source-owned."));
+        (meta.SourceKind != AssetSourceKind::ImportedSource && meta.SourceKind != AssetSourceKind::TextDocument &&
+            meta.SourceKind != AssetSourceKind::ExistingJson))
+        return Fail(result, AssetMutationFailure::InvalidMetadata, id, StringView(), destination, TEXT("Asset metadata is invalid or not source-owned."));
 
     Journal journal;
     journal.ID = id;
@@ -1154,6 +1198,200 @@ bool AssetMutationService::CreateAsset(const StringView& path, const StringAnsiV
         HashFile(destination + TEXT(".meta"), metaHash) || metaHash != journal.Entries[1].StagedHash ||
         AssetMeta::Load(destination + TEXT(".meta"), verifiedMeta, metaDiagnostic) || verifiedMeta.ID != meta.ID)
         return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Published authored source pair failed verification."));
+    return CommitTransaction(*this, journal, result, meta.ID);
+}
+
+bool AssetMutationService::PublishExternal(const StringView& externalSourcePath, const StringView& destinationPath,
+    const AssetMeta& meta, bool replaceExisting, AssetMutationResult& result)
+{
+    const Guid id = Guid::New();
+    String destination;
+    if (ResolveContentPath(*this, destinationPath, destination, result, id, true))
+        return true;
+    String external = FileSystem::IsRelative(externalSourcePath) ? _projectRoot / String(externalSourcePath) : String(externalSourcePath);
+    external = NormalizePath(external);
+    if (!FileSystem::FileExists(external) || FileSystem::DirectoryExists(external))
+        return Fail(result, AssetMutationFailure::InvalidSource, id, external, destination, TEXT("External import source is missing or is not a file."));
+    const String destinationMeta = destination + TEXT(".meta");
+    const bool sourceExists = FileSystem::FileExists(destination);
+    const bool metaExists = FileSystem::FileExists(destinationMeta);
+    const bool adoptingInPlace = FileSystem::AreFilePathsEquivalent(external, destination);
+    if ((!replaceExisting && metaExists) || (!replaceExisting && sourceExists && !adoptingInPlace))
+        return Fail(result, AssetMutationFailure::DestinationCollision, id, external, destination,
+            TEXT("External import destination or its metadata already exists."));
+    if (!FileSystem::DirectoryExists(StringUtils::GetDirectoryName(destination)))
+        return Fail(result, AssetMutationFailure::InvalidDestination, id, external, destination,
+            TEXT("External import destination parent does not exist."));
+    if (!meta.ID.IsValid() || meta.FolderAsset || meta.AssetType.IsEmpty() ||
+        (meta.SourceKind != AssetSourceKind::ImportedSource && meta.SourceKind != AssetSourceKind::TextDocument &&
+            meta.SourceKind != AssetSourceKind::ExistingJson))
+        return Fail(result, AssetMutationFailure::InvalidMetadata, id, external, destination, TEXT("External import metadata is invalid."));
+
+    Array<String> paths;
+    paths.Add(external);
+    paths.Add(destination);
+    paths.Add(destinationMeta);
+    PathLockScope lock;
+    if (lock.Acquire(paths))
+        return Fail(result, AssetMutationFailure::PathBusy, id, external, destination, TEXT("A conflicting asset mutation owns the import source or destination."));
+
+    Journal journal;
+    journal.ID = id;
+    journal.Operation = AssetMutationOperation::PublishExternal;
+    JournalEntry sourceEntry;
+    sourceEntry.Role = TEXT("Source");
+    sourceEntry.SourcePath = destination;
+    sourceEntry.DestinationPath = destination;
+    sourceEntry.StagingPath = StagePath(destination, id, TEXT("source"));
+    sourceEntry.PreimagePath = _journalRoot / TEXT("Preimages") / GuidText(id) / String(StringUtils::GetFileName(destination));
+    if (sourceExists && HashFile(destination, sourceEntry.BeforeHash))
+        return Fail(result, AssetMutationFailure::LockedStorage, id, external, destination, TEXT("Existing import destination could not be fingerprinted."));
+    journal.Entries.Add(sourceEntry);
+    JournalEntry metaEntry;
+    metaEntry.Role = TEXT("Metadata");
+    metaEntry.SourcePath = destinationMeta;
+    metaEntry.DestinationPath = destinationMeta;
+    metaEntry.StagingPath = StagePath(destinationMeta, id, TEXT("meta"));
+    metaEntry.PreimagePath = _journalRoot / TEXT("Preimages") / GuidText(id) / String(StringUtils::GetFileName(destinationMeta));
+    if (metaExists && HashFile(destinationMeta, metaEntry.BeforeHash))
+        return Fail(result, AssetMutationFailure::LockedStorage, id, external, destination, TEXT("Existing import metadata could not be fingerprinted."));
+    journal.Entries.Add(metaEntry);
+    if (SaveJournal(_journalRoot, journal))
+        return Fail(result, AssetMutationFailure::JournalFailure, id, external, destination, TEXT("External import journal could not be persisted."));
+
+    if (sourceExists)
+    {
+        if (CopyPath(destination, journal.Entries[0].PreimagePath) || !SameFileHash(destination, journal.Entries[0].PreimagePath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed, TEXT("External import source preimage capture failed."));
+        journal.Entries[0].PreimageComplete = true;
+    }
+    if (metaExists)
+    {
+        if (CopyPath(destinationMeta, journal.Entries[1].PreimagePath) || !SameFileHash(destinationMeta, journal.Entries[1].PreimagePath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed, TEXT("External import metadata preimage capture failed."));
+        journal.Entries[1].PreimageComplete = true;
+    }
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External import preimages could not be journaled."));
+
+    AssetPipelineDiagnostic metaDiagnostic;
+    if (CopyPath(external, journal.Entries[0].StagingPath) ||
+        AssetMeta::SaveAtomic(journal.Entries[1].StagingPath, meta, metaDiagnostic) ||
+        HashFile(journal.Entries[0].StagingPath, journal.Entries[0].StagedHash) ||
+        HashFile(journal.Entries[1].StagingPath, journal.Entries[1].StagedHash))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed,
+            metaDiagnostic.Message.HasChars() ? metaDiagnostic.Message : TEXT("External source pair staging failed."));
+    journal.Entries[0].StagingComplete = true;
+    journal.Entries[1].StagingComplete = true;
+    journal.State = JournalState::Staged;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External import staged state could not be persisted."));
+    String externalHash;
+    if (HashFile(external, externalHash) || externalHash != journal.Entries[0].StagedHash)
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("External import source changed during staging."));
+    journal.State = JournalState::Publishing;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External import publishing state could not be persisted."));
+    for (int32 i = 0; i < journal.Entries.Count(); i++)
+    {
+        JournalEntry& entry = journal.Entries[i];
+        if (MovePath(entry.StagingPath, entry.DestinationPath, true))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("External source pair could not be atomically published."));
+        entry.Published = true;
+        if (SaveJournal(_journalRoot, journal))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External import publication step could not be journaled."));
+    }
+    AssetMeta verifiedMeta;
+    String sourceHash;
+    String metaHash;
+    if (HashFile(destination, sourceHash) || sourceHash != journal.Entries[0].StagedHash ||
+        HashFile(destinationMeta, metaHash) || metaHash != journal.Entries[1].StagedHash ||
+        AssetMeta::Load(destinationMeta, verifiedMeta, metaDiagnostic) || verifiedMeta.ID != meta.ID)
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Published external source pair failed verification."));
+    return CommitTransaction(*this, journal, result, meta.ID);
+}
+
+bool AssetMutationService::RegisterExisting(const StringView& sourcePath, const AssetMeta& meta,
+    bool replaceExistingMetadata, AssetMutationResult& result)
+{
+    const Guid id = Guid::New();
+    String source;
+    if (ResolveContentPath(*this, sourcePath, source, result, id, false))
+        return true;
+    const bool isDirectory = FileSystem::DirectoryExists(source);
+    const bool isFile = FileSystem::FileExists(source);
+    const String metaPath = source + TEXT(".meta");
+    const bool metadataExists = FileSystem::FileExists(metaPath);
+    if (!isFile && !isDirectory)
+        return Fail(result, AssetMutationFailure::MissingSource, id, source, StringView(), TEXT("Metadata registration source does not exist."));
+    if (metadataExists && !replaceExistingMetadata)
+        return Fail(result, AssetMutationFailure::DestinationCollision, id, source, metaPath, TEXT("Metadata registration destination already exists."));
+    if (!meta.ID.IsValid() || meta.FolderAsset != isDirectory || meta.AssetType.IsEmpty() ||
+        (isDirectory ? meta.SourceKind != AssetSourceKind::Folder :
+            meta.SourceKind != AssetSourceKind::ImportedSource && meta.SourceKind != AssetSourceKind::TextDocument &&
+            meta.SourceKind != AssetSourceKind::ExistingJson))
+        return Fail(result, AssetMutationFailure::InvalidMetadata, id, source, metaPath, TEXT("Metadata does not describe the existing source entry."));
+
+    Array<String> paths;
+    paths.Add(source);
+    paths.Add(metaPath);
+    PathLockScope lock;
+    if (lock.Acquire(paths))
+        return Fail(result, AssetMutationFailure::PathBusy, id, source, metaPath, TEXT("A conflicting source mutation owns the registration path."));
+    if ((!FileSystem::FileExists(source) && !FileSystem::DirectoryExists(source)) ||
+        FileSystem::DirectoryExists(source) != isDirectory || FileSystem::FileExists(metaPath) != metadataExists)
+        return Fail(result, AssetMutationFailure::VerificationFailure, id, source, metaPath, TEXT("Source or metadata state changed during registration preflight."));
+    if (RunDecisionHook(*this, AssetMutationOperation::RegisterExisting, id, source, source, isDirectory, result))
+        return !result.Succeeded;
+
+    Journal journal;
+    journal.ID = id;
+    journal.Operation = AssetMutationOperation::RegisterExisting;
+    JournalEntry sourceEntry;
+    sourceEntry.Role = TEXT("SourceObservation");
+    sourceEntry.SourcePath = source;
+    sourceEntry.DestinationPath = source;
+    sourceEntry.IsDirectory = isDirectory;
+    journal.Entries.Add(sourceEntry);
+    JournalEntry metadataEntry;
+    metadataEntry.Role = TEXT("Metadata");
+    metadataEntry.SourcePath = metaPath;
+    metadataEntry.DestinationPath = metaPath;
+    metadataEntry.StagingPath = StagePath(metaPath, id, TEXT("meta"));
+    metadataEntry.PreimagePath = _journalRoot / TEXT("Preimages") / GuidText(id) / String(StringUtils::GetFileName(metaPath));
+    if (metadataExists && HashFile(metaPath, metadataEntry.BeforeHash))
+        return Fail(result, AssetMutationFailure::LockedStorage, id, source, metaPath, TEXT("Existing metadata could not be fingerprinted."));
+    journal.Entries.Add(metadataEntry);
+    if (SaveJournal(_journalRoot, journal))
+        return Fail(result, AssetMutationFailure::JournalFailure, id, source, metaPath, TEXT("Metadata registration journal could not be persisted."));
+
+    if (metadataExists)
+    {
+        if (CopyPath(metaPath, journal.Entries[1].PreimagePath) || !SameFileHash(metaPath, journal.Entries[1].PreimagePath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed, TEXT("Metadata registration preimage capture failed."));
+        journal.Entries[1].PreimageComplete = true;
+    }
+    AssetPipelineDiagnostic diagnostic;
+    if (AssetMeta::SaveAtomic(journal.Entries[1].StagingPath, meta, diagnostic) ||
+        HashFile(journal.Entries[1].StagingPath, journal.Entries[1].StagedHash))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed,
+            diagnostic.Message.HasChars() ? diagnostic.Message : TEXT("Metadata registration staging failed."));
+    journal.Entries[1].StagingComplete = true;
+    journal.State = JournalState::Staged;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Metadata registration staged state could not be persisted."));
+    journal.State = JournalState::Publishing;
+    if (SaveJournal(_journalRoot, journal) || MovePath(journal.Entries[1].StagingPath, metaPath, true))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("Metadata registration could not be atomically published."));
+    journal.Entries[1].Published = true;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Metadata registration publication could not be journaled."));
+    AssetMeta verified;
+    String metadataHash;
+    if ((!FileSystem::FileExists(source) && !FileSystem::DirectoryExists(source)) || FileSystem::DirectoryExists(source) != isDirectory ||
+        HashFile(metaPath, metadataHash) || metadataHash != journal.Entries[1].StagedHash ||
+        AssetMeta::Load(metaPath, verified, diagnostic) || verified.ID != meta.ID)
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Registered source metadata failed final verification."));
     return CommitTransaction(*this, journal, result, meta.ID);
 }
 
@@ -1654,9 +1892,10 @@ bool AssetMutationService::ReplaceAsset(const StringView& sourcePath, const Stri
     AssetMeta previousMeta;
     AssetPipelineDiagnostic metaDiagnostic;
     if (AssetMeta::Load(metaPath, previousMeta, metaDiagnostic) || !meta.ID.IsValid() || meta.ID != previousMeta.ID ||
-        meta.FolderAsset || (meta.SourceKind != AssetSourceKind::TextDocument && meta.SourceKind != AssetSourceKind::ExistingJson))
+        meta.FolderAsset || (meta.SourceKind != AssetSourceKind::ImportedSource && meta.SourceKind != AssetSourceKind::TextDocument &&
+            meta.SourceKind != AssetSourceKind::ExistingJson))
         return Fail(result, AssetMutationFailure::InvalidMetadata, id, source, StringView(),
-            metaDiagnostic.Message.HasChars() ? metaDiagnostic.Message : TEXT("Replacement metadata must preserve a valid authored file identity."));
+            metaDiagnostic.Message.HasChars() ? metaDiagnostic.Message : TEXT("Replacement metadata must preserve a valid source file identity."));
 
     Journal journal;
     journal.ID = id;

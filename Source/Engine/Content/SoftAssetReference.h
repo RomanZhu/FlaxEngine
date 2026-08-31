@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Engine/Content/Asset.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 
 /// <summary>
 /// The asset soft reference. Asset gets referenced (loaded) on actual use (ID reference is resolving it).
@@ -12,6 +13,7 @@ class FLAXENGINE_API SoftAssetReferenceBase : public IAssetReference
 protected:
     Asset* _asset = nullptr;
     Guid _id = Guid::Empty;
+    mutable AssetObjectId _objectId;
 
 public:
     /// <summary>
@@ -36,10 +38,10 @@ public:
     /// <summary>
     /// Gets the asset ID or Guid::Empty if not set.
     /// </summary>
-    FORCE_INLINE Guid GetID() const
-    {
-        return _id;
-    }
+    Guid GetID() const;
+
+    /// <summary>Gets the persistent file GUID and local file ID.</summary>
+    const AssetObjectId& GetObjectId() const;
 
     /// <summary>
     /// Gets the asset property value as string.
@@ -55,6 +57,7 @@ public:
 protected:
     void OnSet(Asset* asset);
     void OnSet(const Guid& id);
+    void OnSet(const AssetObjectId& id);
     void OnResolve(const ScriptingTypeHandle& type);
 };
 
@@ -98,7 +101,10 @@ public:
     /// <param name="other">The other.</param>
     SoftAssetReference(const SoftAssetReference& other)
     {
-        OnSet(other.GetID());
+        if (other.GetObjectId().IsValid())
+            OnSet(other.GetObjectId());
+        else
+            OnSet(other.GetID());
     }
 
     SoftAssetReference(const Guid& id)
@@ -106,9 +112,17 @@ public:
         OnSet(id);
     }
 
+    SoftAssetReference(const AssetObjectId& id)
+    {
+        OnSet(id);
+    }
+
     SoftAssetReference(SoftAssetReference&& other)
     {
-        OnSet(other.GetID());
+        if (other.GetObjectId().IsValid())
+            OnSet(other.GetObjectId());
+        else
+            OnSet(other.GetID());
         other.OnSet(Guid::Empty);
     }
 
@@ -147,14 +161,22 @@ public:
     SoftAssetReference& operator=(const SoftAssetReference& other)
     {
         if (this != &other)
-            OnSet(other.GetID());
+        {
+            if (other.GetObjectId().IsValid())
+                OnSet(other.GetObjectId());
+            else
+                OnSet(other.GetID());
+        }
         return *this;
     }
     SoftAssetReference& operator=(SoftAssetReference&& other)
     {
         if (this != &other)
         {
-            OnSet(other.GetID());
+            if (other.GetObjectId().IsValid())
+                OnSet(other.GetObjectId());
+            else
+                OnSet(other.GetID());
             other.OnSet(nullptr);
         }
         return *this;
@@ -170,6 +192,11 @@ public:
         return *this;
     }
     FORCE_INLINE SoftAssetReference& operator=(const Guid& id)
+    {
+        OnSet(id);
+        return *this;
+    }
+    FORCE_INLINE SoftAssetReference& operator=(const AssetObjectId& id)
     {
         OnSet(id);
         return *this;
@@ -239,6 +266,12 @@ public:
         OnSet(id);
     }
 
+    /// <summary>Sets an exact persistent object identity.</summary>
+    FORCE_INLINE void Set(const AssetObjectId& id)
+    {
+        OnSet(id);
+    }
+
     /// <summary>
     /// Sets the asset.
     /// </summary>
@@ -252,5 +285,5 @@ public:
 template<typename T>
 uint32 GetHash(const SoftAssetReference<T>& key)
 {
-    return GetHash(key.GetID());
+    return GetHash(key.GetObjectId());
 }

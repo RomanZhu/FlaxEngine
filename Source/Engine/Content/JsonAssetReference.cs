@@ -20,10 +20,26 @@ namespace FlaxEngine
     [Newtonsoft.Json.JsonConverter(typeof(Json.JsonAssetReferenceConverter))]
     public struct JsonAssetReference<T> : IComparable, IComparable<JsonAssetReference<T>>, IEquatable<JsonAssetReference<T>>
     {
+        private AssetObjectId _objectId;
+        private Guid _legacyBackingId;
+
         /// <summary>
         /// Gets or sets the referenced asset.
         /// </summary>
         public JsonAsset Asset;
+
+        /// <summary>
+        /// Gets the persistent file GUID and local file ID, including when the target is currently missing.
+        /// </summary>
+        public AssetObjectId ObjectId
+        {
+            get
+            {
+                if (Asset != null && Content.GetAssetObjectId(Asset.ID, out var id))
+                    return id;
+                return _objectId;
+            }
+        }
 
         /// <summary>
         /// Gets the instance of the serialized object from the json asset data. Cached internally.
@@ -37,6 +53,26 @@ namespace FlaxEngine
         public JsonAssetReference(JsonAsset asset)
         {
             Asset = asset;
+            _objectId = default;
+            _legacyBackingId = asset?.ID ?? Guid.Empty;
+            if (asset != null)
+                Content.GetAssetObjectId(asset.ID, out _objectId);
+        }
+
+        /// <summary>Initializes a reference from an exact persistent object identity.</summary>
+        public JsonAssetReference(AssetObjectId objectId)
+        {
+            _objectId = objectId;
+            _legacyBackingId = Guid.Empty;
+            Asset = objectId.IsValid ? (JsonAsset)Content.LoadAsync(objectId, typeof(JsonAsset)) : null;
+        }
+
+        /// <summary>Initializes a compatibility reference from a legacy backing asset identifier.</summary>
+        public JsonAssetReference(Guid legacyBackingId)
+        {
+            _objectId = default;
+            _legacyBackingId = legacyBackingId;
+            Asset = legacyBackingId != Guid.Empty ? Content.LoadAsync<JsonAsset>(legacyBackingId) : null;
         }
 
         /// <summary>
@@ -64,6 +100,12 @@ namespace FlaxEngine
             return Object.GetUnmanagedPtr(value.Asset);
         }
 
+        /// <summary>Gets the exact persistent identity used by native interop and serialization.</summary>
+        public static implicit operator AssetObjectId(JsonAssetReference<T> value)
+        {
+            return value.ObjectId;
+        }
+
         /// <summary>
         /// Implicit cast operator.
         /// </summary>
@@ -78,6 +120,12 @@ namespace FlaxEngine
         public static implicit operator JsonAssetReference<T>(IntPtr valuePtr)
         {
             return new JsonAssetReference<T>(Object.FromUnmanagedPtr(valuePtr) as JsonAsset);
+        }
+
+        /// <summary>Creates a reference from an exact persistent identity without requiring the target to be loaded.</summary>
+        public static implicit operator JsonAssetReference<T>(AssetObjectId objectId)
+        {
+            return new JsonAssetReference<T>(objectId);
         }
 
         /// <summary>
@@ -97,6 +145,12 @@ namespace FlaxEngine
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool operator ==(JsonAssetReference<T> left, JsonAssetReference<T> right)
         {
+            var leftId = left.ObjectId;
+            var rightId = right.ObjectId;
+            if (leftId.IsValid || rightId.IsValid)
+                return leftId == rightId;
+            if (left._legacyBackingId != Guid.Empty || right._legacyBackingId != Guid.Empty)
+                return left._legacyBackingId == right._legacyBackingId;
             return left.Asset == right.Asset;
         }
 
@@ -106,31 +160,40 @@ namespace FlaxEngine
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool operator !=(JsonAssetReference<T> left, JsonAssetReference<T> right)
         {
-            return left.Asset != right.Asset;
+            return !(left == right);
         }
 
         /// <inheritdoc />
         public bool Equals(JsonAssetReference<T> other)
         {
-            return Asset == other.Asset;
+            return this == other;
         }
 
         /// <inheritdoc />
         public int CompareTo(JsonAssetReference<T> other)
         {
+            var id = ObjectId;
+            var otherId = other.ObjectId;
+            if (id.IsValid || otherId.IsValid)
+            {
+                var guid = id.Guid.CompareTo(otherId.Guid);
+                return guid != 0 ? guid : id.LocalId.CompareTo(otherId.LocalId);
+            }
+            if (_legacyBackingId != Guid.Empty || other._legacyBackingId != Guid.Empty)
+                return _legacyBackingId.CompareTo(other._legacyBackingId);
             return Object.GetUnmanagedPtr(Asset).CompareTo(Object.GetUnmanagedPtr(other.Asset));
         }
 
         /// <inheritdoc />
         public override bool Equals(object obj)
         {
-            return obj is JsonAssetReference<T> other && Asset == other.Asset;
+            return obj is JsonAssetReference<T> other && Equals(other);
         }
 
         /// <inheritdoc />
         public override string ToString()
         {
-            return Asset?.ToString() ?? "null";
+            return Asset?.ToString() ?? (ObjectId.IsValid ? ObjectId.ToString() : (_legacyBackingId != Guid.Empty ? _legacyBackingId.ToString("N") : "null"));
         }
 
         /// <inheritdoc />
@@ -142,7 +205,8 @@ namespace FlaxEngine
         /// <inheritdoc />
         public override int GetHashCode()
         {
-            return (Asset != null ? Asset.GetHashCode() : 0);
+            var id = ObjectId;
+            return id.IsValid ? id.GetHashCode() : (_legacyBackingId != Guid.Empty ? _legacyBackingId.GetHashCode() : (Asset != null ? Asset.GetHashCode() : 0));
         }
     }
 }

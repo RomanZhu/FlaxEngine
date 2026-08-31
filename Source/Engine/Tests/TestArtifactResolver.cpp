@@ -55,6 +55,13 @@ namespace
         manifest.SourceHash = ContentHash::Compute("source", 6);
         manifest.SettingsHash = ContentHash::Compute("settings", 8);
         manifest.BuildID = Guid::New().ToString(Guid::FormatType::N);
+        ArtifactManifestObject object;
+        object.ObjectID = record.GetObjectId();
+        object.BackingAssetID = record.ID;
+        object.TypeName = record.TypeName;
+        object.Name = TEXT("ResolverAsset");
+        object.IsMainObject = record.IsMainAsset();
+        manifest.Objects.Add(object);
         ArtifactManifestOutput output;
         output.Kind = request.OutputKind;
         output.Key = outputKey;

@@ -18,7 +18,6 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
     first.AssetFormatVersion = 4;
     first.Flags = RuntimeAssetIndexFlags::ExactArtifact;
     first.ExactArtifact = ArtifactKey(ContentHash::Compute("first", 5));
-    entries.Add(first);
     RuntimeAssetIndexEntry second;
     second.ID = AssetObjectId(Guid(1, 0, 0, 0), 42);
     second.BackingAssetID = Guid(10, 0, 0, 0);
@@ -32,6 +31,15 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
     second.AssetFormatVersion = 1;
     second.Flags = RuntimeAssetIndexFlags::ExactArtifact;
     second.ExactArtifact = ArtifactKey(ContentHash::Compute("second", 6));
+    first.Dependencies.Add(second.ID);
+    first.PreloadBudgetBytes = RuntimeAssetIndex::DefaultPreloadBudgetBytes;
+    RuntimeAssetPreload preload;
+    preload.ID = second.ID;
+    preload.Priority = MAX_uint32 - 1;
+    preload.EstimatedBytes = second.Size;
+    preload.Required = true;
+    first.Preload.Add(preload);
+    entries.Add(first);
     entries.Add(second);
 
     CHECK_FALSE(RuntimeAssetIndex::ContainsLibraryPath(TEXT("Content/Data_0.flax")));
@@ -44,7 +52,7 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
     StringAnsi again;
     REQUIRE_FALSE(RuntimeAssetIndex::WriteCanonicalJson(entries, again, diagnostic));
     CHECK(json == again);
-    CHECK(json.Contains("\"formatVersion\": 3"));
+    CHECK(json.Contains("\"formatVersion\": 5"));
     CHECK(json.Contains("\"contentHash\":"));
     CHECK(json.Contains("00000001000000000000000000000000:42"));
     CHECK(json.Contains("FlaxEngine.Material"));
@@ -55,6 +63,11 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
     REQUIRE(parsed.Count() == 2);
     CHECK(parsed[0].ID.Guid == second.ID.Guid);
     CHECK(parsed[1].ExactArtifact == first.ExactArtifact);
+    REQUIRE(parsed[1].Dependencies.Count() == 1);
+    CHECK(parsed[1].Dependencies[0] == second.ID);
+    REQUIRE(parsed[1].Preload.Count() == 1);
+    CHECK(parsed[1].Preload[0].Required);
+    CHECK(parsed[1].Preload[0].EstimatedBytes == second.Size);
 
     RuntimeAssetIndexEntry libraryEntry;
     libraryEntry.ID = AssetObjectId(Guid(3, 0, 0, 0), 1);

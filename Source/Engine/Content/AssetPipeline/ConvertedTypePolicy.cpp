@@ -21,7 +21,8 @@ bool ConvertedTypePolicy::IsConvertedGraphType(const StringView& typeName)
         typeName == TEXT("FlaxEngine.CollisionData") ||
         typeName == TEXT("FlaxEngine.MaterialInstance") ||
         typeName == TEXT("FlaxEngine.SkeletonMask") ||
-        typeName == TEXT("FlaxEngine.SceneAnimation");
+        typeName == TEXT("FlaxEngine.SceneAnimation") ||
+        typeName == TEXT("FlaxEngine.GameplayGlobals");
 }
 
 bool ConvertedTypePolicy::IsLegacyExceptionType(const StringView& typeName)

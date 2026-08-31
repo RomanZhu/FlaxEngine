@@ -76,7 +76,7 @@ namespace
             TEXT("materialfunction"), TEXT("animgraphfunction"), TEXT("animgraph"),
             TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction"), TEXT("material"),
             TEXT("particleemitter"), TEXT("particlesystem"), TEXT("collisiondata"),
-            TEXT("materialinstance"), TEXT("sceneanimation"), TEXT("skeletonmask"),
+            TEXT("materialinstance"), TEXT("sceneanimation"), TEXT("skeletonmask"), TEXT("animation"), TEXT("gameplayglobals"),
             TEXT("scene"), TEXT("prefab")
         };
         for (const Char* value : supported)
@@ -209,7 +209,15 @@ namespace
             record.ProcessorID == TEXT("Flax.SceneAnimation") ||
             record.ProcessorID == TEXT("Flax.ParticleSystem") ||
             record.ProcessorID == TEXT("Flax.CollisionData") ||
+            record.ProcessorID == TEXT("Flax.Animation") ||
+            record.ProcessorID == TEXT("Flax.GameplayGlobals") ||
             record.ProcessorID == TEXT("Flax.AuthoredObject");
+    }
+
+    bool IsGraphBuildInputType(const StringView& typeName)
+    {
+        return typeName == TEXT("FlaxEngine.MaterialFunction") || typeName == TEXT("FlaxEngine.AnimationGraphFunction") ||
+            typeName == TEXT("FlaxEngine.ParticleEmitterFunction");
     }
 
     bool IsReferenceGuidField(const StringAnsiView& name)
@@ -223,7 +231,7 @@ namespace
         return name == "localId" || name == "fileId" || name == "LocalId" || name == "FileId" || name == "FileID";
     }
 
-    void CollectJsonReferences(const rapidjson_flax::Value& value, HashSet<Guid>& guidReferences, HashSet<Guid>& objectReferences)
+    void CollectJsonReferences(const rapidjson_flax::Value& value, HashSet<Guid>& guidReferences, HashSet<AssetObjectId>& objectReferences)
     {
         if (value.IsObject())
         {
@@ -241,7 +249,7 @@ namespace
             const bool hasObjectReference = guidValue && guidValue->IsString() && localIdValue && localIdValue->IsInt64() &&
                 localIdValue->GetInt64() != 0 && !Guid::Parse(guidValue->GetStringAnsiView(), fileGuid) && fileGuid.IsValid();
             if (hasObjectReference)
-                objectReferences.Add(SubAssetPolicy::GetBackingAssetId(fileGuid, localIdValue->GetInt64()));
+                objectReferences.Add(AssetObjectId(fileGuid, localIdValue->GetInt64()));
             for (auto i = value.MemberBegin(); i != value.MemberEnd(); ++i)
             {
                 const StringAnsiView name(i->name.GetString(), i->name.GetStringLength());
@@ -282,32 +290,78 @@ namespace
                 continue;
             }
             HashSet<Guid> guidCandidates;
-            HashSet<Guid> objectCandidates;
+            HashSet<AssetObjectId> objectCandidates;
             CollectJsonReferences(json, guidCandidates, objectCandidates);
-            Array<Guid> references;
+            Array<AssetObjectId> objectReferences;
+            Array<AssetObjectId> buildObjectDependencies;
             for (const auto& candidateEntry : objectCandidates)
             {
-                const Guid& candidate = candidateEntry.Item;
-                if (candidate != main.ID)
-                    references.Add(candidate);
+                const AssetObjectId& candidate = candidateEntry.Item;
+                if (candidate != main.GetObjectId())
+                    objectReferences.Add(candidate);
             }
             for (const auto& candidateEntry : guidCandidates)
             {
                 const Guid& candidate = candidateEntry.Item;
-                if (candidate != main.ID && recordIndices.ContainsKey(candidate) && !references.Contains(candidate))
-                    references.Add(candidate);
-            }
-            if (references.Count() > 1)
-            {
-                std::sort(references.Get(), references.Get() + references.Count(), [](const Guid& a, const Guid& b)
+                int32 recordIndex;
+                if (candidate != main.ID && recordIndices.TryGet(candidate, recordIndex))
                 {
-                    return a.ToString(Guid::FormatType::N) < b.ToString(Guid::FormatType::N);
+                    const AssetObjectId objectId = records[recordIndex].GetObjectId();
+                    if (!objectReferences.Contains(objectId))
+                        objectReferences.Add(objectId);
+                }
+            }
+            if (objectReferences.Count() > 1)
+            {
+                std::sort(objectReferences.Get(), objectReferences.Get() + objectReferences.Count(), [](const AssetObjectId& a, const AssetObjectId& b)
+                {
+                    const String aGuid = a.Guid.ToString(Guid::FormatType::N);
+                    const String bGuid = b.Guid.ToString(Guid::FormatType::N);
+                    return aGuid == bGuid ? a.LocalId < b.LocalId : aGuid < bGuid;
                 });
             }
+            if (main.ProcessorID == TEXT("Flax.GraphDocument"))
+            {
+                for (int32 index = objectReferences.Count() - 1; index >= 0; index--)
+                {
+                    int32 targetIndex;
+                    const AssetObjectId& objectId = objectReferences[index];
+                    const Guid backingId = SubAssetPolicy::GetBackingAssetId(objectId.Guid, objectId.LocalId);
+                    if (recordIndices.TryGet(backingId, targetIndex) && IsGraphBuildInputType(records[targetIndex].TypeName))
+                    {
+                        buildObjectDependencies.Add(objectId);
+                        objectReferences.RemoveAt(index);
+                    }
+                }
+                if (buildObjectDependencies.Count() > 1)
+                {
+                    std::sort(buildObjectDependencies.Get(), buildObjectDependencies.Get() + buildObjectDependencies.Count(), [](const AssetObjectId& a, const AssetObjectId& b)
+                    {
+                        const String aGuid = a.Guid.ToString(Guid::FormatType::N);
+                        const String bGuid = b.Guid.ToString(Guid::FormatType::N);
+                        return aGuid == bGuid ? a.LocalId < b.LocalId : aGuid < bGuid;
+                    });
+                }
+            }
+            Array<Guid> references;
+            for (const AssetObjectId& objectId : objectReferences)
+            {
+                const Guid backingId = SubAssetPolicy::GetBackingAssetId(objectId.Guid, objectId.LocalId);
+                if (!references.Contains(backingId))
+                    references.Add(backingId);
+            }
+            Array<Guid> buildDependencies;
+            for (const AssetObjectId& objectId : buildObjectDependencies)
+                buildDependencies.Add(SubAssetPolicy::GetBackingAssetId(objectId.Guid, objectId.LocalId));
             for (AssetRecord& record : records)
             {
                 if (record.SourceAssetID == main.SourceAssetID)
+                {
+                    record.BuildInputObjectDependencies = buildObjectDependencies;
+                    record.BuildInputDependencies = buildDependencies;
+                    record.RuntimeObjectReferences = objectReferences;
                     record.RuntimeReferences = references;
+                }
             }
         }
     }

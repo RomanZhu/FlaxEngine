@@ -791,6 +791,9 @@ bool TextureProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnos
     {
         TextureTool::Options options = payload->Settings.ToImportOptions(context.GetTarget().Platform);
         ImportTexture::NormalizeOptions(options);
+        if (payload->Width > 0 && payload->Height > 0 &&
+            (!Math::IsPowerOfTwo(payload->Width) || !Math::IsPowerOfTwo(payload->Height)))
+            options.GenerateMipMaps = false;
         TextureData textureData;
         String errorMessage;
         if (TextureTool::ImportTexture(verifiedSourcePath, textureData, options, errorMessage, false))

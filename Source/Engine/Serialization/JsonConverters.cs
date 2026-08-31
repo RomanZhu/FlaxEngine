@@ -15,6 +15,17 @@ namespace FlaxEngine.Json
         /// <inheritdoc />
         public override unsafe void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
+            if (value is Asset asset)
+            {
+                if (Content.GetAssetObjectId(asset.ID, out var objectId))
+                    WriteAssetObjectId(writer, objectId);
+                else
+                {
+                    var legacyId = asset.ID;
+                    writer.WriteValue(JsonSerializer.GetStringID(&legacyId));
+                }
+                return;
+            }
             Guid id = Guid.Empty;
             if (value is Object obj)
                 id = obj.ID;
@@ -27,9 +38,59 @@ namespace FlaxEngine.Json
             if (reader.TokenType == JsonToken.String)
             {
                 JsonSerializer.ParseID((string)reader.Value, out var id);
+                if (typeof(Asset).IsAssignableFrom(objectType))
+                    return Content.LoadAsync(id, objectType);
                 return Object.Find(ref id, objectType);
             }
+            if (reader.TokenType == JsonToken.StartObject && ReadAssetObjectId(reader, out var objectId))
+                return Content.LoadAsync(objectId, objectType);
             return null;
+        }
+
+        internal static unsafe void WriteAssetObjectId(JsonWriter writer, AssetObjectId id)
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("guid");
+            var guid = id.Guid;
+            writer.WriteValue(JsonSerializer.GetStringID(&guid));
+            writer.WritePropertyName("localId");
+            writer.WriteValue(id.LocalId);
+            writer.WriteEndObject();
+        }
+
+        internal static bool ReadAssetObjectId(JsonReader reader, out AssetObjectId id)
+        {
+            return ReadAssetObjectId(reader, out id, out _);
+        }
+
+        internal static bool ReadAssetObjectId(JsonReader reader, out AssetObjectId id, out Guid legacyBackingId)
+        {
+            id = default;
+            Guid guid = Guid.Empty;
+            legacyBackingId = Guid.Empty;
+            long localId = 0;
+            while (reader.Read() && reader.TokenType != JsonToken.EndObject)
+            {
+                if (reader.TokenType != JsonToken.PropertyName)
+                    continue;
+                var propertyName = (string)reader.Value;
+                if (!reader.Read())
+                    break;
+                if (propertyName == "guid" && reader.TokenType == JsonToken.String)
+                    JsonSerializer.ParseID((string)reader.Value, out guid);
+                else if (propertyName == "localId" && reader.TokenType == JsonToken.Integer)
+                    localId = Convert.ToInt64(reader.Value);
+                else if (propertyName == "Asset" && reader.TokenType == JsonToken.String)
+                    JsonSerializer.ParseID((string)reader.Value, out legacyBackingId);
+            }
+            id = new AssetObjectId(guid, localId);
+            if (!id.IsValid && legacyBackingId != Guid.Empty)
+            {
+                var asset = Content.LoadAsync<Asset>(legacyBackingId);
+                if (asset != null)
+                    Content.GetAssetObjectId(asset.ID, out id);
+            }
+            return id.IsValid || legacyBackingId != Guid.Empty;
         }
 
         /// <inheritdoc />
@@ -435,8 +496,16 @@ namespace FlaxEngine.Json
         public override unsafe void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
             var asset = (JsonAsset)value.GetType().GetField("Asset").GetValue(value);
-            var id = asset?.ID ?? Guid.Empty;
-            writer.WriteValue(JsonSerializer.GetStringID(&id));
+            var id = (AssetObjectId)value.GetType().GetProperty("ObjectId").GetValue(value);
+            if (id.IsValid)
+            {
+                FlaxObjectConverter.WriteAssetObjectId(writer, id);
+                return;
+            }
+            var legacyBackingId = (Guid)value.GetType().GetField("_legacyBackingId", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(value);
+            if (legacyBackingId == Guid.Empty && asset != null)
+                legacyBackingId = asset.ID;
+            writer.WriteValue(JsonSerializer.GetStringID(&legacyBackingId));
         }
 
         /// <inheritdoc />
@@ -446,31 +515,12 @@ namespace FlaxEngine.Json
             if (reader.TokenType == JsonToken.String)
             {
                 JsonSerializer.ParseID((string)reader.Value, out var id);
-                var asset = Content.LoadAsync<JsonAsset>(id);
-                objectType.GetField("Asset").SetValue(result, asset);
+                result = Activator.CreateInstance(objectType, new object[] { id });
             }
             else if (reader.TokenType == JsonToken.StartObject)
             {
-                // [Deprecated on 26.07.2024, expires on 26.07.2026]
-                while (reader.Read() && reader.TokenType != JsonToken.EndObject)
-                {
-                    switch (reader.TokenType)
-                    {
-                    case JsonToken.PropertyName:
-                    {
-                        var propertyName = (string)reader.Value;
-                        reader.Read();
-                        if (propertyName == "Asset" && reader.TokenType == JsonToken.String)
-                        {
-                            JsonSerializer.ParseID((string)reader.Value, out var id);
-                            var asset = Content.LoadAsync<JsonAsset>(id);
-                            objectType.GetField("Asset").SetValue(result, asset);
-                        }
-
-                        break;
-                    }
-                    }
-                }
+                if (FlaxObjectConverter.ReadAssetObjectId(reader, out var id, out var legacyBackingId))
+                    result = Activator.CreateInstance(objectType, new object[] { id.IsValid ? (object)id : legacyBackingId });
             }
 
             return result;

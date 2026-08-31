@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Engine/Content/Asset.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 
 /// <summary>
 /// Asset reference utility. Keeps reference to the linked asset object and handles load/unload events.
@@ -11,6 +12,7 @@ class FLAXENGINE_API AssetReferenceBase : public IAssetReference
 {
 protected:
     Asset* _asset = nullptr;
+    mutable AssetObjectId _objectId;
     IAssetReference* _owner = nullptr;
 
 public:
@@ -57,6 +59,9 @@ public:
         return _asset ? _asset->GetID() : Guid::Empty;
     }
 
+    /// <summary>Gets the persistent file GUID and local file ID.</summary>
+    const AssetObjectId& GetObjectId() const;
+
     /// <summary>
     /// Gets managed instance object (or null if no asset set).
     /// </summary>
@@ -78,6 +83,8 @@ public:
 
 protected:
     void OnSet(Asset* asset);
+    void OnSet(const AssetObjectId& id, const ScriptingTypeHandle& type);
+    void OnCopy(const AssetReferenceBase& other);
 };
 
 /// <summary>
@@ -114,6 +121,12 @@ public:
         OnSet((Asset*)asset);
     }
 
+    /// <summary>Initializes an exact persistent asset object reference.</summary>
+    AssetReference(const AssetObjectId& id)
+    {
+        OnSet(id, T::TypeInitializer);
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="AssetReference"/> class.
     /// </summary>
@@ -129,12 +142,12 @@ public:
     /// <param name="other">The other.</param>
     AssetReference(const AssetReference& other)
     {
-        OnSet(other._asset);
+        OnCopy(other);
     }
 
     AssetReference(AssetReference&& other) noexcept
     {
-        OnSet(other._asset);
+        OnCopy(other);
         other.OnSet(nullptr);
     }
 
@@ -142,7 +155,7 @@ public:
     {
         if (&other != this)
         {
-            OnSet(other._asset);
+            OnCopy(other);
             other.OnSet(nullptr);
         }
         return *this;
@@ -158,7 +171,7 @@ public:
 public:
     FORCE_INLINE AssetReference& operator=(const AssetReference& other)
     {
-        OnSet(other._asset);
+        OnCopy(other);
         return *this;
     }
 
@@ -171,6 +184,12 @@ public:
     FORCE_INLINE AssetReference& operator=(const Guid& id)
     {
         OnSet(::LoadAsset(id, T::TypeInitializer));
+        return *this;
+    }
+
+    FORCE_INLINE AssetReference& operator=(const AssetObjectId& id)
+    {
+        OnSet(id, T::TypeInitializer);
         return *this;
     }
 
@@ -244,10 +263,16 @@ public:
     {
         OnSet((Asset*)asset);
     }
+
+    /// <summary>Sets an exact persistent asset object reference.</summary>
+    void Set(const AssetObjectId& id)
+    {
+        OnSet(id, T::TypeInitializer);
+    }
 };
 
 template<typename T>
 uint32 GetHash(const AssetReference<T>& key)
 {
-    return GetHash(key.GetID());
+    return GetHash(key.GetObjectId());
 }

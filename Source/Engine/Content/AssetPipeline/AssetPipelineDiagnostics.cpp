@@ -62,6 +62,8 @@ const Char* GetAssetPipelineDiagnosticCodeName(AssetPipelineDiagnosticCode code)
         return TEXT("ASSET_ARTIFACT_INCOMPATIBLE");
     case AssetPipelineDiagnosticCode::FutureMetaVersion:
         return TEXT("ASSET_FUTURE_META_VERSION");
+    case AssetPipelineDiagnosticCode::RecoveryRequired:
+        return TEXT("ASSET_RECOVERY_REQUIRED");
     default:
         return TEXT("ASSET_UNKNOWN_DIAGNOSTIC");
     }

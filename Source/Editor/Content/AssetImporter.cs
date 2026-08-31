@@ -3,8 +3,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using FlaxEngine;
@@ -241,8 +243,10 @@ namespace FlaxEditor
             _assetBundleName = metadata.AssetBundleName ?? string.Empty;
             _assetBundleVariant = metadata.AssetBundleVariant ?? string.Empty;
             LoadExternalObjects(metadata.ExternalObjectsJson);
+            var settingsUpgraded = this is ScriptedImporter scriptedImporter &&
+                                   scriptedImporter.UpgradeSettingsToCurrent(ref _settingsSchemaVersion, ref _settingsJson);
             LoadScriptedSettings();
-            _dirty = false;
+            _dirty = settingsUpgraded;
         }
 
         private void Rebind()
@@ -377,6 +381,8 @@ namespace FlaxEditor
         public int importQueuePriority { get; set; }
         /// <summary>Whether immutable artifact caching is permitted.</summary>
         public bool AllowCaching { get; set; } = true;
+        /// <summary>Current normalized per-asset settings schema version.</summary>
+        public uint settingsSchemaVersion { get; set; } = 1;
 
         internal static string[] NormalizeExtensions(string[] extensions, string parameterName)
         {
@@ -394,6 +400,31 @@ namespace FlaxEditor
     {
         /// <summary>Produces staged objects and dependencies for one source.</summary>
         public abstract void OnImportAsset(AssetImportContext ctx);
+
+        /// <summary>Purely upgrades one settings object from <paramref name="fromVersion"/> to the next schema version.</summary>
+        protected virtual JObject UpgradeSettings(uint fromVersion, JObject settings)
+        {
+            throw new InvalidOperationException($"Importer '{GetType().FullName}' does not implement settings upgrade from schema {fromVersion}.");
+        }
+
+        internal bool UpgradeSettingsToCurrent(ref int schemaVersion, ref string settingsJson)
+        {
+            var attribute = GetType().GetCustomAttribute<ScriptedImporterAttribute>() ??
+                            throw new InvalidOperationException($"Importer '{GetType().FullName}' has no registration attribute.");
+            if (schemaVersion < 1 || schemaVersion > attribute.settingsSchemaVersion)
+                throw new InvalidDataException($"Importer settings schema {schemaVersion} cannot be loaded by '{GetType().FullName}' schema {attribute.settingsSchemaVersion}.");
+            if (schemaVersion == attribute.settingsSchemaVersion)
+                return false;
+            var settings = JObject.Parse(string.IsNullOrWhiteSpace(settingsJson) ? "{}" : settingsJson);
+            while (schemaVersion < attribute.settingsSchemaVersion)
+            {
+                settings = UpgradeSettings((uint)schemaVersion, (JObject)settings.DeepClone()) ??
+                           throw new InvalidDataException($"Importer '{GetType().FullName}' returned null while upgrading schema {schemaVersion}.");
+                schemaVersion++;
+            }
+            settingsJson = settings.ToString(Newtonsoft.Json.Formatting.None);
+            return true;
+        }
     }
 
     internal static class ScriptedImporterRegistry
@@ -445,7 +476,7 @@ namespace FlaxEditor
                 selected = defaultType == null ? null : Entries.First(x => x.Type == defaultType);
                 if (selected == null)
                     return false;
-                if (ScriptedImporterFacade.EnsureMetadata(physicalPath, selected.Id, 1))
+                if (ScriptedImporterFacade.EnsureMetadata(physicalPath, selected.Id, (int)selected.Attribute.settingsSchemaVersion))
                     throw new InvalidOperationException(ScriptedImporterFacade.GetLastError());
                 record = AssetDatabase.GetMainRecord(physicalPath);
             }
@@ -454,13 +485,23 @@ namespace FlaxEditor
             if (string.IsNullOrWhiteSpace(callbackHash))
                 throw new InvalidOperationException("Scripted imports require the exact preprocess callback fingerprint.");
 
-            var result = ScriptedImporterWorkerCoordinator.Run(record.Value.CanonicalPath, selected.Id, callbackHash);
+            var settingsProxy = (ScriptedImporter)Activator.CreateInstance(selected.Type);
+            settingsProxy.Bind(record.Value);
+            if (settingsProxy.WriteImportSettingsIfDirty())
+            {
+                record = AssetDatabase.GetMainRecord(physicalPath);
+                if (!record.HasValue)
+                    throw new InvalidOperationException("The source disappeared while upgrading importer settings.");
+            }
+
+            var verifyDeterminism = (options & ImportAssetOptions.VerifyDeterminism) != 0;
+            var result = ScriptedImporterWorkerCoordinator.Run(record.Value.CanonicalPath, selected.Id, callbackHash, verifyDeterminism);
             if (ScriptedImporterFacade.Publish(physicalPath, result.ToString(Newtonsoft.Json.Formatting.None)))
                 throw new InvalidOperationException(ScriptedImporterFacade.GetLastError());
             return true;
         }
 
-        internal static JObject ExecuteWorker(string path, string processorId, string callbackHash)
+        internal static JObject ExecuteWorker(string path, string processorId, string callbackHash, Func<bool> isCancelled)
         {
             if (!AssetDatabase.IsAssetImportWorkerProcess())
                 throw new InvalidOperationException("Scripted importer execution is restricted to isolated worker processes.");
@@ -472,6 +513,9 @@ namespace FlaxEditor
             if (selected == null || !string.Equals(record.Value.ProcessorID, selected.Id, StringComparison.Ordinal))
                 throw new InvalidOperationException("The requested scripted importer no longer owns the source record.");
 
+            CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+            CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
+
             var importer = (ScriptedImporter)Activator.CreateInstance(selected.Type);
             importer.Bind(record.Value);
             var target = new Content.Settings.BuildTarget
@@ -480,8 +524,12 @@ namespace FlaxEditor
                 Platform = BuildPlatform.Windows64,
                 Mode = BuildConfiguration.Development,
             };
-            var context = new AssetImportContext(record.Value.CanonicalPath, target);
+            var context = new AssetImportContext(record.Value.CanonicalPath, target, isCancelled);
+            if (context.IsCancelled())
+                throw new OperationCanceledException("The scripted import was cancelled before execution.");
             importer.OnImportAsset(context);
+            if (context.IsCancelled())
+                throw new OperationCanceledException("The scripted import was cancelled before staging completed.");
             if (context.Errors.Count != 0)
                 throw new InvalidOperationException(string.Join(Environment.NewLine, context.Errors));
             if (context.mainObject == null || context.GetObjects().Count == 0)
@@ -504,6 +552,7 @@ namespace FlaxEditor
                     ["name"] = declaration.Object.GetType().Name,
                     ["format"] = serialized.Format,
                     ["main"] = ReferenceEquals(declaration.Object, context.mainObject),
+                    ["transientId"] = declaration.Object.ID.ToString("N"),
                     ["data"] = Convert.ToBase64String(serialized.Data),
                 });
                 if (declaration.Thumbnail != null)
@@ -522,6 +571,16 @@ namespace FlaxEditor
                 ["implementationVersion"] = selected.Attribute.version,
                 ["providerHash"] = GetProviderHash(selected),
                 ["postprocessorHash"] = callbackHash ?? string.Empty,
+                ["environment"] = new JObject
+                {
+                    ["framework"] = RuntimeInformation.FrameworkDescription,
+                    ["osArchitecture"] = RuntimeInformation.OSArchitecture.ToString(),
+                    ["processArchitecture"] = RuntimeInformation.ProcessArchitecture.ToString(),
+                    ["processBitness"] = Environment.Is64BitProcess ? 64 : 32,
+                    ["culture"] = CultureInfo.CurrentCulture.Name,
+                    ["uiCulture"] = CultureInfo.CurrentUICulture.Name,
+                    ["timeZone"] = TimeZoneInfo.Local.Id,
+                },
                 ["objects"] = objects,
                 ["outputData"] = outputData,
                 ["identityRenames"] = renames,
@@ -538,6 +597,8 @@ namespace FlaxEditor
                     ["tools"] = JObject.FromObject(context.ToolDependencies.OrderBy(x => x.Key, StringComparer.Ordinal)
                         .ToDictionary(x => x.Key, x => x.Value.ToString(), StringComparer.Ordinal)),
                     ["observedSources"] = JObject.FromObject(context.ObservedSourceHashes.OrderBy(x => x.Key, StringComparer.Ordinal)
+                        .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal)),
+                    ["observedArtifacts"] = JObject.FromObject(context.ObservedArtifactKeys.OrderBy(x => x.Key, StringComparer.Ordinal)
                         .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal)),
                     ["logicalPath"] = context.LogicalPathObserved,
                 },
@@ -557,7 +618,7 @@ namespace FlaxEditor
             var isJson = obj is JsonAssetBase;
             if (obj is Asset asset)
             {
-                var temporaryPath = Path.Combine(Globals.TemporaryFolder, $"scripted-import-{Guid.NewGuid():N}{(isJson ? ".json" : ".flax")}");
+                var temporaryPath = Path.Combine(Path.GetTempPath(), $"scripted-import-{Guid.NewGuid():N}{(isJson ? ".json" : ".flax")}");
                 try
                 {
                     if (asset.Save(temporaryPath))
@@ -627,6 +688,8 @@ namespace FlaxEditor
                     var attribute = type.GetCustomAttribute<ScriptedImporterAttribute>();
                     if (attribute == null)
                         continue;
+                    if (attribute.settingsSchemaVersion == 0 || attribute.settingsSchemaVersion > int.MaxValue)
+                        throw new InvalidOperationException($"Scripted importer '{type.FullName}' has an invalid settings schema version.");
                     attribute.overrideFileExtensions = attribute.overrideFileExtensions == null || attribute.overrideFileExtensions.Length == 0
                         ? Array.Empty<string>()
                         : ScriptedImporterAttribute.NormalizeExtensions(attribute.overrideFileExtensions, nameof(attribute.overrideFileExtensions));

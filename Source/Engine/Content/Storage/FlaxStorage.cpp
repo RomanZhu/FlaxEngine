@@ -14,6 +14,7 @@
 #include "Engine/Serialization/FileWriteStream.h"
 #include "Engine/Content/Asset.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/Artifacts/ArtifactKey.h"
 #include "Engine/Threading/Threading.h"
 #if USE_EDITOR
 #include "Engine/Serialization/JsonWriter.h"
@@ -990,12 +991,49 @@ bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const 
     Array<SerializedEntryV9, InlinedAllocation<1>> entries;
     entries.Resize(assets.Length());
     Array<FlaxChunk*> chunks;
+    Dictionary<FlaxChunk*, int32> chunkIndices;
+    Dictionary<ContentHash, Array<int32>> chunksByContent;
     for (const AssetInitData& asset : assets)
     {
         for (FlaxChunk* chunk : asset.Header.Chunks)
         {
-            if (chunk && chunk->IsLoaded())
+            if (!chunk || !chunk->IsLoaded() || chunkIndices.ContainsKey(chunk))
+                continue;
+            const FlaxChunkFlags serializedFlags = chunk->Flags & ~(FlaxChunkFlags::KeepInMemory);
+            ContentHasher hasher;
+            hasher.Update(&serializedFlags, sizeof(serializedFlags));
+            hasher.Update(chunk->Data.Get(), chunk->Data.Length());
+            const ContentHash content = hasher.Finalize();
+            int32 chunkIndex = -1;
+            Array<int32>* candidates = chunksByContent.TryGet(content);
+            if (candidates)
+            {
+                for (const int32 candidateIndex : *candidates)
+                {
+                    const FlaxChunk* candidate = chunks[candidateIndex];
+                    const FlaxChunkFlags candidateFlags = candidate->Flags & ~(FlaxChunkFlags::KeepInMemory);
+                    if (candidateFlags == serializedFlags && candidate->Data.Length() == chunk->Data.Length() &&
+                        Platform::MemoryCompare(candidate->Data.Get(), chunk->Data.Get(), chunk->Data.Length()) == 0)
+                    {
+                        chunkIndex = candidateIndex;
+                        break;
+                    }
+                }
+            }
+            if (chunkIndex == -1)
+            {
+                chunkIndex = chunks.Count();
                 chunks.Add(chunk);
+                if (candidates)
+                    candidates->Add(chunkIndex);
+                else
+                {
+                    Array<int32> firstCandidate;
+                    firstCandidate.Add(chunkIndex);
+                    chunksByContent.Add(content, MoveTemp(firstCandidate));
+                }
+            }
+            chunkIndices.Add(chunk, chunkIndex);
         }
     }
     const int32 chunksCount = chunks.Count();
@@ -1065,6 +1103,8 @@ bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const 
         chunks[i]->LocationInFile = FlaxChunk::Location(currentAddress, size);
         currentAddress += size;
     }
+    for (const auto& mapping : chunkIndices)
+        mapping.Key->LocationInFile = chunks[mapping.Value]->LocationInFile;
 
     // Write header
     Header mainHeader;
@@ -1117,7 +1157,8 @@ bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const 
         // Chunks mapping
         for (const FlaxChunk* chunk : header.Header.Chunks)
         {
-            const int32 index = chunks.Find(chunk);
+            const int32* mappedIndex = chunk ? chunkIndices.TryGet(const_cast<FlaxChunk*>(chunk)) : nullptr;
+            const int32 index = mappedIndex ? *mappedIndex : -1;
             ASSERT_LOW_LAYER(index >= -1 && index <= ALL_ASSET_CHUNKS);
             stream->WriteInt32(index);
         }

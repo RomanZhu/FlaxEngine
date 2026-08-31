@@ -39,6 +39,7 @@ API_ENUM() enum class AssetPipelineDiagnosticCode
     ArtifactLockBusy,
     ArtifactIncompatible,
     FutureMetaVersion,
+    RecoveryRequired,
 };
 
 /// <summary>

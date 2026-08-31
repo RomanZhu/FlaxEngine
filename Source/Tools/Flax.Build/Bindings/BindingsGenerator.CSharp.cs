@@ -776,6 +776,14 @@ namespace Flax.Build.Bindings
                     if (!parameterInfo.IsOut)
                         contents.Append($"var __{parameterInfo.Name}Count = {(isSetter ? "value" : parameterInfo.Name)}?.Length ?? 0; ");
                 }
+                var apiType = FindApiTypeInfo(buildData, parameterInfo.Type, caller);
+                if (!parameterInfo.IsOut && !parameterInfo.IsRef && apiType?.MarshalAs?.Type == "AssetObjectId" &&
+                    UsePassByReference(buildData, apiType.MarshalAs, caller))
+                {
+                    var paramName = isSetter ? "value" : parameterInfo.Name;
+                    var nativeType = GenerateCSharpManagedToNativeType(buildData, apiType.MarshalAs, caller, true);
+                    contents.Append($"var __{parameterInfo.Name}Marshalled = ({nativeType}){paramName}; ");
+                }
             }
 #endif
             if (functionInfo.Glue.UseReferenceForResult)
@@ -808,6 +816,13 @@ namespace Flax.Build.Bindings
 
                 var convertFunc = GenerateCSharpManagedToNativeConverter(buildData, parameterInfo.Type, caller);
                 var paramName = isSetter ? "value" : parameterInfo.Name;
+                var apiType = FindApiTypeInfo(buildData, parameterInfo.Type, caller);
+                if (!parameterInfo.IsOut && !parameterInfo.IsRef && apiType?.MarshalAs?.Type == "AssetObjectId" &&
+                    UsePassByReference(buildData, apiType.MarshalAs, caller))
+                {
+                    paramName = $"__{parameterInfo.Name}Marshalled";
+                    convertFunc = string.Empty;
+                }
                 if (string.IsNullOrWhiteSpace(convertFunc) || parameterInfo.IsOut)
                 {
                     // Pass value

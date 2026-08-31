@@ -336,7 +336,9 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override Animation LoadAsset()
         {
-            return _item.IsCanonicalSource ? FlaxEngine.Content.LoadAsync<Animation>(_item.ID) : base.LoadAsset();
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return CanonicalGraphDocuments.LoadClone<Animation>(_item);
+            return base.LoadAsset();
         }
 
         private void OnUndoRedo(IUndoAction action)
@@ -404,7 +406,7 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override void Save()
         {
-            if (!IsEdited || _item.IsCanonicalSource)
+            if (!IsEdited)
                 return;
 
             if (RefreshTempAsset())
@@ -417,11 +419,19 @@ namespace FlaxEditor.Windows.Assets
         }
 
         /// <inheritdoc />
+        protected override bool SaveToOriginal()
+        {
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return Editor.ContentDatabase.SaveCanonicalAuthoredDocument(_asset, _item);
+            return base.SaveToOriginal();
+        }
+
+        /// <inheritdoc />
         protected override void UpdateToolstrip()
         {
-            _saveButton.Enabled = IsEdited && !_item.IsCanonicalSource;
-            _undoButton.Enabled = _undo.CanUndo && !_item.IsCanonicalSource;
-            _redoButton.Enabled = _undo.CanRedo && !_item.IsCanonicalSource;
+            _saveButton.Enabled = IsEdited;
+            _undoButton.Enabled = _undo.CanUndo;
+            _redoButton.Enabled = _undo.CanRedo;
 
             base.UpdateToolstrip();
         }

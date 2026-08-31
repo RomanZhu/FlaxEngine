@@ -40,6 +40,7 @@ namespace FlaxEditor.Actions
             public string TypeName;
             public long SizeInBytes;
             public bool IsStaged;
+            public bool UsesNativeRecovery;
         }
 
         private Editor _editor;
@@ -572,9 +573,12 @@ namespace FlaxEditor.Actions
 
         private bool RestoreEntry(ref Entry entry)
         {
-            if (!MoveContentPath(ref entry, entry.TrashPath, entry.OriginalPath))
+            var restoredPair = entry.UsesNativeRecovery
+                ? AssetDatabaseFacade.RecoverAssetPair(entry.TrashPath, entry.OriginalPath).Succeeded
+                : MoveContentPath(ref entry, entry.TrashPath, entry.OriginalPath);
+            if (!restoredPair)
                 return false;
-            if (entry.HasMetadataSidecar && !MovePath(entry.MetadataTrashPath, entry.MetadataOriginalPath, false))
+            if (!entry.UsesNativeRecovery && entry.HasMetadataSidecar && !MovePath(entry.MetadataTrashPath, entry.MetadataOriginalPath, false))
             {
                 if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
                 {
@@ -585,15 +589,31 @@ namespace FlaxEditor.Actions
             }
             if (entry.HasSidecarFolder && !MovePath(entry.SidecarTrashPath, entry.SidecarOriginalPath, true))
             {
-                if (entry.HasMetadataSidecar && !MovePath(entry.MetadataOriginalPath, entry.MetadataTrashPath, false))
+                if (!entry.UsesNativeRecovery && entry.HasMetadataSidecar && !MovePath(entry.MetadataOriginalPath, entry.MetadataTrashPath, false))
                     _requiresRecovery = true;
-                if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
+                var restagedPair = false;
+                if (entry.UsesNativeRecovery)
+                {
+                    var result = AssetDatabaseFacade.DeleteAssetPairToRecovery(entry.OriginalPath);
+                    restagedPair = result.Succeeded;
+                    if (restagedPair)
+                    {
+                        entry.TrashPath = result.RecoveryPath;
+                        entry.MetadataTrashPath = result.RecoveryPath + ".meta";
+                    }
+                }
+                else
+                {
+                    restagedPair = MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath);
+                }
+                if (!restagedPair)
                 {
                     _requiresRecovery = true;
                     Editor.LogError("Failed to roll back a partial content restore. Recovery data: " + entry.TrashPath);
                 }
                 return false;
             }
+            entry.UsesNativeRecovery = false;
 
             entry.IsStaged = false;
             RefreshParent(entry.OriginalPath, true);
@@ -639,13 +659,20 @@ namespace FlaxEditor.Actions
         {
             entry.HasMetadataSidecar = entry.MetadataOriginalPath != null && File.Exists(entry.MetadataOriginalPath);
             entry.HasSidecarFolder = entry.SidecarOriginalPath != null && Directory.Exists(entry.SidecarOriginalPath);
-            if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
-                return false;
-            if (entry.HasMetadataSidecar && !MovePath(entry.MetadataOriginalPath, entry.MetadataTrashPath, false))
+            if (entry.HasMetadataSidecar)
             {
-                RollbackFailedStage(ref entry);
-                return false;
+                var result = AssetDatabaseFacade.DeleteAssetPairToRecovery(entry.OriginalPath);
+                if (!result.Succeeded)
+                {
+                    Editor.LogWarning("Cannot stage canonical Content pair: " + result.Message);
+                    return false;
+                }
+                entry.TrashPath = result.RecoveryPath;
+                entry.MetadataTrashPath = result.RecoveryPath + ".meta";
+                entry.UsesNativeRecovery = true;
             }
+            else if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
+                return false;
             if (entry.HasSidecarFolder && !MovePath(entry.SidecarOriginalPath, entry.SidecarTrashPath, true))
             {
                 RollbackFailedStage(ref entry);
@@ -677,17 +704,24 @@ namespace FlaxEditor.Actions
         {
             var rollbackSucceeded = true;
             if (!PathExists(entry.OriginalPath, entry.IsFolder))
-                rollbackSucceeded &= MoveContentPath(ref entry, entry.TrashPath, entry.OriginalPath);
+            {
+                if (entry.UsesNativeRecovery)
+                    rollbackSucceeded &= AssetDatabaseFacade.RecoverAssetPair(entry.TrashPath, entry.OriginalPath).Succeeded;
+                else
+                    rollbackSucceeded &= MoveContentPath(ref entry, entry.TrashPath, entry.OriginalPath);
+            }
             else
                 DeletePath(entry.TrashPath, entry.IsFolder);
 
-            if (entry.HasMetadataSidecar)
+            if (entry.HasMetadataSidecar && !entry.UsesNativeRecovery)
             {
                 if (!File.Exists(entry.MetadataOriginalPath))
                     rollbackSucceeded &= MovePath(entry.MetadataTrashPath, entry.MetadataOriginalPath, false);
                 else
                     DeletePath(entry.MetadataTrashPath, false);
             }
+            if (rollbackSucceeded)
+                entry.UsesNativeRecovery = false;
             if (entry.HasSidecarFolder)
             {
                 if (!Directory.Exists(entry.SidecarOriginalPath))

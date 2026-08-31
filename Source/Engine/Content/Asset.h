@@ -18,6 +18,8 @@
 	public: \
 	explicit type(const SpawnParams& params, const AssetInfo* info)
 
+struct AssetObjectId;
+
 // Utility interface for objects that reference asset and want to get notified about asset reference changes.
 class FLAXENGINE_API IAssetReference
 {
@@ -337,3 +339,4 @@ public:
 
 // Don't include Content.h but just Load method
 extern FLAXENGINE_API Asset* LoadAsset(const Guid& id, const ScriptingTypeHandle& type);
+extern FLAXENGINE_API Asset* LoadAsset(const AssetObjectId& id, const ScriptingTypeHandle& type);

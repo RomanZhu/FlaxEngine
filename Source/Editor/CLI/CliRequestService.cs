@@ -6,6 +6,7 @@ using FlaxEditor.Content.Settings;
 using FlaxEngine;
 using FlaxEngine.Utilities;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor
 {
@@ -150,7 +151,27 @@ namespace FlaxEditor
                 !string.Equals(worker.MetadataHash, ScriptedImporterWorkerCoordinator.HashFile(metadataPath), StringComparison.Ordinal))
                 throw new InvalidOperationException("The worker input snapshot no longer matches the coordinator request.");
 
-            var importResult = ScriptedImporterRegistry.ExecuteWorker(worker.AssetPath, worker.ProcessorId, worker.CallbackHash);
+            JObject importResult;
+            try
+            {
+                importResult = ScriptedImporterRegistry.ExecuteWorker(worker.AssetPath, worker.ProcessorId, worker.CallbackHash,
+                    () => !string.IsNullOrEmpty(worker.CancellationPath) && File.Exists(worker.CancellationPath));
+            }
+            catch (OperationCanceledException ex)
+            {
+                WriteResult(new
+                {
+                    schemaVersion = 1,
+                    requestId = _request.RequestId,
+                    success = false,
+                    cancelled = true,
+                    exitCode = 3,
+                    errors = new[] { new { code = "FLX-IMPORT-CANCELLED", message = ex.Message } },
+                });
+                TryWriteEvent(new { type = "result", requestId = _request.RequestId, success = false, cancelled = true, exitCode = 3 });
+                Engine.RequestExit(3);
+                return;
+            }
             if (!string.Equals(worker.SourceHash, ScriptedImporterWorkerCoordinator.HashFile(physicalPath), StringComparison.Ordinal) ||
                 !string.Equals(worker.MetadataHash, ScriptedImporterWorkerCoordinator.HashFile(metadataPath), StringComparison.Ordinal))
                 throw new InvalidOperationException("The importer changed its source or metadata; worker output was rejected.");

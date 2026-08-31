@@ -516,7 +516,7 @@ namespace FlaxEditor
             if (asset == null)
                 throw new ArgumentNullException(nameof(asset));
             var physicalPath = ResolvePhysicalPath(path);
-            if (!IsProjectContentPath(physicalPath))
+            if (!IsProjectContentPath(physicalPath) || !AssetMountRegistry.IsWritable(ToLogicalPath(physicalPath)))
                 throw new ArgumentException("Authored assets must be created inside the project Content folder.", nameof(path));
             if (File.Exists(physicalPath) || Directory.Exists(physicalPath) || AssetPathExists(path))
                 throw new IOException("An asset already exists at the destination path.");
@@ -710,7 +710,8 @@ namespace FlaxEditor
             callbackHandled = false;
             var source = ResolvePhysicalPath(oldPath);
             var destination = ResolvePhysicalPath(newPath);
-            if (!IsProjectContentPath(source) || !IsProjectContentPath(destination))
+            if (!IsProjectContentPath(source) || !IsProjectContentPath(destination) ||
+                !AssetMountRegistry.IsWritable(ToLogicalPath(source)) || !AssetMountRegistry.IsWritable(ToLogicalPath(destination)))
                 return "Asset moves must remain inside the project Content folder.";
             var nativeValidation = AssetDatabaseFacade.ValidateAssetMove(source, destination);
             if (!nativeValidation.Succeeded)
@@ -737,12 +738,15 @@ namespace FlaxEditor
             EnsureCoordinatorWrite();
             var source = ResolvePhysicalPath(sourcePath);
             var destination = ResolvePhysicalPath(destinationPath);
-            if (!IsProjectContentPath(source) || !IsProjectContentPath(destination))
+            if (!IsProjectContentPath(source) || !IsProjectContentPath(destination) ||
+                !AssetMountRegistry.IsWritable(ToLogicalPath(source)) || !AssetMountRegistry.IsWritable(ToLogicalPath(destination)))
                 return false;
+            AssetPipelineCallbacks.WillCreate(ToLogicalPath(destination));
             var result = AssetDatabaseFacade.CopyAssetPair(source, destination);
             if (!result.Succeeded)
                 return false;
             QueueImport(destination);
+            AssetPipelineCallbacks.PostprocessAll(new[] { ToLogicalPath(destination) }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), false);
             return true;
         }
 
@@ -771,7 +775,7 @@ namespace FlaxEditor
         {
             EnsureCoordinatorWrite();
             var physicalPath = ResolvePhysicalPath(path);
-            if (!IsProjectContentPath(physicalPath))
+            if (!IsProjectContentPath(physicalPath) || !AssetMountRegistry.IsWritable(ToLogicalPath(physicalPath)))
                 return false;
             if (!AssetPipelineCallbacks.ValidateDelete(ToLogicalPath(physicalPath), out var callbackHandled))
                 return false;
@@ -810,7 +814,8 @@ namespace FlaxEditor
         {
             EnsureCoordinatorWrite();
             var physicalPath = ResolvePhysicalPath(path);
-            if (!IsProjectContentPath(physicalPath) || !AssetPipelineCallbacks.ValidateDelete(ToLogicalPath(physicalPath), out var callbackHandled))
+            if (!IsProjectContentPath(physicalPath) || !AssetMountRegistry.IsWritable(ToLogicalPath(physicalPath)) ||
+                !AssetPipelineCallbacks.ValidateDelete(ToLogicalPath(physicalPath), out var callbackHandled))
                 return false;
             if (callbackHandled)
                 return true;
@@ -846,13 +851,16 @@ namespace FlaxEditor
         {
             EnsureCoordinatorWrite();
             var parent = ResolvePhysicalPath(parentFolder);
-            if (!IsProjectContentPath(parent) || string.IsNullOrWhiteSpace(newFolderName) || Path.GetFileName(newFolderName) != newFolderName)
+            if (!IsProjectContentPath(parent) || !AssetMountRegistry.IsWritable(ToLogicalPath(parent)) ||
+                string.IsNullOrWhiteSpace(newFolderName) || Path.GetFileName(newFolderName) != newFolderName)
                 return string.Empty;
             var path = Path.Combine(parent, newFolderName);
+            AssetPipelineCallbacks.WillCreate(ToLogicalPath(path));
             var result = AssetDatabaseFacade.CreateAssetFolder(path);
             if (!result.Succeeded)
                 return string.Empty;
             QueueImport(path);
+            AssetPipelineCallbacks.PostprocessAll(new[] { ToLogicalPath(path) }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), false);
             return AssetPathToGUID(path);
         }
 
@@ -886,16 +894,19 @@ namespace FlaxEditor
         {
             EnsureCoordinatorWrite();
             var dirty = AuthoredAssetFacade.GetDirtyPaths()
-                .Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            var selected = AssetPipelineCallbacks.WillSave(dirty.Select(ToLogicalPath).ToArray());
-            foreach (var logicalPath in selected)
+                .Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(ResolvePhysicalPath)
+                .Where(path => AssetMountRegistry.IsWritable(ToLogicalPath(path)))
+                .ToDictionary(ToLogicalPath, path => path, StringComparer.OrdinalIgnoreCase);
+            var selected = AssetPipelineCallbacks.WillSave(dirty.Keys.OrderBy(path => path, StringComparer.Ordinal).ToArray());
+            foreach (var logicalPath in selected.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                var physicalPath = ResolvePhysicalPath(logicalPath);
+                if (!dirty.TryGetValue(ToLogicalPath(ResolvePhysicalPath(logicalPath)), out var physicalPath))
+                    continue;
                 if (AuthoredAssetFacade.SaveAssetIfDirty(physicalPath))
                     throw new InvalidOperationException(AuthoredAssetFacade.GetLastError());
                 QueueImport(physicalPath);
             }
-            Editor.Instance.SaveAll();
         }
 
         /// <summary>Saves the containing authored source when the object is writable.</summary>

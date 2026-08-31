@@ -7,6 +7,7 @@
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Scripting/ScriptingObject.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Engine/Utilities/Encryption.h"
 
 struct Version;
@@ -531,18 +532,42 @@ namespace Serialization
     template<typename T>
     inline bool ShouldSerialize(const AssetReference<T>& v, const void* otherObj)
     {
-        return !otherObj || v.Get() != ((AssetReference<T>*)otherObj)->Get();
+        return !otherObj || v.GetObjectId() != ((AssetReference<T>*)otherObj)->GetObjectId();
     }
     template<typename T>
     inline void Serialize(ISerializable::SerializeStream& stream, const AssetReference<T>& v, const void* otherObj)
     {
-        stream.Guid(v.GetID());
+        const AssetObjectId& id = v.GetObjectId();
+        stream.StartObject();
+        stream.JKEY("guid");
+        stream.Guid(id.Guid);
+        stream.JKEY("localId");
+        stream.Int64(id.LocalId);
+        stream.EndObject();
     }
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, AssetReference<T>& v, ISerializeModifier* modifier)
     {
-        Guid id;
-        Deserialize(stream, id, modifier);
+        if (stream.IsString())
+        {
+            // Legacy backing-GUID representation. Loading it first lets the registry
+            // project a subasset backing GUID to its canonical object identity.
+            Guid id;
+            Deserialize(stream, id, modifier);
+            v = id;
+            return;
+        }
+        AssetObjectId id;
+        if (stream.IsObject())
+        {
+            const auto guid = stream.FindMember("guid");
+            const auto localId = stream.FindMember("localId");
+            if (guid != stream.MemberEnd() && localId != stream.MemberEnd() && localId->value.IsInt64())
+            {
+                Deserialize(guid->value, id.Guid, modifier);
+                id.LocalId = localId->value.GetInt64();
+            }
+        }
         v = id;
     }
 
@@ -551,18 +576,40 @@ namespace Serialization
     template<typename T>
     inline bool ShouldSerialize(const WeakAssetReference<T>& v, const void* otherObj)
     {
-        return !otherObj || v.Get() != ((WeakAssetReference<T>*)otherObj)->Get();
+        return !otherObj || v.GetObjectId() != ((WeakAssetReference<T>*)otherObj)->GetObjectId();
     }
     template<typename T>
     inline void Serialize(ISerializable::SerializeStream& stream, const WeakAssetReference<T>& v, const void* otherObj)
     {
-        stream.Guid(v.GetID());
+        const AssetObjectId& id = v.GetObjectId();
+        stream.StartObject();
+        stream.JKEY("guid");
+        stream.Guid(id.Guid);
+        stream.JKEY("localId");
+        stream.Int64(id.LocalId);
+        stream.EndObject();
     }
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, WeakAssetReference<T>& v, ISerializeModifier* modifier)
     {
-        Guid id;
-        Deserialize(stream, id, modifier);
+        if (stream.IsString())
+        {
+            Guid id;
+            Deserialize(stream, id, modifier);
+            v = id;
+            return;
+        }
+        AssetObjectId id;
+        if (stream.IsObject())
+        {
+            const auto guid = stream.FindMember("guid");
+            const auto localId = stream.FindMember("localId");
+            if (guid != stream.MemberEnd() && localId != stream.MemberEnd() && localId->value.IsInt64())
+            {
+                Deserialize(guid->value, id.Guid, modifier);
+                id.LocalId = localId->value.GetInt64();
+            }
+        }
         v = id;
     }
 
@@ -571,18 +618,46 @@ namespace Serialization
     template<typename T>
     inline bool ShouldSerialize(const SoftAssetReference<T>& v, const void* otherObj)
     {
-        return !otherObj || v.Get() != ((SoftAssetReference<T>*)otherObj)->Get();
+        return !otherObj || v.GetObjectId() != ((SoftAssetReference<T>*)otherObj)->GetObjectId();
     }
     template<typename T>
     inline void Serialize(ISerializable::SerializeStream& stream, const SoftAssetReference<T>& v, const void* otherObj)
     {
-        stream.Guid(v.GetID());
+        const AssetObjectId& id = v.GetObjectId();
+        if (!id.IsValid() && v.GetID().IsValid())
+        {
+            // Preserve an unresolved legacy backing GUID until the database can map it.
+            stream.Guid(v.GetID());
+            return;
+        }
+        stream.StartObject();
+        stream.JKEY("guid");
+        stream.Guid(id.Guid);
+        stream.JKEY("localId");
+        stream.Int64(id.LocalId);
+        stream.EndObject();
     }
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, SoftAssetReference<T>& v, ISerializeModifier* modifier)
     {
-        Guid id;
-        Deserialize(stream, id, modifier);
+        if (stream.IsString())
+        {
+            Guid id;
+            Deserialize(stream, id, modifier);
+            v = id;
+            return;
+        }
+        AssetObjectId id;
+        if (stream.IsObject())
+        {
+            const auto guid = stream.FindMember("guid");
+            const auto localId = stream.FindMember("localId");
+            if (guid != stream.MemberEnd() && localId != stream.MemberEnd() && localId->value.IsInt64())
+            {
+                Deserialize(guid->value, id.Guid, modifier);
+                id.LocalId = localId->value.GetInt64();
+            }
+        }
         v = id;
     }
 

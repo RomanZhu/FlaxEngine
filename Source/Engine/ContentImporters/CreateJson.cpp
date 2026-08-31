@@ -12,8 +12,11 @@
 #include "Engine/Content/Storage/JsonStorageProxy.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 #include "Engine/Content/AssetReference.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Localization/LocalizedStringTable.h"
+#include "Engine/Engine/Globals.h"
 #include "Engine/Utilities/TextProcessing.h"
 #include "FlaxEngine.Gen.h"
 
@@ -33,14 +36,22 @@ bool CreateJson::Create(const StringView& path, rapidjson_flax::StringBuffer& da
 bool CreateJson::Create(const StringView& path, const StringAnsiView& data, const StringAnsiView& dataTypename)
 {
     Guid id = Guid::New();
+    String normalizedPath = FileSystem::IsRelative(path) ? Globals::ProjectFolder / String(path) : String(path);
+    FileSystem::NormalizePath(normalizedPath);
+    const StringView contentRoot = Globals::ProjectContentFolder;
+    const bool isProjectContent = normalizedPath.Length() > contentRoot.Length() &&
+        normalizedPath.StartsWith(contentRoot, StringSearchCase::IgnoreCase) &&
+        (normalizedPath[contentRoot.Length()] == '/' || normalizedPath[contentRoot.Length()] == '\\');
+    const bool useJournaledSourcePair = AssetDatabase::Get().IsHardCutEnabled() && isProjectContent;
+    const StringView targetPath = useJournaledSourcePair ? StringView(normalizedPath) : path;
 
     LOG(Info, "Creating json resource of type \'{1}\' at \'{0}\'", path, String(dataTypename.Get()));
 
     // Try use the same asset ID
-    if (FileSystem::FileExists(path))
+    if (FileSystem::FileExists(targetPath))
     {
         String typeName;
-        JsonStorageProxy::GetAssetInfo(path, id, typeName);
+        JsonStorageProxy::GetAssetInfo(targetPath, id, typeName);
         if (typeName != String(dataTypename.Get(), dataTypename.Length()))
         {
             LOG(Warning, "Asset will have different type name {0} -> {1}", typeName, String(dataTypename.Get()));
@@ -48,9 +59,14 @@ bool CreateJson::Create(const StringView& path, const StringAnsiView& data, cons
     }
     else
     {
-        const String directory = StringUtils::GetDirectoryName(path);
+        const String directory = StringUtils::GetDirectoryName(targetPath);
         if (!FileSystem::DirectoryExists(directory))
         {
+            if (useJournaledSourcePair)
+            {
+                LOG(Warning, "Asset System v3 JSON creation requires an existing journaled parent folder: '{}'", directory);
+                return true;
+            }
             if (FileSystem::CreateDirectory(directory))
             {
                 LOG(Warning, "Failed to create directory '{}'", directory);
@@ -80,22 +96,27 @@ bool CreateJson::Create(const StringView& path, const StringAnsiView& data, cons
     }
     writer.EndObject();
 
-    // Save json to file
-    if (File::WriteAllBytes(path, (byte*)buffer.GetString(), (int32)buffer.GetSize()))
+    const StringAnsiView sourceContents((char*)buffer.GetString(), (int32)buffer.GetSize());
+
+    // Asset System v3 publishes the source and sidecar through the sole journaled mutation owner.
+    const bool saveFailed = useJournaledSourcePair
+        ? AssetDatabaseFacade::SaveExistingJsonSource(normalizedPath, sourceContents, id, String(dataTypename.Get(), dataTypename.Length()))
+        : File::WriteAllBytes(path, (byte*)buffer.GetString(), (int32)buffer.GetSize());
+    if (saveFailed)
     {
         LOG(Warning, "Failed to save json to file");
         return true;
     }
 
     // Reload asset at the target location if is loaded
-    auto asset = Content::GetAsset(path);
+    auto asset = Content::GetAsset(targetPath);
     if (asset)
     {
         asset->Reload();
     }
     else
     {
-        Content::GetRegistry()->RegisterAsset(id, String(dataTypename), path);
+        Content::GetRegistry()->RegisterAsset(id, String(dataTypename), targetPath);
     }
 
     return false;

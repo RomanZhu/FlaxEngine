@@ -81,6 +81,9 @@ public:
     /// <summary>Finds exact object information by persistent file GUID and local file ID.</summary>
     API_FUNCTION() static bool GetAssetInfo(const AssetObjectId& id, API_PARAM(Out) AssetInfo& info);
 
+    /// <summary>Resolves a runtime backing asset ID to its persistent file GUID and local file ID.</summary>
+    API_FUNCTION() static bool GetAssetObjectId(const Guid& backingAssetId, API_PARAM(Out) AssetObjectId& id);
+
     /// <summary>
     /// Finds the asset info by path.
     /// </summary>
@@ -167,6 +170,9 @@ public:
     /// </summary>
     /// <returns>The collection of assets.</returns>
     static const Dictionary<Guid, Asset*, HeapAllocation>& GetAssetsRaw();
+
+    /// <summary>Gets loaded canonical assets keyed by persistent file GUID and local file ID.</summary>
+    static const Dictionary<AssetObjectId, Asset*, HeapAllocation>& GetAssetObjectsRaw();
 
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
@@ -336,6 +342,9 @@ public:
     /// <param name="id">The id.</param>
     /// <returns>The found asset or null if not loaded.</returns>
     API_FUNCTION() static Asset* GetAsset(const Guid& id);
+
+    /// <summary>Finds the loaded asset with the exact persistent object identity.</summary>
+    API_FUNCTION() static Asset* GetAsset(const AssetObjectId& id);
 
 public:
     /// <summary>

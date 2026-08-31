@@ -3,6 +3,8 @@
 #include "SceneAnimationDocument.h"
 #include "CanonicalJsonWriter.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
+#include "Engine/Content/Content.h"
+#include "Engine/Content/AssetDatabase/SubAsset.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Platform/StringUtils.h"
@@ -87,8 +89,18 @@ namespace
     {
         JsonValue result(rapidjson::kObjectType);
         result.AddMember("$type", JsonValue(kind, allocator), allocator);
-        const StringAnsi text = GuidText(id);
-        result.AddMember("guid", StringValue(text, allocator), allocator);
+        AssetObjectId objectId;
+        if (StringAnsiView(kind) == "AssetReference" && Content::GetAssetObjectId(id, objectId))
+        {
+            const StringAnsi text = GuidText(objectId.Guid);
+            result.AddMember("guid", StringValue(text, allocator), allocator);
+            result.AddMember("localId", objectId.LocalId, allocator);
+        }
+        else
+        {
+            const StringAnsi text = GuidText(id);
+            result.AddMember("guid", StringValue(text, allocator), allocator);
+        }
         return result;
     }
 
@@ -98,10 +110,24 @@ namespace
             return true;
         const auto type = value.FindMember("$type");
         const auto guid = value.FindMember("guid");
+        const auto localId = value.FindMember("localId");
         if (type == value.MemberEnd() || !type->value.IsString() || guid == value.MemberEnd() || !guid->value.IsString() ||
             StringAnsiView(type->value.GetString(), type->value.GetStringLength()) != StringAnsiView(kind))
             return true;
-        return Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), id);
+        Guid parsed;
+        if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), parsed))
+            return true;
+        if (StringAnsiView(kind) == "AssetReference" && localId != value.MemberEnd())
+        {
+            if (!localId->value.IsInt64() || localId->value.GetInt64() == 0)
+                return true;
+            id = SubAssetPolicy::GetBackingAssetId(parsed, localId->value.GetInt64());
+        }
+        else
+        {
+            id = parsed;
+        }
+        return false;
     }
 
     JsonValue FloatArray(const float* values, int32 count, JsonAlloc& allocator)

@@ -1107,7 +1107,7 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
         if (TextureTool::ImportTexture(textureSourcePath, sourceTextureData, false))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, texture.FilePath, TEXT("Model-owned texture source decode failed."));
-        textureOptions.GenerateMipMaps = textureOptions.GenerateMipMaps &&
+        textureOptions.GenerateMipMaps = textureOptions.GenerateMipMaps && sourceTextureData.Width > 0 && sourceTextureData.Height > 0 &&
             Math::IsPowerOfTwo(sourceTextureData.Width) && Math::IsPowerOfTwo(sourceTextureData.Height);
         TextureData textureData;
         String textureError;

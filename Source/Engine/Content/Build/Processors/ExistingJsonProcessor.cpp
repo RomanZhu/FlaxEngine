@@ -166,16 +166,28 @@ bool ExistingJsonProcessor::Prepare(PrepareAssetContext& context, PreparedAsset&
                 record.ID, record.SourcePath.Get(), TEXT("Existing JSON source is malformed."));
         return true;
     }
-    HashSet<Guid> runtimeReferences;
-    FindRuntimeReferences(json, record.ID, runtimeReferences);
-    for (const Guid& reference : record.RuntimeReferences)
-        runtimeReferences.Add(reference);
-    for (const auto& referenceEntry : runtimeReferences)
+    if (record.RuntimeObjectReferences.HasItems())
     {
-        const Guid& reference = referenceEntry.Item;
-        const String identity = String::Format(TEXT("existing-json-reference:{0}"), reference);
-        if (context.DeclareRuntimeReference(identity, reference, origin, diagnostic))
-            return true;
+        for (const AssetObjectId& reference : record.RuntimeObjectReferences)
+        {
+            const String identity = String::Format(TEXT("existing-json-reference:{0}:{1}"), reference.Guid, reference.LocalId);
+            if (context.DeclareRuntimeReference(identity, reference, origin, diagnostic))
+                return true;
+        }
+    }
+    else
+    {
+        HashSet<Guid> runtimeReferences;
+        FindRuntimeReferences(json, record.ID, runtimeReferences);
+        for (const Guid& reference : record.RuntimeReferences)
+            runtimeReferences.Add(reference);
+        for (const auto& referenceEntry : runtimeReferences)
+        {
+            const Guid& reference = referenceEntry.Item;
+            const String identity = String::Format(TEXT("existing-json-reference:{0}"), reference);
+            if (context.DeclareRuntimeReference(identity, reference, origin, diagnostic))
+                return true;
+        }
     }
     static const char CompilerIdentity[] = "flax-existing-json-compiler-v1";
     if (context.DeclareToolchain(TEXT("existing-json-compiler"), ContentHash::Compute(CompilerIdentity, ARRAY_COUNT(CompilerIdentity) - 1), origin, diagnostic) ||

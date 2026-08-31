@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using FlaxEngine;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor
 {
@@ -26,6 +27,33 @@ namespace FlaxEditor
         /// <summary>Opens an independent read-only in-memory stream.</summary>
         public Stream OpenRead() => new MemoryStream(_data, false);
         /// <summary>Returns a copy of the observed bytes.</summary>
+        public byte[] ReadAllBytes() => (byte[])_data.Clone();
+    }
+
+    /// <summary>Verified immutable bytes from one exact published artifact output.</summary>
+    public sealed class AssetImportReadOnlyArtifact
+    {
+        private readonly byte[] _data;
+
+        internal AssetImportReadOnlyArtifact(Guid assetGuid, string outputKind, string exactArtifactKey, byte[] data)
+        {
+            AssetGuid = assetGuid;
+            OutputKind = outputKind;
+            ExactArtifactKey = exactArtifactKey;
+            _data = data;
+        }
+
+        /// <summary>Persistent source identity owning the artifact.</summary>
+        public Guid AssetGuid { get; }
+        /// <summary>Logical output kind within the immutable artifact.</summary>
+        public string OutputKind { get; }
+        /// <summary>Exact canonical SHA-256 output key.</summary>
+        public string ExactArtifactKey { get; }
+        /// <summary>Verified byte length.</summary>
+        public long Length => _data.LongLength;
+        /// <summary>Opens an independent read-only in-memory stream.</summary>
+        public Stream OpenRead() => new MemoryStream(_data, false);
+        /// <summary>Returns a copy of the verified bytes.</summary>
         public byte[] ReadAllBytes() => (byte[])_data.Clone();
     }
 
@@ -60,6 +88,7 @@ namespace FlaxEditor
         private readonly Dictionary<string, Hash128> _globalDependencies = new Dictionary<string, Hash128>(StringComparer.Ordinal);
         private readonly Dictionary<string, Hash128> _toolDependencies = new Dictionary<string, Hash128>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> _observedSourceHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _observedArtifactKeys = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly Dictionary<string, byte[]> _outputData = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> _identityRenames = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<string> _warnings = new List<string>();
@@ -133,6 +162,33 @@ namespace FlaxEditor
             DependsOnSourceAsset(path);
             var normalized = path.Replace('\\', '/');
             return ReadSource("path:" + normalized, normalized, AssetDatabase.ResolvePhysicalPathInternal(normalized));
+        }
+
+        /// <summary>Reads and exactly pins another source's current immutable artifact output.</summary>
+        public AssetImportReadOnlyArtifact OpenArtifactDependency(Guid guid, string outputKind = "runtime")
+        {
+            if (guid == Guid.Empty)
+                throw new ArgumentException("A valid dependency GUID is required.", nameof(guid));
+            ValidateOutputName(outputKind);
+            DependsOnArtifact(guid);
+            var json = ScriptedImporterFacade.ReadArtifactOutput(guid, outputKind);
+            if (string.IsNullOrEmpty(json))
+                throw new InvalidOperationException(ScriptedImporterFacade.GetLastError());
+            var envelope = JObject.Parse(json);
+            var key = (string)envelope["artifactKey"];
+            var contentHash = (string)envelope["contentHash"];
+            var data = Convert.FromBase64String((string)envelope["data"] ?? string.Empty);
+            var actualHash = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+            if (key?.Length != 64 || contentHash?.Length != 64 || !string.Equals(contentHash, actualHash, StringComparison.Ordinal))
+                throw new InvalidDataException("The artifact-read response failed exact key or content verification.");
+            _observedArtifactKeys[$"guid:{guid:N}/{outputKind}"] = key;
+            return new AssetImportReadOnlyArtifact(guid, outputKind, key, data);
+        }
+
+        /// <summary>Returns verified auxiliary artifact bytes and records the exact dependency.</summary>
+        public byte[] GetArtifactData(Guid guid, string outputKind)
+        {
+            return OpenArtifactDependency(guid, outputKind).ReadAllBytes();
         }
 
         /// <summary>Adds a staged output object under a unique stable identifier.</summary>
@@ -327,6 +383,7 @@ namespace FlaxEditor
         internal IReadOnlyDictionary<string, Hash128> GlobalDependencies => _globalDependencies;
         internal IReadOnlyDictionary<string, Hash128> ToolDependencies => _toolDependencies;
         internal IReadOnlyDictionary<string, string> ObservedSourceHashes => _observedSourceHashes;
+        internal IReadOnlyDictionary<string, string> ObservedArtifactKeys => _observedArtifactKeys;
         internal bool LogicalPathObserved => _logicalPathObserved;
         internal IReadOnlyList<string> Warnings => _warnings;
         internal IReadOnlyList<string> Errors => _errors;

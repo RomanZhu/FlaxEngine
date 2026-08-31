@@ -1,6 +1,8 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "CollisionDataDocument.h"
+#include "Engine/Content/Content.h"
+#include "Engine/Content/AssetDatabase/SubAsset.h"
 
 namespace
 {
@@ -23,7 +25,16 @@ namespace
             return JsonValue(rapidjson::kNullType);
         JsonValue result(rapidjson::kObjectType);
         AddString(result, "$type", "AssetReference", allocator);
-        AddString(result, "value", GuidText(id), allocator);
+        AssetObjectId objectId;
+        if (Content::GetAssetObjectId(id, objectId))
+        {
+            AddString(result, "guid", GuidText(objectId.Guid), allocator);
+            result.AddMember("localId", objectId.LocalId, allocator);
+        }
+        else
+        {
+            AddString(result, "value", GuidText(id), allocator);
+        }
         return result;
     }
 
@@ -35,10 +46,21 @@ namespace
         if (!value.IsObject())
             return true;
         const auto type = value.FindMember("$type");
+        const auto guid = value.FindMember("guid");
+        const auto localId = value.FindMember("localId");
         const auto payload = value.FindMember("value");
         if (type == value.MemberEnd() || !type->value.IsString() ||
-            StringAnsiView(type->value.GetString(), type->value.GetStringLength()) != "AssetReference" ||
-            payload == value.MemberEnd() || !payload->value.IsString())
+            StringAnsiView(type->value.GetString(), type->value.GetStringLength()) != "AssetReference")
+            return true;
+        if (guid != value.MemberEnd() && guid->value.IsString() && localId != value.MemberEnd() && localId->value.IsInt64())
+        {
+            Guid fileGuid;
+            if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), fileGuid) || localId->value.GetInt64() == 0)
+                return true;
+            id = SubAssetPolicy::GetBackingAssetId(fileGuid, localId->value.GetInt64());
+            return !id.IsValid();
+        }
+        if (payload == value.MemberEnd() || !payload->value.IsString())
             return true;
         return Guid::Parse(String(StringAnsiView(payload->value.GetString(), payload->value.GetStringLength())), id);
     }

@@ -6,6 +6,7 @@
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Threading/Threading.h"
+#include <algorithm>
 
 REGISTER_BINARY_ASSET(GameplayGlobals, "FlaxEngine.GameplayGlobals", true);
 
@@ -113,10 +114,17 @@ bool GameplayGlobals::Save(const StringView& path)
     // Save to bytes
     MemoryWriteStream stream(1024);
     stream.Write(Variables.Count());
-    for (auto& e : Variables)
+    Array<String> names;
+    names.EnsureCapacity(Variables.Count());
+    for (const auto& e : Variables)
+        names.Add(e.Key);
+    if (names.Count() > 1)
+        std::sort(names.Get(), names.Get() + names.Count(), [](const String& a, const String& b) { return a < b; });
+    for (const String& name : names)
     {
-        stream.Write(e.Key, 71);
-        stream.Write(e.Value.DefaultValue);
+        const auto* variable = Variables.TryGet(name);
+        stream.Write(name, 71);
+        stream.Write(variable->DefaultValue);
     }
 
     // Set chunk data

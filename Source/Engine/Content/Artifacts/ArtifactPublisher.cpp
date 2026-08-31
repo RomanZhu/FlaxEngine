@@ -366,6 +366,14 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     manifest.SourceHash = CalculateSourceHash(prepared);
     manifest.SettingsHash = prepared.SettingsHash;
     manifest.Outputs = publishedOutputs;
+    ArtifactManifestObject object;
+    object.ObjectID = prepared.ObjectID;
+    object.BackingAssetID = prepared.AssetID;
+    object.TypeName = prepared.OutputType;
+    object.Name = prepared.AssetName;
+    object.StableKey = prepared.StableObjectKey;
+    object.IsMainObject = prepared.IsMainObject;
+    manifest.Objects.Add(MoveTemp(object));
     manifest.BuildID = request.BuildID;
     manifest.BuiltAtUtc = request.BuiltAtUtc;
     for (const AssetDependency& source : prepared.Dependencies)
@@ -374,6 +382,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         dependency.Kind = source.Kind;
         dependency.State = source.State;
         dependency.Identity = source.StableIdentity;
+        dependency.ObjectID = source.ObjectID;
         dependency.AssetID = source.AssetID;
         dependency.Hash = source.Content;
         dependency.MetadataHash = source.Metadata;

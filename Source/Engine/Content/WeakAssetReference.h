@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Engine/Content/Asset.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 
 /// <summary>
 /// Asset reference utility that doesn't add reference to that asset. Handles asset unload event.
@@ -14,6 +15,7 @@ public:
 
 protected:
     Asset* _asset = nullptr;
+    mutable AssetObjectId _objectId;
 
 public:
     /// <summary>
@@ -43,6 +45,9 @@ public:
         return _asset ? _asset->GetID() : Guid::Empty;
     }
 
+    /// <summary>Gets the persistent file GUID and local file ID.</summary>
+    const AssetObjectId& GetObjectId() const;
+
     /// <summary>
     /// Gets managed instance object (or null if no asset set).
     /// </summary>
@@ -64,6 +69,8 @@ public:
 
 protected:
     void OnSet(Asset* asset);
+    void OnSet(const AssetObjectId& id, const ScriptingTypeHandle& type);
+    void OnCopy(const WeakAssetReferenceBase& other);
 };
 
 /// <summary>
@@ -96,18 +103,24 @@ public:
         OnSet(asset);
     }
 
+    /// <summary>Initializes an exact persistent asset object reference.</summary>
+    WeakAssetReference(const AssetObjectId& id)
+    {
+        OnSet(id, T::TypeInitializer);
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="WeakAssetReference"/> class.
     /// </summary>
     /// <param name="other">The other.</param>
     WeakAssetReference(const WeakAssetReference& other)
     {
-        OnSet(other.Get());
+        OnCopy(other);
     }
 
     WeakAssetReference(WeakAssetReference&& other)
     {
-        OnSet(other.Get());
+        OnCopy(other);
         other.OnSet(nullptr);
     }
 
@@ -115,7 +128,7 @@ public:
     {
         if (&other != this)
         {
-            OnSet(other.Get());
+            OnCopy(other);
             other.OnSet(nullptr);
         }
         return *this;
@@ -131,7 +144,7 @@ public:
 public:
     FORCE_INLINE WeakAssetReference& operator=(const WeakAssetReference& other)
     {
-        OnSet(other.Get());
+        OnCopy(other);
         return *this;
     }
 
@@ -144,6 +157,12 @@ public:
     FORCE_INLINE WeakAssetReference& operator=(const Guid& id)
     {
         OnSet((Asset*)::LoadAsset(id, T::TypeInitializer));
+        return *this;
+    }
+
+    FORCE_INLINE WeakAssetReference& operator=(const AssetObjectId& id)
+    {
+        OnSet(id, T::TypeInitializer);
         return *this;
     }
 
@@ -207,10 +226,16 @@ public:
     {
         OnSet(asset);
     }
+
+    /// <summary>Sets an exact persistent asset object reference.</summary>
+    void Set(const AssetObjectId& id)
+    {
+        OnSet(id, T::TypeInitializer);
+    }
 };
 
 template<typename T>
 uint32 GetHash(const WeakAssetReference<T>& key)
 {
-    return GetHash(key.GetID());
+    return GetHash(key.GetObjectId());
 }

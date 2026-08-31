@@ -14,7 +14,10 @@ namespace
     {
         PreparedAsset prepared;
         prepared.AssetID = Guid(1, 2, 3, 4);
+        prepared.ObjectID = AssetObjectId(prepared.AssetID, 1);
         prepared.OutputType = TEXT("Tests.PublishedAsset");
+        prepared.AssetName = TEXT("PublishedAsset");
+        prepared.IsMainObject = true;
         prepared.DatabaseRevision = 12;
         prepared.SettingsHash = ContentHash::Compute("settings", 8);
         prepared.InputFingerprint = ArtifactKey(ContentHash::Compute(&fingerprintSalt, sizeof(fingerprintSalt)));

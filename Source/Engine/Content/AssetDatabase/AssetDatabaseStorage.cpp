@@ -3,6 +3,7 @@
 #include "AssetDatabaseStorage.h"
 #include "AssetMeta.h"
 #include "AssetMount.h"
+#include "SubAsset.h"
 #include "Engine/Content/Artifacts/ArtifactManifest.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Core/ScopeExit.h"
@@ -137,6 +138,23 @@ namespace
                 return true;
             version = 3;
         }
+        if (version == 3)
+        {
+            if (Execute(database,
+                "BEGIN IMMEDIATE;"
+                "CREATE TABLE source_object_dependencies(owner_guid BLOB NOT NULL,input_file_guid BLOB NOT NULL,input_local_id INTEGER NOT NULL,PRIMARY KEY(owner_guid,input_file_guid,input_local_id));"
+                "CREATE TABLE runtime_object_references(owner_guid BLOB NOT NULL,referenced_file_guid BLOB NOT NULL,referenced_local_id INTEGER NOT NULL,PRIMARY KEY(owner_guid,referenced_file_guid,referenced_local_id));"
+                "ALTER TABLE artifact_dependencies ADD COLUMN target_file_guid BLOB;"
+                "ALTER TABLE artifact_dependencies ADD COLUMN target_local_id INTEGER;"
+                "INSERT OR IGNORE INTO source_object_dependencies SELECT d.owner_guid,o.file_guid,o.local_id FROM source_dependencies d JOIN asset_objects o ON o.backing_id=d.input_guid;"
+                "INSERT OR IGNORE INTO runtime_object_references SELECT r.owner_guid,o.file_guid,o.local_id FROM runtime_references r JOIN asset_objects o ON o.backing_id=r.referenced_guid;"
+                "CREATE INDEX source_object_dependencies_target_idx ON source_object_dependencies(input_file_guid,input_local_id);"
+                "CREATE INDEX runtime_object_references_target_idx ON runtime_object_references(referenced_file_guid,referenced_local_id);"
+                "PRAGMA user_version=4;"
+                "COMMIT;", diagnostic, path))
+                return true;
+            version = 4;
+        }
         if (version != 0 && version < AssetDatabaseStorage::SchemaVersion)
             return Fail(diagnostic, path, TEXT("Asset database schema is obsolete and must be rebuilt."));
 
@@ -151,10 +169,12 @@ namespace
             "CREATE TABLE IF NOT EXISTS file_observations(portability_key TEXT PRIMARY KEY,size INTEGER NOT NULL,mtime_ns INTEGER NOT NULL,file_id BLOB,volume_id INTEGER NOT NULL,change_ticks INTEGER NOT NULL,identity_reliable INTEGER NOT NULL,content_hash BLOB,cache_checksum INTEGER NOT NULL,last_seen_session INTEGER NOT NULL);"
             "CREATE TABLE IF NOT EXISTS source_dependencies(owner_guid BLOB NOT NULL,input_guid BLOB NOT NULL,PRIMARY KEY(owner_guid,input_guid));"
             "CREATE TABLE IF NOT EXISTS runtime_references(owner_guid BLOB NOT NULL,referenced_guid BLOB NOT NULL,PRIMARY KEY(owner_guid,referenced_guid));"
+            "CREATE TABLE IF NOT EXISTS source_object_dependencies(owner_guid BLOB NOT NULL,input_file_guid BLOB NOT NULL,input_local_id INTEGER NOT NULL,PRIMARY KEY(owner_guid,input_file_guid,input_local_id));"
+            "CREATE TABLE IF NOT EXISTS runtime_object_references(owner_guid BLOB NOT NULL,referenced_file_guid BLOB NOT NULL,referenced_local_id INTEGER NOT NULL,PRIMARY KEY(owner_guid,referenced_file_guid,referenced_local_id));"
             "CREATE TABLE IF NOT EXISTS artifacts(artifact_key BLOB PRIMARY KEY,guid BLOB NOT NULL,target_key BLOB,importer_id TEXT NOT NULL,importer_version INTEGER NOT NULL,source_input_key BLOB,manifest_path TEXT,status INTEGER NOT NULL,created_utc INTEGER NOT NULL,deterministic INTEGER NOT NULL);"
             "CREATE TABLE IF NOT EXISTS artifact_objects(artifact_key BLOB NOT NULL,local_id INTEGER NOT NULL,type_name TEXT NOT NULL,output_name TEXT NOT NULL,blob_hash BLOB NOT NULL,PRIMARY KEY(artifact_key,local_id));"
             "CREATE TABLE IF NOT EXISTS artifact_outputs(artifact_key BLOB NOT NULL,output_kind TEXT NOT NULL,output_key BLOB NOT NULL,relative_path TEXT NOT NULL,content_hash BLOB NOT NULL,size INTEGER NOT NULL,compatibility TEXT NOT NULL,PRIMARY KEY(artifact_key,output_kind));"
-            "CREATE TABLE IF NOT EXISTS artifact_dependencies(artifact_key BLOB NOT NULL,kind INTEGER NOT NULL,state INTEGER NOT NULL,identity TEXT NOT NULL,target_guid BLOB,observed_fingerprint BLOB NOT NULL,source_hash BLOB,metadata_hash BLOB,target_artifact_key BLOB,interface_hash BLOB,interface_version INTEGER NOT NULL,PRIMARY KEY(artifact_key,kind,identity));"
+            "CREATE TABLE IF NOT EXISTS artifact_dependencies(artifact_key BLOB NOT NULL,kind INTEGER NOT NULL,state INTEGER NOT NULL,identity TEXT NOT NULL,target_guid BLOB,target_file_guid BLOB,target_local_id INTEGER,observed_fingerprint BLOB NOT NULL,source_hash BLOB,metadata_hash BLOB,target_artifact_key BLOB,interface_hash BLOB,interface_version INTEGER NOT NULL,PRIMARY KEY(artifact_key,kind,identity));"
             "CREATE TABLE IF NOT EXISTS current_artifacts(guid BLOB NOT NULL,target_key BLOB NOT NULL,desired_input_key BLOB,current_artifact_key BLOB,last_good_artifact_key BLOB,import_status INTEGER NOT NULL,diagnostic_id INTEGER,PRIMARY KEY(guid,target_key));"
             "CREATE TABLE IF NOT EXISTS custom_dependencies(name TEXT PRIMARY KEY,hash BLOB,revision INTEGER NOT NULL);"
             "CREATE TABLE IF NOT EXISTS import_history(import_id BLOB PRIMARY KEY,guid BLOB NOT NULL,target_key BLOB,reason_mask INTEGER NOT NULL,desired_input_key BLOB,artifact_key BLOB,started_utc INTEGER NOT NULL,completed_utc INTEGER,result INTEGER NOT NULL,log_path TEXT);"
@@ -162,9 +182,11 @@ namespace
             "CREATE INDEX IF NOT EXISTS asset_objects_backing_idx ON asset_objects(backing_id);"
             "CREATE INDEX IF NOT EXISTS source_dependencies_input_idx ON source_dependencies(input_guid);"
             "CREATE INDEX IF NOT EXISTS runtime_references_target_idx ON runtime_references(referenced_guid);"
+            "CREATE INDEX IF NOT EXISTS source_object_dependencies_target_idx ON source_object_dependencies(input_file_guid,input_local_id);"
+            "CREATE INDEX IF NOT EXISTS runtime_object_references_target_idx ON runtime_object_references(referenced_file_guid,referenced_local_id);"
             "CREATE INDEX IF NOT EXISTS artifact_dependencies_identity_idx ON artifact_dependencies(kind,identity);"
             "CREATE INDEX IF NOT EXISTS artifact_dependencies_guid_idx ON artifact_dependencies(target_guid);"
-            "PRAGMA user_version=3;"
+            "PRAGMA user_version=4;"
             "COMMIT;";
         return Execute(database, schema, diagnostic, path);
     }
@@ -199,10 +221,16 @@ namespace
 
     ArtifactKey BuildDependencyFingerprint(const ArtifactManifestDependency& dependency)
     {
-        ArtifactKeyBuilder builder(StringAnsiView("FlaxAssetDependency/v3"));
+        ArtifactKeyBuilder builder(StringAnsiView("FlaxAssetDependency/v4"));
         builder.AddUInt32(StringAnsiView("kind"), static_cast<uint32>(dependency.Kind));
         builder.AddUInt32(StringAnsiView("state"), static_cast<uint32>(dependency.State));
         builder.AddString(StringAnsiView("identity"), dependency.Identity);
+        builder.AddBool(StringAnsiView("has-object-id"), dependency.ObjectID.IsValid());
+        if (dependency.ObjectID.IsValid())
+        {
+            builder.AddGuid(StringAnsiView("file-guid"), dependency.ObjectID.Guid);
+            builder.AddUInt64(StringAnsiView("local-id"), static_cast<uint64>(dependency.ObjectID.LocalId));
+        }
         builder.AddBool(StringAnsiView("has-asset-guid"), dependency.AssetID.IsValid());
         if (dependency.AssetID.IsValid())
             builder.AddGuid(StringAnsiView("asset-guid"), dependency.AssetID);
@@ -220,6 +248,37 @@ namespace
             builder.AddHash(StringAnsiView("interface-hash"), dependency.InterfaceHash);
         builder.AddUInt32(StringAnsiView("interface-version"), dependency.InterfaceVersion);
         return builder.Finalize();
+    }
+
+    bool WriteArtifactObjects(sqlite3* database, const StringView& databasePath, const ArtifactKey& artifactKey,
+        const ArtifactManifest& manifest, AssetPipelineDiagnostic& diagnostic)
+    {
+        StatementHandle clearObjects;
+        if (Prepare(database, "DELETE FROM artifact_objects WHERE artifact_key=?1", clearObjects, diagnostic, databasePath))
+            return true;
+        BindKey(clearObjects.Value, 1, artifactKey);
+        if (sqlite3_step(clearObjects.Value) != SQLITE_DONE)
+            return FailSql(diagnostic, databasePath, database, "replace artifact object inventory");
+
+        StatementHandle object;
+        if (Prepare(database,
+            "INSERT INTO artifact_objects(artifact_key,local_id,type_name,output_name,blob_hash) VALUES(?1,?2,?3,?4,?5)",
+            object, diagnostic, databasePath))
+            return true;
+        const ContentHash& blobHash = manifest.Outputs[0].Content;
+        for (const ArtifactManifestObject& value : manifest.Objects)
+        {
+            sqlite3_reset(object.Value);
+            sqlite3_clear_bindings(object.Value);
+            BindKey(object.Value, 1, artifactKey);
+            sqlite3_bind_int64(object.Value, 2, value.ObjectID.LocalId);
+            BindText(object.Value, 3, value.TypeName);
+            BindText(object.Value, 4, value.StableKey.HasChars() ? value.StableKey : value.Name);
+            BindHash(object.Value, 5, blobHash);
+            if (sqlite3_step(object.Value) != SQLITE_DONE)
+                return FailSql(diagnostic, databasePath, database, "write artifact object inventory");
+        }
+        return false;
     }
 
     Guid ReadGuid(sqlite3_stmt* statement, int32 column)
@@ -250,7 +309,7 @@ namespace
     {
         if (manifest.Validate(StringView::Empty, diagnostic))
             return true;
-        ArtifactKeyBuilder keyBuilder(StringAnsiView("FlaxArtifact/v3"));
+        ArtifactKeyBuilder keyBuilder(StringAnsiView("FlaxArtifact/v4"));
         keyBuilder.AddGuid(StringAnsiView("asset"), manifest.AssetID);
         keyBuilder.AddKey(StringAnsiView("desired-input"), manifest.InputFingerprint);
         keyBuilder.AddString(StringAnsiView("importer"), manifest.ProcessorID);
@@ -267,6 +326,20 @@ namespace
                 output.Key.ToString(), output.Content.ToString(), output.Size));
         }
         keyBuilder.AddSortedStrings(StringAnsiView("outputs"), outputInputs);
+        Array<StringAnsi> objectInputs;
+        for (const ArtifactManifestObject& object : manifest.Objects)
+        {
+            ArtifactKeyBuilder objectBuilder(StringAnsiView("FlaxArtifactObject/v1"));
+            objectBuilder.AddGuid(StringAnsiView("file-guid"), object.ObjectID.Guid);
+            objectBuilder.AddUInt64(StringAnsiView("local-id"), static_cast<uint64>(object.ObjectID.LocalId));
+            objectBuilder.AddGuid(StringAnsiView("backing-guid"), object.BackingAssetID);
+            objectBuilder.AddString(StringAnsiView("type"), object.TypeName);
+            objectBuilder.AddString(StringAnsiView("name"), object.Name);
+            objectBuilder.AddString(StringAnsiView("stable-key"), object.StableKey);
+            objectBuilder.AddBool(StringAnsiView("main"), object.IsMainObject);
+            objectInputs.Add(objectBuilder.Finalize().ToString());
+        }
+        keyBuilder.AddSortedStrings(StringAnsiView("objects"), objectInputs);
         prepared.Manifest = &manifest;
         prepared.Artifact = keyBuilder.Finalize();
         prepared.Target = manifest.Target.BuildKey(ArtifactTargetDimension::All);
@@ -335,6 +408,8 @@ namespace
             if (sqlite3_step(output.Value) != SQLITE_DONE)
                 return FailSql(diagnostic, databasePath, database, "write artifact output");
         }
+        if (WriteArtifactObjects(database, databasePath, prepared.Artifact, manifest, diagnostic))
+            return true;
 
         StatementHandle clearDependencies;
         if (Prepare(database, "DELETE FROM artifact_dependencies WHERE artifact_key=?1", clearDependencies, diagnostic, databasePath))
@@ -344,7 +419,7 @@ namespace
             return FailSql(diagnostic, databasePath, database, "replace artifact dependencies");
         StatementHandle dependency;
         if (Prepare(database,
-            "INSERT INTO artifact_dependencies(artifact_key,kind,state,identity,target_guid,observed_fingerprint,source_hash,metadata_hash,target_artifact_key,interface_hash,interface_version) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT INTO artifact_dependencies(artifact_key,kind,state,identity,target_guid,target_file_guid,target_local_id,observed_fingerprint,source_hash,metadata_hash,target_artifact_key,interface_hash,interface_version) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             dependency, diagnostic, databasePath))
             return true;
         for (const ArtifactManifestDependency& value : manifest.Dependencies)
@@ -359,24 +434,34 @@ namespace
                 BindGuid(dependency.Value, 5, value.AssetID);
             else
                 sqlite3_bind_null(dependency.Value, 5);
-            BindKey(dependency.Value, 6, BuildDependencyFingerprint(value));
-            if (!value.Hash.IsZero())
-                BindHash(dependency.Value, 7, value.Hash);
+            if (value.ObjectID.IsValid())
+            {
+                BindGuid(dependency.Value, 6, value.ObjectID.Guid);
+                sqlite3_bind_int64(dependency.Value, 7, value.ObjectID.LocalId);
+            }
             else
+            {
+                sqlite3_bind_null(dependency.Value, 6);
                 sqlite3_bind_null(dependency.Value, 7);
-            if (!value.MetadataHash.IsZero())
-                BindHash(dependency.Value, 8, value.MetadataHash);
+            }
+            BindKey(dependency.Value, 8, BuildDependencyFingerprint(value));
+            if (!value.Hash.IsZero())
+                BindHash(dependency.Value, 9, value.Hash);
             else
-                sqlite3_bind_null(dependency.Value, 8);
-            if (value.ExactArtifact.IsZero())
                 sqlite3_bind_null(dependency.Value, 9);
-            else
-                BindKey(dependency.Value, 9, value.ExactArtifact);
-            if (!value.InterfaceHash.IsZero())
-                BindHash(dependency.Value, 10, value.InterfaceHash);
+            if (!value.MetadataHash.IsZero())
+                BindHash(dependency.Value, 10, value.MetadataHash);
             else
                 sqlite3_bind_null(dependency.Value, 10);
-            sqlite3_bind_int64(dependency.Value, 11, value.InterfaceVersion);
+            if (value.ExactArtifact.IsZero())
+                sqlite3_bind_null(dependency.Value, 11);
+            else
+                BindKey(dependency.Value, 11, value.ExactArtifact);
+            if (!value.InterfaceHash.IsZero())
+                BindHash(dependency.Value, 12, value.InterfaceHash);
+            else
+                sqlite3_bind_null(dependency.Value, 12);
+            sqlite3_bind_int64(dependency.Value, 13, value.InterfaceVersion);
             if (sqlite3_step(dependency.Value) != SQLITE_DONE)
                 return FailSql(diagnostic, databasePath, database, "write artifact dependency");
         }
@@ -436,6 +521,8 @@ bool AssetDatabaseStorage::Save(const StringView& path, const StringView& projec
         "DELETE FROM mounts;"
         "DELETE FROM source_dependencies;"
         "DELETE FROM runtime_references;"
+        "DELETE FROM source_object_dependencies;"
+        "DELETE FROM runtime_object_references;"
         "DELETE FROM asset_objects;"
         "DELETE FROM source_assets;"
         "DELETE FROM labels;"
@@ -488,8 +575,14 @@ bool AssetDatabaseStorage::Save(const StringView& path, const StringView& projec
     StatementHandle sourceDependency;
     if (Prepare(database.Value, "INSERT OR IGNORE INTO source_dependencies(owner_guid,input_guid) VALUES(?1,?2)", sourceDependency, diagnostic, path))
         return true;
+    StatementHandle sourceObjectDependency;
+    if (Prepare(database.Value, "INSERT OR IGNORE INTO source_object_dependencies(owner_guid,input_file_guid,input_local_id) VALUES(?1,?2,?3)", sourceObjectDependency, diagnostic, path))
+        return true;
     StatementHandle runtimeReference;
     if (Prepare(database.Value, "INSERT OR IGNORE INTO runtime_references(owner_guid,referenced_guid) VALUES(?1,?2)", runtimeReference, diagnostic, path))
+        return true;
+    StatementHandle runtimeObjectReference;
+    if (Prepare(database.Value, "INSERT OR IGNORE INTO runtime_object_references(owner_guid,referenced_file_guid,referenced_local_id) VALUES(?1,?2,?3)", runtimeObjectReference, diagnostic, path))
         return true;
     StatementHandle label;
     if (Prepare(database.Value, "INSERT INTO labels(guid,label) VALUES(?1,?2)", label, diagnostic, path))
@@ -553,6 +646,23 @@ bool AssetDatabaseStorage::Save(const StringView& path, const StringView& projec
             if (sqlite3_step(sourceDependency.Value) != SQLITE_DONE)
                 return FailSql(diagnostic, path, database.Value, "write source dependency");
         }
+        for (const AssetObjectId& dependency : record.BuildInputObjectDependencies)
+        {
+            sqlite3_reset(sourceObjectDependency.Value);
+            sqlite3_clear_bindings(sourceObjectDependency.Value);
+            BindGuid(sourceObjectDependency.Value, 1, record.ID);
+            BindGuid(sourceObjectDependency.Value, 2, dependency.Guid);
+            sqlite3_bind_int64(sourceObjectDependency.Value, 3, dependency.LocalId);
+            if (sqlite3_step(sourceObjectDependency.Value) != SQLITE_DONE)
+                return FailSql(diagnostic, path, database.Value, "write exact source dependency");
+
+            sqlite3_reset(sourceDependency.Value);
+            sqlite3_clear_bindings(sourceDependency.Value);
+            BindGuid(sourceDependency.Value, 1, record.ID);
+            BindGuid(sourceDependency.Value, 2, SubAssetPolicy::GetBackingAssetId(dependency.Guid, dependency.LocalId));
+            if (sqlite3_step(sourceDependency.Value) != SQLITE_DONE)
+                return FailSql(diagnostic, path, database.Value, "write source dependency projection");
+        }
         for (const Guid& reference : record.RuntimeReferences)
         {
             sqlite3_reset(runtimeReference.Value);
@@ -561,6 +671,23 @@ bool AssetDatabaseStorage::Save(const StringView& path, const StringView& projec
             BindGuid(runtimeReference.Value, 2, reference);
             if (sqlite3_step(runtimeReference.Value) != SQLITE_DONE)
                 return FailSql(diagnostic, path, database.Value, "write runtime reference");
+        }
+        for (const AssetObjectId& reference : record.RuntimeObjectReferences)
+        {
+            sqlite3_reset(runtimeObjectReference.Value);
+            sqlite3_clear_bindings(runtimeObjectReference.Value);
+            BindGuid(runtimeObjectReference.Value, 1, record.ID);
+            BindGuid(runtimeObjectReference.Value, 2, reference.Guid);
+            sqlite3_bind_int64(runtimeObjectReference.Value, 3, reference.LocalId);
+            if (sqlite3_step(runtimeObjectReference.Value) != SQLITE_DONE)
+                return FailSql(diagnostic, path, database.Value, "write exact runtime reference");
+
+            sqlite3_reset(runtimeReference.Value);
+            sqlite3_clear_bindings(runtimeReference.Value);
+            BindGuid(runtimeReference.Value, 1, record.ID);
+            BindGuid(runtimeReference.Value, 2, SubAssetPolicy::GetBackingAssetId(reference.Guid, reference.LocalId));
+            if (sqlite3_step(runtimeReference.Value) != SQLITE_DONE)
+                return FailSql(diagnostic, path, database.Value, "write runtime reference projection");
         }
     }
 
@@ -725,6 +852,18 @@ bool AssetDatabaseStorage::Load(const StringView& path, const StringView& projec
     if (stepResult != SQLITE_DONE)
         return FailSql(diagnostic, path, database.Value, "read source dependencies");
 
+    StatementHandle objectDependencies;
+    if (Prepare(database.Value, "SELECT owner_guid,input_file_guid,input_local_id FROM source_object_dependencies ORDER BY owner_guid,input_file_guid,input_local_id", objectDependencies, diagnostic, path))
+        return true;
+    while ((stepResult = sqlite3_step(objectDependencies.Value)) == SQLITE_ROW)
+    {
+        int32 recordIndex;
+        if (recordByBackingId.TryGet(ReadGuid(objectDependencies.Value, 0), recordIndex))
+            records[recordIndex].BuildInputObjectDependencies.Add(AssetObjectId(ReadGuid(objectDependencies.Value, 1), sqlite3_column_int64(objectDependencies.Value, 2)));
+    }
+    if (stepResult != SQLITE_DONE)
+        return FailSql(diagnostic, path, database.Value, "read exact source dependencies");
+
     StatementHandle references;
     if (Prepare(database.Value, "SELECT owner_guid,referenced_guid FROM runtime_references ORDER BY owner_guid,referenced_guid", references, diagnostic, path))
         return true;
@@ -736,6 +875,18 @@ bool AssetDatabaseStorage::Load(const StringView& path, const StringView& projec
     }
     if (stepResult != SQLITE_DONE)
         return FailSql(diagnostic, path, database.Value, "read runtime references");
+
+    StatementHandle objectReferences;
+    if (Prepare(database.Value, "SELECT owner_guid,referenced_file_guid,referenced_local_id FROM runtime_object_references ORDER BY owner_guid,referenced_file_guid,referenced_local_id", objectReferences, diagnostic, path))
+        return true;
+    while ((stepResult = sqlite3_step(objectReferences.Value)) == SQLITE_ROW)
+    {
+        int32 recordIndex;
+        if (recordByBackingId.TryGet(ReadGuid(objectReferences.Value, 0), recordIndex))
+            records[recordIndex].RuntimeObjectReferences.Add(AssetObjectId(ReadGuid(objectReferences.Value, 1), sqlite3_column_int64(objectReferences.Value, 2)));
+    }
+    if (stepResult != SQLITE_DONE)
+        return FailSql(diagnostic, path, database.Value, "read exact runtime references");
 
     StatementHandle observations;
     if (Prepare(database.Value,
@@ -774,7 +925,7 @@ bool AssetDatabaseStorage::PublishArtifact(const StringView& libraryRoot, const 
     if (manifest.Validate(StringView::Empty, diagnostic))
         return true;
 
-    ArtifactKeyBuilder keyBuilder(StringAnsiView("FlaxArtifact/v3"));
+    ArtifactKeyBuilder keyBuilder(StringAnsiView("FlaxArtifact/v4"));
     keyBuilder.AddGuid(StringAnsiView("asset"), manifest.AssetID);
     keyBuilder.AddKey(StringAnsiView("desired-input"), manifest.InputFingerprint);
     keyBuilder.AddString(StringAnsiView("importer"), manifest.ProcessorID);
@@ -791,6 +942,20 @@ bool AssetDatabaseStorage::PublishArtifact(const StringView& libraryRoot, const 
             output.Key.ToString(), output.Content.ToString(), output.Size));
     }
     keyBuilder.AddSortedStrings(StringAnsiView("outputs"), outputInputs);
+    Array<StringAnsi> objectInputs;
+    for (const ArtifactManifestObject& object : manifest.Objects)
+    {
+        ArtifactKeyBuilder objectBuilder(StringAnsiView("FlaxArtifactObject/v1"));
+        objectBuilder.AddGuid(StringAnsiView("file-guid"), object.ObjectID.Guid);
+        objectBuilder.AddUInt64(StringAnsiView("local-id"), static_cast<uint64>(object.ObjectID.LocalId));
+        objectBuilder.AddGuid(StringAnsiView("backing-guid"), object.BackingAssetID);
+        objectBuilder.AddString(StringAnsiView("type"), object.TypeName);
+        objectBuilder.AddString(StringAnsiView("name"), object.Name);
+        objectBuilder.AddString(StringAnsiView("stable-key"), object.StableKey);
+        objectBuilder.AddBool(StringAnsiView("main"), object.IsMainObject);
+        objectInputs.Add(objectBuilder.Finalize().ToString());
+    }
+    keyBuilder.AddSortedStrings(StringAnsiView("objects"), objectInputs);
     const ArtifactKey artifactKey = keyBuilder.Finalize();
 
     const String keyText(artifactKey.ToString());
@@ -870,6 +1035,8 @@ bool AssetDatabaseStorage::PublishArtifact(const StringView& libraryRoot, const 
         if (sqlite3_step(output.Value) != SQLITE_DONE)
             return FailSql(diagnostic, databasePath, database.Value, "write artifact output");
     }
+    if (WriteArtifactObjects(database.Value, databasePath, artifactKey, manifest, diagnostic))
+        return true;
 
     StatementHandle clearDependencies;
     if (Prepare(database.Value, "DELETE FROM artifact_dependencies WHERE artifact_key=?1", clearDependencies, diagnostic, databasePath))
@@ -879,7 +1046,7 @@ bool AssetDatabaseStorage::PublishArtifact(const StringView& libraryRoot, const 
         return FailSql(diagnostic, databasePath, database.Value, "replace artifact dependencies");
     StatementHandle dependency;
     if (Prepare(database.Value,
-        "INSERT INTO artifact_dependencies(artifact_key,kind,state,identity,target_guid,observed_fingerprint,source_hash,metadata_hash,target_artifact_key,interface_hash,interface_version) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO artifact_dependencies(artifact_key,kind,state,identity,target_guid,target_file_guid,target_local_id,observed_fingerprint,source_hash,metadata_hash,target_artifact_key,interface_hash,interface_version) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         dependency, diagnostic, databasePath))
         return true;
     for (const ArtifactManifestDependency& value : manifest.Dependencies)
@@ -894,24 +1061,34 @@ bool AssetDatabaseStorage::PublishArtifact(const StringView& libraryRoot, const 
             BindGuid(dependency.Value, 5, value.AssetID);
         else
             sqlite3_bind_null(dependency.Value, 5);
-        BindKey(dependency.Value, 6, BuildDependencyFingerprint(value));
-        if (!value.Hash.IsZero())
-            BindHash(dependency.Value, 7, value.Hash);
+        if (value.ObjectID.IsValid())
+        {
+            BindGuid(dependency.Value, 6, value.ObjectID.Guid);
+            sqlite3_bind_int64(dependency.Value, 7, value.ObjectID.LocalId);
+        }
         else
+        {
+            sqlite3_bind_null(dependency.Value, 6);
             sqlite3_bind_null(dependency.Value, 7);
-        if (!value.MetadataHash.IsZero())
-            BindHash(dependency.Value, 8, value.MetadataHash);
+        }
+        BindKey(dependency.Value, 8, BuildDependencyFingerprint(value));
+        if (!value.Hash.IsZero())
+            BindHash(dependency.Value, 9, value.Hash);
         else
-            sqlite3_bind_null(dependency.Value, 8);
-        if (value.ExactArtifact.IsZero())
             sqlite3_bind_null(dependency.Value, 9);
-        else
-            BindKey(dependency.Value, 9, value.ExactArtifact);
-        if (!value.InterfaceHash.IsZero())
-            BindHash(dependency.Value, 10, value.InterfaceHash);
+        if (!value.MetadataHash.IsZero())
+            BindHash(dependency.Value, 10, value.MetadataHash);
         else
             sqlite3_bind_null(dependency.Value, 10);
-        sqlite3_bind_int64(dependency.Value, 11, value.InterfaceVersion);
+        if (value.ExactArtifact.IsZero())
+            sqlite3_bind_null(dependency.Value, 11);
+        else
+            BindKey(dependency.Value, 11, value.ExactArtifact);
+        if (!value.InterfaceHash.IsZero())
+            BindHash(dependency.Value, 12, value.InterfaceHash);
+        else
+            sqlite3_bind_null(dependency.Value, 12);
+        sqlite3_bind_int64(dependency.Value, 13, value.InterfaceVersion);
         if (sqlite3_step(dependency.Value) != SQLITE_DONE)
             return FailSql(diagnostic, databasePath, database.Value, "write artifact dependency");
     }
@@ -1003,7 +1180,7 @@ bool AssetDatabaseStorage::GetCurrentArtifactManifest(const StringView& libraryR
     if (!FileSystem::FileExists(databasePath))
         return false;
     DatabaseHandle database;
-    if (Open(databasePath, database, diagnostic) || EnsureSchema(database.Value, databasePath, diagnostic))
+    if (OpenReadOnly(databasePath, database, diagnostic) || ValidateCurrentSchema(database.Value, databasePath, diagnostic))
         return true;
     StatementHandle query;
     if (Prepare(database.Value,
@@ -1022,6 +1199,38 @@ bool AssetDatabaseStorage::GetCurrentArtifactManifest(const StringView& libraryR
     if (ArtifactStore::TryResolveLibraryRelative(libraryRoot, relativePath, absolutePath, diagnostic))
         return true;
     manifestPath = absolutePath.Get();
+    return false;
+}
+
+bool AssetDatabaseStorage::GetReachableArtifactManifests(const StringView& libraryRoot, Array<String>& manifestPaths,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    manifestPaths.Clear();
+    diagnostic = AssetPipelineDiagnostic();
+    const String databasePath = String(libraryRoot) / TEXT("AssetDatabase/AssetDatabase.sqlite");
+    if (!FileSystem::FileExists(databasePath))
+        return Fail(diagnostic, databasePath, TEXT("Artifact garbage collection requires the durable asset database."));
+    DatabaseHandle database;
+    if (OpenReadOnly(databasePath, database, diagnostic) || ValidateCurrentSchema(database.Value, databasePath, diagnostic))
+        return true;
+    StatementHandle query;
+    if (Prepare(database.Value,
+        "SELECT DISTINCT a.manifest_path FROM artifacts a JOIN ("
+        "SELECT current_artifact_key AS artifact_key FROM current_artifacts WHERE current_artifact_key IS NOT NULL "
+        "UNION SELECT last_good_artifact_key FROM current_artifacts WHERE last_good_artifact_key IS NOT NULL"
+        ") retained ON retained.artifact_key=a.artifact_key ORDER BY a.manifest_path",
+        query, diagnostic, databasePath))
+        return true;
+    int32 result;
+    while ((result = sqlite3_step(query.Value)) == SQLITE_ROW)
+    {
+        ArtifactStoragePath absolutePath;
+        if (ArtifactStore::TryResolveLibraryRelative(libraryRoot, ReadText(query.Value, 0), absolutePath, diagnostic))
+            return true;
+        manifestPaths.Add(absolutePath.Get());
+    }
+    if (result != SQLITE_DONE)
+        return FailSql(diagnostic, databasePath, database.Value, "read retained artifact mappings");
     return false;
 }
 
@@ -1061,7 +1270,7 @@ bool AssetDatabaseStorage::GetCustomDependency(const StringView& libraryRoot, co
     if (!FileSystem::FileExists(databasePath))
         return false;
     DatabaseHandle database;
-    if (Open(databasePath, database, diagnostic) || EnsureSchema(database.Value, databasePath, diagnostic))
+    if (OpenReadOnly(databasePath, database, diagnostic) || ValidateCurrentSchema(database.Value, databasePath, diagnostic))
         return true;
     StatementHandle statement;
     if (Prepare(database.Value, "SELECT hash,revision FROM custom_dependencies WHERE name=?1", statement, diagnostic, databasePath))

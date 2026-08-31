@@ -193,6 +193,8 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     extraIds.Add(AuthoredAssetProcessor::SceneAnimationID());
     extraIds.Add(AuthoredAssetProcessor::ParticleSystemID());
     extraIds.Add(AuthoredAssetProcessor::CollisionDataID());
+    extraIds.Add(AuthoredAssetProcessor::AnimationID());
+    extraIds.Add(AuthoredAssetProcessor::GameplayGlobalsID());
     extraIds.Add(AuthoredAssetProcessor::GenericObjectID());
     extraIds.Add(ImportedSourceProcessor::FontID());
     extraIds.Add(ImportedSourceProcessor::ShaderID());

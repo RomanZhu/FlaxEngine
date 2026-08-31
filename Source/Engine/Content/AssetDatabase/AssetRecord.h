@@ -53,7 +53,13 @@ struct FLAXENGINE_API AssetRecord
     String PortabilityKey;
     uint64 MetaSemanticHash = 0;
     Array<String> Labels;
+    /// <summary>Exact persistent identities used while building this source asset.</summary>
+    Array<AssetObjectId> BuildInputObjectDependencies;
+    /// <summary>Backing GUID compatibility projection for legacy build consumers.</summary>
     Array<Guid> BuildInputDependencies;
+    /// <summary>Exact persistent identities referenced by runtime-authored data.</summary>
+    Array<AssetObjectId> RuntimeObjectReferences;
+    /// <summary>Backing GUID compatibility projection for legacy runtime consumers.</summary>
     Array<Guid> RuntimeReferences;
     AssetSourceKind SourceKind = AssetSourceKind::LegacyBinary;
     AssetRecordStatus Status = AssetRecordStatus::Ready;

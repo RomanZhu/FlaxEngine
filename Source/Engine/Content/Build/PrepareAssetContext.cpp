@@ -1,7 +1,9 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "PrepareAssetContext.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
+#include "Engine/Content/AssetDatabase/SubAsset.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/StringUtils.h"
 #include <algorithm>
@@ -21,7 +23,7 @@ namespace
 
     bool SameDependencyValue(const AssetDependency& a, const AssetDependency& b)
     {
-        return a.Kind == b.Kind && a.State == b.State && a.StableIdentity == b.StableIdentity && a.AssetID == b.AssetID &&
+        return a.Kind == b.Kind && a.State == b.State && a.StableIdentity == b.StableIdentity && a.ObjectID == b.ObjectID && a.AssetID == b.AssetID &&
                a.Content == b.Content && a.Metadata == b.Metadata && a.ExactArtifact == b.ExactArtifact &&
                a.SemanticInterface == b.SemanticInterface && a.InterfaceVersion == b.InterfaceVersion;
     }
@@ -30,6 +32,12 @@ namespace
     {
         static const char Empty[] = "[]";
         return ContentHash::Compute(Empty, ARRAY_COUNT(Empty) - 1);
+    }
+
+    AssetObjectId ResolveObjectId(const Guid& backingId)
+    {
+        AssetRecord record;
+        return backingId.IsValid() && AssetDatabase::Get().TryGetRecord(backingId, record) ? record.GetObjectId() : AssetObjectId();
     }
 
     const char* ReasonCode(AssetDependencyKind kind)
@@ -83,7 +91,8 @@ bool PrepareAssetContext::AddDependency(AssetDependency dependency, AssetPipelin
 {
     for (const AssetDependency& existing : _declaredDependencies)
     {
-        if (existing.Kind != dependency.Kind || existing.StableIdentity != dependency.StableIdentity || existing.AssetID != dependency.AssetID)
+        if (existing.Kind != dependency.Kind || existing.StableIdentity != dependency.StableIdentity ||
+            existing.ObjectID != dependency.ObjectID || existing.AssetID != dependency.AssetID)
             continue;
         if (SameDependencyValue(existing, dependency))
             return false;
@@ -208,6 +217,7 @@ bool PrepareAssetContext::DeclareSourceAssetByGuid(const Guid& id, const Content
     dependency.Kind = AssetDependencyKind::SourceAsset;
     dependency.State = missing ? AssetDependencyState::Missing : AssetDependencyState::Present;
     dependency.StableIdentity = TEXT("guid:") + id.ToString(Guid::FormatType::N).ToLower();
+    dependency.ObjectID = ResolveObjectId(id);
     dependency.AssetID = id;
     dependency.Content = content;
     dependency.Metadata = metadata;
@@ -240,7 +250,7 @@ bool PrepareAssetContext::DeclareSourceAssetByPath(const StringView& path, const
 
 bool PrepareAssetContext::DeclareArtifactDependency(const StringView& stableIdentity, const Guid& id, AssetDependencyState selection,
     const ArtifactKey& selectedArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin,
-    AssetPipelineDiagnostic& diagnostic)
+    AssetPipelineDiagnostic& diagnostic, const AssetObjectId& objectId)
 {
     if (CheckCancellation(diagnostic))
         return true;
@@ -248,6 +258,7 @@ bool PrepareAssetContext::DeclareArtifactDependency(const StringView& stableIden
     dependency.Kind = AssetDependencyKind::Artifact;
     dependency.State = selection;
     dependency.StableIdentity = stableIdentity.HasChars() ? String(stableIdentity) : TEXT("guid:") + id.ToString(Guid::FormatType::N).ToLower();
+    dependency.ObjectID = objectId.IsValid() ? objectId : ResolveObjectId(id);
     dependency.AssetID = id;
     dependency.ExactArtifact = selectedArtifact;
     dependency.SemanticInterface = semanticInterface.Hash;
@@ -263,6 +274,13 @@ bool PrepareAssetContext::DeclareBuildInput(const StringView& stableIdentity, co
         exactArtifact, semanticInterface, origin, diagnostic);
 }
 
+bool PrepareAssetContext::DeclareBuildInput(const StringView& stableIdentity, const AssetObjectId& id, const ArtifactKey& exactArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    return DeclareArtifactDependency(stableIdentity, SubAssetPolicy::GetBackingAssetId(id.Guid, id.LocalId),
+        exactArtifact.IsZero() ? AssetDependencyState::CurrentArtifact : AssetDependencyState::ExactArtifact,
+        exactArtifact, semanticInterface, origin, diagnostic, id);
+}
+
 bool PrepareAssetContext::DeclareRuntimeReference(const StringView& stableIdentity, const Guid& id, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
 {
     if (CheckCancellation(diagnostic))
@@ -270,7 +288,21 @@ bool PrepareAssetContext::DeclareRuntimeReference(const StringView& stableIdenti
     AssetDependency dependency;
     dependency.Kind = AssetDependencyKind::RuntimeReference;
     dependency.StableIdentity = stableIdentity;
+    dependency.ObjectID = ResolveObjectId(id);
     dependency.AssetID = id;
+    dependency.Origin = origin;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DeclareRuntimeReference(const StringView& stableIdentity, const AssetObjectId& id, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::RuntimeReference;
+    dependency.StableIdentity = stableIdentity;
+    dependency.ObjectID = id;
+    dependency.AssetID = SubAssetPolicy::GetBackingAssetId(id.Guid, id.LocalId);
     dependency.Origin = origin;
     return AddDependency(MoveTemp(dependency), diagnostic);
 }
@@ -496,9 +528,12 @@ bool PrepareAssetContext::Finalize(uint64 currentDatabaseRevision, PreparedAsset
     }
 
     prepared.AssetID = _record.ID;
+    prepared.ObjectID = _record.GetObjectId();
     prepared.OutputType = _record.TypeName.IsEmpty() ? _descriptor.MainOutputType : _record.TypeName;
     prepared.DatabaseRevision = _record.DatabaseRevision;
     prepared.AssetName = StringUtils::GetFileNameWithoutExtension(_record.SourcePath.Get());
+    prepared.StableObjectKey = _record.SubAsset.Get();
+    prepared.IsMainObject = _record.IsMainAsset();
     prepared.SourcePath = _record.SourcePath.Get();
     for (const AssetDependency& dependency : dependencies)
     {

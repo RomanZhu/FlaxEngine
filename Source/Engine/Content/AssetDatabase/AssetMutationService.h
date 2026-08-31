@@ -10,6 +10,8 @@ enum class AssetMutationOperation : byte
 {
     Validate,
     CreateAsset,
+    PublishExternal,
+    RegisterExisting,
     CreateFolder,
     Copy,
     Move,
@@ -134,6 +136,14 @@ public:
 
     /// <summary>Creates an authored source file and its metadata as one journaled operation.</summary>
     bool CreateAsset(const StringView& path, const StringAnsiView& sourceContents, const AssetMeta& meta, AssetMutationResult& result);
+
+    /// <summary>Publishes an external file and caller-prepared metadata as one journaled source pair.</summary>
+    bool PublishExternal(const StringView& externalSourcePath, const StringView& destinationPath, const AssetMeta& meta,
+        bool replaceExisting, AssetMutationResult& result);
+
+    /// <summary>Creates or replaces metadata for an existing source entry without rewriting source bytes.</summary>
+    bool RegisterExisting(const StringView& sourcePath, const AssetMeta& meta, bool replaceExistingMetadata,
+        AssetMutationResult& result);
 
     /// <summary>Copies a source/meta pair, recursively assigning new GUIDs for a folder copy.</summary>
     bool Copy(const StringView& sourcePath, const StringView& destinationPath, AssetMutationResult& result);

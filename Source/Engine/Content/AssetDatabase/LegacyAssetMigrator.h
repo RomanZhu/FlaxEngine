@@ -9,7 +9,8 @@
 class FLAXENGINE_API LegacyAssetMigrator
 {
 public:
-    static bool ConvertFlax(const StringView& sourcePath, const StringView& destinationPath, const Guid& preservedId, const StringView& typeName, AssetPipelineDiagnostic& diagnostic);
+    static bool ConvertFlax(const StringView& sourcePath, const StringView& destinationPath, const Guid& preservedId, const StringView& typeName,
+        AssetPipelineDiagnostic& diagnostic, const Array<Guid>* references = nullptr);
     static bool SeedModelSubAssets(const StringView& flaxPath, AssetMeta& meta, AssetPipelineDiagnostic& diagnostic);
     static bool WriteSidecar(const StringView& documentPath, const Guid& id, const StringView& typeName, AssetSourceKind kind, const StringView& processorId, const Dictionary<String, SubAssetMeta>* subAssets, AssetPipelineDiagnostic& diagnostic);
 };

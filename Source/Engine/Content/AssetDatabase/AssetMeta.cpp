@@ -495,7 +495,8 @@ bool AssetMeta::SaveAtomic(const StringView& path, const AssetMeta& value, Asset
     StringAnsi json;
     if (value.ToJson(json, diagnostic))
         return true;
-    const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
+    const String staging = String(StringUtils::GetDirectoryName(path)) /
+        (TEXT(".flax-meta-") + Guid::New().ToString(Guid::FormatType::N) + TEXT(".stage"));
     SCOPE_EXIT { FileSystem::DeleteFile(staging); };
     if (File::WriteAllBytes(staging, json.Get(), json.Length()) || FlushWrittenFile(staging))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Cannot write or flush metadata staging file."));

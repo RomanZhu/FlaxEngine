@@ -16,7 +16,7 @@ using AssetDatabaseFileState = SourceHashFileState;
 class FLAXENGINE_API AssetDatabaseStorage
 {
 public:
-    static constexpr int32 SchemaVersion = 3;
+    static constexpr int32 SchemaVersion = 4;
 
     /// <summary>Atomically replaces durable rows with a committed read snapshot.</summary>
     /// <returns>True on failure.</returns>
@@ -42,6 +42,10 @@ public:
     /// <returns>True only on database failure. An empty path means no mapping exists.</returns>
     static bool GetCurrentArtifactManifest(const StringView& libraryRoot, const Guid& assetID,
         const ArtifactKey& targetKey, String& manifestPath, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Gets immutable manifests retained by current or last-known-good mappings.</summary>
+    static bool GetReachableArtifactManifests(const StringView& libraryRoot, Array<String>& manifestPaths,
+        AssetPipelineDiagnostic& diagnostic);
 
     static bool RegisterCustomDependency(const StringView& libraryRoot, const StringView& name,
         const Guid& hash, AssetPipelineDiagnostic& diagnostic);

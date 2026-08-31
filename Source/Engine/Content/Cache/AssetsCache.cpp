@@ -430,6 +430,20 @@ bool AssetsCache::FindAsset(const AssetObjectId& id, AssetInfo& info) const
     return true;
 }
 
+bool AssetsCache::FindObjectId(const Guid& backingAssetId, AssetObjectId& id) const
+{
+    for (auto i = _runtimeLocations.Begin(); i.IsNotEnd(); ++i)
+    {
+        if (i->Value.BackingAssetID == backingAssetId)
+        {
+            id = i->Key;
+            return true;
+        }
+    }
+    id = AssetObjectId();
+    return false;
+}
+
 const RuntimeAssetIndexEntry* AssetsCache::FindRuntimeLocation(const AssetObjectId& id) const
 {
     return _runtimeLocations.TryGet(id);

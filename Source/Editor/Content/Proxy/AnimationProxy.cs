@@ -21,6 +21,9 @@ namespace FlaxEditor.Content
         public override string Name => "Animation";
 
         /// <inheritdoc />
+        public override string FileExtension => CanonicalGraphDocuments.UseNewAssetDatabase ? "animation" : Extension;
+
+        /// <inheritdoc />
         public override bool CanReimport(ContentItem item)
         {
             return false;
@@ -47,6 +50,12 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+            {
+                if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(Animation).FullName) == Guid.Empty)
+                    throw new Exception("Failed to create authored animation document.");
+                return;
+            }
             if (Editor.CreateAsset("Animation", outputPath))
                 throw new Exception("Failed to create new asset.");
         }

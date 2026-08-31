@@ -113,6 +113,16 @@ namespace
             extension = TEXT("sceneanimation");
             return true;
         }
+        if (typeName == TEXT("FlaxEngine.Animation"))
+        {
+            extension = TEXT("animation");
+            return true;
+        }
+        if (typeName == TEXT("FlaxEngine.GameplayGlobals"))
+        {
+            extension = TEXT("gameplayglobals");
+            return true;
+        }
         return false;
     }
 
@@ -132,7 +142,6 @@ namespace
             typeName == TEXT("FlaxEngine.CubeTexture") ||
             typeName == TEXT("FlaxEngine.Model") ||
             typeName == TEXT("FlaxEngine.SkinnedModel") ||
-            typeName == TEXT("FlaxEngine.Animation") ||
             typeName == TEXT("FlaxEngine.AudioClip") ||
             typeName == TEXT("FlaxEngine.FontAsset") ||
             typeName == TEXT("FlaxEngine.Video");

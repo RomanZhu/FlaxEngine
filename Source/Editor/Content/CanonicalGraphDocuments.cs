@@ -11,9 +11,9 @@ namespace FlaxEditor.Content
     /// </summary>
     internal static class CanonicalGraphDocuments
     {
-        public static bool UseTextGraphAssets => true;
+        public static bool UseTextGraphAssets => UseNewAssetDatabase;
 
-        public static bool UseNewAssetDatabase => true;
+        public static bool UseNewAssetDatabase => Editor.Instance?.GameProject?.AssetSystemVersion == ProjectInfo.CurrentAssetSystemVersion;
 
         public static void EnsureCanAuthor(string typeName, string outputPath)
         {
@@ -36,7 +36,9 @@ namespace FlaxEditor.Content
                    extension.Equals(".material", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".materialinstance", StringComparison.OrdinalIgnoreCase) ||
                    extension.Equals(".sceneanimation", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".skeletonmask", StringComparison.OrdinalIgnoreCase);
+                   extension.Equals(".skeletonmask", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".animation", StringComparison.OrdinalIgnoreCase) ||
+                   extension.Equals(".gameplayglobals", StringComparison.OrdinalIgnoreCase);
         }
 
         public static string TypeNameFromPath(string path)
@@ -68,6 +70,10 @@ namespace FlaxEditor.Content
                 return typeof(SceneAnimation).FullName;
             if (extension.Equals(".skeletonmask", StringComparison.OrdinalIgnoreCase))
                 return typeof(SkeletonMask).FullName;
+            if (extension.Equals(".animation", StringComparison.OrdinalIgnoreCase))
+                return typeof(Animation).FullName;
+            if (extension.Equals(".gameplayglobals", StringComparison.OrdinalIgnoreCase))
+                return typeof(GameplayGlobals).FullName;
             return null;
         }
 

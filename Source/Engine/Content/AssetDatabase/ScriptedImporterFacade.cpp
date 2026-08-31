@@ -23,6 +23,7 @@
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Engine/Engine.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Scripting/Scripting.h"
@@ -155,6 +156,83 @@ namespace
         hash = ContentHash::Compute(bytes.Get(), bytes.Count());
         return false;
     }
+
+    bool ReadCurrentArtifact(const AssetRecord& record, const ArtifactTarget& target, ArtifactKey& key,
+        const StringAnsiView& outputKind, ArtifactManifest* resultManifest);
+}
+
+String ScriptedImporterFacade::ReadArtifactOutput(const Guid& sourceAssetId, const StringView& outputKind)
+{
+    ClearError();
+    if (!Engine::GetCommandLine().Contains(TEXT("-assetImportWorker"), StringSearchCase::IgnoreCase))
+    {
+        Fail(TEXT("Immutable importer artifact reads are available only inside an import worker."));
+        return String::Empty;
+    }
+    if (!sourceAssetId.IsValid() || outputKind.IsEmpty())
+    {
+        Fail(TEXT("Immutable importer artifact reads require a source GUID and output kind."));
+        return String::Empty;
+    }
+    AssetRecord record;
+    for (const AssetRecord& candidate : AssetDatabase::Get().GetSnapshot().Records)
+    {
+        if (candidate.IsMainAsset() && (candidate.SourceAssetID == sourceAssetId || candidate.ID == sourceAssetId))
+        {
+            record = candidate;
+            break;
+        }
+    }
+    if (!record.ID.IsValid())
+    {
+        Fail(TEXT("The artifact dependency source is not registered."));
+        return String::Empty;
+    }
+    const StringAnsi outputKindAnsi(outputKind);
+    ArtifactKey key;
+    ArtifactManifest manifest;
+    if (ReadCurrentArtifact(record, TexturePipelineService::GetHostTarget(), key, outputKindAnsi, &manifest))
+    {
+        Fail(TEXT("The requested artifact output is not currently available."));
+        return String::Empty;
+    }
+    const ArtifactManifestOutput* selected = nullptr;
+    for (const ArtifactManifestOutput& output : manifest.Outputs)
+    {
+        if (output.Kind == outputKindAnsi)
+        {
+            selected = &output;
+            break;
+        }
+    }
+    ArtifactStoragePath path;
+    AssetPipelineDiagnostic diagnostic;
+    Array<byte> bytes;
+    ContentHash content;
+    if (!selected || ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, selected->RelativePath, path, diagnostic) ||
+        File::ReadAllBytes(path.Get(), bytes) || HashFile(path.Get(), content) || content != selected->Content ||
+        static_cast<uint64>(bytes.Count()) != selected->Size)
+    {
+        Fail(diagnostic, TEXT("The immutable artifact output failed path, size, or content verification."));
+        return String::Empty;
+    }
+    Array<char> encoded;
+    Encryption::Base64Encode(bytes.Get(), bytes.Count(), encoded);
+    const StringAnsi keyText(key.ToString());
+    const StringAnsi contentText(content.ToString());
+    rapidjson_flax::StringBuffer buffer;
+    CompactJsonWriter writer(buffer);
+    writer.StartObject();
+    writer.JKEY("artifactKey");
+    writer.String(keyText.Get(), keyText.Length());
+    writer.JKEY("contentHash");
+    writer.String(contentText.Get(), contentText.Length());
+    writer.JKEY("outputKind");
+    writer.String(outputKindAnsi.Get(), outputKindAnsi.Length());
+    writer.JKEY("data");
+    writer.String(encoded.Get(), encoded.Count());
+    writer.EndObject();
+    return String(StringAnsiView(buffer.GetString(), static_cast<int32>(buffer.GetSize())));
 }
 
 bool ScriptedImporterFacade::EnsureMetadata(const StringView& sourcePath, const StringView& importerId, int32 settingsSchemaVersion)
@@ -315,7 +393,8 @@ namespace
         return context.DeclareSourceAssetByGuid(dependencyRecord.SourceAssetID, content, metadata, false, origin, diagnostic);
     }
 
-    bool ReadCurrentArtifact(const AssetRecord& record, const ArtifactTarget& target, ArtifactKey& key)
+    bool ReadCurrentArtifact(const AssetRecord& record, const ArtifactTarget& target, ArtifactKey& key,
+        const StringAnsiView& outputKind = StringAnsiView("runtime"), ArtifactManifest* resultManifest = nullptr)
     {
         String manifestPath;
         AssetPipelineDiagnostic diagnostic;
@@ -328,9 +407,11 @@ namespace
             return true;
         for (const ArtifactManifestOutput& output : manifest.Outputs)
         {
-            if (output.Kind == StringAnsiView("runtime"))
+            if (output.Kind == outputKind)
             {
                 key = output.Key;
+                if (resultManifest)
+                    *resultManifest = manifest;
                 return false;
             }
         }
@@ -438,6 +519,41 @@ namespace
                     return Fail(TEXT("Managed importer artifact dependency GUID is invalid."));
                 const bool found = AssetDatabase::Get().TryGetRecord(id, record);
                 if (declareArtifact(found ? &record : nullptr, id, TEXT("guid:") + id.ToString(Guid::FormatType::N).ToLower()))
+                    return true;
+            }
+        }
+
+        const auto observedArtifacts = dependencies.FindMember("observedArtifacts");
+        if (observedArtifacts != dependencies.MemberEnd())
+        {
+            if (!observedArtifacts->value.IsObject())
+                return Fail(TEXT("Managed importer observed-artifact dependencies are malformed."));
+            for (auto item = observedArtifacts->value.MemberBegin(); item != observedArtifacts->value.MemberEnd(); ++item)
+            {
+                const String identity(item->name.GetStringAnsiView());
+                const int32 separator = identity.Find('/');
+                Guid sourceId;
+                ArtifactKey expected;
+                if (!item->value.IsString() || !identity.StartsWith(TEXT("guid:")) || separator <= 5 ||
+                    Guid::Parse(identity.Substring(5, separator - 5), sourceId) ||
+                    ArtifactKey::Parse(item->value.GetStringAnsiView(), expected))
+                    return Fail(TEXT("Managed importer observed-artifact identity or key is invalid."));
+                AssetRecord record;
+                for (const AssetRecord& candidate : AssetDatabase::Get().GetSnapshot().Records)
+                {
+                    if (candidate.IsMainAsset() && candidate.SourceAssetID == sourceId)
+                    {
+                        record = candidate;
+                        break;
+                    }
+                }
+                const StringAnsi kind(identity.Substring(separator + 1));
+                ArtifactKey current;
+                if (!record.ID.IsValid() || ReadCurrentArtifact(record, target, current, kind) || current != expected)
+                    return Fail(TEXT("An artifact read by the managed importer changed before publication; the staged result was discarded."));
+                AssetSemanticInterface interface;
+                if (context.DeclareArtifactDependency(identity, record.ID, AssetDependencyState::ExactArtifact,
+                    expected, interface, origin, diagnostic))
                     return true;
             }
         }
@@ -965,6 +1081,11 @@ bool ScriptedImporterFacade::EnsureMetadata(const StringView&, const StringView&
 bool ScriptedImporterFacade::Publish(const StringView&, const StringView&)
 {
     return true;
+}
+
+String ScriptedImporterFacade::ReadArtifactOutput(const Guid&, const StringView&)
+{
+    return String::Empty;
 }
 
 #endif

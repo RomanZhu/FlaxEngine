@@ -639,6 +639,16 @@ namespace FlaxEditor.Modules
             return UseContentBackendForFileOperation(item);
         }
 
+        private static bool IsCanonicalMutationPair(ContentItem item, string path)
+        {
+            return item is not AssetItem { IsCanonicalSubAsset: true } && File.Exists(path + ".meta");
+        }
+
+        private static bool IsProjectContentPath(string path)
+        {
+            return ContentMutationPathUtils.IsWithinRoot(path, Globals.ProjectContentFolder);
+        }
+
         internal static bool ShouldRemoveMissingContentItem(ContentItem item)
         {
             return item is not NewItem && item?.Exists == false;
@@ -990,6 +1000,17 @@ namespace FlaxEditor.Modules
             if (create == null)
                 throw new ArgumentNullException(nameof(create));
             destinationPath = ContentMutationPathUtils.Normalize(destinationPath);
+            if (_useNewAssetDatabase && isDirectory && ContentMutationPathUtils.IsWithinRoot(destinationPath, Globals.ProjectContentFolder))
+            {
+                var parent = Path.GetDirectoryName(destinationPath);
+                var name = Path.GetFileName(destinationPath);
+                AssetDatabase.CreateFolder(parent, name);
+                var succeeded = Directory.Exists(destinationPath) && File.Exists(destinationPath + ".meta");
+                return succeeded
+                    ? ContentMutationResult.Success(null, destinationPath)
+                    : ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath,
+                        "The native folder-pair creation did not produce a valid source and metadata pair.");
+            }
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Create);
             plan.Entries.Add(new ContentMutationEntry(destinationPath, destinationPath, ContentMutationPathRole.Main, isDirectory)
             {
@@ -1003,6 +1024,12 @@ namespace FlaxEditor.Modules
                     try
                     {
                         create();
+                        if (_useNewAssetDatabase && !isDirectory && IsProjectContentPath(destinationPath) &&
+                            ContentMutationPathUtils.Exists(destinationPath) && !File.Exists(destinationPath + ".meta"))
+                        {
+                            return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath,
+                                "Asset System v3 proxy creation must atomically publish the source and metadata pair.");
+                        }
                         if (ContentMutationPathUtils.Exists(destinationPath) || allowDeferred)
                             return ContentMutationResult.Success(null, destinationPath);
                         return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath, $"Content creation did not produce '{destinationPath}'.");
@@ -1033,17 +1060,26 @@ namespace FlaxEditor.Modules
             try
             {
                 var metadataPath = path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase) ? null : path + ".meta";
-                if (Directory.Exists(path))
+                var deletedCanonicalPair = metadataPath != null && File.Exists(metadataPath) &&
+                                           (File.Exists(path) || Directory.Exists(path));
+                if (deletedCanonicalPair)
+                {
+                    var result = AssetDatabaseFacade.DeleteAssetPairToRecovery(path);
+                    if (!result.Succeeded)
+                    {
+                        Editor.LogWarning("Failed to roll back created Content pair '" + path + "': " + result.Message);
+                        return false;
+                    }
+                }
+                else if (CanonicalGraphDocuments.UseNewAssetDatabase && IsProjectContentPath(path) && (Directory.Exists(path) || File.Exists(path)))
+                {
+                    Editor.LogWarning("Preserving unpaired Asset System v3 source after failed proxy creation for recovery: " + path);
+                    return false;
+                }
+                else if (Directory.Exists(path))
                     Directory.Delete(path, true);
                 else if (File.Exists(path))
-                {
-                    if (FlaxEngine.Content.GetAssetInfo(path, out _))
-                        FlaxEngine.Content.DeleteAsset(path);
-                    if (File.Exists(path))
-                        File.Delete(path);
-                }
-                if (metadataPath != null && File.Exists(metadataPath))
-                    File.Delete(metadataPath);
+                    File.Delete(path);
                 var sidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(path, false, string.Equals(Path.GetExtension(path), ".scene", StringComparison.OrdinalIgnoreCase));
                 if (sidecar != null && Directory.Exists(sidecar))
                     Directory.Delete(sidecar, true);
@@ -1304,10 +1340,36 @@ namespace FlaxEditor.Modules
                 () => VerifyMoveEntries(plan, entryIndices));
         }
 
-        private static ContentMutationResult MoveBackend(ContentItem item, string sourcePath, string destinationPath)
+        private static ContentMutationResult MoveBackend(ContentItem item, string sourcePath, string destinationPath, bool runCallbacks = true)
         {
             try
             {
+                if (IsCanonicalMutationPair(item, sourcePath))
+                {
+                    var message = string.Empty;
+                    if (runCallbacks)
+                    {
+                        message = AssetDatabase.MoveAsset(sourcePath, destinationPath);
+                    }
+                    else
+                    {
+                        var nativeResult = AssetDatabaseFacade.MoveAssetPair(sourcePath, destinationPath);
+                        if (!nativeResult.Succeeded)
+                            message = nativeResult.Message;
+                    }
+                    if (!string.IsNullOrEmpty(message) || ContentMutationPathUtils.Exists(sourcePath) ||
+                        !ContentMutationPathUtils.Exists(destinationPath) || !File.Exists(destinationPath + ".meta"))
+                    {
+                        return ContentMutationResult.Fail(ContentMutationFailure.MoveFailed, sourcePath, destinationPath,
+                            string.IsNullOrEmpty(message) ? "The native source-pair move did not commit a valid destination pair." : message);
+                    }
+                    return ContentMutationResult.Success(sourcePath, destinationPath);
+                }
+                if (CanonicalGraphDocuments.UseNewAssetDatabase && IsProjectContentPath(sourcePath))
+                {
+                    return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, sourcePath, destinationPath,
+                        "Asset System v3 requires every Content entry to have metadata before it can be moved.");
+                }
                 bool failed;
                 if (item.IsFolder)
                 {
@@ -1348,7 +1410,7 @@ namespace FlaxEditor.Modules
                 return true;
             if (ContentMutationPathUtils.Exists(sourcePath) || !ContentMutationPathUtils.Exists(destinationPath))
                 return false;
-            return MoveBackend(item, destinationPath, sourcePath).Succeeded;
+            return MoveBackend(item, destinationPath, sourcePath, false).Succeeded;
         }
 
         private static bool VerifyMoveEntries(ContentMutationPlan plan, int[] entryIndices)
@@ -1539,6 +1601,18 @@ namespace FlaxEditor.Modules
         {
             try
             {
+                if (IsCanonicalMutationPair(item, item.Path))
+                {
+                    if (!AssetDatabase.CopyAsset(item.Path, targetPath))
+                        return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, item.Path, targetPath, "The native source-pair copy failed.");
+                    clonedAssets.Add(targetPath);
+                    return ContentMutationResult.Success(item.Path, targetPath);
+                }
+                if (CanonicalGraphDocuments.UseNewAssetDatabase && IsProjectContentPath(item.Path))
+                {
+                    return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, item.Path, targetPath,
+                        "Asset System v3 requires every Content entry to have metadata before it can be copied.");
+                }
                 if (item.IsFolder)
                 {
                     Directory.CreateDirectory(targetPath);
@@ -1605,7 +1679,15 @@ namespace FlaxEditor.Modules
             {
                 try
                 {
-                    FlaxEngine.Content.DeleteAsset(clonedAssets[i]);
+                    if (File.Exists(clonedAssets[i] + ".meta"))
+                    {
+                        if (!AssetDatabaseFacade.DeleteAssetPairToRecovery(clonedAssets[i]).Succeeded)
+                            succeeded = false;
+                    }
+                    else
+                    {
+                        FlaxEngine.Content.DeleteAsset(clonedAssets[i]);
+                    }
                 }
                 catch
                 {
@@ -1770,8 +1852,21 @@ namespace FlaxEditor.Modules
 
             ContentMutationDiagnostics.Log("mutation.delete.begin", $"path='{item.Path}'; folder={item.IsFolder}; user={deletedByUser}; type={item.GetType().Name}");
 
-            if (deletedByUser && item is AssetItem canonicalItem && canonicalItem.IsCanonicalSource && !DeleteCanonicalAssetPair(canonicalItem))
-                return;
+            var sourcePairDeleted = false;
+            if (deletedByUser)
+            {
+                if (IsCanonicalMutationPair(item, item.Path))
+                {
+                    if (!DeleteCanonicalPair(item.Path))
+                        return;
+                    sourcePairDeleted = true;
+                }
+                else if (CanonicalGraphDocuments.UseNewAssetDatabase && IsProjectContentPath(item.Path))
+                {
+                    Editor.LogError($"Cannot delete '{item.Path}' because Asset System v3 requires a metadata sidecar.");
+                    return;
+                }
+            }
 
             // Fire events
             if (_enableEvents)
@@ -1790,13 +1885,13 @@ namespace FlaxEditor.Modules
                     var children = folder.Children.ToArray();
                     for (int i = 0; i < children.Length; i++)
                     {
-                        var childDeletedByUser = deletedByUser && children[i] is not AssetItem { IsCanonicalSubAsset: true };
+                        var childDeletedByUser = deletedByUser && !sourcePairDeleted && children[i] is not AssetItem { IsCanonicalSubAsset: true };
                         Delete(children[i], childDeletedByUser);
                     }
                 }
 
                 // Remove directory
-                if (deletedByUser && Directory.Exists(path))
+                if (deletedByUser && !sourcePairDeleted && Directory.Exists(path))
                 {
                     // Flush files removal before removing folder (loaded assets remove file during object destruction in Asset::OnDeleteObject)
                     FlaxEngine.Scripting.FlushRemovedObjects();
@@ -1806,7 +1901,7 @@ namespace FlaxEditor.Modules
                         var metadataPath = path + ".meta";
                         if (File.Exists(metadataPath))
                         {
-                            if (!DeleteCanonicalFolderPair(path))
+                            if (!DeleteCanonicalPair(path))
                                 return;
                         }
                         else
@@ -1842,14 +1937,14 @@ namespace FlaxEditor.Modules
                         Editor.Windows.CloseAllEditors(assetItem);
 
                     // Delete asset by using content pool
-                    if (item is not AssetItem canonicalAsset || !canonicalAsset.IsCanonicalSource)
+                    if (!sourcePairDeleted)
                         FlaxEngine.Content.DeleteAsset(path);
                 }
-                else if (item is ScriptItem)
+                else if (item is ScriptItem && !sourcePairDeleted)
                 {
                     FlaxEngine.Content.DeleteScript(path);
                 }
-                else if (deletedByUser)
+                else if (deletedByUser && !sourcePairDeleted)
                 {
                     // Delete file
                     if (File.Exists(path))
@@ -1868,121 +1963,13 @@ namespace FlaxEditor.Modules
                 WorkspaceModified?.Invoke();
         }
 
-        private bool DeleteCanonicalFolderPair(string folderPath)
+        private bool DeleteCanonicalPair(string sourcePath)
         {
-            var metadataPath = folderPath + ".meta";
-            var trashRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationDelete", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(trashRoot);
-            var stagedFolder = Path.Combine(trashRoot, Path.GetFileName(folderPath));
-            var stagedMeta = stagedFolder + ".meta";
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.Delete);
-            plan.Entries.Add(new ContentMutationEntry(folderPath, stagedFolder, ContentMutationPathRole.Main, true));
-            plan.Entries.Add(new ContentMutationEntry(metadataPath, stagedMeta, ContentMutationPathRole.MetadataSidecar, false));
-            var step = new ContentMutationStep(
-                "delete-canonical-folder-pair",
-                new[] { 0, 1 },
-                () =>
-                {
-                    Directory.Move(folderPath, stagedFolder);
-                    File.Move(metadataPath, stagedMeta);
-                    return ContentMutationResult.Success(folderPath, stagedFolder);
-                },
-                () =>
-                {
-                    try
-                    {
-                        if (File.Exists(stagedMeta) && !File.Exists(metadataPath))
-                            File.Move(stagedMeta, metadataPath);
-                        if (Directory.Exists(stagedFolder) && !Directory.Exists(folderPath))
-                            Directory.Move(stagedFolder, folderPath);
-                        return Directory.Exists(folderPath) && File.Exists(metadataPath) && !Directory.Exists(stagedFolder) && !File.Exists(stagedMeta);
-                    }
-                    catch
-                    {
-                        return false;
-                    }
-                },
-                () => !Directory.Exists(folderPath) && !File.Exists(metadataPath) && Directory.Exists(stagedFolder) && File.Exists(stagedMeta));
-            var result = new ContentMutationTransaction(plan).Execute(new[] { step });
-            if (!result.Succeeded)
+            if (!AssetDatabase.DeleteAsset(sourcePath))
             {
-                Editor.LogError($"Cannot delete canonical folder pair '{folderPath}': {result.Message}");
+                Editor.LogError($"Cannot delete canonical source pair '{sourcePath}' through the native mutation gateway.");
                 return false;
             }
-            try
-            {
-                Directory.Delete(stagedFolder, true);
-                File.Delete(stagedMeta);
-                Directory.Delete(trashRoot);
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning($"Canonical folder was deleted but its recovery staging data could not be cleaned: {ex.Message}");
-            }
-            QueueCanonicalSourceRefresh(folderPath);
-            return true;
-        }
-
-        private bool DeleteCanonicalAssetPair(AssetItem item)
-        {
-            var sourcePath = ContentMutationPathUtils.Normalize(item.Path);
-            var metaPath = sourcePath + ".meta";
-            if (!File.Exists(sourcePath) || !File.Exists(metaPath))
-            {
-                Editor.LogError($"Cannot delete canonical source pair because '{sourcePath}' or its metadata sidecar is missing.");
-                return false;
-            }
-
-            var trashRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationDelete", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(trashRoot);
-            var stagedSource = Path.Combine(trashRoot, Path.GetFileName(sourcePath));
-            var stagedMeta = stagedSource + ".meta";
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.Delete);
-            plan.Entries.Add(new ContentMutationEntry(sourcePath, stagedSource, ContentMutationPathRole.Main, false));
-            plan.Entries.Add(new ContentMutationEntry(metaPath, stagedMeta, ContentMutationPathRole.MetadataSidecar, false));
-            var indices = new[] { 0, 1 };
-            var step = new ContentMutationStep(
-                "delete-canonical-pair",
-                indices,
-                () =>
-                {
-                    File.Move(sourcePath, stagedSource);
-                    File.Move(metaPath, stagedMeta);
-                    return ContentMutationResult.Success(sourcePath, stagedSource);
-                },
-                () =>
-                {
-                    try
-                    {
-                        if (File.Exists(stagedMeta) && !File.Exists(metaPath))
-                            File.Move(stagedMeta, metaPath);
-                        if (File.Exists(stagedSource) && !File.Exists(sourcePath))
-                            File.Move(stagedSource, sourcePath);
-                        return File.Exists(sourcePath) && File.Exists(metaPath) && !File.Exists(stagedSource) && !File.Exists(stagedMeta);
-                    }
-                    catch
-                    {
-                        return false;
-                    }
-                },
-                () => !File.Exists(sourcePath) && !File.Exists(metaPath) && File.Exists(stagedSource) && File.Exists(stagedMeta));
-            var result = new ContentMutationTransaction(plan).Execute(new[] { step });
-            if (!result.Succeeded)
-            {
-                Editor.LogError($"Cannot delete canonical source pair '{sourcePath}': {result.Message}");
-                return false;
-            }
-            try
-            {
-                File.Delete(stagedMeta);
-                File.Delete(stagedSource);
-                Directory.Delete(trashRoot);
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning($"Canonical source was deleted but its recovery staging data could not be cleaned: {ex.Message}");
-            }
-            QueueCanonicalSourceRefresh(sourcePath);
             return true;
         }
 
@@ -2190,7 +2177,10 @@ namespace FlaxEditor.Modules
                     {
                         // Item doesn't exist anymore
                         Editor.Log($"Content item \'{child.Path}\' has been removed");
-                        Delete(child);
+                        // A watcher-driven disappearance is reconciliation, not an authored
+                        // mutation. The source tree is already gone, so only detach the managed
+                        // item tree and loaded asset instances; never call the v3 delete gateway.
+                        RemoveFromDatabase(child);
                         i--;
                     }
                     else if (canHaveAssets && child is AssetItem childAsset)
@@ -2520,7 +2510,7 @@ namespace FlaxEditor.Modules
             if (recoveryRequired != 0)
                 Editor.LogError($"{recoveryRequired} interrupted Content transaction(s) require manual recovery. See the log for exact paths.");
 
-            _useNewAssetDatabase = true;
+            _useNewAssetDatabase = Editor.GameProject?.AssetSystemVersion == ProjectInfo.CurrentAssetSystemVersion;
             if (_useNewAssetDatabase)
             {
                 AssetDatabaseFacade.DatabaseChanged += OnAssetDatabaseChanged;
@@ -3021,7 +3011,7 @@ namespace FlaxEditor.Modules
                 throw new ArgumentNullException(nameof(asset));
             if (TryGetAssetDatabaseRecord(asset.ID, out var record) && record.SourceKind == AssetSourceKind.TextDocument)
             {
-                if (asset is Material or MaterialInstance or SkeletonMask or SceneAnimation or ParticleSystem)
+                if (asset is Material or MaterialInstance or SkeletonMask or SceneAnimation or ParticleSystem or Animation or GameplayGlobals)
                 {
                     using var canonicalScope = TrackAssetSave(record.SourcePath);
                     var canonicalFailed = asset is Material material

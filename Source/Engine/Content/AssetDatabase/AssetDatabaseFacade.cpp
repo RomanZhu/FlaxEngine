@@ -16,6 +16,7 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
+#include "Engine/Content/Assets/Animation.h"
 #include "Engine/Content/Assets/RawDataAsset.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
@@ -26,6 +27,7 @@
 #include "Engine/Content/Documents/CollisionDataDocument.h"
 #include "Engine/Content/Documents/ParticleSystemDocument.h"
 #include "Engine/Particles/ParticleSystem.h"
+#include "Engine/Engine/GameplayGlobals.h"
 #include "Engine/Physics/CollisionData.h"
 #include "LegacyAssetMigrator.h"
 #include "Engine/Core/ScopeExit.h"
@@ -78,6 +80,7 @@
 #include "Engine/ContentImporters/CreateSceneAnimation.h"
 #include "Engine/ContentImporters/CreateParticleSystem.h"
 #include "Engine/ContentImporters/CreateCollisionData.h"
+#include "Engine/ContentImporters/CreateAnimation.h"
 #include "Engine/ContentImporters/Types.h"
 #endif
 #include <algorithm>
@@ -344,6 +347,32 @@ namespace
             Globals::ProjectLibraryFolder / TEXT("AssetDatabase/MutationJournals"),
             Globals::ProjectLibraryFolder / TEXT("AssetDatabase/Recovery"));
         return service;
+    }
+
+    bool ReplaceMetadataTransactional(const StringView& sourcePath, const AssetMeta& meta, AssetPipelineDiagnostic& diagnostic)
+    {
+        Array<byte> source;
+        if (File::ReadAllBytes(sourcePath, source))
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::SourceBusy;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.Message = TEXT("Source bytes could not be staged for an atomic metadata update.");
+            return true;
+        }
+        AssetMutationResult mutation;
+        if (GetMutationService().ReplaceAsset(sourcePath,
+            StringAnsiView(reinterpret_cast<const char*>(source.Get()), source.Count()), meta, mutation))
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.AssetGuid = meta.ID;
+            diagnostic.Message = mutation.Message;
+            return true;
+        }
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
     }
 
     AssetMutationResultInfo ToInfo(const AssetMutationResult& result)
@@ -782,7 +811,12 @@ namespace
         }
         else
         {
-            return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::ProcessorMissing, TEXT("No default canonical processor supports this source extension."));
+            meta.AssetType = RawDataAsset::TypeName;
+            meta.Processor.ID = TEXT("Flax.Unsupported");
+            meta.Processor.SettingsVersion = 1;
+            meta.Processor.SettingsJson = "{}\n";
+            work.BuildKind = CanonicalBatchBuildKind::None;
+            return false;
         }
         meta.Processor.SettingsVersion = 1;
         meta.Processor.SettingsJson = "{}\n";
@@ -808,6 +842,20 @@ namespace
             extension == TEXT("mkv") || extension == TEXT("txt");
     }
 
+    bool RegisterExistingMetadata(const StringView& sourcePath, const AssetMeta& metadata, bool replaceExisting,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        AssetMutationResult result;
+        if (!GetMutationService().RegisterExisting(sourcePath, metadata, replaceExisting, result))
+            return false;
+        diagnostic.Code = result.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = metadata.ID;
+        diagnostic.Message = result.Message;
+        return true;
+    }
+
     bool EnsureDefaultCanonicalMetadata(const StringView& sourcePath, AssetPipelineDiagnostic& diagnostic)
     {
         const String metaPath = String(sourcePath) + TEXT(".meta");
@@ -826,7 +874,7 @@ namespace
                 return false;
             metadata.MetaVersion = AssetMeta::CurrentMetaVersion;
             metadata.MetaUpgradeRequired = false;
-            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+            return RegisterExistingMetadata(sourcePath, metadata, true, diagnostic);
         }
         AssetMeta metadata;
         metadata.ID = Guid::New();
@@ -838,7 +886,7 @@ namespace
             metadata.Processor.ID = TEXT("Flax.Folder");
             metadata.Processor.SettingsVersion = 1;
             metadata.Processor.SettingsJson = "{}\n";
-            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+            return RegisterExistingMetadata(sourcePath, metadata, false, diagnostic);
         }
         const String extension = FileSystem::GetExtension(sourcePath).ToLower();
         if (extension == TEXT("flax"))
@@ -857,7 +905,7 @@ namespace
             metadata.Processor.ID = TEXT("Flax.ExistingJson");
             metadata.Processor.SettingsVersion = 1;
             metadata.Processor.SettingsJson = "{}\n";
-            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+            return RegisterExistingMetadata(sourcePath, metadata, false, diagnostic);
         }
         if (!HasDefaultCanonicalImporter(sourcePath))
         {
@@ -866,12 +914,12 @@ namespace
             metadata.Processor.ID = TEXT("Flax.Unsupported");
             metadata.Processor.SettingsVersion = 1;
             metadata.Processor.SettingsJson = "{}\n";
-            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+            return RegisterExistingMetadata(sourcePath, metadata, false, diagnostic);
         }
         CanonicalBatchWork work;
         work.SourcePath = sourcePath;
         work.StagingPath = metaPath;
-        if (PrepareDefaultCanonicalMetadata(work) || AssetMeta::SaveAtomic(metaPath, work.Meta, work.Diagnostic))
+        if (PrepareDefaultCanonicalMetadata(work) || RegisterExistingMetadata(sourcePath, work.Meta, false, work.Diagnostic))
         {
             diagnostic = work.Diagnostic;
             return true;
@@ -989,9 +1037,22 @@ namespace
     }
 #endif
 
+    bool RejectPostCutoverLegacyMutation(const StringView& sourcePath, AssetPipelineDiagnostic& diagnostic)
+    {
+        if (!AssetDatabase::Get().IsHardCutEnabled())
+            return false;
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Migration;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.Message = TEXT("Legacy migration filesystem mutations are private to the pre-cutover migration phase.");
+        return true;
+    }
+
     bool StageImportedFiles(const StringView& legacyPath, const StringView& extractedPath, const StringView& destinationPath,
         const StringView& backupPath, const AssetMeta& meta, AssetPipelineDiagnostic& diagnostic)
     {
+        if (RejectPostCutoverLegacyMutation(legacyPath, diagnostic))
+            return true;
         const String destinationMeta = String(destinationPath) + TEXT(".meta");
         if (!FileSystem::FileExists(legacyPath) || !FileSystem::FileExists(extractedPath) ||
             FileSystem::FileExists(destinationPath) || FileSystem::FileExists(destinationMeta) || FileSystem::FileExists(backupPath))
@@ -1213,7 +1274,8 @@ bool AssetDatabaseFacade::SetLabels(const Guid& assetID, const Array<String>& la
     if (meta.Labels == normalized)
         return false;
     meta.Labels = normalized;
-    if (AssetMeta::SaveAtomic(record.MetaPath.Get(), meta, diagnostic))
+    if ((meta.FolderAsset ? RegisterExistingMetadata(record.SourcePath.Get(), meta, true, diagnostic) :
+        ReplaceMetadataTransactional(record.SourcePath.Get(), meta, diagnostic)))
     {
         Array<AssetPipelineDiagnostic> diagnostics;
         diagnostics.Add(MoveTemp(diagnostic));
@@ -1302,7 +1364,7 @@ bool AssetDatabaseFacade::ApplyImporterMetadata(const Guid& assetID, uint64 expe
         meta.Processor.UserData = userData;
         meta.AssetBundleName = assetBundleName;
         meta.AssetBundleVariant = assetBundleVariant;
-        if (AssetMeta::SaveAtomic(record.MetaPath.Get(), meta, diagnostic))
+        if (ReplaceMetadataTransactional(record.SourcePath.Get(), meta, diagnostic))
         {
             Array<AssetPipelineDiagnostic> diagnostics;
             diagnostics.Add(MoveTemp(diagnostic));
@@ -1371,7 +1433,9 @@ bool AssetDatabaseFacade::ForceReserializeMetadata(const Array<String>& paths)
             continue;
         AssetMeta meta;
         AssetPipelineDiagnostic diagnostic;
-        if (AssetMeta::Load(record.MetaPath.Get(), meta, diagnostic) || AssetMeta::SaveAtomic(record.MetaPath.Get(), meta, diagnostic))
+        if (AssetMeta::Load(record.MetaPath.Get(), meta, diagnostic) ||
+            (meta.FolderAsset ? RegisterExistingMetadata(record.SourcePath.Get(), meta, true, diagnostic) :
+                ReplaceMetadataTransactional(record.SourcePath.Get(), meta, diagnostic)))
         {
             Array<AssetPipelineDiagnostic> diagnostics;
             diagnostics.Add(MoveTemp(diagnostic));
@@ -1477,6 +1541,97 @@ AssetMutationResultInfo AssetDatabaseFacade::CreateAssetFolder(const StringView&
         result.RequiresRecovery = true;
         result.Message = TEXT("The folder pair was created, but database reconciliation failed; run a full Refresh before retrying.");
     }
+    return ToInfo(result);
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::PublishExternalSource(const StringView& externalSourcePath,
+    const StringView& destinationPath, const StringView& typeName, const StringView& processorId, bool replaceExisting)
+{
+    AssetMeta meta;
+    AssetPipelineDiagnostic diagnostic;
+    const String existingMetaPath = String(destinationPath) + TEXT(".meta");
+    if (!replaceExisting || !FileSystem::FileExists(existingMetaPath) || AssetMeta::Load(existingMetaPath, meta, diagnostic))
+        meta.ID = Guid::New();
+    meta.AssetType = typeName;
+    meta.SourceKind = processorId == TEXT("Flax.Text") ? AssetSourceKind::TextDocument : AssetSourceKind::ImportedSource;
+    meta.Processor.ID = processorId;
+    meta.Processor.SettingsVersion = 1;
+    meta.Processor.SettingsJson = "{}\n";
+    AssetMutationResult result;
+    GetMutationService().PublishExternal(externalSourcePath, destinationPath, meta, replaceExisting, result);
+    if (result.Succeeded && RefreshSources(result.ChangedPaths))
+    {
+        result.Succeeded = false;
+        result.RequiresRecovery = true;
+        result.Message = TEXT("The external source pair was published, but database reconciliation failed; run a full Refresh.");
+    }
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (result.Succeeded && processorId != TEXT("Flax.Unsupported") && GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
+    {
+        result.Succeeded = false;
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+    }
+#endif
+    return ToInfo(result);
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::RegisterCanonicalSource(const StringView& sourcePath, bool replaceExistingMetadata)
+{
+    CanonicalBatchWork work;
+    work.SourcePath = sourcePath;
+    work.StagingPath = String(sourcePath) + TEXT(".meta");
+    AssetMutationResult result;
+    if (PrepareDefaultCanonicalMetadata(work))
+    {
+        result.Message = work.Diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(work.Diagnostic));
+        SetDiagnostics(diagnostics);
+        return ToInfo(result);
+    }
+    GetMutationService().RegisterExisting(sourcePath, work.Meta, replaceExistingMetadata, result);
+    if (result.Succeeded && RefreshSources(result.ChangedPaths))
+    {
+        result.Succeeded = false;
+        result.RequiresRecovery = true;
+        result.Message = TEXT("The canonical source was registered, but database reconciliation failed; run a full Refresh.");
+    }
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (result.Succeeded)
+    {
+        AssetPipelineDiagnostic diagnostic;
+        bool buildFailed = false;
+        switch (work.BuildKind)
+        {
+#if COMPILE_WITH_TEXTURE_TOOL
+        case CanonicalBatchBuildKind::Texture:
+            buildFailed = TexturePipelineService::RequestBuild(work.Meta.ID, false, diagnostic);
+            break;
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+        case CanonicalBatchBuildKind::Model:
+            buildFailed = ModelPipelineService::RequestBuild(work.Meta.ID, false, diagnostic);
+            break;
+#endif
+        case CanonicalBatchBuildKind::Imported:
+            buildFailed = GraphPipelineService::RequestBuild(work.Meta.ID, true, diagnostic);
+            break;
+        default:
+            break;
+        }
+        if (buildFailed)
+        {
+            result.Succeeded = false;
+            result.Message = diagnostic.Message;
+            Array<AssetPipelineDiagnostic> diagnostics;
+            diagnostics.Add(MoveTemp(diagnostic));
+            SetDiagnostics(diagnostics);
+        }
+    }
+#endif
     return ToInfo(result);
 }
 
@@ -2089,8 +2244,19 @@ bool AssetDatabaseFacade::CleanLibrary()
 
 bool AssetDatabaseFacade::CloneMetadata(const StringView& sourceMetaPath, const StringView& destinationMetaPath)
 {
-    AssetMeta source;
     AssetPipelineDiagnostic diagnostic;
+    if (AssetDatabase::Get().IsHardCutEnabled())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = destinationMetaPath;
+        diagnostic.Message = TEXT("Standalone metadata cloning is disabled after the Asset System v3 hard cut; copy the source pair through AssetMutationService.");
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    }
+    AssetMeta source;
     if (AssetMeta::Load(sourceMetaPath, source, diagnostic))
     {
         Array<AssetPipelineDiagnostic> diagnostics;
@@ -2122,6 +2288,23 @@ Array<Guid> AssetDatabaseFacade::StageDefaultCanonicalMetadataBatch(const Array<
         diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
         diagnostic.Message = TEXT("Canonical metadata batch source and staging path counts do not match.");
         diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return result;
+    }
+    for (const String& stagingPath : stagingPaths)
+    {
+        if (AssetPathPolicy::IsSameOrChild(stagingPath, Globals::ProjectContentFolder))
+        {
+            AssetPipelineDiagnostic diagnostic;
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.SourcePath = stagingPath;
+            diagnostic.Message = TEXT("Metadata preparation staging cannot write inside a canonical source root.");
+            diagnostics.Add(MoveTemp(diagnostic));
+        }
+    }
+    if (diagnostics.HasItems())
+    {
         SetDiagnostics(diagnostics);
         return result;
     }
@@ -2268,7 +2451,7 @@ Guid AssetDatabaseFacade::CreateTextureMetadata(const StringView& sourcePath, co
     meta.SourceKind = AssetSourceKind::ImportedSource;
     meta.Processor.ID = TextureProcessorSettings::ProcessorID();
     meta.Processor.SettingsVersion = TextureProcessorSettings::CurrentVersion;
-    if (settings.ToJson(meta.Processor.SettingsJson, diagnostic) || AssetMeta::SaveAtomic(metaPath, meta, diagnostic))
+    if (settings.ToJson(meta.Processor.SettingsJson, diagnostic) || RegisterExistingMetadata(sourcePath, meta, false, diagnostic))
     {
         Array<AssetPipelineDiagnostic> diagnostics;
         diagnostics.Add(diagnostic);
@@ -2288,6 +2471,63 @@ Guid AssetDatabaseFacade::CreateTextureMetadata(const StringView& sourcePath, co
     }
 #endif
     return meta.ID;
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::PublishExternalTexture(const StringView& externalSourcePath,
+    const StringView& destinationPath, const TextureTool::Options& options, bool replaceExisting)
+{
+    AssetPipelineDiagnostic diagnostic;
+    TextureProcessorSettings settings = TextureProcessorSettings::FromLegacyOptions(options);
+    AssetMutationResult result;
+    if (settings.Validate(diagnostic))
+    {
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return ToInfo(result);
+    }
+
+    AssetMeta meta;
+    const String existingMetaPath = String(destinationPath) + TEXT(".meta");
+    if (!replaceExisting || !FileSystem::FileExists(existingMetaPath) || AssetMeta::Load(existingMetaPath, meta, diagnostic))
+        meta.ID = Guid::New();
+    meta.AssetType = options.IsAtlas ? SpriteAtlas::TypeName : Texture::TypeName;
+    if (!options.IsAtlas)
+    {
+        TextureData sourceData;
+        if (!TextureTool::ImportTexture(externalSourcePath, sourceData, false) && sourceData.GetArraySize() == 6)
+            meta.AssetType = CubeTexture::TypeName;
+    }
+    meta.SourceKind = AssetSourceKind::ImportedSource;
+    meta.Processor.ID = TextureProcessorSettings::ProcessorID();
+    meta.Processor.SettingsVersion = TextureProcessorSettings::CurrentVersion;
+    if (settings.ToJson(meta.Processor.SettingsJson, diagnostic))
+    {
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return ToInfo(result);
+    }
+    GetMutationService().PublishExternal(externalSourcePath, destinationPath, meta, replaceExisting, result);
+    if (result.Succeeded && RefreshSources(result.ChangedPaths))
+    {
+        result.Succeeded = false;
+        result.RequiresRecovery = true;
+        result.Message = TEXT("The texture source pair was published, but database reconciliation failed; run a full Refresh.");
+    }
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (result.Succeeded && TexturePipelineService::RequestBuild(meta.ID, false, diagnostic))
+    {
+        result.Succeeded = false;
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+    }
+#endif
+    return ToInfo(result);
 }
 
 Guid AssetDatabaseFacade::StageLegacyTextureMigration(const StringView& legacyPath, const StringView& extractedPath,
@@ -2374,7 +2614,7 @@ bool AssetDatabaseFacade::ApplyTextureMetadata(const StringView& sourcePath, con
         meta.Processor.ID = TextureProcessorSettings::ProcessorID();
         meta.Processor.SettingsVersion = TextureProcessorSettings::CurrentVersion;
     }
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
+    if (ReplaceMetadataTransactional(sourcePath, meta, diagnostic) || RefreshPath(sourcePath))
         goto Failed;
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (TexturePipelineService::RequestBuild(meta.ID, false, diagnostic))
@@ -2538,7 +2778,7 @@ bool AssetDatabaseFacade::ApplyModelMetadata(const StringView& sourcePath, const
         meta.Processor.ID = ModelProcessorSettings::ProcessorID();
         meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
     }
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
+    if (ReplaceMetadataTransactional(sourcePath, meta, diagnostic) || RefreshPath(sourcePath))
         goto Failed;
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
@@ -2681,7 +2921,7 @@ Guid AssetDatabaseFacade::CreateGraphDocumentFromSurface(const StringView& outpu
         return fail();
     if (propertiesJson.HasChars())
         document.PropertiesJson = StringAnsi(String(propertiesJson));
-    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) || GraphDocumentCodec::SaveAtomic(outputPath, json, diagnostic))
+    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic))
         return fail();
 
     AssetMeta meta;
@@ -2691,7 +2931,17 @@ Guid AssetDatabaseFacade::CreateGraphDocumentFromSurface(const StringView& outpu
     meta.Processor.ID = TEXT("Flax.GraphDocument");
     meta.Processor.SettingsVersion = 1;
     meta.Processor.SettingsJson = "{}\n";
-    if (AssetMeta::SaveAtomic(String(outputPath) + TEXT(".meta"), meta, diagnostic) || RefreshPath(outputPath))
+    AssetMutationResult mutation;
+    if (GetMutationService().CreateAsset(outputPath, StringAnsiView(json.Get(), json.Length()), meta, mutation))
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = outputPath;
+        diagnostic.AssetGuid = meta.ID;
+        diagnostic.Message = mutation.Message;
+        return fail();
+    }
+    if (RefreshSources(mutation.ChangedPaths))
         return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
     if (GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
@@ -2722,7 +2972,10 @@ Guid AssetDatabaseFacade::CreateAuthoredDocument(const StringView& outputPath, c
         callback.Bind(&CreateParticleSystem::Create);
     else if (typeName == TEXT("FlaxEngine.CollisionData"))
         callback.Bind(&CreateCollisionData::Create);
-    if (!callback.IsBinded() || outputPath.IsEmpty())
+    else if (typeName == Animation::TypeName)
+        callback.Bind(&CreateAnimation::Create);
+    const bool createGameplayGlobals = typeName == GameplayGlobals::TypeName;
+    if ((!callback.IsBinded() && !createGameplayGlobals) || outputPath.IsEmpty())
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
@@ -2739,26 +2992,65 @@ Guid AssetDatabaseFacade::CreateAuthoredDocument(const StringView& outputPath, c
         return fail();
     }
     const String tempPath = temporaryFolder / id.ToString(Guid::FormatType::N) + TEXT(".flax");
-    CreateAssetContext importerContext(StringView::Empty, tempPath, id, nullptr, true, typeName);
-    if (importerContext.Run(callback) != CreateAssetResult::Ok)
+    const String convertedPath = temporaryFolder / id.ToString(Guid::FormatType::N) + TEXT(".source");
+    const String convertedMetaPath = convertedPath + TEXT(".meta");
+    SCOPE_EXIT
+    {
+        FileSystem::DeleteFile(tempPath);
+        FileSystem::DeleteFile(convertedPath);
+        FileSystem::DeleteFile(convertedMetaPath);
+    };
+    bool starterFailed;
+    if (createGameplayGlobals)
+    {
+        MemoryWriteStream stream(16);
+        stream.Write(0);
+        FlaxChunk chunk;
+        chunk.Data.Copy(ToSpan(stream));
+        AssetInitData data;
+        data.Header.ID = id;
+        data.Header.TypeName = GameplayGlobals::TypeName;
+        data.SerializedVersion = GameplayGlobals::SerializedVersion;
+        data.Header.Chunks[0] = &chunk;
+        starterFailed = FlaxStorage::Create(tempPath, data);
+    }
+    else
+    {
+        CreateAssetContext importerContext(StringView::Empty, tempPath, id, nullptr, true, typeName);
+        starterFailed = importerContext.Run(callback) != CreateAssetResult::Ok;
+    }
+    if (starterFailed)
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
         diagnostic.Message = TEXT("Authored starter flax could not be created.");
-        FileSystem::DeleteFile(tempPath);
         return fail();
     }
-    if (LegacyAssetMigrator::ConvertFlax(tempPath, outputPath, id, typeName, diagnostic))
+    if (LegacyAssetMigrator::ConvertFlax(tempPath, convertedPath, id, typeName, diagnostic))
+        return fail();
+    Array<byte> sourceBytes;
+    AssetMeta metadata;
+    if (File::ReadAllBytes(convertedPath, sourceBytes) || AssetMeta::Load(convertedMetaPath, metadata, diagnostic))
     {
-        FileSystem::DeleteFile(tempPath);
+        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.Message = TEXT("Converted authored starter source or metadata could not be staged.");
         return fail();
     }
-    FileSystem::DeleteFile(tempPath);
-    if (RefreshPath(outputPath))
+    AssetMutationResult mutation;
+    if (GetMutationService().CreateAsset(outputPath,
+            StringAnsiView(reinterpret_cast<const char*>(sourceBytes.Get()), sourceBytes.Count()), metadata, mutation))
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = outputPath;
+        diagnostic.AssetGuid = metadata.ID;
+        diagnostic.Message = mutation.Message;
         return fail();
-    if (GraphPipelineService::RequestBuild(id, true, diagnostic))
+    }
+    if (RefreshSources(mutation.ChangedPaths) || GraphPipelineService::RequestBuild(metadata.ID, true, diagnostic))
         return fail();
-    return id;
+    return metadata.ID;
 #else
     diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
     diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
@@ -2782,7 +3074,8 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
     if (!asset || !canonicalAssetID.IsValid() || !AssetDatabase::Get().TryGetRecord(canonicalAssetID, record) ||
         record.SourceKind != AssetSourceKind::TextDocument ||
         (record.ProcessorID != TEXT("Flax.MaterialInstance") && record.ProcessorID != TEXT("Flax.SkeletonMask") &&
-            record.ProcessorID != TEXT("Flax.SceneAnimation") && record.ProcessorID != TEXT("Flax.ParticleSystem")))
+            record.ProcessorID != TEXT("Flax.SceneAnimation") && record.ProcessorID != TEXT("Flax.ParticleSystem") &&
+            record.ProcessorID != TEXT("Flax.Animation") && record.ProcessorID != TEXT("Flax.GameplayGlobals")))
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
@@ -2802,7 +3095,7 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
     }
     const String token = Guid::New().ToString(Guid::FormatType::N);
     const String temporaryFlax = temporaryFolder / token + TEXT(".flax");
-    const String stagedDocument = String(record.SourcePath.Get()) + TEXT(".stage-") + token;
+    const String stagedDocument = temporaryFolder / token + TEXT(".source");
     const String stagedMeta = stagedDocument + TEXT(".meta");
     SCOPE_EXIT
     {
@@ -2855,6 +3148,16 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
             saveFailed = FlaxStorage::Create(temporaryFlax, data);
         }
     }
+    else if (record.TypeName == Animation::TypeName)
+    {
+        auto* typed = ScriptingObject::Cast<Animation>(asset);
+        saveFailed = !typed || typed->Save(temporaryFlax);
+    }
+    else if (record.TypeName == GameplayGlobals::TypeName)
+    {
+        auto* typed = ScriptingObject::Cast<GameplayGlobals>(asset);
+        saveFailed = !typed || typed->Save(temporaryFlax);
+    }
     if (saveFailed)
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
@@ -2863,7 +3166,10 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
         diagnostic.Message = TEXT("The edited asset could not be serialized for canonical document conversion.");
         return fail();
     }
-    if (LegacyAssetMigrator::ConvertFlax(temporaryFlax, stagedDocument, canonicalAssetID, record.TypeName, diagnostic))
+    Array<Guid> references;
+    Array<String> referencedFiles;
+    asset->GetReferences(references, referencedFiles);
+    if (LegacyAssetMigrator::ConvertFlax(temporaryFlax, stagedDocument, canonicalAssetID, record.TypeName, diagnostic, &references))
         return fail();
     if (FileSystem::FileExists(record.SourcePath.Get()) && FileSystem::IsReadOnly(record.SourcePath.Get()))
     {
@@ -2874,16 +3180,28 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
         diagnostic.Message = TEXT("The canonical authored document is read-only.");
         return fail();
     }
-    if (FileSystem::MoveFile(record.SourcePath.Get(), stagedDocument, true))
+    Array<byte> sourceBytes;
+    if (File::ReadAllBytes(stagedDocument, sourceBytes))
     {
-        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
         diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.SourcePath = record.SourcePath.Get();
-        diagnostic.Message = TEXT("Cannot atomically replace the canonical authored document.");
+        diagnostic.SourcePath = stagedDocument;
+        diagnostic.Message = TEXT("Converted authored document could not be read from Library staging.");
         return fail();
     }
-    if (RefreshPath(record.SourcePath.Get()) || GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
+    AssetMutationResult mutation;
+    if (GetMutationService().ReplaceContents(record.SourcePath.Get(),
+            StringAnsiView(reinterpret_cast<const char*>(sourceBytes.Get()), sourceBytes.Count()), mutation))
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.AssetGuid = canonicalAssetID;
+        diagnostic.SourcePath = record.SourcePath.Get();
+        diagnostic.Message = mutation.Message;
+        return fail();
+    }
+    if (RefreshSources(mutation.ChangedPaths) || GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
         return fail();
     return false;
 #else
@@ -3095,7 +3413,7 @@ Guid AssetDatabaseFacade::CreateImportedSourceMetadata(const StringView& sourceP
     meta.Processor.ID = processorId;
     meta.Processor.SettingsVersion = 1;
     meta.Processor.SettingsJson = "{}\n";
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
+    if (RegisterExistingMetadata(sourcePath, meta, false, diagnostic) || RefreshPath(sourcePath))
     {
         Array<AssetPipelineDiagnostic> diagnostics;
         diagnostics.Add(diagnostic);
@@ -3149,13 +3467,54 @@ Guid AssetDatabaseFacade::CreateAudioMetadata(const StringView& sourcePath, cons
     meta.Processor.ID = TEXT("Flax.Audio");
     meta.Processor.SettingsVersion = 1;
     meta.Processor.SettingsJson = StringAnsi(settingsBuffer.GetString(), static_cast<int32>(settingsBuffer.GetSize()));
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
+    if (RegisterExistingMetadata(sourcePath, meta, false, diagnostic) || RefreshPath(sourcePath))
         return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
         return fail();
 #endif
     return meta.ID;
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::PublishExternalAudio(const StringView& externalSourcePath,
+    const StringView& destinationPath, const AudioTool::Options& options, bool replaceExisting)
+{
+    rapidjson_flax::StringBuffer settingsBuffer;
+    CompactJsonWriter settingsWriter(settingsBuffer);
+    settingsWriter.StartObject();
+    AudioTool::Options serializedOptions = options;
+    serializedOptions.Serialize(settingsWriter, nullptr);
+    settingsWriter.EndObject();
+
+    AssetMeta meta;
+    AssetPipelineDiagnostic diagnostic;
+    const String existingMetaPath = String(destinationPath) + TEXT(".meta");
+    if (!replaceExisting || !FileSystem::FileExists(existingMetaPath) || AssetMeta::Load(existingMetaPath, meta, diagnostic))
+        meta.ID = Guid::New();
+    meta.AssetType = TEXT("FlaxEngine.AudioClip");
+    meta.SourceKind = AssetSourceKind::ImportedSource;
+    meta.Processor.ID = TEXT("Flax.Audio");
+    meta.Processor.SettingsVersion = 1;
+    meta.Processor.SettingsJson = StringAnsi(settingsBuffer.GetString(), static_cast<int32>(settingsBuffer.GetSize()));
+    AssetMutationResult result;
+    GetMutationService().PublishExternal(externalSourcePath, destinationPath, meta, replaceExisting, result);
+    if (result.Succeeded && RefreshSources(result.ChangedPaths))
+    {
+        result.Succeeded = false;
+        result.RequiresRecovery = true;
+        result.Message = TEXT("The audio source pair was published, but database reconciliation failed; run a full Refresh.");
+    }
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (result.Succeeded && GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
+    {
+        result.Succeeded = false;
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+    }
+#endif
+    return ToInfo(result);
 }
 
 bool AssetDatabaseFacade::LoadAudioMetadata(const StringView& sourcePath, AudioTool::Options& options)
@@ -3257,7 +3616,7 @@ namespace
             return fail();
         }
         meta.SubAssets = MoveTemp(reconciliation.Resolved);
-        if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshPath(sourcePath))
+        if (RegisterExistingMetadata(sourcePath, meta, false, diagnostic) || RefreshPath(sourcePath))
             return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER
         if (ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
@@ -3276,6 +3635,85 @@ Guid AssetDatabaseFacade::CreateDefaultModelMetadata(const StringView& sourcePat
 Guid AssetDatabaseFacade::CreateModelMetadata(const StringView& sourcePath, const ModelTool::Options& options)
 {
     return CreateModelMetadataInternal(sourcePath, options, false);
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::PublishExternalModel(const StringView& externalSourcePath,
+    const StringView& destinationPath, const ModelTool::Options& options, bool replaceExisting)
+{
+    AssetPipelineDiagnostic diagnostic;
+    ModelProcessorSettings settings = ModelProcessorSettings::FromLegacyOptions(options);
+    AssetMutationResult result;
+    if (settings.Validate(diagnostic))
+    {
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return ToInfo(result);
+    }
+    ModelSourceAnalysis analysis;
+    if (ModelProcessor::AnalyzeSource(externalSourcePath, settings, analysis, diagnostic))
+    {
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return ToInfo(result);
+    }
+
+    AssetMeta meta;
+    const String existingMetaPath = String(destinationPath) + TEXT(".meta");
+    if (!replaceExisting || !FileSystem::FileExists(existingMetaPath) || AssetMeta::Load(existingMetaPath, meta, diagnostic))
+        meta.ID = Guid::New();
+    meta.AssetType = options.Type == ModelTool::ModelType::SkinnedModel || options.Type == ModelTool::ModelType::Animation
+        ? SkinnedModel::TypeName
+        : Model::TypeName;
+    meta.SourceKind = AssetSourceKind::ImportedSource;
+    meta.Processor.ID = ModelProcessorSettings::ProcessorID();
+    meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
+    if (settings.ToJson(meta.Processor.SettingsJson, diagnostic))
+    {
+        result.Message = diagnostic.Message;
+        return ToInfo(result);
+    }
+    const String flaxSibling = String(StringUtils::GetDirectoryName(externalSourcePath)) /
+        String(StringUtils::GetFileNameWithoutExtension(externalSourcePath)) + TEXT(".flax");
+    if (FileSystem::FileExists(flaxSibling) && LegacyAssetMigrator::SeedModelSubAssets(flaxSibling, meta, diagnostic))
+    {
+        result.Message = diagnostic.Message;
+        return ToInfo(result);
+    }
+    SubAssetReconcileResult reconciliation = SubAssetReconciler::Reconcile(meta, analysis.Candidates, true);
+    if (reconciliation.RequiresUserReconciliation)
+    {
+        diagnostic = reconciliation.Diagnostics.HasItems() ? reconciliation.Diagnostics[0] : diagnostic;
+        diagnostic.AssetGuid = meta.ID;
+        diagnostic.SourcePath = externalSourcePath;
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return ToInfo(result);
+    }
+    meta.SubAssets = MoveTemp(reconciliation.Resolved);
+    GetMutationService().PublishExternal(externalSourcePath, destinationPath, meta, replaceExisting, result);
+    if (result.Succeeded && RefreshSources(result.ChangedPaths))
+    {
+        result.Succeeded = false;
+        result.RequiresRecovery = true;
+        result.Message = TEXT("The model source pair was published, but database reconciliation failed; run a full Refresh.");
+    }
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (result.Succeeded && ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
+    {
+        result.Succeeded = false;
+        result.Message = diagnostic.Message;
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+    }
+#endif
+    return ToInfo(result);
 }
 
 Guid AssetDatabaseFacade::StageLegacyModelMigration(const StringView& legacyPath, const StringView& extractedPath,
@@ -3423,14 +3861,16 @@ bool AssetDatabaseFacade::SaveGraphSurface(const StringView& path, const BytesCo
     StringAnsi json;
     if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic))
         return fail();
-    ContentHash previous;
-    if (!allowOverwriteConflict && FileSystem::FileExists(path))
+    AssetMutationResult mutation;
+    if (GetMutationService().ReplaceContents(path, StringAnsiView(json.Get(), json.Length()), mutation))
     {
-        Array<byte> existing;
-        if (!File::ReadAllBytes(path, existing))
-            previous = ContentHash::Compute(existing.Get(), existing.Count());
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = mutation.Message;
+        return fail();
     }
-    if (GraphDocumentCodec::SaveAtomic(path, json, diagnostic, previous.IsZero() ? nullptr : &previous) || RefreshPath(path))
+    if (RefreshSources(mutation.ChangedPaths))
         return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
     AssetMeta meta;
@@ -3523,6 +3963,8 @@ bool AssetDatabaseFacade::MigrateLegacyAsset(const StringView& sourcePath)
         SetDiagnostics(diagnostics);
         return true;
     };
+    if (RejectPostCutoverLegacyMutation(sourcePath, diagnostic))
+        return fail();
     if (sourcePath.IsEmpty() || EnsureDatabaseLoaded())
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::MigrationFailed;
@@ -3646,6 +4088,14 @@ bool AssetDatabaseFacade::MigrateLegacyAsset(const StringView& sourcePath)
 
 bool AssetDatabaseFacade::FinalizeLegacyImportedMigration(const StringView& backupPath)
 {
+    AssetPipelineDiagnostic diagnostic;
+    if (RejectPostCutoverLegacyMutation(backupPath, diagnostic))
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return true;
+    }
     if (backupPath.IsEmpty() || !FileSystem::FileExists(backupPath))
         return true;
     ContentStorageManager::EnsureAccess(backupPath);
@@ -3655,6 +4105,13 @@ bool AssetDatabaseFacade::FinalizeLegacyImportedMigration(const StringView& back
 bool AssetDatabaseFacade::RollbackLegacyImportedMigration(const StringView& legacyPath, const StringView& destinationPath, const StringView& backupPath)
 {
     AssetPipelineDiagnostic diagnostic;
+    if (RejectPostCutoverLegacyMutation(legacyPath, diagnostic))
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(MoveTemp(diagnostic));
+        SetDiagnostics(diagnostics);
+        return true;
+    }
     const String metaPath = String(destinationPath) + TEXT(".meta");
     ContentStorageManager::EnsureAccess(destinationPath);
     ContentStorageManager::EnsureAccess(backupPath);
@@ -3709,9 +4166,93 @@ Guid AssetDatabaseFacade::CreateExistingJsonMetadata(const StringView& sourcePat
     meta.Processor.ID = TEXT("Flax.ExistingJson");
     meta.Processor.SettingsVersion = 1;
     meta.Processor.SettingsJson = "{}\n";
-    if (AssetMeta::SaveAtomic(String(sourcePath) + TEXT(".meta"), meta, diagnostic))
+    if (RegisterExistingMetadata(sourcePath, meta, false, diagnostic))
         return fail();
     return meta.ID;
+}
+
+bool AssetDatabaseFacade::SaveExistingJsonSource(const StringView& sourcePath, const StringAnsiView& sourceContents,
+    const Guid& sourceID, const StringView& typeName)
+{
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    };
+    if (!AssetDatabase::Get().IsHardCutEnabled() || sourcePath.IsEmpty() || sourceContents.Length() == 0 ||
+        !sourceID.IsValid() || typeName.IsEmpty())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = sourceID;
+        diagnostic.Message = TEXT("Journaled existing-JSON publication requires Asset System v3 and a valid identity, type, path, and source payload.");
+        return fail();
+    }
+
+    AssetMutationResult mutation;
+    const String metaPath = String(sourcePath) + TEXT(".meta");
+    if (FileSystem::FileExists(sourcePath))
+    {
+        AssetMeta existing;
+        if (!FileSystem::FileExists(metaPath) || AssetMeta::Load(metaPath, existing, diagnostic) ||
+            existing.ID != sourceID || existing.AssetType != typeName || existing.SourceKind != AssetSourceKind::ExistingJson)
+        {
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            {
+                diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+                diagnostic.SourcePath = sourcePath;
+                diagnostic.AssetGuid = sourceID;
+                diagnostic.Message = TEXT("Existing JSON metadata is missing or does not match the document identity and type.");
+            }
+            return fail();
+        }
+        GetMutationService().ReplaceContents(sourcePath, sourceContents, mutation);
+    }
+    else
+    {
+        if (FileSystem::FileExists(metaPath))
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::PathCollision;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.SourcePath = metaPath;
+            diagnostic.AssetGuid = sourceID;
+            diagnostic.Message = TEXT("Existing JSON metadata is orphaned at the requested creation path.");
+            return fail();
+        }
+        AssetMeta metadata;
+        metadata.ID = sourceID;
+        metadata.AssetType = typeName;
+        metadata.SourceKind = AssetSourceKind::ExistingJson;
+        metadata.Processor.ID = TEXT("Flax.ExistingJson");
+        metadata.Processor.SettingsVersion = 1;
+        metadata.Processor.SettingsJson = "{}\n";
+        GetMutationService().CreateAsset(sourcePath, sourceContents, metadata, mutation);
+    }
+    if (!mutation.Succeeded)
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = sourceID;
+        diagnostic.Message = mutation.Message;
+        return fail();
+    }
+    if (RefreshSources(mutation.ChangedPaths))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::RecoveryRequired;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = sourceID;
+        diagnostic.Message = TEXT("Existing JSON source pair committed, but database reconciliation failed; run a full Refresh.");
+        return fail();
+    }
+    SetDiagnostics(Array<AssetPipelineDiagnostic>());
+    return false;
 }
 
 bool AssetDatabaseFacade::EnsureExistingJsonSidecars()

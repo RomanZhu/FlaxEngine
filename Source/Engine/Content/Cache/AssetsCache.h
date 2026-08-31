@@ -174,6 +174,9 @@ public:
     /// <summary>Finds a cooked asset by persistent file GUID and local file ID.</summary>
     bool FindAsset(const AssetObjectId& id, AssetInfo& info) const;
 
+    /// <summary>Resolves a cooked backing asset ID to its persistent object identity.</summary>
+    bool FindObjectId(const Guid& backingAssetId, AssetObjectId& id) const;
+
     /// <summary>Returns the exact cooked package location for an asset object, or null when absent.</summary>
     const RuntimeAssetIndexEntry* FindRuntimeLocation(const AssetObjectId& id) const;
 #endif

@@ -11,6 +11,7 @@ struct FLAXENGINE_API ArtifactManifestDependency
     AssetDependencyKind Kind = AssetDependencyKind::SourceFile;
     AssetDependencyState State = AssetDependencyState::Present;
     String Identity;
+    AssetObjectId ObjectID;
     Guid AssetID = Guid::Empty;
     ContentHash Hash;
     ContentHash MetadataHash;
@@ -32,10 +33,21 @@ struct FLAXENGINE_API ArtifactManifestOutput
     StringAnsi Compatibility;
 };
 
+/// <summary>One persistent object address materialized by this artifact.</summary>
+struct FLAXENGINE_API ArtifactManifestObject
+{
+    AssetObjectId ObjectID;
+    Guid BackingAssetID = Guid::Empty;
+    String TypeName;
+    String Name;
+    String StableKey;
+    bool IsMainObject = false;
+};
+
 /// <summary>Canonical generated record selecting one coherent successful output set.</summary>
 struct FLAXENGINE_API ArtifactManifest
 {
-    static constexpr int32 CurrentVersion = 1;
+    static constexpr int32 CurrentVersion = 3;
 
     int32 ManifestVersion = CurrentVersion;
     Guid AssetID = Guid::Empty;
@@ -47,6 +59,7 @@ struct FLAXENGINE_API ArtifactManifest
     ContentHash SourceHash;
     ContentHash SettingsHash;
     Array<ArtifactManifestDependency> Dependencies;
+    Array<ArtifactManifestObject> Objects;
     Array<AssetImportReasonNode> ImportReasons;
     Array<ArtifactManifestOutput> Outputs;
     String BuildID;

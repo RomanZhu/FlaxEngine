@@ -15,7 +15,9 @@
 #include "FlaxEngine.Gen.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
+#include "Engine/Content/Assets/Animation.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
+#include "Engine/Engine/GameplayGlobals.h"
 #include "Engine/Particles/ParticleSystem.h"
 #include "Engine/Physics/CollisionCooking.h"
 #include "Engine/Content/Content.h"
@@ -67,6 +69,50 @@ namespace
         data.SerializedVersion = version;
         data.Header.Chunks[0] = &chunk;
         return FlaxStorage::Create(path, data);
+    }
+
+    bool DecodeRuntimeChunk(const JsonDocument& json, Array<byte>& chunk, String& error)
+    {
+        StringAnsiView encoding;
+        StringAnsiView text;
+        if (ReadString(json, "payloadEncoding", encoding) || encoding != StringAnsiView("hex") ||
+            ReadString(json, "runtimeChunk", text) || (text.Length() & 1) != 0)
+        {
+            error = TEXT("Authored runtime payload must contain an even-length hexadecimal runtimeChunk.");
+            return true;
+        }
+        chunk.Resize(text.Length() / 2);
+        for (int32 i = 0; i < chunk.Count(); i++)
+        {
+            const char high = text[i * 2];
+            const char low = text[i * 2 + 1];
+            const int32 highValue = high >= '0' && high <= '9' ? high - '0' : high >= 'a' && high <= 'f' ? high - 'a' + 10 : high >= 'A' && high <= 'F' ? high - 'A' + 10 : -1;
+            const int32 lowValue = low >= '0' && low <= '9' ? low - '0' : low >= 'a' && low <= 'f' ? low - 'a' + 10 : low >= 'A' && low <= 'F' ? low - 'A' + 10 : -1;
+            if (highValue < 0 || lowValue < 0)
+            {
+                error = TEXT("Authored runtimeChunk contains a non-hexadecimal character.");
+                return true;
+            }
+            chunk[i] = static_cast<byte>((highValue << 4) | lowValue);
+        }
+        if (chunk.IsEmpty())
+        {
+            error = TEXT("Authored runtimeChunk cannot be empty.");
+            return true;
+        }
+        return false;
+    }
+
+    bool BuildRuntimePayload(const JsonDocument& json, const Guid& id, const StringView& typeName, uint32 version,
+        const StringView& scratchPath, AssetPipelineDiagnostic& diagnostic)
+    {
+        Array<byte> chunk;
+        String error;
+        if (DecodeRuntimeChunk(json, chunk, error))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build, id, scratchPath, error);
+        if (WriteFlax(scratchPath, id, typeName, version, chunk))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Authored runtime payload could not be written."));
+        return false;
     }
 
     bool BuildMaterialInstance(const JsonDocument& json, const Guid& id, const StringView& scratchPath, AssetPipelineDiagnostic& diagnostic)
@@ -242,7 +288,8 @@ namespace
 bool AuthoredAssetProcessor::Owns(const StringView& processorID)
 {
     return processorID == MaterialInstanceID() || processorID == SkeletonMaskID() || processorID == SceneAnimationID() ||
-        processorID == ParticleSystemID() || processorID == CollisionDataID() || processorID == GenericObjectID();
+        processorID == ParticleSystemID() || processorID == CollisionDataID() || processorID == AnimationID() ||
+        processorID == GameplayGlobalsID() || processorID == GenericObjectID();
 }
 
 const String& AuthoredAssetProcessor::MaterialInstanceID()
@@ -272,6 +319,18 @@ const String& AuthoredAssetProcessor::ParticleSystemID()
 const String& AuthoredAssetProcessor::CollisionDataID()
 {
     static const String value(TEXT("Flax.CollisionData"));
+    return value;
+}
+
+const String& AuthoredAssetProcessor::AnimationID()
+{
+    static const String value(TEXT("Flax.Animation"));
+    return value;
+}
+
+const String& AuthoredAssetProcessor::GameplayGlobalsID()
+{
+    static const String value(TEXT("Flax.GameplayGlobals"));
     return value;
 }
 
@@ -323,6 +382,18 @@ AssetProcessorDescriptor AuthoredAssetProcessor::CreateDescriptor(const StringVi
         descriptor.SourceExtensions.Add(TEXT(".particlesystem"));
         descriptor.DocumentTypes.Add(ParticleSystem::TypeName);
         descriptor.MainOutputType = ParticleSystem::TypeName;
+    }
+    else if (processorID == AnimationID())
+    {
+        descriptor.SourceExtensions.Add(TEXT(".animation"));
+        descriptor.DocumentTypes.Add(Animation::TypeName);
+        descriptor.MainOutputType = Animation::TypeName;
+    }
+    else if (processorID == GameplayGlobalsID())
+    {
+        descriptor.SourceExtensions.Add(TEXT(".gameplayglobals"));
+        descriptor.DocumentTypes.Add(GameplayGlobals::TypeName);
+        descriptor.MainOutputType = GameplayGlobals::TypeName;
     }
     else
     {
@@ -381,21 +452,30 @@ bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
         if (ReadString(json, "type", type) || String(type) != record.TypeName)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
                 record.ID, record.SourcePath.Get(), TEXT("Authored document type does not match its metadata sidecar."));
+        if (record.ProcessorID == AnimationID() || record.ProcessorID == GameplayGlobalsID())
+        {
+            Array<byte> runtimeChunk;
+            String error;
+            if (DecodeRuntimeChunk(json, runtimeChunk, error))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                    record.ID, record.SourcePath.Get(), error);
+        }
     }
     if (record.ProcessorID == MaterialInstanceID() || record.ProcessorID == SceneAnimationID() ||
-        record.ProcessorID == ParticleSystemID() || record.ProcessorID == CollisionDataID())
+        record.ProcessorID == ParticleSystemID() || record.ProcessorID == CollisionDataID() ||
+        record.ProcessorID == AnimationID() || record.ProcessorID == GameplayGlobalsID())
     {
         Array<byte> runtimeChunk;
         Array<Guid> references;
         String error;
-        bool invalid;
+        bool invalid = false;
         if (record.ProcessorID == MaterialInstanceID())
             invalid = MaterialInstanceDocument::Compile(json, runtimeChunk, &references, error);
         else if (record.ProcessorID == SceneAnimationID())
             invalid = SceneAnimationDocument::Compile(json, runtimeChunk, &references, error);
         else if (record.ProcessorID == ParticleSystemID())
             invalid = ParticleSystemDocument::Compile(json, runtimeChunk, &references, error);
-        else
+        else if (record.ProcessorID == CollisionDataID())
         {
             CollisionData::SerializedOptions options;
             invalid = CollisionDataDocument::Parse(json, options, error);
@@ -405,11 +485,23 @@ bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
         if (invalid)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
                 record.ID, record.SourcePath.Get(), error);
-        for (int32 i = 0; i < references.Count(); i++)
+        if (record.RuntimeObjectReferences.HasItems())
         {
-            const String identity = String::Format(TEXT("authored-reference:{0}"), references[i]);
-            if (context.DeclareRuntimeReference(identity, references[i], origin, diagnostic))
-                return true;
+            for (const AssetObjectId& reference : record.RuntimeObjectReferences)
+            {
+                const String identity = String::Format(TEXT("authored-reference:{0}:{1}"), reference.Guid, reference.LocalId);
+                if (context.DeclareRuntimeReference(identity, reference, origin, diagnostic))
+                    return true;
+            }
+        }
+        else
+        {
+            for (int32 i = 0; i < references.Count(); i++)
+            {
+                const String identity = String::Format(TEXT("authored-reference:{0}"), references[i]);
+                if (context.DeclareRuntimeReference(identity, references[i], origin, diagnostic))
+                    return true;
+            }
         }
         if (record.ProcessorID == CollisionDataID() && references.HasItems() && HashCollisionModelInputs(context, references[0], origin, diagnostic))
             return true;
@@ -524,6 +616,16 @@ bool AuthoredAssetProcessor::Build(ArtifactBuildContext& context, AssetPipelineD
     else if (prepared.OutputType == CollisionData::TypeName)
     {
         if (BuildCollisionData(json, prepared.AssetID, scratchPath, diagnostic))
+            return true;
+    }
+    else if (prepared.OutputType == Animation::TypeName)
+    {
+        if (BuildRuntimePayload(json, prepared.AssetID, Animation::TypeName, Animation::SerializedVersion, scratchPath, diagnostic))
+            return true;
+    }
+    else if (prepared.OutputType == GameplayGlobals::TypeName)
+    {
+        if (BuildRuntimePayload(json, prepared.AssetID, GameplayGlobals::TypeName, GameplayGlobals::SerializedVersion, scratchPath, diagnostic))
             return true;
     }
     else

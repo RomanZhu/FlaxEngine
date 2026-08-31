@@ -25,7 +25,7 @@ public:
 class FLAXENGINE_API AuthoredAssetProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 3;
+    static constexpr uint32 ImplementationVersion = 4;
     static constexpr uint32 RuntimeFormatVersion = 1;
 
     static bool Owns(const StringView& processorID);
@@ -34,6 +34,8 @@ public:
     static const String& SceneAnimationID();
     static const String& ParticleSystemID();
     static const String& CollisionDataID();
+    static const String& AnimationID();
+    static const String& GameplayGlobalsID();
     static const String& GenericObjectID();
     static AssetProcessorDescriptor CreateDescriptor(const StringView& processorID);
     static bool Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic);

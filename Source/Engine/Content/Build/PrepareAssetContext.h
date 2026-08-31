@@ -65,9 +65,12 @@ public:
     bool DeclareSourceAssetByGuid(const Guid& id, const ContentHash& content, const ContentHash& metadata, bool missing, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
     bool DeclareSourceAssetByPath(const StringView& path, const ContentHash& content, const ContentHash& metadata, bool missing, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
     bool DeclareArtifactDependency(const StringView& stableIdentity, const Guid& id, AssetDependencyState selection,
-        const ArtifactKey& selectedArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
+        const ArtifactKey& selectedArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic,
+        const AssetObjectId& objectId = AssetObjectId());
     bool DeclareBuildInput(const StringView& stableIdentity, const Guid& id, const ArtifactKey& exactArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
+    bool DeclareBuildInput(const StringView& stableIdentity, const AssetObjectId& id, const ArtifactKey& exactArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
     bool DeclareRuntimeReference(const StringView& stableIdentity, const Guid& id, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
+    bool DeclareRuntimeReference(const StringView& stableIdentity, const AssetObjectId& id, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
     bool DeclareCustomDependency(const StringView& name, const ContentHash& value, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
     bool DeclareGlobalDependency(const StringView& key, const ContentHash& value, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);
     bool DeclareEnvironmentDependency(const StringView& key, const ContentHash& normalizedValue, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic);

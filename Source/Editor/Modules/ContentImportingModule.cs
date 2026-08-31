@@ -329,6 +329,9 @@ namespace FlaxEditor.Modules
                 else
                 {
                     var extension = Path.GetExtension(inputPath) ?? string.Empty;
+                    if (CanonicalGraphDocuments.UseNewAssetDatabase && string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase))
+                        return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, inputPath, targetLocation.Path,
+                            "Asset System v3 does not import legacy cooked .flax files into Content; migrate the source project instead.");
                     var isCanonicalSource = IsCanonicalSourceImport(extension);
                     string outputExtension = null;
                     var isBuilt = !isCanonicalSource && Editor.CanImport(extension, out outputExtension);
@@ -369,8 +372,13 @@ namespace FlaxEditor.Modules
                 throw new ArgumentNullException();
 
             var extension = System.IO.Path.GetExtension(inputPath) ?? string.Empty;
+            if (CanonicalGraphDocuments.UseNewAssetDatabase && string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase))
+            {
+                Editor.LogWarning($"Cannot import legacy cooked asset '{inputPath}' into an Asset System v3 project. Migrate its source project instead.");
+                return;
+            }
 
-            // Check if given file extension is a binary asset (.flax files) and can be imported by the engine
+            // Canonical sources are preserved verbatim and registered with adjacent metadata.
             bool useCanonicalSource = IsCanonicalSourceImport(extension);
             string outputExtension = null;
             bool isBuilt = !useCanonicalSource && Editor.CanImport(extension, out outputExtension);
@@ -456,61 +464,20 @@ namespace FlaxEditor.Modules
 
         private static bool IsCanonicalSourceImport(string extension)
         {
+            if (!CanonicalGraphDocuments.UseNewAssetDatabase)
+                return false;
             extension = extension?.ToLowerInvariant();
             switch (extension)
             {
-            case ".png":
-            case ".tga":
-            case ".exr":
-            case ".bmp":
-            case ".gif":
-            case ".tiff":
-            case ".tif":
-            case ".jpeg":
-            case ".jpg":
-            case ".dds":
-            case ".hdr":
-            case ".raw":
-            case ".fbx":
-            case ".obj":
-            case ".x":
-            case ".dae":
-            case ".gltf":
-            case ".glb":
-            case ".blend":
-            case ".bvh":
-            case ".ase":
-            case ".ply":
-            case ".dxf":
-            case ".ifc":
-            case ".nff":
-            case ".smd":
-            case ".vta":
-            case ".mdl":
-            case ".md2":
-            case ".md3":
-            case ".md5mesh":
-            case ".q3o":
-            case ".q3s":
-            case ".ac":
-            case ".stl":
-            case ".lwo":
-            case ".lws":
-            case ".lxo":
-            case ".wav":
-            case ".mp3":
-            case ".ogg":
-            case ".ttf":
-            case ".otf":
-            case ".shader":
-            case ".mp4":
-            case ".webm":
-            case ".mov":
-            case ".mkv":
-            case ".txt":
-                return true;
-            default:
+            case ".flax":
+            case ".cs":
+            case ".cpp":
+            case ".c":
+            case ".h":
+            case ".hpp":
                 return false;
+            default:
+                return true;
             }
         }
 
@@ -676,189 +643,47 @@ namespace FlaxEditor.Modules
             }
         }
 
-        private bool ExecutePreparedInPlaceRegistrationBatch(List<InPlaceCanonicalImportEntry> entries, string[] stagingPaths, Guid[] assetIds, List<int> validIndices)
-        {
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
-            var steps = new List<ContentMutationStep>();
-            var backupRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationBackups", plan.Id.ToString("N"));
-            var backupPaths = new Dictionary<int, string>();
-
-            // This runs last during rollback, after metadata paths have been restored. Only the
-            // batch's own sources moved, so reindexing those is enough and avoids a full scan.
-            var rollbackPaths = validIndices.Select(index => entries[index].SourceUrl).ToArray();
-            steps.Add(new ContentMutationStep(
-                "restore-database-after-batch-rollback",
-                Array.Empty<int>(),
-                () => ContentMutationResult.Success(null, null),
-                () => rollbackPaths.Length == 0 || !AssetDatabaseFacade.RefreshSources(rollbackPaths),
-                () => true));
-
-            for (int position = 0; position < validIndices.Count; position++)
-            {
-                var index = validIndices[position];
-                var entry = entries[index];
-                var metadataPath = entry.SourceUrl + ".meta";
-                if (entry.ReplaceForeignMetadata)
-                {
-                    Directory.CreateDirectory(backupRoot);
-                    var backupPath = StringUtils.CombinePaths(backupRoot, index + "_" + Path.GetFileName(metadataPath));
-                    backupPaths.Add(index, backupPath);
-                    var backupEntry = plan.Entries.Count;
-                    plan.Entries.Add(new ContentMutationEntry(metadataPath, backupPath, ContentMutationPathRole.ReplacementBackup, false));
-                    steps.Add(new ContentMutationStep(
-                        "backup-foreign-metadata-" + index,
-                        new[] { backupEntry },
-                        () =>
-                        {
-                            File.Move(metadataPath, backupPath);
-                            return ContentMutationResult.Success(metadataPath, backupPath);
-                        },
-                        () =>
-                        {
-                            if (File.Exists(backupPath) && !File.Exists(metadataPath))
-                                File.Move(backupPath, metadataPath);
-                            return File.Exists(metadataPath) && !File.Exists(backupPath);
-                        },
-                        () => !File.Exists(metadataPath) && File.Exists(backupPath)));
-                }
-
-                var stagedPath = stagingPaths[index];
-                var metadataEntry = plan.Entries.Count;
-                plan.Entries.Add(new ContentMutationEntry(stagedPath, metadataPath, ContentMutationPathRole.MetadataSidecar, false)
-                {
-                    DestinationReleasedByTransaction = entry.ReplaceForeignMetadata,
-                    SourceRequired = true,
-                });
-                steps.Add(new ContentMutationStep(
-                    "commit-staged-metadata-" + index,
-                    new[] { metadataEntry },
-                    () =>
-                    {
-                        File.Move(stagedPath, metadataPath);
-                        return ContentMutationResult.Success(stagedPath, metadataPath);
-                    },
-                    () =>
-                    {
-                        if (File.Exists(metadataPath) && !File.Exists(stagedPath))
-                            File.Move(metadataPath, stagedPath);
-                        return File.Exists(stagedPath) && !File.Exists(metadataPath);
-                    },
-                    () => File.Exists(metadataPath) && !File.Exists(stagedPath)));
-            }
-
-            var publishIds = validIndices.Select(index => assetIds[index]).ToArray();
-            var publishPaths = validIndices.Select(index => entries[index].SourceUrl).ToArray();
-            steps.Add(new ContentMutationStep(
-                "publish-canonical-metadata-batch",
-                Array.Empty<int>(),
-                () => AssetDatabaseFacade.PublishDefaultCanonicalMetadataBatch(publishIds, publishPaths)
-                    ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, null, "Canonical metadata batch database publication failed.")
-                    : ContentMutationResult.Success(null, null),
-                () => true,
-                () => validIndices.All(index => FlaxEngine.Content.GetAssetInfo(entries[index].SourceUrl, out var info) && info.ID == assetIds[index])));
-
-            var result = new ContentMutationTransaction(plan).Execute(steps);
-            if (!result.Succeeded)
-                Editor.LogWarning($"Canonical metadata batch transaction {plan.Id:N} failed: {result.Failure}: {result.Message}");
-            if (result.Succeeded)
-            {
-                foreach (var backupPath in backupPaths.Values)
-                    DeleteImportPath(backupPath);
-                if (Directory.Exists(backupRoot) && !Directory.EnumerateFileSystemEntries(backupRoot).Any())
-                    Directory.Delete(backupRoot, false);
-            }
-            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.register-in-place-batch.committed" : "mutation.register-in-place-batch.failed",
-                $"transaction={plan.Id:N}; sources={validIndices.Count}; failure={result.Failure}; recovery={result.RequiresRecovery}");
-            return !result.Succeeded;
-        }
-
         private void ProcessInPlaceCanonicalBatch(List<InPlaceCanonicalImportEntry> entries, List<PendingCanonicalBuild> pendingBuilds)
         {
-            var failed = new bool[entries.Count];
-            var stagingPaths = new string[entries.Count];
-            var assetIds = new Guid[entries.Count];
-            var activeIndices = new List<int>(entries.Count);
-            var stagingRoot = Path.Combine(Globals.ProjectLibraryFolder, "Temp", "MetadataBatches", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(stagingRoot);
-
             for (int i = 0; i < entries.Count; i++)
             {
-                var metadataPath = entries[i].SourceUrl + ".meta";
-                stagingPaths[i] = StringUtils.CombinePaths(stagingRoot, i + ".meta");
+                var entry = entries[i];
+                var metadataPath = entry.SourceUrl + ".meta";
+                var failed = true;
                 Editor.ContentDatabase.BeginAssetSave(metadataPath);
                 try
                 {
-                    ImportFileBegin?.Invoke(entries[i]);
-                    activeIndices.Add(i);
+                    ImportFileBegin?.Invoke(entry);
+                    var logicalPath = AssetDatabase.ToLogicalPathInternal(entry.SourceUrl);
+                    AssetPipelineCallbacks.WillCreate(logicalPath);
+                    var result = AssetDatabaseFacade.RegisterCanonicalSource(entry.SourceUrl, entry.ReplaceForeignMetadata);
+                    failed = !result.Succeeded;
+                    if (!failed)
+                    {
+                        entry.SetPreparedBuild(result.AssetID);
+                        pendingBuilds.Add(new PendingCanonicalBuild(result.AssetID, entry.BuildKind, entry.SourceUrl));
+                        AssetPipelineCallbacks.PostprocessAll(new[] { logicalPath }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), false);
+                    }
+                    else if (!string.IsNullOrEmpty(result.Message))
+                    {
+                        Editor.LogWarning($"Canonical registration failed for {entry.SourceUrl}: {result.Message}");
+                    }
                 }
                 catch (Exception ex)
                 {
-                    failed[i] = true;
                     Editor.LogWarning(ex);
                 }
-            }
-
-            try
-            {
-                if (activeIndices.Count != 0)
+                finally
                 {
-                    var sourcePaths = activeIndices.Select(index => entries[index].SourceUrl).ToArray();
-                    var activeStagingPaths = activeIndices.Select(index => stagingPaths[index]).ToArray();
-                    var stagedIds = AssetDatabaseFacade.StageDefaultCanonicalMetadataBatch(sourcePaths, activeStagingPaths);
-                    var validIndices = new List<int>(activeIndices.Count);
-                    for (int i = 0; i < activeIndices.Count; i++)
-                    {
-                        var index = activeIndices[i];
-                        if (i >= stagedIds.Length || stagedIds[i] == Guid.Empty)
-                        {
-                            failed[index] = true;
-                            continue;
-                        }
-                        assetIds[index] = stagedIds[i];
-                        validIndices.Add(index);
-                    }
-                    if (validIndices.Count != activeIndices.Count)
-                    {
-                        foreach (var diagnostic in AssetDatabaseFacade.GetDiagnostics())
-                            Editor.LogWarning($"Canonical metadata staging failed for {diagnostic.SourcePath}: {diagnostic.Message}");
-                    }
-                    if (validIndices.Count != 0 && ExecutePreparedInPlaceRegistrationBatch(entries, stagingPaths, assetIds, validIndices))
-                    {
-                        for (int i = 0; i < validIndices.Count; i++)
-                            failed[validIndices[i]] = true;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning(ex);
-                for (int i = 0; i < entries.Count; i++)
-                    failed[i] = true;
-            }
-            finally
-            {
-                for (int i = 0; i < entries.Count; i++)
-                {
-                    if (File.Exists(stagingPaths[i]))
-                        DeleteImportPath(stagingPaths[i]);
-                    Editor.ContentDatabase.EndAssetSave(entries[i].SourceUrl + ".meta", !failed[i]);
-                    if (!failed[i])
-                    {
-                        entries[i].SetPreparedBuild(assetIds[i]);
-                        pendingBuilds.Add(new PendingCanonicalBuild(assetIds[i], entries[i].BuildKind, entries[i].SourceUrl));
-                    }
-                    else
-                    {
-                        Editor.LogWarning("Failed to import " + entries[i].SourceUrl + " to " + entries[i].ResultUrl);
-                    }
+                    Editor.ContentDatabase.EndAssetSave(metadataPath, !failed);
+                    if (failed)
+                        Editor.LogWarning("Failed to import " + entry.SourceUrl + " to " + entry.ResultUrl);
                     lock (_requests)
                         _importBatchDone++;
                     Profiler.BeginEvent("ImportFileEnd");
-                    ImportFileEnd?.Invoke(entries[i], failed[i]);
+                    ImportFileEnd?.Invoke(entry, failed);
                     Profiler.EndEvent();
                 }
-                if (Directory.Exists(stagingRoot) && !Directory.EnumerateFileSystemEntries(stagingRoot).Any())
-                    Directory.Delete(stagingRoot, false);
             }
         }
 
@@ -970,11 +795,14 @@ namespace FlaxEditor.Modules
         private bool ExecuteImportTransaction(IFileEntryAction entry)
         {
             if (entry is InPlaceCanonicalImportEntry inPlaceEntry)
-                return ExecuteInPlaceRegistrationTransaction(inPlaceEntry);
+                return !AssetDatabaseFacade.RegisterCanonicalSource(inPlaceEntry.SourceUrl, inPlaceEntry.ReplaceForeignMetadata).Succeeded;
 
             // Folder imports enqueue their descendants and do not have a synchronous commit boundary.
             if (Directory.Exists(entry.SourceUrl))
                 return entry.Execute();
+
+            if (entry is ImportFileEntry { IsCanonicalSource: true } canonicalEntry)
+                return ExecuteCanonicalExternalImport(canonicalEntry);
 
             var destinationPath = ContentMutationPathUtils.Normalize(entry.ResultUrl);
             var isCreate = entry is CreateFileEntry;
@@ -1089,60 +917,37 @@ namespace FlaxEditor.Modules
             return !result.Succeeded;
         }
 
-        private static bool ExecuteInPlaceRegistrationTransaction(InPlaceCanonicalImportEntry entry)
+        private static bool ExecuteCanonicalExternalImport(ImportFileEntry entry)
         {
             var sourcePath = ContentMutationPathUtils.Normalize(entry.SourceUrl);
-            var metadataPath = sourcePath + ".meta";
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
-            var steps = new List<ContentMutationStep>();
-            string backupRoot = null;
-            string backupPath = null;
-            if (entry.ReplaceForeignMetadata)
+            var destinationPath = ContentMutationPathUtils.Normalize(entry.ResultUrl);
+            var logicalPath = AssetDatabase.ToLogicalPathInternal(destinationPath);
+            AssetPipelineCallbacks.WillCreate(logicalPath);
+            AssetMutationResultInfo result;
+            switch (entry)
             {
-                backupRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationBackups", plan.Id.ToString("N"));
-                backupPath = StringUtils.CombinePaths(backupRoot, Path.GetFileName(metadataPath));
-                Directory.CreateDirectory(backupRoot);
-                var backupEntry = plan.Entries.Count;
-                plan.Entries.Add(new ContentMutationEntry(metadataPath, backupPath, ContentMutationPathRole.ReplacementBackup, false));
-                steps.Add(new ContentMutationStep(
-                    "backup-foreign-metadata",
-                    new[] { backupEntry },
-                    () =>
-                    {
-                        File.Move(metadataPath, backupPath);
-                        return ContentMutationResult.Success(metadataPath, backupPath);
-                    },
-                    () =>
-                    {
-                        if (File.Exists(backupPath) && !File.Exists(metadataPath))
-                            File.Move(backupPath, metadataPath);
-                        return File.Exists(metadataPath) && !File.Exists(backupPath);
-                    },
-                    () => !File.Exists(metadataPath) && File.Exists(backupPath)));
+            case TextureImportEntry textureEntry:
+                result = AssetDatabaseFacade.PublishExternalTexture(sourcePath, destinationPath,
+                    ((TextureImportSettings)textureEntry.Settings).Settings, entry.AllowReplace);
+                break;
+            case ModelImportEntry modelEntry:
+                result = AssetDatabaseFacade.PublishExternalModel(sourcePath, destinationPath,
+                    ((ModelImportSettings)modelEntry.Settings).Settings, entry.AllowReplace);
+                break;
+            case AudioImportEntry audioEntry:
+                result = AssetDatabaseFacade.PublishExternalAudio(sourcePath, destinationPath,
+                    ((AudioImportSettings)audioEntry.Settings).Settings, entry.AllowReplace);
+                break;
+            default:
+                if (!TryGetImportedSourceIdentity(destinationPath, out var typeName, out var processorId))
+                    return true;
+                result = AssetDatabaseFacade.PublishExternalSource(sourcePath, destinationPath, typeName, processorId, entry.AllowReplace);
+                break;
             }
-            var metadataEntry = plan.Entries.Count;
-            plan.Entries.Add(new ContentMutationEntry(sourcePath, metadataPath, ContentMutationPathRole.MetadataSidecar, false)
-            {
-                DestinationReleasedByTransaction = entry.ReplaceForeignMetadata,
-                SourceRequired = true,
-            });
-            steps.Add(new ContentMutationStep(
-                "register-in-place-source",
-                new[] { metadataEntry },
-                () => entry.Execute()
-                    ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, sourcePath, metadataPath, "Canonical metadata creation or database registration failed.")
-                    : ContentMutationResult.Success(sourcePath, metadataPath),
-                () => DeleteCanonicalMetadata(metadataPath),
-                () => File.Exists(metadataPath) && FlaxEngine.Content.GetAssetInfo(sourcePath, out var info) && info.ID != Guid.Empty));
-            var result = new ContentMutationTransaction(plan).Execute(steps);
-            if (result.Succeeded && backupPath != null)
-            {
-                DeleteImportPath(backupPath);
-                if (Directory.Exists(backupRoot) && !Directory.EnumerateFileSystemEntries(backupRoot).Any())
-                    Directory.Delete(backupRoot, false);
-            }
-            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.register-in-place.committed" : "mutation.register-in-place.failed",
-                $"transaction={plan.Id:N}; source='{sourcePath}'; failure={result.Failure}; recovery={result.RequiresRecovery}");
+            if (!result.Succeeded && !string.IsNullOrEmpty(result.Message))
+                Editor.LogWarning($"Canonical import failed for {sourcePath}: {result.Message}");
+            if (result.Succeeded)
+                AssetPipelineCallbacks.PostprocessAll(new[] { logicalPath }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), false);
             return !result.Succeeded;
         }
 
@@ -1175,7 +980,14 @@ namespace FlaxEditor.Modules
                 if (FlaxEngine.Content.GetAssetInfo(path, out _))
                     FlaxEngine.Content.DeleteAsset(path);
                 if (File.Exists(path))
+                {
+                    if (CanonicalGraphDocuments.UseNewAssetDatabase && ContentMutationPathUtils.IsWithinRoot(path, Globals.ProjectContentFolder))
+                    {
+                        Editor.LogWarning("Preserving unpaired Asset System v3 source after failed create/import for recovery: " + path);
+                        return false;
+                    }
                     File.Delete(path);
+                }
                 return !File.Exists(path);
             }
             catch (Exception ex)
@@ -1225,9 +1037,14 @@ namespace FlaxEditor.Modules
 
         private static Guid CreateImportedSourceMetadataID(string destinationPath)
         {
-            var extension = Path.GetExtension(destinationPath)?.ToLowerInvariant();
-            string typeName;
-            string processorId;
+            return TryGetImportedSourceIdentity(destinationPath, out var typeName, out var processorId)
+                ? AssetDatabaseFacade.CreateImportedSourceMetadata(destinationPath, typeName, processorId)
+                : Guid.Empty;
+        }
+
+        private static bool TryGetImportedSourceIdentity(string path, out string typeName, out string processorId)
+        {
+            var extension = Path.GetExtension(path)?.ToLowerInvariant();
             switch (extension)
             {
             case ".ttf":
@@ -1251,9 +1068,11 @@ namespace FlaxEditor.Modules
                 processorId = "Flax.Text";
                 break;
             default:
-                return Guid.Empty;
+                typeName = typeof(RawDataAsset).FullName;
+                processorId = "Flax.Unsupported";
+                break;
             }
-            return AssetDatabaseFacade.CreateImportedSourceMetadata(destinationPath, typeName, processorId);
+            return true;
         }
 
         private static bool DeleteCanonicalMetadata(string path)

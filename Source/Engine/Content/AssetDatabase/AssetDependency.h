@@ -49,6 +49,9 @@ struct FLAXENGINE_API AssetDependency
     AssetDependencyKind Kind = AssetDependencyKind::SourceFile;
     AssetDependencyState State = AssetDependencyState::Present;
     String StableIdentity;
+    /// <summary>Exact persistent dependency identity when the dependency targets an asset object.</summary>
+    AssetObjectId ObjectID;
+    /// <summary>Legacy/runtime backing GUID projection.</summary>
     Guid AssetID = Guid::Empty;
     ContentHash Content;
     ContentHash Metadata;

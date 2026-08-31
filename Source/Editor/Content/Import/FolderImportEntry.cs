@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System.IO;
+using FlaxEditor.Content;
 
 namespace FlaxEditor.Content.Import
 {
@@ -29,13 +30,26 @@ namespace FlaxEditor.Content.Import
                 Editor.LogWarning("Cannot import folder because the destination already exists: " + ResultUrl);
                 return true;
             }
-            Directory.CreateDirectory(ResultUrl);
             var parentPath = Path.GetDirectoryName(ResultUrl);
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+            {
+                var folderId = AssetDatabase.CreateFolder(parentPath, Path.GetFileName(ResultUrl));
+                if (string.IsNullOrEmpty(folderId))
+                {
+                    Editor.LogWarning("Failed to create the imported directory through the asset mutation gateway: " + ResultUrl);
+                    return true;
+                }
+            }
+            else
+                Directory.CreateDirectory(ResultUrl);
             var parent = Editor.Instance.ContentDatabase.Find(parentPath);
             if (parent == null)
             {
                 Editor.LogWarning("Failed to find the parent folder for the imported directory.");
-                Directory.Delete(ResultUrl, false);
+                if (CanonicalGraphDocuments.UseNewAssetDatabase)
+                    AssetDatabase.DeleteAsset(ResultUrl);
+                else
+                    Directory.Delete(ResultUrl, false);
                 return true;
             }
             Editor.Instance.ContentDatabase.RefreshFolder(parent, true);
@@ -43,7 +57,10 @@ namespace FlaxEditor.Content.Import
             if (target == null)
             {
                 Editor.LogWarning("Failed to index the imported directory: " + ResultUrl);
-                Directory.Delete(ResultUrl, false);
+                if (CanonicalGraphDocuments.UseNewAssetDatabase)
+                    AssetDatabase.DeleteAsset(ResultUrl);
+                else
+                    Directory.Delete(ResultUrl, false);
                 return true;
             }
 

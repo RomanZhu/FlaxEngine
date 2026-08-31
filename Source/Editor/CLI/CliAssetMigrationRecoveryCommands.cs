@@ -306,6 +306,8 @@ namespace FlaxEditor
                 case ".visualscript":
                 case ".behaviortree":
                 case ".collisiondata":
+                case ".animation":
+                case ".gameplayglobals":
                     return true;
                 default:
                     return false;

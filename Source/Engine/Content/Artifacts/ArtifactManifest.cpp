@@ -125,8 +125,8 @@ namespace
 
 bool ArtifactManifest::Validate(const StringView& path, AssetPipelineDiagnostic& diagnostic) const
 {
-    if (ManifestVersion != CurrentVersion || !AssetID.IsValid() || ProcessorID.IsEmpty() || ProcessorImplementationVersion < 1 ||
-        InputFingerprint.IsZero() || SourceHash.IsZero() || SettingsHash.IsZero() || BuildID.IsEmpty() || Outputs.IsEmpty())
+    if ((ManifestVersion < 2 || ManifestVersion > CurrentVersion) || !AssetID.IsValid() || ProcessorID.IsEmpty() || ProcessorImplementationVersion < 1 ||
+        InputFingerprint.IsZero() || SourceHash.IsZero() || SettingsHash.IsZero() || BuildID.IsEmpty() || Outputs.IsEmpty() || Objects.IsEmpty())
         return Fail(diagnostic, path, TEXT("Artifact manifest is missing a required identity, version, hash, build, or output field."));
     if (Target.Role != "Editor" && Target.Role != "Runtime")
         return Fail(diagnostic, path, TEXT("Artifact manifest target role must be Editor or Runtime."));
@@ -146,8 +146,9 @@ bool ArtifactManifest::Validate(const StringView& path, AssetPipelineDiagnostic&
             dependency.Kind == AssetDependencyKind::Toolchain || dependency.Kind == AssetDependencyKind::Environment;
         if (dependency.State != AssetDependencyState::Missing && hashed && dependency.Hash.IsZero())
             return Fail(diagnostic, path, TEXT("Artifact manifest dependency lacks an observed content hash."));
-        if ((dependency.Kind == AssetDependencyKind::Artifact || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.AssetID.IsValid())
-            return Fail(diagnostic, path, TEXT("Artifact manifest asset dependency lacks a GUID."));
+        if ((dependency.Kind == AssetDependencyKind::Artifact || dependency.Kind == AssetDependencyKind::RuntimeReference) &&
+            !dependency.AssetID.IsValid() && !dependency.ObjectID.IsValid())
+            return Fail(diagnostic, path, TEXT("Artifact manifest asset dependency lacks an object identity."));
         if (dependency.Kind == AssetDependencyKind::Artifact && dependency.State != AssetDependencyState::Missing &&
             dependency.ExactArtifact.IsZero() && dependency.InterfaceHash.IsZero())
             return Fail(diagnostic, path, TEXT("Artifact manifest build input lacks an exact artifact or semantic interface hash."));
@@ -158,6 +159,16 @@ bool ArtifactManifest::Validate(const StringView& path, AssetPipelineDiagnostic&
         const AssetImportReasonNode& reason = ImportReasons[i];
         if (reason.Code.IsEmpty() || reason.Parent < -1 || reason.Parent >= i)
             return Fail(diagnostic, path, TEXT("Artifact manifest import reason tree is malformed."));
+    }
+
+    HashSet<AssetObjectId> objectIds;
+    for (const ArtifactManifestObject& object : Objects)
+    {
+        if (!object.ObjectID.IsValid() || !object.BackingAssetID.IsValid() || object.TypeName.IsEmpty() ||
+            object.BackingAssetID != AssetID || objectIds.Contains(object.ObjectID) ||
+            (object.IsMainObject && object.ObjectID.LocalId != 1))
+            return Fail(diagnostic, path, TEXT("Artifact manifest object inventory contains an invalid or duplicate object."));
+        objectIds.Add(object.ObjectID);
     }
 
     HashSet<StringAnsi> outputKinds;
@@ -198,11 +209,13 @@ bool ArtifactManifest::Parse(const StringAnsiView& json, const StringView& path,
     const auto processor = document.FindMember("processor");
     const auto target = document.FindMember("target");
     const auto dependencies = document.FindMember("dependencies");
+    const auto objects = document.FindMember("objects");
     const auto outputs = document.FindMember("outputs");
     const auto buildId = document.FindMember("buildId");
     if (version == document.MemberEnd() || !version->value.IsInt() || assetGuid == document.MemberEnd() || !assetGuid->value.IsString() ||
         databaseRevision == document.MemberEnd() || !databaseRevision->value.IsUint64() || processor == document.MemberEnd() || !processor->value.IsObject() ||
         target == document.MemberEnd() || !target->value.IsObject() || dependencies == document.MemberEnd() || !dependencies->value.IsArray() ||
+        objects == document.MemberEnd() || !objects->value.IsArray() ||
         outputs == document.MemberEnd() || !outputs->value.IsArray() || buildId == document.MemberEnd() || !buildId->value.IsString())
         return Fail(diagnostic, path, TEXT("Artifact manifest is missing a required field or field type."));
     result.ManifestVersion = version->value.GetInt();
@@ -259,6 +272,16 @@ bool ArtifactManifest::Parse(const StringAnsiView& json, const StringView& path,
         const auto dependencyGuid = value.FindMember("assetGuid");
         if (dependencyGuid != value.MemberEnd() && (!dependencyGuid->value.IsString() || Guid::Parse(StringAnsiView(dependencyGuid->value.GetString(), dependencyGuid->value.GetStringLength()), dependency.AssetID)))
             return Fail(diagnostic, path, TEXT("Artifact manifest dependency GUID is invalid."));
+        const auto dependencyFileGuid = value.FindMember("fileGuid");
+        const auto dependencyLocalId = value.FindMember("localId");
+        if (dependencyFileGuid != value.MemberEnd() || dependencyLocalId != value.MemberEnd())
+        {
+            if (dependencyFileGuid == value.MemberEnd() || !dependencyFileGuid->value.IsString() ||
+                dependencyLocalId == value.MemberEnd() || !dependencyLocalId->value.IsInt64() || dependencyLocalId->value.GetInt64() == 0 ||
+                Guid::Parse(StringAnsiView(dependencyFileGuid->value.GetString(), dependencyFileGuid->value.GetStringLength()), dependency.ObjectID.Guid))
+                return Fail(diagnostic, path, TEXT("Artifact manifest dependency object identity is invalid."));
+            dependency.ObjectID.LocalId = dependencyLocalId->value.GetInt64();
+        }
         const auto interfaceVersion = value.FindMember("interfaceVersion");
         if (interfaceVersion != value.MemberEnd())
         {
@@ -272,6 +295,29 @@ bool ArtifactManifest::Parse(const StringAnsiView& json, const StringView& path,
         if (dependencyState == value.MemberEnd() && dependency.Kind == AssetDependencyKind::Artifact)
             dependency.State = dependency.ExactArtifact.IsZero() ? AssetDependencyState::CurrentArtifact : AssetDependencyState::ExactArtifact;
         result.Dependencies.Add(MoveTemp(dependency));
+    }
+
+    for (const JsonValue& value : objects->value.GetArray())
+    {
+        if (!value.IsObject())
+            return Fail(diagnostic, path, TEXT("Artifact manifest object inventory entry must be an object."));
+        ArtifactManifestObject object;
+        const auto fileGuid = value.FindMember("fileGuid");
+        const auto localId = value.FindMember("localId");
+        const auto backingGuid = value.FindMember("backingAssetGuid");
+        const auto isMain = value.FindMember("isMainObject");
+        if (fileGuid == value.MemberEnd() || !fileGuid->value.IsString() ||
+            localId == value.MemberEnd() || !localId->value.IsInt64() ||
+            backingGuid == value.MemberEnd() || !backingGuid->value.IsString() ||
+            isMain == value.MemberEnd() || !isMain->value.IsBool() ||
+            ReadString(value, "type", object.TypeName) || ReadString(value, "name", object.Name, true) ||
+            ReadString(value, "stableKey", object.StableKey, true) ||
+            Guid::Parse(StringAnsiView(fileGuid->value.GetString(), fileGuid->value.GetStringLength()), object.ObjectID.Guid) ||
+            Guid::Parse(StringAnsiView(backingGuid->value.GetString(), backingGuid->value.GetStringLength()), object.BackingAssetID))
+            return Fail(diagnostic, path, TEXT("Artifact manifest object inventory entry is invalid."));
+        object.ObjectID.LocalId = localId->value.GetInt64();
+        object.IsMainObject = isMain->value.GetBool();
+        result.Objects.Add(MoveTemp(object));
     }
 
     const auto reasons = document.FindMember("importReasons");
@@ -395,6 +441,11 @@ bool ArtifactManifest::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnos
         else
             AddAnsi(value, "hash", dependency.Hash.ToString(), allocator);
         if (!dependency.MetadataHash.IsZero()) AddAnsi(value, "metadataHash", dependency.MetadataHash.ToString(), allocator);
+        if (dependency.ObjectID.IsValid())
+        {
+            AddString(value, "fileGuid", dependency.ObjectID.Guid.ToString(Guid::FormatType::N).ToLower(), allocator);
+            value.AddMember("localId", dependency.ObjectID.LocalId, allocator);
+        }
         if (dependency.AssetID.IsValid()) AddString(value, "assetGuid", dependency.AssetID.ToString(Guid::FormatType::N).ToLower(), allocator);
         if (!dependency.ExactArtifact.IsZero()) AddAnsi(value, "artifactKey", dependency.ExactArtifact.ToString(), allocator);
         if (!dependency.InterfaceHash.IsZero())
@@ -406,6 +457,28 @@ bool ArtifactManifest::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnos
         dependencies.PushBack(value.Move(), allocator);
     }
     document.AddMember("dependencies", dependencies.Move(), allocator);
+
+    Array<ArtifactManifestObject> sortedObjects(Objects);
+    std::sort(sortedObjects.Get(), sortedObjects.Get() + sortedObjects.Count(), [](const ArtifactManifestObject& a, const ArtifactManifestObject& b)
+    {
+        if (a.ObjectID.Guid != b.ObjectID.Guid)
+            return a.ObjectID.Guid.ToString(Guid::FormatType::N) < b.ObjectID.Guid.ToString(Guid::FormatType::N);
+        return a.ObjectID.LocalId < b.ObjectID.LocalId;
+    });
+    JsonValue objects(rapidjson::kArrayType);
+    for (const ArtifactManifestObject& object : sortedObjects)
+    {
+        JsonValue value(rapidjson::kObjectType);
+        AddString(value, "fileGuid", object.ObjectID.Guid.ToString(Guid::FormatType::N).ToLower(), allocator);
+        value.AddMember("localId", object.ObjectID.LocalId, allocator);
+        AddString(value, "backingAssetGuid", object.BackingAssetID.ToString(Guid::FormatType::N).ToLower(), allocator);
+        AddString(value, "type", object.TypeName, allocator);
+        AddString(value, "name", object.Name, allocator);
+        AddString(value, "stableKey", object.StableKey, allocator);
+        value.AddMember("isMainObject", object.IsMainObject, allocator);
+        objects.PushBack(value.Move(), allocator);
+    }
+    document.AddMember("objects", objects.Move(), allocator);
     if (ImportReasons.HasItems())
     {
         JsonValue reasons(rapidjson::kArrayType);
@@ -472,6 +545,7 @@ bool ArtifactManifest::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnos
     rootOrder.Add("sourceHash");
     rootOrder.Add("settingsHash");
     rootOrder.Add("dependencies");
+    rootOrder.Add("objects");
     rootOrder.Add("importReasons");
     rootOrder.Add("outputs");
     rootOrder.Add("buildId");
@@ -492,6 +566,10 @@ bool ArtifactManifest::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnos
     dependencyOrder.Add("kind"); dependencyOrder.Add("state"); dependencyOrder.Add("identity"); dependencyOrder.Add("hash"); dependencyOrder.Add("metadataHash"); dependencyOrder.Add("assetGuid");
     dependencyOrder.Add("artifactKey"); dependencyOrder.Add("interfaceHash"); dependencyOrder.Add("interfaceVersion"); dependencyOrder.Add("origin");
     orders.Add("/dependencies/*", dependencyOrder);
+    Array<StringAnsi> objectOrder;
+    objectOrder.Add("fileGuid"); objectOrder.Add("localId"); objectOrder.Add("backingAssetGuid"); objectOrder.Add("type");
+    objectOrder.Add("name"); objectOrder.Add("stableKey"); objectOrder.Add("isMainObject");
+    orders.Add("/objects/*", objectOrder);
     Array<StringAnsi> reasonOrder;
     reasonOrder.Add("parent"); reasonOrder.Add("code"); reasonOrder.Add("identity"); reasonOrder.Add("previousFingerprint");
     reasonOrder.Add("currentFingerprint"); reasonOrder.Add("explanation");

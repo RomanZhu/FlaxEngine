@@ -43,6 +43,7 @@
 #include "Engine/Scripting/Internal/InternalCalls.h"
 #include "Engine/Scripting/Scripting.h"
 #if USE_EDITOR
+#include "AssetDatabase/AssetDatabaseFacade.h"
 #include "Editor/Editor.h"
 #include "Editor/ProjectInfo.h"
 #endif
@@ -77,6 +78,7 @@ namespace
     // Assets
     CriticalSection AssetsLocker;
     Dictionary<Guid, Asset*> Assets;
+    Dictionary<AssetObjectId, Asset*> AssetObjects;
     Dictionary<Guid, AssetLoadLocation> ExplicitLoadLocations;
     CriticalSection LoadedAssetsToInvokeLocker;
     Array<Asset*> LoadedAssetsToInvoke;
@@ -88,6 +90,10 @@ namespace
     // Loading assets
     THREADLOCAL LoadingThread* ThisLoadThread = nullptr;
     THREADLOCAL int32 PassiveLoadDepth = 0;
+#if !USE_EDITOR
+    THREADLOCAL Array<AssetObjectId> RuntimePreloadStack;
+    THREADLOCAL int32 RuntimePreloadSchedulingDepth = 0;
+#endif
     LoadingThread* MainLoadThread = nullptr;
 #if PLATFORM_THREADS_LIMIT > 1
     Array<LoadingThread*> LoadThreads;
@@ -103,6 +109,28 @@ namespace
     Dictionary<Asset*, TimeSpan> UnloadQueue;
     TimeSpan LastUnloadCheckTime(0);
     bool IsExiting = false;
+
+    void RegisterLoadedAssetObject(Asset* asset)
+    {
+        AssetObjectId id;
+        if (asset && Content::GetAssetObjectId(asset->GetID(), id))
+            AssetObjects[id] = asset;
+    }
+
+    void UnregisterLoadedAssetObject(Asset* asset)
+    {
+        AssetObjectId id;
+        for (auto i = AssetObjects.Begin(); i.IsNotEnd(); ++i)
+        {
+            if (i->Value == asset)
+            {
+                id = i->Key;
+                break;
+            }
+        }
+        if (id.IsValid())
+            AssetObjects.Remove(id);
+    }
 
 #if USE_EDITOR
     bool MovePathWithRetry(const StringView& destination, const StringView& source)
@@ -993,6 +1021,22 @@ bool Content::GetAssetInfo(const AssetObjectId& id, AssetInfo& info)
 #endif
 }
 
+bool Content::GetAssetObjectId(const Guid& backingAssetId, AssetObjectId& id)
+{
+    id = AssetObjectId();
+    if (!backingAssetId.IsValid())
+        return false;
+#if USE_EDITOR
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(backingAssetId, record))
+        return false;
+    id = record.GetObjectId();
+    return id.IsValid();
+#else
+    return Cache.FindObjectId(backingAssetId, id);
+#endif
+}
+
 bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 {
 #if ENABLE_ASSETS_DISCOVERY
@@ -1198,6 +1242,11 @@ FLAXENGINE_API Asset* LoadAsset(const Guid& id, const ScriptingTypeHandle& type)
     return Content::LoadAsync(id, type);
 }
 
+FLAXENGINE_API Asset* LoadAsset(const AssetObjectId& id, const ScriptingTypeHandle& type)
+{
+    return Content::LoadAsync(id, type);
+}
+
 Asset* Content::LoadAsync(const StringView& path, const MClass* type)
 {
     CHECK_RETURN(type, nullptr);
@@ -1263,6 +1312,13 @@ const Dictionary<Guid, Asset*>& Content::GetAssetsRaw()
     return Assets;
 }
 
+const Dictionary<AssetObjectId, Asset*>& Content::GetAssetObjectsRaw()
+{
+    AssetsLocker.Lock();
+    AssetsLocker.Unlock();
+    return AssetObjects;
+}
+
 Asset* Content::LoadAsync(const Guid& id, const MClass* type)
 {
     CHECK_RETURN(type, nullptr);
@@ -1310,6 +1366,15 @@ Asset* Content::GetAsset(const Guid& id)
     return result;
 }
 
+Asset* Content::GetAsset(const AssetObjectId& id)
+{
+    Asset* result = nullptr;
+    AssetsLocker.Lock();
+    AssetObjects.TryGet(id, result);
+    AssetsLocker.Unlock();
+    return result;
+}
+
 void Content::DeleteAsset(Asset* asset)
 {
     if (asset == nullptr || asset->_deleteFileOnUnload)
@@ -1319,6 +1384,26 @@ void Content::DeleteAsset(Asset* asset)
 
     // Ensure that asset is loaded (easier than cancel in-flight loading)
     asset->WaitForLoaded();
+
+#if USE_EDITOR
+    const String sourcePath = asset->GetPath();
+    if (AssetDatabase::Get().IsHardCutEnabled() && IsProjectContentPath(sourcePath))
+    {
+        if (!FileSystem::FileExists(sourcePath + TEXT(".meta")))
+        {
+            LOG(Error, "Cannot delete Content source '{0}' because Asset System v3 requires a metadata sidecar.", sourcePath);
+            return;
+        }
+        const AssetMutationResultInfo result = AssetDatabaseFacade::DeleteAssetPairToRecovery(sourcePath);
+        if (!result.Succeeded)
+        {
+            LOG(Error, "Cannot delete canonical asset '{0}': {1}", sourcePath, result.Message);
+            return;
+        }
+        asset->DeleteObject();
+        return;
+    }
+#endif
 
     // Mark asset for delete queue (delete it after auto unload)
     asset->_deleteFileOnUnload = true;
@@ -1343,6 +1428,19 @@ void Content::DeleteScript(const StringView& path)
 #if USE_EDITOR
     LOG(Info, "Deleting script '{0}'", path);
 
+    if (AssetDatabase::Get().IsHardCutEnabled() && IsProjectContentPath(path))
+    {
+        if (!FileSystem::FileExists(String(path) + TEXT(".meta")))
+        {
+            LOG(Error, "Cannot delete Content source '{0}' because Asset System v3 requires a metadata sidecar.", path);
+            return;
+        }
+        const AssetMutationResultInfo result = AssetDatabaseFacade::DeleteAssetPairToRecovery(path);
+        if (!result.Succeeded)
+            LOG(Error, "Cannot delete canonical source pair '{0}': {1}", path, result.Message);
+        return;
+    }
+
     // Delete file
     deleteFileSafety(path);
 #endif
@@ -1351,6 +1449,21 @@ void Content::DeleteScript(const StringView& path)
 void Content::DeleteAsset(const StringView& path)
 {
     PROFILE_CPU();
+
+#if USE_EDITOR
+    if (AssetDatabase::Get().IsHardCutEnabled() && IsProjectContentPath(path))
+    {
+        if (!FileSystem::FileExists(String(path) + TEXT(".meta")))
+        {
+            LOG(Error, "Cannot delete Content source '{0}' because Asset System v3 requires a metadata sidecar.", path);
+            return;
+        }
+        const AssetMutationResultInfo result = AssetDatabaseFacade::DeleteAssetPairToRecovery(path);
+        if (!result.Succeeded)
+            LOG(Error, "Cannot delete canonical source pair '{0}': {1}", path, result.Message);
+        return;
+    }
+#endif
 
     // Try to delete already loaded asset
     Asset* asset = GetAsset(path);
@@ -1454,6 +1567,19 @@ bool Content::RenameAsset(const StringView& oldPathInput, const StringView& newP
 
     if (oldPath == newPath)
         return false;
+
+    if (AssetDatabase::Get().IsHardCutEnabled() && IsProjectContentPath(oldPath))
+    {
+        if (!FileSystem::FileExists(oldPath + TEXT(".meta")))
+        {
+            LOG(Error, "Cannot move Content source '{0}' because Asset System v3 requires a metadata sidecar.", oldPath);
+            return true;
+        }
+        const AssetMutationResultInfo result = AssetDatabaseFacade::MoveAssetPair(oldPath, newPath);
+        if (!result.Succeeded)
+            LOG(Error, "Cannot move canonical source pair '{0}' to '{1}': {2}", oldPath, newPath, result.Message);
+        return !result.Succeeded;
+    }
 
     // Cache data
     Asset* oldAsset = GetAsset(oldPath);
@@ -1627,6 +1753,19 @@ bool Content::RenameAssetFolder(const StringView& oldPathInput, const StringView
     ContentStorageManager::FormatPath(oldPath);
     ContentStorageManager::FormatPath(newPath);
 
+    if (AssetDatabase::Get().IsHardCutEnabled() && IsProjectContentPath(oldPath))
+    {
+        if (!FileSystem::FileExists(oldPath + TEXT(".meta")))
+        {
+            LOG(Error, "Cannot move Content folder '{0}' because Asset System v3 requires a metadata sidecar.", oldPath);
+            return true;
+        }
+        const AssetMutationResultInfo result = AssetDatabaseFacade::MoveAssetPair(oldPath, newPath);
+        if (!result.Succeeded)
+            LOG(Error, "Cannot move canonical folder pair '{0}' to '{1}': {2}", oldPath, newPath, result.Message);
+        return !result.Succeeded;
+    }
+
     const bool samePath = FileSystem::AreFilePathsEquivalent(oldPath, newPath);
     const bool destinationIsDirectory = !samePath && FileSystem::DirectoryExists(newPath);
     const bool destinationIsFile = !samePath && FileSystem::FileExists(newPath);
@@ -1769,6 +1908,14 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
         ASSERT(FileSystem::AreFilePathsEquivalent(srcPath, dstPath) == false && dstId.IsValid());
 
         LOG(Info, "Cloning asset \'{0}\' to \'{1}\'({2}).", srcPath, dstPath, dstId);
+
+        String normalizedDestination(dstPath);
+        ContentStorageManager::FormatPath(normalizedDestination);
+        if (AssetDatabase::Get().IsHardCutEnabled() && IsProjectContentPath(normalizedDestination))
+        {
+            LOG(Error, "CloneAssetFile cannot mutate Asset System v3 Content directly. Use AssetDatabase.CopyAsset or the native mutation facade.");
+            return true;
+        }
 
         // Check source file
         if (!FileSystem::FileExists(srcPath))
@@ -2270,6 +2417,7 @@ void Content::onAssetUnload(Asset* asset)
 {
     // This is called by the asset on unloading
     ScopeLock locker(AssetsLocker);
+    UnregisterLoadedAssetObject(asset);
     Assets.Remove(asset->GetID());
     UnloadQueue.Remove(asset);
     LoadedAssetsToInvoke.Remove(asset);
@@ -2282,8 +2430,10 @@ void Content::onAssetUnload(Asset* asset)
 void Content::onAssetChangeId(Asset* asset, const Guid& oldId, const Guid& newId)
 {
     ScopeLock locker(AssetsLocker);
+    UnregisterLoadedAssetObject(asset);
     Assets.Remove(oldId);
     Assets.Add(newId, asset);
+    RegisterLoadedAssetObject(asset);
 #if USE_EDITOR
     if (PendingDependencies.ContainsKey(oldId))
     {
@@ -2374,13 +2524,63 @@ Asset* Content::LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type
 
 Asset* Content::LoadAsync(const AssetObjectId& id, const ScriptingTypeHandle& type)
 {
+    if (!id.IsValid())
+        return nullptr;
+    Asset* loaded = nullptr;
+    AssetsLocker.Lock();
+    AssetObjects.TryGet(id, loaded);
+    AssetsLocker.Unlock();
+    if (loaded)
+    {
+        if (IsAssetTypeIdInvalid(type, loaded->GetTypeHandle()) && !loaded->Is(type))
+        {
+            LOG(Warning, "Different loaded asset type! Asset: '{0}'. Expected type: {1}", loaded->ToString(), type.ToString());
+            return nullptr;
+        }
+        return loaded;
+    }
+#if !USE_EDITOR
+    const RuntimeAssetIndexEntry* runtimeLocation = Cache.FindRuntimeLocation(id);
+    if (runtimeLocation && RuntimePreloadSchedulingDepth == 0 && !RuntimePreloadStack.Contains(id))
+    {
+        RuntimePreloadStack.Add(id);
+        SCOPE_EXIT { RuntimePreloadStack.Remove(id); };
+        uint64 remainingBudget = runtimeLocation->PreloadBudgetBytes;
+        RuntimePreloadSchedulingDepth++;
+        SCOPE_EXIT { RuntimePreloadSchedulingDepth--; };
+        for (const RuntimeAssetPreload& request : runtimeLocation->Preload)
+        {
+            const AssetObjectId& dependency = request.ID;
+            if (RuntimePreloadStack.Contains(dependency))
+                continue;
+            if (request.EstimatedBytes > remainingBudget && !request.Required)
+                continue;
+            remainingBudget = request.EstimatedBytes < remainingBudget ? remainingBudget - request.EstimatedBytes : 0;
+            if (!LoadAsync(dependency, ScriptingTypeHandle()))
+            {
+                if (request.Required)
+                {
+                    LOG(Error, "Failed to schedule required runtime preload ({0}:{1}) for ({2}:{3}).",
+                        dependency.Guid, dependency.LocalId, id.Guid, id.LocalId);
+                    return nullptr;
+                }
+            }
+        }
+    }
+#endif
     AssetInfo info;
     if (!GetAssetInfo(id, info))
     {
         LOG(Warning, "Invalid or missing asset object ({0}:{1}, {2}).", id.Guid, id.LocalId, type.ToString());
         return nullptr;
     }
-    return LoadAsync(info.ID, type);
+    Asset* result = LoadAsync(info.ID, type);
+    if (result)
+    {
+        ScopeLock lock(AssetsLocker);
+        AssetObjects[id] = result;
+    }
+    return result;
 }
 
 Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
@@ -2551,6 +2751,7 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
     ASSERT(!Assets.ContainsKey(id));
 #endif
     Assets.Add(id, result);
+    RegisterLoadedAssetObject(result);
 
     // Start asset loading
     result->startLoading();

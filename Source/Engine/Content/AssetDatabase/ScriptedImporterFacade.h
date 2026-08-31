@@ -18,6 +18,10 @@ public:
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool Publish(const StringView& sourcePath, const StringView& resultJson);
 
+    /// <summary>Reads one verified immutable output from another asset's current host artifact.</summary>
+    /// <returns>A JSON envelope with the exact output key and bytes, or an empty string on failure.</returns>
+    API_FUNCTION() static String ReadArtifactOutput(const Guid& sourceAssetId, const StringView& outputKind);
+
     /// <summary>Gets the last managed-import bridge error.</summary>
     API_FUNCTION() static String GetLastError();
 };
