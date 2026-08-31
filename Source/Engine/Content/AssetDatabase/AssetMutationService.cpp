@@ -1525,13 +1525,13 @@ bool AssetMutationService::CreateFolder(const StringView& path, const AssetMeta&
     JournalEntry sourceEntry;
     sourceEntry.Role = TEXT("Source");
     sourceEntry.DestinationPath = destination;
-    sourceEntry.StagingPath = StagePath(destination, id, TEXT("stage"));
+    sourceEntry.StagingPath = StagePath(destination, id, TEXT("source"));
     sourceEntry.IsDirectory = true;
     journal.Entries.Add(sourceEntry);
     JournalEntry metaEntry;
     metaEntry.Role = TEXT("Metadata");
     metaEntry.DestinationPath = destinationMeta;
-    metaEntry.StagingPath = StagePath(destinationMeta, id, TEXT("stage"));
+    metaEntry.StagingPath = StagePath(destinationMeta, id, TEXT("meta"));
     journal.Entries.Add(metaEntry);
     if (SaveJournal(_journalRoot, journal))
         return Fail(result, AssetMutationFailure::JournalFailure, id, StringView(), destination, TEXT("Create-folder journal could not be persisted."));
@@ -1609,7 +1609,7 @@ bool AssetMutationService::Copy(const StringView& sourcePath, const StringView& 
     sourceEntry.Role = TEXT("Source");
     sourceEntry.SourcePath = source;
     sourceEntry.DestinationPath = destination;
-    sourceEntry.StagingPath = StagePath(destination, id, TEXT("stage"));
+    sourceEntry.StagingPath = StagePath(destination, id, TEXT("source"));
     sourceEntry.IsDirectory = FileSystem::DirectoryExists(source);
     if (HashPath(source, sourceEntry.BeforeHash))
         return Fail(result, AssetMutationFailure::LockedStorage, id, source, destination, TEXT("Copy source observation could not be captured."));
@@ -1618,7 +1618,7 @@ bool AssetMutationService::Copy(const StringView& sourcePath, const StringView& 
     metaEntry.Role = TEXT("Metadata");
     metaEntry.SourcePath = sourceMeta;
     metaEntry.DestinationPath = destinationMeta;
-    metaEntry.StagingPath = StagePath(destinationMeta, id, TEXT("stage"));
+    metaEntry.StagingPath = StagePath(destinationMeta, id, TEXT("meta"));
     if (HashFile(sourceMeta, metaEntry.BeforeHash))
         return Fail(result, AssetMutationFailure::LockedStorage, id, source, destination, TEXT("Copy metadata observation could not be captured."));
     journal.Entries.Add(metaEntry);
@@ -1885,7 +1885,7 @@ namespace
         sourceEntry.Role = TEXT("Source");
         sourceEntry.SourcePath = source;
         sourceEntry.DestinationPath = finalDestination;
-        sourceEntry.StagingPath = StagePath(finalDestination, id, TEXT("stage"));
+        sourceEntry.StagingPath = StagePath(finalDestination, id, TEXT("source"));
         sourceEntry.IsDirectory = FileSystem::DirectoryExists(source);
         if (HashPath(source, sourceEntry.BeforeHash))
             return Fail(result, AssetMutationFailure::LockedStorage, id, source, finalDestination, TEXT("Move source observation could not be captured."));
@@ -1894,7 +1894,7 @@ namespace
         metaEntry.Role = TEXT("Metadata");
         metaEntry.SourcePath = sourceMeta;
         metaEntry.DestinationPath = destinationMeta;
-        metaEntry.StagingPath = StagePath(destinationMeta, id, TEXT("stage"));
+        metaEntry.StagingPath = StagePath(destinationMeta, id, TEXT("meta"));
         if (HashFile(sourceMeta, metaEntry.BeforeHash))
             return Fail(result, AssetMutationFailure::LockedStorage, id, source, finalDestination, TEXT("Move metadata observation could not be captured."));
         journal.Entries.Add(metaEntry);

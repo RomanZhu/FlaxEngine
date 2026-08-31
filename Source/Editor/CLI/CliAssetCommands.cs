@@ -595,17 +595,12 @@ namespace FlaxEditor
                 var path = item.Path;
                 if (PathEquals(path, Globals.ProjectContentFolder))
                     throw new InvalidOperationException("The project Content root cannot be deleted.");
-                if (item is AssetItem { IsCanonicalSource: true })
-                {
-                    Editor.Instance.ContentDatabase.Delete(item, true);
-                }
-                else
-                {
-                    var action = ContentItemFilesystemAction.Delete(Editor.Instance, new List<ContentItem> { item });
-                    if (action == null)
-                        throw new InvalidOperationException($"Failed to stage asset deletion for '{path}'.");
-                    action.Dispose();
-                }
+                // Match the Content Window's confirmed-delete path so canonical assets use the
+                // same recoverable source/meta staging and database reconciliation as the UI.
+                var action = ContentItemFilesystemAction.Delete(Editor.Instance, new List<ContentItem> { item });
+                if (action == null)
+                    throw new InvalidOperationException($"Failed to stage asset deletion for '{path}'.");
+                action.Dispose();
                 if (File.Exists(path) || Directory.Exists(path))
                     throw new InvalidOperationException($"Failed to delete asset '{path}'.");
                 if (File.Exists(path + ".meta"))
