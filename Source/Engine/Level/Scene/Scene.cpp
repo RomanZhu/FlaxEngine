@@ -74,6 +74,9 @@ Scene::Scene(const SpawnParams& params)
     , LightmapsData(this)
     , CSGData(this)
 {
+    _persistentSourceAsset = AssetGuid(params.ID);
+    _localFileId = 1;
+
     // Default name
     _name = TEXT("Scene");
 

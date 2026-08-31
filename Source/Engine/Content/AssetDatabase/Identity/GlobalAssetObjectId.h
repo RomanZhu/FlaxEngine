@@ -28,6 +28,26 @@ API_STRUCT() struct FLAXENGINE_API GlobalAssetObjectId
         return SourceAsset.IsValid() && LocalFileId != 0;
     }
 
+    /// <summary>
+    /// Produces the ephemeral scripting registry key for this persistent identity.
+    /// The returned GUID is derived and must never be serialized as object identity.
+    /// </summary>
+    Guid ToRuntimeObjectGuid() const
+    {
+        if (!IsValid())
+            return Guid::Empty;
+        if (Kind == GlobalObjectKind::SceneObject && LocalFileId == 1 && PrefabInstanceFileId == 0)
+            return SourceAsset.Value;
+        Guid result = AssetObjectId(SourceAsset, LocalFileId).ToRuntimeObjectGuid();
+        const uint64 instance = static_cast<uint64>(PrefabInstanceFileId);
+        result.C ^= static_cast<uint32>(Kind) * 0x85ebca6bu;
+        result.C ^= static_cast<uint32>(instance);
+        result.D ^= static_cast<uint32>(instance >> 32) ^ 0xc2b2ae35u;
+        if (!result.IsValid())
+            result.D = 1;
+        return result;
+    }
+
     FORCE_INLINE bool operator==(const GlobalAssetObjectId& other) const
     {
         return Kind == other.Kind && SourceAsset == other.SourceAsset && LocalFileId == other.LocalFileId &&

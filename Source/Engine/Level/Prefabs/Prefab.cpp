@@ -39,7 +39,10 @@ Guid Prefab::GetRootObjectId() const
             const Guid basePrefabRootId = basePrefab->GetRootObjectId();
             for (int32 i = 0; i < ObjectsCount; i++)
             {
-                const Guid prefabObjectId = JsonTools::GetGuid(data[i], "PrefabObjectID");
+                const auto prefabObjectFileId = data[i].FindMember("PrefabObjectFileId");
+                const Guid prefabObjectId = prefabObjectFileId != data[i].MemberEnd() && prefabObjectFileId->value.IsInt64()
+                    ? SceneObject::MakeRuntimeObjectId(basePrefabId, prefabObjectFileId->value.GetInt64(), GlobalObjectKind::PrefabObject)
+                    : Guid::Empty;
                 if (prefabObjectId == basePrefabRootId)
                 {
                     objectIndex = i;
@@ -107,8 +110,12 @@ bool Prefab::GetNestedObject(const Guid& objectId, Guid& outPrefabId, Guid& outO
     if (prefabObjectDataPtr)
     {
         const ISerializable::DeserializeStream& prefabObjectData = **prefabObjectDataPtr;
+        const auto prefabObjectFileId = prefabObjectData.FindMember("PrefabObjectFileId");
         result = JsonTools::GetGuidIfValid(result1, prefabObjectData, "PrefabID") &&
-                JsonTools::GetGuidIfValid(result2, prefabObjectData, "PrefabObjectID");
+                 prefabObjectFileId != prefabObjectData.MemberEnd() && prefabObjectFileId->value.IsInt64() &&
+                 prefabObjectFileId->value.GetInt64() != 0;
+        if (result)
+            result2 = SceneObject::MakeRuntimeObjectId(result1, prefabObjectFileId->value.GetInt64(), GlobalObjectKind::PrefabObject);
     }
     outPrefabId = result1;
     outObjectId = result2;
@@ -158,20 +165,24 @@ Asset::LoadResult Prefab::loadAsset()
     {
         auto& objData = data[objectIndex];
 
-        Guid objectId = JsonTools::GetGuid(objData, "ID");
-        if (!objectId.IsValid())
+        const auto objectFileId = objData.FindMember("FileId");
+        if (objectFileId == objData.MemberEnd() || !objectFileId->value.IsInt64() || objectFileId->value.GetInt64() == 0)
         {
-            LOG(Warning, "The object inside prefab has invalid ID.");
+            LOG(Warning, "The object inside prefab has invalid local file ID.");
             return LoadResult::InvalidData;
         }
+        const Guid objectId = SceneObject::MakeRuntimeObjectId(GetID(), objectFileId->value.GetInt64(), GlobalObjectKind::PrefabObject);
 
         ObjectsIds.Add(objectId);
         ObjectsDataCache.Add(objectId, &objData);
         ObjectsCount++;
 
-        Guid parentID;
-        if (JsonTools::GetGuidIfValid(parentID, objData, "ParentID"))
-            ObjectsHierarchyCache[parentID].Add(objectId);
+        const auto parentFileId = objData.FindMember("ParentFileId");
+        if (parentFileId != objData.MemberEnd() && parentFileId->value.IsInt64() && parentFileId->value.GetInt64() != 0)
+        {
+            const Guid parentId = SceneObject::MakeRuntimeObjectId(GetID(), parentFileId->value.GetInt64(), GlobalObjectKind::PrefabObject);
+            ObjectsHierarchyCache[parentId].Add(objectId);
+        }
 
         Guid prefabId = JsonTools::GetGuid(objData, "PrefabID");
         if (prefabId.IsValid() && !NestedPrefabs.Contains(prefabId))

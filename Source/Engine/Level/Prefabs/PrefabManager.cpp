@@ -157,6 +157,9 @@ Actor* PrefabManager::SpawnPrefab(Prefab* prefab, const SpawnOptions& options)
     }
     auto& data = *prefab->Data;
     SceneObjectsFactory::Context context(modifier.Value);
+    context.SourceAssetId = prefabId;
+    context.DocumentKind = GlobalObjectKind::PrefabObject;
+    context.AssignDocumentLocalFileIds = false;
     context.SuppressMissingPrefabObjectWarnings = options.SuppressMissingPrefabObjectWarnings;
     LogContextScope logContext(prefabId);
 
@@ -206,7 +209,9 @@ Actor* PrefabManager::SpawnPrefab(Prefab* prefab, const SpawnOptions& options)
     const Guid prefabRootObjectId = prefab->GetRootObjectId();
     for (int32 i = 0; i < dataCount && !root; i++)
     {
-        if (JsonTools::GetGuid(data[i], "ID") == prefabRootObjectId)
+        const auto rootFileId = data[i].FindMember("FileId");
+        if (rootFileId != data[i].MemberEnd() && rootFileId->value.IsInt64() &&
+            SceneObject::MakeRuntimeObjectId(prefabId, rootFileId->value.GetInt64(), GlobalObjectKind::PrefabObject) == prefabRootObjectId)
             root = dynamic_cast<Actor*>(sceneObjects->At(i));
     }
     if (!root)
@@ -316,10 +321,14 @@ Actor* PrefabManager::SpawnPrefab(Prefab* prefab, const SpawnOptions& options)
             if (!obj)
                 continue;
 
-            const Guid prefabObjectId = JsonTools::GetGuid(stream, "ID");
+            const auto prefabObjectFileIdMember = stream.FindMember("FileId");
+            if (prefabObjectFileIdMember == stream.MemberEnd() || !prefabObjectFileIdMember->value.IsInt64())
+                continue;
+            const LocalFileId prefabObjectFileId = prefabObjectFileIdMember->value.GetInt64();
+            const Guid prefabObjectId = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileId, GlobalObjectKind::PrefabObject);
             if (options.ObjectsCache)
                 options.ObjectsCache->Add(prefabObjectId, obj);
-            obj->LinkPrefab(prefabId, prefabObjectId);
+            obj->LinkPrefabObject(prefabId, prefabObjectFileId);
         }
     }
     else if (options.ObjectsCache)
@@ -330,7 +339,10 @@ Actor* PrefabManager::SpawnPrefab(Prefab* prefab, const SpawnOptions& options)
             SceneObject* obj = sceneObjects->At(i);
             if (!obj)
                 continue;
-            const Guid prefabObjectId = JsonTools::GetGuid(stream, "ID");
+            const auto prefabObjectFileIdMember = stream.FindMember("FileId");
+            if (prefabObjectFileIdMember == stream.MemberEnd() || !prefabObjectFileIdMember->value.IsInt64())
+                continue;
+            const Guid prefabObjectId = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileIdMember->value.GetInt64(), GlobalObjectKind::PrefabObject);
             options.ObjectsCache->Add(prefabObjectId, obj);
         }
     }
@@ -404,20 +416,7 @@ bool PrefabManager::CreatePrefab(Actor* targetActor, const StringView& outputPat
     }
     IsCreatingPrefab = false;
 
-    // Randomize the objects ids (prevent overlapping of the prefab instance objects ids and the prefab objects ids)
-    Dictionary<Guid, Guid> objectInstanceIdToPrefabObjectId;
-    objectInstanceIdToPrefabObjectId.EnsureCapacity(sceneObjects->Count());
-    if (targetActor->HasParent())
-    {
-        // Unlink from parent actor
-        objectInstanceIdToPrefabObjectId[targetActor->GetParent()->GetID()] = Guid::Empty;
-    }
-    for (int32 i = 0; i < sceneObjects->Count(); i++)
-    {
-        // Generate new IDs for the prefab objects (other than reference instance used to create prefab)
-        const SceneObject* obj = sceneObjects->At(i);
-        objectInstanceIdToPrefabObjectId[obj->GetSceneObjectId()] = Guid::New();
-    }
+    // A prefab source owns authored local file IDs. Runtime scripting IDs are not copied into it.
     {
         // Parse json to DOM document
         rapidjson_flax::Document doc;
@@ -431,8 +430,9 @@ bool PrefabManager::CreatePrefab(Actor* targetActor, const StringView& outputPat
             return true;
         }
 
-        // Process json
-        JsonTools::ChangeIds(doc, objectInstanceIdToPrefabObjectId);
+        // The selected root becomes the prefab document root rather than retaining its scene parent.
+        if (doc.IsArray() && !doc.Empty() && doc[0].IsObject())
+            doc[0].RemoveMember("ParentFileId");
 
         // Save back to text
         actorsDataBuffer.Clear();
@@ -463,11 +463,7 @@ bool PrefabManager::CreatePrefab(Actor* targetActor, const StringView& outputPat
         for (int32 i = 0; i < sceneObjects->Count(); i++)
         {
             SceneObject* obj = sceneObjects->At(i);
-            Guid prefabObjectId;
-            if (objectInstanceIdToPrefabObjectId.TryGet(obj->GetSceneObjectId(), prefabObjectId))
-            {
-                obj->LinkPrefab(assetInfo.ID, prefabObjectId);
-            }
+            obj->LinkPrefabObject(assetInfo.ID, obj->GetLocalFileId());
         }
     }
 

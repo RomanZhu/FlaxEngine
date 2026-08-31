@@ -5,6 +5,7 @@
 #include "Engine/Scripting/ScriptingObject.h"
 #include "Engine/Core/ISerializable.h"
 #include "Engine/Core/Collections/Array.h"
+#include "Engine/Content/AssetDatabase/Identity/GlobalAssetObjectId.h"
 
 class SceneTicking;
 class ScriptsFactory;
@@ -17,6 +18,8 @@ class PrefabInstanceData;
 class SceneObject;
 class PrefabManager;
 class Level;
+class SceneLoader;
+class SceneObjectsFactory;
 
 /// <summary>
 /// Scene objects setup data container used for BeginPlay callback.
@@ -85,6 +88,8 @@ API_CLASS(Abstract, NoSpawn) class FLAXENGINE_API SceneObject : public Scripting
     friend PrefabManager;
     friend Actor;
     friend Level;
+    friend SceneLoader;
+    friend SceneObjectsFactory;
     friend ScriptsFactory;
     friend SceneTicking;
 public:
@@ -103,8 +108,11 @@ public:
 
 protected:
     Actor* _parent;
+    AssetGuid _persistentSourceAsset;
+    LocalFileId _localFileId;
     Guid _prefabID;
     Guid _prefabObjectID;
+    LocalFileId _prefabObjectFileId;
 
 #if USE_EDITOR
     ExternalSiblingOrderKey _externalSiblingOrderKey;
@@ -185,6 +193,26 @@ public:
     virtual const Guid& GetSceneObjectId() const = 0;
 
     /// <summary>
+    /// Gets the stable authored identifier of this actor or component inside its owning scene document.
+    /// Runtime scripting GUIDs are deliberately not persistent identity.
+    /// </summary>
+    API_PROPERTY(Attributes="HideInEditor") FORCE_INLINE int64 GetLocalFileId() const
+    {
+        return _localFileId;
+    }
+
+    /// <summary>
+    /// Gets the persistent global identity for this scene or prefab object.
+    /// </summary>
+    API_PROPERTY(Attributes="HideInEditor") GlobalAssetObjectId GetGlobalObjectId() const;
+
+    /// <summary>
+    /// Resolves a persistent scene or prefab object identity if its owning scene is loaded.
+    /// Missing objects preserve their original identity at the call site and resolve to null.
+    /// </summary>
+    API_FUNCTION() static SceneObject* ResolveGlobalObjectId(API_PARAM(Ref) const GlobalAssetObjectId& objectId);
+
+    /// <summary>
     /// Gets zero-based index in parent actor children list (scripts or child actors).
     /// </summary>
     /// <returns>The order in parent.</returns>
@@ -223,6 +251,14 @@ public:
     }
 
     /// <summary>
+    /// Gets the stable authored identifier of the linked object inside the prefab source.
+    /// </summary>
+    API_PROPERTY(Attributes="HideInEditor") FORCE_INLINE int64 GetPrefabObjectFileId() const
+    {
+        return _prefabObjectFileId;
+    }
+
+    /// <summary>
     /// Links scene object instance to the prefab asset and prefab object. Warning! This applies to the only this object (not scripts or child actors).
     /// </summary>
     /// <param name="prefabId">The prefab asset identifier.</param>
@@ -230,10 +266,24 @@ public:
     API_FUNCTION(Attributes="NoAnimate") virtual void LinkPrefab(const Guid& prefabId, const Guid& prefabObjectId);
 
     /// <summary>
+    /// Links this instance to an authored prefab object by its stable local file ID.
+    /// </summary>
+    void LinkPrefabObject(const Guid& prefabId, LocalFileId prefabObjectFileId);
+
+    /// <summary>
     /// Breaks the prefab linkage for this object, all its scripts, and all child actors.
     /// </summary>
     API_FUNCTION(Attributes="NoAnimate")
     virtual void BreakPrefabLink();
+
+    static Guid MakeRuntimeObjectId(const Guid& sourceAssetId, LocalFileId localFileId, GlobalObjectKind kind = GlobalObjectKind::SceneObject, LocalFileId prefabInstanceFileId = 0);
+    static LocalFileId MakeLocalFileId(const Guid& runtimeSeed);
+
+    FORCE_INLINE void SetPersistentDocumentIdentity(const AssetGuid& sourceAsset, LocalFileId localFileId)
+    {
+        _persistentSourceAsset = sourceAsset;
+        _localFileId = localFileId;
+    }
 
     /// <summary>
     /// Gets the path containing name of this object and all parent objects in tree hierarchy separated with custom separator character (/ by default). Can be used to identify this object in logs.

@@ -31,13 +31,13 @@ void SceneInfo::Serialize(SerializeStream& stream, const void* otherObj)
             stream.StartObject();
 
             stream.JKEY("Lightmap0");
-            stream.Guid(info.Lightmap0);
+            Serialization::Serialize(stream, info.Lightmap0, nullptr);
 
             stream.JKEY("Lightmap1");
-            stream.Guid(info.Lightmap1);
+            Serialization::Serialize(stream, info.Lightmap1, nullptr);
 
             stream.JKEY("Lightmap2");
-            stream.Guid(info.Lightmap2);
+            Serialization::Serialize(stream, info.Lightmap2, nullptr);
 
             stream.EndObject();
         }
@@ -65,9 +65,15 @@ void SceneInfo::Deserialize(DeserializeStream& stream, ISerializeModifier* modif
             auto& lightmap = Lightmaps[i];
             auto& lightmapsData = lightmapsArray[i];
 
-            lightmap.Lightmap0 = JsonTools::GetGuid(lightmapsData, "Lightmap0");
-            lightmap.Lightmap1 = JsonTools::GetGuid(lightmapsData, "Lightmap1");
-            lightmap.Lightmap2 = JsonTools::GetGuid(lightmapsData, "Lightmap2");
+            auto lightmap0 = lightmapsData.FindMember("Lightmap0");
+            auto lightmap1 = lightmapsData.FindMember("Lightmap1");
+            auto lightmap2 = lightmapsData.FindMember("Lightmap2");
+            if (lightmap0 != lightmapsData.MemberEnd())
+                Serialization::Deserialize(lightmap0->value, lightmap.Lightmap0, modifier);
+            if (lightmap1 != lightmapsData.MemberEnd())
+                Serialization::Deserialize(lightmap1->value, lightmap.Lightmap1, modifier);
+            if (lightmap2 != lightmapsData.MemberEnd())
+                Serialization::Deserialize(lightmap2->value, lightmap.Lightmap2, modifier);
         }
     }
 

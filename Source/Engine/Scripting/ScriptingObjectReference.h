@@ -3,9 +3,12 @@
 #pragma once
 
 #include "Engine/Scripting/ScriptingObject.h"
+#include "Engine/Content/AssetDatabase/Identity/GlobalAssetObjectId.h"
 
 // Don't include Scripting.h but just FindObject method
 extern FLAXENGINE_API ScriptingObject* FindObject(const Guid& id, MClass* type);
+extern FLAXENGINE_API ScriptingObject* ResolveGlobalObject(const GlobalAssetObjectId& id, MClass* type);
+extern FLAXENGINE_API GlobalAssetObjectId GetPersistentGlobalObjectId(ScriptingObject* object);
 
 /// <summary>
 /// The scripting object reference.
@@ -18,6 +21,7 @@ public:
 
 protected:
     ScriptingObject* _object = nullptr;
+    GlobalAssetObjectId _persistentObjectId;
 
 public:
     /// <summary>
@@ -36,7 +40,7 @@ public:
     ScriptingObjectReferenceBase(ScriptingObjectReferenceBase&& other) noexcept
         : _object(nullptr)
     {
-        OnSet(other._object);
+        OnSetPersistentObjectId(other._persistentObjectId, other._object);
         other.OnSet(nullptr);
     }
 
@@ -71,6 +75,11 @@ public:
         return _object ? _object->GetID() : Guid::Empty;
     }
 
+    FORCE_INLINE const GlobalAssetObjectId& GetPersistentObjectId() const
+    {
+        return _persistentObjectId;
+    }
+
     /// <summary>
     /// Gets managed instance object (or null if no object linked).
     /// </summary>
@@ -101,6 +110,8 @@ protected:
     /// </summary>
     /// <param name="object">The object.</param>
     void OnSet(ScriptingObject* object);
+
+    void OnSetPersistentObjectId(const GlobalAssetObjectId& objectId, ScriptingObject* object);
 
     void OnDeleted(ScriptingObject* obj);
 
@@ -146,8 +157,9 @@ public:
     /// </summary>
     /// <param name="other">The other property.</param>
     ScriptingObjectReference(const ScriptingObjectReference& other)
-        : ScriptingObjectReferenceBase(other._object)
+        : ScriptingObjectReferenceBase()
     {
+        OnSetPersistentObjectId(other._persistentObjectId, other._object);
     }
 
     ScriptingObjectReference(ScriptingObjectReference&& other) noexcept
@@ -191,7 +203,7 @@ public:
 
     ScriptingObjectReference& operator=(const ScriptingObjectReference& other)
     {
-        OnSet(other._object);
+        OnSetPersistentObjectId(other._persistentObjectId, other._object);
         return *this;
     }
 
@@ -205,6 +217,11 @@ public:
     {
         OnSet(static_cast<ScriptingObject*>(FindObject(id, T::GetStaticClass())));
         return *this;
+    }
+
+    FORCE_INLINE void SetPersistentObjectId(const GlobalAssetObjectId& id)
+    {
+        OnSetPersistentObjectId(id, ResolveGlobalObject(id, T::GetStaticClass()));
     }
 
     /// <summary>
@@ -252,5 +269,5 @@ public:
 template<typename T>
 uint32 GetHash(const ScriptingObjectReference<T>& key)
 {
-    return GetHash(key.GetID());
+    return key.GetPersistentObjectId().IsValid() ? GetHash(key.GetPersistentObjectId()) : GetHash(key.GetID());
 }

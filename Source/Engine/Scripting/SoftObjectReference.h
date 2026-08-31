@@ -3,8 +3,11 @@
 #pragma once
 
 #include "Engine/Scripting/ScriptingObject.h"
+#include "Engine/Content/AssetDatabase/Identity/GlobalAssetObjectId.h"
 
 extern FLAXENGINE_API ScriptingObject* FindObject(const Guid& id, MClass* type);
+extern FLAXENGINE_API ScriptingObject* ResolveGlobalObject(const GlobalAssetObjectId& id, MClass* type);
+extern FLAXENGINE_API GlobalAssetObjectId GetPersistentGlobalObjectId(ScriptingObject* object);
 
 /// <summary>
 /// The scripting object soft reference. Objects gets referenced on use (ID reference is resolving it).
@@ -15,6 +18,7 @@ protected:
 
     ScriptingObject* _object = nullptr;
     Guid _id = Guid::Empty;
+    GlobalAssetObjectId _persistentObjectId;
 
 public:
 
@@ -56,6 +60,11 @@ public:
         return _id;
     }
 
+    const GlobalAssetObjectId& GetPersistentObjectId() const
+    {
+        return _persistentObjectId;
+    }
+
 protected:
 
     void OnSet(ScriptingObject* object)
@@ -66,6 +75,7 @@ protected:
             _object->Deleted.Unbind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         _object = object;
         _id = object ? object->GetID() : Guid::Empty;
+        _persistentObjectId = GetPersistentGlobalObjectId(object);
         if (object)
             object->Deleted.Bind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         Changed();
@@ -79,13 +89,27 @@ protected:
             _object->Deleted.Unbind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         _object = nullptr;
         _id = id;
+        _persistentObjectId = GlobalAssetObjectId();
+        Changed();
+    }
+
+    void OnSet(const GlobalAssetObjectId& id)
+    {
+        ScriptingObject* object = ResolveGlobalObject(id, nullptr);
+        if (_object)
+            _object->Deleted.Unbind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
+        _object = object;
+        _persistentObjectId = id;
+        _id = object ? object->GetID() : id.ToRuntimeObjectGuid();
+        if (object)
+            object->Deleted.Bind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         Changed();
     }
 
     void OnResolve(MClass* type)
     {
         ASSERT(!_object);
-        _object = FindObject(_id, type);
+        _object = _persistentObjectId.IsValid() ? ResolveGlobalObject(_persistentObjectId, type) : FindObject(_id, type);
         if (_object)
             _object->Deleted.Bind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
     }
@@ -95,7 +119,8 @@ protected:
         ASSERT(_object == obj);
         _object->Deleted.Unbind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         _object = nullptr;
-        _id = Guid::Empty;
+        if (!_persistentObjectId.IsValid())
+            _id = Guid::Empty;
         Changed();
     }
 };
@@ -201,6 +226,11 @@ public:
     {
         OnSet(id);
         return *this;
+    }
+
+    FORCE_INLINE void SetPersistentObjectId(const GlobalAssetObjectId& id)
+    {
+        OnSet(id);
     }
     FORCE_INLINE operator T*() const
     {

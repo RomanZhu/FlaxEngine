@@ -24,5 +24,11 @@ public:
     /// </summary>
     Dictionary<Guid, Guid> IdsMapping;
 
+    /// <summary>
+    /// Source asset namespace of the scene or prefab document currently being deserialized.
+    /// Used only to derive ephemeral runtime keys from authored local file IDs.
+    /// </summary>
+    Guid CurrentSourceAssetId;
+
     ISerializeModifier();
 };

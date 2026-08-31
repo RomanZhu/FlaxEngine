@@ -24,6 +24,24 @@
 
 namespace
 {
+    LocalFileId GetLocalFileId(const ISerializable::DeserializeStream& stream, const char* name)
+    {
+        const auto member = stream.FindMember(name);
+        return member != stream.MemberEnd() && member->value.IsInt64() ? member->value.GetInt64() : 0;
+    }
+
+    Guid GetDocumentObjectId(const ISerializable::DeserializeStream& stream, const char* name, const Guid& sourceAssetId, GlobalObjectKind kind)
+    {
+        const LocalFileId fileId = GetLocalFileId(stream, name);
+        return fileId != 0 ? SceneObject::MakeRuntimeObjectId(sourceAssetId, fileId, kind) : Guid::Empty;
+    }
+
+    Guid GetPrefabObjectId(const ISerializable::DeserializeStream& stream)
+    {
+        const Guid prefabId = JsonTools::GetGuid(stream, "PrefabID");
+        return GetDocumentObjectId(stream, "PrefabObjectFileId", prefabId, GlobalObjectKind::PrefabObject);
+    }
+
     bool HasPrefabObjectInInstance(const SceneObjectsFactory::Context& context, const Array<SceneObject*>& sceneObjects, const ISerializable::DeserializeStream& objectsData, int32 initialCount, int32 instanceIndex, const Guid& prefabObjectId)
     {
         const auto& instance = context.Instances[instanceIndex];
@@ -39,10 +57,10 @@ namespace
         // Fall back to the serialized objects in this prefab instance (eg. if objects were reordered).
         for (int32 i = 0; i < initialCount; i++)
         {
-            if (JsonTools::GetGuid(objectsData[i], "PrefabObjectID") != prefabObjectId)
+            if (GetPrefabObjectId(objectsData[i]) != prefabObjectId)
                 continue;
             const SceneObject* object = sceneObjects[i];
-            objectId = object ? object->GetID() : JsonTools::GetGuid(objectsData[i], "ID");
+            objectId = object ? object->GetID() : GetDocumentObjectId(objectsData[i], "FileId", context.SourceAssetId, context.DocumentKind);
             if (context.ObjectToInstance.TryGet(objectId, objectInstanceIndex) && objectInstanceIndex == instanceIndex)
                 return true;
         }
@@ -67,7 +85,7 @@ void MissingScript::SetReferenceScript(const ScriptingObjectReference<Script>& v
         return;
     rapidjson_flax::Document document;
     document.Parse(Data.ToStringAnsi().GetText());
-    document.RemoveMember("ParentID"); // Prevent changing parent
+    document.RemoveMember("ParentFileId"); // Prevent changing parent
     auto modifier = Cache::ISerializeModifier.Get();
     const auto idsMapping = Scripting::ObjectsLookupIdMapping.Get();
     if (idsMapping)
@@ -120,6 +138,7 @@ ISerializeModifier* SceneObjectsFactory::Context::GetModifier()
             modifierThread->EngineBuild = modifier->EngineBuild;
             modifierThread->CurrentInstance = modifier->CurrentInstance;
             modifierThread->IdsMapping = modifier->IdsMapping;
+            modifierThread->CurrentSourceAssetId = modifier->CurrentSourceAssetId;
             Locker.Unlock();
         }
         modifier = modifierThread;
@@ -154,13 +173,30 @@ void SceneObjectsFactory::Context::SetupIdsMapping(const SceneObject* obj, ISeri
 
 SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::DeserializeStream& stream, bool* missingPrefabObject)
 {
+    return SpawnInternal(context, stream, context.SourceAssetId, context.DocumentKind, missingPrefabObject);
+}
+
+SceneObject* SceneObjectsFactory::SpawnInternal(Context& context, const ISerializable::DeserializeStream& stream, const Guid& sourceAssetId, GlobalObjectKind kind, bool* missingPrefabObject)
+{
     if (missingPrefabObject)
         *missingPrefabObject = false;
 
-    // Get object id
-    Guid id = JsonTools::GetGuid(stream, "ID");
+    // Convert the authored local file ID into an ephemeral runtime scripting key.
+    const auto fileIdMember = stream.FindMember("FileId");
+    if (!sourceAssetId.IsValid() || fileIdMember == stream.MemberEnd() || !fileIdMember->value.IsInt64() || fileIdMember->value.GetInt64() == 0)
+    {
+        LOG(Warning, "Invalid scene object local file ID or document source identity.");
+        return nullptr;
+    }
+    const LocalFileId authoredFileId = fileIdMember->value.GetInt64();
+    const Guid serializedId = SceneObject::MakeRuntimeObjectId(sourceAssetId, authoredFileId, kind);
+    Guid id = serializedId;
     ISerializeModifier* modifier = context.GetModifier();
-    modifier->IdsMapping.TryGet(id, id);
+    if (!modifier->IdsMapping.TryGet(id, id) && !context.AssignDocumentLocalFileIds)
+    {
+        id = Guid::New();
+        modifier->IdsMapping[serializedId] = id;
+    }
     if (!id.IsValid())
     {
         LOG(Warning, "Invalid object id.");
@@ -169,9 +205,10 @@ SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::D
     SceneObject* obj = nullptr;
 
     // Check for prefab instance
-    Guid prefabObjectId;
-    if (JsonTools::GetGuidIfValid(prefabObjectId, stream, "PrefabObjectID"))
+    const auto prefabObjectFileIdMember = stream.FindMember("PrefabObjectFileId");
+    if (prefabObjectFileIdMember != stream.MemberEnd() && prefabObjectFileIdMember->value.IsInt64() && prefabObjectFileIdMember->value.GetInt64() != 0)
     {
+        const LocalFileId prefabObjectFileId = prefabObjectFileIdMember->value.GetInt64();
         // Get prefab asset id
         const Guid prefabId = JsonTools::GetGuid(stream, "PrefabID");
         if (!prefabId.IsValid())
@@ -179,6 +216,7 @@ SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::D
             LOG(Warning, "Invalid prefab id.");
             return nullptr;
         }
+        const Guid prefabObjectId = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileId, GlobalObjectKind::PrefabObject);
 
         // Load prefab
         auto prefab = Content::LoadAsync<Prefab>(prefabId);
@@ -208,7 +246,15 @@ SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::D
         modifier->IdsMapping[prefabObjectId] = id;
 
         // Create prefab instance (recursive prefab loading to support nested prefabs)
-        obj = Spawn(context, *prefabData, missingPrefabObject);
+        obj = SpawnInternal(context, *prefabData, prefabId, GlobalObjectKind::PrefabObject, missingPrefabObject);
+        if (obj)
+        {
+            obj->_persistentSourceAsset = AssetGuid(sourceAssetId);
+            obj->_localFileId = context.AssignDocumentLocalFileIds ? authoredFileId : SceneObject::MakeLocalFileId(id);
+            obj->_prefabID = prefabId;
+            obj->_prefabObjectID = prefabObjectId;
+            obj->_prefabObjectFileId = prefabObjectFileId;
+        }
     }
     else
     {
@@ -288,19 +334,32 @@ SceneObject* SceneObjectsFactory::Spawn(Context& context, const ISerializable::D
         }
     }
 
+
+    if (obj && !obj->HasPrefabLink())
+    {
+        obj->_persistentSourceAsset = AssetGuid(sourceAssetId);
+        obj->_localFileId = context.AssignDocumentLocalFileIds ? authoredFileId : SceneObject::MakeLocalFileId(id);
+    }
+
     return obj;
 }
 
 void SceneObjectsFactory::Deserialize(Context& context, SceneObject* obj, ISerializable::DeserializeStream& stream)
+{
+    DeserializeInternal(context, obj, stream, context.SourceAssetId);
+}
+
+void SceneObjectsFactory::DeserializeInternal(Context& context, SceneObject* obj, ISerializable::DeserializeStream& stream, const Guid& sourceAssetId)
 {
     CHECK_DEBUG(obj);
     ISerializeModifier* modifier = context.GetModifier();
     LogContextScope logContext(obj->GetID());
 
     // Check for prefab instance
-    Guid prefabObjectId;
-    if (JsonTools::GetGuidIfValid(prefabObjectId, stream, "PrefabObjectID"))
+    const auto prefabObjectFileIdMember = stream.FindMember("PrefabObjectFileId");
+    if (prefabObjectFileIdMember != stream.MemberEnd() && prefabObjectFileIdMember->value.IsInt64() && prefabObjectFileIdMember->value.GetInt64() != 0)
     {
+        const LocalFileId prefabObjectFileId = prefabObjectFileIdMember->value.GetInt64();
         // Get prefab asset id
         const Guid prefabId = JsonTools::GetGuid(stream, "PrefabID");
         if (!prefabId.IsValid())
@@ -308,6 +367,7 @@ void SceneObjectsFactory::Deserialize(Context& context, SceneObject* obj, ISeria
             LOG(Warning, "Invalid prefab id.");
             return;
         }
+        const Guid prefabObjectId = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileId, GlobalObjectKind::PrefabObject);
 
         // Load prefab
         auto prefab = Content::LoadAsync<Prefab>(prefabId);
@@ -336,7 +396,7 @@ void SceneObjectsFactory::Deserialize(Context& context, SceneObject* obj, ISeria
 #if USE_EDITOR
         bool prevDeprecated = ContentDeprecated::Clear();
 #endif
-        Deserialize(context, obj, *(ISerializable::DeserializeStream*)prefabData);
+        DeserializeInternal(context, obj, *(ISerializable::DeserializeStream*)prefabData, prefabId);
 #if USE_EDITOR
         if (ContentDeprecated::Clear(prevDeprecated))
         {
@@ -352,7 +412,10 @@ void SceneObjectsFactory::Deserialize(Context& context, SceneObject* obj, ISeria
     context.SetupIdsMapping(obj, modifier);
 
     // Load data
+    const Guid previousSourceAssetId = modifier->CurrentSourceAssetId;
+    modifier->CurrentSourceAssetId = sourceAssetId;
     obj->Deserialize(stream, modifier);
+    modifier->CurrentSourceAssetId = previousSourceAssetId;
 }
 
 void SceneObjectsFactory::HandleObjectDeserializationError(const ISerializable::DeserializeStream& value)
@@ -369,25 +432,10 @@ void SceneObjectsFactory::HandleObjectDeserializationError(const ISerializable::
     LOG(Warning, "Failed to deserialize scene object from data: {0}", bufferStr);
 
     // Try to log some useful info about missing object (eg. it's parent name for faster fixing)
-    const auto parentIdMember = value.FindMember("ParentID");
-    if (parentIdMember != value.MemberEnd() && parentIdMember->value.IsString())
+    const auto parentIdMember = value.FindMember("ParentFileId");
+    if (parentIdMember != value.MemberEnd() && parentIdMember->value.IsInt64())
     {
-        const Guid parentId = JsonTools::GetGuid(parentIdMember->value);
-        Actor* parent = Scripting::FindObject<Actor>(parentId);
-        if (parent)
-        {
-#if USE_EDITOR
-            // Add dummy script
-            const auto typeNameMember = value.FindMember("TypeName");
-            if (typeNameMember != value.MemberEnd() && typeNameMember->value.IsString())
-            {
-                auto* dummyScript = parent->AddScript<MissingScript>();
-                dummyScript->MissingTypeName = typeNameMember->value.GetString();
-                dummyScript->Data = MoveTemp(bufferStr);
-            }
-#endif
-            LOG(Warning, "Parent actor of the missing object: '{0}' ({1})", parent->GetNamePath(), String(parent->GetType().Fullname));
-        }
+        LOG(Warning, "Parent local file ID of the missing object: {0}", parentIdMember->value.GetInt64());
     }
 #endif
 }
@@ -519,19 +567,20 @@ void SceneObjectsFactory::SetupPrefabInstances(Context& context, const PrefabSyn
     for (int32 i = 0; i < count; i++)
     {
         const auto& stream = data.Data[i];
-        Guid prefabObjectId, prefabId;
-        if (!JsonTools::GetGuidIfValid(prefabObjectId, stream, "PrefabObjectID"))
+        Guid prefabId;
+        Guid prefabObjectId = GetPrefabObjectId(stream);
+        if (!prefabObjectId.IsValid())
             continue;
         if (!JsonTools::GetGuidIfValid(prefabId, stream, "PrefabID"))
             continue;
-        Guid parentId = JsonTools::GetGuid(stream, "ParentID");
+        Guid parentId = GetDocumentObjectId(stream, "ParentFileId", context.SourceAssetId, context.DocumentKind);
         if (!parentIdsLookup.TryGet(parentId, parentId))
         {
             Guid parentIdKep = parentId;
             for (int32 j = i - 1; j >= 0; j--)
             {
                 // Find ID of the parent to this object (use data in json for relationship)
-                if (parentId == JsonTools::GetGuid(data.Data[j], "ID") && data.SceneObjects[j])
+                if (parentId == GetDocumentObjectId(data.Data[j], "FileId", context.SourceAssetId, context.DocumentKind) && data.SceneObjects[j])
                 {
                     parentId = data.SceneObjects[j]->GetID();
                     break;
@@ -540,7 +589,7 @@ void SceneObjectsFactory::SetupPrefabInstances(Context& context, const PrefabSyn
             parentIdsLookup.Add(parentIdKep, parentId);
         }
         const SceneObject* obj = data.SceneObjects[i];
-        const Guid id = obj ? obj->GetID() : JsonTools::GetGuid(stream, "ID");
+        const Guid id = obj ? obj->GetID() : GetDocumentObjectId(stream, "FileId", context.SourceAssetId, context.DocumentKind);
         auto prefab = Content::LoadAsync<Prefab>(prefabId);
         if (!prefab)
             continue;
@@ -575,7 +624,7 @@ void SceneObjectsFactory::SetupPrefabInstances(Context& context, const PrefabSyn
         // Walk over nested prefabs to link any subobjects into this object (eg. if nested prefab uses cross-object references to link them correctly)
     NESTED_PREFAB_WALK:
         const ISerializable::DeserializeStream* prefabData;
-        if (prefab->ObjectsDataCache.TryGet(prefabObjectId, prefabData) && JsonTools::GetGuidIfValid(prefabObjectId, *prefabData, "PrefabObjectID"))
+        if (prefab->ObjectsDataCache.TryGet(prefabObjectId, prefabData) && (prefabObjectId = GetPrefabObjectId(*prefabData)).IsValid())
         {
             prefabId = JsonTools::GetGuid(*prefabData, "PrefabID");
             prefab = Content::LoadAsync<Prefab>(prefabId);
@@ -635,8 +684,8 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
 
             // Check if current prefab root existed in the deserialized data
             const auto& oldRootData = data.Data[instance.RootIndex];
-            const Guid oldRootId = JsonTools::GetGuid(oldRootData, "ID");
-            const Guid prefabObjectId = JsonTools::GetGuid(oldRootData, "PrefabObjectID");
+            const Guid oldRootId = GetDocumentObjectId(oldRootData, "FileId", context.SourceAssetId, context.DocumentKind);
+            const Guid prefabObjectId = GetPrefabObjectId(oldRootData);
             const Guid prefabRootId = instance.Prefab->GetRootObjectId();
             Guid id;
             int32 idInstance = -1;
@@ -663,7 +712,7 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
                 data.Modifier->IdsMapping[prefabRootId] = id;
 
                 // Create prefab instance (recursive prefab loading to support nested prefabs)
-                root = Spawn(context, *prefabData);
+                root = SpawnInternal(context, *prefabData, instance.Prefab->GetID(), GlobalObjectKind::PrefabObject, nullptr);
                 if (!root)
                 {
                     LOG(Warning, "Failed to create object {1} from prefab {0}.", instance.Prefab->ToString(), prefabRootId);
@@ -672,6 +721,8 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
 
                 // Register object
                 root->RegisterObject();
+                root->_persistentSourceAsset = AssetGuid(context.SourceAssetId);
+                root->_localFileId = SceneObject::MakeLocalFileId(id);
                 data.SceneObjects.Add(root);
                 auto& newObj = data.NewObjects.AddOne();
                 newObj.Prefab = instance.Prefab;
@@ -710,12 +761,14 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
         if (!actor)
             continue;
         const auto& stream = data.Data[i];
-        Guid actorId, actorPrefabObjectId, prefabId;
-        if (!JsonTools::GetGuidIfValid(actorPrefabObjectId, stream, "PrefabObjectID"))
+        Guid prefabId;
+        Guid actorPrefabObjectId = GetPrefabObjectId(stream);
+        if (!actorPrefabObjectId.IsValid())
             continue;
         if (!JsonTools::GetGuidIfValid(prefabId, stream, "PrefabID"))
             continue;
-        if (!JsonTools::GetGuidIfValid(actorId, stream, "ID"))
+        const Guid actorId = GetDocumentObjectId(stream, "FileId", context.SourceAssetId, context.DocumentKind);
+        if (!actorId.IsValid())
             continue;
 
         // Load prefab
@@ -770,7 +823,8 @@ void SceneObjectsFactory::SynchronizePrefabInstances(Context& context, PrefabSyn
         // Get the actual parent object stored in the prefab data
         const ISerializable::DeserializeStream* objData;
         Guid actualParentPrefabId;
-        if (!prefab->ObjectsDataCache.TryGet(prefabObjectId, objData) || !JsonTools::GetGuidIfValid(actualParentPrefabId, *objData, "ParentID"))
+        if (!prefab->ObjectsDataCache.TryGet(prefabObjectId, objData) ||
+            !(actualParentPrefabId = GetDocumentObjectId(*objData, "ParentFileId", prefabId, GlobalObjectKind::PrefabObject)).IsValid())
             continue;
 
         // Validate
@@ -818,8 +872,8 @@ void SceneObjectsFactory::SynchronizePrefabInstances(Context& context, PrefabSyn
 
         // Deserialize object with prefab data
         Scripting::ObjectsLookupIdMapping.Set(&data.Modifier->IdsMapping);
-        Deserialize(context, obj, *(ISerializable::DeserializeStream*)newObj.PrefabData);
-        obj->LinkPrefab(newObj.Prefab->GetID(), newObj.PrefabObjectId);
+        DeserializeInternal(context, obj, *(ISerializable::DeserializeStream*)newObj.PrefabData, newObj.Prefab->GetID());
+        obj->LinkPrefabObject(newObj.Prefab->GetID(), GetLocalFileId(*newObj.PrefabData, "FileId"));
 
         // Preserve order in parent (values from prefab are used)
         const auto defaultInstance = newObj.Prefab->GetDefaultInstance(newObj.PrefabObjectId);
@@ -832,8 +886,8 @@ void SceneObjectsFactory::SynchronizePrefabInstances(Context& context, PrefabSyn
     for (const auto& instance : context.Instances)
     {
         const auto& prefabStartData = data.Data[instance.StatIndex];
-        Guid prefabStartParentId;
-        if (instance.FixRootParent && JsonTools::GetGuidIfValid(prefabStartParentId, prefabStartData, "ParentID"))
+        const Guid prefabStartParentId = GetDocumentObjectId(prefabStartData, "ParentFileId", context.SourceAssetId, context.DocumentKind);
+        if (instance.FixRootParent && prefabStartParentId.IsValid())
         {
             auto* root = data.SceneObjects[instance.RootIndex];
             if (root)
@@ -869,7 +923,7 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
             bool removed = false;
             for (rapidjson::SizeType j = 0; j < size; j++)
             {
-                if (JsonTools::GetGuid(list[j]) == prefabObjectId)
+                if (list[j].IsInt64() && SceneObject::MakeRuntimeObjectId(prefab->GetID(), list[j].GetInt64(), GlobalObjectKind::PrefabObject) == prefabObjectId)
                 {
                     removed = true;
                     break;
@@ -924,7 +978,7 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstance(Context& context, PrefabS
     data.Modifier->IdsMapping[prefabObjectId] = id;
 
     // Create prefab instance (recursive prefab loading to support nested prefabs)
-    auto child = Spawn(context, *prefabData);
+    auto child = SpawnInternal(context, *prefabData, prefab->GetID(), GlobalObjectKind::PrefabObject, nullptr);
     if (!child)
     {
         LOG(Warning, "Failed to create object {1} from prefab {0}.", prefab->ToString(), prefabObjectId);
@@ -934,6 +988,8 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstance(Context& context, PrefabS
 
     // Register object
     child->RegisterObject();
+    child->_persistentSourceAsset = AssetGuid(context.SourceAssetId);
+    child->_localFileId = SceneObject::MakeLocalFileId(id);
     data.SceneObjects.Add(child);
     auto& newObj = data.NewObjects.AddOne();
     newObj.Prefab = prefab;
@@ -950,7 +1006,7 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstance(Context& context, PrefabS
         // Check if it's a nested prefab
         const ISerializable::DeserializeStream* nestedPrefabData;
         Guid nestedPrefabObjectId;
-        if (prefab->ObjectsDataCache.TryGet(prefabObjectId, nestedPrefabData) && JsonTools::GetGuidIfValid(nestedPrefabObjectId, *nestedPrefabData, "PrefabObjectID"))
+        if (prefab->ObjectsDataCache.TryGet(prefabObjectId, nestedPrefabData) && (nestedPrefabObjectId = GetPrefabObjectId(*nestedPrefabData)).IsValid())
         {
             // Try reusing parent nested instance (or make a new one)
             int32 nestedIndex = -1;

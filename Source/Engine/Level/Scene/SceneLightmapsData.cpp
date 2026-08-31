@@ -99,9 +99,9 @@ void SceneLightmapsData::UpdateLightmapsCollection(int32 count, int32 size)
         while (_lightmaps.Count() < count)
         {
             SavedLightmapInfo info;
-            info.Lightmap0 = Guid::Empty;
-            info.Lightmap1 = Guid::Empty;
-            info.Lightmap2 = Guid::Empty;
+            info.Lightmap0 = AssetObjectId();
+            info.Lightmap1 = AssetObjectId();
+            info.Lightmap2 = AssetObjectId();
             auto lightmap = New<Lightmap>(this, _lightmaps.Count(), info);
 
             _lightmaps.Add(lightmap);

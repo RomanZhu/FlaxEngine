@@ -9,6 +9,7 @@
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/Documents/AssetSourceFactory.h"
 #include "Engine/Content/Storage/JsonStorageProxy.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 #include "Engine/Content/AssetReference.h"
@@ -32,9 +33,25 @@ bool CreateJson::Create(const StringView& path, rapidjson_flax::StringBuffer& da
 
 bool CreateJson::Create(const StringView& path, const StringAnsiView& data, const StringAnsiView& dataTypename)
 {
-    Guid id = Guid::New();
-
+    const bool sceneDocument = dataTypename == StringAnsiView("FlaxEngine.SceneAsset");
+    const bool prefabDocument = dataTypename == StringAnsiView("FlaxEngine.Prefab");
     LOG(Info, "Creating json resource of type \'{1}\' at \'{0}\'", path, String(dataTypename.Get()));
+
+    if (sceneDocument || prefabDocument)
+    {
+        AssetCreationParameters parameters;
+        parameters.TypeName = String(dataTypename.Get(), dataTypename.Length());
+        parameters.Payload = StringAnsi(data.Get(), data.Length());
+        AssetPipelineDiagnostic diagnostic;
+        if (AssetSourceFactory::CreateOrReplace(path, parameters, diagnostic))
+        {
+            LOG(Warning, "Failed to create authored scene/prefab source: {0}", diagnostic.Message);
+            return true;
+        }
+        return false;
+    }
+
+    Guid id = Guid::New();
 
     // Try use the same asset ID
     if (FileSystem::FileExists(path))
@@ -61,23 +78,17 @@ bool CreateJson::Create(const StringView& path, const StringAnsiView& data, cons
 
     rapidjson_flax::StringBuffer buffer;
 
-    // Serialize to json
     PrettyJsonWriter writerObj(buffer);
     JsonWriter& writer = writerObj;
     writer.StartObject();
-    {
-        // Json resource header
-        writer.JKEY("ID");
-        writer.Guid(id);
-        writer.JKEY("TypeName");
-        writer.String(dataTypename.Get(), dataTypename.Length());
-        writer.JKEY("EngineBuild");
-        writer.Int(FLAXENGINE_VERSION_BUILD);
-
-        // Json resource data
-        writer.JKEY("Data");
-        writer.RawValue(data.Get(), data.Length());
-    }
+    writer.JKEY("ID");
+    writer.Guid(id);
+    writer.JKEY("TypeName");
+    writer.String(dataTypename.Get(), dataTypename.Length());
+    writer.JKEY("EngineBuild");
+    writer.Int(FLAXENGINE_VERSION_BUILD);
+    writer.JKEY("Data");
+    writer.RawValue(data.Get(), data.Length());
     writer.EndObject();
 
     // Save json to file

@@ -14,9 +14,20 @@ namespace FlaxEditor
     public static class CliAssetMigrationCommands
     {
         /// <summary>Extracts eligible legacy project assets into canonical sources while preserving identities.</summary>
+        [CliCommand("assets.migrate-project", Description = "Convert all supported legacy assets to canonical sources.", Access = CliCommandAccess.Destructive)]
         public static CliCommandOperation ConvertProject()
         {
             return new ProjectMigrationOperation();
+        }
+
+        /// <summary>Converts legacy scene/prefab GUID identities to canonical authored local file IDs.</summary>
+        [CliCommand("assets.migrate-scenes-prefabs", Description = "Convert legacy scene and prefab GUID identities to authored file IDs.", Access = CliCommandAccess.Destructive)]
+        public static object ConvertScenePrefabSources()
+        {
+            var converted = ScenePrefabSourceMigration.ConvertProject(Globals.ProjectContentFolder);
+            if (AssetDatabaseFacade.Scan(false))
+                throw new InvalidOperationException("Asset database scan failed after scene/prefab source migration.");
+            return new { converted };
         }
 
         private sealed class ProjectMigrationOperation : CliCommandOperation
@@ -56,6 +67,7 @@ namespace FlaxEditor
             private Phase _phase;
             private int _index;
             private CliCommandResult _result;
+            private int _scenePrefabDocuments;
 
             public override bool IsCompleted => _phase == Phase.Completed;
             public override CliCommandResult Result => _result;
@@ -142,6 +154,7 @@ namespace FlaxEditor
 
             private void Discover()
             {
+                _scenePrefabDocuments = ScenePrefabSourceMigration.ConvertProject(Globals.ProjectContentFolder);
                 if (AssetDatabaseFacade.LoadOrScan(false))
                     throw new InvalidOperationException("Asset database scan failed before migration.");
                 foreach (var path in Directory.EnumerateFiles(Globals.ProjectContentFolder, "*.flax", SearchOption.AllDirectories).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
@@ -295,6 +308,7 @@ namespace FlaxEditor
                     textures = _imported.Count(x => !x.IsModel),
                     models = _imported.Count(x => x.IsModel),
                     textDocuments = _text.Count,
+                    scenePrefabDocuments = _scenePrefabDocuments,
                     retainedBinaryAssets = _skipped.Count,
                     retained = _skipped,
                 });

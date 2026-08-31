@@ -340,13 +340,15 @@ void Script::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier
 
     DESERIALIZE_BIT_MEMBER(Enabled, _enabled);
     DESERIALIZE_MEMBER(PrefabID, _prefabID);
+    if (_prefabID.IsValid() && _prefabObjectFileId != 0)
+        _prefabObjectID = MakeRuntimeObjectId(_prefabID, _prefabObjectFileId, GlobalObjectKind::PrefabObject);
 
     {
-        const auto member = SERIALIZE_FIND_MEMBER(stream, "ParentID");
-        if (member != stream.MemberEnd())
+        const auto member = SERIALIZE_FIND_MEMBER(stream, "ParentFileId");
+        if (member != stream.MemberEnd() && member->value.IsInt64() && modifier && modifier->CurrentSourceAssetId.IsValid())
         {
-            Guid parentId;
-            Serialization::Deserialize(member->value, parentId, modifier);
+            Guid parentId = MakeRuntimeObjectId(modifier->CurrentSourceAssetId, member->value.GetInt64());
+            modifier->IdsMapping.TryGet(parentId, parentId);
             const auto parent = Scripting::FindObject<Actor>(parentId);
             if (_parent != parent)
             {

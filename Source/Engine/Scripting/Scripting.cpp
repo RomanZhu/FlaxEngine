@@ -28,6 +28,7 @@
 #include "Engine/Core/Types/Stopwatch.h"
 #include "Engine/Content/Asset.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Level/SceneObject.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Engine/Time.h"
@@ -932,10 +933,41 @@ void ScriptingObjectReferenceBase::OnSet(ScriptingObject* object)
         if (e)
             e->Deleted.Unbind<ScriptingObjectReferenceBase, &ScriptingObjectReferenceBase::OnDeleted>(this);
         _object = e = object;
+        if (SceneObject* sceneObject = dynamic_cast<SceneObject*>(object))
+            _persistentObjectId = sceneObject->GetGlobalObjectId();
+        else
+            _persistentObjectId = GlobalAssetObjectId();
         if (e)
             e->Deleted.Bind<ScriptingObjectReferenceBase, &ScriptingObjectReferenceBase::OnDeleted>(this);
         Changed();
     }
+}
+
+void ScriptingObjectReferenceBase::OnSetPersistentObjectId(const GlobalAssetObjectId& objectId, ScriptingObject* object)
+{
+    ScriptingObject* previous = _object;
+    if (previous != object || _persistentObjectId != objectId)
+    {
+        if (previous)
+            previous->Deleted.Unbind<ScriptingObjectReferenceBase, &ScriptingObjectReferenceBase::OnDeleted>(this);
+        _object = object;
+        _persistentObjectId = objectId;
+        if (object)
+            object->Deleted.Bind<ScriptingObjectReferenceBase, &ScriptingObjectReferenceBase::OnDeleted>(this);
+        Changed();
+    }
+}
+
+FLAXENGINE_API ScriptingObject* ResolveGlobalObject(const GlobalAssetObjectId& id, MClass* type)
+{
+    SceneObject* object = SceneObject::ResolveGlobalObjectId(id);
+    return object && type ? FindObject(object->GetID(), type) : object;
+}
+
+FLAXENGINE_API GlobalAssetObjectId GetPersistentGlobalObjectId(ScriptingObject* object)
+{
+    SceneObject* sceneObject = dynamic_cast<SceneObject*>(object);
+    return sceneObject ? sceneObject->GetGlobalObjectId() : GlobalAssetObjectId();
 }
 
 void ScriptingObjectReferenceBase::OnDeleted(ScriptingObject* obj)

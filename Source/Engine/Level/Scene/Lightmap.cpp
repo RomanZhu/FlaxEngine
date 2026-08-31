@@ -46,9 +46,9 @@ Lightmap::Lightmap(SceneLightmapsData* manager, int32 index, const SavedLightmap
     , _index(index)
 {
     // Try to load textures with given IDs
-    _textures[0] = Content::LoadAsync<Texture>(info.Lightmap0);
-    _textures[1] = Content::LoadAsync<Texture>(info.Lightmap1);
-    _textures[2] = Content::LoadAsync<Texture>(info.Lightmap2);
+    _textures[0] = Content::LoadAssetAsync<Texture>(info.Lightmap0);
+    _textures[1] = Content::LoadAssetAsync<Texture>(info.Lightmap1);
+    _textures[2] = Content::LoadAssetAsync<Texture>(info.Lightmap2);
 }
 
 void Lightmap::UpdateTexture(Texture* texture, int32 index)

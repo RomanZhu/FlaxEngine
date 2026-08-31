@@ -287,6 +287,7 @@ void Actor::OnDeleteObject()
     }
     _prefabID = Guid::Empty;
     _prefabObjectID = Guid::Empty;
+    _prefabObjectFileId = 0;
 
     // Base
     SceneObject::OnDeleteObject();
@@ -957,6 +958,7 @@ void Actor::LinkPrefab(const Guid& prefabId, const Guid& prefabObjectId)
     // Link
     _prefabID = prefabId;
     _prefabObjectID = prefabObjectId;
+    _prefabObjectFileId = MakeLocalFileId(prefabObjectId);
     _isPrefabRoot = 0;
 
     if (_prefabID.IsValid() && _prefabObjectID.IsValid())
@@ -966,6 +968,7 @@ void Actor::LinkPrefab(const Guid& prefabId, const Guid& prefabObjectId)
         {
             _prefabID = Guid::Empty;
             _prefabObjectID = Guid::Empty;
+            _prefabObjectFileId = 0;
             LOG(Warning, "Failed to load prefab linked to the actor.");
         }
         else if (prefab->GetRootObjectId() == _prefabObjectID)
@@ -992,6 +995,7 @@ void Actor::BreakPrefabLink()
     // Invalidate link
     _prefabID = Guid::Empty;
     _prefabObjectID = Guid::Empty;
+    _prefabObjectFileId = 0;
     _isPrefabRoot = 0;
 
     // Do for scripts
@@ -1168,7 +1172,7 @@ void Actor::Serialize(SerializeStream& stream, const void* otherObj)
                     stream.StartArray();
                 }
 
-                stream.Guid(prefabObjectId);
+                stream.Int64(other->Children[i]->GetPrefabObjectFileId());
             }
         }
         for (int32 i = 0; i < other->Scripts.Count(); i++)
@@ -1183,7 +1187,7 @@ void Actor::Serialize(SerializeStream& stream, const void* otherObj)
                     stream.StartArray();
                 }
 
-                stream.Guid(prefabObjectId);
+                stream.Int64(other->Scripts[i]->GetPrefabObjectFileId());
             }
         }
         if (hasRemovedObjects)
@@ -1206,11 +1210,11 @@ void Actor::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
     DESERIALIZE_MEMBER(Transform, _localTransform);
 
     {
-        const auto member = SERIALIZE_FIND_MEMBER(stream, "ParentID");
-        if (member != stream.MemberEnd())
+        const auto member = SERIALIZE_FIND_MEMBER(stream, "ParentFileId");
+        if (member != stream.MemberEnd() && member->value.IsInt64() && modifier && modifier->CurrentSourceAssetId.IsValid())
         {
-            Guid parentId;
-            Serialization::Deserialize(member->value, parentId, modifier);
+            Guid parentId = MakeRuntimeObjectId(modifier->CurrentSourceAssetId, member->value.GetInt64());
+            modifier->IdsMapping.TryGet(parentId, parentId);
             const auto parent = Scripting::FindObject<Actor>(parentId);
             if (_parent != parent)
             {
@@ -1296,6 +1300,8 @@ void Actor::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
 #endif
 
             Serialization::Deserialize(member->value, _prefabID, modifier);
+            if (_prefabID.IsValid() && _prefabObjectFileId != 0)
+                _prefabObjectID = MakeRuntimeObjectId(_prefabID, _prefabObjectFileId, GlobalObjectKind::PrefabObject);
             _isPrefabRoot = 0;
 
             auto prefab = Content::LoadAsync<Prefab>(_prefabID);
@@ -1303,6 +1309,7 @@ void Actor::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
             {
                 _prefabID = Guid::Empty;
                 _prefabObjectID = Guid::Empty;
+                _prefabObjectFileId = 0;
                 LOG(Warning, "Failed to load prefab linked to the actor on load.");
             }
             else if (prefab->GetRootObjectId() == _prefabObjectID)
@@ -1809,23 +1816,27 @@ bool Actor::ToBytes(const Array<Actor*>& actors, MemoryWriteStream& output)
     PROFILE_MEM(Level);
 
     // Collect object ids that exist in the serialized data to allow references mapping later
-    Array<Guid> ids(actors.Count());
+    Array<int64> ids(actors.Count());
+    Guid sourceAssetId = Guid::Empty;
     for (int32 i = 0; i < actors.Count(); i++)
     {
         auto actor = actors[i];
         if (!actor)
             continue;
-        ids.Add(actor->GetID());
+        if (!sourceAssetId.IsValid())
+            sourceAssetId = actor->_persistentSourceAsset.Value;
+        ids.Add(actor->GetLocalFileId());
         for (int32 j = 0; j < actor->Scripts.Count(); j++)
         {
             const auto script = actor->Scripts[j];
             if (script)
-                ids.Add(script->GetID());
+                ids.Add(script->GetLocalFileId());
         }
     }
 
     // Header
     output.WriteInt32(FLAXENGINE_VERSION_BUILD);
+    output.WriteBytes(reinterpret_cast<byte*>(&sourceAssetId), sizeof(sourceAssetId));
 
     // Serialized objects ids (for references mapping)
     output.Write(ids);
@@ -1875,7 +1886,7 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
     ASSERT(modifier);
     constexpr int32 MaxClipboardObjects = 1000000;
     constexpr int32 MaxClipboardJsonBytes = 256 * 1024 * 1024;
-    if (data.Length() < sizeof(int32) * 3)
+    if (data.Length() < sizeof(int32) * 3 + sizeof(Guid))
         return true;
     MemoryReadStream stream(data.Get(), data.Length());
 
@@ -1887,21 +1898,26 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
         LOG(Warning, "Unsupported actors data version.");
         return true;
     }
+    Guid serializedSourceAssetId;
+    stream.ReadBytes(reinterpret_cast<byte*>(&serializedSourceAssetId), sizeof(serializedSourceAssetId));
+    if (stream.HasError() || !serializedSourceAssetId.IsValid())
+        return true;
 
     // Serialized objects ids (for references mapping)
     int32 objectsCount;
     stream.ReadInt32(&objectsCount);
     if (stream.HasError() || objectsCount <= 0 || objectsCount > MaxClipboardObjects)
         return true;
-    const uint64 idsSize = static_cast<uint64>(objectsCount) * sizeof(Guid);
+    const uint64 idsSize = static_cast<uint64>(objectsCount) * sizeof(int64);
     if (idsSize > stream.GetLength() - stream.GetPosition())
         return true;
-    const Guid* serializedIds = stream.Move<Guid>(objectsCount);
+    const int64* serializedIds = stream.Move<int64>(objectsCount);
     HashSet<Guid> uniqueIds;
     uniqueIds.EnsureCapacity(objectsCount);
     for (int32 i = 0; i < objectsCount; i++)
     {
-        if (!serializedIds[i].IsValid() || !uniqueIds.Add(serializedIds[i]))
+        const Guid runtimeId = MakeRuntimeObjectId(serializedSourceAssetId, serializedIds[i]);
+        if (serializedIds[i] == 0 || !runtimeId.IsValid() || !uniqueIds.Add(runtimeId))
         {
             LOG(Warning, "Invalid or duplicate object ID in actors data.");
             return true;
@@ -1934,8 +1950,11 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
     jsonIds.EnsureCapacity(objectsCount);
     for (int32 i = 0; i < objectsCount; i++)
     {
-        Guid objectId;
-        if (!document[i].IsObject() || !JsonTools::GetGuidIfValid(objectId, document[i], "ID") || !uniqueIds.Contains(objectId) || !jsonIds.Add(objectId))
+        const auto fileId = document[i].FindMember("FileId");
+        const Guid objectId = document[i].IsObject() && fileId != document[i].MemberEnd() && fileId->value.IsInt64()
+            ? MakeRuntimeObjectId(serializedSourceAssetId, fileId->value.GetInt64())
+            : Guid::Empty;
+        if (!objectId.IsValid() || !uniqueIds.Contains(objectId) || !jsonIds.Add(objectId))
         {
             LOG(Warning, "Invalid, missing, or duplicate object entry in actors data.");
             return true;
@@ -1949,8 +1968,11 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
     {
         for (int32 i = 0; i < objectsCount; i++)
         {
-            Guid parentId;
-            if (JsonTools::GetGuidIfValid(parentId, document[i], "ParentID") && !uniqueIds.Contains(parentId))
+            const auto parentFileId = document[i].FindMember("ParentFileId");
+            const Guid parentId = parentFileId != document[i].MemberEnd() && parentFileId->value.IsInt64()
+                ? MakeRuntimeObjectId(serializedSourceAssetId, parentFileId->value.GetInt64())
+                : Guid::Empty;
+            if (parentId.IsValid() && !uniqueIds.Contains(parentId))
                 modifier->IdsMapping[parentId] = *destinationParentId;
         }
     }
@@ -1961,6 +1983,9 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
     sceneObjects->Resize(objectsCount);
     sceneObjects->SetAll(nullptr);
     SceneObjectsFactory::Context context(modifier);
+    context.SourceAssetId = serializedSourceAssetId;
+    context.DocumentKind = GlobalObjectKind::SceneObject;
+    context.AssignDocumentLocalFileIds = false;
     bool constructionFailed = false;
 
     // Fix root linkage for prefab instances (eg. when user duplicates a sub-prefab actor but not a root one)
@@ -1968,8 +1993,12 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
     SceneObjectsFactory::SetupPrefabInstances(context, prefabSyncData);
     for (auto& instance : context.Instances)
     {
-        Guid prefabObjectId;
-        if (!JsonTools::GetGuidIfValid(prefabObjectId, document[instance.RootIndex], "PrefabObjectID"))
+        const Guid prefabId = JsonTools::GetGuid(document[instance.RootIndex], "PrefabID");
+        const auto prefabObjectFileId = document[instance.RootIndex].FindMember("PrefabObjectFileId");
+        const Guid prefabObjectId = prefabObjectFileId != document[instance.RootIndex].MemberEnd() && prefabObjectFileId->value.IsInt64()
+            ? MakeRuntimeObjectId(prefabId, prefabObjectFileId->value.GetInt64(), GlobalObjectKind::PrefabObject)
+            : Guid::Empty;
+        if (!prefabObjectId.IsValid())
             continue;
 
         // Get the original object from prefab
@@ -2033,6 +2062,18 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
             SceneObjectsFactory::HandleObjectDeserializationError(objData);
     }
     Scripting::ObjectsLookupIdMapping.Set(nullptr);
+
+    AssetGuid destinationSource(serializedSourceAssetId);
+    if (destinationParentId)
+    {
+        if (Actor* destinationParent = Scripting::FindObject<Actor>(*destinationParentId))
+            destinationSource = destinationParent->_persistentSourceAsset;
+    }
+    for (SceneObject* obj : *sceneObjects.Value)
+    {
+        if (obj)
+            obj->SetPersistentDocumentIdentity(destinationSource, obj->GetLocalFileId());
+    }
 
     // Call events (only for parents because they will propagate events down the tree)
     CollectionPoolCache<ActorsCache::ActorsListType>::ScopeCache parents = ActorsCache::ActorsListCache.Get();
@@ -2135,7 +2176,7 @@ Array<Guid> Actor::TryGetSerializedObjectsIds(const Span<byte>& data)
 {
     PROFILE_CPU();
     Array<Guid> result;
-    if (data.Length() >= sizeof(int32) * 2)
+    if (data.Length() >= sizeof(int32) * 2 + sizeof(Guid))
     {
         MemoryReadStream stream(data.Get(), data.Length());
 
@@ -2144,25 +2185,30 @@ Array<Guid> Actor::TryGetSerializedObjectsIds(const Span<byte>& data)
         stream.ReadInt32(&engineBuild);
         if (!stream.HasError() && engineBuild <= FLAXENGINE_VERSION_BUILD && engineBuild >= 6165)
         {
+            Guid sourceAssetId;
+            stream.ReadBytes(reinterpret_cast<byte*>(&sourceAssetId), sizeof(sourceAssetId));
             int32 objectsCount;
             stream.ReadInt32(&objectsCount);
-            const uint64 idsSize = objectsCount > 0 ? static_cast<uint64>(objectsCount) * sizeof(Guid) : 0;
-            if (!stream.HasError() && objectsCount > 0 && objectsCount <= 1000000 && idsSize <= stream.GetLength() - stream.GetPosition())
+            const uint64 idsSize = objectsCount > 0 ? static_cast<uint64>(objectsCount) * sizeof(int64) : 0;
+            if (!stream.HasError() && sourceAssetId.IsValid() && objectsCount > 0 && objectsCount <= 1000000 && idsSize <= stream.GetLength() - stream.GetPosition())
             {
-                const Guid* ids = stream.Move<Guid>(objectsCount);
+                const int64* ids = stream.Move<int64>(objectsCount);
                 HashSet<Guid> uniqueIds;
                 uniqueIds.EnsureCapacity(objectsCount);
                 bool valid = true;
+                result.EnsureCapacity(objectsCount);
                 for (int32 i = 0; i < objectsCount; i++)
                 {
-                    if (!ids[i].IsValid() || !uniqueIds.Add(ids[i]))
+                    const Guid runtimeId = MakeRuntimeObjectId(sourceAssetId, ids[i]);
+                    if (ids[i] == 0 || !runtimeId.IsValid() || !uniqueIds.Add(runtimeId))
                     {
                         valid = false;
                         break;
                     }
+                    result.Add(runtimeId);
                 }
-                if (valid)
-                    result.Set(ids, objectsCount);
+                if (!valid)
+                    result.Clear();
             }
         }
     }

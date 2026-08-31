@@ -31,6 +31,9 @@ class SceneObject;
 #include "Engine/Level/SceneObject.h"
 #endif
 
+FLAXENGINE_API ScriptingObject* ResolveGlobalObject(const GlobalAssetObjectId& id, MClass* type);
+FLAXENGINE_API GlobalAssetObjectId GetPersistentGlobalObjectId(ScriptingObject* object);
+
 // @formatter:off
 
 namespace Serialization
@@ -476,17 +479,29 @@ namespace Serialization
                (other ? other->GetPersistentObjectId() : AssetObjectId());
     }
     template<typename T>
-    inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const T* v, const void* otherObj)
+    inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<SceneObject, T>>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const T* v, const void* otherObj)
     {
         stream.Guid(v ? v->GetID() : Guid::Empty);
     }
     template<typename T>
-    inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, T*& v, ISerializeModifier* modifier)
+    inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<SceneObject, T>>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, T*& v, ISerializeModifier* modifier)
     {
         Guid id;
         Deserialize(stream, id, modifier);
 		modifier->IdsMapping.TryGet(id, id);
         v = (T*)::FindObject(id, T::GetStaticClass());
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const T* v, const void* otherObj)
+    {
+        Serialize(stream, GetPersistentGlobalObjectId((ScriptingObject*)v), nullptr);
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, T*& v, ISerializeModifier* modifier)
+    {
+        GlobalAssetObjectId id;
+        Deserialize(stream, id, modifier);
+        v = (T*)ResolveGlobalObject(id, T::GetStaticClass());
     }
 
     template<typename T>
@@ -511,43 +526,77 @@ namespace Serialization
     // Scripting Object Reference
 
     template<typename T>
-    inline bool ShouldSerialize(const ScriptingObjectReference<T>& v, const void* otherObj)
+    inline typename TEnableIf<TNot<TIsBaseOf<SceneObject, T>>::Value, bool>::Type ShouldSerialize(const ScriptingObjectReference<T>& v, const void* otherObj)
     {
         return !otherObj || ShouldSerializeRef(v.Get(), ((ScriptingObjectReference<T>*)otherObj)->Get());
     }
     template<typename T>
-    inline void Serialize(ISerializable::SerializeStream& stream, const ScriptingObjectReference<T>& v, const void* otherObj)
+    inline typename TEnableIf<TNot<TIsBaseOf<SceneObject, T>>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const ScriptingObjectReference<T>& v, const void* otherObj)
     {
         stream.Guid(v.GetID());
     }
     template<typename T>
-    inline void Deserialize(ISerializable::DeserializeStream& stream, ScriptingObjectReference<T>& v, ISerializeModifier* modifier)
+    inline typename TEnableIf<TNot<TIsBaseOf<SceneObject, T>>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, ScriptingObjectReference<T>& v, ISerializeModifier* modifier)
     {
         Guid id;
         Deserialize(stream, id, modifier);
 		modifier->IdsMapping.TryGet(id, id);
         v = id;
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value, bool>::Type ShouldSerialize(const ScriptingObjectReference<T>& v, const void* otherObj)
+    {
+        return !otherObj || v.GetPersistentObjectId() != ((ScriptingObjectReference<T>*)otherObj)->GetPersistentObjectId();
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const ScriptingObjectReference<T>& v, const void* otherObj)
+    {
+        Serialize(stream, v.GetPersistentObjectId(), nullptr);
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, ScriptingObjectReference<T>& v, ISerializeModifier* modifier)
+    {
+        GlobalAssetObjectId id;
+        Deserialize(stream, id, modifier);
+        v.SetPersistentObjectId(id);
     }
 
     // Soft Object Reference
 
     template<typename T>
-    inline bool ShouldSerialize(const SoftObjectReference<T>& v, const void* otherObj)
+    inline typename TEnableIf<TNot<TIsBaseOf<SceneObject, T>>::Value, bool>::Type ShouldSerialize(const SoftObjectReference<T>& v, const void* otherObj)
     {
         return !otherObj || ShouldSerializeRef(v.Get(), ((SoftObjectReference<T>*)otherObj)->Get());
     }
     template<typename T>
-    inline void Serialize(ISerializable::SerializeStream& stream, const SoftObjectReference<T>& v, const void* otherObj)
+    inline typename TEnableIf<TNot<TIsBaseOf<SceneObject, T>>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const SoftObjectReference<T>& v, const void* otherObj)
     {
         stream.Guid(v.GetID());
     }
     template<typename T>
-    inline void Deserialize(ISerializable::DeserializeStream& stream, SoftObjectReference<T>& v, ISerializeModifier* modifier)
+    inline typename TEnableIf<TNot<TIsBaseOf<SceneObject, T>>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, SoftObjectReference<T>& v, ISerializeModifier* modifier)
     {
         Guid id;
         Deserialize(stream, id, modifier);
 		modifier->IdsMapping.TryGet(id, id);
         v = id;
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value, bool>::Type ShouldSerialize(const SoftObjectReference<T>& v, const void* otherObj)
+    {
+        return !otherObj || v.GetPersistentObjectId() != ((SoftObjectReference<T>*)otherObj)->GetPersistentObjectId();
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const SoftObjectReference<T>& v, const void* otherObj)
+    {
+        Serialize(stream, v.GetPersistentObjectId(), nullptr);
+    }
+    template<typename T>
+    inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, SoftObjectReference<T>& v, ISerializeModifier* modifier)
+    {
+        GlobalAssetObjectId id;
+        Deserialize(stream, id, modifier);
+        v.SetPersistentObjectId(id);
     }
 
     // Asset Reference

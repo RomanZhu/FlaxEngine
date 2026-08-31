@@ -5,6 +5,9 @@
 #include "Engine/Physics/Joints/Joint.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Level/Prefabs/Prefab.h"
+#include "Engine/Level/Level.h"
+#include "Engine/Level/Actor.h"
+#include "Engine/Level/SceneQuery.h"
 #include "Engine/Scripting/BinaryModule.h"
 #include "Engine/Scripting/Internal/ManagedSerialization.h"
 #include "Engine/Serialization/ISerializeModifier.h"
@@ -24,8 +27,11 @@ void SceneBeginData::OnDone()
 SceneObject::SceneObject(const SpawnParams& params)
     : Base(params)
     , _parent(nullptr)
+    , _persistentSourceAsset()
+    , _localFileId(MakeLocalFileId(params.ID))
     , _prefabID(Guid::Empty)
     , _prefabObjectID(Guid::Empty)
+    , _prefabObjectFileId(0)
 #if USE_EDITOR
     , _externalSiblingOrderParentId(Guid::Empty)
     , _externalLegacyOrderInParent(0)
@@ -196,6 +202,7 @@ void SceneObject::LinkPrefab(const Guid& prefabId, const Guid& prefabObjectId)
     // Link
     _prefabID = prefabId;
     _prefabObjectID = prefabObjectId;
+    _prefabObjectFileId = MakeLocalFileId(prefabObjectId);
 
     if (_prefabID.IsValid() && _prefabObjectID.IsValid())
     {
@@ -204,9 +211,19 @@ void SceneObject::LinkPrefab(const Guid& prefabId, const Guid& prefabObjectId)
         {
             _prefabID = Guid::Empty;
             _prefabObjectID = Guid::Empty;
+            _prefabObjectFileId = 0;
             LOG(Warning, "Failed to load prefab linked to the actor.");
         }
     }
+}
+
+void SceneObject::LinkPrefabObject(const Guid& prefabId, LocalFileId prefabObjectFileId)
+{
+    ASSERT(prefabId.IsValid());
+    ASSERT(prefabObjectFileId != 0);
+    LinkPrefab(prefabId, MakeRuntimeObjectId(prefabId, prefabObjectFileId, GlobalObjectKind::PrefabObject));
+    if (_prefabID.IsValid())
+        _prefabObjectFileId = prefabObjectFileId;
 }
 
 void SceneObject::BreakPrefabLink()
@@ -214,6 +231,73 @@ void SceneObject::BreakPrefabLink()
     // Invalidate link
     _prefabID = Guid::Empty;
     _prefabObjectID = Guid::Empty;
+    _prefabObjectFileId = 0;
+}
+
+Guid SceneObject::MakeRuntimeObjectId(const Guid& sourceAssetId, LocalFileId localFileId, GlobalObjectKind kind, LocalFileId prefabInstanceFileId)
+{
+    GlobalAssetObjectId result;
+    result.Kind = kind;
+    result.SourceAsset = AssetGuid(sourceAssetId);
+    result.LocalFileId = localFileId;
+    result.PrefabInstanceFileId = prefabInstanceFileId;
+    return result.ToRuntimeObjectGuid();
+}
+
+LocalFileId SceneObject::MakeLocalFileId(const Guid& runtimeSeed)
+{
+    uint64 value = (static_cast<uint64>(runtimeSeed.A) << 32) | runtimeSeed.B;
+    value ^= (static_cast<uint64>(runtimeSeed.C) << 17) | (static_cast<uint64>(runtimeSeed.D) << 49);
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdULL;
+    value ^= value >> 33;
+    value &= MAX_int64;
+    if (value <= 1)
+        value += 2;
+    return static_cast<LocalFileId>(value);
+}
+
+GlobalAssetObjectId SceneObject::GetGlobalObjectId() const
+{
+    GlobalAssetObjectId result;
+    if (HasPrefabLink() && _prefabObjectFileId != 0)
+    {
+        result.Kind = GlobalObjectKind::PrefabObject;
+        result.SourceAsset = AssetGuid(_prefabID);
+        result.LocalFileId = _prefabObjectFileId;
+        const Actor* instanceRoot = dynamic_cast<const Actor*>(this);
+        if (!instanceRoot)
+            instanceRoot = _parent;
+        while (instanceRoot && !instanceRoot->IsPrefabRoot())
+            instanceRoot = instanceRoot->GetParent();
+        result.PrefabInstanceFileId = instanceRoot ? instanceRoot->GetLocalFileId() : _localFileId;
+    }
+    else
+    {
+        result.Kind = GlobalObjectKind::SceneObject;
+        result.SourceAsset = _persistentSourceAsset;
+        result.LocalFileId = _localFileId;
+    }
+    return result;
+}
+
+SceneObject* SceneObject::ResolveGlobalObjectId(const GlobalAssetObjectId& objectId)
+{
+    if (!objectId.IsValid() || (objectId.Kind != GlobalObjectKind::SceneObject && objectId.Kind != GlobalObjectKind::PrefabObject))
+        return nullptr;
+    ScopeLock lock(Level::ScenesLock);
+    for (Scene* scene : Level::Scenes)
+    {
+        Array<SceneObject*> objects;
+        objects.Add(scene);
+        SceneQuery::GetAllSceneObjects(scene, objects);
+        for (SceneObject* object : objects)
+        {
+            if (object && object->GetGlobalObjectId() == objectId)
+                return object;
+        }
+    }
+    return nullptr;
 }
 
 String SceneObject::GetNamePath(Char separatorChar) const
@@ -253,16 +337,16 @@ void SceneObject::Serialize(SerializeStream& stream, const void* otherObj)
 {
     SERIALIZE_GET_OTHER_OBJ(SceneObject);
 
-    stream.JKEY("ID");
-    stream.Guid(_id);
+    stream.JKEY("FileId");
+    stream.Int64(_localFileId);
 
     if (other && HasPrefabLink())
     {
         stream.JKEY("PrefabID");
         stream.Guid(_prefabID);
 
-        stream.JKEY("PrefabObjectID");
-        stream.Guid(_prefabObjectID);
+        stream.JKEY("PrefabObjectFileId");
+        stream.Int64(_prefabObjectFileId);
     }
     else
     {
@@ -272,8 +356,8 @@ void SceneObject::Serialize(SerializeStream& stream, const void* otherObj)
 
     if (_parent)
     {
-        stream.JKEY("ParentID");
-        stream.Guid(_parent->GetID());
+        stream.JKEY("ParentFileId");
+        stream.Int64(_parent->GetLocalFileId());
     }
 
 #if !COMPILE_WITHOUT_CSHARP
@@ -305,7 +389,9 @@ void SceneObject::Deserialize(DeserializeStream& stream, ISerializeModifier* mod
     // _id is deserialized by Actor/Script impl
     // _parent is deserialized by Actor/Script impl
     // _prefabID is deserialized by Actor/Script impl
-    DESERIALIZE_MEMBER(PrefabObjectID, _prefabObjectID);
+    DESERIALIZE_MEMBER(PrefabObjectFileId, _prefabObjectFileId);
+    if (_prefabID.IsValid() && _prefabObjectFileId != 0)
+        _prefabObjectID = MakeRuntimeObjectId(_prefabID, _prefabObjectFileId, GlobalObjectKind::PrefabObject);
 
 #if USE_EDITOR
     bool hasExternalOrder = false;
@@ -335,9 +421,9 @@ void SceneObject::Deserialize(DeserializeStream& stream, ISerializeModifier* mod
     if (hasExternalOrder)
     {
         _externalSiblingOrderParentId = Guid::Empty;
-        const auto parentMember = SERIALIZE_FIND_MEMBER(stream, "ParentID");
-        if (parentMember != stream.MemberEnd())
-            Serialization::Deserialize(parentMember->value, _externalSiblingOrderParentId, modifier);
+        const auto parentMember = SERIALIZE_FIND_MEMBER(stream, "ParentFileId");
+        if (parentMember != stream.MemberEnd() && parentMember->value.IsInt64() && modifier && modifier->CurrentSourceAssetId.IsValid())
+            _externalSiblingOrderParentId = MakeRuntimeObjectId(modifier->CurrentSourceAssetId, parentMember->value.GetInt64());
     }
 #endif
 

@@ -215,10 +215,10 @@ void CloneObject(rapidjson_flax::StringBuffer& buffer, SceneObject* src, SceneOb
     document.Parse(buffer.GetString(), buffer.GetSize());
 
     // Strip unwanted data
-    document.RemoveMember("ID");
-    document.RemoveMember("ParentID");
+    document.RemoveMember("FileId");
+    document.RemoveMember("ParentFileId");
     document.RemoveMember("PrefabID");
-    document.RemoveMember("PrefabObjectID");
+    document.RemoveMember("PrefabObjectFileId");
     if (stripName)
         document.RemoveMember("Name");
 
