@@ -51,8 +51,6 @@ namespace
         AssetProcessorRegistration Registration;
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
-        Dictionary<Guid, AssetBuildRequestHandle> ThumbnailHandles;
-        Dictionary<Guid, ArtifactKey> ThumbnailPlans;
         Dictionary<Guid, ArtifactKey> Fingerprints;
         uint64 ForceGeneration = 0;
         bool Initialized = false;
@@ -486,57 +484,6 @@ bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, Asset
     return false;
 }
 
-bool TexturePipelineService::RequestThumbnailBuild(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
-{
-    AssetBuildService* builds = GetBuildService(diagnostic);
-    if (!builds)
-        return true;
-    AssetRecord record;
-    if (!AssetDatabase::Get().TryGetRecord(assetID, record))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-            assetID, TEXT("Texture asset is not registered."));
-
-    ArtifactRequest request;
-    request.AssetID = assetID;
-    request.Target = GetHostTarget();
-    request.OutputKind = "thumbnail";
-    request.RequiredCompatibility = "flax-texture-thumbnail-v2";
-    request.Policy = ArtifactResolvePolicy::Exact;
-    ArtifactResolutionPlan plan;
-    if (CreatePlan(record, request, plan, diagnostic))
-        return true;
-
-    TexturePipelineState& state = State();
-    {
-        std::lock_guard<std::mutex> lock(state.Locker);
-        const ArtifactKey* existingPlan = state.ThumbnailPlans.TryGet(assetID);
-        const AssetBuildRequestHandle* existingHandle = state.ThumbnailHandles.TryGet(assetID);
-        if (existingPlan && existingHandle && *existingPlan == plan.BuildRequest.Key.ExactPlan && existingHandle->IsValid())
-        {
-            diagnostic = AssetPipelineDiagnostic();
-            return false;
-        }
-    }
-
-    const AssetBuildRequestHandle handle = builds->Request(plan.BuildRequest);
-    if (!handle.IsValid())
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
-            assetID, TEXT("Texture thumbnail build request was not accepted."));
-    {
-        std::lock_guard<std::mutex> lock(state.Locker);
-        state.ThumbnailPlans[assetID] = plan.BuildRequest.Key.ExactPlan;
-        state.ThumbnailHandles[assetID] = handle;
-    }
-    AssetBuildJobResult immediate;
-    if (handle.TryGetResult(immediate) && immediate.Status == AssetBuildJobStatus::Failed)
-    {
-        diagnostic = immediate.Diagnostic;
-        return true;
-    }
-    diagnostic = AssetPipelineDiagnostic();
-    return false;
-}
-
 AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
 {
     AssetBuildRequestHandle handle;
@@ -544,28 +491,6 @@ AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, Asset
         TexturePipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
         const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID);
-        if (!value)
-        {
-            diagnostic = AssetPipelineDiagnostic();
-            return AssetBuildJobStatus::Invalid;
-        }
-        handle = *value;
-    }
-    AssetBuildJobResult result;
-    if (handle.TryGetResult(result))
-        diagnostic = result.Diagnostic;
-    else
-        diagnostic = AssetPipelineDiagnostic();
-    return handle.GetStatus();
-}
-
-AssetBuildJobStatus TexturePipelineService::GetThumbnailStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
-{
-    AssetBuildRequestHandle handle;
-    {
-        TexturePipelineState& state = State();
-        std::lock_guard<std::mutex> lock(state.Locker);
-        const AssetBuildRequestHandle* value = state.ThumbnailHandles.TryGet(assetID);
         if (!value)
         {
             diagnostic = AssetPipelineDiagnostic();
@@ -592,8 +517,6 @@ void TexturePipelineService::Shutdown()
         if (!state.Initialized)
             return;
         state.Handles.Clear();
-        state.ThumbnailHandles.Clear();
-        state.ThumbnailPlans.Clear();
         state.Fingerprints.Clear();
         builds = MoveTemp(state.Builds);
         registration = MoveTemp(state.Registration);

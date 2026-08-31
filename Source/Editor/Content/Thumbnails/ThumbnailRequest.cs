@@ -77,8 +77,6 @@ namespace FlaxEditor.Content.Thumbnails
         /// </summary>
         public Guid CacheVersion;
 
-        private DateTime _nextThumbnailLoadAttemptUtc;
-
         /// <summary>
         /// Determines whether thumbnail can be drawn for the item.
         /// </summary>
@@ -99,21 +97,6 @@ namespace FlaxEditor.Content.Thumbnails
 
         internal void Update()
         {
-            if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
-            {
-                Asset = TextureImporterService.LoadThumbnail(Item.ID);
-                if (Asset)
-                {
-                    CacheVersion = AssetDatabaseQueryService.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
-                    Proxy.OnThumbnailDrawPrepare(this);
-                    State = States.Prepared;
-                }
-                else
-                {
-                    _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
-                }
-                return;
-            }
             if (State == States.Prepared && (!Asset || Asset.LastLoadFailed))
             {
                 State = States.Failed;
@@ -127,18 +110,7 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (State != States.Created)
                 throw new InvalidOperationException();
-            if (Item.IsCanonicalSource && !Item.IsCanonicalSubAsset && Proxy is TextureProxy)
-            {
-                Asset = TextureImporterService.LoadThumbnail(Item.ID);
-                if (!Asset)
-                {
-                    _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
-                    State = States.Waiting;
-                    return;
-                }
-                CacheVersion = AssetDatabaseQueryService.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
-            }
-            else if (Item.IsCanonicalSource)
+            if (Item.IsCanonicalSource)
             {
                 Asset = AssetDatabaseQueryService.LoadAssetPreview(Item.ObjectID);
                 if (!Asset)

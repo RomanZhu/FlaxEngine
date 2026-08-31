@@ -395,7 +395,7 @@ TEST_CASE("Texture processor Prepare rejects malformed oversized invalid-setting
 
 #if COMPILE_WITH_ASSETS_IMPORTER
 
-TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail artifacts only to Library staging")
+TEST_CASE("Texture processor Build writes a load-compatible runtime artifact only to Library staging")
 {
     const String root = Globals::TemporaryFolder / (TEXT("TextureBuild-") + Guid::New().ToString(Guid::FormatType::N));
     const String content = root / TEXT("Content");
@@ -406,8 +406,6 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
 
     const String sourcePath = content / TEXT("source.png");
     REQUIRE_FALSE(WriteMidtonePng(sourcePath));
-    TextureData sourceThumbnailReference;
-    REQUIRE_FALSE(TextureTool::ImportTexture(sourcePath, sourceThumbnailReference));
     const AssetRecord record = MakeTextureRecord(sourcePath);
     const AssetProcessorDescriptor descriptor = TextureProcessor::CreateDescriptor();
     StringAnsi settingsJson;
@@ -446,19 +444,15 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     REQUIRE_FALSE(buildContext.Initialize(diagnostic));
     REQUIRE_FALSE(descriptor.Build(buildContext, diagnostic));
     REQUIRE_FALSE(buildContext.Close(diagnostic));
-    REQUIRE(buildContext.GetFiles().Count() == 2);
+    REQUIRE(buildContext.GetFiles().Count() == 1);
 
     String runtimePath;
-    String thumbnailPath;
     for (const StagedArtifactFile& file : buildContext.GetFiles())
     {
         if (file.OutputKind == "runtime")
             runtimePath = file.AbsolutePath;
-        else if (file.OutputKind == "thumbnail")
-            thumbnailPath = file.AbsolutePath;
     }
     REQUIRE(runtimePath.HasChars());
-    REQUIRE(thumbnailPath.HasChars());
     Array<String> contentBinaries;
     REQUIRE_FALSE(FileSystem::DirectoryGetFiles(contentBinaries, content, TEXT("*.flax"), DirectorySearchOption::AllDirectories));
     CHECK(contentBinaries.IsEmpty());
@@ -500,19 +494,6 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     CHECK(static_cast<Texture*>(asset)->GetStoragePath() == runtimePath);
     Delete(asset);
 
-    Array<byte> thumbnailBytes;
-    REQUIRE_FALSE(File::ReadAllBytes(thumbnailPath, thumbnailBytes));
-    static const byte pngSignature[] = { 137, 80, 78, 71, 13, 10, 26, 10 };
-    REQUIRE(thumbnailBytes.Count() >= ARRAY_COUNT(pngSignature));
-    CHECK(Platform::MemoryCompare(thumbnailBytes.Get(), pngSignature, ARRAY_COUNT(pngSignature)) == 0);
-    TextureData decodedThumbnail;
-    REQUIRE_FALSE(TextureTool::ImportTexture(thumbnailPath, decodedThumbnail));
-    REQUIRE(decodedThumbnail.GetData(0, 0)->Data.IsValid());
-    REQUIRE(sourceThumbnailReference.GetData(0, 0)->Data.IsValid());
-    const int32 thumbnailRed = decodedThumbnail.GetData(0, 0)->Data[0];
-    const int32 sourceRed = sourceThumbnailReference.GetData(0, 0)->Data[0];
-    CHECK(Math::Abs(thumbnailRed - sourceRed) <= 4);
-
     ArtifactManifestOutput runtimeOutput;
     runtimeOutput.Kind = "runtime";
     runtimeOutput.FormatVersion = TextureProcessor::RuntimeFormatVersion;
@@ -521,42 +502,11 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     REQUIRE_FALSE(TextureArtifactValidator::ValidateRuntime(runtimePath, runtimeOutput, record.ID, Texture::TypeName, diagnostic));
     CHECK(TextureArtifactValidator::ValidateRuntime(runtimePath, runtimeOutput, Guid::New(), Texture::TypeName, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
-    ArtifactManifestOutput thumbnailOutput;
-    thumbnailOutput.Kind = "thumbnail";
-    thumbnailOutput.FormatVersion = TextureProcessor::ThumbnailFormatVersion;
-    thumbnailOutput.Size = FileSystem::GetFileSize(thumbnailPath);
-    thumbnailOutput.Compatibility = "flax-texture-thumbnail-v2";
-    REQUIRE_FALSE(TextureArtifactValidator::ValidateThumbnail(thumbnailPath, thumbnailOutput, diagnostic));
     storage = nullptr;
     ContentStorageManager::EnsureAccess(runtimePath);
-
-    for (const StringAnsiView outputKind : { StringAnsiView("runtime"), StringAnsiView("thumbnail") })
-    {
-        PreparedAsset singleOutputPrepared = prepared;
-        DeclaredArtifactOutput selected;
-        bool found = false;
-        for (const DeclaredArtifactOutput& output : prepared.Outputs)
-        {
-            if (output.Kind == outputKind)
-            {
-                selected = output;
-                found = true;
-                break;
-            }
-        }
-        REQUIRE(found);
-        singleOutputPrepared.Outputs.Clear();
-        singleOutputPrepared.Outputs.Add(selected);
-        ArtifactBuildContext singleOutputContext(root, content, library, Guid::New(), singleOutputPrepared, inputs, cancellation.GetToken(), target);
-        REQUIRE_FALSE(singleOutputContext.Initialize(diagnostic));
-        REQUIRE_FALSE(descriptor.Build(singleOutputContext, diagnostic));
-        REQUIRE_FALSE(singleOutputContext.Close(diagnostic));
-        REQUIRE(singleOutputContext.GetFiles().Count() == 1);
-        CHECK(singleOutputContext.GetFiles()[0].OutputKind == outputKind);
-    }
 }
 
-TEST_CASE("Texture processor output keys isolate target overrides and thumbnail dimensions")
+TEST_CASE("Texture processor runtime output keys isolate target overrides")
 {
     const String root = Globals::TemporaryFolder / (TEXT("TextureKeys-") + Guid::New().ToString(Guid::FormatType::N));
     const String content = root / TEXT("Content");
@@ -585,11 +535,11 @@ TEST_CASE("Texture processor output keys isolate target overrides and thumbnail 
     windows.Graphics = "DirectX12";
     windows.TextureCompression = "Desktop";
     ArtifactKey windowsRuntime;
-    ArtifactKey windowsThumbnail;
     Array<ArtifactKeyComponent> runtimeComponents;
-    Array<ArtifactKeyComponent> thumbnailComponents;
     REQUIRE_FALSE(TextureProcessor::BuildOutputKey(prepared, windows, StringAnsiView("runtime"), windowsRuntime, runtimeComponents, diagnostic));
-    REQUIRE_FALSE(TextureProcessor::BuildOutputKey(prepared, windows, StringAnsiView("thumbnail"), windowsThumbnail, thumbnailComponents, diagnostic));
+    ArtifactKey unsupportedOutput;
+    Array<ArtifactKeyComponent> unsupportedComponents;
+    CHECK(TextureProcessor::BuildOutputKey(prepared, windows, StringAnsiView("thumbnail"), unsupportedOutput, unsupportedComponents, diagnostic));
 
     ArtifactTarget android = windows;
     android.Platform = "Android";
@@ -597,12 +547,9 @@ TEST_CASE("Texture processor output keys isolate target overrides and thumbnail 
     android.Graphics = "Vulkan";
     android.TextureCompression = "Mobile";
     ArtifactKey androidRuntime;
-    ArtifactKey androidThumbnail;
     Array<ArtifactKeyComponent> ignored;
     REQUIRE_FALSE(TextureProcessor::BuildOutputKey(prepared, android, StringAnsiView("runtime"), androidRuntime, ignored, diagnostic));
-    REQUIRE_FALSE(TextureProcessor::BuildOutputKey(prepared, android, StringAnsiView("thumbnail"), androidThumbnail, ignored, diagnostic));
     CHECK(androidRuntime != windowsRuntime);
-    CHECK(androidThumbnail == windowsThumbnail);
 
     TextureProcessorSettings withAndroidOverride = TextureProcessorSettings::Defaults();
     TextureProcessorPlatformOverride overrideSettings;

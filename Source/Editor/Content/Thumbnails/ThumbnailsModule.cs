@@ -120,10 +120,7 @@ namespace FlaxEditor.Content.Thumbnails
 
         private static Guid GetCacheVersion(AssetItem item, AssetProxy proxy)
         {
-            if (!item.IsCanonicalSource)
-                return Guid.Empty;
-            var outputKind = !item.IsCanonicalSubAsset && proxy is TextureProxy ? "thumbnail" : "runtime";
-            return AssetDatabaseQueryService.GetPublishedArtifactCacheID(item.ID, outputKind);
+            return Guid.Empty;
         }
 
         /// <summary>

@@ -7,10 +7,7 @@
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Render2D/SpriteAtlas.h"
 #include "Engine/Graphics/PixelFormatExtensions.h"
-#include "Engine/Graphics/Textures/TextureData.h"
-#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
-#include "Engine/Tools/TextureTool/TextureTool.h"
 
 #if COMPILE_WITH_TEXTURE_TOOL
 
@@ -32,12 +29,7 @@ bool TextureArtifactValidator::Register(ArtifactOutputValidatorRegistry& registr
     {
         return ValidateRuntime(path, output, expectedAssetID, expectedType, result);
     };
-    ArtifactOutputValidator thumbnail = [](const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& result)
-    {
-        return ValidateThumbnail(path, output, result);
-    };
-    return registry.Register(StringAnsiView("runtime"), expectedType, runtime, diagnostic) ||
-           registry.Register(StringAnsiView("thumbnail"), expectedType, thumbnail, diagnostic);
+    return registry.Register(StringAnsiView("runtime"), expectedType, runtime, diagnostic);
 }
 
 bool TextureArtifactValidator::ValidateRuntime(const StringView& path, const ArtifactManifestOutput& output, const Guid& expectedAssetID, const StringView& expectedType, AssetPipelineDiagnostic& diagnostic)
@@ -76,18 +68,6 @@ bool TextureArtifactValidator::ValidateRuntime(const StringView& path, const Art
         if (!chunk || !chunk->ExistsInFile() || static_cast<uint64>(chunk->LocationInFile.Address) + chunk->LocationInFile.Size > output.Size)
             return Invalid(diagnostic, TEXT("Texture runtime artifact has a missing or out-of-bounds mip chunk."));
     }
-    diagnostic = AssetPipelineDiagnostic();
-    return false;
-}
-
-bool TextureArtifactValidator::ValidateThumbnail(const StringView& path, const ArtifactManifestOutput& output, AssetPipelineDiagnostic& diagnostic)
-{
-    if (output.FormatVersion != TextureProcessor::ThumbnailFormatVersion || output.Compatibility != "flax-texture-thumbnail-v2" ||
-        output.Size == 0 || output.Size > 16ull * 1024ull * 1024ull || output.Size != FileSystem::GetFileSize(path))
-        return Invalid(diagnostic, TEXT("Texture thumbnail format metadata or size is invalid."));
-    TextureData image;
-    if (TextureTool::ImportTexture(path, image, false) || image.Width < 1 || image.Height < 1 || image.Width > 256 || image.Height > 256)
-        return Invalid(diagnostic, TEXT("Texture thumbnail is not a valid bounded PNG image."));
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }

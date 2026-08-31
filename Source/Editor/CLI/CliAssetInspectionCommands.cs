@@ -367,7 +367,7 @@ namespace FlaxEditor
                 var direct = FlaxEngine.Content.LoadAssetAsync(requestedObject);
                 if (direct == null || direct.WaitForLoaded())
                     throw new InvalidOperationException($"Asset object '{requestedObject}' failed to load.");
-                return DescribeLoaded(direct.ID, objectInfo.Path, direct, true, null, requestedObject);
+                return DescribeLoaded(direct.ID, objectInfo.Path, direct, true, requestedObject);
             }
             if (Guid.TryParse(asset, out var requestedId) && FlaxEngine.Content.GetRuntimeAssetInfo(requestedId, out var requestedInfo))
             {
@@ -386,17 +386,10 @@ namespace FlaxEditor
             var loaded = item.LoadAsync();
             if (loaded == null || loaded.WaitForLoaded())
                 throw new InvalidOperationException($"Asset '{item.Path}' failed to load.");
-            object thumbnailInfo = null;
-            if (item.IsCanonicalSource && loaded is Texture)
-            {
-                var thumbnail = TextureImporterService.LoadThumbnail(item.ID);
-                if (thumbnail != null)
-                    thumbnailInfo = new { thumbnail.Width, thumbnail.Height, format = thumbnail.Format.ToString() };
-            }
-            return DescribeLoaded(item.ID, item.Path, loaded, item.IsCanonicalSource, thumbnailInfo);
+            return DescribeLoaded(item.ID, item.Path, loaded, item.IsCanonicalSource);
         }
 
-        private static object DescribeLoaded(Guid id, string path, Asset loaded, bool canonical, object thumbnailInfo = null, AssetObjectId? objectId = null)
+        private static object DescribeLoaded(Guid id, string path, Asset loaded, bool canonical, AssetObjectId? objectId = null)
         {
             return new
             {
@@ -408,7 +401,6 @@ namespace FlaxEditor
                 storagePath = loaded is BinaryAsset storage ? storage.StoragePath : loaded.Path,
                 artifactKey = loaded is BinaryAsset artifact ? artifact.ArtifactKey : null,
                 exactArtifact = loaded is BinaryAsset exact && exact.IsUsingExactArtifact,
-                thumbnail = thumbnailInfo,
                 importPath = loaded is BinaryAsset binary ? binary.ImportPath : null,
                 memoryUsage = loaded.MemoryUsage,
                 references = loaded.GetReferences().Where(x => x != Guid.Empty).Distinct().OrderBy(x => x).ToArray(),

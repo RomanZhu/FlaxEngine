@@ -45,10 +45,8 @@
 #include "Engine/Tools/MaterialGenerator/Types.h"
 #endif
 #if COMPILE_WITH_TEXTURE_TOOL
-#include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Assets/Texture.h"
 #include "Engine/Content/Assets/CubeTexture.h"
-#include "Engine/Graphics/PixelFormatExtensions.h"
 #include "Engine/Graphics/Textures/TextureData.h"
 #include "Engine/Render2D/SpriteAtlas.h"
 #include "Engine/Content/Build/Processors/TextureProcessorSettings.h"
@@ -1652,28 +1650,6 @@ Asset* AssetDatabaseQueryService::LoadAssetPreview(const AssetObjectId& objectID
 #endif
 }
 
-Guid AssetDatabaseQueryService::GetPublishedArtifactCacheID(const Guid& assetID, const StringView& outputKind)
-{
-#if USE_EDITOR
-    ArtifactResolver& resolver = ArtifactResolver::Get();
-    if (!resolver.IsConfigured() || !assetID.IsValid() || outputKind.IsEmpty())
-        return Guid::Empty;
-    ArtifactRequest request;
-    request.AssetID = assetID;
-    request.Target = resolver.GetDefaultTarget();
-    request.OutputKind = StringAnsi(outputKind);
-    request.Policy = ArtifactResolvePolicy::PublishedOnly;
-    ResolvedArtifact artifact;
-    AssetPipelineDiagnostic diagnostic;
-    ArtifactKey key;
-    if (resolver.Resolve(request, artifact, diagnostic) || ArtifactKey::Parse(artifact.Key, key))
-        return Guid::Empty;
-    return Guid(key.Digest.Values[0], key.Digest.Values[1], key.Digest.Values[2], key.Digest.Values[3]);
-#else
-    return Guid::Empty;
-#endif
-}
-
 bool AssetPipelineService::Scan(bool strictMetadata)
 {
 #if USE_EDITOR
@@ -2657,48 +2633,6 @@ Failed:
     return true;
 }
 
-Texture* TextureImporterService::LoadThumbnail(const Guid& assetID)
-{
-#if COMPILE_WITH_ASSETS_IMPORTER
-    if (!ArtifactResolver::Get().IsConfigured())
-        return nullptr;
-    AssetPipelineDiagnostic diagnostic;
-    const AssetBuildJobStatus thumbnailStatus = TexturePipelineService::GetThumbnailStatus(assetID, diagnostic);
-    if (thumbnailStatus == AssetBuildJobStatus::Queued || thumbnailStatus == AssetBuildJobStatus::Building ||
-        thumbnailStatus == AssetBuildJobStatus::Publishing || thumbnailStatus == AssetBuildJobStatus::Failed ||
-        thumbnailStatus == AssetBuildJobStatus::Cancelled)
-        return nullptr;
-    ArtifactRequest request;
-    request.AssetID = assetID;
-    request.Target = TexturePipelineService::GetHostTarget();
-    request.OutputKind = "thumbnail";
-    request.RequiredCompatibility = "flax-texture-thumbnail-v2";
-    request.Policy = ArtifactResolvePolicy::NoBuild;
-    ResolvedArtifact artifact;
-    if (ArtifactResolver::Get().Resolve(request, artifact, diagnostic))
-    {
-        TexturePipelineService::RequestThumbnailBuild(assetID, diagnostic);
-        return nullptr;
-    }
-    const ArtifactLease lease = ArtifactLease::Acquire(artifact.StoragePath.Get());
-    TextureData textureData;
-    if (TextureTool::ImportTexture(artifact.StoragePath.Get(), textureData, false))
-        return nullptr;
-    if (PixelFormatExtensions::IsSRGB(textureData.Format))
-        textureData.Format = PixelFormatExtensions::ToNonsRGB(textureData.Format);
-    auto* texture = Content::CreateVirtualAsset<Texture>();
-    auto* initData = New<TextureBase::InitData>();
-    initData->FromTextureData(textureData, false);
-    if (texture->Init(initData))
-    {
-        texture->DeleteObject();
-        return nullptr;
-    }
-    return texture;
-#else
-    return nullptr;
-#endif
-}
 #endif
 
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR

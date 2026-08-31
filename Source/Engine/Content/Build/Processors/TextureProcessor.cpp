@@ -562,15 +562,6 @@ AssetProcessorDescriptor TextureProcessor::CreateDescriptor()
     runtime.CompatibilityTag = "flax-texture-v4";
     runtime.IndependentlyReusable = true;
     descriptor.Outputs.Add(runtime);
-
-    AssetProcessorOutputDescriptor thumbnail;
-    thumbnail.Kind = "thumbnail";
-    thumbnail.Extension = ".png";
-    thumbnail.FormatVersion = ThumbnailFormatVersion;
-    thumbnail.TargetDimensions = ArtifactTargetDimension::None;
-    thumbnail.CompatibilityTag = "flax-texture-thumbnail-v2";
-    thumbnail.IndependentlyReusable = true;
-    descriptor.Outputs.Add(thumbnail);
     return descriptor;
 }
 
@@ -601,36 +592,27 @@ bool TextureProcessor::BuildOutputKey(const PreparedAsset& prepared, const Artif
         return true;
     }
 
-    const bool runtime = outputKind == "runtime";
     ArtifactKeyBuilder builder(StringAnsiView("flax-texture-output-v1"));
     descriptor.AppendVersionKey(builder, *output);
     builder.AddString(StringAnsiView("output-compatibility"), output->CompatibilityTag);
-    if (runtime)
-        builder.AddGuid(StringAnsiView("effective-asset"), prepared.AssetID);
+    builder.AddGuid(StringAnsiView("effective-asset"), prepared.AssetID);
     int32 dependencyIndex = 0;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
         const bool include = dependency.Kind == AssetDependencyKind::SourceFile ||
             (dependency.Kind == AssetDependencyKind::Toolchain &&
-                (dependency.StableIdentity == TEXT("texture-decoder") || (runtime && dependency.StableIdentity == TEXT("texture-compressor"))));
+                (dependency.StableIdentity == TEXT("texture-decoder") || dependency.StableIdentity == TEXT("texture-compressor")));
         if (include)
             dependency.AppendKeyComponents(builder, dependencyIndex++);
     }
-    if (runtime)
-    {
-        TextureProcessorSettings effective = payload->Settings;
-        effective.Import = effective.ToImportOptions(target.Platform);
-        effective.PlatformOverrides.Clear();
-        StringAnsi effectiveJson;
-        if (effective.ToJson(effectiveJson, diagnostic))
-            return true;
-        builder.AddHash(StringAnsiView("effective-settings"), ContentHash::Compute(effectiveJson.Get(), effectiveJson.Length()));
-        builder.AddString(StringAnsiView("graphics-runtime-abi"), StringAnsiView("flax-texture-runtime-abi-v4"));
-    }
-    else
-    {
-        builder.AddString(StringAnsiView("thumbnail-encoder"), StringAnsiView("flax-png-thumbnail-v2"));
-    }
+    TextureProcessorSettings effective = payload->Settings;
+    effective.Import = effective.ToImportOptions(target.Platform);
+    effective.PlatformOverrides.Clear();
+    StringAnsi effectiveJson;
+    if (effective.ToJson(effectiveJson, diagnostic))
+        return true;
+    builder.AddHash(StringAnsiView("effective-settings"), ContentHash::Compute(effectiveJson.Get(), effectiveJson.Length()));
+    builder.AddString(StringAnsiView("graphics-runtime-abi"), StringAnsiView("flax-texture-runtime-abi-v4"));
     builder.AddTarget(target, output->TargetDimensions);
     key = builder.Finalize();
     components = builder.GetComponents();
@@ -705,8 +687,7 @@ bool TextureProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prep
     const ContentHash compressorHash = ContentHash::Compute(CompressorIdentity, ARRAY_COUNT(CompressorIdentity) - 1);
     if (context.DeclareToolchain(TEXT("texture-decoder"), decoderHash, sourceOrigin, diagnostic) ||
         context.DeclareToolchain(TEXT("texture-compressor"), compressorHash, sourceOrigin, diagnostic) ||
-        context.DeclareOutput(StringAnsiView("runtime"), Guid::Empty, diagnostic) ||
-        context.DeclareOutput(StringAnsiView("thumbnail"), Guid::Empty, diagnostic))
+        context.DeclareOutput(StringAnsiView("runtime"), Guid::Empty, diagnostic))
         return true;
 
     auto payload = std::make_shared<TexturePreparedPayload>();
@@ -748,13 +729,9 @@ bool TextureProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnos
         return fail(AssetPipelineDiagnosticCode::BuildCancelled, StringView::Empty, TEXT("Texture build was cancelled before decode."));
 
     bool buildRuntime = false;
-    bool buildThumbnail = false;
     for (const DeclaredArtifactOutput& output : prepared.Outputs)
-    {
         buildRuntime |= output.Kind == StringAnsiView("runtime");
-        buildThumbnail |= output.Kind == StringAnsiView("thumbnail");
-    }
-    if (!buildRuntime && !buildThumbnail)
+    if (!buildRuntime)
         return fail(AssetPipelineDiagnosticCode::ArtifactMissing, StringView::Empty, TEXT("Texture build declares no supported output."));
 
     const AssetDependency* sourceDependency = nullptr;
@@ -832,53 +809,6 @@ bool TextureProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnos
             return true;
     }
 
-    if (!buildThumbnail)
-    {
-        diagnostic = AssetPipelineDiagnostic();
-        return false;
-    }
-
-    if (context.GetCancellation().IsCancellationRequested())
-        return fail(AssetPipelineDiagnosticCode::BuildCancelled, sourcePath, TEXT("Texture build was cancelled before thumbnail generation."));
-    TextureData thumbnailSource;
-    if (TextureTool::ImportTexture(verifiedSourcePath, thumbnailSource, false))
-        return fail(AssetPipelineDiagnosticCode::BuildFailed, sourcePath, TEXT("Texture thumbnail decoder rejected the verified source snapshot."));
-    TextureData converted;
-    TextureData* thumbnail = &thumbnailSource;
-    const bool thumbnailIsSrgb = PixelFormatExtensions::IsSRGB(thumbnailSource.Format);
-    const PixelFormat thumbnailWorkingFormat = thumbnailIsSrgb ? PixelFormat::R8G8B8A8_UNorm_sRGB : PixelFormat::R8G8B8A8_UNorm;
-    if (thumbnailSource.Format != thumbnailWorkingFormat)
-    {
-        if (TextureTool::Convert(converted, thumbnailSource, thumbnailWorkingFormat))
-            return fail(AssetPipelineDiagnosticCode::BuildFailed, sourcePath, TEXT("Texture thumbnail conversion failed."));
-        thumbnail = &converted;
-    }
-    TextureData resized;
-    if (thumbnail->Width > 256 || thumbnail->Height > 256)
-    {
-        const int32 width = thumbnail->Width >= thumbnail->Height ? 256 : Math::Max(1, thumbnail->Width * 256 / thumbnail->Height);
-        const int32 height = thumbnail->Height >= thumbnail->Width ? 256 : Math::Max(1, thumbnail->Height * 256 / thumbnail->Width);
-        if (TextureTool::Resize(resized, *thumbnail, width, height))
-            return fail(AssetPipelineDiagnosticCode::BuildFailed, sourcePath, TEXT("Texture thumbnail resize failed."));
-        thumbnail = &resized;
-    }
-    // PNG stores display-encoded samples. Keep sRGB filtering during conversion/resize, then
-    // re-tag the pixels without converting them to linear values before the PNG encoder.
-    if (thumbnailIsSrgb)
-        thumbnail->Format = PixelFormatExtensions::ToNonsRGB(thumbnail->Format);
-    String thumbnailScratchPath;
-    if (context.CreateScratchFilePath(TEXT(".png"), thumbnailScratchPath, diagnostic))
-        return true;
-    SCOPE_EXIT { FileSystem::DeleteFile(thumbnailScratchPath); };
-    if (TextureTool::ExportTexture(thumbnailScratchPath, *thumbnail, false))
-        return fail(AssetPipelineDiagnosticCode::BuildFailed, thumbnailScratchPath, TEXT("Texture thumbnail encoding failed."));
-    Array<byte> thumbnailBytes;
-    if (File::ReadAllBytes(thumbnailScratchPath, thumbnailBytes))
-        return fail(AssetPipelineDiagnosticCode::ArtifactInvalid, thumbnailScratchPath, TEXT("Texture thumbnail output is unreadable."));
-    ArtifactWriter thumbnailWriter;
-    if (context.OpenOutput(StringAnsiView("thumbnail"), thumbnailWriter, diagnostic) ||
-        thumbnailWriter.WriteFile(TEXT("thumbnail.png"), thumbnailBytes.Get(), thumbnailBytes.Count(), diagnostic))
-        return true;
     diagnostic = AssetPipelineDiagnostic();
     return false;
 #else

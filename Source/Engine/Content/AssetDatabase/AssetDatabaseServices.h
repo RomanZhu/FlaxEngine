@@ -167,7 +167,6 @@ public:
     API_FUNCTION() static Guid GetBackingAssetID(const AssetObjectId& objectID);
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
     API_FUNCTION() static Asset* LoadAssetPreview(const AssetObjectId& objectID);
-    API_FUNCTION() static Guid GetPublishedArtifactCacheID(const Guid& assetID, const StringView& outputKind);
 };
 
 /// <summary>Coordinates source refresh, importer execution, and artifact publication.</summary>
@@ -227,7 +226,6 @@ public:
     API_FUNCTION() static Guid CreateMetadata(const StringView& sourcePath, const TextureTool::Options& options);
     API_FUNCTION() static bool LoadMetadata(const StringView& sourcePath, API_PARAM(Out) TextureTool::Options& options);
     API_FUNCTION() static bool ApplyMetadata(const StringView& sourcePath, const TextureTool::Options& options);
-    API_FUNCTION() static Texture* LoadThumbnail(const Guid& assetID);
 };
 #endif
 
