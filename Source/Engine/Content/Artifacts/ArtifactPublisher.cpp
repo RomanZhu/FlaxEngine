@@ -117,7 +117,24 @@ namespace
         publication.LocalFileId = manifest.ObjectID.LocalId;
         publication.TargetId = targetId;
         publication.ManifestHash = ContentHash::Compute(manifestJson.Get(), manifestJson.Length());
-        publication.Artifact = ArtifactKey(publication.ManifestHash);
+        const ArtifactManifestOutput* primaryOutput = nullptr;
+        for (const ArtifactManifestOutput& output : manifest.Outputs)
+        {
+            if (!primaryOutput || output.Kind == StringAnsiView("runtime"))
+                primaryOutput = &output;
+            if (output.Kind == StringAnsiView("runtime"))
+                break;
+        }
+        if (!primaryOutput || primaryOutput->Key.IsZero())
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.AssetGuid = manifest.AssetID;
+            diagnostic.Message = TEXT("Artifact publication has no deterministic primary output key.");
+            return true;
+        }
+        publication.Artifact = primaryOutput->Key;
         publication.InputFingerprint = manifest.InputFingerprint;
         publication.SourceRevision = manifest.DatabaseRevision;
         publication.ImporterRegistryGeneration = database.GetDurableSnapshot().GetState().Database.ImporterRegistryGeneration;

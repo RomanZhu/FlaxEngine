@@ -1976,11 +1976,14 @@ namespace FlaxEditor.Windows
 
         internal void OnContentTreeNodeExpandedChanged(ContentFolderTreeNode node, bool isExpanded)
         {
-            if (_suppressExpandedStateSave || node == null || node == _root)
+            if (node == null || node == _root)
                 return;
 
             if (isExpanded && node.CanHaveAssets)
                 Editor.ContentDatabase.RefreshFolder(node.Folder, false);
+
+            if (_suppressExpandedStateSave)
+                return;
 
             var path = node.Path;
             if (string.IsNullOrEmpty(path))
@@ -2564,7 +2567,14 @@ namespace FlaxEditor.Windows
             _root.Expand(true);
 
             // Add game project on top, plugins in the middle and engine at bottom
-            _root.AddChild(Editor.ContentDatabase.Game);
+            var game = Editor.ContentDatabase.Game;
+            if (game != null)
+            {
+                game.ShowHeader = false;
+                game.IsSelectable = false;
+                game.ChildrenIndent = 0;
+                _root.AddChild(game);
+            }
             Editor.ContentDatabase.Projects.Sort();
             foreach (var project in Editor.ContentDatabase.Projects)
             {
@@ -2579,7 +2589,7 @@ namespace FlaxEditor.Windows
             Editor.ContentDatabase.Engine.Folder.Visible = _showEngineFiles;
             _root.AddChild(Editor.ContentDatabase.Engine);
 
-            Editor.ContentDatabase.Game?.Expand(true);
+            game?.Expand(true);
             // The internal workspace container is non-presenting; only real project folders
             // contribute visible rows.
             _tree.Margin = new Margin(0.0f, 0.0f, 0.0f, ScrollBar.DefaultSize + 2);

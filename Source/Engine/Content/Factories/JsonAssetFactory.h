@@ -20,7 +20,13 @@ public:
     // [IAssetFactory]
     Asset* New(const AssetLoadLocation& location) override
     {
-        return Create(location.Info);
+        if (location.Artifact.StoragePath.Get().IsEmpty() ||
+            location.Artifact.AssetID != location.Info.ID ||
+            location.Artifact.TypeName != location.Info.TypeName)
+            return nullptr;
+        auto* result = Create(location.Info);
+        result->SetStoragePath(location.Artifact.StoragePath.Get());
+        return result;
     }
 
     Asset* NewVirtual(const AssetInfo& info) override

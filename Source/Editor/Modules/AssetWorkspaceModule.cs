@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Threading.Tasks;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Documents;
 using FlaxEditor.Content.Import;
@@ -49,6 +50,8 @@ namespace FlaxEditor.Modules
         private readonly HashSet<Guid> _pendingCanonicalStartupChecks = new HashSet<Guid>();
         private readonly Dictionary<string, AssetSaveState> _assetSaves = new Dictionary<string, AssetSaveState>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, AssetDiskWrite> _selfAuthoredAssetDiskChanges = new Dictionary<string, AssetDiskWrite>(StringComparer.OrdinalIgnoreCase);
+        private Task<bool> _sourceRefreshTask;
+        private string[] _sourceRefreshTaskPaths;
         private DateTime _lastAssetDiskChangeTime;
         private long _nextAssetSaveGeneration;
         private int _assetDatabaseAutoRefreshDepth;
@@ -228,8 +231,8 @@ namespace FlaxEditor.Modules
 
         private static string[] QueryChildFolders(string folderPath)
         {
-            folderPath = ContentMutationPathUtils.Normalize(folderPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var prefix = folderPath + Path.DirectorySeparatorChar;
+            folderPath = ContentMutationPathUtils.Normalize(folderPath).TrimEnd('/', '\\');
+            var prefix = folderPath + "/";
             var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var record in AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = folderPath }))
             {
@@ -238,9 +241,10 @@ namespace FlaxEditor.Modules
                 var candidate = record.SourceKind == AssetSourceKind.Folder
                     ? ContentMutationPathUtils.Normalize(record.SourcePath)
                     : ContentMutationPathUtils.Normalize(Path.GetDirectoryName(record.SourcePath));
+                candidate = candidate?.TrimEnd('/', '\\');
                 if (candidate == null || !candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                     continue;
-                var separator = candidate.IndexOf(Path.DirectorySeparatorChar, prefix.Length);
+                var separator = candidate.IndexOf('/', prefix.Length);
                 result.Add(separator == -1 ? candidate : candidate.Substring(0, separator));
             }
             var folders = result.ToArray();
@@ -251,6 +255,17 @@ namespace FlaxEditor.Modules
         private static bool HasDatabaseContent(string path)
         {
             return AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = ContentMutationPathUtils.Normalize(path) }).Length != 0;
+        }
+
+        private static bool HasDatabaseDescendants(string path)
+        {
+            path = ContentMutationPathUtils.Normalize(path)?.TrimEnd('/', '\\');
+            if (path == null)
+                return false;
+            var prefix = path + "/";
+            return AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = path })
+                .Any(record => record.Status != AssetRecordStatus.MissingSource &&
+                               ContentMutationPathUtils.Normalize(record.SourcePath)?.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == true);
         }
 
         private bool IsDatabaseOwnedContentPath(string path)
@@ -2103,6 +2118,7 @@ namespace FlaxEditor.Modules
             var path = folder.Path;
             var canHaveAssets = node.CanHaveAssets;
             var databaseOwnedContent = canHaveAssets && IsDatabaseOwnedContentPath(path);
+            node.HasDeferredChildren = databaseOwnedContent && HasDatabaseDescendants(path);
 
             if (_isDuringFastSetup)
             {
@@ -2272,6 +2288,7 @@ namespace FlaxEditor.Modules
                 {
                     // Create node
                     ContentFolderTreeNode n = new ContentFolderTreeNode(node, childPath);
+                    n.HasDeferredChildren = databaseOwnedContent && HasDatabaseDescendants(childPath);
                     if (!_isDuringFastSetup)
                         sortChildren = true;
 
@@ -2291,6 +2308,10 @@ namespace FlaxEditor.Modules
                 {
                     // Update child folder
                     LoadFolder(childFolderNode.Node, !databaseOwnedContent);
+                }
+                else
+                {
+                    childFolderNode.Node.HasDeferredChildren = databaseOwnedContent && HasDatabaseDescendants(childPath);
                 }
             }
             if (sortChildren)
@@ -3186,6 +3207,37 @@ namespace FlaxEditor.Modules
             RebuildInternal();
         }
 
+        private void CompleteSourceRefreshTask()
+        {
+            var task = _sourceRefreshTask;
+            if (task == null || !task.IsCompleted)
+                return;
+            var paths = _sourceRefreshTaskPaths;
+            _sourceRefreshTask = null;
+            _sourceRefreshTaskPaths = null;
+            bool failed;
+            try
+            {
+                failed = task.GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                failed = true;
+                Editor.LogError("Canonical asset database refresh failed: " + ex.Message);
+            }
+            if (failed)
+            {
+                Editor.LogError("Canonical asset database refresh failed. See asset pipeline diagnostics.");
+                lock (_assetDiskChangesLock)
+                    _pendingSourceRefresh.UnionWith(paths);
+            }
+            else
+            {
+                SchedulePendingTextureBuilds();
+            }
+            QueueMissingMetadataRegistrations();
+        }
+
         /// <inheritdoc />
         public override void OnUpdate()
         {
@@ -3203,6 +3255,7 @@ namespace FlaxEditor.Modules
                 OnArtifactPublished(publishedAssets[i]);
 
             ProcessPendingAssetDiskChanges();
+            CompleteSourceRefreshTask();
 
             if (_assetDatabaseAutoRefreshDepth == 0 && _pendingMissingMetadataRegistrations.Count != 0 && !Editor.ContentImporting.IsImporting)
             {
@@ -3212,7 +3265,7 @@ namespace FlaxEditor.Modules
             }
 
             // Only drain once the refresh can actually run, otherwise queued paths are lost for good.
-            if (_assetDatabaseAutoRefreshDepth == 0 && !Editor.ContentImporting.IsImporting)
+            if (_sourceRefreshTask == null && _assetDatabaseAutoRefreshDepth == 0 && !Editor.ContentImporting.IsImporting)
             {
                 string[] refreshPaths;
                 lock (_assetDiskChangesLock)
@@ -3223,19 +3276,15 @@ namespace FlaxEditor.Modules
                 }
                 if (refreshPaths.Length != 0)
                 {
-                    if (AssetPipelineService.RefreshSources(refreshPaths))
-                    {
-                        Editor.LogError("Canonical asset database refresh failed. See asset pipeline diagnostics.");
-                        lock (_assetDiskChangesLock)
-                            _pendingSourceRefresh.UnionWith(refreshPaths);
-                    }
-                    else
-                        SchedulePendingTextureBuilds();
-                    QueueMissingMetadataRegistrations();
+                    _sourceRefreshTaskPaths = refreshPaths;
+                    _sourceRefreshTask = Task.Run(() => AssetPipelineService.RefreshSources(refreshPaths));
                 }
             }
-            ProcessPendingCanonicalStartupChecks();
-            ProcessPendingCanonicalBuilds();
+            if (_sourceRefreshTask == null)
+            {
+                ProcessPendingCanonicalStartupChecks();
+                ProcessPendingCanonicalBuilds();
+            }
 
             // Recursive folder loading can dispatch more watcher/database work. Snapshot the queue so
             // those callbacks never wait on a lock held by the recursive load itself.
@@ -3267,6 +3316,17 @@ namespace FlaxEditor.Modules
             AssetDatabaseQueryService.DatabaseChanged -= OnAssetDatabaseRevisionPublished;
             ScriptsBuilder.ScriptsReload -= OnScriptsReload;
             ScriptsBuilder.ScriptsReloadEnd -= OnScriptsReloadEnd;
+
+            try
+            {
+                _sourceRefreshTask?.GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Editor.LogError("Canonical asset database refresh failed during shutdown: " + ex.Message);
+            }
+            _sourceRefreshTask = null;
+            _sourceRefreshTaskPaths = null;
 
             // Disable events
             _enableEvents = false;

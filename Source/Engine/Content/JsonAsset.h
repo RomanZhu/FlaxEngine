@@ -15,6 +15,7 @@ API_CLASS(Abstract, NoSpawn) class FLAXENGINE_API JsonAssetBase : public Asset
     DECLARE_SCRIPTING_TYPE_NO_SPAWN(JsonAssetBase);
 protected:
     String _path;
+    String _storagePath;
     bool _isVirtualDocument = false;
     bool _isResaving = false;
 
@@ -65,6 +66,9 @@ public:
     /// <param name="dataJson">The Json with serialized data.</param>
     /// <returns>True if failed, otherwise false.</returns>
     API_FUNCTION() bool Init(const StringView& dataTypeName, const StringAnsiView& dataJson);
+
+    /// <summary>Sets the resolved immutable artifact used for loading while retaining the canonical source path.</summary>
+    void SetStoragePath(const StringView& path);
 
 #if USE_EDITOR
     /// <summary>

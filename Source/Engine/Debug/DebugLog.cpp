@@ -76,43 +76,67 @@ bool CacheMethods()
     return false;
 }
 
+void SendLogOnMainThread(const LogType type, const StringView& message, const StringView& stackTrace, const uint64 threadId)
+{
+    if (CacheMethods())
+        return;
+    auto scriptsDomain = Scripting::GetRootDomain();
+    MainThreadManagedInvokeAction::ParamsBuilder params;
+    params.AddParam(type);
+    params.AddParam(message, scriptsDomain);
+    params.AddParam(stackTrace, scriptsDomain);
+    params.AddParam(threadId);
+    MainThreadManagedInvokeAction::InvokeNow(Internal_SendLog, params);
+}
+
+void SendLogMessageOnMainThread(const LogType type, const StringView& message, const StringView& stackTrace, const uint64 threadId)
+{
+    if (CacheMethods())
+        return;
+    auto scriptsDomain = Scripting::GetRootDomain();
+    MainThreadManagedInvokeAction::ParamsBuilder params;
+    params.AddParam(type);
+    params.AddParam(message, scriptsDomain);
+    params.AddParam(stackTrace, scriptsDomain);
+    params.AddParam(threadId);
+    MainThreadManagedInvokeAction::InvokeNow(Internal_SendLogMessage, params);
+}
+
 #endif
 
 void DebugLog::Log(LogType type, const StringView& message)
 {
 #if USE_CSHARP
-    if (CacheMethods())
-        return;
-
     const uint64 threadId = Platform::GetCurrentThreadID();
-    auto scriptsDomain = Scripting::GetRootDomain();
-    MainThreadManagedInvokeAction::ParamsBuilder params;
-    params.AddParam(type);
-    params.AddParam(message, scriptsDomain);
 #if BUILD_RELEASE
-    params.AddParam(StringView::Empty, scriptsDomain);
+    const String stackTrace;
 #else
     const String stackTrace = Platform::GetStackTrace(1);
-    params.AddParam(stackTrace, scriptsDomain);
 #endif
-    params.AddParam(threadId);
-    MainThreadManagedInvokeAction::Invoke(Internal_SendLog, params);
+    if (!IsInMainThread())
+    {
+        Scripting::InvokeOnUpdate([type, message = String(message), stackTrace, threadId]()
+        {
+            SendLogOnMainThread(type, message, stackTrace, threadId);
+        });
+        return;
+    }
+    SendLogOnMainThread(type, message, stackTrace, threadId);
 #endif
 }
 
 void OnLogMessageDetailed(const LogType type, const StringView& message, const StringView& stackTrace, const uint64 threadId)
 {
 #if USE_CSHARP
-    if (CacheMethods())
+    if (!IsInMainThread())
+    {
+        Scripting::InvokeOnUpdate([type, message = String(message), stackTrace = String(stackTrace), threadId]()
+        {
+            SendLogMessageOnMainThread(type, message, stackTrace, threadId);
+        });
         return;
-
-    auto scriptsDomain = Scripting::GetRootDomain();
-    MainThreadManagedInvokeAction::ParamsBuilder params;
-    params.AddParam(type);
-    params.AddParam(message, scriptsDomain);
-    params.AddParam(stackTrace, scriptsDomain);
-    params.AddParam(threadId);
-    MainThreadManagedInvokeAction::Invoke(Internal_SendLogMessage, params);
+    }
+    SendLogMessageOnMainThread(type, message, stackTrace, threadId);
 #endif
 }
 

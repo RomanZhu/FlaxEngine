@@ -364,6 +364,12 @@ namespace FlaxEditor.GUI.Tree
         public Rectangle? CustomArrowRect;
 
         /// <summary>
+        /// Gets or sets a value indicating whether this node has children that are loaded on expansion.
+        /// </summary>
+        [HideInEditor, NoSerialize]
+        public bool HasDeferredChildren { get; set; }
+
+        /// <summary>
         /// Gets the drag over action type.
         /// </summary>
         public DragItemPositioning DragOverMode => _dragOverMode;
@@ -375,7 +381,7 @@ namespace FlaxEditor.GUI.Tree
         {
             get
             {
-                bool result = false;
+                bool result = HasDeferredChildren;
                 for (int i = 0; i < _children.Count; i++)
                 {
                     if (_children[i] is TreeNode node && node.Visible)

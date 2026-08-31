@@ -105,7 +105,6 @@ AssetProcessorDescriptor SceneChunkProcessor::CreateDescriptor()
     descriptor.ProviderID = TEXT("flax");
     descriptor.SourceKinds.Add(AssetSourceKind::TextDocument);
     descriptor.SourceExtensions.Add(TEXT(".scenechunk"));
-    descriptor.DocumentTypes.Add(JsonAsset::TypeName);
     descriptor.MainOutputType = JsonAsset::TypeName;
     descriptor.SettingsSchemaVersion = 1;
     descriptor.ImplementationVersion = ImplementationVersion;

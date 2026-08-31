@@ -6,9 +6,8 @@
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Level/Level.h"
-#else
-#include "Storage/ContentStorageManager.h"
 #endif
+#include "Storage/ContentStorageManager.h"
 #include "Content.h"
 #include "FlaxEngine.Gen.h"
 #include "Engine/Core/Log.h"
@@ -29,9 +28,15 @@
 JsonAssetBase::JsonAssetBase(const SpawnParams& params, const AssetInfo* info)
     : Asset(params, info)
     , _path(info->Path)
+    , _storagePath(info->Path)
     , Data(nullptr)
     , DataEngineBuild(0)
 {
+}
+
+void JsonAssetBase::SetStoragePath(const StringView& path)
+{
+    _storagePath = path;
 }
 
 String JsonAssetBase::GetData() const
@@ -247,9 +252,24 @@ Asset::LoadResult JsonAssetBase::loadAsset()
     // Load data (raw json file in editor, cooked asset in build game)
 #if USE_EDITOR
     BytesContainer data;
-    if (File::ReadAllBytes(_path, data))
+    if (_storagePath != _path)
     {
-        LOG(Warning, "Filed to load json asset data. {0}", ToString());
+        const auto storage = ContentStorageManager::GetStorage(_storagePath, true);
+        if (!storage)
+            return LoadResult::CannotLoadStorage;
+        AssetInitData initData;
+        if (storage->LoadAssetHeader(GetID(), initData))
+            return LoadResult::CannotLoadInitData;
+        auto chunk = initData.Header.Chunks[0];
+        if (chunk == nullptr)
+            return LoadResult::MissingDataChunk;
+        if (storage->LoadAssetChunk(chunk))
+            return LoadResult::CannotLoadData;
+        data.Link(chunk->Data);
+    }
+    else if (File::ReadAllBytes(_storagePath, data))
+    {
+        LOG(Warning, "Failed to load json asset data. {0}", ToString());
         return LoadResult::CannotLoadData;
     }
     if (data.Length() == 0)
@@ -325,6 +345,8 @@ void JsonAssetBase::onRename(const StringView& newPath)
     ScopeLock lock(Locker);
 
     // Rename
+    if (_storagePath == _path)
+        _storagePath = newPath;
     _path = newPath;
 }
 
