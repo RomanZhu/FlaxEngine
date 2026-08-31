@@ -7,6 +7,7 @@
 #include "ShaderGraphUtilities.h"
 #include "Engine/Content/Assets/Texture.h"
 #include "Engine/Content/Assets/CubeTexture.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Engine/GameplayGlobals.h"
 
 const Char* ShaderGenerator::_mathFunctions[] =
@@ -702,7 +703,7 @@ void ShaderGenerator::ProcessGroupTools(Box* box, Node* node, Value& value)
     case 16:
     {
         // Get the variable type
-        auto asset = Assets.Load<GameplayGlobals>(AssetObjectId::Main(AssetGuid((Guid)node->Values[0])));
+        auto asset = Assets.Load<GameplayGlobals>(Content::ResolveAssetObjectId((Guid)node->Values[0]));
         if (!asset)
         {
             OnError(node, box, TEXT("Failed to load Gameplay Global asset."));

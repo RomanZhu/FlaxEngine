@@ -4,6 +4,7 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Math/Transform.h"
 #include "Engine/Core/Config/BuildSettings.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Content/WeakAssetReference.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Profiler/ProfilerMemory.h"
@@ -329,7 +330,7 @@ bool ModelBase::LoadHeader(ReadStream& stream, byte& headerVersion)
     for (auto& slot : MaterialSlots)
     {
         stream.Read(materialId);
-        slot.Material = AssetObjectId::Main(AssetGuid(materialId));
+        slot.Material = Content::ResolveAssetObjectId(materialId);
         slot.ShadowsMode = (ShadowsCastingMode)stream.ReadByte();
         stream.Read(slot.Name, 11);
     }

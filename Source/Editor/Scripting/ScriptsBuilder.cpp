@@ -263,6 +263,7 @@ bool ScriptsBuilder::RunBuildTool(const StringView& args, const StringView& work
     procSettings.FileName = StringView(*cmdLine, cmdLine.Length());
     procSettings.Arguments = args.Get();
     procSettings.WorkingDirectory = workingDir;
+    procSettings.WaitForEnd = true;
     procSettings.KillTreeOnExit = true;
     const int32 result = Platform::CreateProcess(procSettings);
     if (result != 0)

@@ -55,7 +55,16 @@ namespace FlaxEditor
         public static T LoadAssetAtPath<T>(string path) where T : Asset
         {
             var id = AssetDatabaseFacade.AssetPathToGUID(path);
-            return id == Guid.Empty ? null : FlaxEngine.Content.LoadAssetAsync<T>(AssetObjectId.Main(new AssetGuid(id)));
+            if (id == Guid.Empty)
+                return null;
+            var records = AssetDatabaseFacade.GetRecords();
+            for (var i = 0; i < records.Length; i++)
+            {
+                var record = records[i];
+                if (record.IsMain && record.SourceAssetID == id && record.SourceKind == AssetSourceKind.Folder)
+                    return null;
+            }
+            return FlaxEngine.Content.LoadAssetAsync<T>(AssetObjectId.Main(new AssetGuid(id)));
         }
 
         /// <summary>Loads the main asset at a canonical source path.</summary>
@@ -79,7 +88,8 @@ namespace FlaxEditor
             for (var i = 0; i < records.Length; i++)
             {
                 var record = records[i];
-                if (record.Status == AssetRecordStatus.MissingSource || !string.Equals(Path.GetFullPath(record.SourcePath), physicalPath, StringComparison.OrdinalIgnoreCase))
+                if (record.Status == AssetRecordStatus.MissingSource || record.SourceKind == AssetSourceKind.Folder ||
+                    !string.Equals(Path.GetFullPath(record.SourcePath), physicalPath, StringComparison.OrdinalIgnoreCase))
                     continue;
                 var asset = FlaxEngine.Content.LoadAssetAsync<Asset>(new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId));
                 if (asset != null)
@@ -159,7 +169,8 @@ namespace FlaxEditor
             if (item == null)
                 return false;
             if (!item.IsFolder && Editor.Instance.ContentDatabase.TryGetAssetDatabaseRecord(source, out var record) && record.IsMain &&
-                record.SourceKind != AssetSourceKind.LegacyBinary && record.SourceKind != AssetSourceKind.ExistingJson)
+                record.SourceKind != AssetSourceKind.LegacyBinary && record.SourceKind != AssetSourceKind.ExistingJson &&
+                !string.Equals(record.ProcessorID, "Flax.Settings", StringComparison.Ordinal))
                 return !AssetDatabaseFacade.CopyCanonicalAsset(source, destination, out _);
             var result = Editor.Instance.ContentDatabase.Copy(item, destination);
             if (!result.Succeeded)

@@ -20,8 +20,14 @@ namespace FlaxEngine
         public static bool TryParse(string value, out AssetGuid result)
         {
             result = default;
-            if (!Guid.TryParseExact(value, "N", out var guid))
+            if (value == null || value.Length != 32)
                 return false;
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (!Uri.IsHexDigit(value[i]))
+                    return false;
+            }
+            var guid = Json.JsonSerializer.ParseID(value);
             result = new AssetGuid(guid);
             return result.IsValid;
         }
@@ -50,7 +56,7 @@ namespace FlaxEngine
         /// <inheritdoc />
         public override string ToString()
         {
-            return Value.ToString("N");
+            return Json.JsonSerializer.GetStringID(Value);
         }
     }
 }

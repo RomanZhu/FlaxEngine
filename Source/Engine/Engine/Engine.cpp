@@ -472,9 +472,9 @@ JsonAsset* Engine::GetCustomSettings(const StringView& key)
     const auto settings = GameSettings::Get();
     if (!settings)
         return nullptr;
-    Guid assetId = Guid::Empty;
+    AssetObjectId assetId;
     settings->CustomSettings.TryGet(key, assetId);
-    return Content::LoadAsync<JsonAsset>(assetId);
+    return Content::LoadAssetAsync<JsonAsset>(assetId);
 }
 
 void Engine::FocusGameViewport()

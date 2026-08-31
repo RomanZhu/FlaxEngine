@@ -41,9 +41,9 @@ namespace FlaxEngine.Json
             if (typeof(Asset).IsAssignableFrom(objectType) && reader.TokenType == JsonToken.StartObject)
             {
                 var json = JObject.Load(reader);
-                if (Guid.TryParseExact((string)json["guid"], "N", out var guid) &&
-                    json["fileId"]?.Type == JTokenType.Integer)
-                    return Content.LoadAssetAsync(new AssetObjectId(new AssetGuid(guid), (long)json["fileId"]), objectType);
+                if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
+                    json["fileId"]?.Type == JTokenType.Integer && (long)json["fileId"] != 0)
+                    return Content.LoadAssetAsync(new AssetObjectId(guid, (long)json["fileId"]), objectType);
                 return null;
             }
             if (reader.TokenType == JsonToken.String)
@@ -79,7 +79,7 @@ namespace FlaxEngine.Json
             var id = ((SceneReference)value).ID;
             writer.WriteStartObject();
             writer.WritePropertyName("guid");
-            writer.WriteValue(id.Asset.ToString());
+            writer.WriteValue(JsonSerializer.GetStringID(id.Asset.Value));
             writer.WritePropertyName("fileId");
             writer.WriteValue(id.LocalId);
             writer.WritePropertyName("type");
@@ -92,12 +92,16 @@ namespace FlaxEngine.Json
         {
             SceneReference result = new SceneReference();
 
-            if (reader.TokenType == JsonToken.StartObject)
+            if (reader.TokenType == JsonToken.String && AssetGuid.TryParse((string)reader.Value, out var legacyGuid))
+            {
+                result.ID = AssetObjectId.Main(legacyGuid);
+            }
+            else if (reader.TokenType == JsonToken.StartObject)
             {
                 var json = JObject.Load(reader);
-                if (Guid.TryParseExact((string)json["guid"], "N", out var guid) &&
-                    json["fileId"]?.Type == JTokenType.Integer)
-                    result.ID = new AssetObjectId(new AssetGuid(guid), (long)json["fileId"]);
+                if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
+                    json["fileId"]?.Type == JTokenType.Integer && (long)json["fileId"] != 0)
+                    result.ID = new AssetObjectId(guid, (long)json["fileId"]);
             }
 
             return result;

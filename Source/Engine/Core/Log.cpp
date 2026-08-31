@@ -159,7 +159,7 @@ void Log::Logger::Write(const StringView& msg, LogType type)
 
 #if LOG_ENABLE_FILE
     // Write message to log file
-    constexpr int32 LogMaxWriteSize = 1 * 1024 * 1024; // 1GB
+    constexpr int32 LogMaxWriteSize = 64 * 1024 * 1024; // 64 million characters
     if (LogAfterInit && LogTotalWriteSize < LogMaxWriteSize)
     {
         LogTotalWriteSize += length;

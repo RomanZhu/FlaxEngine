@@ -33,13 +33,35 @@ namespace
         FileSystem::NormalizePath(result);
         return result;
     }
+
+#if !USE_EDITOR
+    void MakeRuntimeAssetInfo(const RuntimeAssetCatalogEntry& entry, AssetInfo& info)
+    {
+        const Guid runtimeId = entry.Object.ToRuntimeObjectGuid();
+        info = AssetInfo(runtimeId, entry.Object, String(entry.TypeName), Globals::ProjectContentFolder / String(entry.PackageName));
+        FileSystem::NormalizePath(info.Path);
+    }
+#endif
 }
 
 int32 AssetsCache::Size() const
 {
     ASSETS_CACHE_LOCK();
+#if USE_EDITOR
     const int32 result = _registry.Count();
+#else
+    const int32 result = _runtimeCatalog.GetEntries().Count();
+#endif
     return result;
+}
+
+AssetObjectId AssetsCache::GetGameSettingsObject() const
+{
+#if ASSETS_CACHE_EDITABLE
+    return AssetObjectId();
+#else
+    return _runtimeCatalog.GetGameSettingsObject();
+#endif
 }
 
 void AssetsCache::Init()
@@ -48,42 +70,28 @@ void AssetsCache::Init()
 #if !USE_EDITOR
     _path = Globals::ProjectContentFolder / TEXT("RuntimeAssetCatalog.bin");
     LOG(Info, "Loading runtime asset catalog {0}...", _path);
-    RuntimeAssetCatalog catalog;
     AssetPipelineDiagnostic diagnostic;
-    if (RuntimeAssetCatalog::Load(_path, catalog, diagnostic))
+    if (RuntimeAssetCatalog::Load(_path, _runtimeCatalog, diagnostic))
     {
         LOG(Error, "Cannot load runtime asset catalog: {0}", diagnostic.Message);
         return;
     }
 
     Stopwatch runtimeStopwatch;
-    ASSETS_CACHE_LOCK();
-    _isDirty = false;
-    _registry.Clear();
-    _registry.EnsureCapacity(catalog.GetEntries().Count());
-    _pathsMapping.Clear();
-    _runtimePathAliases.Clear();
-    _runtimePathAliases.EnsureCapacity(catalog.GetAliases().Count());
     int32 rejectedCount = 0;
-    for (const RuntimeAssetCatalogEntry& catalogEntry : catalog.GetEntries())
+    for (const RuntimeAssetCatalogEntry& catalogEntry : _runtimeCatalog.GetEntries())
     {
-        const Guid runtimeID = catalogEntry.Object.ToRuntimeObjectGuid();
-        Entry entry(runtimeID, catalogEntry.Object, String(catalogEntry.TypeName), Globals::ProjectContentFolder / String(catalogEntry.PackageName));
-        FileSystem::NormalizePath(entry.Info.Path);
-        if (FileSystem::FileExists(entry.Info.Path) && IsEntryValid(entry) != EntryValidation::Invalid)
-            _registry.Add(runtimeID, MoveTemp(entry));
-        else
+        AssetInfo info;
+        MakeRuntimeAssetInfo(catalogEntry, info);
+        if (!FileSystem::FileExists(info.Path))
             rejectedCount++;
     }
-    for (const RuntimeAssetCatalogAlias& alias : catalog.GetAliases())
-        _runtimePathAliases.Add(alias.PathHash, alias.Object.ToRuntimeObjectGuid());
     runtimeStopwatch.Stop();
     if (rejectedCount != 0)
         LOG(Error, "Runtime asset catalog references {0} missing package objects.", rejectedCount);
     LOG(Info, "Runtime asset catalog loaded {0} objects and {1} path aliases in {2}ms ({3} rejected)",
-        _registry.Count(), _runtimePathAliases.Count(), runtimeStopwatch.GetMilliseconds(), rejectedCount);
-    return;
-#endif
+        _runtimeCatalog.GetEntries().Count(), _runtimeCatalog.GetAliases().Count(), runtimeStopwatch.GetMilliseconds(), rejectedCount);
+#else
 
     Entry e;
     int32 count;
@@ -146,6 +154,8 @@ void AssetsCache::Init()
     for (int32 i = 0; i < count; i++)
     {
         stream->Read(e.Info.ID);
+        e.Info.ObjectID = AssetObjectId::Main(AssetGuid(e.Info.ID));
+        e.Info.Revision = 0;
         stream->Read(e.Info.TypeName, i - 13);
         stream->Read(e.Info.Path, i);
 #if ENABLE_ASSETS_DISCOVERY
@@ -190,16 +200,6 @@ void AssetsCache::Init()
         _pathsMapping.Add(mappedPath, id);
     }
 
-#if !USE_EDITOR && !BUILD_RELEASE
-    // Build inverse path mapping in development builds for faster GetEditorAssetPath (eg. used by PROFILE_CPU_ASSET)
-    _pathsMappingInv.Clear();
-    _pathsMappingInv.EnsureCapacity(count);
-    for (auto& mapping : _pathsMapping)
-    {
-        _pathsMappingInv.Add(mapping.Value, StringView(mapping.Key));
-    }
-#endif
-
     // Check errors
     const bool hasError = stream->HasError();
     deleteStream.Delete();
@@ -216,6 +216,7 @@ void AssetsCache::Init()
 
     stopwatch.Stop();
     LOG(Info, "Asset Cache loaded {0} entries in {1}ms ({2} rejected)", _registry.Count(), stopwatch.GetMilliseconds(), rejectedCount);
+#endif
 }
 
 bool AssetsCache::Save()
@@ -302,16 +303,8 @@ StringView AssetsCache::GetEditorAssetPath(const Guid& id) const
 #if USE_EDITOR
     auto e = _registry.TryGet(id);
     return e ? e->Info.Path : String::Empty;
-#elif !BUILD_RELEASE
-    StringView result;
-    _pathsMappingInv.TryGet(id, result);
-    return result;
 #else
-    for (auto& e : _pathsMapping)
-    {
-        if (e.Value == id)
-            return e.Key;
-    }
+    // Runtime source paths are intentionally absent. Use catalog path aliases for lookup instead.
     return String::Empty;
 #endif
 }
@@ -319,21 +312,20 @@ StringView AssetsCache::GetEditorAssetPath(const Guid& id) const
 bool AssetsCache::FindAsset(const StringView& path, AssetInfo& info)
 {
     PROFILE_CPU();
-    bool result = false;
-    const String formattedPath = NormalizeAssetPath(path);
-    ASSETS_CACHE_LOCK();
-
 #if !USE_EDITOR
-    String aliasPath = formattedPath;
+    String aliasPath = NormalizeAssetPath(path);
     const String startupPath = NormalizeAssetPath(Globals::StartupFolder);
     if (aliasPath.StartsWith(startupPath) && aliasPath.Length() > startupPath.Length() &&
         aliasPath[startupPath.Length()] == '/')
         aliasPath = aliasPath.Right(aliasPath.Length() - startupPath.Length() - 1);
     ContentHash aliasHash;
-    Guid aliasID;
-    if (!RuntimeAssetCatalog::HashPathAlias(aliasPath, aliasHash) && _runtimePathAliases.TryGet(aliasHash, aliasID))
-        return FindAsset(aliasID, info);
-#endif
+    AssetObjectId object;
+    return !RuntimeAssetCatalog::HashPathAlias(aliasPath, aliasHash) &&
+        _runtimeCatalog.TryGetByPathHash(aliasHash, object) && FindAsset(object, info);
+#else
+    bool result = false;
+    const String formattedPath = NormalizeAssetPath(path);
+    ASSETS_CACHE_LOCK();
 
     // Check if asset has direct mapping to id (used for some cooked assets)
     Guid id;
@@ -341,18 +333,6 @@ bool AssetsCache::FindAsset(const StringView& path, AssetInfo& info)
     {
         return FindAsset(id, info);
     }
-#if !USE_EDITOR
-    if (FileSystem::IsRelative(path))
-    {
-        // Additional check if user provides path relative to the project folder (eg. Content/SomeAssets/MyFile.json)
-        const String absolutePath = Globals::ProjectFolder / *path;
-        if (_pathsMapping.TryGet(absolutePath, id))
-        {
-            return FindAsset(id, info);
-        }
-    }
-#endif
-
     // Find asset in registry
     for (auto i = _registry.Begin(); i.IsNotEnd(); ++i)
     {
@@ -385,11 +365,22 @@ bool AssetsCache::FindAsset(const StringView& path, AssetInfo& info)
     }
 
     return result;
+#endif
 }
 
 bool AssetsCache::FindAsset(const Guid& id, AssetInfo& info)
 {
     PROFILE_CPU();
+#if !USE_EDITOR
+    if (!id.IsValid())
+        return false;
+    for (const RuntimeAssetCatalogEntry& entry : _runtimeCatalog.GetEntries())
+    {
+        if (entry.Object.ToRuntimeObjectGuid() == id)
+            return FindAsset(entry.Object, info);
+    }
+    return false;
+#else
     bool result = false;
     ASSETS_CACHE_LOCK();
     auto e = _registry.TryGet(id);
@@ -417,24 +408,59 @@ bool AssetsCache::FindAsset(const Guid& id, AssetInfo& info)
         }
     }
     return result;
+#endif
+}
+
+bool AssetsCache::FindAsset(const AssetObjectId& id, AssetInfo& info)
+{
+    PROFILE_CPU();
+    if (!id.IsValid())
+        return false;
+#if !USE_EDITOR
+    RuntimeAssetCatalogEntry entry;
+    if (!_runtimeCatalog.TryGet(id, entry))
+        return false;
+    MakeRuntimeAssetInfo(entry, info);
+    return FileSystem::FileExists(info.Path);
+#else
+    if (!FindAsset(id.ToRuntimeObjectGuid(), info))
+        return false;
+    if (!info.ObjectID.IsValid())
+        info.ObjectID = AssetObjectId::Main(AssetGuid(info.ID));
+    return info.ObjectID == id;
+#endif
 }
 
 void AssetsCache::GetAll(Array<Guid>& result) const
 {
     PROFILE_CPU();
     ASSETS_CACHE_LOCK();
+#if USE_EDITOR
     _registry.GetKeys(result);
+#else
+    result.EnsureCapacity(result.Count() + _runtimeCatalog.GetEntries().Count());
+    for (const RuntimeAssetCatalogEntry& entry : _runtimeCatalog.GetEntries())
+        result.Add(entry.Object.ToRuntimeObjectGuid());
+#endif
 }
 
 void AssetsCache::GetAllByTypeName(const StringView& typeName, Array<Guid>& result) const
 {
     PROFILE_CPU();
     ASSETS_CACHE_LOCK();
+#if USE_EDITOR
     for (auto i = _registry.Begin(); i.IsNotEnd(); ++i)
     {
         if (i->Value.Info.TypeName == typeName)
             result.Add(i->Key);
     }
+#else
+    for (const RuntimeAssetCatalogEntry& entry : _runtimeCatalog.GetEntries())
+    {
+        if (String(entry.TypeName) == typeName)
+            result.Add(entry.Object.ToRuntimeObjectGuid());
+    }
+#endif
 }
 
 #if ASSETS_CACHE_EDITABLE

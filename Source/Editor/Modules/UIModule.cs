@@ -1648,8 +1648,13 @@ namespace FlaxEditor.Modules
 
         private void SetTheCurrentSceneViewAsDefault()
         {
+            if (!FlaxEngine.Content.GetAssetInfo(Level.Scenes[0].ID, out var sceneInfo) || !sceneInfo.ObjectID.IsValid)
+            {
+                Editor.LogError("Cannot set the default scene because its persistent asset object identifier is unavailable.");
+                return;
+            }
             var projectInfo = Editor.GameProject;
-            projectInfo.DefaultScene = JsonSerializer.GetStringID(Level.Scenes[0].ID);
+            projectInfo.DefaultScene = sceneInfo.ObjectID;
             projectInfo.DefaultSceneSpawn = Editor.Windows.EditWin.Viewport.ViewRay;
             projectInfo.Save();
         }

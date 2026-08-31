@@ -5,6 +5,7 @@ using System.IO;
 using System.Collections.Generic;
 using FlaxEngine;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor
 {
@@ -102,6 +103,52 @@ namespace FlaxEditor
     }
 
     /// <summary>
+    /// Serializes a project default scene as a persistent asset object identifier.
+    /// </summary>
+    public sealed class ProjectDefaultSceneConverter : JsonConverter
+    {
+        /// <inheritdoc />
+        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+        {
+            if (!(value is AssetObjectId id) || !id.IsValid)
+                throw new JsonSerializationException("Expected a valid default scene asset object identifier.");
+
+            writer.WriteStartObject();
+            writer.WritePropertyName("guid");
+            writer.WriteValue(id.Asset.ToString());
+            writer.WritePropertyName("fileId");
+            writer.WriteValue(id.LocalId);
+            writer.WriteEndObject();
+        }
+
+        /// <inheritdoc />
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+        {
+            if (reader.TokenType == JsonToken.String)
+            {
+                if (AssetGuid.TryParse((string)reader.Value, out var legacyGuid))
+                    return AssetObjectId.Main(legacyGuid);
+                throw new JsonSerializationException("Invalid legacy DefaultScene GUID.");
+            }
+            if (reader.TokenType == JsonToken.StartObject)
+            {
+                var json = JObject.Load(reader);
+                if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
+                    json["fileId"]?.Type == JTokenType.Integer && (long)json["fileId"] != 0)
+                    return new AssetObjectId(guid, (long)json["fileId"]);
+                throw new JsonSerializationException("Invalid composite DefaultScene identifier.");
+            }
+            throw new JsonSerializationException("DefaultScene must contain a composite asset identifier.");
+        }
+
+        /// <inheritdoc />
+        public override bool CanConvert(Type objectType)
+        {
+            return objectType == typeof(AssetObjectId);
+        }
+    }
+
+    /// <summary>
     /// Contains information about Flax project.
     /// </summary>
     public sealed class ProjectInfo
@@ -154,6 +201,16 @@ namespace FlaxEditor
         public Version Version;
 
         /// <summary>
+        /// The source asset system format required by this project.
+        /// </summary>
+        public int AssetSystemVersion;
+
+        /// <summary>
+        /// The source GUID of Content/Settings/ProjectSettingsIndex.settings.
+        /// </summary>
+        public string ProjectSettingsIndexGuid;
+
+        /// <summary>
         /// The project publisher company.
         /// </summary>
         public string Company = string.Empty;
@@ -181,7 +238,9 @@ namespace FlaxEditor
         /// <summary>
         /// The default scene asset identifier to open on project startup.
         /// </summary>
-        public string DefaultScene;
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        [JsonConverter(typeof(ProjectDefaultSceneConverter))]
+        public AssetObjectId DefaultScene;
 
         /// <summary>
         /// The default scene spawn point (position and view direction).

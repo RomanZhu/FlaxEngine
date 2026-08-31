@@ -812,16 +812,15 @@ bool Prefab::ApplyAll(Actor* targetActor)
         PROFILE_CPU_NAMED("Prefab.CollectNestedPrefabs");
 
         // Get all prefab assets ids from project
-        Array<Guid> nestedPrefabIds;
-        Content::GetRegistry()->GetAllByTypeName(Prefab::TypeName, nestedPrefabIds);
+        Array<Guid> nestedPrefabIds = Content::GetAllAssetsByType(Prefab::TypeInitializer.GetClass());
 
         // Assign references to the prefabs
         allPrefabs.EnsureCapacity(Math::RoundUpToPowerOf2(Math::Max(30, nestedPrefabIds.Count())));
-        const Dictionary<Guid, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
+        const Dictionary<AssetObjectId, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
         for (auto& e : assetsRaw)
         {
             if (e.Value->GetTypeHandle() == Prefab::TypeInitializer)
-                nestedPrefabIds.AddUnique(e.Key);
+                nestedPrefabIds.AddUnique(e.Value->GetID());
         }
         for (int32 i = 0; i < nestedPrefabIds.Count(); i++)
         {
@@ -970,16 +969,15 @@ bool Prefab::ApplyAddedObject(Actor* targetActor, SceneObject* addedObject)
         PROFILE_CPU_NAMED("Prefab.CollectNestedPrefabs");
 
         // Get all prefab assets ids from project
-        Array<Guid> nestedPrefabIds;
-        Content::GetRegistry()->GetAllByTypeName(Prefab::TypeName, nestedPrefabIds);
+        Array<Guid> nestedPrefabIds = Content::GetAllAssetsByType(Prefab::TypeInitializer.GetClass());
 
         // Assign references to the prefabs
         allPrefabs.EnsureCapacity(Math::RoundUpToPowerOf2(Math::Max(30, nestedPrefabIds.Count())));
-        const Dictionary<Guid, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
+        const Dictionary<AssetObjectId, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
         for (auto& e : assetsRaw)
         {
             if (e.Value->GetTypeHandle() == Prefab::TypeInitializer)
-                nestedPrefabIds.AddUnique(e.Key);
+                nestedPrefabIds.AddUnique(e.Value->GetID());
         }
         for (int32 i = 0; i < nestedPrefabIds.Count(); i++)
         {

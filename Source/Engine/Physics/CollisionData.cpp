@@ -151,7 +151,7 @@ bool CollisionData::GetModelTriangle(uint32 faceIndex, MeshBase*& mesh, uint32& 
 
             // Check if model was used when cooking
             AssetReference<ModelBase> model;
-            model = AssetObjectId::Main(AssetGuid(_options.Model));
+            model = Content::ResolveAssetObjectId(_options.Model);
             if (!model)
                 return true;
 

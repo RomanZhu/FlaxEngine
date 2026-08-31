@@ -8,9 +8,9 @@
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/Asset.h"
-#include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
 #include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
@@ -308,6 +308,7 @@ namespace
 
     bool EnsureOperations(AssetPipelineDiagnostic& diagnostic)
     {
+#if USE_EDITOR
         if (Operations)
         {
             diagnostic = AssetPipelineDiagnostic();
@@ -333,6 +334,10 @@ namespace
         Operations = std::move(operations);
         diagnostic = AssetPipelineDiagnostic();
         return false;
+#else
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+#endif
     }
 
     String NormalizeAbsolutePath(const StringView& path)
@@ -509,7 +514,7 @@ namespace
         {
             const String path = expanded[i];
             const String extension = FileSystem::GetExtension(path).ToLower();
-            if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json"))
+            if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json") && extension != TEXT("settings"))
                 continue;
             const String metaPath = path + TEXT(".meta");
             if (!FileSystem::FileExists(path) || FileSystem::FileExists(metaPath))
@@ -724,24 +729,58 @@ namespace
             extension == TEXT("mkv") || extension == TEXT("txt") || extension == TEXT("ies");
     }
 
+    void ConfigureSettingsMetadata(AssetMeta& metadata)
+    {
+        metadata.AssetType = JsonAsset::TypeName;
+        metadata.SourceKind = AssetSourceKind::TextDocument;
+        metadata.Processor.ID = TEXT("Flax.Settings");
+        metadata.Processor.SettingsVersion = 1;
+        metadata.Processor.SettingsJson = "{}\n";
+    }
+
+    bool ValidateSettingsIdentity(const StringView& sourcePath, const Guid& expectedID, AssetPipelineDiagnostic& diagnostic)
+    {
+        Guid sourceID;
+        String dataType;
+        if (!JsonStorageProxy::GetAssetInfo(sourcePath, sourceID, dataType) || !sourceID.IsValid() ||
+            sourceID != expectedID || dataType.IsEmpty())
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.AssetGuid = expectedID;
+            diagnostic.Message = TEXT("Settings source ID and TypeName must match its metadata identity.");
+            return true;
+        }
+        return false;
+    }
+
     bool EnsureDefaultCanonicalMetadata(const StringView& sourcePath, AssetPipelineDiagnostic& diagnostic)
     {
         const String metaPath = String(sourcePath) + TEXT(".meta");
         const bool isFolder = FileSystem::DirectoryExists(sourcePath);
         const bool isFile = FileSystem::FileExists(sourcePath);
+        const String extension = isFile ? FileSystem::GetExtension(sourcePath).ToLower() : String::Empty;
         if (!isFile && !isFolder)
             return false;
         if (FileSystem::FileExists(metaPath))
         {
-            if (AssetPipelineSettings::Get()->AssetSystemVersion < 3)
-                return false;
             AssetMeta metadata;
             if (AssetMeta::Load(metaPath, metadata, diagnostic))
                 return true;
-            if (!metadata.MetaUpgradeRequired)
+            const bool isSettings = extension == TEXT("settings");
+            if (isSettings && ValidateSettingsIdentity(sourcePath, metadata.ID, diagnostic))
+                return true;
+            const bool settingsUpgrade = isSettings &&
+                (metadata.AssetType != JsonAsset::TypeName || metadata.SourceKind != AssetSourceKind::TextDocument ||
+                 metadata.Processor.ID != TEXT("Flax.Settings") || metadata.Processor.SettingsVersion != 1 ||
+                 metadata.Processor.SettingsJson != StringAnsiView("{}\n"));
+            if (!metadata.MetaUpgradeRequired && !settingsUpgrade)
                 return false;
             metadata.FileFormatVersion = AssetMeta::CurrentFileFormatVersion;
             metadata.MetaUpgradeRequired = false;
+            if (isSettings)
+                ConfigureSettingsMetadata(metadata);
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
         }
         AssetMeta metadata;
@@ -756,7 +795,6 @@ namespace
             metadata.Processor.SettingsJson = "{}\n";
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
         }
-        const String extension = FileSystem::GetExtension(sourcePath).ToLower();
         if (extension == TEXT("flax"))
             return false;
         if (JsonStorageProxy::IsValidExtension(extension))
@@ -769,10 +807,15 @@ namespace
                 diagnostic.Message = TEXT("Authored JSON source is missing a valid ID and TypeName header.");
                 return true;
             }
-            metadata.SourceKind = AssetSourceKind::ExistingJson;
-            metadata.Processor.ID = TEXT("Flax.ExistingJson");
-            metadata.Processor.SettingsVersion = 1;
-            metadata.Processor.SettingsJson = "{}\n";
+            if (extension == TEXT("settings"))
+                ConfigureSettingsMetadata(metadata);
+            else
+            {
+                metadata.SourceKind = AssetSourceKind::ExistingJson;
+                metadata.Processor.ID = TEXT("Flax.ExistingJson");
+                metadata.Processor.SettingsVersion = 1;
+                metadata.Processor.SettingsJson = "{}\n";
+            }
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
         }
         if (!HasDefaultCanonicalImporter(sourcePath))
@@ -1322,14 +1365,9 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
     EnsureBound();
     if (Initialize())
         return true;
-    const int32 assetSystemVersion = AssetPipelineSettings::Get()->AssetSystemVersion;
     Array<AssetPipelineDiagnostic> metadataDiagnostics;
-    if (assetSystemVersion >= 3)
-        EnsureV3MetadataForRoot(Globals::ProjectContentFolder, metadataDiagnostics);
-    else
-        EnsureExistingJsonSidecars();
+    EnsureV3MetadataForRoot(Globals::ProjectContentFolder, metadataDiagnostics);
     AssetDatabaseScanOptions options;
-    options.AssetSystemVersion = assetSystemVersion;
     options.StrictMetadata = strictMetadata;
     options.HashCache = &HashCache;
     AssetDatabaseScanResult result;
@@ -1390,23 +1428,19 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     if (paths.IsEmpty())
         return false;
 
-    const int32 assetSystemVersion = AssetPipelineSettings::Get()->AssetSystemVersion;
     Array<AssetPipelineDiagnostic> metadataDiagnostics;
-    if (assetSystemVersion >= 3)
+    for (const String& requestedPath : paths)
     {
-        for (const String& requestedPath : paths)
-        {
-            String sourcePath = NormalizeAbsolutePath(requestedPath);
-            if (IsMetaPath(sourcePath))
-                sourcePath = sourcePath.Left(sourcePath.Length() - 5);
-            if (IsV3MetadataExcluded(sourcePath) || !AssetPathPolicy::IsSameOrChild(sourcePath, Globals::ProjectContentFolder))
-                continue;
-            if (FileSystem::DirectoryExists(sourcePath))
-                EnsureV3MetadataForRoot(sourcePath, metadataDiagnostics);
-            AssetPipelineDiagnostic diagnostic;
-            if (EnsureDefaultCanonicalMetadata(sourcePath, diagnostic))
-                metadataDiagnostics.Add(MoveTemp(diagnostic));
-        }
+        String sourcePath = NormalizeAbsolutePath(requestedPath);
+        if (IsMetaPath(sourcePath))
+            sourcePath = sourcePath.Left(sourcePath.Length() - 5);
+        if (IsV3MetadataExcluded(sourcePath) || !AssetPathPolicy::IsSameOrChild(sourcePath, Globals::ProjectContentFolder))
+            continue;
+        if (FileSystem::DirectoryExists(sourcePath))
+            EnsureV3MetadataForRoot(sourcePath, metadataDiagnostics);
+        AssetPipelineDiagnostic diagnostic;
+        if (EnsureDefaultCanonicalMetadata(sourcePath, diagnostic))
+            metadataDiagnostics.Add(MoveTemp(diagnostic));
     }
 
     const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
@@ -1474,7 +1508,6 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
             projectFiles.Add(path);
     }
     AssetDatabaseScanOptions options;
-    options.AssetSystemVersion = assetSystemVersion;
     options.HashCache = &HashCache;
     // Matches a full editor Scan, so a source that shows up without a sidecar still reports
     // MissingMeta and can be picked up by the metadata registration queue.
@@ -3556,6 +3589,7 @@ bool AssetDatabaseFacade::RollbackLegacyImportedMigration(const StringView& lega
 
 Guid AssetDatabaseFacade::CreateExistingJsonMetadata(const StringView& sourcePath)
 {
+#if USE_EDITOR
     AssetPipelineDiagnostic diagnostic;
     auto fail = [&diagnostic]()
     {
@@ -3576,14 +3610,22 @@ Guid AssetDatabaseFacade::CreateExistingJsonMetadata(const StringView& sourcePat
     }
     AssetMeta meta;
     meta.ID = id;
-    meta.AssetType = typeName;
-    meta.SourceKind = AssetSourceKind::ExistingJson;
-    meta.Processor.ID = TEXT("Flax.ExistingJson");
-    meta.Processor.SettingsVersion = 1;
-    meta.Processor.SettingsJson = "{}\n";
+    if (FileSystem::GetExtension(sourcePath).ToLower() == TEXT("settings"))
+        ConfigureSettingsMetadata(meta);
+    else
+    {
+        meta.AssetType = typeName;
+        meta.SourceKind = AssetSourceKind::ExistingJson;
+        meta.Processor.ID = TEXT("Flax.ExistingJson");
+        meta.Processor.SettingsVersion = 1;
+        meta.Processor.SettingsJson = "{}\n";
+    }
     if (AssetMeta::SaveAtomic(String(sourcePath) + TEXT(".meta"), meta, diagnostic))
         return fail();
     return meta.ID;
+#else
+    return Guid::Empty;
+#endif
 }
 
 bool AssetDatabaseFacade::EnsureExistingJsonSidecars()
@@ -3596,7 +3638,7 @@ bool AssetDatabaseFacade::EnsureExistingJsonSidecars()
     for (const String& path : files)
     {
         const String extension = FileSystem::GetExtension(path).ToLower();
-        if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json"))
+        if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json") && extension != TEXT("settings"))
             continue;
         const String metaPath = path + TEXT(".meta");
         if (FileSystem::FileExists(metaPath))

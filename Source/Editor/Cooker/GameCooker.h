@@ -145,5 +145,5 @@ public:
     /// <summary>
     /// Occurs when building collects assets to cook.
     /// </summary>
-    static Delegate<HashSet<Guid>&> OnCollectAssets;
+    static Delegate<HashSet<AssetObjectId>&> OnCollectAssets;
 };

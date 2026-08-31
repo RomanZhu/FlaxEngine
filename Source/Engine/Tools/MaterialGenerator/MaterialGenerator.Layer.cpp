@@ -7,6 +7,7 @@
 #include "Engine/Core/Math/Matrix.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/Material.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Engine/Engine.h"
 
@@ -50,7 +51,7 @@ MaterialLayer* MaterialGenerator::GetLayer(const Guid& id, Node* caller)
     }
 
     // Load asset
-    Asset* asset = Assets.Load<MaterialBase>(AssetObjectId::Main(AssetGuid(id)));
+    Asset* asset = Assets.Load<MaterialBase>(Content::ResolveAssetObjectId(id));
     if (asset == nullptr)
     {
         OnError(caller, nullptr, TEXT("Failed to load material asset."));

@@ -2,8 +2,6 @@
 
 #include "AssetDatabaseScanner.h"
 #include "AssetMeta.h"
-#include "Engine/Content/Storage/ContentStorageManager.h"
-#include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Utilities/Crc.h"
@@ -33,55 +31,6 @@ namespace
     bool IsMeta(const StringView& path)
     {
         return path.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase);
-    }
-
-    bool ReadLegacyEntries(const StringView& path, Array<FlaxStorage::Entry>& entries)
-    {
-        bool failed = false;
-        {
-            const FlaxStorageReference storage = ContentStorageManager::GetStorage(path, true);
-            if (!storage || storage->GetEntriesCount() < 1)
-            {
-                failed = true;
-            }
-            else
-            {
-                entries.Resize(storage->GetEntriesCount());
-                for (int32 i = 0; i < entries.Count(); i++)
-                    storage->GetEntry(i, entries[i]);
-            }
-        }
-        ContentStorageManager::EnsureAccess(path);
-        return failed;
-    }
-
-    bool RequiresMetadata(const StringView& path)
-    {
-        const String extension = FileSystem::GetExtension(path).ToLower();
-        const Char* supported[] =
-        {
-            TEXT("png"), TEXT("jpg"), TEXT("jpeg"), TEXT("tga"), TEXT("bmp"), TEXT("gif"), TEXT("tiff"), TEXT("tif"),
-            TEXT("dds"), TEXT("hdr"), TEXT("raw"), TEXT("exr"),
-            TEXT("obj"), TEXT("fbx"), TEXT("x"), TEXT("dae"), TEXT("gltf"), TEXT("glb"), TEXT("blend"),
-            TEXT("bvh"), TEXT("ase"), TEXT("ply"), TEXT("dxf"), TEXT("ifc"), TEXT("nff"), TEXT("smd"),
-            TEXT("vta"), TEXT("mdl"), TEXT("md2"), TEXT("md3"), TEXT("md5mesh"), TEXT("q3o"), TEXT("q3s"),
-            TEXT("ac"), TEXT("stl"), TEXT("lwo"), TEXT("lws"), TEXT("lxo"),
-            TEXT("wav"), TEXT("mp3"), TEXT("ogg"),
-            TEXT("ttf"), TEXT("otf"),
-            TEXT("mp4"), TEXT("webm"), TEXT("mov"), TEXT("mkv"), TEXT("txt"),
-            TEXT("shader"),
-            TEXT("materialfunction"), TEXT("animgraphfunction"), TEXT("animgraph"),
-            TEXT("visualscript"), TEXT("behaviortree"), TEXT("particlefunction"), TEXT("material"),
-            TEXT("particleemitter"), TEXT("particlesystem"), TEXT("collisiondata"),
-            TEXT("materialinstance"), TEXT("sceneanimation"), TEXT("skeletonmask"),
-            TEXT("scene"), TEXT("prefab")
-        };
-        for (const Char* value : supported)
-        {
-            if (extension == value)
-                return true;
-        }
-        return false;
     }
 
     bool IsExcluded(const StringView& path, const StringView& contentRoot, const StringView& libraryRoot)
@@ -288,49 +237,14 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         const bool isFolder = FileSystem::DirectoryExists(sourcePath);
         if (!isFolder && FileSystem::GetExtension(sourcePath).ToLower() == TEXT("flax"))
         {
-            if (options.AssetSystemVersion >= 3)
-            {
-                result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::ProcessorMissing, sourcePath, TEXT("Asset-system version 3 does not allow legacy cooked .flax files in Content.")));
-                consumedMeta.Add(sourcePath + TEXT(".meta"));
-                continue;
-            }
-            AssetPipelineDiagnostic diagnostic;
-            AssetPathPolicy::ProjectPath normalizedPath;
-            if (AssetPathPolicy::TryNormalizeProjectPath(projectRoot, contentRoot, libraryRoot, sourcePath, normalizedPath, diagnostic))
-            {
-                result.Diagnostics.Add(diagnostic);
-                continue;
-            }
-            Array<FlaxStorage::Entry> entries;
-            if (ReadLegacyEntries(sourcePath, entries))
-            {
-                result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::InvalidMeta, sourcePath, TEXT("Legacy binary asset header is unreadable.")));
-                continue;
-            }
-            const Guid rootID = entries[0].ID;
-            for (int32 i = 0; i < entries.Count(); i++)
-            {
-                AssetRecord record;
-                record.ID = entries[i].ID;
-                record.SourceAssetID = rootID;
-                record.LocalId = i + 1;
-                record.TypeName = entries[i].TypeName;
-                record.CanonicalPath = CanonicalAssetPath(sourcePath);
-                record.SourcePath = SourceFilePath(sourcePath);
-                if (i != 0)
-                    record.SubAsset = SubAssetKey(String::Format(TEXT("legacy:{0}"), i));
-                record.PortabilityKey = normalizedPath.PortabilityKey;
-                record.SourceKind = AssetSourceKind::LegacyBinary;
-                record.Status = AssetRecordStatus::Ready;
-                AddRecordWithDuplicateCheck(MoveTemp(record), records, recordIndices, result.Diagnostics);
-            }
+            result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::ProcessorMissing, sourcePath, TEXT("Legacy cooked .flax files are not valid source assets.")));
+            consumedMeta.Add(sourcePath + TEXT(".meta"));
             continue;
         }
         const String metaPath = sourcePath + TEXT(".meta");
         if (!fileSet.Contains(metaPath))
         {
-            if (options.AssetSystemVersion >= 3 || (options.StrictMetadata && RequiresMetadata(sourcePath)))
-                result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::MissingMeta, sourcePath, TEXT("Canonical source is missing its adjacent metadata sidecar.")));
+            result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::MissingMeta, sourcePath, TEXT("Canonical source is missing its adjacent metadata sidecar.")));
             continue;
         }
         consumedMeta.Add(metaPath);
@@ -364,7 +278,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         const uint64 semanticHash = Crc::MemCrc32(canonicalMeta.Get(), canonicalMeta.Length());
         const AssetRecordStatus status = meta.Processor.ID == TEXT("Flax.Unsupported")
             ? AssetRecordStatus::UnsupportedProcessor
-            : options.AssetSystemVersion >= 3 && meta.MetaUpgradeRequired ? AssetRecordStatus::MetaUpgradeRequired : AssetRecordStatus::Ready;
+            : meta.MetaUpgradeRequired ? AssetRecordStatus::MetaUpgradeRequired : AssetRecordStatus::Ready;
         Array<AssetRecord> metaRecords;
         AddMetaRecords(meta, sourcePath, metaPath, normalizedPath, semanticHash, status, metaRecords);
         for (AssetRecord& record : metaRecords)

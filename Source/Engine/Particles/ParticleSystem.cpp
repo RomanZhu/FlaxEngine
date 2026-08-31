@@ -4,6 +4,7 @@
 #include "ParticleEffect.h"
 #include "Engine/Level/Level.h"
 #include "Engine/Content/Deprecated.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Profiler/ProfilerMemory.h"
 #include "Engine/Serialization/MemoryReadStream.h"
@@ -267,7 +268,7 @@ Asset::LoadResult ParticleSystem::load()
                 stream.ReadInt32(&track.AsEmitter.Index);
                 stream.ReadInt32(&track.AsEmitter.StartFrame);
                 stream.ReadInt32(&track.AsEmitter.DurationFrames);
-                Emitters[track.AsEmitter.Index] = AssetObjectId::Main(AssetGuid(id));
+                Emitters[track.AsEmitter.Index] = Content::ResolveAssetObjectId(id);
                 break;
             case Track::Types::Folder:
                 break;

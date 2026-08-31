@@ -75,6 +75,13 @@ namespace
         return a.D < b.D;
     }
 
+    bool LessAssetObjectId(const AssetObjectId& a, const AssetObjectId& b)
+    {
+        if (a.Asset.Value != b.Asset.Value)
+            return LessGuid(a.Asset.Value, b.Asset.Value);
+        return a.LocalId < b.LocalId;
+    }
+
     ArtifactTarget GetCookArtifactTarget(const CookingData& data)
     {
         ArtifactTarget target;
@@ -190,8 +197,10 @@ namespace
         builder.AddString(StringAnsiView("product"), gameSettings.ProductName);
         builder.AddString(StringAnsiView("company"), gameSettings.CompanyName);
         builder.AddBool(StringAnsiView("no-splash"), gameSettings.NoSplashScreen);
-        builder.AddGuid(StringAnsiView("splash"), gameSettings.SplashScreen);
-        builder.AddGuid(StringAnsiView("streaming"), gameSettings.Streaming);
+        builder.AddGuid(StringAnsiView("splash-guid"), gameSettings.SplashScreen.Asset.Value);
+        builder.AddUInt64(StringAnsiView("splash-file-id"), static_cast<uint64>(gameSettings.SplashScreen.LocalId));
+        builder.AddGuid(StringAnsiView("streaming-guid"), gameSettings.Streaming.Asset.Value);
+        builder.AddUInt64(StringAnsiView("streaming-file-id"), static_cast<uint64>(gameSettings.Streaming.LocalId));
         builder.AddUInt32(StringAnsiView("content-key"), static_cast<uint32>(contentKey));
         builder.AddUInt32(StringAnsiView("max-assets-per-package"), static_cast<uint32>(buildSettings.MaxAssetsPerPackage));
         builder.AddUInt32(StringAnsiView("max-package-size"), static_cast<uint32>(buildSettings.MaxPackageSizeMB));
@@ -434,7 +443,8 @@ void CookAssetsStep::CacheData::Load(CookingData& data)
     }
 
     // Invalidate textures if streaming settings gets modified
-    if (Settings.Global.StreamingSettingsAssetId != gameSettings->Streaming || (Entries.ContainsKey(gameSettings->Streaming) && !Entries[gameSettings->Streaming].IsValid()))
+    const Guid streamingSettingsRuntimeID = gameSettings->Streaming.IsValid() ? gameSettings->Streaming.ToRuntimeObjectGuid() : Guid::Empty;
+    if (Settings.Global.StreamingSettingsAssetId != streamingSettingsRuntimeID || (Entries.ContainsKey(streamingSettingsRuntimeID) && !Entries[streamingSettingsRuntimeID].IsValid()))
     {
         InvalidateCachePerType<Texture>();
         InvalidateCachePerType<CubeTexture>();
@@ -1050,7 +1060,7 @@ private:
     FlaxStorage::CustomData CustomData;
 
     Array<FlaxFile*> files;
-    Array<AssetsCache::Entry*> addedEntries;
+    Array<CookerPackagedAssetEntry*> addedEntries;
     uint64 bytesAdded;
 
     uint64 packagesSizeTotal;
@@ -1102,7 +1112,7 @@ public:
         _packageIndex++;
     }
 
-    bool Add(CookingData& data, AssetsCache::Entry& entry, const String& sourcePath)
+    bool Add(CookingData& data, CookerPackagedAssetEntry& entry, const String& sourcePath)
     {
         const uint64 size = FileSystem::GetFileSize(sourcePath);
 
@@ -1237,7 +1247,7 @@ bool CookAssetsStep::Perform(CookingData& data)
     {
         cache.Settings.Global.ShadersNoOptimize = buildSettings->ShadersNoOptimize;
         cache.Settings.Global.ShadersGenerateDebugData = buildSettings->ShadersGenerateDebugData;
-        cache.Settings.Global.StreamingSettingsAssetId = gameSettings->Streaming;
+        cache.Settings.Global.StreamingSettingsAssetId = gameSettings->Streaming.IsValid() ? gameSettings->Streaming.ToRuntimeObjectGuid() : Guid::Empty;
         cache.Settings.Global.ShadersVersion = GPU_SHADER_CACHE_VERSION;
         cache.Settings.Global.MaterialGraphVersion = MATERIAL_GRAPH_VERSION;
         cache.Settings.Global.ParticleGraphVersion = PARTICLE_GPU_GRAPH_VERSION;
@@ -1248,19 +1258,27 @@ bool CookAssetsStep::Perform(CookingData& data)
 
     // Process all assets
     AssetInfo assetInfo;
-#if ENABLE_ASSETS_DISCOVERY
-    auto minDateTime = DateTime::MinValue();
-#endif
     int32 subStepIndex = 0;
     const ArtifactTarget cookArtifactTarget = GetCookArtifactTarget(data);
-    const AssetDatabaseSnapshot buildDatabaseSnapshot = AssetDatabase::Get().GetSnapshot();
+    const AssetDatabaseSnapshot& buildDatabaseSnapshot = data.DatabaseSnapshot;
     if (buildDatabaseSnapshot.Revision == 0)
     {
-        data.Error(TEXT("Cannot cook without a versioned asset database snapshot."));
+        data.Error(TEXT("Asset cooking requires a frozen asset database snapshot."));
         return true;
     }
+    Dictionary<AssetObjectId, const AssetRecord*> frozenRecords;
+    for (const AssetRecord& record : buildDatabaseSnapshot.Records)
+    {
+        const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
+        if (!object.IsValid() || frozenRecords.ContainsKey(object))
+        {
+            data.Error(TEXT("The frozen asset database contains an invalid or duplicate object identity."));
+            return true;
+        }
+        frozenRecords.Add(object, &record);
+    }
     Array<ArtifactLease> cookArtifactLeases;
-    Dictionary<Guid, ArtifactKey> pinnedArtifactKeys;
+    Dictionary<AssetObjectId, ArtifactKey> pinnedArtifactKeys;
     AssetReference<Asset> assetRef;
     assetRef.Unload.Bind([]
     {
@@ -1271,64 +1289,47 @@ bool CookAssetsStep::Perform(CookingData& data)
     {
         BUILD_STEP_CANCEL_CHECK;
         data.StepProgress(Step1Info, Math::Lerp(Step1ProgressStart, Step1ProgressEnd, static_cast<float>(subStepIndex++) / data.Assets.Count()));
-        const Guid assetId = i->Item;
+        const AssetObjectId objectId = i->Item;
+        const Guid assetId = objectId.ToRuntimeObjectGuid();
+        const bool isBuiltin = data.BuiltinRootAssets.Contains(objectId);
 
         // Register asset
-        auto& e = AssetsRegistry[assetId];
+        auto& e = AssetsRegistry[objectId];
         e.Info.ID = assetId;
-#if ENABLE_ASSETS_DISCOVERY
-        e.FileModified = minDateTime;
-#endif
+        e.Info.ObjectID = objectId;
 
         // Converted imported sources are already target-processed compatibility assets. Resolve exact bytes and
         // feed them directly to the existing package writer instead of cooking the host-editor artifact.
+        const AssetRecord* const* canonicalRecordPtr = frozenRecords.TryGet(objectId);
+        const bool foundCanonical = canonicalRecordPtr != nullptr;
         AssetRecord canonicalRecord;
-        const bool foundCanonical = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord);
-        const bool hasImportedCanonical = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::ImportedSource;
-        const bool isCanonicalTexture = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Texture");
-        const bool isCanonicalModel = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Model");
-        const bool isCanonicalGraph = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
-            (canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.MaterialInstance") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.SkeletonMask") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.SceneAnimation") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.ParticleSystem") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.CollisionData"));
-        const bool isCanonicalText = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
-            canonicalRecord.ProcessorID == TEXT("Flax.Text");
-        const bool isCanonicalImported = hasImportedCanonical &&
-            (canonicalRecord.ProcessorID == TEXT("Flax.Audio") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.Font") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.Video")) || isCanonicalText;
-        if (isCanonicalTexture || isCanonicalModel || isCanonicalGraph || isCanonicalImported)
+        if (foundCanonical)
+            canonicalRecord = **canonicalRecordPtr;
+        const bool hasGeneratedCanonicalRecord = foundCanonical &&
+            canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary &&
+            canonicalRecord.SourceKind != AssetSourceKind::ExistingJson &&
+            canonicalRecord.SourceKind != AssetSourceKind::Folder;
+        if (hasGeneratedCanonicalRecord)
         {
+            AssetRecord currentRecord;
+            if (!AssetDatabase::Get().TryGetRecord(objectId, currentRecord) || currentRecord.Status != canonicalRecord.Status ||
+                !currentRecord.HasSameIdentityAndContent(canonicalRecord))
+            {
+                data.Error(String::Format(TEXT("Required asset object {0} changed after the build snapshot was frozen."),
+                    objectId.ToString()));
+                return true;
+            }
             ArtifactRequest request;
             request.AssetID = assetId;
             request.Target = cookArtifactTarget;
             request.OutputKind = "runtime";
-            if (isCanonicalTexture)
-                request.RequiredCompatibility = "flax-texture-v4";
-            else if (isCanonicalModel)
-                request.RequiredCompatibility = "flax-model-runtime-v1";
-            else if (canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument"))
-                request.RequiredCompatibility = "flax-graph-document-v1";
-            else if (isCanonicalGraph)
-                request.RequiredCompatibility = "flax-authored-document-v1";
-            else
-                request.RequiredCompatibility = "flax-imported-source-v1";
             request.Policy = ArtifactResolvePolicy::Exact;
             ResolvedArtifact artifact;
             AssetPipelineDiagnostic diagnostic;
-            bool resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
-            if (resolveFailed && diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated)
-            {
-                LOG(Warning, "Canonical record {0} changed during its exact build; retrying against the current database revision.", assetId);
-                resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
-            }
+            const bool resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
             if (resolveFailed || !artifact.IsExact || !artifact.IsGenerated())
             {
-                LOG(Error, "Failed to resolve exact canonical artifact {0} for cook target {1}: {2}", assetId,
+                LOG(Error, "Failed to resolve exact canonical artifact {0} for cook target {1}: {2}", objectId.ToString(),
                     String(cookArtifactTarget.BuildKey(ArtifactTargetDimension::All).ToString()), diagnostic.Message);
                 return true;
             }
@@ -1339,7 +1340,7 @@ bool CookAssetsStep::Perform(CookingData& data)
                 data.Error(String::Format(TEXT("Exact canonical artifact {0} has an invalid immutable key."), assetId));
                 return true;
             }
-            pinnedArtifactKeys[assetId] = pinnedArtifact;
+            pinnedArtifactKeys[objectId] = pinnedArtifact;
 
             cookArtifactLeases.Add(ArtifactLease::Acquire(artifact.StoragePath.Get()));
             String cachedFilePath;
@@ -1368,7 +1369,7 @@ bool CookAssetsStep::Perform(CookingData& data)
             ASSERT(cachedEntry->ID == assetId);
 
             // Get actual asset info
-            if (Content::GetAssetInfo(assetId, assetInfo))
+            if (isBuiltin ? Content::GetAssetInfo(assetId, assetInfo) : Content::GetAssetInfo(objectId, assetInfo))
             {
                 // Ensure that cached entry is valid
                 if (cachedEntry->TypeName == assetInfo.TypeName)
@@ -1404,7 +1405,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         }
 
         // Load asset (and keep ref)
-        assetRef = Content::LoadAsync<Asset>(assetId);
+        assetRef = isBuiltin ? Content::LoadAsync<Asset>(assetId) : Content::LoadAssetAsync<Asset>(objectId);
         if (assetRef == nullptr)
         {
             LOG(Error, "Failed to load asset {} included in build", assetId);
@@ -1497,7 +1498,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         bytes[length + 401] = 0;
         *(int32*)(bytes.Get() + 800) = (int32)gameFlags;
         *(int32*)(bytes.Get() + 804) = contentKey;
-        *(Guid*)(bytes.Get() + 808) = gameSettings->SplashScreen;
+        *(Guid*)(bytes.Get() + 808) = gameSettings->SplashScreen.IsValid() ? gameSettings->SplashScreen.ToRuntimeObjectGuid() : Guid::Empty;
         Encryption::EncryptBytes(bytes.Get(), bytes.Count());
         stream->Write(bytes);
 
@@ -1509,15 +1510,16 @@ bool CookAssetsStep::Perform(CookingData& data)
         PackageBuilder packageBuilder(buildSettings->MaxAssetsPerPackage, buildSettings->MaxPackageSizeMB, contentKey);
 
         subStepIndex = 0;
-        Array<Guid> packageAssetIDs;
+        Array<AssetObjectId> packageAssetIDs;
         AssetsRegistry.GetKeys(packageAssetIDs);
         if (packageAssetIDs.Count() > 1)
-            std::sort(packageAssetIDs.Get(), packageAssetIDs.Get() + packageAssetIDs.Count(), LessGuid);
-        for (const Guid& assetId : packageAssetIDs)
+            std::sort(packageAssetIDs.Get(), packageAssetIDs.Get() + packageAssetIDs.Count(), LessAssetObjectId);
+        for (const AssetObjectId& objectId : packageAssetIDs)
         {
             BUILD_STEP_CANCEL_CHECK;
             data.StepProgress(Step3Info, Math::Lerp(Step3ProgressStart, Step3ProgressEnd, (float)subStepIndex++ / AssetsRegistry.Count()));
-            AssetsCache::Entry& registryEntry = AssetsRegistry[assetId];
+            CookerPackagedAssetEntry& registryEntry = AssetsRegistry[objectId];
+            const Guid assetId = objectId.ToRuntimeObjectGuid();
 
             String cookedFilePath;
             cache.GetFilePath(assetId, cookedFilePath);
@@ -1548,7 +1550,8 @@ bool CookAssetsStep::Perform(CookingData& data)
     // Collect compatibility aliases for Content::Load(path). Only their normalized hashes enter the binary catalog.
     for (auto i = data.Assets.Begin(); i.IsNotEnd(); ++i)
     {
-        if (Content::GetAssetInfo(i->Item, assetInfo))
+        const bool isBuiltin = data.BuiltinRootAssets.Contains(i->Item);
+        if (isBuiltin ? Content::GetAssetInfo(i->Item.ToRuntimeObjectGuid(), assetInfo) : Content::GetAssetInfo(i->Item, assetInfo))
         {
             // Use local path relative to the game dir (assets cache is converting them to absolute paths because RelativePaths flag is set)
             String localPath;
@@ -1558,25 +1561,34 @@ bool CookAssetsStep::Perform(CookingData& data)
                 localPath = assetInfo.Path.Right(assetInfo.Path.Length() - Globals::ProjectFolder.Length() - 1);
             else
                 localPath = assetInfo.Path;
-            AssetPathsMapping[localPath] = assetInfo.ID;
+            AssetPathsMapping[localPath] = i->Item;
         }
     }
 
     BUILD_STEP_CANCEL_CHECK;
 
     // Freeze one object-level dependency graph from the same database revision used throughout this cook.
-    if (AssetDatabase::Get().GetRevision() != buildDatabaseSnapshot.Revision)
+    for (auto i = data.Assets.Begin(); i.IsNotEnd(); ++i)
     {
-        data.Error(TEXT("Asset database changed while cooking; refusing to publish a mixed-revision runtime catalog."));
-        return true;
+        const AssetRecord* const* frozen = frozenRecords.TryGet(i->Item);
+        if (!frozen)
+            continue;
+        AssetRecord current;
+        if (!AssetDatabase::Get().TryGetRecord(i->Item, current) || current.Status != (*frozen)->Status ||
+            !current.HasSameIdentityAndContent(**frozen))
+        {
+            data.Error(String::Format(TEXT("Required asset object {0} changed while cooking; refusing to publish a mixed-state catalog."),
+                i->Item.ToString()));
+            return true;
+        }
     }
     Dictionary<Guid, AssetObjectId> objectsByRuntimeID;
     Array<RuntimeObjectDependencyRecord> dependencyRecords;
-    dependencyRecords.EnsureCapacity(buildDatabaseSnapshot.Records.Count() + AssetsRegistry.Count());
+    dependencyRecords.EnsureCapacity(buildDatabaseSnapshot.Records.Count() + data.BuiltinRootAssets.Count());
     for (const AssetRecord& record : buildDatabaseSnapshot.Records)
     {
         const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
-        if (!object.IsValid() || objectsByRuntimeID.ContainsKey(record.ID))
+        if (!object.IsValid() || record.ID != object.ToRuntimeObjectGuid() || objectsByRuntimeID.ContainsKey(record.ID))
         {
             data.Error(TEXT("Build snapshot contains an invalid or duplicate runtime object mapping."));
             return true;
@@ -1587,16 +1599,21 @@ bool CookAssetsStep::Perform(CookingData& data)
         dependencyRecords.Add(MoveTemp(dependencyRecord));
     }
     const int32 databaseRecordCount = buildDatabaseSnapshot.Records.Count();
-    for (auto i = AssetsRegistry.Begin(); i.IsNotEnd(); ++i)
+    for (auto i = data.BuiltinRootAssets.Begin(); i.IsNotEnd(); ++i)
     {
-        if (!objectsByRuntimeID.ContainsKey(i->Key))
+        const Guid runtimeID = i->Item.ToRuntimeObjectGuid();
+        const AssetObjectId* existing = objectsByRuntimeID.TryGet(runtimeID);
+        if (existing && *existing != i->Item)
         {
-            const AssetObjectId object = AssetObjectId::Main(AssetGuid(i->Key));
-            objectsByRuntimeID.Add(i->Key, object);
-            RuntimeObjectDependencyRecord dependencyRecord;
-            dependencyRecord.Object = object;
-            dependencyRecords.Add(MoveTemp(dependencyRecord));
+            data.Error(TEXT("An engine built-in root collides with a project asset object."));
+            return true;
         }
+        if (existing)
+            continue;
+        objectsByRuntimeID.Add(runtimeID, i->Item);
+        RuntimeObjectDependencyRecord dependencyRecord;
+        dependencyRecord.Object = i->Item;
+        dependencyRecords.Add(MoveTemp(dependencyRecord));
     }
     for (int32 recordIndex = 0; recordIndex < databaseRecordCount; recordIndex++)
     {
@@ -1605,36 +1622,25 @@ bool CookAssetsStep::Perform(CookingData& data)
         for (const Guid& runtimeReference : record.RuntimeReferences)
         {
             const AssetObjectId* dependency = objectsByRuntimeID.TryGet(runtimeReference);
-            const AssetObjectId unresolved = AssetObjectId::Main(AssetGuid(runtimeReference));
-            const AssetObjectId& object = dependency ? *dependency : unresolved;
-            if (object == dependencyRecords[recordIndex].Object || !uniqueDependencies.Add(object))
+            if (!dependency)
+            {
+                data.Error(String::Format(TEXT("Runtime dependency {0} from {1} is absent from the frozen build snapshot."),
+                    runtimeReference, dependencyRecords[recordIndex].Object.ToString()));
+                return true;
+            }
+            if (*dependency == dependencyRecords[recordIndex].Object || !uniqueDependencies.Add(*dependency))
             {
                 data.Error(String::Format(TEXT("Runtime dependency graph for {0} contains a self or duplicate reference."), record.ID));
                 return true;
             }
-            dependencyRecords[recordIndex].Dependencies.Add(object);
+            dependencyRecords[recordIndex].Dependencies.Add(*dependency);
         }
     }
 
     Array<AssetObjectId> closureRoots;
-    HashSet<AssetObjectId> uniqueRoots;
+    closureRoots.EnsureCapacity(data.RootAssets.Count());
     for (auto i = data.RootAssets.Begin(); i.IsNotEnd(); ++i)
-    {
-        if (!AssetsRegistry.ContainsKey(i->Item))
-            continue;
-        const AssetObjectId* object = objectsByRuntimeID.TryGet(i->Item);
-        if (object && uniqueRoots.Add(*object))
-            closureRoots.Add(*object);
-    }
-    if (closureRoots.IsEmpty())
-    {
-        for (auto i = AssetsRegistry.Begin(); i.IsNotEnd(); ++i)
-        {
-            const AssetObjectId* object = objectsByRuntimeID.TryGet(i->Key);
-            if (object && uniqueRoots.Add(*object))
-                closureRoots.Add(*object);
-        }
-    }
+        closureRoots.Add(i->Item);
     RuntimeDependencyClosureResult closure;
     AssetPipelineDiagnostic diagnostic;
     if (RuntimeDependencyClosure::Build(closureRoots, dependencyRecords, closure, diagnostic))
@@ -1642,25 +1648,16 @@ bool CookAssetsStep::Perform(CookingData& data)
         data.Error(String::Format(TEXT("Failed to build runtime dependency closure. {0}"), diagnostic.Message));
         return true;
     }
-    HashSet<AssetObjectId> closedObjects;
-    for (const AssetObjectId& object : closure.Objects)
-        closedObjects.Add(object);
-    int32 compatibilityRoots = 0;
-    for (auto i = AssetsRegistry.Begin(); i.IsNotEnd(); ++i)
+    if (closure.Objects.Count() != data.Assets.Count() || closure.Objects.Count() != AssetsRegistry.Count())
     {
-        const AssetObjectId* object = objectsByRuntimeID.TryGet(i->Key);
-        if (object && !closedObjects.Contains(*object) && uniqueRoots.Add(*object))
-        {
-            closureRoots.Add(*object);
-            compatibilityRoots++;
-        }
+        data.Error(TEXT("The cooked object set differs from the frozen dependency closure."));
+        return true;
     }
-    if (compatibilityRoots != 0)
+    for (const AssetObjectId& object : closure.Objects)
     {
-        LOG(Info, "Retaining {0} compatibility roots whose legacy dependencies are not yet recorded in the asset database.", compatibilityRoots);
-        if (RuntimeDependencyClosure::Build(closureRoots, dependencyRecords, closure, diagnostic))
+        if (!data.Assets.Contains(object) || !AssetsRegistry.ContainsKey(object))
         {
-            data.Error(String::Format(TEXT("Failed to complete runtime dependency closure. {0}"), diagnostic.Message));
+            data.Error(String::Format(TEXT("Exact runtime object {0} was not cooked."), object.ToString()));
             return true;
         }
     }
@@ -1676,7 +1673,7 @@ bool CookAssetsStep::Perform(CookingData& data)
     for (const AssetObjectId& object : closure.Objects)
     {
         const Guid runtimeID = object.ToRuntimeObjectGuid();
-        const AssetsCache::Entry* packaged = AssetsRegistry.TryGet(runtimeID);
+        const CookerPackagedAssetEntry* packaged = AssetsRegistry.TryGet(object);
         if (!packaged)
         {
             data.Error(String::Format(TEXT("Runtime dependency {0} has no packaged object."), object.ToString()));
@@ -1715,7 +1712,7 @@ bool CookAssetsStep::Perform(CookingData& data)
 
         AssetBuildSnapshotArtifact snapshotArtifact;
         snapshotArtifact.Object = object;
-        const ArtifactKey* pinnedArtifact = pinnedArtifactKeys.TryGet(runtimeID);
+        const ArtifactKey* pinnedArtifact = pinnedArtifactKeys.TryGet(object);
         snapshotArtifact.Manifest = pinnedArtifact ? *pinnedArtifact : ArtifactKey(contentHash);
         snapshotArtifact.ObjectContent = contentHash;
         buildSnapshot.Artifacts.Add(MoveTemp(snapshotArtifact));
@@ -1727,22 +1724,21 @@ bool CookAssetsStep::Perform(CookingData& data)
     {
         if (!FileSystem::IsRelative(i->Key))
             continue;
-        const AssetObjectId* object = objectsByRuntimeID.TryGet(i->Value);
         ContentHash pathHash;
-        if (!object || RuntimeAssetCatalog::HashPathAlias(i->Key, pathHash))
+        if (!i->Value.IsValid() || RuntimeAssetCatalog::HashPathAlias(i->Key, pathHash))
             continue;
         const AssetObjectId* existing = aliasesByHash.TryGet(pathHash);
-        if (existing && *existing != *object)
+        if (existing && *existing != i->Value)
         {
             data.Error(TEXT("Two runtime asset paths collide after portable normalization."));
             return true;
         }
         if (!existing)
         {
-            aliasesByHash.Add(pathHash, *object);
+            aliasesByHash.Add(pathHash, i->Value);
             RuntimeAssetCatalogAlias alias;
             alias.PathHash = pathHash;
-            alias.Object = *object;
+            alias.Object = i->Value;
             catalogAliases.Add(MoveTemp(alias));
         }
     }
@@ -1755,8 +1751,19 @@ bool CookAssetsStep::Perform(CookingData& data)
     }
     RuntimeAssetCatalog runtimeCatalog;
     const String runtimeCatalogPath = data.DataOutputPath / TEXT("Content/RuntimeAssetCatalog.bin");
-    if (runtimeCatalog.Set(snapshotFingerprint.ToString(), buildSnapshot.TargetHash, catalogEntries, catalogAliases, diagnostic) ||
-        runtimeCatalog.SaveAtomic(runtimeCatalogPath, diagnostic))
+    const AssetObjectId gameSettingsObject = GameSettings::GetGameSettingsObjectId();
+    if (!gameSettingsObject.IsValid())
+    {
+        data.Error(TEXT("Cannot create runtime catalog without an exact GameSettings bootstrap object."));
+        return true;
+    }
+    if (runtimeCatalog.Set(snapshotFingerprint.ToString(), buildSnapshot.TargetHash, catalogEntries, catalogAliases, diagnostic))
+    {
+        data.Error(String::Format(TEXT("Failed to create binary runtime asset catalog. {0}"), diagnostic.Message));
+        return true;
+    }
+    runtimeCatalog.SetGameSettingsObject(gameSettingsObject);
+    if (runtimeCatalog.SaveAtomic(runtimeCatalogPath, diagnostic))
     {
         data.Error(String::Format(TEXT("Failed to create binary runtime asset catalog. {0}"), diagnostic.Message));
         return true;

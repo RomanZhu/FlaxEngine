@@ -3,6 +3,7 @@
 #if COMPILE_WITH_PARTICLE_GPU_GRAPH
 
 #include "ParticleEmitterGraph.GPU.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Particles/ParticleEmitterFunction.h"
 
 namespace
@@ -425,7 +426,7 @@ void ParticleEmitterGPUGenerator::ProcessGroupParticles(Box* box, Node* node, Va
     case 300:
     {
         // Load function asset
-        const auto function = Assets.Load<ParticleEmitterFunction>(AssetObjectId::Main(AssetGuid((Guid)node->Values[0])));
+        const auto function = Assets.Load<ParticleEmitterFunction>(Content::ResolveAssetObjectId((Guid)node->Values[0]));
         if (!function)
         {
             OnError(node, box, TEXT("Missing or invalid function."));
@@ -439,7 +440,7 @@ void ParticleEmitterGPUGenerator::ProcessGroupParticles(Box* box, Node* node, Va
         {
             if (_callStack[i]->Type == GRAPH_NODE_MAKE_TYPE(14, 300))
             {
-                const auto callFunc = Assets.Load<ParticleEmitterFunction>(AssetObjectId::Main(AssetGuid((Guid)_callStack[i]->Values[0])));
+                const auto callFunc = Assets.Load<ParticleEmitterFunction>(Content::ResolveAssetObjectId((Guid)_callStack[i]->Values[0]));
                 if (callFunc == function)
                 {
                     OnError(node, box, String::Format(TEXT("Recursive call to function '{0}'!"), function->ToString()));
@@ -514,7 +515,7 @@ void ParticleEmitterGPUGenerator::ProcessGroupFunction(Box* box, Node* node, Val
             value = Value::Zero;
             break;
         }
-        const auto function = Assets.Load<ParticleEmitterFunction>(AssetObjectId::Main(AssetGuid((Guid)functionCallNode->Values[0])));
+        const auto function = Assets.Load<ParticleEmitterFunction>(Content::ResolveAssetObjectId((Guid)functionCallNode->Values[0]));
         if (!_functions.TryGet(functionCallNode, graph) || !function)
         {
             OnError(node, box, TEXT("Missing calling function graph."));

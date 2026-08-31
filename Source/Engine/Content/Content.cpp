@@ -4,6 +4,7 @@
 #include "JsonAsset.h"
 #include "SceneReference.h"
 #include "Cache/AssetsCache.h"
+#include "Builtin/BuiltinAssetCatalog.h"
 #include "Storage/ContentStorageManager.h"
 #include "Storage/JsonStorageProxy.h"
 #include "Factories/IAssetFactory.h"
@@ -43,10 +44,6 @@
 #include "Engine/Scripting/ManagedCLR/MClass.h"
 #include "Engine/Scripting/Internal/InternalCalls.h"
 #include "Engine/Scripting/Scripting.h"
-#if USE_EDITOR
-#include "Editor/Editor.h"
-#include "Editor/ProjectInfo.h"
-#endif
 #if USE_EDITOR && PLATFORM_WINDOWS
 #include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
 #include <propidlbase.h>
@@ -70,6 +67,13 @@ void FLAXENGINE_API Serialization::Serialize(ISerializable::SerializeStream& str
 
 void FLAXENGINE_API Serialization::Deserialize(ISerializable::DeserializeStream& stream, SceneReference& v, ISerializeModifier* modifier)
 {
+    if (stream.IsString())
+    {
+        Guid legacyId;
+        Deserialize(stream, legacyId, modifier);
+        v.ID = legacyId.IsValid() ? AssetObjectId::Main(AssetGuid(legacyId)) : AssetObjectId();
+        return;
+    }
     Deserialize(stream, v.ID, modifier);
 }
 
@@ -77,8 +81,9 @@ namespace
 {
     // Assets
     CriticalSection AssetsLocker;
-    Dictionary<Guid, Asset*> Assets;
-    Dictionary<Guid, AssetLoadLocation> ExplicitLoadLocations;
+    Dictionary<AssetObjectId, Asset*> Assets;
+    Dictionary<Guid, AssetObjectId> RuntimeAssetIndex;
+    Dictionary<AssetObjectId, AssetLoadLocation> ExplicitLoadLocations;
     CriticalSection LoadedAssetsToInvokeLocker;
     Array<Asset*> LoadedAssetsToInvoke;
     Array<Asset*> ToUnload;
@@ -95,7 +100,7 @@ namespace
     ConcurrentTaskQueue<ContentLoadTask> LoadTasks;
     ConditionVariable LoadTasksSignal;
     CriticalSection LoadTasksMutex;
-    Array<Guid> LoadCallAssets;
+    Array<AssetObjectId> LoadCallAssets;
 #else
     Array<ContentLoadTask*> LoadTasks;
 #endif
@@ -238,10 +243,6 @@ namespace
 
 #endif
 
-#if ENABLE_ASSETS_DISCOVERY
-    DateTime LastWorkspaceDiscovery;
-    CriticalSection WorkspaceDiscoveryLocker;
-#endif
 #if USE_EDITOR
     Dictionary<Guid, HashSet<BinaryAsset*>> PendingDependencies;
 
@@ -534,10 +535,6 @@ namespace
 #endif
 }
 
-#if ENABLE_ASSETS_DISCOVERY
-bool findAsset(const Guid& id, const String& directory, Array<String>& tmpCache, AssetInfo& info);
-#endif
-
 class ContentService : public EngineService
 {
 public:
@@ -561,6 +558,7 @@ bool ContentService::Init()
 
     // Init memory containers
     Assets.EnsureCapacity(2048);
+    RuntimeAssetIndex.EnsureCapacity(2048);
     LoadedAssetsToInvoke.EnsureCapacity(64);
 #if PLATFORM_THREADS_LIMIT > 1
     LoadCallAssets.EnsureCapacity(PLATFORM_THREADS_LIMIT);
@@ -568,6 +566,21 @@ bool ContentService::Init()
 
     // Load assets registry
     Cache.Init();
+#if USE_EDITOR
+    AssetPipelineDiagnostic builtinDiagnostic;
+    if (BuiltinAssetCatalog::Get().Initialize(builtinDiagnostic))
+    {
+        LOG(Fatal, "Cannot initialize built-in asset catalog. {0}: {1} Path: '{2}'.",
+            GetAssetPipelineDiagnosticCodeName(builtinDiagnostic.Code), builtinDiagnostic.Message, builtinDiagnostic.SourcePath);
+        return true;
+    }
+    Array<Guid> builtinRuntimeIds;
+    BuiltinAssetCatalog::Get().GetAll(builtinRuntimeIds);
+    for (const Guid& builtinRuntimeId : builtinRuntimeIds)
+        Cache.DeleteAsset(builtinRuntimeId, nullptr);
+    LOG(Info, "Built-in asset catalog loaded {0} immutable objects from {1} prebuilt roots ({2} generated).",
+        BuiltinAssetCatalog::Get().Count(), BuiltinAssetCatalog::Get().PrebuiltRootsCount(), BuiltinAssetCatalog::Get().GeneratedRootsCount());
+#endif
 
     // Create loading threads
     MainLoadThread = New<LoadingThread>();
@@ -745,6 +758,10 @@ void ContentService::Dispose()
     LoadTasks.Clear();
     LoadTasks.SetCapacity(0);
 #endif
+
+#if USE_EDITOR
+    BuiltinAssetCatalog::Get().Dispose();
+#endif
 }
 
 IAssetFactory::Collection& IAssetFactory::Get()
@@ -886,80 +903,38 @@ AssetsCache* Content::GetRegistry()
     return &Cache;
 }
 
-#if USE_EDITOR
-
-bool FindAssets(const ProjectInfo* project, HashSet<const ProjectInfo*>& projects, const Guid& id, Array<String>& tmpCache, AssetInfo& info)
+AssetObjectId Content::GetRuntimeGameSettingsObject()
 {
-    if (projects.Contains(project))
-        return false;
-    projects.Add(project);
-    bool found = findAsset(id, project->ProjectFolderPath / TEXT("Content"), tmpCache, info);
-    for (const auto& reference : project->References)
-    {
-        if (reference.Project)
-            found |= FindAssets(reference.Project, projects, id, tmpCache, info);
-    }
-    return found;
+    return Cache.GetGameSettingsObject();
 }
-
-#endif
 
 bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 {
     if (!id.IsValid())
         return false;
 
+#if USE_EDITOR
     {
         AssetRecord record;
         if (AssetDatabase::Get().TryGetRecord(id, record))
         {
+            AssetInfo builtinInfo;
+            if (BuiltinAssetCatalog::Get().TryGet(id, builtinInfo))
+            {
+                LOG(Error, "Project asset identity {0} collides with read-only built-in '{1}'.", id, builtinInfo.Path);
+                return false;
+            }
             info = record.ToAssetInfo();
             return true;
         }
     }
-
-#if ENABLE_ASSETS_DISCOVERY
-    // Find asset in registry
-    if (Cache.FindAsset(id, info))
+    if (BuiltinAssetCatalog::Get().TryGet(id, info))
         return true;
-    PROFILE_CPU();
-    PROFILE_MEM(Content);
 
-    // Locking injects some stalls but we need to make it safe (only one thread can pass though it at once)
-    ScopeLock lock(WorkspaceDiscoveryLocker);
-
-    // Check if we can search workspace
-    // Note: we want to limit searching frequency due to high I/O usage and thread stall
-    // We also perform full workspace discovery so all new assets will be found
-    auto now = DateTime::NowUTC();
-    auto diff = now - LastWorkspaceDiscovery;
-    if (diff <= TimeSpan::FromSeconds(5))
-    {
-        //LOG(Warning, "Cannot perform workspace scan for '{1}'. Too often call. Time diff: {0} ms", static_cast<int32>(diff.GetTotalMilliseconds()), id);
-        return false;
-    }
-    LastWorkspaceDiscovery = now;
-
-    // Try to find an asset within the project, engine, plugins workspace folders
-    DateTime startTime = now;
-    int32 startCount = Cache.Size();
-    Array<String> tmpCache(1024);
-#if USE_EDITOR
-    HashSet<const ProjectInfo*> projects;
-    bool found = FindAssets(Editor::Project, projects, id, tmpCache, info);
+    // Editor-private binary assets (for example thumbnail atlases) are generated
+    // under Cache and intentionally do not belong to the canonical project database.
+    return Cache.FindAsset(id, info) && AssetPathPolicy::IsSameOrChild(info.Path, Globals::ProjectCacheFolder);
 #else
-    bool found = findAsset(id, Globals::ProjectContentFolder, tmpCache, info);
-#endif
-    if (found)
-    {
-        LOG(Info, "Workspace searching time: {0} ms, new assets found: {1}", static_cast<int32>((DateTime::NowUTC() - startTime).GetTotalMilliseconds()), Cache.Size() - startCount);
-        return true;
-    }
-
-    //LOG(Warning, "Cannot find {0}.", id);
-    return false;
-#else
-    // Find asset in registry
     return Cache.FindAsset(id, info);
 #endif
 }
@@ -970,18 +945,45 @@ bool Content::GetAssetInfo(const AssetObjectId& id, AssetInfo& info)
         return false;
 #if USE_EDITOR
     AssetRecord record;
-    if (!AssetDatabase::Get().TryGetRecord(id, record))
-        return false;
-    info = record.ToAssetInfo();
-    return true;
+    if (AssetDatabase::Get().TryGetRecord(id, record))
+    {
+        AssetInfo builtinInfo;
+        if (BuiltinAssetCatalog::Get().TryGet(id, builtinInfo) || BuiltinAssetCatalog::Get().TryGet(record.ID, builtinInfo))
+        {
+            LOG(Error, "Project asset identity {0} collides with read-only built-in '{1}'.", id, builtinInfo.Path);
+            return false;
+        }
+        info = record.ToAssetInfo();
+        return true;
+    }
+
+    if (BuiltinAssetCatalog::Get().TryGet(id, info))
+        return true;
+
+    // Keep transient editor packages isolated from project authoring assets while
+    // allowing them to use the regular binary asset loader.
+    return Cache.FindAsset(id, info) && AssetPathPolicy::IsSameOrChild(info.Path, Globals::ProjectCacheFolder);
 #else
-    return Cache.FindAsset(id.ToRuntimeObjectGuid(), info);
+    return Cache.FindAsset(id, info);
 #endif
+}
+
+AssetObjectId Content::ResolveAssetObjectId(const Guid& runtimeId)
+{
+    if (!runtimeId.IsValid())
+        return AssetObjectId();
+    AssetInfo info;
+    if (GetAssetInfo(runtimeId, info) && info.ObjectID.IsValid())
+        return info.ObjectID;
+    return AssetObjectId::Main(AssetGuid(runtimeId));
 }
 
 bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 {
-#if ENABLE_ASSETS_DISCOVERY
+#if USE_EDITOR
+    if (BuiltinAssetCatalog::Get().TryGetByPath(path, info))
+        return true;
+
     String formattedPath(path);
     FileSystem::NormalizePath(formattedPath);
 
@@ -997,76 +999,37 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
             return true;
         }
     }
-
-    // Find asset in registry
-    if (Cache.FindAsset(formattedPath, info))
-        return true;
-    if (!FileSystem::FileExists(formattedPath))
-        return false;
-    PROFILE_CPU();
-    PROFILE_MEM(Content);
-
-    const auto extension = FileSystem::GetExtension(formattedPath).ToLower();
-
-    // Check if it's a binary asset
-    if (ContentStorageManager::IsFlaxStorageExtension(extension))
-    {
-        // Skip packages in editor (results in conflicts with build game packages if deployed inside project folder)
-#if USE_EDITOR
-        if (extension == PACKAGE_FILES_EXTENSION)
-            return false;
-#endif
-
-        // Open storage
-        auto storage = ContentStorageManager::GetStorage(formattedPath);
-        if (storage)
-        {
-#if BUILD_DEBUG || FLAX_TESTS
-            ASSERT(storage->GetPath() == formattedPath);
-#endif
-
-            // Register assets from the storage container (will handle duplicated IDs)
-            Cache.RegisterAssets(storage);
-            return Cache.FindAsset(formattedPath, info);
-        }
-    }
-    // Check for json resource
-    else if (JsonStorageProxy::IsValidExtension(extension))
-    {
-        // Check Json storage layer
-        Guid jsonId;
-        String jsonTypeName;
-        if (JsonStorageProxy::GetAssetInfo(formattedPath, jsonId, jsonTypeName))
-        {
-            // Register asset
-            Cache.RegisterAsset(jsonId, jsonTypeName, formattedPath);
-            return Cache.FindAsset(formattedPath, info);
-        }
-    }
-
+    if (AssetPathPolicy::IsSameOrChild(formattedPath, Globals::ProjectCacheFolder))
+        return Cache.FindAsset(formattedPath, info);
     return false;
 #else
-    // Find asset in registry
     return Cache.FindAsset(path, info);
 #endif
 }
 
 StringView Content::GetEditorAssetPath(const Guid& id)
 {
+#if USE_EDITOR
+    const StringView builtinPath = BuiltinAssetCatalog::Get().GetStoragePath(id);
+    if (builtinPath.HasChars())
+        return builtinPath;
+#endif
     return Cache.GetEditorAssetPath(id);
 }
 
 Array<Guid> Content::GetAllAssets()
 {
     Array<Guid> result;
-    Cache.GetAll(result);
 #if USE_EDITOR
+    BuiltinAssetCatalog::Get().GetAll(result);
     const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
     for (const AssetRecord& record : snapshot.Records)
     {
         if (record.Status != AssetRecordStatus::MissingSource && !result.Contains(record.ID))
             result.Add(record.ID);
     }
+#else
+    Cache.GetAll(result);
 #endif
     return result;
 }
@@ -1076,14 +1039,16 @@ Array<Guid> Content::GetAllAssetsByType(const MClass* type)
     Array<Guid> result;
     CHECK_RETURN(type, result);
     const String typeName(type->GetFullName());
-    Cache.GetAllByTypeName(typeName, result);
 #if USE_EDITOR
+    BuiltinAssetCatalog::Get().GetAllByTypeName(typeName, result);
     const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
     for (const AssetRecord& record : snapshot.Records)
     {
         if (record.TypeName == typeName && record.Status != AssetRecordStatus::MissingSource && !result.Contains(record.ID))
             result.Add(record.ID);
     }
+#else
+    Cache.GetAllByTypeName(typeName, result);
 #endif
     return result;
 }
@@ -1103,7 +1068,7 @@ IAssetFactory* Content::GetAssetFactory(const AssetInfo& assetInfo)
         // Check if it's a json asset (in editor only)
         // In build game all asset factories are valid and json assets are cooked into binary packages
 #if USE_EDITOR
-        if (assetInfo.Path.EndsWith(DEFAULT_JSON_EXTENSION_DOT))
+        if (JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(assetInfo.Path).ToLower()))
 #endif
         {
             IAssetFactory::Get().TryGet(JsonAsset::TypeName, result);
@@ -1195,20 +1160,7 @@ Asset* Content::LoadAssetAsync(const AssetObjectId& objectId, const MClass* type
 
 Asset* Content::LoadAssetAsync(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
 {
-    if (objectId.IsNull())
-        return nullptr;
-#if USE_EDITOR
-    AssetRecord record;
-    if (!AssetDatabase::Get().TryGetRecord(objectId, record))
-        return nullptr;
-    return LoadAsync(record.ID, type);
-#else
-    const Guid runtimeID = objectId.ToRuntimeObjectGuid();
-    AssetInfo info;
-    if (!Cache.FindAsset(runtimeID, info))
-        return nullptr;
-    return LoadAsync(runtimeID, type);
-#endif
+    return LoadAssetObjectAsyncInternal(objectId, type);
 }
 
 Asset* Content::LoadMainAssetAsync(const AssetGuid& asset, const MClass* type)
@@ -1235,6 +1187,12 @@ Asset* Content::LoadAsync(const StringView& path, const ScriptingTypeHandle& typ
 {
     PROFILE_MEM(Content);
 
+#if USE_EDITOR
+    AssetInfo builtinInfo;
+    if (BuiltinAssetCatalog::Get().TryGetByPath(path, builtinInfo))
+        return LoadAssetAsync(builtinInfo.ObjectID, type);
+#endif
+
     // Ensure path is in a valid format
     String pathNorm(path);
     ContentStorageManager::FormatPath(pathNorm);
@@ -1251,7 +1209,7 @@ Asset* Content::LoadAsync(const StringView& path, const ScriptingTypeHandle& typ
     AssetInfo assetInfo;
     if (GetAssetInfo(filePath, assetInfo))
     {
-        return LoadAsync(assetInfo.ID, type);
+        return LoadAssetAsync(assetInfo.ObjectID.IsValid() ? assetInfo.ObjectID : AssetObjectId::Main(AssetGuid(assetInfo.ID)), type);
     }
 
     return nullptr;
@@ -1279,7 +1237,7 @@ Array<Asset*> Content::GetAssets(const MClass* type)
     return assets;
 }
 
-const Dictionary<Guid, Asset*>& Content::GetAssetsRaw()
+const Dictionary<AssetObjectId, Asset*>& Content::GetAssetsRaw()
 {
     AssetsLocker.Lock();
     AssetsLocker.Unlock();
@@ -1301,6 +1259,11 @@ Asset* Content::GetAsset(const StringView& outputPath)
     if (outputPath.IsEmpty())
         return nullptr;
     PROFILE_CPU();
+#if USE_EDITOR
+    AssetInfo builtinInfo;
+    if (BuiltinAssetCatalog::Get().TryGetByPath(outputPath, builtinInfo))
+        return GetAsset(builtinInfo.ObjectID);
+#endif
     String formattedPath(outputPath);
     FileSystem::NormalizePath(formattedPath);
     ScopeLock lock(AssetsLocker);
@@ -1316,10 +1279,27 @@ Asset* Content::GetAsset(const StringView& outputPath)
 
 Asset* Content::GetAsset(const Guid& id)
 {
+    if (!id.IsValid())
+        return nullptr;
+    {
+        ScopeLock lock(AssetsLocker);
+        const AssetObjectId* objectId = RuntimeAssetIndex.TryGet(id);
+        Asset* result = nullptr;
+        if (objectId)
+            Assets.TryGet(*objectId, result);
+        if (result)
+            return result;
+    }
+    return GetAsset(ResolveAssetObjectId(id));
+}
+
+Asset* Content::GetAsset(const AssetObjectId& objectId)
+{
+    if (!objectId.IsValid())
+        return nullptr;
+    ScopeLock lock(AssetsLocker);
     Asset* result = nullptr;
-    AssetsLocker.Lock();
-    Assets.TryGet(id, result);
-    AssetsLocker.Unlock();
+    Assets.TryGet(objectId, result);
     return result;
 }
 
@@ -1327,6 +1307,13 @@ void Content::DeleteAsset(Asset* asset)
 {
     if (asset == nullptr || asset->_deleteFileOnUnload)
         return;
+#if USE_EDITOR
+    if (BuiltinAssetCatalog::Get().GetUri(asset->GetPersistentObjectId()).HasChars())
+    {
+        LOG(Error, "Cannot delete read-only built-in asset {0}.", asset->GetPersistentObjectId());
+        return;
+    }
+#endif
 
     LOG(Info, "Deleting asset {0}...", asset->ToString());
 
@@ -1364,6 +1351,15 @@ void Content::DeleteScript(const StringView& path)
 void Content::DeleteAsset(const StringView& path)
 {
     PROFILE_CPU();
+
+#if USE_EDITOR
+    AssetInfo builtinInfo;
+    if (BuiltinAssetCatalog::Get().TryGetByPath(path, builtinInfo))
+    {
+        LOG(Error, "Cannot delete read-only built-in asset '{0}'.", path);
+        return;
+    }
+#endif
 
     // Try to delete already loaded asset
     Asset* asset = GetAsset(path);
@@ -1467,6 +1463,13 @@ bool Content::RenameAsset(const StringView& oldPathInput, const StringView& newP
 
     if (oldPath == newPath)
         return false;
+
+    AssetInfo builtinInfo;
+    if (BuiltinAssetCatalog::Get().TryGetByPath(oldPath, builtinInfo))
+    {
+        LOG(Error, "Cannot move read-only built-in asset '{0}'.", oldPath);
+        return true;
+    }
 
     // Cache data
     Asset* oldAsset = GetAsset(oldPath);
@@ -1639,6 +1642,12 @@ bool Content::RenameAssetFolder(const StringView& oldPathInput, const StringView
     String newPath(newPathInput);
     ContentStorageManager::FormatPath(oldPath);
     ContentStorageManager::FormatPath(newPath);
+
+    if (BuiltinAssetCatalog::Get().IsReadOnlyPath(oldPath) || BuiltinAssetCatalog::Get().IsReadOnlyPath(newPath))
+    {
+        LOG(Error, "Cannot move a folder into or out of read-only built-in content: '{0}' to '{1}'.", oldPath, newPath);
+        return true;
+    }
 
     const bool samePath = FileSystem::AreFilePathsEquivalent(oldPath, newPath);
     const bool destinationIsDirectory = !samePath && FileSystem::DirectoryExists(newPath);
@@ -2016,7 +2025,18 @@ bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, Asset
 {
     diagnostic = AssetPipelineDiagnostic();
 #if USE_EDITOR
-    if (!location.Info.ID.IsValid() || location.Artifact.AssetID != location.Info.ID || location.Artifact.TypeName != location.Info.TypeName ||
+    AssetInfo builtinInfo;
+    if (BuiltinAssetCatalog::Get().TryGet(location.Info.ObjectID, builtinInfo))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+        diagnostic.AssetGuid = location.Info.ObjectID.Asset.Value;
+        diagnostic.SourcePath = builtinInfo.Path;
+        diagnostic.Message = TEXT("Built-in asset load locations are immutable and cannot be overridden.");
+        return true;
+    }
+    if (!location.Info.ID.IsValid() || !location.Info.ObjectID.IsValid() || location.Info.ObjectID.ToRuntimeObjectGuid() != location.Info.ID ||
+        location.Artifact.AssetID != location.Info.ID || location.Artifact.TypeName != location.Info.TypeName ||
         !AssetPathPolicy::IsCanonicalPathValid(CanonicalAssetPath(location.Info.Path), Globals::ProjectContentFolder) ||
         !AssetPathPolicy::IsArtifactPathValid(location.Artifact.StoragePath, Globals::ProjectLibraryFolder))
     {
@@ -2038,7 +2058,7 @@ bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, Asset
     }
 
     ScopeLock lock(AssetsLocker);
-    if (Assets.ContainsKey(location.Info.ID))
+    if (Assets.ContainsKey(location.Info.ObjectID))
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
@@ -2046,7 +2066,7 @@ bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, Asset
         diagnostic.Message = TEXT("Cannot replace the load location of an already loaded asset. Use BinaryAsset::SwitchStorage.");
         return true;
     }
-    ExplicitLoadLocations[location.Info.ID] = location;
+    ExplicitLoadLocations[location.Info.ObjectID] = location;
     return false;
 #else
     diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
@@ -2058,8 +2078,24 @@ bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, Asset
 
 void Content::UnregisterAssetLoadLocation(const Guid& id)
 {
+    {
+        ScopeLock lock(AssetsLocker);
+        for (auto it = ExplicitLoadLocations.Begin(); it.IsNotEnd(); ++it)
+        {
+            if (it->Value.Info.ID == id)
+            {
+                ExplicitLoadLocations.Remove(it);
+                return;
+            }
+        }
+    }
+    UnregisterAssetLoadLocation(ResolveAssetObjectId(id));
+}
+
+void Content::UnregisterAssetLoadLocation(const AssetObjectId& objectId)
+{
     ScopeLock lock(AssetsLocker);
-    ExplicitLoadLocations.Remove(id);
+    ExplicitLoadLocations.Remove(objectId);
 }
 
 void Content::UnloadAsset(Asset* asset)
@@ -2122,8 +2158,9 @@ Asset* Content::CreateVirtualAsset(const ScriptingTypeHandle& type)
 
     // Register asset
     AssetsLocker.Lock();
-    ASSERT(!Assets.ContainsKey(asset->GetID()));
-    Assets.Add(asset->GetID(), asset);
+    ASSERT(!Assets.ContainsKey(asset->GetPersistentObjectId()));
+    Assets.Add(asset->GetPersistentObjectId(), asset);
+    RuntimeAssetIndex.Add(asset->GetID(), asset->GetPersistentObjectId());
     AssetsLocker.Unlock();
 
     return asset;
@@ -2273,7 +2310,10 @@ void Content::onAssetUnload(Asset* asset)
 {
     // This is called by the asset on unloading
     ScopeLock locker(AssetsLocker);
-    Assets.Remove(asset->GetID());
+    Assets.Remove(asset->GetPersistentObjectId());
+    const AssetObjectId* indexedObject = RuntimeAssetIndex.TryGet(asset->GetID());
+    if (indexedObject && *indexedObject == asset->GetPersistentObjectId())
+        RuntimeAssetIndex.Remove(asset->GetID());
     UnloadQueue.Remove(asset);
     LoadedAssetsToInvoke.Remove(asset);
 #if USE_EDITOR
@@ -2285,8 +2325,12 @@ void Content::onAssetUnload(Asset* asset)
 void Content::onAssetChangeId(Asset* asset, const Guid& oldId, const Guid& newId)
 {
     ScopeLock locker(AssetsLocker);
-    Assets.Remove(oldId);
-    Assets.Add(newId, asset);
+    const AssetObjectId oldObjectId = asset->_persistentObjectId;
+    Assets.Remove(oldObjectId);
+    RuntimeAssetIndex.Remove(oldId);
+    asset->_persistentObjectId = AssetObjectId::Main(AssetGuid(newId));
+    Assets.Add(asset->_persistentObjectId, asset);
+    RuntimeAssetIndex.Add(newId, asset->_persistentObjectId);
 #if USE_EDITOR
     if (PendingDependencies.ContainsKey(oldId))
     {
@@ -2377,7 +2421,14 @@ Asset* Content::LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type
 
 Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
 {
-    if (!id.IsValid())
+    Asset* loaded = GetAsset(id);
+    const AssetObjectId objectId = loaded ? loaded->GetPersistentObjectId() : ResolveAssetObjectId(id);
+    return LoadAssetObjectAsyncInternal(objectId, type);
+}
+
+Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+{
+    if (!objectId.IsValid())
         return nullptr;
     PROFILE_MEM(Content);
     const bool passiveLoad = IsPassiveLoad();
@@ -2385,7 +2436,7 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
     // Check if asset has been already loaded
     Asset* result = nullptr;
     AssetsLocker.Lock();
-    Assets.TryGet(id, result);
+    Assets.TryGet(objectId, result);
     if (result)
     {
         AssetsLocker.Unlock();
@@ -2402,7 +2453,7 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
 
 #if PLATFORM_THREADS_LIMIT > 1
     // Check if that asset is during loading
-    if (LoadCallAssets.Contains(id))
+    if (LoadCallAssets.Contains(objectId))
     {
         AssetsLocker.Unlock();
 
@@ -2412,16 +2463,19 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
         {
             Platform::Sleep(1);
             AssetsLocker.Lock();
-            contains = LoadCallAssets.Contains(id);
+            contains = LoadCallAssets.Contains(objectId);
             AssetsLocker.Unlock();
         }
-        Assets.TryGet(id, result);
+        {
+            ScopeLock lock(AssetsLocker);
+            Assets.TryGet(objectId, result);
+        }
         return result;
     }
 
     // Mark asset as loading and release lock so other threads can load other assets
-    LoadCallAssets.Add(id);
-#define LOAD_FAILED() AssetsLocker.Lock(); LoadCallAssets.Remove(id); AssetsLocker.Unlock(); return nullptr
+    LoadCallAssets.Add(objectId);
+#define LOAD_FAILED() AssetsLocker.Lock(); LoadCallAssets.Remove(objectId); AssetsLocker.Unlock(); return nullptr
 #else
 #define LOAD_FAILED() return nullptr
 #endif
@@ -2434,7 +2488,7 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
     bool hasExplicitLocation;
     {
         ScopeLock lock(AssetsLocker);
-        hasExplicitLocation = ExplicitLoadLocations.TryGet(id, loadLocation);
+        hasExplicitLocation = ExplicitLoadLocations.TryGet(objectId, loadLocation);
     }
     if (hasExplicitLocation)
     {
@@ -2443,33 +2497,14 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
     else if (ArtifactResolver::Get().IsConfigured())
     {
         AssetRecord pipelineRecord;
-        if (AssetDatabase::Get().TryGetRecord(id, pipelineRecord) && pipelineRecord.SourceKind != AssetSourceKind::LegacyBinary)
+        if (AssetDatabase::Get().TryGetRecord(objectId, pipelineRecord) && pipelineRecord.SourceKind != AssetSourceKind::LegacyBinary)
         {
             ArtifactRequest request;
-            request.AssetID = id;
+            request.AssetID = pipelineRecord.ID;
             request.Target = ArtifactResolver::Get().GetDefaultTarget();
             request.OutputKind = "runtime";
             request.Policy = passiveLoad ? ArtifactResolvePolicy::PublishedOnly : ArtifactResolvePolicy::Interactive;
             AssetPipelineDiagnostic diagnostic;
-            if (pipelineRecord.ProcessorID == TEXT("Flax.Texture"))
-                request.RequiredCompatibility = "flax-texture-v4";
-            else if (pipelineRecord.ProcessorID == TEXT("Flax.Model"))
-                request.RequiredCompatibility = "flax-model-runtime-v1";
-            else if (pipelineRecord.ProcessorID == TEXT("Flax.GraphDocument"))
-                request.RequiredCompatibility = "flax-graph-document-v1";
-            else if (pipelineRecord.ProcessorID == TEXT("Flax.MaterialInstance") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.SkeletonMask") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.SceneAnimation") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.ParticleSystem") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.CollisionData"))
-                request.RequiredCompatibility = "flax-authored-document-v1";
-            else if (pipelineRecord.ProcessorID == TEXT("Flax.Audio") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.Font") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.Video") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.Text") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.Binary"))
-                request.RequiredCompatibility = "flax-imported-source-v1";
             if (pipelineRecord.SourceKind == AssetSourceKind::ExistingJson)
             {
                 assetInfo = pipelineRecord.ToAssetInfo();
@@ -2479,17 +2514,22 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
             else if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))
             {
                 if (!passiveLoad)
-                    LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, id, diagnostic.SourcePath);
+                    LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, objectId, diagnostic.SourcePath);
                 LOAD_FAILED();
             }
             assetInfo = loadLocation.Info;
             hasExplicitLocation = true;
         }
     }
-    if (!hasExplicitLocation && !GetAssetInfo(id, assetInfo))
+    if (!hasExplicitLocation && !GetAssetInfo(objectId, assetInfo))
     {
-        LOG(Warning, "Invalid or missing asset ({0}, {1}).", id, type.ToString());
+        LOG(Warning, "Invalid or missing asset ({0}, {1}).", objectId, type.ToString());
         LogContext::Print(LogType::Warning);
+        LOAD_FAILED();
+    }
+    if (assetInfo.ObjectID != objectId)
+    {
+        LOG(Error, "Resolved asset object identity changed from {0} to {1}.", objectId, assetInfo.ObjectID);
         LOAD_FAILED();
     }
     if (!hasExplicitLocation)
@@ -2520,7 +2560,8 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
         LOAD_FAILED();
     }
     result->_isPassiveLoad = passiveLoad;
-    ASSERT(result->GetID() == id);
+    ASSERT(result->GetID() == assetInfo.ID);
+    ASSERT(result->GetPersistentObjectId() == objectId);
 #if ASSETS_LOADING_EXTRA_VERIFICATION
     if (IsAssetTypeIdInvalid(type, result->GetTypeHandle()) && !result->Is(type))
     {
@@ -2535,16 +2576,17 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
     // Register asset
     AssetsLocker.Lock();
 #if ASSETS_LOADING_EXTRA_VERIFICATION
-    ASSERT(!Assets.ContainsKey(id));
+    ASSERT(!Assets.ContainsKey(objectId));
 #endif
-    Assets.Add(id, result);
+    Assets.Add(objectId, result);
+    RuntimeAssetIndex.Add(result->GetID(), objectId);
 
     // Start asset loading
     result->startLoading();
 
     // Remove from the loading queue and release lock
 #if PLATFORM_THREADS_LIMIT > 1
-    LoadCallAssets.Remove(id);
+    LoadCallAssets.Remove(objectId);
 #endif
     AssetsLocker.Unlock();
 
@@ -2552,86 +2594,3 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
 
     return result;
 }
-
-#if ENABLE_ASSETS_DISCOVERY
-
-bool findAsset(const Guid& id, const String& directory, Array<String>& tmpCache, AssetInfo& info)
-{
-    // Get all asset files
-    tmpCache.Clear();
-    if (FileSystem::DirectoryGetFiles(tmpCache, directory))
-    {
-        if (FileSystem::DirectoryExists(directory))
-            LOG(Error, "Cannot query files in folder '{0}'.", directory);
-        return false;
-    }
-
-    // Start searching for asset with given ID
-    bool result = false;
-    LOG(Info, "Start searching asset with ID: {0} in '{1}'. {2} potential files to check...", id, directory, tmpCache.Count());
-    for (int32 i = 0; i < tmpCache.Count(); i++)
-    {
-        String& path = tmpCache[i];
-
-        // Check if not already in registry
-        // Note: maybe we could disable this check? it would slow down searching but we will find more workspace problems
-        if (!Cache.HasAsset(path))
-        {
-            auto extension = FileSystem::GetExtension(path).ToLower();
-
-            // Check if it's a binary asset
-            if (ContentStorageManager::IsFlaxStorageExtension(extension))
-            {
-                // Skip packages in editor (results in conflicts with build game packages if deployed inside project folder)
-#if USE_EDITOR
-                if (extension == PACKAGE_FILES_EXTENSION)
-                    continue;
-#endif
-
-                // Open storage
-                auto storage = ContentStorageManager::GetStorage(path);
-                if (storage)
-                {
-                    // Register assets
-                    Cache.RegisterAssets(storage);
-
-                    // Check if that is a missing asset
-                    if (storage->HasAsset(id))
-                    {
-                        // Found
-                        result = Cache.FindAsset(id, info);
-                        LOG(Info, "Found {1} at '{0}'!", id, path);
-                    }
-                }
-                else
-                {
-                    LOG(Error, "Cannot open file '{0}' error code: {1}", path, 0);
-                }
-            }
-            // Check for json resource
-            else if (JsonStorageProxy::IsValidExtension(extension))
-            {
-                // Check Json storage layer
-                Guid jsonId;
-                String jsonTypeName;
-                if (JsonStorageProxy::GetAssetInfo(path, jsonId, jsonTypeName))
-                {
-                    // Register asset
-                    Cache.RegisterAsset(jsonId, jsonTypeName, path);
-
-                    // Check if that is a missing asset
-                    if (id == jsonId)
-                    {
-                        // Found
-                        result = Cache.FindAsset(id, info);
-                        LOG(Info, "Found {1} at '{0}'!", id, path);
-                    }
-                }
-            }
-        }
-    }
-
-    return result;
-}
-
-#endif

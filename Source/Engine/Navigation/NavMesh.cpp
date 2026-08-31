@@ -3,6 +3,7 @@
 #include "NavMesh.h"
 #include "NavMeshRuntime.h"
 #include "Engine/Level/Scene/Scene.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Threading/Threading.h"
 #include "Engine/Profiler/ProfilerMemory.h"
@@ -69,7 +70,7 @@ void NavMesh::SaveNavMesh()
     }
 
     // Link the created asset
-    DataAsset = AssetObjectId::Main(AssetGuid(assetId));
+    DataAsset = Content::ResolveAssetObjectId(assetId);
 
 #endif
 }

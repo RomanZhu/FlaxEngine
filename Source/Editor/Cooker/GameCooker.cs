@@ -81,7 +81,7 @@ namespace FlaxEditor
         /// <summary>
         /// Occurs when building collects assets to cook.
         /// </summary>
-        public static event Action<List<Guid>> CollectAssets;
+        public static event Action<List<AssetObjectId>> CollectAssets;
 
         /// <summary>
         /// Gets the type of the platform from the game build platform type.
@@ -121,9 +121,9 @@ namespace FlaxEditor
             Progress?.Invoke(info, totalProgress);
         }
 
-        internal static Guid[] Internal_OnCollectAssets()
+        internal static AssetObjectId[] Internal_OnCollectAssets()
         {
-            var list = new List<Guid>();
+            var list = new List<AssetObjectId>();
 
             // Custom assets
             CollectAssets?.Invoke(list);

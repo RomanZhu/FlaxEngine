@@ -128,7 +128,13 @@ namespace
 #endif
             if (record.ProcessorID == GraphDocumentProcessor::ProcessorID() || GraphPipelineService::OwnsProcessor(record.ProcessorID))
                 return GraphPipelineService::CreatePlan(record, request, plan, planDiagnostic);
-            return TexturePipelineService::CreatePlan(record, request, plan, planDiagnostic);
+            if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+                return TexturePipelineService::CreatePlan(record, request, plan, planDiagnostic);
+            const bool failed = Fail(planDiagnostic, AssetPipelineDiagnosticCode::ProcessorMissing,
+                AssetPipelineDiagnosticStage::Prepare, record.ID, TEXT("No artifact plan provider owns the asset processor."));
+            planDiagnostic.ProcessorId = record.ProcessorID;
+            planDiagnostic.SourcePath = record.SourcePath.Get();
+            return failed;
         };
         ArtifactResolver::Get().Configure(AssetDatabase::Get(), *state.Builds, Globals::ProjectLibraryFolder,
             TexturePipelineService::GetHostTarget(), provider);
@@ -217,7 +223,7 @@ namespace
     {
     public:
         TexturePipelineEngineService()
-            : EngineService(TEXT("TexturePipeline"), -500)
+            : EngineService(TEXT("TexturePipeline"), -510)
         {
         }
 

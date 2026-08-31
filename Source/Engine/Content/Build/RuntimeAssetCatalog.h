@@ -39,7 +39,7 @@ struct FLAXENGINE_API RuntimeAssetCatalogAlias
 class FLAXENGINE_API RuntimeAssetCatalog
 {
 public:
-    static constexpr uint32 FormatVersion = 2;
+    static constexpr uint32 FormatVersion = 3;
 
     const StringAnsi& GetBuildID() const
     {
@@ -56,6 +56,16 @@ public:
     const Array<RuntimeAssetCatalogAlias>& GetAliases() const
     {
         return _aliases;
+    }
+    const AssetObjectId& GetGameSettingsObject() const
+    {
+        return _gameSettingsObject;
+    }
+
+    /// <summary>Sets the exact cooked GameSettings bootstrap object.</summary>
+    void SetGameSettingsObject(const AssetObjectId& value)
+    {
+        _gameSettingsObject = value;
     }
 
     /// <summary>Replaces catalog contents, sorts them canonically, and validates all object references.</summary>
@@ -98,6 +108,7 @@ public:
 private:
     StringAnsi _buildID;
     ContentHash _targetHash;
+    AssetObjectId _gameSettingsObject;
     Array<RuntimeAssetCatalogEntry> _entries;
     Array<RuntimeAssetCatalogAlias> _aliases;
 

@@ -321,7 +321,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 CollisionCooking::Argument arg;
                 arg.Type = CollisionDataType::TriangleMesh;
                 arg.OverrideModelData = &modelData;
-                arg.Model = AssetObjectId::Main(AssetGuid(data.outputModelAssetId));
+                arg.Model = Content::ResolveAssetObjectId(data.outputModelAssetId);
                 Guid collisionDataAssetId = scene->CSGData.CollisionData.GetRuntimeInstanceId();
                 if (!collisionDataAssetId.IsValid())
                     collisionDataAssetId = Guid::New();

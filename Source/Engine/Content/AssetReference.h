@@ -141,21 +141,26 @@ public:
     /// <param name="other">The other.</param>
     AssetReference(const AssetReference& other)
     {
-        OnSet(other.GetID(), Asset::TypeInitializer);
+        OnSet(other._asset);
+        _objectId = other._objectId;
     }
 
     AssetReference(AssetReference&& other) noexcept
     {
-        OnSet(other.GetID(), Asset::TypeInitializer);
+        OnSet(other._asset);
+        _objectId = other._objectId;
         other.OnSet(nullptr);
+        other._objectId = AssetObjectId();
     }
 
     AssetReference& operator=(AssetReference&& other)
     {
         if (&other != this)
         {
-            OnSet(other.GetID(), Asset::TypeInitializer);
+            OnSet(other._asset);
+            _objectId = other._objectId;
             other.OnSet(nullptr);
+            other._objectId = AssetObjectId();
         }
         return *this;
     }
@@ -170,7 +175,8 @@ public:
 public:
     FORCE_INLINE AssetReference& operator=(const AssetReference& other)
     {
-        OnSet(other.GetID(), Asset::TypeInitializer);
+        OnSet(other._asset);
+        _objectId = other._objectId;
         return *this;
     }
 

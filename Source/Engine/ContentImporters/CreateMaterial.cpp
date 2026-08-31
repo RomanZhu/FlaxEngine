@@ -127,6 +127,7 @@ namespace
 
 CreateMaterial::Options::Options()
 {
+    Platform::MemoryClear(&Info, sizeof(Info));
     Info.Domain = MaterialDomain::Surface;
     Info.BlendMode = MaterialBlendMode::Opaque;
     Info.ShadingModel = MaterialShadingModel::Lit;
@@ -164,7 +165,7 @@ CreateAssetResult CreateMaterial::Create(CreateAssetContext& context)
         layer->Root = &layer->Graph.Nodes[0];
         for (auto& box : layer->Root->Boxes)
             box.Parent = layer->Root;
-        Meta11 meta;
+        Meta11 meta = {};
         meta.Selected = false;
 
         // Diffuse + Mask

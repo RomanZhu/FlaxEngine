@@ -8,12 +8,16 @@
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Content/AssetInfo.h"
-#include "Engine/Content/Cache/AssetsCache.h"
 
 class Asset;
 class BinaryAsset;
 class JsonAssetBase;
 struct AssetInitData;
+
+struct CookerPackagedAssetEntry
+{
+    AssetInfo Info;
+};
 
 /// <summary>
 /// Cooking step that builds all the assets and packages them to the output directory.
@@ -173,8 +177,8 @@ public:
     
 private:
 
-    AssetsCache::Registry AssetsRegistry;
-    AssetsCache::PathsMapping AssetPathsMapping;
+    Dictionary<AssetObjectId, CookerPackagedAssetEntry> AssetsRegistry;
+    Dictionary<String, AssetObjectId> AssetPathsMapping;
 
     bool Process(CookingData& data, CacheData& cache, Asset* asset);
     bool Process(CookingData& data, CacheData& cache, BinaryAsset* asset);

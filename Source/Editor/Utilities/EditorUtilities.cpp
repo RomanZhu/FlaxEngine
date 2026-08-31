@@ -73,7 +73,7 @@ bool EditorUtilities::GetApplicationImage(const Guid& imageId, TextureData& imag
         const auto gameSettings = GameSettings::Get();
         if (gameSettings)
         {
-            icon = Content::LoadAsync<Texture>(gameSettings->Icon);
+            icon = Content::LoadAssetAsync<Texture>(gameSettings->Icon);
         }
     }
     if (icon == nullptr)

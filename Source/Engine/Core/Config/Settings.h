@@ -38,7 +38,7 @@ public:
         const auto gameSettings = GameSettings::Get(); \
         if (gameSettings) \
         { \
-            const auto asset = Content::Load<JsonAsset>(gameSettings->field); \
+            const auto asset = Content::LoadAsset<JsonAsset>(gameSettings->field); \
             if (asset && asset->Instance && asset->InstanceType == type::TypeInitializer) \
             { \
                 result = static_cast<type*>(asset->Instance); \
@@ -59,9 +59,9 @@ public:
         const auto gameSettings = GameSettings::Get(); \
         if (gameSettings) \
         { \
-            Guid assetId = Guid::Empty; \
+            AssetObjectId assetId; \
             gameSettings->CustomSettings.TryGet(TEXT(name), assetId); \
-            const auto asset = Content::Load<JsonAsset>(assetId); \
+            const auto asset = Content::LoadAsset<JsonAsset>(assetId); \
             if (asset) \
             { \
                 if (auto* instance = asset->GetInstance<type>()) \

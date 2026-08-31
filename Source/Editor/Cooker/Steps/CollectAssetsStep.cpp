@@ -1,106 +1,122 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "CollectAssetsStep.h"
-#include "Engine/Content/Content.h"
-#include "Engine/Content/Asset.h"
-#include "Engine/Content/AssetReference.h"
-#include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/Assets/Texture.h"
+#include "Engine/Content/Build/RuntimeDependencyClosure.h"
 #include "Engine/Core/Log.h"
-#include "Engine/Content/Assets/CubeTexture.h"
-#include "Engine/Content/Assets/Shader.h"
-#include "Engine/Content/Cache/AssetsCache.h"
 
 bool CollectAssetsStep::Perform(CookingData& data)
 {
-    LOG(Info, "Searching for assets to include in a build. Using {0} root assets.", data.RootAssets.Count());
+    LOG(Info, "Searching the frozen asset database for the dependency closure of {0} root objects.", data.RootAssets.Count());
     data.StepProgress(TEXT("Collecting assets"), 0);
 
-    // Initialize assets queue
-    Array<Guid> assetsQueue;
-    assetsQueue.Clear();
-    assetsQueue.EnsureCapacity(1024);
-    for (auto i = data.RootAssets.Begin(); i.IsNotEnd(); ++i)
-        assetsQueue.Add(i->Item);
-
-    // Iterate through the assets graph
-    AssetInfo assetInfo;
-    Array<Guid> references;
-    Array<String> files;
-    while (assetsQueue.HasItems())
+    const AssetDatabaseSnapshot& snapshot = data.DatabaseSnapshot;
+    if (snapshot.Revision == 0)
     {
-        BUILD_STEP_CANCEL_CHECK;
-        const Guid assetId = assetsQueue.Dequeue();
+        data.Error(TEXT("Dependency collection requires a frozen asset database snapshot."));
+        return true;
+    }
+    if (data.RootCollectionFailed)
+    {
+        data.Error(TEXT("Cannot collect assets after root discovery failed."));
+        return true;
+    }
 
-        // Skip already processed or invalid assets
-        if (!assetId.IsValid() || data.Assets.Contains(assetId))
-            continue;
-        AssetRecord canonicalRecord;
-        const bool hasCanonicalRecord = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord);
-        if (hasCanonicalRecord && canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary &&
-            canonicalRecord.ProcessorID != TEXT("Flax.Texture") && canonicalRecord.ProcessorID != TEXT("Flax.Model") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.GraphDocument") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.ExistingJson") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.MaterialInstance") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.SkeletonMask") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.SceneAnimation") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.ParticleSystem") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.CollisionData") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.Audio") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.Font") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.Video") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.Text") &&
-            canonicalRecord.ProcessorID != TEXT("Flax.ShaderSource"))
+    Dictionary<Guid, AssetObjectId> objectsByRuntimeId;
+    Dictionary<AssetObjectId, const AssetRecord*> recordsByObject;
+    Array<RuntimeObjectDependencyRecord> dependencyRecords;
+    dependencyRecords.EnsureCapacity(snapshot.Records.Count() + data.BuiltinRootAssets.Count());
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
+        if (!record.ID.IsValid() || !object.IsValid() || record.ID != object.ToRuntimeObjectGuid() ||
+            objectsByRuntimeId.ContainsKey(record.ID) || recordsByObject.ContainsKey(object))
         {
-            LOG(Warning, "Skipping canonical cooker root {0}; processor '{1}' is not converted yet.", assetId, canonicalRecord.ProcessorID);
-            continue;
+            data.Error(TEXT("The frozen asset database contains an invalid or duplicate object identity."));
+            return true;
         }
-        if (hasCanonicalRecord)
-            assetInfo = canonicalRecord.ToAssetInfo();
-        else if (!Content::GetRegistry()->FindAsset(assetId, assetInfo))
-            continue;
+        objectsByRuntimeId.Add(record.ID, object);
+        recordsByObject.Add(object, &record);
+    }
 
-        // Skip some assets (with no refs and not required to load)
-        if (assetInfo.TypeName == Texture::TypeName ||
-            assetInfo.TypeName == CubeTexture::TypeName ||
-            assetInfo.TypeName == Shader::TypeName ||
-            (hasCanonicalRecord && canonicalRecord.ProcessorID == TEXT("Flax.Video")))
+    for (auto i = data.BuiltinRootAssets.Begin(); i.IsNotEnd(); ++i)
+    {
+        const AssetObjectId object = i->Item;
+        const Guid runtimeId = object.ToRuntimeObjectGuid();
+        const AssetObjectId* existing = objectsByRuntimeId.TryGet(runtimeId);
+        if (existing && *existing != object)
         {
-            LOG_STR(Info, assetInfo.Path);
-            data.Assets.Add(assetId);
-            continue;
+            data.Error(TEXT("An engine built-in root collides with a project asset object."));
+            return true;
         }
+        if (!existing)
+            objectsByRuntimeId.Add(runtimeId, object);
+    }
 
-        // Load asset
-        AssetReference<Asset> asset = Content::LoadAsync<Asset>(assetId);
-        if (asset == nullptr)
-            continue;
-        LOG_STR(Info, asset->GetPath());
-        data.Assets.Add(assetId);
-
-        // Skip virtual/temporary assets
-        if (asset->IsVirtual())
-            continue;
-
-        // Asset should have loaded data
-        if (asset->WaitForLoaded())
-            continue;
-
-        // Gather asset references
-        references.Clear();
-        asset->Locker.Lock();
-        asset->GetReferences(references, files);
-        asset->Locker.Unlock();
-        assetsQueue.Add(references);
-        for (String& file : files)
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        RuntimeObjectDependencyRecord dependencyRecord;
+        dependencyRecord.Object = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+        HashSet<AssetObjectId> uniqueDependencies;
+        for (const Guid& runtimeReference : record.RuntimeReferences)
         {
-            if (file.HasChars())
-                data.Files.Add(MoveTemp(file));
+            const AssetObjectId* dependency = objectsByRuntimeId.TryGet(runtimeReference);
+            if (!dependency)
+            {
+                data.Error(String::Format(TEXT("Recorded runtime reference {0} from {1} does not resolve in database revision {2}."),
+                    runtimeReference, dependencyRecord.Object.ToString(), snapshot.Revision));
+                return true;
+            }
+            if (*dependency == dependencyRecord.Object || !uniqueDependencies.Add(*dependency))
+            {
+                data.Error(String::Format(TEXT("Recorded runtime references for {0} contain a self or duplicate edge."),
+                    dependencyRecord.Object.ToString()));
+                return true;
+            }
+            dependencyRecord.Dependencies.Add(*dependency);
         }
+        dependencyRecords.Add(MoveTemp(dependencyRecord));
+    }
+    for (auto i = data.BuiltinRootAssets.Begin(); i.IsNotEnd(); ++i)
+    {
+        if (recordsByObject.ContainsKey(i->Item))
+            continue;
+        RuntimeObjectDependencyRecord dependencyRecord;
+        dependencyRecord.Object = i->Item;
+        dependencyRecords.Add(MoveTemp(dependencyRecord));
+    }
+
+    Array<AssetObjectId> roots;
+    roots.EnsureCapacity(data.RootAssets.Count());
+    for (auto i = data.RootAssets.Begin(); i.IsNotEnd(); ++i)
+        roots.Add(i->Item);
+
+    RuntimeDependencyClosureResult closure;
+    AssetPipelineDiagnostic diagnostic;
+    if (RuntimeDependencyClosure::Build(roots, dependencyRecords, closure, diagnostic))
+    {
+        data.Error(String::Format(TEXT("Failed to collect the frozen runtime dependency closure. {0}"), diagnostic.Message));
+        return true;
+    }
+
+    data.Assets.Clear();
+    for (const AssetObjectId& object : closure.Objects)
+    {
+        const AssetRecord* const* record = recordsByObject.TryGet(object);
+        if (record && (*record)->Status != AssetRecordStatus::Ready)
+        {
+            data.Error(String::Format(TEXT("Required asset object {0} is not ready in database revision {1}."),
+                object.ToString(), snapshot.Revision));
+            return true;
+        }
+        if (!record && !data.BuiltinRootAssets.Contains(object))
+        {
+            data.Error(String::Format(TEXT("Required asset object {0} has no frozen database record."), object.ToString()));
+            return true;
+        }
+        data.Assets.Add(object);
     }
 
     data.Stats.TotalAssets = data.Assets.Count();
-    LOG(Info, "Found {0} assets to deploy!", data.Assets.Count());
-
+    LOG(Info, "Found {0} exact asset objects to deploy from database revision {1}.", data.Assets.Count(), snapshot.Revision);
     return false;
 }

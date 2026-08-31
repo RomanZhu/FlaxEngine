@@ -8,6 +8,7 @@
 #include "Engine/Core/Math/Ray.h"
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Core/Collections/HashSet.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 
 /// <summary>
 /// Contains information about Flax project.
@@ -62,6 +63,16 @@ public:
     ::Version Version;
 
     /// <summary>
+    /// The source asset system format required by this project.
+    /// </summary>
+    int32 AssetSystemVersion;
+
+    /// <summary>
+    /// The source GUID of Content/Settings/ProjectSettingsIndex.settings.
+    /// </summary>
+    Guid ProjectSettingsIndexGuid;
+
+    /// <summary>
     /// The project publisher company.
     /// </summary>
     String Company;
@@ -89,7 +100,7 @@ public:
     /// <summary>
     /// The default scene asset identifier to open on project startup.
     /// </summary>
-    Guid DefaultScene;
+    AssetObjectId DefaultScene;
 
     /// <summary>
     /// The default scene spawn point (position and view direction).
@@ -111,8 +122,10 @@ public:
     ProjectInfo()
     {
         Version = ::Version(1, 0);
+        AssetSystemVersion = 0;
+        ProjectSettingsIndexGuid = Guid::Empty;
         DefaultSceneSpawn = Ray(Vector3::Zero, Vector3::Forward);
-        DefaultScene = Guid::Empty;
+        DefaultScene = AssetObjectId();
     }
 
     /// <summary>

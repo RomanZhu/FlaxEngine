@@ -5,6 +5,7 @@
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Platform/StringUtils.h"
 #include "Engine/Threading/Threading.h"
+#include <algorithm>
 
 namespace
 {
@@ -97,10 +98,30 @@ namespace
                 if (!target.IsValid())
                     continue;
                 if (dependency.Kind == AssetDependencyKind::BuildInput)
-                    record.BuildInputDependencies.Add(target);
+                {
+                    if (!record.BuildInputDependencies.Contains(target))
+                        record.BuildInputDependencies.Add(target);
+                }
                 else if (dependency.Kind == AssetDependencyKind::RuntimeReference)
-                    record.RuntimeReferences.Add(target);
+                {
+                    if (!record.RuntimeReferences.Contains(target))
+                        record.RuntimeReferences.Add(target);
+                }
             }
+            const auto lessGuid = [](const Guid& a, const Guid& b)
+            {
+                if (a.A != b.A)
+                    return a.A < b.A;
+                if (a.B != b.B)
+                    return a.B < b.B;
+                if (a.C != b.C)
+                    return a.C < b.C;
+                return a.D < b.D;
+            };
+            if (record.BuildInputDependencies.Count() > 1)
+                std::sort(record.BuildInputDependencies.Get(), record.BuildInputDependencies.Get() + record.BuildInputDependencies.Count(), lessGuid);
+            if (record.RuntimeReferences.Count() > 1)
+                std::sort(record.RuntimeReferences.Get(), record.RuntimeReferences.Get() + record.RuntimeReferences.Count(), lessGuid);
             records.Add(MoveTemp(record));
         }
     }

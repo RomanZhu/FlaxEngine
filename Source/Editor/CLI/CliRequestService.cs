@@ -85,6 +85,7 @@ namespace FlaxEditor
                 if (!string.IsNullOrWhiteSpace(_request.EventPath) && !Path.IsPathRooted(_request.EventPath))
                     throw new InvalidOperationException("The CLI event path must be absolute.");
                 ValidateProjectPath();
+                DeleteStaleResponseFiles();
 
                 switch (_request.Operation)
                 {
@@ -105,6 +106,14 @@ namespace FlaxEditor
             {
                 Fail(ex);
             }
+        }
+
+        private void DeleteStaleResponseFiles()
+        {
+            if (File.Exists(_request.ResultPath))
+                File.Delete(_request.ResultPath);
+            if (!string.IsNullOrWhiteSpace(_request.EventPath) && File.Exists(_request.EventPath))
+                File.Delete(_request.EventPath);
         }
 
         private void ExecuteBuild()

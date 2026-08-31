@@ -142,7 +142,8 @@ namespace FlaxEditor.Content
         public override void OnThumbnailDrawCleanup(ThumbnailRequest request)
         {
             // Unlink asset
-            var preview = (AudioClipPreview)request.Tag;
+            if (request.Tag is not AudioClipPreview preview)
+                return;
             preview.Asset = null;
 
             // Return the preview control back to the pool

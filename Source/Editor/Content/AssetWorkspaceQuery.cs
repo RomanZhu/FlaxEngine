@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using FlaxEngine;
 
 namespace FlaxEditor.Content
@@ -26,12 +27,18 @@ namespace FlaxEditor.Content
     {
         public static AssetWorkspaceEntry[] Query(string pathPrefix = null, string typeName = null, AssetRecordStatus? status = null)
         {
+            if (!string.IsNullOrEmpty(pathPrefix) && !pathPrefix.StartsWith("builtin://", StringComparison.OrdinalIgnoreCase))
+            {
+                pathPrefix = pathPrefix.Replace('/', Path.DirectorySeparatorChar);
+                if (!Path.IsPathRooted(pathPrefix))
+                    pathPrefix = Path.GetFullPath(Path.Combine(Globals.ProjectFolder, pathPrefix));
+            }
             var records = AssetDatabaseFacade.GetRecords();
             var result = new List<AssetWorkspaceEntry>(records.Length);
             for (var i = 0; i < records.Length; i++)
             {
                 var record = records[i];
-                if (pathPrefix != null && !record.SourcePath.StartsWith(pathPrefix, StringComparison.OrdinalIgnoreCase))
+                if (pathPrefix != null && !record.SourcePath.Replace('/', Path.DirectorySeparatorChar).StartsWith(pathPrefix, StringComparison.OrdinalIgnoreCase))
                     continue;
                 if (typeName != null && !string.Equals(record.TypeName, typeName, StringComparison.Ordinal))
                     continue;

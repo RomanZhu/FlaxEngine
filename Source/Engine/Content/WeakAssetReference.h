@@ -115,20 +115,25 @@ public:
     WeakAssetReference(const WeakAssetReference& other)
     {
         OnSet(other.Get());
+        _objectId = other._objectId;
     }
 
     WeakAssetReference(WeakAssetReference&& other)
     {
-        OnSet(other.GetID(), T::TypeInitializer);
+        OnSet(other.Get());
+        _objectId = other._objectId;
         other.OnSet(nullptr);
+        other._objectId = AssetObjectId();
     }
 
     WeakAssetReference& operator=(WeakAssetReference&& other)
     {
         if (&other != this)
         {
-            OnSet(other.GetID(), T::TypeInitializer);
+            OnSet(other.Get());
+            _objectId = other._objectId;
             other.OnSet(nullptr);
+            other._objectId = AssetObjectId();
         }
         return *this;
     }
@@ -143,7 +148,8 @@ public:
 public:
     FORCE_INLINE WeakAssetReference& operator=(const WeakAssetReference& other)
     {
-        OnSet(other.GetID(), T::TypeInitializer);
+        OnSet(other.Get());
+        _objectId = other._objectId;
         return *this;
     }
 

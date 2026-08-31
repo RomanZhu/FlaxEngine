@@ -17,7 +17,7 @@
 
 bool JsonStorageProxy::IsValidExtension(const StringView& extension)
 {
-    return extension == DEFAULT_SCENE_EXTENSION || extension == DEFAULT_PREFAB_EXTENSION || extension == DEFAULT_JSON_EXTENSION;
+    return extension == DEFAULT_SCENE_EXTENSION || extension == DEFAULT_PREFAB_EXTENSION || extension == DEFAULT_JSON_EXTENSION || extension == TEXT("settings");
 }
 
 bool JsonStorageProxy::GetAssetInfo(const StringView& path, Guid& resultId, String& resultDataTypeName)

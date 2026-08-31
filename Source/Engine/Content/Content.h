@@ -51,6 +51,9 @@ public:
     /// <summary>Removes an explicit load location. Already loaded assets are unchanged.</summary>
     static void UnregisterAssetLoadLocation(const Guid& id);
 
+    /// <summary>Removes an explicit load location for one exact asset object. Already loaded assets are unchanged.</summary>
+    static void UnregisterAssetLoadLocation(const AssetObjectId& objectId);
+
     /// <summary>
     /// The time between content pool updates.
     /// </summary>
@@ -68,6 +71,9 @@ public:
     /// <returns>The assets cache.</returns>
     static AssetsCache* GetRegistry();
 
+    /// <summary>Gets the exact GameSettings bootstrap object from the cooked runtime catalog.</summary>
+    static AssetObjectId GetRuntimeGameSettingsObject();
+
 public:
     /// <summary>
     /// Finds the asset info by id.
@@ -79,6 +85,9 @@ public:
 
     /// <summary>Finds asset information by persistent source and local file identity. Cooked builds resolve through the runtime catalog registry.</summary>
     API_FUNCTION() static bool GetAssetInfo(const AssetObjectId& id, API_PARAM(Out) AssetInfo& info);
+
+    /// <summary>Resolves a serialized runtime asset GUID back to its persistent source and local file identity.</summary>
+    static AssetObjectId ResolveAssetObjectId(const Guid& runtimeId);
 
     /// <summary>
     /// Finds the asset info by path.
@@ -165,7 +174,7 @@ public:
     /// Gets the raw dictionary of assets (loaded or during load).
     /// </summary>
     /// <returns>The collection of assets.</returns>
-    static const Dictionary<Guid, Asset*, HeapAllocation>& GetAssetsRaw();
+    static const Dictionary<AssetObjectId, Asset*, HeapAllocation>& GetAssetsRaw();
 
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
@@ -194,6 +203,20 @@ public:
 
     /// <summary>Loads the explicit main object for a source asset.</summary>
     static Asset* LoadMainAssetAsync(const AssetGuid& asset, const ScriptingTypeHandle& type);
+
+    /// <summary>Loads one persistent imported object without collapsing its local file identity.</summary>
+    template<typename T>
+    FORCE_INLINE static T* LoadAssetAsync(const AssetObjectId& objectId)
+    {
+        return static_cast<T*>(LoadAssetAsync(objectId, T::TypeInitializer));
+    }
+
+    /// <summary>Loads the explicit main object for a source asset.</summary>
+    template<typename T>
+    FORCE_INLINE static T* LoadMainAssetAsync(const AssetGuid& asset)
+    {
+        return static_cast<T*>(LoadMainAssetAsync(asset, T::TypeInitializer));
+    }
 
     /// <summary>Loads an asset for passive editor presentation without scheduling artifact builds, including dependencies.</summary>
     static Asset* LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type);
@@ -290,6 +313,26 @@ public:
         return nullptr;
     }
 
+    /// <summary>Loads and waits for one persistent imported object without collapsing its local file identity.</summary>
+    template<typename T>
+    static T* LoadAsset(const AssetObjectId& objectId, double timeoutInMilliseconds = 30000.0)
+    {
+        auto asset = LoadAssetAsync<T>(objectId);
+        if (asset && !asset->WaitForLoaded(timeoutInMilliseconds))
+            return asset;
+        return nullptr;
+    }
+
+    /// <summary>Loads and waits for the explicit main object of a source asset.</summary>
+    template<typename T>
+    static T* LoadMainAsset(const AssetGuid& assetId, double timeoutInMilliseconds = 30000.0)
+    {
+        auto asset = LoadMainAssetAsync<T>(assetId);
+        if (asset && !asset->WaitForLoaded(timeoutInMilliseconds))
+            return asset;
+        return nullptr;
+    }
+
     /// <summary>
     /// Loads asset to the Content Pool and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
     /// Waits until asset will be loaded. It's equivalent to LoadAsync + WaitForLoaded.
@@ -316,6 +359,7 @@ public:
     static bool IsAssetTypeIdInvalid(const ScriptingTypeHandle& type, const ScriptingTypeHandle& assetType);
 
 private:
+    static Asset* LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
     static void BeginPassiveLoad();
     static void EndPassiveLoad();
     static bool IsPassiveLoad();
@@ -334,6 +378,9 @@ public:
     /// <param name="id">The id.</param>
     /// <returns>The found asset or null if not loaded.</returns>
     API_FUNCTION() static Asset* GetAsset(const Guid& id);
+
+    /// <summary>Finds the loaded asset with the exact persistent object identity.</summary>
+    API_FUNCTION() static Asset* GetAsset(const AssetObjectId& objectId);
 
 public:
     /// <summary>

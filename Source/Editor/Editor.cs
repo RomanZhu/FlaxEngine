@@ -363,9 +363,9 @@ namespace FlaxEditor
                 {
                 case GeneralOptions.StartupSceneModes.ProjectDefault:
                 {
-                    if (string.IsNullOrEmpty(GameProject.DefaultScene))
+                    if (!GameProject.DefaultScene.IsValid || !FlaxEngine.Content.GetAssetInfo(GameProject.DefaultScene, out var defaultSceneInfo))
                         break;
-                    JsonSerializer.ParseID(GameProject.DefaultScene, out var defaultSceneId);
+                    var defaultSceneId = defaultSceneInfo.ID;
                     Internal_LoadAsset(ref defaultSceneId);
                     break;
                 }
@@ -466,9 +466,9 @@ namespace FlaxEditor
                 {
                 case GeneralOptions.StartupSceneModes.ProjectDefault:
                 {
-                    if (string.IsNullOrEmpty(GameProject.DefaultScene))
+                    if (!GameProject.DefaultScene.IsValid || !FlaxEngine.Content.GetAssetInfo(GameProject.DefaultScene, out var defaultSceneInfo))
                         break;
-                    JsonSerializer.ParseID(GameProject.DefaultScene, out var defaultSceneId);
+                    var defaultSceneId = defaultSceneInfo.ID;
                     var defaultScene = ContentDatabase.Find(defaultSceneId);
                     if (defaultScene is SceneItem)
                     {

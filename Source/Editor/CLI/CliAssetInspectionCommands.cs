@@ -97,6 +97,24 @@ namespace FlaxEditor
             return CliCommandResult.Success(new { path = Globals.ProjectLibraryFolder });
         }
 
+        /// <summary>Refreshes canonical sources and waits for requested artifact builds to complete.</summary>
+        [CliCommand("assets.refresh", Description = "Refresh canonical assets and synchronously publish changed artifacts.", Access = CliCommandAccess.MutatesProject)]
+        public static CliCommandResult RefreshAssets(
+            [CliOption("force", Description = "Revalidate and rebuild assets even when their inputs are unchanged.")] bool force = false)
+        {
+            var options = ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceSynchronousImport;
+            if (force)
+                options |= ImportAssetOptions.ForceUpdate;
+            if (AssetDatabaseFacade.Refresh(options))
+                return CliCommandResult.Failure("FLX-ASSET-REFRESH-0006", "Canonical asset refresh failed.", AssetDatabaseFacade.GetDiagnostics());
+            return CliCommandResult.Success(new
+            {
+                revision = AssetDatabaseFacade.Revision,
+                records = AssetDatabaseFacade.GetRecords().Length,
+                forced = force,
+            });
+        }
+
         /// <summary>Reports legacy texture data needed for a future source/sidecar migration.</summary>
         [CliCommand("assets.texture.migration-inventory", Description = "Describe legacy texture source locations and embedded import settings.", Access = CliCommandAccess.ReadOnly)]
         public static CliCommandResult TextureMigrationInventory()
@@ -444,6 +462,13 @@ namespace FlaxEditor
             [CliOption("asset", Required = true)] string asset,
             [CliOption("reload", Description = "Reload the Content item before inspection.")] bool reload = false)
         {
+            if (AssetObjectId.TryParse(asset, out var requestedObject) && FlaxEngine.Content.GetAssetInfo(requestedObject, out var objectInfo))
+            {
+                var direct = FlaxEngine.Content.LoadAssetAsync(requestedObject);
+                if (direct == null || direct.WaitForLoaded())
+                    throw new InvalidOperationException($"Asset object '{requestedObject}' failed to load.");
+                return DescribeLoaded(direct.ID, objectInfo.Path, direct, true, null, requestedObject);
+            }
             if (Guid.TryParse(asset, out var requestedId) && FlaxEngine.Content.GetAssetInfo(requestedId, out var requestedInfo))
             {
                 var directItem = Editor.Instance.ContentDatabase.FindAsset(requestedId);
@@ -471,11 +496,12 @@ namespace FlaxEditor
             return DescribeLoaded(item.ID, item.Path, loaded, item.IsCanonicalSource, thumbnailInfo);
         }
 
-        private static object DescribeLoaded(Guid id, string path, Asset loaded, bool canonical, object thumbnailInfo = null)
+        private static object DescribeLoaded(Guid id, string path, Asset loaded, bool canonical, object thumbnailInfo = null, AssetObjectId? objectId = null)
         {
             return new
             {
                 id,
+                objectId = objectId ?? loaded.PersistentObjectId,
                 path,
                 type = loaded.GetType().FullName,
                 sourcePath = loaded.SourcePath,

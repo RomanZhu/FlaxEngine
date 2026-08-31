@@ -14,6 +14,7 @@ namespace FlaxEditor.Content
     [ContentContextMenu("New/Settings")]
     public class SettingsProxy : JsonAssetProxy
     {
+        private const string SettingsExtension = "settings";
         private readonly Type _type;
         private readonly SpriteHandle _thumbnail;
 
@@ -37,6 +38,9 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override string Name => "Settings";
         //public override string Name { get; } = Utilities.Utils.GetPropertyNameUI(_type.Name);
+
+        /// <inheritdoc />
+        public override string FileExtension => SettingsExtension;
 
         /// <inheritdoc />
         public override bool CanCreate(ContentFolder targetLocation)

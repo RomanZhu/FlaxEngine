@@ -4,6 +4,7 @@
 #include "Engine/Animations/Animations.h"
 #include "Engine/Animations/AnimEvent.h"
 #include "Engine/Content/Assets/SkinnedModel.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Graphics/Models/SkeletonData.h"
 #include "Engine/Level/Actor.h"
 #include "Engine/Scripting/Scripting.h"
@@ -254,7 +255,7 @@ bool AnimGraph::onParamCreated(Parameter* p)
         }
 
         // Peek the value
-        BaseModel = AssetObjectId::Main(AssetGuid((Guid)p->Value));
+        BaseModel = Content::ResolveAssetObjectId((Guid)p->Value);
     }
 
     return Graph::onParamCreated(p);

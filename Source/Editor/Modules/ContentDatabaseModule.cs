@@ -214,7 +214,13 @@ namespace FlaxEditor.Modules
             {
                 var record = records[i];
                 _assetRecordsById[record.ID] = record;
-                if (record.IsMain && record.SourceKind != AssetSourceKind.LegacyBinary && record.Status != AssetRecordStatus.MissingSource)
+                if (record.IsMain && record.SourceKind == AssetSourceKind.Folder && record.Status != AssetRecordStatus.MissingSource)
+                {
+                    TrackCanonicalFolder(ContentMutationPathUtils.Normalize(record.SourcePath));
+                    continue;
+                }
+                if (record.IsMain && record.SourceKind != AssetSourceKind.LegacyBinary &&
+                    record.SourceKind != AssetSourceKind.Folder && record.Status != AssetRecordStatus.MissingSource)
                 {
                     var sourcePath = ContentMutationPathUtils.Normalize(record.SourcePath);
                     var folder = ContentMutationPathUtils.Normalize(Path.GetDirectoryName(sourcePath));
@@ -259,6 +265,16 @@ namespace FlaxEditor.Modules
                 children.Add(child);
                 child = parent;
             }
+        }
+
+        private static bool IsProjectContentPath(string path)
+        {
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(Globals.ProjectContentFolder))
+                return false;
+            var root = Path.GetFullPath(Globals.ProjectContentFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var candidate = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return string.Equals(candidate, root, StringComparison.OrdinalIgnoreCase) ||
+                   candidate.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
         }
 
         private void QueueCanonicalSourceRefresh(params string[] paths)
@@ -374,7 +390,7 @@ namespace FlaxEditor.Modules
                     var samePath = !string.IsNullOrEmpty(previousPath) &&
                         string.Equals(ContentMutationPathUtils.Normalize(previousPath), ContentMutationPathUtils.Normalize(record.SourcePath), StringComparison.OrdinalIgnoreCase);
                     if (allowInPlace && record.Status != AssetRecordStatus.MissingSource && samePath && Find(record.ID) is AssetItem item &&
-                        item.TypeName == record.TypeName && record.IsMain != item.IsCanonicalSubAsset &&
+                        item.TypeName == GetCanonicalItemType(record) && record.IsMain != item.IsCanonicalSubAsset &&
                         string.Equals(ContentMutationPathUtils.Normalize(item.SourcePath), ContentMutationPathUtils.Normalize(record.SourcePath), StringComparison.OrdinalIgnoreCase))
                     {
                         item.SetAssetDatabaseRecord(record);
@@ -477,7 +493,8 @@ namespace FlaxEditor.Modules
             // Existing JSON assets embed their identity in the document. Other canonical
             // sources keep identity only in metadata and must retain their source bytes.
             if (item is AssetItem { IsCanonicalSource: true } assetItem)
-                return string.Equals(assetItem.ProcessorID, "Flax.ExistingJson", StringComparison.Ordinal);
+                return string.Equals(assetItem.ProcessorID, "Flax.ExistingJson", StringComparison.Ordinal) ||
+                       string.Equals(assetItem.ProcessorID, "Flax.Settings", StringComparison.Ordinal);
             return UseContentBackendForFileOperation(item);
         }
 
@@ -595,16 +612,32 @@ namespace FlaxEditor.Modules
             return null;
         }
 
+        private static string GetCanonicalItemType(AssetDatabaseRecordInfo record)
+        {
+            if (!string.Equals(record.ProcessorID, "Flax.Settings", StringComparison.Ordinal) ||
+                string.IsNullOrEmpty(record.SourcePath) || !File.Exists(record.SourcePath))
+                return record.TypeName;
+            try
+            {
+                return (string)JObject.Parse(File.ReadAllText(record.SourcePath))["TypeName"] ?? record.TypeName;
+            }
+            catch
+            {
+                return record.TypeName;
+            }
+        }
+
         private AssetItem ConstructCanonicalSourceItem(string path, AssetDatabaseRecordInfo record)
         {
             var id = record.ID;
-            var proxy = GetAssetProxy(record.TypeName, path);
-            var item = proxy?.ConstructItem(path, record.TypeName, ref id);
+            var itemType = GetCanonicalItemType(record);
+            var proxy = GetAssetProxy(itemType, path);
+            var item = proxy?.ConstructItem(path, itemType, ref id);
             if (item == null)
             {
-                var type = TypeUtils.GetType(record.TypeName).Type;
+                var type = TypeUtils.GetType(itemType).Type;
                 if (type != null && typeof(Asset).IsAssignableFrom(type))
-                    item = new BinaryAssetItem(path, ref id, record.TypeName, type, ContentItemSearchFilter.Other);
+                    item = new BinaryAssetItem(path, ref id, itemType, type, ContentItemSearchFilter.Other);
             }
             item?.SetAssetDatabaseRecord(record);
             return item;
@@ -2039,6 +2072,7 @@ namespace FlaxEditor.Modules
             var folder = node.Folder;
             var path = folder.Path;
             var canHaveAssets = node.CanHaveAssets;
+            var databaseOwnedContent = canHaveAssets && IsProjectContentPath(path);
 
             if (_isDuringFastSetup)
             {
@@ -2069,7 +2103,7 @@ namespace FlaxEditor.Modules
                             var recordExists = _assetRecordsById.TryGetValue(childAsset.ID, out var record);
                             var recordMatchesItem = recordExists &&
                                                     record.Status != AssetRecordStatus.MissingSource &&
-                                                    record.TypeName == childAsset.TypeName &&
+                                                    GetCanonicalItemType(record) == childAsset.TypeName &&
                                                     record.IsMain != childAsset.IsCanonicalSubAsset &&
                                                     string.Equals(ContentMutationPathUtils.Normalize(record.SourcePath), ContentMutationPathUtils.Normalize(childAsset.SourcePath), StringComparison.OrdinalIgnoreCase);
                             if (!recordMatchesItem)
@@ -2174,7 +2208,9 @@ namespace FlaxEditor.Modules
             }
 
             // Find files
-            var files = Directory.Exists(path) ? Directory.GetFiles(path, "*.*", SearchOption.TopDirectoryOnly) : Array.Empty<string>();
+            var files = !databaseOwnedContent && Directory.Exists(path)
+                ? Directory.GetFiles(path, "*.*", SearchOption.TopDirectoryOnly)
+                : Array.Empty<string>();
             if (canHaveAssets)
             {
                 LoadCanonicalSources(node);
@@ -2188,7 +2224,7 @@ namespace FlaxEditor.Modules
 
             // Get child directories
             var childFolderSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (Directory.Exists(path))
+            if (!databaseOwnedContent && Directory.Exists(path))
                 childFolderSet.UnionWith(Directory.GetDirectories(path));
             if (_canonicalChildFolders.TryGetValue(ContentMutationPathUtils.Normalize(path), out var canonicalFolders))
                 childFolderSet.UnionWith(canonicalFolders);

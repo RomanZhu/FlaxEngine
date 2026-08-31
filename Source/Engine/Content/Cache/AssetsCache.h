@@ -12,7 +12,7 @@
 #include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Platform/CriticalSection.h"
 #if !USE_EDITOR
-#include "Engine/Content/Artifacts/ArtifactKey.h"
+#include "Engine/Content/Build/RuntimeAssetCatalog.h"
 #endif
 
 struct AssetHeader;
@@ -114,17 +114,13 @@ public:
     typedef Dictionary<String, Guid> PathsMapping;
 
 private:
-    bool _isDirty = false;
 #if ASSETS_CACHE_EDITABLE
+    bool _isDirty = false;
     CriticalSection _locker;
-#endif
     Registry _registry;
     PathsMapping _pathsMapping;
-#if !USE_EDITOR
-    Dictionary<ContentHash, Guid> _runtimePathAliases;
-#endif
-#if !USE_EDITOR && !BUILD_RELEASE
-    Dictionary<Guid, StringView> _pathsMappingInv;
+#else
+    RuntimeAssetCatalog _runtimeCatalog;
 #endif
     String _path;
 
@@ -133,6 +129,9 @@ public:
     /// Gets amount of registered assets.
     /// </summary>
     int32 Size() const;
+
+    /// <summary>Gets the exact GameSettings bootstrap object from the cooked runtime catalog.</summary>
+    AssetObjectId GetGameSettingsObject() const;
 
 public:
     /// <summary>
@@ -179,6 +178,14 @@ public:
     /// <param name="info">The output asset info. Filled with valid values if method returns true.</param>
     /// <returns>True if found any asset, otherwise false.</returns>
     bool FindAsset(const Guid& id, AssetInfo& info);
+
+    /// <summary>
+    /// Finds exact asset object information. Cooked builds resolve this directly from RuntimeAssetCatalog.
+    /// </summary>
+    /// <param name="id">The persistent composite object id.</param>
+    /// <param name="info">The output asset info.</param>
+    /// <returns>True if found, otherwise false.</returns>
+    bool FindAsset(const AssetObjectId& id, AssetInfo& info);
 
     /// <summary>
     /// Checks if asset with given path is in registry.

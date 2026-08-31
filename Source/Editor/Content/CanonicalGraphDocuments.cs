@@ -91,17 +91,6 @@ namespace FlaxEditor.Content
             return FlaxEngine.Content.LoadAssetAsync<T>(item.ObjectID);
         }
 
-        public static T LoadWorkingArtifact<T>(AssetItem item) where T : Asset
-        {
-            var original = FlaxEngine.Content.LoadAssetAsync<T>(item.ObjectID);
-            if (original == null || original.WaitForLoaded())
-                return null;
-            var storagePath = (original as BinaryAsset)?.StoragePath;
-            if (string.IsNullOrEmpty(storagePath) || Editor.Instance.ContentEditing.FastTempAssetClone(storagePath, out var copyPath))
-                return null;
-            return FlaxEngine.Content.LoadAsync<T>(copyPath);
-        }
-
         public static byte[] GetSurface(AssetDocumentSession session)
         {
             if (session == null)

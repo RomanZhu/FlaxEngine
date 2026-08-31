@@ -255,6 +255,16 @@ namespace Flax.Build
         public Version Version;
 
         /// <summary>
+        /// The source asset system format required by this project.
+        /// </summary>
+        public int AssetSystemVersion;
+
+        /// <summary>
+        /// The source GUID of Content/Settings/ProjectSettingsIndex.settings.
+        /// </summary>
+        public string ProjectSettingsIndexGuid;
+
+        /// <summary>
         /// The project publisher company.
         /// </summary>
         public string Company = string.Empty;
@@ -528,6 +538,8 @@ namespace Flax.Build
                    ProjectPath == info.ProjectPath &&
                    ProjectFolderPath == info.ProjectFolderPath &&
                    EqualityComparer<Version>.Default.Equals(Version, info.Version) &&
+                   AssetSystemVersion == info.AssetSystemVersion &&
+                   ProjectSettingsIndexGuid == info.ProjectSettingsIndexGuid &&
                    Company == info.Company &&
                    Copyright == info.Copyright &&
                    EqualityComparer<Reference[]>.Default.Equals(References, info.References);
@@ -541,6 +553,8 @@ namespace Flax.Build
             hashCode = hashCode * -1521134295 + EqualityComparer<string>.Default.GetHashCode(ProjectPath);
             hashCode = hashCode * -1521134295 + EqualityComparer<string>.Default.GetHashCode(ProjectFolderPath);
             hashCode = hashCode * -1521134295 + EqualityComparer<Version>.Default.GetHashCode(Version);
+            hashCode = hashCode * -1521134295 + AssetSystemVersion.GetHashCode();
+            hashCode = hashCode * -1521134295 + EqualityComparer<string>.Default.GetHashCode(ProjectSettingsIndexGuid);
             hashCode = hashCode * -1521134295 + EqualityComparer<string>.Default.GetHashCode(Company);
             hashCode = hashCode * -1521134295 + EqualityComparer<string>.Default.GetHashCode(Copyright);
             hashCode = hashCode * -1521134295 + EqualityComparer<Reference[]>.Default.GetHashCode(References);

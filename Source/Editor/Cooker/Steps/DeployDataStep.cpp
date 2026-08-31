@@ -463,6 +463,8 @@ bool DeployDataStep::Perform(CookingData& data)
     data.AddRootEngineAsset(TEXT("Engine/Textures/NormalTexture"));
     data.AddRootEngineAsset(TEXT("Engine/Textures/BlackTexture"));
     data.AddRootEngineAsset(TEXT("Engine/Textures/WhiteTexture"));
+    data.AddRootEngineAsset(TEXT("Engine/Textures/Tiles_N"));
+    data.AddRootEngineAsset(TEXT("Engine/Textures/Tiles_M"));
     data.AddRootEngineAsset(TEXT("Engine/Textures/DefaultLensStarburst"));
     data.AddRootEngineAsset(TEXT("Engine/Textures/DefaultLensColor"));
     data.AddRootEngineAsset(TEXT("Engine/Textures/DefaultLensDirt"));
@@ -483,30 +485,39 @@ bool DeployDataStep::Perform(CookingData& data)
         data.AddRootEngineAsset(TEXT("Editor/Fonts/Roboto-Regular"));
 
     // Register custom assets (eg. plugins)
-    data.StepProgress(TEXT("Deploying custom data"), 30);
+    data.StepProgress(TEXT("Deploying custom data"), 0.3f);
     GameCooker::OnCollectAssets(data.RootAssets);
 
     // Register game assets
-    data.StepProgress(TEXT("Deploying game data"), 50);
+    data.StepProgress(TEXT("Deploying game data"), 0.5f);
     for (auto& e : buildSettings.AdditionalAssets)
-        data.AddRootAsset(e.GetRuntimeInstanceId());
+        data.AddRootAsset(e.GetID());
     for (auto& e : buildSettings.AdditionalScenes)
-        data.AddRootAsset(e.ID.ToRuntimeObjectGuid());
-    Array<String> files;
+        data.AddRootAsset(e.ID);
     for (auto& e : buildSettings.AdditionalAssetFolders)
     {
         String path = FileSystem::ConvertRelativePathToAbsolute(Globals::ProjectFolder, e);
-        if (FileSystem::DirectoryGetFiles(files, path))
+        FileSystem::NormalizePath(path);
+        int32 rootsAdded = 0;
+        for (const AssetRecord& record : data.DatabaseSnapshot.Records)
         {
-            data.Error(TEXT("Failed to find additional assets to deploy."));
+            if (record.SourceKind == AssetSourceKind::Folder || !AssetPathPolicy::IsSameOrChild(record.SourcePath.Get(), path))
+                continue;
+            data.AddRootAsset(AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId));
+            rootsAdded++;
+        }
+        if (rootsAdded == 0)
+        {
+            data.Error(String::Format(TEXT("Additional asset folder '{0}' contains no registered runtime objects."), path));
             return true;
         }
+        LOG(Info, "Adding {0} exact objects from cooker root '{1}'.", rootsAdded, path);
+    }
 
-        LOG(Info, "Adding {0} files from cooker root '{1}'.", files.Count(), path);
-
-        for (auto& q : files)
-            data.AddRootAsset(q);
-        files.Clear();
+    if (data.RootCollectionFailed)
+    {
+        data.Error(TEXT("One or more explicit cooker roots could not be resolved."));
+        return true;
     }
 
     return false;

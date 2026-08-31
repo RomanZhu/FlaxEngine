@@ -825,7 +825,7 @@ bool TextureTool::ImportTextureDirectXTex(ImageType type, const StringView& path
     }
     if (options.GenerateMipMaps && !isPowerOfTwo)
     {
-        LOG(Warning, "Cannot generate mip maps for texture '{}' that size is not power of two. Use Resize or Max Size to change dimensions.", StringUtils::GetFileName(path), width, height);
+        LOG(Info, "Mip-map generation skipped for non-power-of-two texture '{}' ({}x{}).", StringUtils::GetFileName(path), width, height);
     }
 
     // Allocate memory for texture data

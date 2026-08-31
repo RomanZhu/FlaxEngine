@@ -303,6 +303,8 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
                 return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid, duplicate, or self object dependency."));
         }
     }
+    if (_gameSettingsObject.IsValid() && !objects.Contains(_gameSettingsObject))
+        return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog GameSettings bootstrap object is absent from the object-level catalog."));
     for (const RuntimeAssetCatalogEntry& entry : _entries)
     {
         for (const AssetObjectId& dependency : entry.Dependencies)
@@ -374,6 +376,7 @@ bool RuntimeAssetCatalog::ToBytes(Array<byte>& output, AssetPipelineDiagnostic& 
     CatalogWriter payload;
     payload.WriteString(_buildID);
     payload.WriteHash(_targetHash);
+    payload.WriteObject(_gameSettingsObject);
     payload.WriteUInt32(_entries.Count());
     for (const RuntimeAssetCatalogEntry& entry : _entries)
     {
@@ -425,7 +428,7 @@ bool RuntimeAssetCatalog::FromBytes(const Span<byte>& input, RuntimeAssetCatalog
 
     CatalogReader payload(payloadBytes, payloadSize);
     uint32 entryCount;
-    if (payload.ReadString(result._buildID) || payload.ReadHash(result._targetHash) || payload.ReadUInt32(entryCount) ||
+    if (payload.ReadString(result._buildID) || payload.ReadHash(result._targetHash) || payload.ReadObject(result._gameSettingsObject) || payload.ReadUInt32(entryCount) ||
         entryCount == 0 || entryCount > MaximumEntries)
         return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog payload identity or entry count is invalid."));
     result._entries.Resize(entryCount, false);

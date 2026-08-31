@@ -9,6 +9,7 @@ using FlaxEditor.Modules;
 using FlaxEngine;
 using FlaxEngine.GUI;
 using FlaxEngine.Json;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor.Options
 {
@@ -106,21 +107,17 @@ namespace FlaxEditor.Options
 
             try
             {
-                // Load asset
-                var asset = FlaxEngine.Content.LoadAsync<JsonAsset>(_optionsFilePath);
-                if (asset == null)
+                // Editor options are user-local configuration, not a project asset.
+                var document = JObject.Parse(File.ReadAllText(_optionsFilePath));
+                var data = document["Data"];
+                if (data == null)
                 {
                     Editor.LogWarning("Invalid editor settings");
                     return;
                 }
-                if (asset.WaitForLoaded())
-                {
-                    Editor.LogError("Failed to load editor settings");
-                    return;
-                }
 
                 // Deserialize data
-                var assetObj = asset.CreateInstance();
+                var assetObj = JsonSerializer.Deserialize(data.ToString(), typeof(EditorOptions));
                 if (assetObj is EditorOptions options)
                 {
                     // Add missing custom options

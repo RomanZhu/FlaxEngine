@@ -7,6 +7,7 @@
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/Collections/Dictionary.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Scripting/ScriptingObject.h"
 
 class GameCooker;
@@ -339,12 +340,28 @@ public:
     /// The root assets collection to include in build in the first place (can be used only before CollectAssetsStep).
     /// Game cooker will find dependant assets and deploy them as well.
     /// </summary>
-    HashSet<Guid> RootAssets;
+    HashSet<AssetObjectId> RootAssets;
+
+    /// <summary>
+    /// Explicit read-only engine built-ins. These roots have no project database record and never participate in
+    /// source dependency discovery.
+    /// </summary>
+    HashSet<AssetObjectId> BuiltinRootAssets;
 
     /// <summary>
     /// The final assets collection to include in build (valid only after CollectAssetsStep).
     /// </summary>
-    HashSet<Guid> Assets;
+    HashSet<AssetObjectId> Assets;
+
+    /// <summary>
+    /// The immutable project asset database view captured during validation and used by all later cooker steps.
+    /// </summary>
+    AssetDatabaseSnapshot DatabaseSnapshot;
+
+    /// <summary>
+    /// True when root discovery encountered an invalid or unresolved explicit root.
+    /// </summary>
+    bool RootCollectionFailed = false;
 
     /// <summary>
     /// The final files collection to include in build (valid only after CollectAssetsStep).
@@ -424,14 +441,8 @@ public:
     /// <summary>
     /// Adds the asset to the build.
     /// </summary>
-    /// <param name="id">The asset id.</param>
-    void AddRootAsset(const Guid& id);
-
-    /// <summary>
-    /// Adds the asset to the build.
-    /// </summary>
-    /// <param name="path">The absolute asset path.</param>
-    void AddRootAsset(const String& path);
+    /// <param name="id">The persistent asset object id.</param>
+    void AddRootAsset(const AssetObjectId& id);
 
     /// <summary>
     /// Adds the internal engine asset to the build.

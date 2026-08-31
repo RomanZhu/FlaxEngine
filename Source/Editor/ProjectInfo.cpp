@@ -101,6 +101,12 @@ bool ProjectInfo::SaveProject()
         stream.JKEY("Version");
         stream.String(Version.ToString());
 
+        stream.JKEY("AssetSystemVersion");
+        stream.Int(AssetSystemVersion);
+
+        stream.JKEY("ProjectSettingsIndexGuid");
+        stream.Guid(ProjectSettingsIndexGuid);
+
         stream.JKEY("Company");
         stream.String(Company);
 
@@ -127,7 +133,12 @@ bool ProjectInfo::SaveProject()
         if (DefaultScene.IsValid())
         {
             stream.JKEY("DefaultScene");
-            stream.Guid(DefaultScene);
+            stream.StartObject();
+            stream.JKEY("guid");
+            stream.Guid(DefaultScene.Asset.Value);
+            stream.JKEY("fileId");
+            stream.Int64(DefaultScene.LocalId);
+            stream.EndObject();
         }
 
         if (DefaultSceneSpawn != Ray(Vector3::Zero, Vector3::Forward))
@@ -195,6 +206,8 @@ bool ProjectInfo::LoadProject(const String& projectPath)
         Version = ::Version(Version.Major(), Version.Minor(), Version.Build());
     if (Version.Build() == 0 && Version.Revision() == -1)
         Version = ::Version(Version.Major(), Version.Minor());
+    AssetSystemVersion = JsonTools::GetInt(document, "AssetSystemVersion", 0);
+    ProjectSettingsIndexGuid = JsonTools::GetGuid(document, "ProjectSettingsIndexGuid");
     Company = JsonTools::GetString(document, "Company", String::Empty);
     Copyright = JsonTools::GetString(document, "Copyright", String::Empty);
     GameTarget = JsonTools::GetString(document, "GameTarget", String::Empty);
@@ -243,7 +256,38 @@ bool ProjectInfo::LoadProject(const String& projectPath)
             }
         }
     }
-    DefaultScene = JsonTools::GetGuid(document, "DefaultScene");
+    DefaultScene = AssetObjectId();
+    const auto defaultSceneMember = document.FindMember("DefaultScene");
+    if (defaultSceneMember != document.MemberEnd())
+    {
+        const auto& value = defaultSceneMember->value;
+        if (value.IsString())
+        {
+            const Guid legacyGuid = JsonTools::GetGuid(value);
+            if (!legacyGuid.IsValid())
+            {
+                ShowProjectLoadError(TEXT("Invalid legacy DefaultScene GUID."), projectPath);
+                return true;
+            }
+            DefaultScene = AssetObjectId::Main(AssetGuid(legacyGuid));
+        }
+        else if (value.IsObject())
+        {
+            const Guid guid = JsonTools::GetGuid(value, "guid");
+            const auto fileIdMember = value.FindMember("fileId");
+            if (!guid.IsValid() || fileIdMember == value.MemberEnd() || !fileIdMember->value.IsInt64() || fileIdMember->value.GetInt64() == 0)
+            {
+                ShowProjectLoadError(TEXT("Invalid composite DefaultScene identifier."), projectPath);
+                return true;
+            }
+            DefaultScene = AssetObjectId(AssetGuid(guid), fileIdMember->value.GetInt64());
+        }
+        else
+        {
+            ShowProjectLoadError(TEXT("DefaultScene must contain a composite asset identifier."), projectPath);
+            return true;
+        }
+    }
     DefaultSceneSpawn = JsonTools::GetRay(document, "DefaultSceneSpawn", Ray(Vector3::Zero, Vector3::Forward));
     const auto minEngineVersionMember = document.FindMember("MinEngineVersion");
     if (minEngineVersionMember != document.MemberEnd())
@@ -295,11 +339,13 @@ bool ProjectInfo::LoadOldProject(const String& projectPath)
     Name = (const Char*)root.child_value(PUGIXML_TEXT("Name"));
     ProjectPath = projectPath;
     ProjectFolderPath = StringUtils::GetDirectoryName(projectPath);
-    DefaultScene = Guid::Empty;
+    DefaultScene = AssetObjectId();
     const auto defaultScene = root.child_value(PUGIXML_TEXT("DefaultSceneId"));
     if (defaultScene)
     {
-        Guid::Parse((const Char*)defaultScene, DefaultScene);
+        Guid legacyGuid;
+        if (!Guid::Parse((const Char*)defaultScene, legacyGuid))
+            DefaultScene = AssetObjectId::Main(AssetGuid(legacyGuid));
     }
     DefaultSceneSpawn.Position = GetVector3FromXml(root, PUGIXML_TEXT("DefaultSceneSpawnPos"), Vector3::Zero);
     DefaultSceneSpawn.Direction = Quaternion::Euler(GetVector3FromXml(root, PUGIXML_TEXT("DefaultSceneSpawnDir"), Vector3::Zero)) * Vector3::Forward;

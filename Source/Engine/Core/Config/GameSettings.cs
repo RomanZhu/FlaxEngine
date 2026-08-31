@@ -229,7 +229,7 @@ namespace FlaxEditor.Content.Settings
         /// </summary>
         public static string GameSettingsAssetPath
         {
-            get { return StringUtils.CombinePaths(Globals.ProjectContentFolder, "GameSettings.json"); }
+            get { return LoadAsset()?.Path ?? string.Empty; }
         }
 
         /// <summary>
@@ -238,8 +238,13 @@ namespace FlaxEditor.Content.Settings
         /// <returns>The loaded game settings asset.</returns>
         public static JsonAsset LoadAsset()
         {
-            return FlaxEngine.Content.Load<JsonAsset>(GameSettingsAssetPath);
+            GetGameSettingsObjectIdInternal(out var gameSettingsObject);
+            var asset = FlaxEngine.Content.LoadAssetAsync<JsonAsset>(gameSettingsObject);
+            return asset && !asset.WaitForLoaded() ? asset : null;
         }
+
+        [LibraryImport("FlaxEngine", EntryPoint = "GameSettingsInternal_GetGameSettingsObjectId")]
+        private static partial void GetGameSettingsObjectIdInternal(out AssetObjectId result);
 
         /// <summary>
         /// Loads the game settings asset.
@@ -508,7 +513,7 @@ namespace FlaxEditor.Content.Settings
             }
 
             // Create new settings asset and link it to the game settings
-            var path = StringUtils.CombinePaths(Globals.ProjectContentFolder, "Settings", Utilities.Utils.GetPropertyNameUI(typeof(T).Name) + ".json");
+            var path = StringUtils.CombinePaths(Globals.ProjectContentFolder, "Settings", Utilities.Utils.GetPropertyNameUI(typeof(T).Name) + ".settings");
             if (Editor.SaveJsonAsset(path, obj))
                 return true;
             asset = FlaxEngine.Content.LoadAsync<JsonAsset>(path);

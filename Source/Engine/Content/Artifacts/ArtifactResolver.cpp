@@ -143,6 +143,9 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
     diagnostic = AssetPipelineDiagnostic();
     if (!IsConfigured() || !request.AssetID.IsValid() || request.OutputKind.IsEmpty())
         return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, StringView::Empty, TEXT("Artifact resolver is not configured or the request is incomplete."));
+    constexpr int32 MaxExactResolveAttempts = 8;
+    for (int32 resolveAttempt = 0; resolveAttempt < MaxExactResolveAttempts; resolveAttempt++)
+    {
     AssetRecord record;
     if (!_database->TryGetRecord(request.AssetID, record))
         return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Asset database contains no record for the requested GUID."));
@@ -189,6 +192,8 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
     ArtifactResolutionPlan plan;
     if (_planProvider(record, request, plan, diagnostic) || plan.CurrentInputFingerprint.IsZero() || !plan.BuildRequest.Key.IsValid())
     {
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated && resolveAttempt + 1 < MaxExactResolveAttempts)
+            continue;
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Artifact resolution plan is incomplete."));
         return true;
@@ -231,14 +236,22 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
     if (!handle.TryGetResult(buildResult) || buildResult.Status != AssetBuildJobStatus::Succeeded)
     {
         diagnostic = buildResult.Diagnostic;
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated && resolveAttempt + 1 < MaxExactResolveAttempts)
+            continue;
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Exact artifact build failed."));
         diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
         return true;
     }
     AssetRecord currentRecord;
-    if (!_database->TryGetRecord(request.AssetID, currentRecord) || currentRecord.DatabaseRevision != record.DatabaseRevision)
+    if (!_database->TryGetRecord(request.AssetID, currentRecord))
+        return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, record.SourcePath.Get(), TEXT("Asset database lost the requested record while waiting for the exact build."));
+    if (currentRecord.DatabaseRevision != record.DatabaseRevision)
+    {
+        if (resolveAttempt + 1 < MaxExactResolveAttempts)
+            continue;
         return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, request, record.SourcePath.Get(), TEXT("Asset database changed while waiting for the exact build."));
+    }
     ArtifactInspection built;
     Inspect(_libraryRoot, currentRecord, request, built);
     const bool builtCompatibilityMatches = request.RequiredCompatibility.IsEmpty() || built.IsCompatible;
@@ -256,6 +269,8 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
     result.IsExact = true;
     result.IsLastGood = false;
     return false;
+    }
+    return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, request, StringView::Empty, TEXT("Asset database did not stabilize while resolving the exact artifact."));
 }
 
 bool ArtifactResolver::ResolveLoadLocation(const ArtifactRequest& request, AssetLoadLocation& result, AssetPipelineDiagnostic& diagnostic)

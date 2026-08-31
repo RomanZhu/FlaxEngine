@@ -24,20 +24,37 @@
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Streaming/StreamingSettings.h"
 #include "Engine/Serialization/Serialization.h"
-#if FLAX_TESTS || USE_EDITOR
-#include "Engine/Platform/FileSystem.h"
+#include "Engine/Scripting/Internal/InternalCalls.h"
+#if USE_EDITOR
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Editor/Editor.h"
+#include "Editor/ProjectInfo.h"
 #endif
 
 class GameSettingsService : public EngineService
 {
 public:
     GameSettingsService()
-        : EngineService(TEXT("GameSettings"), -70)
+        : EngineService(TEXT("GameSettings"), -500)
     {
     }
 
     bool Init() override
     {
+#if USE_EDITOR
+        if (!Editor::Project || Editor::Project->AssetSystemVersion != 2)
+        {
+            LOG(Error, "This project uses the legacy Flax asset system and cannot be opened by this engine build. This branch requires source assets and version-2 metadata using GUID plus local-file-ID references.");
+            return true;
+        }
+        if (!Editor::Project->ProjectSettingsIndexGuid.IsValid())
+        {
+            LOG(Error, "Project descriptor is missing a valid ProjectSettingsIndexGuid.");
+            return true;
+        }
+        if (AssetDatabaseFacade::LoadOrScan(true))
+            return true;
+#endif
         return GameSettings::Load();
     }
 };
@@ -107,6 +124,35 @@ IMPLEMENT_ENGINE_SETTINGS_GETTER(WebPlatformSettings, WebPlatform);
 GameSettingsService GameSettingsServiceInstance;
 AssetReference<JsonAsset> GameSettingsAsset;
 
+AssetObjectId GameSettings::GetGameSettingsObjectId()
+{
+#if USE_EDITOR
+    if (!Editor::Project || !Editor::Project->ProjectSettingsIndexGuid.IsValid())
+        return AssetObjectId();
+    const AssetObjectId indexObject = AssetObjectId::Main(AssetGuid(Editor::Project->ProjectSettingsIndexGuid));
+    const AssetReference<JsonAsset> indexAsset = Content::LoadAssetAsync<JsonAsset>(indexObject);
+    if (!indexAsset || indexAsset->WaitForLoaded() || !indexAsset->Data || !indexAsset->Data->IsObject())
+    {
+        LOG(Error, "Failed to load project settings index object {0} through the asset pipeline.", indexObject);
+        return AssetObjectId();
+    }
+    const auto gameSettings = indexAsset->Data->FindMember("GameSettings");
+    AssetObjectId result;
+    if (gameSettings != indexAsset->Data->MemberEnd())
+        Serialization::Deserialize(gameSettings->value, result, nullptr);
+    if (!result.IsValid())
+        LOG(Error, "Project settings index does not contain a valid GameSettings object reference.");
+    return result;
+#else
+    return Content::GetRuntimeGameSettingsObject();
+#endif
+}
+
+DEFINE_INTERNAL_CALL(void) GameSettingsInternal_GetGameSettingsObjectId(AssetObjectId* result)
+{
+    *result = GameSettings::GetGameSettingsObjectId();
+}
+
 GameSettings* GameSettings::Get()
 {
     if (!GameSettingsAsset)
@@ -114,26 +160,17 @@ GameSettings* GameSettings::Get()
         // Load root game settings asset.
         // It may be missing in editor during dev but must be ready in the build game.
         PROFILE_CPU();
-        const auto assetPath = Globals::ProjectContentFolder / TEXT("GameSettings.json");
 #if FLAX_TESTS
         // Silence missing GameSettings during test run before Editor creates it (not important)
-        if (!FileSystem::FileExists(assetPath))
-            return nullptr;
+        return nullptr;
 #endif
-#if USE_EDITOR
-        // Log once missing GameSettings in Editor
-        if (!FileSystem::FileExists(assetPath))
+        const AssetObjectId gameSettingsObject = GetGameSettingsObjectId();
+        if (!gameSettingsObject.IsValid())
         {
-            static bool LogOnce = true;
-            if (LogOnce)
-            {
-                LogOnce = false;
-                LOG(Error, "Missing file game settings asset ({0})", assetPath);
-            }
+            LOG(Error, "Runtime catalog is missing the GameSettings bootstrap object.");
             return nullptr;
         }
-#endif
-        GameSettingsAsset = Content::LoadAsync<JsonAsset>(assetPath);
+        GameSettingsAsset = Content::LoadAssetAsync<JsonAsset>(gameSettingsObject);
         if (GameSettingsAsset == nullptr)
         {
             LOG(Error, "Missing game settings asset.");
@@ -174,9 +211,9 @@ bool GameSettings::Load()
     // Preload all settings assets
 #define PRELOAD_SETTINGS(type) \
     { \
-        if (settings->type) \
+        if (settings->type.IsValid()) \
         { \
-            Content::LoadAsync<JsonAsset>(settings->type); \
+            Content::LoadAssetAsync<JsonAsset>(settings->type); \
         } \
         else \
         { \
@@ -195,8 +232,8 @@ bool GameSettings::Load()
     PRELOAD_SETTINGS(GameCooking);
     PRELOAD_SETTINGS(Streaming);
 #undef PRELOAD_SETTINGS
-    if (settings->AssetPipeline)
-        Content::LoadAsync<JsonAsset>(settings->AssetPipeline);
+    if (settings->AssetPipeline.IsValid())
+        Content::LoadAssetAsync<JsonAsset>(settings->AssetPipeline);
 
     // Apply the game settings to the engine
     settings->Apply();
@@ -242,25 +279,23 @@ void GameSettings::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
     CompanyName = JsonTools::GetString(stream, "CompanyName");
     CopyrightNotice = JsonTools::GetString(stream, "CopyrightNotice");
     Version = JsonTools::GetString(stream, "Version");
-    Icon = JsonTools::GetGuid(stream, "Icon");
+    DESERIALIZE(Icon);
     const auto firstScene = stream.FindMember("FirstScene");
     if (firstScene != stream.MemberEnd())
         Serialization::Deserialize(firstScene->value, FirstScene, modifier);
     NoSplashScreen = JsonTools::GetBool(stream, "NoSplashScreen", NoSplashScreen);
-    SplashScreen = JsonTools::GetGuid(stream, "SplashScreen");
+    DESERIALIZE(SplashScreen);
     CustomSettings.Clear();
     const auto customSettings = stream.FindMember("CustomSettings");
-    if (customSettings != stream.MemberEnd() && (customSettings->value.IsObject() || customSettings->value.IsArray()))
+    if (customSettings != stream.MemberEnd() && customSettings->value.IsObject())
     {
         auto& items = customSettings->value;
         for (auto it = items.MemberBegin(); it != items.MemberEnd(); ++it)
         {
-            if (it->value.IsString() && it->value.GetStringLength() == 32)
-            {
-                String key = it->name.GetText();
-                const Guid value = JsonTools::GetGuid(it->value);
-                CustomSettings[key] = value;
-            }
+            AssetObjectId value;
+            Serialization::Deserialize(it->value, value, modifier);
+            if (value.IsValid())
+                CustomSettings[it->name.GetText()] = value;
         }
     }
 

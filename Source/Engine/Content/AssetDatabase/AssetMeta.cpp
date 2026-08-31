@@ -170,6 +170,17 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
     result.Processor.ID = String(StringAnsiView(importerId->value.GetString(), importerId->value.GetStringLength()));
     if (!IsProcessorIdValid(result.Processor.ID))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata importer ID has an invalid shape."));
+    if (result.FolderAsset)
+        result.SourceKind = AssetSourceKind::Folder;
+    else if (result.Processor.ID == TEXT("Flax.ExistingJson"))
+        result.SourceKind = AssetSourceKind::ExistingJson;
+    else if (result.Processor.ID == TEXT("Flax.GraphDocument") || result.Processor.ID == TEXT("Flax.Text") ||
+             result.Processor.ID == TEXT("Flax.MaterialInstance") || result.Processor.ID == TEXT("Flax.SkeletonMask") ||
+             result.Processor.ID == TEXT("Flax.SceneAnimation") || result.Processor.ID == TEXT("Flax.ParticleSystem") ||
+             result.Processor.ID == TEXT("Flax.CollisionData") || result.Processor.ID == TEXT("Flax.Settings"))
+        result.SourceKind = AssetSourceKind::TextDocument;
+    else
+        result.SourceKind = AssetSourceKind::ImportedSource;
     result.Processor.SettingsVersion = importerVersion->value.GetInt();
     if (CanonicalJsonWriter::Write(settings->value, result.Processor.SettingsJson, canonicalError))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Importer settings cannot be canonicalized."));

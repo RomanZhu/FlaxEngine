@@ -3,6 +3,7 @@
 #include "Animation.h"
 #include "SkinnedModel.h"
 #include "Engine/Core/Log.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Animations/CurveSerialization.h"
 #include "Engine/Animations/AnimEvent.h"
@@ -369,7 +370,7 @@ bool Animation::SaveTimeline(BytesContainer& data)
                 stream.Read(nestedAnim.Duration);
                 stream.Read(nestedAnim.Speed);
                 stream.Read(nestedAnim.StartTime);
-                nestedAnim.Anim = AssetObjectId::Main(AssetGuid(id));
+                nestedAnim.Anim = Content::ResolveAssetObjectId(id);
                 nestedAnim.Enabled = (trackFlags & (byte)SceneAnimation::Track::Flags::Mute) == 0;
                 nestedAnim.Loop = (trackFlags & (byte)SceneAnimation::Track::Flags::Loop) != 0;
                 break;
@@ -714,7 +715,7 @@ Asset::LoadResult Animation::load()
             nestedAnim.Loop = flags & 2;
             Guid id;
             stream.Read(id);
-            nestedAnim.Anim = AssetObjectId::Main(AssetGuid(id));
+            nestedAnim.Anim = Content::ResolveAssetObjectId(id);
             stream.Read(nestedAnim.Time);
             stream.Read(nestedAnim.Duration);
             stream.Read(nestedAnim.Speed);

@@ -629,7 +629,7 @@ bool TextureTool::ImportTextureStb(ImageType type, const StringView& path, Textu
     }
     if (options.GenerateMipMaps && !isPowerOfTwo)
     {
-        LOG(Warning, "Cannot generate mip maps for texture '{}' that size is not power of two. Use Resize or Max Size to change dimensions.", StringUtils::GetFileName(path), width, height);
+        LOG(Info, "Mip-map generation skipped for non-power-of-two texture '{}' ({}x{}).", StringUtils::GetFileName(path), width, height);
     }
 
     // Decompress if texture is compressed (next steps need decompressed input data, for eg. mip maps generation or format changing)

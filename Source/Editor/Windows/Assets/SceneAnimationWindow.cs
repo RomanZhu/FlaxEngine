@@ -856,7 +856,7 @@ namespace FlaxEditor.Windows.Assets
         protected override SceneAnimation LoadAsset()
         {
             if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return CanonicalGraphDocuments.LoadWorkingArtifact<SceneAnimation>(_item);
+                return FlaxEngine.Content.LoadAssetAsync<SceneAnimation>(_item.ObjectID);
             return base.LoadAsset();
         }
 

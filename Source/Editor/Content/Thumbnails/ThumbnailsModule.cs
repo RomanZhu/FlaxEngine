@@ -16,6 +16,7 @@ namespace FlaxEditor.Content.Thumbnails
     /// <seealso cref="FlaxEditor.Modules.EditorModule" />
     public sealed class ThumbnailsModule : EditorModule, IContentItemOwner
     {
+        private static readonly bool ThumbnailsEnabled = false;
         private const int CacheVersion = 5;
 
         /// <summary>
@@ -48,6 +49,11 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (item == null)
                 throw new ArgumentNullException();
+            if (!ThumbnailsEnabled)
+            {
+                item.Thumbnail = item.DefaultThumbnail;
+                return;
+            }
             if (_task == null)
             {
                 _pendingRequests.Add(item);
@@ -67,11 +73,13 @@ namespace FlaxEditor.Content.Thumbnails
             if (assetItem == null)
                 return;
 
-            // Ensure that there is valid proxy for that item
+            // Canonical records may intentionally have no thumbnail-capable proxy
+            // (for example settings or an unsupported imported document type).
             var proxy = Editor.ContentDatabase.GetProxy(item) as AssetProxy;
             if (proxy == null)
             {
-                Editor.LogWarning($"Cannot generate preview for item {item.Path}. Cannot find proxy for it.");
+                if (!assetItem.IsCanonicalSource)
+                    Editor.LogWarning($"Cannot generate preview for item {item.Path}. Cannot find proxy for it.");
                 return;
             }
             var cacheVersion = GetCacheVersion(assetItem, proxy);
@@ -319,6 +327,8 @@ namespace FlaxEditor.Content.Thumbnails
         /// <inheritdoc />
         public override void OnInit()
         {
+            if (!ThumbnailsEnabled)
+                return;
             if (Editor.IsHeadlessMode || (GPUDevice.Instance != null && GPUDevice.Instance.RendererType == RendererType.Null))
                 return;
 
@@ -485,9 +495,18 @@ namespace FlaxEditor.Content.Thumbnails
 
         private void RemoveRequest(ThumbnailRequest request)
         {
-            request.Dispose();
-            _requests.Remove(request);
-            request.Item.RemoveReference(this);
+            // Unlink first so cleanup callbacks cannot re-enter and cancel the same
+            // request again, and a failing cleanup cannot poison the whole queue.
+            if (!_requests.Remove(request))
+                return;
+            try
+            {
+                request.Dispose();
+            }
+            finally
+            {
+                request.Item.RemoveReference(this);
+            }
         }
 
         private void RemoveRequest(AssetItem item)

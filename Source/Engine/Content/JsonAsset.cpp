@@ -411,6 +411,10 @@ Asset::LoadResult JsonAsset::loadAsset()
     if (result != LoadResult::Ok || IsInternalType())
         return result;
 
+    // Generic JSON documents are data-only assets and have no script instance.
+    if (DataTypeName == JsonAsset::TypeName)
+        return LoadResult::Ok;
+
     if (CreateInstance())
         return LoadResult::Failed;
 

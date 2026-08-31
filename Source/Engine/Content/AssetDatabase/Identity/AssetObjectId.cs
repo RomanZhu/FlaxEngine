@@ -33,11 +33,11 @@ namespace FlaxEngine
                 return false;
             int separator = value.LastIndexOf(':');
             if (separator <= 0 || separator == value.Length - 1 ||
-                !Guid.TryParseExact(value.Substring(0, separator), "N", out var guid) ||
+                !AssetGuid.TryParse(value.Substring(0, separator), out var asset) ||
                 !long.TryParse(value.Substring(separator + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out var localId) ||
                 localId == 0)
                 return false;
-            result = new AssetObjectId(new AssetGuid(guid), localId);
+            result = new AssetObjectId(asset, localId);
             return true;
         }
 

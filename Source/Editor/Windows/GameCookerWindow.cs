@@ -843,7 +843,7 @@ namespace FlaxEditor.Windows
         private string _preBuildAction;
         private string _postBuildAction;
         private BuildPreset[] _data;
-        private bool _isDataDirty, _exitOnBuildEnd, _lastBuildFailed;
+        private bool _isDataDirty, _exitOnBuildEnd, _lastBuildFailed, _buildCompletionPending;
         private Action<bool> _buildQueueEnded;
 
         /// <summary>
@@ -876,6 +876,8 @@ namespace FlaxEditor.Windows
         {
             if (type == GameCooker.EventType.BuildStarted)
             {
+                _buildCompletionPending = true;
+
                 // Execute pre-build action
                 if (!string.IsNullOrEmpty(_preBuildAction))
                     ExecuteAction(_preBuildAction);
@@ -883,6 +885,8 @@ namespace FlaxEditor.Windows
             }
             else if (type == GameCooker.EventType.BuildDone)
             {
+                _buildCompletionPending = false;
+
                 // Execute post-build action
                 if (!string.IsNullOrEmpty(_postBuildAction))
                     ExecuteAction(_postBuildAction);
@@ -890,6 +894,7 @@ namespace FlaxEditor.Windows
             }
             else if (type == GameCooker.EventType.BuildFailed)
             {
+                _buildCompletionPending = false;
                 _postBuildAction = null;
                 _lastBuildFailed = true;
             }
@@ -1326,6 +1331,11 @@ namespace FlaxEditor.Windows
             // Building queue
             if (!GameCooker.IsRunning)
             {
+                // Native completion is posted to the main thread after IsRunning is cleared.
+                // Wait for that event so a failed build cannot complete the queue as successful.
+                if (_buildCompletionPending)
+                    return;
+
                 if (_buildingQueue.Count > 0)
                 {
                     var item = _buildingQueue.Dequeue();
@@ -1335,6 +1345,8 @@ namespace FlaxEditor.Windows
                     _postBuildAction = target.PostBuildAction;
 
                     bool failed = GameCooker.Build(target.Platform, target.Mode, target.Output, item.Options, target.CustomDefines, item.PresetName, target.Name);
+                    if (!failed)
+                        _buildCompletionPending = true;
                     if (failed && _exitOnBuildEnd)
                         FinishBuildQueue(true);
                 }

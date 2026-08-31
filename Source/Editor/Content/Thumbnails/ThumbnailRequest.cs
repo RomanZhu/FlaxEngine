@@ -173,17 +173,20 @@ namespace FlaxEditor.Content.Thumbnails
         public void Dispose()
         {
             if (State == States.Disposed)
-                throw new InvalidOperationException();
+                return;
 
-            if (State != States.Created && State != States.Waiting)
-            {
-                // Cleanup
-                Proxy.OnThumbnailDrawCleanup(this);
-                Asset = null;
-            }
-
-            Tag = null;
+            var cleanup = State != States.Created && State != States.Waiting;
             State = States.Disposed;
+            try
+            {
+                if (cleanup)
+                    Proxy.OnThumbnailDrawCleanup(this);
+            }
+            finally
+            {
+                Asset = null;
+                Tag = null;
+            }
         }
     }
 }

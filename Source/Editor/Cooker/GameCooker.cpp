@@ -102,7 +102,7 @@ namespace GameCookerImpl
 
     void CallEvent(GameCooker::EventType type);
     void ReportProgress(const String& info, float totalProgress);
-    void OnCollectAssets(HashSet<Guid>& assets);
+    void OnCollectAssets(HashSet<AssetObjectId>& assets);
     bool Build();
     int32 ThreadFunction();
 
@@ -121,7 +121,7 @@ Delegate<const String&, float> GameCooker::OnProgress;
 Action GameCooker::DeployFiles;
 Action GameCooker::PostProcessFiles;
 Action GameCooker::PackageFiles;
-Delegate<HashSet<Guid>&> GameCooker::OnCollectAssets;
+Delegate<HashSet<AssetObjectId>&> GameCooker::OnCollectAssets;
 
 const Char* ToString(const BuildPlatform platform)
 {
@@ -341,28 +341,15 @@ void CookingData::StepProgress(const String& info, const float stepProgress) con
     ReportProgress(info, totalProgress);
 }
 
-void CookingData::AddRootAsset(const Guid& id)
+void CookingData::AddRootAsset(const AssetObjectId& id)
 {
+    if (!id.IsValid())
+    {
+        RootCollectionFailed = true;
+        LOG(Error, "Cannot add an invalid asset object as a cooker root.");
+        return;
+    }
     RootAssets.Add(id);
-}
-
-void CookingData::AddRootAsset(const String& path)
-{
-    const AssetDatabaseSnapshot database = AssetDatabase::Get().GetSnapshot();
-    for (const AssetRecord& record : database.Records)
-    {
-        if (record.IsMainAsset() && FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), path))
-        {
-            LOG(Info, "Adding canonical cooker root {0} from '{1}'.", record.ID, path);
-            RootAssets.Add(record.ID);
-            return;
-        }
-    }
-    AssetInfo info;
-    if (Content::GetAssetInfo(path, info))
-    {
-        RootAssets.Add(info.ID);
-    }
 }
 
 void CookingData::AddRootEngineAsset(const String& internalPath)
@@ -371,7 +358,14 @@ void CookingData::AddRootEngineAsset(const String& internalPath)
     AssetInfo info;
     if (Content::GetAssetInfo(path, info))
     {
-        RootAssets.Add(info.ID);
+        const AssetObjectId object = info.ObjectID.IsValid() ? info.ObjectID : AssetObjectId::Main(AssetGuid(info.ID));
+        RootAssets.Add(object);
+        BuiltinRootAssets.Add(object);
+    }
+    else
+    {
+        RootCollectionFailed = true;
+        LOG(Error, "Cannot resolve required engine built-in cooker root '{0}'.", internalPath);
     }
 }
 
@@ -666,7 +660,7 @@ void GameCookerImpl::ReportProgress(const String& info, float totalProgress)
     ProgressValue = totalProgress;
 }
 
-void GameCookerImpl::OnCollectAssets(HashSet<Guid>& assets)
+void GameCookerImpl::OnCollectAssets(HashSet<AssetObjectId>& assets)
 {
     PROFILE_MEM(Editor);
     if (Internal_OnCollectAssets == nullptr)
@@ -688,7 +682,7 @@ void GameCookerImpl::OnCollectAssets(HashSet<Guid>& assets)
 
     if (list)
     {
-        auto ids = MUtils::ToSpan<Guid>(list);
+        auto ids = MUtils::ToSpan<AssetObjectId>(list);
         for (int32 i = 0; i < ids.Length(); i++)
             assets.Add(ids[i]);
     }
@@ -870,7 +864,7 @@ void GameCookerService::Dispose()
     // End thread
     if (IsThreadRunning)
     {
-        LOG(Warning, "Waiting for the Game Cooker thread end...");
+        LOG(Info, "Waiting for the Game Cooker thread end...");
 
         Platform::AtomicStore(&CancelThreadFlag, 1);
         ThreadCond.NotifyOne();

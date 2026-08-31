@@ -7,6 +7,7 @@
 #include "GraphDocumentProcessor.h"
 #include "AuthoredAssetProcessor.h"
 #include "ImportedSourceProcessor.h"
+#include "SettingsProcessor.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
@@ -160,6 +161,7 @@ namespace
 bool GraphPipelineService::OwnsProcessor(const StringView& processorID)
 {
     return processorID == GraphDocumentProcessor::ProcessorID() ||
+        processorID == SettingsProcessor::ProcessorID() ||
         AuthoredAssetProcessor::Owns(processorID) ||
         ImportedSourceProcessor::Owns(processorID);
 }
@@ -194,6 +196,7 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     extraIds.Add(AuthoredAssetProcessor::SceneAnimationID());
     extraIds.Add(AuthoredAssetProcessor::ParticleSystemID());
     extraIds.Add(AuthoredAssetProcessor::CollisionDataID());
+    extraIds.Add(SettingsProcessor::ProcessorID());
     extraIds.Add(ImportedSourceProcessor::FontID());
     extraIds.Add(ImportedSourceProcessor::ShaderID());
     extraIds.Add(ImportedSourceProcessor::VideoID());
@@ -209,9 +212,13 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
         if (AssetProcessorRegistry::Get().TryGetDescriptor(id, existing))
             continue;
         AssetProcessorRegistration registration;
-        AssetProcessorDescriptor descriptor = AuthoredAssetProcessor::Owns(id)
-            ? AuthoredAssetProcessor::CreateDescriptor(id)
-            : ImportedSourceProcessor::CreateDescriptor(id);
+        AssetProcessorDescriptor descriptor;
+        if (id == SettingsProcessor::ProcessorID())
+            descriptor = SettingsProcessor::CreateDescriptor();
+        else if (AuthoredAssetProcessor::Owns(id))
+            descriptor = AuthoredAssetProcessor::CreateDescriptor(id);
+        else
+            descriptor = ImportedSourceProcessor::CreateDescriptor(id);
         if (AssetProcessorRegistry::Get().Register(MoveTemp(descriptor), registration, diagnostic))
             return true;
         state.ExtraRegistrations.Add(MoveTemp(registration));
@@ -335,6 +342,11 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         else if (AuthoredAssetProcessor::Owns(record.ProcessorID))
         {
             if (AuthoredAssetProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+                return true;
+        }
+        else if (record.ProcessorID == SettingsProcessor::ProcessorID())
+        {
+            if (SettingsProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
                 return true;
         }
         else if (ImportedSourceProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))

@@ -771,7 +771,7 @@ bool ProcessMesh(ModelData& result, OpenFbxImporterData& data, const ofbx::Mesh*
             channel.Get()[i] = uv;
         }
         if (hadInvalidIndices)
-            LOG(Warning, "Mesh '{0}' UV channel {1} contains incomplete polygon-vertex data; missing values were replaced with zero.", mesh.Name, channelIndex);
+            LOG(Info, "Mesh '{0}' UV channel {1} contains incomplete polygon-vertex data; missing values were replaced with zero.", mesh.Name, channelIndex);
         if (data.ConvertRH)
         {
             for (int v = 0; v < vertexCount; v++)

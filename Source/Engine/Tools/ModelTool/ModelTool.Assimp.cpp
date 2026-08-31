@@ -76,12 +76,15 @@ private:
 
     void OnWarn(const char* message) override
     {
-        Write(TEXT("Warn"), message);
+        Write(TEXT("Diagnostic"), message);
     }
 
     void OnError(const char* message) override
     {
-        Write(TEXT("Error"), message);
+        // Assimp emits recoverable post-process diagnostics through its error
+        // callback even when ReadFile succeeds. The actual failed import below
+        // is still reported as a warning with its complete error string.
+        Write(TEXT("Diagnostic"), message);
     }
 };
 

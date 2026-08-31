@@ -216,6 +216,13 @@ namespace FlaxEditor.Modules
         /// <returns>The results list.</returns>
         public List<SearchResult> Search(string charsToFind)
         {
+            if (AssetObjectId.TryParse(charsToFind, out var objectId) && AssetWorkspaceQuery.TryGet(objectId, out var objectEntry))
+            {
+                var objectItem = Editor.Instance.ContentDatabase.Find(objectEntry.RuntimeID) as AssetItem;
+                if (objectItem != null)
+                    return new List<SearchResult> { new SearchResult { Name = objectItem.ShortName, Type = objectItem.TypeName, Item = objectItem } };
+            }
+
             // Special case if searching by object id
             if (charsToFind.Length == 32)
             {
@@ -250,19 +257,51 @@ namespace FlaxEditor.Modules
             Profiler.BeginEvent("ContentFinding.Search");
 
             string type = ".*";
-            string name = charsToFind.Trim();
-            if (charsToFind.Contains(':'))
+            string pathPrefix = null;
+            string importer = null;
+            AssetRecordStatus? status = null;
+            var nameParts = new List<string>();
+            var tokens = charsToFind.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < tokens.Length; i++)
             {
-                var args = charsToFind.Split(':');
-                type = ".*" + args[1].Trim() + ".*";
-                name = ".*" + args[0].Trim() + ".*";
+                var token = tokens[i];
+                if (token.StartsWith("t:", StringComparison.OrdinalIgnoreCase))
+                    type = ".*" + token.Substring(2) + ".*";
+                else if (token.StartsWith("p:", StringComparison.OrdinalIgnoreCase))
+                    pathPrefix = token.Substring(2);
+                else if (token.StartsWith("i:", StringComparison.OrdinalIgnoreCase))
+                    importer = token.Substring(2);
+                else if (token.StartsWith("status:", StringComparison.OrdinalIgnoreCase) && Enum.TryParse(token.Substring(7), true, out AssetRecordStatus parsedStatus))
+                    status = parsedStatus;
+                else
+                    nameParts.Add(token);
             }
+            string name = string.Join(" ", nameParts);
             if (name.Equals(string.Empty))
                 name = ".*";
 
             var typeRegex = new Regex(type, RegexOptions.IgnoreCase);
             var nameRegex = new Regex(name, RegexOptions.IgnoreCase);
             var matches = new List<SearchResult>();
+
+            var assetEntries = AssetWorkspaceQuery.Query(pathPrefix, null, status);
+            for (var i = 0; i < assetEntries.Length; i++)
+            {
+                var entry = assetEntries[i];
+                if (!typeRegex.IsMatch(entry.TypeName ?? string.Empty) ||
+                    (importer != null && (entry.ImporterID == null || entry.ImporterID.IndexOf(importer, StringComparison.OrdinalIgnoreCase) < 0)))
+                    continue;
+                var asset = Editor.Instance.ContentDatabase.Find(entry.RuntimeID) as AssetItem;
+                if (asset == null || !nameRegex.IsMatch(asset.ShortName))
+                    continue;
+                var typeName = asset.TypeName;
+                if (!Aliases.TryGetValue(typeName, out var finalName))
+                {
+                    var splits = typeName.Split('.');
+                    finalName = splits[splits.Length - 1];
+                }
+                matches.Add(new SearchResult { Name = asset.ShortName, Type = finalName, Item = asset });
+            }
 
             foreach (var project in Editor.Instance.ContentDatabase.Projects)
             {
@@ -355,22 +394,9 @@ namespace FlaxEditor.Modules
                 var name = contentItem.ShortName;
                 if (contentItem.IsAsset)
                 {
-                    if (nameRegex.Match(name).Success)
-                    {
-                        var asset = contentItem as AssetItem;
-                        if (asset == null || !typeRegex.Match(asset.TypeName).Success)
-                            continue;
-
-                        if (Aliases.TryGetValue(asset.TypeName, out var finalName))
-                        {
-                        }
-                        else
-                        {
-                            var splits = asset.TypeName.Split('.');
-                            finalName = splits[splits.Length - 1];
-                        }
-                        matches.Add(new SearchResult { Name = name, Type = finalName, Item = asset });
-                    }
+                    // Asset results come from the database query above. Presentation
+                    // nodes are only used to open or reveal the selected result.
+                    continue;
                 }
                 else if (contentItem.IsFolder)
                 {

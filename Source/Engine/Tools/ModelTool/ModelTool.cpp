@@ -1267,8 +1267,8 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
                 }
                 else
                 {
-                    // No bone
-                    LOG(Warning, "Imported mesh \'{0}\' has missing skinning data. It may result in invalid rendering.", mesh->Name);
+                    // Root-bone fallback keeps otherwise valid geometry renderable.
+                    LOG(Info, "Imported mesh \'{0}\' has no matching skinning data; assigning it to the root bone.", mesh->Name);
                 }
 
                 mesh->BlendIndices.Resize(mesh->Positions.Count());

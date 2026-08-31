@@ -329,6 +329,8 @@ namespace FlaxEditor.Modules
                 else
                 {
                     var extension = Path.GetExtension(inputPath) ?? string.Empty;
+                    if (string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase))
+                        return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, inputPath, targetLocation.Path, "Legacy .flax assets cannot be imported into an asset-system-v2 project.");
                     var isCanonicalSource = IsCanonicalSourceImport(extension);
                     string outputExtension = null;
                     var isBuilt = !isCanonicalSource && Editor.CanImport(extension, out outputExtension);
@@ -369,6 +371,12 @@ namespace FlaxEditor.Modules
                 throw new ArgumentNullException();
 
             var extension = System.IO.Path.GetExtension(inputPath) ?? string.Empty;
+
+            if (string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase))
+            {
+                Editor.LogWarning($"Legacy .flax assets cannot be imported into an asset-system-v2 project: {inputPath}");
+                return;
+            }
 
             // Check if given file extension is a binary asset (.flax files) and can be imported by the engine
             bool useCanonicalSource = IsCanonicalSourceImport(extension);
@@ -439,6 +447,12 @@ namespace FlaxEditor.Modules
         {
             inputPath = StringUtils.NormalizePath(inputPath);
             outputPath = StringUtils.NormalizePath(outputPath);
+            if (string.Equals(Path.GetExtension(inputPath), ".flax", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(Path.GetExtension(outputPath), ".flax", StringComparison.OrdinalIgnoreCase))
+            {
+                Editor.LogWarning($"Legacy .flax assets cannot be imported or reimported in an asset-system-v2 project: {inputPath}");
+                return;
+            }
             lock (_requests)
             {
                 _requests.Add(new Request
@@ -471,6 +485,7 @@ namespace FlaxEditor.Modules
             case ".dds":
             case ".hdr":
             case ".raw":
+            case ".ies":
             case ".fbx":
             case ".obj":
             case ".x":
@@ -1230,6 +1245,10 @@ namespace FlaxEditor.Modules
             string processorId;
             switch (extension)
             {
+            case ".ies":
+                typeName = "FlaxEngine.IESProfile";
+                processorId = "Flax.IES";
+                break;
             case ".ttf":
             case ".otf":
                 typeName = typeof(FontAsset).FullName;
