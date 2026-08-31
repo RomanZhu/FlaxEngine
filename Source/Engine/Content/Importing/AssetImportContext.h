@@ -46,6 +46,7 @@ struct FLAXENGINE_API AssetImportOutputDeclaration
     String Name;
     StringAnsi Kind;
     StringAnsi Extension;
+    ArtifactTargetDimension TargetDimensions = ArtifactTargetDimension::All;
     Array<byte> Data;
 };
 
@@ -93,7 +94,8 @@ public:
     void DependsOnProjectSetting(const StringView& name, const ContentHash& value, const StringView& origin = StringView::Empty);
 
     int32 AddObjectToAsset(const StringView& stableIdentifier, const StringView& typeName, const StringView& displayName = StringView::Empty);
-    int32 CreateOutput(const StringView& name, const StringAnsiView& kind, const StringAnsiView& extension);
+    int32 CreateOutput(const StringView& name, const StringAnsiView& kind, const StringAnsiView& extension,
+                       ArtifactTargetDimension targetDimensions = ArtifactTargetDimension::All);
     bool WriteOutput(int32 outputIndex, const Span<byte>& data, AssetPipelineDiagnostic& diagnostic);
     bool SetMainObject(int32 objectIndex, AssetPipelineDiagnostic& diagnostic);
     void AddDiagnostic(const AssetPipelineDiagnostic& diagnostic);

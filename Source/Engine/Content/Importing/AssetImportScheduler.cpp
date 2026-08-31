@@ -5,6 +5,9 @@
 
 AssetBuildRequestHandle AssetImportScheduler::Schedule(const AssetImportPlan& plan, AssetImportJobAction action)
 {
+    // A process-safe registration is an isolation requirement, not an optimization hint.
+    if (plan.Importer.ProcessSafe)
+        return AssetBuildRequestHandle();
     AssetBuildJobRequest request;
     request.Key.ExactPlan = plan.StaticFingerprint;
     request.AssetID = plan.Request.Asset.Value;
@@ -68,7 +71,7 @@ AssetBuildRequestHandle AssetImportScheduler::ScheduleIsolated(const AssetImport
     workerRequest.Importer.ProducesMainObject = plan.Importer.ProducesMainObject;
     workerRequest.Importer.ProducesSubObjects = plan.Importer.ProducesSubObjects;
     workerRequest.Importer.PathSensitive = plan.Importer.PathSensitive;
-    workerRequest.Target = String(plan.Request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
+    workerRequest.Target = plan.Request.Target;
     workerRequest.Limits.MaximumMemoryBytes = plan.Importer.MaximumMemoryBytes;
     workerRequest.Limits.MaximumOutputBytes = plan.Importer.MaximumOutputBytes;
     workerRequest.Limits.MaximumOutputFiles = plan.Importer.MaximumOutputFiles;
@@ -95,7 +98,7 @@ AssetBuildRequestHandle AssetImportScheduler::ScheduleIsolated(const AssetImport
     request.AssetID = plan.Request.Asset.Value;
     request.ProcessorClass = TEXT("isolated-asset-import");
     request.ProcessorID = plan.Importer.ID;
-    request.Target = execution->Request.Target;
+    request.Target = String(execution->Request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     request.KeyComponents = plan.KeyComponents;
     request.RebuildReason = plan.Request.Reason;
     request.MemoryBytes = plan.Importer.MaximumMemoryBytes;

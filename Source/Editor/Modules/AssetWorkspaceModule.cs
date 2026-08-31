@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Documents;
+using FlaxEditor.Content.Import;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Scripting;
 using FlaxEngine;
@@ -3203,6 +3204,7 @@ namespace FlaxEditor.Modules
             }
 
             var publishedAssets = AssetDatabaseFacade.DrainArtifactPublications();
+            ScriptedImporterRegistry.OnAssetsPublished(publishedAssets);
             for (int i = 0; i < publishedAssets.Length; i++)
                 OnArtifactPublished(publishedAssets[i]);
 

@@ -1,6 +1,8 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetImportWorkerProtocol.h"
+#include "Engine/Content/Artifacts/ArtifactStore.h"
+#include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/Platform.h"
 #include "Engine/Platform/FileSystem.h"
@@ -8,6 +10,8 @@
 
 #if PLATFORM_WINDOWS
 #include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
+#include <aclapi.h>
+#include <sddl.h>
 #endif
 
 namespace
@@ -21,7 +25,7 @@ namespace
         diagnostic.AssetGuid = request.Asset.Value;
         diagnostic.SourcePath = request.SourcePath;
         diagnostic.ProcessorId = request.Importer.ID;
-        diagnostic.Target = request.Target;
+        diagnostic.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
         diagnostic.Message = message;
         return true;
     }
@@ -30,6 +34,60 @@ namespace
     {
         return value.Find(TEXT('"')) != -1;
     }
+
+#if PLATFORM_WINDOWS
+    bool ApplyLowIntegrityWriteCapability(const String& path)
+    {
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"S:(ML;OICI;NW;;;LW)", SDDL_REVISION_1, &descriptor, nullptr))
+            return true;
+        BOOL present = FALSE;
+        BOOL defaulted = FALSE;
+        PACL label = nullptr;
+        const bool failed = !GetSecurityDescriptorSacl(descriptor, &present, &label, &defaulted) || !present || !label ||
+            SetNamedSecurityInfoW(const_cast<LPWSTR>(path.Get()), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+                nullptr, nullptr, nullptr, label) != ERROR_SUCCESS;
+        LocalFree(descriptor);
+        return failed;
+    }
+
+    bool CreateLowIntegrityRestrictedToken(HANDLE& result)
+    {
+        result = nullptr;
+        HANDLE processToken = nullptr;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY |
+            TOKEN_ADJUST_DEFAULT, &processToken))
+            return true;
+        HANDLE restrictedToken = nullptr;
+        if (!CreateRestrictedToken(processToken, DISABLE_MAX_PRIVILEGE | LUA_TOKEN, 0, nullptr, 0, nullptr, 0, nullptr,
+            &restrictedToken))
+        {
+            CloseHandle(processToken);
+            return true;
+        }
+        CloseHandle(processToken);
+        PSID lowIntegrity = nullptr;
+        if (!ConvertStringSidToSidW(L"S-1-16-4096", &lowIntegrity))
+        {
+            CloseHandle(restrictedToken);
+            return true;
+        }
+        TOKEN_MANDATORY_LABEL label = {};
+        label.Label.Attributes = SE_GROUP_INTEGRITY;
+        label.Label.Sid = lowIntegrity;
+        const bool failed = !SetTokenInformation(restrictedToken, TokenIntegrityLevel, &label,
+            sizeof(label) + GetLengthSid(lowIntegrity));
+        LocalFree(lowIntegrity);
+        if (failed)
+        {
+            CloseHandle(restrictedToken);
+            return true;
+        }
+        result = restrictedToken;
+        return false;
+    }
+#endif
 }
 
 bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImportJobRequest& request,
@@ -42,9 +100,16 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
     if (AssetImportWorkerProtocol::ValidateRequest(request, diagnostic))
         return true;
     const String executablePath(executable);
+    String stagingPath(request.OutputStagingPath);
+    String workerRoot = ArtifactStore::GetTemporaryPath(Globals::ProjectLibraryFolder) / TEXT("CallbackWorkers");
+    FileSystem::NormalizePath(stagingPath);
+    FileSystem::NormalizePath(workerRoot);
     if (executablePath.IsEmpty() || HasQuote(executablePath) || HasQuote(request.OutputStagingPath) ||
         !FileSystem::FileExists(executablePath))
         return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, request, TEXT("Isolated importer worker executable is missing or invalid."));
+    if (!AssetPathPolicy::IsSameOrChild(stagingPath, workerRoot) || FileSystem::AreFilePathsEqual(stagingPath, workerRoot))
+        return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, request,
+            TEXT("Isolated importer output staging is outside the parent-owned worker capability root."));
     if (FileSystem::DirectoryExists(request.OutputStagingPath))
     {
         Array<String> existing;
@@ -55,10 +120,14 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
     {
         return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, request, TEXT("Cannot create isolated importer output staging."));
     }
+#if PLATFORM_WINDOWS
+    if (ApplyLowIntegrityWriteCapability(request.OutputStagingPath))
+        return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request,
+            TEXT("Cannot restrict isolated importer staging to a low-integrity write capability."));
+#endif
 
-    const String job = request.JobID.ToString(Guid::FormatType::N);
-    const String requestPath = request.OutputStagingPath + TEXT(".request-") + job;
-    const String resultPath = request.OutputStagingPath + TEXT(".result-") + job;
+    const String requestPath = request.OutputStagingPath / TEXT(".worker-request.bin");
+    const String resultPath = request.OutputStagingPath / TEXT(".worker-result.bin");
     auto cleanupProtocolFiles = [&]()
     {
         FileSystem::DeleteFile(requestPath);
@@ -107,7 +176,10 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
     addEnvironment(TEXT("FLAX_ASSET_IMPORT_CAPABILITY"), capability);
     addEnvironment(TEXT("FLAX_ASSET_IMPORT_REQUEST"), requestPath);
     addEnvironment(TEXT("FLAX_ASSET_IMPORT_RESULT"), resultPath);
-    const Char* inheritedNames[] = { TEXT("SystemRoot"), TEXT("WINDIR"), TEXT("TEMP"), TEXT("TMP"), TEXT("DOTNET_ROOT") };
+    addEnvironment(TEXT("FLAX_ASSET_IMPORT_STAGING"), request.OutputStagingPath);
+    addEnvironment(TEXT("TEMP"), request.OutputStagingPath);
+    addEnvironment(TEXT("TMP"), request.OutputStagingPath);
+    const Char* inheritedNames[] = { TEXT("SystemRoot"), TEXT("WINDIR"), TEXT("DOTNET_ROOT"), TEXT("DOTNET_ROOT(x86)") };
     for (const Char* name : inheritedNames)
     {
         String value;
@@ -132,6 +204,26 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
         cleanupProtocolFiles();
         return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::ResourceLimitExceeded, request, TEXT("Cannot apply isolated importer process limits."));
     }
+    JOBOBJECT_BASIC_UI_RESTRICTIONS ui = {};
+    ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_DESKTOP | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS |
+        JOB_OBJECT_UILIMIT_EXITWINDOWS | JOB_OBJECT_UILIMIT_GLOBALATOMS | JOB_OBJECT_UILIMIT_HANDLES |
+        JOB_OBJECT_UILIMIT_READCLIPBOARD | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS | JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
+    if (!SetInformationJobObject(jobHandle, JobObjectBasicUIRestrictions, &ui, sizeof(ui)))
+    {
+        CloseHandle(jobHandle);
+        cleanupProtocolFiles();
+        return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::ResourceLimitExceeded, request,
+            TEXT("Cannot apply isolated importer UI and handle restrictions."));
+    }
+
+    HANDLE restrictedToken = nullptr;
+    if (CreateLowIntegrityRestrictedToken(restrictedToken))
+    {
+        CloseHandle(jobHandle);
+        cleanupProtocolFiles();
+        return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request,
+            TEXT("Cannot create the low-integrity restricted importer token."));
+    }
 
     STARTUPINFOW startup = {};
     startup.cb = sizeof(startup);
@@ -139,13 +231,15 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
     startup.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION process = {};
     const DWORD creationFlags = CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT;
-    if (!CreateProcessW(executablePath.Get(), commandLine.Get(), nullptr, nullptr, FALSE, creationFlags, environment.Get(),
-        request.OutputStagingPath.Get(), &startup, &process))
+    if (!CreateProcessAsUserW(restrictedToken, executablePath.Get(), commandLine.Get(), nullptr, nullptr, FALSE,
+        creationFlags, environment.Get(), request.OutputStagingPath.Get(), &startup, &process))
     {
+        CloseHandle(restrictedToken);
         CloseHandle(jobHandle);
         cleanupProtocolFiles();
         return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, TEXT("Cannot start isolated importer process."));
     }
+    CloseHandle(restrictedToken);
     if (!AssignProcessToJobObject(jobHandle, process.hProcess) || ResumeThread(process.hThread) == static_cast<DWORD>(-1))
     {
         TerminateJobObject(jobHandle, 1);

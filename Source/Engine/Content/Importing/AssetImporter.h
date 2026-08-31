@@ -33,6 +33,11 @@ struct FLAXENGINE_API AssetImporterDescriptor
     bool ProcessSafe = false;
     bool RequiresMainThread = false;
     bool PathSensitive = true;
+    /// <summary>
+    /// Dedicated protocol-compatible executable for a process-safe third-party native importer.
+    /// Managed importers leave this empty and use the restricted editor worker host.
+    /// </summary>
+    String WorkerExecutable;
     uint64 MaximumMemoryBytes = 1024ull * 1024ull * 1024ull;
     uint64 MaximumOutputBytes = 4ull * 1024ull * 1024ull * 1024ull;
     int32 MaximumOutputFiles = 4096;

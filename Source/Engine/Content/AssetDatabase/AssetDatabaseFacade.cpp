@@ -632,7 +632,10 @@ namespace
         AssetImporterSelectionRequest selection;
         selection.SourcePath = sourcePath;
         AssetImporterLease lease;
-        if (registry->Resolve(selection, lease, ignored) || lease.Get().ProviderKind != AssetProcessorProviderKind::Managed)
+        if (registry->Resolve(selection, lease, ignored) || !lease.Get().ProcessSafe)
+            return false;
+        if (lease.Get().ProviderKind != AssetProcessorProviderKind::Managed &&
+            (lease.Get().ProviderKind != AssetProcessorProviderKind::Native || lease.Get().WorkerExecutable.IsEmpty()))
             return false;
         descriptor = lease.Get();
         return true;

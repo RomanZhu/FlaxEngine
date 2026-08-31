@@ -74,11 +74,32 @@ TEST_CASE("AssetImportContext records controlled reads dependencies and declared
     REQUIRE(object >= 0);
     REQUIRE_FALSE(context.SetMainObject(object, diagnostic));
     context.DependsOnCustomDependency(TEXT("render-pipeline"), ContentHash::Compute("rp", 2));
+    const ArtifactKey exactArtifact(ContentHash::Compute("exact", 5));
+    context.DependsOnArtifact(exactArtifact);
+    const int32 output = context.CreateOutput(TEXT("runtime"), "runtime", ".bin", ArtifactTargetDimension::Platform);
+    REQUIRE(output >= 0);
     AssetImportContextResult result;
     REQUIRE_FALSE(context.Complete(true, result, diagnostic));
     CHECK(result.MainObject == object);
     CHECK(result.Objects.Count() == 1);
-    CHECK(result.Dependencies.Count() == 2);
+    CHECK(result.Dependencies.Count() == 3);
+    REQUIRE(result.Outputs.Count() == 1);
+    CHECK(result.Outputs[0].TargetDimensions == ArtifactTargetDimension::Platform);
+}
+
+TEST_CASE("Process-safe native callback importers require an external worker")
+{
+    AssetImporterRegistry registry;
+    AssetPipelineDiagnostic diagnostic;
+    AssetImporterRegistration registration;
+    AssetImporterDescriptor descriptor = MakeImporter(TEXT("Tests.NativeWorker"), TEXT(".native"));
+    descriptor.ProviderKind = AssetProcessorProviderKind::Native;
+    descriptor.ProcessSafe = true;
+    CHECK(registry.Register(descriptor, registration, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidSettingsCombination);
+
+    descriptor.WorkerExecutable = TEXT("Binaries/NativeImportWorker.exe");
+    REQUIRE_FALSE(registry.Register(descriptor, registration, diagnostic));
 }
 
 TEST_CASE("AssetImportPlanner coalesces revisions and pins importer lifetime")

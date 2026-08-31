@@ -154,9 +154,11 @@ int32 AssetImportContext::AddObjectToAsset(const StringView& stableIdentifier, c
     return _result.Objects.Count() - 1;
 }
 
-int32 AssetImportContext::CreateOutput(const StringView& name, const StringAnsiView& kind, const StringAnsiView& extension)
+int32 AssetImportContext::CreateOutput(const StringView& name, const StringAnsiView& kind, const StringAnsiView& extension,
+                                       ArtifactTargetDimension targetDimensions)
 {
-    if (_completed || name.IsEmpty() || kind.IsEmpty() || extension.IsEmpty())
+    if (_completed || name.IsEmpty() || kind.IsEmpty() || extension.IsEmpty() ||
+        (static_cast<uint32>(targetDimensions) & ~static_cast<uint32>(ArtifactTargetDimension::All)) != 0)
         return -1;
     for (const AssetImportOutputDeclaration& output : _result.Outputs)
     {
@@ -167,6 +169,7 @@ int32 AssetImportContext::CreateOutput(const StringView& name, const StringAnsiV
     output.Name = name;
     output.Kind = kind;
     output.Extension = extension;
+    output.TargetDimensions = targetDimensions;
     _result.Outputs.Add(MoveTemp(output));
     return _result.Outputs.Count() - 1;
 }

@@ -86,7 +86,7 @@ namespace
         diagnostic.AssetGuid = request.Asset.Value;
         diagnostic.SourcePath = request.SourcePath;
         diagnostic.ProcessorId = request.Importer.ID;
-        diagnostic.Target = request.Target;
+        diagnostic.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
         diagnostic.Message = message;
         return true;
     }
@@ -160,8 +160,7 @@ namespace
                 TEXT("Scripted importer attempted to read a file outside its authorized input snapshots."));
         };
 
-        ArtifactTarget target;
-        AssetImportContext context(request.Asset, request.SourcePath, target, meta.Processor.SettingsJson, MoveTemp(read));
+        AssetImportContext context(request.Asset, request.SourcePath, request.Target, meta.Processor.SettingsJson, MoveTemp(read));
         CurrentWorkerRequest = &request;
         const bool importFailed = descriptor.Import(context, diagnostic);
         CurrentWorkerRequest = nullptr;
@@ -192,6 +191,7 @@ namespace
             workerOutput.RelativePath = output.Name + String(output.Extension);
             workerOutput.Size = output.Data.Count();
             workerOutput.Hash = ContentHash::Compute(output.Data.Get(), output.Data.Count());
+            workerOutput.TargetDimensions = output.TargetDimensions;
             const String outputPath = request.OutputStagingPath / workerOutput.RelativePath;
             const String outputDirectory = StringUtils::GetDirectoryName(outputPath);
             if ((!FileSystem::DirectoryExists(outputDirectory) && FileSystem::CreateDirectory(outputDirectory)) ||
@@ -358,9 +358,36 @@ DEFINE_INTERNAL_CALL(MString*) ScriptedImporterContextInternal_GetSourcePath()
     return MUtils::ToString(CurrentContext ? CurrentContext->GetSourcePath() : String::Empty);
 }
 
-DEFINE_INTERNAL_CALL(MString*) ScriptedImporterContextInternal_GetTarget()
+DEFINE_INTERNAL_CALL(MString*) ScriptedImporterContextInternal_GetTargetDimension(int32 dimension)
 {
-    return MUtils::ToString(CurrentContext ? String(CurrentContext->GetTarget().BuildKey(ArtifactTargetDimension::All).ToString()) : String::Empty);
+    if (!CurrentContext)
+        return MUtils::ToString(String::Empty);
+    const ArtifactTarget& target = CurrentContext->GetTarget();
+    switch (dimension)
+    {
+    case 0: return MUtils::ToString(String(target.Platform));
+    case 1: return MUtils::ToString(String(target.Architecture));
+    case 2: return MUtils::ToString(String(target.Graphics));
+    case 3: return MUtils::ToString(String(target.Configuration));
+    case 4: return MUtils::ToString(String(target.Quality));
+    case 5: return MUtils::ToString(String(target.TextureCompression));
+    case 6: return MUtils::ToString(String(target.AudioCodec));
+    case 7: return MUtils::ToString(String(target.ShaderCompiler));
+    case 8: return MUtils::ToString(String(target.Role));
+    default: return MUtils::ToString(String::Empty);
+    }
+}
+
+DEFINE_INTERNAL_CALL(int32) ScriptedImporterContextInternal_GetTargetFeatureFlagCount()
+{
+    return CurrentContext ? CurrentContext->GetTarget().FeatureFlags.Count() : 0;
+}
+
+DEFINE_INTERNAL_CALL(MString*) ScriptedImporterContextInternal_GetTargetFeatureFlag(int32 index)
+{
+    if (!CurrentContext || index < 0 || index >= CurrentContext->GetTarget().FeatureFlags.Count())
+        return MUtils::ToString(String::Empty);
+    return MUtils::ToString(String(CurrentContext->GetTarget().FeatureFlags[index]));
 }
 
 DEFINE_INTERNAL_CALL(MString*) ScriptedImporterContextInternal_GetSettings()
@@ -409,6 +436,30 @@ DEFINE_INTERNAL_CALL(void) ScriptedImporterContextInternal_DependsOnObject(Guid*
         CurrentContext->DependsOnSourceAsset(object);
     else
         CurrentContext->DependsOnArtifact(object);
+}
+
+DEFINE_INTERNAL_CALL(bool) ScriptedImporterContextInternal_DependsOnExactArtifact(MString* artifactObject)
+{
+    AssetPipelineDiagnostic diagnostic;
+    if (!RequireContext(&diagnostic))
+        return true;
+    String artifactText;
+    MUtils::ToString(artifactObject, artifactText);
+    ArtifactKey artifact;
+    if (ArtifactKey::Parse(artifactText, artifact) || artifact.IsZero())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = CurrentContext->GetAsset().Value;
+        diagnostic.SourcePath = CurrentContext->GetSourcePath();
+        diagnostic.Message = TEXT("Scripted importer declared an invalid exact artifact dependency key.");
+        CurrentContext->AddDiagnostic(diagnostic);
+        SetError(diagnostic.Message);
+        return true;
+    }
+    CurrentContext->DependsOnArtifact(artifact);
+    SetError(StringView::Empty);
+    return false;
 }
 
 DEFINE_INTERNAL_CALL(void) ScriptedImporterContextInternal_DependsOnNamed(int32 kind, MString* identityObject, MString* hashObject)
@@ -552,7 +603,8 @@ DEFINE_INTERNAL_CALL(bool) ScriptedImporterContextInternal_SetMainObject(int32 o
     return false;
 }
 
-DEFINE_INTERNAL_CALL(int32) ScriptedImporterContextInternal_CreateOutput(MString* nameObject, MString* kindObject, MString* extensionObject)
+DEFINE_INTERNAL_CALL(int32) ScriptedImporterContextInternal_CreateOutput(MString* nameObject, MString* kindObject,
+    MString* extensionObject, uint32 targetDimensions)
 {
     if (!RequireContext())
         return -1;
@@ -560,7 +612,8 @@ DEFINE_INTERNAL_CALL(int32) ScriptedImporterContextInternal_CreateOutput(MString
     MUtils::ToString(nameObject, name);
     MUtils::ToString(kindObject, kind);
     MUtils::ToString(extensionObject, extension);
-    return CurrentContext->CreateOutput(name, StringAnsi(kind), StringAnsi(extension));
+    return CurrentContext->CreateOutput(name, StringAnsi(kind), StringAnsi(extension),
+        static_cast<ArtifactTargetDimension>(targetDimensions));
 }
 
 DEFINE_INTERNAL_CALL(bool) ScriptedImporterContextInternal_WriteOutput(int32 outputIndex, MArray* dataObject)

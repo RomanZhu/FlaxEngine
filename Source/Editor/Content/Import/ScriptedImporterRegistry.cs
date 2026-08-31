@@ -216,6 +216,28 @@ namespace FlaxEditor.Content.Import
                 .ToArray();
         }
 
+        /// <summary>Runs the all-assets callback in the parent editor for one committed publication batch.</summary>
+        internal static void OnAssetsPublished(Guid[] publishedAssets)
+        {
+            if (publishedAssets == null || publishedAssets.Length == 0)
+                return;
+            try
+            {
+                var ordered = publishedAssets.OrderBy(x => x.ToString(), StringComparer.Ordinal).ToArray();
+                var imported = new AssetGuid[ordered.Length];
+                for (var i = 0; i < ordered.Length; i++)
+                    imported[i] = new AssetGuid(ordered[i]);
+                var postprocessors = CreatePostprocessors();
+                for (var i = 0; i < postprocessors.Length; i++)
+                    postprocessors[i].OnPostprocessAllAssets(imported);
+            }
+            catch (Exception ex)
+            {
+                Editor.LogError("Asset postprocessor batch failed after artifact publication.");
+                Editor.LogWarning(ex);
+            }
+        }
+
         private static string HashImporter(Entry entry, byte[] postprocessorHash, Dictionary<Assembly, byte[]> assemblyHashes)
         {
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -249,8 +271,6 @@ namespace FlaxEditor.Content.Import
                 importer.OnImportAsset(context);
                 for (var i = 0; i < postprocessors.Length; i++)
                     postprocessors[i].OnPostprocessAsset(context);
-                for (var i = 0; i < postprocessors.Length; i++)
-                    postprocessors[i].OnPostprocessAllAssets(new[] { context.AssetGuid });
                 context.CommitOutputs();
                 return 0;
             }

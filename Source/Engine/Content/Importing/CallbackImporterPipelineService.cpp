@@ -7,6 +7,7 @@
 #include "AssetImportService.h"
 #include "Engine/Content/Artifacts/ArtifactOutputValidator.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
+#include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
@@ -211,8 +212,10 @@ bool CallbackImporterPipelineService::OwnsProcessor(const StringView& processorI
         return false;
     AssetImporterLease lease;
     AssetPipelineDiagnostic diagnostic;
-    return !registry->TryAcquire(processorID, lease, diagnostic) &&
-        lease.Get().ProviderKind == AssetProcessorProviderKind::Managed && lease.Get().ProcessSafe;
+    if (registry->TryAcquire(processorID, lease, diagnostic) || !lease.Get().ProcessSafe)
+        return false;
+    return lease.Get().ProviderKind == AssetProcessorProviderKind::Managed ||
+        (lease.Get().ProviderKind == AssetProcessorProviderKind::Native && !lease.Get().WorkerExecutable.IsEmpty());
 }
 
 bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
@@ -234,7 +237,9 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
     if (AssetMeta::Load(record.MetaPath.Get(), meta, diagnostic))
         return true;
     auto execution = std::make_shared<CallbackImportExecution>();
-    execution->Target = ArtifactTarget();
+    execution->Target = ArtifactResolver::Get().IsConfigured()
+        ? ArtifactResolver::Get().GetDefaultTarget()
+        : ArtifactTarget();
     execution->Request.JobID = Guid::New();
     execution->Request.Capability = Guid::New();
     execution->Request.SourceRevision = record.DatabaseRevision;
@@ -261,9 +266,12 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
     if (planner->Build(planRequests, plans, diagnostic) || plans.Count() != 1)
         return true;
     execution->Plan = plans[0];
-    if (execution->Plan.Importer.ProviderKind != AssetProcessorProviderKind::Managed || !execution->Plan.Importer.ProcessSafe)
+    const bool managedWorker = execution->Plan.Importer.ProviderKind == AssetProcessorProviderKind::Managed;
+    const bool externalNativeWorker = execution->Plan.Importer.ProviderKind == AssetProcessorProviderKind::Native &&
+        !execution->Plan.Importer.WorkerExecutable.IsEmpty();
+    if (!execution->Plan.Importer.ProcessSafe || (!managedWorker && !externalNativeWorker))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, AssetPipelineDiagnosticStage::Configuration,
-            assetID, record.ProcessorID, record.SourcePath.Get(), TEXT("Callback importer is not configured for mandatory worker isolation."));
+            assetID, record.ProcessorID, record.SourcePath.Get(), TEXT("Callback importer is not configured for mandatory external worker isolation."));
     execution->Request.Limits.MaximumMemoryBytes = execution->Plan.Importer.MaximumMemoryBytes;
     execution->Request.Limits.MaximumOutputBytes = execution->Plan.Importer.MaximumOutputBytes;
     execution->Request.Limits.MaximumOutputFiles = execution->Plan.Importer.MaximumOutputFiles;
@@ -321,7 +329,7 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
             declared.Kind = output.Kind;
             declared.Extension = StringAnsi(".") + StringAnsi(FileSystem::GetExtension(output.RelativePath).ToLower());
             declared.FormatVersion = 1;
-            declared.TargetDimensions = ArtifactTargetDimension::All;
+            declared.TargetDimensions = output.TargetDimensions;
             declared.CompatibilityTag = StringAnsi("scripted-") + output.Kind;
             declared.EffectiveAssetID = current.ID;
             execution->Prepared.Outputs.Add(declared);
@@ -330,7 +338,7 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
             outputKeyBuilder.AddString(StringAnsiView("name"), output.Name);
             outputKeyBuilder.AddString(StringAnsiView("kind"), output.Kind);
             outputKeyBuilder.AddHash(StringAnsiView("content"), output.Hash);
-            outputKeyBuilder.AddTarget(execution->Target, ArtifactTargetDimension::All);
+            outputKeyBuilder.AddTarget(execution->Target, output.TargetDimensions);
             ArtifactPublicationOutputPlan outputPlan;
             outputPlan.Kind = output.Kind;
             outputPlan.Key = outputKeyBuilder.Finalize();
@@ -437,7 +445,14 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
             publication, execution->Validators, publicationResult, publicationDiagnostic);
     };
 
-    const AssetBuildRequestHandle handle = scheduler->ScheduleIsolated(execution->Plan, Platform::GetExecutableFilePath(),
+    String workerExecutable = managedWorker ? Platform::GetExecutableFilePath() : execution->Plan.Importer.WorkerExecutable;
+    if (FileSystem::IsRelative(workerExecutable))
+        workerExecutable = Globals::ProjectFolder / workerExecutable;
+    FileSystem::NormalizePath(workerExecutable);
+    if (!FileSystem::FileExists(workerExecutable))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Configuration,
+            assetID, record.ProcessorID, workerExecutable, TEXT("The isolated importer worker executable does not exist."));
+    const AssetBuildRequestHandle handle = scheduler->ScheduleIsolated(execution->Plan, workerExecutable,
         execution->Request, MoveTemp(publish), diagnostic);
     if (!handle.IsValid())
         return diagnostic.Code != AssetPipelineDiagnosticCode::None ||

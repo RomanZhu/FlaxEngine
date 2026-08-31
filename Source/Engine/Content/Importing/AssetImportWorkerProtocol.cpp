@@ -5,6 +5,7 @@
 #include "Engine/Content/AssetDatabase/SubAsset.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include <algorithm>
 
 namespace
@@ -135,6 +136,79 @@ namespace
         }
     };
 
+    void WriteTarget(ProtocolWriter& writer, const ArtifactTarget& target)
+    {
+        writer.AnsiValue(target.Platform);
+        writer.AnsiValue(target.Architecture);
+        writer.AnsiValue(target.Graphics);
+        writer.AnsiValue(target.Configuration);
+        writer.AnsiValue(target.Quality);
+        writer.AnsiValue(target.TextureCompression);
+        writer.AnsiValue(target.AudioCodec);
+        writer.AnsiValue(target.ShaderCompiler);
+        writer.AnsiValue(target.Role);
+        const uint32 count = target.FeatureFlags.Count();
+        writer.Pod(count);
+        for (const StringAnsi& flag : target.FeatureFlags)
+            writer.AnsiValue(flag);
+    }
+
+    bool ReadTarget(ProtocolReader& reader, ArtifactTarget& target)
+    {
+        uint32 count;
+        if (reader.AnsiValue(target.Platform) || reader.AnsiValue(target.Architecture) ||
+            reader.AnsiValue(target.Graphics) || reader.AnsiValue(target.Configuration) ||
+            reader.AnsiValue(target.Quality) || reader.AnsiValue(target.TextureCompression) ||
+            reader.AnsiValue(target.AudioCodec) || reader.AnsiValue(target.ShaderCompiler) ||
+            reader.AnsiValue(target.Role) || reader.Count(count))
+            return true;
+        target.FeatureFlags.Resize(count);
+        for (StringAnsi& flag : target.FeatureFlags)
+        {
+            if (reader.AnsiValue(flag))
+                return true;
+        }
+        return false;
+    }
+
+    bool IsTargetTokenValid(const StringAnsiView& value)
+    {
+        if (value.Length() > 256)
+            return false;
+        for (int32 i = 0; i < value.Length(); i++)
+        {
+            const byte c = static_cast<byte>(value[i]);
+            if (c < 0x20 || c == 0x7f)
+                return false;
+        }
+        return true;
+    }
+
+    bool IsTargetValid(const ArtifactTarget& target)
+    {
+        const StringAnsiView dimensions[] = { target.Platform, target.Architecture, target.Graphics,
+            target.Configuration, target.Quality, target.TextureCompression, target.AudioCodec,
+            target.ShaderCompiler, target.Role };
+        for (const StringAnsiView& dimension : dimensions)
+        {
+            if (!IsTargetTokenValid(dimension))
+                return false;
+        }
+        if (target.FeatureFlags.Count() > 256)
+            return false;
+        for (int32 i = 0; i < target.FeatureFlags.Count(); i++)
+        {
+            if (target.FeatureFlags[i].IsEmpty() || !IsTargetTokenValid(target.FeatureFlags[i]))
+                return false;
+            for (int32 j = 0; j < i; j++)
+            {
+                if (target.FeatureFlags[i] == target.FeatureFlags[j])
+                    return false;
+            }
+        }
+        return true;
+    }
+
     bool WriteAtomic(const StringView& path, const Array<byte>& data)
     {
         const String staging = String(path) + TEXT(".tmp-") + Guid::New().ToString(Guid::FormatType::N);
@@ -259,7 +333,7 @@ bool AssetImportWorkerProtocol::SaveRequest(const StringView& path, const AssetI
     writer.Pod(request.Importer.ProducesMainObject);
     writer.Pod(request.Importer.ProducesSubObjects);
     writer.Pod(request.Importer.PathSensitive);
-    writer.StringValue(request.Target);
+    WriteTarget(writer, request.Target);
     uint32 count = request.AuthorizedInputs.Count();
     writer.Pod(count);
     for (const AssetImportWorkerInput& input : request.AuthorizedInputs)
@@ -302,7 +376,7 @@ bool AssetImportWorkerProtocol::LoadRequest(const StringView& path, AssetImportJ
         reader.Pod(request.Importer.ProviderKind) ||
         reader.Pod(request.Importer.ImporterVersion) || reader.Pod(request.Importer.SettingsSchemaVersion) ||
         reader.Hash(request.Importer.ImplementationHash) || reader.Pod(request.Importer.ProducesMainObject) ||
-        reader.Pod(request.Importer.ProducesSubObjects) || reader.Pod(request.Importer.PathSensitive) || reader.StringValue(request.Target) ||
+        reader.Pod(request.Importer.ProducesSubObjects) || reader.Pod(request.Importer.PathSensitive) || ReadTarget(reader, request.Target) ||
         reader.Count(count))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, TEXT("Isolated import request is truncated or malformed."));
     request.AuthorizedInputs.Resize(count);
@@ -360,6 +434,7 @@ bool AssetImportWorkerProtocol::SaveResult(const StringView& path, const AssetIm
         writer.StringValue(value.RelativePath);
         writer.Hash(value.Hash);
         writer.Pod(value.Size);
+        writer.Pod(value.TargetDimensions);
     }
     writer.AnsiValue(result.OutputManifestDraft);
     count = result.ObservedToolchain.Count();
@@ -414,7 +489,7 @@ bool AssetImportWorkerProtocol::LoadResult(const StringView& path, AssetImportJo
     for (AssetImportWorkerOutput& value : result.Outputs)
     {
         if (reader.StringValue(value.Name) || reader.AnsiValue(value.Kind) || reader.StringValue(value.RelativePath) ||
-            reader.Hash(value.Hash) || reader.Pod(value.Size))
+            reader.Hash(value.Hash) || reader.Pod(value.Size) || reader.Pod(value.TargetDimensions))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, TEXT("Isolated import output is truncated."));
     }
     if (reader.AnsiValue(result.OutputManifestDraft) || reader.Count(count))
@@ -438,7 +513,7 @@ bool AssetImportWorkerProtocol::ValidateRequest(const AssetImportJobRequest& req
         request.SourceHash.IsZero() || request.MetaHash.IsZero() || request.Importer.ID.IsEmpty() ||
         (request.Importer.ProviderKind != AssetProcessorProviderKind::Native && request.Importer.ProviderKind != AssetProcessorProviderKind::Managed) ||
         request.Importer.ImporterVersion == 0 || request.Importer.SettingsSchemaVersion == 0 ||
-        request.Importer.ImplementationHash.IsZero() || request.Target.IsEmpty() || request.OutputStagingPath.IsEmpty())
+        request.Importer.ImplementationHash.IsZero() || request.OutputStagingPath.IsEmpty() || !IsTargetValid(request.Target))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, TEXT("Isolated import request identity is incomplete."));
     if (request.Limits.MaximumInputBytes == 0 || request.Limits.MaximumOutputBytes == 0 || request.Limits.MaximumMemoryBytes == 0 ||
         request.Limits.MaximumOutputFiles < 1 || request.Limits.TimeoutMilliseconds == 0)
@@ -493,6 +568,27 @@ bool AssetImportWorkerProtocol::ValidateResult(const AssetImportJobRequest& requ
         if (!allowed)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, TEXT("Isolated import worker observed an unapproved toolchain."));
     }
+    for (const AssetImportDependency& dependency : result.Dependencies)
+    {
+        if (dependency.Kind > AssetImportDependencyKind::ProjectSetting)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, TEXT("Isolated import worker declared an unknown dependency kind."));
+        switch (dependency.Kind)
+        {
+        case AssetImportDependencyKind::SourceAsset:
+        case AssetImportDependencyKind::ImportedObject:
+            if (!dependency.Object.IsValid())
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, TEXT("Isolated import worker declared an invalid object dependency."));
+            break;
+        case AssetImportDependencyKind::ImportedArtifact:
+            if (dependency.ExactArtifact.IsZero())
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, TEXT("Isolated import worker declared an invalid exact artifact dependency."));
+            break;
+        default:
+            if (dependency.Identity.IsEmpty() || dependency.ExpectedHash.IsZero())
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, TEXT("Isolated import worker declared an unhashed named dependency."));
+            break;
+        }
+    }
     int32 mainObjects = 0;
     Array<String> stableIdentifiers;
     for (const AssetImportedObjectDeclaration& object : result.Objects)
@@ -521,7 +617,8 @@ bool AssetImportWorkerProtocol::ValidateResult(const AssetImportJobRequest& requ
     for (AssetImportWorkerOutput& output : result.Outputs)
     {
         if (output.Name.IsEmpty() || output.Kind.IsEmpty() || !IsSafeRelativePath(output.RelativePath) || output.Hash.IsZero() ||
-            output.Size == 0 || relativeOutputs.Contains(output.RelativePath) || AddWithoutOverflow(outputBytes, output.Size))
+            output.Size == 0 || relativeOutputs.Contains(output.RelativePath) || AddWithoutOverflow(outputBytes, output.Size) ||
+            (static_cast<uint32>(output.TargetDimensions) & ~static_cast<uint32>(ArtifactTargetDimension::All)) != 0)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, TEXT("Isolated import worker output declaration is invalid or duplicated."));
         const String path = request.OutputStagingPath / output.RelativePath;
         if (!AssetPathPolicy::IsSameOrChild(path, request.OutputStagingPath) || !FileSystem::FileExists(path) ||
@@ -549,6 +646,20 @@ int32 AssetImportWorkerHost::Run(const StringView& requestPath, const StringView
     AssetImportJobRequest request;
     if (AssetImportWorkerProtocol::LoadRequest(requestPath, request, diagnostic))
         return 2;
+    String stagingCapability;
+    if (Platform::GetEnvironmentVariable(TEXT("FLAX_ASSET_IMPORT_STAGING"), stagingCapability) || stagingCapability.IsEmpty())
+        return 3;
+    FileSystem::NormalizePath(stagingCapability);
+    String normalizedRequest(requestPath);
+    String normalizedResult(resultPath);
+    String normalizedOutput(request.OutputStagingPath);
+    FileSystem::NormalizePath(normalizedRequest);
+    FileSystem::NormalizePath(normalizedResult);
+    FileSystem::NormalizePath(normalizedOutput);
+    if (!FileSystem::AreFilePathsEqual(stagingCapability, normalizedOutput) ||
+        !AssetPathPolicy::IsSameOrChild(normalizedRequest, stagingCapability) ||
+        !AssetPathPolicy::IsSameOrChild(normalizedResult, stagingCapability))
+        return 3;
     Guid suppliedCapability;
     if (Guid::Parse(capability, suppliedCapability) || suppliedCapability != request.Capability || !action.IsBinded())
         return 3;

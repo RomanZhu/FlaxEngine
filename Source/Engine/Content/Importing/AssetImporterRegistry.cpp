@@ -127,8 +127,17 @@ bool AssetImporterRegistry::Validate(AssetImporterDescriptor& descriptor, AssetP
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer provider identity is invalid."));
     if (descriptor.Extensions.IsEmpty() && descriptor.Fallback == AssetImporterFallback::None)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer must claim an extension or a fallback role."));
-    if (!descriptor.Import.IsBinded() && (!descriptor.Processor.Prepare.IsBinded() || !descriptor.Processor.Build.IsBinded()))
+    const bool hasExternalNativeWorker = descriptor.ProviderKind == AssetProcessorProviderKind::Native &&
+        descriptor.ProcessSafe && !descriptor.WorkerExecutable.IsEmpty();
+    if (!hasExternalNativeWorker && !descriptor.Import.IsBinded() &&
+        (!descriptor.Processor.Prepare.IsBinded() || !descriptor.Processor.Build.IsBinded()))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer has no import callback or processor implementation."));
+    if (descriptor.ProviderKind == AssetProcessorProviderKind::Managed && !descriptor.WorkerExecutable.IsEmpty())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Managed importers cannot override the restricted editor worker executable."));
+    if (descriptor.ProviderKind == AssetProcessorProviderKind::Native && descriptor.ProcessSafe && descriptor.Import.IsBinded() &&
+        descriptor.WorkerExecutable.IsEmpty())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID,
+            TEXT("A process-safe native callback importer requires a dedicated worker executable; in-process fallback is forbidden."));
     if (descriptor.RequiresMainThread && descriptor.SupportsParallelImport)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Main-thread importers cannot claim parallel execution."));
     if (descriptor.ProcessSafe && (descriptor.MaximumMemoryBytes == 0 ||
@@ -225,7 +234,9 @@ bool AssetImporterRegistry::ReplaceProviderSet(const StringView& providerID, Arr
         }
         if (!replacement || replacement->ImporterVersion != oldState->Descriptor.ImporterVersion ||
             replacement->SettingsSchemaVersion != oldState->Descriptor.SettingsSchemaVersion ||
-            replacement->ImplementationHash != oldState->Descriptor.ImplementationHash)
+            replacement->ImplementationHash != oldState->Descriptor.ImplementationHash ||
+            replacement->WorkerExecutable != oldState->Descriptor.WorkerExecutable ||
+            replacement->ProcessSafe != oldState->Descriptor.ProcessSafe)
             markChanged(oldState->Descriptor.ID);
         _providers.Remove(oldState->Descriptor.ID);
     }
@@ -236,7 +247,9 @@ bool AssetImporterRegistry::ReplaceProviderSet(const StringView& providerID, Arr
         {
             if (oldState->Descriptor.ID == descriptor.ID && oldState->Descriptor.ImporterVersion == descriptor.ImporterVersion &&
                 oldState->Descriptor.SettingsSchemaVersion == descriptor.SettingsSchemaVersion &&
-                oldState->Descriptor.ImplementationHash == descriptor.ImplementationHash)
+                oldState->Descriptor.ImplementationHash == descriptor.ImplementationHash &&
+                oldState->Descriptor.WorkerExecutable == descriptor.WorkerExecutable &&
+                oldState->Descriptor.ProcessSafe == descriptor.ProcessSafe)
             {
                 existedUnchanged = true;
                 break;

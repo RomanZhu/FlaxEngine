@@ -11,6 +11,98 @@ using Newtonsoft.Json;
 
 namespace FlaxEditor.Content.Import
 {
+    [Flags]
+    public enum ArtifactTargetDimensions : uint
+    {
+        None = 0,
+        Platform = 1u << 0,
+        Architecture = 1u << 1,
+        Graphics = 1u << 2,
+        Configuration = 1u << 3,
+        Quality = 1u << 4,
+        TextureCompression = 1u << 5,
+        AudioCodec = 1u << 6,
+        ShaderCompiler = 1u << 7,
+        Role = 1u << 8,
+        FeatureFlags = 1u << 9,
+        All = (1u << 10) - 1,
+    }
+
+    /// <summary>Exact immutable artifact digest used for dependency invalidation.</summary>
+    public readonly struct ArtifactKey : IEquatable<ArtifactKey>
+    {
+        private readonly string _value;
+
+        public ArtifactKey(string value)
+        {
+            if (!IsCanonical(value))
+                throw new ArgumentException("Artifact keys must contain exactly 64 lowercase or uppercase hexadecimal characters.", nameof(value));
+            _value = value.ToLowerInvariant();
+        }
+
+        public bool IsValid => _value != null;
+        public override string ToString() => _value ?? string.Empty;
+        public bool Equals(ArtifactKey other) => string.Equals(_value, other._value, StringComparison.Ordinal);
+        public override bool Equals(object obj) => obj is ArtifactKey other && Equals(other);
+        public override int GetHashCode() => _value == null ? 0 : StringComparer.Ordinal.GetHashCode(_value);
+
+        public static bool TryParse(string value, out ArtifactKey result)
+        {
+            if (IsCanonical(value))
+            {
+                result = new ArtifactKey(value);
+                return true;
+            }
+            result = default;
+            return false;
+        }
+
+        private static bool IsCanonical(string value)
+        {
+            if (value == null || value.Length != 64)
+                return false;
+            for (var i = 0; i < value.Length; i++)
+            {
+                var c = value[i];
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+                    return false;
+            }
+            return true;
+        }
+    }
+
+    /// <summary>Structured immutable target snapshot supplied to a scripted importer.</summary>
+    public sealed class AssetImportTarget
+    {
+        public string Platform { get; }
+        public string Architecture { get; }
+        public string Graphics { get; }
+        public string Configuration { get; }
+        public string Quality { get; }
+        public string TextureCompression { get; }
+        public string AudioCodec { get; }
+        public string ShaderCompiler { get; }
+        public string Role { get; }
+        public IReadOnlyList<string> FeatureFlags { get; }
+
+        internal AssetImportTarget()
+        {
+            Platform = ScriptedImporterInterop.GetTargetDimension(0);
+            Architecture = ScriptedImporterInterop.GetTargetDimension(1);
+            Graphics = ScriptedImporterInterop.GetTargetDimension(2);
+            Configuration = ScriptedImporterInterop.GetTargetDimension(3);
+            Quality = ScriptedImporterInterop.GetTargetDimension(4);
+            TextureCompression = ScriptedImporterInterop.GetTargetDimension(5);
+            AudioCodec = ScriptedImporterInterop.GetTargetDimension(6);
+            ShaderCompiler = ScriptedImporterInterop.GetTargetDimension(7);
+            Role = ScriptedImporterInterop.GetTargetDimension(8);
+            var flags = new string[ScriptedImporterInterop.GetTargetFeatureFlagCount()];
+            for (var i = 0; i < flags.Length; i++)
+                flags[i] = ScriptedImporterInterop.GetTargetFeatureFlag(i);
+            FeatureFlags = flags;
+        }
+    }
+
     /// <summary>Declares one managed source importer.</summary>
     [AttributeUsage(AttributeTargets.Class, Inherited = false)]
     public sealed class ScriptedImporterAttribute : Attribute
@@ -88,6 +180,7 @@ namespace FlaxEditor.Content.Import
     {
         public string Kind { get; set; }
         public string Extension { get; set; }
+        public ArtifactTargetDimensions TargetDimensions { get; set; } = ArtifactTargetDimensions.All;
 
         public ArtifactOutputDescriptor(string kind, string extension)
         {
@@ -165,6 +258,7 @@ namespace FlaxEditor.Content.Import
     public sealed class AssetImportContext
     {
         private readonly List<ArtifactOutputWriter> _outputs = new List<ArtifactOutputWriter>();
+        private readonly AssetImportTarget _target = new AssetImportTarget();
 
         public AssetGuid AssetGuid
         {
@@ -176,7 +270,7 @@ namespace FlaxEditor.Content.Import
         }
 
         public string AssetPath => ScriptedImporterInterop.GetSourcePath();
-        public string Target => ScriptedImporterInterop.GetTarget();
+        public AssetImportTarget Target => _target;
         public string SettingsJson => ScriptedImporterInterop.GetSettings();
         public T GetSettings<T>() => JsonConvert.DeserializeObject<T>(SettingsJson);
 
@@ -202,6 +296,14 @@ namespace FlaxEditor.Content.Import
         {
             var guid = objectId.Asset.Value;
             ScriptedImporterInterop.DependsOnObject(ref guid, objectId.LocalId, 1);
+        }
+
+        public void DependsOnArtifact(ArtifactKey artifact)
+        {
+            if (!artifact.IsValid)
+                throw new ArgumentException("Artifact dependency key is invalid.", nameof(artifact));
+            if (ScriptedImporterInterop.DependsOnExactArtifact(artifact.ToString()))
+                throw new InvalidOperationException(ScriptedImporterInterop.GetLastError());
         }
         public void DependsOnCustomDependency(string name) => ScriptedImporterInterop.DependsOnNamed(0, name, null);
         public void DependsOnFolder(string path)
@@ -235,7 +337,8 @@ namespace FlaxEditor.Content.Import
         {
             if (descriptor == null)
                 throw new ArgumentNullException(nameof(descriptor));
-            var index = ScriptedImporterInterop.CreateOutput(outputName, descriptor.Kind, descriptor.Extension);
+            var index = ScriptedImporterInterop.CreateOutput(outputName, descriptor.Kind, descriptor.Extension,
+                (uint)descriptor.TargetDimensions);
             if (index < 0)
                 throw new InvalidOperationException("The artifact output declaration is invalid or duplicated.");
             var writer = new ArtifactOutputWriter(index);
@@ -288,8 +391,14 @@ namespace FlaxEditor.Content.Import
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_GetSourcePath", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         internal static partial string GetSourcePath();
 
-        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_GetTarget", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
-        internal static partial string GetTarget();
+        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_GetTargetDimension", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        internal static partial string GetTargetDimension(int dimension);
+
+        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_GetTargetFeatureFlagCount")]
+        internal static partial int GetTargetFeatureFlagCount();
+
+        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_GetTargetFeatureFlag", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        internal static partial string GetTargetFeatureFlag(int index);
 
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_GetSettings", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         internal static partial string GetSettings();
@@ -300,6 +409,10 @@ namespace FlaxEditor.Content.Import
 
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_DependsOnObject")]
         internal static partial void DependsOnObject(ref Guid asset, long localId, int kind);
+
+        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_DependsOnExactArtifact", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static partial bool DependsOnExactArtifact(string artifactKey);
 
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_DependsOnNamed", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         internal static partial void DependsOnNamed(int kind, string identity, string hash);
@@ -316,7 +429,7 @@ namespace FlaxEditor.Content.Import
         internal static partial bool SetMainObject(int objectIndex);
 
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_CreateOutput", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
-        internal static partial int CreateOutput(string outputName, string kind, string extension);
+        internal static partial int CreateOutput(string outputName, string kind, string extension, uint targetDimensions);
 
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_WriteOutput")]
         [return: MarshalAs(UnmanagedType.U1)]

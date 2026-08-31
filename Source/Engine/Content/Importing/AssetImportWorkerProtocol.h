@@ -54,7 +54,7 @@ struct FLAXENGINE_API AssetImportWorkerDescriptor
 /// <summary>Self-contained immutable import job passed to an isolated worker process.</summary>
 struct FLAXENGINE_API AssetImportJobRequest
 {
-    static constexpr uint32 CurrentProtocolVersion = 2;
+    static constexpr uint32 CurrentProtocolVersion = 3;
 
     uint32 ProtocolVersion = CurrentProtocolVersion;
     Guid JobID;
@@ -67,7 +67,7 @@ struct FLAXENGINE_API AssetImportJobRequest
     ContentHash MetaHash;
     Array<byte> MetaSnapshot;
     AssetImportWorkerDescriptor Importer;
-    String Target;
+    ArtifactTarget Target;
     Array<AssetImportWorkerInput> AuthorizedInputs;
     Array<AssetImportWorkerTool> AllowedTools;
     String OutputStagingPath;
@@ -81,6 +81,7 @@ struct FLAXENGINE_API AssetImportWorkerOutput
     String RelativePath;
     ContentHash Hash;
     uint64 Size = 0;
+    ArtifactTargetDimension TargetDimensions = ArtifactTargetDimension::All;
 };
 
 /// <summary>Untrusted worker response draft. The parent validates this before any publication.</summary>
