@@ -414,7 +414,7 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
         reader.Read(value.Database.ImporterRegistryGeneration) || reader.Read(flag) || flag > 1 || reader.ReadCount(count))
         return Fail(diagnostic, TEXT("Source asset database header is truncated or malformed."));
     const uint32 serializedSchemaVersion = value.Database.SchemaVersion;
-    if (serializedSchemaVersion < 2 || serializedSchemaVersion > AssetDatabaseSchema::Version)
+    if (serializedSchemaVersion != AssetDatabaseSchema::Version)
         return Fail(diagnostic, TEXT("Source asset database schema version is not supported."));
     value.Database.CleanShutdown = flag != 0;
 
@@ -460,7 +460,7 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
         if (reader.Read(item.OwnerAssetGuid) || reader.Read(item.OwnerLocalFileId) || reader.ReadString(item.TargetId) || reader.Read(kind) ||
             reader.Read(item.TargetAssetGuid) || reader.Read(item.TargetLocalFileId) || reader.ReadString(item.SourcePath) ||
             reader.Read(item.ExactArtifact) || reader.ReadString(item.CustomDependency) || reader.Read(item.Content) || reader.Read(item.Flags) ||
-            (serializedSchemaVersion >= 4 && (reader.ReadString(item.OriginImporter) || reader.ReadString(item.OriginDescription))) ||
+            reader.ReadString(item.OriginImporter) || reader.ReadString(item.OriginDescription) ||
             reader.ReadString(item.OriginPath) || reader.Read(item.OriginLine) || reader.Read(item.OriginColumn) ||
             kind > (byte)AssetDependencyKind::Toolchain)
             return Fail(diagnostic, TEXT("Source asset database dependency table is malformed."));
@@ -494,7 +494,6 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
         item.IsActive = isActive != 0;
     }
 
-    if (serializedSchemaVersion >= 3)
     {
         if (reader.ReadCount(count))
             return Fail(diagnostic, TEXT("Source asset database import target table is malformed."));
@@ -571,9 +570,6 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
                 return Fail(diagnostic, TEXT("Source asset database custom dependency table is malformed."));
         }
     }
-    if (serializedSchemaVersion < AssetDatabaseSchema::Version)
-        value.Database.SchemaVersion = AssetDatabaseSchema::Version;
-
     if (!reader.AtEnd() || (validate && value.Validate(diagnostic)))
         return true;
     output = MoveTemp(value);
