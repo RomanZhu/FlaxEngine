@@ -44,7 +44,9 @@ namespace
         FileSystem::NormalizePath(root);
         root = root.ToLower();
         String relative = normalized;
-        if (relative.StartsWith(root))
+        if (relative == root)
+            relative = String::Empty;
+        else if (relative.StartsWith(root))
             relative = relative.Substring(root.Length());
         relative = TEXT("/") + relative + TEXT("/");
         const Char* excluded[] =

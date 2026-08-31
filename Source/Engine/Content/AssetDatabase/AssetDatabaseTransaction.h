@@ -25,6 +25,7 @@ enum class AssetDatabaseMutationKind : byte
     UpsertImportAttempt,
     UpsertCustomDependency,
     RemoveCustomDependency,
+    ReplaceSnapshot,
 };
 
 struct AssetDatabaseMutation
@@ -79,6 +80,7 @@ public:
     void UpsertImportAttempt(const SourceImportAttemptRow& attempt);
     void UpsertCustomDependency(const SourceCustomDependencyRow& dependency);
     void RemoveCustomDependency(const StringView& dependencyName);
+    void ReplaceSnapshot(SourceAssetDatabaseState&& state, AssetChangeSet&& changes);
 
     /// <summary>Commits all tables and one change set atomically. Returns true on failure.</summary>
     bool Commit(AssetPipelineDiagnostic& diagnostic);

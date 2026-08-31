@@ -89,9 +89,10 @@ namespace FlaxEditor.Content
         /// <returns>Found element of null</returns>
         public ContentItem FindChild(string path)
         {
+            var normalizedPath = ContentMutationPathUtils.Normalize(path);
             for (int i = 0; i < Children.Count; i++)
             {
-                if (Children[i].Path == path)
+                if (ContentMutationPathUtils.Comparer.Equals(ContentMutationPathUtils.Normalize(Children[i].Path), normalizedPath))
                     return Children[i];
             }
 

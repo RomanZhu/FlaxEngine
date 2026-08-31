@@ -237,7 +237,7 @@ namespace
         {
             byte kind;
             uint32 payloadSize;
-            if (reader.Read(kind) || kind > (byte)AssetDatabaseMutationKind::RemoveCustomDependency ||
+            if (reader.Read(kind) || kind > (byte)AssetDatabaseMutationKind::ReplaceSnapshot ||
                 reader.Read(mutation.Key) || reader.Read(mutation.LocalFileId) || reader.Read(mutation.Value) ||
                 reader.ReadString(mutation.TargetId) || reader.Read(mutation.Artifact) || reader.Read(payloadSize) ||
                 payloadSize > MaximumPayloadBytes)
@@ -434,6 +434,8 @@ bool NormalizedAssetDatabaseStore::AppendWal(const StringView& path, const Guid&
         return Fail(diagnostic, path, TEXT("Normalized source database WAL transaction revision is not contiguous."));
     Array<byte> payload;
     SerializeWalRecord(record, payload);
+    if (payload.Count() > MaximumPayloadBytes)
+        return Fail(diagnostic, path, TEXT("Normalized source database WAL transaction exceeds the maximum payload size."));
     WalFrameHeader frame;
     frame.PayloadSize = payload.Count();
     frame.PayloadCrc = Crc::MemCrc32(payload.Get(), payload.Count());

@@ -71,7 +71,7 @@ namespace
         return true;
     }
 
-    bool EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
+    bool EnsureModelPipelineInitialized(AssetPipelineDiagnostic& diagnostic)
     {
         ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
@@ -205,11 +205,16 @@ namespace
     }
 }
 
+bool ModelPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
+{
+    return EnsureModelPipelineInitialized(diagnostic);
+}
+
 bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactRequest& request,
     ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& diagnostic)
 {
     plan = ArtifactResolutionPlan();
-    if (EnsureInitialized(diagnostic))
+    if (EnsureModelPipelineInitialized(diagnostic))
         return true;
     if (!record.ID.IsValid() || record.ProcessorID != ModelProcessorSettings::ProcessorID())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Prepare,
@@ -342,7 +347,7 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
 
 bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
 {
-    if (EnsureInitialized(diagnostic))
+    if (EnsureModelPipelineInitialized(diagnostic))
         return true;
     AssetBuildService* builds = TexturePipelineService::GetBuildService(diagnostic);
     if (!builds)
@@ -489,7 +494,7 @@ bool ModelPipelineService::ReconcileMetadata(const Guid& rootAssetID, Array<SubA
     AssetPipelineDiagnostic& diagnostic)
 {
     changes.Clear();
-    if (EnsureInitialized(diagnostic))
+    if (EnsureModelPipelineInitialized(diagnostic))
         return true;
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(rootAssetID, record) || !record.IsMainAsset() ||

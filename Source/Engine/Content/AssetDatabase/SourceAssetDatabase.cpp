@@ -252,6 +252,9 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
             case AssetDatabaseMutationKind::RemoveCustomDependency:
                 replay.RemoveCustomDependency(mutation.TargetId);
                 break;
+            case AssetDatabaseMutationKind::ReplaceSnapshot:
+                replay._state = MoveTemp(payload);
+                break;
             }
         }
         replay._state.Database.CurrentRevision = record.Revision;

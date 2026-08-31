@@ -130,6 +130,15 @@ namespace
             state.Registration.Reset();
             return true;
         }
+#if COMPILE_WITH_MODEL_TOOL
+        if (ModelPipelineService::EnsureInitialized(diagnostic))
+        {
+            AssetImportService::Shutdown();
+            state.Builds.reset();
+            state.Registration.Reset();
+            return true;
+        }
+#endif
 #endif
         state.Initialized = true;
         ArtifactResolutionPlanProvider provider = [](const AssetRecord& record, const ArtifactRequest& request,

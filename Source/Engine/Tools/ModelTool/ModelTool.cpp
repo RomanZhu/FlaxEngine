@@ -1017,10 +1017,41 @@ String GetAdditionalImportPath(const String& autoImportOutput, Array<String>& im
     return autoImportOutput / filename + ASSET_FILES_EXTENSION_WITH_DOT;
 }
 
+static void CloneParsedSource(const ModelData& source, ModelData& destination, ImportDataTypes importTypes)
+{
+    ASSERT(destination.LODs.IsEmpty());
+    destination.MinScreenSize = source.MinScreenSize;
+    if (EnumHasAnyFlags(importTypes, ImportDataTypes::Textures))
+        destination.Textures = source.Textures;
+    if (EnumHasAnyFlags(importTypes, ImportDataTypes::Materials))
+        destination.Materials = source.Materials;
+    if (EnumHasAnyFlags(importTypes, ImportDataTypes::Skeleton))
+        destination.Skeleton = source.Skeleton;
+    if (EnumHasAnyFlags(importTypes, ImportDataTypes::Nodes))
+        destination.Nodes = source.Nodes;
+    if (EnumHasAnyFlags(importTypes, ImportDataTypes::Animations))
+        destination.Animations = source.Animations;
+    destination.PositionFormat = source.PositionFormat;
+    destination.TexCoordFormat = source.TexCoordFormat;
+    if (EnumHasAnyFlags(importTypes, ImportDataTypes::Geometry))
+    {
+        for (const ModelLodData& sourceLod : source.LODs)
+        {
+            ModelLodData& destinationLod = destination.LODs.AddOne();
+            destinationLod.ScreenSize = sourceLod.ScreenSize;
+            for (const MeshData* sourceMesh : sourceLod.Meshes)
+                destinationLod.Meshes.Add(sourceMesh ? New<MeshData>(*sourceMesh) : nullptr);
+        }
+    }
+}
+
 bool ModelTool::ImportModel(const String& path, ModelData& data, Options& options, String& errorMsg, const String& autoImportOutput)
 {
     PROFILE_CPU();
-    LOG(Info, "Importing model from \'{0}\'", path);
+    if (options.ParsedSource)
+        LOG(Info, "Building model artifact from cached source parse \'{0}\'", path);
+    else
+        LOG(Info, "Importing model from \'{0}\'", path);
     const auto startTime = DateTime::NowUTC();
 
     // Import data
@@ -1055,7 +1086,9 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
     default:
         return true;
     }
-    if (ImportData(path, data, options, errorMsg))
+    if (options.ParsedSource)
+        CloneParsedSource(*options.ParsedSource, data, options.ImportTypes);
+    else if (ImportData(path, data, options, errorMsg))
         return true;
 
     // Copy over data format options

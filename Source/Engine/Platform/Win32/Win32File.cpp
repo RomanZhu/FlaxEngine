@@ -29,7 +29,10 @@ Win32File* Win32File::Open(const StringView& path, FileMode mode, FileAccess acc
 #endif
     if (handle == INVALID_HANDLE_VALUE)
     {
-        LOG_WIN32_LAST_ERROR;
+        const DWORD error = GetLastError();
+        // Files can disappear between an existence check and opening them (eg. filesystem watcher callbacks).
+        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+            LOG(Warning, "Win32::GetLastError() = 0x{0:x}", error);
         return nullptr;
     }
 

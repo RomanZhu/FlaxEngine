@@ -275,6 +275,22 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestContentFolderFindChildUsesCanonicalPathIdentity()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentFolderTests", Guid.NewGuid().ToString("N"));
+            var folder = new ContentFolder(ContentFolderType.Content, root, null);
+            var child = new FileItem(Path.Combine(root, "Materials", "Asset.material"))
+            {
+                ParentFolder = folder,
+            };
+            var equivalentPath = Path.Combine(root, "Materials", ".", "Asset.material");
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                equivalentPath = equivalentPath.Replace('\\', '/').ToUpperInvariant();
+
+            Assert.AreSame(child, folder.FindChild(equivalentPath));
+        }
+
+        [Test]
         public void TestContentNamesRejectWhitespaceTrailingDotAndCrossTypeCollision()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentNameTests", Guid.NewGuid().ToString("N"));

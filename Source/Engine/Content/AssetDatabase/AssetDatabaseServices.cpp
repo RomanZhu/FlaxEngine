@@ -448,7 +448,13 @@ namespace
         String root(Globals::ProjectContentFolder);
         FileSystem::NormalizePath(root);
         root = root.ToLower();
-        String relative = normalized.StartsWith(root) ? normalized.Substring(root.Length()) : normalized;
+        String relative;
+        if (normalized == root)
+            relative = String::Empty;
+        else if (normalized.StartsWith(root))
+            relative = normalized.Substring(root.Length());
+        else
+            relative = normalized;
         relative = TEXT("/") + relative + TEXT("/");
         const Char* excluded[] =
         {
@@ -710,6 +716,7 @@ namespace
                 ? ModelTool::ModelType::SkinnedModel
                 : ModelTool::ModelType::Model;
             settings = ModelProcessorSettings::FromLegacyOptions(options);
+            ModelProcessor::PrimeAnalysisCache(work.SourcePath, settings, analysis);
             meta.AssetType = options.Type == ModelTool::ModelType::SkinnedModel ? SkinnedModel::TypeName : Model::TypeName;
             meta.Processor.ID = ModelProcessorSettings::ProcessorID();
             meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
@@ -3424,6 +3431,7 @@ namespace
                 : ModelTool::ModelType::Model;
             settings = ModelProcessorSettings::FromLegacyOptions(options);
         }
+        ModelProcessor::PrimeAnalysisCache(sourcePath, settings, analysis);
 
         AssetMeta meta;
         meta.ID = Guid::New();

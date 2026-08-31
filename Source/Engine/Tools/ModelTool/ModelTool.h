@@ -408,6 +408,10 @@ public:
         // Cached model data - used when performing nested importing (eg. via objects splitting). Allows to read and process source file only once and use those results for creation of multiple assets (permutation via ObjectIndex).
         CachedData* Cached = nullptr;
 
+        // Immutable raw source snapshot produced by ImportData. ImportModel deep-clones it and applies the
+        // requested output-specific processing without invoking the source parser again.
+        const ModelData* ParsedSource = nullptr;
+
     public:
         // [ISerializable]
         void Serialize(SerializeStream& stream, const void* otherObj) override;

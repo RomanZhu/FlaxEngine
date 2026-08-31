@@ -12,8 +12,11 @@
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Content/Assets/SkinnedModel.h"
 #include "Engine/Content/Assets/Texture.h"
+#include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Serialization/MemoryReadStream.h"
+#include "Engine/Serialization/MemoryWriteStream.h"
 
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/ContentImporters/CreateMaterial.h"
@@ -21,7 +24,6 @@
 #include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Graphics/Textures/TextureData.h"
-#include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Core/ScopeExit.h"
 #endif
 
@@ -31,7 +33,9 @@
 
 namespace
 {
-    constexpr int32 ModelAnalysisCacheCapacity = 64;
+    constexpr int32 ModelAnalysisCacheCapacity = 2048;
+    constexpr uint64 ModelAnalysisCacheByteCapacity = 2ull * 1024ull * 1024ull * 1024ull;
+    constexpr int32 ModelAnalysisDiskCacheByteCapacity = 256 * 1024 * 1024;
 #if COMPILE_WITH_ASSETS_IMPORTER
     constexpr int32 ModelBuildCacheCapacity = 16;
     constexpr uint64 ModelBuildCacheByteCapacity = 512ull * 1024ull * 1024ull;
@@ -42,6 +46,14 @@ namespace
         ModelSourceAnalysis Analysis;
         AssetPipelineDiagnostic Diagnostic;
         bool Failed = false;
+    };
+
+    struct ModelSourceAnalysisCacheEntry
+    {
+        std::shared_future<std::shared_ptr<ModelSourceAnalysisResult>> Future;
+        uint64 MemoryBytes = 0;
+        bool Complete = false;
+        bool SummaryOnly = false;
     };
 
 #if COMPILE_WITH_ASSETS_IMPORTER
@@ -72,8 +84,9 @@ namespace
     struct ModelProcessorCache
     {
         std::mutex Locker;
-        Dictionary<StringAnsi, std::shared_future<std::shared_ptr<ModelSourceAnalysisResult>>> Analyses;
+        Dictionary<StringAnsi, std::shared_ptr<ModelSourceAnalysisCacheEntry>> Analyses;
         Array<StringAnsi> AnalysisOrder;
+        uint64 AnalysisBytes = 0;
 #if COMPILE_WITH_ASSETS_IMPORTER
         Dictionary<StringAnsi, std::shared_ptr<ModelBuildCacheEntry>> Builds;
         Array<StringAnsi> BuildOrder;
@@ -99,6 +112,14 @@ namespace
             }
             lod.Meshes.Clear();
         }
+    }
+
+    void DeleteModelData(ModelData* data)
+    {
+        if (!data)
+            return;
+        ReleaseModelMeshes(*data);
+        Delete(data);
     }
 
 #if COMPILE_WITH_ASSETS_IMPORTER
@@ -166,6 +187,124 @@ namespace
         return bytes;
     }
 
+    uint64 EstimateAnalysisCacheBytes(const ModelSourceAnalysis& analysis)
+    {
+        if (analysis.ParsedSource)
+            return analysis.EstimatedMemoryBytes;
+        uint64 bytes = sizeof(ModelSourceAnalysis);
+        for (const String& path : analysis.ReferencedTexturePaths)
+            bytes += static_cast<uint64>(path.Length()) * sizeof(Char);
+        for (const ModelSubAssetInfo& info : analysis.SubAssets)
+            bytes += sizeof(info) + static_cast<uint64>(info.StableKey.Length() + info.DisplayName.Length() + info.TypeName.Length()) * sizeof(Char);
+        for (const SubAssetCandidate& candidate : analysis.Candidates)
+            bytes += sizeof(candidate) + static_cast<uint64>(candidate.StableKey.Length() + candidate.DisplayName.Length() + candidate.TypeName.Length()) * sizeof(Char);
+        return bytes;
+    }
+
+    String GetAnalysisCachePath(const StringAnsiView& key)
+    {
+        return Globals::ProjectLibraryFolder / TEXT("Cache/ModelAnalysis") / (String(key) + TEXT(".bin"));
+    }
+
+    bool TryLoadAnalysisCache(const StringAnsiView& key, ModelSourceAnalysis& analysis)
+    {
+        constexpr uint32 Magic = 0x3141534d;
+        constexpr uint32 Schema = 1;
+        Array<byte> bytes;
+        const String path = GetAnalysisCachePath(key);
+        if (!FileSystem::FileExists(path) || File::ReadAllBytes(path, bytes) || bytes.Count() < 80 || bytes.Count() > ModelAnalysisDiskCacheByteCapacity)
+            return false;
+        ContentHash storedChecksum;
+        Platform::MemoryCopy(storedChecksum.Bytes, bytes.Get() + bytes.Count() - sizeof(ContentHash), sizeof(ContentHash));
+        if (storedChecksum != ContentHash::Compute(bytes.Get(), bytes.Count() - sizeof(ContentHash)))
+            return false;
+        MemoryReadStream stream(bytes);
+        uint32 magic = 0, schema = 0;
+        stream.ReadUint32(&magic);
+        stream.ReadUint32(&schema);
+        if (magic != Magic || schema != Schema)
+            return false;
+        stream.ReadInt32(&analysis.SourceLodCount);
+        stream.ReadInt32(&analysis.SourceMeshCount);
+        stream.ReadInt32(&analysis.SourceAnimationCount);
+        stream.ReadInt32(&analysis.SourceMaterialCount);
+        stream.ReadInt32(&analysis.SourceSkeletonBoneCount);
+        stream.ReadInt32(&analysis.SourceSkeletonNodeCount);
+        stream.ReadUint64(&analysis.EstimatedMemoryBytes);
+        int32 pathCount = 0;
+        stream.ReadInt32(&pathCount);
+        if (stream.HasError() || pathCount < 0 || pathCount > 65536)
+            return false;
+        analysis.ReferencedTexturePaths.Resize(pathCount, false);
+        for (String& path : analysis.ReferencedTexturePaths)
+            stream.Read(path);
+        int32 subAssetCount = 0;
+        stream.ReadInt32(&subAssetCount);
+        if (stream.HasError() || subAssetCount < 0 || subAssetCount > 1048576)
+            return false;
+        analysis.SubAssets.Resize(subAssetCount, false);
+        analysis.Candidates.Resize(subAssetCount, false);
+        for (int32 i = 0; i < subAssetCount; i++)
+        {
+            ModelSubAssetInfo& info = analysis.SubAssets[i];
+            uint8 kind = 0;
+            stream.ReadUint8(&kind);
+            stream.Read(info.StableKey);
+            stream.Read(info.DisplayName);
+            stream.Read(info.TypeName);
+            stream.ReadBytes(info.SemanticHash.Bytes, sizeof(info.SemanticHash.Bytes));
+            stream.ReadInt32(&info.SourceIndex);
+            if (kind > static_cast<uint8>(ModelSubAssetKind::Texture))
+                return false;
+            info.Kind = static_cast<ModelSubAssetKind>(kind);
+            SubAssetCandidate& candidate = analysis.Candidates[i];
+            candidate.StableKey = info.StableKey;
+            candidate.DisplayName = info.DisplayName;
+            candidate.TypeName = info.TypeName;
+        }
+        return !stream.HasError() && stream.GetPosition() == stream.GetLength() - sizeof(ContentHash);
+    }
+
+    void SaveAnalysisCache(const StringAnsiView& key, const ModelSourceAnalysis& analysis)
+    {
+        constexpr uint32 Magic = 0x3141534d;
+        constexpr uint32 Schema = 1;
+        MemoryWriteStream stream(4096);
+        stream.WriteUint32(Magic);
+        stream.WriteUint32(Schema);
+        stream.WriteInt32(analysis.SourceLodCount);
+        stream.WriteInt32(analysis.SourceMeshCount);
+        stream.WriteInt32(analysis.SourceAnimationCount);
+        stream.WriteInt32(analysis.SourceMaterialCount);
+        stream.WriteInt32(analysis.SourceSkeletonBoneCount);
+        stream.WriteInt32(analysis.SourceSkeletonNodeCount);
+        stream.WriteUint64(analysis.EstimatedMemoryBytes);
+        stream.WriteInt32(analysis.ReferencedTexturePaths.Count());
+        for (const String& path : analysis.ReferencedTexturePaths)
+            stream.Write(path);
+        stream.WriteInt32(analysis.SubAssets.Count());
+        for (const ModelSubAssetInfo& info : analysis.SubAssets)
+        {
+            stream.WriteUint8(static_cast<uint8>(info.Kind));
+            stream.Write(info.StableKey);
+            stream.Write(info.DisplayName);
+            stream.Write(info.TypeName);
+            stream.WriteBytes(info.SemanticHash.Bytes, sizeof(info.SemanticHash.Bytes));
+            stream.WriteInt32(info.SourceIndex);
+        }
+        const ContentHash checksum = ContentHash::Compute(stream.GetHandle(), stream.GetPosition());
+        stream.WriteBytes(checksum.Bytes, sizeof(checksum.Bytes));
+        if (stream.HasError() || stream.GetPosition() > ModelAnalysisDiskCacheByteCapacity)
+            return;
+        const String path = GetAnalysisCachePath(key);
+        const String directory = StringUtils::GetDirectoryName(path);
+        if ((!FileSystem::DirectoryExists(directory) && FileSystem::CreateDirectory(directory)))
+            return;
+        const String staging = path + TEXT(".tmp");
+        if (!File::WriteAllBytes(staging, stream.GetHandle(), stream.GetPosition()))
+            FileSystem::MoveFile(path, staging, true);
+    }
+
     bool DeclareGltfDependencies(PrepareAssetContext& context, const Array<byte>& source, const StringView& sourcePath,
         HashSet<String>& declaredPaths, ArtifactKeyBuilder& analysisKeyBuilder, int32& analysisDependencyIndex,
         AssetPipelineDiagnostic& diagnostic)
@@ -228,45 +367,99 @@ namespace
         return nullptr;
     }
 
+    void TrimAnalysisCache(ModelProcessorCache& cache, const StringAnsi& retainedKey)
+    {
+        while (cache.AnalysisOrder.Count() > ModelAnalysisCacheCapacity || cache.AnalysisBytes > ModelAnalysisCacheByteCapacity)
+        {
+            int32 removeIndex = -1;
+            for (int32 i = 0; i < cache.AnalysisOrder.Count(); i++)
+            {
+                const StringAnsi& candidateKey = cache.AnalysisOrder[i];
+                const std::shared_ptr<ModelSourceAnalysisCacheEntry>* candidate = cache.Analyses.TryGet(candidateKey);
+                if (candidateKey != retainedKey && (!candidate || (*candidate)->Complete))
+                {
+                    removeIndex = i;
+                    break;
+                }
+            }
+            if (removeIndex == -1)
+                break;
+            const StringAnsi key = cache.AnalysisOrder[removeIndex];
+            const std::shared_ptr<ModelSourceAnalysisCacheEntry>* entry = cache.Analyses.TryGet(key);
+            if (entry)
+            {
+                cache.AnalysisBytes = cache.AnalysisBytes >= (*entry)->MemoryBytes ? cache.AnalysisBytes - (*entry)->MemoryBytes : 0;
+                cache.Analyses.Remove(key);
+            }
+            cache.AnalysisOrder.RemoveAtKeepOrder(removeIndex);
+        }
+    }
+
     bool GetCachedSourceAnalysis(const StringAnsi& key, const StringView& sourcePath, const ModelProcessorSettings& settings,
-        std::shared_ptr<const ModelSourceAnalysis>& analysis, AssetPipelineDiagnostic& diagnostic)
+        std::shared_ptr<const ModelSourceAnalysis>& analysis, AssetPipelineDiagnostic& diagnostic, bool requireParsed = false)
     {
         ModelProcessorCache& cache = Cache();
-        std::shared_future<std::shared_ptr<ModelSourceAnalysisResult>> future;
+        std::shared_ptr<ModelSourceAnalysisCacheEntry> entry;
         std::shared_ptr<std::promise<std::shared_ptr<ModelSourceAnalysisResult>>> producer;
         {
             std::lock_guard<std::mutex> lock(cache.Locker);
             auto* existing = cache.Analyses.TryGet(key);
+            if (existing && requireParsed && (*existing)->Complete && (*existing)->SummaryOnly)
+            {
+                cache.AnalysisBytes = cache.AnalysisBytes >= (*existing)->MemoryBytes ? cache.AnalysisBytes - (*existing)->MemoryBytes : 0;
+                cache.Analyses.Remove(key);
+                cache.AnalysisOrder.Remove(key);
+                existing = nullptr;
+            }
             if (existing)
             {
-                future = *existing;
+                entry = *existing;
             }
             else
             {
                 producer = std::make_shared<std::promise<std::shared_ptr<ModelSourceAnalysisResult>>>();
-                future = producer->get_future().share();
-                cache.Analyses.Add(key, future);
+                entry = std::make_shared<ModelSourceAnalysisCacheEntry>();
+                entry->Future = producer->get_future().share();
+                cache.Analyses.Add(key, entry);
                 cache.AnalysisOrder.Add(key);
-                while (cache.AnalysisOrder.Count() > ModelAnalysisCacheCapacity)
-                {
-                    const StringAnsi oldest = cache.AnalysisOrder[0];
-                    cache.AnalysisOrder.RemoveAtKeepOrder(0);
-                    cache.Analyses.Remove(oldest);
-                }
+                TrimAnalysisCache(cache, key);
             }
         }
         if (producer)
         {
             auto result = std::make_shared<ModelSourceAnalysisResult>();
-            result->Failed = ModelProcessor::AnalyzeSource(sourcePath, settings, result->Analysis, result->Diagnostic);
+            const bool loaded = !requireParsed && TryLoadAnalysisCache(key, result->Analysis);
+            if (!loaded)
+            {
+                result->Failed = ModelProcessor::AnalyzeSource(sourcePath, settings, result->Analysis, result->Diagnostic);
+                if (!result->Failed)
+                    SaveAnalysisCache(key, result->Analysis);
+            }
+            {
+                std::lock_guard<std::mutex> lock(cache.Locker);
+                const std::shared_ptr<ModelSourceAnalysisCacheEntry>* current = cache.Analyses.TryGet(key);
+                if (current && *current == entry)
+                {
+                    entry->Complete = true;
+                    if (!result->Failed)
+                    {
+                        entry->MemoryBytes = EstimateAnalysisCacheBytes(result->Analysis);
+                        entry->SummaryOnly = !result->Analysis.ParsedSource;
+                        cache.AnalysisBytes += entry->MemoryBytes;
+                    }
+                    TrimAnalysisCache(cache, key);
+                }
+            }
             producer->set_value(result);
         }
-        const std::shared_ptr<ModelSourceAnalysisResult> result = future.get();
+        const std::shared_ptr<ModelSourceAnalysisResult> result = entry->Future.get();
         if (result->Failed)
         {
             diagnostic = result->Diagnostic;
             return true;
         }
+        if (requireParsed && !result->Analysis.ParsedSource)
+            return GetCachedSourceAnalysis(key, sourcePath, settings, analysis, diagnostic, true);
         analysis = std::shared_ptr<const ModelSourceAnalysis>(result, &result->Analysis);
         diagnostic = AssetPipelineDiagnostic();
         return false;
@@ -293,7 +486,7 @@ namespace
         }
     }
 
-    bool GetCachedBuildData(const StringAnsi& key, const StringView& sourcePath, ModelTool::Options options,
+    bool GetCachedBuildData(const StringAnsi& key, const StringView& sourcePath, const ModelData& parsedSource, ModelTool::Options options,
         std::shared_ptr<const ModelBuildData>& data, AssetPipelineDiagnostic& diagnostic)
     {
         ModelProcessorCache& cache = Cache();
@@ -321,6 +514,7 @@ namespace
             auto result = std::make_shared<ModelBuildDataResult>();
             auto value = std::make_shared<ModelBuildData>();
             String importError;
+            options.ParsedSource = &parsedSource;
             if (ModelTool::ImportModel(String(sourcePath), value->Data, options, importError, String::Empty))
             {
                 result->Failed = Fail(result->Diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
@@ -328,6 +522,7 @@ namespace
             }
             else
             {
+                options.ParsedSource = nullptr;
                 if (value->Data.PositionFormat == ModelData::PositionFormats::Automatic)
                     value->Data.PositionFormat = ModelData::PositionFormats::Float32;
                 value->Options = options;
@@ -369,6 +564,7 @@ namespace
 uint64 ModelPreparedPayload::GetMemoryUsage() const
 {
     uint64 result = sizeof(ModelPreparedPayload);
+    result += AnalysisKey.Length();
     result += static_cast<uint64>(RootTypeName.Length() + RootSourcePath.Length() + SelectedStableKey.Length()) * sizeof(Char);
     for (const ModelSubAssetInfo& info : SubAssets)
         result += sizeof(info) + static_cast<uint64>(info.StableKey.Length() + info.DisplayName.Length() + info.TypeName.Length()) * sizeof(Char);
@@ -429,36 +625,90 @@ bool ModelProcessor::AnalyzeSource(const StringView& sourcePath, const ModelProc
     ModelSourceAnalysis& analysis, AssetPipelineDiagnostic& diagnostic)
 {
     analysis = ModelSourceAnalysis();
-    ScopedModelData ownedData;
+    std::shared_ptr<ModelData> parsedSource(New<ModelData>(), DeleteModelData);
     ModelTool::Options probeOptions = settings.Import;
     probeOptions.Type = ModelTool::ModelType::Prefab;
     probeOptions.ImportTypes = ImportDataTypes::Geometry | ImportDataTypes::Skeleton | ImportDataTypes::Animations |
                                ImportDataTypes::Nodes | ImportDataTypes::Materials | ImportDataTypes::Textures;
     probeOptions.Cached = nullptr;
+    probeOptions.ParsedSource = nullptr;
     String error;
-    if (ModelTool::ImportData(String(sourcePath), ownedData.Data, probeOptions, error))
+    LOG(Info, "Parsing model source \'{0}\'", sourcePath);
+    if (ModelTool::ImportData(String(sourcePath), *parsedSource, probeOptions, error))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Prepare,
             Guid::Empty, sourcePath, error.IsEmpty() ? TEXT("Model structure parser rejected the source.") : error);
 
-    if (ModelSubAssetKeys::Enumerate(ownedData.Data, analysis.SubAssets, analysis.Candidates, diagnostic))
+    if (ModelSubAssetKeys::Enumerate(*parsedSource, analysis.SubAssets, analysis.Candidates, diagnostic))
     {
         diagnostic.SourcePath = sourcePath;
         return true;
     }
-    for (const TextureEntry& texture : ownedData.Data.Textures)
+    for (const TextureEntry& texture : parsedSource->Textures)
     {
         if (!texture.FilePath.IsEmpty())
             analysis.ReferencedTexturePaths.Add(texture.FilePath);
     }
-    analysis.SourceLodCount = ownedData.Data.LODs.Count();
-    analysis.SourceMeshCount = ownedData.Data.LODs.HasItems() ? ownedData.Data.LODs[0].Meshes.Count() : 0;
-    analysis.SourceAnimationCount = ownedData.Data.Animations.Count();
-    analysis.SourceMaterialCount = ownedData.Data.Materials.Count();
-    analysis.SourceSkeletonBoneCount = ownedData.Data.Skeleton.Bones.Count();
-    analysis.SourceSkeletonNodeCount = ownedData.Data.Skeleton.Nodes.Count();
-    analysis.EstimatedMemoryBytes = EstimateData(ownedData.Data);
+    analysis.SourceLodCount = parsedSource->LODs.Count();
+    analysis.SourceMeshCount = parsedSource->LODs.HasItems() ? parsedSource->LODs[0].Meshes.Count() : 0;
+    analysis.SourceAnimationCount = parsedSource->Animations.Count();
+    analysis.SourceMaterialCount = parsedSource->Materials.Count();
+    analysis.SourceSkeletonBoneCount = parsedSource->Skeleton.Bones.Count();
+    analysis.SourceSkeletonNodeCount = parsedSource->Skeleton.Nodes.Count();
+    analysis.EstimatedMemoryBytes = EstimateData(*parsedSource);
+    analysis.ParsedSource = MoveTemp(parsedSource);
     diagnostic = AssetPipelineDiagnostic();
     return false;
+}
+
+void ModelProcessor::PrimeAnalysisCache(const StringView& sourcePath, const ModelProcessorSettings& settings,
+    const ModelSourceAnalysis& analysis)
+{
+    const String extension = FileSystem::GetExtension(sourcePath).ToLower();
+    if (extension == TEXT("gltf"))
+        return;
+    Array<byte> source;
+    StringAnsi settingsJson;
+    AssetPipelineDiagnostic diagnostic;
+    if (File::ReadAllBytes(sourcePath, source) || settings.ToJson(settingsJson, diagnostic))
+        return;
+
+    ArtifactKeyBuilder keyBuilder(StringAnsiView("flax-model-source-analysis-v3"));
+    keyBuilder.AddUInt32(StringAnsiView("processor-version"), ImplementationVersion);
+    keyBuilder.AddUInt32(StringAnsiView("subasset-key-version"), ModelSubAssetKeys::AlgorithmVersion);
+    String normalizedSourcePath(sourcePath);
+    FileSystem::NormalizePath(normalizedSourcePath);
+    keyBuilder.AddString(StringAnsiView("source-path"), normalizedSourcePath.ToLower());
+    keyBuilder.AddHash(StringAnsiView("source"), ContentHash::Compute(source.Get(), source.Count()));
+    keyBuilder.AddHash(StringAnsiView("settings"), ContentHash::Compute(settingsJson.Get(), settingsJson.Length()));
+    keyBuilder.AddString(StringAnsiView("extension"), extension);
+    const StringAnsi key = keyBuilder.Finalize().ToString();
+    SaveAnalysisCache(key, analysis);
+
+    auto result = std::make_shared<ModelSourceAnalysisResult>();
+    result->Analysis = analysis;
+    auto producer = std::make_shared<std::promise<std::shared_ptr<ModelSourceAnalysisResult>>>();
+    auto entry = std::make_shared<ModelSourceAnalysisCacheEntry>();
+    entry->Future = producer->get_future().share();
+    entry->MemoryBytes = EstimateAnalysisCacheBytes(analysis);
+    entry->Complete = true;
+    entry->SummaryOnly = !analysis.ParsedSource;
+    producer->set_value(result);
+
+    ModelProcessorCache& cache = Cache();
+    std::lock_guard<std::mutex> lock(cache.Locker);
+    const std::shared_ptr<ModelSourceAnalysisCacheEntry>* existing = cache.Analyses.TryGet(key);
+    if (existing && (!(*existing)->Complete || !(*existing)->SummaryOnly))
+        return;
+    if (existing)
+    {
+        cache.AnalysisBytes = cache.AnalysisBytes >= (*existing)->MemoryBytes ? cache.AnalysisBytes - (*existing)->MemoryBytes : 0;
+        cache.Analyses.Remove(key);
+        cache.AnalysisOrder.Remove(key);
+    }
+    cache.Analyses.Add(key, entry);
+    cache.AnalysisOrder.Add(key);
+    cache.AnalysisBytes += entry->MemoryBytes;
+    TrimAnalysisCache(cache, key);
 }
 
 void ModelProcessor::ClearCaches()
@@ -467,6 +717,7 @@ void ModelProcessor::ClearCaches()
     std::lock_guard<std::mutex> lock(cache.Locker);
     cache.Analyses.Clear();
     cache.AnalysisOrder.Clear();
+    cache.AnalysisBytes = 0;
 #if COMPILE_WITH_ASSETS_IMPORTER
     cache.Builds.Clear();
     cache.BuildOrder.Clear();
@@ -501,7 +752,12 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
     StringAnsi settingsJson;
     if (settings.ToJson(settingsJson, diagnostic))
         return true;
-    ArtifactKeyBuilder analysisKeyBuilder(StringAnsiView("flax-model-source-analysis-v1"));
+    ArtifactKeyBuilder analysisKeyBuilder(StringAnsiView("flax-model-source-analysis-v3"));
+    analysisKeyBuilder.AddUInt32(StringAnsiView("processor-version"), ImplementationVersion);
+    analysisKeyBuilder.AddUInt32(StringAnsiView("subasset-key-version"), ModelSubAssetKeys::AlgorithmVersion);
+    String normalizedSourcePath = context.GetRecord().SourcePath.Get();
+    FileSystem::NormalizePath(normalizedSourcePath);
+    analysisKeyBuilder.AddString(StringAnsiView("source-path"), normalizedSourcePath.ToLower());
     analysisKeyBuilder.AddHash(StringAnsiView("source"), sourceHash);
     analysisKeyBuilder.AddHash(StringAnsiView("settings"), ContentHash::Compute(settingsJson.Get(), settingsJson.Length()));
     analysisKeyBuilder.AddString(StringAnsiView("extension"), extension);
@@ -593,6 +849,8 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
 
     auto payload = std::make_shared<ModelPreparedPayload>();
     payload->Settings = settings;
+    payload->ParsedSource = analysis->ParsedSource;
+    payload->AnalysisKey = analysisKey;
     payload->RootTypeName = context.GetRecord().IsMainAsset() ? context.GetRecord().TypeName : String::Empty;
     if (payload->RootTypeName.IsEmpty())
         payload->RootTypeName = analysis->SourceSkeletonBoneCount > 0 ? SkinnedModel::TypeName : Model::TypeName;
@@ -920,6 +1178,21 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     if (context.TryGetInputPath(rootDependency->StableIdentity, sourcePath, diagnostic))
         return true;
 
+    std::shared_ptr<const ModelSourceAnalysis> buildAnalysis;
+    std::shared_ptr<const ModelData> parsedSource = payload->ParsedSource;
+    if (!parsedSource)
+    {
+        if (GetCachedSourceAnalysis(payload->AnalysisKey, sourcePath, payload->Settings, buildAnalysis, diagnostic, true))
+        {
+            diagnostic.AssetGuid = prepared.AssetID;
+            return true;
+        }
+        parsedSource = buildAnalysis->ParsedSource;
+    }
+    if (!parsedSource)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+            prepared.AssetID, sourcePath, TEXT("Model source analysis cache did not provide parsed source data."));
+
     const ModelSubAssetInfo* selected = payload->SelectedStableKey.HasChars()
         ? ModelSubAssetKeys::Find(payload->SubAssets, payload->SelectedStableKey)
         : nullptr;
@@ -968,7 +1241,7 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
             sharedKeyBuilder.AddString(prefix + "identity", dependency.StableIdentity);
             sharedKeyBuilder.AddHash(prefix + "content", dependency.Content);
         }
-        if (GetCachedBuildData(sharedKeyBuilder.Finalize().ToString(), sourcePath, options, sharedData, diagnostic))
+        if (GetCachedBuildData(sharedKeyBuilder.Finalize().ToString(), sourcePath, *parsedSource, options, sharedData, diagnostic))
         {
             diagnostic.AssetGuid = prepared.AssetID;
             return true;
@@ -980,9 +1253,11 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     else
     {
         String importError;
+        options.ParsedSource = parsedSource.get();
         if (ModelTool::ImportModel(sourcePath, ownedData.Data, options, importError, String::Empty))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, sourcePath, importError.IsEmpty() ? TEXT("Model compatibility importer rejected the verified source.") : importError);
+        options.ParsedSource = nullptr;
         // Canonical artifacts cannot consult mutable editor Build Settings during serialization.
         // Resolve Automatic to the stable full-precision representation for every build target.
         if (ownedData.Data.PositionFormat == ModelData::PositionFormats::Automatic)

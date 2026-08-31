@@ -447,6 +447,17 @@ void AssetDatabaseTransaction::RemoveCustomDependency(const StringView& dependen
     RecordMutation(_mutations, AssetDatabaseMutationKind::RemoveCustomDependency, nullptr, Guid::Empty, 0, dependencyName);
 }
 
+void AssetDatabaseTransaction::ReplaceSnapshot(SourceAssetDatabaseState&& state, AssetChangeSet&& changes)
+{
+    ASSERT(!_completed);
+    state.Database.CurrentRevision = _baseRevision + 1;
+    state.Database.CleanShutdown = false;
+    _state = MoveTemp(state);
+    _changes = MoveTemp(changes);
+    _mutations.Clear();
+    RecordMutation(_mutations, AssetDatabaseMutationKind::ReplaceSnapshot, &_state);
+}
+
 bool AssetDatabaseTransaction::Commit(AssetPipelineDiagnostic& diagnostic)
 {
     if (_completed || !_owner)
