@@ -3,6 +3,7 @@
 #include "Engine/Content/Importing/AssetImportContext.h"
 #include "Engine/Content/Importing/AssetImportService.h"
 #include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
+#include "Engine/Content/Importing/CallbackImporterPipelineService.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Engine/Globals.h"
@@ -274,6 +275,14 @@ DEFINE_INTERNAL_CALL(bool) ScriptedImporterInternal_AddRegistration(MString* idO
         }
         diagnostic = AssetPipelineDiagnostic();
         return false;
+    };
+    descriptor.RequestBuild = [](const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
+    {
+        return CallbackImporterPipelineService::RequestBuild(assetID, force, diagnostic);
+    };
+    descriptor.GetBuildStatus = [](const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
+    {
+        return CallbackImporterPipelineService::GetStatus(assetID, diagnostic);
     };
     ScopeLock lock(BridgeLocker);
     if (!RegistrationOpen)

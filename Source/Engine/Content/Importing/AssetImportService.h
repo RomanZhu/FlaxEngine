@@ -13,7 +13,9 @@ class FLAXENGINE_API AssetImportService
 public:
     static bool EnsureInitialized(AssetPipelineDiagnostic& diagnostic);
     static bool AttachBuildService(AssetBuildService& builds, AssetPipelineDiagnostic& diagnostic);
-    static bool SynchronizeProcessorDescriptors(AssetPipelineDiagnostic& diagnostic);
+    /// <summary>Registers a built-in importer and its private build-stage implementation explicitly.</summary>
+    static bool RegisterBuiltIn(const AssetProcessorDescriptor& implementation, AssetPipelineDiagnostic& diagnostic,
+        AssetImporterBuildRequest requestBuild, AssetImporterBuildStatus getBuildStatus, int32 priority = 0);
     static bool IsInitialized();
 
     static AssetImporterRegistry* GetImporterRegistry();

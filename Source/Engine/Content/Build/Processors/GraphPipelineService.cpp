@@ -7,11 +7,13 @@
 #include "GraphDocumentProcessor.h"
 #include "AuthoredAssetProcessor.h"
 #include "ImportedSourceProcessor.h"
+#include "JsonAssetProcessor.h"
+#include "SceneChunkProcessor.h"
 #include "SettingsProcessor.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/AssetDatabase/AssetSourceRoots.h"
 #include "Engine/Content/BinaryAsset.h"
@@ -99,7 +101,7 @@ namespace
     {
         if (hasRuntime)
         {
-            Asset* asset = Content::GetAsset(assetID);
+            Asset* asset = Content::GetRuntimeObject(assetID);
             auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
             if (binary && binary->GetTypeName() == artifact.TypeName && binary->IsLoading() && !binary->IsLoaded() && !binary->LastLoadFailed())
             {
@@ -118,7 +120,7 @@ namespace
                     LOG(Error, "Failed to hot-swap graph artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
             }
         }
-        AssetDatabaseFacade::NotifyArtifactPublished(assetID);
+        AssetPipelineService::NotifyArtifactPublished(assetID);
     }
 
     void QueueHotSwap(const ArtifactManifest& manifest, const String& typeName)
@@ -162,6 +164,8 @@ bool GraphPipelineService::OwnsProcessor(const StringView& processorID)
 {
     return processorID == GraphDocumentProcessor::ProcessorID() ||
         processorID == SettingsProcessor::ProcessorID() ||
+        processorID == JsonAssetProcessor::ProcessorID() ||
+        processorID == SceneChunkProcessor::ProcessorID() ||
         AuthoredAssetProcessor::Owns(processorID) ||
         ImportedSourceProcessor::Owns(processorID);
 }
@@ -172,11 +176,22 @@ bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic
     std::lock_guard<std::mutex> lock(state.Locker);
     if (state.Initialized)
         return false;
-    AssetProcessorDescriptor existing;
-    if (!AssetProcessorRegistry::Get().TryGetDescriptor(GraphDocumentProcessor::ProcessorID(), existing) &&
-        AssetProcessorRegistry::Get().Register(GraphDocumentProcessor::CreateDescriptor(), state.GraphRegistration, diagnostic))
-        return true;
-    if (AssetImportService::SynchronizeProcessorDescriptors(diagnostic))
+    AssetProcessorDescriptor implementation;
+    if (!AssetProcessorRegistry::Get().TryGetDescriptor(GraphDocumentProcessor::ProcessorID(), implementation))
+    {
+        implementation = GraphDocumentProcessor::CreateDescriptor();
+        if (AssetProcessorRegistry::Get().Register(implementation, state.GraphRegistration, diagnostic))
+            return true;
+    }
+    if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
+        [](const Guid& id, bool force, AssetPipelineDiagnostic& localDiagnostic)
+        {
+            return GraphPipelineService::RequestBuild(id, force, localDiagnostic);
+        },
+        [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
+        {
+            return GraphPipelineService::GetStatus(id, localDiagnostic);
+        }))
         return true;
     state.Initialized = true;
     return false;
@@ -197,6 +212,8 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     extraIds.Add(AuthoredAssetProcessor::ParticleSystemID());
     extraIds.Add(AuthoredAssetProcessor::CollisionDataID());
     extraIds.Add(SettingsProcessor::ProcessorID());
+    extraIds.Add(JsonAssetProcessor::ProcessorID());
+    extraIds.Add(SceneChunkProcessor::ProcessorID());
     extraIds.Add(ImportedSourceProcessor::FontID());
     extraIds.Add(ImportedSourceProcessor::ShaderID());
     extraIds.Add(ImportedSourceProcessor::VideoID());
@@ -215,16 +232,28 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
         AssetProcessorDescriptor descriptor;
         if (id == SettingsProcessor::ProcessorID())
             descriptor = SettingsProcessor::CreateDescriptor();
+        else if (id == JsonAssetProcessor::ProcessorID())
+            descriptor = JsonAssetProcessor::CreateDescriptor();
+        else if (id == SceneChunkProcessor::ProcessorID())
+            descriptor = SceneChunkProcessor::CreateDescriptor();
         else if (AuthoredAssetProcessor::Owns(id))
             descriptor = AuthoredAssetProcessor::CreateDescriptor(id);
         else
             descriptor = ImportedSourceProcessor::CreateDescriptor(id);
-        if (AssetProcessorRegistry::Get().Register(MoveTemp(descriptor), registration, diagnostic))
+        if (AssetProcessorRegistry::Get().Register(descriptor, registration, diagnostic))
+            return true;
+        if (AssetImportService::RegisterBuiltIn(descriptor, diagnostic,
+            [](const Guid& assetID, bool force, AssetPipelineDiagnostic& localDiagnostic)
+            {
+                return GraphPipelineService::RequestBuild(assetID, force, localDiagnostic);
+            },
+            [](const Guid& assetID, AssetPipelineDiagnostic& localDiagnostic)
+            {
+                return GraphPipelineService::GetStatus(assetID, localDiagnostic);
+            }))
             return true;
         state.ExtraRegistrations.Add(MoveTemp(registration));
     }
-    if (AssetImportService::SynchronizeProcessorDescriptors(diagnostic))
-        return true;
     state.ExtraInitialized = true;
     return false;
 }
@@ -290,7 +319,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
             continue;
         ArtifactBuildInput input;
         input.StableIdentity = dependency.StableIdentity;
-        input.Path = record.SourcePath.Get();
+        input.Path = execution->ProjectRoot / dependency.StableIdentity;
+        FileSystem::NormalizePath(input.Path);
         input.ExpectedContent = dependency.Content;
         execution->Inputs.Add(MoveTemp(input));
     }
@@ -347,6 +377,16 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         else if (record.ProcessorID == SettingsProcessor::ProcessorID())
         {
             if (SettingsProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+                return true;
+        }
+        else if (record.ProcessorID == JsonAssetProcessor::ProcessorID())
+        {
+            if (JsonAssetProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+                return true;
+        }
+        else if (record.ProcessorID == SceneChunkProcessor::ProcessorID())
+        {
+            if (SceneChunkProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
                 return true;
         }
         else if (ImportedSourceProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))

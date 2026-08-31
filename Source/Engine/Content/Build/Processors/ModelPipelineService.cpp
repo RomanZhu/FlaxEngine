@@ -11,7 +11,7 @@
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/Content.h"
@@ -77,11 +77,22 @@ namespace
         std::lock_guard<std::mutex> lock(state.Locker);
         if (state.Initialized)
             return false;
-        AssetProcessorDescriptor existing;
-        if (!AssetProcessorRegistry::Get().TryGetDescriptor(ModelProcessorSettings::ProcessorID(), existing) &&
-            AssetProcessorRegistry::Get().Register(ModelProcessor::CreateDescriptor(), state.Registration, diagnostic))
-            return true;
-        if (AssetImportService::SynchronizeProcessorDescriptors(diagnostic))
+        AssetProcessorDescriptor implementation;
+        if (!AssetProcessorRegistry::Get().TryGetDescriptor(ModelProcessorSettings::ProcessorID(), implementation))
+        {
+            implementation = ModelProcessor::CreateDescriptor();
+            if (AssetProcessorRegistry::Get().Register(implementation, state.Registration, diagnostic))
+                return true;
+        }
+        if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
+            [](const Guid& id, bool force, AssetPipelineDiagnostic& localDiagnostic)
+            {
+                return ModelPipelineService::RequestBuild(id, force, localDiagnostic);
+            },
+            [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
+            {
+                return ModelPipelineService::GetStatus(id, localDiagnostic);
+            }))
             return true;
         state.Initialized = true;
         return false;
@@ -107,7 +118,7 @@ namespace
     {
         if (hasRuntime)
         {
-            Asset* asset = Content::GetAsset(assetID);
+            Asset* asset = Content::GetRuntimeObject(assetID);
             auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
             if (binary && binary->GetTypeName() == artifact.TypeName && binary->IsLoading() && !binary->IsLoaded() && !binary->LastLoadFailed())
             {
@@ -126,7 +137,7 @@ namespace
                     LOG(Error, "Failed to hot-swap model-owned artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
             }
         }
-        AssetDatabaseFacade::NotifyArtifactPublished(assetID);
+        AssetPipelineService::NotifyArtifactPublished(assetID);
     }
 
     void QueueHotSwap(const ArtifactManifest& manifest, const String& typeName)
@@ -508,7 +519,7 @@ bool ModelPipelineService::ReconcileMetadata(const Guid& rootAssetID, Array<SubA
         return true;
     Array<String> refreshPaths;
     refreshPaths.Add(record.SourcePath.Get());
-    if (AssetDatabaseFacade::RefreshSources(refreshPaths))
+    if (AssetPipelineService::RefreshSources(refreshPaths))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, AssetPipelineDiagnosticStage::DatabaseScan,
             rootAssetID, TEXT("Model metadata was reconciled but the database rescan failed."));
     diagnostic = AssetPipelineDiagnostic();

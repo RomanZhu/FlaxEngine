@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "Engine/Content/Build/AssetBuildService.h"
 #include "Engine/Content/Build/AssetProcessor.h"
 
 class AssetImportContext;
@@ -14,6 +15,8 @@ enum class AssetImporterFallback : byte
 };
 using AssetImporterSourcePredicate = Function<bool(const StringView&)>;
 using AssetImporterCallback = Function<bool(AssetImportContext&, AssetPipelineDiagnostic&)>;
+using AssetImporterBuildRequest = Function<bool(const Guid&, bool, AssetPipelineDiagnostic&)>;
+using AssetImporterBuildStatus = Function<AssetBuildJobStatus(const Guid&, AssetPipelineDiagnostic&)>;
 
 /// <summary>Public importer registration contract layered over artifact processor execution.</summary>
 struct FLAXENGINE_API AssetImporterDescriptor
@@ -45,6 +48,8 @@ struct FLAXENGINE_API AssetImporterDescriptor
     AssetImporterFallback Fallback = AssetImporterFallback::None;
     AssetImporterSourcePredicate MatchesSource;
     AssetImporterCallback Import;
+    AssetImporterBuildRequest RequestBuild;
+    AssetImporterBuildStatus GetBuildStatus;
     AssetProcessorDescriptor Processor;
 
     /// <summary>Creates the public importer contract for one private build-stage implementation.</summary>

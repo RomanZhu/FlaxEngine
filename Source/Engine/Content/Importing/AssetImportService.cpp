@@ -1,7 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetImportService.h"
-#include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include <memory>
 #include <mutex>
 
@@ -17,7 +16,7 @@ namespace
         std::unique_ptr<AssetModificationProcessorRegistry> ModificationProcessors;
         std::unique_ptr<CustomDependencyRegistry> CustomDependencies;
         std::unique_ptr<AssetRefreshCoordinator> Refresh;
-        Array<AssetImporterRegistration> ProcessorBridges;
+        Array<AssetImporterRegistration> BuiltInRegistrations;
         AssetBuildService* Builds = nullptr;
     };
 
@@ -39,44 +38,6 @@ namespace
         state.Refresh = std::make_unique<AssetRefreshCoordinator>(*state.Importers, *state.Planner, *state.Postprocessors);
     }
 
-    bool Synchronize(AssetImportServiceState& state, AssetPipelineDiagnostic& diagnostic)
-    {
-        Array<AssetProcessorDescriptor> processors;
-        AssetProcessorRegistry::Get().GetDescriptors(processors);
-        Array<AssetImporterDescriptor> importers;
-        state.Importers->GetDescriptors(importers);
-        for (const AssetProcessorDescriptor& processor : processors)
-        {
-            bool exists = false;
-            for (const AssetImporterDescriptor& importer : importers)
-            {
-                if (importer.ID == processor.ID)
-                {
-                    exists = true;
-                    break;
-                }
-            }
-            if (exists)
-                continue;
-            AssetImporterDescriptor descriptor = AssetImporterDescriptor::FromProcessor(processor);
-            if (descriptor.Extensions.IsEmpty())
-            {
-                // The generic binary processor is the one intentional extension-less fallback.
-                // Other empty descriptors represent features compiled out of this editor and must
-                // not block synchronization or claim arbitrary sources.
-                if (processor.ID == TEXT("Flax.Binary"))
-                    descriptor.Fallback = AssetImporterFallback::Binary;
-                else
-                    continue;
-            }
-            AssetImporterRegistration registration;
-            if (state.Importers->Register(MoveTemp(descriptor), registration, diagnostic))
-                return true;
-            state.ProcessorBridges.Add(MoveTemp(registration));
-        }
-        diagnostic = AssetPipelineDiagnostic();
-        return false;
-    }
 }
 
 bool AssetImportService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
@@ -84,7 +45,8 @@ bool AssetImportService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
     AssetImportServiceState& state = State();
     std::lock_guard<std::mutex> lock(state.Locker);
     InitializeCore(state);
-    return Synchronize(state, diagnostic);
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
 }
 
 bool AssetImportService::AttachBuildService(AssetBuildService& builds, AssetPipelineDiagnostic& diagnostic)
@@ -103,15 +65,57 @@ bool AssetImportService::AttachBuildService(AssetBuildService& builds, AssetPipe
     if (!state.Scheduler)
         state.Scheduler = std::make_unique<AssetImportScheduler>(builds);
     state.Builds = &builds;
-    return Synchronize(state, diagnostic);
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
 }
 
-bool AssetImportService::SynchronizeProcessorDescriptors(AssetPipelineDiagnostic& diagnostic)
+bool AssetImportService::RegisterBuiltIn(const AssetProcessorDescriptor& implementation, AssetPipelineDiagnostic& diagnostic,
+    AssetImporterBuildRequest requestBuild, AssetImporterBuildStatus getBuildStatus, int32 priority)
 {
     AssetImportServiceState& state = State();
     std::lock_guard<std::mutex> lock(state.Locker);
     InitializeCore(state);
-    return Synchronize(state, diagnostic);
+    Array<AssetImporterDescriptor> descriptors;
+    state.Importers->GetDescriptors(descriptors);
+    for (const AssetImporterDescriptor& descriptor : descriptors)
+    {
+        if (descriptor.ID == implementation.ID)
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+    }
+    AssetImporterDescriptor descriptor = AssetImporterDescriptor::FromBuildImplementation(implementation, priority);
+    descriptor.RequestBuild = MoveTemp(requestBuild);
+    descriptor.GetBuildStatus = MoveTemp(getBuildStatus);
+    if (!descriptor.RequestBuild.IsBinded() || !descriptor.GetBuildStatus.IsBinded())
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Configuration;
+        diagnostic.ProcessorId = implementation.ID;
+        diagnostic.Message = TEXT("A built-in importer must provide generic build and status callbacks.");
+        return true;
+    }
+    if (descriptor.Extensions.IsEmpty())
+    {
+        if (implementation.ID == TEXT("Flax.Binary"))
+            descriptor.Fallback = AssetImporterFallback::Binary;
+        else
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Configuration;
+            diagnostic.ProcessorId = implementation.ID;
+            diagnostic.Message = TEXT("A built-in importer must declare source extensions or be the default binary importer.");
+            return true;
+        }
+    }
+    AssetImporterRegistration registration;
+    if (state.Importers->Register(MoveTemp(descriptor), registration, diagnostic))
+        return true;
+    state.BuiltInRegistrations.Add(MoveTemp(registration));
+    return false;
 }
 
 bool AssetImportService::IsInitialized()
@@ -145,7 +149,7 @@ void AssetImportService::Shutdown()
     std::lock_guard<std::mutex> lock(state.Locker);
     state.Scheduler.reset();
     state.Builds = nullptr;
-    state.ProcessorBridges.Clear();
+    state.BuiltInRegistrations.Clear();
     state.Refresh.reset();
     state.CustomDependencies.reset();
     state.ModificationProcessors.reset();

@@ -18,7 +18,7 @@
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Build/AssetProcessorRegistry.h"
@@ -83,11 +83,24 @@ namespace
         if (state.Initialized)
             return false;
 
-        AssetProcessorDescriptor existing;
-        if (!AssetProcessorRegistry::Get().TryGetDescriptor(TextureProcessorSettings::ProcessorID(), existing) &&
-            AssetProcessorRegistry::Get().Register(TextureProcessor::CreateDescriptor(), state.Registration, diagnostic))
-            return true;
+        AssetProcessorDescriptor implementation;
+        if (!AssetProcessorRegistry::Get().TryGetDescriptor(TextureProcessorSettings::ProcessorID(), implementation))
+        {
+            implementation = TextureProcessor::CreateDescriptor();
+            if (AssetProcessorRegistry::Get().Register(implementation, state.Registration, diagnostic))
+                return true;
+        }
         if (AssetImportService::EnsureInitialized(diagnostic))
+            return true;
+        if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
+            [](const Guid& id, bool force, AssetPipelineDiagnostic& localDiagnostic)
+            {
+                return TexturePipelineService::RequestBuild(id, force, localDiagnostic);
+            },
+            [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
+            {
+                return TexturePipelineService::GetStatus(id, localDiagnostic);
+            }))
             return true;
 
         state.Builds = std::make_unique<AssetBuildService>();
@@ -161,7 +174,7 @@ namespace
     {
         if (hasRuntime)
         {
-            Asset* asset = Content::GetAsset(assetID);
+            Asset* asset = Content::GetRuntimeObject(assetID);
             auto* texture = asset && asset->GetTypeName() == Texture::TypeName ? static_cast<Texture*>(asset) : nullptr;
             if (texture && texture->IsLoading() && !texture->IsLoaded() && !texture->LastLoadFailed())
             {
@@ -179,7 +192,7 @@ namespace
                     LOG(Error, "Failed to hot-swap texture artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
             }
         }
-        AssetDatabaseFacade::NotifyArtifactPublished(assetID);
+        AssetPipelineService::NotifyArtifactPublished(assetID);
     }
 
     void QueueTextureHotSwap(const ArtifactManifest& manifest)
