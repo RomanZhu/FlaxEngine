@@ -41,7 +41,12 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
 {
     DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDatabaseRecordInfo);
 
+    /// <summary>Compatibility alias for BackingAssetID. Never serialize this as project object identity.</summary>
     API_FIELD() Guid ID;
+    /// <summary>Canonical persistent identity.</summary>
+    API_FIELD() AssetObjectId ObjectID;
+    /// <summary>Deterministic engine runtime/cache address.</summary>
+    API_FIELD() Guid BackingAssetID;
     API_FIELD() Guid SourceAssetID;
     API_FIELD() int64 LocalId = 1;
     API_FIELD() String TypeName;
@@ -51,6 +56,8 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
     API_FIELD() String SubAssetKey;
     API_FIELD() String ProcessorID;
     API_FIELD() uint64 MetaSemanticHash = 0;
+    /// <summary>Sorted labels separated by newline; labels cannot contain control characters.</summary>
+    API_FIELD() String LabelsSerialized;
     API_FIELD() AssetSourceKind SourceKind = AssetSourceKind::LegacyBinary;
     API_FIELD() AssetRecordStatus Status = AssetRecordStatus::Ready;
     API_FIELD() uint64 Revision = 0;
@@ -69,6 +76,37 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseChangeInfo
     API_FIELD() Array<Guid> StatusChanged;
 };
 
+/// <summary>Native-owned projection of one adjacent metadata importer block.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetImporterMetaInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetImporterMetaInfo);
+
+    API_FIELD() Guid SourceAssetID;
+    API_FIELD() uint64 Revision = 0;
+    API_FIELD() String ImporterID;
+    API_FIELD() int32 SettingsSchemaVersion = 1;
+    API_FIELD() String SettingsJson;
+    API_FIELD() String ExternalObjectsJson;
+    API_FIELD() String UserData;
+    API_FIELD() String AssetBundleName;
+    API_FIELD() String AssetBundleVariant;
+};
+
+/// <summary>Managed-safe result from the native journaled source mutation owner.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetMutationResultInfo
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetMutationResultInfo);
+
+    API_FIELD() bool Succeeded = false;
+    API_FIELD() bool RequiresRecovery = false;
+    API_FIELD() Guid TransactionID;
+    API_FIELD() Guid AssetID;
+    API_FIELD() String SourcePath;
+    API_FIELD() String DestinationPath;
+    API_FIELD() String RecoveryPath;
+    API_FIELD() String Message;
+};
+
 /// <summary>Coarse managed boundary for the canonical source/sidecar database.</summary>
 API_CLASS(Static) class FLAXENGINE_API AssetDatabaseFacade
 {
@@ -85,6 +123,9 @@ public:
     static void NotifyArtifactPublished(const Guid& assetID);
 
     API_PROPERTY() static uint64 GetRevision();
+    API_PROPERTY() static int32 GetDesiredWorkerCount();
+    API_PROPERTY() static void SetDesiredWorkerCount(int32 value);
+    static int32 GetConfiguredMemoryLimitMegabytes();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
     API_FUNCTION() static AssetDatabaseChangeInfo GetLastChange();
@@ -92,11 +133,40 @@ public:
     /// <summary>Returns the source GUID at a logical or absolute canonical asset path.</summary>
     API_FUNCTION() static Guid AssetPathToGUID(const StringView& path);
 
-    /// <summary>Returns the canonical logical path for a live source or subasset GUID.</summary>
+    /// <summary>Returns the canonical logical path for a live source file GUID.</summary>
     API_FUNCTION() static String GUIDToAssetPath(const Guid& assetID);
 
     /// <summary>Returns all live main-asset paths in deterministic canonical order.</summary>
     API_FUNCTION() static Array<String> GetAllAssetPaths();
+
+    /// <summary>Gets deterministic direct or recursive build-input dependency source paths.</summary>
+    API_FUNCTION() static Array<String> GetDependencies(const Guid& assetID, bool recursive = false);
+
+    /// <summary>Gets a stable 128-bit projection of the committed dependency closure.</summary>
+    API_FUNCTION() static Guid GetDependencyHash(const Guid& assetID);
+
+    /// <summary>Atomically replaces source labels when the caller's record revision is current.</summary>
+    API_FUNCTION() static bool SetLabels(const Guid& assetID, const Array<String>& labels, uint64 expectedRevision = 0);
+
+    /// <summary>Reads importer metadata through the native metadata authority.</summary>
+    API_FUNCTION() static AssetImporterMetaInfo GetImporterMetadata(const Guid& assetID);
+
+    /// <summary>Atomically applies a complete importer metadata proxy with optimistic revision checking.</summary>
+    API_FUNCTION() static bool ApplyImporterMetadata(const Guid& assetID, uint64 expectedRevision, const StringView& importerID,
+        int32 settingsSchemaVersion, const StringView& settingsJson, const StringView& externalObjectsJson,
+        const StringView& userData, const StringView& assetBundleName, const StringView& assetBundleVariant);
+    API_FUNCTION() static bool ResetImporterMetadataToDefault(const Guid& assetID, uint64 expectedRevision);
+    API_FUNCTION() static bool ForceReserializeMetadata(const Array<String>& paths);
+
+    API_FUNCTION() static bool RegisterCustomDependency(const StringView& name, const Guid& hash);
+    API_FUNCTION() static bool UnregisterCustomDependencyPrefix(const StringView& prefix);
+
+    API_FUNCTION() static AssetMutationResultInfo ValidateAssetMove(const StringView& sourcePath, const StringView& destinationPath);
+    API_FUNCTION() static AssetMutationResultInfo MoveAssetPair(const StringView& sourcePath, const StringView& destinationPath);
+    API_FUNCTION() static AssetMutationResultInfo CopyAssetPair(const StringView& sourcePath, const StringView& destinationPath);
+    API_FUNCTION() static AssetMutationResultInfo DeleteAssetPairToRecovery(const StringView& sourcePath);
+    API_FUNCTION() static AssetMutationResultInfo CreateAssetFolder(const StringView& path);
+    API_FUNCTION() static AssetMutationResultInfo RecoverAssetPair(const StringView& recoveryPath, const StringView& destinationPath);
 
     /// <summary>Resolves a loaded main asset or subasset to its persistent source identity.</summary>
     API_FUNCTION() static bool TryGetAssetObjectId(Asset* asset, API_PARAM(Out) AssetObjectId& result);
@@ -112,6 +182,9 @@ public:
 
     /// <summary>Gets a stable cache version derived from the currently published artifact key.</summary>
     API_FUNCTION() static Guid GetPublishedArtifactCacheID(const Guid& assetID, const StringView& outputKind);
+
+    /// <summary>Returns true when a compatible published output exists for the asset.</summary>
+    API_FUNCTION() static bool HasPublishedArtifact(const Guid& assetID, const StringView& outputKind);
 
     /// <summary>Loads a still-current disposable snapshot or performs one full scan.</summary>
     /// <returns>True if the scan infrastructure failed. Content diagnostics remain queryable.</returns>

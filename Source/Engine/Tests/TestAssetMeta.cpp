@@ -45,12 +45,12 @@ TEST_CASE("Asset meta parses canonicalizes and preserves unknown fields")
         "{"
         "\"newRoot\":{\"plugin\":true},"
         "\"labels\":[\"stone\",\"environment\"],"
-        "\"subAssets\":{\"mesh:/Root/Body\":{\"guid\":\"96A16D5C-3596-479E-A93A-C2AD99FDCB1D\",\"type\":\"FlaxEngine.Model\",\"name\":\"Body\",\"removed\":false,\"pluginSub\":7}},"
+        "\"subAssets\":{\"mesh:/Root/Body\":{\"guid\":\"96A16D5C-3596-479E-A93A-C2AD99FDCB1D\",\"localId\":42,\"type\":\"FlaxEngine.Model\",\"name\":\"Body\",\"removed\":false,\"pluginSub\":7}},"
         "\"processor\":{\"settings\":{\"z\":1,\"a\":2},\"settingsVersion\":2,\"id\":\"Flax.Model\",\"pluginProcessor\":\"kept\"},"
         "\"sourceKind\":\"ImportedSource\","
         "\"assetType\":\"FlaxEngine.Model\","
         "\"guid\":\"36F15F0C-4B35-4AF8-8BA2-F72F6CB82E22\","
-        "\"metaVersion\":1} ";
+        "\"metaVersion\":2} ";
     AssetMeta meta;
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(AssetMeta::Parse(json, TEXT("Robot.gltf.meta"), meta, diagnostic));
@@ -70,10 +70,12 @@ TEST_CASE("Asset meta parses canonicalizes and preserves unknown fields")
     CHECK(first.Contains("\"newRoot\""));
     CHECK(first.Find("\"id\"") < first.Find("\"settingsVersion\""));
     CHECK(first.Find("\"settingsVersion\"") < first.Find("\"settings\""));
-    CHECK(first.Find("\"guid\": \"96a16d5c") < first.Find("\"type\": \"FlaxEngine.Model\""));
+    CHECK(first.Contains("\"fileFormatVersion\": 2"));
+    CHECK(first.Contains("\"objects\""));
+    CHECK_FALSE(first.Contains("96a16d5c"));
     CHECK(first.Contains("\"pluginProcessor\""));
     CHECK(first.Contains("\"pluginSub\""));
-    CHECK(first.StartsWith("{\n  \"metaVersion\":"));
+    CHECK(first.StartsWith("{\n  \"fileFormatVersion\":"));
     CHECK(first.EndsWith("\n"));
 }
 
@@ -81,11 +83,11 @@ TEST_CASE("Asset meta rejects invalid processor and duplicate identities")
 {
     AssetMeta meta;
     AssetPipelineDiagnostic diagnostic;
-    CHECK(AssetMeta::Parse("{\"metaVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"assetType\":\"T\",\"sourceKind\":\"ImportedSource\",\"processor\":{\"id\":\"bad id\",\"settingsVersion\":1,\"settings\":{}},\"subAssets\":{},\"labels\":[]}", TEXT("bad.meta"), meta, diagnostic));
+    CHECK(AssetMeta::Parse("{\"metaVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"assetType\":\"T\",\"sourceKind\":\"ImportedSource\",\"processor\":{\"id\":\"bad id\",\"settingsVersion\":1,\"settings\":{}},\"subAssets\":{},\"labels\":[]}", TEXT("bad.meta"), meta, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
 
-    CHECK(AssetMeta::Parse("{\"metaVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"assetType\":\"T\",\"sourceKind\":\"ImportedSource\",\"processor\":{\"id\":\"Flax.T\",\"settingsVersion\":1,\"settings\":{}},\"subAssets\":{\"mesh:A\":{\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"type\":\"T\",\"name\":\"A\",\"removed\":false}},\"labels\":[]}", TEXT("duplicate.meta"), meta, diagnostic));
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::DuplicateGuid);
+    CHECK(AssetMeta::Parse("{\"metaVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"assetType\":\"T\",\"sourceKind\":\"ImportedSource\",\"processor\":{\"id\":\"Flax.T\",\"settingsVersion\":1,\"settings\":{}},\"subAssets\":{\"mesh:A\":{\"guid\":\"96a16d5c3596479ea93ac2ad99fdcb1d\",\"localId\":42,\"type\":\"T\",\"name\":\"A\",\"removed\":false},\"mesh:B\":{\"guid\":\"96a16d5c3596479ea93ac2ad99fdcb1e\",\"localId\":42,\"type\":\"T\",\"name\":\"B\",\"removed\":false}},\"labels\":[]}", TEXT("duplicate.meta"), meta, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
 }
 
 TEST_CASE("Asset meta atomic write preserves old complete sidecar on failures")
@@ -137,7 +139,7 @@ TEST_CASE("Asset meta atomic write preserves old complete sidecar on failures")
 TEST_CASE("Asset meta no write parse reports tracked generic upgrade")
 {
     const String path = Globals::ProjectLibraryFolder / TEXT("Tests/old.meta");
-    const StringAnsi oldJson = "{\"metaVersion\":0,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"assetType\":\"T\",\"sourceKind\":\"ImportedSource\",\"processor\":{\"id\":\"Flax.T\",\"settingsVersion\":1,\"settings\":{}},\"subAssets\":{},\"labels\":[]}";
+    const StringAnsi oldJson = "{\"metaVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"assetType\":\"T\",\"sourceKind\":\"ImportedSource\",\"processor\":{\"id\":\"Flax.T\",\"settingsVersion\":1,\"settings\":{}},\"subAssets\":{},\"labels\":[]}";
     REQUIRE_FALSE(File::WriteAllBytes(path, oldJson.Get(), oldJson.Length()));
     SCOPE_EXIT { FileSystem::DeleteFile(path); };
     BytesContainer before;
@@ -191,25 +193,33 @@ TEST_CASE("Processor settings upgrades are staged and independent from implement
     CHECK(created.Processor.SettingsJson.Contains("12345"));
 }
 
-TEST_CASE("Asset metadata clone regenerates root live and tombstone identities")
+TEST_CASE("Asset metadata copy changes file GUID and preserves file-relative local IDs")
 {
     AssetMeta source = MakeMeta();
     SubAssetMeta live;
-    live.ID = Guid::New();
+    live.LocalId = 42;
     live.TypeName = TEXT("FlaxEngine.Model");
     live.DisplayName = TEXT("Live");
     SubAssetMeta tombstone = live;
-    tombstone.ID = Guid::New();
+    tombstone.LocalId = 43;
     tombstone.DisplayName = TEXT("Removed");
     tombstone.Removed = true;
     source.SubAssets.Add(TEXT("mesh:/Live"), live);
     source.SubAssets.Add(TEXT("mesh:/Removed"), tombstone);
     const AssetMeta clone = source.CloneWithNewIdentities();
     CHECK(clone.ID != source.ID);
-    CHECK(clone.SubAssets[TEXT("mesh:/Live")].ID != live.ID);
-    CHECK(clone.SubAssets[TEXT("mesh:/Removed")].ID != tombstone.ID);
+    CHECK(clone.SubAssets[TEXT("mesh:/Live")].LocalId == live.LocalId);
+    CHECK(clone.SubAssets[TEXT("mesh:/Removed")].LocalId == tombstone.LocalId);
     CHECK(clone.SubAssets[TEXT("mesh:/Removed")].Removed);
-    CHECK(clone.SubAssets[TEXT("mesh:/Live")].ID != clone.SubAssets[TEXT("mesh:/Removed")].ID);
+    CHECK(SubAssetPolicy::GetBackingAssetId(clone.ID, live.LocalId) != SubAssetPolicy::GetBackingAssetId(source.ID, live.LocalId));
+}
+
+TEST_CASE("Asset metadata future versions block without rewrite")
+{
+    AssetMeta meta;
+    AssetPipelineDiagnostic diagnostic;
+    CHECK(AssetMeta::Parse("{\"fileFormatVersion\":4}", TEXT("future.meta"), meta, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::FutureMetaVersion);
 }
 
 #endif

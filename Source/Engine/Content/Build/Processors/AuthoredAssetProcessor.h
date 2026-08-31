@@ -12,6 +12,8 @@ class FLAXENGINE_API AuthoredAssetPreparedPayload : public PreparedAssetPayload
 {
 public:
     ContentHash SourceHash;
+    bool GenericObjectDocument = false;
+    int64 ObjectLocalId = 0;
 
     uint64 GetMemoryUsage() const override
     {
@@ -32,6 +34,7 @@ public:
     static const String& SceneAnimationID();
     static const String& ParticleSystemID();
     static const String& CollisionDataID();
+    static const String& GenericObjectID();
     static AssetProcessorDescriptor CreateDescriptor(const StringView& processorID);
     static bool Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic);
     static bool BuildOutputKey(const PreparedAsset& prepared, const ArtifactTarget& target, const StringAnsiView& outputKind,

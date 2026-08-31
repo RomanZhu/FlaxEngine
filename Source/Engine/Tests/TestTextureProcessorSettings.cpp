@@ -122,7 +122,7 @@ TEST_CASE("Texture processor settings round-trip every legacy importer option an
 TEST_CASE("Texture processor settings accept Stone meta and preserve explicit defaults")
 {
     const StringAnsi stoneMeta = R"({
-        "metaVersion":1,
+        "metaVersion":2,
         "guid":"36f15f0c4b354af88ba2f72f6cb82e22",
         "assetType":"FlaxEngine.Texture",
         "sourceKind":"ImportedSource",

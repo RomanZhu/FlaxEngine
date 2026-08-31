@@ -21,6 +21,18 @@ namespace
     {
         return a.Kind == b.Kind && a.StableIdentity == b.StableIdentity && a.AssetID == b.AssetID;
     }
+
+    const char* StateName(AssetDependencyState state)
+    {
+        switch (state)
+        {
+        case AssetDependencyState::Present: return "present";
+        case AssetDependencyState::Missing: return "missing";
+        case AssetDependencyState::CurrentArtifact: return "current";
+        case AssetDependencyState::ExactArtifact: return "exact";
+        default: return "invalid";
+        }
+    }
 }
 
 bool AssetDependency::AffectsBuildKey() const
@@ -34,16 +46,39 @@ void AssetDependency::AppendKeyComponents(ArtifactKeyBuilder& builder, int32 ind
         return;
     const StringAnsi prefix = StringAnsi::Format("dependency-{0}-", index);
     builder.AddUInt32(prefix + "kind", static_cast<uint32>(Kind));
+    builder.AddUInt32(prefix + "state", static_cast<uint32>(State));
     builder.AddString(prefix + "identity", StableIdentity);
     if (AssetID.IsValid())
         builder.AddGuid(prefix + "asset", AssetID);
     switch (Kind)
     {
-    case AssetDependencyKind::SourceFile:
+    case AssetDependencyKind::ExactSourceFile:
+    case AssetDependencyKind::SourceAsset:
+        if (State == AssetDependencyState::Missing)
+        {
+            builder.AddString(prefix + "fingerprint", StringAnsiView("MISSING"));
+            break;
+        }
+        builder.AddHash(prefix + "content", Content);
+        if (!Metadata.IsZero())
+            builder.AddHash(prefix + "metadata", Metadata);
+        break;
+    case AssetDependencyKind::Custom:
+    case AssetDependencyKind::Global:
+    case AssetDependencyKind::Target:
+    case AssetDependencyKind::ImporterProvider:
+    case AssetDependencyKind::Environment:
     case AssetDependencyKind::Toolchain:
         builder.AddHash(prefix + "content", Content);
         break;
-    case AssetDependencyKind::BuildInput:
+    case AssetDependencyKind::LogicalPath:
+        break;
+    case AssetDependencyKind::Artifact:
+        if (State == AssetDependencyState::Missing)
+        {
+            builder.AddString(prefix + "fingerprint", StringAnsiView("MISSING"));
+            break;
+        }
         if (!SemanticInterface.IsZero())
         {
             builder.AddUInt32(prefix + "interface-version", InterfaceVersion);
@@ -59,16 +94,41 @@ void AssetDependency::AppendKeyComponents(ArtifactKeyBuilder& builder, int32 ind
     }
 }
 
+StringAnsi AssetDependency::DescribeFingerprint() const
+{
+    StringAnsi result = StringAnsi::Format("{0}|{1}", static_cast<uint32>(Kind), StateName(State));
+    if (State == AssetDependencyState::Missing)
+        return result + "|MISSING";
+    if (!Content.IsZero())
+        result += "|content=" + Content.ToString();
+    if (!Metadata.IsZero())
+        result += "|metadata=" + Metadata.ToString();
+    if (!ExactArtifact.IsZero())
+        result += "|artifact=" + ExactArtifact.ToString();
+    if (!SemanticInterface.IsZero())
+        result += StringAnsi::Format("|interface={0}:{1}", InterfaceVersion, SemanticInterface.ToString());
+    return result;
+}
+
 bool AssetDependency::NormalizeAndSort(Array<AssetDependency>& dependencies, AssetPipelineDiagnostic& diagnostic)
 {
     diagnostic = AssetPipelineDiagnostic();
     for (AssetDependency& dependency : dependencies)
     {
         dependency.StableIdentity.Replace(TEXT('\\'), TEXT('/'));
+        const bool sourceKind = dependency.Kind == AssetDependencyKind::ExactSourceFile || dependency.Kind == AssetDependencyKind::SourceAsset;
+        const bool hashedKind = sourceKind || dependency.Kind == AssetDependencyKind::Custom || dependency.Kind == AssetDependencyKind::Global ||
+            dependency.Kind == AssetDependencyKind::Target || dependency.Kind == AssetDependencyKind::ImporterProvider ||
+            dependency.Kind == AssetDependencyKind::Toolchain || dependency.Kind == AssetDependencyKind::Environment;
+        const bool artifactKind = dependency.Kind == AssetDependencyKind::Artifact;
+        const bool missingAllowed = sourceKind || artifactKind;
         if (dependency.StableIdentity.IsEmpty() ||
-            ((dependency.Kind == AssetDependencyKind::BuildInput || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.AssetID.IsValid()) ||
-            ((dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::Toolchain) && dependency.Content.IsZero()) ||
-            (dependency.Kind == AssetDependencyKind::BuildInput && dependency.ExactArtifact.IsZero() && dependency.SemanticInterface.IsZero()))
+            ((artifactKind || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.AssetID.IsValid()) ||
+            (dependency.State == AssetDependencyState::Missing && !missingAllowed) ||
+            (dependency.State != AssetDependencyState::Missing && hashedKind && dependency.Content.IsZero()) ||
+            (artifactKind && dependency.State != AssetDependencyState::Missing && dependency.ExactArtifact.IsZero() && dependency.SemanticInterface.IsZero()) ||
+            (artifactKind && dependency.State == AssetDependencyState::Present) ||
+            (!artifactKind && (dependency.State == AssetDependencyState::CurrentArtifact || dependency.State == AssetDependencyState::ExactArtifact)))
         {
             diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
             diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;

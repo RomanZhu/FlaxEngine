@@ -332,6 +332,8 @@ bool LegacyAssetMigrator::SeedModelSubAssets(const StringView& flaxPath, AssetMe
         meta.Processor.ID = TEXT("Flax.Model");
     if (meta.Processor.SettingsJson.IsEmpty())
         meta.Processor.SettingsJson = "{}\n";
+    HashSet<int64> reservedLocalIds;
+    reservedLocalIds.Add(1);
     for (int32 i = 1; i < entries.Count(); i++)
     {
         const FlaxStorage::Entry& entry = entries[i];
@@ -343,12 +345,12 @@ bool LegacyAssetMigrator::SeedModelSubAssets(const StringView& flaxPath, AssetMe
         else if (entry.TypeName.Contains(TEXT("Model")))
             kind = TEXT("mesh");
         SubAssetMeta sub;
-        sub.ID = entry.ID;
         sub.TypeName = entry.TypeName;
         sub.DisplayName = StringUtils::GetFileNameWithoutExtension(flaxPath);
         if (i > 1)
             sub.DisplayName += String::Format(TEXT("-{0}"), i - 1);
         const String key = kind + TEXT(":") + sub.DisplayName;
+        sub.LocalId = SubAssetPolicy::AllocateLocalId(meta.Processor.ID, key, sub.TypeName, reservedLocalIds);
         meta.SubAssets.Add(key, sub);
     }
     diagnostic = AssetPipelineDiagnostic();

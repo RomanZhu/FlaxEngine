@@ -26,7 +26,30 @@
 #include "Engine/Serialization/Serialization.h"
 #if FLAX_TESTS || USE_EDITOR
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/File.h"
 #endif
+
+namespace
+{
+    String GetGameSettingsAssetPath()
+    {
+#if USE_EDITOR
+        Array<String> projects;
+        if (!FileSystem::DirectoryGetFiles(projects, Globals::ProjectFolder, TEXT("*.flaxproj"), DirectorySearchOption::TopDirectoryOnly) && projects.Count() == 1)
+        {
+            StringAnsi source;
+            rapidjson_flax::Document document;
+            if (!File::ReadAllText(projects[0], source))
+            {
+                document.Parse(source.Get(), source.Length());
+                if (!document.HasParseError() && JsonTools::GetInt(document, "AssetSystemVersion", 0) == 3)
+                    return Globals::ProjectContentFolder / TEXT("Settings/Project Settings.json");
+            }
+        }
+#endif
+        return Globals::ProjectContentFolder / TEXT("GameSettings.json");
+    }
+}
 
 class GameSettingsService : public EngineService
 {
@@ -114,7 +137,7 @@ GameSettings* GameSettings::Get()
         // Load root game settings asset.
         // It may be missing in editor during dev but must be ready in the build game.
         PROFILE_CPU();
-        const auto assetPath = Globals::ProjectContentFolder / TEXT("GameSettings.json");
+        const auto assetPath = GetGameSettingsAssetPath();
 #if FLAX_TESTS
         // Silence missing GameSettings during test run before Editor creates it (not important)
         if (!FileSystem::FileExists(assetPath))

@@ -2,11 +2,15 @@
 
 #include "AssetDatabaseScanner.h"
 #include "AssetMeta.h"
+#include "SubAsset.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Core/Types/DateTime.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Serialization/Json.h"
 #include "Engine/Utilities/Crc.h"
+#include <algorithm>
 
 namespace
 {
@@ -51,7 +55,6 @@ namespace
                     storage->GetEntry(i, entries[i]);
             }
         }
-        ContentStorageManager::EnsureAccess(path);
         return failed;
     }
 
@@ -133,6 +136,7 @@ namespace
         result.ProcessorID = meta.Processor.ID;
         result.PortabilityKey = normalizedPath.PortabilityKey;
         result.MetaSemanticHash = semanticHash;
+        result.Labels = meta.Labels;
         result.SourceKind = meta.SourceKind;
         result.Status = status;
         return result;
@@ -144,7 +148,7 @@ namespace
         for (const auto& entry : meta.SubAssets)
         {
             AssetRecord subAsset;
-            subAsset.ID = entry.Value.ID;
+            subAsset.ID = SubAssetPolicy::GetBackingAssetId(meta.ID, entry.Value.LocalId);
             subAsset.SourceAssetID = meta.ID;
             subAsset.LocalId = entry.Value.LocalId;
             subAsset.TypeName = entry.Value.TypeName;
@@ -155,6 +159,7 @@ namespace
             subAsset.ProcessorID = meta.Processor.ID;
             subAsset.PortabilityKey = normalizedPath.PortabilityKey;
             subAsset.MetaSemanticHash = semanticHash;
+            subAsset.Labels = meta.Labels;
             subAsset.SourceKind = meta.SourceKind;
             subAsset.Status = entry.Value.Removed ? AssetRecordStatus::MissingSource : status;
             records.Add(MoveTemp(subAsset));
@@ -168,8 +173,8 @@ namespace
         {
             AssetRecord& existing = records[*existingIndex];
             existing.Status = AssetRecordStatus::DuplicateGuid;
-            AssetPipelineDiagnostic diagnostic = MakeDiagnostic(AssetPipelineDiagnosticCode::DuplicateGuid, record.SourcePath.Get(), TEXT("The GUID is declared by more than one source or subasset."));
-            diagnostic.AssetGuid = record.ID;
+            AssetPipelineDiagnostic diagnostic = MakeDiagnostic(AssetPipelineDiagnosticCode::DuplicateGuid, record.SourcePath.Get(), TEXT("The file GUID or deterministic object backing address is duplicated."));
+            diagnostic.AssetGuid = record.SourceAssetID;
             diagnostic.Related.Add(existing.SourcePath.Get());
             diagnostic.Related.Add(record.SourcePath.Get());
             diagnostics.Add(MoveTemp(diagnostic));
@@ -191,6 +196,118 @@ namespace
             {
                 recordIndices.Add(retained.ID, records.Count());
                 records.Add(MoveTemp(retained));
+            }
+        }
+    }
+
+    bool ProjectsJsonRuntimeReferences(const AssetRecord& record)
+    {
+        return record.ProcessorID == TEXT("Flax.ExistingJson") ||
+            record.ProcessorID == TEXT("Flax.GraphDocument") ||
+            record.ProcessorID == TEXT("Flax.MaterialInstance") ||
+            record.ProcessorID == TEXT("Flax.SkeletonMask") ||
+            record.ProcessorID == TEXT("Flax.SceneAnimation") ||
+            record.ProcessorID == TEXT("Flax.ParticleSystem") ||
+            record.ProcessorID == TEXT("Flax.CollisionData") ||
+            record.ProcessorID == TEXT("Flax.AuthoredObject");
+    }
+
+    bool IsReferenceGuidField(const StringAnsiView& name)
+    {
+        return name == "guid" || name == "fileGuid" || name == "Guid" || name == "FileGuid" ||
+            name == "GUID" || name == "FileGUID";
+    }
+
+    bool IsReferenceLocalIdField(const StringAnsiView& name)
+    {
+        return name == "localId" || name == "fileId" || name == "LocalId" || name == "FileId" || name == "FileID";
+    }
+
+    void CollectJsonReferences(const rapidjson_flax::Value& value, HashSet<Guid>& guidReferences, HashSet<Guid>& objectReferences)
+    {
+        if (value.IsObject())
+        {
+            const rapidjson_flax::Value* guidValue = nullptr;
+            const rapidjson_flax::Value* localIdValue = nullptr;
+            for (auto i = value.MemberBegin(); i != value.MemberEnd(); ++i)
+            {
+                const StringAnsiView name(i->name.GetString(), i->name.GetStringLength());
+                if (IsReferenceGuidField(name))
+                    guidValue = &i->value;
+                else if (IsReferenceLocalIdField(name))
+                    localIdValue = &i->value;
+            }
+            Guid fileGuid;
+            const bool hasObjectReference = guidValue && guidValue->IsString() && localIdValue && localIdValue->IsInt64() &&
+                localIdValue->GetInt64() != 0 && !Guid::Parse(guidValue->GetStringAnsiView(), fileGuid) && fileGuid.IsValid();
+            if (hasObjectReference)
+                objectReferences.Add(SubAssetPolicy::GetBackingAssetId(fileGuid, localIdValue->GetInt64()));
+            for (auto i = value.MemberBegin(); i != value.MemberEnd(); ++i)
+            {
+                const StringAnsiView name(i->name.GetString(), i->name.GetStringLength());
+                if (!hasObjectReference || !IsReferenceGuidField(name))
+                    CollectJsonReferences(i->value, guidReferences, objectReferences);
+            }
+        }
+        else if (value.IsArray())
+        {
+            for (const auto& item : value.GetArray())
+                CollectJsonReferences(item, guidReferences, objectReferences);
+        }
+        else if (value.IsString() && value.GetStringLength() == 32)
+        {
+            Guid id;
+            if (!Guid::Parse(value.GetStringAnsiView(), id) && id.IsValid())
+                guidReferences.Add(id);
+        }
+    }
+
+    void ProjectRuntimeReferencesInternal(Array<AssetRecord>& records, const Dictionary<Guid, int32>& recordIndices, Array<AssetPipelineDiagnostic>& diagnostics)
+    {
+        for (AssetRecord& main : records)
+        {
+            if (!main.IsMainAsset() || !ProjectsJsonRuntimeReferences(main) || !FileSystem::FileExists(main.SourcePath.Get()))
+                continue;
+            Array<byte> bytes;
+            if (File::ReadAllBytes(main.SourcePath.Get(), bytes))
+            {
+                diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::SourceMissing, main.SourcePath.Get(), TEXT("Canonical JSON runtime references could not be read.")));
+                continue;
+            }
+            rapidjson_flax::Document json;
+            json.Parse(reinterpret_cast<const char*>(bytes.Get()), bytes.Count());
+            if (json.HasParseError())
+            {
+                diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::InvalidMeta, main.SourcePath.Get(), TEXT("Canonical JSON runtime references could not be parsed.")));
+                continue;
+            }
+            HashSet<Guid> guidCandidates;
+            HashSet<Guid> objectCandidates;
+            CollectJsonReferences(json, guidCandidates, objectCandidates);
+            Array<Guid> references;
+            for (const auto& candidateEntry : objectCandidates)
+            {
+                const Guid& candidate = candidateEntry.Item;
+                if (candidate != main.ID)
+                    references.Add(candidate);
+            }
+            for (const auto& candidateEntry : guidCandidates)
+            {
+                const Guid& candidate = candidateEntry.Item;
+                if (candidate != main.ID && recordIndices.ContainsKey(candidate) && !references.Contains(candidate))
+                    references.Add(candidate);
+            }
+            if (references.Count() > 1)
+            {
+                std::sort(references.Get(), references.Get() + references.Count(), [](const Guid& a, const Guid& b)
+                {
+                    return a.ToString(Guid::FormatType::N) < b.ToString(Guid::FormatType::N);
+                });
+            }
+            for (AssetRecord& record : records)
+            {
+                if (record.SourceAssetID == main.SourceAssetID)
+                    record.RuntimeReferences = references;
             }
         }
     }
@@ -288,7 +405,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         const bool isFolder = FileSystem::DirectoryExists(sourcePath);
         if (!isFolder && FileSystem::GetExtension(sourcePath).ToLower() == TEXT("flax"))
         {
-            if (options.AssetSystemVersion >= 3)
+            if (options.AssetSystemVersion >= 3 && !options.AllowLegacyBinarySources)
             {
                 result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::ProcessorMissing, sourcePath, TEXT("Asset-system version 3 does not allow legacy cooked .flax files in Content.")));
                 consumedMeta.Add(sourcePath + TEXT(".meta"));
@@ -329,7 +446,8 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         const String metaPath = sourcePath + TEXT(".meta");
         if (!fileSet.Contains(metaPath))
         {
-            if (options.AssetSystemVersion >= 3 || (options.StrictMetadata && RequiresMetadata(sourcePath)))
+            if ((options.AssetSystemVersion >= 3 && !options.AllowLegacyBinarySources) ||
+                (options.StrictMetadata && RequiresMetadata(sourcePath)))
                 result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::MissingMeta, sourcePath, TEXT("Canonical source is missing its adjacent metadata sidecar.")));
             continue;
         }
@@ -424,5 +542,19 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             AddRecordWithDuplicateCheck(MoveTemp(record), records, recordIndices, result.Diagnostics);
     }
 
+    ProjectRuntimeReferencesInternal(records, recordIndices, result.Diagnostics);
+
     return false;
+}
+
+void AssetDatabaseScanner::ProjectRuntimeReferences(Array<AssetRecord>& records, Array<AssetPipelineDiagnostic>& diagnostics)
+{
+    Dictionary<Guid, int32> recordIndices;
+    recordIndices.EnsureCapacity(records.Count());
+    for (int32 i = 0; i < records.Count(); i++)
+    {
+        if (!recordIndices.ContainsKey(records[i].ID))
+            recordIndices.Add(records[i].ID, i);
+    }
+    ProjectRuntimeReferencesInternal(records, recordIndices, diagnostics);
 }

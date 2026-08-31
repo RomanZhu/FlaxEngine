@@ -16,6 +16,10 @@ class FLAXENGINE_API ProjectInfo
 {
 public:
 
+    static constexpr int32 CurrentAssetSystemVersion = 3;
+    static constexpr int32 CurrentArtifactLayoutVersion = 2;
+    static constexpr int32 CurrentSourceDocumentVersion = 1;
+
     /// <summary>
     /// The loaded projects cache.
     /// </summary>
@@ -55,6 +59,29 @@ public:
     /// The project root folder path.
     /// </summary>
     String ProjectFolderPath;
+
+    /// <summary>
+    /// Committed one-way asset-system format marker. Zero means the project predates the marker.
+    /// </summary>
+    int32 AssetSystemVersion;
+
+    /// <summary>Stable bootstrap identity of an asset-system v3 project.</summary>
+    Guid ProjectId;
+
+    /// <summary>The single writable project source-root declaration.</summary>
+    String SourceRoot;
+
+    /// <summary>The persistent source-object identity model.</summary>
+    String IdentityModel;
+
+    /// <summary>The immutable artifact store layout version.</summary>
+    int32 ArtifactLayoutVersion;
+
+    /// <summary>The authored source-document format version.</summary>
+    int32 SourceDocumentVersion;
+
+    /// <summary>True when this editor cannot safely write the project's asset-system format.</summary>
+    bool AssetSystemReadOnly;
 
     /// <summary>
     /// The project version.
@@ -111,9 +138,19 @@ public:
     ProjectInfo()
     {
         Version = ::Version(1, 0);
+        AssetSystemVersion = CurrentAssetSystemVersion;
+        ProjectId = Guid::New();
+        SourceRoot = TEXT("Content");
+        IdentityModel = TEXT("guid-local-id");
+        ArtifactLayoutVersion = CurrentArtifactLayoutVersion;
+        SourceDocumentVersion = CurrentSourceDocumentVersion;
+        AssetSystemReadOnly = false;
         DefaultSceneSpawn = Ray(Vector3::Zero, Vector3::Forward);
         DefaultScene = Guid::Empty;
     }
+
+    /// <summary>Validates the committed asset-system marker without changing project state.</summary>
+    bool ValidateAssetSystemMarker(String& error) const;
 
     /// <summary>
     /// Saves the project file (*.flaxproj).

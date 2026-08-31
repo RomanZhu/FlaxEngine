@@ -20,12 +20,14 @@
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/AssetDatabase/AssetSourceRoots.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Scripting/Scripting.h"
 #include <memory>
 #include <mutex>
@@ -36,6 +38,8 @@ namespace
     {
         PreparedAsset Prepared;
         ArtifactTarget Target;
+        String ProjectRoot;
+        String ContentRoot;
         Guid JobID = Guid::New();
         Array<ArtifactBuildInput> Inputs;
         Array<ArtifactPublicationOutputPlan> Outputs;
@@ -89,8 +93,8 @@ namespace
 
         state.Builds = std::make_unique<AssetBuildService>();
         AssetBuildServiceLimits limits;
-        limits.MaximumWorkers = 2;
-        limits.MaximumMemoryBytes = 4ull * 1024ull * 1024ull * 1024ull;
+        limits.MaximumWorkers = AssetDatabaseFacade::GetDesiredWorkerCount();
+        limits.MaximumMemoryBytes = static_cast<uint64>(AssetDatabaseFacade::GetConfiguredMemoryLimitMegabytes()) * 1024ull * 1024ull;
         limits.MaximumExternalTools = 1;
         if (state.Builds->Initialize(Globals::ProjectLibraryFolder, limits, diagnostic))
         {
@@ -217,6 +221,28 @@ namespace
                 LOG(Error, "Cannot initialize the texture artifact pipeline: {0}", diagnostic.Message);
                 return true;
             }
+#if USE_EDITOR
+            // Canonical records and mounts must exist before settings and other early engine
+            // services attempt to resolve authored assets. The editor module performs a strict
+            // refresh later, but that is too late for the hard-cut load path.
+            if (AssetDatabaseFacade::LoadOrScan(false))
+            {
+                const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseFacade::GetDiagnostics();
+                if (diagnostics.IsEmpty())
+                {
+                    LOG(Error, "Cannot initialize the canonical asset database before engine settings load.");
+                }
+                else
+                {
+                    for (const AssetPipelineDiagnostic& item : diagnostics)
+                    {
+                        if (item.Severity == AssetPipelineDiagnosticSeverity::Error)
+                            LOG(Error, "Canonical asset database initialization failed [{0}]: {1} Path: '{2}'.", GetAssetPipelineDiagnosticCodeName(item.Code), item.Message, item.SourcePath);
+                    }
+                }
+                return true;
+            }
+#endif
             return false;
         }
 
@@ -254,6 +280,20 @@ AssetBuildService* TexturePipelineService::GetBuildService(AssetPipelineDiagnost
     return State().Builds.get();
 }
 
+bool TexturePipelineService::SetMaximumWorkers(int32 value)
+{
+    TexturePipelineState& state = State();
+    std::lock_guard<std::mutex> lock(state.Locker);
+    return state.Builds ? state.Builds->SetMaximumWorkers(value) : false;
+}
+
+int32 TexturePipelineService::GetMaximumWorkers()
+{
+    TexturePipelineState& state = State();
+    std::lock_guard<std::mutex> lock(state.Locker);
+    return state.Builds ? state.Builds->GetMaximumWorkers() : 0;
+}
+
 bool TexturePipelineService::CreatePlan(const AssetRecord& record, const ArtifactRequest& request,
     ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& diagnostic)
 {
@@ -274,8 +314,11 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     AssetCancellationSource preparationCancellation;
     PreparedAsset prepared;
     TexturePipelineState& state = State();
-    PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
-        record, prepareLease.Get(), meta.Processor.SettingsJson, state.HashCache, preparationCancellation.GetToken());
+    String projectRoot;
+    String contentRoot;
+    AssetSourceRoots::Resolve(record.SourcePath.Get(), projectRoot, contentRoot);
+    PrepareAssetContext context(projectRoot, contentRoot, Globals::ProjectLibraryFolder,
+        record, prepareLease.Get(), meta.Processor.SettingsJson, request.Target, state.HashCache, preparationCancellation.GetToken());
     if (prepareLease.Get().Prepare(context, prepared, diagnostic) ||
         context.Finalize(record.DatabaseRevision, prepared, diagnostic))
         return true;
@@ -287,6 +330,8 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     auto execution = std::make_shared<TextureExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
+    execution->ProjectRoot = projectRoot;
+    execution->ContentRoot = contentRoot;
     DeclaredArtifactOutput selectedOutput;
     bool hasSelectedOutput = false;
     for (const DeclaredArtifactOutput& output : prepared.Outputs)
@@ -305,11 +350,11 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     execution->Prepared.Outputs.Add(selectedOutput);
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        if (dependency.Kind != AssetDependencyKind::SourceFile)
+        if (!dependency.IsSourceDependency())
             continue;
         ArtifactBuildInput input;
         input.StableIdentity = dependency.StableIdentity;
-        input.Path = record.SourcePath.Get();
+        input.Path = dependency.Kind == AssetDependencyKind::SourceAsset ? record.SourcePath.Get() : projectRoot / dependency.StableIdentity;
         input.ExpectedContent = dependency.Content;
         execution->Inputs.Add(MoveTemp(input));
     }
@@ -351,7 +396,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
 
     plan.BuildRequest.Build = [execution](const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& buildDiagnostic)
     {
-        execution->Context = std::make_unique<ArtifactBuildContext>(Globals::ProjectFolder, Globals::ProjectContentFolder,
+        execution->Context = std::make_unique<ArtifactBuildContext>(execution->ProjectRoot, execution->ContentRoot,
             Globals::ProjectLibraryFolder, execution->JobID, execution->Prepared, execution->Inputs, cancellation, execution->Target);
         if (execution->Context->Initialize(buildDiagnostic))
             return true;

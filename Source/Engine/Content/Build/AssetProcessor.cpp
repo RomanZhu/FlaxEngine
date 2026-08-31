@@ -11,6 +11,5 @@ void AssetProcessorDescriptor::AppendVersionKey(ArtifactKeyBuilder& builder, con
     builder.AddUInt32(StringAnsiView("processor-interface-version"), InterfaceVersion);
     builder.AddString(StringAnsiView("output-kind"), output.Kind);
     builder.AddUInt32(StringAnsiView("output-format-version"), output.FormatVersion);
-    if (ProviderKind == AssetProcessorProviderKind::ThirdParty)
-        builder.AddHash(StringAnsiView("provider-semantic-identity"), ProviderSemanticIdentity);
+    builder.AddHash(StringAnsiView("provider-code-hash"), ProviderSemanticIdentity);
 }

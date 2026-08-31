@@ -213,6 +213,7 @@ namespace FlaxEditor
                 AssetPipelineDiagnosticCode.SourceBusy => "ASSET_SOURCE_BUSY",
                 AssetPipelineDiagnosticCode.ProcessorMissing => "ASSET_PROCESSOR_MISSING",
                 AssetPipelineDiagnosticCode.SubAssetReconcileRequired => "ASSET_SUBASSET_RECONCILE_REQUIRED",
+                AssetPipelineDiagnosticCode.FutureMetaVersion => "ASSET_FUTURE_META_VERSION",
                 AssetPipelineDiagnosticCode.LibraryPathInvalid => "ASSET_LIBRARY_PATH_INVALID",
                 AssetPipelineDiagnosticCode.LibraryCreationFailed => "ASSET_LIBRARY_CREATION_FAILED",
                 AssetPipelineDiagnosticCode.BuildFailed => "ASSET_BUILD_FAILED",

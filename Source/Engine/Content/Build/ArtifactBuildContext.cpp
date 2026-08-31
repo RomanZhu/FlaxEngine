@@ -123,10 +123,18 @@ bool ArtifactBuildContext::Initialize(AssetPipelineDiagnostic& diagnostic)
                 return true;
             }
         }
-        if (declaration->Kind == AssetDependencyKind::SourceFile)
+        if (declaration->IsSourceDependency())
         {
             AssetPathPolicy::ProjectPath normalized;
-            if (AssetPathPolicy::TryNormalizeProjectPath(_projectRoot, _contentRoot, _libraryRoot, input.Path, normalized, diagnostic) || normalized.ProjectRelativePath != declaration->StableIdentity)
+            if (AssetPathPolicy::TryNormalizeProjectPath(_projectRoot, _contentRoot, _libraryRoot, input.Path, normalized, diagnostic))
+            {
+                SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, _prepared, input.Path, TEXT("Source input path does not match its prepared canonical identity."));
+                return true;
+            }
+            AssetPathPolicy::ProjectPath expected;
+            const StringView expectedPath = declaration->Kind == AssetDependencyKind::SourceAsset ? StringView(_prepared.SourcePath) : StringView(declaration->StableIdentity);
+            if (AssetPathPolicy::TryNormalizeProjectPath(_projectRoot, _contentRoot, _libraryRoot, expectedPath, expected, diagnostic) ||
+                normalized.ProjectRelativePath != expected.ProjectRelativePath)
             {
                 SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, _prepared, input.Path, TEXT("Source input path does not match its prepared canonical identity."));
                 return true;

@@ -9,6 +9,7 @@
 #include "AssetInfo.h"
 #include "Asset.h"
 #include "Config.h"
+#include "AssetDatabase/Identity/AssetObjectId.h"
 
 class Engine;
 class FlaxFile;
@@ -76,6 +77,9 @@ public:
     /// <param name="info">The output asset info. Filled with valid values only if method returns true.</param>
     /// <returns>True if found any asset, otherwise false.</returns>
     API_FUNCTION() static bool GetAssetInfo(const Guid& id, API_PARAM(Out) AssetInfo& info);
+
+    /// <summary>Finds exact object information by persistent file GUID and local file ID.</summary>
+    API_FUNCTION() static bool GetAssetInfo(const AssetObjectId& id, API_PARAM(Out) AssetInfo& info);
 
     /// <summary>
     /// Finds the asset info by path.
@@ -172,6 +176,9 @@ public:
     /// <returns>Loaded asset or null if cannot</returns>
     API_FUNCTION() static Asset* LoadAsync(const Guid& id, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
 
+    /// <summary>Loads an exact persistent object by file GUID and local file ID.</summary>
+    API_FUNCTION() static Asset* LoadAsync(const AssetObjectId& id, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
+
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
     /// </summary>
@@ -179,6 +186,9 @@ public:
     /// <param name="type">The asset type. If loaded object has different type (excluding types derived from the given) the loading fails.</param>
     /// <returns>Loaded asset or null if cannot</returns>
     static Asset* LoadAsync(const Guid& id, const ScriptingTypeHandle& type);
+
+    /// <summary>Loads an exact persistent object by file GUID and local file ID.</summary>
+    static Asset* LoadAsync(const AssetObjectId& id, const ScriptingTypeHandle& type);
 
     /// <summary>Loads an asset for passive editor presentation without scheduling artifact builds, including dependencies.</summary>
     static Asset* LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type);
@@ -191,6 +201,13 @@ public:
     /// <returns>Loaded asset or null if cannot</returns>
     template<typename T>
     FORCE_INLINE static T* LoadAsync(const Guid& id)
+    {
+        return static_cast<T*>(LoadAsync(id, T::TypeInitializer));
+    }
+
+    /// <summary>Loads an exact persistent object by file GUID and local file ID.</summary>
+    template<typename T>
+    FORCE_INLINE static T* LoadAsync(const AssetObjectId& id)
     {
         return static_cast<T*>(LoadAsync(id, T::TypeInitializer));
     }

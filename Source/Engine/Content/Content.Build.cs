@@ -16,6 +16,7 @@ public class Content : EngineModule
         base.Setup(options);
 
         options.PrivateDependencies.Add("lz4");
+        options.PrivateDependencies.Add("sqlite");
         options.PrivateDependencies.Add("AudioTool");
         options.PrivateDependencies.Add("TextureTool");
         options.PrivateDependencies.Add("ModelTool");

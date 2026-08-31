@@ -38,6 +38,7 @@ API_ENUM() enum class AssetPipelineDiagnosticCode
     ResourceLimitExceeded,
     ArtifactLockBusy,
     ArtifactIncompatible,
+    FutureMetaVersion,
 };
 
 /// <summary>

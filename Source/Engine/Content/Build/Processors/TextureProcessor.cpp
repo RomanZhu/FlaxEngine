@@ -327,7 +327,7 @@ namespace
         {
             const uint32 arraySize = ReadU32LE(data.Get() + 140);
             const bool cube = (ReadU32LE(data.Get() + 136) & 0x4) != 0;
-            if (arraySize == 0 || arraySize > MAX_int32 / (cube ? 6 : 1))
+            if (arraySize == 0 || arraySize > static_cast<uint32>(MAX_int32 / (cube ? 6 : 1)))
                 return true;
             result.ArraySize = static_cast<int32>(arraySize) * (cube ? 6 : 1);
         }
@@ -610,7 +610,7 @@ bool TextureProcessor::BuildOutputKey(const PreparedAsset& prepared, const Artif
     int32 dependencyIndex = 0;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        const bool include = dependency.Kind == AssetDependencyKind::SourceFile ||
+        const bool include = dependency.IsSourceDependency() ||
             (dependency.Kind == AssetDependencyKind::Toolchain &&
                 (dependency.StableIdentity == TEXT("texture-decoder") || (runtime && dependency.StableIdentity == TEXT("texture-compressor"))));
         if (include)
@@ -760,7 +760,7 @@ bool TextureProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnos
     const AssetDependency* sourceDependency = nullptr;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        if (dependency.Kind == AssetDependencyKind::SourceFile)
+        if (dependency.Kind == AssetDependencyKind::SourceAsset)
         {
             sourceDependency = &dependency;
             break;

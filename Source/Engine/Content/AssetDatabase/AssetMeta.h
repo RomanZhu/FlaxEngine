@@ -12,6 +12,8 @@ struct FLAXENGINE_API AssetProcessorMeta
     String ID;
     int32 SettingsVersion = 1;
     StringAnsi SettingsJson = "{}\n";
+    StringAnsi ExternalObjectsJson = "[]\n";
+    String UserData;
     Dictionary<StringAnsi, StringAnsi> UnknownFields;
 };
 
@@ -28,6 +30,7 @@ enum class AssetMetaWriteFailurePoint : byte
 /// <summary>Universal tracked asset sidecar.</summary>
 struct FLAXENGINE_API AssetMeta
 {
+    static constexpr int32 LegacyMetaVersion = 2;
     static constexpr int32 CurrentMetaVersion = 2;
 
     int32 MetaVersion = CurrentMetaVersion;
@@ -38,6 +41,9 @@ struct FLAXENGINE_API AssetMeta
     AssetProcessorMeta Processor;
     Dictionary<String, SubAssetMeta> SubAssets;
     Array<String> Labels;
+    String AssetBundleName;
+    String AssetBundleVariant;
+    // Legacy metaVersion:2 root data, converted into Processor.UserData on rewrite.
     StringAnsi UserDataJson;
     Dictionary<StringAnsi, StringAnsi> UnknownFields;
     bool MetaUpgradeRequired = false;
@@ -58,6 +64,6 @@ struct FLAXENGINE_API AssetMeta
     /// <returns>True on failure.</returns>
     bool ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) const;
 
-    /// <summary>Clones tracked identity, assigning a new root and all-new subasset/tombstone GUIDs.</summary>
+    /// <summary>Clones tracked metadata with a new file GUID while preserving file-relative local IDs and tombstones.</summary>
     AssetMeta CloneWithNewIdentities() const;
 };

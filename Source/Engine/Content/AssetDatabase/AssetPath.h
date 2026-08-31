@@ -51,6 +51,10 @@ public:
     static bool IsArtifactPathValid(const ArtifactStoragePath& path, const StringView& libraryRoot);
     static bool IsPackageEntryPathValid(const PackageEntryPath& path);
 
+    /// <summary>Resolves the existing path or nearest existing ancestor to its canonical physical location.</summary>
+    /// <returns>True on failure.</returns>
+    static bool TryResolvePhysicalPath(const StringView& input, String& resolved, AssetPipelineDiagnostic& diagnostic);
+
     /// <summary>Portable normalized project path while retaining the user's display spelling.</summary>
     struct ProjectPath
     {

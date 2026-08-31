@@ -3,8 +3,10 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Linq;
 using FlaxEngine;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor
 {
@@ -106,6 +108,15 @@ namespace FlaxEditor
     /// </summary>
     public sealed class ProjectInfo
     {
+        /// <summary>Asset-system format supported by this editor.</summary>
+        public const int CurrentAssetSystemVersion = 3;
+
+        /// <summary>Artifact layout supported by this editor.</summary>
+        public const int CurrentArtifactLayoutVersion = 2;
+
+        /// <summary>Authored source-document format supported by this editor.</summary>
+        public const int CurrentSourceDocumentVersion = 1;
+
         private static List<ProjectInfo> _projectsCache;
 
         /// <summary>
@@ -147,6 +158,28 @@ namespace FlaxEditor
         /// </summary>
         [NonSerialized]
         public string ProjectFolderPath;
+
+        /// <summary>Committed one-way asset-system format marker. Zero means a pre-marker project.</summary>
+        public int AssetSystemVersion;
+
+        /// <summary>Stable bootstrap identity of an asset-system v3 project.</summary>
+        public System.Guid ProjectId;
+
+        /// <summary>The single writable source-root declaration.</summary>
+        public string SourceRoot;
+
+        /// <summary>The persistent source-object identity model.</summary>
+        public string IdentityModel;
+
+        /// <summary>The immutable artifact store layout version.</summary>
+        public int ArtifactLayoutVersion;
+
+        /// <summary>The authored source-document format version.</summary>
+        public int SourceDocumentVersion;
+
+        /// <summary>Whether this editor must not write this project's asset-system state.</summary>
+        [NonSerialized]
+        public bool AssetSystemReadOnly;
 
         /// <summary>
         /// The project version.
@@ -221,8 +254,134 @@ namespace FlaxEditor
         /// </summary>
         public void Save()
         {
-            var contents = FlaxEngine.Json.JsonSerializer.Serialize(this);
+            if (AssetSystemReadOnly)
+                throw new InvalidOperationException($"Cannot save project descriptor with unsupported asset-system version {AssetSystemVersion}.");
+            string contents;
+            if (AssetSystemVersion == CurrentAssetSystemVersion)
+            {
+                SaveV3MutableSettings();
+                var descriptor = new JObject
+                {
+                    ["ProjectId"] = ProjectId.ToString("N"),
+                    ["AssetSystemVersion"] = AssetSystemVersion,
+                    ["SourceRoot"] = SourceRoot,
+                    ["IdentityModel"] = IdentityModel,
+                    ["ArtifactLayoutVersion"] = ArtifactLayoutVersion,
+                    ["SourceDocumentVersion"] = SourceDocumentVersion,
+                    ["MinEngineVersion"] = MinEngineVersion?.ToString(),
+                    ["References"] = JArray.FromObject(References.Select(x => new { x.Name })),
+                };
+                if (!string.IsNullOrEmpty(EngineNickname))
+                    descriptor["EngineNickname"] = EngineNickname;
+                contents = descriptor.ToString(Formatting.Indented);
+            }
+            else
+            {
+                contents = FlaxEngine.Json.JsonSerializer.Serialize(this);
+            }
             File.WriteAllText(ProjectPath, contents);
+        }
+
+        private static JObject LoadSettingsData(string path)
+        {
+            var document = JObject.Parse(File.ReadAllText(path));
+            return document["Data"] as JObject ?? throw new InvalidDataException($"Mandatory settings source has no Data object: {path}");
+        }
+
+        private static void WriteSettingsData(string path, JObject data)
+        {
+            var document = JObject.Parse(File.ReadAllText(path));
+            document["Data"] = data;
+            var temporary = path + ".tmp";
+            File.WriteAllText(temporary, document.ToString(Formatting.Indented));
+            File.Move(temporary, path, true);
+        }
+
+        private void SaveV3MutableSettings()
+        {
+            var settings = Path.Combine(ProjectFolderPath, "Content", "Settings");
+            var projectPath = Path.Combine(settings, "Project Settings.json");
+            var project = LoadSettingsData(projectPath);
+            project["ProductName"] = Name;
+            project["Version"] = Version?.ToString() ?? "1.0";
+            project["CompanyName"] = Company;
+            project["CopyrightNotice"] = Copyright;
+            project["FirstScene"] = DefaultScene;
+            WriteSettingsData(projectPath, project);
+
+            var buildPath = Path.Combine(settings, "Build Settings.json");
+            var build = LoadSettingsData(buildPath);
+            build["GameTarget"] = GameTarget;
+            build["EditorTarget"] = EditorTarget;
+            WriteSettingsData(buildPath, build);
+
+            var editorPath = Path.Combine(settings, "Editor Settings.json");
+            var editor = LoadSettingsData(editorPath);
+            editor["DefaultSceneSpawn"] = JToken.Parse(FlaxEngine.Json.JsonSerializer.Serialize(DefaultSceneSpawn));
+            WriteSettingsData(editorPath, editor);
+        }
+
+        private void LoadV3MutableSettings()
+        {
+            var settings = Path.Combine(ProjectFolderPath, "Content", "Settings");
+            var project = LoadSettingsData(Path.Combine(settings, "Project Settings.json"));
+            Name = project.Value<string>("ProductName");
+            Version = new Version(project.Value<string>("Version") ?? "1.0");
+            Company = project.Value<string>("CompanyName") ?? string.Empty;
+            Copyright = project.Value<string>("CopyrightNotice") ?? string.Empty;
+            DefaultScene = project.Value<string>("FirstScene");
+
+            var build = LoadSettingsData(Path.Combine(settings, "Build Settings.json"));
+            GameTarget = build.Value<string>("GameTarget");
+            EditorTarget = build.Value<string>("EditorTarget");
+
+            var editor = LoadSettingsData(Path.Combine(settings, "Editor Settings.json"));
+            if (editor.TryGetValue("DefaultSceneSpawn", out var spawn))
+                DefaultSceneSpawn = FlaxEngine.Json.JsonSerializer.Deserialize<Ray>(spawn.ToString(Formatting.None));
+        }
+
+        /// <summary>Validates the committed asset-system marker.</summary>
+        public bool ValidateAssetSystemMarker(out string error)
+        {
+            error = null;
+            if (AssetSystemVersion == 0)
+                return true;
+            if (AssetSystemVersion < CurrentAssetSystemVersion)
+            {
+                error = $"Asset-system version {AssetSystemVersion} requires one-way migration to version {CurrentAssetSystemVersion}.";
+                return false;
+            }
+            if (AssetSystemVersion > CurrentAssetSystemVersion)
+            {
+                error = $"Asset-system version {AssetSystemVersion} is newer than supported version {CurrentAssetSystemVersion}.";
+                return false;
+            }
+            if (ProjectId == System.Guid.Empty)
+            {
+                error = "Asset-system v3 project identity is missing or invalid.";
+                return false;
+            }
+            if (!string.Equals(SourceRoot, "Content", StringComparison.Ordinal))
+            {
+                error = "Asset-system source root must be exactly 'Content'.";
+                return false;
+            }
+            if (!string.Equals(IdentityModel, "guid-local-id", StringComparison.Ordinal))
+            {
+                error = "Asset-system identity model must be exactly 'guid-local-id'.";
+                return false;
+            }
+            if (ArtifactLayoutVersion != CurrentArtifactLayoutVersion)
+            {
+                error = $"Artifact layout version must be {CurrentArtifactLayoutVersion}.";
+                return false;
+            }
+            if (SourceDocumentVersion != CurrentSourceDocumentVersion)
+            {
+                error = $"Source document version must be {CurrentSourceDocumentVersion}.";
+                return false;
+            }
+            return true;
         }
 
         /// <summary>
@@ -250,6 +409,9 @@ namespace FlaxEditor
                 var project = JsonConvert.DeserializeObject<ProjectInfo>(contents, new JsonSerializerSettings() { Converters = new[] { new FlaxVersionConverter() } });
                 project.ProjectPath = path;
                 project.ProjectFolderPath = StringUtils.NormalizePath(Path.GetDirectoryName(path));
+                project.AssetSystemReadOnly = project.AssetSystemVersion > CurrentAssetSystemVersion;
+                if (project.AssetSystemVersion == CurrentAssetSystemVersion)
+                    project.LoadV3MutableSettings();
 
                 // Process project data
                 if (string.IsNullOrEmpty(project.Name))
@@ -260,6 +422,13 @@ namespace FlaxEditor
                     project.Version = new Version(project.Version.Major, project.Version.Minor, project.Version.Build);
                 if (project.Version.Build == 0 && project.Version.Revision == -1)
                     project.Version = new Version(project.Version.Major, project.Version.Minor);
+                if (project.AssetSystemVersion >= CurrentAssetSystemVersion && !project.ValidateAssetSystemMarker(out var markerError))
+                {
+                    if (project.AssetSystemReadOnly)
+                        Editor.LogError($"Project opened read-only. {markerError}");
+                    else
+                        throw new InvalidDataException(markerError);
+                }
                 foreach (var reference in project.References)
                 {
                     string referencePath;

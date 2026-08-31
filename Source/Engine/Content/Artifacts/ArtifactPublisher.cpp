@@ -3,6 +3,7 @@
 #include "ArtifactPublisher.h"
 #include "ArtifactLock.h"
 #include "ArtifactStore.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseStorage.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -164,7 +165,7 @@ namespace
         Array<ContentHash> hashes;
         for (const AssetDependency& dependency : prepared.Dependencies)
         {
-            if (dependency.Kind == AssetDependencyKind::SourceFile)
+            if (dependency.Kind == AssetDependencyKind::SourceAsset)
                 hashes.Add(dependency.Content);
         }
         if (hashes.Count() == 1)
@@ -250,12 +251,27 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         ArtifactManifestOutput output;
         output.Kind = declared.Kind;
         output.FormatVersion = declared.FormatVersion;
-        output.Key = plan->Key;
         output.RelativePath = relativePath;
         output.Content = contentHash;
         output.Size = size;
         output.Compatibility = declared.CompatibilityTag;
         if (validators.Validate(output.Kind, prepared.OutputType, staged->AbsolutePath, output, diagnostic))
+            return true;
+        // The processor plan key identifies desired inputs. The published key also
+        // authenticates the validated output bytes and canonical output contract.
+        ArtifactKeyBuilder publishedKey(StringAnsiView("flax-published-artifact-v2"));
+        publishedKey.AddKey(StringAnsiView("desired-output"), plan->Key);
+        publishedKey.AddString(StringAnsiView("kind"), output.Kind);
+        publishedKey.AddUInt32(StringAnsiView("format"), output.FormatVersion);
+        publishedKey.AddHash(StringAnsiView("content"), output.Content);
+        publishedKey.AddUInt64(StringAnsiView("size"), output.Size);
+        publishedKey.AddString(StringAnsiView("compatibility"), output.Compatibility);
+        output.Key = publishedKey.Finalize();
+        ArtifactStoragePath authenticatedPath;
+        if (ArtifactStore::TryGetArtifactPath(libraryRoot, request.Target, declared.TargetDimensions, declared.EffectiveAssetID,
+            declared.Kind, output.Key, declared.Extension, authenticatedPath, diagnostic))
+            return true;
+        if (ArtifactStore::TryMakeLibraryRelative(libraryRoot, authenticatedPath.Get(), output.RelativePath, diagnostic))
             return true;
         publishedOutputs.Add(MoveTemp(output));
     }
@@ -356,15 +372,18 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     {
         ArtifactManifestDependency dependency;
         dependency.Kind = source.Kind;
+        dependency.State = source.State;
         dependency.Identity = source.StableIdentity;
         dependency.AssetID = source.AssetID;
         dependency.Hash = source.Content;
+        dependency.MetadataHash = source.Metadata;
         dependency.ExactArtifact = source.ExactArtifact;
         dependency.InterfaceHash = source.SemanticInterface;
         dependency.InterfaceVersion = source.InterfaceVersion;
         dependency.Origin = DescribeOrigin(source.Origin);
         manifest.Dependencies.Add(MoveTemp(dependency));
     }
+    manifest.ImportReasons = prepared.ImportReasons;
     ArtifactKeyComponent fingerprintComponent;
     fingerprintComponent.Name = "prepared-input";
     fingerprintComponent.Type = "artifact-key";
@@ -455,9 +474,11 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     if (AtomicReplace(manifestPath.Get(), stagingManifest))
         return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, manifestPath.Get(), TEXT("Cannot atomically replace current artifact manifest."));
     result.Manifest = manifest;
+    if (!request.DeferDurableCommit && AssetDatabaseStorage::PublishArtifact(libraryRoot, result.Manifest, diagnostic))
+        return true;
     if (Inject(request.FailurePoint, ArtifactPublicationFailurePoint::AfterAtomicReplaceBeforeNotification, prepared, diagnostic))
         return true;
-    if (request.Notify.IsBinded())
+    if (!request.DeferDurableCommit && request.Notify.IsBinded())
     {
         request.Notify(result.Manifest);
         result.NotificationSent = true;

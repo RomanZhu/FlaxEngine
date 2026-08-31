@@ -29,7 +29,9 @@ class FLAXENGINE_API AssetDatabase
 private:
     mutable CriticalSection _locker;
     uint64 _revision = 0;
+    bool _hardCutEnabled = false;
     Dictionary<Guid, AssetRecord> _records;
+    Dictionary<AssetObjectId, Guid> _backingByObjectId;
     Dictionary<String, Guid> _mainByPath;
     Dictionary<Guid, Array<Guid>> _subAssetsBySource;
     Dictionary<String, Array<Guid>> _recordsByProcessor;
@@ -37,14 +39,20 @@ private:
     Dictionary<Guid, Array<Guid>> _dependantsByBuildInput;
     Dictionary<Guid, Array<Guid>> _referencersByRuntimeReference;
 
+    bool ApplyFullSnapshot(const Array<AssetRecord>& records, uint64 restoredRevision, bool restoring,
+        AssetPipelineDiagnostic& diagnostic);
+
 public:
     Delegate<const AssetDatabaseChangeBatch&> Changed;
 
     static AssetDatabase& Get();
 
     uint64 GetRevision() const;
+    bool IsHardCutEnabled() const;
+    void SetHardCutEnabled(bool value);
     AssetDatabaseSnapshot GetSnapshot() const;
     bool TryGetRecord(const Guid& id, AssetRecord& result) const;
+    bool TryGetRecord(const AssetObjectId& id, AssetRecord& result) const;
     bool TryGetMainRecordByPath(const StringView& portabilityKey, AssetRecord& result) const;
     void GetSubAssets(const Guid& sourceId, Array<AssetRecord>& result) const;
     void GetByProcessor(const StringView& processorId, Array<AssetRecord>& result) const;
@@ -55,6 +63,10 @@ public:
     /// <summary>Atomically replaces database truth and emits one change batch outside the database lock.</summary>
     /// <returns>True if input records violate an invariant.</returns>
     bool PublishFullSnapshot(const Array<AssetRecord>& records, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Hydrates persisted database truth without reporting the load as a content mutation.</summary>
+    /// <returns>True if the persisted snapshot violates an invariant.</returns>
+    bool RestoreSnapshot(const Array<AssetRecord>& records, uint64 revision, AssetPipelineDiagnostic& diagnostic);
 
     void Clear();
 };

@@ -374,7 +374,7 @@ namespace
         AssetCancellationSource prepareCancellation;
         PreparedAsset prepared;
         PrepareAssetContext prepareContext(Root, ContentRoot, LibraryRoot, record, prepareLease.Get(), Settings,
-            HashCache, prepareCancellation.GetToken());
+            request.Target, HashCache, prepareCancellation.GetToken());
         if (prepareLease.Get().Prepare(prepareContext, prepared, diagnostic) ||
             prepareContext.Finalize(record.DatabaseRevision, prepared, diagnostic))
             return true;

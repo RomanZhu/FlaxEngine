@@ -76,10 +76,18 @@ struct FLAXENGINE_API PreparedAsset
     Guid AssetID = Guid::Empty;
     String OutputType;
     uint64 DatabaseRevision = 0;
+    String AssetName;
+    String SourcePath;
+    ContentHash SourceHash;
     ContentHash SettingsHash;
+    ContentHash ExternalRemapsHash;
+    ContentHash PostprocessorHash;
+    ContentHash ProviderCodeHash;
+    ArtifactKey TargetFingerprint;
     ArtifactKey InputFingerprint;
     Array<DeclaredArtifactOutput> Outputs;
     Array<AssetDependency> Dependencies;
+    Array<AssetImportReasonNode> ImportReasons;
     Array<SubAssetCandidate> SubAssets;
     std::shared_ptr<PreparedAssetPayload> Payload;
     uint64 MemoryEstimate = 0;

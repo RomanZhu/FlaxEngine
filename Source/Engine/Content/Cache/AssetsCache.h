@@ -10,6 +10,7 @@
 #endif
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Collections/Dictionary.h"
+#include "Engine/Content/AssetDatabase/RuntimeAssetIndex.h"
 #include "Engine/Platform/CriticalSection.h"
 
 struct AssetHeader;
@@ -109,6 +110,9 @@ private:
 #endif
     Registry _registry;
     PathsMapping _pathsMapping;
+#if !USE_EDITOR
+    Dictionary<AssetObjectId, RuntimeAssetIndexEntry> _runtimeLocations;
+#endif
 #if !USE_EDITOR && !BUILD_RELEASE
     Dictionary<Guid, StringView> _pathsMappingInv;
 #endif
@@ -165,6 +169,14 @@ public:
     /// <param name="info">The output asset info. Filled with valid values if method returns true.</param>
     /// <returns>True if found any asset, otherwise false.</returns>
     bool FindAsset(const Guid& id, AssetInfo& info);
+
+#if !USE_EDITOR
+    /// <summary>Finds a cooked asset by persistent file GUID and local file ID.</summary>
+    bool FindAsset(const AssetObjectId& id, AssetInfo& info) const;
+
+    /// <summary>Returns the exact cooked package location for an asset object, or null when absent.</summary>
+    const RuntimeAssetIndexEntry* FindRuntimeLocation(const AssetObjectId& id) const;
+#endif
 
     /// <summary>
     /// Checks if asset with given path is in registry.

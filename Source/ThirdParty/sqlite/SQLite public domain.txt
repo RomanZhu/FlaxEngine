@@ -1,0 +1,6 @@
+SQLite is in the public domain.
+
+The SQLite source code in this directory was obtained from the official
+SQLite 3.53.4 amalgamation (sqlite-amalgamation-3530400.zip).
+
+See https://www.sqlite.org/copyright.html for the public-domain dedication.

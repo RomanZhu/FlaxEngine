@@ -253,7 +253,7 @@ TEST_CASE("Existing JSON scenes get identity sidecars without rewriting document
     FileSystem::DeleteDirectory(root, true);
 }
 
-TEST_CASE("Model flax packages seed subasset GUIDs into the root sidecar")
+TEST_CASE("Model flax packages seed file-relative subasset IDs into the root sidecar")
 {
     const String root = Globals::TemporaryFolder / (TEXT("ModelSeed-") + Guid::New().ToString(Guid::FormatType::N));
     REQUIRE_FALSE(FileSystem::CreateDirectory(root));
@@ -285,7 +285,8 @@ TEST_CASE("Model flax packages seed subasset GUIDs into the root sidecar")
     CHECK(meta.ID == rootId);
     CHECK(meta.Processor.ID == TEXT("Flax.Model"));
     REQUIRE(meta.SubAssets.ContainsKey(TEXT("animation:Hero")));
-    CHECK(meta.SubAssets[TEXT("animation:Hero")].ID == walkId);
+    CHECK(meta.SubAssets[TEXT("animation:Hero")].LocalId > 1);
+    CHECK(SubAssetPolicy::GetBackingAssetId(meta.ID, meta.SubAssets[TEXT("animation:Hero")].LocalId) != walkId);
     FileSystem::DeleteDirectory(root, true);
 }
 

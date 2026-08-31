@@ -532,6 +532,10 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
         return true;
     }
 
+    if ((dependencyPaths.Count() > 1 || analysis->ReferencedTexturePaths.HasItems()) &&
+        context.DependsOnLogicalPath(sourceOrigin, diagnostic))
+        return true;
+
     for (const String& texturePath : analysis->ReferencedTexturePaths)
     {
         String path = texturePath;
@@ -654,7 +658,7 @@ bool ModelProcessor::BuildOutputKey(const PreparedAsset& prepared, const Artifac
     int32 dependencyIndex = 0;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        bool include = dependency.Kind == AssetDependencyKind::SourceFile;
+        bool include = dependency.IsSourceDependency();
         if (dependency.Kind == AssetDependencyKind::Toolchain)
         {
             include = dependency.StableIdentity == TEXT("model-parser") ||
@@ -919,7 +923,7 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     const AssetDependency* rootDependency = nullptr;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        if (dependency.Kind == AssetDependencyKind::SourceFile && dependency.Content == payload->RootSourceHash)
+        if (dependency.Kind == AssetDependencyKind::SourceAsset && dependency.Content == payload->RootSourceHash)
         {
             rootDependency = &dependency;
             break;
@@ -975,7 +979,7 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
         int32 dependencyIndex = 0;
         for (const AssetDependency& dependency : prepared.Dependencies)
         {
-            if (dependency.Kind != AssetDependencyKind::SourceFile)
+            if (!dependency.IsSourceDependency())
                 continue;
             const StringAnsi prefix = StringAnsi::Format("source-{0}-", dependencyIndex++);
             sharedKeyBuilder.AddString(prefix + "identity", dependency.StableIdentity);

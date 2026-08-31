@@ -3,13 +3,16 @@
 #pragma once
 
 #include "AssetDatabase.h"
-#include "AssetDatabaseSnapshot.h"
+#include "SourceHashCache.h"
+
+using AssetDatabaseFileState = SourceHashFileState;
 
 /// <summary>Controls a canonical Content-root scan.</summary>
 struct FLAXENGINE_API AssetDatabaseScanOptions
 {
     int32 AssetSystemVersion = 2;
     bool StrictMetadata = false;
+    bool AllowLegacyBinarySources = false;
     int32 MaximumFiles = 1000000;
     const bool* Cancel = nullptr;
     SourceHashCache* HashCache = nullptr;
@@ -39,6 +42,9 @@ public:
     /// <summary>Collects records for an explicit file list without enumerating the Content tree.</summary>
     /// <returns>True if hashing failed fatally. Content diagnostics are returned in result.</returns>
     static bool CollectFromFiles(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const Array<String>& files, const AssetDatabaseScanOptions& options, const AssetDatabaseSnapshot& previous, Array<AssetRecord>& records, AssetDatabaseScanResult& result);
+
+    /// <summary>Reprojects runtime references after records from every active mount have been merged.</summary>
+    static void ProjectRuntimeReferences(Array<AssetRecord>& records, Array<AssetPipelineDiagnostic>& diagnostics);
 
     /// <returns>True if enumeration or publication itself failed. Content diagnostics are returned in result.</returns>
     static bool Scan(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const AssetDatabaseScanOptions& options, AssetDatabase& database, AssetDatabaseScanResult& result);

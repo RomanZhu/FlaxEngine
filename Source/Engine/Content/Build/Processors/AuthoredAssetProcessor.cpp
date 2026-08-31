@@ -10,6 +10,9 @@
 #include "Engine/Content/Documents/SceneAnimationDocument.h"
 #include "Engine/Content/Documents/ParticleSystemDocument.h"
 #include "Engine/Content/Documents/CollisionDataDocument.h"
+#include "Engine/Content/Documents/AuthoredSourceDocument.h"
+#include "Engine/Content/Documents/CanonicalJsonWriter.h"
+#include "FlaxEngine.Gen.h"
 #include "Engine/Content/Assets/MaterialInstance.h"
 #include "Engine/Content/Assets/SkeletonMask.h"
 #include "Engine/Animations/SceneAnimations/SceneAnimation.h"
@@ -29,6 +32,7 @@
 namespace
 {
     typedef rapidjson_flax::Document JsonDocument;
+    typedef rapidjson_flax::Value JsonValue;
 
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, AssetPipelineDiagnosticStage stage,
         const Guid& assetID, const StringView& path, const StringView& message)
@@ -163,6 +167,41 @@ namespace
         return false;
     }
 
+    bool BuildGenericObject(const Array<byte>& sourceBytes, const Guid& id, int64 localId, StringAnsi& output, AssetPipelineDiagnostic& diagnostic)
+    {
+        AuthoredSourceDocument sourceDocument;
+        String error;
+        if (AuthoredSourceDocument::Parse(StringAnsiView((const char*)sourceBytes.Get(), sourceBytes.Count()), sourceDocument, error))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build, id, StringView::Empty, error);
+        const AuthoredSourceObject* object = sourceDocument.FindObject(localId);
+        if (!object)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build, id, StringView::Empty,
+                TEXT("Authored object disappeared after preparation."));
+
+        JsonDocument document;
+        document.SetObject();
+        auto& allocator = document.GetAllocator();
+        const StringAnsi idText(id.ToString(Guid::FormatType::N).ToLower());
+        const StringAnsi typeText(object->TypeName);
+        document.AddMember("ID", JsonValue(idText.Get(), idText.Length(), allocator), allocator);
+        document.AddMember("TypeName", JsonValue(typeText.Get(), typeText.Length(), allocator), allocator);
+        document.AddMember("EngineBuild", FLAXENGINE_VERSION_BUILD, allocator);
+        JsonDocument data;
+        data.Parse(object->DataJson.Get(), object->DataJson.Length());
+        if (data.HasParseError())
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build, id, StringView::Empty,
+                TEXT("Authored object payload is malformed."));
+        JsonValue dataValue;
+        dataValue.CopyFrom(data, allocator);
+        document.AddMember("Data", dataValue.Move(), allocator);
+        Array<StringAnsi> order;
+        order.Add("ID"); order.Add("TypeName"); order.Add("EngineBuild"); order.Add("Data");
+        CanonicalJsonError canonicalError;
+        if (CanonicalJsonWriter::Write(document, output, canonicalError, &order))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build, id, StringView::Empty, canonicalError.Message);
+        return false;
+    }
+
     bool HashCollisionModelInputs(PrepareAssetContext& context, const Guid& modelID, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
     {
         if (!modelID.IsValid())
@@ -203,7 +242,7 @@ namespace
 bool AuthoredAssetProcessor::Owns(const StringView& processorID)
 {
     return processorID == MaterialInstanceID() || processorID == SkeletonMaskID() || processorID == SceneAnimationID() ||
-        processorID == ParticleSystemID() || processorID == CollisionDataID();
+        processorID == ParticleSystemID() || processorID == CollisionDataID() || processorID == GenericObjectID();
 }
 
 const String& AuthoredAssetProcessor::MaterialInstanceID()
@@ -236,6 +275,12 @@ const String& AuthoredAssetProcessor::CollisionDataID()
     return value;
 }
 
+const String& AuthoredAssetProcessor::GenericObjectID()
+{
+    static const String value(TEXT("Flax.AuthoredObject"));
+    return value;
+}
+
 AssetProcessorDescriptor AuthoredAssetProcessor::CreateDescriptor(const StringView& processorID)
 {
     AssetProcessorDescriptor descriptor;
@@ -249,7 +294,13 @@ AssetProcessorDescriptor AuthoredAssetProcessor::CreateDescriptor(const StringVi
     descriptor.MemoryEstimate = 32ull * 1024ull * 1024ull;
     descriptor.Prepare = &AuthoredAssetProcessor::Prepare;
     descriptor.Build = &AuthoredAssetProcessor::Build;
-    if (processorID == MaterialInstanceID())
+    if (processorID == GenericObjectID())
+    {
+        descriptor.SourceExtensions.Add(TEXT(".asset"));
+        descriptor.DocumentTypes.Add(TEXT("Flax.AuthoredObject"));
+        descriptor.MainOutputType = TEXT("FlaxEngine.JsonAsset");
+    }
+    else if (processorID == MaterialInstanceID())
     {
         descriptor.SourceExtensions.Add(TEXT(".materialinstance"));
         descriptor.DocumentTypes.Add(MaterialInstance::TypeName);
@@ -281,10 +332,10 @@ AssetProcessorDescriptor AuthoredAssetProcessor::CreateDescriptor(const StringVi
     }
     AssetProcessorOutputDescriptor runtime;
     runtime.Kind = "runtime";
-    runtime.Extension = ".flax";
+    runtime.Extension = processorID == GenericObjectID() ? ".json" : ".flax";
     runtime.FormatVersion = RuntimeFormatVersion;
     runtime.TargetDimensions = ArtifactTargetDimension::Platform | ArtifactTargetDimension::Architecture;
-    runtime.CompatibilityTag = "flax-authored-document-v1";
+    runtime.CompatibilityTag = processorID == GenericObjectID() ? "flax-authored-object-v1" : "flax-authored-document-v1";
     runtime.IndependentlyReusable = true;
     descriptor.Outputs.Add(runtime);
     return descriptor;
@@ -293,6 +344,7 @@ AssetProcessorDescriptor AuthoredAssetProcessor::CreateDescriptor(const StringVi
 bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
 {
     prepared = PreparedAsset();
+    context.SetSourceSerializerVersion(RuntimeFormatVersion);
     const AssetRecord& record = context.GetRecord();
     if (!Owns(record.ProcessorID))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Prepare,
@@ -308,10 +360,28 @@ bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
     if (json.HasParseError() || !json.IsObject())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Authored document JSON is malformed."));
-    StringAnsiView type;
-    if (ReadString(json, "type", type) || String(type) != record.TypeName)
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
-            record.ID, record.SourcePath.Get(), TEXT("Authored document type does not match its metadata sidecar."));
+    const bool genericObjectDocument = record.ProcessorID == GenericObjectID();
+    int64 genericObjectLocalId = 0;
+    if (genericObjectDocument)
+    {
+        AuthoredSourceDocument sourceDocument;
+        String error;
+        if (AuthoredSourceDocument::Parse(StringAnsiView((const char*)bytes.Get(), bytes.Count()), sourceDocument, error))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                record.ID, record.SourcePath.Get(), error);
+        genericObjectLocalId = record.LocalId;
+        const AuthoredSourceObject* object = sourceDocument.FindObject(genericObjectLocalId);
+        if (!object || object->TypeName != record.TypeName)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                record.ID, record.SourcePath.Get(), TEXT("Authored object inventory does not match adjacent metadata."));
+    }
+    else
+    {
+        StringAnsiView type;
+        if (ReadString(json, "type", type) || String(type) != record.TypeName)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                record.ID, record.SourcePath.Get(), TEXT("Authored document type does not match its metadata sidecar."));
+    }
     if (record.ProcessorID == MaterialInstanceID() || record.ProcessorID == SceneAnimationID() ||
         record.ProcessorID == ParticleSystemID() || record.ProcessorID == CollisionDataID())
     {
@@ -350,6 +420,8 @@ bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
         return true;
     auto payload = std::make_shared<AuthoredAssetPreparedPayload>();
     payload->SourceHash = sourceHash;
+    payload->GenericObjectDocument = genericObjectDocument;
+    payload->ObjectLocalId = genericObjectLocalId;
     prepared.Payload = payload;
     prepared.MemoryEstimate = sizeof(AuthoredAssetPreparedPayload) + bytes.Count();
     diagnostic = AssetPipelineDiagnostic();
@@ -387,7 +459,7 @@ bool AuthoredAssetProcessor::Build(ArtifactBuildContext& context, AssetPipelineD
     const AssetDependency* sourceDependency = nullptr;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        if (dependency.Kind == AssetDependencyKind::SourceFile)
+        if (dependency.Kind == AssetDependencyKind::SourceAsset)
         {
             sourceDependency = &dependency;
             break;
@@ -400,6 +472,22 @@ bool AuthoredAssetProcessor::Build(ArtifactBuildContext& context, AssetPipelineD
     ContentHash sourceHash;
     if (context.ReadInput(sourceDependency->StableIdentity, sourceBytes, sourceHash, diagnostic))
         return true;
+    const auto* payload = static_cast<const AuthoredAssetPreparedPayload*>(prepared.Payload.get());
+    if (!payload)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+            prepared.AssetID, sourceDependency->StableIdentity, TEXT("Authored build payload is missing."));
+    if (payload->GenericObjectDocument)
+    {
+        StringAnsi artifact;
+        if (BuildGenericObject(sourceBytes, prepared.AssetID, payload->ObjectLocalId, artifact, diagnostic))
+            return true;
+        ArtifactWriter writer;
+        if (context.OpenOutput(StringAnsiView("runtime"), writer, diagnostic) ||
+            writer.WriteFile(TEXT("authored.json"), artifact.Get(), artifact.Length(), diagnostic))
+            return true;
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
     JsonDocument json;
     json.Parse(reinterpret_cast<const char*>(sourceBytes.Get()), sourceBytes.Count());
     if (json.HasParseError() || !json.IsObject())

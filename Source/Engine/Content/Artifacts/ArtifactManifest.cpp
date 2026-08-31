@@ -25,20 +25,56 @@ namespace
     {
         switch (kind)
         {
-        case AssetDependencyKind::SourceFile: return "SourceFile";
-        case AssetDependencyKind::BuildInput: return "BuildInput";
+        case AssetDependencyKind::ExactSourceFile: return "ExactSourceFile";
+        case AssetDependencyKind::Artifact: return "Artifact";
         case AssetDependencyKind::RuntimeReference: return "RuntimeReference";
         case AssetDependencyKind::Toolchain: return "Toolchain";
-        default: return "SourceFile";
+        case AssetDependencyKind::SourceAsset: return "SourceAsset";
+        case AssetDependencyKind::Custom: return "Custom";
+        case AssetDependencyKind::Global: return "Global";
+        case AssetDependencyKind::Target: return "Target";
+        case AssetDependencyKind::ImporterProvider: return "ImporterProvider";
+        case AssetDependencyKind::LogicalPath: return "LogicalPath";
+        case AssetDependencyKind::Environment: return "Environment";
+        default: return "ExactSourceFile";
         }
     }
 
     bool ParseDependencyKind(const StringAnsiView& text, AssetDependencyKind& kind)
     {
-        if (text == "SourceFile") kind = AssetDependencyKind::SourceFile;
-        else if (text == "BuildInput") kind = AssetDependencyKind::BuildInput;
+        if (text == "ExactSourceFile" || text == "SourceFile") kind = AssetDependencyKind::ExactSourceFile;
+        else if (text == "Artifact" || text == "BuildInput") kind = AssetDependencyKind::Artifact;
         else if (text == "RuntimeReference") kind = AssetDependencyKind::RuntimeReference;
         else if (text == "Toolchain") kind = AssetDependencyKind::Toolchain;
+        else if (text == "SourceAsset") kind = AssetDependencyKind::SourceAsset;
+        else if (text == "Custom") kind = AssetDependencyKind::Custom;
+        else if (text == "Global") kind = AssetDependencyKind::Global;
+        else if (text == "Target") kind = AssetDependencyKind::Target;
+        else if (text == "ImporterProvider") kind = AssetDependencyKind::ImporterProvider;
+        else if (text == "LogicalPath") kind = AssetDependencyKind::LogicalPath;
+        else if (text == "Environment") kind = AssetDependencyKind::Environment;
+        else return true;
+        return false;
+    }
+
+    const char* DependencyStateName(AssetDependencyState state)
+    {
+        switch (state)
+        {
+        case AssetDependencyState::Present: return "Present";
+        case AssetDependencyState::Missing: return "Missing";
+        case AssetDependencyState::CurrentArtifact: return "CurrentArtifact";
+        case AssetDependencyState::ExactArtifact: return "ExactArtifact";
+        default: return "Present";
+        }
+    }
+
+    bool ParseDependencyState(const StringAnsiView& text, AssetDependencyState& state)
+    {
+        if (text == "Present") state = AssetDependencyState::Present;
+        else if (text == "Missing") state = AssetDependencyState::Missing;
+        else if (text == "CurrentArtifact") state = AssetDependencyState::CurrentArtifact;
+        else if (text == "ExactArtifact") state = AssetDependencyState::ExactArtifact;
         else return true;
         return false;
     }
@@ -104,12 +140,24 @@ bool ArtifactManifest::Validate(const StringView& path, AssetPipelineDiagnostic&
         if (dependencyIdentities.Contains(identity))
             return Fail(diagnostic, path, TEXT("Artifact manifest contains a duplicate dependency."));
         dependencyIdentities.Add(identity);
-        if ((dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::Toolchain) && dependency.Hash.IsZero())
-            return Fail(diagnostic, path, TEXT("Artifact manifest source/toolchain dependency lacks a content hash."));
-        if ((dependency.Kind == AssetDependencyKind::BuildInput || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.AssetID.IsValid())
+        const bool source = dependency.Kind == AssetDependencyKind::ExactSourceFile || dependency.Kind == AssetDependencyKind::SourceAsset;
+        const bool hashed = source || dependency.Kind == AssetDependencyKind::Custom || dependency.Kind == AssetDependencyKind::Global ||
+            dependency.Kind == AssetDependencyKind::Target || dependency.Kind == AssetDependencyKind::ImporterProvider ||
+            dependency.Kind == AssetDependencyKind::Toolchain || dependency.Kind == AssetDependencyKind::Environment;
+        if (dependency.State != AssetDependencyState::Missing && hashed && dependency.Hash.IsZero())
+            return Fail(diagnostic, path, TEXT("Artifact manifest dependency lacks an observed content hash."));
+        if ((dependency.Kind == AssetDependencyKind::Artifact || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.AssetID.IsValid())
             return Fail(diagnostic, path, TEXT("Artifact manifest asset dependency lacks a GUID."));
-        if (dependency.Kind == AssetDependencyKind::BuildInput && dependency.ExactArtifact.IsZero() && dependency.InterfaceHash.IsZero())
+        if (dependency.Kind == AssetDependencyKind::Artifact && dependency.State != AssetDependencyState::Missing &&
+            dependency.ExactArtifact.IsZero() && dependency.InterfaceHash.IsZero())
             return Fail(diagnostic, path, TEXT("Artifact manifest build input lacks an exact artifact or semantic interface hash."));
+    }
+
+    for (int32 i = 0; i < ImportReasons.Count(); i++)
+    {
+        const AssetImportReasonNode& reason = ImportReasons[i];
+        if (reason.Code.IsEmpty() || reason.Parent < -1 || reason.Parent >= i)
+            return Fail(diagnostic, path, TEXT("Artifact manifest import reason tree is malformed."));
     }
 
     HashSet<StringAnsi> outputKinds;
@@ -199,7 +247,14 @@ bool ArtifactManifest::Parse(const StringAnsiView& json, const StringView& path,
         StringAnsi kind;
         if (ReadAnsi(value, "kind", kind) || ParseDependencyKind(kind, dependency.Kind) || ReadString(value, "identity", dependency.Identity))
             return Fail(diagnostic, path, TEXT("Artifact manifest dependency kind or identity is invalid."));
-        if (ReadOptionalHash(value, "hash", dependency.Hash) || ReadOptionalHash(value, "artifactKey", dependency.ExactArtifact.Digest) || ReadOptionalHash(value, "interfaceHash", dependency.InterfaceHash))
+        const auto dependencyState = value.FindMember("state");
+        if (dependencyState != value.MemberEnd())
+        {
+            if (!dependencyState->value.IsString() || ParseDependencyState(StringAnsiView(dependencyState->value.GetString(), dependencyState->value.GetStringLength()), dependency.State))
+                return Fail(diagnostic, path, TEXT("Artifact manifest dependency state is invalid."));
+        }
+        if (ReadOptionalHash(value, "hash", dependency.Hash) || ReadOptionalHash(value, "metadataHash", dependency.MetadataHash) ||
+            ReadOptionalHash(value, "artifactKey", dependency.ExactArtifact.Digest) || ReadOptionalHash(value, "interfaceHash", dependency.InterfaceHash))
             return Fail(diagnostic, path, TEXT("Artifact manifest dependency hash is invalid."));
         const auto dependencyGuid = value.FindMember("assetGuid");
         if (dependencyGuid != value.MemberEnd() && (!dependencyGuid->value.IsString() || Guid::Parse(StringAnsiView(dependencyGuid->value.GetString(), dependencyGuid->value.GetStringLength()), dependency.AssetID)))
@@ -214,7 +269,29 @@ bool ArtifactManifest::Parse(const StringAnsiView& json, const StringView& path,
         const auto origin = value.FindMember("origin");
         if (origin != value.MemberEnd() && (!origin->value.IsString() || ReadString(value, "origin", dependency.Origin, true)))
             return Fail(diagnostic, path, TEXT("Artifact manifest dependency origin is invalid."));
+        if (dependencyState == value.MemberEnd() && dependency.Kind == AssetDependencyKind::Artifact)
+            dependency.State = dependency.ExactArtifact.IsZero() ? AssetDependencyState::CurrentArtifact : AssetDependencyState::ExactArtifact;
         result.Dependencies.Add(MoveTemp(dependency));
+    }
+
+    const auto reasons = document.FindMember("importReasons");
+    if (reasons != document.MemberEnd())
+    {
+        if (!reasons->value.IsArray())
+            return Fail(diagnostic, path, TEXT("Artifact manifest importReasons must be an array."));
+        for (const JsonValue& value : reasons->value.GetArray())
+        {
+            AssetImportReasonNode reason;
+            if (!value.IsObject())
+                return Fail(diagnostic, path, TEXT("Artifact manifest import reason node is invalid."));
+            const auto parent = value.FindMember("parent");
+            if (parent == value.MemberEnd() || !parent->value.IsInt() || ReadAnsi(value, "code", reason.Code) ||
+                ReadString(value, "identity", reason.Identity, true) || ReadAnsi(value, "previousFingerprint", reason.PreviousFingerprint, true) ||
+                ReadAnsi(value, "currentFingerprint", reason.CurrentFingerprint, true) || ReadString(value, "explanation", reason.Explanation, true))
+                return Fail(diagnostic, path, TEXT("Artifact manifest import reason node is invalid."));
+            reason.Parent = parent->value.GetInt();
+            result.ImportReasons.Add(MoveTemp(reason));
+        }
     }
 
     for (const JsonValue& value : outputs->value.GetArray())
@@ -311,11 +388,13 @@ bool ArtifactManifest::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnos
     {
         JsonValue value(rapidjson::kObjectType);
         AddAnsi(value, "kind", StringAnsiView(DependencyKindName(dependency.Kind)), allocator);
+        AddAnsi(value, "state", StringAnsiView(DependencyStateName(dependency.State)), allocator);
         AddString(value, "identity", dependency.Identity, allocator);
         if (dependency.Hash.IsZero())
             value.AddMember("hash", JsonValue(rapidjson::kNullType).Move(), allocator);
         else
             AddAnsi(value, "hash", dependency.Hash.ToString(), allocator);
+        if (!dependency.MetadataHash.IsZero()) AddAnsi(value, "metadataHash", dependency.MetadataHash.ToString(), allocator);
         if (dependency.AssetID.IsValid()) AddString(value, "assetGuid", dependency.AssetID.ToString(Guid::FormatType::N).ToLower(), allocator);
         if (!dependency.ExactArtifact.IsZero()) AddAnsi(value, "artifactKey", dependency.ExactArtifact.ToString(), allocator);
         if (!dependency.InterfaceHash.IsZero())
@@ -327,6 +406,22 @@ bool ArtifactManifest::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnos
         dependencies.PushBack(value.Move(), allocator);
     }
     document.AddMember("dependencies", dependencies.Move(), allocator);
+    if (ImportReasons.HasItems())
+    {
+        JsonValue reasons(rapidjson::kArrayType);
+        for (const AssetImportReasonNode& reason : ImportReasons)
+        {
+            JsonValue value(rapidjson::kObjectType);
+            value.AddMember("parent", reason.Parent, allocator);
+            AddAnsi(value, "code", reason.Code, allocator);
+            AddString(value, "identity", reason.Identity, allocator);
+            AddAnsi(value, "previousFingerprint", reason.PreviousFingerprint, allocator);
+            AddAnsi(value, "currentFingerprint", reason.CurrentFingerprint, allocator);
+            AddString(value, "explanation", reason.Explanation, allocator);
+            reasons.PushBack(value.Move(), allocator);
+        }
+        document.AddMember("importReasons", reasons.Move(), allocator);
+    }
 
     Array<ArtifactManifestOutput> sortedOutputs(Outputs);
     std::sort(sortedOutputs.Get(), sortedOutputs.Get() + sortedOutputs.Count(), [](const ArtifactManifestOutput& a, const ArtifactManifestOutput& b)
@@ -377,6 +472,7 @@ bool ArtifactManifest::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnos
     rootOrder.Add("sourceHash");
     rootOrder.Add("settingsHash");
     rootOrder.Add("dependencies");
+    rootOrder.Add("importReasons");
     rootOrder.Add("outputs");
     rootOrder.Add("buildId");
     rootOrder.Add("builtAtUtc");
@@ -393,9 +489,13 @@ bool ArtifactManifest::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnos
     targetOrder.Add("shaderCompiler"); targetOrder.Add("featureFlags");
     orders.Add("/target", targetOrder);
     Array<StringAnsi> dependencyOrder;
-    dependencyOrder.Add("kind"); dependencyOrder.Add("identity"); dependencyOrder.Add("hash"); dependencyOrder.Add("assetGuid");
+    dependencyOrder.Add("kind"); dependencyOrder.Add("state"); dependencyOrder.Add("identity"); dependencyOrder.Add("hash"); dependencyOrder.Add("metadataHash"); dependencyOrder.Add("assetGuid");
     dependencyOrder.Add("artifactKey"); dependencyOrder.Add("interfaceHash"); dependencyOrder.Add("interfaceVersion"); dependencyOrder.Add("origin");
     orders.Add("/dependencies/*", dependencyOrder);
+    Array<StringAnsi> reasonOrder;
+    reasonOrder.Add("parent"); reasonOrder.Add("code"); reasonOrder.Add("identity"); reasonOrder.Add("previousFingerprint");
+    reasonOrder.Add("currentFingerprint"); reasonOrder.Add("explanation");
+    orders.Add("/importReasons/*", reasonOrder);
     Array<StringAnsi> outputOrder;
     outputOrder.Add("kind"); outputOrder.Add("formatVersion"); outputOrder.Add("artifactKey"); outputOrder.Add("relativePath");
     outputOrder.Add("contentHash"); outputOrder.Add("size"); outputOrder.Add("compatibility");

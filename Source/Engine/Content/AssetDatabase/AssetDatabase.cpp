@@ -55,6 +55,18 @@ uint64 AssetDatabase::GetRevision() const
     return _revision;
 }
 
+bool AssetDatabase::IsHardCutEnabled() const
+{
+    ScopeLock lock(_locker);
+    return _hardCutEnabled;
+}
+
+void AssetDatabase::SetHardCutEnabled(bool value)
+{
+    ScopeLock lock(_locker);
+    _hardCutEnabled = value;
+}
+
 AssetDatabaseSnapshot AssetDatabase::GetSnapshot() const
 {
     ScopeLock lock(_locker);
@@ -68,6 +80,17 @@ bool AssetDatabase::TryGetRecord(const Guid& id, AssetRecord& result) const
 {
     ScopeLock lock(_locker);
     const AssetRecord* record = _records.TryGet(id);
+    if (!record)
+        return false;
+    result = *record;
+    return true;
+}
+
+bool AssetDatabase::TryGetRecord(const AssetObjectId& id, AssetRecord& result) const
+{
+    ScopeLock lock(_locker);
+    const Guid* backingId = _backingByObjectId.TryGet(id);
+    const AssetRecord* record = backingId ? _records.TryGet(*backingId) : nullptr;
     if (!record)
         return false;
     result = *record;
@@ -118,11 +141,12 @@ void AssetDatabase::GetRuntimeReferencers(const Guid& referencedId, Array<AssetR
     ResolveRecords(_records, _referencersByRuntimeReference.TryGet(referencedId), result);
 }
 
-bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, AssetPipelineDiagnostic& diagnostic)
+bool AssetDatabase::ApplyFullSnapshot(const Array<AssetRecord>& records, uint64 restoredRevision, bool restoring,
+    AssetPipelineDiagnostic& diagnostic)
 {
     diagnostic = AssetPipelineDiagnostic();
     Dictionary<Guid, AssetRecord> nextRecords;
-    HashSet<AssetObjectId> nextObjectIds;
+    Dictionary<AssetObjectId, Guid> nextBackingByObjectId;
     Dictionary<String, Guid> nextMainByPath;
     Dictionary<Guid, Array<Guid>> nextSubAssetsBySource;
     Dictionary<String, Array<Guid>> nextRecordsByProcessor;
@@ -135,10 +159,14 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
     {
         if (!input.ID.IsValid() || !input.SourceAssetID.IsValid() || input.LocalId <= 0)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, input.SourcePath.Get(), TEXT("Asset database record has an invalid identity."));
+        if (restoring && (restoredRevision == 0 || input.DatabaseRevision == 0 || input.DatabaseRevision > restoredRevision))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, input.SourcePath.Get(), TEXT("Persisted asset database revisions are invalid."));
         if ((input.IsMainAsset() && input.LocalId != 1) || (!input.IsMainAsset() && input.LocalId == 1))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, input.SourcePath.Get(), TEXT("Main objects require local file ID 1 and subassets require a different positive ID."));
-        if (!nextObjectIds.Add(AssetObjectId(input.SourceAssetID, input.LocalId)))
+        const AssetObjectId objectId(input.SourceAssetID, input.LocalId);
+        if (nextBackingByObjectId.ContainsKey(objectId))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, input.SourcePath.Get(), TEXT("Asset database input repeats a GUID/local file ID identity."));
+        nextBackingByObjectId.Add(objectId, input.ID);
         if (nextRecords.ContainsKey(input.ID))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::DuplicateGuid, input.SourcePath.Get(), TEXT("Asset database input contains a duplicate GUID."));
         AssetRecord record = input;
@@ -182,6 +210,21 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
             AddToIndex(nextReferencersByRuntimeReference, reference, entry.Key);
     }
 
+    if (restoring)
+    {
+        ScopeLock lock(_locker);
+        _records = MoveTemp(nextRecords);
+        _backingByObjectId = MoveTemp(nextBackingByObjectId);
+        _mainByPath = MoveTemp(nextMainByPath);
+        _subAssetsBySource = MoveTemp(nextSubAssetsBySource);
+        _recordsByProcessor = MoveTemp(nextRecordsByProcessor);
+        _recordsByStatus = MoveTemp(nextRecordsByStatus);
+        _dependantsByBuildInput = MoveTemp(nextDependantsByBuildInput);
+        _referencersByRuntimeReference = MoveTemp(nextReferencersByRuntimeReference);
+        _revision = restoredRevision;
+        return false;
+    }
+
     AssetDatabaseChangeBatch changes;
     {
         ScopeLock lock(_locker);
@@ -211,6 +254,7 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
                 changes.Removed.Add(entry.Key);
         }
         _records = MoveTemp(nextRecords);
+        _backingByObjectId = MoveTemp(nextBackingByObjectId);
         _mainByPath = MoveTemp(nextMainByPath);
         _subAssetsBySource = MoveTemp(nextSubAssetsBySource);
         _recordsByProcessor = MoveTemp(nextRecordsByProcessor);
@@ -221,6 +265,16 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, Asset
     }
     Changed(changes);
     return false;
+}
+
+bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, AssetPipelineDiagnostic& diagnostic)
+{
+    return ApplyFullSnapshot(records, 0, false, diagnostic);
+}
+
+bool AssetDatabase::RestoreSnapshot(const Array<AssetRecord>& records, uint64 revision, AssetPipelineDiagnostic& diagnostic)
+{
+    return ApplyFullSnapshot(records, revision, true, diagnostic);
 }
 
 void AssetDatabase::Clear()

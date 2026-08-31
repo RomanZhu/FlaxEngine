@@ -296,6 +296,28 @@ void AssetBuildService::CancelRequester(const AssetBuildRequestHandle& handle)
     _impl->Changed.notify_all();
 }
 
+bool AssetBuildService::SetMaximumWorkers(int32 maximumWorkers)
+{
+    if (maximumWorkers < 1 || maximumWorkers > 64)
+        return true;
+    {
+        std::lock_guard<std::mutex> lock(_impl->Mutex);
+        if (!_impl->Initialized || _impl->Stopping)
+            return true;
+        _impl->Limits.MaximumWorkers = maximumWorkers;
+        while (static_cast<int32>(_impl->Workers.size()) < maximumWorkers)
+            _impl->Workers.emplace_back([impl = _impl.get()]() { impl->Worker(); });
+    }
+    _impl->Changed.notify_all();
+    return false;
+}
+
+int32 AssetBuildService::GetMaximumWorkers() const
+{
+    std::lock_guard<std::mutex> lock(_impl->Mutex);
+    return _impl->Initialized && !_impl->Stopping ? _impl->Limits.MaximumWorkers : 0;
+}
+
 void AssetBuildService::Impl::WriteLogLocked(const std::shared_ptr<AssetBuildSharedState>& job, AssetBuildJobStatus status)
 {
     if (job->LogPath.IsEmpty())
@@ -406,7 +428,8 @@ bool AssetBuildService::Impl::CanRunLocked(const std::shared_ptr<AssetBuildShare
         if (status != AssetBuildJobStatus::Succeeded)
             return false;
     }
-    if (ActiveMemory + job->Request.MemoryBytes > Limits.MaximumMemoryBytes ||
+    if (ActiveWorkers >= Limits.MaximumWorkers ||
+        ActiveMemory + job->Request.MemoryBytes > Limits.MaximumMemoryBytes ||
         ActiveExternalTools + job->Request.ExternalToolSlots > Limits.MaximumExternalTools)
         return false;
     const std::string processor = ProcessorKey(job->Request.ProcessorClass);

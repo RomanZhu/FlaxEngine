@@ -21,6 +21,7 @@
 #include "Engine/Content/Assets/CubeTexture.h"
 #include "Engine/Render2D/SpriteAtlas.h"
 #include "Engine/Content/Storage/FlaxFile.h"
+#include "Engine/Content/Storage/FlaxPackage.h"
 #include "Engine/Particles/ParticleEmitter.h"
 #include "Engine/Utilities/Encryption.h"
 #include "Engine/Serialization/JsonWriters.h"
@@ -54,11 +55,31 @@
 #include "Engine/Platform/Linux/LinuxPlatformSettings.h"
 #endif
 #include "FlaxEngine.Gen.h"
+#include <algorithm>
 
 Dictionary<String, CookAssetsStep::ProcessAssetFunc> CookAssetsStep::AssetProcessors;
 
 namespace
 {
+    struct CookedPackageLocation
+    {
+        Guid PackageID;
+        String Path;
+        uint32 ChunkID = 0;
+        uint64 Offset = 0;
+        uint64 Size = 0;
+        uint32 AssetFormatVersion = 0;
+    };
+
+    String MakeRuntimeLogicalPath(const StringView& path)
+    {
+        if (path.StartsWith(Globals::StartupFolder))
+            return String(path.Get() + Globals::StartupFolder.Length() + 1, path.Length() - Globals::StartupFolder.Length() - 1);
+        if (path.StartsWith(Globals::ProjectFolder))
+            return String(path.Get() + Globals::ProjectFolder.Length() + 1, path.Length() - Globals::ProjectFolder.Length() - 1);
+        return String::Empty;
+    }
+
     ArtifactTarget GetCookArtifactTarget(const CookingData& data)
     {
         ArtifactTarget target;
@@ -1009,6 +1030,7 @@ private:
     uint64 bytesAdded;
 
     uint64 packagesSizeTotal;
+    Dictionary<Guid, CookedPackageLocation>& packageLocations;
 
 public:
     /// <summary>
@@ -1017,7 +1039,7 @@ public:
     /// <param name="maxAssetsPerPackage">The maximum assets per package.</param>
     /// <param name="maxPackageSizeMB">The maximum package size in MB.</param>
     /// <param name="contentKey">The content keycode.</param>
-    PackageBuilder(int32 maxAssetsPerPackage, int32 maxPackageSizeMB, int32 contentKey)
+    PackageBuilder(int32 maxAssetsPerPackage, int32 maxPackageSizeMB, int32 contentKey, Dictionary<Guid, CookedPackageLocation>& packageLocations)
         : _packageIndex(0)
         , MaxAssetsPerPackage(maxAssetsPerPackage)
         , MaxPackageSize(maxPackageSizeMB * (1024 * 1024))
@@ -1025,6 +1047,7 @@ public:
         , addedEntries(maxAssetsPerPackage)
         , bytesAdded(0)
         , packagesSizeTotal(0)
+        , packageLocations(packageLocations)
     {
         Platform::MemoryClear(&CustomData, sizeof(CustomData));
         CustomData.ContentKey = contentKey;
@@ -1127,6 +1150,57 @@ public:
             return true;
         }
 
+        ArtifactKeyBuilder packageKeyBuilder(StringAnsiView("flax-cooked-package-v1"));
+        packageKeyBuilder.AddString(StringAnsiView("path"), localPath);
+        packageKeyBuilder.AddUInt64(StringAnsiView("size"), FileSystem::GetFileSize(path));
+        for (const AssetInitData& assetData : assetsData)
+            packageKeyBuilder.AddGuid(StringAnsiView("asset"), assetData.Header.ID);
+        const ArtifactKey packageKey = packageKeyBuilder.Finalize();
+        const Guid packageID(packageKey.Digest.Values[0], packageKey.Digest.Values[1], packageKey.Digest.Values[2], packageKey.Digest.Values[3]);
+
+        FlaxPackage package(path);
+        if (package.Load())
+        {
+            data.Error(TEXT("Failed to verify the created assets package."));
+            return true;
+        }
+        Array<FlaxStorage::Entry> packageEntries;
+        package.GetEntries(packageEntries);
+        package.Dispose();
+        std::sort(packageEntries.Get(), packageEntries.Get() + packageEntries.Count(), [](const FlaxStorage::Entry& a, const FlaxStorage::Entry& b)
+        {
+            return a.Address < b.Address;
+        });
+        const uint64 packageSize = FileSystem::GetFileSize(path);
+        Dictionary<Guid, uint64> artifactSizes;
+        for (int32 i = 0; i < count; i++)
+            artifactSizes.Add(addedEntries[i]->Info.ID, FileSystem::GetFileSize(files[i]->GetPath()));
+        for (int32 i = 0; i < packageEntries.Count(); i++)
+        {
+            const FlaxStorage::Entry& packaged = packageEntries[i];
+            const uint64* artifactSize = artifactSizes.TryGet(packaged.ID);
+            if (packaged.Address >= packageSize || !artifactSize || *artifactSize == 0)
+            {
+                data.Error(TEXT("Created assets package contains an invalid indexed entry."));
+                return true;
+            }
+            CookedPackageLocation location;
+            location.PackageID = packageID;
+            location.Path = localPath;
+            location.ChunkID = static_cast<uint32>(i);
+            location.Offset = packaged.Address;
+            location.Size = *artifactSize;
+            for (const AssetInitData& assetData : assetsData)
+            {
+                if (assetData.Header.ID == packaged.ID)
+                {
+                    location.AssetFormatVersion = assetData.SerializedVersion;
+                    break;
+                }
+            }
+            packageLocations.Add(packaged.ID, MoveTemp(location));
+        }
+
         // Link storage info to all packaged assets
         for (int32 i = 0; i < count; i++)
         {
@@ -1161,6 +1235,9 @@ bool CookAssetsStep::Perform(CookingData& data)
     const int32 contentKey = buildSettings->ContentKey == 0 ? rand() : buildSettings->ContentKey;
     AssetsRegistry.Clear();
     AssetPathsMapping.Clear();
+    const bool hardCut = AssetDatabase::Get().IsHardCutEnabled();
+    Dictionary<Guid, ArtifactKey> exactArtifacts;
+    Dictionary<Guid, CookedPackageLocation> packageLocations;
 
     // Load incremental build cache
     CacheData cache;
@@ -1244,12 +1321,23 @@ bool CookAssetsStep::Perform(CookingData& data)
                 canonicalRecord.ProcessorID == TEXT("Flax.CollisionData"));
         const bool isCanonicalText = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
             canonicalRecord.ProcessorID == TEXT("Flax.Text");
+        const bool isCanonicalExistingJson = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::ExistingJson &&
+            canonicalRecord.ProcessorID == TEXT("Flax.ExistingJson");
         const bool isCanonicalImported = hasImportedCanonical &&
             (canonicalRecord.ProcessorID == TEXT("Flax.Audio") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.Font") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.Video")) || isCanonicalText;
-        if (isCanonicalTexture || isCanonicalModel || isCanonicalGraph || isCanonicalImported)
+        const bool hasExactRuntimeProcessor = isCanonicalTexture || isCanonicalModel || isCanonicalGraph || isCanonicalImported || isCanonicalExistingJson;
+        if (hardCut && !hasExactRuntimeProcessor)
+        {
+            if (!foundCanonical)
+                LOG(Error, "Hard-cut cook refused asset {0}: it has no canonical database record.", assetId);
+            else
+                LOG(Error, "Hard-cut cook refused canonical asset {0}: processor '{1}' does not publish an exact runtime artifact.", assetId, canonicalRecord.ProcessorID);
+            return true;
+        }
+        if (hasExactRuntimeProcessor)
         {
             ArtifactRequest request;
             request.AssetID = assetId;
@@ -1263,23 +1351,27 @@ bool CookAssetsStep::Perform(CookingData& data)
                 request.RequiredCompatibility = "flax-graph-document-v1";
             else if (isCanonicalGraph)
                 request.RequiredCompatibility = "flax-authored-document-v1";
+            else if (isCanonicalExistingJson)
+                request.RequiredCompatibility = "flax-existing-json-v1";
             else
                 request.RequiredCompatibility = "flax-imported-source-v1";
             request.Policy = ArtifactResolvePolicy::Exact;
             ResolvedArtifact artifact;
             AssetPipelineDiagnostic diagnostic;
-            bool resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
-            if (resolveFailed && diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated)
-            {
-                LOG(Warning, "Canonical record {0} changed during its exact build; retrying against the current database revision.", assetId);
-                resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
-            }
+            const bool resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
             if (resolveFailed || !artifact.IsExact || !artifact.IsGenerated())
             {
                 LOG(Error, "Failed to resolve exact canonical artifact {0} for cook target {1}: {2}", assetId,
                     String(cookArtifactTarget.BuildKey(ArtifactTargetDimension::All).ToString()), diagnostic.Message);
                 return true;
             }
+            ArtifactKey exactArtifact;
+            if (ArtifactKey::Parse(artifact.Key, exactArtifact) || exactArtifact.IsZero())
+            {
+                LOG(Error, "Exact canonical artifact {0} returned an invalid immutable key.", assetId);
+                return true;
+            }
+            exactArtifacts.Add(assetId, exactArtifact);
 
             cookArtifactLeases.Add(ArtifactLease::Acquire(artifact.StoragePath.Get()));
             String cachedFilePath;
@@ -1292,10 +1384,8 @@ bool CookAssetsStep::Perform(CookingData& data)
             auto& cacheEntry = cache.Entries[assetId];
             cacheEntry.ID = assetId;
             cacheEntry.TypeName = canonicalRecord.TypeName;
-            cacheEntry.FileModified = FileSystem::GetFileLastEditTime(canonicalRecord.SourcePath.Get());
+            cacheEntry.FileModified = FileSystem::GetFileLastEditTime(artifact.StoragePath.Get());
             cacheEntry.FileDependencies.Clear();
-            cacheEntry.FileDependencies.Add(ToPair(String(canonicalRecord.SourcePath.Get()), cacheEntry.FileModified));
-            cacheEntry.FileDependencies.Add(ToPair(String(canonicalRecord.MetaPath.Get()), FileSystem::GetFileLastEditTime(canonicalRecord.MetaPath.Get())));
             e.Info.TypeName = canonicalRecord.TypeName;
             data.Stats.CookedAssets++;
             continue;
@@ -1446,7 +1536,7 @@ bool CookAssetsStep::Perform(CookingData& data)
 
     // Package all registered assets into packages
     {
-        PackageBuilder packageBuilder(buildSettings->MaxAssetsPerPackage, buildSettings->MaxPackageSizeMB, contentKey);
+        PackageBuilder packageBuilder(buildSettings->MaxAssetsPerPackage, buildSettings->MaxPackageSizeMB, contentKey, packageLocations);
 
         subStepIndex = 0;
         for (auto i = AssetsRegistry.Begin(); i.IsNotEnd(); ++i)
@@ -1459,6 +1549,11 @@ bool CookAssetsStep::Perform(CookingData& data)
             cache.GetFilePath(assetId, cookedFilePath);
             if (!FileSystem::FileExists(cookedFilePath))
             {
+                if (hardCut)
+                {
+                    LOG(Error, "Hard-cut cook is missing exact artifact bytes for asset \'{0}\'", assetId);
+                    return true;
+                }
                 LOG(Warning, "Missing cooked file for asset \'{0}\'", assetId);
                 continue;
             }
@@ -1504,10 +1599,16 @@ bool CookAssetsStep::Perform(CookingData& data)
 
     BUILD_STEP_CANCEL_CHECK;
 
-    // Save assets cache
-    if (AssetsCache::Save(data.DataOutputPath / TEXT("Content/AssetsCache.dat"), AssetsRegistry, AssetPathsMapping, AssetsCacheFlags::RelativePaths))
+    // Legacy cooks retain their cache. Hard-cut players use only RuntimeAssetIndex.
+    const String legacyCachePath = data.DataOutputPath / TEXT("Content/AssetsCache.dat");
+    if (!hardCut && AssetsCache::Save(legacyCachePath, AssetsRegistry, AssetPathsMapping, AssetsCacheFlags::RelativePaths))
     {
         data.Error(TEXT("Failed to create assets registry."));
+        return true;
+    }
+    if (hardCut && FileSystem::FileExists(legacyCachePath) && FileSystem::DeleteFile(legacyCachePath))
+    {
+        data.Error(TEXT("Failed to remove stale legacy assets registry from hard-cut output."));
         return true;
     }
     {
@@ -1517,11 +1618,49 @@ bool CookAssetsStep::Perform(CookingData& data)
         {
             RuntimeAssetIndexEntry entry;
             AssetRecord canonicalRecord;
-            entry.ID = AssetDatabase::Get().TryGetRecord(i->Key, canonicalRecord)
-                ? AssetObjectId(canonicalRecord.SourceAssetID, canonicalRecord.LocalId)
-                : AssetObjectId(i->Key, 1);
+            const bool hasCanonicalRecord = AssetDatabase::Get().TryGetRecord(i->Key, canonicalRecord);
+            entry.ID = hasCanonicalRecord ? canonicalRecord.GetObjectId() : AssetObjectId(i->Key, 1);
+            entry.BackingAssetID = i->Key;
             entry.TypeName = i->Value.Info.TypeName;
-            entry.PackagedPath = i->Value.Info.Path;
+            entry.CanonicalPath = hasCanonicalRecord ? MakeRuntimeLogicalPath(canonicalRecord.CanonicalPath.Get()) : String::Empty;
+            if (!hasCanonicalRecord)
+            {
+                for (const auto& mapping : AssetPathsMapping)
+                {
+                    if (mapping.Value == i->Key)
+                    {
+                        entry.CanonicalPath = mapping.Key;
+                        break;
+                    }
+                }
+            }
+            const CookedPackageLocation* location = packageLocations.TryGet(i->Key);
+            if (!location)
+            {
+                data.Error(String::Format(TEXT("Packaged asset {0} has no runtime package location."), i->Key));
+                return true;
+            }
+            entry.PackagedPath = location->Path;
+            entry.PackageID = location->PackageID;
+            entry.ChunkID = location->ChunkID;
+            entry.Offset = location->Offset;
+            entry.Size = location->Size;
+            entry.AssetFormatVersion = location->AssetFormatVersion;
+            const ArtifactKey* exactArtifact = exactArtifacts.TryGet(i->Key);
+            if (exactArtifact)
+            {
+                entry.Flags = RuntimeAssetIndexFlags::ExactArtifact;
+                entry.ExactArtifact = *exactArtifact;
+            }
+            else
+            {
+                entry.Flags = RuntimeAssetIndexFlags::LegacyConverted;
+                if (hardCut)
+                {
+                    data.Error(String::Format(TEXT("Hard-cut packaged asset {0} has no exact artifact identity."), i->Key));
+                    return true;
+                }
+            }
             indexEntries.Add(MoveTemp(entry));
         }
         AssetPipelineDiagnostic diagnostic;

@@ -9,6 +9,8 @@
 #include "Engine/Threading/MainThreadTask.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Platform/File.h"
@@ -42,6 +44,15 @@
 
 namespace
 {
+    bool RejectCanonicalCookedOutput(const StringView& outputPath)
+    {
+        if (!AssetDatabase::Get().IsHardCutEnabled() ||
+            !AssetPathPolicy::IsSameOrChild(outputPath, Globals::ProjectContentFolder))
+            return false;
+        LOG(Error, "Legacy cooked-asset output into a source mount is forbidden: '{0}'. Use AssetDatabase or an artifact pipeline processor.", outputPath);
+        return true;
+    }
+
     bool IsAssetTypeNameTextureFile(const String& typeName)
     {
         return typeName == Texture::TypeName || typeName == SpriteAtlas::TypeName;
@@ -309,6 +320,8 @@ const AssetCreator* AssetsImportingManager::GetCreator(const String& tag)
 
 bool AssetsImportingManager::Create(const CreateAssetFunction& importFunc, const StringView& outputPath, Guid& assetId, void* arg)
 {
+    if (RejectCanonicalCookedOutput(outputPath))
+        return true;
     return Create(importFunc, StringView::Empty, outputPath, assetId, arg);
 }
 
@@ -325,6 +338,8 @@ bool AssetsImportingManager::Create(const String& tag, const StringView& outputP
 
 bool AssetsImportingManager::Import(const StringView& inputPath, const StringView& outputPath, Guid& assetId, void* arg)
 {
+    if (RejectCanonicalCookedOutput(outputPath))
+        return true;
     LOG(Info, "Importing file '{0}' to '{1}'...", inputPath, outputPath);
 
     // Check if input file exists
@@ -397,6 +412,8 @@ String AssetsImportingManager::GetImportPath(const String& path)
 
 bool AssetsImportingManager::Create(const Function<CreateAssetResult(CreateAssetContext&)>& callback, const StringView& inputPath, const StringView& outputPath, Guid& assetId, void* arg)
 {
+    if (RejectCanonicalCookedOutput(outputPath))
+        return true;
     PROFILE_CPU();
     ZoneText(*outputPath, outputPath.Length());
     const auto startTime = Platform::GetTimeSeconds();

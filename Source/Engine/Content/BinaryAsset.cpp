@@ -14,6 +14,8 @@
 #include "Engine/Threading/Threading.h"
 #include "Engine/Profiler/ProfilerMemory.h"
 #if USE_EDITOR
+#include "AssetDatabase/AssetDatabase.h"
+#include "AssetDatabase/AssetPath.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Engine/Globals.h"
 #endif
@@ -450,6 +452,11 @@ bool BinaryAsset::SaveToAsset(const StringView& path, AssetInitData& data, bool 
     String pathNorm(path);
     ContentStorageManager::FormatPath(pathNorm);
     const StringView filePath = pathNorm;
+    if (AssetDatabase::Get().IsHardCutEnabled() && AssetPathPolicy::IsSameOrChild(filePath, Globals::ProjectContentFolder))
+    {
+        LOG(Error, "Cooked asset storage cannot be written into the canonical Content source tree.");
+        return true;
+    }
 
     // Find target storage container and the asset
     auto storage = ContentStorageManager::TryGetStorage(filePath);

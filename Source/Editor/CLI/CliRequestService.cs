@@ -44,6 +44,9 @@ namespace FlaxEditor
         [JsonProperty("command")]
         public CliCommandOptions Command { get; set; }
 
+        [JsonProperty("scriptedImporterWorker")]
+        public ScriptedImporterWorkerRequest ScriptedImporterWorker { get; set; }
+
         [JsonProperty("eventPath")]
         public string EventPath { get; set; }
 
@@ -97,6 +100,9 @@ namespace FlaxEditor
                 case "command":
                     ExecuteCommand();
                     break;
+                case "scriptedImporterWorker":
+                    ExecuteScriptedImporterWorker();
+                    break;
                 default:
                     throw new InvalidOperationException($"Unsupported CLI operation '{_request.Operation}'.");
                 }
@@ -131,6 +137,34 @@ namespace FlaxEditor
                 var options = _request.Options != null && _request.Options.RunAfterBuild ? BuildOptions.AutoRun : BuildOptions.None;
                 Editor.Instance.Windows.GameCookerWin.Build(preset, target, options);
                 Editor.Instance.Windows.GameCookerWin.ExitOnBuildQueueEnd(Complete);
+        }
+
+        private void ExecuteScriptedImporterWorker()
+        {
+            if (!AssetDatabase.IsAssetImportWorkerProcess())
+                throw new InvalidOperationException("Scripted importer worker requests require isolated worker mode.");
+            var worker = _request.ScriptedImporterWorker ?? throw new InvalidOperationException("The scripted importer worker payload is missing.");
+            var physicalPath = AssetDatabase.ResolvePhysicalPathInternal(worker.AssetPath);
+            var metadataPath = physicalPath + ".meta";
+            if (!string.Equals(worker.SourceHash, ScriptedImporterWorkerCoordinator.HashFile(physicalPath), StringComparison.Ordinal) ||
+                !string.Equals(worker.MetadataHash, ScriptedImporterWorkerCoordinator.HashFile(metadataPath), StringComparison.Ordinal))
+                throw new InvalidOperationException("The worker input snapshot no longer matches the coordinator request.");
+
+            var importResult = ScriptedImporterRegistry.ExecuteWorker(worker.AssetPath, worker.ProcessorId, worker.CallbackHash);
+            if (!string.Equals(worker.SourceHash, ScriptedImporterWorkerCoordinator.HashFile(physicalPath), StringComparison.Ordinal) ||
+                !string.Equals(worker.MetadataHash, ScriptedImporterWorkerCoordinator.HashFile(metadataPath), StringComparison.Ordinal))
+                throw new InvalidOperationException("The importer changed its source or metadata; worker output was rejected.");
+            WriteResult(new
+            {
+                schemaVersion = 1,
+                requestId = _request.RequestId,
+                success = true,
+                exitCode = 0,
+                importResult,
+                errors = Array.Empty<object>(),
+            });
+            TryWriteEvent(new { type = "result", requestId = _request.RequestId, success = true, exitCode = 0 });
+            Engine.RequestExit(0);
         }
 
         private void ValidateProjectPath()

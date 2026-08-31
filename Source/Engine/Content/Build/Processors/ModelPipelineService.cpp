@@ -13,6 +13,7 @@
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/AssetDatabase/AssetSourceRoots.h"
 #include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Build/ArtifactBuildContext.h"
@@ -31,6 +32,8 @@ namespace
     {
         PreparedAsset Prepared;
         ArtifactTarget Target;
+        String ProjectRoot;
+        String ContentRoot;
         Guid JobID = Guid::New();
         Array<ArtifactBuildInput> Inputs;
         Array<ArtifactPublicationOutputPlan> Outputs;
@@ -162,15 +165,19 @@ namespace
         });
     }
 
-    bool PrepareRecord(const AssetRecord& record, const AssetMeta& meta, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
+    bool PrepareRecord(const AssetRecord& record, const AssetMeta& meta, const ArtifactTarget& target,
+        PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
     {
         ModelPipelineState& state = State();
         AssetProcessorLease lease;
         if (AssetProcessorRegistry::Get().TryAcquire(record.ProcessorID, AssetProcessorInvocationStage::Prepare, lease, diagnostic))
             return true;
         AssetCancellationSource cancellation;
-        PrepareAssetContext context(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
-            record, lease.Get(), meta.Processor.SettingsJson, state.HashCache, cancellation.GetToken());
+        String projectRoot;
+        String contentRoot;
+        AssetSourceRoots::Resolve(record.SourcePath.Get(), projectRoot, contentRoot);
+        PrepareAssetContext context(projectRoot, contentRoot, Globals::ProjectLibraryFolder,
+            record, lease.Get(), meta.Processor.SettingsJson, target, state.HashCache, cancellation.GetToken());
         if (lease.Get().Prepare(context, prepared, diagnostic) || context.Finalize(record.DatabaseRevision, prepared, diagnostic))
             return true;
         {
@@ -185,7 +192,7 @@ namespace
         for (const auto& mapping : meta.SubAssets)
         {
             if (!mapping.Value.Removed)
-                payload->AssignedIDs[mapping.Key] = mapping.Value.ID;
+                payload->AssignedIDs[mapping.Key] = SubAssetPolicy::GetBackingAssetId(meta.ID, mapping.Value.LocalId);
         }
         return false;
     }
@@ -205,7 +212,7 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     if (AssetMeta::Load(record.MetaPath.Get(), meta, diagnostic))
         return true;
     PreparedAsset prepared;
-    if (PrepareRecord(record, meta, prepared, diagnostic))
+    if (PrepareRecord(record, meta, request.Target, prepared, diagnostic))
         return true;
     SubAssetReconcileResult reconciliation = SubAssetReconciler::Reconcile(meta, prepared.SubAssets, false);
     if (reconciliation.RequiresUserReconciliation || reconciliation.HasTrackedChanges)
@@ -220,6 +227,7 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     auto execution = std::make_shared<ModelExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
+    AssetSourceRoots::Resolve(record.SourcePath.Get(), execution->ProjectRoot, execution->ContentRoot);
     {
         ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
@@ -236,11 +244,11 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     }
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        if (dependency.Kind != AssetDependencyKind::SourceFile)
+        if (!dependency.IsSourceDependency())
             continue;
         ArtifactBuildInput input;
         input.StableIdentity = dependency.StableIdentity;
-        input.Path = Globals::ProjectFolder / dependency.StableIdentity;
+        input.Path = dependency.Kind == AssetDependencyKind::SourceAsset ? record.SourcePath.Get() : execution->ProjectRoot / dependency.StableIdentity;
         FileSystem::NormalizePath(input.Path);
         input.ExpectedContent = dependency.Content;
         execution->Inputs.Add(MoveTemp(input));
@@ -284,7 +292,7 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     plan.BuildRequest.Build = [execution](const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& buildDiagnostic)
     {
         std::lock_guard<std::mutex> sourceLock(*execution->SourceLocker);
-        execution->Context = std::make_unique<ArtifactBuildContext>(Globals::ProjectFolder, Globals::ProjectContentFolder,
+        execution->Context = std::make_unique<ArtifactBuildContext>(execution->ProjectRoot, execution->ContentRoot,
             Globals::ProjectLibraryFolder, execution->JobID, execution->Prepared, execution->Inputs, cancellation, execution->Target);
         if (execution->Context->Initialize(buildDiagnostic))
             return true;
@@ -477,7 +485,9 @@ bool ModelPipelineService::ReconcileMetadata(const Guid& rootAssetID, Array<SubA
     if (AssetMeta::Load(record.MetaPath.Get(), meta, diagnostic))
         return true;
     PreparedAsset prepared;
-    if (PrepareRecord(record, meta, prepared, diagnostic))
+    ArtifactTarget target;
+    target.Role = "Editor";
+    if (PrepareRecord(record, meta, target, prepared, diagnostic))
         return true;
     SubAssetReconcileResult result = SubAssetReconciler::Reconcile(meta, prepared.SubAssets, true);
     if (result.RequiresUserReconciliation)

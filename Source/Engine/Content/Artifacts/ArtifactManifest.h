@@ -9,9 +9,11 @@
 struct FLAXENGINE_API ArtifactManifestDependency
 {
     AssetDependencyKind Kind = AssetDependencyKind::SourceFile;
+    AssetDependencyState State = AssetDependencyState::Present;
     String Identity;
     Guid AssetID = Guid::Empty;
     ContentHash Hash;
+    ContentHash MetadataHash;
     ArtifactKey ExactArtifact;
     ContentHash InterfaceHash;
     uint32 InterfaceVersion = 0;
@@ -45,6 +47,7 @@ struct FLAXENGINE_API ArtifactManifest
     ContentHash SourceHash;
     ContentHash SettingsHash;
     Array<ArtifactManifestDependency> Dependencies;
+    Array<AssetImportReasonNode> ImportReasons;
     Array<ArtifactManifestOutput> Outputs;
     String BuildID;
     String BuiltAtUtc;

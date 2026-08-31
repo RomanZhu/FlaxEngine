@@ -9,6 +9,10 @@
 #include "Engine/Profiler/ProfilerMemory.h"
 #include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Serialization/JsonTools.h"
+#include "Engine/Content/Documents/CanonicalJsonWriter.h"
+#include "Engine/Content/Artifacts/ArtifactKey.h"
+#include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/AssetDatabase/AssetMountDescriptor.h"
 #include <ThirdParty/pugixml/pugixml.hpp>
 using namespace pugi;
 
@@ -87,31 +91,332 @@ int32 GetIntFromXml(const xml_node& parent, const PUGIXML_CHAR* name, const int3
     return defaultValue;
 }
 
+namespace
+{
+    typedef rapidjson_flax::Document JsonDocument;
+    typedef rapidjson_flax::Value JsonValue;
+
+    Guid NewProjectRoleId(const Guid& projectId, const char* role)
+    {
+        ContentHasher hasher;
+        const StringAnsi domain("flax-new-project-bootstrap-v1");
+        hasher.Update(domain.Get(), domain.Length());
+        hasher.Update(projectId.Values, sizeof(projectId.Values));
+        hasher.Update(role, StringUtils::Length(role));
+        const ContentHash hash = hasher.Finalize();
+        Guid result(hash.Values[0], hash.Values[1], hash.Values[2], hash.Values[3]);
+        if (!result.IsValid())
+            result.D = 1;
+        return result;
+    }
+
+    bool ReadSettingsData(const StringView& path, JsonDocument& document, JsonValue*& data)
+    {
+        StringAnsi source;
+        if (File::ReadAllText(path, source))
+            return true;
+        document.Parse(source.Get(), source.Length());
+        const auto member = document.FindMember("Data");
+        if (document.HasParseError() || !document.IsObject() || member == document.MemberEnd() || !member->value.IsObject())
+            return true;
+        data = &member->value;
+        return false;
+    }
+
+    void SetString(JsonValue& data, const char* name, const StringView& value, JsonDocument::AllocatorType& allocator)
+    {
+        const StringAnsi ansi(value);
+        const auto member = data.FindMember(name);
+        if (member == data.MemberEnd())
+            data.AddMember(JsonValue(name, allocator), JsonValue(ansi.Get(), ansi.Length(), allocator), allocator);
+        else
+            member->value.SetString(ansi.Get(), ansi.Length(), allocator);
+    }
+
+    void SetGuid(JsonValue& data, const char* name, const Guid& value, JsonDocument::AllocatorType& allocator)
+    {
+        SetString(data, name, value.ToString(Guid::FormatType::N), allocator);
+    }
+
+    void SetRay(JsonValue& data, const char* name, const Ray& value, JsonDocument::AllocatorType& allocator)
+    {
+        rapidjson_flax::StringBuffer buffer;
+        CompactJsonWriter writerObject(buffer);
+        auto& writer = *(JsonWriter*)&writerObject;
+        writer.StartObject();
+        writer.JKEY("Value");
+        writer.Ray(value);
+        writer.EndObject();
+        JsonDocument temporary;
+        temporary.Parse(buffer.GetString(), buffer.GetSize());
+        const auto source = temporary.FindMember("Value");
+        const auto destination = data.FindMember(name);
+        if (destination == data.MemberEnd())
+            data.AddMember(JsonValue(name, allocator), JsonValue(source->value, allocator), allocator);
+        else
+            destination->value.CopyFrom(source->value, allocator);
+    }
+
+    bool WriteSettings(const StringView& path, JsonDocument& document)
+    {
+        Array<StringAnsi> order;
+        order.Add("ID");
+        order.Add("TypeName");
+        order.Add("EngineBuild");
+        order.Add("Data");
+        StringAnsi output;
+        CanonicalJsonError error;
+        if (CanonicalJsonWriter::Write(document, output, error, &order))
+            return true;
+        const String staging = String(path) + TEXT(".tmp");
+        if (File::WriteAllBytes(staging, reinterpret_cast<const byte*>(output.Get()), output.Length()) ||
+            FileSystem::MoveFile(path, staging, true))
+        {
+            FileSystem::DeleteFile(staging);
+            return true;
+        }
+        return false;
+    }
+
+    bool CreateSettingsSource(const StringView& path, const Guid& id, const StringView& typeName, JsonValue& data)
+    {
+        const String metaPath = String(path) + TEXT(".meta");
+        if (FileSystem::FileExists(path) || FileSystem::FileExists(metaPath))
+            return !FileSystem::FileExists(path) || !FileSystem::FileExists(metaPath);
+        JsonDocument document;
+        document.SetObject();
+        SetString(document, "ID", id.ToString(Guid::FormatType::N), document.GetAllocator());
+        SetString(document, "TypeName", typeName, document.GetAllocator());
+        document.AddMember("Data", JsonValue(data, document.GetAllocator()), document.GetAllocator());
+        if (WriteSettings(path, document))
+            return true;
+        AssetMeta meta;
+        meta.ID = id;
+        meta.AssetType = typeName;
+        meta.SourceKind = AssetSourceKind::ExistingJson;
+        meta.Processor.ID = TEXT("Flax.ExistingJson");
+        meta.Processor.SettingsVersion = 1;
+        AssetPipelineDiagnostic diagnostic;
+        return AssetMeta::SaveAtomic(metaPath, meta, diagnostic);
+    }
+
+    bool EnsureV3BootstrapSources(const ProjectInfo& project)
+    {
+        if (!project.ProjectId.IsValid())
+            return true;
+        const String content = project.ProjectFolderPath / TEXT("Content");
+        const String settings = content / TEXT("Settings");
+        if (!FileSystem::DirectoryExists(content) ||
+            (!FileSystem::DirectoryExists(settings) && FileSystem::CreateDirectory(settings)))
+            return true;
+
+        const Guid settingsId = NewProjectRoleId(project.ProjectId, "settings-folder");
+        const String settingsMetaPath = settings + TEXT(".meta");
+        if (!FileSystem::FileExists(settingsMetaPath))
+        {
+            AssetMeta meta;
+            meta.ID = settingsId;
+            meta.FolderAsset = true;
+            meta.AssetType = TEXT("FlaxEngine.Folder");
+            meta.SourceKind = AssetSourceKind::Folder;
+            meta.Processor.ID = TEXT("Flax.Folder");
+            AssetPipelineDiagnostic diagnostic;
+            if (AssetMeta::SaveAtomic(settingsMetaPath, meta, diagnostic))
+                return true;
+        }
+
+        const Guid projectSettingsId = NewProjectRoleId(project.ProjectId, "project-settings");
+        const Guid buildSettingsId = NewProjectRoleId(project.ProjectId, "build-settings");
+        const Guid pipelineSettingsId = NewProjectRoleId(project.ProjectId, "asset-pipeline-settings");
+        const Guid editorSettingsId = NewProjectRoleId(project.ProjectId, "editor-settings");
+        const Guid mountSettingsId = NewProjectRoleId(project.ProjectId, "content-mount-settings");
+
+        JsonDocument owner;
+        owner.SetObject();
+        SetString(owner, "ProductName", project.Name, owner.GetAllocator());
+        SetString(owner, "Version", project.Version.ToString(), owner.GetAllocator());
+        SetString(owner, "CompanyName", project.Company, owner.GetAllocator());
+        SetString(owner, "CopyrightNotice", project.Copyright, owner.GetAllocator());
+        SetGuid(owner, "FirstScene", project.DefaultScene, owner.GetAllocator());
+        SetGuid(owner, "GameCooking", buildSettingsId, owner.GetAllocator());
+        SetGuid(owner, "AssetPipeline", pipelineSettingsId, owner.GetAllocator());
+        if (CreateSettingsSource(settings / TEXT("Project Settings.json"), projectSettingsId,
+            TEXT("FlaxEditor.Content.Settings.GameSettings"), owner))
+            return true;
+
+        JsonDocument build;
+        build.SetObject();
+        SetString(build, "GameTarget", project.GameTarget, build.GetAllocator());
+        SetString(build, "EditorTarget", project.EditorTarget, build.GetAllocator());
+        if (CreateSettingsSource(settings / TEXT("Build Settings.json"), buildSettingsId,
+            TEXT("FlaxEditor.Content.Settings.BuildSettings"), build))
+            return true;
+
+        JsonDocument pipeline;
+        pipeline.SetObject();
+        if (CreateSettingsSource(settings / TEXT("Asset Pipeline Settings.json"), pipelineSettingsId,
+            TEXT("FlaxEditor.Content.Settings.AssetPipelineSettings"), pipeline))
+            return true;
+
+        JsonDocument editor;
+        editor.SetObject();
+        SetRay(editor, "DefaultSceneSpawn", project.DefaultSceneSpawn, editor.GetAllocator());
+        if (CreateSettingsSource(settings / TEXT("Editor Settings.json"), editorSettingsId,
+            TEXT("FlaxEditor.Content.Settings.AssetEditorSettings"), editor))
+            return true;
+
+        const String mountsPath = settings / TEXT("Content Mounts.json");
+        const String mountsMetaPath = mountsPath + TEXT(".meta");
+        if (!FileSystem::FileExists(mountsPath) && !FileSystem::FileExists(mountsMetaPath))
+        {
+            AssetMountSourceDescriptor engine;
+            engine.MountId = NewProjectRoleId(project.ProjectId, "engine-content-mount");
+            engine.LogicalPrefix = TEXT("EngineContent");
+            engine.Root = TEXT("$(EnginePath)/Content");
+            engine.Kind = AssetMountKind::EngineContent;
+            Array<AssetMountSourceDescriptor> descriptors;
+            descriptors.Add(MoveTemp(engine));
+            StringAnsi source;
+            AssetPipelineDiagnostic diagnostic;
+            if (AssetMountDescriptorCodec::Write(mountSettingsId, descriptors, source, diagnostic))
+                return true;
+            JsonDocument mounts;
+            mounts.Parse(source.Get(), source.Length());
+            if (mounts.HasParseError() || WriteSettings(mountsPath, mounts))
+                return true;
+            AssetMeta meta;
+            meta.ID = mountSettingsId;
+            meta.AssetType = AssetMountDescriptorCodec::TypeName;
+            meta.SourceKind = AssetSourceKind::ExistingJson;
+            meta.Processor.ID = TEXT("Flax.ExistingJson");
+            if (AssetMeta::SaveAtomic(mountsMetaPath, meta, diagnostic))
+                return true;
+        }
+        return !FileSystem::FileExists(mountsPath) || !FileSystem::FileExists(mountsMetaPath);
+    }
+
+    bool SaveV3MutableSettings(const ProjectInfo& project)
+    {
+        const String settings = project.ProjectFolderPath / TEXT("Content/Settings");
+        JsonDocument projectDocument;
+        JsonValue* projectData;
+        if (ReadSettingsData(settings / TEXT("Project Settings.json"), projectDocument, projectData))
+            return true;
+        SetString(*projectData, "ProductName", project.Name, projectDocument.GetAllocator());
+        SetString(*projectData, "Version", project.Version.ToString(), projectDocument.GetAllocator());
+        SetString(*projectData, "CompanyName", project.Company, projectDocument.GetAllocator());
+        SetString(*projectData, "CopyrightNotice", project.Copyright, projectDocument.GetAllocator());
+        SetGuid(*projectData, "FirstScene", project.DefaultScene, projectDocument.GetAllocator());
+        if (WriteSettings(settings / TEXT("Project Settings.json"), projectDocument))
+            return true;
+
+        JsonDocument buildDocument;
+        JsonValue* buildData;
+        if (ReadSettingsData(settings / TEXT("Build Settings.json"), buildDocument, buildData))
+            return true;
+        SetString(*buildData, "GameTarget", project.GameTarget, buildDocument.GetAllocator());
+        SetString(*buildData, "EditorTarget", project.EditorTarget, buildDocument.GetAllocator());
+        if (WriteSettings(settings / TEXT("Build Settings.json"), buildDocument))
+            return true;
+
+        JsonDocument editorDocument;
+        JsonValue* editorData;
+        if (ReadSettingsData(settings / TEXT("Editor Settings.json"), editorDocument, editorData))
+            return true;
+        SetRay(*editorData, "DefaultSceneSpawn", project.DefaultSceneSpawn, editorDocument.GetAllocator());
+        return WriteSettings(settings / TEXT("Editor Settings.json"), editorDocument);
+    }
+
+    bool LoadV3MutableSettings(ProjectInfo& project)
+    {
+        const String settings = project.ProjectFolderPath / TEXT("Content/Settings");
+        JsonDocument document;
+        JsonValue* data;
+        if (ReadSettingsData(settings / TEXT("Project Settings.json"), document, data))
+            return true;
+        project.Name = JsonTools::GetString(*data, "ProductName", String::Empty);
+        const String version = JsonTools::GetString(*data, "Version", TEXT("1.0"));
+        Version::Parse(*version, &project.Version);
+        project.Company = JsonTools::GetString(*data, "CompanyName", String::Empty);
+        project.Copyright = JsonTools::GetString(*data, "CopyrightNotice", String::Empty);
+        project.DefaultScene = JsonTools::GetGuid(*data, "FirstScene");
+
+        if (ReadSettingsData(settings / TEXT("Build Settings.json"), document, data))
+            return true;
+        project.GameTarget = JsonTools::GetString(*data, "GameTarget", String::Empty);
+        project.EditorTarget = JsonTools::GetString(*data, "EditorTarget", String::Empty);
+
+        if (ReadSettingsData(settings / TEXT("Editor Settings.json"), document, data))
+            return true;
+        project.DefaultSceneSpawn = JsonTools::GetRay(*data, "DefaultSceneSpawn", Ray(Vector3::Zero, Vector3::Forward));
+        return false;
+    }
+}
+
 bool ProjectInfo::SaveProject()
 {
+    if (AssetSystemReadOnly)
+    {
+        LOG(Error, "Cannot save project descriptor because asset-system version {0} is newer than supported version {1}.", AssetSystemVersion, CurrentAssetSystemVersion);
+        return true;
+    }
+    if (AssetSystemVersion == CurrentAssetSystemVersion &&
+        (EnsureV3BootstrapSources(*this) || SaveV3MutableSettings(*this)))
+    {
+        LOG(Error, "Cannot save asset-system v3 mandatory project settings.");
+        return true;
+    }
+
     // Serialize object to Json
     rapidjson_flax::StringBuffer buffer;
     PrettyJsonWriter writerObj(buffer);
     auto& stream = *(JsonWriter*)&writerObj;
     stream.StartObject();
     {
-        stream.JKEY("Name");
-        stream.String(Name);
+        if (AssetSystemVersion < CurrentAssetSystemVersion)
+        {
+            stream.JKEY("Name");
+            stream.String(Name);
 
-        stream.JKEY("Version");
-        stream.String(Version.ToString());
+            stream.JKEY("Version");
+            stream.String(Version.ToString());
+        }
 
-        stream.JKEY("Company");
-        stream.String(Company);
+        stream.JKEY("AssetSystemVersion");
+        stream.Int(AssetSystemVersion);
 
-        stream.JKEY("Copyright");
-        stream.String(Copyright);
+        if (AssetSystemVersion == CurrentAssetSystemVersion)
+        {
+            stream.JKEY("ProjectId");
+            stream.Guid(ProjectId);
+        }
 
-        stream.JKEY("GameTarget");
-        stream.String(GameTarget);
+        stream.JKEY("SourceRoot");
+        stream.String(SourceRoot);
 
-        stream.JKEY("EditorTarget");
-        stream.String(EditorTarget);
+        stream.JKEY("IdentityModel");
+        stream.String(IdentityModel);
+
+        stream.JKEY("ArtifactLayoutVersion");
+        stream.Int(ArtifactLayoutVersion);
+
+        stream.JKEY("SourceDocumentVersion");
+        stream.Int(SourceDocumentVersion);
+
+        if (AssetSystemVersion < CurrentAssetSystemVersion)
+        {
+            stream.JKEY("Company");
+            stream.String(Company);
+
+            stream.JKEY("Copyright");
+            stream.String(Copyright);
+
+            stream.JKEY("GameTarget");
+            stream.String(GameTarget);
+
+            stream.JKEY("EditorTarget");
+            stream.String(EditorTarget);
+        }
 
         stream.JKEY("References");
         stream.StartArray();
@@ -124,13 +429,13 @@ bool ProjectInfo::SaveProject()
         }
         stream.EndArray();
 
-        if (DefaultScene.IsValid())
+        if (AssetSystemVersion < CurrentAssetSystemVersion && DefaultScene.IsValid())
         {
             stream.JKEY("DefaultScene");
             stream.Guid(DefaultScene);
         }
 
-        if (DefaultSceneSpawn != Ray(Vector3::Zero, Vector3::Forward))
+        if (AssetSystemVersion < CurrentAssetSystemVersion && DefaultSceneSpawn != Ray(Vector3::Zero, Vector3::Forward))
         {
             stream.JKEY("DefaultSceneSpawn");
             stream.Ray(DefaultSceneSpawn);
@@ -171,34 +476,49 @@ bool ProjectInfo::LoadProject(const String& projectPath)
     }
 
     // Parse properties
-    Name = JsonTools::GetString(document, "Name", String::Empty);
     ProjectPath = projectPath;
     ProjectFolderPath = StringUtils::GetDirectoryName(projectPath);
-    const auto versionMember = document.FindMember("Version");
-    if (versionMember != document.MemberEnd())
+    AssetSystemVersion = JsonTools::GetInt(document, "AssetSystemVersion", 0);
+    ProjectId = JsonTools::GetGuid(document, "ProjectId");
+    SourceRoot = JsonTools::GetString(document, "SourceRoot", String::Empty);
+    IdentityModel = JsonTools::GetString(document, "IdentityModel", String::Empty);
+    ArtifactLayoutVersion = JsonTools::GetInt(document, "ArtifactLayoutVersion", 0);
+    SourceDocumentVersion = JsonTools::GetInt(document, "SourceDocumentVersion", 0);
+    AssetSystemReadOnly = AssetSystemVersion > CurrentAssetSystemVersion;
+    if (AssetSystemVersion < CurrentAssetSystemVersion)
     {
-        auto& version = versionMember->value;
-        if (version.IsString())
+        Name = JsonTools::GetString(document, "Name", String::Empty);
+        const auto versionMember = document.FindMember("Version");
+        if (versionMember != document.MemberEnd())
         {
-            Version::Parse(version.GetText(), &Version);
+            auto& version = versionMember->value;
+            if (version.IsString())
+                Version::Parse(version.GetText(), &Version);
+            else if (version.IsObject())
+            {
+                Version = ::Version(
+                    JsonTools::GetInt(version, "Major", 0),
+                    JsonTools::GetInt(version, "Minor", 0),
+                    JsonTools::GetInt(version, "Build", -1),
+                    JsonTools::GetInt(version, "Revision", -1));
+            }
         }
-        else if (version.IsObject())
-        {
-            Version = ::Version(
-                JsonTools::GetInt(version, "Major", 0),
-                JsonTools::GetInt(version, "Minor", 0),
-                JsonTools::GetInt(version, "Build", -1),
-                JsonTools::GetInt(version, "Revision", -1));
-        }
+        Company = JsonTools::GetString(document, "Company", String::Empty);
+        Copyright = JsonTools::GetString(document, "Copyright", String::Empty);
+        GameTarget = JsonTools::GetString(document, "GameTarget", String::Empty);
+        EditorTarget = JsonTools::GetString(document, "EditorTarget", String::Empty);
+        DefaultScene = JsonTools::GetGuid(document, "DefaultScene");
+        DefaultSceneSpawn = JsonTools::GetRay(document, "DefaultSceneSpawn", Ray(Vector3::Zero, Vector3::Forward));
+    }
+    else if (AssetSystemVersion == CurrentAssetSystemVersion && LoadV3MutableSettings(*this))
+    {
+        ShowProjectLoadError(TEXT("Failed to load mandatory asset-system v3 Project, Build, or Editor settings."), projectPath);
+        return true;
     }
     if (Version.Revision() == 0)
         Version = ::Version(Version.Major(), Version.Minor(), Version.Build());
     if (Version.Build() == 0 && Version.Revision() == -1)
         Version = ::Version(Version.Major(), Version.Minor());
-    Company = JsonTools::GetString(document, "Company", String::Empty);
-    Copyright = JsonTools::GetString(document, "Copyright", String::Empty);
-    GameTarget = JsonTools::GetString(document, "GameTarget", String::Empty);
-    EditorTarget = JsonTools::GetString(document, "EditorTarget", String::Empty);
     EngineNickname = JsonTools::GetString(document, "EngineNickname", String::Empty);
     const auto referencesMember = document.FindMember("References");
     if (referencesMember != document.MemberEnd())
@@ -243,8 +563,6 @@ bool ProjectInfo::LoadProject(const String& projectPath)
             }
         }
     }
-    DefaultScene = JsonTools::GetGuid(document, "DefaultScene");
-    DefaultSceneSpawn = JsonTools::GetRay(document, "DefaultSceneSpawn", Ray(Vector3::Zero, Vector3::Forward));
     const auto minEngineVersionMember = document.FindMember("MinEngineVersion");
     if (minEngineVersionMember != document.MemberEnd())
     {
@@ -268,8 +586,62 @@ bool ProjectInfo::LoadProject(const String& projectPath)
         ShowProjectLoadError(TEXT("Missing project name."), projectPath);
         return true;
     }
+    String markerError;
+    if (AssetSystemVersion >= CurrentAssetSystemVersion && !ValidateAssetSystemMarker(markerError))
+    {
+        if (AssetSystemReadOnly)
+            LOG(Error, "Project opened read-only. {0}", markerError);
+        else
+        {
+            ShowProjectLoadError(*markerError, projectPath);
+            return true;
+        }
+    }
 
     return false;
+}
+
+bool ProjectInfo::ValidateAssetSystemMarker(String& error) const
+{
+    error = String::Empty;
+    if (AssetSystemVersion == 0)
+        return true;
+    if (AssetSystemVersion < CurrentAssetSystemVersion)
+    {
+        error = String::Format(TEXT("Asset-system version {0} requires one-way migration to version {1}."), AssetSystemVersion, CurrentAssetSystemVersion);
+        return false;
+    }
+    if (AssetSystemVersion > CurrentAssetSystemVersion)
+    {
+        error = String::Format(TEXT("Asset-system version {0} is newer than supported version {1}."), AssetSystemVersion, CurrentAssetSystemVersion);
+        return false;
+    }
+    if (!ProjectId.IsValid())
+    {
+        error = TEXT("Asset-system v3 project identity is missing or invalid.");
+        return false;
+    }
+    if (SourceRoot != TEXT("Content"))
+    {
+        error = TEXT("Asset-system source root must be exactly 'Content'.");
+        return false;
+    }
+    if (IdentityModel != TEXT("guid-local-id"))
+    {
+        error = TEXT("Asset-system identity model must be exactly 'guid-local-id'.");
+        return false;
+    }
+    if (ArtifactLayoutVersion != CurrentArtifactLayoutVersion)
+    {
+        error = String::Format(TEXT("Artifact layout version must be {0}."), CurrentArtifactLayoutVersion);
+        return false;
+    }
+    if (SourceDocumentVersion != CurrentSourceDocumentVersion)
+    {
+        error = String::Format(TEXT("Source document version must be {0}."), CurrentSourceDocumentVersion);
+        return false;
+    }
+    return true;
 }
 
 bool ProjectInfo::LoadOldProject(const String& projectPath)

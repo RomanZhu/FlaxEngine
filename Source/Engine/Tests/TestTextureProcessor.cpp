@@ -315,7 +315,7 @@ TEST_CASE("Texture processor Prepare probes every supported source format determ
         const AssetRecord record = MakeTextureRecord(sourcePath);
         AssetCancellationSource cancellation;
         PreparedAsset first;
-        PrepareAssetContext firstContext(root, content, library, record, lease.Get(), settingsJson, hashCache, cancellation.GetToken());
+        PrepareAssetContext firstContext(root, content, library, record, lease.Get(), settingsJson, ArtifactTarget(), hashCache, cancellation.GetToken());
         REQUIRE_FALSE(lease.Get().Prepare(firstContext, first, diagnostic));
         REQUIRE_FALSE(firstContext.Finalize(record.DatabaseRevision, first, diagnostic));
         REQUIRE(first.Payload);
@@ -331,7 +331,7 @@ TEST_CASE("Texture processor Prepare probes every supported source format determ
         CHECK(first.Outputs.Count() == 2);
 
         PreparedAsset second;
-        PrepareAssetContext secondContext(root, content, library, record, lease.Get(), settingsJson, hashCache, cancellation.GetToken());
+        PrepareAssetContext secondContext(root, content, library, record, lease.Get(), settingsJson, ArtifactTarget(), hashCache, cancellation.GetToken());
         REQUIRE_FALSE(lease.Get().Prepare(secondContext, second, diagnostic));
         REQUIRE_FALSE(secondContext.Finalize(record.DatabaseRevision, second, diagnostic));
         CHECK(second.InputFingerprint == first.InputFingerprint);
@@ -364,7 +364,7 @@ TEST_CASE("Texture processor Prepare rejects malformed oversized invalid-setting
     REQUIRE_FALSE(File::WriteAllBytes(malformedPath, malformed, ARRAY_COUNT(malformed)));
     AssetRecord record = MakeTextureRecord(malformedPath);
     PreparedAsset prepared;
-    PrepareAssetContext malformedContext(root, content, library, record, descriptor, settingsJson, hashCache, cancellation.GetToken());
+    PrepareAssetContext malformedContext(root, content, library, record, descriptor, settingsJson, ArtifactTarget(), hashCache, cancellation.GetToken());
     CHECK(TextureProcessor::Prepare(malformedContext, prepared, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
     CHECK(diagnostic.Stage == AssetPipelineDiagnosticStage::Prepare);
@@ -374,7 +374,7 @@ TEST_CASE("Texture processor Prepare rejects malformed oversized invalid-setting
     const Array<byte> oversized = MakePng(TextureProcessor::MaximumDimension, TextureProcessor::MaximumDimension);
     REQUIRE_FALSE(File::WriteAllBytes(oversizedPath, oversized.Get(), oversized.Count()));
     record = MakeTextureRecord(oversizedPath);
-    PrepareAssetContext oversizedContext(root, content, library, record, descriptor, settingsJson, hashCache, cancellation.GetToken());
+    PrepareAssetContext oversizedContext(root, content, library, record, descriptor, settingsJson, ArtifactTarget(), hashCache, cancellation.GetToken());
     CHECK(TextureProcessor::Prepare(oversizedContext, prepared, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ResourceLimitExceeded);
 
@@ -382,13 +382,13 @@ TEST_CASE("Texture processor Prepare rejects malformed oversized invalid-setting
     const Array<byte> valid = MakePng(8, 8);
     REQUIRE_FALSE(File::WriteAllBytes(validPath, valid.Get(), valid.Count()));
     record = MakeTextureRecord(validPath);
-    PrepareAssetContext settingsContext(root, content, library, record, descriptor, StringAnsiView("{\"type\":\"NoSuchType\"}"), hashCache, cancellation.GetToken());
+    PrepareAssetContext settingsContext(root, content, library, record, descriptor, StringAnsiView("{\"type\":\"NoSuchType\"}"), ArtifactTarget(), hashCache, cancellation.GetToken());
     CHECK(TextureProcessor::Prepare(settingsContext, prepared, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
 
     AssetCancellationSource cancelled;
     cancelled.Cancel();
-    PrepareAssetContext cancelledContext(root, content, library, record, descriptor, settingsJson, hashCache, cancelled.GetToken());
+    PrepareAssetContext cancelledContext(root, content, library, record, descriptor, settingsJson, ArtifactTarget(), hashCache, cancelled.GetToken());
     CHECK(TextureProcessor::Prepare(cancelledContext, prepared, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::BuildCancelled);
 }
@@ -416,7 +416,7 @@ TEST_CASE("Texture processor Build writes load-compatible runtime and thumbnail 
     SourceHashCache hashCache;
     AssetCancellationSource cancellation;
     PreparedAsset prepared;
-    PrepareAssetContext prepareContext(root, content, library, record, descriptor, settingsJson, hashCache, cancellation.GetToken());
+    PrepareAssetContext prepareContext(root, content, library, record, descriptor, settingsJson, ArtifactTarget(), hashCache, cancellation.GetToken());
     REQUIRE_FALSE(descriptor.Prepare(prepareContext, prepared, diagnostic));
     REQUIRE_FALSE(prepareContext.Finalize(record.DatabaseRevision, prepared, diagnostic));
 
@@ -575,7 +575,7 @@ TEST_CASE("Texture processor output keys isolate target overrides and thumbnail 
     SourceHashCache hashCache;
     AssetCancellationSource cancellation;
     PreparedAsset prepared;
-    PrepareAssetContext context(root, content, library, record, descriptor, settingsJson, hashCache, cancellation.GetToken());
+    PrepareAssetContext context(root, content, library, record, descriptor, settingsJson, ArtifactTarget(), hashCache, cancellation.GetToken());
     REQUIRE_FALSE(descriptor.Prepare(context, prepared, diagnostic));
     REQUIRE_FALSE(context.Finalize(record.DatabaseRevision, prepared, diagnostic));
 
@@ -612,7 +612,7 @@ TEST_CASE("Texture processor output keys isolate target overrides and thumbnail 
     withAndroidOverride.PlatformOverrides.Add("android", overrideSettings);
     REQUIRE_FALSE(withAndroidOverride.ToJson(settingsJson, diagnostic));
     PreparedAsset overridePrepared;
-    PrepareAssetContext overrideContext(root, content, library, record, descriptor, settingsJson, hashCache, cancellation.GetToken());
+    PrepareAssetContext overrideContext(root, content, library, record, descriptor, settingsJson, ArtifactTarget(), hashCache, cancellation.GetToken());
     REQUIRE_FALSE(descriptor.Prepare(overrideContext, overridePrepared, diagnostic));
     REQUIRE_FALSE(overrideContext.Finalize(record.DatabaseRevision, overridePrepared, diagnostic));
     ArtifactKey unchangedWindowsRuntime;
@@ -650,7 +650,7 @@ TEST_CASE("Texture processor Build fails safely for decoder errors and cancellat
     SourceHashCache hashCache;
     AssetCancellationSource cancellation;
     PreparedAsset prepared;
-    PrepareAssetContext prepareContext(root, content, library, record, descriptor, settingsJson, hashCache, cancellation.GetToken());
+    PrepareAssetContext prepareContext(root, content, library, record, descriptor, settingsJson, ArtifactTarget(), hashCache, cancellation.GetToken());
     REQUIRE_FALSE(descriptor.Prepare(prepareContext, prepared, diagnostic));
     REQUIRE_FALSE(prepareContext.Finalize(record.DatabaseRevision, prepared, diagnostic));
     ArtifactBuildInput input;

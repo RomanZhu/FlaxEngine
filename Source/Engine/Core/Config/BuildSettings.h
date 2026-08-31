@@ -17,6 +17,14 @@ API_CLASS(sealed, Namespace="FlaxEditor.Content.Settings") class FLAXENGINE_API 
     API_AUTO_SERIALIZATION();
 
 public:
+    /// <summary>Name of the project game-code target.</summary>
+    API_FIELD(Attributes="EditorOrder(-20), EditorDisplay(\"General\")")
+    String GameTarget;
+
+    /// <summary>Name of the project editor-code target.</summary>
+    API_FIELD(Attributes="EditorOrder(-10), EditorDisplay(\"General\")")
+    String EditorTarget;
+
     /// <summary>
     /// Name of the output app created by the build system. Used to rename main executable (eg. MyGame.exe) or final package name (eg. MyGame.apk). Custom tokens: ${PROJECT_NAME}, ${COMPANY_NAME}.
     /// </summary>

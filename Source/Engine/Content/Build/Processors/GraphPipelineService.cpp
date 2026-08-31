@@ -7,6 +7,7 @@
 #include "GraphDocumentProcessor.h"
 #include "AuthoredAssetProcessor.h"
 #include "ImportedSourceProcessor.h"
+#include "ExistingJsonProcessor.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
@@ -160,7 +161,8 @@ bool GraphPipelineService::OwnsProcessor(const StringView& processorID)
 {
     return processorID == GraphDocumentProcessor::ProcessorID() ||
         AuthoredAssetProcessor::Owns(processorID) ||
-        ImportedSourceProcessor::Owns(processorID);
+        ImportedSourceProcessor::Owns(processorID) ||
+        processorID == ExistingJsonProcessor::ProcessorID();
 }
 
 bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
@@ -191,10 +193,12 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     extraIds.Add(AuthoredAssetProcessor::SceneAnimationID());
     extraIds.Add(AuthoredAssetProcessor::ParticleSystemID());
     extraIds.Add(AuthoredAssetProcessor::CollisionDataID());
+    extraIds.Add(AuthoredAssetProcessor::GenericObjectID());
     extraIds.Add(ImportedSourceProcessor::FontID());
     extraIds.Add(ImportedSourceProcessor::ShaderID());
     extraIds.Add(ImportedSourceProcessor::VideoID());
     extraIds.Add(ImportedSourceProcessor::TextID());
+    extraIds.Add(ExistingJsonProcessor::ProcessorID());
 #if COMPILE_WITH_AUDIO_TOOL
     extraIds.Add(ImportedSourceProcessor::AudioID());
 #endif
@@ -204,9 +208,13 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
         if (AssetProcessorRegistry::Get().TryGetDescriptor(id, existing))
             continue;
         AssetProcessorRegistration registration;
-        AssetProcessorDescriptor descriptor = AuthoredAssetProcessor::Owns(id)
-            ? AuthoredAssetProcessor::CreateDescriptor(id)
-            : ImportedSourceProcessor::CreateDescriptor(id);
+        AssetProcessorDescriptor descriptor;
+        if (AuthoredAssetProcessor::Owns(id))
+            descriptor = AuthoredAssetProcessor::CreateDescriptor(id);
+        else if (ImportedSourceProcessor::Owns(id))
+            descriptor = ImportedSourceProcessor::CreateDescriptor(id);
+        else
+            descriptor = ExistingJsonProcessor::CreateDescriptor();
         if (AssetProcessorRegistry::Get().Register(MoveTemp(descriptor), registration, diagnostic))
             return true;
         state.ExtraRegistrations.Add(MoveTemp(registration));
@@ -244,7 +252,7 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     AssetSourceRoots::Resolve(record.SourcePath.Get(), projectRoot, contentRoot);
     GraphPipelineState& state = State();
     PrepareAssetContext context(projectRoot, contentRoot, Globals::ProjectLibraryFolder,
-        record, prepareLease.Get(), meta.Processor.SettingsJson, state.HashCache, preparationCancellation.GetToken());
+        record, prepareLease.Get(), meta.Processor.SettingsJson, request.Target, state.HashCache, preparationCancellation.GetToken());
     if (prepareLease.Get().Prepare(context, prepared, diagnostic) ||
         context.Finalize(record.DatabaseRevision, prepared, diagnostic))
         return true;
@@ -259,7 +267,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     execution->ProcessorID = record.ProcessorID;
     execution->ProjectRoot = projectRoot;
     execution->ContentRoot = contentRoot;
-    execution->ValidateFlaxStorage = record.ProcessorID != ImportedSourceProcessor::VideoID();
+    execution->ValidateFlaxStorage = record.ProcessorID != ImportedSourceProcessor::VideoID() &&
+        record.ProcessorID != AuthoredAssetProcessor::GenericObjectID();
     AssetProcessorDescriptor processorDescriptor;
     if (AssetProcessorRegistry::Get().TryGetDescriptor(record.ProcessorID, processorDescriptor))
         execution->ImplementationVersion = processorDescriptor.ImplementationVersion;
@@ -272,11 +281,11 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     }
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        if (dependency.Kind != AssetDependencyKind::SourceFile)
+        if (!dependency.IsSourceDependency())
             continue;
         ArtifactBuildInput input;
         input.StableIdentity = dependency.StableIdentity;
-        input.Path = record.SourcePath.Get();
+        input.Path = dependency.Kind == AssetDependencyKind::SourceAsset ? record.SourcePath.Get() : projectRoot / dependency.StableIdentity;
         input.ExpectedContent = dependency.Content;
         execution->Inputs.Add(MoveTemp(input));
     }
@@ -328,6 +337,11 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         else if (AuthoredAssetProcessor::Owns(record.ProcessorID))
         {
             if (AuthoredAssetProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+                return true;
+        }
+        else if (record.ProcessorID == ExistingJsonProcessor::ProcessorID())
+        {
+            if (ExistingJsonProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
                 return true;
         }
         else if (ImportedSourceProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))

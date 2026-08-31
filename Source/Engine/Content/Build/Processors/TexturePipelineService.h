@@ -27,6 +27,8 @@ public:
 
     static const ArtifactTarget& GetHostTarget();
     static AssetBuildService* GetBuildService(AssetPipelineDiagnostic& diagnostic);
+    static bool SetMaximumWorkers(int32 value);
+    static int32 GetMaximumWorkers();
 
     /// <summary>Stops texture workers and releases the processor registration before engine teardown.</summary>
     static void Shutdown();

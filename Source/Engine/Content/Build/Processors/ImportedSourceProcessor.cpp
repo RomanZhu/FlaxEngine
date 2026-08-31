@@ -225,7 +225,7 @@ bool ImportedSourceProcessor::Build(ArtifactBuildContext& context, AssetPipeline
     const AssetDependency* sourceDependency = nullptr;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        if (dependency.Kind == AssetDependencyKind::SourceFile)
+        if (dependency.Kind == AssetDependencyKind::SourceAsset)
         {
             sourceDependency = &dependency;
             break;

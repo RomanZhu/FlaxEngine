@@ -40,6 +40,7 @@ struct FLAXENGINE_API ArtifactPublicationRequest
     Array<ArtifactPublicationOutputPlan> Outputs;
     ArtifactPublicationStateQuery QueryCurrentState;
     ArtifactPublicationNotification Notify;
+    bool DeferDurableCommit = false;
     ArtifactPublicationFailurePoint FailurePoint = ArtifactPublicationFailurePoint::None;
 };
 

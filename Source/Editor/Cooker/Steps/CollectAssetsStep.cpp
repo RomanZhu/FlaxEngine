@@ -11,6 +11,43 @@
 #include "Engine/Content/Assets/Shader.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 
+namespace
+{
+    bool HasExactRuntimeProcessor(const AssetRecord& record)
+    {
+        return record.ProcessorID == TEXT("Flax.Texture") ||
+            record.ProcessorID == TEXT("Flax.Model") ||
+            record.ProcessorID == TEXT("Flax.GraphDocument") ||
+            record.ProcessorID == TEXT("Flax.ExistingJson") ||
+            record.ProcessorID == TEXT("Flax.MaterialInstance") ||
+            record.ProcessorID == TEXT("Flax.SkeletonMask") ||
+            record.ProcessorID == TEXT("Flax.SceneAnimation") ||
+            record.ProcessorID == TEXT("Flax.ParticleSystem") ||
+            record.ProcessorID == TEXT("Flax.CollisionData") ||
+            record.ProcessorID == TEXT("Flax.Audio") ||
+            record.ProcessorID == TEXT("Flax.Font") ||
+            record.ProcessorID == TEXT("Flax.Video") ||
+            record.ProcessorID == TEXT("Flax.Text") ||
+            record.ProcessorID == TEXT("Flax.ShaderSource");
+    }
+
+    void QueueRuntimeObjectClosure(const AssetRecord& record, Array<Guid>& queue)
+    {
+        queue.Add(record.RuntimeReferences);
+        if (!record.IsMainAsset())
+            return;
+        Array<AssetRecord> objects;
+        AssetDatabase::Get().GetSubAssets(record.SourceAssetID, objects);
+        for (const AssetRecord& object : objects)
+        {
+            // MissingSource is the durable tombstone state. Every other live object is queued
+            // so a bad current artifact fails explicitly instead of being stripped silently.
+            if (object.Status != AssetRecordStatus::MissingSource)
+                queue.Add(object.ID);
+        }
+    }
+}
+
 bool CollectAssetsStep::Perform(CookingData& data)
 {
     LOG(Info, "Searching for assets to include in a build. Using {0} root assets.", data.RootAssets.Count());
@@ -27,6 +64,7 @@ bool CollectAssetsStep::Perform(CookingData& data)
     AssetInfo assetInfo;
     Array<Guid> references;
     Array<String> files;
+    const bool hardCut = AssetDatabase::Get().IsHardCutEnabled();
     while (assetsQueue.HasItems())
     {
         BUILD_STEP_CANCEL_CHECK;
@@ -37,6 +75,23 @@ bool CollectAssetsStep::Perform(CookingData& data)
             continue;
         AssetRecord canonicalRecord;
         const bool hasCanonicalRecord = AssetDatabase::Get().TryGetRecord(assetId, canonicalRecord);
+        if (hardCut)
+        {
+            if (!hasCanonicalRecord)
+            {
+                LOG(Error, "Hard-cut cook root/reference {0} has no canonical database record.", assetId);
+                return true;
+            }
+            if (!HasExactRuntimeProcessor(canonicalRecord))
+            {
+                LOG(Error, "Hard-cut cook root/reference {0} uses processor '{1}', which has no exact runtime output.", assetId, canonicalRecord.ProcessorID);
+                return true;
+            }
+            LOG_STR(Info, canonicalRecord.CanonicalPath.Get());
+            data.Assets.Add(assetId);
+            QueueRuntimeObjectClosure(canonicalRecord, assetsQueue);
+            continue;
+        }
         if (hasCanonicalRecord && canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary &&
             canonicalRecord.ProcessorID != TEXT("Flax.Texture") && canonicalRecord.ProcessorID != TEXT("Flax.Model") &&
             canonicalRecord.ProcessorID != TEXT("Flax.GraphDocument") &&

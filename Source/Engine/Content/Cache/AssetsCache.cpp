@@ -42,14 +42,58 @@ int32 AssetsCache::Size() const
 void AssetsCache::Init()
 {
     PROFILE_CPU();
+#if !USE_EDITOR
+    Stopwatch stopwatch;
+    _path = Globals::ProjectContentFolder / TEXT("RuntimeAssetIndex.json");
+    LOG(Info, "Loading runtime asset index {0}...", _path);
+
+    Array<RuntimeAssetIndexEntry> locations;
+    AssetPipelineDiagnostic diagnostic;
+    if (RuntimeAssetIndex::Load(_path, locations, diagnostic))
+    {
+        _isDirty = true;
+        LOG(Error, "Cooked runtime asset index is missing or invalid: {0}", diagnostic.Message);
+        return;
+    }
+
+    ASSETS_CACHE_LOCK();
+    _registry.Clear();
+    _pathsMapping.Clear();
+    _runtimeLocations.Clear();
+    _registry.EnsureCapacity(locations.Count());
+    _pathsMapping.EnsureCapacity(locations.Count());
+    _runtimeLocations.EnsureCapacity(locations.Count());
+    for (RuntimeAssetIndexEntry& location : locations)
+    {
+        String packagePath = Globals::StartupFolder / location.PackagedPath;
+        FileSystem::NormalizePath(packagePath);
+        _registry.Add(location.BackingAssetID, Entry(location.BackingAssetID, location.TypeName, packagePath));
+        if (location.CanonicalPath.HasChars())
+        {
+            String canonicalPath = location.CanonicalPath;
+            if (FileSystem::IsRelative(canonicalPath))
+                canonicalPath = Globals::StartupFolder / canonicalPath;
+            FileSystem::NormalizePath(canonicalPath);
+            _pathsMapping.Add(canonicalPath, location.BackingAssetID);
+        }
+        _runtimeLocations.Add(location.ID, MoveTemp(location));
+    }
+
+#if !BUILD_RELEASE
+    _pathsMappingInv.Clear();
+    _pathsMappingInv.EnsureCapacity(_pathsMapping.Count());
+    for (auto& mapping : _pathsMapping)
+        _pathsMappingInv.Add(mapping.Value, StringView(mapping.Key));
+#endif
+    _isDirty = false;
+    stopwatch.Stop();
+    LOG(Info, "Runtime asset index loaded {0} object locations in {1}ms", _runtimeLocations.Count(), stopwatch.GetMilliseconds());
+    return;
+#else
     Entry e;
     int32 count;
     Stopwatch stopwatch;
-#if USE_EDITOR
     _path = Globals::ProjectCacheFolder / TEXT("AssetsCache.dat");
-#else
-    _path = Globals::ProjectContentFolder / TEXT("AssetsCache.dat");
-#endif
     LOG(Info, "Loading Asset Cache {0}...", _path);
 
     // Check if assets registry exists
@@ -177,6 +221,7 @@ void AssetsCache::Init()
 
     stopwatch.Stop();
     LOG(Info, "Asset Cache loaded {0} entries in {1}ms ({2} rejected)", _registry.Count(), stopwatch.GetMilliseconds(), rejectedCount);
+#endif
 }
 
 bool AssetsCache::Save()
@@ -300,6 +345,9 @@ bool AssetsCache::FindAsset(const StringView& path, AssetInfo& info)
             return FindAsset(id, info);
         }
     }
+    // Runtime path lookup is index-only. Package paths are storage details shared by many
+    // assets and must never act as an implicit asset lookup fallback.
+    return false;
 #endif
 
     // Find asset in registry
@@ -367,6 +415,26 @@ bool AssetsCache::FindAsset(const Guid& id, AssetInfo& info)
     }
     return result;
 }
+
+#if !USE_EDITOR
+bool AssetsCache::FindAsset(const AssetObjectId& id, AssetInfo& info) const
+{
+    PROFILE_CPU();
+    const RuntimeAssetIndexEntry* location = _runtimeLocations.TryGet(id);
+    if (!location)
+        return false;
+    const Entry* entry = _registry.TryGet(location->BackingAssetID);
+    if (!entry)
+        return false;
+    info = entry->Info;
+    return true;
+}
+
+const RuntimeAssetIndexEntry* AssetsCache::FindRuntimeLocation(const AssetObjectId& id) const
+{
+    return _runtimeLocations.TryGet(id);
+}
+#endif
 
 void AssetsCache::GetAll(Array<Guid>& result) const
 {

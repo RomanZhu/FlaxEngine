@@ -195,6 +195,21 @@ bool AssetPathPolicy::IsPackageEntryPathValid(const PackageEntryPath& path)
     return true;
 }
 
+bool AssetPathPolicy::TryResolvePhysicalPath(const StringView& input, String& resolved, AssetPipelineDiagnostic& diagnostic)
+{
+    diagnostic = AssetPipelineDiagnostic();
+    resolved = String::Empty;
+    if (input.IsEmpty() || FileSystem::IsRelative(input))
+        return PathFail(diagnostic, input, TEXT("Physical asset path must be absolute."));
+    String normalized(input);
+    StringUtils::PathRemoveRelativeParts(normalized);
+    if (ResolveExistingPath(normalized, resolved))
+        return PathFail(diagnostic, input, TEXT("Physical asset path cannot be resolved safely."));
+    StringUtils::PathRemoveRelativeParts(resolved);
+    resolved.Replace((Char)92, '/');
+    return false;
+}
+
 bool AssetPathPolicy::TryNormalizeProjectPath(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot, const StringView& input, ProjectPath& result, AssetPipelineDiagnostic& diagnostic)
 {
     diagnostic = AssetPipelineDiagnostic();

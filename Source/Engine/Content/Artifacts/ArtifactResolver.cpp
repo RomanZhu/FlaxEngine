@@ -3,6 +3,7 @@
 #include "ArtifactResolver.h"
 #include "ArtifactCompatibility.h"
 #include "ArtifactStore.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseStorage.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 
@@ -53,21 +54,28 @@ namespace
     bool Inspect(const StringView& libraryRoot, const AssetRecord& record, const ArtifactRequest& request, ArtifactInspection& result)
     {
         result = ArtifactInspection();
-        ArtifactStoragePath manifestPath;
         AssetPipelineDiagnostic diagnostic;
-        if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, request.AssetID, manifestPath, diagnostic))
+        String manifestPath;
+        if (AssetDatabaseStorage::GetCurrentArtifactManifest(libraryRoot, request.AssetID,
+            request.Target.BuildKey(ArtifactTargetDimension::All), manifestPath, diagnostic))
         {
             result.InvalidDiagnostic = diagnostic;
             return false;
         }
-        if (!FileSystem::FileExists(manifestPath.Get()))
+        if (manifestPath.IsEmpty())
             return false;
+        if (!FileSystem::FileExists(manifestPath))
+        {
+            ResolveFail(result.InvalidDiagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, request, manifestPath,
+                TEXT("Durable artifact mapping points to a missing immutable manifest."));
+            return false;
+        }
         StringAnsi json;
-        if (File::ReadAllText(manifestPath.Get(), json) || ArtifactManifest::Parse(json, manifestPath.Get(), result.Manifest, diagnostic) ||
+        if (File::ReadAllText(manifestPath, json) || ArtifactManifest::Parse(json, manifestPath, result.Manifest, diagnostic) ||
             result.Manifest.AssetID != request.AssetID || result.Manifest.Target.BuildKey(ArtifactTargetDimension::All) != request.Target.BuildKey(ArtifactTargetDimension::All))
         {
             if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
-                ResolveFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, request, manifestPath.Get(), TEXT("Current artifact manifest identity or target is invalid."));
+                ResolveFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, request, manifestPath, TEXT("Current artifact manifest identity or target is invalid."));
             result.InvalidDiagnostic = diagnostic;
             return false;
         }
@@ -156,11 +164,12 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
     Inspect(_libraryRoot, record, request, inspection);
     if (request.Policy == ArtifactResolvePolicy::PublishedOnly)
     {
-        if (inspection.HasOutput && inspection.IsCompatible)
+        const bool compatibilityMatches = request.RequiredCompatibility.IsEmpty() || inspection.IsCompatible;
+        if (inspection.HasOutput && compatibilityMatches)
         {
             result = inspection.Artifact;
-            result.IsExact = false;
-            result.IsLastGood = true;
+            result.IsExact = inspection.Manifest.DatabaseRevision == record.DatabaseRevision;
+            result.IsLastGood = !result.IsExact;
             return false;
         }
         if (inspection.InvalidDiagnostic.Code != AssetPipelineDiagnosticCode::None)
@@ -169,7 +178,7 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
             diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
             return true;
         }
-        const AssetPipelineDiagnosticCode code = inspection.HasOutput
+        const AssetPipelineDiagnosticCode code = inspection.HasOutput && !compatibilityMatches
             ? AssetPipelineDiagnosticCode::ArtifactIncompatible
             : AssetPipelineDiagnosticCode::ArtifactMissing;
         return ResolveFail(diagnostic, code, request, record.SourcePath.Get(), TEXT("No compatible published artifact is available."));

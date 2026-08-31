@@ -4,13 +4,13 @@
 
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Core/Collections/Dictionary.h"
+#include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/Types/Guid.h"
 #include "Engine/Core/Types/String.h"
 
-/// <summary>Durable sidecar mapping for one processor-owned subasset.</summary>
+/// <summary>Durable sidecar mapping for one processor-owned object under its source file GUID.</summary>
 struct FLAXENGINE_API SubAssetMeta
 {
-    Guid ID;
     int64 LocalId = 0;
     String TypeName;
     String DisplayName;
@@ -29,12 +29,19 @@ struct FLAXENGINE_API SubAssetCandidate
     bool RenameEvidenceReliable = false;
 };
 
-/// <summary>Stable subasset key rules and cloning helpers.</summary>
+/// <summary>Stable imported-object key and identity allocation rules.</summary>
 class FLAXENGINE_API SubAssetPolicy
 {
 public:
     static String NormalizeKey(const StringView& key);
     static bool IsKeyValid(const StringView& key);
-    static int64 LocalIdFromGuid(const Guid& id);
-    static void RegenerateGuids(Dictionary<String, SubAssetMeta>& mappings);
+
+    /// <summary>Allocates a deterministic positive local file ID and reserves it against live IDs and tombstones.</summary>
+    static int64 AllocateLocalId(const StringView& importerId, const StringView& stableKey, const StringView& typeName, HashSet<int64>& reserved);
+
+    /// <summary>Converts a legacy per-object GUID into a migration-only local file ID candidate.</summary>
+    static int64 LegacyLocalIdFromGuid(const Guid& id);
+
+    /// <summary>Returns the deterministic engine backing GUID for an object ID. This is never persistent project identity.</summary>
+    static Guid GetBackingAssetId(const Guid& fileGuid, int64 localId);
 };

@@ -238,6 +238,16 @@ namespace Flax.Build
         public string Name;
 
         /// <summary>
+        /// Committed asset-system project format. Version 3 stores mutable project values in mandatory authored settings.
+        /// </summary>
+        public int AssetSystemVersion;
+
+        /// <summary>
+        /// Stable asset-system v3 project identity.
+        /// </summary>
+        public string ProjectId;
+
+        /// <summary>
         /// The project file path.
         /// </summary>
         [JsonIgnore]
@@ -436,6 +446,63 @@ namespace Flax.Build
             File.WriteAllText(ProjectPath, contents);
         }
 
+        private static JsonElement LoadMandatorySettingsData(string projectFolder, string typeName)
+        {
+            var settingsFolder = Path.Combine(projectFolder, "Content", "Settings");
+            if (!Directory.Exists(settingsFolder))
+                throw new DirectoryNotFoundException($"Missing mandatory asset-system v3 settings folder: {settingsFolder}");
+
+            JsonElement? result = null;
+            foreach (var path in Directory.EnumerateFiles(settingsFolder, "*.json", SearchOption.TopDirectoryOnly)
+                                         .OrderBy(x => x, StringComparer.Ordinal))
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip,
+                });
+                var root = document.RootElement;
+                if (!root.TryGetProperty("TypeName", out var sourceType) || sourceType.ValueKind != JsonValueKind.String ||
+                    !string.Equals(sourceType.GetString(), typeName, StringComparison.Ordinal))
+                    continue;
+                if (result.HasValue)
+                    throw new InvalidDataException($"Duplicate mandatory asset-system v3 settings role '{typeName}'.");
+                if (!File.Exists(path + ".meta"))
+                    throw new FileNotFoundException($"Mandatory asset-system v3 settings source has no adjacent metadata: {path}.meta");
+                if (!root.TryGetProperty("Data", out var data) || data.ValueKind != JsonValueKind.Object)
+                    throw new InvalidDataException($"Mandatory asset-system v3 settings source has no Data object: {path}");
+                result = data.Clone();
+            }
+            return result ?? throw new FileNotFoundException($"Missing mandatory asset-system v3 settings role '{typeName}' under {settingsFolder}.");
+        }
+
+        private void LoadV3MutableSettings()
+        {
+            if (string.IsNullOrWhiteSpace(ProjectId) ||
+                (!Guid.TryParseExact(ProjectId, "N", out var projectId) && !Guid.TryParseExact(ProjectId, "D", out projectId)) ||
+                projectId == Guid.Empty)
+                throw new InvalidDataException("Asset-system v3 project descriptor has no valid ProjectId.");
+            ProjectId = projectId.ToString("N");
+
+            var project = LoadMandatorySettingsData(ProjectFolderPath, "FlaxEditor.Content.Settings.GameSettings");
+            if (!project.TryGetProperty("ProductName", out var productName) || productName.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException("Mandatory Project settings have no ProductName string.");
+            Name = productName.GetString();
+            if (project.TryGetProperty("Version", out var version))
+                Version = JsonSerializer.Deserialize<Version>(version.GetRawText(), JsonOptions);
+            if (project.TryGetProperty("CompanyName", out var company) && company.ValueKind == JsonValueKind.String)
+                Company = company.GetString();
+            if (project.TryGetProperty("CopyrightNotice", out var copyright) && copyright.ValueKind == JsonValueKind.String)
+                Copyright = copyright.GetString();
+
+            var build = LoadMandatorySettingsData(ProjectFolderPath, "FlaxEditor.Content.Settings.BuildSettings");
+            if (!build.TryGetProperty("GameTarget", out var gameTarget) || gameTarget.ValueKind != JsonValueKind.String ||
+                !build.TryGetProperty("EditorTarget", out var editorTarget) || editorTarget.ValueKind != JsonValueKind.String)
+                throw new InvalidDataException("Mandatory Build settings must author GameTarget and EditorTarget strings.");
+            GameTarget = gameTarget.GetString();
+            EditorTarget = editorTarget.GetString();
+        }
+
         /// <summary>
         /// Loads the project from the specified file.
         /// </summary>
@@ -461,6 +528,9 @@ namespace Flax.Build
                 var project = JsonSerializer.Deserialize<ProjectInfo>(contents.AsSpan(), JsonOptions);
                 project.ProjectPath = path;
                 project.ProjectFolderPath = Path.GetDirectoryName(path);
+
+                if (project.AssetSystemVersion == 3)
+                    project.LoadV3MutableSettings();
 
                 // Process project data
                 if (string.IsNullOrEmpty(project.Name))

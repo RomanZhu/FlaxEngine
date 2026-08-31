@@ -63,7 +63,7 @@ namespace
     {
         AssetRecord record = MakePreparedRecord(source);
         AssetProcessorDescriptor descriptor = MakePreparedProcessor();
-        PrepareAssetContext context(root, content, library, record, descriptor, StringAnsiView("{\"quality\":1}\n"), cache, cancellation, maximumBytes, 8);
+        PrepareAssetContext context(root, content, library, record, descriptor, StringAnsiView("{\"quality\":1}\n"), ArtifactTarget(), cache, cancellation, maximumBytes, 8);
         Array<byte> data;
         ContentHash hash;
         AssetDependencyOrigin origin;
@@ -145,16 +145,16 @@ TEST_CASE("PrepareAssetContext rejects unsafe, stale, cancelled, and oversized w
     ContentHash hash;
 
     AssetCancellationSource active;
-    PrepareAssetContext unsafe(root, content, library, record, descriptor, StringAnsiView("{}\n"), cache, active.GetToken());
+    PrepareAssetContext unsafe(root, content, library, record, descriptor, StringAnsiView("{}\n"), ArtifactTarget(), cache, active.GetToken());
     CHECK(unsafe.ReadSourceFile(outside, data, hash, origin, diagnostic));
     CHECK(diagnostic.Code != AssetPipelineDiagnosticCode::None);
     CHECK(diagnostic.Stage == AssetPipelineDiagnosticStage::Prepare);
 
-    PrepareAssetContext limited(root, content, library, record, descriptor, StringAnsiView("{}\n"), cache, active.GetToken(), 2, 8);
+    PrepareAssetContext limited(root, content, library, record, descriptor, StringAnsiView("{}\n"), ArtifactTarget(), cache, active.GetToken(), 2, 8);
     CHECK(limited.ReadSourceFile(source, data, hash, origin, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ResourceLimitExceeded);
 
-    PrepareAssetContext stale(root, content, library, record, descriptor, StringAnsiView("{}\n"), cache, active.GetToken());
+    PrepareAssetContext stale(root, content, library, record, descriptor, StringAnsiView("{}\n"), ArtifactTarget(), cache, active.GetToken());
     REQUIRE_FALSE(stale.ReadSourceFile(source, data, hash, origin, diagnostic));
     REQUIRE_FALSE(stale.DeclareOutput(StringAnsiView("runtime"), Guid::Empty, diagnostic));
     PreparedAsset prepared;
@@ -164,11 +164,11 @@ TEST_CASE("PrepareAssetContext rejects unsafe, stale, cancelled, and oversized w
 
     AssetCancellationSource cancelled;
     cancelled.Cancel();
-    PrepareAssetContext stopped(root, content, library, record, descriptor, StringAnsiView("{}\n"), cache, cancelled.GetToken());
+    PrepareAssetContext stopped(root, content, library, record, descriptor, StringAnsiView("{}\n"), ArtifactTarget(), cache, cancelled.GetToken());
     CHECK(stopped.ReadSourceFile(source, data, hash, origin, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::BuildCancelled);
 
-    PrepareAssetContext memoryLimited(root, content, library, record, descriptor, StringAnsiView("{}\n"), cache, active.GetToken(), 32, 8);
+    PrepareAssetContext memoryLimited(root, content, library, record, descriptor, StringAnsiView("{}\n"), ArtifactTarget(), cache, active.GetToken(), 32, 8);
     REQUIRE_FALSE(memoryLimited.ReadSourceFile(source, data, hash, origin, diagnostic));
     REQUIRE_FALSE(memoryLimited.DeclareOutput(StringAnsiView("runtime"), Guid::Empty, diagnostic));
     prepared = PreparedAsset();

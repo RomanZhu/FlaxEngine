@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AssetPath.h"
+#include "Identity/AssetObjectId.h"
 #include "Engine/Content/AssetInfo.h"
 #include "Engine/Scripting/ScriptingType.h"
 
@@ -39,6 +40,7 @@ API_ENUM() enum class AssetRecordStatus : byte
 /// <summary>Canonical identity record. Generated artifact paths are intentionally absent.</summary>
 struct FLAXENGINE_API AssetRecord
 {
+    /// <summary>Deterministic runtime/cache address. Persistent identity is SourceAssetID plus LocalId.</summary>
     Guid ID;
     Guid SourceAssetID;
     int64 LocalId = 1;
@@ -50,6 +52,7 @@ struct FLAXENGINE_API AssetRecord
     String ProcessorID;
     String PortabilityKey;
     uint64 MetaSemanticHash = 0;
+    Array<String> Labels;
     Array<Guid> BuildInputDependencies;
     Array<Guid> RuntimeReferences;
     AssetSourceKind SourceKind = AssetSourceKind::LegacyBinary;
@@ -58,6 +61,7 @@ struct FLAXENGINE_API AssetRecord
 
     static AssetRecord FromLegacy(const AssetInfo& info);
     AssetInfo ToAssetInfo() const;
+    AssetObjectId GetObjectId() const;
     bool IsMainAsset() const;
     bool HasSameIdentityAndContent(const AssetRecord& other) const;
 };

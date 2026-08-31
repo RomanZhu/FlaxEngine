@@ -9,10 +9,28 @@
 /// <summary>How a declared dependency participates in building and packaging.</summary>
 enum class AssetDependencyKind : byte
 {
-    SourceFile,
-    BuildInput,
-    RuntimeReference,
-    Toolchain,
+    ExactSourceFile = 0,
+    SourceFile = ExactSourceFile,
+    Artifact = 1,
+    BuildInput = Artifact,
+    RuntimeReference = 2,
+    Toolchain = 3,
+    SourceAsset = 4,
+    Custom = 5,
+    Global = 6,
+    Target = 7,
+    ImporterProvider = 8,
+    LogicalPath = 9,
+    Environment = 10,
+};
+
+/// <summary>How a dependency fingerprint was resolved during preparation.</summary>
+enum class AssetDependencyState : byte
+{
+    Present,
+    Missing,
+    CurrentArtifact,
+    ExactArtifact,
 };
 
 /// <summary>Origin retained for dependency and cycle diagnostics.</summary>
@@ -29,19 +47,37 @@ struct FLAXENGINE_API AssetDependencyOrigin
 struct FLAXENGINE_API AssetDependency
 {
     AssetDependencyKind Kind = AssetDependencyKind::SourceFile;
+    AssetDependencyState State = AssetDependencyState::Present;
     String StableIdentity;
     Guid AssetID = Guid::Empty;
     ContentHash Content;
+    ContentHash Metadata;
     ArtifactKey ExactArtifact;
     ContentHash SemanticInterface;
     uint32 InterfaceVersion = 0;
     AssetDependencyOrigin Origin;
 
     bool AffectsBuildKey() const;
+    bool IsSourceDependency() const
+    {
+        return Kind == AssetDependencyKind::ExactSourceFile || Kind == AssetDependencyKind::SourceAsset;
+    }
     void AppendKeyComponents(ArtifactKeyBuilder& builder, int32 index) const;
+    StringAnsi DescribeFingerprint() const;
 
     /// <summary>Sorts declarations by kind and stable identity. Returns true on duplicate/invalid declarations.</summary>
     static bool NormalizeAndSort(Array<AssetDependency>& dependencies, AssetPipelineDiagnostic& diagnostic);
+};
+
+/// <summary>One durable node in an import-reason tree. Parent indices always precede children.</summary>
+struct FLAXENGINE_API AssetImportReasonNode
+{
+    int32 Parent = -1;
+    StringAnsi Code;
+    String Identity;
+    StringAnsi PreviousFingerprint;
+    StringAnsi CurrentFingerprint;
+    String Explanation;
 };
 
 /// <summary>Versioned semantic interface exposed to build dependants.</summary>

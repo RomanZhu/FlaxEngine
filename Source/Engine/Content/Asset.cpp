@@ -18,6 +18,8 @@
 
 #if USE_EDITOR
 
+#include "AssetDatabase/AssetDatabase.h"
+#include "AssetDatabase/AssetPath.h"
 #include "Engine/Engine/Globals.h"
 
 ThreadLocal<bool> ContentDeprecatedFlags;
@@ -748,6 +750,13 @@ bool Asset::WaitForInitPhysics()
 
 bool Asset::OnCheckSave(const StringView& path) const
 {
+    const StringView targetPath = path.IsEmpty() ? GetPath() : path;
+    if (AssetDatabase::Get().IsHardCutEnabled() && targetPath.HasChars() &&
+        AssetPathPolicy::IsSameOrChild(targetPath, Globals::ProjectContentFolder))
+    {
+        LOG(Error, "Cooked asset storage cannot be saved into the canonical Content source tree. Save the authored source document instead.");
+        return true;
+    }
     if (LastLoadFailed())
     {
         LOG(Warning, "Saving asset that failed to load.");

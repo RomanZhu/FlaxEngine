@@ -3,6 +3,7 @@
 #include "PrepareAssetContext.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Platform/File.h"
+#include "Engine/Platform/StringUtils.h"
 #include <algorithm>
 
 namespace
@@ -20,21 +21,49 @@ namespace
 
     bool SameDependencyValue(const AssetDependency& a, const AssetDependency& b)
     {
-        return a.Kind == b.Kind && a.StableIdentity == b.StableIdentity && a.AssetID == b.AssetID &&
-               a.Content == b.Content && a.ExactArtifact == b.ExactArtifact &&
+        return a.Kind == b.Kind && a.State == b.State && a.StableIdentity == b.StableIdentity && a.AssetID == b.AssetID &&
+               a.Content == b.Content && a.Metadata == b.Metadata && a.ExactArtifact == b.ExactArtifact &&
                a.SemanticInterface == b.SemanticInterface && a.InterfaceVersion == b.InterfaceVersion;
+    }
+
+    ContentHash EmptySetHash()
+    {
+        static const char Empty[] = "[]";
+        return ContentHash::Compute(Empty, ARRAY_COUNT(Empty) - 1);
+    }
+
+    const char* ReasonCode(AssetDependencyKind kind)
+    {
+        switch (kind)
+        {
+        case AssetDependencyKind::ExactSourceFile:
+        case AssetDependencyKind::SourceAsset: return "SourceDependencyChanged";
+        case AssetDependencyKind::Artifact: return "ArtifactDependencyChanged";
+        case AssetDependencyKind::Custom: return "CustomDependencyChanged";
+        case AssetDependencyKind::Global:
+        case AssetDependencyKind::Target: return "TargetChanged";
+        case AssetDependencyKind::ImporterProvider: return "ImporterVersionChanged";
+        case AssetDependencyKind::Toolchain: return "ToolchainChanged";
+        case AssetDependencyKind::Environment: return "EnvironmentChanged";
+        case AssetDependencyKind::LogicalPath: return "LogicalPathChanged";
+        case AssetDependencyKind::RuntimeReference: return "RuntimeReferenceObserved";
+        default: return "DependencyChanged";
+        }
     }
 }
 
 PrepareAssetContext::PrepareAssetContext(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot,
     const AssetRecord& record, const AssetProcessorDescriptor& descriptor, const StringAnsiView& normalizedSettings,
-    SourceHashCache& hashCache, const AssetCancellationToken& cancellation, uint64 maximumSourceBytes, int32 maximumInputs)
+    const ArtifactTarget& target, SourceHashCache& hashCache, const AssetCancellationToken& cancellation, uint64 maximumSourceBytes, int32 maximumInputs)
     : _projectRoot(projectRoot)
     , _contentRoot(contentRoot)
     , _libraryRoot(libraryRoot)
     , _record(record)
     , _descriptor(descriptor)
+    , _target(target)
     , _settings(normalizedSettings)
+    , _externalRemapsHash(EmptySetHash())
+    , _postprocessorHash(EmptySetHash())
     , _hashCache(&hashCache)
     , _cancellation(cancellation)
     , _maximumSourceBytes(maximumSourceBytes)
@@ -116,14 +145,28 @@ bool PrepareAssetContext::ReadSourceFile(const StringView& path, Array<byte>& da
         return true;
     }
 
-    AssetDependency dependency;
-    dependency.Kind = AssetDependencyKind::SourceFile;
-    dependency.StableIdentity = normalized.ProjectRelativePath;
-    dependency.Content = hash;
-    dependency.Origin = origin;
-    if (dependency.Origin.Path.IsEmpty())
-        dependency.Origin.Path = normalized.ProjectRelativePath;
-    if (AddDependency(MoveTemp(dependency), diagnostic))
+    AssetPathPolicy::ProjectPath canonicalSource;
+    if (AssetPathPolicy::TryNormalizeProjectPath(_projectRoot, _contentRoot, _libraryRoot, _record.SourcePath.Get(), canonicalSource, diagnostic))
+    {
+        data.Clear();
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = _record.ID;
+        diagnostic.ProcessorId = _descriptor.ID;
+        return true;
+    }
+    bool declarationFailed = false;
+    if (canonicalSource.ProjectRelativePath == normalized.ProjectRelativePath)
+    {
+        ArtifactKeyBuilder metadataBuilder(StringAnsiView("flax-source-metadata-fingerprint-v1"));
+        metadataBuilder.AddUInt64(StringAnsiView("semantic"), _record.MetaSemanticHash);
+        declarationFailed = DeclareSourceAssetByGuid(_record.SourceAssetID.IsValid() ? _record.SourceAssetID : _record.ID,
+            hash, metadataBuilder.Finalize().Digest, false, origin, diagnostic);
+    }
+    else
+    {
+        declarationFailed = DeclareExactSourceFile(normalized.ProjectRelativePath, hash, false, origin, diagnostic);
+    }
+    if (declarationFailed)
     {
         data.Clear();
         return true;
@@ -132,19 +175,92 @@ bool PrepareAssetContext::ReadSourceFile(const StringView& path, Array<byte>& da
     return false;
 }
 
-bool PrepareAssetContext::DeclareBuildInput(const StringView& stableIdentity, const Guid& id, const ArtifactKey& exactArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+bool PrepareAssetContext::DeclareExactSourceFile(const StringView& path, const ContentHash& content, bool missing,
+    const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetPathPolicy::ProjectPath normalized;
+    if (AssetPathPolicy::TryNormalizeProjectPath(_projectRoot, _contentRoot, _libraryRoot, path, normalized, diagnostic))
+    {
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = _record.ID;
+        diagnostic.ProcessorId = _descriptor.ID;
+        return true;
+    }
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::ExactSourceFile;
+    dependency.State = missing ? AssetDependencyState::Missing : AssetDependencyState::Present;
+    dependency.StableIdentity = normalized.ProjectRelativePath;
+    dependency.Content = content;
+    dependency.Origin = origin;
+    if (dependency.Origin.Path.IsEmpty())
+        dependency.Origin.Path = normalized.ProjectRelativePath;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DeclareSourceAssetByGuid(const Guid& id, const ContentHash& content, const ContentHash& metadata,
+    bool missing, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
 {
     if (CheckCancellation(diagnostic))
         return true;
     AssetDependency dependency;
-    dependency.Kind = AssetDependencyKind::BuildInput;
-    dependency.StableIdentity = stableIdentity;
+    dependency.Kind = AssetDependencyKind::SourceAsset;
+    dependency.State = missing ? AssetDependencyState::Missing : AssetDependencyState::Present;
+    dependency.StableIdentity = TEXT("guid:") + id.ToString(Guid::FormatType::N).ToLower();
     dependency.AssetID = id;
-    dependency.ExactArtifact = exactArtifact;
+    dependency.Content = content;
+    dependency.Metadata = metadata;
+    dependency.Origin = origin;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DeclareSourceAssetByPath(const StringView& path, const ContentHash& content, const ContentHash& metadata,
+    bool missing, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetPathPolicy::ProjectPath normalized;
+    if (AssetPathPolicy::TryNormalizeProjectPath(_projectRoot, _contentRoot, _libraryRoot, path, normalized, diagnostic))
+    {
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = _record.ID;
+        diagnostic.ProcessorId = _descriptor.ID;
+        return true;
+    }
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::SourceAsset;
+    dependency.State = missing ? AssetDependencyState::Missing : AssetDependencyState::Present;
+    dependency.StableIdentity = normalized.ProjectRelativePath;
+    dependency.Content = content;
+    dependency.Metadata = metadata;
+    dependency.Origin = origin;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DeclareArtifactDependency(const StringView& stableIdentity, const Guid& id, AssetDependencyState selection,
+    const ArtifactKey& selectedArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::Artifact;
+    dependency.State = selection;
+    dependency.StableIdentity = stableIdentity.HasChars() ? String(stableIdentity) : TEXT("guid:") + id.ToString(Guid::FormatType::N).ToLower();
+    dependency.AssetID = id;
+    dependency.ExactArtifact = selectedArtifact;
     dependency.SemanticInterface = semanticInterface.Hash;
     dependency.InterfaceVersion = semanticInterface.Version;
     dependency.Origin = origin;
     return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DeclareBuildInput(const StringView& stableIdentity, const Guid& id, const ArtifactKey& exactArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    return DeclareArtifactDependency(stableIdentity, id,
+        exactArtifact.IsZero() ? AssetDependencyState::CurrentArtifact : AssetDependencyState::ExactArtifact,
+        exactArtifact, semanticInterface, origin, diagnostic);
 }
 
 bool PrepareAssetContext::DeclareRuntimeReference(const StringView& stableIdentity, const Guid& id, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
@@ -159,6 +275,58 @@ bool PrepareAssetContext::DeclareRuntimeReference(const StringView& stableIdenti
     return AddDependency(MoveTemp(dependency), diagnostic);
 }
 
+bool PrepareAssetContext::DeclareCustomDependency(const StringView& name, const ContentHash& value,
+    const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::Custom;
+    dependency.StableIdentity = name;
+    dependency.Content = value;
+    dependency.Origin = origin;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DeclareGlobalDependency(const StringView& key, const ContentHash& value,
+    const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::Global;
+    dependency.StableIdentity = key;
+    dependency.Content = value;
+    dependency.Origin = origin;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DeclareEnvironmentDependency(const StringView& key, const ContentHash& normalizedValue,
+    const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::Environment;
+    dependency.StableIdentity = key;
+    dependency.Content = normalizedValue;
+    dependency.Origin = origin;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DeclareTargetDependency(ArtifactTargetDimension dimensions, const AssetDependencyOrigin& origin,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::Target;
+    dependency.StableIdentity = String::Format(TEXT("dimensions:{0}"), static_cast<uint32>(dimensions));
+    dependency.Content = _target.BuildKey(dimensions).Digest;
+    dependency.Origin = origin;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
 bool PrepareAssetContext::DeclareToolchain(const StringView& stableIdentity, const ContentHash& semanticIdentity, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
 {
     if (CheckCancellation(diagnostic))
@@ -169,6 +337,52 @@ bool PrepareAssetContext::DeclareToolchain(const StringView& stableIdentity, con
     dependency.Content = semanticIdentity;
     dependency.Origin = origin;
     return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+bool PrepareAssetContext::DependsOnLogicalPath(const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckCancellation(diagnostic))
+        return true;
+    AssetPathPolicy::ProjectPath normalized;
+    if (AssetPathPolicy::TryNormalizeProjectPath(_projectRoot, _contentRoot, _libraryRoot, _record.SourcePath.Get(), normalized, diagnostic))
+    {
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = _record.ID;
+        diagnostic.ProcessorId = _descriptor.ID;
+        return true;
+    }
+    AssetDependency dependency;
+    dependency.Kind = AssetDependencyKind::LogicalPath;
+    dependency.StableIdentity = normalized.ProjectRelativePath;
+    dependency.Origin = origin;
+    return AddDependency(MoveTemp(dependency), diagnostic);
+}
+
+void PrepareAssetContext::SetExternalObjectRemapsFingerprint(const ContentHash& value)
+{
+    _externalRemapsHash = value;
+}
+
+void PrepareAssetContext::SetPostprocessorFingerprint(const ContentHash& value)
+{
+    _postprocessorHash = value;
+}
+
+void PrepareAssetContext::SetSourceSerializerVersion(uint32 value)
+{
+    _sourceSerializerVersion = value;
+}
+
+bool PrepareAssetContext::AddImportReason(AssetImportReasonNode reason, AssetPipelineDiagnostic& diagnostic)
+{
+    if (reason.Code.IsEmpty() || reason.Parent < -1 || reason.Parent >= _importReasons.Count())
+    {
+        SetPrepareFailure(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, _record, _descriptor,
+            TEXT("Import reason has an invalid code or parent node."));
+        return true;
+    }
+    _importReasons.Add(MoveTemp(reason));
+    return false;
 }
 
 bool PrepareAssetContext::DeclareOutput(const StringAnsiView& kind, const Guid& effectiveAssetId, AssetPipelineDiagnostic& diagnostic)
@@ -230,6 +444,16 @@ bool PrepareAssetContext::Finalize(uint64 currentDatabaseRevision, PreparedAsset
         return true;
     }
 
+    AssetDependencyOrigin automaticOrigin;
+    automaticOrigin.Path = _record.SourcePath.Get();
+    AssetDependency provider;
+    provider.Kind = AssetDependencyKind::ImporterProvider;
+    provider.StableIdentity = _descriptor.ProviderID + TEXT("/") + _descriptor.ID;
+    provider.Content = _descriptor.ProviderSemanticIdentity;
+    provider.Origin = automaticOrigin;
+    if (AddDependency(MoveTemp(provider), diagnostic) || DeclareTargetDependency(ArtifactTargetDimension::All, automaticOrigin, diagnostic))
+        return true;
+
     Array<AssetDependency> dependencies(_declaredDependencies);
     if (AssetDependency::NormalizeAndSort(dependencies, diagnostic))
     {
@@ -274,7 +498,21 @@ bool PrepareAssetContext::Finalize(uint64 currentDatabaseRevision, PreparedAsset
     prepared.AssetID = _record.ID;
     prepared.OutputType = _record.TypeName.IsEmpty() ? _descriptor.MainOutputType : _record.TypeName;
     prepared.DatabaseRevision = _record.DatabaseRevision;
+    prepared.AssetName = StringUtils::GetFileNameWithoutExtension(_record.SourcePath.Get());
+    prepared.SourcePath = _record.SourcePath.Get();
+    for (const AssetDependency& dependency : dependencies)
+    {
+        if (dependency.Kind == AssetDependencyKind::SourceAsset && dependency.State == AssetDependencyState::Present)
+        {
+            prepared.SourceHash = dependency.Content;
+            break;
+        }
+    }
     prepared.SettingsHash = ContentHash::Compute(_settings.Get(), _settings.Length());
+    prepared.ExternalRemapsHash = _externalRemapsHash;
+    prepared.PostprocessorHash = _postprocessorHash;
+    prepared.ProviderCodeHash = _descriptor.ProviderSemanticIdentity;
+    prepared.TargetFingerprint = _target.BuildKey(ArtifactTargetDimension::All);
     prepared.Outputs = _declaredOutputs;
     std::sort(prepared.Outputs.Get(), prepared.Outputs.Get() + prepared.Outputs.Count(), [](const DeclaredArtifactOutput& a, const DeclaredArtifactOutput& b)
     {
@@ -284,15 +522,24 @@ bool PrepareAssetContext::Finalize(uint64 currentDatabaseRevision, PreparedAsset
     prepared.SubAssets = MoveTemp(subAssets);
     prepared.MemoryEstimate = memoryEstimate;
 
-    ArtifactKeyBuilder builder(StringAnsiView("flax-prepared-input-v1"));
+    ArtifactKeyBuilder builder(StringAnsiView("FlaxAssetImportInput/v3"));
     builder.AddGuid(StringAnsiView("asset-id"), prepared.AssetID);
+    builder.AddGuid(StringAnsiView("source-file-guid"), _record.SourceAssetID.IsValid() ? _record.SourceAssetID : _record.ID);
+    builder.AddHash(StringAnsiView("source-content"), prepared.SourceHash);
+    builder.AddString(StringAnsiView("asset-name"), prepared.AssetName);
+    builder.AddString(StringAnsiView("asset-basename"), StringUtils::GetFileName(_record.SourcePath.Get()));
     builder.AddString(StringAnsiView("processor-id"), _descriptor.ID);
-    builder.AddUInt32(StringAnsiView("processor-api"), _descriptor.EngineApiLevel);
+    builder.AddUInt32(StringAnsiView("engine-import-abi"), _descriptor.EngineApiLevel);
+    builder.AddUInt32(StringAnsiView("asset-import-contract"), 3);
     builder.AddUInt32(StringAnsiView("settings-schema-version"), _descriptor.SettingsSchemaVersion);
     builder.AddUInt32(StringAnsiView("implementation-version"), _descriptor.ImplementationVersion);
-    builder.AddHash(StringAnsiView("settings"), prepared.SettingsHash);
-    if (_descriptor.ProviderKind == AssetProcessorProviderKind::ThirdParty)
-        builder.AddHash(StringAnsiView("provider-semantic-identity"), _descriptor.ProviderSemanticIdentity);
+    builder.AddHash(StringAnsiView("provider-code-hash"), prepared.ProviderCodeHash);
+    builder.AddString(StringAnsiView("normalized-importer-settings"), _settings);
+    builder.AddHash(StringAnsiView("external-object-remaps"), prepared.ExternalRemapsHash);
+    builder.AddHash(StringAnsiView("postprocessor-set-order"), prepared.PostprocessorHash);
+    builder.AddKey(StringAnsiView("target-fingerprint"), prepared.TargetFingerprint);
+    builder.AddUInt32(StringAnsiView("source-serializer-version"), _sourceSerializerVersion);
+    builder.AddUInt64(StringAnsiView("source-meta-semantic"), _record.MetaSemanticHash);
     int32 dependencyIndex = 0;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
@@ -325,6 +572,30 @@ bool PrepareAssetContext::Finalize(uint64 currentDatabaseRevision, PreparedAsset
         builder.AddSortedStrings(prefix + "previous-keys", previousKeys);
     }
     prepared.InputFingerprint = builder.Finalize();
+    prepared.ImportReasons = _importReasons;
+    if (prepared.ImportReasons.IsEmpty())
+    {
+        AssetImportReasonNode root;
+        root.Code = "DesiredInputKeyChanged";
+        root.Identity = _record.SourcePath.Get();
+        root.CurrentFingerprint = prepared.InputFingerprint.ToString();
+        root.Explanation = TEXT("Canonical importer inputs produced a new desired input key.");
+        prepared.ImportReasons.Add(MoveTemp(root));
+        for (const AssetDependency& dependency : prepared.Dependencies)
+        {
+            if (!dependency.AffectsBuildKey())
+                continue;
+            AssetImportReasonNode child;
+            child.Parent = 0;
+            child.Code = ReasonCode(dependency.Kind);
+            child.Identity = dependency.StableIdentity;
+            child.CurrentFingerprint = dependency.DescribeFingerprint();
+            child.Explanation = dependency.State == AssetDependencyState::Missing
+                ? TEXT("The declared dependency is missing; appearance will invalidate this result.")
+                : TEXT("The observed dependency fingerprint participates in the desired input key.");
+            prepared.ImportReasons.Add(MoveTemp(child));
+        }
+    }
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }

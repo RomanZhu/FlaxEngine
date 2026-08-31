@@ -229,7 +229,14 @@ namespace FlaxEditor.Content.Settings
         /// </summary>
         public static string GameSettingsAssetPath
         {
-            get { return StringUtils.CombinePaths(Globals.ProjectContentFolder, "GameSettings.json"); }
+            get
+            {
+#if FLAX_EDITOR
+                if (Editor.Instance?.GameProject?.AssetSystemVersion == ProjectInfo.CurrentAssetSystemVersion)
+                    return StringUtils.CombinePaths(Globals.ProjectContentFolder, "Settings/Project Settings.json");
+#endif
+                return StringUtils.CombinePaths(Globals.ProjectContentFolder, "GameSettings.json");
+            }
         }
 
         /// <summary>

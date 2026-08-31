@@ -60,6 +60,8 @@ const Char* GetAssetPipelineDiagnosticCodeName(AssetPipelineDiagnosticCode code)
         return TEXT("ASSET_ARTIFACT_LOCK_BUSY");
     case AssetPipelineDiagnosticCode::ArtifactIncompatible:
         return TEXT("ASSET_ARTIFACT_INCOMPATIBLE");
+    case AssetPipelineDiagnosticCode::FutureMetaVersion:
+        return TEXT("ASSET_FUTURE_META_VERSION");
     default:
         return TEXT("ASSET_UNKNOWN_DIAGNOSTIC");
     }

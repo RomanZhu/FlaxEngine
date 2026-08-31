@@ -3,6 +3,7 @@
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseScanner.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseStorage.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Assets/Texture.h"
 #include "Engine/Content/Assets/RawDataAsset.h"
@@ -44,14 +45,14 @@ namespace
         return false;
     }
 
-    // Reads the live persisted snapshot without touching the running database.
+    // Reads the durable SQLite projection without touching the running database.
     int32 PersistedFileStateCount(const StringView& folder)
     {
-        const String snapshotPath = Globals::ProjectLibraryFolder / TEXT("AssetDatabase") / TEXT("index.bin");
+        const String databasePath = Globals::ProjectLibraryFolder / TEXT("AssetDatabase") / TEXT("AssetDatabase.sqlite");
         AssetDatabase loaded;
         Array<AssetDatabaseFileState> states;
         AssetPipelineDiagnostic diagnostic;
-        if (AssetDatabaseSnapshotStore::Load(snapshotPath, Globals::ProjectFolder, Globals::ProjectContentFolder, loaded, states, diagnostic))
+        if (AssetDatabaseStorage::Load(databasePath, Globals::ProjectFolder, Globals::ProjectContentFolder, loaded, states, diagnostic))
             return -1;
         int32 count = 0;
         for (const AssetDatabaseFileState& state : states)
@@ -251,55 +252,6 @@ TEST_CASE("Asset database scan registers legacy binary assets for mixed-mode loa
     CHECK(record.SourceKind == AssetSourceKind::LegacyBinary);
     CHECK(record.SourcePath.Get() == path);
     CHECK(record.MetaPath.Get().IsEmpty());
-}
-
-TEST_CASE("Asset database snapshot is disposable checksummed and project scoped")
-{
-    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseSnapshot-") + Guid::New().ToString(Guid::FormatType::N));
-    const String content = root / TEXT("Content");
-    const String library = root / TEXT("Library");
-    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
-    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
-    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
-
-    AssetDatabase source;
-    Array<AssetRecord> records;
-    const Guid id(51, 52, 53, 54);
-    records.Add(MakeDatabaseRecord(id, id, content / TEXT("Warm.png")));
-    AssetPipelineDiagnostic diagnostic;
-    REQUIRE_FALSE(source.PublishFullSnapshot(records, diagnostic));
-    Array<AssetDatabaseFileState> states;
-    AssetDatabaseFileState state;
-    state.Path = content / TEXT("Warm.png");
-    state.Size = 123;
-    state.LastWriteTicks = 456;
-    state.VolumeIdentity = 12;
-    state.FileIdentity = 34;
-    state.ChangeTicks = 567;
-    state.IdentityReliable = true;
-    state.CachedContentHash = ContentHash::Compute("warm", 4);
-    state.CacheChecksum = 789;
-    states.Add(state);
-    const String path = library / TEXT("index.bin");
-    REQUIRE_FALSE(AssetDatabaseSnapshotStore::SaveAtomic(path, root, content, source.GetSnapshot(), states, diagnostic));
-
-    AssetDatabase loaded;
-    Array<AssetDatabaseFileState> loadedStates;
-    REQUIRE_FALSE(AssetDatabaseSnapshotStore::Load(path, root, content, loaded, loadedStates, diagnostic));
-    AssetRecord found;
-    CHECK(loaded.TryGetRecord(id, found));
-    REQUIRE(loadedStates.Count() == 1);
-    CHECK(loadedStates[0].CachedContentHash == state.CachedContentHash);
-    CHECK(loadedStates[0].CacheChecksum == 789);
-    CHECK(AssetDatabaseSnapshotStore::Load(path, root + TEXT("-other"), content, loaded, loadedStates, diagnostic));
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::SnapshotInvalid);
-
-    BytesContainer bytes;
-    REQUIRE_FALSE(File::ReadAllBytes(path, bytes));
-    bytes.Get()[bytes.Length() - 1] ^= 0xff;
-    REQUIRE_FALSE(File::WriteAllBytes(path, bytes.Get(), bytes.Length()));
-    CHECK(AssetDatabaseSnapshotStore::Load(path, root, content, loaded, loadedStates, diagnostic));
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::SnapshotInvalid);
 }
 
 TEST_CASE("Asset database CollectFromFiles indexes an explicit file list")

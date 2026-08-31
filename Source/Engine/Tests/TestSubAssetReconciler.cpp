@@ -7,10 +7,10 @@
 
 namespace
 {
-    SubAssetMeta Mapping(const Guid& id, const StringView& type, const StringView& name, bool removed = false)
+    SubAssetMeta Mapping(int64 localId, const StringView& type, const StringView& name, bool removed = false)
     {
         SubAssetMeta result;
-        result.ID = id;
+        result.LocalId = localId;
         result.TypeName = type;
         result.DisplayName = name;
         result.Removed = removed;
@@ -31,8 +31,8 @@ TEST_CASE("Subasset reconciliation retains identities across candidate reorder")
 {
     AssetMeta meta;
     meta.ID = Guid(61, 62, 63, 64);
-    const Guid bodyId(71, 72, 73, 74);
-    const Guid headId(81, 82, 83, 84);
+    const int64 bodyId = 71;
+    const int64 headId = 81;
     meta.SubAssets.Add(TEXT("mesh:/Body"), Mapping(bodyId, TEXT("FlaxEngine.Model"), TEXT("Body")));
     meta.SubAssets.Add(TEXT("mesh:/Head"), Mapping(headId, TEXT("FlaxEngine.Model"), TEXT("Head")));
     Array<SubAssetCandidate> candidates;
@@ -41,15 +41,15 @@ TEST_CASE("Subasset reconciliation retains identities across candidate reorder")
     const SubAssetReconcileResult result = SubAssetReconciler::Reconcile(meta, candidates, false);
     CHECK_FALSE(result.RequiresUserReconciliation);
     CHECK_FALSE(result.HasTrackedChanges);
-    CHECK(result.Resolved[TEXT("mesh:/Body")].ID == bodyId);
-    CHECK(result.Resolved[TEXT("mesh:/Head")].ID == headId);
+    CHECK(result.Resolved[TEXT("mesh:/Body")].LocalId == bodyId);
+    CHECK(result.Resolved[TEXT("mesh:/Head")].LocalId == headId);
 }
 
 TEST_CASE("Subasset reconciliation accepts only reliable unambiguous compatible rename evidence")
 {
     AssetMeta meta;
     meta.ID = Guid(91, 92, 93, 94);
-    const Guid walkId(101, 102, 103, 104);
+    const int64 walkId = 101;
     meta.SubAssets.Add(TEXT("animation:Walk"), Mapping(walkId, TEXT("FlaxEngine.Animation"), TEXT("Walk")));
     SubAssetCandidate renamed = Candidate(TEXT("animation:WalkFast"), TEXT("FlaxEngine.Animation"), TEXT("Walk Fast"));
     renamed.PreviousKeys.Add(TEXT("animation:Walk"));
@@ -59,7 +59,7 @@ TEST_CASE("Subasset reconciliation accepts only reliable unambiguous compatible 
     const SubAssetReconcileResult interactive = SubAssetReconciler::Reconcile(meta, candidates, true);
     CHECK_FALSE(interactive.RequiresUserReconciliation);
     CHECK(interactive.HasTrackedChanges);
-    CHECK(interactive.Resolved[renamed.StableKey].ID == walkId);
+    CHECK(interactive.Resolved[renamed.StableKey].LocalId == walkId);
     REQUIRE(interactive.Changes.Count() == 1);
     CHECK(interactive.Changes[0].Kind == SubAssetChangeKind::Move);
 
@@ -73,7 +73,7 @@ TEST_CASE("Subasset reconciliation blocks tracked additions and tombstones in he
 {
     AssetMeta meta;
     meta.ID = Guid(111, 112, 113, 114);
-    const Guid oldId(121, 122, 123, 124);
+    const int64 oldId = 121;
     meta.SubAssets.Add(TEXT("mesh:/Old"), Mapping(oldId, TEXT("FlaxEngine.Model"), TEXT("Old")));
     Array<SubAssetCandidate> candidates;
     candidates.Add(Candidate(TEXT("mesh:/New"), TEXT("FlaxEngine.Model"), TEXT("New")));
@@ -83,12 +83,12 @@ TEST_CASE("Subasset reconciliation blocks tracked additions and tombstones in he
     CHECK_FALSE(headless.Resolved.ContainsKey(TEXT("mesh:/New")));
     REQUIRE(headless.Resolved.ContainsKey(TEXT("mesh:/Old")));
     CHECK(headless.Resolved[TEXT("mesh:/Old")].Removed);
-    CHECK(headless.Resolved[TEXT("mesh:/Old")].ID == oldId);
+    CHECK(headless.Resolved[TEXT("mesh:/Old")].LocalId == oldId);
 
     const SubAssetReconcileResult interactive = SubAssetReconciler::Reconcile(meta, candidates, true);
     CHECK_FALSE(interactive.RequiresUserReconciliation);
     CHECK(interactive.Resolved.ContainsKey(TEXT("mesh:/New")));
-    CHECK(interactive.Resolved[TEXT("mesh:/New")].ID != oldId);
+    CHECK(interactive.Resolved[TEXT("mesh:/New")].LocalId != oldId);
     CHECK(interactive.Resolved[TEXT("mesh:/Old")].Removed);
 }
 

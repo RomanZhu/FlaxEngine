@@ -458,12 +458,13 @@ int32 Editor::LoadProduct()
         auto& flaxRef = newProject.References.AddOne();
         flaxRef.Name = TEXT("$(EnginePath)/Flax.flaxproj");
         flaxRef.Project = nullptr;
+        // Asset-system v3 writes mandatory authored bootstrap settings before its descriptor.
+        if (FileSystem::CreateDirectory(projectPath / TEXT("Content")))
+            return 11;
         if (newProject.SaveProject())
             return 10;
 
         // Generate source files
-        if (FileSystem::CreateDirectory(projectPath / TEXT("Content")))
-            return 11;
         if (FileSystem::CreateDirectory(projectPath / TEXT("Source/Game")))
             return 11;
         bool failed = File::WriteAllText(projectPath / TEXT("Source/GameTarget.Build.cs"),TEXT(

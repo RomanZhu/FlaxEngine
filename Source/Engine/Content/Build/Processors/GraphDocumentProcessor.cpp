@@ -85,6 +85,7 @@ AssetProcessorDescriptor GraphDocumentProcessor::CreateDescriptor()
 bool GraphDocumentProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
 {
     prepared = PreparedAsset();
+    context.SetSourceSerializerVersion(RuntimeFormatVersion);
     const AssetRecord& record = context.GetRecord();
     if (!GraphDocumentCodec::IsSupportedType(record.TypeName))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
@@ -196,7 +197,7 @@ bool GraphDocumentProcessor::Build(ArtifactBuildContext& context, AssetPipelineD
     const AssetDependency* sourceDependency = nullptr;
     for (const AssetDependency& dependency : prepared.Dependencies)
     {
-        if (dependency.Kind == AssetDependencyKind::SourceFile)
+        if (dependency.Kind == AssetDependencyKind::SourceAsset)
         {
             sourceDependency = &dependency;
             break;

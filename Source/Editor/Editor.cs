@@ -687,7 +687,11 @@ namespace FlaxEditor
             GameSettings.Save(new NetworkSettings());
             GameSettings.Save(new NavigationSettings());
             GameSettings.Save(new LocalizationSettings());
-            GameSettings.Save(new BuildSettings());
+            GameSettings.Save(new BuildSettings
+            {
+                GameTarget = project.GameTarget,
+                EditorTarget = project.EditorTarget,
+            });
             GameSettings.Save(new StreamingSettings());
             GameSettings.Save(new AssetPipelineSettings());
             GameSettings.Save(new WindowsPlatformSettings());

@@ -127,6 +127,13 @@ public:
     /// <summary>Cancels only this requester; shared work is cancelled after its final requester leaves.</summary>
     void CancelRequester(const AssetBuildRequestHandle& handle);
 
+    /// <summary>Changes the scheduler worker limit. Additional threads are started on demand; lowering the limit drains running work.</summary>
+    /// <returns>True when the value or service state is invalid.</returns>
+    bool SetMaximumWorkers(int32 maximumWorkers);
+
+    /// <summary>Gets the current scheduler worker limit.</summary>
+    int32 GetMaximumWorkers() const;
+
     /// <summary>Closes the publication gate, cancels outstanding work, and joins all workers.</summary>
     void Shutdown();
 

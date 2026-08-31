@@ -172,6 +172,17 @@ bool AssetProcessorRegistry::ValidateDescriptor(AssetProcessorDescriptor& descri
         if ((_requireThirdPartyIsolation || descriptor.UsesExternalProcess) && descriptor.TrustMode != AssetProcessorTrustMode::IsolatedProcess)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Project policy requires this third-party processor to run isolated."));
     }
+    if (descriptor.ProviderSemanticIdentity.IsZero())
+    {
+        // Built-in providers still need an explicit key component. This fallback is
+        // version-derived; release providers can supply a binary/assembly code hash.
+        ArtifactKeyBuilder provider(StringAnsiView("flax-provider-code-fallback-v1"));
+        provider.AddString(StringAnsiView("provider"), descriptor.ProviderID);
+        provider.AddString(StringAnsiView("processor"), descriptor.ID);
+        provider.AddUInt32(StringAnsiView("engine-api"), descriptor.EngineApiLevel);
+        provider.AddUInt32(StringAnsiView("implementation"), descriptor.ImplementationVersion);
+        descriptor.ProviderSemanticIdentity = provider.Finalize().Digest;
+    }
 
     CanonicalJsonError jsonError;
     StringAnsi canonicalDefaults;

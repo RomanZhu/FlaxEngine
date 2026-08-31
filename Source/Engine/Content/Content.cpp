@@ -917,6 +917,21 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
         }
     }
 
+    if (AssetDatabase::Get().IsHardCutEnabled())
+    {
+        // Runtime/engine packages may already be registered explicitly, but a
+        // missing project identity must never trigger recursive workspace discovery.
+        if (Cache.FindAsset(id, info))
+        {
+            AssetPathPolicy::ProjectPath projectPath;
+            AssetPipelineDiagnostic diagnostic;
+            if (AssetPathPolicy::TryNormalizeProjectPath(Globals::ProjectFolder, Globals::ProjectContentFolder,
+                Globals::ProjectLibraryFolder, info.Path, projectPath, diagnostic))
+                return true;
+        }
+        return false;
+    }
+
 #if ENABLE_ASSETS_DISCOVERY
     // Find asset in registry
     if (Cache.FindAsset(id, info))
@@ -963,24 +978,42 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 #endif
 }
 
+bool Content::GetAssetInfo(const AssetObjectId& id, AssetInfo& info)
+{
+    if (!id.IsValid())
+        return false;
+#if USE_EDITOR
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(id, record))
+        return false;
+    info = AssetInfo(record.ID, record.TypeName, record.CanonicalPath.Get());
+    return true;
+#else
+    return Cache.FindAsset(id, info);
+#endif
+}
+
 bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 {
 #if ENABLE_ASSETS_DISCOVERY
     String formattedPath(path);
     FileSystem::NormalizePath(formattedPath);
 
+    AssetPathPolicy::ProjectPath projectPath;
+    AssetPipelineDiagnostic pathDiagnostic;
+    const bool isCanonicalProjectPath = !AssetPathPolicy::TryNormalizeProjectPath(Globals::ProjectFolder, Globals::ProjectContentFolder,
+        Globals::ProjectLibraryFolder, formattedPath, projectPath, pathDiagnostic);
+    if (isCanonicalProjectPath)
     {
-        AssetPathPolicy::ProjectPath projectPath;
-        AssetPipelineDiagnostic diagnostic;
         AssetRecord record;
-        if (!AssetPathPolicy::TryNormalizeProjectPath(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder,
-                formattedPath, projectPath, diagnostic) &&
-            AssetDatabase::Get().TryGetMainRecordByPath(projectPath.PortabilityKey, record))
+        if (AssetDatabase::Get().TryGetMainRecordByPath(projectPath.PortabilityKey, record))
         {
             info = AssetInfo(record.ID, record.TypeName, record.CanonicalPath.Get());
             return true;
         }
     }
+    if (AssetDatabase::Get().IsHardCutEnabled() && isCanonicalProjectPath)
+        return false;
 
     // Find asset in registry
     if (Cache.FindAsset(formattedPath, info))
@@ -1231,6 +1264,16 @@ const Dictionary<Guid, Asset*>& Content::GetAssetsRaw()
 }
 
 Asset* Content::LoadAsync(const Guid& id, const MClass* type)
+{
+    CHECK_RETURN(type, nullptr);
+    const auto scriptingType = Scripting::FindScriptingType(type->GetFullName());
+    if (scriptingType)
+        return LoadAsync(id, scriptingType);
+    LOG(Error, "Failed to find asset type '{0}'.", String(type->GetFullName()));
+    return nullptr;
+}
+
+Asset* Content::LoadAsync(const AssetObjectId& id, const MClass* type)
 {
     CHECK_RETURN(type, nullptr);
     const auto scriptingType = Scripting::FindScriptingType(type->GetFullName());
@@ -1960,6 +2003,16 @@ bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, Asset
 {
     diagnostic = AssetPipelineDiagnostic();
 #if USE_EDITOR
+    AssetRecord canonicalRecord;
+    if (AssetDatabase::Get().IsHardCutEnabled() && AssetDatabase::Get().TryGetRecord(location.Info.ID, canonicalRecord))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+        diagnostic.AssetGuid = location.Info.ID;
+        diagnostic.SourcePath = canonicalRecord.SourcePath.Get();
+        diagnostic.Message = TEXT("Canonical project objects resolve only through the database current-artifact mapping.");
+        return true;
+    }
     if (!location.Info.ID.IsValid() || location.Artifact.AssetID != location.Info.ID || location.Artifact.TypeName != location.Info.TypeName ||
         !AssetPathPolicy::IsCanonicalPathValid(CanonicalAssetPath(location.Info.Path), Globals::ProjectContentFolder) ||
         !AssetPathPolicy::IsArtifactPathValid(location.Artifact.StoragePath, Globals::ProjectLibraryFolder))
@@ -2319,6 +2372,17 @@ Asset* Content::LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type
     return result;
 }
 
+Asset* Content::LoadAsync(const AssetObjectId& id, const ScriptingTypeHandle& type)
+{
+    AssetInfo info;
+    if (!GetAssetInfo(id, info))
+    {
+        LOG(Warning, "Invalid or missing asset object ({0}:{1}, {2}).", id.Guid, id.LocalId, type.ToString());
+        return nullptr;
+    }
+    return LoadAsync(info.ID, type);
+}
+
 Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
 {
     if (!id.IsValid())
@@ -2375,7 +2439,10 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
     // Get canonical asset info from the explicit new-pipeline record or the legacy registry.
     AssetInfo assetInfo;
     AssetLoadLocation loadLocation;
-    bool hasExplicitLocation;
+    AssetRecord canonicalRecord;
+    const bool isCanonicalRecord = AssetDatabase::Get().TryGetRecord(id, canonicalRecord);
+    bool hasExplicitLocation = false;
+    if (!AssetDatabase::Get().IsHardCutEnabled() || !isCanonicalRecord)
     {
         ScopeLock lock(AssetsLocker);
         hasExplicitLocation = ExplicitLoadLocations.TryGet(id, loadLocation);
@@ -2386,8 +2453,8 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
     }
     else if (ArtifactResolver::Get().IsConfigured())
     {
-        AssetRecord pipelineRecord;
-        if (AssetDatabase::Get().TryGetRecord(id, pipelineRecord) && pipelineRecord.SourceKind != AssetSourceKind::LegacyBinary)
+        AssetRecord pipelineRecord = canonicalRecord;
+        if (isCanonicalRecord && pipelineRecord.SourceKind != AssetSourceKind::LegacyBinary)
         {
             ArtifactRequest request;
             request.AssetID = id;
@@ -2407,19 +2474,17 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
                 pipelineRecord.ProcessorID == TEXT("Flax.ParticleSystem") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.CollisionData"))
                 request.RequiredCompatibility = "flax-authored-document-v1";
+            else if (pipelineRecord.ProcessorID == TEXT("Flax.AuthoredObject"))
+                request.RequiredCompatibility = "flax-authored-object-v1";
+            else if (pipelineRecord.ProcessorID == TEXT("Flax.ExistingJson"))
+                request.RequiredCompatibility = "flax-existing-json-v1";
             else if (pipelineRecord.ProcessorID == TEXT("Flax.Audio") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.Font") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.Video") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.Text"))
                 request.RequiredCompatibility = "flax-imported-source-v1";
-            if (pipelineRecord.SourceKind == AssetSourceKind::ExistingJson)
-            {
-                assetInfo = pipelineRecord.ToAssetInfo();
-                loadLocation = AssetLoadLocation::Legacy(assetInfo);
-                hasExplicitLocation = true;
-            }
-            else if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))
+            if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))
             {
                 if (!passiveLoad)
                     LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, id, diagnostic.SourcePath);
@@ -2428,6 +2493,11 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
             assetInfo = loadLocation.Info;
             hasExplicitLocation = true;
         }
+    }
+    if (!hasExplicitLocation && AssetDatabase::Get().IsHardCutEnabled() && isCanonicalRecord && canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary)
+    {
+        LOG(Error, "Canonical asset resolver is unavailable for database object {0}.", id);
+        LOAD_FAILED();
     }
     if (!hasExplicitLocation && !GetAssetInfo(id, assetInfo))
     {
