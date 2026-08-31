@@ -32,8 +32,7 @@ API_ENUM(Attributes="Flags") enum class ImportAssetOptions : uint32
     ForceUpdate = 1 << 0,
     ForceSynchronousImport = 1 << 1,
     ImportRecursive = 1 << 2,
-    DontDownloadFromCacheServer = 1 << 3,
-    ForceUncompressedImport = 1 << 4,
+    ForceUncompressedImport = 1 << 3,
 };
 
 DECLARE_ENUM_OPERATORS(ImportAssetOptions);
