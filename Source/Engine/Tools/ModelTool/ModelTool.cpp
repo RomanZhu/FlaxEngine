@@ -25,6 +25,7 @@
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Assets/Shader.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Engine/Units.h"
 #if USE_EDITOR
@@ -820,7 +821,7 @@ bool ModelTool::ImportData(const String& path, ModelData& data, Options& options
                 // Remove whole channel if has no effective data
                 if (channel.Position.IsEmpty() && channel.Rotation.IsEmpty() && channel.Scale.IsEmpty())
                 {
-                    LOG(Warning, "Removing empty animation channel ({0}).", channel.NodeName);
+                    LOG(Info, "Removing empty animation channel ({0}).", channel.NodeName);
                     channels.RemoveAtKeepOrder(i);
                 }
             }
@@ -1019,6 +1020,11 @@ String GetAdditionalImportPath(const String& autoImportOutput, Array<String>& im
 bool ModelTool::ImportModel(const String& path, ModelData& data, Options& options, String& errorMsg, const String& autoImportOutput)
 {
     PROFILE_CPU();
+    if (AssetDatabase::Get().IsHardCutEnabled() && autoImportOutput.HasChars())
+    {
+        errorMsg = TEXT("Asset-system v3 model import cannot generate sibling cooked assets in a source mount.");
+        return true;
+    }
     LOG(Info, "Importing model from \'{0}\'", path);
     const auto startTime = DateTime::NowUTC();
 

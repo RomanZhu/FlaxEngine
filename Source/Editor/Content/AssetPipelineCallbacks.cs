@@ -95,6 +95,26 @@ namespace FlaxEditor
 
     internal static class AssetPipelineCallbacks
     {
+        [ThreadStatic]
+        private static int _nativeDecisionBypassDepth;
+
+        internal static bool NativeDecisionBypassed => _nativeDecisionBypassDepth != 0;
+
+        internal static IDisposable BypassNativeDecision()
+        {
+            _nativeDecisionBypassDepth++;
+            return new NativeDecisionBypassScope();
+        }
+
+        private sealed class NativeDecisionBypassScope : IDisposable
+        {
+            public void Dispose()
+            {
+                if (_nativeDecisionBypassDepth > 0)
+                    _nativeDecisionBypassDepth--;
+            }
+        }
+
         private sealed class PostprocessorEntry
         {
             public Type Type;
@@ -135,6 +155,7 @@ namespace FlaxEditor
         public static string ValidateMove(string oldPath, string newPath, out bool handled)
         {
             handled = false;
+            using (AssetDatabase.EnterCallbackScope())
             foreach (var type in FindProcessors(typeof(AssetModificationProcessor)))
             {
                 var method = type.GetMethod("OnWillMoveAsset", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(string), typeof(string) }, null);
@@ -157,6 +178,7 @@ namespace FlaxEditor
         public static bool ValidateDelete(string path, out bool handled)
         {
             handled = false;
+            using (AssetDatabase.EnterCallbackScope())
             foreach (var type in FindProcessors(typeof(AssetModificationProcessor)))
             {
                 var method = type.GetMethod("OnWillDeleteAsset", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(string) }, null);
@@ -178,6 +200,7 @@ namespace FlaxEditor
 
         public static void WillCreate(string path)
         {
+            using (AssetDatabase.EnterCallbackScope())
             foreach (var type in FindProcessors(typeof(AssetModificationProcessor)))
             {
                 var method = type.GetMethod("OnWillCreateAsset", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(string) }, null);
@@ -189,6 +212,7 @@ namespace FlaxEditor
         public static string[] WillSave(string[] paths)
         {
             var result = paths ?? Array.Empty<string>();
+            using (AssetDatabase.EnterCallbackScope())
             foreach (var type in FindProcessors(typeof(AssetModificationProcessor)))
             {
                 var method = type.GetMethod("OnWillSaveAssets", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(string[]) }, null);

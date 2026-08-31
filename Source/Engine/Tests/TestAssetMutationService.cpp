@@ -97,6 +97,47 @@ TEST_CASE("Native asset mutation service publishes complete source metadata pair
     CHECK(recovered.IsEmpty());
 }
 
+TEST_CASE("Native asset mutation rolls filesystem back when database commit fails")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetMutationDatabaseRollback-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String journals = root / TEXT("Library/AssetDatabase/MutationJournals");
+    const String recovery = root / TEXT("Library/AssetDatabase/Recovery");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    AssetMutationService service(root, content, journals, recovery);
+    const String source = content / TEXT("Before.txt");
+    const String destination = content / TEXT("After.txt");
+    REQUIRE_FALSE(WriteMutationBytes(source, "before"));
+    const AssetMeta meta = MakeMutationMeta();
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), meta, diagnostic));
+
+    int32 databaseCommits = 0;
+    service.DatabaseCommitHook = [&databaseCommits](const AssetMutationResult&)
+    {
+        databaseCommits++;
+        return databaseCommits == 1;
+    };
+    AssetMutationResult result;
+    CHECK(service.Move(source, destination, result));
+    CHECK_FALSE(result.Succeeded);
+    CHECK_FALSE(result.RequiresRecovery);
+    CHECK(result.Failure == AssetMutationFailure::DatabaseCommitFailed);
+    CHECK(databaseCommits == 2);
+    CHECK(FileSystem::FileExists(source));
+    CHECK(FileSystem::FileExists(source + TEXT(".meta")));
+    CHECK_FALSE(FileSystem::FileExists(destination));
+    CHECK_FALSE(FileSystem::FileExists(destination + TEXT(".meta")));
+    AssetMeta restored;
+    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), restored, diagnostic));
+    CHECK(restored.ID == meta.ID);
+
+    Array<AssetMutationResult> recovered;
+    CHECK_FALSE(service.RecoverPending(recovered));
+    CHECK(recovered.IsEmpty());
+}
+
 TEST_CASE("Authored save service preserves local IDs and tombstones")
 {
     const String root = Globals::TemporaryFolder / (TEXT("AuthoredSave-") + Guid::New().ToString(Guid::FormatType::N));

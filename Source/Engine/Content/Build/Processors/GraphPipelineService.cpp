@@ -6,6 +6,7 @@
 
 #include "GraphDocumentProcessor.h"
 #include "AuthoredAssetProcessor.h"
+#include "BakedAssetProcessor.h"
 #include "ImportedSourceProcessor.h"
 #include "ExistingJsonProcessor.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
@@ -54,7 +55,7 @@ namespace
         Array<AssetProcessorRegistration> ExtraRegistrations;
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
-        Dictionary<Guid, ArtifactKey> Fingerprints;
+        Dictionary<String, ArtifactKey> Fingerprints;
         uint64 ForceGeneration = 0;
         bool Initialized = false;
         bool ExtraInitialized = false;
@@ -78,7 +79,12 @@ namespace
         return true;
     }
 
-    void QueryCurrentState(const Guid& assetID, uint64& revision, ArtifactKey& fingerprint)
+    String GetFingerprintIdentity(const Guid& assetID, const ArtifactKey& targetFingerprint)
+    {
+        return assetID.ToString(Guid::FormatType::N) + TEXT("/") + String(targetFingerprint.ToString());
+    }
+
+    void QueryCurrentState(const Guid& assetID, const ArtifactKey& targetFingerprint, uint64& revision, ArtifactKey& fingerprint)
     {
         AssetRecord record;
         if (!AssetDatabase::Get().TryGetRecord(assetID, record))
@@ -90,7 +96,7 @@ namespace
         revision = record.DatabaseRevision;
         GraphPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
-        const ArtifactKey* value = state.Fingerprints.TryGet(assetID);
+        const ArtifactKey* value = state.Fingerprints.TryGet(GetFingerprintIdentity(assetID, targetFingerprint));
         fingerprint = value ? *value : ArtifactKey();
     }
 
@@ -161,6 +167,7 @@ bool GraphPipelineService::OwnsProcessor(const StringView& processorID)
 {
     return processorID == GraphDocumentProcessor::ProcessorID() ||
         AuthoredAssetProcessor::Owns(processorID) ||
+        processorID == BakedAssetProcessor::ProcessorID() ||
         ImportedSourceProcessor::Owns(processorID) ||
         processorID == ExistingJsonProcessor::ProcessorID();
 }
@@ -196,6 +203,7 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     extraIds.Add(AuthoredAssetProcessor::AnimationID());
     extraIds.Add(AuthoredAssetProcessor::GameplayGlobalsID());
     extraIds.Add(AuthoredAssetProcessor::GenericObjectID());
+    extraIds.Add(BakedAssetProcessor::ProcessorID());
     extraIds.Add(ImportedSourceProcessor::FontID());
     extraIds.Add(ImportedSourceProcessor::ShaderID());
     extraIds.Add(ImportedSourceProcessor::VideoID());
@@ -213,6 +221,8 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
         AssetProcessorDescriptor descriptor;
         if (AuthoredAssetProcessor::Owns(id))
             descriptor = AuthoredAssetProcessor::CreateDescriptor(id);
+        else if (id == BakedAssetProcessor::ProcessorID())
+            descriptor = BakedAssetProcessor::CreateDescriptor();
         else if (ImportedSourceProcessor::Owns(id))
             descriptor = ImportedSourceProcessor::CreateDescriptor(id);
         else
@@ -260,7 +270,7 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         return true;
     {
         std::lock_guard<std::mutex> lock(state.Locker);
-        state.Fingerprints[record.ID] = prepared.InputFingerprint;
+        state.Fingerprints[GetFingerprintIdentity(record.ID, prepared.TargetFingerprint)] = prepared.InputFingerprint;
     }
 
     auto execution = std::make_shared<GraphExecution>();
@@ -341,6 +351,11 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
             if (AuthoredAssetProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
                 return true;
         }
+        else if (record.ProcessorID == BakedAssetProcessor::ProcessorID())
+        {
+            if (BakedAssetProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
+                return true;
+        }
         else if (record.ProcessorID == ExistingJsonProcessor::ProcessorID())
         {
             if (ExistingJsonProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
@@ -394,9 +409,9 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         publication.ProcessorImplementationVersion = execution->ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
         publication.Outputs = execution->Outputs;
-        publication.QueryCurrentState = [assetID = execution->Prepared.AssetID](uint64& revision, ArtifactKey& fingerprint)
+        publication.QueryCurrentState = [assetID = execution->Prepared.AssetID, targetFingerprint = execution->Prepared.TargetFingerprint](uint64& revision, ArtifactKey& fingerprint)
         {
-            QueryCurrentState(assetID, revision, fingerprint);
+            QueryCurrentState(assetID, targetFingerprint, revision, fingerprint);
         };
         publication.Notify = [typeName = execution->Prepared.OutputType](const ArtifactManifest& manifest)
         {

@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "ArtifactResolver.h"
+#include "Engine/Content/AssetDatabase/EngineContentCatalog.h"
 #include "ArtifactCompatibility.h"
 #include "ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseStorage.h"
@@ -154,11 +155,27 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
     AssetRecord record;
     if (!_database->TryGetRecord(request.AssetID, record))
         return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Asset database contains no record for the requested GUID."));
-    if (record.SourceKind == AssetSourceKind::LegacyBinary)
+    if (record.SourceKind == AssetSourceKind::PrebuiltArtifact)
+    {
+        if (request.OutputKind != StringAnsiView("runtime") ||
+            (!request.RequiredCompatibility.IsEmpty() && request.RequiredCompatibility != EngineContentCatalog::Compatibility))
+            return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactIncompatible, request,
+                record.CanonicalPath.Get(), TEXT("The shipped engine-content artifact is incompatible with the requested output."));
+        ContentHash content;
+        uint64 size;
+        if (EngineContentCatalog::Resolve(request.AssetID, result, content, size, diagnostic))
+            return true;
+        result.OutputKind = TEXT("runtime");
+        return false;
+    }
+    if (record.SourceKind == AssetSourceKind::LegacyBinary && !_database->IsHardCutEnabled())
     {
         result = ResolvedArtifact::Legacy(record.ToAssetInfo());
         return false;
     }
+    if (record.SourceKind == AssetSourceKind::LegacyBinary)
+        return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactIncompatible, request,
+            record.CanonicalPath.Get(), TEXT("Hard-cut projects cannot resolve legacy binary assets."));
 
     ArtifactInspection inspection;
     Inspect(_libraryRoot, record, request, inspection);

@@ -3,6 +3,7 @@
 #include "CookAssetsStep.h"
 #include "Editor/Cooker/PlatformTools.h"
 #include "Engine/Core/DeleteMe.h"
+#include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Utilities.h"
 #include "Engine/Core/Collections/Sorting.h"
 #include "Engine/Core/Collections/HashSet.h"
@@ -15,9 +16,12 @@
 #include "Engine/Content/AssetReference.h"
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
+#include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseStorage.h"
+#include "Engine/Content/AssetDatabase/EngineContentCatalog.h"
 #include "Engine/Content/AssetDatabase/RuntimeAssetIndex.h"
+#include "Engine/Content/AssetDatabase/SourceHashCache.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/Shader.h"
 #include "Engine/Content/Assets/Texture.h"
@@ -81,16 +85,56 @@ namespace
         uint32 Depth = 0;
     };
 
-    String MakeRuntimeLogicalPath(const StringView& path)
+    String MakeLogicalPath(const StringView& path)
     {
+        String result;
         if (path.StartsWith(Globals::StartupFolder))
-            return String(path.Get() + Globals::StartupFolder.Length() + 1, path.Length() - Globals::StartupFolder.Length() - 1);
-        if (path.StartsWith(Globals::ProjectFolder))
-            return String(path.Get() + Globals::ProjectFolder.Length() + 1, path.Length() - Globals::ProjectFolder.Length() - 1);
-        return String::Empty;
+            result = String(path.Get() + Globals::StartupFolder.Length() + 1, path.Length() - Globals::StartupFolder.Length() - 1);
+        else if (path.StartsWith(Globals::ProjectFolder))
+            result = String(path.Get() + Globals::ProjectFolder.Length() + 1, path.Length() - Globals::ProjectFolder.Length() - 1);
+        result.Replace(TEXT('\\'), TEXT('/'));
+        return result;
     }
 
-    ArtifactTarget GetCookArtifactTarget(const CookingData& data)
+    String MakeRuntimeLogicalPath(const AssetRecord& record)
+    {
+        if (!record.IsMainAsset())
+            return String::Empty;
+        // The runtime settings loader has a stable player address independent of the authored v3 source layout.
+        if (record.TypeName == TEXT("FlaxEditor.Content.Settings.GameSettings"))
+            return TEXT("Content/GameSettings.json");
+        return MakeLogicalPath(record.CanonicalPath.Get());
+    }
+
+    String MakeResourcePath(const AssetRecord& record)
+    {
+        if (!record.IsMainAsset())
+            return String::Empty;
+        const String resourcesRoot = Globals::ProjectContentFolder / TEXT("Resources");
+        if (!AssetPathPolicy::IsSameOrChild(record.SourcePath.Get(), resourcesRoot))
+            return String::Empty;
+        String result = FileSystem::ConvertAbsolutePathToRelative(resourcesRoot, record.SourcePath.Get());
+        result.Replace(TEXT('\\'), TEXT('/'));
+        return result;
+    }
+
+    void GetRuntimeAddresses(const AssetRecord& record, Array<String>& addresses)
+    {
+        addresses.Clear();
+        if (!record.IsMainAsset())
+            return;
+        for (const String& label : record.Labels)
+        {
+            const String normalized = label.ToLower();
+            if (!normalized.StartsWith(TEXT("address:")) || label.Length() <= 8)
+                continue;
+            String address = label.Substring(8);
+            address.Replace(TEXT('\\'), TEXT('/'));
+            addresses.Add(MoveTemp(address));
+        }
+    }
+
+    ArtifactTarget GetCookArtifactTarget(const CookingData& data, const BuildSettings& buildSettings)
     {
         ArtifactTarget target;
         switch (data.Platform)
@@ -183,6 +227,51 @@ namespace
         target.Quality = "Default";
         target.TextureCompression = data.Platform == BuildPlatform::AndroidARM64 || data.Platform == BuildPlatform::iOSARM64 || data.Platform == BuildPlatform::Switch
             ? "Mobile" : data.Platform == BuildPlatform::Web ? "Web" : "Desktop";
+        target.ShaderCompiler = StringAnsi::Format("cache-{0}-material-{1}", GPU_SHADER_CACHE_VERSION, MATERIAL_GRAPH_VERSION);
+        if (buildSettings.ShadersNoOptimize)
+            target.FeatureFlags.Add("shader-no-optimize");
+        if (buildSettings.ShadersGenerateDebugData)
+            target.FeatureFlags.Add("shader-debug-data");
+#if PLATFORM_TOOLS_WINDOWS
+        if (data.Platform == BuildPlatform::Windows32 || data.Platform == BuildPlatform::Windows64 || data.Platform == BuildPlatform::WindowsARM64)
+        {
+            const auto settings = WindowsPlatformSettings::Get();
+            target.Graphics = settings->SupportDX12 ? "DirectX12" : settings->SupportDX11 ? "DirectX11" :
+                settings->SupportDX10 ? "DirectX10" : settings->SupportVulkan ? "Vulkan" : "None";
+            if (settings->SupportDX12)
+                target.FeatureFlags.Add("shader-dx12");
+            if (settings->SupportDX11)
+                target.FeatureFlags.Add("shader-dx11");
+            if (settings->SupportDX10)
+                target.FeatureFlags.Add("shader-dx10");
+            if (settings->SupportVulkan)
+                target.FeatureFlags.Add("shader-vulkan");
+        }
+#endif
+#if PLATFORM_TOOLS_UWP
+        if (data.Platform == BuildPlatform::UWPx86 || data.Platform == BuildPlatform::UWPx64)
+        {
+            const auto settings = UWPPlatformSettings::Get();
+            target.Graphics = settings->SupportDX11 ? "DirectX11" : settings->SupportDX10 ? "DirectX10" : "None";
+            if (settings->SupportDX11)
+                target.FeatureFlags.Add("shader-dx11");
+            if (settings->SupportDX10)
+                target.FeatureFlags.Add("shader-dx10");
+        }
+#endif
+#if PLATFORM_TOOLS_LINUX
+        if (data.Platform == BuildPlatform::LinuxX64 && LinuxPlatformSettings::Get()->SupportVulkan)
+            target.FeatureFlags.Add("shader-vulkan");
+#endif
+        if (data.Platform == BuildPlatform::AndroidARM64 || data.Platform == BuildPlatform::MacOSx64 || data.Platform == BuildPlatform::MacOSARM64 ||
+            data.Platform == BuildPlatform::iOSARM64 || data.Platform == BuildPlatform::Switch)
+            target.FeatureFlags.Add("shader-vulkan");
+        else if (data.Platform == BuildPlatform::XboxOne || data.Platform == BuildPlatform::XboxScarlett)
+            target.FeatureFlags.Add("shader-dx12");
+        else if (data.Platform == BuildPlatform::PS4 || data.Platform == BuildPlatform::PS5)
+            target.FeatureFlags.Add("shader-console");
+        else if (data.Platform == BuildPlatform::Web)
+            target.FeatureFlags.Add("shader-webgpu");
         target.Role = "Runtime";
         return target;
     }
@@ -227,6 +316,127 @@ namespace
     bool LessGuid(const Guid& a, const Guid& b)
     {
         return StringAnsi(a.ToString(Guid::FormatType::N)) < StringAnsi(b.ToString(Guid::FormatType::N));
+    }
+
+    bool PublishEnginePrebuiltRuntimeArtifact(const AssetRecord& record, const ArtifactTarget& target,
+        const ContentHash& settingsHash, const StringView& cookedPath, ArtifactKey& exactArtifact,
+        RuntimeBuildArtifactEvidence& evidence, AssetPipelineDiagnostic& diagnostic)
+    {
+        ResolvedArtifact shippedArtifact;
+        ContentHash shippedContent;
+        uint64 shippedSize;
+        if (EngineContentCatalog::Resolve(record.ID, shippedArtifact, shippedContent, shippedSize, diagnostic))
+            return true;
+
+        ArtifactKeyBuilder inputBuilder(StringAnsiView("flax-engine-prebuilt-runtime-input-v1"));
+        inputBuilder.AddHash(StringAnsiView("shipped-content"), shippedContent);
+        inputBuilder.AddKey(StringAnsiView("target"), target.BuildKey(ArtifactTargetDimension::All));
+        inputBuilder.AddHash(StringAnsiView("settings"), settingsHash);
+        inputBuilder.AddUInt32(StringAnsiView("engine-build"), FLAXENGINE_VERSION_BUILD);
+        const ArtifactKey inputFingerprint = inputBuilder.Finalize();
+
+        ContentHash cookedContent;
+        if (ComputeFileContentHash(cookedPath, cookedContent))
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Cook;
+            diagnostic.SourcePath = cookedPath;
+            diagnostic.Message = TEXT("Failed to hash target-processed engine-content artifact.");
+            return true;
+        }
+        exactArtifact = ArtifactKey(cookedContent);
+        ArtifactStoragePath immutablePath;
+        if (ArtifactStore::TryGetArtifactPath(Globals::ProjectLibraryFolder, target, ArtifactTargetDimension::All,
+            record.ID, StringAnsiView("runtime"), exactArtifact, StringAnsiView(".flax"), immutablePath, diagnostic))
+            return true;
+        const String immutableDirectory = StringUtils::GetDirectoryName(immutablePath.Get());
+        if (!FileSystem::DirectoryExists(immutableDirectory) && FileSystem::CreateDirectory(immutableDirectory))
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::LibraryCreationFailed;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.SourcePath = immutableDirectory;
+            diagnostic.Message = TEXT("Failed to create the immutable engine-content artifact directory.");
+            return true;
+        }
+        if (!FileSystem::FileExists(immutablePath.Get()))
+        {
+            const String staging = immutablePath.Get() + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
+            SCOPE_EXIT { FileSystem::DeleteFile(staging); };
+            if (FileSystem::CopyFile(staging, cookedPath) || FileSystem::MoveFile(immutablePath.Get(), staging, false))
+            {
+                if (!FileSystem::FileExists(immutablePath.Get()))
+                {
+                    diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+                    diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+                    diagnostic.SourcePath = immutablePath.Get();
+                    diagnostic.Message = TEXT("Failed to atomically publish the target-processed engine-content artifact.");
+                    return true;
+                }
+            }
+        }
+        ContentHash publishedContent;
+        if (ComputeFileContentHash(immutablePath.Get(), publishedContent) || publishedContent != cookedContent)
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.SourcePath = immutablePath.Get();
+            diagnostic.Message = TEXT("Published engine-content artifact failed content verification.");
+            return true;
+        }
+
+        String relativeOutput;
+        if (ArtifactStore::TryMakeLibraryRelative(Globals::ProjectLibraryFolder, immutablePath.Get(), relativeOutput, diagnostic))
+            return true;
+        ArtifactManifest manifest;
+        manifest.AssetID = record.ID;
+        manifest.DatabaseRevision = record.DatabaseRevision;
+        manifest.ProcessorID = EngineContentCatalog::ProcessorID;
+        manifest.ProcessorImplementationVersion = 1;
+        manifest.Target = target;
+        manifest.InputFingerprint = inputFingerprint;
+        manifest.SourceHash = shippedContent;
+        manifest.SettingsHash = settingsHash;
+        manifest.BuildID = String(inputFingerprint.ToString());
+        manifest.KeyComponents = inputBuilder.GetComponents();
+        ArtifactManifestDependency& sourceDependency = manifest.Dependencies.AddOne();
+        sourceDependency.Kind = AssetDependencyKind::ExactSourceFile;
+        sourceDependency.Identity = record.CanonicalPath.Get();
+        sourceDependency.Hash = shippedContent;
+        sourceDependency.Origin = TEXT("EngineContentCatalog");
+        ArtifactManifestDependency& targetDependency = manifest.Dependencies.AddOne();
+        targetDependency.Kind = AssetDependencyKind::Target;
+        targetDependency.Identity = String(target.BuildKey(ArtifactTargetDimension::All).ToString());
+        targetDependency.Hash = target.BuildKey(ArtifactTargetDimension::All).Digest;
+        targetDependency.Origin = TEXT("CookTarget");
+        ArtifactManifestObject& object = manifest.Objects.AddOne();
+        object.ObjectID = record.GetObjectId();
+        object.BackingAssetID = record.ID;
+        object.TypeName = record.TypeName;
+        object.Name = StringUtils::GetFileNameWithoutExtension(record.CanonicalPath.Get());
+        object.StableKey = TEXT("main");
+        object.IsMainObject = true;
+        ArtifactManifestOutput& output = manifest.Outputs.AddOne();
+        output.Kind = "runtime";
+        output.FormatVersion = 1;
+        output.Key = exactArtifact;
+        output.RelativePath = relativeOutput;
+        output.Content = cookedContent;
+        output.Size = FileSystem::GetFileSize(immutablePath.Get());
+        output.Compatibility = "flax-engine-runtime-v1";
+        if (AssetDatabaseStorage::PublishArtifact(Globals::ProjectLibraryFolder, manifest, diagnostic))
+            return true;
+
+        evidence.ID = record.GetObjectId();
+        evidence.Artifact = exactArtifact;
+        evidence.InputFingerprint = inputFingerprint;
+        evidence.SettingsHash = settingsHash;
+        evidence.ProcessorID = EngineContentCatalog::ProcessorID;
+        evidence.ProcessorVersion = 1;
+        RuntimeBuildDependencyEvidence& sourceEvidence = evidence.Environment.AddOne();
+        sourceEvidence.Kind = TEXT("EngineContentCatalog");
+        sourceEvidence.Identity = record.CanonicalPath.Get();
+        sourceEvidence.Hash = shippedContent;
+        return false;
     }
 }
 
@@ -1246,7 +1456,7 @@ public:
         const Guid packageID(packageKey.Digest.Values[0], packageKey.Digest.Values[1], packageKey.Digest.Values[2], packageKey.Digest.Values[3]);
 
         FlaxPackage package(path);
-        if (package.Load())
+        if (package.LoadCookedForValidation(CustomData.ContentKey))
         {
             data.Error(TEXT("Failed to verify the created assets package."));
             return true;
@@ -1321,7 +1531,7 @@ bool CookAssetsStep::Perform(CookingData& data)
     const auto gameSettings = GameSettings::Get();
     const auto buildSettings = BuildSettings::Get();
     const bool hardCut = AssetDatabase::Get().IsHardCutEnabled();
-    const ArtifactTarget cookArtifactTarget = GetCookArtifactTarget(data);
+    const ArtifactTarget cookArtifactTarget = GetCookArtifactTarget(data, *buildSettings);
     int32 contentKey = buildSettings->ContentKey;
     if (contentKey == 0)
     {
@@ -1348,6 +1558,9 @@ bool CookAssetsStep::Perform(CookingData& data)
     Dictionary<Guid, ArtifactKey> exactArtifacts;
     Dictionary<Guid, RuntimeBuildArtifactEvidence> artifactEvidence;
     Dictionary<Guid, CookedPackageLocation> packageLocations;
+    Array<RuntimeBuildFileEvidence> settingsEvidence;
+    Array<RuntimeBuildFileEvidence> streamingEvidence;
+    SourceHashCache reproducibilityHashCache;
 
     // Load incremental build cache
     CacheData cache;
@@ -1384,6 +1597,22 @@ bool CookAssetsStep::Perform(CookingData& data)
         cache.Settings.Global.MaterialGraphVersion = MATERIAL_GRAPH_VERSION;
         cache.Settings.Global.ParticleGraphVersion = PARTICLE_GPU_GRAPH_VERSION;
     }
+    ArtifactKeyBuilder enginePrebuiltSettingsBuilder(StringAnsiView("flax-engine-prebuilt-cook-settings-v1"));
+    enginePrebuiltSettingsBuilder.AddBool(StringAnsiView("shader-no-optimize"), cache.Settings.Global.ShadersNoOptimize);
+    enginePrebuiltSettingsBuilder.AddBool(StringAnsiView("shader-debug-data"), cache.Settings.Global.ShadersGenerateDebugData);
+    enginePrebuiltSettingsBuilder.AddUInt32(StringAnsiView("shader-version"), cache.Settings.Global.ShadersVersion);
+    enginePrebuiltSettingsBuilder.AddUInt32(StringAnsiView("material-graph-version"), cache.Settings.Global.MaterialGraphVersion);
+    enginePrebuiltSettingsBuilder.AddUInt32(StringAnsiView("particle-graph-version"), cache.Settings.Global.ParticleGraphVersion);
+#if PLATFORM_TOOLS_WINDOWS
+    if (data.Platform == BuildPlatform::Windows32 || data.Platform == BuildPlatform::Windows64 || data.Platform == BuildPlatform::WindowsARM64)
+    {
+        enginePrebuiltSettingsBuilder.AddBool(StringAnsiView("windows-dx12"), cache.Settings.Windows.SupportDX12);
+        enginePrebuiltSettingsBuilder.AddBool(StringAnsiView("windows-dx11"), cache.Settings.Windows.SupportDX11);
+        enginePrebuiltSettingsBuilder.AddBool(StringAnsiView("windows-dx10"), cache.Settings.Windows.SupportDX10);
+        enginePrebuiltSettingsBuilder.AddBool(StringAnsiView("windows-vulkan"), cache.Settings.Windows.SupportVulkan);
+    }
+#endif
+    const ContentHash enginePrebuiltSettingsHash = enginePrebuiltSettingsBuilder.Finalize().Digest;
 
     // Note: this step converts all the assets (even the json) into the binary files (FlaxStorage format).
     // Then files cooked files are packed into the packages.
@@ -1421,24 +1650,33 @@ bool CookAssetsStep::Perform(CookingData& data)
         const bool hasImportedCanonical = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::ImportedSource;
         const bool isCanonicalTexture = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Texture");
         const bool isCanonicalModel = hasImportedCanonical && canonicalRecord.ProcessorID == TEXT("Flax.Model");
+        const bool isCanonicalBaked = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
+            canonicalRecord.ProcessorID == TEXT("Flax.BakedAsset");
         const bool isCanonicalGraph = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
             (canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.MaterialInstance") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.SkeletonMask") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.SceneAnimation") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.ParticleSystem") ||
-                canonicalRecord.ProcessorID == TEXT("Flax.CollisionData"));
+                canonicalRecord.ProcessorID == TEXT("Flax.CollisionData") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.Animation") ||
+                canonicalRecord.ProcessorID == TEXT("Flax.GameplayGlobals"));
+        const bool isCanonicalAuthoredObject = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
+            canonicalRecord.ProcessorID == TEXT("Flax.AuthoredObject");
         const bool isCanonicalText = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::TextDocument &&
             canonicalRecord.ProcessorID == TEXT("Flax.Text");
         const bool isCanonicalExistingJson = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::ExistingJson &&
             canonicalRecord.ProcessorID == TEXT("Flax.ExistingJson");
+        const bool isEnginePrebuilt = foundCanonical && canonicalRecord.SourceKind == AssetSourceKind::PrebuiltArtifact &&
+            canonicalRecord.ProcessorID == EngineContentCatalog::ProcessorID;
         const bool isCanonicalImported = hasImportedCanonical &&
             (canonicalRecord.ProcessorID == TEXT("Flax.Audio") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.Font") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.ShaderSource") ||
                 canonicalRecord.ProcessorID == TEXT("Flax.Video")) || isCanonicalText;
-        const bool hasExactRuntimeProcessor = isCanonicalTexture || isCanonicalModel || isCanonicalGraph || isCanonicalImported || isCanonicalExistingJson;
-        if (hardCut && !hasExactRuntimeProcessor)
+        const bool hasExactRuntimeProcessor = isCanonicalTexture || isCanonicalModel || isCanonicalBaked || isCanonicalGraph ||
+            isCanonicalAuthoredObject || isCanonicalImported || isCanonicalExistingJson;
+        if (hardCut && !hasExactRuntimeProcessor && !isEnginePrebuilt)
         {
             if (!foundCanonical)
                 LOG(Error, "Hard-cut cook refused asset {0}: it has no canonical database record.", assetId);
@@ -1456,8 +1694,12 @@ bool CookAssetsStep::Perform(CookingData& data)
                 request.RequiredCompatibility = "flax-texture-v4";
             else if (isCanonicalModel)
                 request.RequiredCompatibility = "flax-model-runtime-v1";
+            else if (isCanonicalBaked)
+                request.RequiredCompatibility = "flax-baked-asset-v1";
             else if (canonicalRecord.ProcessorID == TEXT("Flax.GraphDocument"))
                 request.RequiredCompatibility = "flax-graph-document-v1";
+            else if (isCanonicalAuthoredObject)
+                request.RequiredCompatibility = "flax-authored-object-v1";
             else if (isCanonicalGraph)
                 request.RequiredCompatibility = "flax-authored-document-v1";
             else if (isCanonicalExistingJson)
@@ -1508,6 +1750,23 @@ bool CookAssetsStep::Perform(CookingData& data)
                 LOG(Error, "Exact canonical artifact {0} is not present in its selected immutable manifest.", assetId);
                 return true;
             }
+            const String settingsRoot = Globals::ProjectContentFolder / TEXT("Settings");
+            if (canonicalRecord.IsMainAsset() && AssetPathPolicy::IsSameOrChild(canonicalRecord.SourcePath.Get(), settingsRoot))
+            {
+                RuntimeBuildFileEvidence settingsFile;
+                settingsFile.Path = MakeLogicalPath(canonicalRecord.SourcePath.Get());
+                SourceHashFileState sourceState;
+                ContentHash currentSource;
+                if (settingsFile.Path.IsEmpty() || reproducibilityHashCache.HashFile(canonicalRecord.SourcePath.Get(), currentSource, sourceState, diagnostic) ||
+                    currentSource != manifest.SourceHash)
+                {
+                    LOG(Error, "Cook settings source '{0}' no longer matches its exact artifact manifest.", canonicalRecord.SourcePath.Get());
+                    return true;
+                }
+                settingsFile.Content = currentSource;
+                settingsFile.Size = sourceState.Size;
+                settingsEvidence.Add(MoveTemp(settingsFile));
+            }
             RuntimeBuildArtifactEvidence evidence;
             evidence.ID = canonicalRecord.GetObjectId();
             evidence.Artifact = exactArtifact;
@@ -1547,7 +1806,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         }
 
         // Check if asset is in cooking cache and was not modified since last build
-        const auto cachedEntry = cache.Entries.TryGet(assetId);
+        const auto cachedEntry = isEnginePrebuilt ? nullptr : cache.Entries.TryGet(assetId);
         if (cachedEntry)
         {
             ASSERT(cachedEntry->ID == assetId);
@@ -1604,6 +1863,22 @@ bool CookAssetsStep::Perform(CookingData& data)
             cache.Save(data);
             return true;
         }
+        if (isEnginePrebuilt)
+        {
+            String cookedPath;
+            cache.GetFilePath(assetId, cookedPath);
+            ArtifactKey exactArtifact;
+            RuntimeBuildArtifactEvidence evidence;
+            AssetPipelineDiagnostic diagnostic;
+            if (PublishEnginePrebuiltRuntimeArtifact(canonicalRecord, cookArtifactTarget, enginePrebuiltSettingsHash,
+                cookedPath, exactArtifact, evidence, diagnostic))
+            {
+                LOG(Error, "Failed to publish exact target engine-content artifact {0}: {1}", assetId, diagnostic.Message);
+                return true;
+            }
+            exactArtifacts.Add(assetId, exactArtifact);
+            artifactEvidence.Add(assetId, MoveTemp(evidence));
+        }
         data.Stats.CookedAssets++;
 
         // Auto save build cache after every few cooked assets (reduces next build time if cooking fails later)
@@ -1630,26 +1905,72 @@ bool CookAssetsStep::Perform(CookingData& data)
         else
             cookedPath /= String(TEXT("Content")) / StringUtils::GetFileName(filePath);
 
-        // Copy file
-        if (!FileSystem::FileExists(cookedPath) || FileSystem::GetFileLastEditTime(cookedPath) >= FileSystem::GetFileLastEditTime(filePath))
+        // Copy the selected bytes. Timestamp shortcuts can retain stale payloads after source restores.
+        const String cookedFolder = StringUtils::GetDirectoryName(cookedPath);
+        if (FileSystem::CreateDirectory(cookedFolder))
         {
-            const String cookedFolder = StringUtils::GetDirectoryName(cookedPath);
-            if (FileSystem::CreateDirectory(cookedFolder))
-            {
-                LOG(Error, "Failed to create directory '{}'", cookedFolder);
-                return true;
-            }
-            if (FileSystem::CopyFile(cookedPath, filePath))
-            {
-                LOG(Error, "Failed to copy file from '{}' to '{}'", filePath, cookedPath);
-                return true;
-            }
+            LOG(Error, "Failed to create directory '{}'", cookedFolder);
+            return true;
+        }
+        if (FileSystem::CopyFile(cookedPath, filePath))
+        {
+            LOG(Error, "Failed to copy file from '{}' to '{}'", filePath, cookedPath);
+            return true;
         }
 
         // Count stats of file extension
         auto& assetStats = data.Stats.AssetStats[FileSystem::GetExtension(cookedPath)];
         assetStats.Count++;
         assetStats.ContentSize += FileSystem::GetFileSize(cookedPath);
+    }
+
+    // StreamingAssets are database-discovered inputs with explicit output paths. Hash both ends so
+    // a source mutation during the copy cannot produce a stale or torn player payload.
+    SourceHashCache streamingHashCache;
+    SourceHashCache streamingVerificationHashCache;
+    for (const CookingData::VerbatimFile& file : data.VerbatimFiles)
+    {
+        BUILD_STEP_CANCEL_CHECK;
+        if (!FileSystem::IsRelative(file.OutputPath))
+        {
+            LOG(Error, "Verbatim cook output path must be player-relative: '{0}'.", file.OutputPath);
+            return true;
+        }
+        const String cookedPath = data.DataOutputPath / file.OutputPath;
+        if (!AssetPathPolicy::IsSameOrChild(cookedPath, data.DataOutputPath))
+        {
+            LOG(Error, "Verbatim cook output escapes the player data root: '{0}'.", file.OutputPath);
+            return true;
+        }
+        ContentHash sourceBefore, sourceAfter, copied;
+        SourceHashFileState state;
+        AssetPipelineDiagnostic diagnostic;
+        if (streamingHashCache.HashFile(file.SourcePath, sourceBefore, state, diagnostic))
+        {
+            LOG(Error, "Failed to hash StreamingAssets source '{0}': {1}", file.SourcePath, diagnostic.Message);
+            return true;
+        }
+        const String cookedFolder = StringUtils::GetDirectoryName(cookedPath);
+        if (FileSystem::CreateDirectory(cookedFolder) || FileSystem::CopyFile(cookedPath, file.SourcePath))
+        {
+            LOG(Error, "Failed to copy StreamingAssets file from '{0}' to '{1}'.", file.SourcePath, cookedPath);
+            return true;
+        }
+        if (streamingVerificationHashCache.HashFile(file.SourcePath, sourceAfter, state, diagnostic) ||
+            streamingVerificationHashCache.HashFile(cookedPath, copied, state, diagnostic) ||
+            sourceBefore != sourceAfter || sourceAfter != copied)
+        {
+            LOG(Error, "StreamingAssets file changed during cook or failed byte verification: '{0}'.", file.SourcePath);
+            return true;
+        }
+        auto& assetStats = data.Stats.AssetStats[FileSystem::GetExtension(cookedPath)];
+        assetStats.Count++;
+        assetStats.ContentSize += FileSystem::GetFileSize(cookedPath);
+        RuntimeBuildFileEvidence fileEvidence;
+        fileEvidence.Path = file.OutputPath;
+        fileEvidence.Content = copied;
+        fileEvidence.Size = FileSystem::GetFileSize(cookedPath);
+        streamingEvidence.Add(MoveTemp(fileEvidence));
     }
 
     // Create build game header
@@ -1782,7 +2103,10 @@ bool CookAssetsStep::Perform(CookingData& data)
             entry.ID = hasCanonicalRecord ? canonicalRecord.GetObjectId() : AssetObjectId(i->Key, 1);
             entry.BackingAssetID = i->Key;
             entry.TypeName = i->Value.Info.TypeName;
-            entry.CanonicalPath = hasCanonicalRecord ? MakeRuntimeLogicalPath(canonicalRecord.CanonicalPath.Get()) : String::Empty;
+            entry.CanonicalPath = hasCanonicalRecord ? MakeRuntimeLogicalPath(canonicalRecord) : String::Empty;
+            entry.ResourcePath = hasCanonicalRecord ? MakeResourcePath(canonicalRecord) : String::Empty;
+            if (hasCanonicalRecord)
+                GetRuntimeAddresses(canonicalRecord, entry.Addresses);
             if (!hasCanonicalRecord)
             {
                 for (const auto& mapping : AssetPathsMapping)
@@ -1921,6 +2245,8 @@ bool CookAssetsStep::Perform(CookingData& data)
                 : AssetObjectId(root->Item, 1));
         }
         artifactEvidence.GetValues(reproducibility.Artifacts);
+        reproducibility.Settings = settingsEvidence;
+        reproducibility.StreamingFiles = streamingEvidence;
         Dictionary<Guid, RuntimeBuildPackageEvidence> packages;
         for (auto location = packageLocations.Begin(); location.IsNotEnd(); ++location)
         {

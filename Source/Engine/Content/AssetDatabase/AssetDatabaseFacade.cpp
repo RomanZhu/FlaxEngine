@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetDatabaseFacade.h"
+#include "EngineContentCatalog.h"
 #include "AssetDatabaseStorage.h"
 #include "AssetSourceRoots.h"
 #include "AssetMeta.h"
@@ -25,7 +26,11 @@
 #include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Content/Documents/CollisionDataDocument.h"
+#include "Engine/Content/Documents/MaterialInstanceDocument.h"
+#include "Engine/Content/Documents/SceneAnimationDocument.h"
 #include "Engine/Content/Documents/ParticleSystemDocument.h"
+#include "Engine/Animations/CurveSerialization.h"
+#include "Engine/Animations/AnimEvent.h"
 #include "Engine/Particles/ParticleSystem.h"
 #include "Engine/Engine/GameplayGlobals.h"
 #include "Engine/Physics/CollisionData.h"
@@ -75,13 +80,6 @@
 #include "Engine/Content/Build/Processors/GraphDocumentProcessor.h"
 #include "Engine/Content/Build/Processors/GraphPipelineService.h"
 #include "Engine/Content/Build/Processors/ImportedSourceProcessor.h"
-#include "Engine/ContentImporters/CreateMaterialInstance.h"
-#include "Engine/ContentImporters/CreateSkeletonMask.h"
-#include "Engine/ContentImporters/CreateSceneAnimation.h"
-#include "Engine/ContentImporters/CreateParticleSystem.h"
-#include "Engine/ContentImporters/CreateCollisionData.h"
-#include "Engine/ContentImporters/CreateAnimation.h"
-#include "Engine/ContentImporters/Types.h"
 #endif
 #include <algorithm>
 #include <future>
@@ -108,10 +106,18 @@ namespace
     int32 ConfiguredWorkerLimit = 1;
     int32 ConfiguredMemoryLimitMegabytes = 4096;
 
-    bool IsLegacyEngineContentMount(const AssetMount& mount)
+    String AssetPipelineLibraryFolder()
     {
-        return mount.Kind == AssetMountKind::EngineContent &&
-            FileSystem::AreFilePathsEquivalent(mount.PhysicalRoot, String(Globals::StartupFolder) / TEXT("Content"));
+#if USE_EDITOR
+        return Globals::ProjectLibraryFolder;
+#else
+        return Globals::ProjectFolder / TEXT("Library");
+#endif
+    }
+
+    bool IsManifestBackedEngineContentMount(const AssetMount& mount)
+    {
+        return mount.Kind == AssetMountKind::EngineContent;
     }
 
     bool MountTablesMatch(const Array<AssetMount>& a, const Array<AssetMount>& b)
@@ -136,7 +142,7 @@ namespace
         for (const AssetMount& mount : mounts)
             hasEngineMount |= mount.Kind == AssetMountKind::EngineContent;
 
-        // Retain the pre-descriptor engine authoring root for older projects. A validated
+        // Retain the pre-descriptor engine content root for older projects. A validated
         // EngineContent descriptor is authoritative whenever one is present.
         const String legacyEngineRoot = AssetSourceRoots::GetEngineRoot();
         if (!hasEngineMount && FileSystem::DirectoryExists(legacyEngineRoot))
@@ -211,19 +217,6 @@ namespace
         return StringUtils::GetDirectoryName(mount.PhysicalRoot);
     }
 
-    AssetDatabaseScanOptions GetMountScanOptions(const AssetMount& mount, const AssetDatabaseScanOptions& options)
-    {
-        AssetDatabaseScanOptions result = options;
-        if (IsLegacyEngineContentMount(mount))
-        {
-            // The shipped engine Content tree is a prebuilt compatibility mount. Keep its
-            // legacy binary objects visible without treating shader/tool files as v3 sources.
-            result.AllowLegacyBinarySources = true;
-            result.StrictMetadata = false;
-        }
-        return result;
-    }
-
     void QualifyMountRecords(const AssetMount& mount, Array<AssetRecord>& records)
     {
         for (AssetRecord& record : records)
@@ -253,9 +246,17 @@ namespace
     {
         Array<AssetRecord> mountRecords;
         AssetDatabaseScanResult mountResult;
-        const AssetDatabaseScanOptions mountOptions = GetMountScanOptions(mount, options);
-        const bool failed = AssetDatabaseScanner::Collect(GetMountProjectRoot(mount), mount.PhysicalRoot,
-            Globals::ProjectLibraryFolder, mountOptions, previous, mountRecords, mountResult);
+        bool failed;
+        if (options.AssetSystemVersion >= 3 && IsManifestBackedEngineContentMount(mount))
+        {
+            failed = EngineContentCatalog::Collect(mount.PhysicalRoot, mountRecords, mountResult.Diagnostics);
+            mountResult.FilesExamined = mountRecords.Count();
+        }
+        else
+        {
+            failed = AssetDatabaseScanner::Collect(GetMountProjectRoot(mount), mount.PhysicalRoot,
+                AssetPipelineLibraryFolder(), options, previous, mountRecords, mountResult);
+        }
         QualifyMountRecords(mount, mountRecords);
         records.Add(MoveTemp(mountRecords));
         AppendScanResult(result, mountResult);
@@ -267,9 +268,17 @@ namespace
     {
         Array<AssetRecord> mountRecords;
         AssetDatabaseScanResult mountResult;
-        const AssetDatabaseScanOptions mountOptions = GetMountScanOptions(mount, options);
-        const bool failed = AssetDatabaseScanner::CollectFromFiles(GetMountProjectRoot(mount), mount.PhysicalRoot,
-            Globals::ProjectLibraryFolder, files, mountOptions, previous, mountRecords, mountResult);
+        bool failed;
+        if (options.AssetSystemVersion >= 3 && IsManifestBackedEngineContentMount(mount))
+        {
+            failed = EngineContentCatalog::Collect(mount.PhysicalRoot, mountRecords, mountResult.Diagnostics);
+            mountResult.FilesExamined = mountRecords.Count();
+        }
+        else
+        {
+            failed = AssetDatabaseScanner::CollectFromFiles(GetMountProjectRoot(mount), mount.PhysicalRoot,
+                AssetPipelineLibraryFolder(), files, options, previous, mountRecords, mountResult);
+        }
         QualifyMountRecords(mount, mountRecords);
         records.Add(MoveTemp(mountRecords));
         AppendScanResult(result, mountResult);
@@ -279,7 +288,7 @@ namespace
     String SnapshotDirectory()
     {
 #if USE_EDITOR
-        return Globals::ProjectLibraryFolder / TEXT("AssetDatabase");
+        return AssetPipelineLibraryFolder() / TEXT("AssetDatabase");
 #else
         return String::Empty;
 #endif
@@ -344,10 +353,237 @@ namespace
     AssetMutationService& GetMutationService()
     {
         static AssetMutationService service(Globals::ProjectFolder, Globals::ProjectContentFolder,
-            Globals::ProjectLibraryFolder / TEXT("AssetDatabase/MutationJournals"),
-            Globals::ProjectLibraryFolder / TEXT("AssetDatabase/Recovery"));
+            AssetPipelineLibraryFolder() / TEXT("AssetDatabase/MutationJournals"),
+            AssetPipelineLibraryFolder() / TEXT("AssetDatabase/Recovery"));
+        static bool databaseCommitBound = false;
+        if (!databaseCommitBound)
+        {
+            service.DatabaseCommitHook = [](const AssetMutationResult& pending)
+            {
+                return AssetDatabaseFacade::RefreshSources(pending.ChangedPaths);
+            };
+            databaseCommitBound = true;
+        }
         return service;
     }
+
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    typedef rapidjson_flax::Document AuthoredJsonDocument;
+    typedef rapidjson_flax::Value AuthoredJsonValue;
+
+    StringAnsi AuthoredGuidText(const Guid& id)
+    {
+        return StringAnsi(id.ToString(Guid::FormatType::N)).ToLower();
+    }
+
+    bool FailAuthoredSerialization(AssetPipelineDiagnostic& diagnostic, const StringView& message)
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.ProcessorId = TEXT("Flax.AuthoredDocument");
+        diagnostic.Message = message;
+        return true;
+    }
+
+    bool WriteAuthoredJson(const AuthoredJsonDocument& document, const Array<StringAnsi>& order,
+        StringAnsi& source, AssetPipelineDiagnostic& diagnostic)
+    {
+        CanonicalJsonError error;
+        if (CanonicalJsonWriter::Write(document, source, error, &order))
+            return FailAuthoredSerialization(diagnostic, error.Message);
+        return false;
+    }
+
+    StringAnsi EncodeAuthoredHex(const Span<byte>& bytes)
+    {
+        static const char digits[] = "0123456789abcdef";
+        StringAnsi result;
+        result.Resize(bytes.Length() * 2);
+        for (int32 i = 0; i < bytes.Length(); i++)
+        {
+            result[i * 2] = digits[bytes[i] >> 4];
+            result[i * 2 + 1] = digits[bytes[i] & 15];
+        }
+        return result;
+    }
+
+    bool WriteRuntimePayloadSource(const StringView& typeName, const Span<byte>& chunk, const Array<Guid>& references,
+        StringAnsi& source, AssetPipelineDiagnostic& diagnostic)
+    {
+        if (chunk.Length() == 0)
+            return FailAuthoredSerialization(diagnostic, TEXT("Authored runtime payload is empty."));
+        AuthoredJsonDocument document;
+        document.SetObject();
+        auto& allocator = document.GetAllocator();
+        const StringAnsi type(typeName);
+        const StringAnsi hex = EncodeAuthoredHex(chunk);
+        document.AddMember("documentVersion", 1, allocator);
+        document.AddMember("type", AuthoredJsonValue(type.Get(), type.Length(), allocator), allocator);
+        document.AddMember("payloadEncoding", AuthoredJsonValue("hex", allocator), allocator);
+        document.AddMember("runtimeChunk", AuthoredJsonValue(hex.Get(), hex.Length(), allocator), allocator);
+        Array<StringAnsi> sortedReferences;
+        for (const Guid& reference : references)
+        {
+            if (reference.IsValid())
+                sortedReferences.Add(AuthoredGuidText(reference));
+        }
+        if (sortedReferences.Count() > 1)
+        {
+            std::sort(sortedReferences.Get(), sortedReferences.Get() + sortedReferences.Count());
+            for (int32 i = sortedReferences.Count() - 1; i > 0; i--)
+            {
+                if (sortedReferences[i] == sortedReferences[i - 1])
+                    sortedReferences.RemoveAt(i);
+            }
+        }
+        AuthoredJsonValue referenceValues(rapidjson::kArrayType);
+        for (const StringAnsi& reference : sortedReferences)
+            referenceValues.PushBack(AuthoredJsonValue(reference.Get(), reference.Length(), allocator), allocator);
+        document.AddMember("references", referenceValues, allocator);
+        Array<StringAnsi> order;
+        order.Add("documentVersion");
+        order.Add("type");
+        order.Add("payloadEncoding");
+        order.Add("runtimeChunk");
+        order.Add("references");
+        return WriteAuthoredJson(document, order, source, diagnostic);
+    }
+
+    bool WriteSemanticAuthoredSource(AuthoredJsonDocument& document, const StringView& typeName,
+        StringAnsi& source, AssetPipelineDiagnostic& diagnostic)
+    {
+        Array<StringAnsi> order;
+        order.Add("documentVersion");
+        order.Add("type");
+        if (typeName == MaterialInstance::TypeName)
+        {
+            order.Add("baseMaterial");
+            order.Add("overrides");
+        }
+        else if (typeName == SkeletonMask::TypeName)
+        {
+            order.Add("skeleton");
+            order.Add("maskedNodes");
+        }
+        else if (typeName == SceneAnimation::TypeName)
+        {
+            order.Add("framesPerSecond");
+            order.Add("durationFrames");
+            order.Add("tracks");
+        }
+        else if (typeName == ParticleSystem::TypeName)
+        {
+            order.Add("framesPerSecond");
+            order.Add("durationFrames");
+            order.Add("tracks");
+            order.Add("parameterOverrides");
+        }
+        else if (typeName == CollisionData::TypeName)
+        {
+            order.Add("collisionType");
+            order.Add("sourceModel");
+            order.Add("modelLodIndex");
+            order.Add("materialSlotsMask");
+            order.Add("convexFlags");
+            order.Add("convexVertexLimit");
+        }
+        return WriteAuthoredJson(document, order, source, diagnostic);
+    }
+
+    bool DecodeMaterialInstanceSource(MaterialInstance* asset, AuthoredJsonDocument& document, String& error)
+    {
+        MemoryWriteStream stream(512);
+        const Guid baseMaterial = asset->GetBaseMaterial() ? asset->GetBaseMaterial()->GetID() : Guid::Empty;
+        stream.Write(baseMaterial);
+        asset->Params.Save(&stream);
+        return MaterialInstanceDocument::DecodeRuntime(ToSpan(stream), document, error);
+    }
+
+    void DecodeSkeletonMaskSource(SkeletonMask* asset, AuthoredJsonDocument& document)
+    {
+        document.SetObject();
+        auto& allocator = document.GetAllocator();
+        const StringAnsi type(SkeletonMask::TypeName);
+        const StringAnsi skeleton = AuthoredGuidText(asset->Skeleton.GetID());
+        document.AddMember("documentVersion", 1, allocator);
+        document.AddMember("type", AuthoredJsonValue(type.Get(), type.Length(), allocator), allocator);
+        document.AddMember("skeleton", AuthoredJsonValue(skeleton.Get(), skeleton.Length(), allocator), allocator);
+        Array<String> names = asset->GetMaskedNodes();
+        if (names.Count() > 1)
+            std::sort(names.Get(), names.Get() + names.Count());
+        AuthoredJsonValue nodes(rapidjson::kArrayType);
+        for (const String& name : names)
+        {
+            const StringAnsi value(name);
+            nodes.PushBack(AuthoredJsonValue(value.Get(), value.Length(), allocator), allocator);
+        }
+        document.AddMember("maskedNodes", nodes, allocator);
+    }
+
+    void SerializeAnimationChunk(Animation* asset, MemoryWriteStream& stream)
+    {
+        stream.Write(103);
+        stream.Write(asset->Data.Duration);
+        stream.Write(asset->Data.FramesPerSecond);
+        stream.Write(static_cast<byte>(asset->Data.RootMotionFlags));
+        stream.Write(asset->Data.RootNodeName, 13);
+        stream.WriteInt32(asset->Data.Channels.Count());
+        for (auto& animation : asset->Data.Channels)
+        {
+            stream.Write(animation.NodeName, 172);
+            Serialization::Serialize(stream, animation.Position);
+            Serialization::Serialize(stream, animation.Rotation);
+            Serialization::Serialize(stream, animation.Scale);
+        }
+        stream.WriteInt32(asset->Events.Count());
+        for (auto& eventTrack : asset->Events)
+        {
+            stream.Write(eventTrack.First, 172);
+            stream.Write(eventTrack.Second.GetKeyframes().Count());
+            for (const auto& keyframe : eventTrack.Second.GetKeyframes())
+            {
+                stream.Write(keyframe.Time);
+                stream.Write(keyframe.Value.Duration);
+                stream.Write(keyframe.Value.TypeName, 17);
+                stream.WriteJson(keyframe.Value.Instance);
+            }
+        }
+        stream.WriteInt32(asset->NestedAnims.Count());
+        for (auto& nestedTrack : asset->NestedAnims)
+        {
+            stream.Write(nestedTrack.First, 172);
+            auto& animation = nestedTrack.Second;
+            byte flags = 0;
+            if (animation.Enabled)
+                flags |= 1;
+            if (animation.Loop)
+                flags |= 2;
+            stream.Write(flags);
+            stream.Write(animation.Anim.GetID());
+            stream.Write(animation.Time);
+            stream.Write(animation.Duration);
+            stream.Write(animation.Speed);
+            stream.Write(animation.StartTime);
+        }
+    }
+
+    void SerializeGameplayGlobalsChunk(GameplayGlobals* asset, MemoryWriteStream& stream)
+    {
+        stream.Write(asset->Variables.Count());
+        Array<String> names;
+        names.EnsureCapacity(asset->Variables.Count());
+        for (const auto& entry : asset->Variables)
+            names.Add(entry.Key);
+        if (names.Count() > 1)
+            std::sort(names.Get(), names.Get() + names.Count());
+        for (const String& name : names)
+        {
+            const auto* variable = asset->Variables.TryGet(name);
+            stream.Write(name, 71);
+            stream.Write(variable->DefaultValue);
+        }
+    }
+#endif
 
     bool ReplaceMetadataTransactional(const StringView& sourcePath, const AssetMeta& meta, AssetPipelineDiagnostic& diagnostic)
     {
@@ -419,6 +655,8 @@ namespace
         const Array<AssetMount> mounts = AssetMountRegistry::GetMounts();
         for (const AssetMount& mount : mounts)
         {
+            if (ConfiguredAssetSystemVersion >= 3 && IsManifestBackedEngineContentMount(mount))
+                continue;
             if (!checkRoot(mount.PhysicalRoot))
                 return false;
         }
@@ -583,29 +821,6 @@ namespace
         SetDiagnostics(merged);
     }
 
-    // Sources that arrive without a sidecar are invisible to the database until one exists. A full
-    // Scan handles this through EnsureExistingJsonSidecars, so a scoped refresh must do the same.
-    void EnsureScopedJsonSidecars(HashSet<String>& keys, Array<String>& expanded)
-    {
-        const int32 count = expanded.Count();
-        for (int32 i = 0; i < count; i++)
-        {
-            const String path = expanded[i];
-            const String extension = FileSystem::GetExtension(path).ToLower();
-            if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json"))
-                continue;
-            const String metaPath = path + TEXT(".meta");
-            if (!FileSystem::FileExists(path) || FileSystem::FileExists(metaPath))
-                continue;
-            AssetMountResolution resolution;
-            AssetPipelineDiagnostic diagnostic;
-            if (AssetMountRegistry::Get().ResolvePhysical(path, resolution, diagnostic) || !resolution.Mount.Writable)
-                continue;
-            if (AssetDatabaseFacade::CreateExistingJsonMetadata(path).IsValid())
-                AddUniquePath(metaPath, keys, expanded);
-        }
-    }
-
     bool SnapshotIdentityChanged(const AssetDatabaseSnapshot& previous, const Array<AssetRecord>& merged)
     {
         if (previous.Records.Count() != merged.Count())
@@ -676,6 +891,7 @@ namespace
         AssetMeta Meta;
         AssetPipelineDiagnostic Diagnostic;
         CanonicalBatchBuildKind BuildKind = CanonicalBatchBuildKind::None;
+        bool AllowExistingStaging = false;
         bool Failed = false;
     };
 
@@ -691,14 +907,41 @@ namespace
 
     bool PrepareDefaultCanonicalMetadata(CanonicalBatchWork& work)
     {
-        if (!FileSystem::FileExists(work.SourcePath))
+        const bool isFolder = FileSystem::DirectoryExists(work.SourcePath);
+        if (!isFolder && !FileSystem::FileExists(work.SourcePath))
             return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::SourceMissing, TEXT("Canonical source does not exist."));
-        if (FileSystem::FileExists(work.StagingPath))
+        if (!work.AllowExistingStaging && FileSystem::FileExists(work.StagingPath))
             return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::PathCollision, TEXT("Canonical metadata staging path already exists."));
 
         const String extension = FileSystem::GetExtension(work.SourcePath).ToLower();
         AssetMeta& meta = work.Meta;
         meta.ID = Guid::New();
+        meta.FolderAsset = isFolder;
+        if (isFolder)
+        {
+            meta.AssetType = TEXT("FlaxEngine.Folder");
+            meta.SourceKind = AssetSourceKind::Folder;
+            meta.Processor.ID = TEXT("Flax.Folder");
+            meta.Processor.SettingsVersion = 1;
+            meta.Processor.SettingsJson = "{}\n";
+            return false;
+        }
+        if (JsonStorageProxy::IsValidExtension(extension))
+        {
+            Guid sourceHeaderID;
+            if (!JsonStorageProxy::GetAssetInfo(work.SourcePath, sourceHeaderID, meta.AssetType) ||
+                !sourceHeaderID.IsValid() || meta.AssetType.IsEmpty())
+            {
+                return FailCanonicalBatchWork(work, AssetPipelineDiagnosticCode::InvalidMeta,
+                    TEXT("Authored JSON source is missing a valid ID and TypeName header."));
+            }
+            meta.SourceKind = AssetSourceKind::ExistingJson;
+            meta.Processor.ID = TEXT("Flax.ExistingJson");
+            meta.Processor.SettingsVersion = 1;
+            meta.Processor.SettingsJson = "{}\n";
+            work.BuildKind = CanonicalBatchBuildKind::Imported;
+            return false;
+        }
         meta.SourceKind = AssetSourceKind::ImportedSource;
 
 #if COMPILE_WITH_TEXTURE_TOOL
@@ -751,10 +994,6 @@ namespace
             meta.Processor.ID = ModelProcessorSettings::ProcessorID();
             meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
             if (settings.ToJson(meta.Processor.SettingsJson, work.Diagnostic))
-                return true;
-            const String flaxSibling = String(StringUtils::GetDirectoryName(work.SourcePath)) /
-                String(StringUtils::GetFileNameWithoutExtension(work.SourcePath)) + TEXT(".flax");
-            if (FileSystem::FileExists(flaxSibling) && LegacyAssetMigrator::SeedModelSubAssets(flaxSibling, meta, work.Diagnostic))
                 return true;
             SubAssetReconcileResult reconciliation = SubAssetReconciler::Reconcile(meta, analysis.Candidates, true);
             if (reconciliation.RequiresUserReconciliation)
@@ -893,7 +1132,8 @@ namespace
             return false;
         if (JsonStorageProxy::IsValidExtension(extension))
         {
-            if (!JsonStorageProxy::GetAssetInfo(sourcePath, metadata.ID, metadata.AssetType) || !metadata.ID.IsValid() || metadata.AssetType.IsEmpty())
+            Guid sourceHeaderID;
+            if (!JsonStorageProxy::GetAssetInfo(sourcePath, sourceHeaderID, metadata.AssetType) || !sourceHeaderID.IsValid() || metadata.AssetType.IsEmpty())
             {
                 diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
                 diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
@@ -946,31 +1186,6 @@ namespace
         return false;
     }
 
-    void EnsureV3MetadataForRoot(const StringView& root, Array<AssetPipelineDiagnostic>& diagnostics)
-    {
-        Array<String> sources;
-        if (FileSystem::DirectoryGetFiles(sources, String(root), TEXT("*"), DirectorySearchOption::AllDirectories) ||
-            CollectSourceDirectories(root, sources))
-        {
-            AssetPipelineDiagnostic diagnostic;
-            diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
-            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
-            diagnostic.SourcePath = root;
-            diagnostic.Message = TEXT("Cannot enumerate the writable source root for metadata reconciliation.");
-            diagnostics.Add(MoveTemp(diagnostic));
-            return;
-        }
-        if (sources.Count() > 1)
-            std::sort(sources.Get(), sources.Get() + sources.Count());
-        for (const String& source : sources)
-        {
-            if (IsMetaPath(source) || IsV3MetadataExcluded(source))
-                continue;
-            AssetPipelineDiagnostic diagnostic;
-            if (EnsureDefaultCanonicalMetadata(source, diagnostic))
-                diagnostics.Add(MoveTemp(diagnostic));
-        }
-    }
 #endif
 
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
@@ -1099,6 +1314,11 @@ namespace
 uint64 AssetDatabaseFacade::GetRevision()
 {
     return AssetDatabase::Get().GetRevision();
+}
+
+void AssetDatabaseFacade::SetMutationDecisionHook(AssetMutationDecisionHook&& hook)
+{
+    GetMutationService().DecisionHook = MoveTemp(hook);
 }
 
 int32 AssetDatabaseFacade::GetDesiredWorkerCount()
@@ -1455,7 +1675,7 @@ bool AssetDatabaseFacade::RegisterCustomDependency(const StringView& name, const
 {
 #if USE_EDITOR
     AssetPipelineDiagnostic diagnostic;
-    if (AssetDatabaseStorage::RegisterCustomDependency(Globals::ProjectLibraryFolder, name, hash, diagnostic))
+    if (AssetDatabaseStorage::RegisterCustomDependency(AssetPipelineLibraryFolder(), name, hash, diagnostic))
     {
         Array<AssetPipelineDiagnostic> diagnostics;
         diagnostics.Add(MoveTemp(diagnostic));
@@ -1472,7 +1692,7 @@ bool AssetDatabaseFacade::UnregisterCustomDependencyPrefix(const StringView& pre
 {
 #if USE_EDITOR
     AssetPipelineDiagnostic diagnostic;
-    if (AssetDatabaseStorage::UnregisterCustomDependencyPrefix(Globals::ProjectLibraryFolder, prefix, diagnostic))
+    if (AssetDatabaseStorage::UnregisterCustomDependencyPrefix(AssetPipelineLibraryFolder(), prefix, diagnostic))
     {
         Array<AssetPipelineDiagnostic> diagnostics;
         diagnostics.Add(MoveTemp(diagnostic));
@@ -1496,12 +1716,13 @@ AssetMutationResultInfo AssetDatabaseFacade::MoveAssetPair(const StringView& sou
 {
     AssetMutationResult result;
     GetMutationService().Move(sourcePath, destinationPath, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The source pair moved, but database reconciliation failed; run a full Refresh before retrying.");
-    }
+    return ToInfo(result);
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::MoveAssetPairs(const Array<String>& sourcePaths, const Array<String>& destinationPaths)
+{
+    AssetMutationResult result;
+    GetMutationService().MoveBatch(sourcePaths, destinationPaths, result);
     return ToInfo(result);
 }
 
@@ -1509,12 +1730,13 @@ AssetMutationResultInfo AssetDatabaseFacade::CopyAssetPair(const StringView& sou
 {
     AssetMutationResult result;
     GetMutationService().Copy(sourcePath, destinationPath, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The source pair copied, but database reconciliation failed; run a full Refresh before retrying.");
-    }
+    return ToInfo(result);
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::CopyAssetPairs(const Array<String>& sourcePaths, const Array<String>& destinationPaths)
+{
+    AssetMutationResult result;
+    GetMutationService().CopyBatch(sourcePaths, destinationPaths, result);
     return ToInfo(result);
 }
 
@@ -1522,12 +1744,13 @@ AssetMutationResultInfo AssetDatabaseFacade::DeleteAssetPairToRecovery(const Str
 {
     AssetMutationResult result;
     GetMutationService().DeleteToRecovery(sourcePath, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The source pair entered recovery storage, but database reconciliation failed; run a full Refresh before retrying.");
-    }
+    return ToInfo(result);
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::DeleteAssetPairsToRecovery(const Array<String>& sourcePaths)
+{
+    AssetMutationResult result;
+    GetMutationService().DeleteToRecoveryBatch(sourcePaths, result);
     return ToInfo(result);
 }
 
@@ -1535,12 +1758,6 @@ AssetMutationResultInfo AssetDatabaseFacade::CreateAssetFolder(const StringView&
 {
     AssetMutationResult result;
     GetMutationService().CreateFolder(path, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The folder pair was created, but database reconciliation failed; run a full Refresh before retrying.");
-    }
     return ToInfo(result);
 }
 
@@ -1559,12 +1776,6 @@ AssetMutationResultInfo AssetDatabaseFacade::PublishExternalSource(const StringV
     meta.Processor.SettingsJson = "{}\n";
     AssetMutationResult result;
     GetMutationService().PublishExternal(externalSourcePath, destinationPath, meta, replaceExisting, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The external source pair was published, but database reconciliation failed; run a full Refresh.");
-    }
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (result.Succeeded && processorId != TEXT("Flax.Unsupported") && GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
     {
@@ -1580,9 +1791,15 @@ AssetMutationResultInfo AssetDatabaseFacade::PublishExternalSource(const StringV
 
 AssetMutationResultInfo AssetDatabaseFacade::RegisterCanonicalSource(const StringView& sourcePath, bool replaceExistingMetadata)
 {
+#if !USE_EDITOR
+    AssetMutationResult result;
+    result.Message = TEXT("Canonical source registration is editor-only.");
+    return ToInfo(result);
+#else
     CanonicalBatchWork work;
     work.SourcePath = sourcePath;
     work.StagingPath = String(sourcePath) + TEXT(".meta");
+    work.AllowExistingStaging = replaceExistingMetadata;
     AssetMutationResult result;
     if (PrepareDefaultCanonicalMetadata(work))
     {
@@ -1593,12 +1810,6 @@ AssetMutationResultInfo AssetDatabaseFacade::RegisterCanonicalSource(const Strin
         return ToInfo(result);
     }
     GetMutationService().RegisterExisting(sourcePath, work.Meta, replaceExistingMetadata, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The canonical source was registered, but database reconciliation failed; run a full Refresh.");
-    }
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (result.Succeeded)
     {
@@ -1633,18 +1844,20 @@ AssetMutationResultInfo AssetDatabaseFacade::RegisterCanonicalSource(const Strin
     }
 #endif
     return ToInfo(result);
+#endif
 }
 
 AssetMutationResultInfo AssetDatabaseFacade::RecoverAssetPair(const StringView& recoveryPath, const StringView& destinationPath)
 {
     AssetMutationResult result;
     GetMutationService().Recover(recoveryPath, destinationPath, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The source pair was restored, but database reconciliation failed; run a full Refresh before retrying.");
-    }
+    return ToInfo(result);
+}
+
+AssetMutationResultInfo AssetDatabaseFacade::RecoverAssetPairs(const Array<String>& recoveryPaths, const Array<String>& destinationPaths)
+{
+    AssetMutationResult result;
+    GetMutationService().RecoverBatch(recoveryPaths, destinationPaths, result);
     return ToInfo(result);
 }
 
@@ -1753,9 +1966,7 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
     }
     const int32 assetSystemVersion = ConfiguredAssetSystemVersion;
     AssetDatabase::Get().SetHardCutEnabled(assetSystemVersion >= 3);
-    if (assetSystemVersion >= 3)
-        EnsureV3MetadataForRoot(Globals::ProjectContentFolder, metadataDiagnostics);
-    else
+    if (assetSystemVersion < 3)
         EnsureExistingJsonSidecars();
     AssetDatabaseScanOptions options;
     options.AssetSystemVersion = assetSystemVersion;
@@ -1892,26 +2103,6 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
         return Scan(true);
     const int32 assetSystemVersion = ConfiguredAssetSystemVersion;
     AssetDatabase::Get().SetHardCutEnabled(assetSystemVersion >= 3);
-    if (assetSystemVersion >= 3)
-    {
-        for (const String& requestedPath : paths)
-        {
-            String sourcePath = NormalizeAbsolutePath(requestedPath);
-            if (IsMetaPath(sourcePath))
-                sourcePath = sourcePath.Left(sourcePath.Length() - 5);
-            AssetMountResolution resolution;
-            AssetPipelineDiagnostic mountDiagnostic;
-            if (AssetMountRegistry::Get().ResolvePhysical(sourcePath, resolution, mountDiagnostic) ||
-                !resolution.Mount.Writable || IsV3MetadataExcluded(sourcePath))
-                continue;
-            if (FileSystem::DirectoryExists(sourcePath))
-                EnsureV3MetadataForRoot(sourcePath, metadataDiagnostics);
-            AssetPipelineDiagnostic diagnostic;
-            if (EnsureDefaultCanonicalMetadata(sourcePath, diagnostic))
-                metadataDiagnostics.Add(MoveTemp(diagnostic));
-        }
-    }
-
     const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
     HashSet<String> affectedKeys;
     Array<String> expanded;
@@ -1962,8 +2153,6 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
             AddUniquePath(record.MetaPath.Get(), affectedKeys, expanded);
     }
 
-    EnsureScopedJsonSidecars(affectedKeys, expanded);
-
     const Array<AssetMount> mounts = AssetMountRegistry::GetMounts();
     Array<Array<String>> mountFiles;
     mountFiles.Resize(mounts.Count());
@@ -1971,9 +2160,13 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     {
         if (!FileSystem::FileExists(path) && !FileSystem::DirectoryExists(path))
             continue;
+        AssetMountResolution resolution;
+        AssetPipelineDiagnostic resolutionDiagnostic;
+        if (AssetMountRegistry::Get().ResolvePhysical(path, resolution, resolutionDiagnostic))
+            continue;
         for (int32 mountIndex = 0; mountIndex < mounts.Count(); mountIndex++)
         {
-            if (AssetPathPolicy::IsSameOrChild(path, mounts[mountIndex].PhysicalRoot))
+            if (mounts[mountIndex].MountId == resolution.Mount.MountId)
             {
                 mountFiles[mountIndex].Add(path);
                 break;
@@ -2040,8 +2233,7 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     }
     nextStates.Add(result.FileStates);
     LastFileStates = MoveTemp(nextStates);
-    PersistSnapshot();
-    return false;
+    return PersistSnapshot();
 #else
     return true;
 #endif
@@ -2416,6 +2608,9 @@ bool AssetDatabaseFacade::PublishDefaultCanonicalMetadataBatch(const Array<Guid>
 #if COMPILE_WITH_TEXTURE_TOOL
 Guid AssetDatabaseFacade::CreateTextureMetadata(const StringView& sourcePath, const TextureTool::Options& options)
 {
+#if !USE_EDITOR
+    return Guid::Empty;
+#else
     const String metaPath = String(sourcePath) + TEXT(".meta");
     AssetPipelineDiagnostic diagnostic;
     if (!FileSystem::FileExists(sourcePath) || FileSystem::FileExists(metaPath))
@@ -2471,6 +2666,7 @@ Guid AssetDatabaseFacade::CreateTextureMetadata(const StringView& sourcePath, co
     }
 #endif
     return meta.ID;
+#endif
 }
 
 AssetMutationResultInfo AssetDatabaseFacade::PublishExternalTexture(const StringView& externalSourcePath,
@@ -2511,12 +2707,6 @@ AssetMutationResultInfo AssetDatabaseFacade::PublishExternalTexture(const String
         return ToInfo(result);
     }
     GetMutationService().PublishExternal(externalSourcePath, destinationPath, meta, replaceExisting, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The texture source pair was published, but database reconciliation failed; run a full Refresh.");
-    }
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (result.Succeeded && TexturePipelineService::RequestBuild(meta.ID, false, diagnostic))
     {
@@ -2941,8 +3131,6 @@ Guid AssetDatabaseFacade::CreateGraphDocumentFromSurface(const StringView& outpu
         diagnostic.Message = mutation.Message;
         return fail();
     }
-    if (RefreshSources(mutation.ChangedPaths))
-        return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
     if (GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
         return fail();
@@ -2961,85 +3149,118 @@ Guid AssetDatabaseFacade::CreateAuthoredDocument(const StringView& outputPath, c
         return Guid::Empty;
     };
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
-    CreateAssetFunction callback;
-    if (typeName == TEXT("FlaxEngine.MaterialInstance"))
-        callback.Bind(&CreateMaterialInstance::Create);
-    else if (typeName == TEXT("FlaxEngine.SkeletonMask"))
-        callback.Bind(&CreateSkeletonMask::Create);
-    else if (typeName == TEXT("FlaxEngine.SceneAnimation"))
-        callback.Bind(&CreateSceneAnimation::Create);
-    else if (typeName == TEXT("FlaxEngine.ParticleSystem"))
-        callback.Bind(&CreateParticleSystem::Create);
-    else if (typeName == TEXT("FlaxEngine.CollisionData"))
-        callback.Bind(&CreateCollisionData::Create);
+    String processorID;
+    if (typeName == MaterialInstance::TypeName)
+        processorID = TEXT("Flax.MaterialInstance");
+    else if (typeName == SkeletonMask::TypeName)
+        processorID = TEXT("Flax.SkeletonMask");
+    else if (typeName == SceneAnimation::TypeName)
+        processorID = TEXT("Flax.SceneAnimation");
+    else if (typeName == ParticleSystem::TypeName)
+        processorID = TEXT("Flax.ParticleSystem");
+    else if (typeName == CollisionData::TypeName)
+        processorID = TEXT("Flax.CollisionData");
     else if (typeName == Animation::TypeName)
-        callback.Bind(&CreateAnimation::Create);
-    const bool createGameplayGlobals = typeName == GameplayGlobals::TypeName;
-    if ((!callback.IsBinded() && !createGameplayGlobals) || outputPath.IsEmpty())
+        processorID = TEXT("Flax.Animation");
+    else if (typeName == GameplayGlobals::TypeName)
+        processorID = TEXT("Flax.GameplayGlobals");
+    if (processorID.IsEmpty() || outputPath.IsEmpty())
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
         diagnostic.Message = TEXT("Authored document type or path is invalid.");
         return fail();
     }
-    const Guid id = Guid::New();
-    const String temporaryFolder = Globals::ProjectLibraryFolder / TEXT("Temp/AuthoredCreates");
-    if (FileSystem::CreateDirectory(temporaryFolder))
+
+    StringAnsi source;
+    AuthoredJsonDocument document;
+    String error;
+    bool serializeFailed = false;
+    if (typeName == MaterialInstance::TypeName)
     {
-        diagnostic.Code = AssetPipelineDiagnosticCode::LibraryCreationFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-        diagnostic.Message = TEXT("Cannot create the temporary authored-document folder.");
-        return fail();
+        MemoryWriteStream stream(64);
+        stream.Write(Guid::Empty);
+        MaterialParams::Save(&stream, nullptr);
+        serializeFailed = MaterialInstanceDocument::DecodeRuntime(ToSpan(stream), document, error);
     }
-    const String tempPath = temporaryFolder / id.ToString(Guid::FormatType::N) + TEXT(".flax");
-    const String convertedPath = temporaryFolder / id.ToString(Guid::FormatType::N) + TEXT(".source");
-    const String convertedMetaPath = convertedPath + TEXT(".meta");
-    SCOPE_EXIT
+    else if (typeName == SkeletonMask::TypeName)
     {
-        FileSystem::DeleteFile(tempPath);
-        FileSystem::DeleteFile(convertedPath);
-        FileSystem::DeleteFile(convertedMetaPath);
-    };
-    bool starterFailed;
-    if (createGameplayGlobals)
+        document.SetObject();
+        auto& allocator = document.GetAllocator();
+        const StringAnsi type(typeName);
+        const StringAnsi skeleton = AuthoredGuidText(Guid::Empty);
+        document.AddMember("documentVersion", 1, allocator);
+        document.AddMember("type", AuthoredJsonValue(type.Get(), type.Length(), allocator), allocator);
+        document.AddMember("skeleton", AuthoredJsonValue(skeleton.Get(), skeleton.Length(), allocator), allocator);
+        document.AddMember("maskedNodes", AuthoredJsonValue(rapidjson::kArrayType), allocator);
+    }
+    else if (typeName == SceneAnimation::TypeName)
     {
-        MemoryWriteStream stream(16);
-        stream.Write(0);
-        FlaxChunk chunk;
-        chunk.Data.Copy(ToSpan(stream));
-        AssetInitData data;
-        data.Header.ID = id;
-        data.Header.TypeName = GameplayGlobals::TypeName;
-        data.SerializedVersion = GameplayGlobals::SerializedVersion;
-        data.Header.Chunks[0] = &chunk;
-        starterFailed = FlaxStorage::Create(tempPath, data);
+        MemoryWriteStream stream(64);
+        stream.WriteInt32(4);
+        stream.WriteFloat(60.0f);
+        stream.WriteInt32(5 * 60);
+        stream.WriteInt32(0);
+        serializeFailed = SceneAnimationDocument::DecodeRuntime(ToSpan(stream), document, error);
+    }
+    else if (typeName == ParticleSystem::TypeName)
+    {
+        MemoryWriteStream stream(64);
+        stream.WriteInt32(4);
+        stream.WriteFloat(60.0f);
+        stream.WriteInt32(5 * 60);
+        stream.WriteInt32(0);
+        stream.WriteInt32(0);
+        stream.WriteInt32(0);
+        serializeFailed = ParticleSystemDocument::DecodeRuntime(ToSpan(stream), document, error);
+    }
+    else if (typeName == CollisionData::TypeName)
+    {
+        CollisionData::SerializedOptions options;
+        Platform::MemoryClear(&options, sizeof(options));
+        options.MaterialSlotsMask = MAX_uint32;
+        options.ConvexVertexLimit = 255;
+        serializeFailed = CollisionDataDocument::DecodeRuntime(options, document, error);
     }
     else
     {
-        CreateAssetContext importerContext(StringView::Empty, tempPath, id, nullptr, true, typeName);
-        starterFailed = importerContext.Run(callback) != CreateAssetResult::Ok;
+        MemoryWriteStream stream(256);
+        if (typeName == Animation::TypeName)
+        {
+            stream.Write(103);
+            stream.Write(5 * 60.0);
+            stream.Write(60.0);
+            stream.Write(static_cast<byte>(0));
+            stream.Write(StringView::Empty, 13);
+            stream.WriteInt32(0);
+            stream.WriteInt32(0);
+            stream.WriteInt32(0);
+        }
+        else
+        {
+            stream.WriteInt32(0);
+        }
+        Array<Guid> references;
+        serializeFailed = WriteRuntimePayloadSource(typeName, ToSpan(stream), references, source, diagnostic);
     }
-    if (starterFailed)
+    if (serializeFailed)
     {
-        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
-        diagnostic.Message = TEXT("Authored starter flax could not be created.");
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            FailAuthoredSerialization(diagnostic, error);
         return fail();
     }
-    if (LegacyAssetMigrator::ConvertFlax(tempPath, convertedPath, id, typeName, diagnostic))
+    if (source.IsEmpty() && WriteSemanticAuthoredSource(document, typeName, source, diagnostic))
         return fail();
-    Array<byte> sourceBytes;
+
     AssetMeta metadata;
-    if (File::ReadAllBytes(convertedPath, sourceBytes) || AssetMeta::Load(convertedMetaPath, metadata, diagnostic))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
-        diagnostic.Message = TEXT("Converted authored starter source or metadata could not be staged.");
-        return fail();
-    }
+    metadata.ID = Guid::New();
+    metadata.AssetType = typeName;
+    metadata.SourceKind = AssetSourceKind::TextDocument;
+    metadata.Processor.ID = processorID;
+    metadata.Processor.SettingsVersion = 1;
+    metadata.Processor.SettingsJson = "{}\n";
     AssetMutationResult mutation;
-    if (GetMutationService().CreateAsset(outputPath,
-            StringAnsiView(reinterpret_cast<const char*>(sourceBytes.Get()), sourceBytes.Count()), metadata, mutation))
+    if (GetMutationService().CreateAsset(outputPath, StringAnsiView(source.Get(), source.Length()), metadata, mutation))
     {
         diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
@@ -3048,7 +3269,7 @@ Guid AssetDatabaseFacade::CreateAuthoredDocument(const StringView& outputPath, c
         diagnostic.Message = mutation.Message;
         return fail();
     }
-    if (RefreshSources(mutation.ChangedPaths) || GraphPipelineService::RequestBuild(metadata.ID, true, diagnostic))
+    if (GraphPipelineService::RequestBuild(metadata.ID, true, diagnostic))
         return fail();
     return metadata.ID;
 #else
@@ -3084,37 +3305,21 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
         return fail();
     }
 
-    const String temporaryFolder = Globals::ProjectLibraryFolder / TEXT("Temp/AuthoredSaves");
-    if (FileSystem::CreateDirectory(temporaryFolder))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::LibraryCreationFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-        diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.Message = TEXT("Cannot create the temporary authored-document save folder.");
-        return fail();
-    }
-    const String token = Guid::New().ToString(Guid::FormatType::N);
-    const String temporaryFlax = temporaryFolder / token + TEXT(".flax");
-    const String stagedDocument = temporaryFolder / token + TEXT(".source");
-    const String stagedMeta = stagedDocument + TEXT(".meta");
-    SCOPE_EXIT
-    {
-        ContentStorageManager::EnsureAccess(temporaryFlax);
-        FileSystem::DeleteFile(temporaryFlax);
-        FileSystem::DeleteFile(stagedDocument);
-        FileSystem::DeleteFile(stagedMeta);
-    };
-
-    bool saveFailed = true;
+    StringAnsi source;
+    AuthoredJsonDocument document;
+    String error;
+    bool serializeFailed = false;
     if (record.TypeName == MaterialInstance::TypeName)
     {
         auto* typed = ScriptingObject::Cast<MaterialInstance>(asset);
-        saveFailed = !typed || typed->Save(temporaryFlax);
+        serializeFailed = !typed || DecodeMaterialInstanceSource(typed, document, error);
     }
     else if (record.TypeName == SkeletonMask::TypeName)
     {
         auto* typed = ScriptingObject::Cast<SkeletonMask>(asset);
-        saveFailed = !typed || typed->Save(temporaryFlax);
+        serializeFailed = !typed;
+        if (typed)
+            DecodeSkeletonMaskSource(typed, document);
     }
     else if (record.TypeName == SceneAnimation::TypeName)
     {
@@ -3122,15 +3327,11 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
         if (typed)
         {
             const BytesContainer& timeline = typed->LoadTimeline();
-            FlaxChunk chunk;
-            chunk.Data.Copy(timeline.Get(), timeline.Length());
-            AssetInitData data;
-            data.Header.ID = canonicalAssetID;
-            data.Header.TypeName = SceneAnimation::TypeName;
-            data.SerializedVersion = SceneAnimation::SerializedVersion;
-            data.Header.Chunks[0] = &chunk;
-            saveFailed = FlaxStorage::Create(temporaryFlax, data);
+            serializeFailed = timeline.IsInvalid() || SceneAnimationDocument::DecodeRuntime(
+                Span<byte>(timeline.Get(), timeline.Length()), document, error);
         }
+        else
+            serializeFailed = true;
     }
     else if (record.TypeName == ParticleSystem::TypeName)
     {
@@ -3138,38 +3339,48 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
         if (typed)
         {
             const BytesContainer timeline = typed->LoadTimeline();
-            FlaxChunk chunk;
-            chunk.Data.Copy(timeline.Get(), timeline.Length());
-            AssetInitData data;
-            data.Header.ID = canonicalAssetID;
-            data.Header.TypeName = ParticleSystem::TypeName;
-            data.SerializedVersion = ParticleSystem::SerializedVersion;
-            data.Header.Chunks[0] = &chunk;
-            saveFailed = FlaxStorage::Create(temporaryFlax, data);
+            serializeFailed = timeline.IsInvalid() || ParticleSystemDocument::DecodeRuntime(
+                Span<byte>(timeline.Get(), timeline.Length()), document, error);
         }
+        else
+            serializeFailed = true;
     }
     else if (record.TypeName == Animation::TypeName)
     {
         auto* typed = ScriptingObject::Cast<Animation>(asset);
-        saveFailed = !typed || typed->Save(temporaryFlax);
+        serializeFailed = !typed;
+        if (typed)
+        {
+            MemoryWriteStream stream(4096);
+            SerializeAnimationChunk(typed, stream);
+            Array<Guid> references;
+            Array<String> referencedFiles;
+            typed->GetReferences(references, referencedFiles);
+            serializeFailed = WriteRuntimePayloadSource(record.TypeName, ToSpan(stream), references, source, diagnostic);
+        }
     }
     else if (record.TypeName == GameplayGlobals::TypeName)
     {
         auto* typed = ScriptingObject::Cast<GameplayGlobals>(asset);
-        saveFailed = !typed || typed->Save(temporaryFlax);
+        serializeFailed = !typed;
+        if (typed)
+        {
+            MemoryWriteStream stream(1024);
+            SerializeGameplayGlobalsChunk(typed, stream);
+            Array<Guid> references;
+            Array<String> referencedFiles;
+            typed->GetReferences(references, referencedFiles);
+            serializeFailed = WriteRuntimePayloadSource(record.TypeName, ToSpan(stream), references, source, diagnostic);
+        }
     }
-    if (saveFailed)
+    if (serializeFailed)
     {
-        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            FailAuthoredSerialization(diagnostic, error.HasChars() ? StringView(error) : TEXT("The edited asset could not be serialized as a canonical source document."));
         diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.Message = TEXT("The edited asset could not be serialized for canonical document conversion.");
         return fail();
     }
-    Array<Guid> references;
-    Array<String> referencedFiles;
-    asset->GetReferences(references, referencedFiles);
-    if (LegacyAssetMigrator::ConvertFlax(temporaryFlax, stagedDocument, canonicalAssetID, record.TypeName, diagnostic, &references))
+    if (source.IsEmpty() && WriteSemanticAuthoredSource(document, record.TypeName, source, diagnostic))
         return fail();
     if (FileSystem::FileExists(record.SourcePath.Get()) && FileSystem::IsReadOnly(record.SourcePath.Get()))
     {
@@ -3180,19 +3391,8 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
         diagnostic.Message = TEXT("The canonical authored document is read-only.");
         return fail();
     }
-    Array<byte> sourceBytes;
-    if (File::ReadAllBytes(stagedDocument, sourceBytes))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-        diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.SourcePath = stagedDocument;
-        diagnostic.Message = TEXT("Converted authored document could not be read from Library staging.");
-        return fail();
-    }
     AssetMutationResult mutation;
-    if (GetMutationService().ReplaceContents(record.SourcePath.Get(),
-            StringAnsiView(reinterpret_cast<const char*>(sourceBytes.Get()), sourceBytes.Count()), mutation))
+    if (GetMutationService().ReplaceContents(record.SourcePath.Get(), StringAnsiView(source.Get(), source.Length()), mutation))
     {
         diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
@@ -3201,7 +3401,7 @@ bool AssetDatabaseFacade::SaveAuthoredDocument(BinaryAsset* asset, const Guid& c
         diagnostic.Message = mutation.Message;
         return fail();
     }
-    if (RefreshSources(mutation.ChangedPaths) || GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
+    if (GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
         return fail();
     return false;
 #else
@@ -3326,8 +3526,23 @@ bool AssetDatabaseFacade::SaveCollisionDataDocument(const StringView& path, Coll
     order.Add("materialSlotsMask");
     order.Add("convexFlags");
     order.Add("convexVertexLimit");
-    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || RefreshPath(path))
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = jsonError.Message;
         return fail();
+    }
+    AssetMutationResult mutation;
+    if (GetMutationService().ReplaceContents(path, StringAnsiView(text.Get(), text.Length()), mutation))
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = mutation.Message;
+        return fail();
+    }
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.CollisionData"))
         return fail();
@@ -3369,8 +3584,23 @@ bool AssetDatabaseFacade::SaveParticleSystemTimeline(const StringView& path, con
     order.Add("durationFrames");
     order.Add("tracks");
     order.Add("parameterOverrides");
-    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || RefreshPath(path))
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = jsonError.Message;
         return fail();
+    }
+    AssetMutationResult mutation;
+    if (GetMutationService().ReplaceContents(path, StringAnsiView(text.Get(), text.Length()), mutation))
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = mutation.Message;
+        return fail();
+    }
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.ParticleSystem"))
         return fail();
@@ -3393,6 +3623,9 @@ bool AssetDatabaseFacade::LoadCollisionDataDocument(const StringView& path, Coll
 
 Guid AssetDatabaseFacade::CreateImportedSourceMetadata(const StringView& sourcePath, const StringView& typeName, const StringView& processorId)
 {
+#if !USE_EDITOR
+    return Guid::Empty;
+#else
     const String metaPath = String(sourcePath) + TEXT(".meta");
     AssetPipelineDiagnostic diagnostic;
     if (!FileSystem::FileExists(sourcePath) || FileSystem::FileExists(metaPath) || typeName.IsEmpty() || processorId.IsEmpty())
@@ -3430,6 +3663,7 @@ Guid AssetDatabaseFacade::CreateImportedSourceMetadata(const StringView& sourceP
     }
 #endif
     return meta.ID;
+#endif
 }
 
 #if COMPILE_WITH_AUDIO_TOOL && USE_EDITOR
@@ -3498,12 +3732,6 @@ AssetMutationResultInfo AssetDatabaseFacade::PublishExternalAudio(const StringVi
     meta.Processor.SettingsJson = StringAnsi(settingsBuffer.GetString(), static_cast<int32>(settingsBuffer.GetSize()));
     AssetMutationResult result;
     GetMutationService().PublishExternal(externalSourcePath, destinationPath, meta, replaceExisting, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The audio source pair was published, but database reconciliation failed; run a full Refresh.");
-    }
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (result.Succeeded && GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
     {
@@ -3603,10 +3831,6 @@ namespace
         meta.Processor.SettingsVersion = ModelProcessorSettings::CurrentVersion;
         if (settings.ToJson(meta.Processor.SettingsJson, diagnostic))
             return fail();
-        const String flaxSibling = String(StringUtils::GetDirectoryName(sourcePath)) / String(StringUtils::GetFileNameWithoutExtension(sourcePath)) + TEXT(".flax");
-        if (FileSystem::FileExists(flaxSibling) && LegacyAssetMigrator::SeedModelSubAssets(flaxSibling, meta, diagnostic))
-            return fail();
-
         SubAssetReconcileResult reconciliation = SubAssetReconciler::Reconcile(meta, analysis.Candidates, true);
         if (reconciliation.RequiresUserReconciliation)
         {
@@ -3676,13 +3900,6 @@ AssetMutationResultInfo AssetDatabaseFacade::PublishExternalModel(const StringVi
         result.Message = diagnostic.Message;
         return ToInfo(result);
     }
-    const String flaxSibling = String(StringUtils::GetDirectoryName(externalSourcePath)) /
-        String(StringUtils::GetFileNameWithoutExtension(externalSourcePath)) + TEXT(".flax");
-    if (FileSystem::FileExists(flaxSibling) && LegacyAssetMigrator::SeedModelSubAssets(flaxSibling, meta, diagnostic))
-    {
-        result.Message = diagnostic.Message;
-        return ToInfo(result);
-    }
     SubAssetReconcileResult reconciliation = SubAssetReconciler::Reconcile(meta, analysis.Candidates, true);
     if (reconciliation.RequiresUserReconciliation)
     {
@@ -3697,12 +3914,6 @@ AssetMutationResultInfo AssetDatabaseFacade::PublishExternalModel(const StringVi
     }
     meta.SubAssets = MoveTemp(reconciliation.Resolved);
     GetMutationService().PublishExternal(externalSourcePath, destinationPath, meta, replaceExisting, result);
-    if (result.Succeeded && RefreshSources(result.ChangedPaths))
-    {
-        result.Succeeded = false;
-        result.RequiresRecovery = true;
-        result.Message = TEXT("The model source pair was published, but database reconciliation failed; run a full Refresh.");
-    }
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (result.Succeeded && ModelPipelineService::RequestBuild(meta.ID, false, diagnostic))
     {
@@ -3870,8 +4081,6 @@ bool AssetDatabaseFacade::SaveGraphSurface(const StringView& path, const BytesCo
         diagnostic.Message = mutation.Message;
         return fail();
     }
-    if (RefreshSources(mutation.ChangedPaths))
-        return fail();
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
     AssetMeta meta;
     if (!AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) && GraphPipelineService::RequestBuild(meta.ID, false, diagnostic))
@@ -3892,6 +4101,55 @@ bool AssetDatabaseFacade::BuildGraph(const Guid& assetID)
         return true;
     }
     return false;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::BuildAsset(const Guid& assetID)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    AssetPipelineDiagnostic diagnostic;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(assetID, record))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = assetID;
+        diagnostic.Message = TEXT("Canonical asset is not registered.");
+    }
+#if COMPILE_WITH_TEXTURE_TOOL
+    else if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+    {
+        if (!TexturePipelineService::RequestBuild(assetID, false, diagnostic))
+            return false;
+    }
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+    else if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
+    {
+        if (!ModelPipelineService::RequestBuild(assetID, false, diagnostic))
+            return false;
+    }
+#endif
+    else if (GraphPipelineService::OwnsProcessor(record.ProcessorID))
+    {
+        if (!GraphPipelineService::RequestBuild(assetID, false, diagnostic))
+            return false;
+    }
+    else
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = assetID;
+        diagnostic.SourcePath = record.SourcePath.Get();
+        diagnostic.ProcessorId = record.ProcessorID;
+        diagnostic.Message = TEXT("Canonical asset has no supported build pipeline.");
+    }
+    Array<AssetPipelineDiagnostic> diagnostics;
+    diagnostics.Add(diagnostic);
+    SetDiagnostics(diagnostics);
+    return true;
 #else
     return true;
 #endif
@@ -4141,6 +4399,9 @@ bool AssetDatabaseFacade::RollbackLegacyImportedMigration(const StringView& lega
 
 Guid AssetDatabaseFacade::CreateExistingJsonMetadata(const StringView& sourcePath)
 {
+#if !USE_EDITOR
+    return Guid::Empty;
+#else
     AssetPipelineDiagnostic diagnostic;
     auto fail = [&diagnostic]()
     {
@@ -4149,9 +4410,9 @@ Guid AssetDatabaseFacade::CreateExistingJsonMetadata(const StringView& sourcePat
         SetDiagnostics(diagnostics);
         return Guid::Empty;
     };
-    Guid id;
+    Guid sourceHeaderID;
     String typeName;
-    if (!JsonStorageProxy::GetAssetInfo(sourcePath, id, typeName) || !id.IsValid() || typeName.IsEmpty())
+    if (!JsonStorageProxy::GetAssetInfo(sourcePath, sourceHeaderID, typeName) || !sourceHeaderID.IsValid() || typeName.IsEmpty())
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
         diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
@@ -4160,7 +4421,7 @@ Guid AssetDatabaseFacade::CreateExistingJsonMetadata(const StringView& sourcePat
         return fail();
     }
     AssetMeta meta;
-    meta.ID = id;
+    meta.ID = Guid::New();
     meta.AssetType = typeName;
     meta.SourceKind = AssetSourceKind::ExistingJson;
     meta.Processor.ID = TEXT("Flax.ExistingJson");
@@ -4169,6 +4430,7 @@ Guid AssetDatabaseFacade::CreateExistingJsonMetadata(const StringView& sourcePat
     if (RegisterExistingMetadata(sourcePath, meta, false, diagnostic))
         return fail();
     return meta.ID;
+#endif
 }
 
 bool AssetDatabaseFacade::SaveExistingJsonSource(const StringView& sourcePath, const StringAnsiView& sourceContents,
@@ -4242,17 +4504,35 @@ bool AssetDatabaseFacade::SaveExistingJsonSource(const StringView& sourcePath, c
         diagnostic.Message = mutation.Message;
         return fail();
     }
-    if (RefreshSources(mutation.ChangedPaths))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::RecoveryRequired;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
-        diagnostic.SourcePath = sourcePath;
-        diagnostic.AssetGuid = sourceID;
-        diagnostic.Message = TEXT("Existing JSON source pair committed, but database reconciliation failed; run a full Refresh.");
-        return fail();
-    }
     SetDiagnostics(Array<AssetPipelineDiagnostic>());
     return false;
+}
+
+bool AssetDatabaseFacade::SaveExistingJsonSourceBytes(const StringView& sourcePath, const BytesContainer& sourceContents,
+    const Guid& sourceID, const StringView& typeName)
+{
+    return SaveExistingJsonSource(sourcePath,
+        StringAnsiView(reinterpret_cast<const char*>(sourceContents.Get()), sourceContents.Length()), sourceID, typeName);
+}
+
+bool AssetDatabaseFacade::CommitMetadata(const StringView& sourcePath, const AssetMeta& metadata,
+    bool replaceExisting, AssetPipelineDiagnostic& diagnostic)
+{
+#if USE_EDITOR
+    ScopeLock mutationLock(MetadataMutationLocker);
+    return metadata.FolderAsset
+        ? RegisterExistingMetadata(sourcePath, metadata, replaceExisting, diagnostic)
+        : replaceExisting
+            ? ReplaceMetadataTransactional(sourcePath, metadata, diagnostic)
+            : RegisterExistingMetadata(sourcePath, metadata, false, diagnostic);
+#else
+    diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+    diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+    diagnostic.SourcePath = sourcePath;
+    diagnostic.AssetGuid = metadata.ID;
+    diagnostic.Message = TEXT("Metadata mutation is unavailable outside the editor.");
+    return true;
+#endif
 }
 
 bool AssetDatabaseFacade::EnsureExistingJsonSidecars()

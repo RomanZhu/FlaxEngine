@@ -1664,6 +1664,45 @@ namespace FlaxEditor
             return StateMachine.CurrentState.CanReloadScripts;
         }
 
+        private static int Internal_AssetMutationDecision(int operation, string source, string destination)
+        {
+            if (AssetPipelineCallbacks.NativeDecisionBypassed)
+                return 0;
+            if (AssetDatabase.IsCallbackScopeActive)
+                return 1;
+
+            string Logical(string path) => string.IsNullOrWhiteSpace(path) ? string.Empty : AssetDatabase.ToLogicalPathInternal(path);
+            var logicalSource = Logical(source);
+            var logicalDestination = Logical(destination);
+            switch (operation)
+            {
+            case 1: // CreateAsset
+            case 2: // PublishExternal
+            case 3: // RegisterExisting
+            case 4: // CreateFolder
+            case 5: // Copy
+                AssetPipelineCallbacks.WillCreate(string.IsNullOrEmpty(logicalDestination) ? logicalSource : logicalDestination);
+                return 0;
+            case 6: // Move
+            case 7: // Rename
+            case 11: // Recover
+                var error = AssetPipelineCallbacks.ValidateMove(logicalSource, logicalDestination, out var moveHandled);
+                if (moveHandled)
+                    throw new InvalidOperationException("Asset System v3 does not accept DidMove without a transaction-bound native receipt.");
+                return !string.IsNullOrEmpty(error) ? 1 : 0;
+            case 8: // DeleteToRecovery
+                var deleteAllowed = AssetPipelineCallbacks.ValidateDelete(logicalSource, out var deleteHandled);
+                if (deleteHandled)
+                    throw new InvalidOperationException("Asset System v3 does not accept DidDelete without a transaction-bound native receipt.");
+                return deleteAllowed ? 0 : 1;
+            case 9: // ReplaceContents
+            case 10: // ReplaceAsset
+                return AssetPipelineCallbacks.WillSave(new[] { logicalSource }).Contains(logicalSource, StringComparer.OrdinalIgnoreCase) ? 0 : 1;
+            default:
+                return 0;
+            }
+        }
+
         internal bool Internal_CanAutoBuildCSG()
         {
             // Interactive CSG tools route live and final builds through the managed scheduler.

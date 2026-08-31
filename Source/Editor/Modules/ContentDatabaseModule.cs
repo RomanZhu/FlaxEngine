@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Threading;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Scripting;
@@ -30,6 +31,8 @@ namespace FlaxEditor.Modules
         private int _itemsDeleted;
         private bool _useNewAssetDatabase;
         private ulong _assetDatabaseRevision;
+        private long _pendingAssetDatabaseRevision;
+        private int _assetDatabaseChangeDispatchPending;
         private const double AssetDiskChangeQuietPeriodSeconds = 0.5;
         private const double SelfAuthoredAssetDiskChangeLifetimeSeconds = 5.0;
         private const double DirectoryWatcherValidationPeriodSeconds = 1.0;
@@ -488,6 +491,32 @@ namespace FlaxEditor.Modules
 
         private void OnAssetDatabaseChanged(ulong revision)
         {
+            Interlocked.Exchange(ref _pendingAssetDatabaseRevision, unchecked((long)revision));
+            if (Interlocked.CompareExchange(ref _assetDatabaseChangeDispatchPending, 1, 0) == 0)
+                FlaxEngine.Scripting.InvokeOnUpdate(DispatchAssetDatabaseChanged);
+        }
+
+        private void DispatchAssetDatabaseChanged()
+        {
+            var revision = unchecked((ulong)Interlocked.Exchange(ref _pendingAssetDatabaseRevision, 0));
+            try
+            {
+                if (revision != 0)
+                    ApplyAssetDatabaseChanged(revision);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _assetDatabaseChangeDispatchPending, 0);
+                if (Interlocked.Read(ref _pendingAssetDatabaseRevision) != 0 &&
+                    Interlocked.CompareExchange(ref _assetDatabaseChangeDispatchPending, 1, 0) == 0)
+                {
+                    FlaxEngine.Scripting.InvokeOnUpdate(DispatchAssetDatabaseChanged);
+                }
+            }
+        }
+
+        private void ApplyAssetDatabaseChanged(ulong revision)
+        {
             var change = AssetDatabaseFacade.GetLastChange();
 
             // Native keeps only the most recent batch, so a publish from a build worker can overwrite
@@ -502,6 +531,8 @@ namespace FlaxEditor.Modules
             }
 
             var previousPaths = new Dictionary<Guid, string>();
+            var previousLogicalPaths = new Dictionary<Guid, string>();
+            var previousMainAssets = new HashSet<Guid>();
             void Capture(Guid[] ids)
             {
                 if (ids == null)
@@ -509,7 +540,14 @@ namespace FlaxEditor.Modules
                 for (int i = 0; i < ids.Length; i++)
                 {
                     if (_assetRecordsById.TryGetValue(ids[i], out var record) && !string.IsNullOrEmpty(record.SourcePath))
+                    {
                         previousPaths[ids[i]] = record.SourcePath;
+                        if (record.IsMain)
+                        {
+                            previousMainAssets.Add(ids[i]);
+                            previousLogicalPaths[ids[i]] = record.CanonicalPath;
+                        }
+                    }
                 }
             }
             Capture(change.Removed);
@@ -519,6 +557,36 @@ namespace FlaxEditor.Modules
             RefreshAssetDatabaseRecords(revision);
             if (!_enableEvents)
                 return;
+
+            var deletedPaths = new List<string>();
+            if (change.Removed != null)
+            {
+                for (int i = 0; i < change.Removed.Length; i++)
+                {
+                    if (previousMainAssets.Contains(change.Removed[i]) && previousLogicalPaths.TryGetValue(change.Removed[i], out var removedPath))
+                        deletedPaths.Add(removedPath);
+                }
+            }
+            var movedPairs = new List<KeyValuePair<string, string>>();
+            if (change.Changed != null)
+            {
+                for (int i = 0; i < change.Changed.Length; i++)
+                {
+                    var id = change.Changed[i];
+                    if (!previousMainAssets.Contains(id) || !previousLogicalPaths.TryGetValue(id, out var oldPath) ||
+                        !_assetRecordsById.TryGetValue(id, out var current) || !current.IsMain ||
+                        string.Equals(oldPath, current.CanonicalPath, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    movedPairs.Add(new KeyValuePair<string, string>(current.CanonicalPath, oldPath));
+                }
+            }
+            if (deletedPaths.Count != 0 || movedPairs.Count != 0)
+            {
+                deletedPaths = deletedPaths.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path, StringComparer.Ordinal).ToList();
+                movedPairs = movedPairs.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToList();
+                AssetPipelineCallbacks.PostprocessAll(Array.Empty<string>(), deletedPaths.ToArray(),
+                    movedPairs.Select(pair => pair.Key).ToArray(), movedPairs.Select(pair => pair.Value).ToArray(), false);
+            }
 
             if (change.Removed != null)
             {
@@ -1011,6 +1079,54 @@ namespace FlaxEditor.Modules
                     : ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath,
                         "The native folder-pair creation did not produce a valid source and metadata pair.");
             }
+            if (_useNewAssetDatabase && ContentMutationPathUtils.IsWithinRoot(destinationPath, Globals.ProjectContentFolder))
+            {
+                try
+                {
+                    create();
+                    if (allowDeferred && !ContentMutationPathUtils.Exists(destinationPath))
+                        return ContentMutationResult.Success(null, destinationPath);
+                    if (File.Exists(destinationPath) && File.Exists(destinationPath + ".meta"))
+                        return ContentMutationResult.Success(null, destinationPath);
+                    return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath,
+                        "Asset System v3 creation must commit source and metadata through the native mutation service.", true);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    return ContentMutationResult.Fail(ContentMutationFailure.PermissionDenied, null, destinationPath, ex.Message);
+                }
+                catch (IOException ex)
+                {
+                    return ContentMutationResult.Fail(ContentMutationFailure.LockedStorage, null, destinationPath, ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath, ex.Message);
+                }
+            }
+            if (_useNewAssetDatabase)
+            {
+                try
+                {
+                    create();
+                    return ContentMutationPathUtils.Exists(destinationPath) || allowDeferred
+                        ? ContentMutationResult.Success(null, destinationPath)
+                        : ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath,
+                            $"Content creation did not produce '{destinationPath}'.");
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    return ContentMutationResult.Fail(ContentMutationFailure.PermissionDenied, null, destinationPath, ex.Message);
+                }
+                catch (IOException ex)
+                {
+                    return ContentMutationResult.Fail(ContentMutationFailure.LockedStorage, null, destinationPath, ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, destinationPath, ex.Message);
+                }
+            }
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Create);
             plan.Entries.Add(new ContentMutationEntry(destinationPath, destinationPath, ContentMutationPathRole.Main, isDirectory)
             {
@@ -1191,8 +1307,33 @@ namespace FlaxEditor.Modules
                 AddMoveSteps(plan, steps, moves[i].Item, moves[i].Source, moves[i].Destination);
 
             ContentMutationDiagnostics.Log("mutation.move.begin", $"transaction={plan.Id:N}; operation={operation}; items={moves.Count}; entries={plan.Entries.Count}");
-            var transaction = new ContentMutationTransaction(plan);
-            var result = transaction.Execute(steps);
+            ContentMutationResult result;
+            if (_useNewAssetDatabase)
+            {
+                var sources = new string[moves.Count];
+                var destinations = new string[moves.Count];
+                for (int i = 0; i < moves.Count; i++)
+                {
+                    if (!File.Exists(moves[i].Source + ".meta"))
+                    {
+                        result = ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, moves[i].Source, moves[i].Destination,
+                            "Asset System v3 move requires an adjacent metadata sidecar.", transactionId: plan.Id);
+                        goto MoveCompleted;
+                    }
+                    sources[i] = moves[i].Source;
+                    destinations[i] = moves[i].Destination;
+                }
+                var message = AssetDatabase.MoveAssets(sources, destinations);
+                result = string.IsNullOrEmpty(message)
+                    ? ContentMutationResult.Success(sources[0], destinations[destinations.Length - 1], plan.Id, destinations)
+                    : ContentMutationResult.Fail(ContentMutationFailure.MoveFailed, sources[0], destinations[destinations.Length - 1], message, transactionId: plan.Id);
+            }
+            else
+            {
+                var transaction = new ContentMutationTransaction(plan);
+                result = transaction.Execute(steps);
+            }
+MoveCompleted:
             if (!result.Succeeded)
             {
                 ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={plan.Id:N}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
@@ -1481,6 +1622,31 @@ namespace FlaxEditor.Modules
         {
             if (requests == null || requests.Count == 0)
                 return ContentMutationResult.Prepared(null, null);
+
+            if (_useNewAssetDatabase)
+            {
+                var transactionId = Guid.NewGuid();
+                var sources = new string[requests.Count];
+                var destinations = new string[requests.Count];
+                for (int i = 0; i < requests.Count; i++)
+                {
+                    var item = requests[i].Item;
+                    var destination = ContentMutationPathUtils.Normalize(requests[i].Destination);
+                    if (item == null || !item.Exists || item is AssetItem { IsCanonicalSubAsset: true } || !File.Exists(item.Path + ".meta"))
+                        return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, item?.Path, destination,
+                            "Asset System v3 copy requires a live main source with adjacent metadata.", transactionId: transactionId);
+                    var preflight = PreflightCopy(item, destination);
+                    if (!preflight.Succeeded)
+                        return preflight;
+                    sources[i] = item.Path;
+                    destinations[i] = destination;
+                }
+                if (!AssetDatabase.CopyAssets(sources, destinations))
+                    return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, sources[0], destinations[destinations.Length - 1],
+                        "The atomic native source-pair copy batch failed.", transactionId: transactionId);
+                return ContentMutationResult.Success(requests[0].Item.Path, requests[requests.Count - 1].Destination,
+                    transactionId, destinations);
+            }
 
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
             var steps = new List<ContentMutationStep>(requests.Count);
@@ -2504,13 +2670,18 @@ namespace FlaxEditor.Modules
 
             FlaxEngine.Content.AssetDisposing += OnContentAssetDisposing;
 
-            // Recover or surface any mutation that was interrupted before the previous Editor process exited.
-            var recoveredImportSources = new List<string>();
-            var recoveryRequired = ContentMutationTransaction.RecoverPendingTransactions(recoveredImportSources);
-            if (recoveryRequired != 0)
-                Editor.LogError($"{recoveryRequired} interrupted Content transaction(s) require manual recovery. See the log for exact paths.");
-
             _useNewAssetDatabase = Editor.GameProject?.AssetSystemVersion == ProjectInfo.CurrentAssetSystemVersion;
+
+            var recoveredImportSources = new List<string>();
+
+            // Recover or surface any mutation that was interrupted before the previous Editor process exited.
+            if (!_useNewAssetDatabase)
+            {
+                var recoveryRequired = ContentMutationTransaction.RecoverPendingTransactions(recoveredImportSources);
+                if (recoveryRequired != 0)
+                    Editor.LogError($"{recoveryRequired} interrupted Content transaction(s) require manual recovery. See the log for exact paths.");
+            }
+
             if (_useNewAssetDatabase)
             {
                 AssetDatabaseFacade.DatabaseChanged += OnAssetDatabaseChanged;
@@ -2808,8 +2979,6 @@ namespace FlaxEditor.Modules
                 previousRecords = new Dictionary<Guid, AssetDatabaseRecordInfo>(_textureRecordsBeforeWatcherScan);
                 _pendingTextureBuildSources.Clear();
                 _pendingTextureBuildIds.Clear();
-                _pendingCanonicalBuilds.Clear();
-                _pendingCanonicalBuildIds.Clear();
                 _renameOnlyTextureIds.Clear();
                 _textureRecordsBeforeWatcherScan.Clear();
             }
@@ -2820,13 +2989,8 @@ namespace FlaxEditor.Modules
                     continue;
                 if (renameOnlyIds.Contains(id) && previousRecords.TryGetValue(id, out var previous) && previous.MetaSemanticHash == record.MetaSemanticHash)
                     continue;
-                var failed = IsTextureRecord(record)
-                    ? AssetDatabaseFacade.BuildTexture(id)
-                    : IsModelRecord(record)
-                        ? AssetDatabaseFacade.BuildModel(id)
-                        : AssetDatabaseFacade.RebuildGraph(id);
-                if (failed)
-                    Editor.LogError($"Cannot queue canonical asset build after disk change: {record.SourcePath}");
+                if (_pendingCanonicalBuildIds.Add(id))
+                    _pendingCanonicalBuilds.Enqueue(id);
             }
         }
 

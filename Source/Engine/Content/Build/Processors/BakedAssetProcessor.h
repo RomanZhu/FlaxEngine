@@ -7,23 +7,23 @@
 
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
 
-/// <summary>Immutable source state retained between ExistingJson Prepare and Build.</summary>
-class FLAXENGINE_API ExistingJsonPreparedPayload : public PreparedAssetPayload
+/// <summary>Validated persistent tool-bake source retained between Prepare and Build.</summary>
+class FLAXENGINE_API BakedAssetPreparedPayload : public PreparedAssetPayload
 {
 public:
     ContentHash SourceHash;
 
     uint64 GetMemoryUsage() const override
     {
-        return sizeof(ExistingJsonPreparedPayload);
+        return sizeof(BakedAssetPreparedPayload);
     }
 };
 
-/// <summary>Compiles legacy-shaped canonical JSON documents into exact runtime Flax artifacts.</summary>
-class FLAXENGINE_API ExistingJsonProcessor
+/// <summary>Builds canonical tool-authored bake documents into immutable runtime artifacts.</summary>
+class FLAXENGINE_API BakedAssetProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 2;
+    static constexpr uint32 ImplementationVersion = 1;
     static constexpr uint32 RuntimeFormatVersion = 1;
 
     static const String& ProcessorID();

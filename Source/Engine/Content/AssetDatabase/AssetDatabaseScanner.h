@@ -12,7 +12,6 @@ struct FLAXENGINE_API AssetDatabaseScanOptions
 {
     int32 AssetSystemVersion = 2;
     bool StrictMetadata = false;
-    bool AllowLegacyBinarySources = false;
     int32 MaximumFiles = 1000000;
     const bool* Cancel = nullptr;
     SourceHashCache* HashCache = nullptr;

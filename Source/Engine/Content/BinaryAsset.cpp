@@ -15,6 +15,8 @@
 #include "Engine/Profiler/ProfilerMemory.h"
 #if USE_EDITOR
 #include "AssetDatabase/AssetDatabase.h"
+#include "AssetDatabase/AssetDatabaseFacade.h"
+#include "AssetDatabase/AssetMount.h"
 #include "AssetDatabase/AssetPath.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Engine/Globals.h"
@@ -225,6 +227,12 @@ BinaryAssetStorageSwitchResult BinaryAsset::SwitchStorage(const ResolvedArtifact
 
 void BinaryAsset::Reimport() const
 {
+    if (AssetDatabase::Get().IsHardCutEnabled())
+    {
+        if (AssetDatabaseFacade::BuildAsset(GetID()))
+            LOG(Error, "Cannot queue a canonical rebuild for asset {0}.", GetID());
+        return;
+    }
     if (_isGeneratedArtifact)
     {
         LOG(Error, "Generated artifact storage cannot be reimported as an authoritative binary. Rebuild it from the canonical source instead.");
@@ -452,10 +460,16 @@ bool BinaryAsset::SaveToAsset(const StringView& path, AssetInitData& data, bool 
     String pathNorm(path);
     ContentStorageManager::FormatPath(pathNorm);
     const StringView filePath = pathNorm;
-    if (AssetDatabase::Get().IsHardCutEnabled() && AssetPathPolicy::IsSameOrChild(filePath, Globals::ProjectContentFolder))
+    if (AssetDatabase::Get().IsHardCutEnabled())
     {
-        LOG(Error, "Cooked asset storage cannot be written into the canonical Content source tree.");
-        return true;
+        AssetMountResolution mount;
+        const bool isSourceMount = AssetMountRegistry::TryResolvePhysical(filePath, mount) ||
+            AssetPathPolicy::IsSameOrChild(filePath, Globals::ProjectContentFolder);
+        if (isSourceMount)
+        {
+            LOG(Error, "Cooked asset storage cannot be written into a registered canonical source mount.");
+            return true;
+        }
     }
 
     // Find target storage container and the asset

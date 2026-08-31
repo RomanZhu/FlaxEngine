@@ -31,6 +31,23 @@
 
 namespace
 {
+    Guid ReadAssetReference(const rapidjson_flax::Value& value)
+    {
+        if (!value.IsObject())
+            return Guid::Empty;
+        const auto guid = value.FindMember("guid");
+        const auto localId = value.FindMember("localId");
+        if (guid == value.MemberEnd() || localId == value.MemberEnd() || !localId->value.IsInt64() || localId->value.GetInt64() != 1)
+            return Guid::Empty;
+        return JsonTools::GetGuid(guid->value);
+    }
+
+    void ReadAssetReference(const rapidjson_flax::Value& stream, const char* name, Guid& result)
+    {
+        const auto value = stream.FindMember(name);
+        result = value != stream.MemberEnd() ? ReadAssetReference(value->value) : Guid::Empty;
+    }
+
     String GetGameSettingsAssetPath()
     {
 #if USE_EDITOR
@@ -260,15 +277,16 @@ void GameSettings::Apply()
 
 void GameSettings::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
 {
+    (void)modifier;
     // Load properties
     ProductName = JsonTools::GetString(stream, "ProductName");
     CompanyName = JsonTools::GetString(stream, "CompanyName");
     CopyrightNotice = JsonTools::GetString(stream, "CopyrightNotice");
     Version = JsonTools::GetString(stream, "Version");
-    Icon = JsonTools::GetGuid(stream, "Icon");
-    FirstScene = JsonTools::GetGuid(stream, "FirstScene");
+    ReadAssetReference(stream, "Icon", Icon);
+    ReadAssetReference(stream, "FirstScene", FirstScene);
     NoSplashScreen = JsonTools::GetBool(stream, "NoSplashScreen", NoSplashScreen);
-    SplashScreen = JsonTools::GetGuid(stream, "SplashScreen");
+    ReadAssetReference(stream, "SplashScreen", SplashScreen);
     CustomSettings.Clear();
     const auto customSettings = stream.FindMember("CustomSettings");
     if (customSettings != stream.MemberEnd() && (customSettings->value.IsObject() || customSettings->value.IsArray()))
@@ -276,42 +294,44 @@ void GameSettings::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
         auto& items = customSettings->value;
         for (auto it = items.MemberBegin(); it != items.MemberEnd(); ++it)
         {
-            if (it->value.IsString() && it->value.GetStringLength() == 32)
+            const Guid value = ReadAssetReference(it->value);
+            if (value.IsValid())
             {
-                String key = it->name.GetText();
-                const Guid value = JsonTools::GetGuid(it->value);
+                const String key = it->name.GetText();
                 CustomSettings[key] = value;
             }
         }
     }
 
-    // Settings containers
-    DESERIALIZE(Time);
-    DESERIALIZE(Audio);
-    DESERIALIZE(LayersAndTags);
-    DESERIALIZE(Physics);
-    DESERIALIZE(Input);
-    DESERIALIZE(Graphics);
-    DESERIALIZE(Network);
-    DESERIALIZE(Navigation);
-    DESERIALIZE(Localization);
-    DESERIALIZE(GameCooking);
-    DESERIALIZE(Streaming);
-    DESERIALIZE(AssetPipeline);
+    // Settings containers use the canonical file GUID/local-ID representation.
+#define DESERIALIZE_ASSET_REFERENCE(name) ReadAssetReference(stream, #name, name)
+    DESERIALIZE_ASSET_REFERENCE(Time);
+    DESERIALIZE_ASSET_REFERENCE(Audio);
+    DESERIALIZE_ASSET_REFERENCE(LayersAndTags);
+    DESERIALIZE_ASSET_REFERENCE(Physics);
+    DESERIALIZE_ASSET_REFERENCE(Input);
+    DESERIALIZE_ASSET_REFERENCE(Graphics);
+    DESERIALIZE_ASSET_REFERENCE(Network);
+    DESERIALIZE_ASSET_REFERENCE(Navigation);
+    DESERIALIZE_ASSET_REFERENCE(Localization);
+    DESERIALIZE_ASSET_REFERENCE(GameCooking);
+    DESERIALIZE_ASSET_REFERENCE(Streaming);
+    DESERIALIZE_ASSET_REFERENCE(AssetPipeline);
 
     // Per-platform settings containers
-    DESERIALIZE(WindowsPlatform);
-    DESERIALIZE(UWPPlatform);
-    DESERIALIZE(LinuxPlatform);
-    DESERIALIZE(PS4Platform);
-    DESERIALIZE(XboxOnePlatform);
-    DESERIALIZE(XboxScarlettPlatform);
-    DESERIALIZE(AndroidPlatform);
-    DESERIALIZE(SwitchPlatform);
-    DESERIALIZE(PS5Platform);
-    DESERIALIZE(MacPlatform);
-    DESERIALIZE(iOSPlatform);
-    DESERIALIZE(WebPlatform);
+    DESERIALIZE_ASSET_REFERENCE(WindowsPlatform);
+    DESERIALIZE_ASSET_REFERENCE(UWPPlatform);
+    DESERIALIZE_ASSET_REFERENCE(LinuxPlatform);
+    DESERIALIZE_ASSET_REFERENCE(PS4Platform);
+    DESERIALIZE_ASSET_REFERENCE(XboxOnePlatform);
+    DESERIALIZE_ASSET_REFERENCE(XboxScarlettPlatform);
+    DESERIALIZE_ASSET_REFERENCE(AndroidPlatform);
+    DESERIALIZE_ASSET_REFERENCE(SwitchPlatform);
+    DESERIALIZE_ASSET_REFERENCE(PS5Platform);
+    DESERIALIZE_ASSET_REFERENCE(MacPlatform);
+    DESERIALIZE_ASSET_REFERENCE(iOSPlatform);
+    DESERIALIZE_ASSET_REFERENCE(WebPlatform);
+#undef DESERIALIZE_ASSET_REFERENCE
 }
 
 #if USE_EDITOR

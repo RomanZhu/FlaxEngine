@@ -186,7 +186,7 @@ namespace
             "CREATE INDEX IF NOT EXISTS runtime_object_references_target_idx ON runtime_object_references(referenced_file_guid,referenced_local_id);"
             "CREATE INDEX IF NOT EXISTS artifact_dependencies_identity_idx ON artifact_dependencies(kind,identity);"
             "CREATE INDEX IF NOT EXISTS artifact_dependencies_guid_idx ON artifact_dependencies(target_guid);"
-            "PRAGMA user_version=4;"
+            "PRAGMA user_version=5;"
             "COMMIT;";
         return Execute(database, schema, diagnostic, path);
     }

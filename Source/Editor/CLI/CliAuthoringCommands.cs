@@ -176,7 +176,7 @@ namespace FlaxEditor
         public static object CreateScene([CliOption("path", Description = "Content-relative scene path.", Required = true)] string path, [CliOption("open", Description = "Open the scene after creating it.")] bool open = false, CliCommandContext context = null)
         {
             var outputPath = ResolveAuthoringPath(path, ".scene", true);
-            Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+            EnsureAuthoringDirectory(Path.GetDirectoryName(outputPath));
             Editor.Instance.Scene.CreateSceneFile(outputPath);
             RefreshCreatedContent(outputPath);
 
@@ -380,10 +380,10 @@ namespace FlaxEditor
             build.AdditionalScenes = additional.Distinct().ToArray();
             if (changed)
             {
-                SaveSettings(game);
                 SaveSettings(build);
+                SaveSettings(game);
             }
-            return new { changed, buildList = DescribeBuildScenes() };
+            return new { changed, buildList = DescribeBuildScenes(game, build) };
         }
 
         [CliCommand("scenes.build-list.remove", Description = "Remove a cooked scene. Removing the startup scene promotes the first additional scene when available.", Access = CliCommandAccess.MutatesProject)]
@@ -408,10 +408,10 @@ namespace FlaxEditor
             build.AdditionalScenes = additional.ToArray();
             if (changed)
             {
-                SaveSettings(game);
                 SaveSettings(build);
+                SaveSettings(game);
             }
-            return new { changed, promotedStartupSceneId = promoted, buildList = DescribeBuildScenes() };
+            return new { changed, promotedStartupSceneId = promoted, buildList = DescribeBuildScenes(game, build) };
         }
 
         [CliCommand("scenes.hierarchy", Description = "Return the loaded scene Actor hierarchy.", Access = CliCommandAccess.ReadOnly)]
@@ -1562,7 +1562,7 @@ namespace FlaxEditor
         {
             var value = RequireActor(actor);
             var outputPath = ResolveAuthoringPath(path, ".prefab", true);
-            Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+            EnsureAuthoringDirectory(Path.GetDirectoryName(outputPath));
             if (PrefabManager.CreatePrefab(value, outputPath, true))
                 throw new InvalidOperationException($"Failed to create Prefab '{outputPath}'.");
             CreateCanonicalJsonMetadata(outputPath);
@@ -1579,7 +1579,7 @@ namespace FlaxEditor
             if (asset.WaitForLoaded())
                 throw new InvalidOperationException($"Failed to load Prefab '{prefab}'.");
             var outputPath = ResolveAuthoringPath(path, ".prefab", true);
-            Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+            EnsureAuthoringDirectory(Path.GetDirectoryName(outputPath));
             var root = PrefabManager.SpawnPrefab(asset, null) ?? throw new InvalidOperationException("Failed to create the Prefab variant instance.");
             try
             {
@@ -2032,10 +2032,40 @@ namespace FlaxEditor
             database.RefreshFolder(contentRoot, true);
         }
 
-        private static void CreateCanonicalJsonMetadata(string path)
+        private static void EnsureAuthoringDirectory(string directory)
         {
-            if (CanonicalGraphDocuments.UseNewAssetDatabase && AssetDatabaseFacade.CreateExistingJsonMetadata(path) == Guid.Empty)
+            if (Directory.Exists(directory))
+                return;
+            if (!CanonicalGraphDocuments.UseNewAssetDatabase)
+            {
+                Directory.CreateDirectory(directory);
+                return;
+            }
+
+            var missing = new Stack<string>();
+            var parent = directory;
+            while (!Directory.Exists(parent))
+            {
+                missing.Push(Path.GetFileName(parent));
+                parent = Path.GetDirectoryName(parent);
+            }
+            while (missing.Count != 0)
+            {
+                var name = missing.Pop();
+                if (string.IsNullOrEmpty(AssetDatabase.CreateFolder(parent, name)))
+                    throw new IOException($"Failed to create canonical authoring folder '{Path.Combine(parent, name)}'.");
+                parent = Path.Combine(parent, name);
+            }
+        }
+
+        private static Guid CreateCanonicalJsonMetadata(string path)
+        {
+            if (!CanonicalGraphDocuments.UseNewAssetDatabase)
+                return Guid.Empty;
+            var id = AssetDatabaseFacade.CreateExistingJsonMetadata(path);
+            if (id == Guid.Empty)
                 throw new IOException($"Failed to create canonical metadata for '{path}'.");
+            return id;
         }
 
         private static string GetAuthoringRoot(string contentRoot)
@@ -2118,10 +2148,10 @@ namespace FlaxEditor
             return new { id = scene.ID, name = scene.Name, path = info.Path, dirty = Editor.Instance.Scene.IsEdited(scene), actorCount = EnumerateActors(scene).Count() - 1 };
         }
 
-        private static object DescribeBuildScenes()
+        private static object DescribeBuildScenes(GameSettings game = null, BuildSettings build = null)
         {
-            var game = GameSettings.Load();
-            var build = GameSettings.Load<BuildSettings>() ?? new BuildSettings();
+            game ??= GameSettings.Load();
+            build ??= GameSettings.Load<BuildSettings>() ?? new BuildSettings();
             var entries = new List<object>();
             var seen = new HashSet<Guid>();
             if (game.FirstScene.ID != Guid.Empty)

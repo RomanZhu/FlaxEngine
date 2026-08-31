@@ -5,6 +5,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using FlaxEditor.Content;
 using FlaxEngine;
@@ -37,6 +39,11 @@ namespace FlaxEditor.Actions
             public bool HasMetadataSidecar;
             public bool HasSidecarFolder;
             public Guid AssetId;
+            public Guid TransactionId;
+            public Guid[] SourceGuids;
+            public long[] LocalIds;
+            public string SourceHash;
+            public string MetadataHash;
             public string TypeName;
             public long SizeInBytes;
             public bool IsStaged;
@@ -223,8 +230,10 @@ namespace FlaxEditor.Actions
                         if (entry.HasSidecarFolder && ContentMutationPathUtils.Exists(entry.SidecarTrashPath))
                             plan.Entries.Add(new ContentMutationEntry(entry.SidecarTrashPath, entry.SidecarOriginalPath, ContentMutationPathRole.ExternalActorSidecar, true));
                     }
-                    if (plan.Entries.Count != 0)
+                    if (plan.Entries.Count != 0 && !CanonicalGraphDocuments.UseNewAssetDatabase)
                         ContentMutationTransaction.PreserveRecoveryRecord(plan, "Undo-history cleanup could not remove staged Content data.");
+                    else if (plan.Entries.Count != 0)
+                        Editor.LogError("Native asset recovery data could not be cleaned. Recovery paths were preserved for manual cleanup.");
                 }
             }
             else if (_entries != null && _requiresRecovery)
@@ -330,6 +339,11 @@ namespace FlaxEditor.Actions
                 if (sidecarSizeInBytes >= 0)
                     sizeInBytes = sizeInBytes >= 0 ? sizeInBytes + sidecarSizeInBytes : sidecarSizeInBytes;
             }
+            var identityRecords = AssetDatabaseFacade.GetRecords()
+                .Where(x => IsSameOrNestedSource(x.SourcePath, originalPath, item.IsFolder))
+                .OrderBy(x => x.SourceAssetID)
+                .ThenBy(x => x.LocalId)
+                .ToArray();
             return new Entry
             {
                 OriginalPath = originalPath,
@@ -342,9 +356,60 @@ namespace FlaxEditor.Actions
                 HasMetadataSidecar = hasMetadataSidecar,
                 HasSidecarFolder = hasSidecarFolder,
                 AssetId = item is AssetItem assetItem ? assetItem.ID : Guid.Empty,
+                SourceGuids = identityRecords.Select(x => x.SourceAssetID).ToArray(),
+                LocalIds = identityRecords.Select(x => x.LocalId).ToArray(),
+                SourceHash = ComputePathHash(originalPath, item.IsFolder),
+                MetadataHash = hasMetadataSidecar ? ComputePathHash(metadataOriginalPath, false) : null,
                 TypeName = item is AssetItem typedAssetItem ? typedAssetItem.TypeName : null,
                 SizeInBytes = sizeInBytes,
             };
+        }
+
+        private static bool IsSameOrNestedSource(string candidate, string root, bool includeNested)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+                return false;
+            candidate = StringUtils.NormalizePath(candidate);
+            root = StringUtils.NormalizePath(root).TrimEnd('/');
+            if (ContentMutationPathUtils.Comparer.Equals(candidate, root))
+                return true;
+            return includeNested && candidate.StartsWith(root + "/", ContentMutationPathUtils.Comparison);
+        }
+
+        private static string ComputePathHash(string path, bool isFolder)
+        {
+            if (string.IsNullOrWhiteSpace(path) || isFolder && !Directory.Exists(path) || !isFolder && !File.Exists(path))
+                return null;
+            if (!isFolder)
+                return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var files = Directory.GetFiles(path, "*", SearchOption.AllDirectories)
+                .OrderBy(x => x, ContentMutationPathUtils.Comparer);
+            foreach (var file in files)
+            {
+                var relative = StringUtils.NormalizePath(Path.GetRelativePath(path, file));
+                var name = Encoding.UTF8.GetBytes(relative);
+                hash.AppendData(BitConverter.GetBytes(name.Length));
+                hash.AppendData(name);
+                var content = SHA256.HashData(File.ReadAllBytes(file));
+                hash.AppendData(content);
+            }
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+
+        private static bool VerifyEntrySnapshot(Entry entry)
+        {
+            if (!string.Equals(entry.SourceHash, ComputePathHash(entry.OriginalPath, entry.IsFolder), StringComparison.Ordinal) ||
+                entry.HasMetadataSidecar && !string.Equals(entry.MetadataHash, ComputePathHash(entry.MetadataOriginalPath, false), StringComparison.Ordinal))
+                return false;
+            var records = AssetDatabaseFacade.GetRecords()
+                .Where(x => IsSameOrNestedSource(x.SourcePath, entry.OriginalPath, entry.IsFolder))
+                .OrderBy(x => x.SourceAssetID)
+                .ThenBy(x => x.LocalId)
+                .ToArray();
+            return (entry.SourceGuids ?? Array.Empty<Guid>()).SequenceEqual(records.Select(x => x.SourceAssetID)) &&
+                   (entry.LocalIds ?? Array.Empty<long>()).SequenceEqual(records.Select(x => x.LocalId));
         }
 
         private static string GetActionString(string verb, Entry[] entries)
@@ -386,6 +451,8 @@ namespace FlaxEditor.Actions
 
         private bool ExecuteStage(IReadOnlyList<ContentItem> items, string source)
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+                return ExecuteNativeStage(items);
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Delete);
             var steps = new List<ContentMutationStep>(_entries.Length);
             for (int i = 0; i < _entries.Length; i++)
@@ -434,6 +501,8 @@ namespace FlaxEditor.Actions
 
         private bool ExecuteRestore()
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+                return ExecuteNativeRestore();
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Restore);
             var steps = new List<ContentMutationStep>(_entries.Length);
             for (int i = 0; i < _entries.Length; i++)
@@ -468,6 +537,129 @@ namespace FlaxEditor.Actions
             _isDeleted = AnyEntryStaged();
             ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.restore.committed" : "mutation.restore.failed", $"transaction={plan.Id:N}; action='{ActionString}'; entries={_entries.Length}; recovery={_requiresRecovery}; failure={result.Failure}");
             return result.Succeeded && !_isDeleted;
+        }
+
+        private bool ExecuteNativeStage(IReadOnlyList<ContentItem> items)
+        {
+            var indices = new List<int>(_entries.Length);
+            var sources = new List<string>(_entries.Length);
+            var selectedItems = new List<ContentItem>(_entries.Length);
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                if (_entries[i].IsStaged)
+                    continue;
+                indices.Add(i);
+                sources.Add(_entries[i].OriginalPath);
+                selectedItems.Add(items != null ? items[i] : _editor.ContentDatabase.Find(_entries[i].OriginalPath));
+            }
+            if (indices.Count == 0)
+                return AreAllEntriesStaged();
+
+            var result = AssetDatabaseFacade.DeleteAssetPairsToRecovery(sources.ToArray());
+            _requiresRecovery |= result.RequiresRecovery;
+            if (!result.Succeeded || string.IsNullOrEmpty(result.RecoveryPath))
+                return false;
+
+            var recoveryPaths = new string[indices.Count];
+            for (int i = 0; i < indices.Count; i++)
+            {
+                var entry = _entries[indices[i]];
+                entry.TrashPath = StringUtils.CombinePaths(result.RecoveryPath, i.ToString(), Path.GetFileName(entry.OriginalPath));
+                entry.MetadataTrashPath = entry.TrashPath + ".meta";
+                entry.TransactionId = result.TransactionID;
+                entry.UsesNativeRecovery = true;
+                _entries[indices[i]] = entry;
+                recoveryPaths[i] = entry.TrashPath;
+            }
+
+            try
+            {
+                for (int i = 0; i < indices.Count; i++)
+                {
+                    var item = selectedItems[i];
+                    if (item == null)
+                        continue;
+                    _editor.Thumbnails.DeletePreview(item);
+                    _editor.ContentDatabase.RemoveFromDatabasePreservingAssets(item);
+                }
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning(ex);
+                var rollback = AssetDatabaseFacade.RecoverAssetPairs(recoveryPaths, sources.ToArray());
+                _requiresRecovery |= !rollback.Succeeded || rollback.RequiresRecovery;
+                for (int i = 0; i < indices.Count; i++)
+                {
+                    var entry = _entries[indices[i]];
+                    entry.TransactionId = rollback.TransactionID;
+                    entry.IsStaged = PathExists(entry.TrashPath, entry.IsFolder);
+                    if (!entry.IsStaged)
+                    {
+                        entry.UsesNativeRecovery = false;
+                        if (!VerifyEntrySnapshot(entry))
+                            _requiresRecovery = true;
+                    }
+                    _entries[indices[i]] = entry;
+                    RefreshParent(entry.OriginalPath, true);
+                }
+                _isDeleted = AreAllEntriesStaged();
+                return false;
+            }
+
+            for (int i = 0; i < indices.Count; i++)
+            {
+                var entry = _entries[indices[i]];
+                entry.IsStaged = true;
+                _entries[indices[i]] = entry;
+                RefreshParent(entry.OriginalPath, true);
+            }
+            _isDeleted = AreAllEntriesStaged();
+            return _isDeleted;
+        }
+
+        private bool ExecuteNativeRestore()
+        {
+            var indices = new List<int>(_entries.Length);
+            var recoveryPaths = new List<string>(_entries.Length);
+            var destinations = new List<string>(_entries.Length);
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                if (!_entries[i].IsStaged)
+                    continue;
+                if (!_entries[i].UsesNativeRecovery)
+                {
+                    Editor.LogError("Asset System v3 cannot restore an entry that was not staged by the native recovery service: " + _entries[i].OriginalPath);
+                    return false;
+                }
+                indices.Add(i);
+                recoveryPaths.Add(_entries[i].TrashPath);
+                destinations.Add(_entries[i].OriginalPath);
+            }
+            if (indices.Count == 0)
+                return true;
+
+            var result = AssetDatabaseFacade.RecoverAssetPairs(recoveryPaths.ToArray(), destinations.ToArray());
+            _requiresRecovery |= result.RequiresRecovery;
+            if (!result.Succeeded)
+                return false;
+            var snapshotsVerified = true;
+            for (int i = 0; i < indices.Count; i++)
+            {
+                var entry = _entries[indices[i]];
+                entry.TransactionId = result.TransactionID;
+                entry.UsesNativeRecovery = false;
+                entry.IsStaged = false;
+                if (!VerifyEntrySnapshot(entry))
+                {
+                    snapshotsVerified = false;
+                    _requiresRecovery = true;
+                    Editor.LogError("Restored asset identity or content differs from its undo snapshot: " + entry.OriginalPath);
+                }
+                _entries[indices[i]] = entry;
+                RefreshParent(entry.OriginalPath, true);
+            }
+            _isDeleted = AnyEntryStaged();
+            return snapshotsVerified && !_isDeleted;
         }
 
         private ContentMutationResult CommitStageEntry(int index, ContentItem item)
@@ -523,12 +715,24 @@ namespace FlaxEditor.Actions
                 }
 
                 entry.HasMetadataSidecar = entry.MetadataOriginalPath != null && File.Exists(entry.MetadataOriginalPath);
+                if (CanonicalGraphDocuments.UseNewAssetDatabase &&
+                    ContentMutationPathUtils.IsWithinRoot(entry.OriginalPath, Globals.ProjectContentFolder) &&
+                    !entry.HasMetadataSidecar)
+                {
+                    Editor.LogWarning("Cannot stage Asset System v3 Content without its metadata sidecar: " + entry.OriginalPath);
+                    return false;
+                }
                 if (entry.HasMetadataSidecar && (ContainsReparsePoint(entry.MetadataOriginalPath, false) || File.Exists(entry.MetadataTrashPath) || Directory.Exists(entry.MetadataTrashPath)))
                 {
                     Editor.LogWarning("Cannot stage asset metadata because its recovery path is unsafe or already exists: " + entry.MetadataOriginalPath);
                     return false;
                 }
                 entry.HasSidecarFolder = entry.SidecarOriginalPath != null && Directory.Exists(entry.SidecarOriginalPath);
+                if (CanonicalGraphDocuments.UseNewAssetDatabase && entry.HasSidecarFolder)
+                {
+                    Editor.LogWarning("Asset System v3 cannot stage legacy external SceneActors data. Migrate the scene to an authored source document first: " + entry.OriginalPath);
+                    return false;
+                }
                 if (entry.HasSidecarFolder && (ContainsReparsePoint(entry.SidecarOriginalPath, true) || File.Exists(entry.SidecarTrashPath) || Directory.Exists(entry.SidecarTrashPath)))
                 {
                     Editor.LogWarning("Cannot stage scene actors folder because its recovery path is unsafe or already exists: " + entry.SidecarOriginalPath);
@@ -741,6 +945,13 @@ namespace FlaxEditor.Actions
 
         private static bool CopyPath(string sourcePath, string targetPath, bool isFolder)
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase &&
+                (ContentMutationPathUtils.IsWithinRoot(sourcePath, Globals.ProjectContentFolder) ||
+                 ContentMutationPathUtils.IsWithinRoot(targetPath, Globals.ProjectContentFolder)))
+            {
+                Editor.LogError("Asset System v3 project copies must use AssetDatabase.CopyAsset(s); direct undo filesystem copying is disabled.");
+                return false;
+            }
             for (int retry = 0; retry < FilesystemRetryCount; retry++)
             {
                 try
@@ -843,6 +1054,16 @@ namespace FlaxEditor.Actions
         {
             try
             {
+                if (CanonicalGraphDocuments.UseNewAssetDatabase &&
+                    (ContentMutationPathUtils.IsWithinRoot(sourcePath, Globals.ProjectContentFolder) ||
+                     ContentMutationPathUtils.IsWithinRoot(targetPath, Globals.ProjectContentFolder)))
+                {
+                    if (ContentMutationPathUtils.IsWithinRoot(sourcePath, Globals.ProjectContentFolder) &&
+                        ContentMutationPathUtils.IsWithinRoot(targetPath, Globals.ProjectContentFolder))
+                        return AssetDatabaseFacade.MoveAssetPair(sourcePath, targetPath).Succeeded;
+                    Editor.LogError("Asset System v3 project/recovery moves require DeleteAssetPairToRecovery or RecoverAssetPair.");
+                    return false;
+                }
                 var targetDirectory = Path.GetDirectoryName(targetPath);
                 if (!string.IsNullOrEmpty(targetDirectory))
                     Directory.CreateDirectory(targetDirectory);
@@ -883,6 +1104,13 @@ namespace FlaxEditor.Actions
 
         private static bool MovePath(string sourcePath, string targetPath, bool isFolder)
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase &&
+                (ContentMutationPathUtils.IsWithinRoot(sourcePath, Globals.ProjectContentFolder) ||
+                 ContentMutationPathUtils.IsWithinRoot(targetPath, Globals.ProjectContentFolder)))
+            {
+                Editor.LogError("Asset System v3 project moves must use the native AssetMutationService.");
+                return false;
+            }
             for (int retry = 0; retry < FilesystemRetryCount; retry++)
             {
                 try
@@ -955,6 +1183,14 @@ namespace FlaxEditor.Actions
 
         private static bool DeletePath(string path, bool isFolder)
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase &&
+                ContentMutationPathUtils.IsWithinRoot(path, Globals.ProjectContentFolder))
+            {
+                if ((File.Exists(path) || Directory.Exists(path)) && File.Exists(path + ".meta"))
+                    return AssetDatabaseFacade.DeleteAssetPairToRecovery(path).Succeeded;
+                Editor.LogError("Asset System v3 refused to directly delete an unpaired project source: " + path);
+                return false;
+            }
             return DeletePathWithRetries(path, isFolder, "staged content item");
         }
 

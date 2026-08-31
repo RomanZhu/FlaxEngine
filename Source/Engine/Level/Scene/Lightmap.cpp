@@ -10,7 +10,7 @@
 #include "Engine/Graphics/Textures/GPUTexture.h"
 #if USE_EDITOR
 #include "Engine/ContentImporters/ImportTexture.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/Content/AssetDatabase/BakedAssetFacade.h"
 #include "Engine/Graphics/Textures/TextureData.h"
 #endif
 #include "Engine/Serialization/Serialization.h"
@@ -120,7 +120,8 @@ void Lightmap::EnsureSize(int32 size)
             options.sRGB = false;
             options.NeverStream = false;
             options.InternalLoad.Bind<Lightmap, &Lightmap::OnInitLightmap>(this);
-            if (AssetsImportingManager::Create(AssetsImportingManager::CreateTextureTag, assetPath, id, &options))
+            CreateAssetFunction encoder = &ImportTexture::Import;
+            if (BakedAssetFacade::Create(encoder, assetPath, id, &options))
             {
                 LOG(Error, "Cannot import empty lightmap {0}:{1}", _index, textureIndex);
             }

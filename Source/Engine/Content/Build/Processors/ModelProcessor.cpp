@@ -20,9 +20,13 @@
 #include "Engine/ContentImporters/ImportModel.h"
 #include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Graphics/Materials/MaterialShader.h"
+#include "Engine/Graphics/Shaders/GPUShader.h"
 #include "Engine/Graphics/Textures/TextureData.h"
+#include "Engine/ShadersCompilation/ShadersCompilation.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Core/ScopeExit.h"
+#include "Engine/Utilities/Encryption.h"
 #endif
 
 #include <algorithm>
@@ -414,7 +418,8 @@ AssetProcessorDescriptor ModelProcessor::CreateDescriptor()
         output.IndependentlyReusable = true;
         descriptor.Outputs.Add(MoveTemp(output));
     };
-    const ArtifactTargetDimension runtimeDimensions = ArtifactTargetDimension::Platform | ArtifactTargetDimension::Architecture | ArtifactTargetDimension::Graphics;
+    const ArtifactTargetDimension runtimeDimensions = ArtifactTargetDimension::Platform | ArtifactTargetDimension::Architecture |
+        ArtifactTargetDimension::Graphics | ArtifactTargetDimension::ShaderCompiler | ArtifactTargetDimension::FeatureFlags;
     addOutput("runtime", ".flax", RuntimeFormatVersion, runtimeDimensions, "flax-model-runtime-v1");
     addOutput("geometry", ".bin", GeometryFormatVersion, ArtifactTargetDimension::Architecture, "flax-model-geometry-v1");
     addOutput("lod", ".bin", LodFormatVersion, ArtifactTargetDimension::Architecture, "flax-model-lod-v1");
@@ -582,6 +587,14 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
         (!selected && context.GetRecord().TypeName == Animation::TypeName);
     const bool materialOutput = selected && selected->Kind == ModelSubAssetKind::Material;
     const bool textureOutput = selected && selected->Kind == ModelSubAssetKind::Texture;
+    if (materialOutput)
+    {
+        const String materialCompilerIdentity = String::Format(TEXT("flax-material-shader-v{0}-graph-{1}-processor-{2}"),
+            GPU_SHADER_CACHE_VERSION, MATERIAL_GRAPH_VERSION, ModelProcessor::ImplementationVersion);
+        if (context.DeclareToolchain(TEXT("material-shader-compiler"),
+            ContentHash::Compute(*materialCompilerIdentity, materialCompilerIdentity.Length() * sizeof(Char)), sourceOrigin, diagnostic))
+            return true;
+    }
     const bool hasGeometry = analysis->SourceMeshCount > 0;
     if (!animationOutput && !materialOutput && !textureOutput)
     {
@@ -662,6 +675,8 @@ bool ModelProcessor::BuildOutputKey(const PreparedAsset& prepared, const Artifac
         if (dependency.Kind == AssetDependencyKind::Toolchain)
         {
             include = dependency.StableIdentity == TEXT("model-parser") ||
+                ((outputKind == "runtime" || outputKind == "material") && prepared.OutputType == Material::TypeName &&
+                    dependency.StableIdentity == TEXT("material-shader-compiler")) ||
                 ((outputKind == "lod" || outputKind == "runtime") && dependency.StableIdentity == TEXT("model-lod")) ||
                 ((outputKind == "sdf" || outputKind == "runtime") && dependency.StableIdentity == TEXT("model-sdf")) ||
                 ((outputKind == "animation" || (outputKind == "runtime" && prepared.OutputType == Animation::TypeName)) && dependency.StableIdentity == TEXT("model-animation"));
@@ -889,6 +904,131 @@ namespace
                 prepared.AssetID, path, String::Format(TEXT("Model compatibility output is missing required chunk {0}."), chunkIndex));
         }
         return false;
+    }
+
+    bool HasTargetFeature(const ArtifactTarget& target, const StringAnsiView& feature)
+    {
+        for (const StringAnsi& value : target.FeatureFlags)
+        {
+            if (value == feature)
+                return true;
+        }
+        return false;
+    }
+
+    bool CompileModelMaterialRuntime(const StringView& path, const PreparedAsset& prepared, const ArtifactTarget& target,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        if (target.Role != StringAnsiView("Runtime"))
+            return false;
+#if COMPILE_WITH_SHADER_COMPILER
+        AssetInitData sourceData;
+        {
+            auto storage = ContentStorageManager::GetStorage(path, true);
+            if (!storage || storage->LoadAssetHeader(prepared.AssetID, sourceData) ||
+                sourceData.CustomData.Length() != sizeof(ShaderStorage::Header))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Build,
+                    prepared.AssetID, path, TEXT("Model-owned material header could not be opened for target shader compilation."));
+            if (LoadChunk(storage.Get(), sourceData, SHADER_FILE_CHUNK_SOURCE, diagnostic, prepared, path))
+                return true;
+            if (sourceData.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS] &&
+                storage->LoadAssetChunk(sourceData.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS]))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Build,
+                    prepared.AssetID, path, TEXT("Model-owned material parameters could not be loaded for runtime publication."));
+
+            AssetInitData runtimeData;
+            runtimeData.SerializedVersion = sourceData.SerializedVersion;
+            runtimeData.Header.ID = sourceData.Header.ID;
+            runtimeData.Header.TypeName = sourceData.Header.TypeName;
+            runtimeData.CustomData.Copy(sourceData.CustomData);
+            if (sourceData.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS])
+                runtimeData.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS] = sourceData.Header.Chunks[SHADER_FILE_CHUNK_MATERIAL_PARAMS]->Clone();
+
+            BytesContainer source;
+            source.Copy(sourceData.Header.Chunks[SHADER_FILE_CHUNK_SOURCE]->Data);
+            uint32 sourceLength = source.Length();
+            Encryption::DecryptBytes(source.Get(), sourceLength);
+            source.Get()[sourceLength - 1] = 0;
+            while (sourceLength > 2 && source.Get()[sourceLength - 1] == 0)
+                sourceLength--;
+
+            const auto& shaderHeader = *reinterpret_cast<const ShaderStorage::Header*>(sourceData.CustomData.Get());
+            ShaderCompilationOptions options;
+            options.TargetName = prepared.AssetName.HasChars() ? prepared.AssetName : prepared.AssetID.ToString(Guid::FormatType::N);
+            options.TargetID = prepared.AssetID;
+            options.Source = reinterpret_cast<const char*>(source.Get());
+            options.SourceLength = sourceLength;
+            options.NoOptimize = HasTargetFeature(target, StringAnsiView("shader-no-optimize"));
+            options.GenerateDebugData = HasTargetFeature(target, StringAnsiView("shader-debug-data"));
+            options.TreatWarningsAsErrors = false;
+            MemoryWriteStream cacheStream(32 * 1024);
+            int32 compiledProfiles = 0;
+            auto compileProfile = [&](ShaderProfile profile, int32 chunkIndex, const char* platformDefine, PlatformType platform = (PlatformType)0) -> bool
+            {
+                cacheStream.SetPosition(0);
+                options.Profile = profile;
+                options.Platform = platform;
+                options.Output = &cacheStream;
+                options.Macros.Clear();
+                ShaderMacro& macro = options.Macros.AddOne();
+                macro.Name = platformDefine;
+                macro.Definition = nullptr;
+                Material::SetupCompilationOptions(options, shaderHeader.Material.Info);
+                if (ShadersCompilation::Compile(options))
+                    return true;
+                auto* chunk = New<FlaxChunk>();
+                chunk->Data.Copy(cacheStream.GetHandle(), cacheStream.GetPosition());
+                runtimeData.Header.Chunks[chunkIndex] = chunk;
+                compiledProfiles++;
+                return false;
+            };
+
+            const bool dx12 = HasTargetFeature(target, StringAnsiView("shader-dx12"));
+            const bool dx11 = HasTargetFeature(target, StringAnsiView("shader-dx11"));
+            const bool dx10 = HasTargetFeature(target, StringAnsiView("shader-dx10"));
+            const bool vulkan = HasTargetFeature(target, StringAnsiView("shader-vulkan"));
+            const bool console = HasTargetFeature(target, StringAnsiView("shader-console"));
+            const bool webGpu = HasTargetFeature(target, StringAnsiView("shader-webgpu"));
+            const char* platformDefine = target.Platform == StringAnsiView("UWP") ? "PLATFORM_UWP" :
+                target.Platform == StringAnsiView("Linux") ? "PLATFORM_LINUX" :
+                target.Platform == StringAnsiView("Android") ? "PLATFORM_ANDROID" :
+                target.Platform == StringAnsiView("Mac") ? "PLATFORM_MAC" :
+                target.Platform == StringAnsiView("iOS") ? "PLATFORM_IOS" :
+                target.Platform == StringAnsiView("Switch") ? "PLATFORM_SWITCH" : "PLATFORM_WINDOWS";
+            if ((dx12 && compileProfile(ShaderProfile::DirectX_SM6, SHADER_FILE_CHUNK_INTERNAL_D3D_SM6_CACHE, platformDefine,
+                    target.Platform == StringAnsiView("XboxScarlett") ? PlatformType::XboxScarlett : (PlatformType)0)) ||
+                (dx11 && compileProfile(ShaderProfile::DirectX_SM5, SHADER_FILE_CHUNK_INTERNAL_D3D_SM5_CACHE, platformDefine)) ||
+                (dx10 && compileProfile(ShaderProfile::DirectX_SM4, SHADER_FILE_CHUNK_INTERNAL_D3D_SM4_CACHE, platformDefine)) ||
+                (vulkan && compileProfile(ShaderProfile::Vulkan_SM5, SHADER_FILE_CHUNK_INTERNAL_VULKAN_SM5_CACHE, platformDefine)) ||
+                (console && target.Platform == StringAnsiView("PS4") && compileProfile(ShaderProfile::PS4, SHADER_FILE_CHUNK_INTERNAL_GENERIC_CACHE, "PLATFORM_PS4")) ||
+                (console && target.Platform == StringAnsiView("PS5") && compileProfile(ShaderProfile::PS5, SHADER_FILE_CHUNK_INTERNAL_GENERIC_CACHE, "PLATFORM_PS5")) ||
+                (webGpu && compileProfile(ShaderProfile::WebGPU, SHADER_FILE_CHUNK_INTERNAL_GENERIC_CACHE, "PLATFORM_WEB")))
+            {
+                runtimeData.Header.DeleteChunks();
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                    prepared.AssetID, path, TEXT("Model-owned material shader compilation failed for the runtime target."));
+            }
+            if (compiledProfiles == 0)
+            {
+                runtimeData.Header.DeleteChunks();
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build,
+                    prepared.AssetID, path, TEXT("Runtime target declares no material shader profiles."));
+            }
+
+            storage = nullptr;
+            ContentStorageManager::EnsureAccess(path);
+            const bool saveFailed = FlaxStorage::Create(path, runtimeData, true);
+            runtimeData.Header.DeleteChunks();
+            if (saveFailed)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Build,
+                    prepared.AssetID, path, TEXT("Target-compiled model-owned material artifact could not be saved."));
+        }
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+#else
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Build,
+            prepared.AssetID, path, TEXT("Runtime model-owned material publication requires the shader compiler."));
+#endif
     }
 
     const ModelSubAssetInfo* ResolveBuiltSelection(const Array<ModelSubAssetInfo>& infos, const ModelSubAssetInfo& selected)
@@ -1136,6 +1276,9 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
         return Fail(diagnostic, createResult == CreateAssetResult::Abort ? AssetPipelineDiagnosticCode::BuildCancelled : AssetPipelineDiagnosticCode::BuildFailed,
             AssetPipelineDiagnosticStage::Build, prepared.AssetID, sourcePath, TEXT("Model compatibility artifact creation failed in job staging."));
     }
+    if (selected && selected->Kind == ModelSubAssetKind::Material &&
+        CompileModelMaterialRuntime(runtimeScratchPath, prepared, context.GetTarget(), diagnostic))
+        return true;
 
     Array<byte> runtimeBytes;
     if (File::ReadAllBytes(runtimeScratchPath, runtimeBytes) || runtimeBytes.IsEmpty())

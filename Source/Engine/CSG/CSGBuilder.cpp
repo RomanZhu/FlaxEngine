@@ -14,7 +14,9 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Physics/CollisionData.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/Content/AssetDatabase/BakedAssetFacade.h"
+#include "Engine/ContentImporters/ImportModel.h"
+#include "Engine/ContentImporters/CreateRawData.h"
 #include "Engine/ContentImporters/CreateCollisionData.h"
 #include "Engine/Content/Assets/RawDataAsset.h"
 #include "Engine/Engine/Engine.h"
@@ -271,8 +273,9 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 Guid modelDataAssetId = scene->CSGData.Model.GetID();
                 if (!modelDataAssetId.IsValid())
                     modelDataAssetId = Guid::New();
-                const String modelDataAssetPath = sceneDataFolderPath / TEXT("CSG_Mesh") + ASSET_FILES_EXTENSION_WITH_DOT;
-                if (AssetsImportingManager::Create(AssetsImportingManager::CreateModelTag, modelDataAssetPath, modelDataAssetId, &modelData))
+                const String modelDataAssetPath = sceneDataFolderPath / TEXT("CSG_Mesh.bakedasset");
+                CreateAssetFunction encoder = &ImportModel::Create;
+                if (BakedAssetFacade::Create(encoder, modelDataAssetPath, modelDataAssetId, &modelData))
                 {
                     LOG(Warning, "Failed to import CSG mesh data");
                     return true;
@@ -287,7 +290,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 Guid rawDataAssetId = scene->CSGData.Data.GetID();
                 if (!rawDataAssetId.IsValid())
                     rawDataAssetId = Guid::New();
-                const String rawDataAssetPath = sceneDataFolderPath / TEXT("CSG_Data") + ASSET_FILES_EXTENSION_WITH_DOT;
+                const String rawDataAssetPath = sceneDataFolderPath / TEXT("CSG_Data.bakedasset");
                 if (generateRawDataAsset(meshData, rawDataAssetId, rawDataAssetPath))
                 {
                     LOG(Warning, "Failed to create raw CSG data");
@@ -325,8 +328,9 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 Guid collisionDataAssetId = scene->CSGData.CollisionData.GetID();
                 if (!collisionDataAssetId.IsValid())
                     collisionDataAssetId = Guid::New();
-                const String collisionDataAssetPath = sceneDataFolderPath / TEXT("CSG_Collision") + ASSET_FILES_EXTENSION_WITH_DOT;
-                if (AssetsImportingManager::Create(AssetsImportingManager::CreateCollisionDataTag, collisionDataAssetPath, collisionDataAssetId, &arg))
+                const String collisionDataAssetPath = sceneDataFolderPath / TEXT("CSG_Collision.bakedasset");
+                CreateAssetFunction encoder = &CreateCollisionData::Create;
+                if (BakedAssetFacade::Create(encoder, collisionDataAssetPath, collisionDataAssetId, &arg))
                 {
                     LOG(Warning, "Failed to cook CSG mesh collision data");
                     return true;
@@ -425,7 +429,8 @@ bool CSGBuilderImpl::generateRawDataAsset(RawData& meshData, Guid& assetId, cons
     // Serialize
     BytesContainer bytesContainer;
     bytesContainer.Link(ToSpan(stream));
-    return AssetsImportingManager::Create(AssetsImportingManager::CreateRawDataTag, assetPath, assetId, (void*)&bytesContainer);
+    CreateAssetFunction encoder = &CreateRawData::Create;
+    return BakedAssetFacade::Create(encoder, assetPath, assetId, &bytesContainer);
 }
 
 #endif

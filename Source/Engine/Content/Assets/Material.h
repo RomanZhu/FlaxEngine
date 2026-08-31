@@ -54,6 +54,7 @@ public:
     // [ShaderAssetBase]
 #if USE_EDITOR
     void InitCompilationOptions(ShaderCompilationOptions& options) override;
+    static void SetupCompilationOptions(ShaderCompilationOptions& options, const MaterialInfo& info);
     bool Save(const StringView& path = StringView::Empty) override;
 #endif
 

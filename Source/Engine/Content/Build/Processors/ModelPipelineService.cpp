@@ -49,7 +49,7 @@ namespace
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
         Dictionary<Guid, Array<AssetBuildRequestHandle>> FamilyHandles;
-        Dictionary<Guid, ArtifactKey> Fingerprints;
+        Dictionary<String, ArtifactKey> Fingerprints;
         Dictionary<Guid, std::shared_ptr<std::mutex>> SourceLockers;
         uint64 ForceGeneration = 0;
         bool Initialized = false;
@@ -87,7 +87,12 @@ namespace
         return false;
     }
 
-    void QueryCurrentState(const Guid& assetID, uint64& revision, ArtifactKey& fingerprint)
+    String GetFingerprintIdentity(const Guid& assetID, const ArtifactKey& targetFingerprint)
+    {
+        return assetID.ToString(Guid::FormatType::N) + TEXT("/") + String(targetFingerprint.ToString());
+    }
+
+    void QueryCurrentState(const Guid& assetID, const ArtifactKey& targetFingerprint, uint64& revision, ArtifactKey& fingerprint)
     {
         AssetRecord record;
         if (!AssetDatabase::Get().TryGetRecord(assetID, record))
@@ -99,7 +104,7 @@ namespace
         revision = record.DatabaseRevision;
         ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
-        const ArtifactKey* value = state.Fingerprints.TryGet(assetID);
+        const ArtifactKey* value = state.Fingerprints.TryGet(GetFingerprintIdentity(assetID, targetFingerprint));
         fingerprint = value ? *value : ArtifactKey();
     }
 
@@ -182,7 +187,7 @@ namespace
             return true;
         {
             std::lock_guard<std::mutex> lock(state.Locker);
-            state.Fingerprints[record.ID] = prepared.InputFingerprint;
+            state.Fingerprints[GetFingerprintIdentity(record.ID, prepared.TargetFingerprint)] = prepared.InputFingerprint;
         }
         auto* payload = static_cast<ModelPreparedPayload*>(prepared.Payload.get());
         if (!payload)
@@ -318,9 +323,9 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         publication.ProcessorImplementationVersion = ModelProcessor::ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
         publication.Outputs = execution->Outputs;
-        publication.QueryCurrentState = [assetID = execution->Prepared.AssetID](uint64& revision, ArtifactKey& fingerprint)
+        publication.QueryCurrentState = [assetID = execution->Prepared.AssetID, targetFingerprint = execution->Prepared.TargetFingerprint](uint64& revision, ArtifactKey& fingerprint)
         {
-            QueryCurrentState(assetID, revision, fingerprint);
+            QueryCurrentState(assetID, targetFingerprint, revision, fingerprint);
         };
         publication.Notify = [typeName = execution->Prepared.OutputType](const ArtifactManifest& manifest)
         {
@@ -502,13 +507,8 @@ bool ModelPipelineService::ReconcileMetadata(const Guid& rootAssetID, Array<SubA
         return false;
     }
     meta.SubAssets = MoveTemp(result.Resolved);
-    if (AssetMeta::SaveAtomic(record.MetaPath.Get(), meta, diagnostic))
+    if (AssetDatabaseFacade::CommitMetadata(record.SourcePath.Get(), meta, true, diagnostic))
         return true;
-    Array<String> refreshPaths;
-    refreshPaths.Add(record.SourcePath.Get());
-    if (AssetDatabaseFacade::RefreshSources(refreshPaths))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, AssetPipelineDiagnosticStage::DatabaseScan,
-            rootAssetID, TEXT("Model metadata was reconciled but the database rescan failed."));
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }

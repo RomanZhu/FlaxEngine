@@ -44,6 +44,7 @@ enum class AssetMutationFailure : byte
     JournalFailure,
     CallbackRejected,
     CallbackHandledInvalidState,
+    DatabaseCommitFailed,
     RecoveryRequired,
 };
 
@@ -107,10 +108,11 @@ struct FLAXENGINE_API AssetMutationResult
 
 using AssetMutationDecisionHook = Function<AssetMutationDecisionResult(const AssetMutationDecisionContext&)>;
 using AssetMutationCommittedHook = Function<void(const AssetMutationResult&)>;
+using AssetMutationDatabaseCommitHook = Function<bool(const AssetMutationResult&)>;
 
 /// <summary>
 /// Owns atomic filesystem mutations for canonical sources and their adjacent .meta sidecars.
-/// Database publication/import scheduling is intentionally performed by the facade after success.
+/// The configured database hook reconciles source state before the durable commit marker is published.
 /// </summary>
 class FLAXENGINE_API AssetMutationService
 {
@@ -128,11 +130,20 @@ public:
     /// <summary>Optional notification invoked after a fully verified commit.</summary>
     AssetMutationCommittedHook CommittedHook;
 
+    /// <summary>
+    /// Commits the already-published filesystem view into the source database. Returns true on failure.
+    /// When it fails the service rolls the filesystem back and invokes it again to reconcile the old view.
+    /// </summary>
+    AssetMutationDatabaseCommitHook DatabaseCommitHook;
+
     /// <summary>Validates a planned operation without taking a decision hook or changing the filesystem.</summary>
     bool Validate(AssetMutationOperation operation, const StringView& sourcePath, const StringView& destinationPath, AssetMutationResult& result) const;
 
     /// <summary>Creates a folder and folder metadata as one journaled operation.</summary>
     bool CreateFolder(const StringView& path, AssetMutationResult& result);
+
+    /// <summary>Creates a folder with caller-provided canonical metadata as one journaled operation.</summary>
+    bool CreateFolder(const StringView& path, const AssetMeta& meta, AssetMutationResult& result);
 
     /// <summary>Creates an authored source file and its metadata as one journaled operation.</summary>
     bool CreateAsset(const StringView& path, const StringAnsiView& sourceContents, const AssetMeta& meta, AssetMutationResult& result);
@@ -148,14 +159,23 @@ public:
     /// <summary>Copies a source/meta pair, recursively assigning new GUIDs for a folder copy.</summary>
     bool Copy(const StringView& sourcePath, const StringView& destinationPath, AssetMutationResult& result);
 
+    /// <summary>Copies source/meta pairs under one durable journal and commit marker.</summary>
+    bool CopyBatch(const Array<String>& sourcePaths, const Array<String>& destinationPaths, AssetMutationResult& result);
+
     /// <summary>Moves a source/meta pair on the same volume while preserving identity.</summary>
     bool Move(const StringView& sourcePath, const StringView& destinationPath, AssetMutationResult& result);
+
+    /// <summary>Moves source/meta pairs under one durable journal while preserving every identity.</summary>
+    bool MoveBatch(const Array<String>& sourcePaths, const Array<String>& destinationPaths, AssetMutationResult& result);
 
     /// <summary>Renames a source/meta pair, including case-only renames.</summary>
     bool Rename(const StringView& sourcePath, const StringView& newName, AssetMutationResult& result);
 
     /// <summary>Moves a source/meta pair into durable recovery storage.</summary>
     bool DeleteToRecovery(const StringView& sourcePath, AssetMutationResult& result);
+
+    /// <summary>Moves source/meta pairs into durable recovery storage under one journal and commit marker.</summary>
+    bool DeleteToRecoveryBatch(const Array<String>& sourcePaths, AssetMutationResult& result);
 
     /// <summary>Atomically replaces source bytes while retaining the adjacent metadata identity.</summary>
     bool ReplaceContents(const StringView& sourcePath, const StringView& replacementPath, AssetMutationResult& result);
@@ -168,6 +188,9 @@ public:
 
     /// <summary>Restores a pair returned by DeleteToRecovery to a canonical Content path.</summary>
     bool Recover(const StringView& recoveryPath, const StringView& destinationPath, AssetMutationResult& result);
+
+    /// <summary>Restores recovery source/meta pairs under one durable journal and commit marker.</summary>
+    bool RecoverBatch(const Array<String>& recoveryPaths, const Array<String>& destinationPaths, AssetMutationResult& result);
 
     /// <summary>Resolves every interrupted journal to a verified old or new pair state.</summary>
     /// <returns>True when one or more journals could not be recovered safely.</returns>

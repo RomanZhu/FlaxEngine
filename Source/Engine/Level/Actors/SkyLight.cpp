@@ -10,7 +10,8 @@
 #include "Engine/Renderer/ProbesRenderer.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Serialization/Serialization.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/Content/AssetDatabase/BakedAssetFacade.h"
+#include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Graphics/RenderTools.h"
 #include "Engine/Level/Scene/Scene.h"
 
@@ -69,11 +70,12 @@ void SkyLight::SetProbeData(TextureData& data)
 
 #if COMPILE_WITH_ASSETS_IMPORTER
     // Create asset file
-    const String path = GetScene()->GetDataFolderPath() / TEXT("SkyLights/") / GetID().ToString(Guid::FormatType::N) + ASSET_FILES_EXTENSION_WITH_DOT;
+    const String path = GetScene()->GetDataFolderPath() / TEXT("SkyLights/") / GetID().ToString(Guid::FormatType::N) + TEXT(".bakedasset");
     AssetInfo info;
     if (FileSystem::FileExists(path) && Content::GetAssetInfo(path, info))
         id = info.ID;
-    if (AssetsImportingManager::Create(AssetsImportingManager::CreateCubeTextureTag, path, id, &data))
+    CreateAssetFunction encoder = &ImportTexture::ImportCube;
+    if (BakedAssetFacade::Create(encoder, path, id, &data))
     {
         LOG(Error, "Cannot import generated sky light!");
         return;

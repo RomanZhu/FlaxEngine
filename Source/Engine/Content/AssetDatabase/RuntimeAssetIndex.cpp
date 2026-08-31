@@ -66,6 +66,20 @@ namespace
         object.AddMember(JsonValue(name, allocator), array, allocator);
     }
 
+    void AddStrings(JsonValue& object, const char* name, const Array<String>& values, JsonAlloc& allocator)
+    {
+        Array<String> sorted(values);
+        if (sorted.Count() > 1)
+            std::sort(sorted.Get(), sorted.Get() + sorted.Count(), [](const String& a, const String& b) { return a < b; });
+        JsonValue array(rapidjson::kArrayType);
+        for (const String& value : sorted)
+        {
+            const StringAnsi text(value);
+            array.PushBack(JsonValue(text.Get(), text.Length(), allocator), allocator);
+        }
+        object.AddMember(JsonValue(name, allocator), array, allocator);
+    }
+
     bool LessPreload(const RuntimeAssetPreload& a, const RuntimeAssetPreload& b)
     {
         if (a.Required != b.Required)
@@ -111,6 +125,26 @@ namespace
             return Fail(diagnostic, TEXT("Runtime asset index entries require object identity, backing GUID, type, package identity, and a non-empty package range."));
         if (RuntimeAssetIndex::ContainsLibraryPath(entry.PackagedPath) || RuntimeAssetIndex::ContainsLibraryPath(entry.CanonicalPath))
             return Fail(diagnostic, TEXT("Runtime asset index must not refer to project Library storage."));
+        if (entry.CanonicalPath.HasChars() && (entry.CanonicalPath.Contains(TEXT("\\")) || !FileSystem::IsRelative(entry.CanonicalPath) ||
+            entry.CanonicalPath.StartsWith(TEXT("../")) || entry.CanonicalPath.Contains(TEXT("/../"))))
+            return Fail(diagnostic, TEXT("Runtime canonical lookup paths must be normalized and player-relative."));
+        if (entry.ResourcePath.HasChars())
+        {
+            String resourcePath(entry.ResourcePath);
+            resourcePath.Replace(TEXT('\\'), TEXT('/'));
+            if (resourcePath != entry.ResourcePath || !FileSystem::IsRelative(resourcePath) || resourcePath.StartsWith(TEXT("../")) ||
+                resourcePath.Contains(TEXT("/../")) || resourcePath == TEXT(".."))
+                return Fail(diagnostic, TEXT("Runtime resource aliases must be normalized paths relative to Content/Resources."));
+        }
+        HashSet<String> addresses;
+        for (const String& address : entry.Addresses)
+        {
+            String key(address);
+            key.Replace(TEXT('\\'), TEXT('/'));
+            key = key.ToLower();
+            if (key.IsEmpty() || address.Contains(TEXT("\\")) || !addresses.Add(key))
+                return Fail(diagnostic, TEXT("Runtime address keys must be non-empty and unique per object."));
+        }
         if (EnumHasAnyFlags(entry.Flags, RuntimeAssetIndexFlags::ExactArtifact) && entry.ExactArtifact.IsZero())
             return Fail(diagnostic, TEXT("Runtime asset index exact-artifact entries require the immutable artifact key."));
         if (entry.Preload.HasItems() && entry.PreloadBudgetBytes == 0)
@@ -121,8 +155,31 @@ namespace
     bool ValidateGraph(const Array<RuntimeAssetIndexEntry>& entries, AssetPipelineDiagnostic& diagnostic)
     {
         HashSet<AssetObjectId> available;
+        HashSet<String> runtimePaths;
         for (const RuntimeAssetIndexEntry& entry : entries)
+        {
             available.Add(entry.ID);
+            if (entry.CanonicalPath.HasChars())
+            {
+                const String canonicalPath = entry.CanonicalPath.ToLower();
+                if (!runtimePaths.Add(canonicalPath))
+                    return Fail(diagnostic, TEXT("Runtime asset index contains a duplicate canonical lookup path."));
+            }
+            if (entry.ResourcePath.HasChars())
+            {
+                String resourcePath(entry.ResourcePath);
+                resourcePath.Replace(TEXT('\\'), TEXT('/'));
+                resourcePath = resourcePath.ToLower();
+                if (!runtimePaths.Add(resourcePath))
+                    return Fail(diagnostic, TEXT("Runtime asset index contains a duplicate resource-relative path."));
+            }
+            for (const String& address : entry.Addresses)
+            {
+                const String key = address.ToLower();
+                if (!runtimePaths.Add(key))
+                    return Fail(diagnostic, TEXT("Runtime asset index contains a duplicate resource or address key."));
+            }
+        }
         for (const RuntimeAssetIndexEntry& entry : entries)
         {
             HashSet<AssetObjectId> dependencies;
@@ -169,6 +226,8 @@ namespace
             AddAnsi(item, "backingGuid", GuidKey(entry.BackingAssetID), allocator);
             AddString(item, "type", entry.TypeName, allocator);
             AddString(item, "canonicalPath", entry.CanonicalPath, allocator);
+            AddString(item, "resourcePath", entry.ResourcePath, allocator);
+            AddStrings(item, "addresses", entry.Addresses, allocator);
             AddString(item, "packagePath", entry.PackagedPath, allocator);
             AddAnsi(item, "packageId", GuidKey(entry.PackageID), allocator);
             item.AddMember("chunkId", entry.ChunkID, allocator);
@@ -241,6 +300,22 @@ namespace
         return false;
     }
 
+    bool ReadStrings(const JsonValue& object, const char* name, Array<String>& values)
+    {
+        values.Clear();
+        const JsonValue* member = Member(object, name);
+        if (!member || !member->IsArray())
+            return true;
+        values.EnsureCapacity(static_cast<int32>(member->Size()));
+        for (const JsonValue& item : member->GetArray())
+        {
+            if (!item.IsString())
+                return true;
+            values.Add(String(StringAnsiView(item.GetString(), item.GetStringLength())));
+        }
+        return false;
+    }
+
     bool ReadPreloads(const JsonValue& object, Array<RuntimeAssetPreload>& values)
     {
         values.Clear();
@@ -277,7 +352,7 @@ namespace
     {
         JsonDocument json;
         json.Parse(input.Get(), input.Length());
-        if (json.HasParseError() || !json.IsObject() || json.MemberCount() != 9)
+        if (json.HasParseError() || !json.IsObject() || json.MemberCount() != 11)
             return Fail(diagnostic, TEXT("Cook reproducibility manifest is malformed or has unexpected root fields."));
         const JsonValue* version = Member(json, "formatVersion");
         const JsonValue* storedContentHash = Member(json, "contentHash");
@@ -287,10 +362,13 @@ namespace
         const JsonValue* deterministic = Member(json, "deterministic");
         const JsonValue* roots = Member(json, "roots");
         const JsonValue* artifacts = Member(json, "artifacts");
+        const JsonValue* settings = Member(json, "settings");
+        const JsonValue* streamingFiles = Member(json, "streamingFiles");
         const JsonValue* packages = Member(json, "packages");
-        if (!version || !version->IsInt() || version->GetInt() != 1 || !storedContentHash || !storedContentHash->IsString() ||
+        if (!version || !version->IsInt() || version->GetInt() != 2 || !storedContentHash || !storedContentHash->IsString() ||
             !storedInputHash || !storedInputHash->IsString() || !engineBuild || !engineBuild->IsInt() || !target || !target->IsString() ||
             !deterministic || !deterministic->IsBool() || !roots || !roots->IsArray() || !artifacts || !artifacts->IsObject() ||
+            !settings || !settings->IsObject() || !streamingFiles || !streamingFiles->IsObject() ||
             !packages || !packages->IsObject() || ArtifactKey::Parse(storedInputHash->GetStringAnsiView(), inputHash) ||
             ContentHash::Parse(storedContentHash->GetStringAnsiView(), contentHash))
             return Fail(diagnostic, TEXT("Cook reproducibility manifest fields have invalid types or hashes."));
@@ -304,6 +382,8 @@ namespace
         fullOrder.Add("deterministic");
         fullOrder.Add("roots");
         fullOrder.Add("artifacts");
+        fullOrder.Add("settings");
+        fullOrder.Add("streamingFiles");
         fullOrder.Add("packages");
         StringAnsi canonical;
         if (Serialize(json, canonical, fullOrder, diagnostic) || canonical.Length() != input.Length() ||
@@ -321,6 +401,8 @@ namespace
         payloadOrder.Add("deterministic");
         payloadOrder.Add("roots");
         payloadOrder.Add("artifacts");
+        payloadOrder.Add("settings");
+        payloadOrder.Add("streamingFiles");
         payloadOrder.Add("packages");
         StringAnsi payloadText;
         if (Serialize(payload, payloadText, payloadOrder, diagnostic) ||
@@ -402,7 +484,7 @@ bool RuntimeAssetIndex::Parse(const StringAnsiView& input, Array<RuntimeAssetInd
     entries.EnsureCapacity(static_cast<int32>(assets->MemberCount()));
     for (auto i = assets->MemberBegin(); i != assets->MemberEnd(); ++i)
     {
-        if (!i->name.IsString() || !i->value.IsObject() || i->value.MemberCount() != 16)
+        if (!i->name.IsString() || !i->value.IsObject() || i->value.MemberCount() != 18)
             return Fail(diagnostic, TEXT("Runtime asset index contains a malformed asset location."));
         const JsonValue& item = i->value;
         RuntimeAssetIndexEntry entry;
@@ -416,7 +498,8 @@ bool RuntimeAssetIndex::Parse(const StringAnsiView& input, Array<RuntimeAssetInd
         const JsonValue* preloadBudget = Member(item, "preloadBudgetBytes");
         if (ReadGuid(item, "fileGuid", entry.ID.Guid) || !localId || !localId->IsInt64() ||
             ReadGuid(item, "backingGuid", entry.BackingAssetID) || ReadString(item, "type", entry.TypeName) ||
-            ReadString(item, "canonicalPath", entry.CanonicalPath) || ReadString(item, "packagePath", entry.PackagedPath) ||
+            ReadString(item, "canonicalPath", entry.CanonicalPath) || ReadString(item, "resourcePath", entry.ResourcePath) ||
+            ReadStrings(item, "addresses", entry.Addresses) || ReadString(item, "packagePath", entry.PackagedPath) ||
             ReadGuid(item, "packageId", entry.PackageID) || !chunkId || !chunkId->IsUint() || !offset || !offset->IsUint64() ||
             !size || !size->IsUint64() || !assetFormatVersion || !assetFormatVersion->IsUint() || !flags || !flags->IsUint() || !artifact ||
             !preloadBudget || !preloadBudget->IsUint64() || ReadObjectIds(item, "dependencies", entry.Dependencies) || ReadPreloads(item, entry.Preload))
@@ -505,6 +588,36 @@ bool RuntimeAssetIndex::WriteReproducibilityJson(const RuntimeBuildReproducibili
         }
     }
 
+
+    auto prepareFiles = [&](const Array<RuntimeBuildFileEvidence>& input, Array<RuntimeBuildFileEvidence>& sorted, const StringView& kind)
+    {
+        sorted = input;
+        if (sorted.Count() > 1)
+            std::sort(sorted.Get(), sorted.Get() + sorted.Count(), [](const RuntimeBuildFileEvidence& a, const RuntimeBuildFileEvidence& b)
+            {
+                return a.Path < b.Path;
+            });
+        HashSet<String> paths;
+        for (const RuntimeBuildFileEvidence& file : sorted)
+        {
+            String key(file.Path);
+            key.Replace(TEXT('\\'), TEXT('/'));
+            key = key.ToLower();
+            if (file.Path.IsEmpty() || file.Path.Contains(TEXT("\\")) || !FileSystem::IsRelative(file.Path) || ContainsLibraryPath(file.Path) ||
+                file.Content.IsZero() || !paths.Add(key))
+            {
+                Fail(diagnostic, String::Format(TEXT("Cook reproducibility {0} evidence is incomplete, duplicated, absolute, or refers to Library."), kind));
+                return true;
+            }
+        }
+        return false;
+    };
+    Array<RuntimeBuildFileEvidence> settings;
+    Array<RuntimeBuildFileEvidence> streamingFiles;
+    if (prepareFiles(manifest.Settings, settings, TEXT("settings")) ||
+        prepareFiles(manifest.StreamingFiles, streamingFiles, TEXT("streaming-file")))
+        return true;
+
     Array<RuntimeBuildPackageEvidence> packages(manifest.Packages);
     if (packages.Count() > 1)
         std::sort(packages.Get(), packages.Get() + packages.Count(), [](const RuntimeBuildPackageEvidence& a, const RuntimeBuildPackageEvidence& b)
@@ -519,7 +632,7 @@ bool RuntimeAssetIndex::WriteReproducibilityJson(const RuntimeBuildReproducibili
             return Fail(diagnostic, TEXT("Cook reproducibility package evidence is incomplete, duplicated, or refers to Library."));
     }
 
-    ArtifactKeyBuilder inputBuilder(StringAnsiView("flax-cook-reproducibility-input-v1"));
+    ArtifactKeyBuilder inputBuilder(StringAnsiView("flax-cook-reproducibility-input-v2"));
     inputBuilder.AddUInt32(StringAnsiView("engineBuild"), static_cast<uint32>(manifest.EngineBuild));
     inputBuilder.AddKey(StringAnsiView("target"), manifest.TargetFingerprint);
     inputBuilder.AddBool(StringAnsiView("deterministic"), manifest.Deterministic);
@@ -551,13 +664,25 @@ bool RuntimeAssetIndex::WriteReproducibilityJson(const RuntimeBuildReproducibili
             inputBuilder.AddHash(StringAnsi::Format("artifact.{0}.environment.{1}.hash", i, j), environment[j].Hash);
         }
     }
+    for (int32 i = 0; i < settings.Count(); i++)
+    {
+        inputBuilder.AddString(StringAnsi::Format("setting.{0}.path", i), settings[i].Path);
+        inputBuilder.AddHash(StringAnsi::Format("setting.{0}.content", i), settings[i].Content);
+        inputBuilder.AddUInt64(StringAnsi::Format("setting.{0}.size", i), settings[i].Size);
+    }
+    for (int32 i = 0; i < streamingFiles.Count(); i++)
+    {
+        inputBuilder.AddString(StringAnsi::Format("streaming.{0}.path", i), streamingFiles[i].Path);
+        inputBuilder.AddHash(StringAnsi::Format("streaming.{0}.content", i), streamingFiles[i].Content);
+        inputBuilder.AddUInt64(StringAnsi::Format("streaming.{0}.size", i), streamingFiles[i].Size);
+    }
     const StringAnsi inputHash = inputBuilder.Finalize().ToString();
 
     auto buildDocument = [&](JsonDocument& json, const StringAnsi* contentHash)
     {
         json.SetObject();
         JsonAlloc& allocator = json.GetAllocator();
-        json.AddMember("formatVersion", 1, allocator);
+        json.AddMember("formatVersion", 2, allocator);
         if (contentHash)
             AddAnsi(json, "contentHash", *contentHash, allocator);
         AddAnsi(json, "inputHash", inputHash, allocator);
@@ -596,6 +721,22 @@ bool RuntimeAssetIndex::WriteReproducibilityJson(const RuntimeBuildReproducibili
         }
         json.AddMember("artifacts", artifactTable, allocator);
 
+        auto addFileTable = [&](const char* name, const Array<RuntimeBuildFileEvidence>& files)
+        {
+            JsonValue table(rapidjson::kObjectType);
+            for (const RuntimeBuildFileEvidence& file : files)
+            {
+                JsonValue item(rapidjson::kObjectType);
+                AddAnsi(item, "content", file.Content.ToString(), allocator);
+                item.AddMember("size", file.Size, allocator);
+                const StringAnsi key(file.Path);
+                table.AddMember(JsonValue(key.Get(), key.Length(), allocator), item, allocator);
+            }
+            json.AddMember(JsonValue(name, allocator), table, allocator);
+        };
+        addFileTable("settings", settings);
+        addFileTable("streamingFiles", streamingFiles);
+
         JsonValue packageTable(rapidjson::kObjectType);
         for (const RuntimeBuildPackageEvidence& package : packages)
         {
@@ -617,6 +758,8 @@ bool RuntimeAssetIndex::WriteReproducibilityJson(const RuntimeBuildReproducibili
     payloadOrder.Add("deterministic");
     payloadOrder.Add("roots");
     payloadOrder.Add("artifacts");
+    payloadOrder.Add("settings");
+    payloadOrder.Add("streamingFiles");
     payloadOrder.Add("packages");
     JsonDocument payload;
     buildDocument(payload, nullptr);
@@ -636,6 +779,8 @@ bool RuntimeAssetIndex::WriteReproducibilityJson(const RuntimeBuildReproducibili
     order.Add("deterministic");
     order.Add("roots");
     order.Add("artifacts");
+    order.Add("settings");
+    order.Add("streamingFiles");
     order.Add("packages");
     if (Serialize(json, output, order, diagnostic))
         return true;

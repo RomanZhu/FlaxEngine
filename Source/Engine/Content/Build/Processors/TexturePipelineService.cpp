@@ -56,7 +56,7 @@ namespace
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
         Dictionary<Guid, AssetBuildRequestHandle> ThumbnailHandles;
         Dictionary<Guid, ArtifactKey> ThumbnailPlans;
-        Dictionary<Guid, ArtifactKey> Fingerprints;
+        Dictionary<String, ArtifactKey> Fingerprints;
         uint64 ForceGeneration = 0;
         bool Initialized = false;
     };
@@ -127,7 +127,12 @@ namespace
         return false;
     }
 
-    void QueryCurrentState(const Guid& assetID, uint64& revision, ArtifactKey& fingerprint)
+    String GetFingerprintIdentity(const Guid& assetID, const ArtifactKey& targetFingerprint)
+    {
+        return assetID.ToString(Guid::FormatType::N) + TEXT("/") + String(targetFingerprint.ToString());
+    }
+
+    void QueryCurrentState(const Guid& assetID, const ArtifactKey& targetFingerprint, uint64& revision, ArtifactKey& fingerprint)
     {
         AssetRecord record;
         if (!AssetDatabase::Get().TryGetRecord(assetID, record))
@@ -139,7 +144,7 @@ namespace
         revision = record.DatabaseRevision;
         TexturePipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
-        const ArtifactKey* current = state.Fingerprints.TryGet(assetID);
+        const ArtifactKey* current = state.Fingerprints.TryGet(GetFingerprintIdentity(assetID, targetFingerprint));
         fingerprint = current ? *current : ArtifactKey();
     }
 
@@ -324,7 +329,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
         return true;
     {
         std::lock_guard<std::mutex> lock(state.Locker);
-        state.Fingerprints[record.ID] = prepared.InputFingerprint;
+        state.Fingerprints[GetFingerprintIdentity(record.ID, prepared.TargetFingerprint)] = prepared.InputFingerprint;
     }
 
     auto execution = std::make_shared<TextureExecution>();
@@ -422,9 +427,9 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
         publication.ProcessorImplementationVersion = TextureProcessor::ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
         publication.Outputs = execution->Outputs;
-        publication.QueryCurrentState = [assetID = execution->Prepared.AssetID](uint64& revision, ArtifactKey& fingerprint)
+        publication.QueryCurrentState = [assetID = execution->Prepared.AssetID, targetFingerprint = execution->Prepared.TargetFingerprint](uint64& revision, ArtifactKey& fingerprint)
         {
-            QueryCurrentState(assetID, revision, fingerprint);
+            QueryCurrentState(assetID, targetFingerprint, revision, fingerprint);
         };
         publication.Notify = [](const ArtifactManifest& manifest)
         {

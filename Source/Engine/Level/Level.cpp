@@ -47,6 +47,8 @@
 #include <algorithm>
 #if USE_EDITOR
 #include "Editor/Editor.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Platform/MessageBox.h"
 #include "Engine/Engine/CommandLine.h"
 #include "Engine/Serialization/JsonSerializer.h"
@@ -2129,27 +2131,40 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
         return true;
     }
 
-    // Save to a same-directory staging file first. Publishing uses an atomic same-volume
-    // replacement on supported desktop platforms, so a failed write or replacement leaves
-    // the previous scene bytes untouched.
-    String stagingPath(path);
-    stagingPath += TEXT(".tmp-");
-    stagingPath += Guid::New().ToString(Guid::FormatType::N);
-    if (File::WriteAllBytes(stagingPath, (byte*)buffer.GetString(), (int32)buffer.GetSize()))
+#if USE_EDITOR
+    if (AssetDatabase::Get().IsHardCutEnabled())
     {
-        LOG(Error, "Cannot write staged scene file '{0}'", stagingPath);
-        if (FileSystem::FileExists(stagingPath))
-            FileSystem::DeleteFile(stagingPath);
-        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
-        return true;
+        const StringAnsiView source(buffer.GetString(), static_cast<int32>(buffer.GetSize()));
+        if (AssetDatabaseFacade::SaveExistingJsonSource(path, source, sceneId, TEXT("FlaxEngine.SceneAsset")))
+        {
+            LOG(Error, "Cannot publish scene source pair '{0}' through the asset database.", path);
+            CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+            return true;
+        }
     }
-    if (FileSystem::MoveFile(path, stagingPath, true))
+    else
+#endif
     {
-        LOG(Error, "Cannot replace scene file '{0}' with completed staging file '{1}'", path, stagingPath);
-        if (FileSystem::FileExists(stagingPath))
-            FileSystem::DeleteFile(stagingPath);
-        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
-        return true;
+        // Legacy projects publish the scene through a same-directory staging file.
+        String stagingPath(path);
+        stagingPath += TEXT(".tmp-");
+        stagingPath += Guid::New().ToString(Guid::FormatType::N);
+        if (File::WriteAllBytes(stagingPath, (byte*)buffer.GetString(), (int32)buffer.GetSize()))
+        {
+            LOG(Error, "Cannot write staged scene file '{0}'", stagingPath);
+            if (FileSystem::FileExists(stagingPath))
+                FileSystem::DeleteFile(stagingPath);
+            CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+            return true;
+        }
+        if (FileSystem::MoveFile(path, stagingPath, true))
+        {
+            LOG(Error, "Cannot replace scene file '{0}' with completed staging file '{1}'", path, stagingPath);
+            if (FileSystem::FileExists(stagingPath))
+                FileSystem::DeleteFile(stagingPath);
+            CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+            return true;
+        }
     }
 
     stopwatch.Stop();

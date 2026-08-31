@@ -829,7 +829,7 @@ namespace
         return false;
     }
 
-    bool RecoverOldState(const AssetMutationService& service, Journal& journal)
+    bool RecoverOldState(const AssetMutationService& service, Journal& journal, bool preserveJournal = false)
     {
         journal.State = JournalState::RollingBack;
         SaveJournal(service.GetJournalRoot(), journal);
@@ -929,7 +929,7 @@ namespace
         journal.State = failed ? JournalState::RecoveryRequired : JournalState::RolledBack;
         if (SaveJournal(service.GetJournalRoot(), journal))
             return true;
-        if (!failed)
+        if (!failed && !preserveJournal)
             DeleteJournal(service.GetJournalRoot(), journal.ID);
         return failed;
     }
@@ -995,21 +995,9 @@ namespace
             journal.Entries.HasItems() ? journal.Entries[0].DestinationPath : StringView(), message);
     }
 
-    bool CommitTransaction(AssetMutationService& service, Journal& journal, AssetMutationResult& result, const Guid& assetID = Guid())
+    void PopulateCommittedResult(const AssetMutationService& service, const Journal& journal, AssetMutationResult& result, const Guid& assetID)
     {
-        journal.State = JournalState::Committed;
-        if (SaveJournal(service.GetJournalRoot(), journal))
-            return AbortTransaction(service, journal, result, AssetMutationFailure::JournalFailure, TEXT("Mutation commit marker could not be persisted."));
-        bool cleaned = true;
-        for (const JournalEntry& entry : journal.Entries)
-        {
-            if (entry.StagingPath.HasChars() && Exists(entry.StagingPath))
-                cleaned &= !DeletePath(entry.StagingPath);
-            if (entry.PreimagePath.HasChars() && Exists(entry.PreimagePath))
-                cleaned &= !DeletePath(entry.PreimagePath);
-        }
-        if (cleaned)
-            DeleteJournal(service.GetJournalRoot(), journal.ID);
+        result = AssetMutationResult();
         Succeed(result, journal.ID, journal.Entries[0].SourcePath, journal.Entries[0].DestinationPath);
         result.AssetID = assetID;
         result.RecoveryPath = journal.RecoveryPath;
@@ -1020,6 +1008,52 @@ namespace
             if (entry.DestinationPath.HasChars() && IsSameOrChild(entry.DestinationPath, service.GetContentRoot()) && !result.ChangedPaths.Contains(entry.DestinationPath))
                 result.ChangedPaths.Add(entry.DestinationPath);
         }
+    }
+
+    bool RollbackDatabaseCommit(AssetMutationService& service, Journal& journal, AssetMutationResult& result, const StringView& message)
+    {
+        journal.LastError = message;
+        if (RecoverOldState(service, journal, true))
+            return Fail(result, AssetMutationFailure::RecoveryRequired, journal.ID,
+                journal.Entries.HasItems() ? journal.Entries[0].SourcePath : StringView(),
+                journal.Entries.HasItems() ? journal.Entries[0].DestinationPath : StringView(), message, true);
+
+        AssetMutationResult rollbackView;
+        PopulateCommittedResult(service, journal, rollbackView, Guid());
+        if (service.DatabaseCommitHook.IsBinded() && service.DatabaseCommitHook(rollbackView))
+        {
+            journal.State = JournalState::RecoveryRequired;
+            journal.LastError = TEXT("Filesystem rollback succeeded, but the source database could not reconcile the restored state.");
+            SaveJournal(service.GetJournalRoot(), journal);
+            return Fail(result, AssetMutationFailure::RecoveryRequired, journal.ID,
+                journal.Entries[0].SourcePath, journal.Entries[0].DestinationPath, journal.LastError, true);
+        }
+        DeleteJournal(service.GetJournalRoot(), journal.ID);
+        return Fail(result, AssetMutationFailure::DatabaseCommitFailed, journal.ID,
+            journal.Entries[0].SourcePath, journal.Entries[0].DestinationPath, message);
+    }
+
+    bool CommitTransaction(AssetMutationService& service, Journal& journal, AssetMutationResult& result, const Guid& assetID = Guid())
+    {
+        PopulateCommittedResult(service, journal, result, assetID);
+        if (service.DatabaseCommitHook.IsBinded() && service.DatabaseCommitHook(result))
+            return RollbackDatabaseCommit(service, journal, result,
+                TEXT("Source database reconciliation failed; the filesystem mutation was rolled back."));
+
+        journal.State = JournalState::Committed;
+        if (SaveJournal(service.GetJournalRoot(), journal))
+            return RollbackDatabaseCommit(service, journal, result,
+                TEXT("The database committed, but the durable mutation commit marker could not be persisted; the mutation was rolled back."));
+        bool cleaned = true;
+        for (const JournalEntry& entry : journal.Entries)
+        {
+            if (entry.StagingPath.HasChars() && Exists(entry.StagingPath))
+                cleaned &= !DeletePath(entry.StagingPath);
+            if (entry.PreimagePath.HasChars() && Exists(entry.PreimagePath))
+                cleaned &= !DeletePath(entry.PreimagePath);
+        }
+        if (cleaned)
+            DeleteJournal(service.GetJournalRoot(), journal.ID);
         if (service.CommittedHook.IsBinded())
             service.CommittedHook(result);
         return false;
@@ -1234,6 +1268,8 @@ bool AssetMutationService::PublishExternal(const StringView& externalSourcePath,
     PathLockScope lock;
     if (lock.Acquire(paths))
         return Fail(result, AssetMutationFailure::PathBusy, id, external, destination, TEXT("A conflicting asset mutation owns the import source or destination."));
+    if (RunDecisionHook(*this, AssetMutationOperation::PublishExternal, id, external, destination, false, result))
+        return !result.Succeeded;
 
     Journal journal;
     journal.ID = id;
@@ -1397,6 +1433,19 @@ bool AssetMutationService::RegisterExisting(const StringView& sourcePath, const 
 
 bool AssetMutationService::CreateFolder(const StringView& path, AssetMutationResult& result)
 {
+    AssetMeta meta;
+    meta.ID = Guid::New();
+    meta.FolderAsset = true;
+    meta.AssetType = TEXT("FlaxEngine.Folder");
+    meta.SourceKind = AssetSourceKind::Folder;
+    meta.Processor.ID = TEXT("Flax.Folder");
+    return CreateFolder(path, meta, result);
+}
+
+bool AssetMutationService::CreateFolder(const StringView& path, const AssetMeta& meta, AssetMutationResult& result)
+{
+    if (!meta.ID.IsValid() || !meta.FolderAsset || meta.SourceKind != AssetSourceKind::Folder || meta.Processor.ID != TEXT("Flax.Folder"))
+        return Fail(result, AssetMutationFailure::InvalidMetadata, Guid::New(), StringView(), path, TEXT("Folder metadata is invalid."));
     AssetMutationResult validation;
     if (Validate(AssetMutationOperation::CreateFolder, path, StringView(), validation))
     {
@@ -1450,12 +1499,6 @@ bool AssetMutationService::CreateFolder(const StringView& path, AssetMutationRes
     if (SaveJournal(_journalRoot, journal))
         return Fail(result, AssetMutationFailure::JournalFailure, id, StringView(), destination, TEXT("Create-folder journal could not be persisted."));
 
-    AssetMeta meta;
-    meta.ID = Guid::New();
-    meta.FolderAsset = true;
-    meta.AssetType = TEXT("FlaxEngine.Folder");
-    meta.SourceKind = AssetSourceKind::Folder;
-    meta.Processor.ID = TEXT("Flax.Folder");
     AssetPipelineDiagnostic diagnostic;
     if (FileSystem::CreateDirectory(sourceEntry.StagingPath))
         return AbortTransaction(*this, journal, result, AssetMutationFailure::PermissionDenied, TEXT("Folder staging could not be created."));
@@ -1582,6 +1625,158 @@ bool AssetMutationService::Copy(const StringView& sourcePath, const StringView& 
     return CommitTransaction(*this, journal, result, copiedID);
 }
 
+bool AssetMutationService::CopyBatch(const Array<String>& sourcePaths, const Array<String>& destinationPaths, AssetMutationResult& result)
+{
+    const Guid id = Guid::New();
+    result = AssetMutationResult();
+    if (sourcePaths.IsEmpty() || sourcePaths.Count() != destinationPaths.Count())
+        return Fail(result, AssetMutationFailure::InvalidSource, id, StringView(), StringView(), TEXT("Copy batch requires matching non-empty source and destination arrays."));
+
+    Array<String> sources;
+    Array<String> destinations;
+    Array<String> lockPaths;
+    sources.EnsureCapacity(sourcePaths.Count());
+    destinations.EnsureCapacity(sourcePaths.Count());
+    lockPaths.EnsureCapacity(sourcePaths.Count() * 4);
+    for (int32 i = 0; i < sourcePaths.Count(); i++)
+    {
+        AssetMutationResult validation;
+        if (Validate(AssetMutationOperation::Copy, sourcePaths[i], destinationPaths[i], validation))
+        {
+            result = MoveTemp(validation);
+            result.TransactionID = id;
+            return true;
+        }
+        const String source = validation.SourcePath;
+        const String destination = validation.DestinationPath;
+        for (int32 j = 0; j < sources.Count(); j++)
+        {
+            if (PathsOverlap(source, sources[j]) || PathsOverlap(destination, destinations[j]) ||
+                PathsOverlap(destination, sources[j]) || PathsOverlap(source, destinations[j]))
+                return Fail(result, AssetMutationFailure::PathCycle, id, source, destination, TEXT("Copy batch paths overlap another selected source or destination."));
+        }
+        sources.Add(source);
+        destinations.Add(destination);
+        lockPaths.Add(source);
+        lockPaths.Add(source + TEXT(".meta"));
+        lockPaths.Add(destination);
+        lockPaths.Add(destination + TEXT(".meta"));
+    }
+
+    PathLockScope lock;
+    if (lock.Acquire(lockPaths))
+        return Fail(result, AssetMutationFailure::PathBusy, id, sources[0], destinations[0], TEXT("A conflicting asset mutation owns a copy batch path."));
+    for (int32 i = 0; i < sources.Count(); i++)
+    {
+        if (ValidateSourcePair(sources[i], result, id) || ValidateDestination(sources[i], destinations[i], false, result, id))
+            return true;
+        String replacement;
+        if (RunDecisionHook(*this, AssetMutationOperation::Copy, id, sources[i], destinations[i],
+            FileSystem::DirectoryExists(sources[i]), result, &replacement))
+        {
+            if (result.Succeeded)
+                return Fail(result, AssetMutationFailure::CallbackHandledInvalidState, id, sources[i], destinations[i],
+                    TEXT("A callback cannot complete only part of an atomic copy batch."));
+            return true;
+        }
+        if (replacement.HasChars())
+            return Fail(result, AssetMutationFailure::InvalidDestination, id, sources[i], destinations[i],
+                TEXT("Replacement destinations are not supported for an atomic copy batch."));
+    }
+
+    Journal journal;
+    journal.ID = id;
+    journal.Operation = AssetMutationOperation::Copy;
+    Array<Guid> copiedIDs;
+    copiedIDs.Resize(sources.Count());
+    for (int32 i = 0; i < sources.Count(); i++)
+    {
+        const String sourceMeta = sources[i] + TEXT(".meta");
+        const String destinationMeta = destinations[i] + TEXT(".meta");
+        const String sourceRole = String::Format(TEXT("copy-source-{0}"), i);
+        const String metadataRole = String::Format(TEXT("copy-meta-{0}"), i);
+        JournalEntry sourceEntry;
+        sourceEntry.Role = TEXT("Source");
+        sourceEntry.SourcePath = sources[i];
+        sourceEntry.DestinationPath = destinations[i];
+        sourceEntry.StagingPath = StagePath(destinations[i], id, *sourceRole);
+        sourceEntry.IsDirectory = FileSystem::DirectoryExists(sources[i]);
+        if (HashPath(sources[i], sourceEntry.BeforeHash))
+            return Fail(result, AssetMutationFailure::LockedStorage, id, sources[i], destinations[i], TEXT("Copy batch source observation could not be captured."));
+        journal.Entries.Add(sourceEntry);
+        JournalEntry metadataEntry;
+        metadataEntry.Role = TEXT("Metadata");
+        metadataEntry.SourcePath = sourceMeta;
+        metadataEntry.DestinationPath = destinationMeta;
+        metadataEntry.StagingPath = StagePath(destinationMeta, id, *metadataRole);
+        if (HashFile(sourceMeta, metadataEntry.BeforeHash))
+            return Fail(result, AssetMutationFailure::LockedStorage, id, sources[i], destinations[i], TEXT("Copy batch metadata observation could not be captured."));
+        journal.Entries.Add(metadataEntry);
+    }
+    if (SaveJournal(_journalRoot, journal))
+        return Fail(result, AssetMutationFailure::JournalFailure, id, sources[0], destinations[0], TEXT("Copy batch journal could not be persisted."));
+
+    for (int32 i = 0; i < sources.Count(); i++)
+    {
+        const int32 sourceIndex = i * 2;
+        const int32 metadataIndex = sourceIndex + 1;
+        JournalEntry& sourceEntry = journal.Entries[sourceIndex];
+        JournalEntry& metadataEntry = journal.Entries[metadataIndex];
+        if (CopyPath(sources[i], sourceEntry.StagingPath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed, TEXT("Copy batch source staging failed."));
+        String stagedPreClone;
+        if (HashPath(sourceEntry.StagingPath, stagedPreClone) || stagedPreClone != sourceEntry.BeforeHash)
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Copy batch source staging differs from preflight."));
+        sourceEntry.StagingComplete = true;
+        if (SaveJournal(_journalRoot, journal))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Copy batch source staging could not be journaled."));
+        String cloneError;
+        if (ClonePairMetadata(sources[i], sourceEntry.StagingPath, metadataEntry.StagingPath, copiedIDs[i], cloneError))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed,
+                cloneError.HasChars() ? cloneError : TEXT("Copy batch metadata staging failed."));
+        metadataEntry.StagingComplete = true;
+        if (HashPath(sourceEntry.StagingPath, sourceEntry.StagedHash) || HashFile(metadataEntry.StagingPath, metadataEntry.StagedHash))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Copy batch staging could not be fingerprinted."));
+        if (SaveJournal(_journalRoot, journal))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Copy batch metadata staging could not be journaled."));
+    }
+
+    journal.State = JournalState::Staged;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Copy batch staged state could not be persisted."));
+    for (int32 i = 0; i < sources.Count(); i++)
+    {
+        String currentSourceHash;
+        String currentMetadataHash;
+        if (HashPath(sources[i], currentSourceHash) || currentSourceHash != journal.Entries[i * 2].BeforeHash ||
+            HashFile(sources[i] + TEXT(".meta"), currentMetadataHash) || currentMetadataHash != journal.Entries[i * 2 + 1].BeforeHash)
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("A copy batch source changed after staging."));
+    }
+
+    journal.State = JournalState::Publishing;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Copy batch publishing state could not be persisted."));
+    for (int32 i = 0; i < journal.Entries.Count(); i++)
+    {
+        JournalEntry& entry = journal.Entries[i];
+        if (MovePath(entry.StagingPath, entry.DestinationPath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("Copy batch publication failed."));
+        entry.Published = true;
+        if (SaveJournal(_journalRoot, journal))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Copy batch publication step could not be journaled."));
+    }
+    for (int32 i = 0; i < destinations.Count(); i++)
+    {
+        String publishedHash;
+        AssetMeta publishedMeta;
+        AssetPipelineDiagnostic metaDiagnostic;
+        if (!PairExists(destinations[i]) || HashPath(destinations[i], publishedHash) || publishedHash != journal.Entries[i * 2].StagedHash ||
+            AssetMeta::Load(destinations[i] + TEXT(".meta"), publishedMeta, metaDiagnostic) || publishedMeta.ID != copiedIDs[i])
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("A published copy batch pair failed verification."));
+    }
+    return CommitTransaction(*this, journal, result, copiedIDs[0]);
+}
+
 namespace
 {
     bool MovePairOperation(AssetMutationService& service, AssetMutationOperation operation, const Guid& id,
@@ -1702,6 +1897,139 @@ namespace
             return AbortTransaction(service, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Move did not preserve the source GUID."));
         return CommitTransaction(service, journal, result, originalMeta.ID);
     }
+
+    bool MovePairsOperation(AssetMutationService& service, AssetMutationOperation operation, const Guid& id,
+        const Array<String>& sources, const Array<String>& destinations, const StringView& recoveryPath, AssetMutationResult& result)
+    {
+        Array<String> lockPaths;
+        lockPaths.EnsureCapacity(sources.Count() * 4);
+        for (int32 i = 0; i < sources.Count(); i++)
+        {
+            lockPaths.Add(sources[i]);
+            lockPaths.Add(sources[i] + TEXT(".meta"));
+            lockPaths.Add(destinations[i]);
+            lockPaths.Add(destinations[i] + TEXT(".meta"));
+        }
+        PathLockScope lock;
+        if (lock.Acquire(lockPaths))
+            return Fail(result, AssetMutationFailure::PathBusy, id, sources[0], destinations[0], TEXT("A conflicting asset mutation owns a move batch path."));
+
+        const bool allowEquivalent = operation == AssetMutationOperation::Move || operation == AssetMutationOperation::Rename;
+        for (int32 i = 0; i < sources.Count(); i++)
+        {
+            if (ValidateSourcePair(sources[i], result, id))
+                return true;
+            if (operation == AssetMutationOperation::DeleteToRecovery)
+            {
+                if (!PairAbsent(destinations[i]))
+                    return Fail(result, AssetMutationFailure::DestinationCollision, id, sources[i], destinations[i], TEXT("Batch recovery destination already exists."));
+            }
+            else if (ValidateDestination(sources[i], destinations[i], allowEquivalent, result, id))
+            {
+                return true;
+            }
+            if (operation == AssetMutationOperation::Move && !IsSameVolume(sources[i], destinations[i]))
+                return Fail(result, AssetMutationFailure::UnsupportedCrossVolumeMove, id, sources[i], destinations[i], TEXT("Cross-volume batch moves cannot provide rename atomicity."));
+            String replacement;
+            if (RunDecisionHook(service, operation, id, sources[i], destinations[i], FileSystem::DirectoryExists(sources[i]), result, &replacement))
+            {
+                if (result.Succeeded)
+                    return Fail(result, AssetMutationFailure::CallbackHandledInvalidState, id, sources[i], destinations[i],
+                        TEXT("A callback cannot complete only part of an atomic move batch."));
+                return true;
+            }
+            if (replacement.HasChars())
+                return Fail(result, AssetMutationFailure::InvalidDestination, id, sources[i], destinations[i],
+                    TEXT("Replacement destinations are not supported for an atomic move batch."));
+        }
+
+        Journal journal;
+        journal.ID = id;
+        journal.Operation = operation;
+        journal.RecoveryPath = recoveryPath;
+        Array<Guid> originalIDs;
+        originalIDs.Resize(sources.Count());
+        for (int32 i = 0; i < sources.Count(); i++)
+        {
+            const String sourceMeta = sources[i] + TEXT(".meta");
+            const String destinationMeta = destinations[i] + TEXT(".meta");
+            AssetMeta originalMeta;
+            AssetPipelineDiagnostic metaDiagnostic;
+            if (AssetMeta::Load(sourceMeta, originalMeta, metaDiagnostic))
+                return Fail(result, AssetMutationFailure::InvalidMetadata, id, sources[i], destinations[i], metaDiagnostic.Message);
+            originalIDs[i] = originalMeta.ID;
+            const String sourceRole = String::Format(TEXT("move-source-{0}"), i);
+            const String metadataRole = String::Format(TEXT("move-meta-{0}"), i);
+            JournalEntry sourceEntry;
+            sourceEntry.Role = TEXT("Source");
+            sourceEntry.SourcePath = sources[i];
+            sourceEntry.DestinationPath = destinations[i];
+            sourceEntry.StagingPath = StagePath(destinations[i], id, *sourceRole);
+            sourceEntry.IsDirectory = FileSystem::DirectoryExists(sources[i]);
+            if (HashPath(sources[i], sourceEntry.BeforeHash))
+                return Fail(result, AssetMutationFailure::LockedStorage, id, sources[i], destinations[i], TEXT("Move batch source observation could not be captured."));
+            journal.Entries.Add(sourceEntry);
+            JournalEntry metadataEntry;
+            metadataEntry.Role = TEXT("Metadata");
+            metadataEntry.SourcePath = sourceMeta;
+            metadataEntry.DestinationPath = destinationMeta;
+            metadataEntry.StagingPath = StagePath(destinationMeta, id, *metadataRole);
+            if (HashFile(sourceMeta, metadataEntry.BeforeHash))
+                return Fail(result, AssetMutationFailure::LockedStorage, id, sources[i], destinations[i], TEXT("Move batch metadata observation could not be captured."));
+            journal.Entries.Add(metadataEntry);
+        }
+        if (SaveJournal(service.GetJournalRoot(), journal))
+            return Fail(result, AssetMutationFailure::JournalFailure, id, sources[0], destinations[0], TEXT("Move batch journal could not be persisted."));
+
+        for (int32 i = 0; i < sources.Count(); i++)
+        {
+            JournalEntry& sourceEntry = journal.Entries[i * 2];
+            JournalEntry& metadataEntry = journal.Entries[i * 2 + 1];
+            String currentSourceHash;
+            String currentMetadataHash;
+            if (HashPath(sources[i], currentSourceHash) || currentSourceHash != sourceEntry.BeforeHash ||
+                HashFile(sources[i] + TEXT(".meta"), currentMetadataHash) || currentMetadataHash != metadataEntry.BeforeHash)
+                return AbortTransaction(service, journal, result, AssetMutationFailure::VerificationFailure, TEXT("A move batch source changed after preflight."));
+            if (MovePath(sources[i], sourceEntry.StagingPath))
+                return AbortTransaction(service, journal, result, AssetMutationFailure::MoveFailed, TEXT("Move batch source staging failed."));
+            if (HashPath(sourceEntry.StagingPath, sourceEntry.StagedHash) || sourceEntry.StagedHash != sourceEntry.BeforeHash)
+                return AbortTransaction(service, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Move batch staged source differs from preflight."));
+            sourceEntry.StagingComplete = true;
+            if (SaveJournal(service.GetJournalRoot(), journal) || MovePath(sources[i] + TEXT(".meta"), metadataEntry.StagingPath))
+                return AbortTransaction(service, journal, result, AssetMutationFailure::MoveFailed, TEXT("Move batch metadata staging failed."));
+            if (HashFile(metadataEntry.StagingPath, metadataEntry.StagedHash) || metadataEntry.StagedHash != metadataEntry.BeforeHash)
+                return AbortTransaction(service, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Move batch staged metadata differs from preflight."));
+            metadataEntry.StagingComplete = true;
+            if (SaveJournal(service.GetJournalRoot(), journal))
+                return AbortTransaction(service, journal, result, AssetMutationFailure::JournalFailure, TEXT("Move batch staging step could not be journaled."));
+        }
+
+        journal.State = JournalState::Staged;
+        if (SaveJournal(service.GetJournalRoot(), journal))
+            return AbortTransaction(service, journal, result, AssetMutationFailure::JournalFailure, TEXT("Move batch staged state could not be persisted."));
+        journal.State = JournalState::Publishing;
+        if (SaveJournal(service.GetJournalRoot(), journal))
+            return AbortTransaction(service, journal, result, AssetMutationFailure::JournalFailure, TEXT("Move batch publishing state could not be persisted."));
+        for (int32 i = 0; i < journal.Entries.Count(); i++)
+        {
+            JournalEntry& entry = journal.Entries[i];
+            if (MovePath(entry.StagingPath, entry.DestinationPath))
+                return AbortTransaction(service, journal, result, AssetMutationFailure::MoveFailed, TEXT("Move batch publication failed."));
+            entry.Published = true;
+            if (SaveJournal(service.GetJournalRoot(), journal))
+                return AbortTransaction(service, journal, result, AssetMutationFailure::JournalFailure, TEXT("Move batch publication step could not be journaled."));
+        }
+        for (int32 i = 0; i < destinations.Count(); i++)
+        {
+            AssetMeta publishedMeta;
+            AssetPipelineDiagnostic metaDiagnostic;
+            String publishedHash;
+            if (!PairExists(destinations[i]) || HashPath(destinations[i], publishedHash) || publishedHash != journal.Entries[i * 2].StagedHash ||
+                AssetMeta::Load(destinations[i] + TEXT(".meta"), publishedMeta, metaDiagnostic) || publishedMeta.ID != originalIDs[i])
+                return AbortTransaction(service, journal, result, AssetMutationFailure::VerificationFailure, TEXT("A published move batch pair failed verification."));
+        }
+        return CommitTransaction(service, journal, result, originalIDs[0]);
+    }
 }
 
 bool AssetMutationService::Move(const StringView& sourcePath, const StringView& destinationPath, AssetMutationResult& result)
@@ -1713,6 +2041,39 @@ bool AssetMutationService::Move(const StringView& sourcePath, const StringView& 
         return true;
     }
     return MovePairOperation(*this, AssetMutationOperation::Move, validation.TransactionID, validation.SourcePath, validation.DestinationPath, result);
+}
+
+bool AssetMutationService::MoveBatch(const Array<String>& sourcePaths, const Array<String>& destinationPaths, AssetMutationResult& result)
+{
+    const Guid id = Guid::New();
+    result = AssetMutationResult();
+    if (sourcePaths.IsEmpty() || sourcePaths.Count() != destinationPaths.Count())
+        return Fail(result, AssetMutationFailure::InvalidSource, id, StringView(), StringView(), TEXT("Move batch requires matching non-empty source and destination arrays."));
+    Array<String> sources;
+    Array<String> destinations;
+    sources.EnsureCapacity(sourcePaths.Count());
+    destinations.EnsureCapacity(sourcePaths.Count());
+    for (int32 i = 0; i < sourcePaths.Count(); i++)
+    {
+        AssetMutationResult validation;
+        if (Validate(AssetMutationOperation::Move, sourcePaths[i], destinationPaths[i], validation))
+        {
+            result = MoveTemp(validation);
+            result.TransactionID = id;
+            return true;
+        }
+        const String source = validation.SourcePath;
+        const String destination = validation.DestinationPath;
+        for (int32 j = 0; j < sources.Count(); j++)
+        {
+            if (PathsOverlap(source, sources[j]) || PathsOverlap(destination, destinations[j]) ||
+                PathsOverlap(destination, sources[j]) || PathsOverlap(source, destinations[j]))
+                return Fail(result, AssetMutationFailure::PathCycle, id, source, destination, TEXT("Move batch paths overlap another selected source or destination."));
+        }
+        sources.Add(source);
+        destinations.Add(destination);
+    }
+    return MovePairsOperation(*this, AssetMutationOperation::Move, id, sources, destinations, StringView(), result);
 }
 
 bool AssetMutationService::Rename(const StringView& sourcePath, const StringView& newName, AssetMutationResult& result)
@@ -1754,6 +2115,157 @@ bool AssetMutationService::DeleteToRecovery(const StringView& sourcePath, AssetM
     return MovePairOperation(*this, AssetMutationOperation::DeleteToRecovery, id, source, destination, result);
 }
 
+bool AssetMutationService::DeleteToRecoveryBatch(const Array<String>& sourcePaths, AssetMutationResult& result)
+{
+    const Guid id = Guid::New();
+    result = AssetMutationResult();
+    if (sourcePaths.IsEmpty())
+        return Fail(result, AssetMutationFailure::InvalidSource, id, StringView(), StringView(), TEXT("Delete batch requires at least one source pair."));
+
+    Array<String> sources;
+    Array<String> destinations;
+    Array<String> lockPaths;
+    sources.EnsureCapacity(sourcePaths.Count());
+    destinations.EnsureCapacity(sourcePaths.Count());
+    lockPaths.EnsureCapacity(sourcePaths.Count() * 4);
+    const String recoveryDirectory = _recoveryRoot / GuidText(id);
+    for (int32 i = 0; i < sourcePaths.Count(); i++)
+    {
+        AssetMutationResult validation;
+        if (Validate(AssetMutationOperation::DeleteToRecovery, sourcePaths[i], StringView(), validation))
+        {
+            result = MoveTemp(validation);
+            result.TransactionID = id;
+            return true;
+        }
+        const String source = validation.SourcePath;
+        const String destination = recoveryDirectory / StringUtils::ToString(i) / String(StringUtils::GetFileName(source));
+        for (const String& selected : sources)
+        {
+            if (PathsOverlap(source, selected))
+                return Fail(result, AssetMutationFailure::PathCycle, id, source, destination, TEXT("Delete batch contains overlapping source trees."));
+        }
+        if (!PairAbsent(destination))
+            return Fail(result, AssetMutationFailure::DestinationCollision, id, source, destination, TEXT("Delete batch recovery destination already exists."));
+        sources.Add(source);
+        destinations.Add(destination);
+        lockPaths.Add(source);
+        lockPaths.Add(source + TEXT(".meta"));
+        lockPaths.Add(destination);
+        lockPaths.Add(destination + TEXT(".meta"));
+    }
+
+    PathLockScope lock;
+    if (lock.Acquire(lockPaths))
+        return Fail(result, AssetMutationFailure::PathBusy, id, sources[0], destinations[0], TEXT("A conflicting asset mutation owns a delete batch path."));
+    for (int32 i = 0; i < sources.Count(); i++)
+    {
+        if (ValidateSourcePair(sources[i], result, id) || !PairAbsent(destinations[i]))
+            return true;
+        String replacement;
+        if (RunDecisionHook(*this, AssetMutationOperation::DeleteToRecovery, id, sources[i], destinations[i],
+            FileSystem::DirectoryExists(sources[i]), result, &replacement))
+        {
+            if (result.Succeeded)
+                return Fail(result, AssetMutationFailure::CallbackHandledInvalidState, id, sources[i], destinations[i],
+                    TEXT("A callback cannot complete only part of an atomic delete batch."));
+            return true;
+        }
+        if (replacement.HasChars())
+            return Fail(result, AssetMutationFailure::InvalidDestination, id, sources[i], destinations[i],
+                TEXT("Delete callbacks cannot replace service-owned batch recovery paths."));
+    }
+
+    Journal journal;
+    journal.ID = id;
+    journal.Operation = AssetMutationOperation::DeleteToRecovery;
+    journal.RecoveryPath = recoveryDirectory;
+    Array<Guid> originalIDs;
+    originalIDs.Resize(sources.Count());
+    for (int32 i = 0; i < sources.Count(); i++)
+    {
+        const String sourceMeta = sources[i] + TEXT(".meta");
+        const String destinationMeta = destinations[i] + TEXT(".meta");
+        AssetMeta originalMeta;
+        AssetPipelineDiagnostic metaDiagnostic;
+        if (AssetMeta::Load(sourceMeta, originalMeta, metaDiagnostic))
+            return Fail(result, AssetMutationFailure::InvalidMetadata, id, sources[i], destinations[i], metaDiagnostic.Message);
+        originalIDs[i] = originalMeta.ID;
+        const String sourceRole = String::Format(TEXT("delete-source-{0}"), i);
+        const String metadataRole = String::Format(TEXT("delete-meta-{0}"), i);
+        JournalEntry sourceEntry;
+        sourceEntry.Role = TEXT("Source");
+        sourceEntry.SourcePath = sources[i];
+        sourceEntry.DestinationPath = destinations[i];
+        sourceEntry.StagingPath = StagePath(destinations[i], id, *sourceRole);
+        sourceEntry.IsDirectory = FileSystem::DirectoryExists(sources[i]);
+        if (HashPath(sources[i], sourceEntry.BeforeHash))
+            return Fail(result, AssetMutationFailure::LockedStorage, id, sources[i], destinations[i], TEXT("Delete batch source observation could not be captured."));
+        journal.Entries.Add(sourceEntry);
+        JournalEntry metadataEntry;
+        metadataEntry.Role = TEXT("Metadata");
+        metadataEntry.SourcePath = sourceMeta;
+        metadataEntry.DestinationPath = destinationMeta;
+        metadataEntry.StagingPath = StagePath(destinationMeta, id, *metadataRole);
+        if (HashFile(sourceMeta, metadataEntry.BeforeHash))
+            return Fail(result, AssetMutationFailure::LockedStorage, id, sources[i], destinations[i], TEXT("Delete batch metadata observation could not be captured."));
+        journal.Entries.Add(metadataEntry);
+    }
+    if (SaveJournal(_journalRoot, journal))
+        return Fail(result, AssetMutationFailure::JournalFailure, id, sources[0], destinations[0], TEXT("Delete batch journal could not be persisted."));
+
+    for (int32 i = 0; i < sources.Count(); i++)
+    {
+        const int32 sourceIndex = i * 2;
+        const int32 metadataIndex = sourceIndex + 1;
+        JournalEntry& sourceEntry = journal.Entries[sourceIndex];
+        JournalEntry& metadataEntry = journal.Entries[metadataIndex];
+        String currentSourceHash;
+        String currentMetadataHash;
+        if (HashPath(sources[i], currentSourceHash) || currentSourceHash != sourceEntry.BeforeHash ||
+            HashFile(sources[i] + TEXT(".meta"), currentMetadataHash) || currentMetadataHash != metadataEntry.BeforeHash)
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("A delete batch source changed after preflight."));
+        if (MovePath(sources[i], sourceEntry.StagingPath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("Delete batch source staging failed."));
+        String stagedHash;
+        if (HashPath(sourceEntry.StagingPath, stagedHash) || stagedHash != sourceEntry.BeforeHash)
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Delete batch staged source differs from preflight."));
+        sourceEntry.StagingComplete = true;
+        if (SaveJournal(_journalRoot, journal) || MovePath(sources[i] + TEXT(".meta"), metadataEntry.StagingPath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("Delete batch metadata staging failed."));
+        String stagedMetadataHash;
+        if (HashFile(metadataEntry.StagingPath, stagedMetadataHash) || stagedMetadataHash != metadataEntry.BeforeHash)
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Delete batch staged metadata differs from preflight."));
+        metadataEntry.StagingComplete = true;
+        if (SaveJournal(_journalRoot, journal))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Delete batch staging step could not be journaled."));
+    }
+
+    journal.State = JournalState::Staged;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Delete batch staged state could not be persisted."));
+    journal.State = JournalState::Publishing;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Delete batch publishing state could not be persisted."));
+    for (int32 i = 0; i < journal.Entries.Count(); i++)
+    {
+        JournalEntry& entry = journal.Entries[i];
+        if (MovePath(entry.StagingPath, entry.DestinationPath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("Delete batch recovery publication failed."));
+        entry.Published = true;
+        if (SaveJournal(_journalRoot, journal))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("Delete batch publication step could not be journaled."));
+    }
+    for (int32 i = 0; i < destinations.Count(); i++)
+    {
+        AssetMeta publishedMeta;
+        AssetPipelineDiagnostic metaDiagnostic;
+        if (!PairExists(destinations[i]) || AssetMeta::Load(destinations[i] + TEXT(".meta"), publishedMeta, metaDiagnostic) || publishedMeta.ID != originalIDs[i])
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("A published delete batch pair failed verification."));
+    }
+    return CommitTransaction(*this, journal, result, originalIDs[0]);
+}
+
 bool AssetMutationService::Recover(const StringView& recoveryPath, const StringView& destinationPath, AssetMutationResult& result)
 {
     AssetMutationResult validation;
@@ -1763,6 +2275,38 @@ bool AssetMutationService::Recover(const StringView& recoveryPath, const StringV
         return true;
     }
     return MovePairOperation(*this, AssetMutationOperation::Recover, validation.TransactionID, validation.SourcePath, validation.DestinationPath, result);
+}
+
+bool AssetMutationService::RecoverBatch(const Array<String>& recoveryPaths, const Array<String>& destinationPaths, AssetMutationResult& result)
+{
+    const Guid id = Guid::New();
+    result = AssetMutationResult();
+    if (recoveryPaths.IsEmpty() || recoveryPaths.Count() != destinationPaths.Count())
+        return Fail(result, AssetMutationFailure::InvalidSource, id, StringView(), StringView(), TEXT("Recovery batch requires matching non-empty recovery and destination arrays."));
+    Array<String> sources;
+    Array<String> destinations;
+    sources.EnsureCapacity(recoveryPaths.Count());
+    destinations.EnsureCapacity(recoveryPaths.Count());
+    for (int32 i = 0; i < recoveryPaths.Count(); i++)
+    {
+        AssetMutationResult validation;
+        if (Validate(AssetMutationOperation::Recover, recoveryPaths[i], destinationPaths[i], validation))
+        {
+            result = MoveTemp(validation);
+            result.TransactionID = id;
+            return true;
+        }
+        const String source = validation.SourcePath;
+        const String destination = validation.DestinationPath;
+        for (int32 j = 0; j < sources.Count(); j++)
+        {
+            if (PathsOverlap(source, sources[j]) || PathsOverlap(destination, destinations[j]))
+                return Fail(result, AssetMutationFailure::PathCycle, id, source, destination, TEXT("Recovery batch contains overlapping source or destination trees."));
+        }
+        sources.Add(source);
+        destinations.Add(destination);
+    }
+    return MovePairsOperation(*this, AssetMutationOperation::Recover, id, sources, destinations, StringView(), result);
 }
 
 bool AssetMutationService::ReplaceContents(const StringView& sourcePath, const StringView& replacementPath, AssetMutationResult& result)

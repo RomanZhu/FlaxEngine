@@ -12,6 +12,12 @@
 class FLAXENGINE_API SceneAnimationDocument
 {
 public:
+    /// <summary>Projects the current runtime timeline into the canonical authored document.</summary>
+    static bool DecodeRuntime(const Span<byte>& timeline, rapidjson_flax::Document& document, String& error)
+    {
+        return DecodeLegacy(timeline, document, error);
+    }
+
     /// <summary>Decodes legacy timeline bytes into explicit tracks and keyframes.</summary>
     static bool DecodeLegacy(const Span<byte>& timeline, rapidjson_flax::Document& document, String& error);
 

@@ -16,7 +16,7 @@ using AssetDatabaseFileState = SourceHashFileState;
 class FLAXENGINE_API AssetDatabaseStorage
 {
 public:
-    static constexpr int32 SchemaVersion = 4;
+    static constexpr int32 SchemaVersion = 5;
 
     /// <summary>Atomically replaces durable rows with a committed read snapshot.</summary>
     /// <returns>True on failure.</returns>

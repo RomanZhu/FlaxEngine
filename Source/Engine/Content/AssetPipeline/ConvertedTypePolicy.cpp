@@ -2,10 +2,6 @@
 
 #include "ConvertedTypePolicy.h"
 #include "Engine/Platform/FileSystem.h"
-#if USE_EDITOR
-#include "Engine/Content/AssetDatabase/AssetPath.h"
-#include "Engine/Engine/Globals.h"
-#endif
 
 bool ConvertedTypePolicy::IsConvertedGraphType(const StringView& typeName)
 {
@@ -52,10 +48,6 @@ bool ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(const AssetPipelineSetting
 {
     if (!IsConvertedAssetType(typeName))
         return true;
-#if USE_EDITOR
-    if (Globals::EngineContentFolder.HasChars() && AssetPathPolicy::IsSameOrChild(path, Globals::EngineContentFolder))
-        return true;
-#endif
     const String extension = FileSystem::GetExtension(path).ToLower();
     return extension != TEXT("flax");
 }

@@ -9,6 +9,12 @@
 class FLAXENGINE_API CollisionDataDocument
 {
 public:
+    /// <summary>Projects the current collision recipe into the canonical authored document.</summary>
+    static bool DecodeRuntime(const CollisionData::SerializedOptions& options, rapidjson_flax::Document& document, String& error)
+    {
+        return DecodeLegacy(options, document, error);
+    }
+
     /// <summary>Decodes the legacy options prefix. Cooked bytes are intentionally not copied into Content text.</summary>
     static bool DecodeLegacy(const CollisionData::SerializedOptions& options, rapidjson_flax::Document& document, String& error);
 

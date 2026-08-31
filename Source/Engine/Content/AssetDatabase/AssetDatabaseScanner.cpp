@@ -211,6 +211,7 @@ namespace
             record.ProcessorID == TEXT("Flax.CollisionData") ||
             record.ProcessorID == TEXT("Flax.Animation") ||
             record.ProcessorID == TEXT("Flax.GameplayGlobals") ||
+            record.ProcessorID == TEXT("Flax.BakedAsset") ||
             record.ProcessorID == TEXT("Flax.AuthoredObject");
     }
 
@@ -459,7 +460,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         const bool isFolder = FileSystem::DirectoryExists(sourcePath);
         if (!isFolder && FileSystem::GetExtension(sourcePath).ToLower() == TEXT("flax"))
         {
-            if (options.AssetSystemVersion >= 3 && !options.AllowLegacyBinarySources)
+            if (options.AssetSystemVersion >= 3)
             {
                 result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::ProcessorMissing, sourcePath, TEXT("Asset-system version 3 does not allow legacy cooked .flax files in Content.")));
                 consumedMeta.Add(sourcePath + TEXT(".meta"));
@@ -500,7 +501,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         const String metaPath = sourcePath + TEXT(".meta");
         if (!fileSet.Contains(metaPath))
         {
-            if ((options.AssetSystemVersion >= 3 && !options.AllowLegacyBinarySources) ||
+            if (options.AssetSystemVersion >= 3 ||
                 (options.StrictMetadata && RequiresMetadata(sourcePath)))
                 result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::MissingMeta, sourcePath, TEXT("Canonical source is missing its adjacent metadata sidecar.")));
             continue;

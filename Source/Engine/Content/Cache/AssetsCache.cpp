@@ -61,7 +61,7 @@ void AssetsCache::Init()
     _pathsMapping.Clear();
     _runtimeLocations.Clear();
     _registry.EnsureCapacity(locations.Count());
-    _pathsMapping.EnsureCapacity(locations.Count());
+    _pathsMapping.EnsureCapacity(locations.Count() * 2);
     _runtimeLocations.EnsureCapacity(locations.Count());
     for (RuntimeAssetIndexEntry& location : locations)
     {
@@ -76,6 +76,13 @@ void AssetsCache::Init()
             FileSystem::NormalizePath(canonicalPath);
             _pathsMapping.Add(canonicalPath, location.BackingAssetID);
         }
+        if (location.ResourcePath.HasChars())
+        {
+            const String resourcePath = NormalizeAssetPath(location.ResourcePath);
+            _pathsMapping.Add(resourcePath, location.BackingAssetID);
+        }
+        for (const String& address : location.Addresses)
+            _pathsMapping.Add(NormalizeAssetPath(address), location.BackingAssetID);
         _runtimeLocations.Add(location.ID, MoveTemp(location));
     }
 
@@ -83,7 +90,10 @@ void AssetsCache::Init()
     _pathsMappingInv.Clear();
     _pathsMappingInv.EnsureCapacity(_pathsMapping.Count());
     for (auto& mapping : _pathsMapping)
-        _pathsMappingInv.Add(mapping.Value, StringView(mapping.Key));
+    {
+        if (!_pathsMappingInv.ContainsKey(mapping.Value))
+            _pathsMappingInv.Add(mapping.Value, StringView(mapping.Key));
+    }
 #endif
     _isDirty = false;
     stopwatch.Stop();

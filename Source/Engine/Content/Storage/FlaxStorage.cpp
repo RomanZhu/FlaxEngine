@@ -343,7 +343,7 @@ bool FlaxStorage::Load()
 
 #if USE_EDITOR
         // Block loading packaged games content
-        if (customData.ContentKey != 0)
+        if (customData.ContentKey != 0 && customData.ContentKey != _expectedCookedContentKey)
 #else
         // Block load content from unknown sources
         if (customData.ContentKey != Globals::ContentKey)
@@ -394,7 +394,7 @@ bool FlaxStorage::Load()
 
 #if USE_EDITOR
         // Block loading packaged games content
-        if (customData.ContentKey != 0)
+        if (customData.ContentKey != 0 && customData.ContentKey != _expectedCookedContentKey)
 #else
         // Block load content from unknown sources
         if (customData.ContentKey != Globals::ContentKey)
@@ -616,6 +616,15 @@ bool FlaxStorage::Load()
 }
 
 #if USE_EDITOR
+
+bool FlaxStorage::LoadCookedForValidation(const int32 expectedContentKey)
+{
+    if (expectedContentKey == 0 || IsLoaded())
+        return true;
+    _expectedCookedContentKey = expectedContentKey;
+    SCOPE_EXIT { _expectedCookedContentKey = 0; };
+    return Load();
+}
 
 bool FlaxStorage::Reload()
 {

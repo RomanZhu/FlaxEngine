@@ -168,6 +168,7 @@ namespace FlaxEngine.Json
         internal static ThreadLocal<SerializerCache> Current = new ThreadLocal<SerializerCache>();
         internal static ThreadLocal<SerializerCache> Cache = new ThreadLocal<SerializerCache>(() => new SerializerCache(false));
         internal static ThreadLocal<SerializerCache> CacheManagedOnly = new ThreadLocal<SerializerCache>(() => new SerializerCache(true));
+        internal static ThreadLocal<bool> AllowGuidOnlyAssetReferences = new ThreadLocal<bool>();
         internal static ThreadLocal<IntPtr> CachedGuidBuffer = new ThreadLocal<IntPtr>(() => Marshal.AllocHGlobal(32 * sizeof(char)), true);
         internal static string CachedGuidDigits = "0123456789abcdef";
 #if FLAX_EDITOR
@@ -231,6 +232,7 @@ namespace FlaxEngine.Json
             Current.Dispose();
             Cache.Dispose();
             CacheManagedOnly.Dispose();
+            AllowGuidOnlyAssetReferences.Dispose();
         }
 
         /// <summary>

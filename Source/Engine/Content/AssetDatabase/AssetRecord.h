@@ -15,6 +15,8 @@ API_ENUM() enum class AssetSourceKind : byte
     ExistingJson,
     LegacyBinary,
     Folder,
+    /// <summary>Immutable shipped artifact described by an authoritative compiled catalog.</summary>
+    PrebuiltArtifact,
 };
 
 /// <summary>Current registration/build state of an asset record.</summary>

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Engine/Scripting/ScriptingObject.h"
+#include "Engine/Content/Content.h"
 
 extern FLAXENGINE_API ScriptingObject* FindObject(const Guid& id, MClass* type);
 
@@ -15,6 +16,7 @@ protected:
 
     ScriptingObject* _object = nullptr;
     Guid _id = Guid::Empty;
+    mutable AssetObjectId _objectId;
 
 public:
 
@@ -56,6 +58,14 @@ public:
         return _id;
     }
 
+    /// <summary>Gets the persistent identity when this reference targets an asset object.</summary>
+    const AssetObjectId& GetObjectId() const
+    {
+        if (!_objectId.IsValid() && _id.IsValid())
+            Content::GetAssetObjectId(_id, _objectId);
+        return _objectId;
+    }
+
 protected:
 
     void OnSet(ScriptingObject* object)
@@ -66,6 +76,9 @@ protected:
             _object->Deleted.Unbind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         _object = object;
         _id = object ? object->GetID() : Guid::Empty;
+        _objectId = AssetObjectId();
+        if (_id.IsValid())
+            Content::GetAssetObjectId(_id, _objectId);
         if (object)
             object->Deleted.Bind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         Changed();
@@ -79,15 +92,33 @@ protected:
             _object->Deleted.Unbind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         _object = nullptr;
         _id = id;
+        _objectId = AssetObjectId();
+        if (_id.IsValid())
+            Content::GetAssetObjectId(_id, _objectId);
+        Changed();
+    }
+
+    void OnSet(const AssetObjectId& id)
+    {
+        if (_objectId == id)
+            return;
+        if (_object)
+            _object->Deleted.Unbind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
+        _object = nullptr;
+        _objectId = id;
+        _id = id.LocalId == 1 ? id.Guid : Guid::Empty;
         Changed();
     }
 
     void OnResolve(MClass* type)
     {
         ASSERT(!_object);
-        _object = FindObject(_id, type);
+        _object = _objectId.IsValid() ? Content::LoadAsync(_objectId, type) : FindObject(_id, type);
         if (_object)
+        {
+            _id = _object->GetID();
             _object->Deleted.Bind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
+        }
     }
 
     void OnDeleted(ScriptingObject* obj)
@@ -96,6 +127,7 @@ protected:
         _object->Deleted.Unbind<SoftObjectReferenceBase, &SoftObjectReferenceBase::OnDeleted>(this);
         _object = nullptr;
         _id = Guid::Empty;
+        _objectId = AssetObjectId();
         Changed();
     }
 };
@@ -134,7 +166,10 @@ public:
     /// <param name="other">The other property.</param>
     SoftObjectReference(const SoftObjectReference& other)
     {
-        OnSet(other.GetID());
+        if (other.GetObjectId().IsValid())
+            OnSet(other.GetObjectId());
+        else
+            OnSet(other.GetID());
     }
 
     /// <summary>
@@ -143,7 +178,10 @@ public:
     /// <param name="other">The other property.</param>
     SoftObjectReference(SoftObjectReference&& other)
     {
-        OnSet(other.GetID());
+        if (other.GetObjectId().IsValid())
+            OnSet(other.GetObjectId());
+        else
+            OnSet(other.GetID());
         other.OnSet(nullptr);
     }
 
@@ -175,14 +213,22 @@ public:
     SoftObjectReference& operator=(const SoftObjectReference& other)
     {
         if (this != &other)
-            OnSet(other.GetID());
+        {
+            if (other.GetObjectId().IsValid())
+                OnSet(other.GetObjectId());
+            else
+                OnSet(other.GetID());
+        }
         return *this;
     }
     SoftObjectReference& operator=(SoftObjectReference&& other)
     {
         if (this != &other)
         {
-            OnSet(other.GetID());
+            if (other.GetObjectId().IsValid())
+                OnSet(other.GetObjectId());
+            else
+                OnSet(other.GetID());
             other.OnSet(nullptr);
         }
         return *this;
@@ -198,6 +244,11 @@ public:
         return *this;
     }
     FORCE_INLINE SoftObjectReference& operator=(const Guid& id)
+    {
+        OnSet(id);
+        return *this;
+    }
+    FORCE_INLINE SoftObjectReference& operator=(const AssetObjectId& id)
     {
         OnSet(id);
         return *this;
@@ -264,6 +315,12 @@ public:
     /// </summary>
     /// <param name="id">The object ID. Uses Scripting to find the registered object of the given ID.</param>
     FORCE_INLINE void Set(const Guid& id)
+    {
+        OnSet(id);
+    }
+
+    /// <summary>Sets an exact persistent asset object identity.</summary>
+    FORCE_INLINE void Set(const AssetObjectId& id)
     {
         OnSet(id);
     }

@@ -32,10 +32,12 @@ namespace FlaxEditor.Content.Thumbnails
         private RenderTask _task;
         private GPUTexture _output;
 
+        private bool UseGeneratedThumbnails => Editor.GameProject?.AssetSystemVersion != ProjectInfo.CurrentAssetSystemVersion;
+
         internal ThumbnailsModule(Editor editor)
         : base(editor)
         {
-            _cacheFolder = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "Thumbnails", $"v{CacheVersion}");
+            _cacheFolder = StringUtils.CombinePaths(Globals.ProjectLibraryFolder, "Thumbnails", $"v{CacheVersion}");
             _lastFlushTime = DateTime.UtcNow;
         }
 
@@ -48,6 +50,14 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (item == null)
                 throw new ArgumentNullException();
+
+            // Canonical asset projects use lightweight type icons until the v3 preview pipeline is ready.
+            if (!UseGeneratedThumbnails)
+            {
+                var icon = item.DefaultThumbnail;
+                item.Thumbnail = icon.IsValid ? icon : Editor.Icons.Document128;
+                return;
+            }
             if (_task == null)
             {
                 _pendingRequests.Add(item);
@@ -319,7 +329,7 @@ namespace FlaxEditor.Content.Thumbnails
         /// <inheritdoc />
         public override void OnInit()
         {
-            if (Editor.IsHeadlessMode || (GPUDevice.Instance != null && GPUDevice.Instance.RendererType == RendererType.Null))
+            if (!UseGeneratedThumbnails || Editor.IsHeadlessMode || (GPUDevice.Instance != null && GPUDevice.Instance.RendererType == RendererType.Null))
                 return;
 
             // Create cache folder

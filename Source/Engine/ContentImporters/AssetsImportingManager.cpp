@@ -10,6 +10,7 @@
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetMount.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 #include "Engine/Engine/EngineService.h"
@@ -46,8 +47,12 @@ namespace
 {
     bool RejectCanonicalCookedOutput(const StringView& outputPath)
     {
-        if (!AssetDatabase::Get().IsHardCutEnabled() ||
-            !AssetPathPolicy::IsSameOrChild(outputPath, Globals::ProjectContentFolder))
+        if (!AssetDatabase::Get().IsHardCutEnabled())
+            return false;
+        AssetMountResolution mount;
+        const bool isSourceMount = AssetMountRegistry::TryResolvePhysical(outputPath, mount) ||
+            AssetPathPolicy::IsSameOrChild(outputPath, Globals::ProjectContentFolder);
+        if (!isSourceMount)
             return false;
         LOG(Error, "Legacy cooked-asset output into a source mount is forbidden: '{0}'. Use AssetDatabase or an artifact pipeline processor.", outputPath);
         return true;

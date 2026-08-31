@@ -521,6 +521,8 @@ namespace FlaxEditor
             if (File.Exists(physicalPath) || Directory.Exists(physicalPath) || AssetPathExists(path))
                 throw new IOException("An asset already exists at the destination path.");
             AssetPipelineCallbacks.WillCreate(ToLogicalPath(physicalPath));
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+            {
             if (!(asset is BinaryAsset binaryAsset))
             {
                 if (!string.Equals(Path.GetExtension(physicalPath), ".asset", StringComparison.OrdinalIgnoreCase))
@@ -546,6 +548,7 @@ namespace FlaxEditor
                 : AssetDatabaseFacade.SaveAuthoredDocument(binaryAsset, id);
             if (saveFailed)
                 throw new InvalidOperationException(GetLastDiagnostic("The initial authored asset state could not be serialized."));
+            }
             QueueImport(physicalPath);
         }
 
@@ -691,11 +694,65 @@ namespace FlaxEditor
                 return validation;
             var source = ResolvePhysicalPath(oldPath);
             var destination = ResolvePhysicalPath(newPath);
-            var result = AssetDatabaseFacade.MoveAssetPair(source, destination);
+            AssetMutationResultInfo result;
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+                result = AssetDatabaseFacade.MoveAssetPair(source, destination);
             if (!result.Succeeded)
                 return string.IsNullOrEmpty(result.Message) ? "Asset move transaction failed." : result.Message;
             QueueImport(destination);
-            AssetPipelineCallbacks.PostprocessAll(Array.Empty<string>(), Array.Empty<string>(), new[] { ToLogicalPath(destination) }, new[] { ToLogicalPath(source) }, false);
+            return string.Empty;
+        }
+
+        /// <summary>Moves source/metadata pairs under one durable native transaction.</summary>
+        internal static string MoveAssets(string[] oldPaths, string[] newPaths)
+        {
+            if (oldPaths == null)
+                throw new ArgumentNullException(nameof(oldPaths));
+            if (newPaths == null)
+                throw new ArgumentNullException(nameof(newPaths));
+            if (oldPaths.Length != newPaths.Length)
+                throw new ArgumentException("Source and destination arrays must have matching indexes.");
+            EnsureCoordinatorWrite();
+            if (oldPaths.Length == 0)
+                return string.Empty;
+            var sources = new List<string>(oldPaths.Length);
+            var destinations = new List<string>(newPaths.Length);
+            var logicalSources = new List<string>(oldPaths.Length);
+            var logicalDestinations = new List<string>(newPaths.Length);
+            var callbackHandled = false;
+            for (var i = 0; i < oldPaths.Length; i++)
+            {
+                var validation = ValidateMoveAsset(oldPaths[i], newPaths[i], out var handled);
+                if (!string.IsNullOrEmpty(validation))
+                    return validation;
+                if (handled)
+                {
+                    callbackHandled = true;
+                    continue;
+                }
+                var source = ResolvePhysicalPath(oldPaths[i]);
+                var destination = ResolvePhysicalPath(newPaths[i]);
+                sources.Add(source);
+                destinations.Add(destination);
+                logicalSources.Add(ToLogicalPath(source));
+                logicalDestinations.Add(ToLogicalPath(destination));
+            }
+            if (callbackHandled && sources.Count != 0)
+            {
+                Refresh(ImportAssetOptions.Default);
+                return "A modification callback handled only part of the move selection. The remaining paths were excluded from the native atomic batch.";
+            }
+            if (sources.Count == 0)
+                return string.Empty;
+            using (AssetEditingScope())
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+            {
+                var result = AssetDatabaseFacade.MoveAssetPairs(sources.ToArray(), destinations.ToArray());
+                if (!result.Succeeded)
+                    return string.IsNullOrEmpty(result.Message) ? "Asset move batch transaction failed." : result.Message;
+                for (var i = 0; i < destinations.Count; i++)
+                    QueueImport(destinations[i]);
+            }
             return string.Empty;
         }
 
@@ -742,7 +799,9 @@ namespace FlaxEditor
                 !AssetMountRegistry.IsWritable(ToLogicalPath(source)) || !AssetMountRegistry.IsWritable(ToLogicalPath(destination)))
                 return false;
             AssetPipelineCallbacks.WillCreate(ToLogicalPath(destination));
-            var result = AssetDatabaseFacade.CopyAssetPair(source, destination);
+            AssetMutationResultInfo result;
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+                result = AssetDatabaseFacade.CopyAssetPair(source, destination);
             if (!result.Succeeded)
                 return false;
             QueueImport(destination);
@@ -759,13 +818,31 @@ namespace FlaxEditor
                 throw new ArgumentNullException(nameof(destinationPaths));
             if (sourcePaths.Length != destinationPaths.Length)
                 throw new ArgumentException("Source and destination arrays must have matching indexes.");
-            using (AssetEditingScope())
+            EnsureCoordinatorWrite();
+            if (sourcePaths.Length == 0)
+                return true;
+            var sources = new string[sourcePaths.Length];
+            var destinations = new string[destinationPaths.Length];
+            var logicalDestinations = new string[destinationPaths.Length];
+            for (var i = 0; i < sourcePaths.Length; i++)
             {
-                for (var i = 0; i < sourcePaths.Length; i++)
-                {
-                    if (!CopyAsset(sourcePaths[i], destinationPaths[i]))
-                        return false;
-                }
+                sources[i] = ResolvePhysicalPath(sourcePaths[i]);
+                destinations[i] = ResolvePhysicalPath(destinationPaths[i]);
+                if (!IsProjectContentPath(sources[i]) || !IsProjectContentPath(destinations[i]) ||
+                    !AssetMountRegistry.IsWritable(ToLogicalPath(sources[i])) || !AssetMountRegistry.IsWritable(ToLogicalPath(destinations[i])))
+                    return false;
+                logicalDestinations[i] = ToLogicalPath(destinations[i]);
+                AssetPipelineCallbacks.WillCreate(logicalDestinations[i]);
+            }
+            using (AssetEditingScope())
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+            {
+                var result = AssetDatabaseFacade.CopyAssetPairs(sources, destinations);
+                if (!result.Succeeded)
+                    return false;
+                for (var i = 0; i < destinations.Length; i++)
+                    QueueImport(destinations[i]);
+                AssetPipelineCallbacks.PostprocessAll(logicalDestinations, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), false);
             }
             return true;
         }
@@ -781,11 +858,10 @@ namespace FlaxEditor
                 return false;
             if (callbackHandled)
                 return true;
-            var result = AssetDatabaseFacade.DeleteAssetPairToRecovery(physicalPath);
-            var deleted = result.Succeeded;
-            if (deleted)
-                AssetPipelineCallbacks.PostprocessAll(Array.Empty<string>(), new[] { ToLogicalPath(physicalPath) }, Array.Empty<string>(), Array.Empty<string>(), false);
-            return deleted;
+            AssetMutationResultInfo result;
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+                result = AssetDatabaseFacade.DeleteAssetPairToRecovery(physicalPath);
+            return result.Succeeded;
         }
 
         /// <summary>Deletes multiple source trees and reports paths that failed.</summary>
@@ -795,18 +871,7 @@ namespace FlaxEditor
                 throw new ArgumentNullException(nameof(paths));
             if (failedPaths == null)
                 throw new ArgumentNullException(nameof(failedPaths));
-            var allSucceeded = true;
-            using (AssetEditingScope())
-            {
-                foreach (var path in paths)
-                {
-                    if (DeleteAsset(path))
-                        continue;
-                    failedPaths.Add(path);
-                    allSucceeded = false;
-                }
-            }
-            return allSucceeded;
+            return DeleteAssetsBatch(paths, failedPaths);
         }
 
         /// <summary>Requests a recoverable deletion.</summary>
@@ -819,9 +884,9 @@ namespace FlaxEditor
                 return false;
             if (callbackHandled)
                 return true;
-            var result = AssetDatabaseFacade.DeleteAssetPairToRecovery(physicalPath);
-            if (result.Succeeded)
-                AssetPipelineCallbacks.PostprocessAll(Array.Empty<string>(), new[] { ToLogicalPath(physicalPath) }, Array.Empty<string>(), Array.Empty<string>(), false);
+            AssetMutationResultInfo result;
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+                result = AssetDatabaseFacade.DeleteAssetPairToRecovery(physicalPath);
             return result.Succeeded;
         }
 
@@ -832,18 +897,54 @@ namespace FlaxEditor
                 throw new ArgumentNullException(nameof(paths));
             if (failedPaths == null)
                 throw new ArgumentNullException(nameof(failedPaths));
-            var allSucceeded = true;
-            using (AssetEditingScope())
+            return DeleteAssetsBatch(paths, failedPaths);
+        }
+
+        private static bool DeleteAssetsBatch(string[] paths, List<string> failedPaths)
+        {
+            EnsureCoordinatorWrite();
+            if (paths.Length == 0)
+                return true;
+            var nativePaths = new List<string>(paths.Length);
+            var nativeInputs = new List<string>(paths.Length);
+            var callbackHandledAny = false;
+            for (var i = 0; i < paths.Length; i++)
             {
-                foreach (var path in paths)
+                var physicalPath = ResolvePhysicalPath(paths[i]);
+                var logicalPath = ToLogicalPath(physicalPath);
+                if (!IsProjectContentPath(physicalPath) || !AssetMountRegistry.IsWritable(logicalPath) ||
+                    !AssetPipelineCallbacks.ValidateDelete(logicalPath, out var callbackHandled))
                 {
-                    if (MoveAssetToTrash(path))
-                        continue;
-                    failedPaths.Add(path);
-                    allSucceeded = false;
+                    failedPaths.Add(paths[i]);
+                    return false;
+                }
+                if (callbackHandled)
+                {
+                    callbackHandledAny = true;
+                    continue;
+                }
+                nativePaths.Add(physicalPath);
+                nativeInputs.Add(paths[i]);
+            }
+            if (callbackHandledAny && nativePaths.Count != 0)
+            {
+                Editor.LogWarning("A modification callback handled only part of the delete selection. Callback-handled paths are explicitly outside the native transaction; the remaining paths were not mutated.");
+                failedPaths.AddRange(nativeInputs);
+                return false;
+            }
+            if (nativePaths.Count == 0)
+                return true;
+            using (AssetEditingScope())
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+            {
+                var result = AssetDatabaseFacade.DeleteAssetPairsToRecovery(nativePaths.ToArray());
+                if (!result.Succeeded)
+                {
+                    failedPaths.AddRange(nativeInputs);
+                    return false;
                 }
             }
-            return allSucceeded;
+            return true;
         }
 
         /// <summary>Creates a folder and schedules metadata reconciliation.</summary>
@@ -856,7 +957,9 @@ namespace FlaxEditor
                 return string.Empty;
             var path = Path.Combine(parent, newFolderName);
             AssetPipelineCallbacks.WillCreate(ToLogicalPath(path));
-            var result = AssetDatabaseFacade.CreateAssetFolder(path);
+            AssetMutationResultInfo result;
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+                result = AssetDatabaseFacade.CreateAssetFolder(path);
             if (!result.Succeeded)
                 return string.Empty;
             QueueImport(path);
@@ -903,7 +1006,10 @@ namespace FlaxEditor
             {
                 if (!dirty.TryGetValue(ToLogicalPath(ResolvePhysicalPath(logicalPath)), out var physicalPath))
                     continue;
-                if (AuthoredAssetFacade.SaveAssetIfDirty(physicalPath))
+                bool failed;
+                using (AssetPipelineCallbacks.BypassNativeDecision())
+                    failed = AuthoredAssetFacade.SaveAssetIfDirty(physicalPath);
+                if (failed)
                     throw new InvalidOperationException(AuthoredAssetFacade.GetLastError());
                 QueueImport(physicalPath);
             }
@@ -933,7 +1039,10 @@ namespace FlaxEditor
                 var selectedGeneric = AssetPipelineCallbacks.WillSave(new[] { logicalPath });
                 if (!selectedGeneric.Contains(logicalPath, StringComparer.OrdinalIgnoreCase))
                     return false;
-                if (AuthoredAssetFacade.SaveAssetIfDirty(physicalPath))
+                bool failed;
+                using (AssetPipelineCallbacks.BypassNativeDecision())
+                    failed = AuthoredAssetFacade.SaveAssetIfDirty(physicalPath);
+                if (failed)
                     throw new InvalidOperationException(AuthoredAssetFacade.GetLastError());
                 QueueImport(physicalPath);
                 return true;
@@ -943,7 +1052,8 @@ namespace FlaxEditor
             var selected = AssetPipelineCallbacks.WillSave(new[] { record.CanonicalPath });
             if (!selected.Contains(record.CanonicalPath, StringComparer.OrdinalIgnoreCase))
                 return false;
-            return !Editor.Instance.ContentDatabase.SaveAsset(asset);
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+                return !Editor.Instance.ContentDatabase.SaveAsset(asset);
         }
 
         /// <summary>Saves the authored source identified by a file GUID.</summary>
@@ -961,7 +1071,10 @@ namespace FlaxEditor
                 var logicalPath = record.CanonicalPath;
                 if (!AssetPipelineCallbacks.WillSave(new[] { logicalPath }).Contains(logicalPath, StringComparer.OrdinalIgnoreCase))
                     return false;
-                if (AuthoredAssetFacade.SaveAssetIfDirty(ResolvePhysicalPath(logicalPath)))
+                bool failed;
+                using (AssetPipelineCallbacks.BypassNativeDecision())
+                    failed = AuthoredAssetFacade.SaveAssetIfDirty(ResolvePhysicalPath(logicalPath));
+                if (failed)
                     throw new InvalidOperationException(AuthoredAssetFacade.GetLastError());
                 QueueImport(logicalPath);
                 return true;
@@ -1207,6 +1320,8 @@ namespace FlaxEditor
                     FlushDeferredImports();
             });
         }
+
+        internal static bool IsCallbackScopeActive => _callbackDepth != 0;
 
         internal static string ResolvePhysicalPathInternal(string path)
         {

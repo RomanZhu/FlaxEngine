@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AssetDatabaseScanner.h"
+#include "AssetMutationService.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Scripting/ScriptingType.h"
 #include "Identity/AssetObjectId.h"
@@ -22,6 +23,7 @@ class Texture;
 class BinaryAsset;
 class Asset;
 class Material;
+struct AssetMeta;
 
 /// <summary>Controls generic asset import and refresh behavior.</summary>
 API_ENUM(Attributes="Flags") enum class ImportAssetOptions : uint32
@@ -124,6 +126,9 @@ public:
     /// <summary>Notifies editor consumers that an exact generated artifact is ready.</summary>
     static void NotifyArtifactPublished(const Guid& assetID);
 
+    /// <summary>Installs the editor modification-processor bridge used by every native source mutation.</summary>
+    static void SetMutationDecisionHook(AssetMutationDecisionHook&& hook);
+
     API_PROPERTY() static uint64 GetRevision();
     API_PROPERTY() static int32 GetDesiredWorkerCount();
     API_PROPERTY() static void SetDesiredWorkerCount(int32 value);
@@ -165,8 +170,11 @@ public:
 
     API_FUNCTION() static AssetMutationResultInfo ValidateAssetMove(const StringView& sourcePath, const StringView& destinationPath);
     API_FUNCTION() static AssetMutationResultInfo MoveAssetPair(const StringView& sourcePath, const StringView& destinationPath);
+    API_FUNCTION() static AssetMutationResultInfo MoveAssetPairs(const Array<String>& sourcePaths, const Array<String>& destinationPaths);
     API_FUNCTION() static AssetMutationResultInfo CopyAssetPair(const StringView& sourcePath, const StringView& destinationPath);
+    API_FUNCTION() static AssetMutationResultInfo CopyAssetPairs(const Array<String>& sourcePaths, const Array<String>& destinationPaths);
     API_FUNCTION() static AssetMutationResultInfo DeleteAssetPairToRecovery(const StringView& sourcePath);
+    API_FUNCTION() static AssetMutationResultInfo DeleteAssetPairsToRecovery(const Array<String>& sourcePaths);
     API_FUNCTION() static AssetMutationResultInfo CreateAssetFolder(const StringView& path);
     API_FUNCTION() static AssetMutationResultInfo PublishExternalSource(const StringView& externalSourcePath,
         const StringView& destinationPath, const StringView& typeName, const StringView& processorId,
@@ -174,6 +182,7 @@ public:
     API_FUNCTION() static AssetMutationResultInfo RegisterCanonicalSource(const StringView& sourcePath,
         bool replaceExistingMetadata = false);
     API_FUNCTION() static AssetMutationResultInfo RecoverAssetPair(const StringView& recoveryPath, const StringView& destinationPath);
+    API_FUNCTION() static AssetMutationResultInfo RecoverAssetPairs(const Array<String>& recoveryPaths, const Array<String>& destinationPaths);
 
     /// <summary>Resolves a loaded main asset or subasset to its persistent source identity.</summary>
     API_FUNCTION() static bool TryGetAssetObjectId(Asset* asset, API_PARAM(Out) AssetObjectId& result);
@@ -294,7 +303,7 @@ public:
     /// <summary>Creates a canonical small authored document plus sidecar.</summary>
     API_FUNCTION() static Guid CreateAuthoredDocument(const StringView& outputPath, const StringView& typeName);
 
-    /// <summary>Saves an edited authored compatibility asset back into its canonical text document.</summary>
+    /// <summary>Serializes an edited authored asset directly into its canonical text source document.</summary>
     API_FUNCTION() static bool SaveAuthoredDocument(BinaryAsset* asset, const Guid& canonicalAssetID);
 
     /// <summary>Saves edited material parameter defaults back into the canonical graph document.</summary>
@@ -324,7 +333,7 @@ public:
 #endif
 
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
-    /// <summary>Creates canonical model metadata beside an imported source and seeds subasset GUIDs from a sibling flax package when present.</summary>
+    /// <summary>Creates canonical model metadata beside an imported source and reconciles stable subasset IDs from source analysis.</summary>
     API_FUNCTION() static Guid CreateModelMetadata(const StringView& sourcePath, const ModelTool::Options& options);
     API_FUNCTION() static AssetMutationResultInfo PublishExternalModel(const StringView& externalSourcePath,
         const StringView& destinationPath, const ModelTool::Options& options, bool replaceExisting = false);
@@ -346,6 +355,9 @@ public:
     /// <summary>Queues the current exact graph, authored-document, or imported-source build.</summary>
     API_FUNCTION() static bool BuildGraph(const Guid& assetID);
 
+    /// <summary>Queues the current exact build through the processor that owns the canonical source.</summary>
+    API_FUNCTION() static bool BuildAsset(const Guid& assetID);
+
     /// <summary>Queues an exact graph document rebuild.</summary>
     API_FUNCTION() static bool RebuildGraph(const Guid& assetID);
 
@@ -359,6 +371,15 @@ public:
     /// <returns>True on failure.</returns>
     static bool SaveExistingJsonSource(const StringView& sourcePath, const StringAnsiView& sourceContents,
         const Guid& sourceID, const StringView& typeName);
+
+    /// <summary>Creates or replaces an existing-JSON source from serialized bytes through the journaled mutation owner.</summary>
+    /// <returns>True on failure.</returns>
+    API_FUNCTION() static bool SaveExistingJsonSourceBytes(const StringView& sourcePath, const BytesContainer& sourceContents,
+        const Guid& sourceID, const StringView& typeName);
+
+    /// <summary>Journal-publishes metadata for an existing canonical source and commits the database view.</summary>
+    static bool CommitMetadata(const StringView& sourcePath, const AssetMeta& metadata, bool replaceExisting,
+        AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Writes missing scene/prefab sidecars without changing document bytes.</summary>
     API_FUNCTION() static bool EnsureExistingJsonSidecars();

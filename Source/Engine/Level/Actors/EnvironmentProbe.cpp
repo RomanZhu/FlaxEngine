@@ -13,7 +13,8 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Deprecated.h"
 #include "Engine/ContentExporters/AssetExporters.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/Content/AssetDatabase/BakedAssetFacade.h"
+#include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Core/Math/OrientedBoundingBox.h"
 #include "Engine/Graphics/RenderTools.h"
 #include "Engine/Serialization/Serialization.h"
@@ -128,12 +129,13 @@ void EnvironmentProbe::SetProbeData(TextureData& data)
 
 #if COMPILE_WITH_ASSETS_IMPORTER
     // Create asset file
-    const String path = GetScene()->GetDataFolderPath() / TEXT("EnvProbes/") / GetID().ToString(Guid::FormatType::N) + ASSET_FILES_EXTENSION_WITH_DOT;
+    const String path = GetScene()->GetDataFolderPath() / TEXT("EnvProbes/") / GetID().ToString(Guid::FormatType::N) + TEXT(".bakedasset");
     AssetInfo info;
     Guid id = Guid::New();
     if (FileSystem::FileExists(path) && Content::GetAssetInfo(path, info))
         id = info.ID;
-    if (AssetsImportingManager::Create(AssetsImportingManager::CreateCubeTextureTag, path, id, &data))
+    CreateAssetFunction encoder = &ImportTexture::ImportCube;
+    if (BakedAssetFacade::Create(encoder, path, id, &data))
     {
         LOG(Error, "Cannot import generated env probe!");
         return;

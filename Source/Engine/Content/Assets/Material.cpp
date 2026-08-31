@@ -463,12 +463,17 @@ void Material::InitCompilationOptions(ShaderCompilationOptions& options)
     // Base
     ShaderAssetBase::InitCompilationOptions(options);
 
+    SetupCompilationOptions(options, _shaderHeader.Material.Info);
+}
+
+void Material::SetupCompilationOptions(ShaderCompilationOptions& options, const MaterialInfo& info)
+{
+
 #if COMPILE_WITH_SHADER_COMPILER
     // Ensure that this call is valid (material features switches may depend on target compilation platform)
     ASSERT(options.Profile != ShaderProfile::Unknown);
 
     // Prepare
-    auto& info = _shaderHeader.Material.Info;
     const bool isSurfaceOrTerrainOrDeformable = info.Domain == MaterialDomain::Surface || info.Domain == MaterialDomain::Terrain || info.Domain == MaterialDomain::Deformable;
     const bool isOpaque = info.BlendMode == MaterialBlendMode::Opaque;
     const bool useCustomData = info.ShadingModel == MaterialShadingModel::Subsurface || info.ShadingModel == MaterialShadingModel::Foliage;

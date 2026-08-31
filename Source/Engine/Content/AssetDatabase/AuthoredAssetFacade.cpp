@@ -12,11 +12,20 @@ namespace
     CriticalSection StateLocker;
     String LastError;
 
+    String AssetPipelineLibraryFolder()
+    {
+#if USE_EDITOR
+        return Globals::ProjectLibraryFolder;
+#else
+        return Globals::ProjectFolder / TEXT("Library");
+#endif
+    }
+
     AssetSaveService& GetService()
     {
         static AssetSaveService service(Globals::ProjectFolder, Globals::ProjectContentFolder,
-            Globals::ProjectLibraryFolder / TEXT("AssetDatabase/MutationJournals"),
-            Globals::ProjectLibraryFolder / TEXT("AssetDatabase/Recovery"));
+            AssetPipelineLibraryFolder() / TEXT("AssetDatabase/MutationJournals"),
+            AssetPipelineLibraryFolder() / TEXT("AssetDatabase/Recovery"));
         return service;
     }
 

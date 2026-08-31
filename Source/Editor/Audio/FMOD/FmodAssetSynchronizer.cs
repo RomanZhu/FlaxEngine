@@ -83,11 +83,8 @@ namespace FlaxEditor.FMOD
             var snapshotDirectory = Path.Combine(contentRoot, "Audio", "Snapshots");
             var busDirectory = Path.Combine(contentRoot, "Audio", "Buses");
             var vcaDirectory = Path.Combine(contentRoot, "Audio", "VCAs");
-            Directory.CreateDirectory(eventDirectory);
-            Directory.CreateDirectory(bankDirectory);
-            Directory.CreateDirectory(snapshotDirectory);
-            Directory.CreateDirectory(busDirectory);
-            Directory.CreateDirectory(vcaDirectory);
+            if (!EnsureGeneratedDirectories(contentRoot, report, "Audio", "Events", "Banks", "Snapshots", "Buses", "VCAs"))
+                return report;
 
             var knownBankIds = new HashSet<Guid>();
             foreach (var bankData in metadata.banks)
@@ -171,7 +168,16 @@ namespace FlaxEditor.FMOD
                 {
                     if (!bankAssetIds.TryGetValue(dependency, out var bankAssetId))
                         continue;
-                    bankAssets.Add(bankAssetId.ToString("N"));
+                    if (!FlaxEngine.Content.GetAssetObjectId(bankAssetId, out var objectId) || !objectId.IsValid)
+                    {
+                        report.Errors.Add($"FMOD bank asset '{bankAssetId}' has no canonical file GUID/local-ID identity.");
+                        continue;
+                    }
+                    bankAssets.Add(new JObject
+                    {
+                        ["guid"] = objectId.Guid.ToString("N"),
+                        ["localId"] = objectId.LocalId,
+                    });
                 }
                 var eventAssetData = new JObject
                 {
@@ -262,6 +268,31 @@ namespace FlaxEditor.FMOD
             }
         }
 
+        private static bool EnsureGeneratedDirectories(string contentRoot, Report report, params string[] names)
+        {
+            var useCanonicalAssetSystem = Editor.Instance?.GameProject?.AssetSystemVersion == ProjectInfo.CurrentAssetSystemVersion;
+            var parent = contentRoot;
+            for (var i = 0; i < names.Length; i++)
+            {
+                if (i == 1)
+                    parent = Path.Combine(contentRoot, names[0]);
+                var path = Path.Combine(parent, names[i]);
+                if (Directory.Exists(path))
+                    continue;
+                if (!useCanonicalAssetSystem)
+                {
+                    Directory.CreateDirectory(path);
+                    continue;
+                }
+                if (string.IsNullOrEmpty(AssetDatabase.CreateFolder(parent, names[i])))
+                {
+                    report.Errors.Add($"Failed to create FMOD asset folder '{path}'.");
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private static bool SaveGeneratedAsset(string path, object asset)
         {
             var data = JToken.Parse(FlaxEngine.Json.JsonSerializer.Serialize(asset));
@@ -270,8 +301,23 @@ namespace FlaxEditor.FMOD
 
         private static bool SaveGeneratedAsset(string path, JToken data, string typeName)
         {
+            NormalizeNativeGuids(data);
             if (IsGeneratedAssetCurrent(path, data))
                 return false;
+
+            if (Editor.Instance?.GameProject?.AssetSystemVersion == ProjectInfo.CurrentAssetSystemVersion)
+            {
+                var logicalPath = AssetDatabase.ToLogicalPathInternal(path);
+                if (File.Exists(path))
+                {
+                    if (!AssetPipelineCallbacks.WillSave(new[] { logicalPath }).Contains(logicalPath, StringComparer.OrdinalIgnoreCase))
+                        return false;
+                }
+                else
+                {
+                    AssetPipelineCallbacks.WillCreate(logicalPath);
+                }
+            }
 
             var contentDatabase = Editor.Instance?.ContentDatabase;
             using var saveScope = contentDatabase?.TrackAssetSave(path);
@@ -290,13 +336,15 @@ namespace FlaxEditor.FMOD
 
                 // Authored event metadata contains nested structures with managed strings. Keep it
                 // out of generated C# setters and use the native JSON creation path with serialized data.
-                if (Editor.Internal_SaveJsonAsset(path, data.ToString(Formatting.None), typeName))
+                bool failed;
+                using (AssetPipelineCallbacks.BypassNativeDecision())
+                    failed = Editor.Internal_SaveJsonAsset(path, data.ToString(Formatting.None), typeName);
+                if (failed)
                     return true;
 
                 // Match the normal disk-change path: notify item owners only after Reload has been requested.
                 loadedItem?.NotifyReloaded();
 
-                NormalizeNativeGuids(path);
                 succeeded = true;
                 return false;
             }
@@ -307,8 +355,6 @@ namespace FlaxEditor.FMOD
             }
             finally
             {
-                // Keep the initial JSON write and the normalized GUID rewrite in one
-                // tracked save so the file watcher cannot schedule a second reload.
                 saveScope?.Complete(succeeded);
             }
         }
@@ -398,17 +444,6 @@ namespace FlaxEditor.FMOD
                     editor.Windows.PropertiesWin?.PrepareForAssetReload(asset);
                 break;
             }
-        }
-
-        private static void NormalizeNativeGuids(string path)
-        {
-            // Native Flax JSON Guid deserialization uses the engine's compact N
-            // representation. Newtonsoft's default Guid converter writes D;
-            // normalize every generated Guid string while preserving paths and
-            // other authored strings.
-            var root = JToken.Parse(File.ReadAllText(path));
-            NormalizeNativeGuids(root);
-            File.WriteAllText(path, root.ToString(Formatting.Indented));
         }
 
         private static void NormalizeNativeGuids(JToken token)

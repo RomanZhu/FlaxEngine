@@ -161,14 +161,9 @@ namespace
         const StringAnsiView& outputKind, ArtifactManifest* resultManifest);
 }
 
-String ScriptedImporterFacade::ReadArtifactOutput(const Guid& sourceAssetId, const StringView& outputKind)
+static String ReadArtifactOutputInternal(const Guid& sourceAssetId, const StringView& outputKind)
 {
     ClearError();
-    if (!Engine::GetCommandLine().Contains(TEXT("-assetImportWorker"), StringSearchCase::IgnoreCase))
-    {
-        Fail(TEXT("Immutable importer artifact reads are available only inside an import worker."));
-        return String::Empty;
-    }
     if (!sourceAssetId.IsValid() || outputKind.IsEmpty())
     {
         Fail(TEXT("Immutable importer artifact reads require a source GUID and output kind."));
@@ -235,15 +230,38 @@ String ScriptedImporterFacade::ReadArtifactOutput(const Guid& sourceAssetId, con
     return String(StringAnsiView(buffer.GetString(), static_cast<int32>(buffer.GetSize())));
 }
 
+String ScriptedImporterFacade::ReadArtifactOutput(const Guid& sourceAssetId, const StringView& outputKind)
+{
+    if (!Engine::GetCommandLine().Contains(TEXT("-assetImportWorker"), StringSearchCase::IgnoreCase))
+    {
+        ClearError();
+        Fail(TEXT("Immutable importer artifact reads are available only inside an import worker."));
+        return String::Empty;
+    }
+    return ReadArtifactOutputInternal(sourceAssetId, outputKind);
+}
+
+String ScriptedImporterFacade::ReadArtifactOutputForCoordinator(const Guid& sourceAssetId, const StringView& outputKind)
+{
+    if (Engine::GetCommandLine().Contains(TEXT("-assetImportWorker"), StringSearchCase::IgnoreCase))
+    {
+        ClearError();
+        Fail(TEXT("Coordinator artifact staging cannot run inside an importer worker."));
+        return String::Empty;
+    }
+    return ReadArtifactOutputInternal(sourceAssetId, outputKind);
+}
+
 bool ScriptedImporterFacade::EnsureMetadata(const StringView& sourcePath, const StringView& importerId, int32 settingsSchemaVersion)
 {
     const String resolved = ResolvePath(sourcePath);
     if (resolved.IsEmpty() || !FileSystem::FileExists(resolved) || importerId.IsEmpty() || settingsSchemaVersion < 1)
         return Fail(TEXT("Managed importer metadata requires an existing mounted source and a valid importer identity."));
     const String metaPath = resolved + TEXT(".meta");
+    const bool metadataExists = FileSystem::FileExists(metaPath);
     AssetPipelineDiagnostic diagnostic;
     AssetMeta meta;
-    if (FileSystem::FileExists(metaPath))
+    if (metadataExists)
     {
         if (AssetMeta::Load(metaPath, meta, diagnostic))
             return Fail(diagnostic, TEXT("Managed importer metadata is unreadable."));
@@ -260,7 +278,7 @@ bool ScriptedImporterFacade::EnsureMetadata(const StringView& sourcePath, const 
     meta.Processor.SettingsVersion = settingsSchemaVersion;
     if (meta.Processor.SettingsJson.IsEmpty())
         meta.Processor.SettingsJson = "{}\n";
-    if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic) || RefreshSource(resolved))
+    if (AssetDatabaseFacade::CommitMetadata(resolved, meta, metadataExists, diagnostic))
         return Fail(diagnostic, TEXT("Managed importer metadata could not be published."));
     ClearError();
     return false;
@@ -376,9 +394,7 @@ namespace
             return true;
         }
         meta.SubAssets = MoveTemp(reconciliation.Resolved);
-        if (AssetMeta::SaveAtomic(String(sourcePath) + TEXT(".meta"), meta, diagnostic))
-            return true;
-        return RefreshSource(sourcePath);
+        return AssetDatabaseFacade::CommitMetadata(sourcePath, meta, true, diagnostic);
     }
 
     bool DeclareSourceRecord(PrepareAssetContext& context, const AssetRecord& dependencyRecord,
@@ -1084,6 +1100,11 @@ bool ScriptedImporterFacade::Publish(const StringView&, const StringView&)
 }
 
 String ScriptedImporterFacade::ReadArtifactOutput(const Guid&, const StringView&)
+{
+    return String::Empty;
+}
+
+String ScriptedImporterFacade::ReadArtifactOutputForCoordinator(const Guid&, const StringView&)
 {
     return String::Empty;
 }

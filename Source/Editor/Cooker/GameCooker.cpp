@@ -870,7 +870,7 @@ void GameCookerService::Dispose()
     // End thread
     if (IsThreadRunning)
     {
-        LOG(Warning, "Waiting for the Game Cooker thread end...");
+        LOG(Info, "Waiting for the Game Cooker thread end...");
 
         Platform::AtomicStore(&CancelThreadFlag, 1);
         ThreadCond.NotifyOne();

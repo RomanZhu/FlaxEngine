@@ -14,6 +14,7 @@
 #include "Engine/Platform/WindowsManager.h"
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Level/Actor.h"
 #include "Engine/CSG/CSGBuilder.h"
 #include "Engine/Engine/CommandLine.h"
@@ -41,6 +42,45 @@ MMethod* Internal_GetGameWindowSize = nullptr;
 MMethod* Internal_OnAppExit = nullptr;
 MMethod* Internal_OnVisualScriptingDebugFlow = nullptr;
 MMethod* Internal_RequestStartPlayOnEditMode = nullptr;
+MMethod* Internal_AssetMutationDecision = nullptr;
+
+AssetMutationDecisionResult OnAssetMutationDecision(const AssetMutationDecisionContext& context)
+{
+    AssetMutationDecisionResult result;
+    if (Internal_AssetMutationDecision == nullptr)
+        Internal_AssetMutationDecision = ManagedEditor::GetStaticClass()->GetMethod("Internal_AssetMutationDecision", 3);
+    if (Internal_AssetMutationDecision == nullptr)
+    {
+        result.Decision = AssetMutationDecision::Deny;
+        result.Message = TEXT("The managed asset modification callback bridge is unavailable.");
+        return result;
+    }
+
+    int32 operation = static_cast<int32>(context.Operation);
+    void* args[3];
+    args[0] = &operation;
+    args[1] = MUtils::ToString(context.SourcePath);
+    args[2] = MUtils::ToString(context.DestinationPath);
+    MObject* exception = nullptr;
+    MObject* value = Internal_AssetMutationDecision->Invoke(nullptr, args, &exception);
+    if (exception || value == nullptr)
+    {
+        if (exception)
+        {
+            MException ex(exception);
+            ex.Log(LogType::Error, TEXT("Asset modification callback"));
+        }
+        result.Decision = AssetMutationDecision::Deny;
+        result.Message = TEXT("An asset modification callback failed.");
+        return result;
+    }
+
+    const int32 decision = MUtils::Unbox<int32>(value);
+    result.Decision = decision >= static_cast<int32>(AssetMutationDecision::Allow) && decision <= static_cast<int32>(AssetMutationDecision::AlreadyHandled)
+        ? static_cast<AssetMutationDecision>(decision)
+        : AssetMutationDecision::Deny;
+    return result;
+}
 
 void OnLightmapsBake(ShadowsOfMordor::BuildProgressStep step, float stepProgress, float totalProgress, bool isProgressEvent)
 {
@@ -232,6 +272,10 @@ void ManagedEditor::Init()
         LOG_STR(Fatal, TEXT("Failed to initialize editor! ") + ex.Message);
     }
 
+    AssetMutationDecisionHook decisionHook;
+    decisionHook.Bind<OnAssetMutationDecision>();
+    AssetDatabaseFacade::SetMutationDecisionHook(MoveTemp(decisionHook));
+
     // Clear flag to ensure to call Exit() on assembly unloading
     WasExitCalled = false;
 
@@ -347,6 +391,7 @@ void ManagedEditor::Exit()
         ex.Log(LogType::Warning, TEXT("ManagedEditor::Exit"));
         LOG_STR(Fatal, TEXT("Failed to shutdown editor! ") + ex.Message);
     }
+    AssetDatabaseFacade::SetMutationDecisionHook(AssetMutationDecisionHook());
 }
 
 Window* ManagedEditor::GetMainWindow()
@@ -672,6 +717,7 @@ void ManagedEditor::DestroyManaged()
     {
         Exit();
     }
+    AssetDatabaseFacade::SetMutationDecisionHook(AssetMutationDecisionHook());
 
     Internal_EnvProbeBake = nullptr;
     Internal_LightmapsBake = nullptr;
@@ -681,6 +727,7 @@ void ManagedEditor::DestroyManaged()
     Internal_GetGameWinPtr = nullptr;
     Internal_OnAppExit = nullptr;
     Internal_OnVisualScriptingDebugFlow = nullptr;
+    Internal_AssetMutationDecision = nullptr;
 
     // Base
     ScriptingObject::DestroyManaged();

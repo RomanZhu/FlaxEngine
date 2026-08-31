@@ -8,7 +8,8 @@
 #include "Engine/Profiler/ProfilerMemory.h"
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/Core/Log.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/Content/AssetDatabase/BakedAssetFacade.h"
+#include "Engine/ContentImporters/CreateRawData.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #if USE_EDITOR
 #include "Editor/Editor.h"
@@ -52,7 +53,7 @@ void NavMesh::SaveNavMesh()
     Guid assetId = DataAsset.GetID();
     if (!assetId.IsValid())
         assetId = Guid::New();
-    const String assetPath = scene->GetDataFolderPath() / TEXT("NavMesh") + Properties.Name + ASSET_FILES_EXTENSION_WITH_DOT;
+    const String assetPath = scene->GetDataFolderPath() / TEXT("NavMesh") + Properties.Name + TEXT(".bakedasset");
 
     // Generate navmesh tiles data
     const int32 streamInitialCapacity = Math::RoundUpToPowerOf2((Data.Tiles.Count() + 1) * 1024);
@@ -62,7 +63,8 @@ void NavMesh::SaveNavMesh()
     bytesContainer.Link(ToSpan(stream));
 
     // Save asset to file
-    if (AssetsImportingManager::Create(AssetsImportingManager::CreateRawDataTag, assetPath, assetId, (void*)&bytesContainer))
+    CreateAssetFunction encoder = &CreateRawData::Create;
+    if (BakedAssetFacade::Create(encoder, assetPath, assetId, &bytesContainer))
     {
         LOG(Warning, "Failed to save navmesh tiles data to file.");
         return;

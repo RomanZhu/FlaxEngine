@@ -33,6 +33,7 @@
 #include "Editor/Editor.h"
 #include "Editor/ProjectInfo.h"
 #include "Editor/Managed/ManagedEditor.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #else
 #include "Engine/Utilities/Encryption.h"
 #include "Engine/Scripting/Scripting.h"
@@ -142,6 +143,12 @@ int32 Engine::OnInit(const Char* cmdLine)
 #if LOG_ENABLE
         Log::Logger::Dispose();
 #endif
+        return 1;
+    }
+    if (Editor::Project->AssetSystemVersion == ProjectInfo::CurrentAssetSystemVersion &&
+        AssetDatabaseFacade::LoadOrScan(false))
+    {
+        LOG(Error, "Failed to initialize the Asset System v3 database before engine services.");
         return 1;
     }
 #endif

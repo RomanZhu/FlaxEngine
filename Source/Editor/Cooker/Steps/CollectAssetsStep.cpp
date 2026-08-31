@@ -17,6 +17,7 @@ namespace
     {
         return record.ProcessorID == TEXT("Flax.Texture") ||
             record.ProcessorID == TEXT("Flax.Model") ||
+            record.ProcessorID == TEXT("Flax.BakedAsset") ||
             record.ProcessorID == TEXT("Flax.GraphDocument") ||
             record.ProcessorID == TEXT("Flax.ExistingJson") ||
             record.ProcessorID == TEXT("Flax.MaterialInstance") ||
@@ -24,14 +25,18 @@ namespace
             record.ProcessorID == TEXT("Flax.SceneAnimation") ||
             record.ProcessorID == TEXT("Flax.ParticleSystem") ||
             record.ProcessorID == TEXT("Flax.CollisionData") ||
+            record.ProcessorID == TEXT("Flax.Animation") ||
+            record.ProcessorID == TEXT("Flax.GameplayGlobals") ||
+            record.ProcessorID == TEXT("Flax.AuthoredObject") ||
             record.ProcessorID == TEXT("Flax.Audio") ||
             record.ProcessorID == TEXT("Flax.Font") ||
             record.ProcessorID == TEXT("Flax.Video") ||
             record.ProcessorID == TEXT("Flax.Text") ||
-            record.ProcessorID == TEXT("Flax.ShaderSource");
+            record.ProcessorID == TEXT("Flax.ShaderSource") ||
+            record.ProcessorID == TEXT("Flax.EnginePrebuilt");
     }
 
-    bool QueueRuntimeObjectClosure(const AssetRecord& record, Array<Guid>& queue)
+    bool QueueObjectClosure(const AssetRecord& record, Array<Guid>& queue)
     {
         if (record.RuntimeObjectReferences.HasItems())
         {
@@ -46,6 +51,20 @@ namespace
         else
         {
             queue.Add(record.RuntimeReferences);
+        }
+        if (record.BuildInputObjectDependencies.HasItems())
+        {
+            for (const AssetObjectId& dependency : record.BuildInputObjectDependencies)
+            {
+                AssetRecord dependencyRecord;
+                if (!AssetDatabase::Get().TryGetRecord(dependency, dependencyRecord))
+                    return true;
+                queue.Add(dependencyRecord.ID);
+            }
+        }
+        else
+        {
+            queue.Add(record.BuildInputDependencies);
         }
         if (!record.IsMainAsset())
             return false;
@@ -103,9 +122,9 @@ bool CollectAssetsStep::Perform(CookingData& data)
             }
             LOG_STR(Info, canonicalRecord.CanonicalPath.Get());
             data.Assets.Add(assetId);
-            if (QueueRuntimeObjectClosure(canonicalRecord, assetsQueue))
+            if (QueueObjectClosure(canonicalRecord, assetsQueue))
             {
-                LOG(Error, "Hard-cut cook object {0}:{1} has an unresolved exact runtime reference.",
+                LOG(Error, "Hard-cut cook object {0}:{1} has an unresolved exact runtime or artifact dependency.",
                     canonicalRecord.SourceAssetID, canonicalRecord.LocalId);
                 return true;
             }
@@ -113,6 +132,7 @@ bool CollectAssetsStep::Perform(CookingData& data)
         }
         if (hasCanonicalRecord && canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary &&
             canonicalRecord.ProcessorID != TEXT("Flax.Texture") && canonicalRecord.ProcessorID != TEXT("Flax.Model") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.BakedAsset") &&
             canonicalRecord.ProcessorID != TEXT("Flax.GraphDocument") &&
             canonicalRecord.ProcessorID != TEXT("Flax.ExistingJson") &&
             canonicalRecord.ProcessorID != TEXT("Flax.MaterialInstance") &&
@@ -120,6 +140,9 @@ bool CollectAssetsStep::Perform(CookingData& data)
             canonicalRecord.ProcessorID != TEXT("Flax.SceneAnimation") &&
             canonicalRecord.ProcessorID != TEXT("Flax.ParticleSystem") &&
             canonicalRecord.ProcessorID != TEXT("Flax.CollisionData") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.Animation") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.GameplayGlobals") &&
+            canonicalRecord.ProcessorID != TEXT("Flax.AuthoredObject") &&
             canonicalRecord.ProcessorID != TEXT("Flax.Audio") &&
             canonicalRecord.ProcessorID != TEXT("Flax.Font") &&
             canonicalRecord.ProcessorID != TEXT("Flax.Video") &&

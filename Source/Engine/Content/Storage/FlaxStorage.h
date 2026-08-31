@@ -102,6 +102,9 @@ protected:
     // Metadata
     uint32 _version = 0;
     String _path;
+#if USE_EDITOR
+    int32 _expectedCookedContentKey = 0;
+#endif
 
 protected:
     explicit FlaxStorage(const StringView& path);
@@ -351,6 +354,9 @@ public:
     bool Load();
 
 #if USE_EDITOR
+
+    /// <summary>Loads a cooked package only for cooker output verification.</summary>
+    bool LoadCookedForValidation(int32 expectedContentKey);
 
     /// <summary>
     /// Action fired on storage reloading.

@@ -6,12 +6,87 @@
 #include "Engine/Core/Types/Version.h"
 #include "Engine/Core/Config/BuildSettings.h"
 #include "Engine/Core/Config/GameSettings.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Renderer/ReflectionsPass.h"
 #include "Engine/Renderer/AntiAliasing/SMAA.h"
 #include "Engine/Engine/Globals.h"
 #include "Editor/Cooker/PlatformTools.h"
 #include "Editor/Utilities/EditorUtilities.h"
+#include <algorithm>
+
+namespace
+{
+    bool IsDeclaredCookRoot(const AssetRecord& record)
+    {
+        for (const String& label : record.Labels)
+        {
+            const String normalized = label.ToLower();
+            if (normalized == TEXT("always-include") || normalized == TEXT("addressable") ||
+                (normalized.StartsWith(TEXT("address:")) && normalized.Length() > 8) ||
+                (normalized.StartsWith(TEXT("group:")) && normalized.Length() > 6))
+                return true;
+        }
+        return false;
+    }
+
+    bool AddContentPolicyInputs(CookingData& data)
+    {
+        const String resourcesRoot = Globals::ProjectContentFolder / TEXT("Resources");
+        const String streamingRoot = Globals::ProjectContentFolder / TEXT("StreamingAssets");
+        AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+        if (snapshot.Records.Count() > 1)
+        {
+            std::sort(snapshot.Records.Get(), snapshot.Records.Get() + snapshot.Records.Count(), [](const AssetRecord& a, const AssetRecord& b)
+            {
+                return a.PortabilityKey < b.PortabilityKey;
+            });
+        }
+
+        data.VerbatimFiles.Clear();
+        int32 resourceRoots = 0;
+        int32 settingsRoots = 0;
+        int32 declaredRoots = 0;
+        for (const AssetRecord& record : snapshot.Records)
+        {
+            if (!record.IsMainAsset() || record.SourceKind == AssetSourceKind::Folder)
+                continue;
+            const String& sourcePath = record.SourcePath.Get();
+            if (AssetPathPolicy::IsSameOrChild(sourcePath, resourcesRoot))
+            {
+                data.AddRootAsset(record.ID);
+                resourceRoots++;
+            }
+            if (record.TypeName == TEXT("FlaxEditor.Content.Settings.GameSettings"))
+            {
+                data.AddRootAsset(record.ID);
+                settingsRoots++;
+            }
+            if (IsDeclaredCookRoot(record))
+            {
+                data.AddRootAsset(record.ID);
+                declaredRoots++;
+            }
+            if (!AssetPathPolicy::IsSameOrChild(sourcePath, streamingRoot))
+                continue;
+            if (!FileSystem::FileExists(sourcePath))
+            {
+                data.Error(String::Format(TEXT("Streaming asset source is missing: '{0}'."), sourcePath));
+                return true;
+            }
+            CookingData::VerbatimFile file;
+            file.SourcePath = sourcePath;
+            file.OutputPath = String(TEXT("Content/StreamingAssets")) /
+                FileSystem::ConvertAbsolutePathToRelative(streamingRoot, sourcePath);
+            FileSystem::NormalizePath(file.OutputPath);
+            file.OutputPath.Replace(TEXT('\\'), TEXT('/'));
+            data.VerbatimFiles.Add(MoveTemp(file));
+        }
+        LOG(Info, "Registered {0} Resources roots, {1} runtime settings roots, {2} label/group roots, and {3} verbatim StreamingAssets files from canonical database revision {4}.",
+            resourceRoots, settingsRoots, declaredRoots, data.VerbatimFiles.Count(), snapshot.Revision);
+        return false;
+    }
+}
 
 bool DeployDataStep::Perform(CookingData& data)
 {
@@ -508,6 +583,9 @@ bool DeployDataStep::Perform(CookingData& data)
             data.AddRootAsset(q);
         files.Clear();
     }
+
+    if (AddContentPolicyInputs(data))
+        return true;
 
     return false;
 }

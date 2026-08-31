@@ -26,7 +26,9 @@
 #include "Engine/Serialization/MemoryWriteStream.h"
 #if USE_EDITOR
 #include "Editor/Editor.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/Content/AssetDatabase/BakedAssetFacade.h"
+#include "Engine/ContentImporters/ImportTexture.h"
+#include "Engine/ContentImporters/CreateRawData.h"
 #endif
 #include "Engine/Debug/DebugDraw.h"
 #endif
@@ -899,8 +901,8 @@ bool TerrainPatch::SetupHeightMap(int32 heightMapLength, const float* heightMap,
         const String cacheDir = _terrain->GetScene()->GetDataFolderPath() / TEXT("Terrain/") / _terrain->GetID().ToString(Guid::FormatType::N);
 
         // Prepare asset paths for the non-virtual assets
-        heightMapPath = cacheDir + String::Format(TEXT("_{0:2}_{1:2}_Heightmap.{2}"), _x, _z, ASSET_FILES_EXTENSION);
-        heightFieldPath = cacheDir + String::Format(TEXT("_{0:2}_{1:2}_Heightfield.{2}"), _x, _z, ASSET_FILES_EXTENSION);
+        heightMapPath = cacheDir + String::Format(TEXT("_{0:2}_{1:2}_Heightmap.bakedasset"), _x, _z);
+        heightFieldPath = cacheDir + String::Format(TEXT("_{0:2}_{1:2}_Heightfield.bakedasset"), _x, _z);
     }
 #endif
 
@@ -968,7 +970,8 @@ bool TerrainPatch::SetupHeightMap(int32 heightMapLength, const float* heightMap,
     {
         // Import data to the asset file
         Guid id = Guid::New();
-        if (AssetsImportingManager::Create(AssetsImportingManager::CreateTextureAsInitDataTag, heightMapPath, id, initData))
+        CreateAssetFunction encoder = &ImportTexture::ImportAsInitData;
+        if (BakedAssetFacade::Create(encoder, heightMapPath, id, initData))
         {
             LOG(Error, "Cannot import generated heightmap texture asset.");
             return true;
@@ -1029,7 +1032,8 @@ bool TerrainPatch::SetupHeightMap(int32 heightMapLength, const float* heightMap,
         Guid id = Guid::New();
         BytesContainer bytesContainer;
         bytesContainer.Link(tmpData.Get(), tmpData.Count());
-        if (AssetsImportingManager::Create(AssetsImportingManager::CreateRawDataTag, heightFieldPath, id, &bytesContainer))
+        CreateAssetFunction encoder = &CreateRawData::Create;
+        if (BakedAssetFacade::Create(encoder, heightFieldPath, id, &bytesContainer))
         {
             LOG(Error, "Cannot import generated heightfield collision asset.");
             return true;
@@ -1117,7 +1121,7 @@ bool TerrainPatch::SetupSplatMap(int32 index, int32 splatMapLength, const Color3
         const String cacheDir = _terrain->GetScene()->GetDataFolderPath() / TEXT("Terrain/") / _terrain->GetID().ToString(Guid::FormatType::N);
 
         // Prepare asset path for the non-virtual assets
-        splatMapPath = cacheDir + String::Format(TEXT("_{0:2}_{1:2}_Splatmap{3}.{2}"), _x, _z, ASSET_FILES_EXTENSION, index);
+        splatMapPath = cacheDir + String::Format(TEXT("_{0:2}_{1:2}_Splatmap{2}.bakedasset"), _x, _z, index);
     }
 #endif
 
@@ -1185,7 +1189,8 @@ bool TerrainPatch::SetupSplatMap(int32 index, int32 splatMapLength, const Color3
     {
         // Import data to the asset file
         Guid id = Guid::New();
-        if (AssetsImportingManager::Create(AssetsImportingManager::CreateTextureAsInitDataTag, splatMapPath, id, initData))
+        CreateAssetFunction encoder = &ImportTexture::ImportAsInitData;
+        if (BakedAssetFacade::Create(encoder, splatMapPath, id, initData))
         {
             LOG(Error, "Cannot import generated splatmap texture asset.");
             return true;
@@ -1741,12 +1746,13 @@ bool TerrainPatch::ModifySplatMap(int32 index, const Color32* samples, const Int
         else
         {
             // Prepare asset path for the non-virtual asset
-            const String cacheDir = String(StringUtils::GetDirectoryName(Heightmap->GetPath())) / _terrain->GetID().ToString(Guid::FormatType::N);
-            const String splatMapPath = cacheDir + String::Format(TEXT("_{0:2}_{1:2}_Splatmap{3}.{2}"), _x, _z, ASSET_FILES_EXTENSION, index);
+            const String cacheDir = _terrain->GetScene()->GetDataFolderPath() / TEXT("Terrain/") / _terrain->GetID().ToString(Guid::FormatType::N);
+            const String splatMapPath = cacheDir + String::Format(TEXT("_{0:2}_{1:2}_Splatmap{2}.bakedasset"), _x, _z, index);
 
             // Import data to the asset file
             Guid id = Guid::New();
-            if (AssetsImportingManager::Create(AssetsImportingManager::CreateTextureAsInitDataTag, splatMapPath, id, dataSplatmap))
+            CreateAssetFunction encoder = &ImportTexture::ImportAsInitData;
+            if (BakedAssetFacade::Create(encoder, splatMapPath, id, dataSplatmap))
             {
                 LOG(Error, "Cannot import generated splatmap texture asset.");
                 return true;

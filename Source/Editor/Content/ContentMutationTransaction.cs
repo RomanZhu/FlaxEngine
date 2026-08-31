@@ -75,6 +75,14 @@ namespace FlaxEditor.Content
 
         public ContentMutationResult Execute(IReadOnlyList<ContentMutationStep> steps)
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase && _plan.Entries.Any(x =>
+                    ContentMutationPathUtils.IsWithinRoot(x.SourcePath, Globals.ProjectContentFolder) ||
+                    ContentMutationPathUtils.IsWithinRoot(x.DestinationPath, Globals.ProjectContentFolder)))
+            {
+                return ContentMutationResult.Fail(ContentMutationFailure.InvalidSource, _plan.Entries.FirstOrDefault()?.SourcePath,
+                    _plan.Entries.FirstOrDefault()?.DestinationPath,
+                    "Asset System v3 project-tree mutations must use the native AssetMutationService.", transactionId: _plan.Id);
+            }
             var preflight = _plan.Preflight();
             if (!preflight.Succeeded)
                 return preflight;

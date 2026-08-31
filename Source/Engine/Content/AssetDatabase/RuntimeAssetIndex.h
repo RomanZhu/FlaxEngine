@@ -34,6 +34,10 @@ struct FLAXENGINE_API RuntimeAssetIndexEntry
     Guid BackingAssetID;
     String TypeName;
     String CanonicalPath;
+    /// <summary>Optional path relative to Content/Resources for explicit runtime lookup.</summary>
+    String ResourcePath;
+    /// <summary>Explicit runtime address keys declared by canonical metadata labels.</summary>
+    Array<String> Addresses;
     String PackagedPath;
     Guid PackageID;
     uint32 ChunkID = 0;
@@ -76,6 +80,14 @@ struct FLAXENGINE_API RuntimeBuildPackageEvidence
     uint64 Size = 0;
 };
 
+/// <summary>Exact content evidence for a non-package file consumed or emitted by the cook.</summary>
+struct FLAXENGINE_API RuntimeBuildFileEvidence
+{
+    String Path;
+    ContentHash Content;
+    uint64 Size = 0;
+};
+
 /// <summary>Deterministic inputs and outputs needed to compare two cooked builds.</summary>
 struct FLAXENGINE_API RuntimeBuildReproducibility
 {
@@ -83,6 +95,8 @@ struct FLAXENGINE_API RuntimeBuildReproducibility
     ArtifactKey TargetFingerprint;
     Array<AssetObjectId> Roots;
     Array<RuntimeBuildArtifactEvidence> Artifacts;
+    Array<RuntimeBuildFileEvidence> Settings;
+    Array<RuntimeBuildFileEvidence> StreamingFiles;
     Array<RuntimeBuildPackageEvidence> Packages;
     bool Deterministic = false;
 };
@@ -91,7 +105,7 @@ struct FLAXENGINE_API RuntimeBuildReproducibility
 class FLAXENGINE_API RuntimeAssetIndex
 {
 public:
-    static constexpr int32 FormatVersion = 5;
+    static constexpr int32 FormatVersion = 7;
     static constexpr uint64 DefaultPreloadBudgetBytes = 64ull * 1024ull * 1024ull;
 
     static bool ContainsLibraryPath(const StringView& path);

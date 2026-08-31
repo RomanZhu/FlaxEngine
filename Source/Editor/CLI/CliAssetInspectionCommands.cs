@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Text;
 using FlaxEditor.Content;
 using FlaxEngine;
+using FlaxEngine.Utilities;
 
 namespace FlaxEditor
 {
@@ -44,6 +45,8 @@ namespace FlaxEditor
                 schemaVersion = 1,
                 revision = AssetDatabaseFacade.Revision,
                 records = records.Length,
+                prebuiltArtifacts = records.Count(x => x.SourceKind == AssetSourceKind.PrebuiltArtifact),
+                legacyBinaries = records.Count(x => x.SourceKind == AssetSourceKind.LegacyBinary),
                 blockingRecords = records.Where(x => blockingStatuses.Contains(x.Status)).Select(x => new
                 {
                     guid = x.ID,
@@ -135,6 +138,36 @@ namespace FlaxEditor
                 schemaVersion = 1,
                 inventoryJson = json,
             });
+        }
+
+        /// <summary>Exports the immutable identity and dependency inventory for shipped engine content.</summary>
+        [CliCommand("assets.engine-content.inventory", Description = "Export the shipped engine-content manifest inventory.", Access = CliCommandAccess.ReadOnly)]
+        public static CliCommandResult EngineContentInventory()
+        {
+            var records = AssetDatabaseFacade.GetRecords()
+                .Where(x => x.SourceKind == AssetSourceKind.PrebuiltArtifact &&
+                            x.SourcePath.StartsWith(Globals.EngineContentFolder, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(x => x.SourcePath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(x => x.LocalId)
+                .Select(x =>
+                {
+                    var asset = FlaxEngine.Content.LoadAsync(x.ID, TypeUtils.GetType(x.TypeName).Type ?? typeof(Asset));
+                    if (asset == null || asset.WaitForLoaded())
+                        throw new InvalidOperationException($"Cannot load shipped engine-content object '{x.ID}' at '{x.SourcePath}'.");
+                    var relativePath = Path.GetRelativePath(Globals.EngineContentFolder, x.SourcePath).Replace(Path.DirectorySeparatorChar, '/');
+                    return new
+                    {
+                        relativePath,
+                        id = x.ID,
+                        sourceAssetId = x.SourceAssetID,
+                        x.LocalId,
+                        x.TypeName,
+                        subAssetKey = x.SubAssetKey,
+                        runtimeReferences = asset.GetReferences().OrderBy(id => id).ToArray(),
+                    };
+                })
+                .ToArray();
+            return CliCommandResult.Success(new { schemaVersion = 1, records });
         }
 
         /// <summary>Converts one eligible legacy binary to its canonical text document.</summary>

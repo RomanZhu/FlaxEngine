@@ -3,9 +3,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using FlaxEngine;
-using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor
 {
@@ -93,19 +93,22 @@ namespace FlaxEditor
         private readonly Dictionary<string, string> _identityRenames = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly List<string> _warnings = new List<string>();
         private readonly List<string> _errors = new List<string>();
+        private readonly ScriptedImporterWorkerCapabilityGrant[] _capabilities;
         private readonly Content.Settings.BuildTarget _selectedBuildTarget;
         private readonly Func<bool> _isCancelled;
         private FlaxEngine.Object _mainObject;
         private bool _selectedTargetObserved;
         private bool _logicalPathObserved;
 
-        internal AssetImportContext(string assetPath, Content.Settings.BuildTarget selectedBuildTarget, Func<bool> isCancelled = null)
+        internal AssetImportContext(string assetPath, Content.Settings.BuildTarget selectedBuildTarget, Func<bool> isCancelled = null,
+            ScriptedImporterWorkerCapabilityGrant[] capabilities = null)
         {
             if (string.IsNullOrWhiteSpace(assetPath))
                 throw new ArgumentException("A canonical source path is required.", nameof(assetPath));
             this.assetPath = assetPath;
             _selectedBuildTarget = selectedBuildTarget;
             _isCancelled = isCancelled ?? (() => false);
+            _capabilities = capabilities ?? Array.Empty<ScriptedImporterWorkerCapabilityGrant>();
         }
 
         /// <summary>Canonical source path being imported.</summary>
@@ -153,15 +156,17 @@ namespace FlaxEditor
             var path = AssetDatabase.GUIDToAssetPath(guid.ToString("N"));
             if (string.IsNullOrEmpty(path))
                 throw new FileNotFoundException($"Source dependency '{guid:N}' is not registered.");
-            return ReadSource("guid:" + guid.ToString("N"), path, AssetDatabase.ResolvePhysicalPathInternal(path));
+            return ReadSourceCapability("guid:" + guid.ToString("N"), guid, path);
         }
 
         /// <summary>Reads a declared source dependency path through a context-owned immutable snapshot.</summary>
         public AssetImportReadOnlyFile OpenSourceDependency(string path)
         {
+            if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path))
+                throw new ArgumentException("A canonical project-relative dependency path is required.", nameof(path));
             DependsOnSourceAsset(path);
             var normalized = path.Replace('\\', '/');
-            return ReadSource("path:" + normalized, normalized, AssetDatabase.ResolvePhysicalPathInternal(normalized));
+            return ReadSourceCapability("path:" + normalized, Guid.Empty, normalized);
         }
 
         /// <summary>Reads and exactly pins another source's current immutable artifact output.</summary>
@@ -170,19 +175,31 @@ namespace FlaxEditor
             if (guid == Guid.Empty)
                 throw new ArgumentException("A valid dependency GUID is required.", nameof(guid));
             ValidateOutputName(outputKind);
-            DependsOnArtifact(guid);
-            var json = ScriptedImporterFacade.ReadArtifactOutput(guid, outputKind);
-            if (string.IsNullOrEmpty(json))
-                throw new InvalidOperationException(ScriptedImporterFacade.GetLastError());
-            var envelope = JObject.Parse(json);
-            var key = (string)envelope["artifactKey"];
-            var contentHash = (string)envelope["contentHash"];
-            var data = Convert.FromBase64String((string)envelope["data"] ?? string.Empty);
+            var sourcePath = AssetDatabase.GUIDToAssetPath(guid.ToString("N"));
+            AssetDatabaseRecordInfo? record = string.IsNullOrEmpty(sourcePath) ? null : AssetDatabase.GetMainRecord(sourcePath);
+            if (!record.HasValue || record.Value.SourceAssetID == Guid.Empty)
+                throw new FileNotFoundException($"Artifact dependency source '{guid:N}' is not registered.");
+            var sourceGuid = record.Value.SourceAssetID;
+            var grant = _capabilities.FirstOrDefault(x => string.Equals(x.Kind, "artifact", StringComparison.Ordinal) &&
+                                                        x.SourceGuid == sourceGuid && string.Equals(x.OutputKind, outputKind, StringComparison.Ordinal));
+            if (grant == null)
+            {
+                throw new ScriptedImporterWorkerCapabilityException(new ScriptedImporterWorkerCapabilityRequest
+                {
+                    Kind = "artifact",
+                    SourceGuid = guid,
+                    OutputKind = outputKind,
+                });
+            }
+            DependsOnArtifact(grant.SourceGuid);
+            var key = grant.ArtifactKey;
+            var contentHash = grant.ContentHash;
+            var data = File.ReadAllBytes(grant.ReadPath);
             var actualHash = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
             if (key?.Length != 64 || contentHash?.Length != 64 || !string.Equals(contentHash, actualHash, StringComparison.Ordinal))
-                throw new InvalidDataException("The artifact-read response failed exact key or content verification.");
-            _observedArtifactKeys[$"guid:{guid:N}/{outputKind}"] = key;
-            return new AssetImportReadOnlyArtifact(guid, outputKind, key, data);
+                throw new InvalidDataException("The granted artifact snapshot failed exact key or content verification.");
+            _observedArtifactKeys[$"guid:{grant.SourceGuid:N}/{outputKind}"] = key;
+            return new AssetImportReadOnlyArtifact(grant.SourceGuid, outputKind, key, data);
         }
 
         /// <summary>Returns verified auxiliary artifact bytes and records the exact dependency.</summary>
@@ -389,6 +406,34 @@ namespace FlaxEditor
         internal IReadOnlyList<string> Errors => _errors;
         internal IReadOnlyDictionary<string, string> IdentityRenames => _identityRenames;
         internal IReadOnlyDictionary<string, byte[]> OutputData => _outputData;
+
+        private AssetImportReadOnlyFile ReadSourceCapability(string observationKey, Guid requestedGuid, string requestedPath)
+        {
+            var record = AssetDatabase.GetMainRecord(requestedPath);
+            if (!record.HasValue || record.Value.SourceAssetID == Guid.Empty)
+                throw new FileNotFoundException($"Source dependency '{requestedPath}' is not a registered canonical source.");
+            var canonicalPath = record.Value.CanonicalPath.Replace('\\', '/');
+            var grant = _capabilities.FirstOrDefault(x => string.Equals(x.Kind, "source", StringComparison.Ordinal) &&
+                                                        (x.SourceGuid == record.Value.SourceAssetID ||
+                                                         string.Equals(x.SourcePath, canonicalPath, StringComparison.OrdinalIgnoreCase)));
+            if (grant == null)
+            {
+                throw new ScriptedImporterWorkerCapabilityException(new ScriptedImporterWorkerCapabilityRequest
+                {
+                    Kind = "source",
+                    SourceGuid = requestedGuid == Guid.Empty ? record.Value.SourceAssetID : requestedGuid,
+                    SourcePath = canonicalPath,
+                });
+            }
+            if (IsCancelled())
+                throw new OperationCanceledException("Scripted import was cancelled.");
+            var data = File.ReadAllBytes(grant.ReadPath);
+            var actualHash = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+            if (grant.ContentHash?.Length != 64 || !string.Equals(grant.ContentHash, actualHash, StringComparison.Ordinal))
+                throw new InvalidDataException("The granted source snapshot failed exact content verification.");
+            _observedSourceHashes[observationKey] = actualHash;
+            return new AssetImportReadOnlyFile(Path.GetFileName(canonicalPath), data);
+        }
 
         private AssetImportReadOnlyFile ReadSource(string observationKey, string logicalPath, string physicalPath)
         {

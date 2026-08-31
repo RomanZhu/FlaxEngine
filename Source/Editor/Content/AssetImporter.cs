@@ -501,7 +501,8 @@ namespace FlaxEditor
             return true;
         }
 
-        internal static JObject ExecuteWorker(string path, string processorId, string callbackHash, Func<bool> isCancelled)
+        internal static JObject ExecuteWorker(string path, string processorId, string callbackHash, Func<bool> isCancelled,
+            ScriptedImporterWorkerCapabilityGrant[] capabilities)
         {
             if (!AssetDatabase.IsAssetImportWorkerProcess())
                 throw new InvalidOperationException("Scripted importer execution is restricted to isolated worker processes.");
@@ -524,7 +525,7 @@ namespace FlaxEditor
                 Platform = BuildPlatform.Windows64,
                 Mode = BuildConfiguration.Development,
             };
-            var context = new AssetImportContext(record.Value.CanonicalPath, target, isCancelled);
+            var context = new AssetImportContext(record.Value.CanonicalPath, target, isCancelled, capabilities);
             if (context.IsCancelled())
                 throw new OperationCanceledException("The scripted import was cancelled before execution.");
             importer.OnImportAsset(context);
@@ -618,7 +619,9 @@ namespace FlaxEditor
             var isJson = obj is JsonAssetBase;
             if (obj is Asset asset)
             {
-                var temporaryPath = Path.Combine(Path.GetTempPath(), $"scripted-import-{Guid.NewGuid():N}{(isJson ? ".json" : ".flax")}");
+                var temporaryRoot = Path.Combine(Globals.ProjectLibraryFolder, "Temp", "ScriptedImporters");
+                Directory.CreateDirectory(temporaryRoot);
+                var temporaryPath = Path.Combine(temporaryRoot, $"scripted-import-{Guid.NewGuid():N}{(isJson ? ".json" : ".flax")}");
                 try
                 {
                     if (asset.Save(temporaryPath))

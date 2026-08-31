@@ -403,7 +403,7 @@ AssetProcessorDescriptor AuthoredAssetProcessor::CreateDescriptor(const StringVi
     }
     AssetProcessorOutputDescriptor runtime;
     runtime.Kind = "runtime";
-    runtime.Extension = processorID == GenericObjectID() ? ".json" : ".flax";
+    runtime.Extension = ".flax";
     runtime.FormatVersion = RuntimeFormatVersion;
     runtime.TargetDimensions = ArtifactTargetDimension::Platform | ArtifactTargetDimension::Architecture;
     runtime.CompatibilityTag = processorID == GenericObjectID() ? "flax-authored-object-v1" : "flax-authored-document-v1";
@@ -570,12 +570,35 @@ bool AuthoredAssetProcessor::Build(ArtifactBuildContext& context, AssetPipelineD
             prepared.AssetID, sourceDependency->StableIdentity, TEXT("Authored build payload is missing."));
     if (payload->GenericObjectDocument)
     {
-        StringAnsi artifact;
-        if (BuildGenericObject(sourceBytes, prepared.AssetID, payload->ObjectLocalId, artifact, diagnostic))
+        StringAnsi runtimeJson;
+        if (BuildGenericObject(sourceBytes, prepared.AssetID, payload->ObjectLocalId, runtimeJson, diagnostic))
             return true;
+        String scratchPath;
+        if (context.CreateScratchFilePath(TEXT(".flax"), scratchPath, diagnostic))
+            return true;
+        SCOPE_EXIT
+        {
+            ContentStorageManager::EnsureAccess(scratchPath);
+            FileSystem::DeleteFile(scratchPath);
+        };
+        FlaxChunk chunk;
+        chunk.Flags = FlaxChunkFlags::CompressedLZ4;
+        chunk.Data.Copy(reinterpret_cast<const byte*>(runtimeJson.Get()), runtimeJson.Length());
+        AssetInitData data;
+        data.Header.ID = prepared.AssetID;
+        data.Header.TypeName = prepared.OutputType;
+        data.Header.Chunks[0] = &chunk;
+        data.SerializedVersion = RuntimeFormatVersion;
+        if (FlaxStorage::Create(scratchPath, data))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, scratchPath, TEXT("Authored object runtime Flax artifact could not be written."));
+        Array<byte> artifact;
+        if (File::ReadAllBytes(scratchPath, artifact))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, scratchPath, TEXT("Authored object runtime artifact is unreadable."));
         ArtifactWriter writer;
         if (context.OpenOutput(StringAnsiView("runtime"), writer, diagnostic) ||
-            writer.WriteFile(TEXT("authored.json"), artifact.Get(), artifact.Length(), diagnostic))
+            writer.WriteFile(TEXT("authored-object.flax"), artifact.Get(), artifact.Count(), diagnostic))
             return true;
         diagnostic = AssetPipelineDiagnostic();
         return false;

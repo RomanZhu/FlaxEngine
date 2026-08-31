@@ -20,10 +20,7 @@ namespace FlaxEngine.Json
                 if (Content.GetAssetObjectId(asset.ID, out var objectId))
                     WriteAssetObjectId(writer, objectId);
                 else
-                {
-                    var legacyId = asset.ID;
-                    writer.WriteValue(JsonSerializer.GetStringID(&legacyId));
-                }
+                    throw new JsonSerializationException($"Asset '{asset.ID}' has no canonical file GUID/local-ID identity.");
                 return;
             }
             Guid id = Guid.Empty;
@@ -37,9 +34,16 @@ namespace FlaxEngine.Json
         {
             if (reader.TokenType == JsonToken.String)
             {
-                JsonSerializer.ParseID((string)reader.Value, out var id);
                 if (typeof(Asset).IsAssignableFrom(objectType))
-                    return Content.LoadAsync(id, objectType);
+                {
+                    if (!JsonSerializer.AllowGuidOnlyAssetReferences.Value)
+                        throw new JsonSerializationException("GUID-only asset references are accepted only outside canonical project source or by the migration reader.");
+                    JsonSerializer.ParseID((string)reader.Value, out var backingId);
+                    if (Content.GetAssetObjectId(backingId, out var legacyObjectId))
+                        return Content.LoadAsync(legacyObjectId, objectType);
+                    return Content.LoadAsync(backingId, objectType);
+                }
+                JsonSerializer.ParseID((string)reader.Value, out var id);
                 return Object.Find(ref id, objectType);
             }
             if (reader.TokenType == JsonToken.StartObject && ReadAssetObjectId(reader, out var objectId))
@@ -60,14 +64,8 @@ namespace FlaxEngine.Json
 
         internal static bool ReadAssetObjectId(JsonReader reader, out AssetObjectId id)
         {
-            return ReadAssetObjectId(reader, out id, out _);
-        }
-
-        internal static bool ReadAssetObjectId(JsonReader reader, out AssetObjectId id, out Guid legacyBackingId)
-        {
             id = default;
             Guid guid = Guid.Empty;
-            legacyBackingId = Guid.Empty;
             long localId = 0;
             while (reader.Read() && reader.TokenType != JsonToken.EndObject)
             {
@@ -80,17 +78,9 @@ namespace FlaxEngine.Json
                     JsonSerializer.ParseID((string)reader.Value, out guid);
                 else if (propertyName == "localId" && reader.TokenType == JsonToken.Integer)
                     localId = Convert.ToInt64(reader.Value);
-                else if (propertyName == "Asset" && reader.TokenType == JsonToken.String)
-                    JsonSerializer.ParseID((string)reader.Value, out legacyBackingId);
             }
             id = new AssetObjectId(guid, localId);
-            if (!id.IsValid && legacyBackingId != Guid.Empty)
-            {
-                var asset = Content.LoadAsync<Asset>(legacyBackingId);
-                if (asset != null)
-                    Content.GetAssetObjectId(asset.ID, out id);
-            }
-            return id.IsValid || legacyBackingId != Guid.Empty;
+            return id.IsValid;
         }
 
         /// <inheritdoc />
@@ -107,7 +97,7 @@ namespace FlaxEngine.Json
     }
 
     /// <summary>
-    /// Serialize <see cref="SceneReference"/> as Guid in internal format.
+    /// Serialize <see cref="SceneReference"/> as a canonical asset object identity.
     /// </summary>
     /// <seealso cref="Newtonsoft.Json.JsonConverter" />
     internal class SceneReferenceConverter : JsonConverter
@@ -116,7 +106,7 @@ namespace FlaxEngine.Json
         public override unsafe void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
             Guid id = ((SceneReference)value).ID;
-            writer.WriteValue(JsonSerializer.GetStringID(&id));
+            FlaxObjectConverter.WriteAssetObjectId(writer, id == Guid.Empty ? default : new AssetObjectId(id, 1));
         }
 
         /// <inheritdoc />
@@ -124,10 +114,8 @@ namespace FlaxEngine.Json
         {
             SceneReference result = new SceneReference();
 
-            if (reader.TokenType == JsonToken.String)
-            {
-                JsonSerializer.ParseID((string)reader.Value, out result.ID);
-            }
+            if (reader.TokenType == JsonToken.StartObject && FlaxObjectConverter.ReadAssetObjectId(reader, out var id) && id.LocalId == 1)
+                result.ID = id.Guid;
 
             return result;
         }
@@ -140,7 +128,7 @@ namespace FlaxEngine.Json
     }
 
     /// <summary>
-    /// Serialize <see cref="SoftObjectReference"/> as Guid in internal format.
+    /// Serialize <see cref="SoftObjectReference"/> using object identity for asset targets.
     /// </summary>
     /// <seealso cref="Newtonsoft.Json.JsonConverter" />
     internal class SoftObjectReferenceConverter : JsonConverter
@@ -148,19 +136,22 @@ namespace FlaxEngine.Json
         /// <inheritdoc />
         public override unsafe void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
-            var id = ((SoftObjectReference)value).ID;
-            writer.WriteValue(JsonSerializer.GetStringID(&id));
+            var reference = (SoftObjectReference)value;
+            var objectId = reference.ObjectId;
+            if (objectId.IsValid)
+            {
+                FlaxObjectConverter.WriteAssetObjectId(writer, objectId);
+                return;
+            }
+            FlaxObjectConverter.WriteAssetObjectId(writer, default);
         }
 
         /// <inheritdoc />
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, Newtonsoft.Json.JsonSerializer serializer)
         {
             var result = new SoftObjectReference();
-            if (reader.TokenType == JsonToken.String)
-            {
-                JsonSerializer.ParseID((string)reader.Value, out var id);
-                result.ID = id;
-            }
+            if (reader.TokenType == JsonToken.StartObject && FlaxObjectConverter.ReadAssetObjectId(reader, out var objectId))
+                result.Set(objectId);
             return result;
         }
 
@@ -502,10 +493,15 @@ namespace FlaxEngine.Json
                 FlaxObjectConverter.WriteAssetObjectId(writer, id);
                 return;
             }
+            if (asset != null && Content.GetAssetObjectId(asset.ID, out id) && id.IsValid)
+            {
+                FlaxObjectConverter.WriteAssetObjectId(writer, id);
+                return;
+            }
             var legacyBackingId = (Guid)value.GetType().GetField("_legacyBackingId", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(value);
-            if (legacyBackingId == Guid.Empty && asset != null)
-                legacyBackingId = asset.ID;
-            writer.WriteValue(JsonSerializer.GetStringID(&legacyBackingId));
+            if (legacyBackingId != Guid.Empty)
+                throw new JsonSerializationException($"Asset '{legacyBackingId}' has no canonical file GUID/local-ID identity.");
+            FlaxObjectConverter.WriteAssetObjectId(writer, default);
         }
 
         /// <inheritdoc />
@@ -513,14 +509,11 @@ namespace FlaxEngine.Json
         {
             var result = existingValue ?? Activator.CreateInstance(objectType);
             if (reader.TokenType == JsonToken.String)
-            {
-                JsonSerializer.ParseID((string)reader.Value, out var id);
-                result = Activator.CreateInstance(objectType, new object[] { id });
-            }
+                throw new JsonSerializationException("GUID-only JSON asset references are accepted only by the migration reader.");
             else if (reader.TokenType == JsonToken.StartObject)
             {
-                if (FlaxObjectConverter.ReadAssetObjectId(reader, out var id, out var legacyBackingId))
-                    result = Activator.CreateInstance(objectType, new object[] { id.IsValid ? (object)id : legacyBackingId });
+                if (FlaxObjectConverter.ReadAssetObjectId(reader, out var id))
+                    result = Activator.CreateInstance(objectType, new object[] { id });
             }
 
             return result;

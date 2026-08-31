@@ -11,6 +11,7 @@ namespace FlaxEngine
     {
         private Guid _id;
         private Object _object;
+        private AssetObjectId _objectId;
 
         /// <summary>
         /// Gets or sets the object identifier.
@@ -24,6 +25,22 @@ namespace FlaxEngine
                     return;
                 _id = value;
                 _object = null;
+                _objectId = default;
+                if (_id != Guid.Empty)
+                    Content.GetAssetObjectId(_id, out _objectId);
+            }
+        }
+
+        /// <summary>Gets the persistent identity when this reference targets an asset object.</summary>
+        public AssetObjectId ObjectId
+        {
+            get
+            {
+                if (_object is Asset asset && Content.GetAssetObjectId(asset.ID, out var id))
+                    return id;
+                if (_objectId.IsValid)
+                    return _objectId;
+                return _id != Guid.Empty && Content.GetAssetObjectId(_id, out id) ? id : default;
             }
         }
 
@@ -34,6 +51,8 @@ namespace FlaxEngine
         /// <returns>The resolved object or null.</returns>
         public T Get<T>() where T : Object
         {
+            if (!_object && _objectId.IsValid)
+                _object = Content.LoadAsync(_objectId, typeof(Asset));
             if (!_object)
                 _object = Object.Find(ref _id, typeof(T));
             return _object as T;
@@ -47,6 +66,17 @@ namespace FlaxEngine
         {
             _object = obj;
             _id = obj?.ID ?? Guid.Empty;
+            _objectId = default;
+            if (obj is Asset asset)
+                Content.GetAssetObjectId(asset.ID, out _objectId);
+        }
+
+        /// <summary>Sets an exact persistent asset object identity.</summary>
+        public void Set(AssetObjectId objectId)
+        {
+            _objectId = objectId;
+            _object = objectId.IsValid ? Content.LoadAsync(objectId, typeof(Asset)) : null;
+            _id = _object?.ID ?? (objectId.LocalId == 1 ? objectId.Guid : Guid.Empty);
         }
 
         /// <inheritdoc />
@@ -60,7 +90,7 @@ namespace FlaxEngine
         /// <inheritdoc />
         public override int GetHashCode()
         {
-            return _id.GetHashCode();
+            return ObjectId.IsValid ? ObjectId.GetHashCode() : _id.GetHashCode();
         }
 
         /// <inheritdoc />
@@ -74,6 +104,8 @@ namespace FlaxEngine
         /// <inheritdoc />
         public int CompareTo(SoftObjectReference other)
         {
+            if (ObjectId.IsValid || other.ObjectId.IsValid)
+                return string.CompareOrdinal(ObjectId.ToString(), other.ObjectId.ToString());
             return _id.CompareTo(other._id);
         }
     }

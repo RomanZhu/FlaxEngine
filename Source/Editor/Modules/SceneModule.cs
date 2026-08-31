@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using FlaxEditor.Content;
 using FlaxEditor.SceneEditing;
 using FlaxEditor.SceneGraph;
 using FlaxEditor.SceneGraph.Actors;
@@ -286,6 +287,7 @@ namespace FlaxEditor.Modules
             audioListener.Name = "Audio Listener";
 
             // Serialize
+            var sceneId = scene.ID;
             var bytes = Level.SaveSceneToBytes(scene);
 
             // Cleanup
@@ -294,9 +296,21 @@ namespace FlaxEditor.Modules
             if (bytes == null || bytes.Length == 0)
                 throw new Exception("Failed to serialize scene.");
 
-            // Write to file
-            using (var fileStream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read))
+            var physicalPath = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(Globals.ProjectFolder, path));
+            if (CanonicalGraphDocuments.UseNewAssetDatabase && ContentMutationPathUtils.IsWithinRoot(physicalPath, Globals.ProjectContentFolder))
+            {
+                AssetPipelineCallbacks.WillCreate(AssetDatabase.ToLogicalPathInternal(physicalPath));
+                bool failed;
+                using (AssetPipelineCallbacks.BypassNativeDecision())
+                    failed = AssetDatabaseFacade.SaveExistingJsonSourceBytes(physicalPath, bytes, sceneId, Scene.AssetTypename);
+                if (failed)
+                    throw new IOException($"Failed to create journaled scene source pair '{physicalPath}'.");
+            }
+            else
+            {
+                using var fileStream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
                 fileStream.Write(bytes, 0, bytes.Length);
+            }
         }
 
         /// <summary>
@@ -308,6 +322,25 @@ namespace FlaxEditor.Modules
             SaveScene(GetActorNode(scene) as SceneNode);
         }
 
+        private static string GetSceneSavePath(Scene scene)
+        {
+            if (scene == null)
+                return string.Empty;
+            var path = AssetDatabaseFacade.GetCanonicalSourcePath(scene.ID);
+            if (string.IsNullOrEmpty(path))
+                path = scene.Path;
+            return string.IsNullOrEmpty(path)
+                ? string.Empty
+                : AssetDatabase.ToLogicalPathInternal(AssetDatabase.ResolvePhysicalPathInternal(path));
+        }
+
+        private static bool CanSaveScene(Scene scene)
+        {
+            var path = GetSceneSavePath(scene);
+            return !string.IsNullOrEmpty(path) &&
+                   AssetPipelineCallbacks.WillSave(new[] { path }).Contains(path, StringComparer.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// Saves scene (async).
         /// </summary>
@@ -317,6 +350,8 @@ namespace FlaxEditor.Modules
             if (Editor.MultiplayerPlayMode.IsReplica)
                 return;
             if (scene == null || !scene.IsEdited)
+                return;
+            if (!CanSaveScene(scene.Scene))
                 return;
 
             QueueSaveCompletion(scene);
@@ -342,6 +377,8 @@ namespace FlaxEditor.Modules
                 return false;
             if (!node.IsEdited)
                 return true;
+            if (!CanSaveScene(scene))
+                return false;
 
             QueueSaveCompletion(node);
             if (SceneSaveFaults.ShouldFail(scene))
@@ -368,18 +405,21 @@ namespace FlaxEditor.Modules
             if (!IsEdited())
                 return;
 
+            var edited = Root.ChildNodes.OfType<SceneNode>().Where(x => x.IsEdited).ToArray();
+            var scenePaths = edited.ToDictionary(x => x, x => GetSceneSavePath(x.Scene));
+            var approved = new HashSet<string>(AssetPipelineCallbacks.WillSave(scenePaths.Values
+                .Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()), StringComparer.OrdinalIgnoreCase);
             var queued = 0;
-            foreach (var scene in Root.ChildNodes)
+            foreach (var node in edited)
             {
-                if (scene is SceneNode node && node.IsEdited)
-                {
-                    QueueSaveCompletion(node);
-                    if (SceneSaveFaults.ShouldFail(node.Scene))
-                        OnSceneSaveError(node.Scene, node.Scene.ID);
-                    else
-                        Level.SaveSceneAsync(node.Scene);
-                    queued++;
-                }
+                if (!approved.Contains(scenePaths[node]))
+                    continue;
+                QueueSaveCompletion(node);
+                if (SceneSaveFaults.ShouldFail(node.Scene))
+                    OnSceneSaveError(node.Scene, node.Scene.ID);
+                else
+                    Level.SaveSceneAsync(node.Scene);
+                queued++;
             }
             if (queued != 0)
                 Editor.UI.AddStatusMessage("Saving scenes...");

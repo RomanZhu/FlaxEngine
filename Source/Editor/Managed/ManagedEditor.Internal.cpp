@@ -665,11 +665,18 @@ bool ManagedEditor::Import(String inputPath, String outputPath, void* arg)
 {
     FileSystem::NormalizePath(inputPath);
     FileSystem::NormalizePath(outputPath);
+    if (Editor::Project && Editor::Project->AssetSystemVersion >= ProjectInfo::CurrentAssetSystemVersion)
+    {
+        LOG(Error, "Asset-system v3 generic import cannot invoke the legacy cooked-asset importer; use a canonical typed source import.");
+        return true;
+    }
     return AssetsImportingManager::Import(inputPath, outputPath, arg);
 }
 
 bool ManagedEditor::Import(const String& inputPath, const String& outputPath, const TextureTool::Options& options)
 {
+    if (Editor::Project && Editor::Project->AssetSystemVersion >= ProjectInfo::CurrentAssetSystemVersion)
+        return !AssetDatabaseFacade::PublishExternalTexture(inputPath, outputPath, options).Succeeded;
     return Import(inputPath, outputPath, (void*)&options);
 }
 
@@ -683,6 +690,8 @@ bool ManagedEditor::TryRestoreImportOptions(TextureTool::Options& options, Strin
 
 bool ManagedEditor::Import(const String& inputPath, const String& outputPath, const ModelTool::Options& options)
 {
+    if (Editor::Project && Editor::Project->AssetSystemVersion >= ProjectInfo::CurrentAssetSystemVersion)
+        return !AssetDatabaseFacade::PublishExternalModel(inputPath, outputPath, options).Succeeded;
     return Import(inputPath, outputPath, (void*)&options);
 }
 
@@ -701,6 +710,8 @@ bool ManagedEditor::TryRestoreImportOptions(ModelTool::Options& options, String 
 
 bool ManagedEditor::Import(const String& inputPath, const String& outputPath, const AudioTool::Options& options)
 {
+    if (Editor::Project && Editor::Project->AssetSystemVersion >= ProjectInfo::CurrentAssetSystemVersion)
+        return !AssetDatabaseFacade::PublishExternalAudio(inputPath, outputPath, options).Succeeded;
     return Import(inputPath, outputPath, (void*)&options);
 }
 
@@ -715,6 +726,42 @@ bool ManagedEditor::TryRestoreImportOptions(AudioTool::Options& options, String 
 bool ManagedEditor::CreateAsset(const String& tag, String outputPath)
 {
     FileSystem::NormalizePath(outputPath);
+    if (Editor::Project && Editor::Project->AssetSystemVersion >= ProjectInfo::CurrentAssetSystemVersion)
+    {
+        if (Editor::Project->AssetSystemVersion > ProjectInfo::CurrentAssetSystemVersion)
+        {
+            LOG(Error, "Cannot create assets in a project with a newer, read-only asset-system version.");
+            return true;
+        }
+        String typeName;
+        const bool graphDocument =
+            tag == TEXT("Material") || tag == TEXT("AnimationGraph") || tag == TEXT("ParticleEmitter") ||
+            tag == TEXT("MaterialFunction") || tag == TEXT("ParticleEmitterFunction") ||
+            tag == TEXT("AnimationGraphFunction") || tag == TEXT("BehaviorTree") || tag == TEXT("VisualScript");
+        if (tag == TEXT("Material")) typeName = TEXT("FlaxEngine.Material");
+        else if (tag == TEXT("AnimationGraph")) typeName = TEXT("FlaxEngine.AnimationGraph");
+        else if (tag == TEXT("ParticleEmitter")) typeName = TEXT("FlaxEngine.ParticleEmitter");
+        else if (tag == TEXT("MaterialFunction")) typeName = TEXT("FlaxEngine.MaterialFunction");
+        else if (tag == TEXT("ParticleEmitterFunction")) typeName = TEXT("FlaxEngine.ParticleEmitterFunction");
+        else if (tag == TEXT("AnimationGraphFunction")) typeName = TEXT("FlaxEngine.AnimationGraphFunction");
+        else if (tag == TEXT("BehaviorTree")) typeName = TEXT("FlaxEngine.BehaviorTree");
+        else if (tag == TEXT("VisualScript")) typeName = TEXT("FlaxEngine.VisualScript");
+        else if (tag == TEXT("MaterialInstance")) typeName = TEXT("FlaxEngine.MaterialInstance");
+        else if (tag == TEXT("CollisionData")) typeName = TEXT("FlaxEngine.CollisionData");
+        else if (tag == TEXT("SkeletonMask")) typeName = TEXT("FlaxEngine.SkeletonMask");
+        else if (tag == TEXT("ParticleSystem")) typeName = TEXT("FlaxEngine.ParticleSystem");
+        else if (tag == TEXT("SceneAnimation")) typeName = TEXT("FlaxEngine.SceneAnimation");
+        else if (tag == TEXT("Animation")) typeName = TEXT("FlaxEngine.Animation");
+        if (typeName.HasChars())
+        {
+            const Guid id = graphDocument
+                ? AssetDatabaseFacade::CreateGraphDocument(outputPath, typeName)
+                : AssetDatabaseFacade::CreateAuthoredDocument(outputPath, typeName);
+            return !id.IsValid();
+        }
+        LOG(Error, "Asset-system v3 does not permit the legacy '{0}' cooked-asset creator.", tag);
+        return true;
+    }
     return AssetsImportingManager::Create(tag, outputPath);
 }
 

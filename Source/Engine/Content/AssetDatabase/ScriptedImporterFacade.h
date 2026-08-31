@@ -22,6 +22,10 @@ public:
     /// <returns>A JSON envelope with the exact output key and bytes, or an empty string on failure.</returns>
     API_FUNCTION() static String ReadArtifactOutput(const Guid& sourceAssetId, const StringView& outputKind);
 
+    /// <summary>Reads a verified immutable output for coordinator-controlled worker capability staging.</summary>
+    /// <returns>A JSON envelope with the exact output key and bytes, or an empty string on failure.</returns>
+    API_FUNCTION() static String ReadArtifactOutputForCoordinator(const Guid& sourceAssetId, const StringView& outputKind);
+
     /// <summary>Gets the last managed-import bridge error.</summary>
     API_FUNCTION() static String GetLastError();
 };

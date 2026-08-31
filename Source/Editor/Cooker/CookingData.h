@@ -351,6 +351,20 @@ public:
     /// </summary>
     HashSet<String> Files;
 
+    /// <summary>
+    /// One source file copied byte-for-byte to an explicit player-relative path.
+    /// </summary>
+    struct VerbatimFile
+    {
+        String SourcePath;
+        String OutputPath;
+    };
+
+    /// <summary>
+    /// Raw streaming files copied outside the runtime asset packages.
+    /// </summary>
+    Array<VerbatimFile> VerbatimFiles;
+
     struct BinaryModuleInfo
     {
         String Name;

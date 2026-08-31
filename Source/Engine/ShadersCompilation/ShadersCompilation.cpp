@@ -26,6 +26,7 @@
 #if USE_EDITOR
 #define COMPILE_WITH_ASSETS_IMPORTER 1 // Hack to use shaders importing in this module
 #include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Utilities/Encryption.h"
 #include "Engine/Platform/FileSystemWatcher.h"
@@ -620,8 +621,11 @@ bool ShadersCompilationService::Init()
 {
 #if USE_EDITOR
     // Initialize automatic shaders importing and reloading for all loaded projects (game, engine, plugins)
-    HashSet<const ProjectInfo*> projects;
-    RegisterShaderWatchers(Editor::Project, projects);
+    if (!AssetDatabase::Get().IsHardCutEnabled())
+    {
+        HashSet<const ProjectInfo*> projects;
+        RegisterShaderWatchers(Editor::Project, projects);
+    }
 #endif
 
     return false;

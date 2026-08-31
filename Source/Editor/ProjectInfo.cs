@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using FlaxEngine;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -288,37 +289,81 @@ namespace FlaxEditor
             return document["Data"] as JObject ?? throw new InvalidDataException($"Mandatory settings source has no Data object: {path}");
         }
 
+        private static JToken MainAssetReference(string guid)
+        {
+            return Guid.TryParse(guid, out var id) && id != Guid.Empty
+                ? new JObject
+                {
+                    ["guid"] = id.ToString("N"),
+                    ["localId"] = 1,
+                }
+                : JValue.CreateNull();
+        }
+
+        private static string ReadMainAssetReference(JToken value)
+        {
+            if (!(value is JObject reference) || reference.Value<long?>("localId") != 1)
+                return string.Empty;
+            return Guid.TryParse(reference.Value<string>("guid"), out var id) && id != Guid.Empty ? id.ToString("N") : string.Empty;
+        }
+
         private static void WriteSettingsData(string path, JObject data)
         {
             var document = JObject.Parse(File.ReadAllText(path));
+            var typeName = document.Value<string>("TypeName");
+            if (string.IsNullOrEmpty(typeName))
+                throw new InvalidDataException($"Mandatory settings source has no TypeName: {path}");
+            if (!Guid.TryParse(document.Value<string>("ID"), out var sourceId) || sourceId == Guid.Empty)
+                throw new InvalidDataException($"Mandatory settings source has no valid ID: {path}");
             document["Data"] = data;
-            var temporary = path + ".tmp";
-            File.WriteAllText(temporary, document.ToString(Formatting.Indented));
-            File.Move(temporary, path, true);
+            var contents = Encoding.UTF8.GetBytes(document.ToString(Formatting.Indented));
+
+            var contentDatabase = Editor.Instance?.ContentDatabase;
+            contentDatabase?.BeginAssetSave(path);
+            var failed = true;
+            try
+            {
+                failed = AssetDatabaseFacade.SaveExistingJsonSourceBytes(path, contents, sourceId, typeName);
+                if (failed)
+                    throw new IOException($"Failed to save mandatory settings source: {path}");
+            }
+            finally
+            {
+                contentDatabase?.EndAssetSave(path, !failed);
+            }
         }
 
         private void SaveV3MutableSettings()
         {
             var settings = Path.Combine(ProjectFolderPath, "Content", "Settings");
             var projectPath = Path.Combine(settings, "Project Settings.json");
+            var buildPath = Path.Combine(settings, "Build Settings.json");
+            var editorPath = Path.Combine(settings, "Editor Settings.json");
+            var paths = new[] { projectPath, buildPath, editorPath };
+            var callbackPaths = paths.Select(AssetDatabase.ToLogicalPathInternal).ToArray();
+            var approved = new HashSet<string>(AssetPipelineCallbacks.WillSave(callbackPaths), StringComparer.OrdinalIgnoreCase);
+            if (callbackPaths.Any(path => !approved.Contains(path)))
+                throw new OperationCanceledException("Saving mandatory project settings was vetoed by an asset modification callback.");
+
+            using (AssetPipelineCallbacks.BypassNativeDecision())
+            {
             var project = LoadSettingsData(projectPath);
             project["ProductName"] = Name;
             project["Version"] = Version?.ToString() ?? "1.0";
             project["CompanyName"] = Company;
             project["CopyrightNotice"] = Copyright;
-            project["FirstScene"] = DefaultScene;
+            project["FirstScene"] = MainAssetReference(DefaultScene);
             WriteSettingsData(projectPath, project);
 
-            var buildPath = Path.Combine(settings, "Build Settings.json");
             var build = LoadSettingsData(buildPath);
             build["GameTarget"] = GameTarget;
             build["EditorTarget"] = EditorTarget;
             WriteSettingsData(buildPath, build);
 
-            var editorPath = Path.Combine(settings, "Editor Settings.json");
             var editor = LoadSettingsData(editorPath);
             editor["DefaultSceneSpawn"] = JToken.Parse(FlaxEngine.Json.JsonSerializer.Serialize(DefaultSceneSpawn));
             WriteSettingsData(editorPath, editor);
+            }
         }
 
         private void LoadV3MutableSettings()
@@ -329,7 +374,7 @@ namespace FlaxEditor
             Version = new Version(project.Value<string>("Version") ?? "1.0");
             Company = project.Value<string>("CompanyName") ?? string.Empty;
             Copyright = project.Value<string>("CopyrightNotice") ?? string.Empty;
-            DefaultScene = project.Value<string>("FirstScene");
+            DefaultScene = ReadMainAssetReference(project["FirstScene"]);
 
             var build = LoadSettingsData(Path.Combine(settings, "Build Settings.json"));
             GameTarget = build.Value<string>("GameTarget");

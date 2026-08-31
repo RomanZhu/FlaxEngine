@@ -12,6 +12,12 @@
 class FLAXENGINE_API MaterialInstanceDocument
 {
 public:
+    /// <summary>Projects the current runtime representation into the canonical authored document.</summary>
+    static bool DecodeRuntime(const Span<byte>& chunk, rapidjson_flax::Document& document, String& error)
+    {
+        return DecodeLegacy(chunk, document, error);
+    }
+
     /// <summary>Decodes a legacy runtime chunk into the canonical authored document.</summary>
     static bool DecodeLegacy(const Span<byte>& chunk, rapidjson_flax::Document& document, String& error);
 

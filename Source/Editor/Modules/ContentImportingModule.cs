@@ -490,9 +490,10 @@ namespace FlaxEditor.Modules
                 var path = ContentMutationPathUtils.Normalize(sourcePath);
                 var metadataPath = path + ".meta";
                 var replaceForeignMetadata = File.Exists(metadataPath) && IsUnityMetadata(metadataPath);
-                if (!uniquePaths.Add(path) || !File.Exists(path) ||
+                var isDirectory = Directory.Exists(path);
+                if (!uniquePaths.Add(path) || (!File.Exists(path) && !isDirectory) ||
                     (File.Exists(metadataPath) && !replaceForeignMetadata) ||
-                    !IsCanonicalSourceImport(Path.GetExtension(path)))
+                    (!isDirectory && !IsCanonicalSourceImport(Path.GetExtension(path))))
                     continue;
                 entries.Add(new InPlaceCanonicalImportEntry(path, replaceForeignMetadata));
             }
@@ -656,12 +657,15 @@ namespace FlaxEditor.Modules
                     ImportFileBegin?.Invoke(entry);
                     var logicalPath = AssetDatabase.ToLogicalPathInternal(entry.SourceUrl);
                     AssetPipelineCallbacks.WillCreate(logicalPath);
-                    var result = AssetDatabaseFacade.RegisterCanonicalSource(entry.SourceUrl, entry.ReplaceForeignMetadata);
+                    AssetMutationResultInfo result;
+                    using (AssetPipelineCallbacks.BypassNativeDecision())
+                        result = AssetDatabaseFacade.RegisterCanonicalSource(entry.SourceUrl, entry.ReplaceForeignMetadata);
                     failed = !result.Succeeded;
                     if (!failed)
                     {
                         entry.SetPreparedBuild(result.AssetID);
-                        pendingBuilds.Add(new PendingCanonicalBuild(result.AssetID, entry.BuildKind, entry.SourceUrl));
+                        if (entry.BuildKind != CanonicalBuildKind.None)
+                            pendingBuilds.Add(new PendingCanonicalBuild(result.AssetID, entry.BuildKind, entry.SourceUrl));
                         AssetPipelineCallbacks.PostprocessAll(new[] { logicalPath }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), false);
                     }
                     else if (!string.IsNullOrEmpty(result.Message))
@@ -801,8 +805,27 @@ namespace FlaxEditor.Modules
             if (Directory.Exists(entry.SourceUrl))
                 return entry.Execute();
 
-            if (entry is ImportFileEntry { IsCanonicalSource: true } canonicalEntry)
-                return ExecuteCanonicalExternalImport(canonicalEntry);
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+            {
+                if (entry is ImportFileEntry canonicalEntry)
+                {
+                    if (!canonicalEntry.IsCanonicalSource)
+                    {
+                        Editor.LogWarning($"Asset System v3 rejected a noncanonical import into Content: {canonicalEntry.ResultUrl}");
+                        return true;
+                    }
+                    return ExecuteCanonicalExternalImport(canonicalEntry);
+                }
+
+                if (entry is CreateFileEntry createEntry)
+                    return ExecuteCanonicalCreate(createEntry);
+
+                Editor.LogWarning($"Asset System v3 rejected an import action without a native mutation route: {entry.GetType().FullName}");
+                return true;
+            }
+
+            if (entry is ImportFileEntry { IsCanonicalSource: true } legacyCanonicalEntry)
+                return ExecuteCanonicalExternalImport(legacyCanonicalEntry);
 
             var destinationPath = ContentMutationPathUtils.Normalize(entry.ResultUrl);
             var isCreate = entry is CreateFileEntry;
@@ -917,6 +940,22 @@ namespace FlaxEditor.Modules
             return !result.Succeeded;
         }
 
+        private static bool ExecuteCanonicalCreate(CreateFileEntry entry)
+        {
+            var destinationPath = ContentMutationPathUtils.Normalize(entry.ResultUrl);
+            if (entry.Execute())
+                return true;
+
+            var metadataPath = destinationPath + ".meta";
+            var registered = AssetDatabaseFacade.GetRecords().Any(x =>
+                x.IsMain && string.Equals(ContentMutationPathUtils.Normalize(x.SourcePath), destinationPath, StringComparison.OrdinalIgnoreCase));
+            if (File.Exists(destinationPath) && File.Exists(metadataPath) && registered)
+                return false;
+
+            Editor.LogError($"Asset System v3 creation did not commit a registered source/metadata pair: {destinationPath}");
+            return true;
+        }
+
         private static bool ExecuteCanonicalExternalImport(ImportFileEntry entry)
         {
             var sourcePath = ContentMutationPathUtils.Normalize(entry.SourceUrl);
@@ -924,6 +963,7 @@ namespace FlaxEditor.Modules
             var logicalPath = AssetDatabase.ToLogicalPathInternal(destinationPath);
             AssetPipelineCallbacks.WillCreate(logicalPath);
             AssetMutationResultInfo result;
+            using (AssetPipelineCallbacks.BypassNativeDecision())
             switch (entry)
             {
             case TextureImportEntry textureEntry:

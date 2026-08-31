@@ -68,7 +68,21 @@ namespace FlaxEngine
 
                             // Deserialize object
                             var data = Data;
-                            JsonSerializer.Deserialize(obj, data);
+                            var path = Path ?? string.Empty;
+                            var projectContent = Globals.ProjectContentFolder ?? string.Empty;
+                            var canonicalProjectSource = path.StartsWith("Content/", StringComparison.OrdinalIgnoreCase) ||
+                                                         path.StartsWith("Content\\", StringComparison.OrdinalIgnoreCase) ||
+                                                         (!string.IsNullOrEmpty(projectContent) && path.StartsWith(projectContent, StringComparison.OrdinalIgnoreCase));
+                            var previousReferencePolicy = JsonSerializer.AllowGuidOnlyAssetReferences.Value;
+                            JsonSerializer.AllowGuidOnlyAssetReferences.Value = !canonicalProjectSource;
+                            try
+                            {
+                                JsonSerializer.Deserialize(obj, data);
+                            }
+                            finally
+                            {
+                                JsonSerializer.AllowGuidOnlyAssetReferences.Value = previousReferencePolicy;
+                            }
                         }
                         catch (Exception ex)
                         {

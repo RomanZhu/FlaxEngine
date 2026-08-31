@@ -34,6 +34,7 @@ namespace
         case AssetSourceKind::TextDocument: return TEXT("TextDocument");
         case AssetSourceKind::ExistingJson: return TEXT("ExistingJson");
         case AssetSourceKind::LegacyBinary: return TEXT("LegacyBinary");
+        case AssetSourceKind::PrebuiltArtifact: return TEXT("PrebuiltArtifact");
         default: return TEXT("ImportedSource");
         }
     }
@@ -45,6 +46,7 @@ namespace
         else if (text == "TextDocument") kind = AssetSourceKind::TextDocument;
         else if (text == "ExistingJson") kind = AssetSourceKind::ExistingJson;
         else if (text == "LegacyBinary") kind = AssetSourceKind::LegacyBinary;
+        else if (text == "PrebuiltArtifact") kind = AssetSourceKind::PrebuiltArtifact;
         else return false;
         return true;
     }

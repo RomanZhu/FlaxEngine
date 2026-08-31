@@ -9,8 +9,10 @@
 #include "Factories/IAssetFactory.h"
 #include "Artifacts/ResolvedArtifact.h"
 #include "Artifacts/ArtifactResolver.h"
+#include "Artifacts/ArtifactStore.h"
 #include "AssetDatabase/AssetPath.h"
 #include "AssetDatabase/AssetDatabase.h"
+#include "AssetDatabase/AssetMount.h"
 #include "Loading/LoadingThread.h"
 #include "Loading/ContentLoadTask.h"
 #include "Engine/Core/Log.h"
@@ -65,12 +67,23 @@ String AssetInfo::ToString() const
 
 void FLAXENGINE_API Serialization::Serialize(ISerializable::SerializeStream& stream, const SceneReference& v, const void* otherObj)
 {
-    Serialize(stream, v.ID, otherObj);
+    stream.StartObject();
+    stream.JKEY("guid");
+    stream.Guid(v.ID);
+    stream.JKEY("localId");
+    stream.Int64(v.ID.IsValid() ? 1 : 0);
+    stream.EndObject();
 }
 
 void FLAXENGINE_API Serialization::Deserialize(ISerializable::DeserializeStream& stream, SceneReference& v, ISerializeModifier* modifier)
 {
-    Deserialize(stream, v.ID, modifier);
+    v.ID = Guid::Empty;
+    if (!stream.IsObject())
+        return;
+    const auto guid = stream.FindMember("guid");
+    const auto localId = stream.FindMember("localId");
+    if (guid != stream.MemberEnd() && localId != stream.MemberEnd() && localId->value.IsInt64() && localId->value.GetInt64() == 1)
+        Deserialize(guid->value, v.ID, modifier);
 }
 
 namespace
@@ -947,15 +960,16 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 
     if (AssetDatabase::Get().IsHardCutEnabled())
     {
-        // Runtime/engine packages may already be registered explicitly, but a
-        // missing project identity must never trigger recursive workspace discovery.
+        // Session-only assets outside source mounts (for example editor preview clones)
+        // may be registered explicitly. A mounted source identity must come from the
+        // durable database and can never fall back to the legacy cache.
         if (Cache.FindAsset(id, info))
         {
-            AssetPathPolicy::ProjectPath projectPath;
-            AssetPipelineDiagnostic diagnostic;
-            if (AssetPathPolicy::TryNormalizeProjectPath(Globals::ProjectFolder, Globals::ProjectContentFolder,
-                Globals::ProjectLibraryFolder, info.Path, projectPath, diagnostic))
-                return true;
+            AssetMountResolution resolution;
+            const bool mounted = FileSystem::IsRelative(info.Path)
+                ? AssetMountRegistry::TryResolveLogical(info.Path, resolution)
+                : AssetMountRegistry::TryResolvePhysical(info.Path, resolution);
+            return !mounted;
         }
         return false;
     }
@@ -1042,6 +1056,22 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 #if ENABLE_ASSETS_DISCOVERY
     String formattedPath(path);
     FileSystem::NormalizePath(formattedPath);
+
+    if (AssetDatabase::Get().IsHardCutEnabled())
+    {
+        AssetMountResolution resolution;
+        const bool mounted = FileSystem::IsRelative(formattedPath)
+            ? AssetMountRegistry::TryResolveLogical(formattedPath, resolution)
+            : AssetMountRegistry::TryResolvePhysical(formattedPath, resolution);
+        if (mounted)
+        {
+            AssetRecord record;
+            if (!AssetDatabase::Get().TryGetMainRecordByPath(resolution.LogicalPath, record))
+                return false;
+            info = AssetInfo(record.ID, record.TypeName, record.CanonicalPath.Get());
+            return true;
+        }
+    }
 
     AssetPathPolicy::ProjectPath projectPath;
     AssetPipelineDiagnostic pathDiagnostic;
@@ -1176,7 +1206,15 @@ IAssetFactory* Content::GetAssetFactory(const AssetInfo& assetInfo)
 
 String Content::CreateTemporaryAssetPath()
 {
-    return Globals::TemporaryFolder / (Guid::New().ToString(Guid::FormatType::N) + ASSET_FILES_EXTENSION_WITH_DOT);
+#if USE_EDITOR
+    const String root = ArtifactStore::GetTemporaryPath(Globals::ProjectLibraryFolder);
+#else
+    const String libraryRoot = Globals::ProjectFolder / TEXT("Library");
+    const String root = AssetDatabase::Get().IsHardCutEnabled()
+        ? ArtifactStore::GetTemporaryPath(libraryRoot)
+        : Globals::TemporaryFolder;
+#endif
+    return root / (Guid::New().ToString(Guid::FormatType::N) + ASSET_FILES_EXTENSION_WITH_DOT);
 }
 
 ContentStats Content::GetStats()
@@ -1873,7 +1911,7 @@ bool Content::FastTmpAssetClone(const StringView& path, String& resultPath)
 {
     ASSERT(path.HasChars());
 
-    const String dstPath = Globals::TemporaryFolder / Guid::New().ToString(Guid::FormatType::D) + ASSET_FILES_EXTENSION_WITH_DOT;
+    const String dstPath = CreateTemporaryAssetPath();
 
     if (CloneAssetFile(dstPath, path, Guid::New()))
         return true;
@@ -1917,8 +1955,16 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
             return true;
         }
 
+        String sourcePath(srcPath);
+        if (AssetDatabase::Get().IsHardCutEnabled() && FileSystem::IsRelative(sourcePath))
+        {
+            AssetMountResolution resolution;
+            if (AssetMountRegistry::TryResolveLogical(sourcePath, resolution))
+                sourcePath = resolution.PhysicalPath;
+        }
+
         // Check source file
-        if (!FileSystem::FileExists(srcPath))
+        if (!FileSystem::FileExists(sourcePath))
         {
             LOG(Warning, "Missing source file.");
             return true;
@@ -1948,11 +1994,11 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
                     FileSystem::DeleteFile(backupPath);
             };
 
-            const bool isJson = JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(srcPath).ToLower());
-            if (isJson && IsSceneAssetPath(srcPath))
+            const bool isJson = JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(sourcePath).ToLower());
+            if (isJson && IsSceneAssetPath(sourcePath))
             {
                 rapidjson_flax::Document sourceDocument;
-                if (ReadJsonDocument(srcPath, sourceDocument))
+                if (ReadJsonDocument(sourcePath, sourceDocument))
                     return true;
                 if (IsExternalActorsSceneDocument(sourceDocument))
                 {
@@ -1962,7 +2008,7 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
             }
 
             // Prepare and validate the complete replacement without touching the destination.
-            if (FileSystem::CopyFile(stagingPath, srcPath))
+            if (FileSystem::CopyFile(stagingPath, sourcePath))
             {
                 LOG(Warning, "Cannot copy asset to replacement staging file.");
                 return true;
@@ -2068,22 +2114,22 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
         };
 
         // Special case for json resources
-        if (JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(srcPath).ToLower()))
+        if (JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(sourcePath).ToLower()))
         {
-            if (IsSceneAssetPath(srcPath))
+            if (IsSceneAssetPath(sourcePath))
             {
                 rapidjson_flax::Document sourceDocument;
-                if (ReadJsonDocument(srcPath, sourceDocument))
+                if (ReadJsonDocument(sourcePath, sourceDocument))
                     return true;
                 if (IsExternalActorsSceneDocument(sourceDocument))
                 {
-                    const bool failed = CopyExternalActorsSceneData(dstPath, srcPath, dstId, sourceDocument);
+                    const bool failed = CopyExternalActorsSceneData(dstPath, sourcePath, dstId, sourceDocument);
                     destinationCreated = !failed;
                     return failed;
                 }
             }
 
-            if (FileSystem::CopyFile(dstPath, srcPath))
+            if (FileSystem::CopyFile(dstPath, sourcePath))
             {
                 LOG(Warning, "Cannot copy file to destination.");
                 return true;
@@ -2098,7 +2144,7 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
         }
 
         // Use quick file copy and remove any partial output on failure.
-        if (FileSystem::CopyFile(dstPath, srcPath))
+        if (FileSystem::CopyFile(dstPath, sourcePath))
         {
             LOG(Warning, "Cannot copy file to destination.");
             return true;
@@ -2672,7 +2718,9 @@ Asset* Content::LoadAsync(const Guid& id, const ScriptingTypeHandle& type)
                 pipelineRecord.ProcessorID == TEXT("Flax.SkeletonMask") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.SceneAnimation") ||
                 pipelineRecord.ProcessorID == TEXT("Flax.ParticleSystem") ||
-                pipelineRecord.ProcessorID == TEXT("Flax.CollisionData"))
+                pipelineRecord.ProcessorID == TEXT("Flax.CollisionData") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.Animation") ||
+                pipelineRecord.ProcessorID == TEXT("Flax.GameplayGlobals"))
                 request.RequiredCompatibility = "flax-authored-document-v1";
             else if (pipelineRecord.ProcessorID == TEXT("Flax.AuthoredObject"))
                 request.RequiredCompatibility = "flax-authored-object-v1";

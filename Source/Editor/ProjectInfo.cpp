@@ -11,8 +11,11 @@
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Content/Artifacts/ArtifactKey.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/AssetDatabase/AssetMountDescriptor.h"
+#include "Engine/Content/AssetDatabase/AssetMutationService.h"
 #include <ThirdParty/pugixml/pugixml.hpp>
 using namespace pugi;
 
@@ -133,9 +136,38 @@ namespace
             member->value.SetString(ansi.Get(), ansi.Length(), allocator);
     }
 
-    void SetGuid(JsonValue& data, const char* name, const Guid& value, JsonDocument::AllocatorType& allocator)
+    void SetAssetReference(JsonValue& data, const char* name, const Guid& value, JsonDocument::AllocatorType& allocator)
     {
-        SetString(data, name, value.ToString(Guid::FormatType::N), allocator);
+        JsonValue reference;
+        if (value.IsValid())
+        {
+            reference.SetObject();
+            const StringAnsi guid(value.ToString(Guid::FormatType::N));
+            reference.AddMember("guid", JsonValue(guid.Get(), guid.Length(), allocator), allocator);
+            reference.AddMember("localId", 1, allocator);
+        }
+        else
+        {
+            reference.SetNull();
+        }
+        const auto member = data.FindMember(name);
+        if (member == data.MemberEnd())
+            data.AddMember(JsonValue(name, allocator), reference.Move(), allocator);
+        else
+            member->value = reference.Move();
+    }
+
+    Guid GetAssetReference(const JsonValue& data, const char* name)
+    {
+        const auto member = data.FindMember(name);
+        if (member == data.MemberEnd() || !member->value.IsObject())
+            return Guid::Empty;
+        const auto guid = member->value.FindMember("guid");
+        const auto localId = member->value.FindMember("localId");
+        if (guid == member->value.MemberEnd() || localId == member->value.MemberEnd() ||
+            !localId->value.IsInt64() || localId->value.GetInt64() != 1)
+            return Guid::Empty;
+        return JsonTools::GetGuid(guid->value);
     }
 
     void SetRay(JsonValue& data, const char* name, const Ray& value, JsonDocument::AllocatorType& allocator)
@@ -157,28 +189,45 @@ namespace
             destination->value.CopyFrom(source->value, allocator);
     }
 
-    bool WriteSettings(const StringView& path, JsonDocument& document)
+    bool SerializeSettings(JsonDocument& document, StringAnsi& output)
     {
         Array<StringAnsi> order;
         order.Add("ID");
         order.Add("TypeName");
         order.Add("EngineBuild");
         order.Add("Data");
-        StringAnsi output;
         CanonicalJsonError error;
-        if (CanonicalJsonWriter::Write(document, output, error, &order))
-            return true;
-        const String staging = String(path) + TEXT(".tmp");
-        if (File::WriteAllBytes(staging, reinterpret_cast<const byte*>(output.Get()), output.Length()) ||
-            FileSystem::MoveFile(path, staging, true))
-        {
-            FileSystem::DeleteFile(staging);
-            return true;
-        }
-        return false;
+        return CanonicalJsonWriter::Write(document, output, error, &order);
     }
 
-    bool CreateSettingsSource(const StringView& path, const Guid& id, const StringView& typeName, JsonValue& data)
+    void BindProjectDatabaseCommit(const ProjectInfo& project, AssetMutationService& service)
+    {
+        if (Globals::ProjectFolder.HasChars() &&
+            FileSystem::AreFilePathsEquivalent(project.ProjectFolderPath, Globals::ProjectFolder) &&
+            AssetDatabase::Get().IsHardCutEnabled())
+        {
+            service.DatabaseCommitHook = [](const AssetMutationResult& pending)
+            {
+                return AssetDatabaseFacade::RefreshSources(pending.ChangedPaths);
+            };
+        }
+    }
+
+    bool WriteSettings(const ProjectInfo& project, const StringView& path, JsonDocument& document)
+    {
+        StringAnsi output;
+        if (SerializeSettings(document, output))
+            return true;
+        AssetMutationService service(project.ProjectFolderPath, project.ProjectFolderPath / TEXT("Content"),
+            project.ProjectFolderPath / TEXT("Library/AssetDatabase/MutationJournals"),
+            project.ProjectFolderPath / TEXT("Library/AssetDatabase/Recovery"));
+        BindProjectDatabaseCommit(project, service);
+        AssetMutationResult result;
+        return service.ReplaceContents(path, StringAnsiView(output), result);
+    }
+
+    bool CreateSettingsSource(const ProjectInfo& project, const StringView& path, const Guid& id,
+        const StringView& typeName, JsonValue& data)
     {
         const String metaPath = String(path) + TEXT(".meta");
         if (FileSystem::FileExists(path) || FileSystem::FileExists(metaPath))
@@ -188,7 +237,8 @@ namespace
         SetString(document, "ID", id.ToString(Guid::FormatType::N), document.GetAllocator());
         SetString(document, "TypeName", typeName, document.GetAllocator());
         document.AddMember("Data", JsonValue(data, document.GetAllocator()), document.GetAllocator());
-        if (WriteSettings(path, document))
+        StringAnsi output;
+        if (SerializeSettings(document, output))
             return true;
         AssetMeta meta;
         meta.ID = id;
@@ -196,8 +246,12 @@ namespace
         meta.SourceKind = AssetSourceKind::ExistingJson;
         meta.Processor.ID = TEXT("Flax.ExistingJson");
         meta.Processor.SettingsVersion = 1;
-        AssetPipelineDiagnostic diagnostic;
-        return AssetMeta::SaveAtomic(metaPath, meta, diagnostic);
+        AssetMutationService service(project.ProjectFolderPath, project.ProjectFolderPath / TEXT("Content"),
+            project.ProjectFolderPath / TEXT("Library/AssetDatabase/MutationJournals"),
+            project.ProjectFolderPath / TEXT("Library/AssetDatabase/Recovery"));
+        BindProjectDatabaseCommit(project, service);
+        AssetMutationResult result;
+        return service.CreateAsset(path, StringAnsiView(output), meta, result);
     }
 
     bool EnsureV3BootstrapSources(const ProjectInfo& project)
@@ -206,13 +260,12 @@ namespace
             return true;
         const String content = project.ProjectFolderPath / TEXT("Content");
         const String settings = content / TEXT("Settings");
-        if (!FileSystem::DirectoryExists(content) ||
-            (!FileSystem::DirectoryExists(settings) && FileSystem::CreateDirectory(settings)))
+        if (!FileSystem::DirectoryExists(content))
             return true;
 
         const Guid settingsId = NewProjectRoleId(project.ProjectId, "settings-folder");
         const String settingsMetaPath = settings + TEXT(".meta");
-        if (!FileSystem::FileExists(settingsMetaPath))
+        if (!FileSystem::DirectoryExists(settings) || !FileSystem::FileExists(settingsMetaPath))
         {
             AssetMeta meta;
             meta.ID = settingsId;
@@ -220,8 +273,15 @@ namespace
             meta.AssetType = TEXT("FlaxEngine.Folder");
             meta.SourceKind = AssetSourceKind::Folder;
             meta.Processor.ID = TEXT("Flax.Folder");
-            AssetPipelineDiagnostic diagnostic;
-            if (AssetMeta::SaveAtomic(settingsMetaPath, meta, diagnostic))
+            AssetMutationService service(project.ProjectFolderPath, content,
+                project.ProjectFolderPath / TEXT("Library/AssetDatabase/MutationJournals"),
+                project.ProjectFolderPath / TEXT("Library/AssetDatabase/Recovery"));
+            BindProjectDatabaseCommit(project, service);
+            AssetMutationResult result;
+            const bool failed = FileSystem::DirectoryExists(settings)
+                ? service.RegisterExisting(settings, meta, false, result)
+                : service.CreateFolder(settings, meta, result);
+            if (failed)
                 return true;
         }
 
@@ -237,10 +297,10 @@ namespace
         SetString(owner, "Version", project.Version.ToString(), owner.GetAllocator());
         SetString(owner, "CompanyName", project.Company, owner.GetAllocator());
         SetString(owner, "CopyrightNotice", project.Copyright, owner.GetAllocator());
-        SetGuid(owner, "FirstScene", project.DefaultScene, owner.GetAllocator());
-        SetGuid(owner, "GameCooking", buildSettingsId, owner.GetAllocator());
-        SetGuid(owner, "AssetPipeline", pipelineSettingsId, owner.GetAllocator());
-        if (CreateSettingsSource(settings / TEXT("Project Settings.json"), projectSettingsId,
+        SetAssetReference(owner, "FirstScene", project.DefaultScene, owner.GetAllocator());
+        SetAssetReference(owner, "GameCooking", buildSettingsId, owner.GetAllocator());
+        SetAssetReference(owner, "AssetPipeline", pipelineSettingsId, owner.GetAllocator());
+        if (CreateSettingsSource(project, settings / TEXT("Project Settings.json"), projectSettingsId,
             TEXT("FlaxEditor.Content.Settings.GameSettings"), owner))
             return true;
 
@@ -248,20 +308,20 @@ namespace
         build.SetObject();
         SetString(build, "GameTarget", project.GameTarget, build.GetAllocator());
         SetString(build, "EditorTarget", project.EditorTarget, build.GetAllocator());
-        if (CreateSettingsSource(settings / TEXT("Build Settings.json"), buildSettingsId,
+        if (CreateSettingsSource(project, settings / TEXT("Build Settings.json"), buildSettingsId,
             TEXT("FlaxEditor.Content.Settings.BuildSettings"), build))
             return true;
 
         JsonDocument pipeline;
         pipeline.SetObject();
-        if (CreateSettingsSource(settings / TEXT("Asset Pipeline Settings.json"), pipelineSettingsId,
+        if (CreateSettingsSource(project, settings / TEXT("Asset Pipeline Settings.json"), pipelineSettingsId,
             TEXT("FlaxEditor.Content.Settings.AssetPipelineSettings"), pipeline))
             return true;
 
         JsonDocument editor;
         editor.SetObject();
         SetRay(editor, "DefaultSceneSpawn", project.DefaultSceneSpawn, editor.GetAllocator());
-        if (CreateSettingsSource(settings / TEXT("Editor Settings.json"), editorSettingsId,
+        if (CreateSettingsSource(project, settings / TEXT("Editor Settings.json"), editorSettingsId,
             TEXT("FlaxEditor.Content.Settings.AssetEditorSettings"), editor))
             return true;
 
@@ -282,14 +342,20 @@ namespace
                 return true;
             JsonDocument mounts;
             mounts.Parse(source.Get(), source.Length());
-            if (mounts.HasParseError() || WriteSettings(mountsPath, mounts))
+            StringAnsi canonicalMounts;
+            if (mounts.HasParseError() || SerializeSettings(mounts, canonicalMounts))
                 return true;
             AssetMeta meta;
             meta.ID = mountSettingsId;
             meta.AssetType = AssetMountDescriptorCodec::TypeName;
             meta.SourceKind = AssetSourceKind::ExistingJson;
             meta.Processor.ID = TEXT("Flax.ExistingJson");
-            if (AssetMeta::SaveAtomic(mountsMetaPath, meta, diagnostic))
+            AssetMutationService service(project.ProjectFolderPath, content,
+                project.ProjectFolderPath / TEXT("Library/AssetDatabase/MutationJournals"),
+                project.ProjectFolderPath / TEXT("Library/AssetDatabase/Recovery"));
+            BindProjectDatabaseCommit(project, service);
+            AssetMutationResult result;
+            if (service.CreateAsset(mountsPath, StringAnsiView(canonicalMounts), meta, result))
                 return true;
         }
         return !FileSystem::FileExists(mountsPath) || !FileSystem::FileExists(mountsMetaPath);
@@ -306,8 +372,8 @@ namespace
         SetString(*projectData, "Version", project.Version.ToString(), projectDocument.GetAllocator());
         SetString(*projectData, "CompanyName", project.Company, projectDocument.GetAllocator());
         SetString(*projectData, "CopyrightNotice", project.Copyright, projectDocument.GetAllocator());
-        SetGuid(*projectData, "FirstScene", project.DefaultScene, projectDocument.GetAllocator());
-        if (WriteSettings(settings / TEXT("Project Settings.json"), projectDocument))
+        SetAssetReference(*projectData, "FirstScene", project.DefaultScene, projectDocument.GetAllocator());
+        if (WriteSettings(project, settings / TEXT("Project Settings.json"), projectDocument))
             return true;
 
         JsonDocument buildDocument;
@@ -316,7 +382,7 @@ namespace
             return true;
         SetString(*buildData, "GameTarget", project.GameTarget, buildDocument.GetAllocator());
         SetString(*buildData, "EditorTarget", project.EditorTarget, buildDocument.GetAllocator());
-        if (WriteSettings(settings / TEXT("Build Settings.json"), buildDocument))
+        if (WriteSettings(project, settings / TEXT("Build Settings.json"), buildDocument))
             return true;
 
         JsonDocument editorDocument;
@@ -324,7 +390,7 @@ namespace
         if (ReadSettingsData(settings / TEXT("Editor Settings.json"), editorDocument, editorData))
             return true;
         SetRay(*editorData, "DefaultSceneSpawn", project.DefaultSceneSpawn, editorDocument.GetAllocator());
-        return WriteSettings(settings / TEXT("Editor Settings.json"), editorDocument);
+        return WriteSettings(project, settings / TEXT("Editor Settings.json"), editorDocument);
     }
 
     bool LoadV3MutableSettings(ProjectInfo& project)
@@ -339,7 +405,7 @@ namespace
         Version::Parse(*version, &project.Version);
         project.Company = JsonTools::GetString(*data, "CompanyName", String::Empty);
         project.Copyright = JsonTools::GetString(*data, "CopyrightNotice", String::Empty);
-        project.DefaultScene = JsonTools::GetGuid(*data, "FirstScene");
+        project.DefaultScene = GetAssetReference(*data, "FirstScene");
 
         if (ReadSettingsData(settings / TEXT("Build Settings.json"), document, data))
             return true;

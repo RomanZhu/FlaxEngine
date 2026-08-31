@@ -34,7 +34,7 @@ void SceneLightmapsData::GetCachedLightmapPath(String* result, int32 lightmapInd
 {
     String cacheFolder;
     GetCacheFolder(&cacheFolder);
-    *result = cacheFolder / String::Format(TEXT("Lightmap{0:0>2}-{1}"), lightmapIndex, textureIndex) + ASSET_FILES_EXTENSION_WITH_DOT;
+    *result = cacheFolder / String::Format(TEXT("Lightmap{0:0>2}-{1}.bakedasset"), lightmapIndex, textureIndex);
 }
 
 #endif

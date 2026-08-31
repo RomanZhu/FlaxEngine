@@ -42,6 +42,7 @@ namespace
         case AssetSourceKind::ImportedSource: return TEXT("ImportedSource");
         case AssetSourceKind::TextDocument: return TEXT("TextDocument");
         case AssetSourceKind::ExistingJson: return TEXT("ExistingJson");
+        case AssetSourceKind::PrebuiltArtifact: return TEXT("PrebuiltArtifact");
         default: return TEXT("LegacyBinary");
         }
     }

@@ -70,6 +70,7 @@ namespace FlaxEditor
         private CliRequest _request;
         private string _outputPath;
         private bool _completed;
+        private bool _buildFailed;
 
         public void Execute(string requestPath)
         {
@@ -155,7 +156,23 @@ namespace FlaxEditor
             try
             {
                 importResult = ScriptedImporterRegistry.ExecuteWorker(worker.AssetPath, worker.ProcessorId, worker.CallbackHash,
-                    () => !string.IsNullOrEmpty(worker.CancellationPath) && File.Exists(worker.CancellationPath));
+                    () => !string.IsNullOrEmpty(worker.CancellationPath) && File.Exists(worker.CancellationPath), worker.Capabilities);
+            }
+            catch (ScriptedImporterWorkerCapabilityException ex)
+            {
+                WriteResult(new
+                {
+                    schemaVersion = 1,
+                    requestId = _request.RequestId,
+                    success = false,
+                    cancelled = false,
+                    exitCode = 4,
+                    capabilityRequest = ex.Request,
+                    errors = Array.Empty<object>(),
+                });
+                TryWriteEvent(new { type = "capabilityRequest", requestId = _request.RequestId, capability = ex.Request });
+                Engine.RequestExit(4);
+                return;
             }
             catch (OperationCanceledException ex)
             {
@@ -203,6 +220,8 @@ namespace FlaxEditor
         {
             if (type == GameCooker.EventType.BuildStarted)
                 TryWriteEvent(new { type = "phase", requestId = _request.RequestId, name = "GameCooker" });
+            else if (type == GameCooker.EventType.BuildFailed)
+                _buildFailed = true;
         }
 
         private void OnBuildProgress(string message, float progress)
@@ -217,6 +236,7 @@ namespace FlaxEditor
             _completed = true;
             GameCooker.Event -= OnBuildEvent;
             GameCooker.Progress -= OnBuildProgress;
+            failed |= _buildFailed || !BuildOutputHasFiles();
             if (!failed)
                 TryWriteEvent(new { type = "artifact", requestId = _request.RequestId, kind = "output", path = _outputPath });
             var result = new
@@ -230,6 +250,14 @@ namespace FlaxEditor
             };
             WriteResult(result);
             TryWriteEvent(new { type = "result", requestId = _request.RequestId, success = !failed, exitCode = failed ? 6 : 0 });
+        }
+
+        private bool BuildOutputHasFiles()
+        {
+            if (string.IsNullOrWhiteSpace(_outputPath) || !Directory.Exists(_outputPath))
+                return false;
+            using var files = Directory.EnumerateFiles(_outputPath, "*", SearchOption.AllDirectories).GetEnumerator();
+            return files.MoveNext();
         }
 
         private void Fail(Exception exception)

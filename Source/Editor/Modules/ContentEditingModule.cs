@@ -191,7 +191,9 @@ namespace FlaxEditor.Modules
         {
             var extension = System.IO.Path.GetExtension(srcPath);
             var id = Guid.NewGuid();
-            resultPath = StringUtils.CombinePaths(Globals.TemporaryFolder, id.ToString("N")) + extension;
+            var temporaryRoot = StringUtils.CombinePaths(Globals.ProjectLibraryFolder, "Temp");
+            System.IO.Directory.CreateDirectory(temporaryRoot);
+            resultPath = StringUtils.CombinePaths(temporaryRoot, id.ToString("N")) + extension;
 
             if (CloneAssetFile(srcPath, resultPath, id))
                 return true;

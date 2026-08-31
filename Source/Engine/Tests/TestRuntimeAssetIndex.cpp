@@ -11,6 +11,8 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
     first.BackingAssetID = Guid(20, 0, 0, 0);
     first.TypeName = TEXT("FlaxEngine.Texture");
     first.CanonicalPath = TEXT("Content/Textures/First.png");
+    first.ResourcePath = TEXT("Textures/First.png");
+    first.Addresses.Add(TEXT("ui/first-texture"));
     first.PackagedPath = TEXT("Content/Data_1.flax");
     first.PackageID = Guid(200, 0, 0, 0);
     first.Offset = 128;
@@ -52,7 +54,7 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
     StringAnsi again;
     REQUIRE_FALSE(RuntimeAssetIndex::WriteCanonicalJson(entries, again, diagnostic));
     CHECK(json == again);
-    CHECK(json.Contains("\"formatVersion\": 5"));
+    CHECK(json.Contains("\"formatVersion\": 7"));
     CHECK(json.Contains("\"contentHash\":"));
     CHECK(json.Contains("00000001000000000000000000000000:42"));
     CHECK(json.Contains("FlaxEngine.Material"));
@@ -63,6 +65,9 @@ TEST_CASE("Runtime asset index is deterministic and never refers to Library")
     REQUIRE(parsed.Count() == 2);
     CHECK(parsed[0].ID.Guid == second.ID.Guid);
     CHECK(parsed[1].ExactArtifact == first.ExactArtifact);
+    CHECK(parsed[1].ResourcePath == first.ResourcePath);
+    REQUIRE(parsed[1].Addresses.Count() == 1);
+    CHECK(parsed[1].Addresses[0] == first.Addresses[0]);
     REQUIRE(parsed[1].Dependencies.Count() == 1);
     CHECK(parsed[1].Dependencies[0] == second.ID);
     REQUIRE(parsed[1].Preload.Count() == 1);

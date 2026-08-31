@@ -44,11 +44,31 @@ namespace
         const auto type = json.FindMember("TypeName");
         const auto data = json.FindMember("Data");
         Guid sourceID;
-        if (id == json.MemberEnd() || !id->value.IsString() || Guid::Parse(id->value.GetStringAnsiView(), sourceID) || sourceID != record.ID ||
+        if (id == json.MemberEnd() || !id->value.IsString() || Guid::Parse(id->value.GetStringAnsiView(), sourceID) || !sourceID.IsValid() ||
             type == json.MemberEnd() || !type->value.IsString() || String(type->value.GetStringAnsiView()) != record.TypeName || data == json.MemberEnd())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
                 record.ID, record.SourcePath.Get(), TEXT("Existing JSON ID, type, or Data payload does not match its canonical record."));
         return false;
+    }
+
+    void RemapSelfReferences(JsonValue& value, const Guid& sourceID, const StringAnsiView& runtimeID, JsonDocument::AllocatorType& allocator)
+    {
+        if (value.IsObject())
+        {
+            for (auto i = value.MemberBegin(); i != value.MemberEnd(); ++i)
+                RemapSelfReferences(i->value, sourceID, runtimeID, allocator);
+        }
+        else if (value.IsArray())
+        {
+            for (JsonValue& item : value.GetArray())
+                RemapSelfReferences(item, sourceID, runtimeID, allocator);
+        }
+        else if (value.IsString())
+        {
+            Guid referenced;
+            if (!Guid::Parse(value.GetStringAnsiView(), referenced) && referenced == sourceID)
+                value.SetString(runtimeID.Get(), runtimeID.Length(), allocator);
+        }
     }
 
     void FindRuntimeReferences(const JsonValue& value, const Guid& self, HashSet<Guid>& references)
@@ -80,6 +100,7 @@ namespace
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, prepared.SourcePath, TEXT("Snapshotted Existing JSON source is malformed."));
         const auto data = source.FindMember("Data");
+        const auto sourceIdMember = source.FindMember("ID");
         if (data == source.MemberEnd())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, prepared.SourcePath, TEXT("Snapshotted Existing JSON source has no Data payload."));
@@ -94,6 +115,10 @@ namespace
         runtime.AddMember("EngineBuild", FLAXENGINE_VERSION_BUILD, allocator);
         JsonValue runtimeData;
         runtimeData.CopyFrom(data->value, allocator);
+        Guid sourceID;
+        if (sourceIdMember != source.MemberEnd() && sourceIdMember->value.IsString() &&
+            !Guid::Parse(sourceIdMember->value.GetStringAnsiView(), sourceID) && sourceID != prepared.AssetID)
+            RemapSelfReferences(runtimeData, sourceID, id, allocator);
         runtime.AddMember("Data", runtimeData.Move(), allocator);
         Array<StringAnsi> rootOrder;
         rootOrder.Add("ID");
@@ -189,7 +214,7 @@ bool ExistingJsonProcessor::Prepare(PrepareAssetContext& context, PreparedAsset&
                 return true;
         }
     }
-    static const char CompilerIdentity[] = "flax-existing-json-compiler-v1";
+    static const char CompilerIdentity[] = "flax-existing-json-compiler-v2";
     if (context.DeclareToolchain(TEXT("existing-json-compiler"), ContentHash::Compute(CompilerIdentity, ARRAY_COUNT(CompilerIdentity) - 1), origin, diagnostic) ||
         context.DeclareOutput(StringAnsiView("runtime"), record.ID, diagnostic))
         return true;
