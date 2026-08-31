@@ -25,6 +25,9 @@ namespace
         { "prefabGuid", "PrefabID" },
         { "prefabObjectFileId", "PrefabObjectFileId" },
         { "removedObjects", "RemovedObjects" },
+        { "siblingOrderKey", "SiblingOrderKey" },
+        { "orderInParent", "OrderInParent" },
+        { "useExternalActors", "UseExternalActors" },
     };
 
     const char* MapName(const rapidjson_flax::Value& name, bool toRuntime)
@@ -196,6 +199,18 @@ bool ScenePrefabDocument::RuntimeEnvelopeToSource(rapidjson_flax::StringBuffer& 
             return true;
         }
         source.AddMember("externalActors", external->value.GetBool(), allocator);
+    }
+    const auto partitions = runtime.FindMember("Partitions");
+    if (scene && partitions != runtime.MemberEnd())
+    {
+        if (!partitions->value.IsArray())
+        {
+            error = TEXT("Runtime scene Partitions table is malformed.");
+            return true;
+        }
+        JsonValue value;
+        value.CopyFrom(partitions->value, allocator);
+        source.AddMember("partitions", value.Move(), allocator);
     }
     JsonValue objects;
     if (ToSourceObjects(data->value, objects, allocator, scene, error))
