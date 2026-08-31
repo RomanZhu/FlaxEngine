@@ -6,7 +6,6 @@
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
-#include "Engine/Content/AssetDatabase/MigrationInventory.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
 
@@ -183,13 +182,6 @@ bool ValidateStep::Perform(CookingData& data)
     data.AddRootAsset(gameSettingsObject);
     data.AddRootAsset(gameSettings->FirstScene.ID);
 
-    Array<MigrationInventoryEntry> inventory;
-    MigrationInventory::Build(snapshot.Records, inventory);
-    if (MigrationInventory::HasBlockingConflict(inventory))
-    {
-        data.Error(TEXT("Mixed-mode cook refused because legacy and canonical records conflict."));
-        return true;
-    }
     for (const AssetRecord& record : snapshot.Records)
     {
         if (IsBlockingRecordStatus(record.Status))
