@@ -855,17 +855,13 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override SceneAnimation LoadAsset()
         {
-            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return FlaxEngine.Content.LoadAssetAsync<SceneAnimation>(_item.ObjectID);
-            return base.LoadAsset();
+            return FlaxEngine.Content.LoadAssetAsync<SceneAnimation>(_item.ObjectID);
         }
 
         /// <inheritdoc />
         protected override bool SaveToOriginal()
         {
-            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return Editor.ContentDatabase.SaveCanonicalAuthoredDocument(_asset, _item);
-            return base.SaveToOriginal();
+            return Editor.ContentDatabase.SaveCanonicalAuthoredDocument(_asset, _item);
         }
 
         /// <inheritdoc />

@@ -708,47 +708,28 @@ namespace FlaxEditor.Windows.Assets
             // Early check
             if (!IsEdited || _asset == null || _isWaitingForSurfaceLoad)
                 return;
-            if (!ConvertedTypePolicy.AllowsLegacyBinaryAuthoring(_item.TypeName, _item.Path))
-            {
-                Editor.LogError("Legacy .flax saving is disabled for converted asset types. Migrate the asset before editing it.");
-                return;
-            }
-            if (_documentSession != null)
-            {
-                if (_surface.IsEdited && SaveSurface())
-                    return;
-                var meta = new VisualScript.Metadata
-                {
-                    BaseTypename = _properties.BaseClass?.FullName,
-                    Flags = VisualScript.Flags.None,
-                };
-                if (_properties.IsAbstract)
-                    meta.Flags |= VisualScript.Flags.Abstract;
-                if (_properties.IsSealed)
-                    meta.Flags |= VisualScript.Flags.Sealed;
-                var properties = CanonicalGraphDocuments.VisualScriptProperties(meta.BaseTypename, (int)meta.Flags);
-                if (CanonicalGraphDocuments.SaveSurface(_item, _documentSession, properties))
-                    return;
-                SaveBreakpoints();
-                Editor.CodeEditing.ClearTypes();
-                Editor.CodeEditing.OnTypesChanged();
-                ClearEditedFlag();
-                OnSurfaceEditedChanged();
-                return;
-            }
-            using var saveScope = Editor.ContentDatabase.TrackAssetSave(_item.Path);
-
-            // Check if surface has been edited
             if (_surface.IsEdited)
             {
                 if (SaveSurface())
                     return;
             }
-
+            var meta = new VisualScript.Metadata
+            {
+                BaseTypename = _properties.BaseClass?.FullName,
+                Flags = VisualScript.Flags.None,
+            };
+            if (_properties.IsAbstract)
+                meta.Flags |= VisualScript.Flags.Abstract;
+            if (_properties.IsSealed)
+                meta.Flags |= VisualScript.Flags.Sealed;
+            var properties = AssetDocumentRegistry.VisualScriptProperties(meta.BaseTypename, (int)meta.Flags);
+            if (_documentSession.SaveGraph(_item, properties))
+                return;
+            SaveBreakpoints();
+            Editor.CodeEditing.ClearTypes();
+            Editor.CodeEditing.OnTypesChanged();
             ClearEditedFlag();
             OnSurfaceEditedChanged();
-            _item.RefreshThumbnail();
-            saveScope.Complete(true);
         }
 
         /// <inheritdoc />
@@ -1165,41 +1146,16 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override VisualScript LoadAsset()
         {
-            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return CanonicalGraphDocuments.Open<VisualScript>(_item, out _documentSession);
-            return base.LoadAsset();
+            return AssetDocumentRegistry.OpenGraph<VisualScript>(_item, out _documentSession);
         }
 
         /// <inheritdoc />
         public byte[] SurfaceData
         {
-            get => _documentSession != null ? CanonicalGraphDocuments.GetSurface(_documentSession) : _asset.LoadSurface();
+            get => _documentSession.GetGraphSurface();
             set
             {
-                // Create metadata
-                var meta = new VisualScript.Metadata
-                {
-                    BaseTypename = _properties.BaseClass?.FullName,
-                    Flags = VisualScript.Flags.None,
-                };
-                if (_properties.IsAbstract)
-                    meta.Flags |= VisualScript.Flags.Abstract;
-                if (_properties.IsSealed)
-                    meta.Flags |= VisualScript.Flags.Sealed;
-
-                if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                {
-                    CanonicalGraphDocuments.SetSurface(_documentSession, value);
-                    return;
-                }
-
-                // Save data to the asset
-                if (_asset.SaveSurface(value, ref meta))
-                {
-                    _surface.MarkAsEdited();
-                    Editor.LogError("Failed to save surface data");
-                }
-                _asset.Reload();
+                _documentSession.SetGraphSurface(value);
                 SaveBreakpoints();
 
                 // Asset got edited so the methods/properties types info could be changed
@@ -1248,7 +1204,7 @@ namespace FlaxEditor.Windows.Assets
             _surface.Script = null;
             _isWaitingForSurfaceLoad = false;
             _properties.OnClean();
-            CanonicalGraphDocuments.Close(_item, ref _documentSession);
+            AssetDocumentRegistry.Close(_item, ref _documentSession);
 
             base.UnlinkItem();
         }

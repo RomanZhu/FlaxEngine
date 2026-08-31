@@ -5,6 +5,7 @@
 #include "Engine/Content/Config.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Assets/AnimationGraph.h"
 #include "Engine/Content/Assets/AnimationGraphFunction.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
@@ -30,6 +31,7 @@
 #endif
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/Collections/Dictionary.h"
+#include "Engine/Core/Log.h"
 #include "Engine/Core/Math/Math.h"
 #include "Engine/Core/Math/BoundingBox.h"
 #include "Engine/Core/Math/BoundingSphere.h"
@@ -739,13 +741,25 @@ namespace
             AddString(object, "$type", "String", allocator);
             AddString(object, "value", StringAnsi((StringView)value), allocator);
             break;
-        case VariantType::Asset:
         case VariantType::Guid:
         case VariantType::Object:
         {
             const Guid id = (Guid)value;
             AddString(object, "$type", VariantTypeName(value.Type.Type), allocator);
             AddString(object, "guid", GuidToken(id), allocator);
+            if (value.Type.TypeName)
+                AddString(object, "typeName", StringAnsiView(value.Type.TypeName), allocator);
+            break;
+        }
+        case VariantType::Asset:
+        {
+            const Guid runtimeId = (Guid)value;
+            AssetObjectId objectId = Content::ResolveAssetObjectId(runtimeId);
+            if (objectId.IsNull() && runtimeId.IsValid())
+                objectId = AssetObjectId::Main(AssetGuid(runtimeId));
+            AddString(object, "$type", "AssetReference", allocator);
+            AddString(object, "guid", GuidToken(objectId.Asset.Value), allocator);
+            object.AddMember("fileId", static_cast<int64>(objectId.LocalId), allocator);
             if (value.Type.TypeName)
                 AddString(object, "typeName", StringAnsiView(value.Type.TypeName), allocator);
             break;
@@ -1099,7 +1113,14 @@ namespace
             if (ParseGuidToken(StringAnsiView(guidMember->value.GetString(), guidMember->value.GetStringLength()), id))
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph GUID value is invalid."));
             if (typeName == "AssetReference")
-                result.SetAsset(Content::LoadAsync<Asset>(id));
+            {
+                const auto fileId = value.FindMember("fileId");
+                if (fileId == value.MemberEnd() || !fileId->value.IsInt64() || (id.IsValid() && fileId->value.GetInt64() == 0))
+                    return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph asset references require a persistent fileId."));
+                result.SetAsset(id.IsValid()
+                    ? Content::LoadAsync<Asset>(AssetObjectId(AssetGuid(id), fileId->value.GetInt64()))
+                    : nullptr);
+            }
             else if (typeName == "ObjectReference")
                 result.SetObject(FindObject(id, ScriptingObject::GetStaticClass()));
             else
@@ -2159,11 +2180,14 @@ bool GraphDependencyExtractor::Extract(const GraphDocument& document, Array<Asse
         for (const Guid& id : referenced)
         {
             AssetDependency dependency;
-            dependency.AssetID = id;
-            dependency.StableIdentity = String(GuidToken(id));
             dependency.Origin.GraphNode = String(node.GetStableID());
             AssetRecord record;
-            if (AssetDatabase::Get().TryGetRecord(id, record) && IsFunctionAssetType(record.TypeName))
+            const bool hasRecord = AssetDatabase::Get().TryGetRecord(id, record);
+            dependency.ObjectID = hasRecord
+                ? AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId)
+                : AssetObjectId::Main(AssetGuid(id));
+            dependency.StableIdentity = dependency.ObjectID.ToString();
+            if (hasRecord && IsFunctionAssetType(record.TypeName))
             {
                 dependency.Kind = AssetDependencyKind::BuildInput;
                 dependency.SemanticInterface = record.MetaSemanticHash != 0
@@ -2193,8 +2217,11 @@ bool GraphDependencyExtractor::Extract(const GraphDocument& document, Array<Asse
         {
             AssetDependency dependency;
             dependency.Kind = AssetDependencyKind::RuntimeReference;
-            dependency.AssetID = id;
-            dependency.StableIdentity = String(GuidToken(id));
+            AssetRecord record;
+            dependency.ObjectID = AssetDatabase::Get().TryGetRecord(id, record)
+                ? AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId)
+                : AssetObjectId::Main(AssetGuid(id));
+            dependency.StableIdentity = dependency.ObjectID.ToString();
             dependency.Origin.GraphPin = String(GuidToken(parameter.ID));
             dependencies.Add(MoveTemp(dependency));
         }
@@ -2535,6 +2562,111 @@ bool GraphDocumentCompiler::Compile(const AssetDocumentSnapshot& snapshot, Array
     output = MoveTemp(graph.CompatibilitySurface);
     diagnostic = AssetPipelineDiagnostic();
     return false;
+}
+
+BytesContainer AssetDocumentService::LoadGraphSource(const StringView& path)
+{
+    BytesContainer result;
+    AssetPipelineDiagnostic diagnostic;
+    GraphDocumentSession session;
+    if (session.Open(path, diagnostic))
+    {
+        LOG(Error, "Cannot open graph source '{0}': {1}", path, diagnostic.Message);
+        return result;
+    }
+    Array<byte> surface;
+    if (GraphDocumentCompiler::CompileDocument(session.Document, surface, diagnostic))
+    {
+        LOG(Error, "Cannot compile editable graph source '{0}': {1}", path, diagnostic.Message);
+        return result;
+    }
+    result.Copy(ToSpan(surface));
+    return result;
+}
+
+bool AssetDocumentService::SaveGraphSource(const StringView& path, const BytesContainer& surface,
+    const StringView& expectedSourceHash, const StringView& propertiesJson)
+{
+    AssetPipelineDiagnostic diagnostic;
+    String typeName;
+    if (GraphDocumentCodec::TypeForExtension(FileSystem::GetExtension(path), typeName))
+    {
+        LOG(Error, "Cannot save graph source '{0}': unsupported source extension.", path);
+        return true;
+    }
+    GraphDocument document;
+    if (GraphDocumentCodec::FromSurface(typeName, surface, document, diagnostic))
+    {
+        LOG(Error, "Cannot serialize graph source '{0}': {1}", path, diagnostic.Message);
+        return true;
+    }
+    GraphDocumentSession current;
+    if (current.Open(path, diagnostic))
+    {
+        LOG(Error, "Cannot open graph source before save '{0}': {1}", path, diagnostic.Message);
+        return true;
+    }
+    if (propertiesJson.HasChars())
+        document.PropertiesJson = StringAnsi(String(propertiesJson));
+    else
+        document.PropertiesJson = current.Document.PropertiesJson;
+
+    ContentHash expected;
+    if (expectedSourceHash.HasChars() && ContentHash::Parse(expectedSourceHash, expected))
+    {
+        LOG(Error, "Cannot save graph source '{0}': invalid expected source hash.", path);
+        return true;
+    }
+    StringAnsi json;
+    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) ||
+        GraphDocumentCodec::SaveAtomic(path, json, diagnostic, expectedSourceHash.HasChars() ? &expected : nullptr))
+    {
+        LOG(Error, "Cannot save graph source '{0}': {1}", path, diagnostic.Message);
+        return true;
+    }
+    return false;
+}
+
+Guid AssetDocumentService::CreateGraphSource(const StringView& path, const StringView& typeName,
+    const StringView& propertiesJson)
+{
+    AssetPipelineDiagnostic diagnostic;
+    String extensionType;
+    if (path.IsEmpty() || !GraphDocumentCodec::IsSupportedType(typeName) ||
+        GraphDocumentCodec::TypeForExtension(FileSystem::GetExtension(path), extensionType) || extensionType != typeName ||
+        FileSystem::FileExists(path) || FileSystem::FileExists(String(path) + TEXT(".meta")))
+    {
+        LOG(Error, "Cannot create graph source '{0}': path, type, or destination is invalid.", path);
+        return Guid::Empty;
+    }
+    GraphDocument document;
+    if (GraphDocumentCodec::CreateStarter(typeName, document, diagnostic))
+    {
+        LOG(Error, "Cannot create starter graph source '{0}': {1}", path, diagnostic.Message);
+        return Guid::Empty;
+    }
+    if (propertiesJson.HasChars())
+        document.PropertiesJson = StringAnsi(String(propertiesJson));
+    StringAnsi json;
+    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) || GraphDocumentCodec::SaveAtomic(path, json, diagnostic))
+    {
+        LOG(Error, "Cannot write starter graph source '{0}': {1}", path, diagnostic.Message);
+        return Guid::Empty;
+    }
+    AssetMeta meta;
+    meta.ID = Guid::New();
+    meta.AssetType = typeName;
+    meta.SourceKind = AssetSourceKind::TextDocument;
+    meta.Processor.ID = TEXT("Flax.GraphDocument");
+    meta.Processor.SettingsVersion = 1;
+    meta.Processor.SettingsJson = "{}\n";
+    if (AssetMeta::SaveAtomic(String(path) + TEXT(".meta"), meta, diagnostic))
+    {
+        FileSystem::DeleteFile(path);
+        LOG(Error, "Cannot create graph source metadata '{0}': {1}", path, diagnostic.Message);
+        return Guid::Empty;
+    }
+    return meta.ID;
 }
 
 bool GraphDocumentSession::Open(const StringView& path, AssetPipelineDiagnostic& diagnostic)

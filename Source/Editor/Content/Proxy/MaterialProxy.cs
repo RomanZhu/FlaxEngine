@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.Content.Thumbnails;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
@@ -26,8 +27,7 @@ namespace FlaxEditor.Content
             if (typeName != TypeName)
                 return false;
             var extension = System.IO.Path.GetExtension(path);
-            return string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(extension, ".material", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(extension, ".material", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <inheritdoc />
@@ -45,8 +45,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            CanonicalGraphDocuments.EnsureCanAuthor(typeof(Material).FullName, outputPath);
-            if (AssetDatabaseFacade.CreateGraphDocument(outputPath, typeof(Material).FullName) == Guid.Empty)
+            if (AssetDocumentRegistry.CreateGraph(outputPath, typeof(Material).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
 

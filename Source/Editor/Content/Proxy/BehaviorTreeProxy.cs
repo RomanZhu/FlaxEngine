@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.Content.Thumbnails;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
@@ -29,8 +30,7 @@ namespace FlaxEditor.Content
             if (typeName != TypeName)
                 return false;
             var extension = Path.GetExtension(path);
-            return string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(extension, ".behaviortree", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(extension, ".behaviortree", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <inheritdoc />
@@ -60,8 +60,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            CanonicalGraphDocuments.EnsureCanAuthor(typeof(BehaviorTree).FullName, outputPath);
-            if (AssetDatabaseFacade.CreateGraphDocument(outputPath, typeof(BehaviorTree).FullName) == Guid.Empty)
+            if (AssetDocumentRegistry.CreateGraph(outputPath, typeof(BehaviorTree).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
 

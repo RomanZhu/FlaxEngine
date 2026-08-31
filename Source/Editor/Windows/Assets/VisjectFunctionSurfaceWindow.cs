@@ -69,8 +69,8 @@ namespace FlaxEditor.Windows.Assets
         /// <summary>Gets or replaces the editable canonical graph model.</summary>
         protected byte[] CanonicalSurfaceData
         {
-            get => CanonicalGraphDocuments.GetSurface(_documentSession);
-            set => CanonicalGraphDocuments.SetSurface(_documentSession, value);
+            get => _documentSession.GetGraphSurface();
+            set => _documentSession.SetGraphSurface(value);
         }
 
         /// <summary>
@@ -160,17 +160,13 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override TAsset LoadAsset()
         {
-            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return CanonicalGraphDocuments.Open<TAsset>(_item, out _documentSession);
-            return base.LoadAsset();
+            return AssetDocumentRegistry.OpenGraph<TAsset>(_item, out _documentSession);
         }
 
         /// <inheritdoc />
         protected override bool SaveToOriginal()
         {
-            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return CanonicalGraphDocuments.SaveSurface(_item, _documentSession);
-            return base.SaveToOriginal();
+            return _documentSession.SaveGraph(_item);
         }
 
         /// <inheritdoc />
@@ -187,7 +183,7 @@ namespace FlaxEditor.Windows.Assets
         protected override void UnlinkItem()
         {
             _isWaitingForSurfaceLoad = false;
-            CanonicalGraphDocuments.Close(_item, ref _documentSession);
+            AssetDocumentRegistry.Close(_item, ref _documentSession);
 
             base.UnlinkItem();
         }

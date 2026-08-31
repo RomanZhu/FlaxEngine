@@ -2,6 +2,7 @@
 
 using System;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEngine;
 
 namespace FlaxEditor.Content.Create
@@ -50,9 +51,8 @@ namespace FlaxEditor.Content.Create
         /// <inheritdoc />
         public override bool Create()
         {
-            CanonicalGraphDocuments.EnsureCanAuthor(typeof(VisualScript).FullName, ResultUrl);
-            var properties = CanonicalGraphDocuments.VisualScriptProperties(_options.BaseClass?.FullName, 0);
-            return AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(VisualScript).FullName, properties) == Guid.Empty;
+            var properties = AssetDocumentRegistry.VisualScriptProperties(_options.BaseClass?.FullName, 0);
+            return AssetDocumentRegistry.CreateGraph(ResultUrl, typeof(VisualScript).FullName, properties) == Guid.Empty;
         }
     }
 }

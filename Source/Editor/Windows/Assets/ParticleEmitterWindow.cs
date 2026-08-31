@@ -276,21 +276,10 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override byte[] SurfaceData
         {
-            get => IsCanonicalDocument ? CanonicalSurfaceData : _asset.LoadSurface(true);
+            get => CanonicalSurfaceData;
             set
             {
-                if (IsCanonicalDocument)
-                {
-                    CanonicalSurfaceData = value;
-                    return;
-                }
-                if (_asset.SaveSurface(value))
-                {
-                    _surface.MarkAsEdited();
-                    Editor.LogError("Failed to save surface data");
-                }
-                _asset.Reload();
-                _asset.WaitForLoaded();
+                CanonicalSurfaceData = value;
                 _preview.PreviewActor.ResetSimulation();
                 _previewTab.Presenter.BuildLayoutOnUpdate();
                 _layoutTab.Presenter.BuildLayoutOnUpdate();
@@ -336,15 +325,7 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override bool SaveToOriginal()
         {
-            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return CanonicalGraphDocuments.SaveSurface(_item, _documentSession);
-
-            // Copy shader cache from the temporary Particle Emitter (will skip compilation on Reload - faster)
-            Guid dstId = _item.ID;
-            Guid srcId = _asset.ID;
-            Editor.Internal_CopyCache(ref dstId, ref srcId);
-
-            return base.SaveToOriginal();
+            return _documentSession.SaveGraph(_item);
         }
 
         /// <inheritdoc />

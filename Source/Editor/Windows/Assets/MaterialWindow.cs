@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.Scripting;
 using FlaxEditor.Surface;
 using FlaxEditor.Viewport.Previews;
@@ -355,22 +356,10 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override byte[] SurfaceData
         {
-            get => IsCanonicalDocument ? CanonicalSurfaceData : _asset.LoadSurface(true);
+            get => CanonicalSurfaceData;
             set
             {
-                if (IsCanonicalDocument)
-                {
-                    CanonicalSurfaceData = value;
-                    return;
-                }
-                FillMaterialInfo(out var info);
-                if (_asset.SaveSurface(value, info))
-                {
-                    _surface.MarkAsEdited();
-                    Editor.LogError("Failed to save surface data");
-                }
-                _asset.Reload();
-                _asset.WaitForLoaded();
+                CanonicalSurfaceData = value;
             }
         }
 
@@ -411,18 +400,8 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override bool SaveToOriginal()
         {
-            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-            {
-                FillMaterialInfo(out var info);
-                return CanonicalGraphDocuments.SaveSurface(_item, _documentSession, CanonicalGraphDocuments.MaterialProperties(info));
-            }
-
-            // Copy shader cache from the temporary Particle Emitter (will skip compilation on Reload - faster)
-            Guid dstId = _item.ID;
-            Guid srcId = _asset.ID;
-            Editor.Internal_CopyCache(ref dstId, ref srcId);
-
-            return base.SaveToOriginal();
+            FillMaterialInfo(out var info);
+            return _documentSession.SaveGraph(_item, AssetDocumentRegistry.MaterialProperties(info));
         }
 
         /// <inheritdoc />

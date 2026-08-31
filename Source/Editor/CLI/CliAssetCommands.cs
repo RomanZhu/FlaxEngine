@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.Content.Import;
 using FlaxEditor.Content.Settings;
 using FlaxEditor.Windows.Assets;
@@ -415,7 +416,7 @@ namespace FlaxEditor
                 }
                 if (proxy is ParticleEmitterProxy && System.IO.Path.GetExtension(path).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (AssetDatabaseFacade.CreateGraphDocument(path, typeof(ParticleEmitter).FullName) == Guid.Empty)
+                    if (AssetDocumentRegistry.CreateGraph(path, typeof(ParticleEmitter).FullName) == Guid.Empty)
                         throw new IOException($"Failed to create Particle Emitter asset '{path}'.");
                     return;
                 }

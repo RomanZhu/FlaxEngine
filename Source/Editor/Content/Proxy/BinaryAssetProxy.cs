@@ -1,10 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
-using System.IO;
-using FlaxEditor.GUI.ContextMenu;
 using FlaxEngine;
-using FlaxEngine.GUI;
 using FlaxEngine.Utilities;
 
 namespace FlaxEditor.Content
@@ -36,52 +33,6 @@ namespace FlaxEditor.Content
         public override bool IsProxyFor<T>()
         {
             return typeof(T) == AssetType;
-        }
-
-        /// <inheritdoc />
-        public override void OnContentWindowContextMenu(ContextMenu menu, ContentItem item)
-        {
-            base.OnContentWindowContextMenu(menu, item);
-
-            if (item is not BinaryAssetItem assetItem ||
-                !string.Equals(Path.GetExtension(item.Path), ".flax", StringComparison.OrdinalIgnoreCase) ||
-                !CanConvertToText(assetItem))
-                return;
-
-            menu.AddButton("Convert to text form", () => ConvertToText(assetItem));
-        }
-
-        private static bool CanConvertToText(BinaryAssetItem item)
-        {
-            return ConvertedTypePolicy.IsConvertedGraphType(item.TypeName) || item.Type == typeof(Shader);
-        }
-
-        private static void ConvertToText(BinaryAssetItem item)
-        {
-            if (MessageBox.Show(
-                    $"Convert '{item.ShortName}' to its text form? The legacy .flax file will be replaced while preserving the asset ID.",
-                    "Convert asset to text", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
-                return;
-
-            var sourcePath = item.Path;
-            if (!AssetDatabaseFacade.MigrateLegacyAsset(sourcePath))
-            {
-                Editor.Log($"Converted asset to text form: {sourcePath}");
-                return;
-            }
-
-            var message = $"Failed to convert asset to text form: {sourcePath}";
-            var diagnostics = AssetDatabaseFacade.GetDiagnostics();
-            for (int i = 0; i < diagnostics.Length; i++)
-            {
-                if (!string.IsNullOrEmpty(diagnostics[i].Message))
-                {
-                    message += "\n" + diagnostics[i].Message;
-                    break;
-                }
-            }
-            Editor.LogError(message);
-            MessageBox.Show(message, "Asset conversion failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         /// <summary>

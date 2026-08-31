@@ -2030,10 +2030,15 @@ namespace FlaxEditor.Windows
                     get => _asset.LoadSurface(true);
                     set
                     {
-                        var sourcePath = AssetDatabaseFacade.GetCanonicalSourcePath(_asset.ID);
-                        var failed = !string.IsNullOrEmpty(sourcePath) && CanonicalGraphDocuments.IsGraphDocumentPath(sourcePath)
-                            ? Editor.Instance.ContentDatabase.SaveAsset(sourcePath, () => AssetDatabaseFacade.SaveGraphSurface(sourcePath, value))
-                            : _asset.SaveSurface(value);
+                        if (!AssetDatabaseFacade.TryGetAssetObjectId(_asset, out var objectId) ||
+                            !AssetWorkspaceQuery.TryGet(objectId, out var entry))
+                        {
+                            Editor.LogError("Particle Emitter has no authored source record.");
+                            return;
+                        }
+                        var sourcePath = entry.SourcePath;
+                        var failed = Editor.Instance.ContentDatabase.SaveAsset(sourcePath,
+                            () => AssetDocumentService.SaveGraphSource(sourcePath, value, string.Empty, null));
                         if (failed)
                         {
                             Editor.LogError("Failed to save Particle Emitter surface.");

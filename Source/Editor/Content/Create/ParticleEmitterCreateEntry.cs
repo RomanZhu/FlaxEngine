@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEngine;
 
 namespace FlaxEditor.Content.Create
@@ -104,20 +105,18 @@ namespace FlaxEditor.Content.Create
                 break;
             default: throw new ArgumentOutOfRangeException();
             }
-            if (Path.GetExtension(ResultUrl).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
-            {
-                if (templateName == null)
-                    return AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(ParticleEmitter).FullName) == Guid.Empty;
-                var sourcePath = Path.Combine(Globals.EngineContentFolder, "Editor/Particles", templateName + ".flax");
-                var template = FlaxEngine.Content.Load<ParticleEmitter>(sourcePath);
-                if (!template || template.WaitForLoaded())
-                    return true;
-                return AssetDatabaseFacade.CreateGraphDocumentFromSurface(ResultUrl, typeof(ParticleEmitter).FullName, template.LoadSurface(true)) == Guid.Empty;
-            }
+            var id = AssetDocumentRegistry.CreateGraph(ResultUrl, typeof(ParticleEmitter).FullName);
+            if (id == Guid.Empty)
+                return true;
             if (templateName == null)
-                return Editor.CreateAsset("ParticleEmitter", ResultUrl);
-            var templatePath = Path.Combine(Globals.EngineContentFolder, "Editor/Particles", templateName + ".flax");
-            return Editor.Instance.ContentEditing.CloneAssetFile(templatePath, ResultUrl, Guid.NewGuid());
+                return false;
+
+            var sourcePath = Path.Combine(Globals.EngineContentFolder, "Editor/Particles", templateName + ".particleemitter");
+            var surface = AssetDocumentService.LoadGraphSource(sourcePath);
+            if (surface == null || surface.Length == 0 || AssetDocumentService.SaveGraphSource(ResultUrl, surface, string.Empty, null))
+                return true;
+            AssetDatabase.ImportAsset(ResultUrl, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            return false;
         }
     }
 }

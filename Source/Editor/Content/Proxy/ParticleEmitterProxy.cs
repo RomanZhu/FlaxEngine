@@ -36,8 +36,7 @@ namespace FlaxEditor.Content
             if (typeName != TypeName)
                 return false;
             var extension = System.IO.Path.GetExtension(path);
-            return string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(extension, ".particleemitter", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(extension, ".particleemitter", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <inheritdoc />
@@ -61,7 +60,6 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            CanonicalGraphDocuments.EnsureCanAuthor(typeof(ParticleEmitter).FullName, outputPath);
             Editor.Instance.ContentImporting.Create(new ParticleEmitterCreateEntry(outputPath));
         }
 

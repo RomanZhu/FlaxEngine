@@ -4,7 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.Surface;
 using FlaxEditor.Surface.Elements;
 using FlaxEngine;
@@ -142,9 +144,7 @@ namespace FlaxEditor
                 owner.Material = item.LoadAsync() as Material ?? throw new InvalidOperationException("The asset is not a Material.");
                 if (owner.Material.WaitForLoaded())
                     throw new InvalidOperationException($"Material '{item.Path}' failed to load from disk.");
-                // Newly created materials do not contain a surface chunk yet;
-                // ask the native asset to materialize Flax's default graph.
-                owner.SurfaceData = owner.Material.LoadSurface(true);
+                owner.SurfaceData = AssetDocumentService.LoadGraphSource(item.Path);
                 surface = new MaterialSurface(owner, null, owner.Undo);
                 break;
             case "animation":
@@ -152,7 +152,7 @@ namespace FlaxEditor
                 owner.Animation = item.LoadAsync() as AnimationGraph ?? throw new InvalidOperationException("The asset is not an AnimationGraph.");
                 if (owner.Animation.WaitForLoaded())
                     throw new InvalidOperationException($"Animation Graph '{item.Path}' failed to load from disk.");
-                owner.SurfaceData = owner.Animation.LoadSurface();
+                owner.SurfaceData = AssetDocumentService.LoadGraphSource(item.Path);
                 surface = new AnimGraphSurface(owner, null, owner.Undo);
                 break;
             default: throw new InvalidOperationException("Visject kind must be material or animation.");
@@ -337,50 +337,34 @@ namespace FlaxEditor
             public void OnSurfaceClose() { }
             public void Save()
             {
-                var textDocument = CanonicalGraphDocuments.IsGraphDocumentPath(Path);
-                string backupPath;
-                if (textDocument)
-                {
-                    backupPath = System.IO.Path.Combine(Globals.TemporaryFolder, Guid.NewGuid().ToString("N") + System.IO.Path.GetExtension(Path));
-                    File.Copy(Path, backupPath, true);
-                }
-                else if (Editor.Instance.ContentEditing.FastTempAssetClone(Path, out backupPath))
-                {
-                    throw new IOException($"Failed to create a rollback copy for graph asset '{Path}'.");
-                }
+                if (!AssetDocumentRegistry.IsGraphSourcePath(Path))
+                    throw new IOException($"Graph asset '{Path}' is not an authored source document.");
+                var backupPath = System.IO.Path.Combine(Globals.TemporaryFolder, Guid.NewGuid().ToString("N") + System.IO.Path.GetExtension(Path));
+                var sourceBytes = File.ReadAllBytes(Path);
+                File.Copy(Path, backupPath, true);
+                using var algorithm = SHA256.Create();
+                var expectedHash = BitConverter.ToString(algorithm.ComputeHash(sourceBytes)).Replace("-", string.Empty);
                 using var saveScope = Editor.Instance.ContentDatabase.TrackAssetSave(Path);
                 try
                 {
-                    if (textDocument)
-                    {
-                        var properties = Material != null ? CanonicalGraphDocuments.MaterialProperties(Material.Info) : null;
-                        if (AssetDatabaseFacade.SaveGraphSurface(Path, SurfaceData, false, properties))
-                            throw new IOException("Canonical graph document save failed.");
-                    }
-                    else if (Material != null)
-                    {
-                        if (Material.SaveSurface(SurfaceData, Material.Info))
-                            throw new IOException("Material surface save failed.");
-                    }
-                    else if (Animation != null)
-                    {
-                        if (Animation.SaveSurface(SurfaceData))
-                            throw new IOException("Animation graph surface save failed.");
-                    }
+                    var properties = Material != null ? AssetDocumentRegistry.MaterialProperties(Material.Info) : null;
+                    if (AssetDocumentService.SaveGraphSource(Path, SurfaceData, expectedHash, properties))
+                        throw new IOException("Graph source document save failed.");
+                    AssetDatabase.ImportAsset(Path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
                     VerifyPersistedAsset();
                     saveScope.Complete(true);
                 }
                 catch (Exception ex)
                 {
                     var rollbackFailed = false;
-                    if (textDocument)
+                    try
                     {
-                        try { File.Copy(backupPath, Path, true); }
-                        catch { rollbackFailed = true; }
+                        File.Copy(backupPath, Path, true);
+                        AssetDatabase.ImportAsset(Path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
                     }
-                    else
+                    catch
                     {
-                        rollbackFailed = Editor.Instance.ContentEditing.CloneAssetFile(backupPath, Path, AssetId, true);
+                        rollbackFailed = true;
                     }
                     Item.Reload();
                     var rollbackAsset = Item.LoadAsync();
@@ -408,12 +392,12 @@ namespace FlaxEditor
                 if (Material != null)
                 {
                     Material = asset as Material ?? throw new IOException($"Graph asset '{Path}' reloaded as '{asset.GetType().FullName}' instead of Material.");
-                    SurfaceData = Material.LoadSurface(false);
+                    SurfaceData = AssetDocumentService.LoadGraphSource(Path);
                 }
                 else
                 {
                     Animation = asset as AnimationGraph ?? throw new IOException($"Graph asset '{Path}' reloaded as '{asset.GetType().FullName}' instead of AnimationGraph.");
-                    SurfaceData = Animation.LoadSurface();
+                    SurfaceData = AssetDocumentService.LoadGraphSource(Path);
                 }
                 if (SurfaceData == null || SurfaceData.Length == 0)
                     throw new IOException($"Graph asset '{Path}' reloaded without persisted surface data.");

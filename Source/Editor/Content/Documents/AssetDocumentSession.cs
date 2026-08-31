@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Security.Cryptography;
+using FlaxEditor.Content;
 using FlaxEngine;
 
 namespace FlaxEditor.Content.Documents
@@ -79,6 +80,41 @@ namespace FlaxEditor.Content.Documents
                 throw new ArgumentNullException(nameof(document));
             Document = document;
             MarkDirty();
+        }
+
+        /// <summary>Gets the editable Visject surface decoded directly from the source document.</summary>
+        public byte[] GetGraphSurface()
+        {
+            return GetDocument<byte[]>();
+        }
+
+        /// <summary>Replaces the editable Visject surface without modifying a runtime artifact.</summary>
+        public void SetGraphSurface(byte[] surface)
+        {
+            SetDocument(surface);
+        }
+
+        /// <summary>Atomically saves an edited graph source and reimports it through the generic asset pipeline.</summary>
+        /// <returns>True on failure.</returns>
+        public bool SaveGraph(AssetItem item, string propertiesJson = null, bool allowOverwriteConflict = false)
+        {
+            if (item == null)
+                throw new ArgumentNullException(nameof(item));
+            if (item.ObjectID != ObjectID)
+                throw new ArgumentException("The document session does not own this asset item.", nameof(item));
+
+            using var save = Editor.Instance.ContentDatabase.TrackAssetSave(SourcePath);
+            var committed = Save(value => !AssetDocumentService.SaveGraphSource(
+                value.SourcePath,
+                value.GetGraphSurface(),
+                allowOverwriteConflict ? string.Empty : value.BaseSourceHash,
+                propertiesJson), allowOverwriteConflict);
+            save.Complete(committed);
+            if (committed)
+                item.RefreshThumbnail();
+            else if (HasExternalConflict)
+                Editor.LogError("Cannot save graph source because it changed externally: " + SourcePath);
+            return !committed;
         }
 
         /// <summary>Marks the document as having unsaved changes.</summary>

@@ -38,7 +38,6 @@
 #include "CreateBehaviorTree.h"
 #include "CreateJson.h"
 #include "Engine/Content/Assets/Model.h"
-#include "Engine/Content/AssetPipeline/ConvertedTypePolicy.h"
 
 namespace
 {
@@ -170,12 +169,6 @@ CreateAssetResult CreateAssetContext::Run(const CreateAssetFunction& callback)
         LOG(Warning, "Assigned asset TypeName is invalid.");
         return CreateAssetResult::InvalidTypeID;
     }
-    if (!ConvertedTypePolicy::AllowsLegacyBinaryAuthoring(Data.Header.TypeName, TargetAssetPath))
-    {
-        LOG(Warning, "Legacy binary authoring is disabled for converted asset type '{0}'. Import or create its canonical source instead.", Data.Header.TypeName);
-        return CreateAssetResult::InvalidTypeID;
-    }
-
     // Add import metadata to the file (if it's empty)
     if (!SkipMetadata && Data.Metadata.IsInvalid())
     {

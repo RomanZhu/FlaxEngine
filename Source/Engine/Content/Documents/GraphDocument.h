@@ -4,8 +4,10 @@
 
 #include "AssetDocument.h"
 #include "Engine/Content/Artifacts/ArtifactLease.h"
+#include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Core/Types/Span.h"
 #include "Engine/Core/Types/Variant.h"
+#include "Engine/Scripting/ScriptingType.h"
 #include "Engine/Visject/VisjectMeta.h"
 
 /// <summary>One authored graph parameter keyed by a stable GUID rather than display name.</summary>
@@ -150,6 +152,26 @@ class FLAXENGINE_API GraphDependencyExtractor
 {
 public:
     static bool Extract(const GraphDocument& document, Array<AssetDependency>& dependencies, ContentHash& functionInterfaceHash, AssetPipelineDiagnostic& diagnostic);
+};
+
+/// <summary>Direct source-document operations used by editor document sessions.</summary>
+API_CLASS(Static) class FLAXENGINE_API AssetDocumentService
+{
+    DECLARE_SCRIPTING_TYPE_NO_SPAWN(AssetDocumentService);
+
+public:
+    /// <summary>Parses and compiles an authored graph source into its editable surface representation.</summary>
+    API_FUNCTION() static BytesContainer LoadGraphSource(const StringView& path);
+
+    /// <summary>Atomically writes an edited graph surface to its source document.</summary>
+    /// <returns>True on failure.</returns>
+    API_FUNCTION() static bool SaveGraphSource(const StringView& path, const BytesContainer& surface,
+        const StringView& expectedSourceHash, const StringView& propertiesJson = StringView::Empty);
+
+    /// <summary>Creates a starter graph source and metadata without creating a runtime binary asset.</summary>
+    /// <returns>The source GUID, or an invalid GUID on failure.</returns>
+    API_FUNCTION() static Guid CreateGraphSource(const StringView& path, const StringView& typeName,
+        const StringView& propertiesJson = StringView::Empty);
 };
 
 /// <summary>Editor document session: dirty/save/external-change detection without compiling on open.</summary>

@@ -57,8 +57,7 @@ namespace FlaxEditor.Content
             if (typeName != TypeName)
                 return false;
             var extension = System.IO.Path.GetExtension(path);
-            return string.Equals(extension, ".flax", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(extension, ".particlesystem", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(extension, ".particlesystem", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <inheritdoc />
@@ -88,7 +87,6 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            CanonicalGraphDocuments.EnsureCanAuthor(typeof(ParticleSystem).FullName, outputPath);
             if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(ParticleSystem).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }

@@ -2,6 +2,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using FlaxEditor.Content;
 using FlaxEngine;
 
 namespace FlaxEditor.Content.Documents
@@ -36,6 +39,74 @@ namespace FlaxEditor.Content.Documents
             var session = Open(id);
             session.ConfigureDocumentLoader(path => documentLoader(path));
             return session;
+        }
+
+        /// <summary>Opens a graph source session and loads the runtime artifact only as its preview target.</summary>
+        public static TAsset OpenGraph<TAsset>(AssetItem item, out AssetDocumentSession session) where TAsset : Asset
+        {
+            if (item == null)
+                throw new ArgumentNullException(nameof(item));
+            if (!IsGraphSourcePath(item.Path))
+                throw new InvalidOperationException("Graph editors only accept authored graph source documents.");
+            session = Open(item.ObjectID, AssetDocumentService.LoadGraphSource);
+            if (session.Document is not byte[] surface || surface.Length == 0)
+                throw new InvalidDataException("The graph source did not produce an editable surface.");
+            return FlaxEngine.Content.LoadAssetAsync<TAsset>(item.ObjectID);
+        }
+
+        /// <summary>Closes a shared source document session.</summary>
+        public static void Close(AssetItem item, ref AssetDocumentSession session)
+        {
+            if (session == null)
+                return;
+            Close(session.ObjectID);
+            session = null;
+        }
+
+        /// <summary>Creates and imports a source-authored graph document.</summary>
+        public static Guid CreateGraph(string path, string typeName, string propertiesJson = null)
+        {
+            var id = AssetDocumentService.CreateGraphSource(path, typeName, propertiesJson);
+            if (id == Guid.Empty)
+                return Guid.Empty;
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            return id;
+        }
+
+        /// <summary>Returns whether a path is an authored graph source.</summary>
+        public static bool IsGraphSourcePath(string path)
+        {
+            switch (Path.GetExtension(path).ToLowerInvariant())
+            {
+            case ".materialfunction":
+            case ".animgraphfunction":
+            case ".animgraph":
+            case ".visualscript":
+            case ".behaviortree":
+            case ".particlefunction":
+            case ".particleemitter":
+            case ".material":
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        /// <summary>Builds Visual Script source properties.</summary>
+        public static string VisualScriptProperties(string baseType, int flags)
+        {
+            var type = string.IsNullOrEmpty(baseType) ? "FlaxEngine.Script" : baseType;
+            return "{\n  \"baseType\": \"" + type + "\",\n  \"flags\": " + flags + "\n}\n";
+        }
+
+        /// <summary>Builds material source properties.</summary>
+        public static string MaterialProperties(MaterialInfo info)
+        {
+            return "{\n  \"blendMode\": " + (int)info.BlendMode +
+                   ",\n  \"domain\": " + (int)info.Domain +
+                   ",\n  \"maskThreshold\": " + info.MaskThreshold.ToString(CultureInfo.InvariantCulture) +
+                   ",\n  \"opacityThreshold\": " + info.OpacityThreshold.ToString(CultureInfo.InvariantCulture) +
+                   ",\n  \"shadingModel\": " + (int)info.ShadingModel + "\n}\n";
         }
 
         public static bool Close(AssetObjectId id)
