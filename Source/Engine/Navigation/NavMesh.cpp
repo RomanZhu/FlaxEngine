@@ -9,7 +9,9 @@
 #include "Engine/Profiler/ProfilerMemory.h"
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/Core/Log.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
+#include "Engine/ContentImporters/CreateRawData.h"
+#include "Engine/Content/Assets/RawDataAsset.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #if USE_EDITOR
 #include "Editor/Editor.h"
@@ -63,7 +65,7 @@ void NavMesh::SaveNavMesh()
     bytesContainer.Link(ToSpan(stream));
 
     // Save asset to file
-    if (AssetsImportingManager::Create(AssetsImportingManager::CreateRawDataTag, assetPath, assetId, (void*)&bytesContainer))
+    if (GeneratedAssetBuilder::Build(&CreateRawData::Create, assetPath, RawDataAsset::TypeName, assetId, &bytesContainer))
     {
         LOG(Warning, "Failed to save navmesh tiles data to file.");
         return;

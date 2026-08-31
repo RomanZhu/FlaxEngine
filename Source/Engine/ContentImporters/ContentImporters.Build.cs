@@ -32,7 +32,7 @@ public class ContentImporters : EngineModule
     /// <inheritdoc />
     public override void GetFilesToDeploy(List<string> files)
     {
-        files.Add(Path.Combine(FolderPath, "AssetsImportingManager.h"));
+        files.Add(Path.Combine(FolderPath, "GeneratedAssetBuilder.h"));
         files.Add(Path.Combine(FolderPath, "Types.h"));
     }
 }

@@ -5,7 +5,7 @@
 #include "Loading/Tasks/LoadAssetDataTask.h"
 #include "Factories/BinaryAssetFactory.h"
 #include "Artifacts/ResolvedArtifact.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Debug/Exceptions/JsonParseException.h"
@@ -227,11 +227,7 @@ void BinaryAsset::Reimport() const
         LOG(Error, "Generated artifact storage cannot be reimported as an authoritative binary. Rebuild it from the canonical source instead.");
         return;
     }
-    const String importPath = GetImportPath();
-    if (importPath.HasChars())
-    {
-        AssetsImportingManager::Import(importPath, GetStoragePath());
-    }
+    AssetPipelineService::RebuildAsset(GetID());
 }
 
 #endif

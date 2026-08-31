@@ -4,7 +4,7 @@
 
 #if COMPILE_WITH_ASSETS_IMPORTER
 
-#include "AssetsImportingManager.h"
+#include "GeneratedAssetBuilder.h"
 #include "Engine/Physics/CollisionData.h"
 
 CreateAssetResult CreateCollisionData::Create(CreateAssetContext& context)
@@ -57,8 +57,8 @@ CreateAssetResult CreateCollisionData::Create(CreateAssetContext& context)
 
 bool CreateCollisionData::CookMeshCollision(const String& outputPath, CollisionCooking::Argument& arg)
 {
-    // Use in-build assets importing/creating pipeline to generate asset
-    return AssetsImportingManager::Create(AssetsImportingManager::CreateCollisionDataTag, outputPath, &arg);
+    Guid id = Guid::New();
+    return GeneratedAssetBuilder::Build(&CreateCollisionData::Create, outputPath, CollisionData::TypeName, id, &arg);
 }
 
 #endif

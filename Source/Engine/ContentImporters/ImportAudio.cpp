@@ -221,7 +221,6 @@ CreateAssetResult ImportAudio::Import(CreateAssetContext& context, AudioDecoder&
     JsonWriter& importOptionsMeta = importOptionsMetaObj;
     importOptionsMeta.StartObject();
     {
-        context.AddMeta(importOptionsMeta);
         options.Serialize(importOptionsMeta, nullptr);
     }
     importOptionsMeta.EndObject();

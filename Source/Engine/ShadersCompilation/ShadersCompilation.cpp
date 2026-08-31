@@ -25,7 +25,8 @@
 #include "Engine/Particles/ParticleEmitter.h"
 #if USE_EDITOR
 #define COMPILE_WITH_ASSETS_IMPORTER 1 // Hack to use shaders importing in this module
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
+#include "Engine/ContentImporters/ImportShader.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Utilities/Encryption.h"
 #include "Engine/Platform/FileSystemWatcher.h"
@@ -547,7 +548,7 @@ namespace
     {
         if (ShadersCompilation::IsShaderSourceAssetUpToDate(sourcePath, assetPath))
             return false;
-        return AssetsImportingManager::Import(sourcePath, assetPath, assetId);
+        return GeneratedAssetBuilder::BuildFromSource(&ImportShader::Import, sourcePath, assetPath, Shader::TypeName, assetId);
     }
 
     void OnWatcherShadersEvent(const String& path, FileSystemAction action)

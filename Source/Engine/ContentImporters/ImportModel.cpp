@@ -28,7 +28,7 @@
 #include "Engine/Scripting/Scripting.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Editor/Utilities/EditorUtilities.h"
-#include "AssetsImportingManager.h"
+#include "GeneratedAssetBuilder.h"
 
 bool ImportModel::TryGetImportOptions(const StringView& path, Options& options)
 {
@@ -331,7 +331,8 @@ CreateAssetResult ImportModel::Import(CreateAssetContext& context)
                 splitOptions.Translation = meshData->OriginTranslation * scale * -1.0f;
             }
 
-            return AssetsImportingManager::Import(context.InputPath, outputPath, &splitOptions);
+            Guid splitAssetID = Guid::New();
+            return GeneratedAssetBuilder::BuildFromSource(&ImportModel::Import, context.InputPath, outputPath, StringView::Empty, splitAssetID, &splitOptions);
         };
         auto splitOptions = options;
         LOG(Info, "Splitting imported {0} meshes", meshesByName.Count());
@@ -389,7 +390,8 @@ CreateAssetResult ImportModel::Import(CreateAssetContext& context)
             if (splitPos != -1)
                 postFix = postFix.Substring(splitPos + 1);
             const String outputPath = String(StringUtils::GetPathWithoutExtension(context.TargetAssetPath)) + TEXT(" ") + postFix + TEXT(".flax");
-            return AssetsImportingManager::Import(context.InputPath, outputPath, &splitOptions);
+            Guid splitAssetID = Guid::New();
+            return GeneratedAssetBuilder::BuildFromSource(&ImportModel::Import, context.InputPath, outputPath, StringView::Empty, splitAssetID, &splitOptions);
         });
         auto splitOptions = options;
         switch (options.Type)
@@ -596,7 +598,6 @@ CreateAssetResult ImportModel::Import(CreateAssetContext& context)
     JsonWriter& importOptionsMeta = importOptionsMetaObj;
     importOptionsMeta.StartObject();
     {
-        context.AddMeta(importOptionsMeta);
         options.Serialize(importOptionsMeta, nullptr);
     }
     importOptionsMeta.EndObject();
@@ -898,7 +899,7 @@ CreateAssetResult ImportModel::CreatePrefab(CreateAssetContext& context, const M
         // Add script with import options
         auto* modelPrefabScript = New<ModelPrefab>();
         modelPrefabScript->SetParent(rootActor);
-        modelPrefabScript->ImportPath = AssetsImportingManager::GetImportPath(context.InputPath);
+        modelPrefabScript->ImportPath = GeneratedAssetBuilder::GetSourceReference(context.InputPath);
         modelPrefabScript->ImportOptions = options;
 
         // Link with existing prefab instance

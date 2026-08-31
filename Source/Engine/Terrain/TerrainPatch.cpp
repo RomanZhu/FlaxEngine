@@ -26,7 +26,10 @@
 #include "Engine/Serialization/MemoryWriteStream.h"
 #if USE_EDITOR
 #include "Editor/Editor.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
+#include "Engine/ContentImporters/ImportTexture.h"
+#include "Engine/ContentImporters/CreateRawData.h"
+#include "Engine/Content/Assets/RawDataAsset.h"
 #endif
 #include "Engine/Debug/DebugDraw.h"
 #endif
@@ -968,12 +971,12 @@ bool TerrainPatch::SetupHeightMap(int32 heightMapLength, const float* heightMap,
     {
         // Import data to the asset file
         Guid id = Guid::New();
-        if (AssetsImportingManager::Create(AssetsImportingManager::CreateTextureAsInitDataTag, heightMapPath, id, initData))
+        if (GeneratedAssetBuilder::Build(&ImportTexture::ImportAsInitData, heightMapPath, Texture::TypeName, id, initData))
         {
             LOG(Error, "Cannot import generated heightmap texture asset.");
             return true;
         }
-        Heightmap = Content::LoadAsync<Texture>(id);
+        Heightmap = Content::LoadRuntimeObjectAsync<Texture>(id);
         if (Heightmap == nullptr)
         {
             LOG(Error, "Cannot load generated heightmap texture asset.");
@@ -1029,12 +1032,12 @@ bool TerrainPatch::SetupHeightMap(int32 heightMapLength, const float* heightMap,
         Guid id = Guid::New();
         BytesContainer bytesContainer;
         bytesContainer.Link(tmpData.Get(), tmpData.Count());
-        if (AssetsImportingManager::Create(AssetsImportingManager::CreateRawDataTag, heightFieldPath, id, &bytesContainer))
+        if (GeneratedAssetBuilder::Build(&CreateRawData::Create, heightFieldPath, RawDataAsset::TypeName, id, &bytesContainer))
         {
             LOG(Error, "Cannot import generated heightfield collision asset.");
             return true;
         }
-        _heightfield = Content::LoadAsync<RawDataAsset>(id);
+        _heightfield = Content::LoadRuntimeObjectAsync<RawDataAsset>(id);
         if (_heightfield == nullptr)
         {
             LOG(Error, "Cannot load generated heightfield collision asset.");
@@ -1185,12 +1188,12 @@ bool TerrainPatch::SetupSplatMap(int32 index, int32 splatMapLength, const Color3
     {
         // Import data to the asset file
         Guid id = Guid::New();
-        if (AssetsImportingManager::Create(AssetsImportingManager::CreateTextureAsInitDataTag, splatMapPath, id, initData))
+        if (GeneratedAssetBuilder::Build(&ImportTexture::ImportAsInitData, splatMapPath, Texture::TypeName, id, initData))
         {
             LOG(Error, "Cannot import generated splatmap texture asset.");
             return true;
         }
-        splatmapAsset = Content::LoadAsync<Texture>(id);
+        splatmapAsset = Content::LoadRuntimeObjectAsync<Texture>(id);
         if (splatmapAsset == nullptr)
         {
             LOG(Error, "Cannot load generated splatmap texture asset.");
@@ -1746,12 +1749,12 @@ bool TerrainPatch::ModifySplatMap(int32 index, const Color32* samples, const Int
 
             // Import data to the asset file
             Guid id = Guid::New();
-            if (AssetsImportingManager::Create(AssetsImportingManager::CreateTextureAsInitDataTag, splatMapPath, id, dataSplatmap))
+            if (GeneratedAssetBuilder::Build(&ImportTexture::ImportAsInitData, splatMapPath, Texture::TypeName, id, dataSplatmap))
             {
                 LOG(Error, "Cannot import generated splatmap texture asset.");
                 return true;
             }
-            splatmap = Content::LoadAsync<Texture>(id);
+            splatmap = Content::LoadRuntimeObjectAsync<Texture>(id);
             if (splatmap == nullptr)
             {
                 LOG(Error, "Cannot load generated splatmap texture asset.");

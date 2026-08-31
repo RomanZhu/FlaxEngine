@@ -204,7 +204,6 @@ CreateAssetResult ImportTexture::Create(CreateAssetContext& context, const Textu
     CompactJsonWriter importOptionsMeta(importOptionsMetaBuffer);
     importOptionsMeta.StartObject();
     {
-        context.AddMeta(importOptionsMeta);
         options.Serialize(importOptionsMeta, nullptr);
     }
     importOptionsMeta.EndObject();
@@ -338,7 +337,6 @@ CreateAssetResult ImportTexture::Create(CreateAssetContext& context, const Textu
     CompactJsonWriter importOptionsMeta(importOptionsMetaBuffer);
     importOptionsMeta.StartObject();
     {
-        context.AddMeta(importOptionsMeta);
         options.Serialize(importOptionsMeta, nullptr);
     }
     importOptionsMeta.EndObject();

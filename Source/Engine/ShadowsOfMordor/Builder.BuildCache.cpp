@@ -4,7 +4,7 @@
 #include "Engine/Level/Scene/Lightmap.h"
 #include "Engine/Level/Scene/Scene.h"
 #include "Engine/Content/Content.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
 #include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Graphics/GPUBuffer.h"
@@ -135,7 +135,7 @@ void ShadowsOfMordor::Builder::SceneBuildCache::UpdateLightmaps()
             ImportLightmapIndex = lightmapIndex;
             ImportLightmapTextureIndex = textureIndex;
             options.InternalLoad.Bind<SceneBuildCache, &SceneBuildCache::onImportLightmap>(this);
-            if (AssetsImportingManager::Create(AssetsImportingManager::CreateTextureTag, assetPath, id, &options))
+            if (GeneratedAssetBuilder::Build(&ImportTexture::Import, assetPath, Texture::TypeName, id, &options))
             {
                 LOG(Error, "Cannot create new lightmap {0}:{1}", lightmapIndex, textureIndex);
                 return;

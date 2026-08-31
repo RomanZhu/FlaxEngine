@@ -14,7 +14,9 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Physics/CollisionData.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
+#include "Engine/ContentImporters/ImportModel.h"
+#include "Engine/ContentImporters/CreateRawData.h"
 #include "Engine/ContentImporters/CreateCollisionData.h"
 #include "Engine/Content/Assets/RawDataAsset.h"
 #include "Engine/Engine/Engine.h"
@@ -272,7 +274,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 if (!modelDataAssetId.IsValid())
                     modelDataAssetId = Guid::New();
                 const String modelDataAssetPath = sceneDataFolderPath / TEXT("CSG_Mesh") + ASSET_FILES_EXTENSION_WITH_DOT;
-                if (AssetsImportingManager::Create(AssetsImportingManager::CreateModelTag, modelDataAssetPath, modelDataAssetId, &modelData))
+                if (GeneratedAssetBuilder::Build(&ImportModel::Create, modelDataAssetPath, Model::TypeName, modelDataAssetId, &modelData))
                 {
                     LOG(Warning, "Failed to import CSG mesh data");
                     return true;
@@ -326,7 +328,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 if (!collisionDataAssetId.IsValid())
                     collisionDataAssetId = Guid::New();
                 const String collisionDataAssetPath = sceneDataFolderPath / TEXT("CSG_Collision") + ASSET_FILES_EXTENSION_WITH_DOT;
-                if (AssetsImportingManager::Create(AssetsImportingManager::CreateCollisionDataTag, collisionDataAssetPath, collisionDataAssetId, &arg))
+                if (GeneratedAssetBuilder::Build(&CreateCollisionData::Create, collisionDataAssetPath, CollisionData::TypeName, collisionDataAssetId, &arg))
                 {
                     LOG(Warning, "Failed to cook CSG mesh collision data");
                     return true;
@@ -425,7 +427,7 @@ bool CSGBuilderImpl::generateRawDataAsset(RawData& meshData, Guid& assetId, cons
     // Serialize
     BytesContainer bytesContainer;
     bytesContainer.Link(ToSpan(stream));
-    return AssetsImportingManager::Create(AssetsImportingManager::CreateRawDataTag, assetPath, assetId, (void*)&bytesContainer);
+    return GeneratedAssetBuilder::Build(&CreateRawData::Create, assetPath, RawDataAsset::TypeName, assetId, &bytesContainer);
 }
 
 #endif

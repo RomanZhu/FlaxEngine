@@ -5,7 +5,7 @@
 #include "Editor/ProjectInfo.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/WindowsManager.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
 #include "Engine/ContentExporters/AssetsExportingManager.h"
 #include "Editor/CustomEditors/CustomEditorsUtil.h"
 #include "Engine/Scripting/Scripting.h"
@@ -21,8 +21,9 @@
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/VisualScript.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
+#include "Engine/Content/Importing/AssetImportService.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Content/Documents/AssetSourceFactory.h"
 #include "Engine/Content/Documents/GraphDocument.h"
@@ -251,10 +252,30 @@ DEFINE_INTERNAL_CALL(MString*) EditorInternal_CanImport(MString* extensionObj)
 {
     String extension;
     MUtils::ToString(extensionObj, extension);
-    if (extension.Length() > 0 && extension[0] == '.')
-        extension.Remove(0, 1);
-    const AssetImporter* importer = AssetsImportingManager::GetImporter(extension);
-    return importer ? MUtils::ToString(importer->ResultExtension) : nullptr;
+    extension.ToLower();
+    if (extension.HasChars() && extension[0] != '.')
+        extension = TEXT(".") + extension;
+    if (!AssetImportService::IsInitialized() || extension.IsEmpty())
+        return nullptr;
+
+    Array<AssetImporterDescriptor> importers;
+    AssetImportService::GetImporterRegistry()->GetDescriptors(importers);
+    const String sourceProbe = TEXT("source") + extension;
+    for (const AssetImporterDescriptor& importer : importers)
+    {
+        bool matches = false;
+        for (const String& candidate : importer.Extensions)
+        {
+            if (candidate.Compare(extension, StringSearchCase::IgnoreCase) == 0)
+            {
+                matches = true;
+                break;
+            }
+        }
+        if (matches && (!importer.MatchesSource.IsBinded() || importer.MatchesSource(sourceProbe)))
+            return MUtils::ToString(extension.Substring(1));
+    }
+    return nullptr;
 }
 
 DEFINE_INTERNAL_CALL(void) EditorInternal_GetAudioClipMetadata(AudioClip* clip, int32* originalSize, int32* importedSize)
@@ -392,7 +413,7 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CookMeshCollision(MString* pathObj, Co
     MUtils::ToString(pathObj, path);
     FileSystem::NormalizePath(path);
     if (FileSystem::GetExtension(path).ToLower() == TEXT("collisiondata"))
-        return AssetDatabaseFacade::SaveCollisionDataDocument(path, type, modelObj->GetID(), modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit);
+        return AuthoredAssetDocumentService::SaveCollisionData(path, type, modelObj->GetID(), modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit);
     arg.Type = type;
     arg.Model = modelObj;
     arg.ModelLodIndex = modelLodIndex;
@@ -422,7 +443,7 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_GetCollisionDataOptions(MString* pathO
     if (FileSystem::GetExtension(path).ToLower() == TEXT("collisiondata"))
     {
         CollisionData::SerializedOptions options;
-        if (AssetDatabaseFacade::LoadCollisionDataDocument(path, options))
+        if (AuthoredAssetDocumentService::LoadCollisionData(path, options))
             return false;
         *type = options.Type;
         *model = options.Model;
@@ -495,7 +516,7 @@ DEFINE_INTERNAL_CALL(void) EditorInternal_SetOptions(ManagedEditor::InternalOpti
     ManagedEditor::ManagedEditorOptions = *options;
 
     // Apply options
-    AssetsImportingManager::UseImportPathRelative = ManagedEditor::ManagedEditorOptions.UseAssetImportPathRelative != 0;
+    GeneratedAssetBuilder::UseRelativeSourcePaths = ManagedEditor::ManagedEditorOptions.UseAssetImportPathRelative != 0;
 }
 
 DEFINE_INTERNAL_CALL(void) EditorInternal_DrawNavMesh()
@@ -703,7 +724,7 @@ bool ManagedEditor::Import(String inputPath, String outputPath, void* arg)
 {
     FileSystem::NormalizePath(inputPath);
     FileSystem::NormalizePath(outputPath);
-    return AssetsImportingManager::Import(inputPath, outputPath, arg);
+    return AssetOperationService::ImportAsset(inputPath, outputPath);
 }
 
 bool ManagedEditor::Import(const String& inputPath, const String& outputPath, const TextureTool::Options& options)
@@ -715,7 +736,7 @@ bool ManagedEditor::TryRestoreImportOptions(TextureTool::Options& options, Strin
 {
     FileSystem::NormalizePath(assetPath);
     if (FileSystem::FileExists(assetPath + TEXT(".meta")))
-        return !AssetDatabaseFacade::LoadTextureMetadata(assetPath, options);
+        return !TextureImporterService::LoadMetadata(assetPath, options);
     return ImportTexture::TryGetImportOptions(assetPath, options);
 }
 
@@ -733,7 +754,7 @@ bool ManagedEditor::TryRestoreImportOptions(ModelTool::Options& options, String 
     }
     FileSystem::NormalizePath(assetPath);
     if (FileSystem::FileExists(assetPath + TEXT(".meta")))
-        return !AssetDatabaseFacade::LoadModelMetadata(assetPath, options);
+        return !ModelImporterService::LoadMetadata(assetPath, options);
     return ImportModel::TryGetImportOptions(assetPath, options);
 }
 
@@ -746,14 +767,50 @@ bool ManagedEditor::TryRestoreImportOptions(AudioTool::Options& options, String 
 {
     FileSystem::NormalizePath(assetPath);
     if (FileSystem::FileExists(assetPath + TEXT(".meta")))
-        return !AssetDatabaseFacade::LoadAudioMetadata(assetPath, options);
+        return !AudioImporterService::LoadMetadata(assetPath, options);
     return ImportAudio::TryGetImportOptions(assetPath, options);
 }
 
 bool ManagedEditor::CreateAsset(const String& tag, String outputPath)
 {
     FileSystem::NormalizePath(outputPath);
-    return AssetsImportingManager::Create(tag, outputPath);
+    String typeName;
+    bool authored = false;
+    if (tag == TEXT("Material"))
+        typeName = TEXT("FlaxEngine.Material");
+    else if (tag == TEXT("MaterialInstance"))
+        typeName = TEXT("FlaxEngine.MaterialInstance"), authored = true;
+    else if (tag == TEXT("CollisionData"))
+        typeName = TEXT("FlaxEngine.CollisionData"), authored = true;
+    else if (tag == TEXT("AnimationGraph"))
+        typeName = TEXT("FlaxEngine.AnimationGraph");
+    else if (tag == TEXT("SkeletonMask"))
+        typeName = TEXT("FlaxEngine.SkeletonMask"), authored = true;
+    else if (tag == TEXT("ParticleEmitter"))
+        typeName = TEXT("FlaxEngine.ParticleEmitter");
+    else if (tag == TEXT("ParticleSystem"))
+        typeName = TEXT("FlaxEngine.ParticleSystem"), authored = true;
+    else if (tag == TEXT("SceneAnimation"))
+        typeName = TEXT("FlaxEngine.SceneAnimation"), authored = true;
+    else if (tag == TEXT("MaterialFunction"))
+        typeName = TEXT("FlaxEngine.MaterialFunction");
+    else if (tag == TEXT("ParticleEmitterFunction"))
+        typeName = TEXT("FlaxEngine.ParticleEmitterFunction");
+    else if (tag == TEXT("AnimationGraphFunction"))
+        typeName = TEXT("FlaxEngine.AnimationGraphFunction");
+    else if (tag == TEXT("BehaviorTree"))
+        typeName = TEXT("FlaxEngine.BehaviorTree");
+    else
+    {
+        LOG(Error, "No canonical source factory owns asset tag '{0}'.", tag);
+        return true;
+    }
+
+    if (authored)
+        return !AuthoredAssetDocumentService::Create(outputPath, typeName).IsValid();
+    const Guid id = AssetDocumentService::CreateGraphSource(outputPath, typeName);
+    return !id.IsValid() || AssetPipelineService::ImportAsset(outputPath,
+        ImportAssetOptions::ForceUpdate | ImportAssetOptions::ForceSynchronousImport);
 }
 
 Array<Guid> ManagedEditor::GetAssetReferences(const Guid& assetId)

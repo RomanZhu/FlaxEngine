@@ -106,7 +106,7 @@ bool CreateJson::Create(const StringView& path, const StringAnsiView& data, cons
     }
     else
     {
-        Content::GetObjectRegistry()->RegisterTransientObject(id, dataTypename, path);
+        Content::GetObjectRegistry()->RegisterTransientObject(id, String(dataTypename), path);
     }
 
     return false;

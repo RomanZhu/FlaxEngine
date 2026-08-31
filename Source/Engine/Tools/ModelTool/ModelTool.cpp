@@ -37,7 +37,8 @@
 #include "Engine/Graphics/Models/SkeletonUpdater.h"
 #include "Engine/Graphics/Models/SkeletonMapping.h"
 #include "Engine/Tools/TextureTool/TextureTool.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
+#include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/ContentImporters/CreateMaterial.h"
 #include "Engine/ContentImporters/CreateMaterialInstance.h"
 #include "Engine/ContentImporters/CreateCollisionData.h"
@@ -1375,7 +1376,7 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
             textureOptions.sRGB = false;
             break;
         }
-        AssetsImportingManager::ImportIfEdited(texture.FilePath, assetPath, texture.AssetID, &textureOptions);
+        GeneratedAssetBuilder::BuildFromSourceIfModified(&ImportTexture::Import, texture.FilePath, assetPath, Texture::TypeName, texture.AssetID, &textureOptions);
 #endif
     }
 
@@ -1421,7 +1422,7 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
         if (options.ImportMaterialsAsInstances)
         {
             // Create material instance
-            AssetsImportingManager::Create(AssetsImportingManager::CreateMaterialInstanceTag, assetPath, material.AssetID);
+            GeneratedAssetBuilder::Build(&CreateMaterialInstance::Create, assetPath, MaterialInstance::TypeName, material.AssetID);
             if (auto* materialInstance = Content::Load<MaterialInstance>(assetPath))
             {
                 materialInstance->SetBaseMaterial(options.InstanceToImportAs);
@@ -1490,7 +1491,7 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
                 materialOptions.Info.FeaturesFlags |= MaterialFeaturesFlags::Wireframe;
             if (!Math::IsOne(material.Opacity.Value) || material.Opacity.TextureIndex != -1)
                 materialOptions.Info.BlendMode = MaterialBlendMode::Transparent;
-            AssetsImportingManager::Create(AssetsImportingManager::CreateMaterialTag, assetPath, material.AssetID, &materialOptions);
+            GeneratedAssetBuilder::Build(&CreateMaterial::Create, assetPath, Material::TypeName, material.AssetID, &materialOptions);
         }
 #endif
     }

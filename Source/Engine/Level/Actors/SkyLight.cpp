@@ -10,7 +10,8 @@
 #include "Engine/Renderer/ProbesRenderer.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Serialization/Serialization.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
+#include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Graphics/RenderTools.h"
 #include "Engine/Level/Scene/Scene.h"
 
@@ -73,7 +74,7 @@ void SkyLight::SetProbeData(TextureData& data)
     AssetInfo info;
     if (FileSystem::FileExists(path) && Content::GetAssetInfo(path, info))
         id = info.ID;
-    if (AssetsImportingManager::Create(AssetsImportingManager::CreateCubeTextureTag, path, id, &data))
+    if (GeneratedAssetBuilder::Build(&ImportTexture::ImportCube, path, CubeTexture::TypeName, id, &data))
     {
         LOG(Error, "Cannot import generated sky light!");
         return;

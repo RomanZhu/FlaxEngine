@@ -31,7 +31,6 @@ typedef Function<CreateAssetResult(CreateAssetContext&)> CreateAssetFunction;
 class FLAXENGINE_API CreateAssetContext : public NonCopyable
 {
 private:
-    CreateAssetResult _applyChangesResult;
     bool _artifactStagingMode = false;
     Guid _intendedAssetID = Guid::Empty;
     String _intendedTypeName;
@@ -78,16 +77,7 @@ public:
     // TODO: add cancellation feature - so progress can be aborted on demand
 
 public:
-    /// <summary>
-    /// Initializes a new instance of the <see cref="CreateAssetContext"/> class.
-    /// </summary>
-    /// <param name="inputPath">The input path.</param>
-    /// <param name="outputPath">The output path.</param>
-    /// <param name="id">The identifier.</param>
-    /// <param name="arg">The custom argument.</param>
-    CreateAssetContext(const StringView& inputPath, const StringView& outputPath, const Guid& id, void* arg);
-
-    /// <summary>Creates a compatibility importer context that can publish only to a staging file.</summary>
+    /// <summary>Creates an importer context that can publish only to a staging file.</summary>
     CreateAssetContext(const StringView& inputPath, const StringView& outputPath, const Guid& id, void* arg, bool artifactStagingMode, const StringView& intendedTypeName);
 
     /// <summary>
@@ -113,53 +103,6 @@ public:
     /// <returns>True if cannot allocate it.</returns>
     bool AllocateChunk(int32 index);
 
-    /// <summary>
-    /// Adds the meta to the writer.
-    /// </summary>
-    /// <param name="writer">The json metadata writer.</param>
-    void AddMeta(JsonWriter& writer) const;
-
-private:
-    void ApplyChanges();
-};
-
-/// <summary>
-/// Asset importer entry
-/// </summary>
-struct FLAXENGINE_API AssetImporter
-{
-public:
-    /// <summary>
-    /// Extension of the file to import with that importer (without leading dot).
-    /// </summary>
-    String FileExtension;
-
-    /// <summary>
-    /// Extension of the output file as output with that importer (without leading dot).
-    /// </summary>
-    String ResultExtension;
-
-    /// <summary>
-    /// Callback for the asset importing process.
-    /// </summary>
-    CreateAssetFunction Callback;
-};
-
-/// <summary>
-/// Asset creator entry
-/// </summary>
-struct FLAXENGINE_API AssetCreator
-{
-public:
-    /// <summary>
-    /// Asset creators are identifiable by tag
-    /// </summary>
-    String Tag;
-
-    /// <summary>
-    /// Call asset creating process
-    /// </summary>
-    CreateAssetFunction Callback;
 };
 
 #define IMPORT_SETUP(type, serializedVersion) context.Data.Header.TypeName = type::TypeName; context.Data.SerializedVersion = serializedVersion;

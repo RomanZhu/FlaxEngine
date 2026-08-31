@@ -34,7 +34,7 @@ GPU_CB_STRUCT(Data {
 #include "Engine/Core/Math/Math.h"
 #include "Engine/Graphics/Textures/TextureData.h"
 #include "Engine/ContentImporters/ImportTexture.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
 
 namespace PreIntegratedGF
 {
@@ -144,7 +144,7 @@ namespace PreIntegratedGF
         options.Compress = false;
         options.InternalLoad.Bind(&OnGenerate);
         const String path = Globals::EngineContentFolder / PRE_INTEGRATED_GF_ASSET_NAME + ASSET_FILES_EXTENSION_WITH_DOT;
-        AssetsImportingManager::Create(AssetsImportingManager::CreateTextureTag, path, id, &options);
+        GeneratedAssetBuilder::Build(&ImportTexture::Import, path, Texture::TypeName, id, &options);
 	}
 };
 
