@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "SourceAssetDatabase.h"
+#include "NormalizedAssetDatabaseStore.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Platform/File.h"
@@ -65,21 +66,6 @@ namespace
         return File::WriteAllBytes(staging, data, length) || AtomicReplace(path, staging);
     }
 
-    bool SaveSnapshot(const StringView& path, const SourceAssetDatabaseState& state, AssetPipelineDiagnostic& diagnostic)
-    {
-        Array<byte> payload;
-        state.Serialize(payload);
-        SnapshotHeader header = { SnapshotMagic, SnapshotVersion, (uint32)payload.Count(), Crc::MemCrc32(payload.Get(), payload.Count()) };
-        Array<byte> file;
-        file.Resize(sizeof(header) + payload.Count(), false);
-        Platform::MemoryCopy(file.Get(), &header, sizeof(header));
-        if (payload.HasItems())
-            Platform::MemoryCopy(file.Get() + sizeof(header), payload.Get(), payload.Count());
-        if (WriteAtomic(path, file.Get(), file.Count()))
-            return Fail(diagnostic, path, TEXT("Cannot atomically write the source asset database snapshot."));
-        return false;
-    }
-
     bool LoadSnapshot(const StringView& path, SourceAssetDatabaseState& state, AssetPipelineDiagnostic& diagnostic)
     {
         Array<byte> file;
@@ -92,23 +78,6 @@ namespace
             header.PayloadCrc != Crc::MemCrc32(file.Get() + sizeof(header), header.PayloadSize))
             return Fail(diagnostic, path, TEXT("Source asset database snapshot version or checksum is invalid."));
         return SourceAssetDatabaseState::Deserialize(file.Get() + sizeof(header), header.PayloadSize, state, diagnostic);
-    }
-
-    bool SaveWal(const StringView& path, const SourceAssetDatabaseState& state, const AssetChangeSet& changes, AssetPipelineDiagnostic& diagnostic)
-    {
-        Array<byte> statePayload, changePayload;
-        state.Serialize(statePayload);
-        changes.Serialize(changePayload);
-        WalHeader header = { WalMagic, WalVersion, (uint32)statePayload.Count(), (uint32)changePayload.Count(),
-            Crc::MemCrc32(statePayload.Get(), statePayload.Count()), Crc::MemCrc32(changePayload.Get(), changePayload.Count()) };
-        Array<byte> file;
-        file.Resize(sizeof(header) + statePayload.Count() + changePayload.Count(), false);
-        Platform::MemoryCopy(file.Get(), &header, sizeof(header));
-        Platform::MemoryCopy(file.Get() + sizeof(header), statePayload.Get(), statePayload.Count());
-        Platform::MemoryCopy(file.Get() + sizeof(header) + statePayload.Count(), changePayload.Get(), changePayload.Count());
-        if (WriteAtomic(path, file.Get(), file.Count()))
-            return Fail(diagnostic, path, TEXT("Cannot atomically write the source asset database WAL."));
-        return false;
     }
 
     bool LoadWal(const StringView& path, SourceAssetDatabaseState& state, AssetChangeSet& changes, AssetPipelineDiagnostic& diagnostic)
@@ -144,73 +113,175 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
         return Fail(diagnostic, libraryPath, TEXT("Source asset database requires a valid project identity."));
     Close();
     _directory = String(libraryPath) / TEXT("AssetDatabase");
-    _snapshotPath = _directory / TEXT("source-database.bin");
-    _walPath = _directory / TEXT("source-database.wal");
+    _manifestPath = NormalizedAssetDatabaseStore::GetManifestPath(_directory);
+    _walPath = NormalizedAssetDatabaseStore::GetWalPath(_directory);
     _journalPath = _directory / TEXT("source-changes.log");
+    _sessionMarkerPath = _directory / TEXT("unclean-session.marker");
     if ((!FileSystem::DirectoryExists(_directory) && FileSystem::CreateDirectory(_directory)) || FileSystem::FileExists(_directory))
         return Fail(diagnostic, _directory, TEXT("Cannot create the source asset database directory."), AssetPipelineDiagnosticCode::LibraryCreationFailed);
 
-    SourceAssetDatabaseState state;
-    AssetChangeSet walChanges;
-    SourceAssetDatabaseState walState;
-    const bool hasSnapshot = FileSystem::FileExists(_snapshotPath);
-    const bool hasWal = FileSystem::FileExists(_walPath);
-    bool stateFromWal = false;
-    if (hasSnapshot && LoadSnapshot(_snapshotPath, state, diagnostic))
+    const String writerLockPath = _directory / TEXT("writer.lock");
+    _writerLock = File::Open(writerLockPath, FileMode::OpenAlways, FileAccess::ReadWrite, FileShare::None);
+    if (!_writerLock)
+        return Fail(diagnostic, writerLockPath, TEXT("Another process owns the source asset database writer."));
+    bool opened = false;
+    SCOPE_EXIT
     {
-        if (!hasWal || LoadWal(_walPath, walState, walChanges, diagnostic))
-            return true;
-        state = walState;
-        stateFromWal = true;
-    }
-    else if (!hasSnapshot)
-    {
-        if (hasWal)
+        if (!opened)
         {
-            if (LoadWal(_walPath, state, walChanges, diagnostic))
-                return true;
-            walState = state;
-            stateFromWal = true;
+            Delete(_writerLock);
+            _writerLock = nullptr;
         }
-        else
+    };
+
+    SourceAssetDatabaseState state;
+    if (FileSystem::FileExists(_manifestPath))
+    {
+        if (NormalizedAssetDatabaseStore::LoadCheckpoint(_directory, projectId, state, _checkpointGeneration, diagnostic))
+            return true;
+    }
+    else
+    {
+        // One-time migration from the v2 replacement-image store. It is never used after the
+        // normalized manifest has been atomically published.
+        const String legacySnapshotPath = _directory / TEXT("source-database.bin");
+        const String legacyWalPath = _directory / TEXT("source-database.wal");
+        if (FileSystem::FileExists(legacySnapshotPath) && LoadSnapshot(legacySnapshotPath, state, diagnostic))
+            return true;
+        if (!FileSystem::FileExists(legacySnapshotPath))
         {
             state.Database.ProjectId = projectId;
             state.Database.CleanShutdown = true;
         }
-    }
-    if (state.Database.ProjectId != projectId)
-        return Fail(diagnostic, _snapshotPath, TEXT("Source asset database belongs to another project."));
-
-    const uint64 journalBase = stateFromWal && state.Database.CurrentRevision ? state.Database.CurrentRevision - 1 : state.Database.CurrentRevision;
-    if (_journal.Open(_journalPath, journalBase, diagnostic))
-        return true;
-    if (hasWal && !stateFromWal && LoadWal(_walPath, walState, walChanges, diagnostic))
-        return true;
-    if (hasWal)
-    {
-        if (walState.Database.ProjectId != projectId || walState.Database.CurrentRevision < state.Database.CurrentRevision ||
-            walState.Database.CurrentRevision > state.Database.CurrentRevision + (stateFromWal ? 0 : 1))
-            return Fail(diagnostic, _walPath, TEXT("Source asset database WAL revision is inconsistent with the snapshot."));
-        if (_journal.GetLastRevision() < walChanges.Revision && _journal.Append(walChanges, diagnostic))
+        if (FileSystem::FileExists(legacyWalPath))
+        {
+            SourceAssetDatabaseState legacyWalState;
+            AssetChangeSet legacyChanges;
+            if (LoadWal(legacyWalPath, legacyWalState, legacyChanges, diagnostic))
+                return true;
+            if (legacyWalState.Database.CurrentRevision >= state.Database.CurrentRevision)
+                state = MoveTemp(legacyWalState);
+        }
+        state.Database.SchemaVersion = AssetDatabaseSchema::Version;
+        if (state.Database.ProjectId != projectId)
+            return Fail(diagnostic, legacySnapshotPath, TEXT("Source asset database belongs to another project."));
+        if (NormalizedAssetDatabaseStore::SaveCheckpoint(_directory, state, _checkpointGeneration, diagnostic))
             return true;
-        if (SaveSnapshot(_snapshotPath, walState, diagnostic))
-            return true;
-        state = walState;
-        FileSystem::DeleteFile(_walPath);
-    }
-    else if (_journal.GetLastRevision() != state.Database.CurrentRevision &&
-        _journal.Reset(state.Database.CurrentRevision, diagnostic))
-    {
-        return true;
     }
 
-    _lastShutdownWasClean = state.Database.CleanShutdown;
+    _lastShutdownWasClean = state.Database.CleanShutdown && !FileSystem::FileExists(_sessionMarkerPath);
+    const uint64 checkpointRevision = state.Database.CurrentRevision;
+    Array<NormalizedAssetDatabaseWalRecord> walRecords;
+    if (NormalizedAssetDatabaseStore::OpenWal(_walPath, projectId, checkpointRevision, _walBaseRevision,
+        _walLastRevision, walRecords, diagnostic))
+        return true;
+
+    for (const NormalizedAssetDatabaseWalRecord& record : walRecords)
+    {
+        if (record.BaseRevision != state.Database.CurrentRevision)
+            return Fail(diagnostic, _walPath, TEXT("Normalized source database WAL transaction conflicts with its checkpoint."));
+        AssetDatabaseTransaction replay(this, state);
+        for (const AssetDatabaseMutation& mutation : record.Mutations)
+        {
+            SourceAssetDatabaseState payload;
+            if (mutation.Payload.HasItems() && SourceAssetDatabaseState::Deserialize(mutation.Payload.Get(),
+                mutation.Payload.Count(), payload, diagnostic, false))
+                return Fail(diagnostic, _walPath, TEXT("Normalized source database WAL row payload is invalid."));
+            switch (mutation.Kind)
+            {
+            case AssetDatabaseMutationKind::SetLastCompleteScanId:
+                replay.SetLastCompleteScanId(mutation.Value);
+                break;
+            case AssetDatabaseMutationKind::SetImporterRegistryGeneration:
+                replay.SetImporterRegistryGeneration(mutation.Value);
+                break;
+            case AssetDatabaseMutationKind::UpsertSource:
+                if (!payload.Sources.HasItems()) return Fail(diagnostic, _walPath, TEXT("WAL source upsert payload is empty."));
+                replay.UpsertSource(payload.Sources[0]);
+                break;
+            case AssetDatabaseMutationKind::RemoveSource:
+                replay.RemoveSource(mutation.Key);
+                break;
+            case AssetDatabaseMutationKind::ReplaceObjects:
+                replay.ReplaceObjects(mutation.Key, payload.Objects);
+                break;
+            case AssetDatabaseMutationKind::ReplaceDependencies:
+                if (mutation.LocalFileId)
+                    replay.ReplaceDependencies(mutation.Key, mutation.LocalFileId, mutation.TargetId, payload.Dependencies);
+                else
+                    replay.ReplaceDependencies(mutation.Key, mutation.TargetId, payload.Dependencies);
+                break;
+            case AssetDatabaseMutationKind::UpsertPublication:
+                if (!payload.Publications.HasItems()) return Fail(diagnostic, _walPath, TEXT("WAL publication payload is empty."));
+                replay.UpsertPublication(payload.Publications[0]);
+                break;
+            case AssetDatabaseMutationKind::ReplaceDiagnostics:
+                replay.ReplaceDiagnostics(mutation.Key, payload.Diagnostics);
+                break;
+            case AssetDatabaseMutationKind::UpsertImportTarget:
+                if (!payload.ImportTargets.HasItems()) return Fail(diagnostic, _walPath, TEXT("WAL import target payload is empty."));
+                replay.UpsertImportTarget(payload.ImportTargets[0]);
+                break;
+            case AssetDatabaseMutationKind::ReplaceArtifactObjects:
+                replay.ReplaceArtifactObjects(mutation.Artifact, payload.ArtifactObjects);
+                break;
+            case AssetDatabaseMutationKind::SetLabels:
+            {
+                Array<String> labels;
+                for (const SourceAssetLabelRow& row : payload.Labels)
+                    labels.Add(row.Label);
+                replay.SetLabels(mutation.Key, labels);
+                break;
+            }
+            case AssetDatabaseMutationKind::AppendFileJournal:
+                if (!payload.FileJournal.HasItems()) return Fail(diagnostic, _walPath, TEXT("WAL file journal payload is empty."));
+                replay.AppendFileJournal(payload.FileJournal[0]);
+                break;
+            case AssetDatabaseMutationKind::UpsertRefreshSession:
+                if (!payload.RefreshSessions.HasItems()) return Fail(diagnostic, _walPath, TEXT("WAL refresh session payload is empty."));
+                replay.UpsertRefreshSession(payload.RefreshSessions[0]);
+                break;
+            case AssetDatabaseMutationKind::UpsertImportAttempt:
+                if (!payload.ImportAttempts.HasItems()) return Fail(diagnostic, _walPath, TEXT("WAL import attempt payload is empty."));
+                replay.UpsertImportAttempt(payload.ImportAttempts[0]);
+                break;
+            case AssetDatabaseMutationKind::UpsertCustomDependency:
+                if (!payload.CustomDependencies.HasItems()) return Fail(diagnostic, _walPath, TEXT("WAL custom dependency payload is empty."));
+                replay.UpsertCustomDependency(payload.CustomDependencies[0]);
+                break;
+            case AssetDatabaseMutationKind::RemoveCustomDependency:
+                replay.RemoveCustomDependency(mutation.TargetId);
+                break;
+            }
+        }
+        replay._state.Database.CurrentRevision = record.Revision;
+        replay._state.Database.CleanShutdown = false;
+        if (replay._state.Validate(diagnostic))
+            return true;
+        state = MoveTemp(replay._state);
+    }
+
+    if (_journal.Open(_journalPath, checkpointRevision, diagnostic))
+        return true;
+    if (_journal.GetLastRevision() > state.Database.CurrentRevision || _journal.GetLastRevision() < checkpointRevision)
+    {
+        if (_journal.Reset(checkpointRevision, diagnostic))
+            return true;
+    }
+    for (const NormalizedAssetDatabaseWalRecord& record : walRecords)
+        if (_journal.GetLastRevision() < record.Revision && _journal.Append(record.Changes, diagnostic))
+            return true;
+    if (_journal.GetLastRevision() != state.Database.CurrentRevision && _journal.Reset(state.Database.CurrentRevision, diagnostic))
+        return true;
+
     state.Database.CleanShutdown = false;
-    if (SaveSnapshot(_snapshotPath, state, diagnostic))
-        return true;
+    const byte marker = 1;
+    if (WriteAtomic(_sessionMarkerPath, &marker, sizeof(marker)))
+        return Fail(diagnostic, _sessionMarkerPath, TEXT("Cannot persist the source asset database session marker."));
     _state = std::make_shared<const SourceAssetDatabaseState>(MoveTemp(state));
     _open = true;
     _recoveryRequired = false;
+    opened = true;
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
@@ -224,16 +295,28 @@ bool SourceAssetDatabase::Close(AssetPipelineDiagnostic* diagnostic)
     {
         SourceAssetDatabaseState state = *_state;
         state.Database.CleanShutdown = true;
-        failed = SaveSnapshot(_snapshotPath, state, localDiagnostic);
+        failed = NormalizedAssetDatabaseStore::SaveCheckpoint(_directory, state, _checkpointGeneration, localDiagnostic);
+        if (!failed)
+            failed = NormalizedAssetDatabaseStore::ResetWal(_walPath, state.Database.ProjectId,
+                state.Database.CurrentRevision, localDiagnostic);
+        if (!failed)
+            FileSystem::DeleteFile(_sessionMarkerPath);
     }
     _state.reset();
     _journal.Close();
+    if (_writerLock)
+        Delete(_writerLock);
+    _writerLock = nullptr;
     _open = false;
     _recoveryRequired = false;
     _directory.Clear();
-    _snapshotPath.Clear();
+    _manifestPath.Clear();
     _walPath.Clear();
     _journalPath.Clear();
+    _sessionMarkerPath.Clear();
+    _checkpointGeneration = 0;
+    _walBaseRevision = 0;
+    _walLastRevision = 0;
     _locker.Unlock();
     if (diagnostic)
         *diagnostic = localDiagnostic;
@@ -289,23 +372,34 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
     if (!_open || !_state || _recoveryRequired || transaction._owner != this || transaction._baseRevision != _state->Database.CurrentRevision)
     {
         _locker.Unlock();
-        return Fail(diagnostic, _snapshotPath, TEXT("Source asset database transaction conflicts with a newer revision."));
+        return Fail(diagnostic, _manifestPath, TEXT("Source asset database transaction conflicts with a newer revision."));
     }
     transaction._changes.Revision = transaction._baseRevision + 1;
     transaction._state.Database.CurrentRevision = transaction._changes.Revision;
     transaction._state.Database.CleanShutdown = false;
-    if (transaction._state.Validate(diagnostic) || SaveWal(_walPath, transaction._state, transaction._changes, diagnostic))
+    if (transaction._state.Validate(diagnostic))
     {
         _locker.Unlock();
         return true;
     }
-    if (_journal.Append(transaction._changes, diagnostic) || SaveSnapshot(_snapshotPath, transaction._state, diagnostic))
+    NormalizedAssetDatabaseWalRecord record;
+    record.BaseRevision = transaction._baseRevision;
+    record.Revision = transaction._changes.Revision;
+    record.Mutations = transaction._mutations;
+    record.Changes = transaction._changes;
+    if (NormalizedAssetDatabaseStore::AppendWal(_walPath, transaction._state.Database.ProjectId,
+        _walLastRevision, record, diagnostic))
     {
         _recoveryRequired = true;
         _locker.Unlock();
         return true;
     }
-    FileSystem::DeleteFile(_walPath);
+    if (_journal.Append(transaction._changes, diagnostic))
+    {
+        _recoveryRequired = true;
+        _locker.Unlock();
+        return true;
+    }
     _state = std::make_shared<const SourceAssetDatabaseState>(transaction._state);
     const AssetChangeSet changes = transaction._changes;
     _locker.Unlock();

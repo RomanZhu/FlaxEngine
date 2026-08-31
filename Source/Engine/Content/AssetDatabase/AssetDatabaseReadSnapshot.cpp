@@ -114,3 +114,85 @@ void AssetDatabaseReadSnapshot::GetActiveDiagnostics(const Guid& assetGuid, Arra
         }
     }
 }
+
+bool AssetDatabaseReadSnapshot::TryGetImportTarget(const StringView& targetId, SourceAssetImportTargetRow& result) const
+{
+    if (_state)
+    {
+        for (const SourceAssetImportTargetRow& row : _state->ImportTargets)
+        {
+            if (row.TargetId == targetId)
+            {
+                result = row;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void AssetDatabaseReadSnapshot::GetArtifactObjects(const ArtifactKey& artifact, Array<SourceArtifactObjectRow>& result) const
+{
+    result.Clear();
+    if (_state)
+        for (const SourceArtifactObjectRow& row : _state->ArtifactObjects)
+            if (row.Artifact == artifact)
+                result.Add(row);
+}
+
+void AssetDatabaseReadSnapshot::GetLabels(const Guid& assetGuid, Array<String>& result) const
+{
+    result.Clear();
+    if (_state)
+        for (const SourceAssetLabelRow& row : _state->Labels)
+            if (row.AssetGuid == assetGuid)
+                result.Add(row.Label);
+}
+
+bool AssetDatabaseReadSnapshot::TryGetRefreshSession(const Guid& refreshId, SourceRefreshSessionRow& result) const
+{
+    if (_state)
+    {
+        for (const SourceRefreshSessionRow& row : _state->RefreshSessions)
+        {
+            if (row.RefreshId == refreshId)
+            {
+                result = row;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool AssetDatabaseReadSnapshot::TryGetImportAttempt(const Guid& attemptId, SourceImportAttemptRow& result) const
+{
+    if (_state)
+    {
+        for (const SourceImportAttemptRow& row : _state->ImportAttempts)
+        {
+            if (row.AttemptId == attemptId)
+            {
+                result = row;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool AssetDatabaseReadSnapshot::TryGetCustomDependency(const StringView& name, SourceCustomDependencyRow& result) const
+{
+    if (_state)
+    {
+        for (const SourceCustomDependencyRow& row : _state->CustomDependencies)
+        {
+            if (row.DependencyName == name)
+            {
+                result = row;
+                return true;
+            }
+        }
+    }
+    return false;
+}

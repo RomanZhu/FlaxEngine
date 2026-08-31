@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AssetPath.h"
+#include "Identity/AssetObjectId.h"
 #include "Engine/Content/AssetInfo.h"
 #include "Engine/Scripting/ScriptingType.h"
 
@@ -50,8 +51,9 @@ struct FLAXENGINE_API AssetRecord
     String ProcessorID;
     String PortabilityKey;
     uint64 MetaSemanticHash = 0;
-    Array<Guid> BuildInputDependencies;
-    Array<Guid> RuntimeReferences;
+    Array<String> Labels;
+    Array<AssetObjectId> BuildInputDependencies;
+    Array<AssetObjectId> RuntimeReferences;
     AssetSourceKind SourceKind = AssetSourceKind::LegacyBinary;
     AssetRecordStatus Status = AssetRecordStatus::Ready;
     uint64 DatabaseRevision = 0;

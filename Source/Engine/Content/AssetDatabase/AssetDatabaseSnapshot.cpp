@@ -42,11 +42,21 @@ namespace
         stream.WriteBytes(utf8.Get(), utf8.Length());
     }
 
-    void WriteGuidArray(MemoryWriteStream& stream, const Array<Guid>& values)
+    void WriteObjectIdArray(MemoryWriteStream& stream, const Array<AssetObjectId>& values)
     {
         stream.WriteUint32(values.Count());
-        for (const Guid& value : values)
-            stream.WriteBytes(&value, sizeof(Guid));
+        for (const AssetObjectId& value : values)
+        {
+            stream.WriteBytes(&value.Asset.Value, sizeof(Guid));
+            stream.WriteInt64(value.LocalId);
+        }
+    }
+
+    void WriteStringArray(MemoryWriteStream& stream, const Array<String>& values)
+    {
+        stream.WriteUint32(values.Count());
+        for (const String& value : values)
+            WriteString(stream, value);
     }
 
     void WriteRecord(MemoryWriteStream& stream, const AssetRecord& record)
@@ -64,8 +74,9 @@ namespace
         stream.WriteUint64(record.MetaSemanticHash);
         stream.WriteUint8((uint8)record.SourceKind);
         stream.WriteUint8((uint8)record.Status);
-        WriteGuidArray(stream, record.BuildInputDependencies);
-        WriteGuidArray(stream, record.RuntimeReferences);
+        WriteStringArray(stream, record.Labels);
+        WriteObjectIdArray(stream, record.BuildInputDependencies);
+        WriteObjectIdArray(stream, record.RuntimeReferences);
     }
 
     class SafeReader
@@ -107,13 +118,33 @@ namespace
             return false;
         }
 
-        bool ReadGuidArray(Array<Guid>& output)
+        bool ReadObjectIdArray(Array<AssetObjectId>& output)
         {
             uint32 count;
-            if (Read(count) || count > MaximumSnapshotEntries || count > (_length - _position) / sizeof(Guid))
+            if (Read(count) || count > MaximumSnapshotEntries ||
+                count > (_length - _position) / (sizeof(Guid) + sizeof(int64)))
                 return true;
             output.Resize(count, false);
-            return count && ReadBytes(output.Get(), count * sizeof(Guid));
+            for (AssetObjectId& value : output)
+            {
+                Guid guid;
+                if (Read(guid) || Read(value.LocalId))
+                    return true;
+                value.Asset = AssetGuid(guid);
+            }
+            return false;
+        }
+
+        bool ReadStringArray(Array<String>& output)
+        {
+            uint32 count;
+            if (Read(count) || count > MaximumSnapshotEntries)
+                return true;
+            output.Resize(count, false);
+            for (String& value : output)
+                if (ReadString(value))
+                    return true;
+            return false;
         }
 
         bool AtEnd() const
@@ -130,7 +161,8 @@ namespace
             reader.ReadString(canonicalPath) || reader.ReadString(sourcePath) || reader.ReadString(metaPath) ||
             reader.ReadString(subAsset) || reader.ReadString(record.ProcessorID) || reader.ReadString(record.PortabilityKey) ||
             reader.Read(record.MetaSemanticHash) || reader.Read(sourceKind) || reader.Read(status) ||
-            reader.ReadGuidArray(record.BuildInputDependencies) || reader.ReadGuidArray(record.RuntimeReferences))
+            reader.ReadStringArray(record.Labels) || reader.ReadObjectIdArray(record.BuildInputDependencies) ||
+            reader.ReadObjectIdArray(record.RuntimeReferences))
             return true;
         if (record.LocalId <= 0 || sourceKind > (uint8)AssetSourceKind::Folder || status > (uint8)AssetRecordStatus::PathCollision)
             return true;

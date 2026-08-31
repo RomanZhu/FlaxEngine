@@ -7,6 +7,37 @@
 
 class SourceAssetDatabase;
 
+enum class AssetDatabaseMutationKind : byte
+{
+    SetLastCompleteScanId,
+    SetImporterRegistryGeneration,
+    UpsertSource,
+    RemoveSource,
+    ReplaceObjects,
+    ReplaceDependencies,
+    UpsertPublication,
+    ReplaceDiagnostics,
+    UpsertImportTarget,
+    ReplaceArtifactObjects,
+    SetLabels,
+    AppendFileJournal,
+    UpsertRefreshSession,
+    UpsertImportAttempt,
+    UpsertCustomDependency,
+    RemoveCustomDependency,
+};
+
+struct AssetDatabaseMutation
+{
+    AssetDatabaseMutationKind Kind = AssetDatabaseMutationKind::UpsertSource;
+    Guid Key = Guid::Empty;
+    int64 LocalFileId = 0;
+    uint64 Value = 0;
+    String TargetId;
+    ArtifactKey Artifact;
+    Array<byte> Payload;
+};
+
 /// <summary>Private mutable copy committed optimistically against one database revision.</summary>
 class FLAXENGINE_API AssetDatabaseTransaction
 {
@@ -17,6 +48,7 @@ private:
     uint64 _baseRevision = 0;
     SourceAssetDatabaseState _state;
     AssetChangeSet _changes;
+    Array<AssetDatabaseMutation> _mutations;
     bool _completed = false;
 
     AssetDatabaseTransaction(SourceAssetDatabase* owner, const SourceAssetDatabaseState& state);
@@ -39,6 +71,14 @@ public:
         const Array<SourceAssetDependencyRow>& dependencies);
     void UpsertPublication(const SourceAssetPublicationRow& publication);
     void ReplaceDiagnostics(const Guid& assetGuid, const Array<SourceAssetDiagnosticRow>& diagnostics);
+    void UpsertImportTarget(const SourceAssetImportTargetRow& target);
+    void ReplaceArtifactObjects(const ArtifactKey& artifact, const Array<SourceArtifactObjectRow>& objects);
+    void SetLabels(const Guid& assetGuid, const Array<String>& labels);
+    void AppendFileJournal(const SourceFileJournalRow& entry);
+    void UpsertRefreshSession(const SourceRefreshSessionRow& session);
+    void UpsertImportAttempt(const SourceImportAttemptRow& attempt);
+    void UpsertCustomDependency(const SourceCustomDependencyRow& dependency);
+    void RemoveCustomDependency(const StringView& dependencyName);
 
     /// <summary>Commits all tables and one change set atomically. Returns true on failure.</summary>
     bool Commit(AssetPipelineDiagnostic& diagnostic);

@@ -14,6 +14,22 @@ namespace
                 rows.RemoveAtKeepOrder(i);
         }
     }
+
+    void RecordMutation(Array<AssetDatabaseMutation>& mutations, AssetDatabaseMutationKind kind,
+        const SourceAssetDatabaseState* payload = nullptr, const Guid& key = Guid::Empty, int64 localFileId = 0,
+        const StringView& targetId = StringView::Empty, const ArtifactKey& artifact = ArtifactKey(), uint64 value = 0)
+    {
+        AssetDatabaseMutation mutation;
+        mutation.Kind = kind;
+        mutation.Key = key;
+        mutation.LocalFileId = localFileId;
+        mutation.TargetId = targetId;
+        mutation.Artifact = artifact;
+        mutation.Value = value;
+        if (payload)
+            payload->Serialize(mutation.Payload);
+        mutations.Add(MoveTemp(mutation));
+    }
 }
 
 AssetDatabaseTransaction::AssetDatabaseTransaction(SourceAssetDatabase* owner, const SourceAssetDatabaseState& state)
@@ -47,12 +63,16 @@ void AssetDatabaseTransaction::SetLastCompleteScanId(uint64 scanId)
 {
     ASSERT(!_completed);
     _state.Database.LastCompleteScanId = scanId;
+    RecordMutation(_mutations, AssetDatabaseMutationKind::SetLastCompleteScanId, nullptr, Guid::Empty, 0,
+        StringView::Empty, ArtifactKey(), scanId);
 }
 
 void AssetDatabaseTransaction::SetImporterRegistryGeneration(uint64 generation)
 {
     ASSERT(!_completed);
     _state.Database.ImporterRegistryGeneration = generation;
+    RecordMutation(_mutations, AssetDatabaseMutationKind::SetImporterRegistryGeneration, nullptr, Guid::Empty, 0,
+        StringView::Empty, ArtifactKey(), generation);
 }
 
 void AssetDatabaseTransaction::UpsertSource(const SourceAssetRow& source)
@@ -80,6 +100,10 @@ void AssetDatabaseTransaction::UpsertSource(const SourceAssetRow& source)
         if (statusChanged)
             _changes.StatusChanged.Add({ value.AssetGuid, current.Status, value.Status });
         current = MoveTemp(value);
+        SourceAssetDatabaseState payload;
+        payload.Database = _state.Database;
+        payload.Sources.Add(current);
+        RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertSource, &payload, current.AssetGuid);
         return;
     }
     value.FirstSeenRevision = revision;
@@ -87,6 +111,10 @@ void AssetDatabaseTransaction::UpsertSource(const SourceAssetRow& source)
     value.LastModifiedRevision = revision;
     _state.Sources.Add(value);
     _changes.Added.Add({ value.AssetGuid, value.Path });
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    payload.Sources.Add(value);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertSource, &payload, value.AssetGuid);
 }
 
 void AssetDatabaseTransaction::RemoveSource(const Guid& assetGuid)
@@ -108,6 +136,10 @@ void AssetDatabaseTransaction::RemoveSource(const Guid& assetGuid)
     });
     RemoveRows(_state.Publications, [&](const SourceAssetPublicationRow& value) { return value.AssetGuid == assetGuid; });
     RemoveRows(_state.Diagnostics, [&](const SourceAssetDiagnosticRow& value) { return value.AssetGuid == assetGuid; });
+    RemoveRows(_state.ArtifactObjects, [&](const SourceArtifactObjectRow& value) { return value.AssetGuid == assetGuid; });
+    RemoveRows(_state.Labels, [&](const SourceAssetLabelRow& value) { return value.AssetGuid == assetGuid; });
+    RemoveRows(_state.ImportAttempts, [&](const SourceImportAttemptRow& value) { return value.AssetGuid == assetGuid; });
+    RecordMutation(_mutations, AssetDatabaseMutationKind::RemoveSource, nullptr, assetGuid);
 }
 
 void AssetDatabaseTransaction::ReplaceObjects(const Guid& assetGuid, const Array<SourceAssetObjectRow>& objects)
@@ -158,6 +190,12 @@ void AssetDatabaseTransaction::ReplaceObjects(const Guid& assetGuid, const Array
     }
     if (changed)
         _changes.ObjectsChanged.Add(MoveTemp(change));
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    for (const SourceAssetObjectRow& value : _state.Objects)
+        if (value.AssetGuid == assetGuid)
+            payload.Objects.Add(value);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::ReplaceObjects, &payload, assetGuid);
 }
 
 void AssetDatabaseTransaction::ReplaceDependencies(const Guid& assetGuid, const StringView& targetId, const Array<SourceAssetDependencyRow>& dependencies)
@@ -173,6 +211,12 @@ void AssetDatabaseTransaction::ReplaceDependencies(const Guid& assetGuid, const 
         value.TargetId = targetId;
         _state.Dependencies.Add(MoveTemp(value));
     }
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    for (const SourceAssetDependencyRow& value : _state.Dependencies)
+        if (value.OwnerAssetGuid == assetGuid && value.TargetId == targetId)
+            payload.Dependencies.Add(value);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::ReplaceDependencies, &payload, assetGuid, 0, targetId);
 }
 
 void AssetDatabaseTransaction::ReplaceDependencies(const Guid& assetGuid, int64 localFileId, const StringView& targetId,
@@ -190,6 +234,12 @@ void AssetDatabaseTransaction::ReplaceDependencies(const Guid& assetGuid, int64 
         value.TargetId = targetId;
         _state.Dependencies.Add(MoveTemp(value));
     }
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    for (const SourceAssetDependencyRow& value : _state.Dependencies)
+        if (value.OwnerAssetGuid == assetGuid && value.OwnerLocalFileId == localFileId && value.TargetId == targetId)
+            payload.Dependencies.Add(value);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::ReplaceDependencies, &payload, assetGuid, localFileId, targetId);
 }
 
 void AssetDatabaseTransaction::UpsertPublication(const SourceAssetPublicationRow& publication)
@@ -202,11 +252,21 @@ void AssetDatabaseTransaction::UpsertPublication(const SourceAssetPublicationRow
         {
             current = value;
             _changes.Imported.Add({ value.AssetGuid, value.LocalFileId, value.TargetId, value.Artifact });
+            SourceAssetDatabaseState payload;
+            payload.Database = _state.Database;
+            payload.Publications.Add(value);
+            RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertPublication, &payload, value.AssetGuid,
+                value.LocalFileId, value.TargetId);
             return;
         }
     }
     _state.Publications.Add(value);
     _changes.Imported.Add({ value.AssetGuid, value.LocalFileId, value.TargetId, value.Artifact });
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    payload.Publications.Add(value);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertPublication, &payload, value.AssetGuid,
+        value.LocalFileId, value.TargetId);
 }
 
 void AssetDatabaseTransaction::ReplaceDiagnostics(const Guid& assetGuid, const Array<SourceAssetDiagnosticRow>& diagnostics)
@@ -220,6 +280,8 @@ void AssetDatabaseTransaction::ReplaceDiagnostics(const Guid& assetGuid, const A
         if (existing.DiagnosticId >= nextDiagnosticId)
             nextDiagnosticId = existing.DiagnosticId + 1;
     }
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
     for (SourceAssetDiagnosticRow value : diagnostics)
     {
         value.AssetGuid = assetGuid;
@@ -229,9 +291,160 @@ void AssetDatabaseTransaction::ReplaceDiagnostics(const Guid& assetGuid, const A
         if (value.CreatedRevision == 0)
             value.CreatedRevision = _baseRevision + 1;
         activeCount += value.IsActive ? 1 : 0;
+        payload.Diagnostics.Add(value);
         _state.Diagnostics.Add(MoveTemp(value));
     }
     _changes.DiagnosticsChanged.Add({ assetGuid, activeCount });
+    RecordMutation(_mutations, AssetDatabaseMutationKind::ReplaceDiagnostics, &payload, assetGuid);
+}
+
+void AssetDatabaseTransaction::UpsertImportTarget(const SourceAssetImportTargetRow& target)
+{
+    ASSERT(!_completed);
+    for (SourceAssetImportTargetRow& current : _state.ImportTargets)
+    {
+        if (current.TargetId == target.TargetId)
+        {
+            current = target;
+            SourceAssetDatabaseState payload;
+            payload.Database = _state.Database;
+            payload.ImportTargets.Add(current);
+            RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertImportTarget, &payload, Guid::Empty, 0, target.TargetId);
+            return;
+        }
+    }
+    _state.ImportTargets.Add(target);
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    payload.ImportTargets.Add(target);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertImportTarget, &payload, Guid::Empty, 0, target.TargetId);
+}
+
+void AssetDatabaseTransaction::ReplaceArtifactObjects(const ArtifactKey& artifact, const Array<SourceArtifactObjectRow>& objects)
+{
+    ASSERT(!_completed);
+    RemoveRows(_state.ArtifactObjects, [&](const SourceArtifactObjectRow& value) { return value.Artifact == artifact; });
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    for (SourceArtifactObjectRow value : objects)
+    {
+        value.Artifact = artifact;
+        _state.ArtifactObjects.Add(value);
+        payload.ArtifactObjects.Add(MoveTemp(value));
+    }
+    RecordMutation(_mutations, AssetDatabaseMutationKind::ReplaceArtifactObjects, &payload, Guid::Empty, 0,
+        StringView::Empty, artifact);
+}
+
+void AssetDatabaseTransaction::SetLabels(const Guid& assetGuid, const Array<String>& labels)
+{
+    ASSERT(!_completed);
+    RemoveRows(_state.Labels, [&](const SourceAssetLabelRow& value) { return value.AssetGuid == assetGuid; });
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    for (const String& label : labels)
+    {
+        SourceAssetLabelRow row;
+        row.AssetGuid = assetGuid;
+        row.Label = label;
+        _state.Labels.Add(row);
+        payload.Labels.Add(MoveTemp(row));
+    }
+    RecordMutation(_mutations, AssetDatabaseMutationKind::SetLabels, &payload, assetGuid);
+}
+
+void AssetDatabaseTransaction::AppendFileJournal(const SourceFileJournalRow& entry)
+{
+    ASSERT(!_completed);
+    SourceFileJournalRow value = entry;
+    if (value.Sequence == 0)
+        value.Sequence = _state.FileJournal.HasItems() ? _state.FileJournal.Last().Sequence + 1 : 1;
+    _state.FileJournal.Add(value);
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    payload.FileJournal.Add(value);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::AppendFileJournal, &payload);
+}
+
+void AssetDatabaseTransaction::UpsertRefreshSession(const SourceRefreshSessionRow& session)
+{
+    ASSERT(!_completed);
+    for (SourceRefreshSessionRow& current : _state.RefreshSessions)
+    {
+        if (current.RefreshId == session.RefreshId)
+        {
+            current = session;
+            SourceAssetDatabaseState payload;
+            payload.Database = _state.Database;
+            payload.RefreshSessions.Add(current);
+            RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertRefreshSession, &payload, session.RefreshId);
+            return;
+        }
+    }
+    _state.RefreshSessions.Add(session);
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    payload.RefreshSessions.Add(session);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertRefreshSession, &payload, session.RefreshId);
+}
+
+void AssetDatabaseTransaction::UpsertImportAttempt(const SourceImportAttemptRow& attempt)
+{
+    ASSERT(!_completed);
+    for (SourceImportAttemptRow& current : _state.ImportAttempts)
+    {
+        if (current.AttemptId == attempt.AttemptId)
+        {
+            current = attempt;
+            SourceAssetDatabaseState payload;
+            payload.Database = _state.Database;
+            payload.ImportAttempts.Add(current);
+            RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertImportAttempt, &payload, attempt.AttemptId);
+            return;
+        }
+    }
+    _state.ImportAttempts.Add(attempt);
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    payload.ImportAttempts.Add(attempt);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertImportAttempt, &payload, attempt.AttemptId);
+}
+
+void AssetDatabaseTransaction::UpsertCustomDependency(const SourceCustomDependencyRow& dependency)
+{
+    ASSERT(!_completed);
+    SourceCustomDependencyRow value = dependency;
+    if (value.ModifiedRevision == 0)
+        value.ModifiedRevision = _baseRevision + 1;
+    for (SourceCustomDependencyRow& current : _state.CustomDependencies)
+    {
+        if (current.DependencyName == value.DependencyName)
+        {
+            current = value;
+            SourceAssetDatabaseState payload;
+            payload.Database = _state.Database;
+            payload.CustomDependencies.Add(current);
+            RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertCustomDependency, &payload, Guid::Empty, 0,
+                value.DependencyName);
+            return;
+        }
+    }
+    _state.CustomDependencies.Add(value);
+    SourceAssetDatabaseState payload;
+    payload.Database = _state.Database;
+    payload.CustomDependencies.Add(value);
+    RecordMutation(_mutations, AssetDatabaseMutationKind::UpsertCustomDependency, &payload, Guid::Empty, 0,
+        value.DependencyName);
+}
+
+void AssetDatabaseTransaction::RemoveCustomDependency(const StringView& dependencyName)
+{
+    ASSERT(!_completed);
+    RemoveRows(_state.CustomDependencies, [&](const SourceCustomDependencyRow& value)
+    {
+        return value.DependencyName == dependencyName;
+    });
+    RecordMutation(_mutations, AssetDatabaseMutationKind::RemoveCustomDependency, nullptr, Guid::Empty, 0, dependencyName);
 }
 
 bool AssetDatabaseTransaction::Commit(AssetPipelineDiagnostic& diagnostic)

@@ -82,6 +82,7 @@ namespace
         result.ProcessorID = meta.Processor.ID;
         result.PortabilityKey = normalizedPath.PortabilityKey;
         result.MetaSemanticHash = semanticHash;
+        result.Labels = meta.Labels;
         result.SourceKind = meta.SourceKind;
         result.Status = status;
         return result;

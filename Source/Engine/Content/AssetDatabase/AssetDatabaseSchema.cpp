@@ -147,6 +147,68 @@ bool SourceAssetDatabaseState::Validate(AssetPipelineDiagnostic& diagnostic) con
             return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate diagnostic row."));
         diagnosticIds.Add(row.DiagnosticId, 0);
     }
+
+    Dictionary<String, byte> targetIds;
+    for (const SourceAssetImportTargetRow& row : ImportTargets)
+    {
+        if (row.TargetId.IsEmpty() || targetIds.ContainsKey(row.TargetId))
+            return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate import target row."));
+        targetIds.Add(row.TargetId, 0);
+    }
+
+    Dictionary<String, byte> artifactObjectIds;
+    for (const SourceArtifactObjectRow& row : ArtifactObjects)
+    {
+        const String key = String(row.Artifact.ToString()) + TEXT(":") + ObjectKey(row.AssetGuid, row.LocalFileId);
+        if (row.Artifact.IsZero() || !objectIds.ContainsKey(ObjectKey(row.AssetGuid, row.LocalFileId)) ||
+            row.TypeName.IsEmpty() || row.ObjectBlobId.IsZero() || artifactObjectIds.ContainsKey(key))
+            return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate artifact object row."));
+        artifactObjectIds.Add(key, 0);
+    }
+
+    Dictionary<String, byte> labelIds;
+    for (const SourceAssetLabelRow& row : Labels)
+    {
+        const String key = row.AssetGuid.ToString(Guid::FormatType::N) + TEXT(":") + row.Label;
+        if (!sourceIds.ContainsKey(row.AssetGuid) || row.Label.IsEmpty() || labelIds.ContainsKey(key))
+            return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate label row."));
+        labelIds.Add(key, 0);
+    }
+
+    uint64 previousSequence = 0;
+    for (const SourceFileJournalRow& row : FileJournal)
+    {
+        if (row.Sequence == 0 || row.Sequence <= previousSequence || row.EventKind.IsEmpty())
+            return Fail(diagnostic, TEXT("Source asset database contains an invalid file journal row."));
+        previousSequence = row.Sequence;
+    }
+
+    Dictionary<Guid, byte> refreshIds;
+    for (const SourceRefreshSessionRow& row : RefreshSessions)
+    {
+        if (!row.RefreshId.IsValid() || row.Status.IsEmpty() || row.StartingRevision > Database.CurrentRevision ||
+            row.EndingRevision > Database.CurrentRevision || refreshIds.ContainsKey(row.RefreshId))
+            return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate refresh session row."));
+        refreshIds.Add(row.RefreshId, 0);
+    }
+
+    Dictionary<Guid, byte> attemptIds;
+    for (const SourceImportAttemptRow& row : ImportAttempts)
+    {
+        if (!row.AttemptId.IsValid() || !sourceIds.ContainsKey(row.AssetGuid) || row.TargetId.IsEmpty() ||
+            row.Status.IsEmpty() || row.RequestedRevision > Database.CurrentRevision || attemptIds.ContainsKey(row.AttemptId))
+            return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate import attempt row."));
+        attemptIds.Add(row.AttemptId, 0);
+    }
+
+    Dictionary<String, byte> customDependencyIds;
+    for (const SourceCustomDependencyRow& row : CustomDependencies)
+    {
+        if (row.DependencyName.IsEmpty() || row.CurrentHash.IsZero() || row.ModifiedRevision > Database.CurrentRevision ||
+            customDependencyIds.ContainsKey(row.DependencyName))
+            return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate custom dependency row."));
+        customDependencyIds.Add(row.DependencyName, 0);
+    }
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
@@ -220,6 +282,8 @@ void SourceAssetDatabaseState::Serialize(Array<byte>& output) const
         writer.WriteString(value.CustomDependency);
         writer.Write(value.Content);
         writer.Write(value.Flags);
+        writer.WriteString(value.OriginImporter);
+        writer.WriteString(value.OriginDescription);
         writer.WriteString(value.OriginPath);
         writer.Write(value.OriginLine);
         writer.Write(value.OriginColumn);
@@ -251,10 +315,95 @@ void SourceAssetDatabaseState::Serialize(Array<byte>& output) const
         writer.Write(value.CreatedRevision);
         writer.Write((byte)(value.IsActive ? 1 : 0));
     }
+
+    writer.Write((uint32)ImportTargets.Count());
+    for (const SourceAssetImportTargetRow& value : ImportTargets)
+    {
+        writer.WriteString(value.TargetId);
+        writer.WriteString(value.Platform);
+        writer.WriteString(value.Architecture);
+        writer.WriteString(value.GraphicsApi);
+        writer.WriteString(value.QualityLevel);
+        writer.WriteString(value.FeatureSet);
+        writer.WriteString(value.BuildConfiguration);
+        writer.Write(value.CanonicalHash);
+    }
+
+    writer.Write((uint32)ArtifactObjects.Count());
+    for (const SourceArtifactObjectRow& value : ArtifactObjects)
+    {
+        writer.Write(value.Artifact);
+        writer.Write(value.AssetGuid);
+        writer.Write(value.LocalFileId);
+        writer.WriteString(value.TypeName);
+        writer.Write(value.ObjectBlobId);
+        writer.Write(value.MetadataBlobId);
+        writer.WriteString(value.CompatibilityTag);
+    }
+
+    writer.Write((uint32)Labels.Count());
+    for (const SourceAssetLabelRow& value : Labels)
+    {
+        writer.Write(value.AssetGuid);
+        writer.WriteString(value.Label);
+    }
+
+    writer.Write((uint32)FileJournal.Count());
+    for (const SourceFileJournalRow& value : FileJournal)
+    {
+        writer.Write(value.Sequence);
+        writer.WriteString(value.EventKind);
+        writer.WriteString(value.OldPath);
+        writer.WriteString(value.NewPath);
+        writer.WriteString(value.FileIdentityHint);
+        writer.Write(value.ObservedSize);
+        writer.Write(value.ObservedMtime);
+        writer.Write(value.ObservedUtcTicks);
+        writer.Write(value.ProcessedRefreshId);
+    }
+
+    writer.Write((uint32)RefreshSessions.Count());
+    for (const SourceRefreshSessionRow& value : RefreshSessions)
+    {
+        writer.Write(value.RefreshId);
+        writer.Write(value.StartingRevision);
+        writer.Write(value.EndingRevision);
+        writer.WriteString(value.Reason);
+        writer.Write(value.IterationCount);
+        writer.WriteString(value.Status);
+        writer.Write(value.StartedUtcTicks);
+        writer.Write(value.CompletedUtcTicks);
+    }
+
+    writer.Write((uint32)ImportAttempts.Count());
+    for (const SourceImportAttemptRow& value : ImportAttempts)
+    {
+        writer.Write(value.AttemptId);
+        writer.Write(value.RefreshId);
+        writer.Write(value.AssetGuid);
+        writer.WriteString(value.TargetId);
+        writer.Write(value.RequestedRevision);
+        writer.Write(value.InputFingerprint);
+        writer.WriteString(value.WorkerId);
+        writer.WriteString(value.Status);
+        writer.Write(value.StartedUtcTicks);
+        writer.Write(value.CompletedUtcTicks);
+        writer.WriteString(value.FailureCode);
+    }
+
+    writer.Write((uint32)CustomDependencies.Count());
+    for (const SourceCustomDependencyRow& value : CustomDependencies)
+    {
+        writer.WriteString(value.DependencyName);
+        writer.Write(value.CurrentHash);
+        writer.WriteString(value.Provider);
+        writer.Write(value.ModifiedRevision);
+    }
     writer.Finish(output);
 }
 
-bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, SourceAssetDatabaseState& output, AssetPipelineDiagnostic& diagnostic)
+bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, SourceAssetDatabaseState& output,
+    AssetPipelineDiagnostic& diagnostic, bool validate)
 {
     Reader reader(data, length);
     SourceAssetDatabaseState value;
@@ -264,6 +413,9 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
         reader.Read(value.Database.CurrentRevision) || reader.Read(value.Database.LastCompleteScanId) ||
         reader.Read(value.Database.ImporterRegistryGeneration) || reader.Read(flag) || flag > 1 || reader.ReadCount(count))
         return Fail(diagnostic, TEXT("Source asset database header is truncated or malformed."));
+    const uint32 serializedSchemaVersion = value.Database.SchemaVersion;
+    if (serializedSchemaVersion < 2 || serializedSchemaVersion > AssetDatabaseSchema::Version)
+        return Fail(diagnostic, TEXT("Source asset database schema version is not supported."));
     value.Database.CleanShutdown = flag != 0;
 
     value.Sources.Resize(count, false);
@@ -308,6 +460,7 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
         if (reader.Read(item.OwnerAssetGuid) || reader.Read(item.OwnerLocalFileId) || reader.ReadString(item.TargetId) || reader.Read(kind) ||
             reader.Read(item.TargetAssetGuid) || reader.Read(item.TargetLocalFileId) || reader.ReadString(item.SourcePath) ||
             reader.Read(item.ExactArtifact) || reader.ReadString(item.CustomDependency) || reader.Read(item.Content) || reader.Read(item.Flags) ||
+            (serializedSchemaVersion >= 4 && (reader.ReadString(item.OriginImporter) || reader.ReadString(item.OriginDescription))) ||
             reader.ReadString(item.OriginPath) || reader.Read(item.OriginLine) || reader.Read(item.OriginColumn) ||
             kind > (byte)AssetDependencyKind::Toolchain)
             return Fail(diagnostic, TEXT("Source asset database dependency table is malformed."));
@@ -341,7 +494,87 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
         item.IsActive = isActive != 0;
     }
 
-    if (!reader.AtEnd() || value.Validate(diagnostic))
+    if (serializedSchemaVersion >= 3)
+    {
+        if (reader.ReadCount(count))
+            return Fail(diagnostic, TEXT("Source asset database import target table is malformed."));
+        value.ImportTargets.Resize(count, false);
+        for (SourceAssetImportTargetRow& item : value.ImportTargets)
+        {
+            if (reader.ReadString(item.TargetId) || reader.ReadString(item.Platform) || reader.ReadString(item.Architecture) ||
+                reader.ReadString(item.GraphicsApi) || reader.ReadString(item.QualityLevel) || reader.ReadString(item.FeatureSet) ||
+                reader.ReadString(item.BuildConfiguration) || reader.Read(item.CanonicalHash))
+                return Fail(diagnostic, TEXT("Source asset database import target table is malformed."));
+        }
+
+        if (reader.ReadCount(count))
+            return Fail(diagnostic, TEXT("Source asset database artifact object table is malformed."));
+        value.ArtifactObjects.Resize(count, false);
+        for (SourceArtifactObjectRow& item : value.ArtifactObjects)
+        {
+            if (reader.Read(item.Artifact) || reader.Read(item.AssetGuid) || reader.Read(item.LocalFileId) ||
+                reader.ReadString(item.TypeName) || reader.Read(item.ObjectBlobId) || reader.Read(item.MetadataBlobId) ||
+                reader.ReadString(item.CompatibilityTag))
+                return Fail(diagnostic, TEXT("Source asset database artifact object table is malformed."));
+        }
+
+        if (reader.ReadCount(count))
+            return Fail(diagnostic, TEXT("Source asset database label table is malformed."));
+        value.Labels.Resize(count, false);
+        for (SourceAssetLabelRow& item : value.Labels)
+        {
+            if (reader.Read(item.AssetGuid) || reader.ReadString(item.Label))
+                return Fail(diagnostic, TEXT("Source asset database label table is malformed."));
+        }
+
+        if (reader.ReadCount(count))
+            return Fail(diagnostic, TEXT("Source asset database file journal table is malformed."));
+        value.FileJournal.Resize(count, false);
+        for (SourceFileJournalRow& item : value.FileJournal)
+        {
+            if (reader.Read(item.Sequence) || reader.ReadString(item.EventKind) || reader.ReadString(item.OldPath) ||
+                reader.ReadString(item.NewPath) || reader.ReadString(item.FileIdentityHint) || reader.Read(item.ObservedSize) ||
+                reader.Read(item.ObservedMtime) || reader.Read(item.ObservedUtcTicks) || reader.Read(item.ProcessedRefreshId))
+                return Fail(diagnostic, TEXT("Source asset database file journal table is malformed."));
+        }
+
+        if (reader.ReadCount(count))
+            return Fail(diagnostic, TEXT("Source asset database refresh session table is malformed."));
+        value.RefreshSessions.Resize(count, false);
+        for (SourceRefreshSessionRow& item : value.RefreshSessions)
+        {
+            if (reader.Read(item.RefreshId) || reader.Read(item.StartingRevision) || reader.Read(item.EndingRevision) ||
+                reader.ReadString(item.Reason) || reader.Read(item.IterationCount) || reader.ReadString(item.Status) ||
+                reader.Read(item.StartedUtcTicks) || reader.Read(item.CompletedUtcTicks))
+                return Fail(diagnostic, TEXT("Source asset database refresh session table is malformed."));
+        }
+
+        if (reader.ReadCount(count))
+            return Fail(diagnostic, TEXT("Source asset database import attempt table is malformed."));
+        value.ImportAttempts.Resize(count, false);
+        for (SourceImportAttemptRow& item : value.ImportAttempts)
+        {
+            if (reader.Read(item.AttemptId) || reader.Read(item.RefreshId) || reader.Read(item.AssetGuid) ||
+                reader.ReadString(item.TargetId) || reader.Read(item.RequestedRevision) || reader.Read(item.InputFingerprint) ||
+                reader.ReadString(item.WorkerId) || reader.ReadString(item.Status) || reader.Read(item.StartedUtcTicks) ||
+                reader.Read(item.CompletedUtcTicks) || reader.ReadString(item.FailureCode))
+                return Fail(diagnostic, TEXT("Source asset database import attempt table is malformed."));
+        }
+
+        if (reader.ReadCount(count))
+            return Fail(diagnostic, TEXT("Source asset database custom dependency table is malformed."));
+        value.CustomDependencies.Resize(count, false);
+        for (SourceCustomDependencyRow& item : value.CustomDependencies)
+        {
+            if (reader.ReadString(item.DependencyName) || reader.Read(item.CurrentHash) || reader.ReadString(item.Provider) ||
+                reader.Read(item.ModifiedRevision))
+                return Fail(diagnostic, TEXT("Source asset database custom dependency table is malformed."));
+        }
+    }
+    if (serializedSchemaVersion < AssetDatabaseSchema::Version)
+        value.Database.SchemaVersion = AssetDatabaseSchema::Version;
+
+    if (!reader.AtEnd() || (validate && value.Validate(diagnostic)))
         return true;
     output = MoveTemp(value);
     return false;

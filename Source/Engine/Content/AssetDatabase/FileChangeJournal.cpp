@@ -16,6 +16,7 @@ namespace
     constexpr uint32 JournalVersion = 1;
     constexpr uint32 FrameMagic = 0x46434146; // FACF
     constexpr uint32 MaximumFrameBytes = 256 * 1024 * 1024;
+    constexpr uint64 MaximumRetainedRevisions = 4096;
 
     struct JournalHeader
     {
@@ -100,6 +101,38 @@ namespace
         }
         return false;
     }
+}
+
+bool FileChangeJournal::Compact(uint64 baseRevision, AssetPipelineDiagnostic& diagnostic)
+{
+    Array<byte> data;
+    uint64 parsedBase, parsedLast;
+    uint32 validLength;
+    Array<AssetChangeSet> changes;
+    if (File::ReadAllBytes(_path, data) || ParseJournal(data, parsedBase, parsedLast, validLength, &changes, baseRevision) ||
+        validLength != (uint32)data.Count() || baseRevision < parsedBase || baseRevision > parsedLast)
+        return Fail(diagnostic, _path, TEXT("Cannot read source asset change history for compaction."));
+    JournalHeader header = { JournalMagic, JournalVersion, baseRevision, 0 };
+    header.HeaderCrc = HeaderCrc(header);
+    Array<byte> compacted;
+    compacted.Resize(sizeof(header), false);
+    Platform::MemoryCopy(compacted.Get(), &header, sizeof(header));
+    for (const AssetChangeSet& change : changes)
+    {
+        Array<byte> payload;
+        change.Serialize(payload);
+        FrameHeader frame = { FrameMagic, (uint32)payload.Count(), Crc::MemCrc32(payload.Get(), payload.Count()), change.Revision };
+        const int32 offset = compacted.Count();
+        compacted.Resize(offset + sizeof(frame) + payload.Count(), true);
+        Platform::MemoryCopy(compacted.Get() + offset, &frame, sizeof(frame));
+        if (payload.HasItems())
+            Platform::MemoryCopy(compacted.Get() + offset + sizeof(frame), payload.Get(), payload.Count());
+    }
+    if (WriteAtomic(_path, compacted.Get(), compacted.Count()))
+        return Fail(diagnostic, _path, TEXT("Cannot compact source asset change history."));
+    _baseRevision = baseRevision;
+    _lastRevision = parsedLast;
+    return false;
 }
 
 bool FileChangeJournal::Open(const StringView& path, uint64 baseRevision, AssetPipelineDiagnostic& diagnostic)
@@ -190,6 +223,9 @@ bool FileChangeJournal::Append(const AssetChangeSet& changeSet, AssetPipelineDia
     if (failed)
         return Fail(diagnostic, _path, TEXT("Cannot append the source asset change journal."));
     _lastRevision = changeSet.Revision;
+    if (_lastRevision - _baseRevision > MaximumRetainedRevisions &&
+        Compact(_lastRevision - MaximumRetainedRevisions, diagnostic))
+        return true;
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }

@@ -11,7 +11,7 @@ using AssetDatabaseFileState = SourceHashFileState;
 class FLAXENGINE_API AssetDatabaseSnapshotStore
 {
 public:
-    static constexpr uint32 CurrentVersion = 4;
+    static constexpr uint32 CurrentVersion = 5;
 
     /// <returns>True on failure.</returns>
     static bool SaveAtomic(const StringView& path, const StringView& projectRoot, const StringView& contentRoot, const AssetDatabaseSnapshot& snapshot, const Array<AssetDatabaseFileState>& fileStates, AssetPipelineDiagnostic& diagnostic);

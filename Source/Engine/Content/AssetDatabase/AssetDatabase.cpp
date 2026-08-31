@@ -57,11 +57,19 @@ namespace
     {
         records.Clear();
         Dictionary<Guid, const SourceAssetRow*> sources;
-        Dictionary<AssetObjectId, Guid> objectGuids;
+        Dictionary<Guid, Array<String>> labels;
         for (const SourceAssetRow& source : state.Sources)
             sources.Add(source.AssetGuid, &source);
-        for (const SourceAssetObjectRow& object : state.Objects)
-            objectGuids.Add(AssetObjectId(AssetGuid(object.AssetGuid), object.LocalFileId), object.ObjectGuid);
+        for (const SourceAssetLabelRow& label : state.Labels)
+        {
+            Array<String>* values = labels.TryGet(label.AssetGuid);
+            if (!values)
+            {
+                labels.Add(label.AssetGuid, Array<String>());
+                values = labels.TryGet(label.AssetGuid);
+            }
+            values->Add(label.Label);
+        }
         records.EnsureCapacity(state.Objects.Count());
         for (const SourceAssetObjectRow& object : state.Objects)
         {
@@ -82,6 +90,9 @@ namespace
             record.ProcessorID = (*source)->ImporterId;
             record.PortabilityKey = (*source)->PortabilityKey;
             record.MetaSemanticHash = (*source)->MetaSemanticHash;
+            const Array<String>* sourceLabels = labels.TryGet(object.AssetGuid);
+            if (sourceLabels)
+                record.Labels = *sourceLabels;
             record.SourceKind = (*source)->SourceKind;
             record.Status = object.Status;
             record.DatabaseRevision = object.LastModifiedRevision;
@@ -89,12 +100,8 @@ namespace
             {
                 if (dependency.OwnerAssetGuid != object.AssetGuid || dependency.OwnerLocalFileId != object.LocalFileId)
                     continue;
-                Guid target = dependency.TargetAssetGuid;
-                if (dependency.TargetLocalFileId != 0)
-                {
-                    const Guid* objectGuid = objectGuids.TryGet(AssetObjectId(AssetGuid(dependency.TargetAssetGuid), dependency.TargetLocalFileId));
-                    target = objectGuid ? *objectGuid : Guid::Empty;
-                }
+                const AssetObjectId target(AssetGuid(dependency.TargetAssetGuid),
+                    dependency.TargetLocalFileId != 0 ? dependency.TargetLocalFileId : 1);
                 if (!target.IsValid())
                     continue;
                 if (dependency.Kind == AssetDependencyKind::BuildInput)
@@ -108,20 +115,24 @@ namespace
                         record.RuntimeReferences.Add(target);
                 }
             }
-            const auto lessGuid = [](const Guid& a, const Guid& b)
+            const auto lessObject = [](const AssetObjectId& a, const AssetObjectId& b)
             {
-                if (a.A != b.A)
-                    return a.A < b.A;
-                if (a.B != b.B)
-                    return a.B < b.B;
-                if (a.C != b.C)
-                    return a.C < b.C;
-                return a.D < b.D;
+                const Guid& left = a.Asset.Value;
+                const Guid& right = b.Asset.Value;
+                if (left.A != right.A)
+                    return left.A < right.A;
+                if (left.B != right.B)
+                    return left.B < right.B;
+                if (left.C != right.C)
+                    return left.C < right.C;
+                if (left.D != right.D)
+                    return left.D < right.D;
+                return a.LocalId < b.LocalId;
             };
             if (record.BuildInputDependencies.Count() > 1)
-                std::sort(record.BuildInputDependencies.Get(), record.BuildInputDependencies.Get() + record.BuildInputDependencies.Count(), lessGuid);
+                std::sort(record.BuildInputDependencies.Get(), record.BuildInputDependencies.Get() + record.BuildInputDependencies.Count(), lessObject);
             if (record.RuntimeReferences.Count() > 1)
-                std::sort(record.RuntimeReferences.Get(), record.RuntimeReferences.Get() + record.RuntimeReferences.Count(), lessGuid);
+                std::sort(record.RuntimeReferences.Get(), record.RuntimeReferences.Get() + record.RuntimeReferences.Count(), lessObject);
             records.Add(MoveTemp(record));
         }
     }
@@ -234,14 +245,32 @@ void AssetDatabase::GetByStatus(AssetRecordStatus status, Array<AssetRecord>& re
 
 void AssetDatabase::GetBuildDependants(const Guid& inputId, Array<AssetRecord>& result) const
 {
+    AssetRecord input;
+    const AssetObjectId object = TryGetRecord(inputId, input)
+        ? AssetObjectId(AssetGuid(input.SourceAssetID), input.LocalId)
+        : AssetObjectId::Main(AssetGuid(inputId));
+    GetBuildDependants(object, result);
+}
+
+void AssetDatabase::GetBuildDependants(const AssetObjectId& input, Array<AssetRecord>& result) const
+{
     ScopeLock lock(_locker);
-    ResolveRecords(_records, _dependantsByBuildInput.TryGet(inputId), result);
+    ResolveRecords(_records, _dependantsByBuildInput.TryGet(input), result);
 }
 
 void AssetDatabase::GetRuntimeReferencers(const Guid& referencedId, Array<AssetRecord>& result) const
 {
+    AssetRecord referenced;
+    const AssetObjectId object = TryGetRecord(referencedId, referenced)
+        ? AssetObjectId(AssetGuid(referenced.SourceAssetID), referenced.LocalId)
+        : AssetObjectId::Main(AssetGuid(referencedId));
+    GetRuntimeReferencers(object, result);
+}
+
+void AssetDatabase::GetRuntimeReferencers(const AssetObjectId& referenced, Array<AssetRecord>& result) const
+{
     ScopeLock lock(_locker);
-    ResolveRecords(_records, _referencersByRuntimeReference.TryGet(referencedId), result);
+    ResolveRecords(_records, _referencersByRuntimeReference.TryGet(referenced), result);
 }
 
 bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revision, AssetDatabaseChangeBatch& changes, AssetPipelineDiagnostic& diagnostic)
@@ -254,8 +283,8 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
     Dictionary<Guid, Array<Guid>> nextSubAssetsBySource;
     Dictionary<String, Array<Guid>> nextRecordsByProcessor;
     Dictionary<AssetRecordStatus, Array<Guid>> nextRecordsByStatus;
-    Dictionary<Guid, Array<Guid>> nextDependantsByBuildInput;
-    Dictionary<Guid, Array<Guid>> nextReferencersByRuntimeReference;
+    Dictionary<AssetObjectId, Array<Guid>> nextDependantsByBuildInput;
+    Dictionary<AssetObjectId, Array<Guid>> nextReferencersByRuntimeReference;
 
     nextRecords.EnsureCapacity(records.Count());
     for (const AssetRecord& input : records)
@@ -305,9 +334,9 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
     {
         AddToIndex(nextRecordsByProcessor, entry.Value.ProcessorID, entry.Key);
         AddToIndex(nextRecordsByStatus, entry.Value.Status, entry.Key);
-        for (const Guid& dependency : entry.Value.BuildInputDependencies)
+        for (const AssetObjectId& dependency : entry.Value.BuildInputDependencies)
             AddToIndex(nextDependantsByBuildInput, dependency, entry.Key);
-        for (const Guid& reference : entry.Value.RuntimeReferences)
+        for (const AssetObjectId& reference : entry.Value.RuntimeReferences)
             AddToIndex(nextReferencersByRuntimeReference, reference, entry.Key);
     }
 
@@ -377,7 +406,6 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
     Dictionary<Guid, const AssetRecord*> firstBySource;
     Dictionary<Guid, const AssetRecord*> mainBySource;
     Dictionary<Guid, Guid> sourceByObject;
-    Dictionary<Guid, int64> localIdByObject;
     Dictionary<Guid, Array<SourceAssetObjectRow>> objectsBySource;
     Dictionary<Guid, Array<SourceAssetDependencyRow>> dependenciesBySource;
     HashSet<Guid> incomingSources;
@@ -388,7 +416,6 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         if (sourceByObject.ContainsKey(record.ID))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::DuplicateGuid, record.SourcePath.Get(), TEXT("Asset database input contains a duplicate object GUID."));
         sourceByObject.Add(record.ID, record.SourceAssetID);
-        localIdByObject.Add(record.ID, record.LocalId);
         incomingSources.Add(record.SourceAssetID);
         if (!firstBySource.ContainsKey(record.SourceAssetID))
             firstBySource.Add(record.SourceAssetID, &record);
@@ -431,6 +458,7 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         source.SourceKind = sourceRecord->SourceKind;
         source.Status = sourceRecord->Status;
         transaction->UpsertSource(source);
+        transaction->SetLabels(sourceId, sourceRecord->Labels);
     }
 
     for (const AssetRecord& record : records)
@@ -460,32 +488,28 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
             dependenciesBySource.Add(record.SourceAssetID, Array<SourceAssetDependencyRow>());
             dependencies = dependenciesBySource.TryGet(record.SourceAssetID);
         }
-        for (const Guid& dependencyId : record.BuildInputDependencies)
+        for (const AssetObjectId& dependencyId : record.BuildInputDependencies)
         {
             SourceAssetDependencyRow dependency;
             dependency.OwnerAssetGuid = record.SourceAssetID;
             dependency.OwnerLocalFileId = record.LocalId;
             dependency.TargetId = TEXT("default");
             dependency.Kind = AssetDependencyKind::BuildInput;
-            const Guid* targetSource = sourceByObject.TryGet(dependencyId);
-            const int64* targetLocalId = localIdByObject.TryGet(dependencyId);
-            dependency.TargetAssetGuid = targetSource ? *targetSource : dependencyId;
-            dependency.TargetLocalFileId = targetLocalId ? *targetLocalId : 0;
-            dependency.CustomDependency = dependencyId.ToString(Guid::FormatType::N);
+            dependency.TargetAssetGuid = dependencyId.Asset.Value;
+            dependency.TargetLocalFileId = dependencyId.LocalId;
+            dependency.CustomDependency = dependencyId.ToString();
             dependencies->Add(MoveTemp(dependency));
         }
-        for (const Guid& dependencyId : record.RuntimeReferences)
+        for (const AssetObjectId& dependencyId : record.RuntimeReferences)
         {
             SourceAssetDependencyRow dependency;
             dependency.OwnerAssetGuid = record.SourceAssetID;
             dependency.OwnerLocalFileId = record.LocalId;
             dependency.TargetId = TEXT("default");
             dependency.Kind = AssetDependencyKind::RuntimeReference;
-            const Guid* targetSource = sourceByObject.TryGet(dependencyId);
-            const int64* targetLocalId = localIdByObject.TryGet(dependencyId);
-            dependency.TargetAssetGuid = targetSource ? *targetSource : dependencyId;
-            dependency.TargetLocalFileId = targetLocalId ? *targetLocalId : 0;
-            dependency.CustomDependency = dependencyId.ToString(Guid::FormatType::N);
+            dependency.TargetAssetGuid = dependencyId.Asset.Value;
+            dependency.TargetLocalFileId = dependencyId.LocalId;
+            dependency.CustomDependency = dependencyId.ToString();
             dependencies->Add(MoveTemp(dependency));
         }
     }

@@ -14,6 +14,8 @@ private:
     uint64 _lastRevision = 0;
     bool _open = false;
 
+    bool Compact(uint64 baseRevision, AssetPipelineDiagnostic& diagnostic);
+
 public:
     /// <summary>Opens the journal and discards only an incomplete/corrupt tail. Returns true on failure.</summary>
     bool Open(const StringView& path, uint64 baseRevision, AssetPipelineDiagnostic& diagnostic);

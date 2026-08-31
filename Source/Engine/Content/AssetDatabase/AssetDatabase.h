@@ -37,8 +37,8 @@ private:
     Dictionary<Guid, Array<Guid>> _subAssetsBySource;
     Dictionary<String, Array<Guid>> _recordsByProcessor;
     Dictionary<AssetRecordStatus, Array<Guid>> _recordsByStatus;
-    Dictionary<Guid, Array<Guid>> _dependantsByBuildInput;
-    Dictionary<Guid, Array<Guid>> _referencersByRuntimeReference;
+    Dictionary<AssetObjectId, Array<Guid>> _dependantsByBuildInput;
+    Dictionary<AssetObjectId, Array<Guid>> _referencersByRuntimeReference;
     SourceAssetDatabase _sourceDatabase;
 
     bool PublishCache(const Array<AssetRecord>& records, uint64 revision, AssetDatabaseChangeBatch& changes, AssetPipelineDiagnostic& diagnostic);
@@ -63,7 +63,9 @@ public:
     void GetByProcessor(const StringView& processorId, Array<AssetRecord>& result) const;
     void GetByStatus(AssetRecordStatus status, Array<AssetRecord>& result) const;
     void GetBuildDependants(const Guid& inputId, Array<AssetRecord>& result) const;
+    void GetBuildDependants(const AssetObjectId& input, Array<AssetRecord>& result) const;
     void GetRuntimeReferencers(const Guid& referencedId, Array<AssetRecord>& result) const;
+    void GetRuntimeReferencers(const AssetObjectId& referenced, Array<AssetRecord>& result) const;
 
     /// <summary>Atomically replaces database truth and emits one change batch outside the database lock.</summary>
     /// <returns>True if input records violate an invariant.</returns>

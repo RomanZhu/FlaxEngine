@@ -28,4 +28,10 @@ public:
     void GetDependencies(const Guid& ownerAssetGuid, const StringView& targetId, Array<SourceAssetDependencyRow>& result) const;
     void GetDependants(const Guid& targetAssetGuid, Array<SourceAssetDependencyRow>& result) const;
     void GetActiveDiagnostics(const Guid& assetGuid, Array<SourceAssetDiagnosticRow>& result) const;
+    bool TryGetImportTarget(const StringView& targetId, SourceAssetImportTargetRow& result) const;
+    void GetArtifactObjects(const ArtifactKey& artifact, Array<SourceArtifactObjectRow>& result) const;
+    void GetLabels(const Guid& assetGuid, Array<String>& result) const;
+    bool TryGetRefreshSession(const Guid& refreshId, SourceRefreshSessionRow& result) const;
+    bool TryGetImportAttempt(const Guid& attemptId, SourceImportAttemptRow& result) const;
+    bool TryGetCustomDependency(const StringView& name, SourceCustomDependencyRow& result) const;
 };

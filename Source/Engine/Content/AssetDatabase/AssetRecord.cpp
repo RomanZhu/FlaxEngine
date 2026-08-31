@@ -32,5 +32,5 @@ bool AssetRecord::HasSameIdentityAndContent(const AssetRecord& other) const
         CanonicalPath == other.CanonicalPath && SourcePath == other.SourcePath && MetaPath == other.MetaPath &&
         SubAsset == other.SubAsset && ProcessorID == other.ProcessorID && PortabilityKey == other.PortabilityKey &&
         MetaSemanticHash == other.MetaSemanticHash && SourceKind == other.SourceKind &&
-        BuildInputDependencies == other.BuildInputDependencies && RuntimeReferences == other.RuntimeReferences;
+        Labels == other.Labels && BuildInputDependencies == other.BuildInputDependencies && RuntimeReferences == other.RuntimeReferences;
 }

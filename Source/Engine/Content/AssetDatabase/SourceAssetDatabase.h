@@ -6,6 +6,7 @@
 #include "AssetDatabaseTransaction.h"
 #include "FileChangeJournal.h"
 #include "Engine/Core/Delegate.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/CriticalSection.h"
 #include <memory>
 
@@ -17,11 +18,16 @@ class FLAXENGINE_API SourceAssetDatabase
 private:
     mutable CriticalSection _locker;
     String _directory;
-    String _snapshotPath;
+    String _manifestPath;
     String _walPath;
     String _journalPath;
+    String _sessionMarkerPath;
     std::shared_ptr<const SourceAssetDatabaseState> _state;
     FileChangeJournal _journal;
+    File* _writerLock = nullptr;
+    uint64 _checkpointGeneration = 0;
+    uint64 _walBaseRevision = 0;
+    uint64 _walLastRevision = 0;
     bool _open = false;
     bool _lastShutdownWasClean = true;
     bool _recoveryRequired = false;
