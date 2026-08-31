@@ -136,7 +136,7 @@ namespace
 #if COMPILE_WITH_PHYSICS_COOKING
         if (recipe.Type != CollisionDataType::None)
         {
-            auto model = Content::LoadAsync<ModelBase>(recipe.Model);
+            auto model = Content::LoadAssetAsync<ModelBase>(recipe.Model);
             if (!model || model->WaitForLoaded())
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Collision source model artifact could not be loaded."));
             CollisionCooking::Argument argument;
@@ -177,7 +177,7 @@ namespace
         else
         {
             AssetInfo modelInfo;
-            if (!Content::GetAssetInfo(modelID, modelInfo) || modelInfo.Path.IsEmpty())
+            if (!Content::GetRuntimeAssetInfo(modelID, modelInfo) || modelInfo.Path.IsEmpty())
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
                     context.GetRecord().ID, context.GetRecord().SourcePath.Get(), TEXT("Collision source model is unavailable."));
             modelPath = modelInfo.Path;
@@ -197,6 +197,14 @@ namespace
             hasher.Update(bytes.Get(), bytes.Count());
         }
         return context.DeclareToolchain(TEXT("collision-model-input"), hasher.Finalize(), origin, diagnostic);
+    }
+
+    AssetObjectId ResolvePersistentObjectId(const Guid& runtimeId)
+    {
+        AssetRecord record;
+        if (AssetDatabase::Get().TryGetRecord(runtimeId, record))
+            return AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+        return AssetObjectId::Main(AssetGuid(runtimeId));
     }
 }
 
@@ -337,8 +345,9 @@ bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
                 record.ID, record.SourcePath.Get(), error);
         for (int32 i = 0; i < references.Count(); i++)
         {
-            const String identity = String::Format(TEXT("authored-reference:{0}"), references[i]);
-            if (context.DeclareRuntimeReference(identity, references[i], origin, diagnostic))
+            const AssetObjectId objectId = ResolvePersistentObjectId(references[i]);
+            const String identity = TEXT("authored-reference:") + objectId.ToString();
+            if (context.DeclareRuntimeReference(identity, objectId, origin, diagnostic))
                 return true;
         }
         if (record.ProcessorID == CollisionDataID() && references.HasItems() && HashCollisionModelInputs(context, references[0], origin, diagnostic))

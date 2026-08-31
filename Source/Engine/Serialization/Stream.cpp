@@ -293,7 +293,7 @@ void ReadStream::Read(Variant& data)
     {
         Guid id;
         Read(id);
-        data.SetAsset(LoadAsset(id, Asset::TypeInitializer));
+        data.SetAsset(LoadRuntimeAsset(id, Asset::TypeInitializer));
         break;
     }
     case VariantType::Float2:

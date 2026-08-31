@@ -163,7 +163,7 @@ bool CSGBuilderImpl::updatePreviewModel(AssetReference<Model>& previewModel, con
         auto& destinationSlot = previewModel->MaterialSlots[slotIndex];
         destinationSlot.Name = sourceSlot.Name;
         destinationSlot.ShadowsMode = sourceSlot.ShadowsMode;
-        destinationSlot.Material = Content::LoadAsync<MaterialBase>(sourceSlot.AssetID);
+        destinationSlot.Material = Content::LoadRuntimeObjectAsync<MaterialBase>(sourceSlot.AssetID);
     }
 
     for (int32 lodIndex = 0; lodIndex < modelData.LODs.Count(); lodIndex++)
@@ -321,7 +321,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 CollisionCooking::Argument arg;
                 arg.Type = CollisionDataType::TriangleMesh;
                 arg.OverrideModelData = &modelData;
-                arg.Model = Content::ResolveAssetObjectId(data.outputModelAssetId);
+                arg.Model = Content::ResolveRuntimeObjectId(data.outputModelAssetId);
                 Guid collisionDataAssetId = scene->CSGData.CollisionData.GetRuntimeInstanceId();
                 if (!collisionDataAssetId.IsValid())
                     collisionDataAssetId = Guid::New();
@@ -357,9 +357,9 @@ void CSGBuilderImpl::build(Scene* scene)
     }
 
     // Assign results
-    auto outputData = Content::LoadAsync<RawDataAsset>(data.outputRawDataAssetId);
-    auto outputModel = Content::LoadAsync<Model>(data.outputModelAssetId);
-    auto outputCollisionData = Content::LoadAsync<CollisionData>(data.outputCollisionDataAssetId);
+    auto outputData = Content::LoadRuntimeObjectAsync<RawDataAsset>(data.outputRawDataAssetId);
+    auto outputModel = Content::LoadRuntimeObjectAsync<Model>(data.outputModelAssetId);
+    auto outputCollisionData = Content::LoadRuntimeObjectAsync<CollisionData>(data.outputCollisionDataAssetId);
 
     scene->CSGData.Data = outputData;
     if (!outputModel)

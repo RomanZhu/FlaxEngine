@@ -1021,14 +1021,14 @@ ScriptingObject* Scripting::FindObject(Guid id, const MClass* type)
     // Check if object can be an asset and try to load it
     if (!type)
     {
-        result = Content::LoadAsync<Asset>(id);
+        result = Content::LoadRuntimeObjectAsync<Asset>(id);
         if (!result)
             LOG(Warning, "Unable to find scripting object with ID={0}", id);
         return result;
     }
     if (type == ScriptingObject::GetStaticClass() || type->IsSubClassOf(Asset::GetStaticClass()))
     {
-        Asset* asset = Content::LoadAsync(id, type);
+        Asset* asset = Content::LoadRuntimeObjectAsync(id, type);
         if (asset)
             return asset;
     }

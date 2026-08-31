@@ -17,7 +17,6 @@
 #include "Engine/Threading/Threading.h"
 #if GPU_ENABLE_RESOURCE_NAMING && !USE_EDITOR
 #include "Engine/Content/Content.h"
-#include "Engine/Content/Cache/AssetsCache.h"
 #endif
 
 TextureMipData::TextureMipData()

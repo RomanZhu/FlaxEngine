@@ -78,11 +78,11 @@ namespace
         // Find prefab object that is used by this object in a given prefab
         Guid currentPrefabId = object->GetPrefabID(), currentObjectId = object->GetPrefabObjectID();
     RETRY:
-        auto prefab = Content::Load<Prefab>(currentPrefabId);
+        auto prefab = Content::LoadRuntimeObject<Prefab>(currentPrefabId);
         Guid nestedPrefabId, nestedObjectId;
         if (prefab && prefab->GetNestedObject(currentObjectId, nestedPrefabId, nestedObjectId))
         {
-            auto nestedPrefab = Content::Load<Prefab>(nestedPrefabId);
+            auto nestedPrefab = Content::LoadRuntimeObject<Prefab>(nestedPrefabId);
             if (nestedPrefab)
             {
                 auto nestedObject = (Actor*)nestedPrefab->GetDefaultInstance(nestedObjectId);
@@ -963,7 +963,7 @@ void Actor::LinkPrefab(const Guid& prefabId, const Guid& prefabObjectId)
 
     if (_prefabID.IsValid() && _prefabObjectID.IsValid())
     {
-        auto prefab = Content::LoadAsync<Prefab>(_prefabID);
+        auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(_prefabID);
         if (prefab == nullptr || prefab->WaitForLoaded())
         {
             _prefabID = Guid::Empty;
@@ -1304,7 +1304,7 @@ void Actor::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
                 _prefabObjectID = MakeRuntimeObjectId(_prefabID, _prefabObjectFileId, GlobalObjectKind::PrefabObject);
             _isPrefabRoot = 0;
 
-            auto prefab = Content::LoadAsync<Prefab>(_prefabID);
+            auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(_prefabID);
             if (prefab == nullptr || prefab->WaitForLoaded())
             {
                 _prefabID = Guid::Empty;
@@ -2088,11 +2088,11 @@ bool Actor::FromBytes(const Span<byte>& data, Array<Actor*>& output, ISerializeM
             // Find a prefab in which that object is a root to establish a new linkage
             Guid currentPrefabId = actor->GetPrefabID(), currentObjectId = actor->GetPrefabObjectID();
         RETRY:
-            auto prefab = Content::Load<Prefab>(currentPrefabId);
+            auto prefab = Content::LoadRuntimeObject<Prefab>(currentPrefabId);
             Guid nestedPrefabId, nestedObjectId;
             if (prefab && prefab->GetNestedObject(currentObjectId, nestedPrefabId, nestedObjectId))
             {
-                auto nestedPrefab = Content::Load<Prefab>(nestedPrefabId);
+                auto nestedPrefab = Content::LoadRuntimeObject<Prefab>(nestedPrefabId);
                 if (nestedPrefab)
                 {
                     auto nestedObject = (Actor*)nestedPrefab->GetDefaultInstance(nestedObjectId);

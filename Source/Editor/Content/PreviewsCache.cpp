@@ -135,7 +135,7 @@ Asset::LoadResult PreviewsCache::load()
     for (int32 i = 0; i < _assets.Count(); i++)
     {
         Guid& id = _assets[i];
-        if (id.IsValid() && Content::GetAsset(id) == nullptr && !Content::GetAssetInfo(id, assetInfo))
+        if (id.IsValid() && Content::GetRuntimeObject(id) == nullptr && !Content::GetRuntimeAssetInfo(id, assetInfo))
         {
             // Free slot (no matter the texture contents)
             _versions[i] = Guid::Empty;

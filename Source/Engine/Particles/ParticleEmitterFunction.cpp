@@ -14,7 +14,7 @@
 
 void InitParticleEmitterFunctionCall(const Guid& assetId, AssetReference<Asset>& asset, bool& usesParticleData, ParticleLayout& layout)
 {
-    const auto function = Content::Load<ParticleEmitterFunction>(assetId);
+    const auto function = Content::LoadRuntimeObject<ParticleEmitterFunction>(assetId);
     asset = function;
     if (function)
     {

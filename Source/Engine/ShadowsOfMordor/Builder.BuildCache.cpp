@@ -140,7 +140,7 @@ void ShadowsOfMordor::Builder::SceneBuildCache::UpdateLightmaps()
                 LOG(Error, "Cannot create new lightmap {0}:{1}", lightmapIndex, textureIndex);
                 return;
             }
-            const auto result = Content::LoadAsync<Texture>(id);
+            const auto result = Content::LoadRuntimeObjectAsync<Texture>(id);
             if (result == nullptr)
 #else
 #error "Cannot import lightmaps. Assets importer module iss missing."

@@ -1,7 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/Assets/RawDataAsset.h"
-#include "Engine/Content/Cache/AssetsCache.h"
+#include "Engine/Content/AssetObjectRegistry.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
@@ -51,7 +51,7 @@ namespace
             Content::UnloadAsset(asset);
             asset = nullptr;
         }
-        Content::GetRegistry()->DeleteAsset(path, nullptr);
+        Content::GetObjectRegistry()->RemoveTransientPackage(path, nullptr);
         FileSystem::DeleteFile(path);
     }
 
@@ -89,7 +89,7 @@ TEST_CASE("Binary asset factory load streaming and reload")
     };
 
     WriteRawDataAsset(path, id, RawDataAsset::SerializedVersion, initialBytes, ARRAY_COUNT(initialBytes));
-    Content::GetRegistry()->RegisterAsset(id, RawDataAsset::TypeName, path);
+    Content::GetObjectRegistry()->RegisterTransientObject(id, RawDataAsset::TypeName, path);
 
     asset = Content::Load<RawDataAsset>(path);
     REQUIRE(asset);
@@ -230,7 +230,7 @@ TEST_CASE("Binary asset storage switch succeeds or restores old storage")
     WriteRawDataAsset(invalidPath, Guid::New(), RawDataAsset::SerializedVersion, replacementBytes, ARRAY_COUNT(replacementBytes));
     WriteRawDataAssetWithoutChunks(unloadablePath, id);
     WriteRawDataAsset(concurrentPath, id, RawDataAsset::SerializedVersion, concurrentBytes, ARRAY_COUNT(concurrentBytes));
-    Content::GetRegistry()->RegisterAsset(id, RawDataAsset::TypeName, canonicalPath);
+    Content::GetObjectRegistry()->RegisterTransientObject(id, RawDataAsset::TypeName, canonicalPath);
     asset = Content::Load<RawDataAsset>(canonicalPath);
     REQUIRE(asset);
     REQUIRE_FALSE(asset->WaitForLoaded());
@@ -313,7 +313,7 @@ TEST_CASE("Binary asset storage rejects malformed and unsupported data")
     REQUIRE(bytes.Length() > 16);
     bytes[0] ^= 0xff;
     REQUIRE(!File::WriteAllBytes(corruptPath, bytes.Get(), bytes.Length()));
-    Content::GetRegistry()->RegisterAsset(corruptId, RawDataAsset::TypeName, corruptPath);
+    Content::GetObjectRegistry()->RegisterTransientObject(corruptId, RawDataAsset::TypeName, corruptPath);
     corruptAsset = Content::Load<RawDataAsset>(corruptPath);
     CHECK_FALSE(corruptAsset);
 
@@ -322,13 +322,13 @@ TEST_CASE("Binary asset storage rejects malformed and unsupported data")
     REQUIRE(!File::ReadAllBytes(truncatedPath, bytes));
     REQUIRE(bytes.Length() > 2);
     REQUIRE(!File::WriteAllBytes(truncatedPath, bytes.Get(), bytes.Length() / 2));
-    Content::GetRegistry()->RegisterAsset(truncatedId, RawDataAsset::TypeName, truncatedPath);
+    Content::GetObjectRegistry()->RegisterTransientObject(truncatedId, RawDataAsset::TypeName, truncatedPath);
     truncatedAsset = Content::Load<RawDataAsset>(truncatedPath);
     CHECK_FALSE(truncatedAsset);
 
     const Guid versionId = Guid::New();
     WriteRawDataAsset(versionPath, versionId, RawDataAsset::SerializedVersion + 1, payload, ARRAY_COUNT(payload));
-    Content::GetRegistry()->RegisterAsset(versionId, RawDataAsset::TypeName, versionPath);
+    Content::GetObjectRegistry()->RegisterTransientObject(versionId, RawDataAsset::TypeName, versionPath);
     versionAsset = Content::Load<RawDataAsset>(versionPath);
     CHECK_FALSE(versionAsset);
 }
@@ -397,8 +397,8 @@ TEST_CASE("Content resolves an explicit distinct Library load location and still
         if (asset)
             Content::UnloadAsset(asset);
         CleanupRawDataAsset(legacyPath, legacyAsset);
-        Content::UnregisterAssetLoadLocation(id);
-        Content::GetRegistry()->DeleteAsset(canonicalPath, nullptr);
+        Content::UnregisterRuntimeAssetLoadLocation(id);
+        Content::GetObjectRegistry()->RemoveTransientPackage(canonicalPath, nullptr);
         ContentStorageManager::EnsureAccess(storagePath);
         FileSystem::DeleteDirectory(root, true);
         FileSystem::DeleteFile(canonicalPath);
@@ -416,7 +416,7 @@ TEST_CASE("Content resolves an explicit distinct Library load location and still
 
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(Content::RegisterAssetLoadLocation(location, diagnostic));
-    asset = Content::Load<RawDataAsset>(id);
+    asset = Content::LoadRuntimeObject<RawDataAsset>(id);
     REQUIRE(asset);
     CHECK(asset->GetPath() == canonicalPath);
     CHECK(asset->GetStoragePath() == storagePath);
@@ -432,14 +432,14 @@ TEST_CASE("Content resolves an explicit distinct Library load location and still
     asset = nullptr;
     ObjectsRemovalService::Flush();
     CHECK_FALSE(ArtifactLease::IsLeased(storagePath));
-    Content::UnregisterAssetLoadLocation(id);
+    Content::UnregisterRuntimeAssetLoadLocation(id);
     CHECK_FALSE(ArtifactStore::CleanEntireLibrary(diagnostic));
     CHECK_FALSE(FileSystem::FileExists(storagePath));
     CHECK(FileSystem::FileExists(canonicalPath));
 
     WriteRawDataAsset(legacyPath, legacyId, RawDataAsset::SerializedVersion, payload, ARRAY_COUNT(payload));
-    Content::GetRegistry()->RegisterAsset(legacyId, RawDataAsset::TypeName, legacyPath);
-    legacyAsset = Content::Load<RawDataAsset>(legacyId);
+    Content::GetObjectRegistry()->RegisterTransientObject(legacyId, RawDataAsset::TypeName, legacyPath);
+    legacyAsset = Content::LoadRuntimeObject<RawDataAsset>(legacyId);
     REQUIRE(legacyAsset);
     CHECK(legacyAsset->GetPath() == legacyPath);
     CHECK(legacyAsset->GetStoragePath() == legacyPath);

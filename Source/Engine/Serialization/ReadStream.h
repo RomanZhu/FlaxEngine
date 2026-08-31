@@ -7,7 +7,7 @@
 #include "Engine/Content/Asset.h"
 
 extern FLAXENGINE_API class ScriptingObject* FindObject(const Guid& id, class MClass* type);
-extern FLAXENGINE_API class Asset* LoadAsset(const Guid& id, const struct ScriptingTypeHandle& type);
+extern FLAXENGINE_API class Asset* LoadRuntimeAsset(const Guid& runtimeId, const struct ScriptingTypeHandle& type);
 extern FLAXENGINE_API class Asset* LoadAsset(const AssetObjectId& id, const struct ScriptingTypeHandle& type);
 
 /// <summary>
@@ -132,7 +132,7 @@ public:
     {
         AssetObjectId id;
         Read(id);
-        data = (T*)::LoadAsset(id, T::TypeInitializer);
+        data = (T*)::LoadRuntimeAsset(id, T::TypeInitializer);
     }
 
     template<typename T>
@@ -172,7 +172,7 @@ public:
     {
         AssetObjectId id;
         Read(id);
-        v.Set(*(Guid*)id);
+        v.Set(id);
     }
 
     /// <summary>

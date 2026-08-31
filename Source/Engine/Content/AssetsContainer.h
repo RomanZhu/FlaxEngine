@@ -25,7 +25,7 @@ public:
             if (e.GetID() == id)
                 return (T*)e.Get();
         }
-        auto asset = (T*)::LoadAsset(id, T::TypeInitializer);
+        auto asset = (T*)::LoadRuntimeAsset(id, T::TypeInitializer);
         if (asset && !asset->WaitForLoaded())
             Add(asset);
         else

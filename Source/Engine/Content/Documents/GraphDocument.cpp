@@ -754,7 +754,7 @@ namespace
         case VariantType::Asset:
         {
             const Guid runtimeId = (Guid)value;
-            AssetObjectId objectId = Content::ResolveAssetObjectId(runtimeId);
+            AssetObjectId objectId = Content::ResolveRuntimeObjectId(runtimeId);
             if (objectId.IsNull() && runtimeId.IsValid())
                 objectId = AssetObjectId::Main(AssetGuid(runtimeId));
             AddString(object, "$type", "AssetReference", allocator);
@@ -1118,7 +1118,7 @@ namespace
                 if (fileId == value.MemberEnd() || !fileId->value.IsInt64() || (id.IsValid() && fileId->value.GetInt64() == 0))
                     return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph asset references require a persistent fileId."));
                 result.SetAsset(id.IsValid()
-                    ? Content::LoadAsync<Asset>(AssetObjectId(AssetGuid(id), fileId->value.GetInt64()))
+                    ? Content::LoadAssetAsync<Asset>(AssetObjectId(AssetGuid(id), fileId->value.GetInt64()))
                     : nullptr);
             }
             else if (typeName == "ObjectReference")

@@ -124,8 +124,8 @@ namespace
             AssetSemanticInterface semanticInterface;
             semanticInterface.Version = 1;
             semanticInterface.Hash = ContentHash::Compute("synthetic-interface-v1", 22);
-            if (context.DeclareBuildInput(TEXT("synthetic-upstream-runtime"), BuildDependencyID, BuildDependencyKey, semanticInterface, dependencyOrigin, diagnostic) ||
-                context.DeclareRuntimeReference(TEXT("synthetic-runtime-reference"), RuntimeReferenceID, dependencyOrigin, diagnostic) ||
+            if (context.DeclareBuildInput(TEXT("synthetic-upstream-runtime"), AssetObjectId::Main(AssetGuid(BuildDependencyID)), BuildDependencyKey, semanticInterface, dependencyOrigin, diagnostic) ||
+                context.DeclareRuntimeReference(TEXT("synthetic-runtime-reference"), AssetObjectId::Main(AssetGuid(RuntimeReferenceID)), dependencyOrigin, diagnostic) ||
                 context.DeclareToolchain(TEXT("synthetic-toolchain"), ToolchainHash, dependencyOrigin, diagnostic) ||
                 context.DeclareOutput(StringAnsiView("runtime"), Guid::Empty, diagnostic) ||
                 context.DeclareOutput(StringAnsiView("trace"), Guid::Empty, diagnostic))
@@ -570,7 +570,7 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
 
     // A real Content load drives prepare, build, publication, resolution, factory creation, and binary loading.
     const Array<byte> firstExpected = fixture.ExpectedPayload();
-    loadedAsset = Content::Load<RawDataAsset>(fixture.AssetID);
+    loadedAsset = Content::LoadRuntimeObject<RawDataAsset>(fixture.AssetID);
     REQUIRE(loadedAsset);
     REQUIRE(loadedAsset->Data.Count() == firstExpected.Count());
     CHECK(Platform::MemoryCompare(loadedAsset->Data.Get(), firstExpected.Get(), firstExpected.Count()) == 0);
@@ -740,7 +740,7 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
     ArtifactResolver::Get().Configure(database, *service, fixture.LibraryRoot, fixture.Target, provider);
 
     const int32 regenerationBuilds = fixture.BuildCompleted.load();
-    loadedAsset = Content::Load<RawDataAsset>(fixture.AssetID);
+    loadedAsset = Content::LoadRuntimeObject<RawDataAsset>(fixture.AssetID);
     REQUIRE(loadedAsset);
     const Array<byte> regeneratedExpected = fixture.ExpectedPayload();
     REQUIRE(loadedAsset->Data.Count() == regeneratedExpected.Count());

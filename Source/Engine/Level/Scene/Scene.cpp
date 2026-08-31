@@ -130,7 +130,7 @@ void Scene::BuildCSG(float timeoutMs)
 String Scene::GetPath() const
 {
     AssetInfo info;
-    if (Content::GetAssetInfo(GetID(), info))
+    if (Content::GetRuntimeAssetInfo(GetID(), info))
     {
         return info.Path;
     }
@@ -173,7 +173,7 @@ void Scene::ApplyCSGModelSDF()
 Array<Guid> Scene::GetAssetReferences() const
 {
     Array<Guid> result;
-    const auto asset = Content::Load<SceneAsset>(GetID());
+    const auto asset = Content::LoadRuntimeObject<SceneAsset>(GetID());
     if (asset)
     {
         Array<String> files;

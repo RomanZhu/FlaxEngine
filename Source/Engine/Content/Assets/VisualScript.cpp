@@ -104,7 +104,7 @@ VisualScriptExecutor::VisualScriptExecutor()
 
 void VisualScriptExecutor::Invoke(const Guid& scriptId, int32 nodeId, int32 boxId, const Guid& instanceId, Variant& result) const
 {
-    auto script = Content::Load<VisualScript>(scriptId);
+    auto script = Content::LoadRuntimeObject<VisualScript>(scriptId);
     if (!script)
         return;
     const auto node = script->Graph.GetNode(nodeId);
@@ -926,7 +926,7 @@ void VisualScriptExecutor::ProcessGroupFunction(Box* boxBase, Node* node, Value&
         Guid id;
         if (Guid::Parse(type.Fullname, id))
             break;
-        if (const auto visualScript = (VisualScript*)Content::GetAsset(id))
+        if (const auto visualScript = (VisualScript*)Content::GetRuntimeObject(id))
         {
             if (auto i = visualScript->GetScriptInstance(object))
             {
@@ -1672,7 +1672,7 @@ void VisualScript::CacheScriptingType()
                     Guid id;
                     if (!Guid::Parse(eType.Fullname, id))
                     {
-                        if (const auto visualScript = Content::LoadAsync<VisualScript>(id))
+                        if (const auto visualScript = Content::LoadRuntimeObjectAsync<VisualScript>(id))
                         {
                             node = visualScript->FindMethod(referenceMethod->GetName(), referenceMethod->GetParametersCount());
                         }
@@ -1817,7 +1817,7 @@ void VisualScriptingBinaryModule::OnEvent(ScriptingObject* object, Span<Variant>
         Guid id;
         if (Guid::Parse(type.Fullname, id))
             return;
-        if (const auto visualScript = (VisualScript*)Content::GetAsset(id))
+        if (const auto visualScript = (VisualScript*)Content::GetRuntimeObject(id))
         {
             if (auto instance = visualScript->GetScriptInstance(object))
             {
@@ -1884,7 +1884,7 @@ bool VisualScriptingBinaryModule::FindScriptingType(const StringAnsiView& typeNa
         Guid id;
         if (!Guid::Parse(typeName, id))
         {
-            const auto visualScript = Content::LoadAsync<VisualScript>(id);
+            const auto visualScript = Content::LoadRuntimeObjectAsync<VisualScript>(id);
             if (visualScript)
             {
                 const auto handle = visualScript->GetScriptingType();

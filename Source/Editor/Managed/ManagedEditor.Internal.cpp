@@ -22,11 +22,14 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetPath.h"
+#include "Engine/Engine/Globals.h"
+#include "Engine/Content/Documents/AssetSourceFactory.h"
+#include "Engine/Content/Documents/GraphDocument.h"
 #include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/ContentImporters/ImportModel.h"
 #include "Engine/ContentImporters/ImportAudio.h"
 #include "Engine/ContentImporters/CreateCollisionData.h"
-#include "Engine/ContentImporters/CreateJson.h"
 #include "Engine/Level/Level.h"
 #include "Engine/Level/Actor.h"
 #include "Engine/Level/Prefabs/Prefab.h"
@@ -49,6 +52,7 @@
 #include "FlaxEngine.Gen.h"
 #include "Engine/Level/Actors/AnimatedModel.h"
 #include "Engine/Serialization/JsonTools.h"
+#include "Engine/Serialization/JsonWriters.h"
 
 Guid ManagedEditor::ObjectID(0x91970b4e, 0x99634f61, 0x84723632, 0x54c776af);
 
@@ -240,7 +244,7 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CreateVisualScript(MString* outputPath
     String propertiesJson = TEXT("{\n  \"baseType\": \"");
     propertiesJson += baseTypename.HasChars() ? baseTypename : TEXT("FlaxEngine.Script");
     propertiesJson += TEXT("\",\n  \"flags\": 0\n}\n");
-    return !AssetDatabaseFacade::CreateGraphDocument(outputPath, VisualScript::TypeName, propertiesJson).IsValid();
+    return !AssetDocumentService::CreateGraphSource(outputPath, VisualScript::TypeName, propertiesJson).IsValid();
 }
 
 DEFINE_INTERNAL_CALL(MString*) EditorInternal_CanImport(MString* extensionObj)
@@ -274,7 +278,39 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_SaveJsonAsset(MString* outputPathObj, 
     const StringAsANSI<> dataTypeName(dataTypeNameObjChars.Get(), dataTypeNameObjChars.Length());
     const StringAnsiView dataTypeNameAnsi(dataTypeName.Get(), dataTypeName.Length());
 
-    return CreateJson::Create(outputPath, dataAnsi, dataTypeNameAnsi);
+    if (AssetPathPolicy::IsSameOrChild(outputPath, Globals::ProjectContentFolder))
+    {
+        AssetCreationParameters parameters;
+        parameters.TypeName = String(dataTypeNameAnsi.Get(), dataTypeNameAnsi.Length());
+        parameters.Payload = StringAnsi(dataAnsi.Get(), dataAnsi.Length());
+        AssetPipelineDiagnostic diagnostic;
+        if (AssetSourceFactory::CreateOrReplace(outputPath, parameters, diagnostic))
+        {
+            LOG(Error, "Cannot save authored asset source '{0}': {1}", outputPath, diagnostic.Message);
+            return true;
+        }
+        return false;
+    }
+
+    // Editor-local configuration is not an asset source document.
+    rapidjson_flax::StringBuffer buffer;
+    PrettyJsonWriter writer(buffer);
+    writer.StartObject();
+    writer.JKEY("TypeName");
+    writer.String(dataTypeNameAnsi.Get(), dataTypeNameAnsi.Length());
+    writer.JKEY("EngineBuild");
+    writer.Int(FLAXENGINE_VERSION_BUILD);
+    writer.JKEY("Data");
+    writer.RawValue(dataAnsi.Get(), dataAnsi.Length());
+    writer.EndObject();
+    AssetPipelineDiagnostic diagnostic;
+    const StringAnsi text(buffer.GetString(), static_cast<int32>(buffer.GetSize()));
+    if (GraphDocumentCodec::SaveJsonAtomic(outputPath, text, diagnostic))
+    {
+        LOG(Error, "Cannot save local JSON configuration '{0}': {1}", outputPath, diagnostic.Message);
+        return true;
+    }
+    return false;
 }
 
 DEFINE_INTERNAL_CALL(bool) EditorInternal_CanExport(MString* pathObj)
@@ -607,7 +643,7 @@ DEFINE_INTERNAL_CALL(void) EditorInternal_DeserializeSceneObject(SceneObject* sc
 
 DEFINE_INTERNAL_CALL(void) EditorInternal_LoadAsset(Guid* id)
 {
-    Content::LoadAsync<Asset>(*id);
+    Content::LoadRuntimeObjectAsync<Asset>(*id);
 }
 
 DEFINE_INTERNAL_CALL(bool) EditorInternal_CanSetToRoot(Prefab* prefab, Actor* targetActor)
@@ -621,11 +657,13 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CanSetToRoot(Prefab* prefab, Actor* ta
         if (!newRootDataPtr || !*newRootDataPtr)
             return false;
         const ISerializable::DeserializeStream& newRootData = **newRootDataPtr;
-        Guid prefabId, prefabObjectID;
-        if (JsonTools::GetGuidIfValid(prefabId, newRootData, "PrefabID") && 
-            JsonTools::GetGuidIfValid(prefabObjectID, newRootData, "PrefabObjectID"))
+        Guid prefabId;
+        const auto prefabObjectFileId = newRootData.FindMember("PrefabObjectFileId");
+        if (JsonTools::GetGuidIfValid(prefabId, newRootData, "PrefabID") &&
+            prefabObjectFileId != newRootData.MemberEnd() && prefabObjectFileId->value.IsInt64())
         {
-            const auto nestedPrefab = Content::Load<Prefab>(prefabId);
+            const Guid prefabObjectID = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileId->value.GetInt64(), GlobalObjectKind::PrefabObject);
+            const auto nestedPrefab = Content::LoadRuntimeObject<Prefab>(prefabId);
             if (nestedPrefab && nestedPrefab->GetRootObjectId() != prefabObjectID)
                 return false;
         }
@@ -721,7 +759,7 @@ bool ManagedEditor::CreateAsset(const String& tag, String outputPath)
 Array<Guid> ManagedEditor::GetAssetReferences(const Guid& assetId)
 {
     Array<Guid> result;
-    if (auto* asset = Content::Load<Asset>(assetId))
+    if (auto* asset = Content::LoadRuntimeObject<Asset>(assetId))
     {
         Array<String> files;
         asset->GetReferences(result, files);

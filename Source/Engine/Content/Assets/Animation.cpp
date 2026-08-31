@@ -370,7 +370,7 @@ bool Animation::SaveTimeline(BytesContainer& data)
                 stream.Read(nestedAnim.Duration);
                 stream.Read(nestedAnim.Speed);
                 stream.Read(nestedAnim.StartTime);
-                nestedAnim.Anim = Content::ResolveAssetObjectId(id);
+                nestedAnim.Anim = Content::ResolveRuntimeObjectId(id);
                 nestedAnim.Enabled = (trackFlags & (byte)SceneAnimation::Track::Flags::Mute) == 0;
                 nestedAnim.Loop = (trackFlags & (byte)SceneAnimation::Track::Flags::Loop) != 0;
                 break;
@@ -715,7 +715,7 @@ Asset::LoadResult Animation::load()
             nestedAnim.Loop = flags & 2;
             Guid id;
             stream.Read(id);
-            nestedAnim.Anim = Content::ResolveAssetObjectId(id);
+            nestedAnim.Anim = Content::ResolveRuntimeObjectId(id);
             stream.Read(nestedAnim.Time);
             stream.Read(nestedAnim.Duration);
             stream.Read(nestedAnim.Speed);

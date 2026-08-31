@@ -520,7 +520,7 @@ struct FLAXENGINE_API GPUDeviceLock : NonCopyable
 
 // Utility to get GPU resource name (StringView) from the AssetInfo. Supports cooked builds with enabled debug resource naming that resolves original file path from the project to boost debugging experience.
 #if GPU_ENABLE_RESOURCE_NAMING && !USE_EDITOR
-#define GPU_GET_RESOURCE_NAME_FROM_ASSET(assetInfo) Content::GetRegistry()->GetEditorAssetPath(info->ID)
+#define GPU_GET_RESOURCE_NAME_FROM_ASSET(assetInfo) Content::GetEditorAssetPath(info->ObjectID)
 #else
 #define GPU_GET_RESOURCE_NAME_FROM_ASSET(assetInfo) info->Path
 #endif

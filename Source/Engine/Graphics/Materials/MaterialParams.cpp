@@ -209,7 +209,7 @@ void MaterialParameter::SetValue(const Variant& value)
             _asAsset = nullptr;
             break;
         case VariantType::Guid:
-            _asAsset = Content::LoadAsync<TextureBase>(*(Guid*)value.AsData);
+            _asAsset = Content::LoadRuntimeObjectAsync<TextureBase>(*(Guid*)value.AsData);
             break;
         case VariantType::Pointer:
             _asAsset = (TextureBase*)value.AsPointer;
@@ -256,7 +256,7 @@ void MaterialParameter::SetValue(const Variant& value)
             _asAsset = nullptr;
             break;
         case VariantType::Guid:
-            _asAsset = Content::LoadAsync<GameplayGlobals>(*(Guid*)value.AsData);
+            _asAsset = Content::LoadRuntimeObjectAsync<GameplayGlobals>(*(Guid*)value.AsData);
             break;
         case VariantType::Pointer:
             _asAsset = (GameplayGlobals*)value.AsPointer;
@@ -743,7 +743,7 @@ bool MaterialParams::Load(ReadStream* stream)
                 case MaterialParameterType::Texture:
                 case MaterialParameterType::CubeTexture:
                     stream->Read(id);
-                    param->_asAsset = Content::LoadAsync<TextureBase>(id);
+                    param->_asAsset = Content::LoadRuntimeObjectAsync<TextureBase>(id);
                     break;
                 case MaterialParameterType::GPUTextureVolume:
                 case MaterialParameterType::GPUTextureCube:
@@ -754,7 +754,7 @@ bool MaterialParams::Load(ReadStream* stream)
                     break;
                 case MaterialParameterType::GameplayGlobal:
                     stream->Read(id);
-                    param->_asAsset = Content::LoadAsync<GameplayGlobals>(id);
+                    param->_asAsset = Content::LoadRuntimeObjectAsync<GameplayGlobals>(id);
                     break;
                 default:
                     break;
@@ -819,7 +819,7 @@ bool MaterialParams::Load(ReadStream* stream)
                 case MaterialParameterType::Texture:
                 case MaterialParameterType::CubeTexture:
                     stream->Read(id);
-                    param->_asAsset = Content::LoadAsync<TextureBase>(id);
+                    param->_asAsset = Content::LoadRuntimeObjectAsync<TextureBase>(id);
                     break;
                 case MaterialParameterType::GPUTextureVolume:
                 case MaterialParameterType::GPUTextureCube:
@@ -830,7 +830,7 @@ bool MaterialParams::Load(ReadStream* stream)
                     break;
                 case MaterialParameterType::GameplayGlobal:
                     stream->Read(id);
-                    param->_asAsset = Content::LoadAsync<GameplayGlobals>(id);
+                    param->_asAsset = Content::LoadRuntimeObjectAsync<GameplayGlobals>(id);
                     break;
                 default:
                     break;
@@ -894,7 +894,7 @@ bool MaterialParams::Load(ReadStream* stream)
                 case MaterialParameterType::Texture:
                 case MaterialParameterType::CubeTexture:
                     stream->Read(id);
-                    param->_asAsset = Content::LoadAsync<TextureBase>(id);
+                    param->_asAsset = Content::LoadRuntimeObjectAsync<TextureBase>(id);
                     break;
                 case MaterialParameterType::GPUTextureVolume:
                 case MaterialParameterType::GPUTextureCube:
@@ -905,7 +905,7 @@ bool MaterialParams::Load(ReadStream* stream)
                     break;
                 case MaterialParameterType::GameplayGlobal:
                     stream->Read(id);
-                    param->_asAsset = Content::LoadAsync<GameplayGlobals>(id);
+                    param->_asAsset = Content::LoadRuntimeObjectAsync<GameplayGlobals>(id);
                     break;
                 default:
                     break;

@@ -16,7 +16,7 @@
 #include "Engine/Scripting/Scripting.h"
 #if USE_EDITOR
 #include "Engine/Content/Content.h"
-#include "Engine/Content/Cache/AssetsCache.h"
+#include "Engine/Content/AssetObjectRegistry.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Level/Actors/EmptyActor.h"
@@ -75,7 +75,7 @@ namespace
 
     void CleanupTestSceneFiles(const String& scenePath)
     {
-        Content::GetRegistry()->DeleteAsset(scenePath, nullptr);
+        Content::GetObjectRegistry()->RemoveTransientPackage(scenePath, nullptr);
         FileSystem::DeleteFile(scenePath);
         FileSystem::DeleteDirectory(GetSceneActorsFolder(scenePath));
     }
@@ -120,7 +120,7 @@ namespace
 
         EnsureDirectory(StringUtils::GetDirectoryName(scenePath));
         REQUIRE(!File::WriteAllBytes(scenePath, buffer.GetString(), static_cast<int32>(buffer.GetSize())));
-        Content::GetRegistry()->RegisterAsset(sceneId, SceneAsset::TypeName, scenePath);
+        Content::GetObjectRegistry()->RegisterTransientObject(sceneId, SceneAsset::TypeName, scenePath);
     }
 
     void ReadFileBytes(const String& path, BytesContainer& data)
@@ -1180,7 +1180,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(FileSystem::FileExists(GetExternalActorPath(destinationScenePath, actorId)));
         CHECK(sceneAsset->GetPath() == destinationScenePath);
         AssetInfo info;
-        REQUIRE(Content::GetAssetInfo(sceneId, info));
+        REQUIRE(Content::GetRuntimeAssetInfo(sceneId, info));
         CHECK(info.Path == destinationScenePath);
     }
 
@@ -1190,8 +1190,8 @@ TEST_CASE("ExternalActorsSceneStorage")
         const String sourcePath = Globals::ProjectContentFolder / TEXT("__FailedBinaryRenameSource.flax");
         const String destinationPath = Globals::ProjectContentFolder / TEXT("__FailedBinaryRenameTarget.flax");
         const Guid assetId = ParseGuid("45454545454545454545454545454550");
-        Content::GetRegistry()->DeleteAsset(sourcePath, nullptr);
-        Content::GetRegistry()->DeleteAsset(destinationPath, nullptr);
+        Content::GetObjectRegistry()->RemoveTransientPackage(sourcePath, nullptr);
+        Content::GetObjectRegistry()->RemoveTransientPackage(destinationPath, nullptr);
         FileSystem::DeleteFile(sourcePath);
         FileSystem::DeleteFile(destinationPath);
         Material* material = nullptr;
@@ -1199,8 +1199,8 @@ TEST_CASE("ExternalActorsSceneStorage")
         {
             if (material)
                 Content::UnloadAsset(material);
-            Content::GetRegistry()->DeleteAsset(sourcePath, nullptr);
-            Content::GetRegistry()->DeleteAsset(destinationPath, nullptr);
+            Content::GetObjectRegistry()->RemoveTransientPackage(sourcePath, nullptr);
+            Content::GetObjectRegistry()->RemoveTransientPackage(destinationPath, nullptr);
             FileSystem::DeleteFile(sourcePath);
             FileSystem::DeleteFile(destinationPath);
         };
@@ -1245,7 +1245,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(FileSystem::FileExists(destinationPath));
         CHECK(material->GetPath() == destinationPath);
         AssetInfo info;
-        REQUIRE(Content::GetAssetInfo(assetId, info));
+        REQUIRE(Content::GetRuntimeAssetInfo(assetId, info));
         CHECK(info.Path == destinationPath);
         BytesContainer preservedBytes;
         REQUIRE(!File::ReadAllBytes(destinationPath, preservedBytes));
@@ -1256,7 +1256,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(FileSystem::FileExists(sourcePath));
         CHECK(!FileSystem::FileExists(destinationPath));
         CHECK(material->GetPath() == sourcePath);
-        REQUIRE(Content::GetAssetInfo(assetId, info));
+        REQUIRE(Content::GetRuntimeAssetInfo(assetId, info));
         CHECK(info.Path == sourcePath);
     }
 

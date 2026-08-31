@@ -149,12 +149,6 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
     AssetRecord record;
     if (!_database->TryGetRecord(request.AssetID, record))
         return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Asset database contains no record for the requested GUID."));
-    if (record.SourceKind == AssetSourceKind::LegacyBinary)
-    {
-        result = ResolvedArtifact::Legacy(record.ToAssetInfo());
-        return false;
-    }
-
     ArtifactInspection inspection;
     Inspect(_libraryRoot, record, request, inspection);
     if (request.Policy == ArtifactResolvePolicy::PublishedOnly)

@@ -90,7 +90,7 @@ void LogContext::Print(LogType verbosity)
                     msg.AppendFormat(TEXT("object {} ({})"), String(typeName), context.ObjectID);
                 }
             }
-            else if (Asset* asset = Content::GetAsset(context.ObjectID))
+            else if (Asset* asset = Content::GetRuntimeObject(context.ObjectID))
             {
                 msg.AppendFormat(TEXT("asset '{}' ({}, {})"), asset->GetPath(), asset->GetTypeName(), context.ObjectID);
             }

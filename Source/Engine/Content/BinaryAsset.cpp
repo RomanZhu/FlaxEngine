@@ -1,7 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "BinaryAsset.h"
-#include "Cache/AssetsCache.h"
 #include "Storage/ContentStorageManager.h"
 #include "Loading/Tasks/LoadAssetDataTask.h"
 #include "Factories/BinaryAssetFactory.h"
@@ -84,7 +83,7 @@ bool BinaryAsset::Init(AssetInitData& initData)
     Dependencies = initData.Dependencies;
     for (auto& e : Dependencies)
     {
-        auto asset = Cast<BinaryAsset>(Content::GetAsset(e.First));
+        auto asset = Cast<BinaryAsset>(Content::GetRuntimeObject(e.First));
         if (asset)
         {
             asset->_dependantAssets.Add(this);
@@ -273,7 +272,7 @@ void BinaryAsset::ClearDependencies()
 {
     for (auto& e : Dependencies)
     {
-        auto asset = Cast<BinaryAsset>(Content::GetAsset(e.First));
+        auto asset = Cast<BinaryAsset>(Content::GetRuntimeObject(e.First));
         if (asset)
             asset->_dependantAssets.Remove(this);
     }
@@ -299,7 +298,7 @@ bool BinaryAsset::HasDependenciesModified() const
     AssetInfo info;
     for (const auto& e : Dependencies)
     {
-        if (Content::GetAssetInfo(e.First, info))
+        if (Content::GetRuntimeAssetInfo(e.First, info))
         {
             const auto editTime = FileSystem::GetFileLastEditTime(info.Path);
             if (editTime > e.Second)
@@ -596,7 +595,7 @@ StringView BinaryAsset::GetPath() const
     return _canonicalPath;
 #else
     // In build all assets are packed into packages so use ID for original path lookup
-    return Content::GetRegistry()->GetEditorAssetPath(_id);
+    return Content::GetEditorAssetPath(_persistentObjectId);
 #endif
 }
 

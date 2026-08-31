@@ -67,7 +67,7 @@ bool EditorUtilities::FormatAppPackageName(String& packageName)
 
 bool EditorUtilities::GetApplicationImage(const Guid& imageId, TextureData& imageData, ApplicationImageType type)
 {
-    AssetReference<Texture> icon = Content::LoadAsync<Texture>(imageId);
+    AssetReference<Texture> icon = Content::LoadRuntimeObjectAsync<Texture>(imageId);
     if (icon == nullptr)
     {
         const auto gameSettings = GameSettings::Get();
@@ -96,7 +96,7 @@ bool EditorUtilities::GetApplicationImage(const Guid& imageId, TextureData& imag
 
 bool EditorUtilities::GetTexture(const Guid& textureId, TextureData& textureData)
 {
-    AssetReference<Texture> texture = Content::LoadAsync<Texture>(textureId);
+    AssetReference<Texture> texture = Content::LoadRuntimeObjectAsync<Texture>(textureId);
     if (texture)
     {
         if (texture->WaitForLoaded())

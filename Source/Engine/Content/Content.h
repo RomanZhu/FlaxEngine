@@ -14,7 +14,7 @@ class Engine;
 class FlaxFile;
 class BinaryAsset;
 class IAssetFactory;
-class AssetsCache;
+class AssetObjectRegistry;
 struct AssetLoadLocation;
 struct AssetPipelineDiagnostic;
 
@@ -49,7 +49,7 @@ public:
     static bool RegisterAssetLoadLocation(const AssetLoadLocation& location, AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Removes an explicit load location. Already loaded assets are unchanged.</summary>
-    static void UnregisterAssetLoadLocation(const Guid& id);
+    static void UnregisterRuntimeAssetLoadLocation(const Guid& runtimeId);
 
     /// <summary>Removes an explicit load location for one exact asset object. Already loaded assets are unchanged.</summary>
     static void UnregisterAssetLoadLocation(const AssetObjectId& objectId);
@@ -66,28 +66,28 @@ public:
 
 public:
     /// <summary>
-    /// Gets the assets registry.
+    /// Gets the transient/runtime object registry.
     /// </summary>
-    /// <returns>The assets cache.</returns>
-    static AssetsCache* GetRegistry();
+    /// <returns>The object registry.</returns>
+    static AssetObjectRegistry* GetObjectRegistry();
 
     /// <summary>Gets the exact GameSettings bootstrap object from the cooked runtime catalog.</summary>
     static AssetObjectId GetRuntimeGameSettingsObject();
 
 public:
     /// <summary>
-    /// Finds the asset info by id.
+    /// Finds asset information by an explicit transient/runtime scripting object identifier.
     /// </summary>
-    /// <param name="id">The asset id.</param>
+    /// <param name="runtimeId">The transient/runtime object identifier.</param>
     /// <param name="info">The output asset info. Filled with valid values only if method returns true.</param>
     /// <returns>True if found any asset, otherwise false.</returns>
-    API_FUNCTION() static bool GetAssetInfo(const Guid& id, API_PARAM(Out) AssetInfo& info);
+    API_FUNCTION() static bool GetRuntimeAssetInfo(const Guid& runtimeId, API_PARAM(Out) AssetInfo& info);
 
     /// <summary>Finds asset information by persistent source and local file identity. Cooked builds resolve through the runtime catalog registry.</summary>
     API_FUNCTION() static bool GetAssetInfo(const AssetObjectId& id, API_PARAM(Out) AssetInfo& info);
 
     /// <summary>Resolves a serialized runtime asset GUID back to its persistent source and local file identity.</summary>
-    static AssetObjectId ResolveAssetObjectId(const Guid& runtimeId);
+    static AssetObjectId ResolveRuntimeObjectId(const Guid& runtimeId);
 
     /// <summary>
     /// Finds the asset info by path.
@@ -98,11 +98,11 @@ public:
     API_FUNCTION() static bool GetAssetInfo(const StringView& path, API_PARAM(Out) AssetInfo& info);
 
     /// <summary>
-    /// Finds the asset path by id. In editor it returns the actual asset path, at runtime it returns the mapped asset path.
+    /// Finds the editor package path for an exact persistent asset object.
     /// </summary>
-    /// <param name="id">The asset id.</param>
+    /// <param name="objectId">The persistent object identity.</param>
     /// <returns>The asset path, or empty if failed to find.</returns>
-    API_FUNCTION() static StringView GetEditorAssetPath(const Guid& id);
+    API_FUNCTION() static StringView GetEditorAssetPath(const AssetObjectId& objectId);
 
     /// <summary>
     /// Finds all the asset IDs. Uses asset registry.
@@ -182,7 +182,7 @@ public:
     /// <param name="id">Asset unique ID</param>
     /// <param name="type">The asset type. If loaded object has different type (excluding types derived from the given) the loading fails.</param>
     /// <returns>Loaded asset or null if cannot</returns>
-    API_FUNCTION() static Asset* LoadAsync(const Guid& id, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
+    API_FUNCTION() static Asset* LoadRuntimeObjectAsync(const Guid& runtimeId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
 
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
@@ -190,7 +190,7 @@ public:
     /// <param name="id">Asset unique ID</param>
     /// <param name="type">The asset type. If loaded object has different type (excluding types derived from the given) the loading fails.</param>
     /// <returns>Loaded asset or null if cannot</returns>
-    static Asset* LoadAsync(const Guid& id, const ScriptingTypeHandle& type);
+    static Asset* LoadRuntimeObjectAsync(const Guid& runtimeId, const ScriptingTypeHandle& type);
 
     /// <summary>Loads one persistent imported object without collapsing its local file identity. Cooked builds require an exact runtime catalog entry.</summary>
     API_FUNCTION() static Asset* LoadAssetAsync(const AssetObjectId& objectId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
@@ -218,8 +218,8 @@ public:
         return static_cast<T*>(LoadMainAssetAsync(asset, T::TypeInitializer));
     }
 
-    /// <summary>Loads an asset for passive editor presentation without scheduling artifact builds, including dependencies.</summary>
-    static Asset* LoadAsyncPreview(const Guid& id, const ScriptingTypeHandle& type);
+    /// <summary>Loads an exact asset object for passive editor presentation without scheduling artifact builds, including dependencies.</summary>
+    static Asset* LoadAsyncPreview(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
 
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
@@ -228,9 +228,9 @@ public:
     /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
     /// <returns>Loaded asset or null if cannot</returns>
     template<typename T>
-    FORCE_INLINE static T* LoadAsync(const Guid& id)
+    FORCE_INLINE static T* LoadRuntimeObjectAsync(const Guid& runtimeId)
     {
-        return static_cast<T*>(LoadAsync(id, T::TypeInitializer));
+        return static_cast<T*>(LoadRuntimeObjectAsync(runtimeId, T::TypeInitializer));
     }
 
     /// <summary>
@@ -305,9 +305,9 @@ public:
     /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
     /// <returns>Asset instance if loaded, null otherwise.</returns>
     template<typename T>
-    static T* Load(const Guid& id, double timeoutInMilliseconds = 30000.0)
+    static T* LoadRuntimeObject(const Guid& runtimeId, double timeoutInMilliseconds = 30000.0)
     {
-        auto asset = LoadAsync<T>(id);
+        auto asset = LoadRuntimeObjectAsync<T>(runtimeId);
         if (asset && !asset->WaitForLoaded(timeoutInMilliseconds))
             return asset;
         return nullptr;
@@ -373,11 +373,11 @@ public:
     API_FUNCTION() static Asset* GetAsset(const StringView& path);
 
     /// <summary>
-    /// Finds the asset with given ID. Checks all loaded assets.
+    /// Finds the loaded asset with a transient/runtime scripting object identifier.
     /// </summary>
-    /// <param name="id">The id.</param>
+    /// <param name="runtimeId">The transient/runtime identifier.</param>
     /// <returns>The found asset or null if not loaded.</returns>
-    API_FUNCTION() static Asset* GetAsset(const Guid& id);
+    API_FUNCTION() static Asset* GetRuntimeObject(const Guid& runtimeId);
 
     /// <summary>Finds the loaded asset with the exact persistent object identity.</summary>
     API_FUNCTION() static Asset* GetAsset(const AssetObjectId& objectId);

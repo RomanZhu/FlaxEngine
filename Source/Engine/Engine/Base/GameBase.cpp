@@ -113,7 +113,7 @@ bool GameBase::Init()
     {
         LOG(Info, "Loading splash screen");
         if (GameBaseImpl::SplashScreenId)
-            GameBaseImpl::SplashScreen = Content::LoadAsync<Texture>(GameBaseImpl::SplashScreenId);
+            GameBaseImpl::SplashScreen = Content::LoadRuntimeObjectAsync<Texture>(GameBaseImpl::SplashScreenId);
         else
             GameBaseImpl::SplashScreen = Content::LoadAsyncInternal<Texture>(TEXT("Engine/Textures/Logo"));
         if (!GameBaseImpl::SplashScreen)

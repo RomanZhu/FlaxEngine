@@ -11,7 +11,6 @@
 #endif
 #include "Content.h"
 #include "FlaxEngine.Gen.h"
-#include "Cache/AssetsCache.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Config/Settings.h"
 #include "Engine/Serialization/JsonTools.h"
@@ -97,7 +96,7 @@ StringView JsonAssetBase::GetPath() const
     return _path;
 #else
     // In build all assets are packed into packages so use ID for original path lookup
-    return Content::GetRegistry()->GetEditorAssetPath(_id);
+    return Content::GetEditorAssetPath(_persistentObjectId);
 #endif
 }
 

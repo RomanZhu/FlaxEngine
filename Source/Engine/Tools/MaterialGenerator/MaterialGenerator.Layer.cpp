@@ -51,7 +51,7 @@ MaterialLayer* MaterialGenerator::GetLayer(const Guid& id, Node* caller)
     }
 
     // Load asset
-    Asset* asset = Assets.Load<MaterialBase>(Content::ResolveAssetObjectId(id));
+    Asset* asset = Assets.Load<MaterialBase>(Content::ResolveRuntimeObjectId(id));
     if (asset == nullptr)
     {
         OnError(caller, nullptr, TEXT("Failed to load material asset."));
@@ -263,7 +263,7 @@ void MaterialGenerator::prepareLayer(MaterialLayer* layer, bool allowVisiblePara
                 mp.Type = MaterialParameterType::Texture;
 
                 // Special case for Normal Maps
-                auto asset = (Texture*)::LoadAsset((Guid)param->Value, Texture::TypeInitializer);
+                auto asset = (Texture*)::LoadRuntimeAsset((Guid)param->Value, Texture::TypeInitializer);
                 if (asset && !asset->WaitForLoaded() && asset->IsNormalMap())
                     mp.Type = MaterialParameterType::NormalMap;
             }

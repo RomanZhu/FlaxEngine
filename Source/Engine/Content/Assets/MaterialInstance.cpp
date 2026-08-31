@@ -217,7 +217,7 @@ Asset::LoadResult MaterialInstance::load()
     // Load base material
     Guid baseMaterialId;
     headerStream.Read(baseMaterialId);
-    auto baseMaterial = Content::LoadAsync<MaterialBase>(baseMaterialId);
+    auto baseMaterial = Content::LoadRuntimeObjectAsync<MaterialBase>(baseMaterialId);
     if (baseMaterial)
         baseMaterial->AddReference();
 

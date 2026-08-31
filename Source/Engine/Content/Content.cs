@@ -41,9 +41,9 @@ namespace FlaxEngine
         /// <param name="id">Asset unique ID.</param>
         /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
         /// <returns>Asset instance if loaded, null otherwise.</returns>
-        public static T LoadAsync<T>(Guid id) where T : Asset
+        public static T LoadRuntimeObjectAsync<T>(Guid id) where T : Asset
         {
-            return (T)LoadAsync(id, typeof(T));
+            return (T)LoadRuntimeObjectAsync(id, typeof(T));
         }
 
         /// <summary>
@@ -52,9 +52,9 @@ namespace FlaxEngine
         /// <param name="id">Asset unique ID.</param>
         /// <returns>Asset instance if loaded, null otherwise</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Asset LoadAsync(Guid id)
+        public static Asset LoadRuntimeObjectAsync(Guid id)
         {
-            return LoadAsync<Asset>(id);
+            return LoadRuntimeObjectAsync<Asset>(id);
         }
 
         /// <summary>Loads one persistent imported object without dropping its local file identity.</summary>
@@ -67,6 +67,21 @@ namespace FlaxEngine
         public static Asset LoadAssetAsync(AssetObjectId id)
         {
             return LoadAssetAsync<Asset>(id);
+        }
+
+        /// <summary>Loads and waits for one exact persistent imported object.</summary>
+        public static T LoadAsset<T>(AssetObjectId id, double timeoutInMilliseconds = 30000.0) where T : Asset
+        {
+            var asset = LoadAssetAsync<T>(id);
+            if (asset && asset.WaitForLoaded(timeoutInMilliseconds) == false)
+                return asset;
+            return null;
+        }
+
+        /// <summary>Loads and waits for one exact persistent imported object.</summary>
+        public static Asset LoadAsset(AssetObjectId id, double timeoutInMilliseconds = 30000.0)
+        {
+            return LoadAsset<Asset>(id, timeoutInMilliseconds);
         }
 
         /// <summary>
@@ -123,9 +138,9 @@ namespace FlaxEngine
         /// <param name="timeoutInMilliseconds">Custom timeout value in milliseconds.</param>
         /// <returns>Asset instance if loaded, null otherwise</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Asset Load(Guid id, double timeoutInMilliseconds = 30000.0)
+        public static Asset LoadRuntimeObject(Guid id, double timeoutInMilliseconds = 30000.0)
         {
-            return Load<Asset>(id, timeoutInMilliseconds);
+            return LoadRuntimeObject<Asset>(id, timeoutInMilliseconds);
         }
 
         /// <summary>
@@ -163,9 +178,9 @@ namespace FlaxEngine
         /// <param name="timeoutInMilliseconds">Custom timeout value in milliseconds.</param>
         /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
         /// <returns>Asset instance if loaded, null otherwise</returns>
-        public static T Load<T>(Guid id, double timeoutInMilliseconds = 30000.0) where T : Asset
+        public static T LoadRuntimeObject<T>(Guid id, double timeoutInMilliseconds = 30000.0) where T : Asset
         {
-            var asset = LoadAsync<T>(id);
+            var asset = LoadRuntimeObjectAsync<T>(id);
             if (asset && asset.WaitForLoaded(timeoutInMilliseconds) == false)
                 return asset;
             return null;

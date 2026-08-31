@@ -315,7 +315,7 @@ Asset::LoadResult SceneAnimation::load()
             {
                 const auto trackData = stream.Move<PostProcessMaterialTrack::Data>();
                 track.Data = trackData;
-                track.Asset = Content::LoadAsync<MaterialBase>(trackData->AssetID);
+                track.Asset = Content::LoadRuntimeObjectAsync<MaterialBase>(trackData->AssetID);
                 const auto trackRuntime = _runtimeData.Move<PostProcessMaterialTrack::Runtime>();
                 track.RuntimeData = trackRuntime;
                 if (version <= 3)
@@ -340,7 +340,7 @@ Asset::LoadResult SceneAnimation::load()
             {
                 const auto trackData = stream.Move<NestedSceneAnimationTrack::Data>();
                 track.Data = trackData;
-                track.Asset = Content::LoadAsync<SceneAnimation>(trackData->AssetID);
+                track.Asset = Content::LoadRuntimeObjectAsync<SceneAnimation>(trackData->AssetID);
                 const auto trackRuntime = _runtimeData.Move<NestedSceneAnimationTrack::Runtime>();
                 track.RuntimeData = trackRuntime;
                 track.TrackStateIndex = TrackStatesCount;
@@ -370,7 +370,7 @@ Asset::LoadResult SceneAnimation::load()
             {
                 const auto trackData = stream.Move<AudioTrack::Data>();
                 track.Data = trackData;
-                track.Asset = Content::LoadAsync<AudioClip>(trackData->AssetID);
+                track.Asset = Content::LoadRuntimeObjectAsync<AudioClip>(trackData->AssetID);
                 const auto trackRuntime = _runtimeData.Move<AudioTrack::Runtime>();
                 track.RuntimeData = trackRuntime;
                 track.TrackStateIndex = TrackStatesCount++;

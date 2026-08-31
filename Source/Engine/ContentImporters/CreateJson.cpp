@@ -11,7 +11,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Documents/AssetSourceFactory.h"
 #include "Engine/Content/Storage/JsonStorageProxy.h"
-#include "Engine/Content/Cache/AssetsCache.h"
+#include "Engine/Content/AssetObjectRegistry.h"
 #include "Engine/Content/AssetReference.h"
 #include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Localization/LocalizedStringTable.h"
@@ -106,7 +106,7 @@ bool CreateJson::Create(const StringView& path, const StringAnsiView& data, cons
     }
     else
     {
-        Content::GetRegistry()->RegisterAsset(id, String(dataTypename), path);
+        Content::GetObjectRegistry()->RegisterTransientObject(id, dataTypename, path);
     }
 
     return false;

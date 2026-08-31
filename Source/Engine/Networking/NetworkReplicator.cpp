@@ -1128,7 +1128,7 @@ void InvokeObjectSpawn(const NetworkMessageObjectSpawn& msgData, const Guid& pre
         if (!prefabInstance)
         {
             // Spawn prefab
-            auto prefab = (Prefab*)LoadAsset(prefabId, Prefab::TypeInitializer);
+            auto prefab = (Prefab*)LoadRuntimeAsset(prefabId, Prefab::TypeInitializer);
             if (!prefab)
             {
                 NETWORK_REPLICATOR_LOG(Error, "[NetworkReplicator] Failed to find prefab {}", prefabId.ToString());
@@ -1262,7 +1262,7 @@ void InvokeObjectSpawn(const NetworkMessageObjectSpawn& msgData, const Guid& pre
 #if USE_NETWORK_REPLICATOR_LOG
                 // Ignore case when parent object in a message was a scene (eg. that is already unloaded on a client)
                 AssetInfo assetInfo;
-                if (!Content::GetAssetInfo(msgDataItem.ParentId, assetInfo) || assetInfo.TypeName != TEXT("FlaxEngine.SceneAsset"))
+                if (!Content::GetRuntimeAssetInfo(msgDataItem.ParentId, assetInfo) || assetInfo.TypeName != TEXT("FlaxEngine.SceneAsset"))
                 {
                     NETWORK_REPLICATOR_LOG(Error, "[NetworkReplicator] Failed to find object {} as parent to spawned object", msgDataItem.ParentId.ToString());
                 }

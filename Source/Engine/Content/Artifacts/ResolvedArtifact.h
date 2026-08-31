@@ -8,7 +8,6 @@
 /// <summary>Physical storage category selected for an asset load.</summary>
 enum class ArtifactStorageKind : byte
 {
-    Legacy,
     Generated,
     Package,
 };
@@ -28,11 +27,11 @@ struct FLAXENGINE_API ResolvedArtifact
     ArtifactStoragePath StoragePath;
     String OutputKind;
     String Key;
-    ArtifactStorageKind StorageKind = ArtifactStorageKind::Legacy;
+    ArtifactStorageKind StorageKind = ArtifactStorageKind::Package;
     bool IsExact = true;
     bool IsLastGood = false;
 
-    static ResolvedArtifact Legacy(const AssetInfo& info);
+    static ResolvedArtifact Package(const AssetInfo& info);
     bool IsGenerated() const;
 };
 
@@ -42,5 +41,5 @@ struct FLAXENGINE_API AssetLoadLocation
     AssetInfo Info;
     ResolvedArtifact Artifact;
 
-    static AssetLoadLocation Legacy(const AssetInfo& info);
+    static AssetLoadLocation Package(const AssetInfo& info);
 };

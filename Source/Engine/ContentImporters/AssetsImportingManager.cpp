@@ -9,7 +9,7 @@
 #include "Engine/Threading/MainThreadTask.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Content.h"
-#include "Engine/Content/Cache/AssetsCache.h"
+#include "Engine/Content/AssetObjectRegistry.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -455,7 +455,7 @@ bool AssetsImportingManager::Create(const Function<CreateAssetResult(CreateAsset
     if (result == CreateAssetResult::Ok)
     {
         // Register asset
-        Content::GetRegistry()->RegisterAsset(context.Data.Header, context.TargetAssetPath);
+        Content::GetObjectRegistry()->RegisterTransientObject(context.Data.Header, context.TargetAssetPath);
 
         // Done
         const auto endTime = Platform::GetTimeSeconds();

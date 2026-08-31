@@ -4,7 +4,7 @@
 #include "Content.h"
 #include "Deprecated.h"
 #include "SoftAssetReference.h"
-#include "Cache/AssetsCache.h"
+#include "AssetObjectRegistry.h"
 #include "Loading/Tasks/LoadAssetTask.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/LogContext.h"
@@ -352,7 +352,7 @@ void Asset::OnDeleteObject()
         LOG(Info, "Deleting asset '{0}':{1}.", path, id.ToString());
 
         // Remove from registry
-        Content::GetRegistry()->DeleteAsset(id, nullptr);
+        Content::GetObjectRegistry()->RemoveTransientObject(_persistentObjectId, nullptr);
 
         // Delete file
         if (!IsVirtual())
@@ -417,7 +417,7 @@ void Asset::ChangeID(const Guid& newId)
         CRASH;
 
     // ID has to be unique
-    if (Content::GetAsset(newId) != nullptr)
+    if (Content::GetRuntimeObject(newId) != nullptr)
         CRASH;
 
     const Guid oldId = _id;

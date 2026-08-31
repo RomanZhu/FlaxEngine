@@ -178,7 +178,7 @@ public:
         case GRAPH_NODE_MAKE_TYPE(7, 16):
         {
             node->Assets.Resize(1);
-            node->Assets[0] = Content::LoadAsync<Asset>((Guid)node->Values[0]);
+            node->Assets[0] = Content::LoadRuntimeObjectAsync<Asset>((Guid)node->Values[0]);
             break;
         }
 
@@ -450,7 +450,7 @@ public:
         case GRAPH_NODE_MAKE_TYPE(15, 400):
         {
             node->Assets.Resize(1);
-            node->Assets[0] = Content::LoadAsync<Asset>((Guid)node->Values[2]);
+            node->Assets[0] = Content::LoadRuntimeObjectAsync<Asset>((Guid)node->Values[2]);
             USE_ATTRIBUTE(Position, Float3, 0);
             USE_ATTRIBUTE(Rotation, Float3, 1);
             USE_ATTRIBUTE(SpriteSize, Float2, 2);
@@ -488,8 +488,8 @@ public:
         case GRAPH_NODE_MAKE_TYPE(15, 403):
         {
             node->Assets.Resize(2);
-            node->Assets[0] = Content::LoadAsync<Asset>((Guid)node->Values[2]);
-            node->Assets[1] = Content::LoadAsync<Asset>((Guid)node->Values[3]);
+            node->Assets[0] = Content::LoadRuntimeObjectAsync<Asset>((Guid)node->Values[2]);
+            node->Assets[1] = Content::LoadRuntimeObjectAsync<Asset>((Guid)node->Values[3]);
             USE_ATTRIBUTE(Position, Float3, 0);
             USE_ATTRIBUTE(Rotation, Float3, 1);
             USE_ATTRIBUTE(Scale, Float3, 2);
@@ -499,7 +499,7 @@ public:
         case GRAPH_NODE_MAKE_TYPE(15, 404):
         {
             node->Assets.Resize(1);
-            node->Assets[0] = Content::LoadAsync<Asset>((Guid)node->Values[2]);
+            node->Assets[0] = Content::LoadRuntimeObjectAsync<Asset>((Guid)node->Values[2]);
             USE_ATTRIBUTE(Position, Float3, 0);
             // TODO: add support for custom sorting key - not only by age
             USE_ATTRIBUTE(Age, Float, 1);
@@ -509,7 +509,7 @@ public:
         case GRAPH_NODE_MAKE_TYPE(15, 405):
         {
             node->Assets.Resize(1);
-            node->Assets[0] = Content::LoadAsync<Asset>((Guid)node->Values[2]);
+            node->Assets[0] = Content::LoadRuntimeObjectAsync<Asset>((Guid)node->Values[2]);
             USE_ATTRIBUTE(Position, Float3, 0);
             USE_ATTRIBUTE(Radius, Float, 1);
             break;

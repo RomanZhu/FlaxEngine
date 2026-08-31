@@ -6,7 +6,6 @@
 #include "Engine/Graphics/Shaders/GPUShader.h"
 #if GPU_ENABLE_RESOURCE_NAMING && !USE_EDITOR
 #include "Engine/Content/Content.h"
-#include "Engine/Content/Cache/AssetsCache.h"
 #endif
 #include "Engine/Content/Upgraders/ShaderAssetUpgrader.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"

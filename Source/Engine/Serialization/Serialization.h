@@ -514,7 +514,7 @@ namespace Serialization
     {
         AssetObjectId id;
         Deserialize(stream, id, modifier);
-        v = (T*)::LoadAsset(id, T::TypeInitializer);
+        v = (T*)::LoadRuntimeAsset(id, T::TypeInitializer);
     }
 
     template<typename T>

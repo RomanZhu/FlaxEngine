@@ -228,7 +228,7 @@ void IBuildCache::InvalidateCacheTextures()
 bool CookAssetsStep::CacheEntry::IsValid(bool withDependencies)
 {
     AssetInfo assetInfo;
-    if (Content::GetAssetInfo(ID, assetInfo))
+    if (Content::GetRuntimeAssetInfo(ID, assetInfo))
     {
         if (TypeName == assetInfo.TypeName)
         {
@@ -961,7 +961,7 @@ bool CookAssetsStep::Process(CookingData& data, CacheData& cache, BinaryAsset* a
     for (auto& e : initData.Dependencies)
     {
         AssetInfo info;
-        if (Content::GetAssetInfo(e.First, info))
+        if (Content::GetRuntimeAssetInfo(e.First, info))
         {
             fileDependencies.Add(ToPair(info.Path, FileSystem::GetFileLastEditTime(info.Path)));
         }
@@ -1305,10 +1305,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         AssetRecord canonicalRecord;
         if (foundCanonical)
             canonicalRecord = **canonicalRecordPtr;
-        const bool hasGeneratedCanonicalRecord = foundCanonical &&
-            canonicalRecord.SourceKind != AssetSourceKind::LegacyBinary &&
-            canonicalRecord.SourceKind != AssetSourceKind::ExistingJson &&
-            canonicalRecord.SourceKind != AssetSourceKind::Folder;
+        const bool hasGeneratedCanonicalRecord = foundCanonical && canonicalRecord.SourceKind != AssetSourceKind::Folder;
         if (hasGeneratedCanonicalRecord)
         {
             AssetRecord currentRecord;
@@ -1369,7 +1366,7 @@ bool CookAssetsStep::Perform(CookingData& data)
             ASSERT(cachedEntry->ID == assetId);
 
             // Get actual asset info
-            if (isBuiltin ? Content::GetAssetInfo(assetId, assetInfo) : Content::GetAssetInfo(objectId, assetInfo))
+            if (isBuiltin ? Content::GetRuntimeAssetInfo(assetId, assetInfo) : Content::GetAssetInfo(objectId, assetInfo))
             {
                 // Ensure that cached entry is valid
                 if (cachedEntry->TypeName == assetInfo.TypeName)
@@ -1405,7 +1402,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         }
 
         // Load asset (and keep ref)
-        assetRef = isBuiltin ? Content::LoadAsync<Asset>(assetId) : Content::LoadAssetAsync<Asset>(objectId);
+        assetRef = isBuiltin ? Content::LoadRuntimeObjectAsync<Asset>(assetId) : Content::LoadAssetAsync<Asset>(objectId);
         if (assetRef == nullptr)
         {
             LOG(Error, "Failed to load asset {} included in build", assetId);
@@ -1551,7 +1548,7 @@ bool CookAssetsStep::Perform(CookingData& data)
     for (auto i = data.Assets.Begin(); i.IsNotEnd(); ++i)
     {
         const bool isBuiltin = data.BuiltinRootAssets.Contains(i->Item);
-        if (isBuiltin ? Content::GetAssetInfo(i->Item.ToRuntimeObjectGuid(), assetInfo) : Content::GetAssetInfo(i->Item, assetInfo))
+        if (isBuiltin ? Content::GetRuntimeAssetInfo(i->Item.ToRuntimeObjectGuid(), assetInfo) : Content::GetAssetInfo(i->Item, assetInfo))
         {
             // Use local path relative to the game dir (assets cache is converting them to absolute paths because RelativePaths flag is set)
             String localPath;
@@ -1619,21 +1616,20 @@ bool CookAssetsStep::Perform(CookingData& data)
     {
         const AssetRecord& record = buildDatabaseSnapshot.Records[recordIndex];
         HashSet<AssetObjectId> uniqueDependencies;
-        for (const Guid& runtimeReference : record.RuntimeReferences)
+        for (const AssetObjectId& runtimeReference : record.RuntimeReferences)
         {
-            const AssetObjectId* dependency = objectsByRuntimeID.TryGet(runtimeReference);
-            if (!dependency)
+            if (!frozenRecords.ContainsKey(runtimeReference) && !data.BuiltinRootAssets.Contains(runtimeReference))
             {
                 data.Error(String::Format(TEXT("Runtime dependency {0} from {1} is absent from the frozen build snapshot."),
                     runtimeReference, dependencyRecords[recordIndex].Object.ToString()));
                 return true;
             }
-            if (*dependency == dependencyRecords[recordIndex].Object || !uniqueDependencies.Add(*dependency))
+            if (runtimeReference == dependencyRecords[recordIndex].Object || !uniqueDependencies.Add(runtimeReference))
             {
                 data.Error(String::Format(TEXT("Runtime dependency graph for {0} contains a self or duplicate reference."), record.ID));
                 return true;
             }
-            dependencyRecords[recordIndex].Dependencies.Add(*dependency);
+            dependencyRecords[recordIndex].Dependencies.Add(runtimeReference);
         }
     }
 
@@ -1769,15 +1765,6 @@ bool CookAssetsStep::Perform(CookingData& data)
         return true;
     }
     data.Stats.ContentSize += FileSystem::GetFileSize(runtimeCatalogPath);
-    const String legacyAssetsCache = data.DataOutputPath / TEXT("Content/AssetsCache.dat");
-    const String legacyRuntimeIndex = data.DataOutputPath / TEXT("Content/RuntimeAssetIndex.json");
-    if ((FileSystem::FileExists(legacyAssetsCache) && FileSystem::DeleteFile(legacyAssetsCache)) ||
-        (FileSystem::FileExists(legacyRuntimeIndex) && FileSystem::DeleteFile(legacyRuntimeIndex)))
-    {
-        data.Error(TEXT("Failed to remove obsolete cooked asset indexes."));
-        return true;
-    }
-
     // Print stats
     LOG(Info, "Cooked {0} assets, total assets: {1}, total content packages size: {2} MB", data.Stats.CookedAssets, AssetsRegistry.Count(), (int32)(data.Stats.ContentSize / (1024 * 1024)));
     {
