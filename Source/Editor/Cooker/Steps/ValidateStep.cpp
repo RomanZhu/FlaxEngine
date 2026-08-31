@@ -5,7 +5,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
 
@@ -97,12 +97,12 @@ bool ValidateStep::Perform(CookingData& data)
     }
 
     data.StepProgress(TEXT("Validating asset metadata"), 0.5f);
-    if (AssetDatabaseFacade::Scan(true))
+    if (AssetPipelineService::Scan(true))
     {
         data.Error(TEXT("Canonical asset metadata scan failed."));
         return true;
     }
-    const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseFacade::GetDiagnostics();
+    const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
     for (const AssetPipelineDiagnostic& diagnostic : diagnostics)
     {
         if (diagnostic.Severity == AssetPipelineDiagnosticSeverity::Error)
@@ -118,9 +118,9 @@ bool ValidateStep::Perform(CookingData& data)
     for (const AssetRecord& record : settingsSnapshot.Records)
     {
         if (record.IsMainAsset() && record.ProcessorID == TEXT("Flax.Settings") &&
-            AssetDatabaseFacade::BuildAsset(record.ID, false, true))
+            AssetPipelineService::BuildAsset(record.ID, false, true))
         {
-            const Array<AssetPipelineDiagnostic> buildDiagnostics = AssetDatabaseFacade::GetDiagnostics();
+            const Array<AssetPipelineDiagnostic> buildDiagnostics = AssetDatabaseQueryService::GetDiagnostics();
             const String message = buildDiagnostics.HasItems() ? buildDiagnostics.Last().Message : TEXT("Unknown settings artifact build error.");
             data.Error(String::Format(TEXT("Failed to build settings artifact {0}: {1}"), record.ID, message));
             return true;

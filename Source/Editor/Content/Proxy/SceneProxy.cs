@@ -47,7 +47,7 @@ namespace FlaxEditor.Content
         public override void Create(string outputPath, object arg)
         {
             Editor.Instance.Scene.CreateSceneFile(outputPath);
-            if (AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath) == Guid.Empty)
+            if (AuthoredAssetDocumentService.CreateMetadata(outputPath) == Guid.Empty)
                 throw new InvalidOperationException("Failed to register the scene source in the asset database.");
         }
 

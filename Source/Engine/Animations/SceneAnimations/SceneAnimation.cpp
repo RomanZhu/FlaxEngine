@@ -14,7 +14,7 @@
 #include "Engine/Threading/Threading.h"
 #endif
 
-REGISTER_BINARY_ASSET(SceneAnimation, "FlaxEngine.SceneAnimation", false);
+REGISTER_BINARY_ASSET(SceneAnimation, "FlaxEngine.SceneAnimation", true);
 
 SceneAnimation::SceneAnimation(const SpawnParams& params, const AssetInfo* info)
     : BinaryAsset(params, info)

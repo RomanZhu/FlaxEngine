@@ -39,7 +39,7 @@ namespace FlaxEditor.Windows
             };
             refresh.Clicked += () =>
             {
-                AssetDatabaseFacade.Refresh(ImportAssetOptions.Default);
+                AssetPipelineService.Refresh(ImportAssetOptions.Default);
                 RefreshView();
             };
             var reimport = new Button
@@ -51,7 +51,7 @@ namespace FlaxEditor.Windows
             };
             reimport.Clicked += () =>
             {
-                AssetDatabaseFacade.Refresh(ImportAssetOptions.ForceUpdate);
+                AssetPipelineService.Refresh(ImportAssetOptions.ForceUpdate);
                 RefreshView();
             };
             var clean = new Button
@@ -63,7 +63,7 @@ namespace FlaxEditor.Windows
             };
             clean.Clicked += () =>
             {
-                AssetDatabaseFacade.CleanLibrary();
+                AssetPipelineService.CleanLibrary();
                 RefreshView();
             };
             var inventory = new Button
@@ -75,7 +75,7 @@ namespace FlaxEditor.Windows
             };
             inventory.Clicked += () =>
             {
-                AssetDatabaseFacade.Scan(false);
+                AssetPipelineService.Scan(false);
                 RefreshView();
             };
 
@@ -120,9 +120,9 @@ namespace FlaxEditor.Windows
 
         private void RefreshView()
         {
-            var records = AssetDatabaseFacade.QueryRecords(default);
-            var diagnostics = AssetDatabaseFacade.GetDiagnostics();
-            _summary.Text = "Revision " + AssetDatabaseFacade.Revision + " · " + records.Length + " records · " + diagnostics.Length + " diagnostics";
+            var records = AssetDatabaseQueryService.QueryRecords(default);
+            var diagnostics = AssetDatabaseQueryService.GetDiagnostics();
+            _summary.Text = "Revision " + AssetDatabaseQueryService.Revision + " · " + records.Length + " records · " + diagnostics.Length + " diagnostics";
 
             var recordsText = new StringBuilder();
             recordsText.AppendLine("Records");

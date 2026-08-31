@@ -21,7 +21,7 @@ namespace FlaxEditor
         public static CliCommandResult RebuildDatabase()
         {
             var databaseRoot = RequireLibraryChild("AssetDatabase");
-            if (AssetDatabaseFacade.Shutdown())
+            if (AssetPipelineService.Shutdown())
                 return Failure("FLX-ASSET-DATABASE-SHUTDOWN-0006", "The source database could not be closed before rebuild.");
             try
             {
@@ -30,10 +30,10 @@ namespace FlaxEditor
             }
             catch (Exception ex)
             {
-                AssetDatabaseFacade.Initialize();
+                AssetPipelineService.Initialize();
                 return CliCommandResult.Failure("FLX-ASSET-DATABASE-DELETE-0006", "The derived source database could not be removed.", new { path = databaseRoot, exception = ex.Message });
             }
-            if (AssetDatabaseFacade.Initialize() || AssetDatabaseFacade.Scan(true))
+            if (AssetPipelineService.Initialize() || AssetPipelineService.Scan(true))
                 return Failure("FLX-ASSET-DATABASE-REBUILD-0006", "The source database could not be rebuilt from canonical sources.");
             return SuccessSummary("rebuildDatabase", new { databaseRoot });
         }
@@ -43,7 +43,7 @@ namespace FlaxEditor
         public static CliCommandResult ReimportAll()
         {
             var options = ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate;
-            if (AssetDatabaseFacade.Refresh(options))
+            if (AssetPipelineService.Refresh(options))
                 return Failure("FLX-ASSET-REIMPORT-ALL-0006", "Forced canonical asset reimport failed.");
             return SuccessSummary("reimportAll", new { forced = true });
         }
@@ -54,21 +54,21 @@ namespace FlaxEditor
         {
             var objectId = ParseObjectId(asset);
             var record = ResolveRecord(objectId);
-            var diagnostics = AssetDatabaseFacade.GetDiagnostics()
+            var diagnostics = AssetDatabaseQueryService.GetDiagnostics()
                 .Where(x => x.AssetGuid == record.SourceAssetID || x.AssetGuid == record.ID)
                 .Select(DescribeDiagnostic)
                 .ToArray();
             return CliCommandResult.Success(new
             {
                 schemaVersion = 1,
-                revision = AssetDatabaseFacade.Revision,
+                revision = AssetDatabaseQueryService.Revision,
                 objectId = objectId.ToString(),
                 record = DescribeRecord(record),
-                publications = AssetDatabaseFacade.GetPublications(objectId).Select(DescribePublication).ToArray(),
-                dependencies = AssetDatabaseFacade.GetDependencies(objectId).Select(DescribeDependency).ToArray(),
-                referencers = AssetDatabaseFacade.GetReferencers(objectId).Select(DescribeDependency).ToArray(),
+                publications = AssetDatabaseQueryService.GetPublications(objectId).Select(DescribePublication).ToArray(),
+                dependencies = AssetDatabaseQueryService.GetDependencies(objectId).Select(DescribeDependency).ToArray(),
+                referencers = AssetDatabaseQueryService.GetReferencers(objectId).Select(DescribeDependency).ToArray(),
                 diagnostics,
-                artifactCurrent = record.IsMain && IsArtifactSource(record) && AssetDatabaseFacade.IsCanonicalArtifactCurrent(record.ID),
+                artifactCurrent = record.IsMain && IsArtifactSource(record) && AssetPipelineService.IsArtifactCurrent(record.ID),
             });
         }
 
@@ -78,8 +78,8 @@ namespace FlaxEditor
         {
             var objectId = ParseObjectId(asset);
             ResolveRecord(objectId);
-            var edges = AssetDatabaseFacade.GetDependencies(objectId).Select(DescribeDependency).ToArray();
-            return CliCommandResult.Success(new { schemaVersion = 1, revision = AssetDatabaseFacade.Revision, objectId = objectId.ToString(), count = edges.Length, edges });
+            var edges = AssetDatabaseQueryService.GetDependencies(objectId).Select(DescribeDependency).ToArray();
+            return CliCommandResult.Success(new { schemaVersion = 1, revision = AssetDatabaseQueryService.Revision, objectId = objectId.ToString(), count = edges.Length, edges });
         }
 
         /// <summary>Lists normalized reverse dependency edges for one canonical asset object.</summary>
@@ -88,8 +88,8 @@ namespace FlaxEditor
         {
             var objectId = ParseObjectId(asset);
             ResolveRecord(objectId);
-            var edges = AssetDatabaseFacade.GetReferencers(objectId).Select(DescribeDependency).ToArray();
-            return CliCommandResult.Success(new { schemaVersion = 1, revision = AssetDatabaseFacade.Revision, objectId = objectId.ToString(), count = edges.Length, edges });
+            var edges = AssetDatabaseQueryService.GetReferencers(objectId).Select(DescribeDependency).ToArray();
+            return CliCommandResult.Success(new { schemaVersion = 1, revision = AssetDatabaseQueryService.Revision, objectId = objectId.ToString(), count = edges.Length, edges });
         }
 
         /// <summary>Strictly validates canonical project asset state.</summary>
@@ -100,7 +100,7 @@ namespace FlaxEditor
             if (!metadata.Succeeded)
                 return metadata;
 
-            var records = AssetDatabaseFacade.GetRecords();
+            var records = AssetDatabaseQueryService.GetRecords();
             var issues = new List<object>();
             var identities = new HashSet<string>(StringComparer.Ordinal);
             foreach (var record in records)
@@ -111,7 +111,7 @@ namespace FlaxEditor
                 if (IsBlocking(record.Status))
                     issues.Add(new { code = "ASSET_RECORD_BLOCKED", objectId, path = record.CanonicalPath, status = record.Status.ToString(), message = "The asset record is not usable." });
 
-                foreach (var dependency in AssetDatabaseFacade.GetDependencies(ObjectId(record)))
+                foreach (var dependency in AssetDatabaseQueryService.GetDependencies(ObjectId(record)))
                 {
                     if (dependency.TargetObject.IsValid && !records.Any(x => x.SourceAssetID == dependency.TargetObject.Asset.Value && x.LocalId == dependency.TargetObject.LocalId))
                     {
@@ -137,15 +137,15 @@ namespace FlaxEditor
                     }
                 }
 
-                if (record.IsMain && record.Status == AssetRecordStatus.Ready && IsArtifactSource(record) && !AssetDatabaseFacade.IsCanonicalArtifactCurrent(record.ID))
+                if (record.IsMain && record.Status == AssetRecordStatus.Ready && IsArtifactSource(record) && !AssetPipelineService.IsArtifactCurrent(record.ID))
                     issues.Add(new { code = "ASSET_ARTIFACT_NOT_CURRENT", objectId, path = record.CanonicalPath, processor = record.ProcessorID, message = "No exact current artifact is published for this source." });
             }
 
-            var diagnostics = AssetDatabaseFacade.GetDiagnostics().Select(DescribeDiagnostic).ToArray();
+            var diagnostics = AssetDatabaseQueryService.GetDiagnostics().Select(DescribeDiagnostic).ToArray();
             var report = new
             {
                 schemaVersion = 1,
-                revision = AssetDatabaseFacade.Revision,
+                revision = AssetDatabaseQueryService.Revision,
                 records = records.Length,
                 issues = issues.ToArray(),
                 diagnostics,
@@ -161,17 +161,17 @@ namespace FlaxEditor
         public static CliCommandResult VerifyDeterminism()
         {
             var options = ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate;
-            if (AssetDatabaseFacade.Refresh(options))
+            if (AssetPipelineService.Refresh(options))
                 return Failure("FLX-ASSET-DETERMINISM-FIRST-0006", "The first forced import pass failed.");
             var first = CaptureDeterminismState();
-            if (AssetDatabaseFacade.Refresh(options))
+            if (AssetPipelineService.Refresh(options))
                 return Failure("FLX-ASSET-DETERMINISM-SECOND-0006", "The second forced import pass failed.");
             var second = CaptureDeterminismState();
             var mismatches = CompareDeterminismStates(first, second).Take(100).ToArray();
             var report = new
             {
                 schemaVersion = 1,
-                revision = AssetDatabaseFacade.Revision,
+                revision = AssetDatabaseQueryService.Revision,
                 firstRecords = first.RecordSignatures.Count,
                 secondRecords = second.RecordSignatures.Count,
                 firstPublications = first.PublicationSignatures.Count,
@@ -188,7 +188,7 @@ namespace FlaxEditor
         [CliCommand("assets.clean-unused-artifacts", Description = "Delete every unleased immutable artifact not reachable from a current manifest.", Access = CliCommandAccess.MutatesProject)]
         public static CliCommandResult CleanUnusedArtifacts()
         {
-            if (AssetDatabaseFacade.CleanUnusedArtifacts(out var result))
+            if (AssetPipelineService.CleanUnusedArtifacts(out var result))
                 return CliCommandResult.Failure("FLX-ASSET-ARTIFACT-CLEAN-0006", "Unused artifact cleanup failed.", DescribeCleanup(result));
             if (result.BlockedByInvalidManifest)
                 return CliCommandResult.Failure("FLX-ASSET-ARTIFACT-MANIFEST-0004", "Unused artifacts were not deleted because a current manifest is invalid.", DescribeCleanup(result));
@@ -204,13 +204,13 @@ namespace FlaxEditor
         private static DeterminismState CaptureDeterminismState()
         {
             var result = new DeterminismState();
-            foreach (var record in AssetDatabaseFacade.GetRecords())
+            foreach (var record in AssetDatabaseQueryService.GetRecords())
             {
                 var objectId = ObjectId(record);
                 var key = objectId.ToString();
                 result.RecordSignatures[key] = string.Join("|", record.CanonicalPath, record.SourcePath, record.SubAssetKey,
                     record.TypeName, record.ProcessorID, record.MetaSemanticHash.ToString(CultureInfo.InvariantCulture), record.Status.ToString());
-                foreach (var publication in AssetDatabaseFacade.GetPublications(objectId))
+                foreach (var publication in AssetDatabaseQueryService.GetPublications(objectId))
                 {
                     var publicationKey = key + "|" + publication.TargetID;
                     result.PublicationSignatures[publicationKey] = publication.Artifact + "|" + publication.InputFingerprint;
@@ -252,7 +252,7 @@ namespace FlaxEditor
 
         private static AssetDatabaseRecordInfo ResolveRecord(AssetObjectId objectId)
         {
-            var records = AssetDatabaseFacade.GetRecords();
+            var records = AssetDatabaseQueryService.GetRecords();
             for (var i = 0; i < records.Length; i++)
             {
                 if (records[i].SourceAssetID == objectId.Asset.Value && records[i].LocalId == objectId.LocalId)
@@ -387,13 +387,13 @@ namespace FlaxEditor
 
         private static CliCommandResult SuccessSummary(string action, object details)
         {
-            var records = AssetDatabaseFacade.GetRecords();
-            var diagnostics = AssetDatabaseFacade.GetDiagnostics();
+            var records = AssetDatabaseQueryService.GetRecords();
+            var diagnostics = AssetDatabaseQueryService.GetDiagnostics();
             return CliCommandResult.Success(new
             {
                 schemaVersion = 1,
                 action,
-                revision = AssetDatabaseFacade.Revision,
+                revision = AssetDatabaseQueryService.Revision,
                 records = records.Length,
                 ready = records.Count(x => x.Status == AssetRecordStatus.Ready),
                 failed = records.Count(x => IsBlocking(x.Status)),
@@ -406,8 +406,8 @@ namespace FlaxEditor
         {
             return CliCommandResult.Failure(code, message, new
             {
-                revision = AssetDatabaseFacade.Revision,
-                diagnostics = AssetDatabaseFacade.GetDiagnostics().Select(DescribeDiagnostic).ToArray(),
+                revision = AssetDatabaseQueryService.Revision,
+                diagnostics = AssetDatabaseQueryService.GetDiagnostics().Select(DescribeDiagnostic).ToArray(),
             });
         }
     }

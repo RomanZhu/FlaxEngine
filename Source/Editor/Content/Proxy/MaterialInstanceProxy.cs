@@ -44,7 +44,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(MaterialInstance).FullName) == Guid.Empty)
+            if (AuthoredAssetDocumentService.Create(outputPath, typeof(MaterialInstance).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
 

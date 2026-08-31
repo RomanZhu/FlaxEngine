@@ -10,7 +10,7 @@
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/AssetDatabase/SubAssetReconciler.h"
@@ -197,7 +197,7 @@ namespace
             return true;
         Array<String> refreshPaths;
         refreshPaths.Add(record.SourcePath.Get());
-        if (AssetDatabaseFacade::RefreshSources(refreshPaths) || !AssetDatabase::Get().TryGetRecord(record.ID, record))
+        if (AssetPipelineService::RefreshSources(refreshPaths) || !AssetDatabase::Get().TryGetRecord(record.ID, record))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, AssetPipelineDiagnosticStage::DatabaseScan,
                 record.ID, record.ProcessorID, record.SourcePath.Get(),
                 TEXT("Scripted importer metadata was reconciled but the parent database refresh failed."));
@@ -438,7 +438,7 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
         };
         publication.Notify = [assetID = current.ID](const ArtifactManifest&)
         {
-            AssetDatabaseFacade::NotifyArtifactPublished(assetID);
+            AssetPipelineService::NotifyArtifactPublished(assetID);
         };
         ArtifactPublicationResult publicationResult;
         return ArtifactPublisher::Publish(Globals::ProjectLibraryFolder, execution->Prepared, *execution->Context,

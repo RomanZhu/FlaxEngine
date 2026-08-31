@@ -17,7 +17,7 @@ namespace FlaxEditor.Content
         /// <summary>Reads every retained durable change after the supplied revision.</summary>
         public static AssetChangeSetModel[] ReadAfter(ulong revision, out bool requiresSnapshot)
         {
-            var changes = AssetDatabaseFacade.GetChangesAfter(revision, out requiresSnapshot);
+            var changes = AssetDatabaseQueryService.GetChangesAfter(revision, out requiresSnapshot);
             if (changes == null || changes.Length == 0)
                 return Array.Empty<AssetChangeSetModel>();
             var result = new AssetChangeSetModel[changes.Length];

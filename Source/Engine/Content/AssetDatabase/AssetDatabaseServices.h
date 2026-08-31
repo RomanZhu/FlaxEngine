@@ -22,6 +22,8 @@ class Texture;
 class BinaryAsset;
 class Asset;
 class Material;
+class MaterialInstance;
+class SkeletonMask;
 
 /// <summary>Controls generic asset import and refresh behavior.</summary>
 API_ENUM(Attributes="Flags") enum class ImportAssetOptions : uint32
@@ -262,7 +264,12 @@ API_CLASS(Static) class FLAXENGINE_API AuthoredAssetDocumentService
 public:
     API_FUNCTION() static Guid Create(const StringView& outputPath, const StringView& typeName);
     API_FUNCTION() static bool Save(BinaryAsset* asset, const Guid& sourceAssetID);
+    API_FUNCTION() static bool SaveMaterialInstance(MaterialInstance* asset, const Guid& sourceAssetID);
+    API_FUNCTION() static bool SaveSkeletonMask(SkeletonMask* asset, const Guid& sourceAssetID);
     API_FUNCTION() static bool SaveMaterial(Material* asset, const Guid& sourceAssetID);
+    API_FUNCTION() static BytesContainer LoadSceneAnimationTimeline(const StringView& path);
+    API_FUNCTION() static bool SaveSceneAnimationTimeline(const StringView& path, const BytesContainer& timeline);
+    API_FUNCTION() static BytesContainer LoadParticleSystemTimeline(const StringView& path);
     API_FUNCTION() static bool SaveParticleSystemTimeline(const StringView& path, const BytesContainer& timeline);
     static bool SaveCollisionData(const StringView& path, CollisionDataType type, const Guid& model, int32 modelLodIndex,
         uint32 materialSlotsMask, ConvexMeshGenerationFlags convexFlags, int32 convexVertexLimit);

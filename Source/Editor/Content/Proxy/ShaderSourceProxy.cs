@@ -55,7 +55,7 @@ namespace FlaxEditor.Content
 
             // Save
             File.WriteAllText(outputPath, shaderTemplate, Encoding.UTF8);
-            if (AssetDatabaseFacade.CreateImportedSourceMetadata(outputPath, typeof(Shader).FullName, "Flax.ShaderSource") == Guid.Empty)
+            if (AssetOperationService.CreateImportedSourceMetadata(outputPath, typeof(Shader).FullName, "Flax.ShaderSource") == Guid.Empty)
                 throw new Exception("Failed to create shader metadata.");
         }
 

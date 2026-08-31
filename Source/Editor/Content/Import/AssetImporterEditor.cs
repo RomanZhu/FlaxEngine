@@ -88,7 +88,7 @@ namespace FlaxEditor.Content.Import
 
         private string GetSourcePath()
         {
-            var path = AssetDatabaseFacade.GetCanonicalSourcePath(Asset.Value);
+            var path = AssetDatabaseQueryService.GetCanonicalSourcePath(Asset.Value);
             if (string.IsNullOrEmpty(path))
                 throw new FileNotFoundException("The importer editor asset is not registered in the source database.", Asset.ToString());
             return path;

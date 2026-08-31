@@ -1,9 +1,11 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.IO;
 using System.Linq;
 using System.Xml;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.GUI;
@@ -14,16 +16,17 @@ using FlaxEditor.Surface;
 using FlaxEditor.Viewport.Previews;
 using FlaxEngine;
 using FlaxEngine.GUI;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor.Windows.Assets
 {
     /// <summary>
     /// Particle System window allows to view and edit <see cref="ParticleSystem"/> asset.
-    /// Note: it uses ClonedAssetEditorWindowBase which is creating cloned asset to edit/preview.
+    /// The editable timeline is decoded from the authoritative source document into a virtual preview asset.
     /// </summary>
     /// <seealso cref="ParticleSystem" />
     /// <seealso cref="FlaxEditor.Windows.Assets.AssetEditorWindow" />
-    public sealed class ParticleSystemWindow : ClonedAssetEditorWindowBase<ParticleSystem>
+    public sealed class ParticleSystemWindow : AssetEditorWindowBase<ParticleSystem>
     {
         sealed class EditParameterOverrideAction : IUndoAction
         {
@@ -286,6 +289,7 @@ namespace FlaxEditor.Windows.Assets
         private bool _isWaitingForTimelineLoad;
         private bool _isEditingInstancedParameterValue;
         private uint _parametersVersion;
+        private AssetDocumentSession _documentSession;
 
         /// <summary>
         /// Gets the particle system preview.
@@ -306,6 +310,8 @@ namespace FlaxEditor.Windows.Assets
         public ParticleSystemWindow(Editor editor, AssetItem item)
         : base(editor, item)
         {
+            _documentSession = AssetDocumentRegistry.Open(item.ObjectID, path => JObject.Parse(File.ReadAllText(path)));
+            OnEdited += _documentSession.MarkDirty;
             var inputOptions = Editor.Options.Options.Input;
 
             // Undo
@@ -473,13 +479,24 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override ParticleSystem LoadAsset()
         {
-            return FlaxEngine.Content.LoadAssetAsync<ParticleSystem>(_item.ObjectID);
+            var asset = FlaxEngine.Content.CreateVirtualAsset<ParticleSystem>();
+            var timeline = AuthoredAssetDocumentService.LoadParticleSystemTimeline(_item.Path);
+            if (asset == null || timeline == null || asset.SaveTimeline(timeline))
+            {
+                FlaxEngine.Object.Destroy(asset);
+                return null;
+            }
+            return asset;
         }
 
-        /// <inheritdoc />
-        protected override bool SaveToOriginal()
+        private bool SaveToOriginal()
         {
-            return Editor.ContentDatabase.SaveCanonicalAuthoredDocument(_asset, _item);
+            var timeline = _asset.LoadTimeline();
+            using var save = Editor.ContentDatabase.TrackAssetSave(_item.Path);
+            var committed = _documentSession.Save(_ =>
+                !AuthoredAssetDocumentService.SaveParticleSystemTimeline(_item.Path, timeline), importAfterSave: false);
+            save.Complete(committed);
+            return !committed;
         }
 
         /// <inheritdoc />
@@ -586,6 +603,7 @@ namespace FlaxEditor.Windows.Assets
         {
             if (IsDisposing)
                 return;
+            AssetDocumentRegistry.Close(_item, ref _documentSession);
             base.OnDestroy();
 
             if (_undo != null)

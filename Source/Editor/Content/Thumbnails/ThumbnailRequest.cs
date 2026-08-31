@@ -101,10 +101,10 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
             {
-                Asset = AssetPipelineService.LoadTextureThumbnail(Item.ID);
+                Asset = TextureImporterService.LoadThumbnail(Item.ID);
                 if (Asset)
                 {
-                    CacheVersion = AssetPipelineService.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
+                    CacheVersion = AssetDatabaseQueryService.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
                     Proxy.OnThumbnailDrawPrepare(this);
                     State = States.Prepared;
                 }
@@ -129,18 +129,18 @@ namespace FlaxEditor.Content.Thumbnails
                 throw new InvalidOperationException();
             if (Item.IsCanonicalSource && !Item.IsCanonicalSubAsset && Proxy is TextureProxy)
             {
-                Asset = AssetPipelineService.LoadTextureThumbnail(Item.ID);
+                Asset = TextureImporterService.LoadThumbnail(Item.ID);
                 if (!Asset)
                 {
                     _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
                     State = States.Waiting;
                     return;
                 }
-                CacheVersion = AssetPipelineService.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
+                CacheVersion = AssetDatabaseQueryService.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
             }
             else if (Item.IsCanonicalSource)
             {
-                Asset = AssetPipelineService.LoadAssetPreview(Item.ObjectID);
+                Asset = AssetDatabaseQueryService.LoadAssetPreview(Item.ObjectID);
                 if (!Asset)
                 {
                     State = States.Failed;

@@ -97,7 +97,7 @@ namespace FlaxEditor.Content.Import
 
         internal bool CreateMetadata()
         {
-            return AssetDatabaseFacade.CreateAudioMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
+            return AudioImporterService.CreateMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
         }
     }
 }

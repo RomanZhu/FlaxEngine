@@ -238,7 +238,7 @@ namespace FlaxEditor.Content.Import
 
         internal bool CreateMetadata()
         {
-            return AssetDatabaseFacade.CreateTextureMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
+            return TextureImporterService.CreateMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
         }
     }
 }

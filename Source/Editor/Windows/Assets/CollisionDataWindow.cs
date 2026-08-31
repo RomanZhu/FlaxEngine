@@ -1,9 +1,11 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.IO;
 using System.Threading.Tasks;
 using System.Xml;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.Elements;
@@ -13,6 +15,7 @@ using FlaxEditor.Viewport.Cameras;
 using FlaxEditor.Viewport.Previews;
 using FlaxEngine;
 using FlaxEngine.GUI;
+using Newtonsoft.Json.Linq;
 using Object = FlaxEngine.Object;
 
 namespace FlaxEditor.Windows.Assets
@@ -281,7 +284,10 @@ namespace FlaxEditor.Windows.Assets
                     bool failed = true;
                     try
                     {
-                        failed = window.Editor.ContentDatabase.SaveAsset(sourcePath, () => FlaxEditor.Editor.CookMeshCollision(sourcePath, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit));
+                        using var save = window.Editor.ContentDatabase.TrackAssetSave(sourcePath);
+                        var committed = window._documentSession.Save(_ => !FlaxEditor.Editor.CookMeshCollision(sourcePath, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit), importAfterSave: false);
+                        save.Complete(committed);
+                        failed = !committed;
                     }
                     catch (Exception ex)
                     {
@@ -315,7 +321,13 @@ namespace FlaxEditor.Windows.Assets
                 try
                 {
                     var sourcePath = window.Item.Path;
-                    failed = Task.Run(() => window.Editor.ContentDatabase.SaveAsset(sourcePath, () => FlaxEditor.Editor.CookMeshCollision(sourcePath, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit))).GetAwaiter().GetResult();
+                    failed = Task.Run(() =>
+                    {
+                        using var save = window.Editor.ContentDatabase.TrackAssetSave(sourcePath);
+                        var committed = window._documentSession.Save(_ => !FlaxEditor.Editor.CookMeshCollision(sourcePath, type, model, modelLodIndex, materialSlotsMask, convexFlags, convexVertexLimit), importAfterSave: false);
+                        save.Complete(committed);
+                        return !committed;
+                    }).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
@@ -421,6 +433,7 @@ namespace FlaxEditor.Windows.Assets
         private readonly ToolStripButton _redoButton;
         private readonly ToolStripButton _cookButton;
         private readonly Undo _undo;
+        private AssetDocumentSession _documentSession;
         private Model _collisionWiresModel;
         private StaticModel _collisionWiresShowActor;
         private bool _updateWireMesh;
@@ -461,6 +474,8 @@ namespace FlaxEditor.Windows.Assets
         public CollisionDataWindow(Editor editor, AssetItem item)
         : base(editor, item)
         {
+            _documentSession = AssetDocumentRegistry.Open(item.ObjectID, path => JObject.Parse(File.ReadAllText(path)));
+            OnEdited += _documentSession.MarkDirty;
             var inputOptions = Editor.Options.Options.Input;
 
             // Undo
@@ -807,6 +822,7 @@ namespace FlaxEditor.Windows.Assets
         {
             if (IsDisposing)
                 return;
+            AssetDocumentRegistry.Close(_item, ref _documentSession);
             base.OnDestroy();
 
             Object.Destroy(ref _collisionWiresShowActor);

@@ -123,7 +123,7 @@ namespace FlaxEditor.Content.Thumbnails
             if (!item.IsCanonicalSource)
                 return Guid.Empty;
             var outputKind = !item.IsCanonicalSubAsset && proxy is TextureProxy ? "thumbnail" : "runtime";
-            return AssetDatabaseFacade.GetPublishedArtifactCacheID(item.ID, outputKind);
+            return AssetDatabaseQueryService.GetPublishedArtifactCacheID(item.ID, outputKind);
         }
 
         /// <summary>

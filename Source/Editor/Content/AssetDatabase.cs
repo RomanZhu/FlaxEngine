@@ -21,20 +21,20 @@ namespace FlaxEditor
         /// <summary>Returns the source GUID at a canonical logical or absolute path.</summary>
         public static string AssetPathToGUID(string path)
         {
-            var id = AssetDatabaseFacade.AssetPathToGUID(path);
+            var id = AssetDatabaseQueryService.AssetPathToGUID(path);
             return id == Guid.Empty ? string.Empty : id.ToString("N");
         }
 
         /// <summary>Returns the canonical logical path for a live source GUID.</summary>
         public static string GUIDToAssetPath(string guid)
         {
-            return Guid.TryParse(guid, out var id) ? AssetDatabaseFacade.GUIDToAssetPath(id) : string.Empty;
+            return Guid.TryParse(guid, out var id) ? AssetDatabaseQueryService.GUIDToAssetPath(id) : string.Empty;
         }
 
         /// <summary>Resolves a loaded main asset to its file GUID and local file ID.</summary>
         public static bool TryGetGUIDAndLocalFileIdentifier(FlaxEngine.Object obj, out string guid, out long localId)
         {
-            if (obj is Asset asset && AssetDatabaseFacade.TryGetAssetObjectId(asset, out var id))
+            if (obj is Asset asset && AssetDatabaseQueryService.TryGetAssetObjectId(asset, out var id))
             {
                 guid = id.Asset.ToString();
                 localId = id.LocalId;
@@ -48,13 +48,13 @@ namespace FlaxEditor
         /// <summary>Gets all live main source paths.</summary>
         public static string[] GetAllAssetPaths()
         {
-            return AssetDatabaseFacade.GetAllAssetPaths();
+            return AssetDatabaseQueryService.GetAllAssetPaths();
         }
 
         /// <summary>Loads the main asset at a canonical source path.</summary>
         public static T LoadAssetAtPath<T>(string path) where T : Asset
         {
-            if (!AssetDatabaseFacade.TryGetMainRecordAtPath(path, out var record) || record.SourceKind == AssetSourceKind.Folder)
+            if (!AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out var record) || record.SourceKind == AssetSourceKind.Folder)
                 return null;
             return FlaxEngine.Content.LoadAssetAsync<T>(new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId));
         }
@@ -75,7 +75,7 @@ namespace FlaxEditor
         public static Asset[] LoadAllAssetsAtPath(string path)
         {
             var physicalPath = ResolvePhysicalPath(path);
-            var records = AssetDatabaseFacade.QueryRecords(new AssetDatabaseQuery { PathPrefix = physicalPath });
+            var records = AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = physicalPath });
             var result = new List<Asset>();
             for (var i = 0; i < records.Length; i++)
             {
@@ -98,7 +98,7 @@ namespace FlaxEditor
                 DeferredImports.Add(path);
                 return;
             }
-            if (AssetDatabaseFacade.ImportAsset(path, options))
+            if (AssetPipelineService.ImportAsset(path, options))
                 throw new InvalidOperationException(GetLastDiagnostic("Asset import failed."));
         }
 
@@ -111,7 +111,7 @@ namespace FlaxEditor
                 _deferredRefreshOptions |= options;
                 return;
             }
-            if (AssetDatabaseFacade.Refresh(options))
+            if (AssetPipelineService.Refresh(options))
                 throw new InvalidOperationException(GetLastDiagnostic("Asset refresh failed."));
         }
 
@@ -122,9 +122,9 @@ namespace FlaxEditor
             var destination = ResolvePhysicalPath(newPath);
             if (!IsProjectContentPath(source) || !IsProjectContentPath(destination))
                 return "Asset moves must remain inside the project Content folder.";
-            if (!AssetDatabaseFacade.TryGetMainRecordAtPath(source, out var record) || !record.IsMain || record.SourceKind == AssetSourceKind.LegacyBinary)
+            if (!AssetDatabaseQueryService.TryGetMainRecordAtPath(source, out var record) || !record.IsMain)
                 return "Source asset is not registered in the canonical Asset Database.";
-            return AssetDatabaseFacade.MoveCanonicalAsset(source, destination)
+            return AssetOperationService.MoveAsset(source, destination)
                 ? GetLastDiagnostic("Asset move transaction failed.")
                 : string.Empty;
         }
@@ -148,9 +148,9 @@ namespace FlaxEditor
             var destination = ResolvePhysicalPath(destinationPath);
             if (!IsProjectContentPath(source) || !IsProjectContentPath(destination))
                 return false;
-            if (!AssetDatabaseFacade.TryGetMainRecordAtPath(source, out var record) || !record.IsMain || record.SourceKind == AssetSourceKind.LegacyBinary)
+            if (!AssetDatabaseQueryService.TryGetMainRecordAtPath(source, out var record) || !record.IsMain)
                 return false;
-            return !AssetDatabaseFacade.CopyCanonicalAsset(source, destination, out _);
+            return !AssetOperationService.CopyAsset(source, destination, out _);
         }
 
         /// <summary>Deletes a source and its adjacent metadata.</summary>
@@ -159,9 +159,9 @@ namespace FlaxEditor
             var physicalPath = ResolvePhysicalPath(path);
             if (!IsProjectContentPath(physicalPath))
                 return false;
-            if (!AssetDatabaseFacade.TryGetMainRecordAtPath(physicalPath, out var record) || !record.IsMain || record.SourceKind == AssetSourceKind.LegacyBinary)
+            if (!AssetDatabaseQueryService.TryGetMainRecordAtPath(physicalPath, out var record) || !record.IsMain)
                 return false;
-            return !AssetDatabaseFacade.DeleteCanonicalAsset(physicalPath);
+            return !AssetOperationService.DeleteAsset(physicalPath);
         }
 
         /// <summary>Creates a folder and schedules metadata reconciliation.</summary>
@@ -201,7 +201,7 @@ namespace FlaxEditor
             if (_assetEditingDepth == 0)
             {
                 Editor.Instance.ContentDatabase.SuspendAssetDatabaseAutoRefresh();
-                AssetDatabaseFacade.StartAssetEditing();
+                AssetOperationService.StartEditing();
             }
             _assetEditingDepth++;
         }
@@ -213,7 +213,7 @@ namespace FlaxEditor
                 throw new InvalidOperationException("StopAssetEditing called without a matching StartAssetEditing.");
             if (--_assetEditingDepth != 0)
                 return;
-            var failed = AssetDatabaseFacade.StopAssetEditing();
+            var failed = AssetOperationService.StopEditing();
             Editor.Instance.ContentDatabase.ResumeAssetDatabaseAutoRefresh();
             if (failed)
                 throw new InvalidOperationException(GetLastDiagnostic("Asset editing batch refresh failed."));
@@ -293,7 +293,7 @@ namespace FlaxEditor
 
         private static string GetLastDiagnostic(string fallback)
         {
-            var diagnostics = AssetDatabaseFacade.GetDiagnostics();
+            var diagnostics = AssetDatabaseQueryService.GetDiagnostics();
             return diagnostics.Length == 0 ? fallback : diagnostics[0].Message;
         }
     }

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Xml;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.GUI;
@@ -13,17 +14,18 @@ using FlaxEditor.GUI.Timeline;
 using FlaxEditor.Scripting;
 using FlaxEngine;
 using FlaxEngine.GUI;
+using Newtonsoft.Json.Linq;
 using Object = FlaxEngine.Object;
 
 namespace FlaxEditor.Windows.Assets
 {
     /// <summary>
     /// Scene Animation window allows to view and edit <see cref="SceneAnimation"/> asset.
-    /// Note: it uses ClonedAssetEditorWindowBase which is creating cloned asset to edit/preview.
+    /// The editable timeline is decoded from the authoritative source document into a virtual preview asset.
     /// </summary>
     /// <seealso cref="SceneAnimation" />
     /// <seealso cref="FlaxEditor.Windows.Assets.AssetEditorWindow" />
-    public sealed class SceneAnimationWindow : ClonedAssetEditorWindowBase<SceneAnimation>
+    public sealed class SceneAnimationWindow : AssetEditorWindowBase<SceneAnimation>
     {
         struct StagingTexture
         {
@@ -623,6 +625,9 @@ namespace FlaxEditor.Windows.Assets
         private bool _isWaitingForTimelineLoad;
         private Guid _cachedPlayerId;
         private RenderPopup _popup;
+        private AssetDocumentSession _documentSession;
+
+        private SceneAnimation OriginalAsset => Asset;
 
         /// <summary>
         /// Gets the timeline editor.
@@ -638,6 +643,8 @@ namespace FlaxEditor.Windows.Assets
         public SceneAnimationWindow(Editor editor, AssetItem item)
         : base(editor, item)
         {
+            _documentSession = AssetDocumentRegistry.Open(item.ObjectID, path => JObject.Parse(File.ReadAllText(path)));
+            OnEdited += _documentSession.MarkDirty;
             var inputOptions = Editor.Options.Options.Input;
 
             // Undo
@@ -855,13 +862,24 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override SceneAnimation LoadAsset()
         {
-            return FlaxEngine.Content.LoadAssetAsync<SceneAnimation>(_item.ObjectID);
+            var asset = FlaxEngine.Content.CreateVirtualAsset<SceneAnimation>();
+            var timeline = AuthoredAssetDocumentService.LoadSceneAnimationTimeline(_item.Path);
+            if (asset == null || timeline == null || asset.SaveTimeline(timeline))
+            {
+                FlaxEngine.Object.Destroy(asset);
+                return null;
+            }
+            return asset;
         }
 
-        /// <inheritdoc />
-        protected override bool SaveToOriginal()
+        private bool SaveToOriginal()
         {
-            return Editor.ContentDatabase.SaveCanonicalAuthoredDocument(_asset, _item);
+            var timeline = _asset.LoadTimeline();
+            using var save = Editor.ContentDatabase.TrackAssetSave(_item.Path);
+            var committed = _documentSession.Save(_ =>
+                !AuthoredAssetDocumentService.SaveSceneAnimationTimeline(_item.Path, timeline), importAfterSave: false);
+            save.Complete(committed);
+            return !committed;
         }
 
         /// <inheritdoc />
@@ -1048,6 +1066,7 @@ namespace FlaxEditor.Windows.Assets
         {
             if (IsDisposing)
                 return;
+            AssetDocumentRegistry.Close(_item, ref _documentSession);
             base.OnDestroy();
 
             Level.ActorDeleted -= OnActorDeleted;

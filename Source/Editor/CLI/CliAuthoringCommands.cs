@@ -2036,7 +2036,7 @@ namespace FlaxEditor
 
         private static void CreateCanonicalJsonMetadata(string path)
         {
-            if (AssetPipelineService.CreateJsonDocumentMetadata(path) == Guid.Empty)
+            if (AuthoredAssetDocumentService.CreateMetadata(path) == Guid.Empty)
                 throw new IOException($"Failed to create canonical metadata for '{path}'.");
         }
 
@@ -2147,7 +2147,7 @@ namespace FlaxEditor
 
         private static object DescribeBuildScene(AssetObjectId id, int index, bool startup)
         {
-            var backing = AssetPipelineService.GetBackingAssetID(id);
+            var backing = AssetDatabaseQueryService.GetBackingAssetID(id);
             FlaxEngine.Content.GetRuntimeAssetInfo(backing, out var info);
             return new { index, id, path = info.Path, name = Path.GetFileNameWithoutExtension(info.Path), startup, valid = info.ID != Guid.Empty };
         }

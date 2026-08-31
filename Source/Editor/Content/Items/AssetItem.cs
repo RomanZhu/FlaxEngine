@@ -192,7 +192,7 @@ namespace FlaxEditor.Content
         /// </summary>
         public Asset LoadPreviewAsync()
         {
-            return IsCanonicalSource ? AssetPipelineService.LoadAssetPreview(ObjectID) : LoadAsync();
+            return IsCanonicalSource ? AssetDatabaseQueryService.LoadAssetPreview(ObjectID) : LoadAsync();
         }
 
         /// <summary>

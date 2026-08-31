@@ -207,21 +207,20 @@ namespace FlaxEditor.Modules
 
         private static bool TryGetMainRecord(Guid sourceId, out AssetDatabaseRecordInfo record)
         {
-            return AssetPipelineService.TryGetRecord(new AssetObjectId(new AssetGuid(sourceId), 1), out record);
+            return AssetDatabaseQueryService.TryGetRecord(new AssetObjectId(new AssetGuid(sourceId), 1), out record);
         }
 
         private static bool TryGetMainRecord(string path, out AssetDatabaseRecordInfo record)
         {
-            return AssetPipelineService.TryGetMainRecordAtPath(ContentMutationPathUtils.Normalize(path), out record);
+            return AssetDatabaseQueryService.TryGetMainRecordAtPath(ContentMutationPathUtils.Normalize(path), out record);
         }
 
         private static AssetDatabaseRecordInfo[] QueryDirectFolderRecords(string folderPath, bool mainAssets)
         {
             folderPath = ContentMutationPathUtils.Normalize(folderPath);
-            return AssetPipelineService.QueryRecords(new AssetDatabaseQuery { PathPrefix = folderPath })
+            return AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = folderPath })
                 .Where(record => record.IsMain == mainAssets &&
                                  record.Status != AssetRecordStatus.MissingSource &&
-                                 record.SourceKind != AssetSourceKind.LegacyBinary &&
                                  record.SourceKind != AssetSourceKind.Folder &&
                                  string.Equals(ContentMutationPathUtils.Normalize(Path.GetDirectoryName(record.SourcePath)), folderPath, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
@@ -232,7 +231,7 @@ namespace FlaxEditor.Modules
             folderPath = ContentMutationPathUtils.Normalize(folderPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var prefix = folderPath + Path.DirectorySeparatorChar;
             var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var record in AssetPipelineService.QueryRecords(new AssetDatabaseQuery { PathPrefix = folderPath }))
+            foreach (var record in AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = folderPath }))
             {
                 if (record.Status == AssetRecordStatus.MissingSource)
                     continue;
@@ -251,7 +250,7 @@ namespace FlaxEditor.Modules
 
         private static bool HasDatabaseContent(string path)
         {
-            return AssetPipelineService.QueryRecords(new AssetDatabaseQuery { PathPrefix = ContentMutationPathUtils.Normalize(path) }).Length != 0;
+            return AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = ContentMutationPathUtils.Normalize(path) }).Length != 0;
         }
 
         private bool IsDatabaseOwnedContentPath(string path)
@@ -317,11 +316,11 @@ namespace FlaxEditor.Modules
 
         private void ReplayAssetDatabaseChanges()
         {
-            var publishedRevision = AssetPipelineService.Revision;
+            var publishedRevision = AssetDatabaseQueryService.Revision;
             if (publishedRevision == _assetDatabaseRevision)
                 return;
 
-            var changes = AssetPipelineService.GetChangesAfter(_assetDatabaseRevision, out var requiresSnapshot);
+            var changes = AssetDatabaseQueryService.GetChangesAfter(_assetDatabaseRevision, out var requiresSnapshot);
             if (requiresSnapshot || changes == null || changes.Length == 0)
             {
                 RefreshAssetDatabaseRecords(publishedRevision);
@@ -387,7 +386,7 @@ namespace FlaxEditor.Modules
 
         private void QueueMissingMetadataRegistrations()
         {
-            var diagnostics = AssetPipelineService.GetDiagnostics();
+            var diagnostics = AssetDatabaseQueryService.GetDiagnostics();
             for (int i = 0; i < diagnostics.Length; i++)
             {
                 var diagnostic = diagnostics[i];
@@ -448,7 +447,7 @@ namespace FlaxEditor.Modules
         /// <summary>Gets the immutable database record for a persistent source object identity.</summary>
         public bool TryGetAssetDatabaseRecord(AssetObjectId id, out AssetDatabaseRecordInfo record)
         {
-            return AssetPipelineService.TryGetRecord(id, out record);
+            return AssetDatabaseQueryService.TryGetRecord(id, out record);
         }
 
         /// <summary>Gets the immutable main canonical database record for a source path.</summary>
@@ -481,7 +480,7 @@ namespace FlaxEditor.Modules
             // Handle deleted asset
             if (asset.ShouldDeleteFileOnUnload)
             {
-                var item = AssetPipelineService.TryGetAssetObjectId(asset, out var objectId) ? FindAsset(objectId) : null;
+                var item = AssetDatabaseQueryService.TryGetAssetObjectId(asset, out var objectId) ? FindAsset(objectId) : null;
                 if (item != null)
                 {
                     // Close all asset editors
@@ -1630,7 +1629,7 @@ namespace FlaxEditor.Modules
             var sourceMetaPath = sourcePath + ".meta";
             if (!File.Exists(sourceMetaPath))
                 return;
-            if (AssetPipelineService.CloneMetadata(sourceMetaPath, targetPath + ".meta"))
+            if (AssetOperationService.CloneMetadata(sourceMetaPath, targetPath + ".meta"))
                 throw new IOException($"Cannot clone folder metadata for '{sourcePath}'.");
         }
 
@@ -1639,7 +1638,7 @@ namespace FlaxEditor.Modules
             if (item is AssetItem assetItem && assetItem.IsCanonicalSource)
             {
                 var targetMetaPath = targetPath + ".meta";
-                if (AssetPipelineService.CloneMetadata(item.Path + ".meta", targetMetaPath))
+                if (AssetOperationService.CloneMetadata(item.Path + ".meta", targetMetaPath))
                     throw new IOException($"Cannot clone metadata for canonical source '{item.Path}'.");
                 if (UseContentBackendForCopy(item))
                 {
@@ -2131,7 +2130,7 @@ namespace FlaxEditor.Modules
                     {
                         if (childAsset.IsCanonicalSource)
                         {
-                            var recordExists = AssetPipelineService.TryGetRecord(childAsset.ObjectID, out var record);
+                            var recordExists = AssetDatabaseQueryService.TryGetRecord(childAsset.ObjectID, out var record);
                             var recordMatchesItem = recordExists &&
                                                     record.Status != AssetRecordStatus.MissingSource &&
                                                     GetCanonicalItemType(record) == childAsset.TypeName &&
@@ -2454,7 +2453,7 @@ namespace FlaxEditor.Modules
         public override void OnInit()
         {
             FlaxEngine.Content.AssetDisposing += OnContentAssetDisposing;
-            AssetPipelineService.DatabaseChanged += OnAssetDatabaseRevisionPublished;
+            AssetDatabaseQueryService.DatabaseChanged += OnAssetDatabaseRevisionPublished;
 
             // Recover or surface any mutation that was interrupted before the previous Editor process exited.
             var recoveredImportSources = new List<string>();
@@ -2464,7 +2463,7 @@ namespace FlaxEditor.Modules
 
             if (AssetPipelineService.LoadOrScan(true))
                 Editor.LogError("Failed to initialize the canonical asset database. See asset pipeline diagnostics.");
-            RefreshAssetDatabaseRecords(AssetPipelineService.Revision);
+            RefreshAssetDatabaseRecords(AssetDatabaseQueryService.Revision);
             QueueCanonicalStartupChecks();
             QueueRecoveredCanonicalImports(recoveredImportSources);
             QueueMissingMetadataRegistrations();
@@ -2693,7 +2692,7 @@ namespace FlaxEditor.Modules
 
         private static bool CanBuildCanonicalRecord(AssetDatabaseRecordInfo record)
         {
-            return record.IsMain && record.SourceKind != AssetSourceKind.LegacyBinary &&
+            return record.IsMain &&
                    record.SourceKind != AssetSourceKind.Folder && !string.IsNullOrEmpty(record.ProcessorID);
         }
 
@@ -2728,7 +2727,7 @@ namespace FlaxEditor.Modules
         {
             lock (_assetDiskChangesLock)
             {
-                foreach (var record in AssetPipelineService.QueryRecords(new AssetDatabaseQuery { MainAssetsOnly = true }))
+                foreach (var record in AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { MainAssetsOnly = true }))
                 {
                     if (record.Status == AssetRecordStatus.Ready && CanBuildCanonicalRecord(record))
                         _pendingCanonicalStartupChecks.Add(record.ID);
@@ -2749,7 +2748,7 @@ namespace FlaxEditor.Modules
             {
                 if (!TryGetMainRecord(ids[i], out var record) || record.Status != AssetRecordStatus.Ready || !CanBuildCanonicalRecord(record))
                     continue;
-                if (!AssetPipelineService.IsCanonicalArtifactCurrent(ids[i]))
+                if (!AssetPipelineService.IsArtifactCurrent(ids[i]))
                 {
                     lock (_assetDiskChangesLock)
                         _pendingTextureBuildIds.Add(ids[i]);
@@ -2933,15 +2932,15 @@ namespace FlaxEditor.Modules
         {
             if (asset == null)
                 throw new ArgumentNullException(nameof(asset));
-            if (AssetPipelineService.TryGetAssetObjectId(asset, out var objectId) &&
+            if (AssetDatabaseQueryService.TryGetAssetObjectId(asset, out var objectId) &&
                 TryGetAssetDatabaseRecord(objectId, out var record) && record.SourceKind == AssetSourceKind.TextDocument)
             {
                 if (asset is Material or MaterialInstance or SkeletonMask or SceneAnimation or ParticleSystem)
                 {
                     using var canonicalScope = TrackAssetSave(record.SourcePath);
                     var canonicalFailed = asset is Material material
-                        ? AssetPipelineService.SaveMaterialDocument(material, asset.ID)
-                        : AssetPipelineService.SaveAuthoredDocument((BinaryAsset)asset, asset.ID);
+                        ? AuthoredAssetDocumentService.SaveMaterial(material, asset.ID)
+                        : AuthoredAssetDocumentService.Save((BinaryAsset)asset, asset.ID);
                     canonicalScope.Complete(!canonicalFailed);
                     return canonicalFailed;
                 }
@@ -2973,7 +2972,7 @@ namespace FlaxEditor.Modules
             if (item == null)
                 throw new ArgumentNullException(nameof(item));
             using var scope = TrackAssetSave(item.Path);
-            var failed = AssetPipelineService.SaveAuthoredDocument(asset, item.ID);
+            var failed = AuthoredAssetDocumentService.Save(asset, item.ID);
             scope.Complete(!failed);
             return failed;
         }
@@ -3038,7 +3037,7 @@ namespace FlaxEditor.Modules
 
         private void RegisterOperationSelfWrites()
         {
-            var paths = AssetPipelineService.DrainOperationSelfWrites();
+            var paths = AssetOperationService.DrainSelfWrites();
             for (int i = 0; i < paths.Length; i++)
             {
                 var path = ContentMutationPathUtils.Normalize(paths[i]);
@@ -3190,9 +3189,9 @@ namespace FlaxEditor.Modules
         /// <inheritdoc />
         public override void OnUpdate()
         {
-            AssetPipelineService.PumpDatabaseEvents();
+            AssetDatabaseQueryService.PumpDatabaseEvents();
             RegisterOperationSelfWrites();
-            if (_assetDatabaseReplayPending || AssetPipelineService.Revision != _assetDatabaseRevision)
+            if (_assetDatabaseReplayPending || AssetDatabaseQueryService.Revision != _assetDatabaseRevision)
             {
                 _assetDatabaseReplayPending = false;
                 ReplayAssetDatabaseChanges();
@@ -3265,7 +3264,7 @@ namespace FlaxEditor.Modules
         public override void OnExit()
         {
             FlaxEngine.Content.AssetDisposing -= OnContentAssetDisposing;
-            AssetPipelineService.DatabaseChanged -= OnAssetDatabaseRevisionPublished;
+            AssetDatabaseQueryService.DatabaseChanged -= OnAssetDatabaseRevisionPublished;
             ScriptsBuilder.ScriptsReload -= OnScriptsReload;
             ScriptsBuilder.ScriptsReloadEnd -= OnScriptsReloadEnd;
 

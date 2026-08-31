@@ -68,7 +68,7 @@ namespace FlaxEditor.Content.Create
 
             if (PrefabManager.CreatePrefab(actor, ResultUrl, true))
                 return true;
-            return AssetDatabaseFacade.CreateExistingJsonMetadata(ResultUrl) == Guid.Empty;
+            return AuthoredAssetDocumentService.CreateMetadata(ResultUrl) == Guid.Empty;
         }
     }
 
@@ -178,7 +178,7 @@ namespace FlaxEditor.Content.Create
 
             if (PrefabManager.CreatePrefab(actor, ResultUrl, true))
                 return true;
-            return AssetDatabaseFacade.CreateExistingJsonMetadata(ResultUrl) == Guid.Empty;
+            return AuthoredAssetDocumentService.CreateMetadata(ResultUrl) == Guid.Empty;
         }
     }
 }

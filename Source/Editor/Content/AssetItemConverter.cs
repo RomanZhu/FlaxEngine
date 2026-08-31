@@ -34,7 +34,7 @@ namespace FlaxEditor.Content
                 if (Guid.TryParseExact((string)json["guid"], "N", out var source) && json["fileId"]?.Type == JTokenType.Integer)
                 {
                     var objectId = new AssetObjectId(new AssetGuid(source), (long)json["fileId"]);
-                    var backing = AssetDatabaseFacade.GetBackingAssetID(objectId);
+                    var backing = AssetDatabaseQueryService.GetBackingAssetID(objectId);
                     return backing == Guid.Empty ? null : Editor.Instance.ContentDatabase.Find(backing);
                 }
             }

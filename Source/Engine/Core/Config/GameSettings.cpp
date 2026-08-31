@@ -26,7 +26,7 @@
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Scripting/Internal/InternalCalls.h"
 #if USE_EDITOR
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Editor/Editor.h"
 #include "Editor/ProjectInfo.h"
 #endif
@@ -52,8 +52,16 @@ public:
             LOG(Error, "Project descriptor is missing a valid ProjectSettingsIndexGuid.");
             return true;
         }
-        if (AssetDatabaseFacade::LoadOrScan(true))
+        if (AssetPipelineService::LoadOrScan(true))
+        {
+            const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
+            for (const AssetPipelineDiagnostic& diagnostic : diagnostics)
+            {
+                LOG(Error, "[{0}] {1} Source: '{2}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code),
+                    diagnostic.Message, diagnostic.SourcePath);
+            }
             return true;
+        }
 #endif
         return GameSettings::Load();
     }

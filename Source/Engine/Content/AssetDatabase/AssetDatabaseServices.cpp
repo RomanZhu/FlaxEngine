@@ -2873,105 +2873,23 @@ bool AuthoredAssetDocumentService::Save(BinaryAsset* asset, const Guid& canonica
         return fail();
     }
 
-    const String temporaryFolder = Globals::ProjectLibraryFolder / TEXT("Temp/AuthoredSaves");
-    if (FileSystem::CreateDirectory(temporaryFolder))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::LibraryCreationFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-        diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.Message = TEXT("Cannot create the temporary authored-document save folder.");
-        return fail();
-    }
-    const String token = Guid::New().ToString(Guid::FormatType::N);
-    const String temporaryFlax = temporaryFolder / token + TEXT(".flax");
-    const String stagedDocument = String(record.SourcePath.Get()) + TEXT(".stage-") + token;
-    const String stagedMeta = stagedDocument + TEXT(".meta");
-    SCOPE_EXIT
-    {
-        ContentStorageManager::EnsureAccess(temporaryFlax);
-        FileSystem::DeleteFile(temporaryFlax);
-        FileSystem::DeleteFile(stagedDocument);
-        FileSystem::DeleteFile(stagedMeta);
-    };
-
-    bool saveFailed = true;
-    if (record.TypeName == MaterialInstance::TypeName)
-    {
-        auto* typed = ScriptingObject::Cast<MaterialInstance>(asset);
-        saveFailed = !typed || typed->Save(temporaryFlax);
-    }
-    else if (record.TypeName == SkeletonMask::TypeName)
-    {
-        auto* typed = ScriptingObject::Cast<SkeletonMask>(asset);
-        saveFailed = !typed || typed->Save(temporaryFlax);
-    }
-    else if (record.TypeName == SceneAnimation::TypeName)
-    {
-        auto* typed = ScriptingObject::Cast<SceneAnimation>(asset);
-        if (typed)
-        {
-            const BytesContainer& timeline = typed->LoadTimeline();
-            FlaxChunk chunk;
-            chunk.Data.Copy(timeline.Get(), timeline.Length());
-            AssetInitData data;
-            data.Header.ID = canonicalAssetID;
-            data.Header.TypeName = SceneAnimation::TypeName;
-            data.SerializedVersion = SceneAnimation::SerializedVersion;
-            data.Header.Chunks[0] = &chunk;
-            saveFailed = FlaxStorage::Create(temporaryFlax, data);
-        }
-    }
-    else if (record.TypeName == ParticleSystem::TypeName)
-    {
-        auto* typed = ScriptingObject::Cast<ParticleSystem>(asset);
-        if (typed)
-        {
-            const BytesContainer timeline = typed->LoadTimeline();
-            FlaxChunk chunk;
-            chunk.Data.Copy(timeline.Get(), timeline.Length());
-            AssetInitData data;
-            data.Header.ID = canonicalAssetID;
-            data.Header.TypeName = ParticleSystem::TypeName;
-            data.SerializedVersion = ParticleSystem::SerializedVersion;
-            data.Header.Chunks[0] = &chunk;
-            saveFailed = FlaxStorage::Create(temporaryFlax, data);
-        }
-    }
-    if (saveFailed)
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-        diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.Message = TEXT("The edited asset could not be serialized for canonical document conversion.");
-        return fail();
-    }
-    FlaxStorageReference temporaryStorage = ContentStorageManager::GetStorage(temporaryFlax, true);
-    AssetInitData temporaryData;
-    if (!temporaryStorage || temporaryStorage->GetEntriesCount() < 1 || temporaryStorage->LoadAssetHeader(0, temporaryData) ||
-        !temporaryData.Header.Chunks[0] || temporaryStorage->LoadAssetChunk(temporaryData.Header.Chunks[0]))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-        diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.Message = TEXT("The edited authored asset did not produce a readable source payload.");
-        return fail();
-    }
-    const FlaxChunk* sourceChunk = temporaryData.Header.Chunks[0];
     rapidjson_flax::Document sourceJson;
     String conversionError;
     Array<StringAnsi> sourceOrder;
-    auto failConversion = [&]()
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
-        diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.Message = conversionError.IsEmpty() ? TEXT("Authored source conversion failed.") : conversionError;
-        return fail();
-    };
     if (record.TypeName == MaterialInstance::TypeName)
     {
-        if (MaterialInstanceDocument::DecodeLegacy(Span<byte>(sourceChunk->Get(), sourceChunk->Size()), sourceJson, conversionError))
-            return failConversion();
+        auto* typed = ScriptingObject::Cast<MaterialInstance>(asset);
+        if (!typed)
+            conversionError = TEXT("Material instance editor state is unavailable.");
+        else
+        {
+            MemoryWriteStream sourceStream(256);
+            const MaterialBase* baseMaterial = typed->GetBaseMaterial();
+            sourceStream.Write(baseMaterial ? baseMaterial->GetPersistentObjectId().Asset.Value : Guid::Empty);
+            typed->Params.Save(&sourceStream);
+            if (MaterialInstanceDocument::DecodeLegacy(ToSpan(sourceStream), sourceJson, conversionError))
+                sourceJson.SetNull();
+        }
         sourceOrder.Add("documentVersion");
         sourceOrder.Add("type");
         sourceOrder.Add("baseMaterial");
@@ -2979,31 +2897,25 @@ bool AuthoredAssetDocumentService::Save(BinaryAsset* asset, const Guid& canonica
     }
     else if (record.TypeName == SkeletonMask::TypeName)
     {
-        MemoryReadStream sourceStream(sourceChunk->Get(), sourceChunk->Size());
-        Guid skeleton;
-        int32 count = 0;
-        sourceStream.Read(skeleton);
-        sourceStream.ReadInt32(&count);
-        if (count < 0 || count > 100000)
+        auto* typed = ScriptingObject::Cast<SkeletonMask>(asset);
+        if (!typed)
+            conversionError = TEXT("Skeleton mask editor state is unavailable.");
+        else
         {
-            conversionError = TEXT("Skeleton mask node count is invalid.");
-            return failConversion();
+            sourceJson.SetObject();
+            auto& allocator = sourceJson.GetAllocator();
+            sourceJson.AddMember("documentVersion", 1, allocator);
+            sourceJson.AddMember("type", rapidjson_flax::Value("FlaxEngine.SkeletonMask", allocator), allocator);
+            const StringAnsi skeletonText = StringAnsi(typed->Skeleton.GetID().Asset.Value.ToString(Guid::FormatType::N)).ToLower();
+            sourceJson.AddMember("skeleton", rapidjson_flax::Value(skeletonText.Get(), skeletonText.Length(), allocator), allocator);
+            rapidjson_flax::Value nodes(rapidjson::kArrayType);
+            for (const String& name : typed->GetMaskedNodes())
+            {
+                const StringAnsi text(name);
+                nodes.PushBack(rapidjson_flax::Value(text.Get(), text.Length(), allocator), allocator);
+            }
+            sourceJson.AddMember("maskedNodes", nodes, allocator);
         }
-        sourceJson.SetObject();
-        auto& allocator = sourceJson.GetAllocator();
-        sourceJson.AddMember("documentVersion", 1, allocator);
-        sourceJson.AddMember("type", rapidjson_flax::Value("FlaxEngine.SkeletonMask", allocator), allocator);
-        const StringAnsi skeletonText = StringAnsi(skeleton.ToString(Guid::FormatType::N)).ToLower();
-        sourceJson.AddMember("skeleton", rapidjson_flax::Value(skeletonText.Get(), skeletonText.Length(), allocator), allocator);
-        rapidjson_flax::Value nodes(rapidjson::kArrayType);
-        for (int32 i = 0; i < count; i++)
-        {
-            String name;
-            sourceStream.Read(name, -13);
-            const StringAnsi text(name);
-            nodes.PushBack(rapidjson_flax::Value(text.Get(), text.Length(), allocator), allocator);
-        }
-        sourceJson.AddMember("maskedNodes", nodes, allocator);
         sourceOrder.Add("documentVersion");
         sourceOrder.Add("type");
         sourceOrder.Add("skeleton");
@@ -3011,8 +2923,10 @@ bool AuthoredAssetDocumentService::Save(BinaryAsset* asset, const Guid& canonica
     }
     else if (record.TypeName == SceneAnimation::TypeName)
     {
-        if (SceneAnimationDocument::DecodeLegacy(Span<byte>(sourceChunk->Get(), sourceChunk->Size()), sourceJson, conversionError))
-            return failConversion();
+        auto* typed = ScriptingObject::Cast<SceneAnimation>(asset);
+        if (!typed || SceneAnimationDocument::DecodeLegacy(
+            Span<byte>(typed->LoadTimeline().Get(), typed->LoadTimeline().Length()), sourceJson, conversionError))
+            sourceJson.SetNull();
         sourceOrder.Add("documentVersion");
         sourceOrder.Add("type");
         sourceOrder.Add("framesPerSecond");
@@ -3021,8 +2935,11 @@ bool AuthoredAssetDocumentService::Save(BinaryAsset* asset, const Guid& canonica
     }
     else if (record.TypeName == ParticleSystem::TypeName)
     {
-        if (ParticleSystemDocument::DecodeLegacy(Span<byte>(sourceChunk->Get(), sourceChunk->Size()), sourceJson, conversionError))
-            return failConversion();
+        auto* typed = ScriptingObject::Cast<ParticleSystem>(asset);
+        const BytesContainer timeline = typed ? typed->LoadTimeline() : BytesContainer();
+        if (!typed || ParticleSystemDocument::DecodeLegacy(
+            Span<byte>(timeline.Get(), timeline.Length()), sourceJson, conversionError))
+            sourceJson.SetNull();
         sourceOrder.Add("documentVersion");
         sourceOrder.Add("type");
         sourceOrder.Add("framesPerSecond");
@@ -3032,37 +2949,33 @@ bool AuthoredAssetDocumentService::Save(BinaryAsset* asset, const Guid& canonica
     }
     if (sourceJson.IsNull())
     {
-        return failConversion();
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = canonicalAssetID;
+        diagnostic.Message = conversionError.IsEmpty() ? TEXT("Authored source conversion failed.") : conversionError;
+        return fail();
     }
     StringAnsi sourceText;
     CanonicalJsonError jsonError;
     if (CanonicalJsonWriter::Write(sourceJson, sourceText, jsonError, &sourceOrder) ||
-        GraphDocumentCodec::SaveJsonAtomic(stagedDocument, sourceText, diagnostic))
+        GraphDocumentCodec::SaveJsonAtomic(record.SourcePath.Get(), sourceText, diagnostic))
         return fail();
-    if (FileSystem::FileExists(record.SourcePath.Get()) && FileSystem::IsReadOnly(record.SourcePath.Get()))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::SourceBusy;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
-        diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.SourcePath = record.SourcePath.Get();
-        diagnostic.Message = TEXT("The canonical authored document is read-only.");
-        return fail();
-    }
-    if (FileSystem::MoveFile(record.SourcePath.Get(), stagedDocument, true))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
-        diagnostic.AssetGuid = canonicalAssetID;
-        diagnostic.SourcePath = record.SourcePath.Get();
-        diagnostic.Message = TEXT("Cannot atomically replace the canonical authored document.");
-        return fail();
-    }
     if (RefreshPath(record.SourcePath.Get()) || GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
         return fail();
     return false;
 #else
     return true;
 #endif
+}
+
+bool AuthoredAssetDocumentService::SaveMaterialInstance(MaterialInstance* asset, const Guid& sourceAssetID)
+{
+    return Save(asset, sourceAssetID);
+}
+
+bool AuthoredAssetDocumentService::SaveSkeletonMask(SkeletonMask* asset, const Guid& sourceAssetID)
+{
+    return Save(asset, sourceAssetID);
 }
 
 bool AuthoredAssetDocumentService::SaveMaterial(Material* asset, const Guid& canonicalAssetID)
@@ -3237,6 +3150,107 @@ bool AuthoredAssetDocumentService::SaveParticleSystemTimeline(const StringView& 
 #else
     return true;
 #endif
+}
+
+BytesContainer AuthoredAssetDocumentService::LoadParticleSystemTimeline(const StringView& path)
+{
+    BytesContainer result;
+#if USE_EDITOR
+    Array<byte> bytes;
+    rapidjson_flax::Document json;
+    String error;
+    AssetPipelineDiagnostic diagnostic;
+    if (File::ReadAllBytes(path, bytes))
+        error = TEXT("Cannot read particle-system source document.");
+    else
+        json.Parse(reinterpret_cast<const char*>(bytes.Get()), bytes.Count());
+    Array<byte> timeline;
+    if (error.IsEmpty() && (json.HasParseError() || !json.IsObject()))
+        error = TEXT("Particle-system source document is malformed.");
+    if (error.IsEmpty() && ParticleSystemDocument::Compile(json, timeline, nullptr, error))
+        timeline.Clear();
+    if (!error.IsEmpty())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = error;
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return result;
+    }
+    result.Copy(timeline.Get(), timeline.Count());
+#endif
+    return result;
+}
+
+bool AuthoredAssetDocumentService::SaveSceneAnimationTimeline(const StringView& path, const BytesContainer& timeline)
+{
+#if USE_EDITOR && COMPILE_WITH_ASSETS_IMPORTER
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    };
+    rapidjson_flax::Document json;
+    String error;
+    if (SceneAnimationDocument::DecodeLegacy(Span<byte>(timeline.Get(), timeline.Length()), json, error))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = error;
+        return fail();
+    }
+    StringAnsi text;
+    CanonicalJsonError jsonError;
+    Array<StringAnsi> order;
+    order.Add("documentVersion");
+    order.Add("type");
+    order.Add("framesPerSecond");
+    order.Add("durationFrames");
+    order.Add("tracks");
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) ||
+        GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || RefreshPath(path))
+        return fail();
+    AssetMeta meta;
+    if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.SceneAnimation"))
+        return fail();
+    return GraphPipelineService::RequestBuild(meta.ID, false, diagnostic) ? fail() : false;
+#else
+    return true;
+#endif
+}
+
+BytesContainer AuthoredAssetDocumentService::LoadSceneAnimationTimeline(const StringView& path)
+{
+    BytesContainer result;
+#if USE_EDITOR
+    Array<byte> bytes;
+    rapidjson_flax::Document json;
+    String error;
+    AssetPipelineDiagnostic diagnostic;
+    if (File::ReadAllBytes(path, bytes))
+        error = TEXT("Cannot read scene-animation source document.");
+    else
+        json.Parse(reinterpret_cast<const char*>(bytes.Get()), bytes.Count());
+    Array<byte> timeline;
+    if (error.IsEmpty() && (json.HasParseError() || !json.IsObject()))
+        error = TEXT("Scene-animation source document is malformed.");
+    if (error.IsEmpty() && SceneAnimationDocument::Compile(json, timeline, nullptr, error))
+        timeline.Clear();
+    if (!error.IsEmpty())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = error;
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return result;
+    }
+    result.Copy(timeline.Get(), timeline.Count());
+#endif
+    return result;
 }
 
 bool AuthoredAssetDocumentService::LoadCollisionData(const StringView& path, CollisionData::SerializedOptions& options)

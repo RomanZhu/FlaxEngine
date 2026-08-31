@@ -105,7 +105,7 @@ namespace FlaxEditor.Windows.Assets
 
                 if (window.Item.IsCanonicalSource)
                 {
-                    if (AssetDatabaseFacade.LoadTextureMetadata(window.Item.Path, out ImportSettings))
+                    if (TextureImporterService.LoadMetadata(window.Item.Path, out ImportSettings))
                         Editor.LogWarning("Cannot load tracked texture settings for " + window.Item.Path);
                 }
                 else
@@ -136,11 +136,11 @@ namespace FlaxEditor.Windows.Assets
             public void Apply()
             {
                 using var save = Editor.Instance.ContentDatabase.TrackAssetSave(_window.Item.Path + ".meta");
-                var failed = AssetDatabaseFacade.ApplyTextureMetadata(_window.Item.Path, ImportSettings);
+                var failed = TextureImporterService.ApplyMetadata(_window.Item.Path, ImportSettings);
                 save.Complete(!failed);
                 if (failed)
                 {
-                    var diagnostic = AssetDatabaseFacade.GetTextureBuildDiagnostic(_window.Item.ID);
+                    var diagnostic = AssetPipelineService.GetBuildDiagnostic(_window.Item.ID);
                     Editor.LogError(string.IsNullOrEmpty(diagnostic.Message) ? "Cannot apply texture settings." : diagnostic.Message);
                     return;
                 }
@@ -150,7 +150,7 @@ namespace FlaxEditor.Windows.Assets
 
             public void Rebuild()
             {
-                if (AssetDatabaseFacade.RebuildTexture(_window.Item.ID))
+                if (AssetPipelineService.RebuildAsset(_window.Item.ID))
                     Editor.LogError("Cannot queue texture rebuild.");
             }
 
@@ -168,7 +168,7 @@ namespace FlaxEditor.Windows.Assets
             {
                 if (_window.Item.IsCanonicalSource)
                 {
-                    if (AssetDatabaseFacade.LoadTextureMetadata(_window.Item.Path, out ImportSettings))
+                    if (TextureImporterService.LoadMetadata(_window.Item.Path, out ImportSettings))
                         ImportSettings = _savedSettings;
                 }
                 else
@@ -196,8 +196,8 @@ namespace FlaxEditor.Windows.Assets
                     if (proxy._window.Item.IsCanonicalSource)
                     {
                         var state = layout.Group("Artifact State");
-                        state.Label("Status: " + AssetDatabaseFacade.GetTextureBuildStatus(proxy._window.Item.ID));
-                        var diagnostic = AssetDatabaseFacade.GetTextureBuildDiagnostic(proxy._window.Item.ID);
+                        state.Label("Status: " + AssetPipelineService.GetBuildStatus(proxy._window.Item.ID));
+                        var diagnostic = AssetPipelineService.GetBuildDiagnostic(proxy._window.Item.ID);
                         if (!string.IsNullOrEmpty(diagnostic.Message))
                             state.Label(diagnostic.Message);
                         layout.Space(5);

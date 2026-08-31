@@ -1,8 +1,10 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System.Collections;
+using System.IO;
 using System.Xml;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.Elements;
@@ -12,6 +14,7 @@ using FlaxEditor.Viewport.Cameras;
 using FlaxEditor.Viewport.Previews;
 using FlaxEngine;
 using FlaxEngine.GUI;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor.Windows.Assets
 {
@@ -187,11 +190,14 @@ namespace FlaxEditor.Windows.Assets
         private readonly CustomEditorPresenter _propertiesPresenter;
         private readonly PropertiesProxy _properties;
         private readonly ToolStripButton _saveButton;
+        private AssetDocumentSession _documentSession;
 
         /// <inheritdoc />
         public SkeletonMaskWindow(Editor editor, AssetItem item)
         : base(editor, item)
         {
+            _documentSession = AssetDocumentRegistry.Open(item.ObjectID, path => JObject.Parse(File.ReadAllText(path)));
+            OnEdited += _documentSession.MarkDirty;
             var inputOptions = Editor.Options.Options.Input;
 
             // Toolstrip
@@ -252,7 +258,11 @@ namespace FlaxEditor.Windows.Assets
                 }
             }
             _asset.MaskedNodes = nodes;
-            if (Editor.ContentDatabase.SaveAsset(_asset))
+            using var save = Editor.ContentDatabase.TrackAssetSave(_item.Path);
+            var committed = _documentSession.Save(_ =>
+                !AuthoredAssetDocumentService.SaveSkeletonMask(_asset, _item.ID), importAfterSave: false);
+            save.Complete(committed);
+            if (!committed)
             {
                 Editor.LogError("Cannot save asset.");
                 return;
@@ -316,6 +326,15 @@ namespace FlaxEditor.Windows.Assets
         public override void OnLayoutDeserialize()
         {
             _split.SplitterValue = 0.7f;
+        }
+
+        /// <inheritdoc />
+        public override void OnDestroy()
+        {
+            if (IsDisposing)
+                return;
+            AssetDocumentRegistry.Close(_item, ref _documentSession);
+            base.OnDestroy();
         }
     }
 }

@@ -18,7 +18,7 @@ namespace FlaxEditor.Content.Documents
             if (!AssetWorkspaceQuery.TryGet(objectId, out var entry))
                 throw new InvalidOperationException("The asset object is not present in the current database snapshot.");
             Revision = entry.Revision;
-            Asset = AssetDatabaseFacade.LoadAssetPreview(entry.RuntimeID);
+            Asset = AssetDatabaseQueryService.LoadAssetPreview(objectId);
         }
 
         public bool IsCurrent => AssetWorkspaceQuery.TryGet(ObjectID, out var entry) && entry.Revision == Revision;

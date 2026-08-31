@@ -106,7 +106,7 @@ namespace FlaxEditor.Content.Import
 
         internal bool CreateMetadata()
         {
-            return AssetDatabaseFacade.CreateModelMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
+            return ModelImporterService.CreateMetadata(ResultUrl, _settings.Settings) == System.Guid.Empty;
         }
     }
 }

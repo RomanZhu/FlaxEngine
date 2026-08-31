@@ -6,7 +6,7 @@
 #include "Engine/Core/Types/Version.h"
 #include "Engine/Core/Config/BuildSettings.h"
 #include "Engine/Core/Config/GameSettings.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Renderer/ReflectionsPass.h"
 #include "Engine/Renderer/AntiAliasing/SMAA.h"
 #include "Engine/Engine/Globals.h"
@@ -16,7 +16,7 @@
 bool DeployDataStep::Perform(CookingData& data)
 {
     data.StepProgress(TEXT("Deploying engine data"), 0);
-    if (AssetDatabaseFacade::LoadOrScan(false))
+    if (AssetPipelineService::LoadOrScan(false))
     {
         data.Error(TEXT("Failed to initialize the canonical asset database for cooking."));
         return true;

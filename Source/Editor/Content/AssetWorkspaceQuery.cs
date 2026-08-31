@@ -34,7 +34,7 @@ namespace FlaxEditor.Content
                 if (!Path.IsPathRooted(pathPrefix))
                     pathPrefix = Path.GetFullPath(Path.Combine(Globals.ProjectFolder, pathPrefix));
             }
-            var records = AssetDatabaseFacade.QueryRecords(new AssetDatabaseQuery
+            var records = AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery
             {
                 PathPrefix = pathPrefix,
                 TypeName = typeName,
@@ -55,7 +55,7 @@ namespace FlaxEditor.Content
 
         public static bool TryGet(AssetObjectId id, out AssetWorkspaceEntry entry)
         {
-            if (AssetDatabaseFacade.TryGetRecord(id, out var record))
+            if (AssetDatabaseQueryService.TryGetRecord(id, out var record))
             {
                 entry = ToEntry(record);
                 return true;
@@ -66,7 +66,7 @@ namespace FlaxEditor.Content
 
         public static bool TryGetMainAtPath(string path, out AssetWorkspaceEntry entry)
         {
-            if (AssetDatabaseFacade.TryGetMainRecordAtPath(path, out var record))
+            if (AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out var record))
             {
                 entry = ToEntry(record);
                 return true;

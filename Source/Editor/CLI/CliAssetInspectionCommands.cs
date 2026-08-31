@@ -22,8 +22,8 @@ namespace FlaxEditor
         {
             var before = HashContentTree();
             var scanFailed = AssetPipelineService.Scan(true);
-            var diagnostics = AssetPipelineService.GetDiagnostics();
-            var records = AssetPipelineService.GetRecords();
+            var diagnostics = AssetDatabaseQueryService.GetDiagnostics();
+            var records = AssetDatabaseQueryService.GetRecords();
             var after = HashContentTree();
             if (!before.SequenceEqual(after))
                 return CliCommandResult.Failure("FLX-ASSET-METADATA-NOWRITE-0006", "Metadata validation changed tracked Content files.");
@@ -42,7 +42,7 @@ namespace FlaxEditor
             var report = new
             {
                 schemaVersion = 1,
-                revision = AssetPipelineService.Revision,
+                revision = AssetDatabaseQueryService.Revision,
                 records = records.Length,
                 blockingRecords = records.Where(x => blockingStatuses.Contains(x.Status)).Select(x => new
                 {
@@ -93,7 +93,7 @@ namespace FlaxEditor
         public static CliCommandResult CleanLibrary()
         {
             if (AssetPipelineService.CleanLibrary())
-                return CliCommandResult.Failure("FLX-ASSET-LIBRARY-CLEAN-0006", "Project Library cleanup failed.", AssetPipelineService.GetDiagnostics());
+                return CliCommandResult.Failure("FLX-ASSET-LIBRARY-CLEAN-0006", "Project Library cleanup failed.", AssetDatabaseQueryService.GetDiagnostics());
             return CliCommandResult.Success(new { path = Globals.ProjectLibraryFolder });
         }
 
@@ -106,11 +106,11 @@ namespace FlaxEditor
             if (force)
                 options |= ImportAssetOptions.ForceUpdate;
             if (AssetPipelineService.Refresh(options))
-                return CliCommandResult.Failure("FLX-ASSET-REFRESH-0006", "Canonical asset refresh failed.", AssetPipelineService.GetDiagnostics());
+                return CliCommandResult.Failure("FLX-ASSET-REFRESH-0006", "Canonical asset refresh failed.", AssetDatabaseQueryService.GetDiagnostics());
             return CliCommandResult.Success(new
             {
-                revision = AssetPipelineService.Revision,
-                records = AssetPipelineService.GetRecords().Length,
+                revision = AssetDatabaseQueryService.Revision,
+                records = AssetDatabaseQueryService.GetRecords().Length,
                 forced = force,
             });
         }
@@ -187,18 +187,18 @@ namespace FlaxEditor
                 if (!_requested)
                 {
                     _requested = true;
-                    var failed = _force ? AssetPipelineService.RebuildTexture(_item.ID) : AssetPipelineService.BuildTexture(_item.ID);
+                    var failed = _force ? AssetPipelineService.RebuildAsset(_item.ID) : AssetPipelineService.BuildAsset(_item.ID);
                     if (failed)
                     {
-                        _result = CliCommandResult.Failure("FLX-ASSET-TEXTURE-BUILD-0004", "Texture build request failed.", AssetPipelineService.GetTextureBuildDiagnostic(_item.ID));
+                        _result = CliCommandResult.Failure("FLX-ASSET-TEXTURE-BUILD-0004", "Texture build request failed.", AssetPipelineService.GetBuildDiagnostic(_item.ID));
                         return;
                     }
                 }
-                var status = AssetPipelineService.GetTextureBuildStatus(_item.ID);
+                var status = AssetPipelineService.GetBuildStatus(_item.ID);
                 if (status == "ReadyExact")
                     _result = CliCommandResult.Success(new { id = _item.ID, path = _item.Path, status, forced = _force });
                 else if (status == "Failed" || status == "Cancelled")
-                    _result = CliCommandResult.Failure("FLX-ASSET-TEXTURE-BUILD-0004", "Texture build failed.", AssetPipelineService.GetTextureBuildDiagnostic(_item.ID));
+                    _result = CliCommandResult.Failure("FLX-ASSET-TEXTURE-BUILD-0004", "Texture build failed.", AssetPipelineService.GetBuildDiagnostic(_item.ID));
             }
         }
 
@@ -207,9 +207,9 @@ namespace FlaxEditor
         public static CliCommandResult ReconcileModel([CliOption("asset", Required = true)] string asset)
         {
             var item = ResolveAssetItem(asset);
-            if (AssetPipelineService.ReconcileModel(item.ID))
-                return CliCommandResult.Failure("FLX-ASSET-MODEL-RECONCILE-0004", "Model subasset reconciliation failed.", AssetPipelineService.GetDiagnostics());
-            var records = AssetPipelineService.GetRecords().Where(x => x.SourceAssetID == item.ID).OrderBy(x => x.SubAssetKey).Select(x => new
+            if (ModelImporterService.ReconcileSubAssets(item.ID))
+                return CliCommandResult.Failure("FLX-ASSET-MODEL-RECONCILE-0004", "Model subasset reconciliation failed.", AssetDatabaseQueryService.GetDiagnostics());
+            var records = AssetDatabaseQueryService.GetRecords().Where(x => x.SourceAssetID == item.ID).OrderBy(x => x.SubAssetKey).Select(x => new
             {
                 id = x.ID,
                 sourceId = x.SourceAssetID,
@@ -266,18 +266,18 @@ namespace FlaxEditor
                 if (!_requested)
                 {
                     _requested = true;
-                    var failed = _force ? AssetPipelineService.RebuildModel(_id) : AssetPipelineService.BuildModel(_id);
+                    var failed = _force ? AssetPipelineService.RebuildAsset(_id) : AssetPipelineService.BuildAsset(_id);
                     if (failed)
                     {
-                        _result = CliCommandResult.Failure("FLX-ASSET-MODEL-BUILD-0004", "Model build request failed.", AssetPipelineService.GetModelBuildDiagnostic(_id));
+                        _result = CliCommandResult.Failure("FLX-ASSET-MODEL-BUILD-0004", "Model build request failed.", AssetPipelineService.GetBuildDiagnostic(_id));
                         return;
                     }
                 }
-                var status = AssetPipelineService.GetModelBuildStatus(_id);
+                var status = AssetPipelineService.GetBuildStatus(_id);
                 if (status == "ReadyExact")
                     _result = CliCommandResult.Success(new { id = _id, path = _path, status, forced = _force });
                 else if (status == "Failed" || status == "Cancelled")
-                    _result = CliCommandResult.Failure("FLX-ASSET-MODEL-BUILD-0004", "Model build failed.", AssetPipelineService.GetModelBuildDiagnostic(_id));
+                    _result = CliCommandResult.Failure("FLX-ASSET-MODEL-BUILD-0004", "Model build failed.", AssetPipelineService.GetBuildDiagnostic(_id));
             }
         }
 
@@ -289,7 +289,7 @@ namespace FlaxEditor
         {
             if (!Guid.TryParse(asset, out var id))
                 id = ResolveAssetItem(asset).ID;
-            var record = AssetPipelineService.GetRecords().FirstOrDefault(x => x.ID == id);
+            var record = AssetDatabaseQueryService.GetRecords().FirstOrDefault(x => x.ID == id);
             if (record.ID == Guid.Empty || record.ProcessorID != "Flax.Model" || record.TypeName != typeof(Material).FullName || record.IsMain)
                 throw new InvalidOperationException("Extract Material requires a live model-owned material child GUID.");
             var outputPath = Path.IsPathRooted(target) ? Path.GetFullPath(target) : Path.GetFullPath(Path.Combine(Globals.ProjectContentFolder, target));
@@ -325,16 +325,16 @@ namespace FlaxEditor
                 if (!_requested)
                 {
                     _requested = true;
-                    if (AssetPipelineService.BuildModel(_sourceId))
+                    if (AssetPipelineService.BuildAsset(_sourceId))
                     {
-                        _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "Model-owned material build request failed.", AssetPipelineService.GetModelBuildDiagnostic(_sourceId));
+                        _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "Model-owned material build request failed.", AssetPipelineService.GetBuildDiagnostic(_sourceId));
                         return;
                     }
                 }
-                var status = AssetPipelineService.GetModelBuildStatus(_sourceId);
+                var status = AssetPipelineService.GetBuildStatus(_sourceId);
                 if (status == "Failed" || status == "Cancelled")
                 {
-                    _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "Model-owned material build failed.", AssetPipelineService.GetModelBuildDiagnostic(_sourceId));
+                    _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "Model-owned material build failed.", AssetPipelineService.GetBuildDiagnostic(_sourceId));
                     return;
                 }
                 if (status != "ReadyExact")
@@ -389,7 +389,7 @@ namespace FlaxEditor
             object thumbnailInfo = null;
             if (item.IsCanonicalSource && loaded is Texture)
             {
-                var thumbnail = AssetPipelineService.LoadTextureThumbnail(item.ID);
+                var thumbnail = TextureImporterService.LoadThumbnail(item.ID);
                 if (thumbnail != null)
                     thumbnailInfo = new { thumbnail.Width, thumbnail.Height, format = thumbnail.Format.ToString() };
             }

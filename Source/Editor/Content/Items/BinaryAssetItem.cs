@@ -39,7 +39,7 @@ namespace FlaxEditor.Content
         /// <returns>True if fails, otherwise false.</returns>
         public bool GetImportPath(out string importPath)
         {
-            importPath = AssetPipelineService.GetCanonicalSourcePath(ID);
+            importPath = AssetDatabaseQueryService.GetCanonicalSourcePath(ID);
             if (!string.IsNullOrEmpty(importPath))
                 return false;
 

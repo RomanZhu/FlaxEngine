@@ -1,7 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Tools/ModelTool/ModelTool.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Build/Processors/ModelProcessor.h"
 #include "Engine/Core/ScopeExit.h"
@@ -86,7 +86,7 @@ TEST_CASE("Canonical metadata batch prepares model sources concurrently")
         REQUIRE_FALSE(File::WriteAllBytes(sources.Last(), obj, ARRAY_COUNT(obj) - 1));
     }
 
-    const Array<Guid> ids = AssetDatabaseFacade::StageDefaultCanonicalMetadataBatch(sources, staging);
+    const Array<Guid> ids = AssetOperationService::StageDefaultMetadataBatch(sources, staging);
     REQUIRE(ids.Count() == sources.Count());
     for (int32 i = 0; i < ids.Count(); i++)
     {
