@@ -1979,6 +1979,9 @@ namespace FlaxEditor.Windows
             if (_suppressExpandedStateSave || node == null || node == _root)
                 return;
 
+            if (isExpanded && node.CanHaveAssets)
+                Editor.ContentDatabase.RefreshFolder(node.Folder, false);
+
             var path = node.Path;
             if (string.IsNullOrEmpty(path))
                 return;

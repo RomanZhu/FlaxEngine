@@ -77,9 +77,9 @@ namespace FlaxEngine.Tests
             var sceneItem = new SceneItem("C:/Project/Content/Scene.scene", Guid.NewGuid());
             var fileItem = new FileItem("C:/Project/Content/Notes.txt");
 
-            Assert.IsTrue(ContentDatabaseModule.UseContentBackendForFileOperation(sceneItem));
-            Assert.IsFalse(ContentDatabaseModule.UseContentBackendForFileOperation(fileItem));
-            Assert.IsFalse(ContentDatabaseModule.UseContentBackendForFileOperation(null));
+            Assert.IsTrue(AssetWorkspaceModule.UseContentBackendForFileOperation(sceneItem));
+            Assert.IsFalse(AssetWorkspaceModule.UseContentBackendForFileOperation(fileItem));
+            Assert.IsFalse(AssetWorkspaceModule.UseContentBackendForFileOperation(null));
         }
 
         [Test]
@@ -108,13 +108,13 @@ namespace FlaxEngine.Tests
                 SourceAssetID = prefabId,
                 SourcePath = prefabItem.Path,
                 MetaPath = prefabItem.Path + ".meta",
-                ProcessorID = "Flax.ExistingJson",
-                SourceKind = AssetSourceKind.ExistingJson,
+                ProcessorID = "Flax.JsonDocument",
+                SourceKind = AssetSourceKind.TextDocument,
                 IsMain = true,
             });
 
-            Assert.IsFalse(ContentDatabaseModule.UseContentBackendForCopy(textureItem));
-            Assert.IsTrue(ContentDatabaseModule.UseContentBackendForCopy(prefabItem));
+            Assert.IsFalse(AssetWorkspaceModule.UseContentBackendForCopy(textureItem));
+            Assert.IsFalse(AssetWorkspaceModule.UseContentBackendForCopy(prefabItem));
         }
 
         [Test]
@@ -149,7 +149,7 @@ namespace FlaxEngine.Tests
                 Assert.IsTrue(item.CanDrag);
                 Assert.IsFalse(item.CanRename);
                 Assert.IsTrue(item.IsCanonicalSubAsset);
-                var result = new ContentDatabaseModule(null).Copy(item, Path.Combine(root, "Walk.flax"));
+                var result = new AssetWorkspaceModule(null).Copy(item, Path.Combine(root, "Walk.flax"));
                 Assert.IsFalse(result.Succeeded);
                 Assert.AreEqual(ContentMutationFailure.InvalidSource, result.Failure);
             }
@@ -170,7 +170,7 @@ namespace FlaxEngine.Tests
                 var destinationPath = Path.Combine(root, "Destination.txt");
                 File.WriteAllText(sourcePath, "source");
                 File.WriteAllText(destinationPath, "destination");
-                var database = new ContentDatabaseModule(null);
+                var database = new AssetWorkspaceModule(null);
 
                 var result = database.Copy(new FileItem(sourcePath), destinationPath);
 
@@ -195,7 +195,7 @@ namespace FlaxEngine.Tests
                 var sourcePath = Path.Combine(root, "Source.txt");
                 var destinationPath = Path.Combine(root, "Destination.txt");
                 File.WriteAllText(sourcePath, "source");
-                var database = new ContentDatabaseModule(null);
+                var database = new AssetWorkspaceModule(null);
 
                 var result = database.Copy(new FileItem(sourcePath), destinationPath);
 
@@ -221,7 +221,7 @@ namespace FlaxEngine.Tests
                 var metadataPath = Path.Combine(root, "Artifact.prefab.meta");
                 File.WriteAllText(metadataPath, "{\"metaVersion\":1,\"guid\":\"" + serializedId + "\"}");
 
-                Assert.AreEqual(expected, ContentDatabaseModule.ReadCanonicalMetadataGuid(metadataPath));
+                Assert.AreEqual(expected, AssetWorkspaceModule.ReadCanonicalMetadataGuid(metadataPath));
             }
             finally
             {
@@ -245,7 +245,7 @@ namespace FlaxEngine.Tests
                 File.WriteAllText(Path.Combine(destinationFolderPath, "Existing.txt"), "existing");
                 File.WriteAllText(fileCollisionPath, "existing file");
                 var sourceFolder = new ContentFolder(ContentFolderType.Content, sourceFolderPath, null);
-                var database = new ContentDatabaseModule(null);
+                var database = new AssetWorkspaceModule(null);
 
                 var folderResult = database.Copy(sourceFolder, destinationFolderPath);
                 var crossTypeResult = database.Copy(sourceFolder, fileCollisionPath);
@@ -269,9 +269,9 @@ namespace FlaxEngine.Tests
             var newItem = new NewItem(Path.Combine(folder.Path, "Json Asset.json"), proxy, null);
             var fileItem = new FileItem(Path.Combine(folder.Path, "Notes.txt"));
 
-            Assert.IsFalse(ContentDatabaseModule.ShouldRemoveMissingContentItem(newItem));
-            Assert.IsTrue(ContentDatabaseModule.ShouldRemoveMissingContentItem(fileItem));
-            Assert.IsFalse(ContentDatabaseModule.ShouldRemoveMissingContentItem(null));
+            Assert.IsFalse(AssetWorkspaceModule.ShouldRemoveMissingContentItem(newItem));
+            Assert.IsTrue(AssetWorkspaceModule.ShouldRemoveMissingContentItem(fileItem));
+            Assert.IsFalse(AssetWorkspaceModule.ShouldRemoveMissingContentItem(null));
         }
 
         [Test]
@@ -307,7 +307,7 @@ namespace FlaxEngine.Tests
             File.WriteAllText(path, "asset");
             try
             {
-                var database = new ContentDatabaseModule(null);
+                var database = new AssetWorkspaceModule(null);
 
                 database.BeginAssetSave(path);
                 database.BeginAssetSave(path);
@@ -333,7 +333,7 @@ namespace FlaxEngine.Tests
             File.WriteAllText(path, "asset");
             try
             {
-                var database = new ContentDatabaseModule(null);
+                var database = new AssetWorkspaceModule(null);
 
                 database.BeginAssetSave(path);
                 database.BeginAssetSave(path);

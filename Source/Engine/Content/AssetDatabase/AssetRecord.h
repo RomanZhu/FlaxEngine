@@ -48,6 +48,7 @@ struct FLAXENGINE_API AssetRecord
     SourceFilePath SourcePath;
     MetaFilePath MetaPath;
     SubAssetKey SubAsset;
+    String DisplayName;
     String ProcessorID;
     String PortabilityKey;
     uint64 MetaSemanticHash = 0;

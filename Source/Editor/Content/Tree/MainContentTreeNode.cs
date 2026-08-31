@@ -1,7 +1,5 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
-using System.IO;
-
 namespace FlaxEditor.Content
 {
     /// <summary>
@@ -10,8 +8,6 @@ namespace FlaxEditor.Content
     /// <seealso cref="ContentFolderTreeNode" />
     public class MainContentFolderTreeNode : ContentFolderTreeNode
     {
-        private FileSystemWatcher _watcher;
-
         /// <inheritdoc />
         public override bool CanDelete => false;
 
@@ -27,28 +23,6 @@ namespace FlaxEditor.Content
         public MainContentFolderTreeNode(ProjectFolderTreeNode parent, ContentFolderType type, string path)
         : base(parent, type, path)
         {
-            _watcher = new FileSystemWatcher(path)
-            {
-                IncludeSubdirectories = true,
-                InternalBufferSize = 64 * 1024,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
-            };
-            _watcher.Changed += OnEvent;
-            _watcher.Created += OnEvent;
-            _watcher.Deleted += OnEvent;
-            _watcher.Renamed += OnEvent;
-            _watcher.Error += OnError;
-            _watcher.EnableRaisingEvents = true;
-        }
-
-        private void OnEvent(object sender, FileSystemEventArgs e)
-        {
-            Editor.Instance.ContentDatabase.OnDirectoryEvent(this, e);
-        }
-
-        private void OnError(object sender, ErrorEventArgs e)
-        {
-            Editor.Instance.ContentDatabase.OnDirectoryWatcherError(this, e);
         }
 
         /// <inheritdoc />
@@ -57,15 +31,5 @@ namespace FlaxEditor.Content
             // No drag for root nodes
         }
 
-        /// <inheritdoc />
-        public override void OnDestroy()
-        {
-            _watcher.EnableRaisingEvents = false;
-            _watcher.Error -= OnError;
-            _watcher.Dispose();
-            _watcher = null;
-
-            base.OnDestroy();
-        }
     }
 }

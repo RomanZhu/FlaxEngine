@@ -24,6 +24,21 @@ struct FLAXENGINE_API AssetDatabaseSnapshot
     Array<AssetRecord> Records;
 };
 
+/// <summary>Native indexed asset record query.</summary>
+struct FLAXENGINE_API AssetRecordQuery
+{
+    String Name;
+    String PathPrefix;
+    String TypeName;
+    String ProcessorId;
+    String Label;
+    AssetRecordStatus Status = AssetRecordStatus::Ready;
+    bool HasStatus = false;
+    bool MainAssetsOnly = false;
+    AssetObjectId ReferencedAsset;
+    AssetObjectId UsedByAsset;
+};
+
 /// <summary>Thread-safe canonical source/metadata registry.</summary>
 class FLAXENGINE_API AssetDatabase
 {
@@ -36,6 +51,10 @@ private:
     Dictionary<String, Guid> _mainByPath;
     Dictionary<Guid, Array<Guid>> _subAssetsBySource;
     Dictionary<String, Array<Guid>> _recordsByProcessor;
+    Dictionary<String, Array<Guid>> _recordsByType;
+    Dictionary<String, Array<Guid>> _recordsByLabel;
+    Array<Guid> _recordsBySortedPath;
+    Dictionary<String, Array<Guid>> _recordsBySearchGram;
     Dictionary<AssetRecordStatus, Array<Guid>> _recordsByStatus;
     Dictionary<AssetObjectId, Array<Guid>> _dependantsByBuildInput;
     Dictionary<AssetObjectId, Array<Guid>> _referencersByRuntimeReference;
@@ -66,6 +85,13 @@ public:
     void GetBuildDependants(const AssetObjectId& input, Array<AssetRecord>& result) const;
     void GetRuntimeReferencers(const Guid& referencedId, Array<AssetRecord>& result) const;
     void GetRuntimeReferencers(const AssetObjectId& referenced, Array<AssetRecord>& result) const;
+    void QueryRecords(const AssetRecordQuery& query, Array<AssetRecord>& result) const;
+    void GetLabels(const Guid& sourceId, Array<String>& result) const;
+    bool SetLabels(const Guid& sourceId, const Array<String>& labels, AssetPipelineDiagnostic& diagnostic);
+    bool RegisterCustomDependency(const StringView& name, const ContentHash& hash, const StringView& provider,
+        AssetPipelineDiagnostic& diagnostic);
+    bool UnregisterCustomDependency(const StringView& name, AssetPipelineDiagnostic& diagnostic);
+    bool TryGetCustomDependencyHash(const StringView& name, ContentHash& result) const;
 
     /// <summary>Atomically replaces database truth and emits one change batch outside the database lock.</summary>
     /// <returns>True if input records violate an invariant.</returns>

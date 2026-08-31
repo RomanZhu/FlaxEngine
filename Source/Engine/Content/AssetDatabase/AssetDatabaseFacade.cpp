@@ -292,6 +292,11 @@ namespace
         result.SourcePath = record.SourcePath.Get();
         result.MetaPath = record.MetaPath.Get();
         result.SubAssetKey = record.SubAsset.Get();
+        result.DisplayName = record.DisplayName.HasChars()
+            ? record.DisplayName
+            : record.SubAsset.Get().HasChars()
+            ? String(record.SubAsset.Get())
+            : String(StringUtils::GetFileNameWithoutExtension(record.SourcePath.Get()));
         result.ProcessorID = record.ProcessorID;
         result.MetaSemanticHash = record.MetaSemanticHash;
         result.SourceKind = record.SourceKind;
@@ -1277,6 +1282,114 @@ Array<AssetDatabaseRecordInfo> AssetDatabaseFacade::GetRecords()
     return result;
 }
 
+Array<AssetDatabaseRecordInfo> AssetDatabaseFacade::QueryRecords(const AssetDatabaseQuery& query)
+{
+    Array<AssetDatabaseRecordInfo> result;
+    if (EnsureDatabaseLoaded())
+        return result;
+    AssetRecordQuery nativeQuery;
+    nativeQuery.Name = query.Name;
+    nativeQuery.PathPrefix = query.PathPrefix;
+    nativeQuery.TypeName = query.TypeName;
+    nativeQuery.ProcessorId = query.ImporterID;
+    nativeQuery.Label = query.Label;
+    nativeQuery.Status = query.Status;
+    nativeQuery.HasStatus = query.HasStatus;
+    nativeQuery.MainAssetsOnly = query.MainAssetsOnly;
+    nativeQuery.ReferencedAsset = query.ReferencedAsset;
+    nativeQuery.UsedByAsset = query.UsedByAsset;
+    Array<AssetRecord> records;
+    AssetDatabase::Get().QueryRecords(nativeQuery, records);
+    result.EnsureCapacity(records.Count());
+    for (const AssetRecord& record : records)
+        result.Add(ToInfo(record));
+    return result;
+}
+
+bool AssetDatabaseFacade::TryGetRecord(const AssetObjectId& objectID, AssetDatabaseRecordInfo& result)
+{
+    result = AssetDatabaseRecordInfo();
+    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+        return false;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(objectID, record))
+        return false;
+    result = ToInfo(record);
+    return true;
+}
+
+bool AssetDatabaseFacade::TryGetMainRecordAtPath(const StringView& path, AssetDatabaseRecordInfo& result)
+{
+    result = AssetDatabaseRecordInfo();
+    if (path.IsEmpty() || EnsureDatabaseLoaded())
+        return false;
+    String key = ResolveFacadeAssetPath(path).ToLower();
+    key.Replace(TEXT('\\'), TEXT('/'));
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetMainRecordByPath(key, record))
+        return false;
+    result = ToInfo(record);
+    return true;
+}
+
+Array<String> AssetDatabaseFacade::GetLabels(const Guid& sourceID)
+{
+    Array<String> result;
+    if (sourceID.IsValid() && !EnsureDatabaseLoaded())
+        AssetDatabase::Get().GetLabels(sourceID, result);
+    return result;
+}
+
+bool AssetDatabaseFacade::SetLabels(const Guid& sourceID, const Array<String>& labels)
+{
+    if (EnsureDatabaseLoaded())
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = AssetDatabase::Get().SetLabels(sourceID, labels, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+}
+
+bool AssetDatabaseFacade::RegisterCustomDependency(const StringView& name, const StringView& contentHash, const StringView& provider)
+{
+    if (EnsureDatabaseLoaded())
+        return true;
+    ContentHash hash;
+    AssetPipelineDiagnostic diagnostic;
+    if (ContentHash::Parse(contentHash, hash))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        diagnostic.Message = TEXT("Custom dependency hashes must be canonical SHA-256 values.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    const bool failed = AssetDatabase::Get().RegisterCustomDependency(name, hash, provider, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+}
+
+bool AssetDatabaseFacade::UnregisterCustomDependency(const StringView& name)
+{
+    if (EnsureDatabaseLoaded())
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = AssetDatabase::Get().UnregisterCustomDependency(name, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+}
+
+String AssetDatabaseFacade::GetCustomDependencyHash(const StringView& name)
+{
+    if (EnsureDatabaseLoaded())
+        return String::Empty;
+    ContentHash hash;
+    return AssetDatabase::Get().TryGetCustomDependencyHash(name, hash) ? String(hash.ToString()) : String::Empty;
+}
+
 Array<AssetDatabaseDependencyInfo> AssetDatabaseFacade::GetDependencies(const AssetObjectId& objectID)
 {
     Array<AssetDatabaseDependencyInfo> result;
@@ -1390,14 +1503,10 @@ Guid AssetDatabaseFacade::AssetPathToGUID(const StringView& path)
 {
     if (path.IsEmpty() || EnsureDatabaseLoaded())
         return Guid::Empty;
-    const String resolved = ResolveFacadeAssetPath(path);
-    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
-    for (const AssetRecord& record : snapshot.Records)
-    {
-        if (record.IsMainAsset() && FileSystem::AreFilePathsEqual(record.CanonicalPath.Get(), resolved))
-            return record.ID;
-    }
-    return Guid::Empty;
+    String key = ResolveFacadeAssetPath(path).ToLower();
+    key.Replace(TEXT('\\'), TEXT('/'));
+    AssetRecord record;
+    return AssetDatabase::Get().TryGetMainRecordByPath(key, record) ? record.SourceAssetID : Guid::Empty;
 }
 
 String AssetDatabaseFacade::GUIDToAssetPath(const Guid& assetID)
@@ -1442,13 +1551,8 @@ Guid AssetDatabaseFacade::GetBackingAssetID(const AssetObjectId& objectID)
 {
     if (!objectID.IsValid() || EnsureDatabaseLoaded())
         return Guid::Empty;
-    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
-    for (const AssetRecord& record : snapshot.Records)
-    {
-        if (record.SourceAssetID == objectID.Asset.Value && record.LocalId == objectID.LocalId)
-            return record.ID;
-    }
-    return Guid::Empty;
+    AssetRecord record;
+    return AssetDatabase::Get().TryGetRecord(objectID, record) ? record.ID : Guid::Empty;
 }
 
 String AssetDatabaseFacade::GetCanonicalSourcePath(const Guid& assetID)
@@ -1459,10 +1563,10 @@ String AssetDatabaseFacade::GetCanonicalSourcePath(const Guid& assetID)
         : String::Empty;
 }
 
-Asset* AssetDatabaseFacade::LoadAssetPreview(const Guid& assetID)
+Asset* AssetDatabaseFacade::LoadAssetPreview(const AssetObjectId& objectID)
 {
 #if USE_EDITOR
-    return Content::LoadAsyncPreview(assetID, Asset::TypeInitializer);
+    return Content::LoadAsyncPreview(objectID, Asset::TypeInitializer);
 #else
     return nullptr;
 #endif
@@ -1939,7 +2043,6 @@ bool AssetDatabaseFacade::CopyCanonicalAsset(const StringView& sourcePath, const
         return true;
     const String resolved = ResolveFacadeAssetPath(sourcePath);
     AssetOperationTarget target;
-    bool embeddedIdentity = false;
     const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
     for (const AssetRecord& record : snapshot.Records)
     {
@@ -1947,20 +2050,10 @@ bool AssetDatabaseFacade::CopyCanonicalAsset(const StringView& sourcePath, const
         {
             target.SourcePath = record.SourcePath.Get();
             target.ExpectedGuid = record.SourceAssetID;
-            embeddedIdentity = record.SourceKind == AssetSourceKind::ExistingJson;
             break;
         }
     }
     AssetPipelineDiagnostic diagnostic;
-    if (embeddedIdentity)
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
-        diagnostic.SourcePath = resolved;
-        diagnostic.Message = TEXT("Canonical JSON copy requires document-aware identity rewriting.");
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
-    }
     if (!target.ExpectedGuid.IsValid())
     {
         diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;

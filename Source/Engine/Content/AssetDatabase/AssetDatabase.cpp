@@ -21,6 +21,47 @@ namespace
         values->Add(id);
     }
 
+    String NormalizeIndexKey(const StringView& value)
+    {
+        String result(value);
+        result = result.ToLower();
+        result.Replace(TEXT('\\'), TEXT('/'));
+        while (result.Length() > 1 && result.EndsWith('/'))
+            result.Remove(result.Length() - 1, 1);
+        return result;
+    }
+
+    String GetSearchText(const AssetRecord& record)
+    {
+        String result(StringUtils::GetFileNameWithoutExtension(record.SourcePath.Get()));
+        if (record.DisplayName.HasChars())
+            result += TEXT(" ") + record.DisplayName;
+        if (record.SubAsset.Get().HasChars())
+            result += TEXT(" ") + String(record.SubAsset.Get());
+        result += TEXT(" ") + record.TypeName;
+        return result.ToLower();
+    }
+
+    void AddSearchGrams(Dictionary<String, Array<Guid>>& index, const AssetRecord& record)
+    {
+        const String text = GetSearchText(record);
+        for (int32 length = 1; length <= 3; length++)
+        {
+            for (int32 i = 0; i + length <= text.Length(); i++)
+            {
+                const String gram(text.Get() + i, length);
+                Array<Guid>* values = index.TryGet(gram);
+                if (!values)
+                {
+                    index.Add(gram, Array<Guid>());
+                    values = index.TryGet(gram);
+                }
+                if (!values->Contains(record.ID))
+                    values->Add(record.ID);
+            }
+        }
+    }
+
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const StringView& path, const StringView& message)
     {
         diagnostic = AssetPipelineDiagnostic();
@@ -87,6 +128,7 @@ namespace
             record.SourcePath = SourceFilePath((*source)->Path);
             record.MetaPath = MetaFilePath((*source)->MetaPath);
             record.SubAsset = SubAssetKey(object.SubAssetKey);
+            record.DisplayName = object.DisplayName;
             record.ProcessorID = (*source)->ImporterId;
             record.PortabilityKey = (*source)->PortabilityKey;
             record.MetaSemanticHash = (*source)->MetaSemanticHash;
@@ -164,6 +206,10 @@ bool AssetDatabase::Close(AssetPipelineDiagnostic* diagnostic)
     _mainByPath.Clear();
     _subAssetsBySource.Clear();
     _recordsByProcessor.Clear();
+    _recordsByType.Clear();
+    _recordsByLabel.Clear();
+    _recordsBySortedPath.Clear();
+    _recordsBySearchGram.Clear();
     _recordsByStatus.Clear();
     _dependantsByBuildInput.Clear();
     _referencersByRuntimeReference.Clear();
@@ -234,7 +280,7 @@ void AssetDatabase::GetSubAssets(const Guid& sourceId, Array<AssetRecord>& resul
 void AssetDatabase::GetByProcessor(const StringView& processorId, Array<AssetRecord>& result) const
 {
     ScopeLock lock(_locker);
-    ResolveRecords(_records, _recordsByProcessor.TryGet(String(processorId)), result);
+    ResolveRecords(_records, _recordsByProcessor.TryGet(NormalizeIndexKey(processorId)), result);
 }
 
 void AssetDatabase::GetByStatus(AssetRecordStatus status, Array<AssetRecord>& result) const
@@ -273,6 +319,267 @@ void AssetDatabase::GetRuntimeReferencers(const AssetObjectId& referenced, Array
     ResolveRecords(_records, _referencersByRuntimeReference.TryGet(referenced), result);
 }
 
+void AssetDatabase::QueryRecords(const AssetRecordQuery& query, Array<AssetRecord>& result) const
+{
+    ScopeLock lock(_locker);
+    result.Clear();
+
+    const Array<Guid>* candidates = nullptr;
+    Array<Guid> usedByCandidates;
+    Array<Guid> pathCandidates;
+    bool constrained = false;
+    bool impossible = false;
+    const auto consider = [&candidates, &constrained, &impossible](const Array<Guid>* values)
+    {
+        constrained = true;
+        if (!values)
+        {
+            impossible = true;
+            return;
+        }
+        if (!candidates || values->Count() < candidates->Count())
+            candidates = values;
+    };
+
+    if (query.PathPrefix.HasChars())
+    {
+        const String prefix = NormalizeIndexKey(query.PathPrefix);
+        int32 left = 0;
+        int32 right = _recordsBySortedPath.Count();
+        while (left < right)
+        {
+            const int32 middle = left + (right - left) / 2;
+            const AssetRecord* record = _records.TryGet(_recordsBySortedPath[middle]);
+            const String path = record ? NormalizeIndexKey(record->SourcePath.Get()) : String::Empty;
+            if (path < prefix)
+                left = middle + 1;
+            else
+                right = middle;
+        }
+        while (left < _recordsBySortedPath.Count())
+        {
+            const Guid& id = _recordsBySortedPath[left++];
+            const AssetRecord* record = _records.TryGet(id);
+            if (!record || !NormalizeIndexKey(record->SourcePath.Get()).StartsWith(prefix))
+                break;
+            pathCandidates.Add(id);
+        }
+        consider(&pathCandidates);
+    }
+    if (query.TypeName.HasChars())
+        consider(_recordsByType.TryGet(NormalizeIndexKey(query.TypeName)));
+    if (query.ProcessorId.HasChars())
+        consider(_recordsByProcessor.TryGet(NormalizeIndexKey(query.ProcessorId)));
+    if (query.Label.HasChars())
+        consider(_recordsByLabel.TryGet(NormalizeIndexKey(query.Label)));
+    if (query.HasStatus)
+        consider(_recordsByStatus.TryGet(query.Status));
+    if (query.ReferencedAsset.IsValid())
+        consider(_referencersByRuntimeReference.TryGet(query.ReferencedAsset));
+    if (query.UsedByAsset.IsValid())
+    {
+        const Guid* ownerId = _recordByObject.TryGet(query.UsedByAsset);
+        const AssetRecord* owner = ownerId ? _records.TryGet(*ownerId) : nullptr;
+        if (owner)
+        {
+            for (const AssetObjectId& referenced : owner->RuntimeReferences)
+            {
+                const Guid* id = _recordByObject.TryGet(referenced);
+                if (id && !usedByCandidates.Contains(*id))
+                    usedByCandidates.Add(*id);
+            }
+        }
+        consider(owner ? &usedByCandidates : nullptr);
+    }
+    if (query.Name.HasChars())
+    {
+        const String name = NormalizeIndexKey(query.Name);
+        const int32 gramLength = Math::Min(3, name.Length());
+        consider(gramLength > 0 ? _recordsBySearchGram.TryGet(String(name.Get(), gramLength)) : nullptr);
+    }
+    if (impossible)
+        return;
+
+    const String normalizedPath = NormalizeIndexKey(query.PathPrefix);
+    const String normalizedType = NormalizeIndexKey(query.TypeName);
+    const String normalizedProcessor = NormalizeIndexKey(query.ProcessorId);
+    const String normalizedLabel = NormalizeIndexKey(query.Label);
+    const String normalizedName = NormalizeIndexKey(query.Name);
+    const auto matches = [&](const AssetRecord& record)
+    {
+        if (query.MainAssetsOnly && !record.IsMainAsset())
+            return false;
+        if (query.HasStatus && record.Status != query.Status)
+            return false;
+        if (normalizedPath.HasChars() && !NormalizeIndexKey(record.SourcePath.Get()).StartsWith(normalizedPath))
+            return false;
+        if (normalizedType.HasChars())
+        {
+            const String recordType = NormalizeIndexKey(record.TypeName);
+            String typeSuffix(TEXT("."));
+            typeSuffix += normalizedType;
+            if (recordType != normalizedType && !recordType.EndsWith(typeSuffix))
+                return false;
+        }
+        if (normalizedProcessor.HasChars() && NormalizeIndexKey(record.ProcessorID) != normalizedProcessor)
+            return false;
+        if (normalizedLabel.HasChars())
+        {
+            bool found = false;
+            for (const String& label : record.Labels)
+                found |= NormalizeIndexKey(label) == normalizedLabel;
+            if (!found)
+                return false;
+        }
+        if (query.ReferencedAsset.IsValid() && !record.RuntimeReferences.Contains(query.ReferencedAsset))
+            return false;
+        if (query.UsedByAsset.IsValid() && !usedByCandidates.Contains(record.ID))
+            return false;
+        if (normalizedName.HasChars() && !GetSearchText(record).Contains(normalizedName))
+            return false;
+        return true;
+    };
+
+    if (constrained)
+    {
+        if (!candidates)
+            return;
+        result.EnsureCapacity(candidates->Count());
+        for (const Guid& id : *candidates)
+        {
+            const AssetRecord* record = _records.TryGet(id);
+            if (record && matches(*record))
+                result.Add(*record);
+        }
+    }
+    else
+    {
+        result.EnsureCapacity(_records.Count());
+        for (const auto& entry : _records)
+            if (matches(entry.Value))
+                result.Add(entry.Value);
+    }
+    if (result.Count() > 1)
+    {
+        std::sort(result.Get(), result.Get() + result.Count(), [](const AssetRecord& a, const AssetRecord& b)
+        {
+            const int32 path = StringUtils::CompareIgnoreCase(a.SourcePath.Get().Get(), b.SourcePath.Get().Get());
+            return path != 0 ? path < 0 : a.LocalId < b.LocalId;
+        });
+    }
+}
+
+void AssetDatabase::GetLabels(const Guid& sourceId, Array<String>& result) const
+{
+    result.Clear();
+    const AssetDatabaseReadSnapshot snapshot = _sourceDatabase.Read();
+    if (snapshot.IsValid())
+        snapshot.GetLabels(sourceId, result);
+    if (result.Count() > 1)
+        std::sort(result.Get(), result.Get() + result.Count());
+}
+
+bool AssetDatabase::SetLabels(const Guid& sourceId, const Array<String>& labels, AssetPipelineDiagnostic& diagnostic)
+{
+    ScopeLock writeLock(_writeLocker);
+    const AssetDatabaseReadSnapshot snapshot = _sourceDatabase.Read();
+    SourceAssetRow source;
+    if (!sourceId.IsValid() || !snapshot.IsValid() || !snapshot.TryGetSource(sourceId, source))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, StringView::Empty, TEXT("Cannot label an unknown source asset."));
+    Array<String> normalized;
+    HashSet<String> unique;
+    for (const String& label : labels)
+    {
+        if (label.IsEmpty())
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, source.Path, TEXT("Asset labels cannot be empty."));
+        if (unique.Add(label))
+            normalized.Add(label);
+    }
+    if (normalized.Count() > 1)
+        std::sort(normalized.Get(), normalized.Get() + normalized.Count());
+    Array<String> current;
+    snapshot.GetLabels(sourceId, current);
+    if (current.Count() > 1)
+        std::sort(current.Get(), current.Get() + current.Count());
+    if (current == normalized)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+    std::unique_ptr<AssetDatabaseTransaction> transaction = _sourceDatabase.BeginTransaction();
+    if (!transaction)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, source.Path, TEXT("Cannot begin the asset label transaction."));
+    transaction->SetLabels(sourceId, normalized);
+    if (transaction->Commit(diagnostic))
+        return true;
+    AssetDatabaseChangeBatch changes;
+    RebuildCacheFromDurable(&changes);
+    Changed(changes);
+    return false;
+}
+
+bool AssetDatabase::RegisterCustomDependency(const StringView& name, const ContentHash& hash, const StringView& provider,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    ScopeLock writeLock(_writeLocker);
+    if (name.IsEmpty() || hash.IsZero())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, StringView::Empty, TEXT("Custom dependencies require a name and non-zero content hash."));
+    SourceCustomDependencyRow current;
+    const AssetDatabaseReadSnapshot snapshot = _sourceDatabase.Read();
+    if (snapshot.IsValid() && snapshot.TryGetCustomDependency(name, current) && current.CurrentHash == hash && current.Provider == provider)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+    std::unique_ptr<AssetDatabaseTransaction> transaction = _sourceDatabase.BeginTransaction();
+    if (!transaction)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, StringView::Empty, TEXT("Cannot begin the custom dependency transaction."));
+    SourceCustomDependencyRow dependency;
+    dependency.DependencyName = name;
+    dependency.CurrentHash = hash;
+    dependency.Provider = provider;
+    transaction->UpsertCustomDependency(dependency);
+    if (transaction->Commit(diagnostic))
+        return true;
+    AssetDatabaseChangeBatch changes;
+    RebuildCacheFromDurable(&changes);
+    Changed(changes);
+    return false;
+}
+
+bool AssetDatabase::UnregisterCustomDependency(const StringView& name, AssetPipelineDiagnostic& diagnostic)
+{
+    ScopeLock writeLock(_writeLocker);
+    SourceCustomDependencyRow current;
+    const AssetDatabaseReadSnapshot snapshot = _sourceDatabase.Read();
+    if (name.IsEmpty() || !snapshot.IsValid() || !snapshot.TryGetCustomDependency(name, current))
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+    std::unique_ptr<AssetDatabaseTransaction> transaction = _sourceDatabase.BeginTransaction();
+    if (!transaction)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, StringView::Empty, TEXT("Cannot begin the custom dependency transaction."));
+    transaction->RemoveCustomDependency(name);
+    if (transaction->Commit(diagnostic))
+        return true;
+    AssetDatabaseChangeBatch changes;
+    RebuildCacheFromDurable(&changes);
+    Changed(changes);
+    return false;
+}
+
+bool AssetDatabase::TryGetCustomDependencyHash(const StringView& name, ContentHash& result) const
+{
+    result = ContentHash();
+    SourceCustomDependencyRow row;
+    const AssetDatabaseReadSnapshot snapshot = _sourceDatabase.Read();
+    if (!snapshot.IsValid() || !snapshot.TryGetCustomDependency(name, row))
+        return false;
+    result = row.CurrentHash;
+    return true;
+}
+
 bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revision, AssetDatabaseChangeBatch& changes, AssetPipelineDiagnostic& diagnostic)
 {
     diagnostic = AssetPipelineDiagnostic();
@@ -282,6 +589,10 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
     Dictionary<String, Guid> nextMainByPath;
     Dictionary<Guid, Array<Guid>> nextSubAssetsBySource;
     Dictionary<String, Array<Guid>> nextRecordsByProcessor;
+    Dictionary<String, Array<Guid>> nextRecordsByType;
+    Dictionary<String, Array<Guid>> nextRecordsByLabel;
+    Array<Guid> nextRecordsBySortedPath;
+    Dictionary<String, Array<Guid>> nextRecordsBySearchGram;
     Dictionary<AssetRecordStatus, Array<Guid>> nextRecordsByStatus;
     Dictionary<AssetObjectId, Array<Guid>> nextDependantsByBuildInput;
     Dictionary<AssetObjectId, Array<Guid>> nextReferencersByRuntimeReference;
@@ -332,12 +643,30 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
     }
     for (const auto& entry : nextRecords)
     {
-        AddToIndex(nextRecordsByProcessor, entry.Value.ProcessorID, entry.Key);
+        AddToIndex(nextRecordsByProcessor, NormalizeIndexKey(entry.Value.ProcessorID), entry.Key);
+        const String normalizedType = NormalizeIndexKey(entry.Value.TypeName);
+        AddToIndex(nextRecordsByType, normalizedType, entry.Key);
+        const int32 typeSeparator = normalizedType.FindLast('.');
+        if (typeSeparator != -1 && typeSeparator + 1 < normalizedType.Length())
+            AddToIndex(nextRecordsByType, normalizedType.Substring(typeSeparator + 1), entry.Key);
+        for (const String& label : entry.Value.Labels)
+            AddToIndex(nextRecordsByLabel, NormalizeIndexKey(label), entry.Key);
+        nextRecordsBySortedPath.Add(entry.Key);
+        AddSearchGrams(nextRecordsBySearchGram, entry.Value);
         AddToIndex(nextRecordsByStatus, entry.Value.Status, entry.Key);
         for (const AssetObjectId& dependency : entry.Value.BuildInputDependencies)
             AddToIndex(nextDependantsByBuildInput, dependency, entry.Key);
         for (const AssetObjectId& reference : entry.Value.RuntimeReferences)
             AddToIndex(nextReferencersByRuntimeReference, reference, entry.Key);
+    }
+    if (nextRecordsBySortedPath.Count() > 1)
+    {
+        std::sort(nextRecordsBySortedPath.Get(), nextRecordsBySortedPath.Get() + nextRecordsBySortedPath.Count(), [&nextRecords](const Guid& a, const Guid& b)
+        {
+            const AssetRecord* left = nextRecords.TryGet(a);
+            const AssetRecord* right = nextRecords.TryGet(b);
+            return left && right && NormalizeIndexKey(left->SourcePath.Get()) < NormalizeIndexKey(right->SourcePath.Get());
+        });
     }
 
     changes = AssetDatabaseChangeBatch();
@@ -373,6 +702,10 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
         _mainByPath = MoveTemp(nextMainByPath);
         _subAssetsBySource = MoveTemp(nextSubAssetsBySource);
         _recordsByProcessor = MoveTemp(nextRecordsByProcessor);
+        _recordsByType = MoveTemp(nextRecordsByType);
+        _recordsByLabel = MoveTemp(nextRecordsByLabel);
+        _recordsBySortedPath = MoveTemp(nextRecordsBySortedPath);
+        _recordsBySearchGram = MoveTemp(nextRecordsBySearchGram);
         _recordsByStatus = MoveTemp(nextRecordsByStatus);
         _dependantsByBuildInput = MoveTemp(nextDependantsByBuildInput);
         _referencersByRuntimeReference = MoveTemp(nextReferencersByRuntimeReference);
@@ -477,6 +810,7 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         if (object.StableIdentifier.IsEmpty())
             object.StableIdentifier = StringUtils::ToString(record.LocalId);
         object.SubAssetKey = record.SubAsset.Get();
+        object.DisplayName = record.DisplayName.HasChars() ? record.DisplayName : String(StringUtils::GetFileNameWithoutExtension(record.SourcePath.Get()));
         object.TypeName = record.TypeName;
         object.IsMain = record.IsMainAsset();
         object.Status = record.Status;

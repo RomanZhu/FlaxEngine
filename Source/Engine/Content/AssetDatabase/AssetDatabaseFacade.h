@@ -49,12 +49,30 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseRecordInfo
     API_FIELD() String SourcePath;
     API_FIELD() String MetaPath;
     API_FIELD() String SubAssetKey;
+    API_FIELD() String DisplayName;
     API_FIELD() String ProcessorID;
     API_FIELD() uint64 MetaSemanticHash = 0;
     API_FIELD() AssetSourceKind SourceKind = AssetSourceKind::LegacyBinary;
     API_FIELD() AssetRecordStatus Status = AssetRecordStatus::Ready;
     API_FIELD() uint64 Revision = 0;
     API_FIELD() bool IsMain = false;
+};
+
+/// <summary>Composite database-indexed editor asset query.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetDatabaseQuery
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDatabaseQuery);
+
+    API_FIELD() String Name;
+    API_FIELD() String PathPrefix;
+    API_FIELD() String TypeName;
+    API_FIELD() String ImporterID;
+    API_FIELD() String Label;
+    API_FIELD() AssetRecordStatus Status = AssetRecordStatus::Ready;
+    API_FIELD() bool HasStatus = false;
+    API_FIELD() bool MainAssetsOnly = false;
+    API_FIELD() AssetObjectId ReferencedAsset;
+    API_FIELD() AssetObjectId UsedByAsset;
 };
 
 /// <summary>Managed-safe normalized asset dependency projection.</summary>
@@ -145,6 +163,14 @@ public:
 
     API_PROPERTY() static uint64 GetRevision();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
+    API_FUNCTION() static Array<AssetDatabaseRecordInfo> QueryRecords(const AssetDatabaseQuery& query);
+    API_FUNCTION() static bool TryGetRecord(const AssetObjectId& objectID, API_PARAM(Out) AssetDatabaseRecordInfo& result);
+    API_FUNCTION() static bool TryGetMainRecordAtPath(const StringView& path, API_PARAM(Out) AssetDatabaseRecordInfo& result);
+    API_FUNCTION() static Array<String> GetLabels(const Guid& sourceID);
+    API_FUNCTION() static bool SetLabels(const Guid& sourceID, const Array<String>& labels);
+    API_FUNCTION() static bool RegisterCustomDependency(const StringView& name, const StringView& contentHash, const StringView& provider = StringView::Empty);
+    API_FUNCTION() static bool UnregisterCustomDependency(const StringView& name);
+    API_FUNCTION() static String GetCustomDependencyHash(const StringView& name);
     API_FUNCTION() static Array<AssetDatabaseDependencyInfo> GetDependencies(const AssetObjectId& objectID);
     API_FUNCTION() static Array<AssetDatabaseDependencyInfo> GetReferencers(const AssetObjectId& objectID);
     API_FUNCTION() static Array<AssetDatabasePublicationInfo> GetPublications(const AssetObjectId& objectID);
@@ -179,7 +205,7 @@ public:
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
 
     /// <summary>Loads an asset for passive editor presentation without scheduling source or dependency builds.</summary>
-    API_FUNCTION() static Asset* LoadAssetPreview(const Guid& assetID);
+    API_FUNCTION() static Asset* LoadAssetPreview(const AssetObjectId& objectID);
 
     /// <summary>Gets a stable cache version derived from the currently published artifact key.</summary>
     API_FUNCTION() static Guid GetPublishedArtifactCacheID(const Guid& assetID, const StringView& outputKind);

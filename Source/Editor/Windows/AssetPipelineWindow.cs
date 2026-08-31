@@ -120,7 +120,7 @@ namespace FlaxEditor.Windows
 
         private void RefreshView()
         {
-            var records = AssetDatabaseFacade.GetRecords();
+            var records = AssetDatabaseFacade.QueryRecords(default);
             var diagnostics = AssetDatabaseFacade.GetDiagnostics();
             _summary.Text = "Revision " + AssetDatabaseFacade.Revision + " · " + records.Length + " records · " + diagnostics.Length + " diagnostics";
 

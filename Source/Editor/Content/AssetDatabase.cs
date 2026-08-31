@@ -54,17 +54,9 @@ namespace FlaxEditor
         /// <summary>Loads the main asset at a canonical source path.</summary>
         public static T LoadAssetAtPath<T>(string path) where T : Asset
         {
-            var id = AssetDatabaseFacade.AssetPathToGUID(path);
-            if (id == Guid.Empty)
+            if (!AssetDatabaseFacade.TryGetMainRecordAtPath(path, out var record) || record.SourceKind == AssetSourceKind.Folder)
                 return null;
-            var records = AssetDatabaseFacade.GetRecords();
-            for (var i = 0; i < records.Length; i++)
-            {
-                var record = records[i];
-                if (record.IsMain && record.SourceAssetID == id && record.SourceKind == AssetSourceKind.Folder)
-                    return null;
-            }
-            return FlaxEngine.Content.LoadAssetAsync<T>(AssetObjectId.Main(new AssetGuid(id)));
+            return FlaxEngine.Content.LoadAssetAsync<T>(new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId));
         }
 
         /// <summary>Loads the main asset at a canonical source path.</summary>
@@ -83,7 +75,7 @@ namespace FlaxEditor
         public static Asset[] LoadAllAssetsAtPath(string path)
         {
             var physicalPath = ResolvePhysicalPath(path);
-            var records = AssetDatabaseFacade.GetRecords();
+            var records = AssetDatabaseFacade.QueryRecords(new AssetDatabaseQuery { PathPrefix = physicalPath });
             var result = new List<Asset>();
             for (var i = 0; i < records.Length; i++)
             {
@@ -130,20 +122,11 @@ namespace FlaxEditor
             var destination = ResolvePhysicalPath(newPath);
             if (!IsProjectContentPath(source) || !IsProjectContentPath(destination))
                 return "Asset moves must remain inside the project Content folder.";
-            var item = Editor.Instance.ContentDatabase.Find(source);
-            if (item == null)
-                return "Source asset does not exist in the Content database.";
-            if (!item.IsFolder && Editor.Instance.ContentDatabase.TryGetAssetDatabaseRecord(source, out var record) &&
-                record.IsMain && record.SourceKind != AssetSourceKind.LegacyBinary)
-            {
-                return AssetDatabaseFacade.MoveCanonicalAsset(source, destination)
-                    ? GetLastDiagnostic("Asset move transaction failed.")
-                    : string.Empty;
-            }
-            if (!Editor.Instance.ContentDatabase.Move(item, destination))
-                return "Asset move transaction failed.";
-            QueueImport(destination);
-            return string.Empty;
+            if (!AssetDatabaseFacade.TryGetMainRecordAtPath(source, out var record) || !record.IsMain || record.SourceKind == AssetSourceKind.LegacyBinary)
+                return "Source asset is not registered in the canonical Asset Database.";
+            return AssetDatabaseFacade.MoveCanonicalAsset(source, destination)
+                ? GetLastDiagnostic("Asset move transaction failed.")
+                : string.Empty;
         }
 
         /// <summary>Renames a source while preserving identity.</summary>
@@ -165,18 +148,9 @@ namespace FlaxEditor
             var destination = ResolvePhysicalPath(destinationPath);
             if (!IsProjectContentPath(source) || !IsProjectContentPath(destination))
                 return false;
-            var item = Editor.Instance.ContentDatabase.Find(source);
-            if (item == null)
+            if (!AssetDatabaseFacade.TryGetMainRecordAtPath(source, out var record) || !record.IsMain || record.SourceKind == AssetSourceKind.LegacyBinary)
                 return false;
-            if (!item.IsFolder && Editor.Instance.ContentDatabase.TryGetAssetDatabaseRecord(source, out var record) && record.IsMain &&
-                record.SourceKind != AssetSourceKind.LegacyBinary && record.SourceKind != AssetSourceKind.ExistingJson &&
-                !string.Equals(record.ProcessorID, "Flax.Settings", StringComparison.Ordinal))
-                return !AssetDatabaseFacade.CopyCanonicalAsset(source, destination, out _);
-            var result = Editor.Instance.ContentDatabase.Copy(item, destination);
-            if (!result.Succeeded)
-                return false;
-            QueueImport(destination);
-            return true;
+            return !AssetDatabaseFacade.CopyCanonicalAsset(source, destination, out _);
         }
 
         /// <summary>Deletes a source and its adjacent metadata.</summary>
@@ -185,14 +159,9 @@ namespace FlaxEditor
             var physicalPath = ResolvePhysicalPath(path);
             if (!IsProjectContentPath(physicalPath))
                 return false;
-            var item = Editor.Instance.ContentDatabase.Find(physicalPath);
-            if (item == null)
+            if (!AssetDatabaseFacade.TryGetMainRecordAtPath(physicalPath, out var record) || !record.IsMain || record.SourceKind == AssetSourceKind.LegacyBinary)
                 return false;
-            if (!item.IsFolder && Editor.Instance.ContentDatabase.TryGetAssetDatabaseRecord(physicalPath, out var record) &&
-                record.IsMain && record.SourceKind != AssetSourceKind.LegacyBinary)
-                return !AssetDatabaseFacade.DeleteCanonicalAsset(physicalPath);
-            Editor.Instance.ContentDatabase.Delete(item, true);
-            return !File.Exists(physicalPath) && !Directory.Exists(physicalPath) && !File.Exists(physicalPath + ".meta");
+            return !AssetDatabaseFacade.DeleteCanonicalAsset(physicalPath);
         }
 
         /// <summary>Creates a folder and schedules metadata reconciliation.</summary>

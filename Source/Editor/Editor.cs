@@ -150,7 +150,7 @@ namespace FlaxEditor
         /// <summary>
         /// The content database module.
         /// </summary>
-        public ContentDatabaseModule ContentDatabase;
+        public AssetWorkspaceModule ContentDatabase;
 
         /// <summary>
         /// The content importing module.
@@ -316,7 +316,7 @@ namespace FlaxEditor
             RegisterModule(Prefabs = new PrefabsModule(this));
             RegisterModule(SceneEditing = new SceneEditingModule(this));
             RegisterModule(ContentEditing = new ContentEditingModule(this));
-            RegisterModule(ContentDatabase = new ContentDatabaseModule(this));
+            RegisterModule(ContentDatabase = new AssetWorkspaceModule(this));
             RegisterModule(ContentImporting = new ContentImportingModule(this));
             RegisterModule(CodeEditing = new CodeEditingModule(this));
             RegisterModule(CodeDocs = new CodeDocsModule(this));

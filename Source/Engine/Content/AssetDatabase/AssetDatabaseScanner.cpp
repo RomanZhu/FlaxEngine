@@ -79,6 +79,7 @@ namespace
         result.CanonicalPath = CanonicalAssetPath(sourcePath);
         result.SourcePath = SourceFilePath(sourcePath);
         result.MetaPath = MetaFilePath(metaPath);
+        result.DisplayName = String(StringUtils::GetFileNameWithoutExtension(sourcePath));
         result.ProcessorID = meta.Processor.ID;
         result.PortabilityKey = normalizedPath.PortabilityKey;
         result.MetaSemanticHash = semanticHash;
@@ -102,6 +103,7 @@ namespace
             subAsset.SourcePath = SourceFilePath(sourcePath);
             subAsset.MetaPath = MetaFilePath(metaPath);
             subAsset.SubAsset = SubAssetKey(entry.Key);
+            subAsset.DisplayName = entry.Value.DisplayName;
             subAsset.ProcessorID = meta.Processor.ID;
             subAsset.PortabilityKey = normalizedPath.PortabilityKey;
             subAsset.MetaSemanticHash = semanticHash;

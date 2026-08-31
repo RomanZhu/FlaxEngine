@@ -84,6 +84,7 @@ TEST_CASE("Asset database publishes coherent indexed immutable snapshots")
     Array<AssetRecord> records;
     records.Add(MakeDatabaseRecord(rootId, rootId, path));
     records.Add(MakeDatabaseRecord(subId, rootId, path, TEXT("mesh:/Body")));
+    records[0].Labels.Add(TEXT("Environment"));
 
     int32 eventCount = 0;
     uint64 eventRevision = 0;
@@ -111,6 +112,16 @@ TEST_CASE("Asset database publishes coherent indexed immutable snapshots")
     CHECK(query.Count() == 2);
     database.GetBuildDependants(Guid(91, 92, 93, 94), query);
     CHECK(query.Count() == 2);
+    AssetRecordQuery composite;
+    composite.Name = TEXT("test");
+    composite.PathPrefix = Globals::ProjectContentFolder / TEXT("Database");
+    composite.TypeName = TEXT("Texture");
+    composite.ProcessorId = TEXT("Flax.Test");
+    composite.Label = TEXT("environment");
+    composite.MainAssetsOnly = true;
+    database.QueryRecords(composite, query);
+    REQUIRE(query.Count() == 1);
+    CHECK(query[0].ID == rootId);
 
     const uint64 rootRecordRevision = found.DatabaseRevision;
     const uint64 unchangedSnapshotRevision = database.GetRevision();
