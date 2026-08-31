@@ -690,6 +690,40 @@ namespace
         return false;
     }
 
+    bool ValidateVariantAssetReferences(const Variant& value, AssetPipelineDiagnostic& diagnostic)
+    {
+        if (value.Type.Type == VariantType::Asset)
+        {
+            const Guid backingId = (Guid)value;
+            AssetObjectId objectId;
+            if (backingId.IsValid() && (!Content::GetAssetObjectId(backingId, objectId) || !objectId.IsValid()))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                    TEXT("Graph asset reference has no canonical file GUID and local file ID."));
+        }
+        else if (value.Type.Type == VariantType::Array)
+        {
+            const auto* items = reinterpret_cast<const Array<Variant>*>(value.AsData);
+            if (items)
+            {
+                for (const Variant& item : *items)
+                {
+                    if (ValidateVariantAssetReferences(item, diagnostic))
+                        return true;
+                }
+            }
+        }
+        else if (value.Type.Type == VariantType::Dictionary && value.AsDictionary)
+        {
+            for (auto i = value.AsDictionary->Begin(); i.IsNotEnd(); ++i)
+            {
+                if (ValidateVariantAssetReferences(i->Key, diagnostic) ||
+                    ValidateVariantAssetReferences(i->Value, diagnostic))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     JsonValue EncodeVariant(const Variant& value, JsonAlloc& allocator)
     {
         JsonValue object(rapidjson::kObjectType);
@@ -745,16 +779,19 @@ namespace
         {
             const Guid id = (Guid)value;
             AddString(object, "$type", VariantTypeName(value.Type.Type), allocator);
-            AssetObjectId objectId;
-            if (value.Type.Type == VariantType::Asset && Content::GetAssetObjectId(id, objectId))
+            if (value.Type.Type == VariantType::Asset)
             {
+                AssetObjectId objectId;
+                if (id.IsValid())
+                {
+                    Content::GetAssetObjectId(id, objectId);
+                    ASSERT(objectId.IsValid());
+                }
                 AddString(object, "guid", GuidToken(objectId.Guid), allocator);
                 object.AddMember("localId", objectId.LocalId, allocator);
             }
             else
-            {
                 AddString(object, "guid", GuidToken(id), allocator);
-            }
             if (value.Type.TypeName)
                 AddString(object, "typeName", StringAnsiView(value.Type.TypeName), allocator);
             break;
@@ -1110,15 +1147,23 @@ namespace
             if (typeName == "AssetReference")
             {
                 const auto localId = value.FindMember("localId");
-                if (localId != value.MemberEnd())
+                if (localId == value.MemberEnd() || !localId->value.IsInt64())
+                    return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                        TEXT("Graph asset reference requires a local file ID."));
+                const int64 localFileId = localId->value.GetInt64();
+                if (!id.IsValid())
                 {
-                    if (!localId->value.IsInt64() || localId->value.GetInt64() == 0)
-                        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph asset local file ID is invalid."));
-                    result.SetAsset(Content::LoadAsync<Asset>(AssetObjectId(id, localId->value.GetInt64())));
+                    if (localFileId != 0)
+                        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                            TEXT("Null graph asset references must use local file ID zero."));
+                    result.SetAsset(nullptr);
                 }
                 else
                 {
-                    result.SetAsset(Content::LoadAsync<Asset>(id));
+                    if (localFileId == 0)
+                        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                            TEXT("Graph asset local file ID is invalid."));
+                    result.SetAsset(Content::LoadAsync<Asset>(AssetObjectId(id, localFileId)));
                 }
             }
             else if (typeName == "ObjectReference")
@@ -1720,6 +1765,8 @@ bool GraphDocumentCodec::TypeForExtension(const StringView& extension, String& t
 
 bool GraphDocumentCodec::EncodeVariantJson(const Variant& value, StringAnsi& output, AssetPipelineDiagnostic& diagnostic)
 {
+    if (ValidateVariantAssetReferences(value, diagnostic))
+        return true;
     JsonDocument json;
     json.SetObject();
     JsonValue encoded = EncodeVariant(value, json.GetAllocator());
@@ -1820,6 +1867,19 @@ bool GraphDocumentCodec::FromSurface(const StringView& typeName, const Span<byte
 
 bool GraphDocumentCodec::ToCanonicalJson(const GraphDocument& document, StringAnsi& output, AssetPipelineDiagnostic& diagnostic)
 {
+    for (const GraphDocumentParameter& parameter : document.Parameters)
+    {
+        if (ValidateVariantAssetReferences(parameter.Default, diagnostic))
+            return true;
+    }
+    for (const GraphDocumentNode& node : document.Nodes)
+    {
+        for (const Variant& value : node.Values)
+        {
+            if (ValidateVariantAssetReferences(value, diagnostic))
+                return true;
+        }
+    }
     JsonDocument json;
     json.SetObject();
     JsonAlloc& allocator = json.GetAllocator();

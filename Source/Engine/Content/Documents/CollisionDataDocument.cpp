@@ -19,50 +19,47 @@ namespace
         object.AddMember(JsonValue(name, allocator), JsonValue(value.Get(), value.Length(), allocator), allocator);
     }
 
-    JsonValue MakeReference(const Guid& id, JsonAlloc& allocator)
+    bool MakeReference(const Guid& id, JsonValue& result, JsonAlloc& allocator)
     {
-        if (!id.IsValid())
-            return JsonValue(rapidjson::kNullType);
-        JsonValue result(rapidjson::kObjectType);
+        result.SetObject();
         AddString(result, "$type", "AssetReference", allocator);
+        if (!id.IsValid())
+        {
+            AddString(result, "guid", GuidText(Guid::Empty), allocator);
+            result.AddMember("localId", 0, allocator);
+            return false;
+        }
         AssetObjectId objectId;
-        if (Content::GetAssetObjectId(id, objectId))
-        {
-            AddString(result, "guid", GuidText(objectId.Guid), allocator);
-            result.AddMember("localId", objectId.LocalId, allocator);
-        }
-        else
-        {
-            AddString(result, "value", GuidText(id), allocator);
-        }
-        return result;
+        if (!Content::GetAssetObjectId(id, objectId) || !objectId.Guid.IsValid() || objectId.LocalId == 0)
+            return true;
+        AddString(result, "guid", GuidText(objectId.Guid), allocator);
+        result.AddMember("localId", objectId.LocalId, allocator);
+        return false;
     }
 
     bool ReadReference(const JsonValue& value, Guid& id)
     {
         id = Guid::Empty;
-        if (value.IsNull())
-            return false;
         if (!value.IsObject())
             return true;
         const auto type = value.FindMember("$type");
         const auto guid = value.FindMember("guid");
         const auto localId = value.FindMember("localId");
-        const auto payload = value.FindMember("value");
         if (type == value.MemberEnd() || !type->value.IsString() ||
-            StringAnsiView(type->value.GetString(), type->value.GetStringLength()) != "AssetReference")
+            StringAnsiView(type->value.GetString(), type->value.GetStringLength()) != "AssetReference" ||
+            guid == value.MemberEnd() || !guid->value.IsString() ||
+            localId == value.MemberEnd() || !localId->value.IsInt64())
             return true;
-        if (guid != value.MemberEnd() && guid->value.IsString() && localId != value.MemberEnd() && localId->value.IsInt64())
-        {
-            Guid fileGuid;
-            if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), fileGuid) || localId->value.GetInt64() == 0)
-                return true;
-            id = SubAssetPolicy::GetBackingAssetId(fileGuid, localId->value.GetInt64());
-            return !id.IsValid();
-        }
-        if (payload == value.MemberEnd() || !payload->value.IsString())
+        Guid fileGuid;
+        if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), fileGuid))
             return true;
-        return Guid::Parse(String(StringAnsiView(payload->value.GetString(), payload->value.GetStringLength())), id);
+        const int64 objectLocalId = localId->value.GetInt64();
+        if (!fileGuid.IsValid())
+            return objectLocalId != 0;
+        if (objectLocalId == 0)
+            return true;
+        id = SubAssetPolicy::GetBackingAssetId(fileGuid, objectLocalId);
+        return !id.IsValid();
     }
 
     const char* CollisionTypeName(CollisionDataType type)
@@ -115,10 +112,16 @@ bool CollisionDataDocument::DecodeLegacy(const CollisionData::SerializedOptions&
     }
     document.SetObject();
     JsonAlloc& allocator = document.GetAllocator();
+    JsonValue sourceModel;
+    if (MakeReference(options.Model, sourceModel, allocator))
+    {
+        error = TEXT("Collision source model has no canonical asset identity.");
+        return true;
+    }
     document.AddMember("documentVersion", 1, allocator);
     AddString(document, "type", "FlaxEngine.CollisionData", allocator);
     AddString(document, "collisionType", typeName, allocator);
-    document.AddMember("sourceModel", MakeReference(options.Model, allocator), allocator);
+    document.AddMember("sourceModel", sourceModel, allocator);
     document.AddMember("modelLodIndex", options.ModelLodIndex, allocator);
     document.AddMember("materialSlotsMask", options.MaterialSlotsMask == 0 ? MAX_uint32 : options.MaterialSlotsMask, allocator);
     JsonValue flags(rapidjson::kArrayType);

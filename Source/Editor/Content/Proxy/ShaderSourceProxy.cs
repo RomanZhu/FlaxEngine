@@ -17,6 +17,10 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool CanCreate(ContentFolder targetLocation)
         {
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+                return targetLocation.CanHaveAssets &&
+                       ContentMutationPathUtils.IsWithinRoot(targetLocation.Path, Globals.ProjectContentFolder);
+
             // Allow to create shaders only under '<root>/Source/Shaders' directory and it's sub-dirs
             var prevTargetLocation = targetLocation;
             while (targetLocation.ParentFolder?.ParentFolder != null)
@@ -54,10 +58,16 @@ namespace FlaxEditor.Content
             shaderTemplate = shaderTemplate.Replace("%copyright%", copyrightComment);
 
             // Save
-            File.WriteAllText(outputPath, shaderTemplate, Encoding.UTF8);
-            if (CanonicalGraphDocuments.UseNewAssetDatabase &&
-                AssetDatabaseFacade.CreateImportedSourceMetadata(outputPath, typeof(Shader).FullName, "Flax.ShaderSource") == Guid.Empty)
-                throw new Exception("Failed to create shader metadata.");
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+            {
+                if (AssetDatabaseFacade.CreateImportedSourceBytes(outputPath, Encoding.UTF8.GetBytes(shaderTemplate),
+                        typeof(Shader).FullName, "Flax.ShaderSource") == Guid.Empty)
+                    throw new Exception("Failed to create shader source.");
+            }
+            else
+            {
+                File.WriteAllText(outputPath, shaderTemplate, Encoding.UTF8);
+            }
         }
 
         /// <inheritdoc />
@@ -86,7 +96,16 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            File.WriteAllText(outputPath, "\n", Encoding.UTF8);
+            if (CanonicalGraphDocuments.UseNewAssetDatabase)
+            {
+                if (AssetDatabaseFacade.CreateImportedSourceBytes(outputPath, Encoding.UTF8.GetBytes("\n"),
+                        typeof(RawDataAsset).FullName, "Flax.Unsupported") == Guid.Empty)
+                    throw new Exception("Failed to create shader header.");
+            }
+            else
+            {
+                File.WriteAllText(outputPath, "\n", Encoding.UTF8);
+            }
         }
 
         /// <inheritdoc />

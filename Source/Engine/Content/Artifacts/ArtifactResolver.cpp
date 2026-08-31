@@ -34,7 +34,7 @@ namespace
 
     bool IsBuildableStatus(AssetRecordStatus status)
     {
-        return status == AssetRecordStatus::Ready || status == AssetRecordStatus::Stale || status == AssetRecordStatus::Building || status == AssetRecordStatus::Failed;
+        return status == AssetRecordStatus::Ready || status == AssetRecordStatus::Stale || status == AssetRecordStatus::Building;
     }
 
     AssetPipelineDiagnosticCode StatusCode(AssetRecordStatus status)
@@ -49,6 +49,8 @@ namespace
             return AssetPipelineDiagnosticCode::DuplicateGuid;
         if (status == AssetRecordStatus::MetaUpgradeRequired || status == AssetRecordStatus::DocumentUpgradeRequired)
             return AssetPipelineDiagnosticCode::MetaUpgradeRequired;
+        if (status == AssetRecordStatus::Failed)
+            return AssetPipelineDiagnosticCode::BuildFailed;
         return AssetPipelineDiagnosticCode::InvalidMeta;
     }
 

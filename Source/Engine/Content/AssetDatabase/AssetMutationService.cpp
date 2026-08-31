@@ -44,6 +44,7 @@ namespace
         bool PreimageComplete = false;
         bool StagingComplete = false;
         bool Published = false;
+        bool DeleteOnPublish = false;
     };
 
     struct Journal
@@ -149,6 +150,7 @@ namespace
         case AssetMutationOperation::DeleteToRecovery: return TEXT("DeleteToRecovery");
         case AssetMutationOperation::ReplaceContents: return TEXT("ReplaceContents");
         case AssetMutationOperation::ReplaceAsset: return TEXT("ReplaceAsset");
+        case AssetMutationOperation::SaveExternalActors: return TEXT("SaveExternalActors");
         case AssetMutationOperation::Recover: return TEXT("Recover");
         default: return TEXT("Validate");
         }
@@ -373,6 +375,7 @@ namespace
             item.AddMember("preimageComplete", entry.PreimageComplete, allocator);
             item.AddMember("stagingComplete", entry.StagingComplete, allocator);
             item.AddMember("published", entry.Published, allocator);
+            item.AddMember("deleteOnPublish", entry.DeleteOnPublish, allocator);
             entries.PushBack(item, allocator);
         }
         document.AddMember("entries", entries, allocator);
@@ -416,10 +419,12 @@ namespace
             const auto preimageComplete = item.FindMember("preimageComplete");
             const auto stagingComplete = item.FindMember("stagingComplete");
             const auto published = item.FindMember("published");
+            const auto deleteOnPublish = item.FindMember("deleteOnPublish");
             if (isDirectory == item.MemberEnd() || !isDirectory->value.IsBool() ||
                 preimageComplete == item.MemberEnd() || !preimageComplete->value.IsBool() ||
                 stagingComplete == item.MemberEnd() || !stagingComplete->value.IsBool() ||
                 published == item.MemberEnd() || !published->value.IsBool() ||
+                (deleteOnPublish != item.MemberEnd() && !deleteOnPublish->value.IsBool()) ||
                 ReadString(item, "role", entry.Role) || ReadString(item, "sourcePath", entry.SourcePath) ||
                 ReadString(item, "destinationPath", entry.DestinationPath) || ReadString(item, "stagingPath", entry.StagingPath) ||
                 ReadString(item, "preimagePath", entry.PreimagePath) || ReadString(item, "beforeHash", entry.BeforeHash) ||
@@ -429,6 +434,7 @@ namespace
             entry.PreimageComplete = preimageComplete->value.GetBool();
             entry.StagingComplete = stagingComplete->value.GetBool();
             entry.Published = published->value.GetBool();
+            entry.DeleteOnPublish = deleteOnPublish != item.MemberEnd() && deleteOnPublish->value.GetBool();
             journal.Entries.Add(MoveTemp(entry));
         }
         return journal.Entries.IsEmpty();
@@ -592,6 +598,7 @@ namespace
             return PairAbsent(source);
         case AssetMutationOperation::ReplaceContents:
         case AssetMutationOperation::ReplaceAsset:
+        case AssetMutationOperation::SaveExternalActors:
             return PairExists(source);
         default:
             return false;
@@ -922,6 +929,23 @@ namespace
             }
             failed |= journal.Entries.HasItems() && !PairExists(journal.Entries[0].SourcePath);
             break;
+        case AssetMutationOperation::SaveExternalActors:
+            for (int32 i = journal.Entries.Count() - 1; i >= 0; i--)
+            {
+                const JournalEntry& entry = journal.Entries[i];
+                if (entry.BeforeHash.HasChars())
+                    failed |= RestoreReplacement(entry);
+                else
+                    failed |= entry.SourcePath.HasChars() && Exists(entry.SourcePath) && DeletePath(entry.SourcePath);
+                failed |= entry.StagingPath.HasChars() && Exists(entry.StagingPath) && DeletePath(entry.StagingPath);
+                failed |= entry.PreimagePath.HasChars() && Exists(entry.PreimagePath) && DeletePath(entry.PreimagePath);
+            }
+            if (journal.Entries.HasItems())
+            {
+                const JournalEntry& source = journal.Entries[0];
+                failed |= source.BeforeHash.HasChars() ? !PairExists(source.SourcePath) : !PairAbsent(source.SourcePath);
+            }
+            break;
         default:
             failed = true;
             break;
@@ -938,14 +962,27 @@ namespace
     {
         bool failed = false;
         if (journal.Operation == AssetMutationOperation::ReplaceContents || journal.Operation == AssetMutationOperation::ReplaceAsset ||
+            journal.Operation == AssetMutationOperation::SaveExternalActors ||
             journal.Operation == AssetMutationOperation::PublishExternal || journal.Operation == AssetMutationOperation::RegisterExisting)
         {
             if (journal.Entries.IsEmpty() || !PairExists(journal.Entries[0].SourcePath))
                 failed = true;
             for (const JournalEntry& entry : journal.Entries)
             {
-                if (!entry.StagedHash.HasChars())
+                if (entry.DeleteOnPublish)
+                {
+                    failed |= Exists(entry.SourcePath);
                     continue;
+                }
+                if (!entry.StagedHash.HasChars())
+                {
+                    if (entry.BeforeHash.HasChars())
+                    {
+                        String current;
+                        failed |= HashFile(entry.SourcePath, current) || current != entry.BeforeHash;
+                    }
+                    continue;
+                }
                 String current;
                 failed |= HashFile(entry.SourcePath, current) || current != entry.StagedHash;
             }
@@ -2502,6 +2539,214 @@ bool AssetMutationService::ReplaceAsset(const StringView& sourcePath, const Stri
         HashFile(metaPath, metaHash) || metaHash != journal.Entries[1].StagedHash ||
         AssetMeta::Load(metaPath, verifiedMeta, metaDiagnostic) || verifiedMeta.ID != meta.ID)
         return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Published authored replacement pair failed verification."));
+    return CommitTransaction(*this, journal, result, meta.ID);
+}
+
+bool AssetMutationService::SaveExternalActors(const StringView& sourcePath, const StringAnsiView& sourceContents,
+    const AssetMeta& meta, const Array<AssetMutationSidecar>& sidecars, AssetMutationResult& result)
+{
+    const Guid id = Guid::New();
+    result = AssetMutationResult();
+    if (sourceContents.IsEmpty())
+        return Fail(result, AssetMutationFailure::InvalidSource, id, sourcePath, StringView(), TEXT("External actor scene source payload is empty."));
+    String source;
+    if (ResolveContentPath(*this, sourcePath, source, result, id, !FileSystem::FileExists(sourcePath)))
+        return true;
+    const String metaPath = source + TEXT(".meta");
+    const bool create = PairAbsent(source);
+    if (!create && ValidateSourcePair(source, result, id))
+        return true;
+    if (create && !FileSystem::DirectoryExists(StringUtils::GetDirectoryName(source)))
+        return Fail(result, AssetMutationFailure::InvalidDestination, id, source, StringView(), TEXT("Scene source parent does not exist."));
+    if (!meta.ID.IsValid() || meta.FolderAsset || meta.AssetType != TEXT("FlaxEngine.SceneAsset") ||
+        meta.SourceKind != AssetSourceKind::ExistingJson)
+        return Fail(result, AssetMutationFailure::InvalidMetadata, id, source, StringView(), TEXT("External actor scene metadata is invalid."));
+    if (!create)
+    {
+        AssetMeta previousMeta;
+        AssetPipelineDiagnostic diagnostic;
+        if (AssetMeta::Load(metaPath, previousMeta, diagnostic) || previousMeta.ID != meta.ID ||
+            previousMeta.AssetType != meta.AssetType || previousMeta.SourceKind != meta.SourceKind)
+            return Fail(result, AssetMutationFailure::InvalidMetadata, id, source, StringView(),
+                diagnostic.Message.HasChars() ? diagnostic.Message : TEXT("External actor scene metadata does not match the source identity."));
+    }
+
+    const String actorsRoot = _projectRoot / TEXT("SceneActors");
+    Array<String> paths;
+    paths.Add(source);
+    paths.Add(metaPath);
+    HashSet<String> uniqueSidecars;
+    for (const AssetMutationSidecar& sidecar : sidecars)
+    {
+        String path = FileSystem::IsRelative(sidecar.Path) ? _projectRoot / sidecar.Path : sidecar.Path;
+        path = NormalizePath(path);
+        if (!IsSameOrChild(path, actorsRoot) || path == actorsRoot ||
+            FileSystem::GetExtension(path).ToLower() != TEXT("actor") ||
+            FileSystem::DirectoryExists(path) || !uniqueSidecars.Add(LockKey(path)))
+            return Fail(result, AssetMutationFailure::InvalidDestination, id, source, path, TEXT("External actor mutation path is invalid or duplicated."));
+        if (sidecar.Delete && !FileSystem::FileExists(path))
+            return Fail(result, AssetMutationFailure::MissingSource, id, source, path, TEXT("External actor selected for deletion is missing."));
+        if (!sidecar.Delete && sidecar.Contents.IsEmpty())
+            return Fail(result, AssetMutationFailure::InvalidSource, id, source, path, TEXT("External actor payload is empty."));
+        paths.Add(path);
+    }
+    PathLockScope lock;
+    if (lock.Acquire(paths))
+        return Fail(result, AssetMutationFailure::PathBusy, id, source, StringView(), TEXT("A conflicting asset mutation owns the scene or an external actor path."));
+    if ((create && !PairAbsent(source)) || (!create && ValidateSourcePair(source, result, id)))
+        return true;
+    for (const AssetMutationSidecar& sidecar : sidecars)
+    {
+        const String path = NormalizePath(FileSystem::IsRelative(sidecar.Path) ? _projectRoot / sidecar.Path : sidecar.Path);
+        if ((sidecar.Delete && !FileSystem::FileExists(path)) || FileSystem::DirectoryExists(path))
+            return Fail(result, AssetMutationFailure::VerificationFailure, id, source, path, TEXT("External actor state changed after preflight."));
+    }
+    if (RunDecisionHook(*this, AssetMutationOperation::SaveExternalActors, id, source, source, false, result))
+        return !result.Succeeded;
+
+    Journal journal;
+    journal.ID = id;
+    journal.Operation = AssetMutationOperation::SaveExternalActors;
+    const String preimageRoot = _journalRoot / TEXT("Preimages") / GuidText(id);
+    JournalEntry sourceEntry;
+    sourceEntry.Role = TEXT("Source");
+    sourceEntry.SourcePath = source;
+    sourceEntry.DestinationPath = source;
+    sourceEntry.StagingPath = StagePath(source, id, TEXT("scene"));
+    if (!create)
+    {
+        sourceEntry.PreimagePath = preimageRoot / TEXT("scene");
+        if (HashFile(source, sourceEntry.BeforeHash))
+            return Fail(result, AssetMutationFailure::LockedStorage, id, source, StringView(), TEXT("Existing scene source could not be read."));
+    }
+    journal.Entries.Add(MoveTemp(sourceEntry));
+
+    JournalEntry metaEntry;
+    metaEntry.Role = TEXT("Metadata");
+    metaEntry.SourcePath = metaPath;
+    metaEntry.DestinationPath = metaPath;
+    if (create)
+        metaEntry.StagingPath = StagePath(metaPath, id, TEXT("meta"));
+    else if (HashFile(metaPath, metaEntry.BeforeHash))
+        return Fail(result, AssetMutationFailure::LockedStorage, id, source, StringView(), TEXT("Existing scene metadata could not be read."));
+    journal.Entries.Add(MoveTemp(metaEntry));
+
+    for (int32 i = 0; i < sidecars.Count(); i++)
+    {
+        const AssetMutationSidecar& sidecar = sidecars[i];
+        JournalEntry entry;
+        entry.Role = String::Format(TEXT("ExternalActor-{0}"), i);
+        entry.SourcePath = NormalizePath(FileSystem::IsRelative(sidecar.Path) ? _projectRoot / sidecar.Path : sidecar.Path);
+        entry.DestinationPath = entry.SourcePath;
+        entry.DeleteOnPublish = sidecar.Delete;
+        if (!sidecar.Delete)
+            entry.StagingPath = _journalRoot / TEXT("Staging") / GuidText(id) / String::Format(TEXT("actor-{0}"), i);
+        if (FileSystem::FileExists(entry.SourcePath))
+        {
+            entry.PreimagePath = preimageRoot / String::Format(TEXT("actor-{0}"), i);
+            if (HashFile(entry.SourcePath, entry.BeforeHash))
+                return Fail(result, AssetMutationFailure::LockedStorage, id, source, entry.SourcePath, TEXT("Existing external actor could not be read."));
+        }
+        journal.Entries.Add(MoveTemp(entry));
+    }
+    if (SaveJournal(_journalRoot, journal))
+        return Fail(result, AssetMutationFailure::JournalFailure, id, source, StringView(), TEXT("External actor scene journal could not be persisted."));
+
+    for (int32 i = 0; i < journal.Entries.Count(); i++)
+    {
+        JournalEntry& entry = journal.Entries[i];
+        if (!entry.PreimagePath.HasChars())
+            continue;
+        if (CopyPath(entry.SourcePath, entry.PreimagePath) || !SameFileHash(entry.SourcePath, entry.PreimagePath))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed, TEXT("External actor scene preimage capture failed."));
+        entry.PreimageComplete = true;
+    }
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External actor scene preimages could not be journaled."));
+
+    AssetPipelineDiagnostic metaDiagnostic;
+    JournalEntry& stagedSource = journal.Entries[0];
+    if (File::WriteAllBytes(stagedSource.StagingPath, sourceContents.Get(), sourceContents.Length()) ||
+        FlushWrittenFile(stagedSource.StagingPath) || HashFile(stagedSource.StagingPath, stagedSource.StagedHash))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed, TEXT("External actor scene source staging failed."));
+    stagedSource.StagingComplete = true;
+    JournalEntry& stagedMeta = journal.Entries[1];
+    if (create)
+    {
+        if (AssetMeta::SaveAtomic(stagedMeta.StagingPath, meta, metaDiagnostic) || HashFile(stagedMeta.StagingPath, stagedMeta.StagedHash))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed,
+                metaDiagnostic.Message.HasChars() ? metaDiagnostic.Message : TEXT("External actor scene metadata staging failed."));
+        stagedMeta.StagingComplete = true;
+    }
+    for (int32 i = 0; i < sidecars.Count(); i++)
+    {
+        const AssetMutationSidecar& sidecar = sidecars[i];
+        JournalEntry& entry = journal.Entries[i + 2];
+        if (sidecar.Delete)
+            continue;
+        if (EnsureDirectoryFor(entry.StagingPath) ||
+            File::WriteAllBytes(entry.StagingPath, sidecar.Contents.Get(), sidecar.Contents.Length()) ||
+            FlushWrittenFile(entry.StagingPath) || HashFile(entry.StagingPath, entry.StagedHash))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::CopyFailed, TEXT("External actor staging failed."));
+        entry.StagingComplete = true;
+    }
+    journal.State = JournalState::Staged;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External actor scene staged state could not be persisted."));
+
+    for (const JournalEntry& entry : journal.Entries)
+    {
+        if (!entry.BeforeHash.HasChars())
+            continue;
+        String currentHash;
+        if (HashFile(entry.SourcePath, currentHash) || currentHash != entry.BeforeHash)
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Scene source, metadata, or external actor changed during staging."));
+    }
+    journal.State = JournalState::Publishing;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External actor scene publishing state could not be persisted."));
+
+    for (int32 i = 2; i < journal.Entries.Count(); i++)
+    {
+        JournalEntry& entry = journal.Entries[i];
+        const bool failed = entry.DeleteOnPublish ? DeletePath(entry.SourcePath) : MovePath(entry.StagingPath, entry.DestinationPath, true);
+        if (failed)
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("External actor publication failed."));
+        entry.Published = true;
+        if (SaveJournal(_journalRoot, journal))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External actor publication step could not be journaled."));
+    }
+    if (create)
+    {
+        if (MovePath(stagedMeta.StagingPath, stagedMeta.DestinationPath, true))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("External actor scene metadata publication failed."));
+        stagedMeta.Published = true;
+        if (SaveJournal(_journalRoot, journal))
+            return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External actor scene metadata publication could not be journaled."));
+    }
+    if (MovePath(stagedSource.StagingPath, stagedSource.DestinationPath, true))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::MoveFailed, TEXT("External actor scene source publication failed."));
+    stagedSource.Published = true;
+    if (SaveJournal(_journalRoot, journal))
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::JournalFailure, TEXT("External actor scene source publication could not be journaled."));
+
+    AssetMeta verifiedMeta;
+    if (!PairExists(source) || AssetMeta::Load(metaPath, verifiedMeta, metaDiagnostic) || verifiedMeta.ID != meta.ID)
+        return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Published external actor scene source pair failed verification."));
+    for (const JournalEntry& entry : journal.Entries)
+    {
+        if (entry.DeleteOnPublish)
+        {
+            if (Exists(entry.SourcePath))
+                return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Deleted external actor remained after publication."));
+        }
+        else if (entry.StagedHash.HasChars())
+        {
+            String publishedHash;
+            if (HashFile(entry.SourcePath, publishedHash) || publishedHash != entry.StagedHash)
+                return AbortTransaction(*this, journal, result, AssetMutationFailure::VerificationFailure, TEXT("Published external actor scene data failed verification."));
+        }
+    }
     return CommitTransaction(*this, journal, result, meta.ID);
 }
 

@@ -40,21 +40,22 @@ namespace
         object.AddMember(JsonValue(name, allocator), JsonValue(value.Get(), value.Length(), allocator), allocator);
     }
 
-    JsonValue MakeReference(const Guid& id, JsonAlloc& allocator)
+    bool MakeReference(const Guid& id, JsonValue& result, JsonAlloc& allocator)
     {
-        JsonValue result(rapidjson::kObjectType);
+        result.SetObject();
         AddString(result, "$type", "AssetReference", allocator);
+        if (!id.IsValid())
+        {
+            AddString(result, "guid", GuidText(Guid::Empty), allocator);
+            result.AddMember("localId", 0, allocator);
+            return false;
+        }
         AssetObjectId objectId;
-        if (Content::GetAssetObjectId(id, objectId))
-        {
-            AddString(result, "guid", GuidText(objectId.Guid), allocator);
-            result.AddMember("localId", objectId.LocalId, allocator);
-        }
-        else
-        {
-            AddString(result, "value", GuidText(id), allocator);
-        }
-        return result;
+        if (!Content::GetAssetObjectId(id, objectId) || !objectId.Guid.IsValid() || objectId.LocalId == 0)
+            return true;
+        AddString(result, "guid", GuidText(objectId.Guid), allocator);
+        result.AddMember("localId", objectId.LocalId, allocator);
+        return false;
     }
 
     bool ReadReference(const JsonValue& value, Guid& id)
@@ -64,21 +65,24 @@ namespace
         const auto type = value.FindMember("$type");
         const auto guid = value.FindMember("guid");
         const auto localId = value.FindMember("localId");
-        const auto payload = value.FindMember("value");
         if (type == value.MemberEnd() || !type->value.IsString() ||
-            StringAnsiView(type->value.GetString(), type->value.GetStringLength()) != "AssetReference")
+            StringAnsiView(type->value.GetString(), type->value.GetStringLength()) != "AssetReference" ||
+            guid == value.MemberEnd() || !guid->value.IsString() ||
+            localId == value.MemberEnd() || !localId->value.IsInt64())
             return true;
-        if (guid != value.MemberEnd() && guid->value.IsString() && localId != value.MemberEnd() && localId->value.IsInt64())
+        Guid fileGuid;
+        if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), fileGuid))
+            return true;
+        const int64 objectLocalId = localId->value.GetInt64();
+        if (!fileGuid.IsValid())
         {
-            Guid fileGuid;
-            if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), fileGuid) || localId->value.GetInt64() == 0)
-                return true;
-            id = SubAssetPolicy::GetBackingAssetId(fileGuid, localId->value.GetInt64());
-            return !id.IsValid();
+            id = Guid::Empty;
+            return objectLocalId != 0;
         }
-        if (payload == value.MemberEnd() || !payload->value.IsString())
+        if (objectLocalId == 0)
             return true;
-        return Guid::Parse(String(StringAnsiView(payload->value.GetString(), payload->value.GetStringLength())), id);
+        id = SubAssetPolicy::GetBackingAssetId(fileGuid, objectLocalId);
+        return !id.IsValid();
     }
 
     const char* TrackTypeName(Track::Types type)
@@ -200,7 +204,13 @@ bool ParticleSystemDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
                 error = TEXT("Particle system emitter index is invalid.");
                 return true;
             }
-            data.AddMember("emitter", MakeReference(emitter, allocator), allocator);
+            JsonValue emitterReference;
+            if (MakeReference(emitter, emitterReference, allocator))
+            {
+                error = TEXT("Particle system emitter has no canonical asset identity.");
+                return true;
+            }
+            data.AddMember("emitter", emitterReference, allocator);
             data.AddMember("emitterIndex", emitterIndex, allocator);
             data.AddMember("startFrame", startFrame, allocator);
             data.AddMember("durationFrames", trackDuration, allocator);

@@ -10,8 +10,6 @@
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/AssetMount.h"
-#include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/Cache/AssetsCache.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Platform/File.h"
@@ -45,16 +43,11 @@
 
 namespace
 {
-    bool RejectCanonicalCookedOutput(const StringView& outputPath)
+    bool RejectLegacyImporterCall(const StringView& outputPath)
     {
         if (!AssetDatabase::Get().IsHardCutEnabled())
             return false;
-        AssetMountResolution mount;
-        const bool isSourceMount = AssetMountRegistry::TryResolvePhysical(outputPath, mount) ||
-            AssetPathPolicy::IsSameOrChild(outputPath, Globals::ProjectContentFolder);
-        if (!isSourceMount)
-            return false;
-        LOG(Error, "Legacy cooked-asset output into a source mount is forbidden: '{0}'. Use AssetDatabase or an artifact pipeline processor.", outputPath);
+        LOG(Error, "Legacy asset importer API is disabled for asset-system-v3 projects: '{0}'. Use the canonical mutation and artifact pipeline APIs.", outputPath);
         return true;
     }
 
@@ -305,6 +298,8 @@ void CreateAssetContext::ApplyChanges()
 
 const AssetImporter* AssetsImportingManager::GetImporter(const String& extension)
 {
+    if (AssetDatabase::Get().IsHardCutEnabled())
+        return nullptr;
     for (int32 i = 0; i < Importers.Count(); i++)
     {
         if (Importers[i].FileExtension.Compare(extension, StringSearchCase::IgnoreCase) == 0)
@@ -315,6 +310,8 @@ const AssetImporter* AssetsImportingManager::GetImporter(const String& extension
 
 const AssetCreator* AssetsImportingManager::GetCreator(const String& tag)
 {
+    if (AssetDatabase::Get().IsHardCutEnabled())
+        return nullptr;
     for (int32 i = 0; i < Creators.Count(); i++)
     {
         if (Creators[i].Tag == tag)
@@ -325,7 +322,7 @@ const AssetCreator* AssetsImportingManager::GetCreator(const String& tag)
 
 bool AssetsImportingManager::Create(const CreateAssetFunction& importFunc, const StringView& outputPath, Guid& assetId, void* arg)
 {
-    if (RejectCanonicalCookedOutput(outputPath))
+    if (RejectLegacyImporterCall(outputPath))
         return true;
     return Create(importFunc, StringView::Empty, outputPath, assetId, arg);
 }
@@ -343,7 +340,7 @@ bool AssetsImportingManager::Create(const String& tag, const StringView& outputP
 
 bool AssetsImportingManager::Import(const StringView& inputPath, const StringView& outputPath, Guid& assetId, void* arg)
 {
-    if (RejectCanonicalCookedOutput(outputPath))
+    if (RejectLegacyImporterCall(outputPath))
         return true;
     LOG(Info, "Importing file '{0}' to '{1}'...", inputPath, outputPath);
 
@@ -377,6 +374,8 @@ bool AssetsImportingManager::Import(const StringView& inputPath, const StringVie
 
 bool AssetsImportingManager::ImportIfEdited(const StringView& inputPath, const StringView& outputPath, Guid& assetId, void* arg)
 {
+    if (RejectLegacyImporterCall(outputPath))
+        return true;
     // Check if asset not exists
     if (!FileSystem::FileExists(outputPath))
     {
@@ -417,7 +416,7 @@ String AssetsImportingManager::GetImportPath(const String& path)
 
 bool AssetsImportingManager::Create(const Function<CreateAssetResult(CreateAssetContext&)>& callback, const StringView& inputPath, const StringView& outputPath, Guid& assetId, void* arg)
 {
-    if (RejectCanonicalCookedOutput(outputPath))
+    if (RejectLegacyImporterCall(outputPath))
         return true;
     PROFILE_CPU();
     ZoneText(*outputPath, outputPath.Length());

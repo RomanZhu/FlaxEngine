@@ -26,13 +26,14 @@ struct FLAXENGINE_API ModelSubAssetInfo
     String TypeName;
     ContentHash SemanticHash;
     int32 SourceIndex = -1;
+    String LegacyStableKey;
 };
 
 /// <summary>Format-independent stable identity derivation for independently addressable model outputs.</summary>
 class FLAXENGINE_API ModelSubAssetKeys
 {
 public:
-    static constexpr uint32 AlgorithmVersion = 3;
+    static constexpr uint32 AlgorithmVersion = 4;
 
     /// <summary>Enumerates sorted stable candidates. Returns true on collision or invalid source structure.</summary>
     static bool Enumerate(const ModelData& data, Array<ModelSubAssetInfo>& infos, Array<SubAssetCandidate>& candidates, AssetPipelineDiagnostic& diagnostic);

@@ -749,6 +749,19 @@ namespace FlaxEditor.Modules
             return Projects.FirstOrDefault(x => x.Project == project);
         }
 
+        private bool CanExposeReferencedContent(string contentFolder)
+        {
+            if (!_useNewAssetDatabase)
+                return true;
+            if (!AssetMountRegistry.TryResolvePhysical(contentFolder, out var resolution) ||
+                !resolution.Found || !string.IsNullOrEmpty(resolution.RelativePath))
+                return false;
+            return !resolution.Mount.Writable &&
+                   (resolution.Mount.Kind == AssetMountKind.PluginContent ||
+                    resolution.Mount.Kind == AssetMountKind.ExternalReadOnlyContent ||
+                    resolution.Mount.Kind == AssetMountKind.EngineContent);
+        }
+
         /// <summary>
         /// Gets the proxy object for the given content item.
         /// </summary>
@@ -2636,18 +2649,21 @@ MoveCompleted:
             var workspace = GetProjectWorkspace(project);
             if (workspace == null)
             {
+                var contentFolder = StringUtils.CombinePaths(project.ProjectFolderPath, "Content");
+                var sourceFolder = StringUtils.CombinePaths(project.ProjectFolderPath, "Source");
+                var exposeContent = Directory.Exists(contentFolder) &&
+                                    (project == Editor.GameProject || CanExposeReferencedContent(contentFolder));
+                var exposeSource = Directory.Exists(sourceFolder);
                 workspace = new ProjectFolderTreeNode(project);
                 Projects.Add(workspace);
 
-                var contentFolder = StringUtils.CombinePaths(project.ProjectFolderPath, "Content");
-                if (Directory.Exists(contentFolder))
+                if (exposeContent)
                 {
                     workspace.Content = new MainContentFolderTreeNode(workspace, ContentFolderType.Content, contentFolder);
                     workspace.Content.Folder.ParentFolder = workspace.Folder;
                 }
 
-                var sourceFolder = StringUtils.CombinePaths(project.ProjectFolderPath, "Source");
-                if (Directory.Exists(sourceFolder))
+                if (exposeSource)
                 {
                     workspace.Source = new MainContentFolderTreeNode(workspace, ContentFolderType.Source, sourceFolder);
                     workspace.Source.Folder.ParentFolder = workspace.Folder;

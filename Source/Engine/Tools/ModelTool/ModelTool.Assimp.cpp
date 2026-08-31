@@ -6,6 +6,7 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Math/Matrix.h"
 #include "Engine/Core/Collections/Dictionary.h"
+#include "Engine/Content/Artifacts/ArtifactKey.h"
 #include "Engine/Tools/TextureTool/TextureTool.h"
 #include "Engine/Utilities/AnsiPathTempFile.h"
 
@@ -505,6 +506,15 @@ bool ImportTexture(ModelData& result, AssimpImporterData& data, aiString& aFilen
     return true;
 }
 
+String GetEmbeddedTextureSourceIdentity(const aiTexture& texture)
+{
+    String originalName = StringUtils::GetFileName(String(texture.mFilename.C_Str()).TrimTrailing());
+    if (originalName.HasChars() && !originalName.StartsWith(TEXT(AI_EMBEDDED_TEXNAME_PREFIX)))
+        return originalName;
+    const ContentHash content = ContentHash::Compute(texture.pcData, texture.mWidth);
+    return TEXT("embedded-") + String(content.ToString().Substring(0, 24));
+}
+
 bool ImportMaterialTexture(ModelData& result, AssimpImporterData& data, const aiMaterial* aMaterial, aiTextureType aTextureType, int32& textureIndex, TextureEntry::TypeHint type, bool sRGB = false)
 {
     aiString aFilename;
@@ -533,6 +543,7 @@ bool ImportMaterialTexture(ModelData& result, AssimpImporterData& data, const ai
                 auto& texture = result.Textures.AddOne();
                 texture.FilePath = filename;
                 texture.EmbeddedData.Set((const byte*)aTex->pcData, (int32)aTex->mWidth);
+                texture.SourceIdentity = GetEmbeddedTextureSourceIdentity(*aTex);
                 texture.Type = type;
                 texture.sRGB = sRGB;
                 texture.AssetID = Guid::Empty;

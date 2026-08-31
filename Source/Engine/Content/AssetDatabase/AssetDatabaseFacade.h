@@ -322,6 +322,14 @@ public:
     /// <summary>Creates canonical imported-source metadata beside an audio, font, shader, or video file.</summary>
     API_FUNCTION() static Guid CreateImportedSourceMetadata(const StringView& sourcePath, const StringView& typeName, const StringView& processorId);
 
+    /// <summary>Creates a canonical imported source and sidecar through the journaled mutation owner.</summary>
+    API_FUNCTION() static Guid CreateImportedSourceBytes(const StringView& sourcePath, const BytesContainer& sourceContents,
+        const StringView& typeName, const StringView& processorId);
+
+    /// <summary>Replaces canonical source bytes while preserving adjacent metadata identity.</summary>
+    /// <returns>True on failure.</returns>
+    static bool ReplaceCanonicalSource(const StringView& sourcePath, const StringAnsiView& sourceContents);
+
 #if COMPILE_WITH_AUDIO_TOOL && USE_EDITOR
     /// <summary>Creates canonical audio metadata with the selected import settings.</summary>
     API_FUNCTION() static Guid CreateAudioMetadata(const StringView& sourcePath, const AudioTool::Options& options);
@@ -371,6 +379,11 @@ public:
     /// <returns>True on failure.</returns>
     static bool SaveExistingJsonSource(const StringView& sourcePath, const StringAnsiView& sourceContents,
         const Guid& sourceID, const StringView& typeName);
+
+    /// <summary>Creates or replaces a scene source and its non-browsable external actor files in one transaction.</summary>
+    /// <returns>True on failure.</returns>
+    static bool SaveExistingJsonSourceWithExternalActors(const StringView& sourcePath, const StringAnsiView& sourceContents,
+        const Guid& sourceID, const StringView& typeName, const Array<AssetMutationSidecar>& sidecars);
 
     /// <summary>Creates or replaces an existing-JSON source from serialized bytes through the journaled mutation owner.</summary>
     /// <returns>True on failure.</returns>

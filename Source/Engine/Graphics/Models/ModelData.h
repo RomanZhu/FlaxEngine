@@ -279,6 +279,11 @@ struct FLAXENGINE_API TextureEntry
     Array<byte> EmbeddedData;
 
     /// <summary>
+    /// Parser-provided identity for an embedded image. Unlike FilePath, this must not be derived from image array order.
+    /// </summary>
+    String SourceIdentity;
+
+    /// <summary>
     /// The texture contents hint based on the usage/context.
     /// </summary>
     TypeHint Type;

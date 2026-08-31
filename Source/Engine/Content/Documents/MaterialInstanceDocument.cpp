@@ -31,13 +31,22 @@ namespace
         return JsonValue(text.Get(), text.Length(), allocator);
     }
 
-    JsonValue GuidReference(const Guid& id, const char* kind, JsonAlloc& allocator)
+    bool GuidReference(const Guid& id, const char* kind, JsonValue& result, JsonAlloc& allocator)
     {
-        JsonValue result(rapidjson::kObjectType);
+        result.SetObject();
         result.AddMember("$type", JsonValue(kind, allocator), allocator);
-        AssetObjectId objectId;
-        if (StringAnsiView(kind) == "AssetReference" && Content::GetAssetObjectId(id, objectId))
+        if (StringAnsiView(kind) == "AssetReference")
         {
+            if (!id.IsValid())
+            {
+                const StringAnsi text = GuidText(Guid::Empty);
+                result.AddMember("guid", StringValue(text, allocator), allocator);
+                result.AddMember("localId", 0, allocator);
+                return false;
+            }
+            AssetObjectId objectId;
+            if (!Content::GetAssetObjectId(id, objectId) || !objectId.Guid.IsValid() || objectId.LocalId == 0)
+                return true;
             const StringAnsi text = GuidText(objectId.Guid);
             result.AddMember("guid", StringValue(text, allocator), allocator);
             result.AddMember("localId", objectId.LocalId, allocator);
@@ -47,7 +56,7 @@ namespace
             const StringAnsi text = GuidText(id);
             result.AddMember("guid", StringValue(text, allocator), allocator);
         }
-        return result;
+        return false;
     }
 
     const char* TypeName(MaterialParameterType type)
@@ -159,8 +168,9 @@ namespace
         return false;
     }
 
-    JsonValue EncodeValue(const SerializedMaterialParam& parameter, JsonAlloc& allocator)
+    JsonValue EncodeValue(const SerializedMaterialParam& parameter, JsonAlloc& allocator, bool& failed)
     {
+        failed = false;
         switch (parameter.Type)
         {
         case MaterialParameterType::Bool:
@@ -186,13 +196,22 @@ namespace
         case MaterialParameterType::Texture:
         case MaterialParameterType::CubeTexture:
         case MaterialParameterType::GameplayGlobal:
-            return GuidReference(parameter.AsGuid, "AssetReference", allocator);
+        {
+            JsonValue result;
+            failed = GuidReference(parameter.AsGuid, "AssetReference", result, allocator);
+            return result;
+        }
         case MaterialParameterType::GPUTextureVolume:
         case MaterialParameterType::GPUTextureCube:
         case MaterialParameterType::GPUTextureArray:
         case MaterialParameterType::GPUTexture:
-            return GuidReference(parameter.AsGuid, "ObjectReference", allocator);
+        {
+            JsonValue result;
+            failed = GuidReference(parameter.AsGuid, "ObjectReference", result, allocator);
+            return result;
+        }
         default:
+            failed = true;
             return JsonValue();
         }
     }
@@ -211,17 +230,23 @@ namespace
         Guid parsed;
         if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), parsed))
             return true;
-        if (StringAnsiView(expectedKind) == "AssetReference" && localId != value.MemberEnd())
+        if (StringAnsiView(expectedKind) == "AssetReference")
         {
-            if (!localId->value.IsInt64() || localId->value.GetInt64() == 0)
+            if (localId == value.MemberEnd() || !localId->value.IsInt64())
                 return true;
-            id = SubAssetPolicy::GetBackingAssetId(parsed, localId->value.GetInt64());
+            const int64 objectLocalId = localId->value.GetInt64();
+            if (!parsed.IsValid())
+            {
+                id = Guid::Empty;
+                return objectLocalId != 0;
+            }
+            if (objectLocalId == 0)
+                return true;
+            id = SubAssetPolicy::GetBackingAssetId(parsed, objectLocalId);
+            return !id.IsValid();
         }
-        else
-        {
-            id = parsed;
-        }
-        return !id.IsValid() && parsed.IsValid();
+        id = parsed;
+        return false;
     }
 
     bool ReadNumberArray(const JsonValue& value, float* output, int32 count)
@@ -296,9 +321,15 @@ bool MaterialInstanceDocument::DecodeLegacy(const Span<byte>& chunk, rapidjson_f
 
     document.SetObject();
     JsonAlloc& allocator = document.GetAllocator();
+    JsonValue baseMaterialReference;
+    if (GuidReference(baseMaterial, "AssetReference", baseMaterialReference, allocator))
+    {
+        error = TEXT("Material instance base material has no canonical asset identity.");
+        return true;
+    }
     document.AddMember("documentVersion", 1, allocator);
     document.AddMember("type", JsonValue("FlaxEngine.MaterialInstance", allocator), allocator);
-    document.AddMember("baseMaterial", GuidReference(baseMaterial, "AssetReference", allocator), allocator);
+    document.AddMember("baseMaterial", baseMaterialReference, allocator);
     JsonValue overrides(rapidjson::kObjectType);
     if (stream.GetPosition() < static_cast<uint64>(chunk.Length()))
     {
@@ -331,7 +362,14 @@ bool MaterialInstanceDocument::DecodeLegacy(const Span<byte>& chunk, rapidjson_f
             }
             JsonValue overrideValue(rapidjson::kObjectType);
             overrideValue.AddMember("type", JsonValue(typeName, allocator), allocator);
-            overrideValue.AddMember("value", EncodeValue(parameter, allocator), allocator);
+            bool encodeFailed;
+            JsonValue encodedValue = EncodeValue(parameter, allocator, encodeFailed);
+            if (encodeFailed)
+            {
+                error = TEXT("Material instance override asset has no canonical asset identity.");
+                return true;
+            }
+            overrideValue.AddMember("value", encodedValue, allocator);
             const StringAnsi key = GuidText(parameter.ID);
             overrides.AddMember(StringValue(key, allocator), overrideValue, allocator);
         }

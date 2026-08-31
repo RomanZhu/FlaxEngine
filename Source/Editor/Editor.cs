@@ -1685,7 +1685,7 @@ namespace FlaxEditor
                 return 0;
             case 6: // Move
             case 7: // Rename
-            case 11: // Recover
+            case 12: // Recover
                 var error = AssetPipelineCallbacks.ValidateMove(logicalSource, logicalDestination, out var moveHandled);
                 if (moveHandled)
                     throw new InvalidOperationException("Asset System v3 does not accept DidMove without a transaction-bound native receipt.");
@@ -1697,6 +1697,7 @@ namespace FlaxEditor
                 return deleteAllowed ? 0 : 1;
             case 9: // ReplaceContents
             case 10: // ReplaceAsset
+            case 11: // SaveExternalActors
                 return AssetPipelineCallbacks.WillSave(new[] { logicalSource }).Contains(logicalSource, StringComparer.OrdinalIgnoreCase) ? 0 : 1;
             default:
                 return 0;

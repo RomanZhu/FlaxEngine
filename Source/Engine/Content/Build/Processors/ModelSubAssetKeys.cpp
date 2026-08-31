@@ -121,6 +121,13 @@ namespace
         return hasher.Finalize();
     }
 
+    String TextureIdentity(const TextureEntry& texture)
+    {
+        return texture.SourceIdentity.HasChars()
+            ? texture.SourceIdentity
+            : StringUtils::GetFileName(texture.FilePath);
+    }
+
     bool Failure(AssetPipelineDiagnostic& diagnostic, const StringView& message, const StringView& key = StringView::Empty)
     {
         diagnostic = AssetPipelineDiagnostic();
@@ -224,14 +231,17 @@ bool ModelSubAssetKeys::Enumerate(const ModelData& data, Array<ModelSubAssetInfo
             HashMaterial(material), index, materialNames[baseKey] > 1);
     }
 
-    Dictionary<String, int32> textureNames;
+    Dictionary<String, int32> textureIdentities;
+    Dictionary<String, int32> legacyTextureNames;
     for (const TextureEntry& texture : data.Textures)
     {
         if (texture.EmbeddedData.IsEmpty())
             continue;
         const String displayName = StringUtils::GetFileName(texture.FilePath);
-        const String key = TEXT("texture:") + Escape(displayName);
-        textureNames[key] = textureNames.ContainsKey(key) ? textureNames[key] + 1 : 1;
+        const String key = TEXT("texture:") + Escape(TextureIdentity(texture));
+        const String legacyKey = TEXT("texture:") + Escape(displayName);
+        textureIdentities[key] = textureIdentities.ContainsKey(key) ? textureIdentities[key] + 1 : 1;
+        legacyTextureNames[legacyKey] = legacyTextureNames.ContainsKey(legacyKey) ? legacyTextureNames[legacyKey] + 1 : 1;
     }
     for (int32 index = 0; index < data.Textures.Count(); index++)
     {
@@ -239,18 +249,30 @@ bool ModelSubAssetKeys::Enumerate(const ModelData& data, Array<ModelSubAssetInfo
         if (texture.EmbeddedData.IsEmpty())
             continue;
         const String displayName = StringUtils::GetFileName(texture.FilePath);
-        const String baseKey = TEXT("texture:") + Escape(displayName);
+        const String baseKey = TEXT("texture:") + Escape(TextureIdentity(texture));
+        const String legacyBaseKey = TEXT("texture:") + Escape(displayName);
+        const ContentHash semanticHash = HashTexture(texture);
         AddInfo(infos, ModelSubAssetKind::Texture, baseKey, displayName, Texture::TypeName,
-            HashTexture(texture), index, textureNames[baseKey] > 1);
+            semanticHash, index, textureIdentities[baseKey] > 1);
+        infos[infos.Count() - 1].LegacyStableKey = legacyTextureNames[legacyBaseKey] > 1
+            ? legacyBaseKey + TEXT("#") + Suffix(semanticHash)
+            : legacyBaseKey;
     }
 
     Dictionary<String, int32> identicalKeys;
+    Dictionary<String, int32> identicalLegacyKeys;
     for (const ModelSubAssetInfo& info : infos)
+    {
         identicalKeys[info.StableKey] = identicalKeys.ContainsKey(info.StableKey) ? identicalKeys[info.StableKey] + 1 : 1;
+        if (info.LegacyStableKey.HasChars())
+            identicalLegacyKeys[info.LegacyStableKey] = identicalLegacyKeys.ContainsKey(info.LegacyStableKey) ? identicalLegacyKeys[info.LegacyStableKey] + 1 : 1;
+    }
     for (ModelSubAssetInfo& info : infos)
     {
         if (identicalKeys[info.StableKey] > 1)
             info.StableKey += String::Format(TEXT("-{0}"), info.SourceIndex);
+        if (info.LegacyStableKey.HasChars() && identicalLegacyKeys[info.LegacyStableKey] > 1)
+            info.LegacyStableKey += String::Format(TEXT("-{0}"), info.SourceIndex);
     }
 
     if (infos.Count() > 1)
@@ -268,6 +290,11 @@ bool ModelSubAssetKeys::Enumerate(const ModelData& data, Array<ModelSubAssetInfo
         candidate.StableKey = infos[i].StableKey;
         candidate.TypeName = infos[i].TypeName;
         candidate.DisplayName = infos[i].DisplayName;
+        if (infos[i].LegacyStableKey.HasChars() && infos[i].LegacyStableKey != infos[i].StableKey)
+        {
+            candidate.PreviousKeys.Add(infos[i].LegacyStableKey);
+            candidate.RenameEvidenceReliable = true;
+        }
         candidates.Add(MoveTemp(candidate));
     }
     return false;

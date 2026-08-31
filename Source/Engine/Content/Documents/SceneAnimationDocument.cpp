@@ -85,13 +85,22 @@ namespace
         return JsonValue(text.Get(), text.Length(), allocator);
     }
 
-    JsonValue Reference(const Guid& id, const char* kind, JsonAlloc& allocator)
+    bool Reference(const Guid& id, const char* kind, JsonValue& result, JsonAlloc& allocator)
     {
-        JsonValue result(rapidjson::kObjectType);
+        result.SetObject();
         result.AddMember("$type", JsonValue(kind, allocator), allocator);
-        AssetObjectId objectId;
-        if (StringAnsiView(kind) == "AssetReference" && Content::GetAssetObjectId(id, objectId))
+        if (StringAnsiView(kind) == "AssetReference")
         {
+            if (!id.IsValid())
+            {
+                const StringAnsi text = GuidText(Guid::Empty);
+                result.AddMember("guid", StringValue(text, allocator), allocator);
+                result.AddMember("localId", 0, allocator);
+                return false;
+            }
+            AssetObjectId objectId;
+            if (!Content::GetAssetObjectId(id, objectId) || !objectId.Guid.IsValid() || objectId.LocalId == 0)
+                return true;
             const StringAnsi text = GuidText(objectId.Guid);
             result.AddMember("guid", StringValue(text, allocator), allocator);
             result.AddMember("localId", objectId.LocalId, allocator);
@@ -101,6 +110,13 @@ namespace
             const StringAnsi text = GuidText(id);
             result.AddMember("guid", StringValue(text, allocator), allocator);
         }
+        return false;
+    }
+
+    JsonValue ObjectReference(const Guid& id, JsonAlloc& allocator)
+    {
+        JsonValue result;
+        Reference(id, "ObjectReference", result, allocator);
         return result;
     }
 
@@ -117,16 +133,22 @@ namespace
         Guid parsed;
         if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), parsed))
             return true;
-        if (StringAnsiView(kind) == "AssetReference" && localId != value.MemberEnd())
+        if (StringAnsiView(kind) == "AssetReference")
         {
-            if (!localId->value.IsInt64() || localId->value.GetInt64() == 0)
+            if (localId == value.MemberEnd() || !localId->value.IsInt64())
                 return true;
-            id = SubAssetPolicy::GetBackingAssetId(parsed, localId->value.GetInt64());
+            const int64 objectLocalId = localId->value.GetInt64();
+            if (!parsed.IsValid())
+            {
+                id = Guid::Empty;
+                return objectLocalId != 0;
+            }
+            if (objectLocalId == 0)
+                return true;
+            id = SubAssetPolicy::GetBackingAssetId(parsed, objectLocalId);
+            return !id.IsValid();
         }
-        else
-        {
-            id = parsed;
-        }
+        id = parsed;
         return false;
     }
 
@@ -423,7 +445,13 @@ bool SceneAnimationDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
         {
             SceneAnimation::PostProcessMaterialTrack::Data header;
             ReadRaw(stream, header);
-            data.AddMember("material", Reference(header.AssetID, "AssetReference", allocator), allocator);
+            JsonValue materialReference;
+            if (Reference(header.AssetID, "AssetReference", materialReference, allocator))
+            {
+                error = TEXT("Scene animation material has no canonical asset identity.");
+                return true;
+            }
+            data.AddMember("material", materialReference, allocator);
             int32 count = 1;
             if (version >= 4) stream.ReadInt32(&count);
             JsonValue clips(rapidjson::kArrayType);
@@ -442,7 +470,13 @@ bool SceneAnimationDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
         case Track::Types::NestedSceneAnimation:
         {
             SceneAnimation::NestedSceneAnimationTrack::Data header; ReadRaw(stream, header);
-            data.AddMember("animation", Reference(header.AssetID, "AssetReference", allocator), allocator);
+            JsonValue animationReference;
+            if (Reference(header.AssetID, "AssetReference", animationReference, allocator))
+            {
+                error = TEXT("Nested scene animation has no canonical asset identity.");
+                return true;
+            }
+            data.AddMember("animation", animationReference, allocator);
             data.AddMember("startFrame", header.StartFrame, allocator);
             data.AddMember("durationFrames", header.DurationFrames, allocator);
             break;
@@ -468,7 +502,13 @@ bool SceneAnimationDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
         case Track::Types::Audio:
         {
             SceneAnimation::AudioTrack::Data header; ReadRaw(stream, header);
-            data.AddMember("audio", Reference(header.AssetID, "AssetReference", allocator), allocator);
+            JsonValue audioReference;
+            if (Reference(header.AssetID, "AssetReference", audioReference, allocator))
+            {
+                error = TEXT("Scene animation audio has no canonical asset identity.");
+                return true;
+            }
+            data.AddMember("audio", audioReference, allocator);
             int32 count = 1;
             if (version >= 4) stream.ReadInt32(&count);
             JsonValue clips(rapidjson::kArrayType);
@@ -510,7 +550,7 @@ bool SceneAnimationDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
         case Track::Types::Script:
         {
             SceneAnimation::ObjectTrack::Data header; ReadRaw(stream, header);
-            data.AddMember("object", Reference(header.ID, "ObjectReference", allocator), allocator);
+            data.AddMember("object", ObjectReference(header.ID, allocator), allocator);
             break;
         }
         case Track::Types::KeyframesProperty:
@@ -542,7 +582,7 @@ bool SceneAnimationDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
                 else if (type == Track::Types::ObjectReferenceProperty)
                 {
                     Guid value; stream.Read(value);
-                    key.AddMember("value", Reference(value, "ObjectReference", allocator), allocator);
+                    key.AddMember("value", ObjectReference(value, allocator), allocator);
                 }
                 else if (type == Track::Types::CurveProperty)
                 {
@@ -654,7 +694,7 @@ bool SceneAnimationDocument::DecodeLegacy(const Span<byte>& timeline, rapidjson_
         case Track::Types::CameraCut:
         {
             SceneAnimation::CameraCutTrack::Data header; ReadRaw(stream, header);
-            data.AddMember("camera", Reference(header.ID, "ObjectReference", allocator), allocator);
+            data.AddMember("camera", ObjectReference(header.ID, allocator), allocator);
             int32 count = 1;
             if (version >= 4) stream.ReadInt32(&count);
             JsonValue clips(rapidjson::kArrayType);

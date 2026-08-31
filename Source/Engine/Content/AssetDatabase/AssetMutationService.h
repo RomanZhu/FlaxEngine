@@ -19,6 +19,7 @@ enum class AssetMutationOperation : byte
     DeleteToRecovery,
     ReplaceContents,
     ReplaceAsset,
+    SaveExternalActors,
     Recover,
 };
 
@@ -106,6 +107,14 @@ struct FLAXENGINE_API AssetMutationResult
     Array<String> ChangedPaths;
 };
 
+/// <summary>One non-browsable external actor file write or deletion bundled with a scene save.</summary>
+struct FLAXENGINE_API AssetMutationSidecar
+{
+    String Path;
+    StringAnsi Contents;
+    bool Delete = false;
+};
+
 using AssetMutationDecisionHook = Function<AssetMutationDecisionResult(const AssetMutationDecisionContext&)>;
 using AssetMutationCommittedHook = Function<void(const AssetMutationResult&)>;
 using AssetMutationDatabaseCommitHook = Function<bool(const AssetMutationResult&)>;
@@ -185,6 +194,10 @@ public:
 
     /// <summary>Atomically replaces authored source bytes and metadata while preserving file identity.</summary>
     bool ReplaceAsset(const StringView& sourcePath, const StringAnsiView& sourceContents, const AssetMeta& meta, AssetMutationResult& result);
+
+    /// <summary>Atomically saves a scene source pair and its external actor file changes.</summary>
+    bool SaveExternalActors(const StringView& sourcePath, const StringAnsiView& sourceContents, const AssetMeta& meta,
+        const Array<AssetMutationSidecar>& sidecars, AssetMutationResult& result);
 
     /// <summary>Restores a pair returned by DeleteToRecovery to a canonical Content path.</summary>
     bool Recover(const StringView& recoveryPath, const StringView& destinationPath, AssetMutationResult& result);

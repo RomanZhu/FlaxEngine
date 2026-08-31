@@ -166,7 +166,7 @@ namespace
         for (const AnimationData& animation : data.Animations)
             bytes += animation.GetMemoryUsage();
         for (const TextureEntry& texture : data.Textures)
-            bytes += texture.EmbeddedData.Count();
+            bytes += texture.EmbeddedData.Count() + static_cast<uint64>(texture.SourceIdentity.Length()) * sizeof(Char);
         return bytes;
     }
 
@@ -375,7 +375,7 @@ uint64 ModelPreparedPayload::GetMemoryUsage() const
     uint64 result = sizeof(ModelPreparedPayload);
     result += static_cast<uint64>(RootTypeName.Length() + RootSourcePath.Length() + SelectedStableKey.Length()) * sizeof(Char);
     for (const ModelSubAssetInfo& info : SubAssets)
-        result += sizeof(info) + static_cast<uint64>(info.StableKey.Length() + info.DisplayName.Length() + info.TypeName.Length()) * sizeof(Char);
+        result += sizeof(info) + static_cast<uint64>(info.StableKey.Length() + info.DisplayName.Length() + info.TypeName.Length() + info.LegacyStableKey.Length()) * sizeof(Char);
     result += static_cast<uint64>(AssignedIDs.Count()) * (sizeof(Guid) + 64);
     return result;
 }

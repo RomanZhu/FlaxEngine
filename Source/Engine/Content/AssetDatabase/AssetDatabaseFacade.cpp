@@ -3666,6 +3666,91 @@ Guid AssetDatabaseFacade::CreateImportedSourceMetadata(const StringView& sourceP
 #endif
 }
 
+Guid AssetDatabaseFacade::CreateImportedSourceBytes(const StringView& sourcePath, const BytesContainer& sourceContents,
+    const StringView& typeName, const StringView& processorId)
+{
+#if !USE_EDITOR
+    return Guid::Empty;
+#else
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return Guid::Empty;
+    };
+    if (!AssetDatabase::Get().IsHardCutEnabled() || sourcePath.IsEmpty() || sourceContents.Length() == 0 ||
+        typeName.IsEmpty() || processorId.IsEmpty())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.Message = TEXT("Journaled imported-source creation requires Asset System v3 and valid source bytes, type, processor, and Content path.");
+        return fail();
+    }
+
+    AssetMeta meta;
+    meta.ID = Guid::New();
+    meta.AssetType = typeName;
+    meta.SourceKind = processorId == TEXT("Flax.Text") ? AssetSourceKind::TextDocument : AssetSourceKind::ImportedSource;
+    meta.Processor.ID = processorId;
+    meta.Processor.SettingsVersion = 1;
+    meta.Processor.SettingsJson = "{}\n";
+    AssetMutationResult mutation;
+    GetMutationService().CreateAsset(sourcePath,
+        StringAnsiView(reinterpret_cast<const char*>(sourceContents.Get()), sourceContents.Length()), meta, mutation);
+    if (!mutation.Succeeded)
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = meta.ID;
+        diagnostic.Message = mutation.Message;
+        return fail();
+    }
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (processorId != TEXT("Flax.Unsupported") && GraphPipelineService::RequestBuild(meta.ID, true, diagnostic))
+        return fail();
+#endif
+    SetDiagnostics(Array<AssetPipelineDiagnostic>());
+    return meta.ID;
+#endif
+}
+
+bool AssetDatabaseFacade::ReplaceCanonicalSource(const StringView& sourcePath, const StringAnsiView& sourceContents)
+{
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    };
+    if (!AssetDatabase::Get().IsHardCutEnabled() || sourcePath.IsEmpty() || sourceContents.IsEmpty())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.Message = TEXT("Canonical source replacement requires Asset System v3, source bytes, and a valid Content path.");
+        return fail();
+    }
+    AssetMutationResult mutation;
+    GetMutationService().ReplaceContents(sourcePath, sourceContents, mutation);
+    if (!mutation.Succeeded)
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = mutation.AssetID;
+        diagnostic.Message = mutation.Message;
+        return fail();
+    }
+    SetDiagnostics(Array<AssetPipelineDiagnostic>());
+    return false;
+}
+
 #if COMPILE_WITH_AUDIO_TOOL && USE_EDITOR
 Guid AssetDatabaseFacade::CreateAudioMetadata(const StringView& sourcePath, const AudioTool::Options& options)
 {
@@ -4495,6 +4580,81 @@ bool AssetDatabaseFacade::SaveExistingJsonSource(const StringView& sourcePath, c
         metadata.Processor.SettingsJson = "{}\n";
         GetMutationService().CreateAsset(sourcePath, sourceContents, metadata, mutation);
     }
+    if (!mutation.Succeeded)
+    {
+        diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = sourceID;
+        diagnostic.Message = mutation.Message;
+        return fail();
+    }
+    SetDiagnostics(Array<AssetPipelineDiagnostic>());
+    return false;
+}
+
+bool AssetDatabaseFacade::SaveExistingJsonSourceWithExternalActors(const StringView& sourcePath,
+    const StringAnsiView& sourceContents, const Guid& sourceID, const StringView& typeName,
+    const Array<AssetMutationSidecar>& sidecars)
+{
+    AssetPipelineDiagnostic diagnostic;
+    auto fail = [&diagnostic]()
+    {
+        Array<AssetPipelineDiagnostic> diagnostics;
+        diagnostics.Add(diagnostic);
+        SetDiagnostics(diagnostics);
+        return true;
+    };
+    if (!AssetDatabase::Get().IsHardCutEnabled() || sourcePath.IsEmpty() || sourceContents.Length() == 0 ||
+        !sourceID.IsValid() || typeName != TEXT("FlaxEngine.SceneAsset"))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = sourceID;
+        diagnostic.Message = TEXT("Journaled external-actor scene publication requires Asset System v3 and a valid scene identity, path, and source payload.");
+        return fail();
+    }
+
+    AssetMeta metadata;
+    const String metaPath = String(sourcePath) + TEXT(".meta");
+    if (FileSystem::FileExists(sourcePath))
+    {
+        if (!FileSystem::FileExists(metaPath) || AssetMeta::Load(metaPath, metadata, diagnostic) ||
+            metadata.ID != sourceID || metadata.AssetType != typeName || metadata.SourceKind != AssetSourceKind::ExistingJson)
+        {
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            {
+                diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+                diagnostic.SourcePath = sourcePath;
+                diagnostic.AssetGuid = sourceID;
+                diagnostic.Message = TEXT("Existing scene metadata is missing or does not match the document identity and type.");
+            }
+            return fail();
+        }
+    }
+    else
+    {
+        if (FileSystem::FileExists(metaPath))
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::PathCollision;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.SourcePath = metaPath;
+            diagnostic.AssetGuid = sourceID;
+            diagnostic.Message = TEXT("Existing scene metadata is orphaned at the requested creation path.");
+            return fail();
+        }
+        metadata.ID = sourceID;
+        metadata.AssetType = typeName;
+        metadata.SourceKind = AssetSourceKind::ExistingJson;
+        metadata.Processor.ID = TEXT("Flax.ExistingJson");
+        metadata.Processor.SettingsVersion = 1;
+        metadata.Processor.SettingsJson = "{}\n";
+    }
+
+    AssetMutationResult mutation;
+    GetMutationService().SaveExternalActors(sourcePath, sourceContents, metadata, sidecars, mutation);
     if (!mutation.Succeeded)
     {
         diagnostic.Code = mutation.RequiresRecovery ? AssetPipelineDiagnosticCode::RecoveryRequired : AssetPipelineDiagnosticCode::InvalidMeta;

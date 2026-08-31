@@ -3,6 +3,8 @@
 #include "FmodCatalogBuilder.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Math/Math.h"
 #include "Engine/Core/Collections/HashSet.h"
@@ -309,6 +311,24 @@ bool FmodCatalogBuilder::BuildCatalog(const String& banksDirectory, const String
     writer.EndObject();
 
     const String output = outputDirectory / TEXT("fmod-metadata.json");
+    if (AssetDatabase::Get().IsHardCutEnabled())
+    {
+        const bool failed = FileSystem::FileExists(output)
+            ? AssetDatabaseFacade::ReplaceCanonicalSource(output,
+                StringAnsiView(buffer.GetString(), static_cast<int32>(buffer.GetSize())))
+            : !AssetDatabaseFacade::CreateImportedSourceBytes(output,
+                BytesContainer(reinterpret_cast<const byte*>(buffer.GetString()), static_cast<int32>(buffer.GetSize())),
+                TEXT("FlaxEngine.RawDataAsset"), TEXT("Flax.Unsupported")).IsValid();
+        studio->release();
+        if (failed)
+        {
+            LOG(Error, "Failed to publish FMOD metadata catalog '{0}'.", output);
+            return false;
+        }
+        LOG(Info, "Generated FMOD metadata catalog '{0}' from {1} banks and {2} events.", output, banks.Count(), writtenEvents.Count());
+        return true;
+    }
+
     FileWriteStream* stream = FileWriteStream::Open(output);
     if (!stream)
     {

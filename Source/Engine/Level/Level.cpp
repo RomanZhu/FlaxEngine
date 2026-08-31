@@ -10,6 +10,7 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Deprecated.h"
 #include "Engine/Content/JsonAsset.h"
+#include "Engine/Content/AssetDatabase/AssetMutationService.h"
 #include "Engine/Core/Cache.h"
 #include "Engine/Core/Collections/CollectionPoolCache.h"
 #include "Engine/Core/Collections/Dictionary.h"
@@ -466,11 +467,10 @@ namespace
         writer.EndObject();
     }
 
-    bool SaveExternalActorFile(const String& actorsFolder, Actor* actor, const HashSet<SceneObject*>& serializableObjects, HashSet<String>& writtenFiles)
+    bool SaveExternalActorFile(const String& actorsFolder, Actor* actor, const HashSet<SceneObject*>& serializableObjects,
+        HashSet<String>& writtenFiles, Array<AssetMutationSidecar>* mutations)
     {
         const String path = GetExternalActorFilePath(actorsFolder, actor->GetID());
-        if (FileSystem::CreateDirectory(StringUtils::GetDirectoryName(path)))
-            return true;
 
         rapidjson_flax::StringBuffer buffer;
         PrettyJsonWriter writer(buffer);
@@ -497,6 +497,24 @@ namespace
         writer.EndObject();
 
         writtenFiles.Add(path);
+        if (mutations)
+        {
+            BytesContainer existingData;
+            if (!File::ReadAllBytes(path, existingData) &&
+                ((existingData.Length() == buffer.GetSize() &&
+                  Platform::MemoryCompare(existingData.Get(), buffer.GetString(), buffer.GetSize()) == 0) ||
+                 HasSameExternalActorData(existingData, buffer.GetString(), static_cast<int32>(buffer.GetSize()))))
+            {
+                return false;
+            }
+            AssetMutationSidecar mutation;
+            mutation.Path = path;
+            mutation.Contents = StringAnsi(buffer.GetString(), static_cast<int32>(buffer.GetSize()));
+            mutations->Add(MoveTemp(mutation));
+            return false;
+        }
+        if (FileSystem::CreateDirectory(StringUtils::GetDirectoryName(path)))
+            return true;
         return WriteExternalActorBytesIfChanged(path, buffer.GetString(), static_cast<int32>(buffer.GetSize()));
     }
 
@@ -869,8 +887,10 @@ namespace LevelImpl
     bool unloadScenes();
     bool saveScene(Scene* scene);
     bool saveScene(Scene* scene, const String& path);
-    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson, bool useExternalActorsStorage = true);
-    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool useExternalActorsStorage = true);
+    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson, bool useExternalActorsStorage = true,
+        Array<AssetMutationSidecar>* externalActorMutations = nullptr);
+    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool useExternalActorsStorage = true,
+        Array<AssetMutationSidecar>* externalActorMutations = nullptr);
     bool spawnActor(Actor* actor, Actor* parent);
     bool deleteActor(Actor* actor);
 }
@@ -2125,7 +2145,13 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
 
     // Serialize to json
     rapidjson_flax::StringBuffer buffer;
-    if (saveScene(scene, buffer, true) && buffer.GetSize() > 0)
+    Array<AssetMutationSidecar> externalActorMutations;
+    Array<AssetMutationSidecar>* externalActorMutationTarget = nullptr;
+#if USE_EDITOR
+    if (AssetDatabase::Get().IsHardCutEnabled() && scene->UseExternalActors)
+        externalActorMutationTarget = &externalActorMutations;
+#endif
+    if (saveScene(scene, buffer, true, true, externalActorMutationTarget) && buffer.GetSize() > 0)
     {
         CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
         return true;
@@ -2135,7 +2161,11 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     if (AssetDatabase::Get().IsHardCutEnabled())
     {
         const StringAnsiView source(buffer.GetString(), static_cast<int32>(buffer.GetSize()));
-        if (AssetDatabaseFacade::SaveExistingJsonSource(path, source, sceneId, TEXT("FlaxEngine.SceneAsset")))
+        const bool failed = externalActorMutationTarget
+                                ? AssetDatabaseFacade::SaveExistingJsonSourceWithExternalActors(path, source, sceneId,
+                                    TEXT("FlaxEngine.SceneAsset"), externalActorMutations)
+                                : AssetDatabaseFacade::SaveExistingJsonSource(path, source, sceneId, TEXT("FlaxEngine.SceneAsset"));
+        if (failed)
         {
             LOG(Error, "Cannot publish scene source pair '{0}' through the asset database.", path);
             CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
@@ -2185,23 +2215,25 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     return false;
 }
 
-bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson, bool useExternalActorsStorage)
+bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson,
+    bool useExternalActorsStorage, Array<AssetMutationSidecar>* externalActorMutations)
 {
     PROFILE_CPU_NAMED("Level.SaveScene");
     PROFILE_MEM(Level);
     if (prettyJson)
     {
         PrettyJsonWriter writerObj(outBuffer);
-        return saveScene(scene, outBuffer, writerObj, useExternalActorsStorage);
+        return saveScene(scene, outBuffer, writerObj, useExternalActorsStorage, externalActorMutations);
     }
     else
     {
         CompactJsonWriter writerObj(outBuffer);
-        return saveScene(scene, outBuffer, writerObj, useExternalActorsStorage);
+        return saveScene(scene, outBuffer, writerObj, useExternalActorsStorage, externalActorMutations);
     }
 }
 
-bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool useExternalActorsStorage)
+bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer,
+    bool useExternalActorsStorage, Array<AssetMutationSidecar>* externalActorMutations)
 {
     ASSERT(scene);
     const auto sceneId = scene->GetID();
@@ -2216,7 +2248,7 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
     if (useExternalActorsStorage && scene->UseExternalActors)
     {
         const String actorsFolder = GetExternalActorsFolder(scene->GetPath());
-        if (FileSystem::CreateDirectory(actorsFolder))
+        if (!externalActorMutations && FileSystem::CreateDirectory(actorsFolder))
             return true;
 
         Array<SceneObject*> allObjects;
@@ -2233,17 +2265,30 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
         {
             if (!serializableObjects.Contains(actor))
                 continue;
-            if (SaveExternalActorFile(actorsFolder, actor, serializableObjects, writtenFiles))
+            if (SaveExternalActorFile(actorsFolder, actor, serializableObjects, writtenFiles, externalActorMutations))
                 return true;
         }
 
         Array<String> existingActorFiles;
-        if (FileSystem::DirectoryGetFiles(existingActorFiles, actorsFolder, TEXT("*.actor"), DirectorySearchOption::AllDirectories))
+        if (FileSystem::DirectoryExists(actorsFolder) &&
+            FileSystem::DirectoryGetFiles(existingActorFiles, actorsFolder, TEXT("*.actor"), DirectorySearchOption::AllDirectories))
             return true;
         for (const String& file : existingActorFiles)
         {
-            if (!IsWrittenExternalActorFile(writtenFiles, file) && FileSystem::DeleteFile(file))
-                return true;
+            if (!IsWrittenExternalActorFile(writtenFiles, file))
+            {
+                if (externalActorMutations)
+                {
+                    AssetMutationSidecar mutation;
+                    mutation.Path = file;
+                    mutation.Delete = true;
+                    externalActorMutations->Add(MoveTemp(mutation));
+                }
+                else if (FileSystem::DeleteFile(file))
+                {
+                    return true;
+                }
+            }
         }
 
         writer.StartObject();
