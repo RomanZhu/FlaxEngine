@@ -284,7 +284,7 @@ namespace FlaxEditor.FMOD
                 if (contentDatabase?.Find(path) is AssetItem item && item.IsLoaded)
                 {
                     loadedItem = item;
-                    var loadedAsset = FlaxEngine.Content.GetAsset(item.ID);
+                    var loadedAsset = FlaxEngine.Content.GetAsset(item.ObjectID);
                     Editor.Instance.Windows.PropertiesWin?.PrepareForAssetReload(loadedAsset);
                 }
 
@@ -393,7 +393,7 @@ namespace FlaxEditor.FMOD
                 if (!itemPath.StartsWith(audioRoot, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var asset = FlaxEngine.Content.GetAsset(item.ID);
+                var asset = FlaxEngine.Content.GetAsset(item.ObjectID);
                 if (asset != null)
                     editor.Windows.PropertiesWin?.PrepareForAssetReload(asset);
                 break;

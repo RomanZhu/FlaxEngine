@@ -99,7 +99,7 @@ namespace FlaxEditor.GUI.Timeline.Tracks
         {
             var e = (NestedAnimationTrack)track;
             Guid id = stream.ReadGuid();
-            e.Asset = FlaxEngine.Content.LoadAsync<Animation>(id);
+            e.Asset = FlaxEngine.Content.LoadRuntimeObjectAsync<Animation>(id);
             var m = e.TrackMedia;
             m.StartFrame = (int)stream.ReadSingle();
             m.DurationFrames = (int)stream.ReadSingle();

@@ -40,7 +40,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Actor OnEditorDrop(object context)
         {
-            return PrefabManager.SpawnPrefab(FlaxEngine.Content.LoadAsync<Prefab>(ID), null);
+            return PrefabManager.SpawnPrefab(FlaxEngine.Content.LoadAssetAsync<Prefab>(ObjectID), null);
         }
 
         /// <inheritdoc />
@@ -60,7 +60,7 @@ namespace FlaxEditor.Content
                 if (_cachedTypeDescription == null)
                 {
                     _cachedTypeDescription = "Prefab";
-                    var prefab = FlaxEngine.Content.Load<Prefab>(ID);
+                    var prefab = FlaxEngine.Content.LoadAsset<Prefab>(ObjectID);
                     if (prefab)
                     {
                         Actor root = prefab.GetDefaultInstance();
@@ -81,7 +81,7 @@ namespace FlaxEditor.Content
                 if (!_hasCachedSourcePrefabId)
                 {
                     _hasCachedSourcePrefabId = true;
-                    var prefab = FlaxEngine.Content.Load<Prefab>(ID);
+                    var prefab = FlaxEngine.Content.LoadAsset<Prefab>(ObjectID);
                     if (prefab)
                     {
                         var root = prefab.GetDefaultInstance();
@@ -108,7 +108,7 @@ namespace FlaxEditor.Content
                         {
                             _cachedSourcePrefabDescription = item.ShortName;
                         }
-                        else if (FlaxEngine.Content.GetAssetInfo(sourcePrefabId, out var info))
+                        else if (FlaxEngine.Content.GetRuntimeAssetInfo(sourcePrefabId, out var info))
                         {
                             _cachedSourcePrefabDescription = System.IO.Path.GetFileNameWithoutExtension(info.Path);
                         }
@@ -125,7 +125,7 @@ namespace FlaxEditor.Content
                 if (_cachedInstanceTypeDescription == null)
                 {
                     _cachedInstanceTypeDescription = string.Empty;
-                    var prefab = FlaxEngine.Content.Load<Prefab>(ID);
+                    var prefab = FlaxEngine.Content.LoadAsset<Prefab>(ObjectID);
                     if (prefab)
                     {
                         var root = prefab.GetDefaultInstance();

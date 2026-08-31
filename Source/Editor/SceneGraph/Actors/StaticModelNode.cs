@@ -417,7 +417,7 @@ namespace FlaxEditor.SceneGraph.Actors
 
         private static bool TryCollisionData(Model model, BinaryAssetItem assetItem, out CollisionData collisionData)
         {
-            collisionData = FlaxEngine.Content.Load<CollisionData>(assetItem.ID);
+            collisionData = FlaxEngine.Content.LoadAsset<CollisionData>(assetItem.ObjectID);
             if (collisionData)
             {
                 var options = collisionData.Options;

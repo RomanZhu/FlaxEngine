@@ -342,7 +342,7 @@ namespace FlaxEditor
                 changed.Add(new { record.AssetId, before = record.Path, after = normalized });
                 if (dryRun)
                     continue;
-                var jsonAsset = FlaxEngine.Content.LoadAsync<JsonAsset>(record.AssetId);
+                var jsonAsset = FlaxEngine.Content.LoadRuntimeObjectAsync<JsonAsset>(record.AssetId);
                 if (jsonAsset && jsonAsset.WaitForLoaded())
                     jsonAsset = null;
                 var bank = jsonAsset ? new JsonAssetReference<AudioBank>(jsonAsset).Instance : null;
@@ -672,7 +672,7 @@ namespace FlaxEditor
                 repaired.Add(new { owner = emitter.ID, property = "Event", path = emitter.EventPath, assetId = match.AssetId });
                 if (dryRun)
                     continue;
-                var asset = FlaxEngine.Content.LoadAsync<JsonAsset>(match.AssetId);
+                var asset = FlaxEngine.Content.LoadRuntimeObjectAsync<JsonAsset>(match.AssetId);
                 if (!asset || asset.WaitForLoaded())
                     throw new InvalidOperationException($"Failed to load AudioEvent asset '{match.File}'.");
                 emitter.Event = new JsonAssetReference<AudioEvent>(asset);

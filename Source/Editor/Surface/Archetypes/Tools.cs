@@ -641,7 +641,7 @@ namespace FlaxEditor.Surface.Archetypes
                 // Update items
                 Type type = null;
                 var toSelect = (string)Values[1];
-                var asset = FlaxEngine.Content.Load<GameplayGlobals>((Guid)Values[0]);
+                var asset = FlaxEngine.Content.LoadRuntimeObject<GameplayGlobals>((Guid)Values[0]);
                 _combobox.ClearItems();
                 if (asset)
                 {
@@ -767,7 +767,7 @@ namespace FlaxEditor.Surface.Archetypes
 
             private void UpdateOutputBox()
             {
-                var asset = FlaxEngine.Content.LoadAsync((Guid)Values[0]);
+                var asset = FlaxEngine.Content.LoadRuntimeObjectAsync((Guid)Values[0]);
                 var box = (OutputBox)GetBox(0);
                 if (asset != null)
                 {

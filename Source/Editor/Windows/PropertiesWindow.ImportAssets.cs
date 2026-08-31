@@ -161,8 +161,8 @@ namespace FlaxEditor.Windows
                 {
                     result[i] = new RetargetSetupProperties
                     {
-                        SourceAsset = FlaxEngine.Content.LoadAsync(source[i].SourceAsset),
-                        Skeleton = FlaxEngine.Content.LoadAsync<SkinnedModel>(source[i].SkeletonAsset),
+                        SourceAsset = FlaxEngine.Content.LoadRuntimeObjectAsync(source[i].SourceAsset),
+                        Skeleton = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(source[i].SkeletonAsset),
                         NodesMapping = source[i].NodesMapping != null
                             ? new Dictionary<string, string>(source[i].NodesMapping)
                             : new Dictionary<string, string>(),
@@ -611,7 +611,7 @@ namespace FlaxEditor.Windows
             {
                 var settings = new ModelImportSettings();
                 var restored = item.IsCanonicalSource
-                    ? !AssetDatabaseFacade.LoadModelMetadata(item.SourcePath, out settings.Settings)
+                    ? !AssetPipelineService.LoadModelMetadata(item.SourcePath, out settings.Settings)
                     : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
                 if (!restored)
                     return false;
@@ -648,7 +648,7 @@ namespace FlaxEditor.Windows
             {
                 var settings = new TextureImportSettings();
                 var restored = item.IsCanonicalSource
-                    ? !AssetDatabaseFacade.LoadTextureMetadata(item.SourcePath, out settings.Settings)
+                    ? !AssetPipelineService.LoadTextureMetadata(item.SourcePath, out settings.Settings)
                     : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
                 if (!restored)
                     return false;
@@ -660,7 +660,7 @@ namespace FlaxEditor.Windows
             {
                 var settings = new AudioImportSettings();
                 var restored = item.IsCanonicalSource
-                    ? !AssetDatabaseFacade.LoadAudioMetadata(item.SourcePath, out settings.Settings)
+                    ? !AssetPipelineService.LoadAudioMetadata(item.SourcePath, out settings.Settings)
                     : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
                 if (!restored)
                     return false;

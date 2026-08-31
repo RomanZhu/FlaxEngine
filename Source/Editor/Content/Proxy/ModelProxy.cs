@@ -56,12 +56,12 @@ namespace FlaxEditor.Content
                     foreach (var contentItem in items)
                     {
                         if (contentItem is ModelItem modelItem)
-                            collisionDataProxy.CreateCollisionDataFromModel(FlaxEngine.Content.LoadAsync<Model>(modelItem.ID), null, false);
+                            collisionDataProxy.CreateCollisionDataFromModel(FlaxEngine.Content.LoadAssetAsync<Model>(modelItem.ObjectID), null, false);
                     }
                 }
                 else
                 {
-                    var model = FlaxEngine.Content.LoadAsync<Model>(((ModelItem)item).ID);
+                    var model = FlaxEngine.Content.LoadAssetAsync<Model>(((ModelItem)item).ObjectID);
                     collisionDataProxy.CreateCollisionDataFromModel(model);
                 }
             });

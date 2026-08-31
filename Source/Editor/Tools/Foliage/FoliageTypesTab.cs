@@ -444,7 +444,7 @@ namespace FlaxEditor.Tools.Foliage
         private void OnItemSelectedForFoliageModel(AssetItem item)
         {
             var foliage = Tab.SelectedFoliage;
-            var model = FlaxEngine.Content.LoadAsync<Model>(item.ID);
+            var model = FlaxEngine.Content.LoadAssetAsync<Model>(item.ObjectID);
             var action = new Undo.EditFoliageAction(foliage);
 
             foliage.AddFoliageType(model);

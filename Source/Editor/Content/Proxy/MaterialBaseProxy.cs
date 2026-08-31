@@ -57,13 +57,13 @@ namespace FlaxEditor.Content
         private static void OnMaterialInstanceCreated(ContentItem item, BinaryAssetItem materialItem)
         {
             var assetItem = (AssetItem)item;
-            var materialInstance = FlaxEngine.Content.LoadAsync<MaterialInstance>(assetItem.ID);
+            var materialInstance = FlaxEngine.Content.LoadAssetAsync<MaterialInstance>(assetItem.ObjectID);
             if (materialInstance == null || materialInstance.WaitForLoaded())
             {
                 Editor.LogError("Failed to load created material instance.");
                 return;
             }
-            materialInstance.BaseMaterial = FlaxEngine.Content.LoadAsync<MaterialBase>(materialItem.ID);
+            materialInstance.BaseMaterial = FlaxEngine.Content.LoadAssetAsync<MaterialBase>(materialItem.ObjectID);
             Editor.Instance.ContentDatabase.SaveAsset(materialInstance);
         }
 

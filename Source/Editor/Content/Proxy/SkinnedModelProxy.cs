@@ -72,7 +72,7 @@ namespace FlaxEditor.Content
 
         private static void OnAnimationGraphCreated(ContentItem item, BinaryAssetItem skinnedModelItem)
         {
-            var skinnedModel = FlaxEngine.Content.Load<SkinnedModel>(skinnedModelItem.ID);
+            var skinnedModel = FlaxEngine.Content.LoadAsset<SkinnedModel>(skinnedModelItem.ObjectID);
             if (skinnedModel == null)
             {
                 Editor.LogError("Failed to load base skinned model.");

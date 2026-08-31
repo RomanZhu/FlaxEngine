@@ -303,7 +303,7 @@ namespace FlaxEditor.Tools.CSG
             if (cache.TryGetCustomData(RayPlacementFrontCacheKey, out text) && Enum.TryParse(text, out CSGRayPlacementFront front))
                 state.RayPlacementFront = front;
             if (cache.TryGetCustomData(BrushMaterialCacheKey, out text) && Guid.TryParse(text, out var materialId) && materialId != Guid.Empty)
-                state.BrushMaterial = FlaxEngine.Content.LoadAsync<MaterialBase>(materialId);
+                state.BrushMaterial = FlaxEngine.Content.LoadRuntimeObjectAsync<MaterialBase>(materialId);
             if (cache.TryGetCustomData(BrushMaterialAutoPickCacheKey, out flag))
                 state.BrushMaterialAutoPick = flag;
             Controller.ApplyState(state);

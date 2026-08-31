@@ -288,7 +288,7 @@ namespace FlaxEditor.Modules
                 return true;
             if (scannedAssets.TryGetValue(id, out var result))
                 return result;
-            if (id == Guid.Empty || !FlaxEngine.Content.GetAssetInfo(id, out var assetInfo))
+            if (id == Guid.Empty || !FlaxEngine.Content.GetRuntimeAssetInfo(id, out var assetInfo))
                 return false;
             scannedAssets.Add(id, false);
 
@@ -297,7 +297,7 @@ namespace FlaxEditor.Modules
                 return false;
 
             // Recursive check if this asset contains direct or indirect reference to the given asset
-            var asset = FlaxEngine.Content.Load<Asset>(assetInfo.ID, 1000);
+            var asset = FlaxEngine.Content.LoadAsset<Asset>(assetInfo.ObjectID, 1000);
             if (asset)
             {
                 var references = asset.GetReferences();

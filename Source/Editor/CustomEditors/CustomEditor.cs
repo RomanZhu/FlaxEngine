@@ -672,7 +672,7 @@ namespace FlaxEditor.CustomEditors
             var visited = new HashSet<Guid>();
             while (prefabId != Guid.Empty && objectId != Guid.Empty && visited.Add(prefabId))
             {
-                var prefab = FlaxEngine.Content.Load<Prefab>(prefabId);
+                var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId);
                 if (!prefab || prefab.WaitForLoaded())
                     break;
 
@@ -682,7 +682,7 @@ namespace FlaxEditor.CustomEditors
 
                 var item = Editor.Instance.ContentDatabase.FindAsset(prefabId);
                 var name = item?.ShortName;
-                if (string.IsNullOrEmpty(name) && FlaxEngine.Content.GetAssetInfo(prefabId, out var info))
+                if (string.IsNullOrEmpty(name) && FlaxEngine.Content.GetRuntimeAssetInfo(prefabId, out var info))
                     name = System.IO.Path.GetFileNameWithoutExtension(info.Path);
                 if (string.IsNullOrEmpty(name))
                     name = prefabId.ToString();
@@ -958,7 +958,7 @@ namespace FlaxEditor.CustomEditors
             var visited = new HashSet<Guid>();
             while (prefabId != targetPrefabId && prefabId != Guid.Empty && objectId != Guid.Empty && visited.Add(prefabId))
             {
-                var prefab = FlaxEngine.Content.Load<Prefab>(prefabId);
+                var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId);
                 if (!prefab || prefab.WaitForLoaded())
                     break;
                 var currentObjectId = objectId;

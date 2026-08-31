@@ -33,7 +33,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Actor OnEditorDrop(object context)
         {
-            return new MeshCollider { CollisionData = FlaxEngine.Content.LoadAsync<CollisionData>(ID) };
+            return new MeshCollider { CollisionData = FlaxEngine.Content.LoadAssetAsync<CollisionData>(ObjectID) };
         }
     }
 
@@ -94,7 +94,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(CollisionData).FullName) == Guid.Empty)
+            if (AssetPipelineService.CreateAuthoredDocument(outputPath, typeof(CollisionData).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
 
@@ -139,7 +139,7 @@ namespace FlaxEditor.Content
         private static ModelBase ResolveCollisionModel(BinaryAssetItem item, Guid modelId)
         {
             if (modelId != Guid.Empty)
-                return FlaxEngine.Content.LoadAsync<ModelBase>(modelId);
+                return FlaxEngine.Content.LoadRuntimeObjectAsync<ModelBase>(modelId);
 
             const string suffix = " Collision.flax";
             if (!item.Path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
@@ -198,7 +198,7 @@ namespace FlaxEditor.Content
 
         private bool TryUseCollisionData(Model model, BinaryAssetItem assetItem, Action<CollisionData> created, bool alwaysDeferCallback, CollisionDataType type)
         {
-            var collisionData = FlaxEngine.Content.Load<CollisionData>(assetItem.ID);
+            var collisionData = FlaxEngine.Content.LoadAsset<CollisionData>(assetItem.ObjectID);
             if (collisionData)
             {
                 var options = collisionData.Options;
@@ -257,7 +257,7 @@ namespace FlaxEditor.Content
             Action<ContentItem> create = contentItem =>
             {
                 var assetItem = (AssetItem)contentItem;
-                var collisionData = FlaxEngine.Content.LoadAsync<CollisionData>(assetItem.ID);
+                var collisionData = FlaxEngine.Content.LoadAssetAsync<CollisionData>(assetItem.ObjectID);
                 if (collisionData == null || collisionData.WaitForLoaded())
                 {
                     Editor.LogError("Failed to load created collision data.");

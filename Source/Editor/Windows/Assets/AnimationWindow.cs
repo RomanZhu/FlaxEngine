@@ -179,7 +179,7 @@ namespace FlaxEditor.Windows.Assets
                 // Try to restore target asset import options (useful for fast reimport)
                 if (window.Item.IsCanonicalSource && !window.Item.IsCanonicalSubAsset)
                 {
-                    if (AssetDatabaseFacade.LoadModelMetadata(window.Item.Path, out ImportSettings.Settings))
+                    if (AssetPipelineService.LoadModelMetadata(window.Item.Path, out ImportSettings.Settings))
                         Editor.LogError("Cannot load canonical model import settings.");
                 }
                 else if (!window.Item.IsCanonicalSubAsset)
@@ -201,7 +201,7 @@ namespace FlaxEditor.Windows.Assets
             {
                 if (Window.Item.IsCanonicalSource)
                 {
-                    if (AssetDatabaseFacade.ApplyModelMetadata(Window.Item.Path, ImportSettings.Settings))
+                    if (AssetPipelineService.ApplyModelMetadata(Window.Item.Path, ImportSettings.Settings))
                         Editor.LogError("Cannot apply canonical model import settings.");
                 }
                 else
@@ -336,7 +336,7 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override Animation LoadAsset()
         {
-            return _item.IsCanonicalSource ? FlaxEngine.Content.LoadAsync<Animation>(_item.ID) : base.LoadAsset();
+            return _item.IsCanonicalSource ? FlaxEngine.Content.LoadAssetAsync<Animation>(_item.ObjectID) : base.LoadAsset();
         }
 
         private void OnUndoRedo(IUndoAction action)
@@ -381,7 +381,7 @@ namespace FlaxEditor.Windows.Assets
                 Editor.ProjectCache.TryGetCustomData(GetPreviewModelCacheName(), out string str) && 
                 Guid.TryParse(str, out var id))
             {
-                _initialPreviewModel = FlaxEngine.Content.LoadAsync<SkinnedModel>(id);
+                _initialPreviewModel = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(id);
             }
             if (_initialPreviewModel)
             {
@@ -518,9 +518,9 @@ namespace FlaxEditor.Windows.Assets
             if (bool.TryParse(node.GetAttribute("ShowPreviewValues"), out bool value3))
                 _timeline.ShowPreviewValues = value3;
             if (Guid.TryParse(node.GetAttribute("PreviewModel"), out Guid value4))
-                _initialPreviewModel = FlaxEngine.Content.LoadAsync<SkinnedModel>(value4);
+                _initialPreviewModel = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(value4);
             if (Guid.TryParse(node.GetAttribute("BaseModel"), out value4))
-                _initialBaseModel = FlaxEngine.Content.LoadAsync<SkinnedModel>(value4);
+                _initialBaseModel = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(value4);
         }
 
         /// <inheritdoc />

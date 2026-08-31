@@ -33,7 +33,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Actor OnEditorDrop(object context)
         {
-            return new AudioSource { Clip = FlaxEngine.Content.LoadAsync<AudioClip>(ID) };
+            return new AudioSource { Clip = FlaxEngine.Content.LoadAssetAsync<AudioClip>(ObjectID) };
         }
 
         /// <inheritdoc />
@@ -41,7 +41,7 @@ namespace FlaxEditor.Content
         {
             base.OnBuildTooltipText(sb);
 
-            var asset = FlaxEngine.Content.Load<AudioClip>(ID, 100);
+            var asset = FlaxEngine.Content.LoadAsset<AudioClip>(ObjectID, 100);
             if (asset)
             {
                 var info = asset.Info;

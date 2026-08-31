@@ -50,12 +50,12 @@ namespace FlaxEditor.Content
         public string ProcessorID { get; private set; }
 
         /// <summary>Physical runtime storage currently attached to a loaded binary asset.</summary>
-        public string StoragePath => (FlaxEngine.Content.GetAsset(ID) as BinaryAsset)?.StoragePath ?? string.Empty;
+        public string StoragePath => (FlaxEngine.Content.GetAsset(ObjectID) as BinaryAsset)?.StoragePath ?? string.Empty;
 
         /// <summary>
         /// Returns true if asset is now loaded.
         /// </summary>
-        public bool IsLoaded => FlaxEngine.Content.GetAsset(ID)?.IsLoaded ?? false;
+        public bool IsLoaded => FlaxEngine.Content.GetAsset(ObjectID)?.IsLoaded ?? false;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AssetItem"/> class.
@@ -192,7 +192,7 @@ namespace FlaxEditor.Content
         /// </summary>
         public Asset LoadPreviewAsync()
         {
-            return IsCanonicalSource ? AssetDatabaseFacade.LoadAssetPreview(ID) : LoadAsync();
+            return IsCanonicalSource ? AssetPipelineService.LoadAssetPreview(ObjectID) : LoadAsync();
         }
 
         /// <summary>
@@ -200,7 +200,7 @@ namespace FlaxEditor.Content
         /// </summary>
         public void Reload()
         {
-            var asset = FlaxEngine.Content.GetAsset(ID);
+            var asset = FlaxEngine.Content.GetAsset(ObjectID);
             if (asset != null && (asset.IsLoaded || asset.LastLoadFailed))
             {
                 asset.Reload();

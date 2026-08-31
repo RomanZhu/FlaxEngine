@@ -25,7 +25,7 @@ namespace FlaxEditor.Content
         public override EditorWindow Open(Editor editor, ContentItem item)
         {
             var assetItem = (BinaryAssetItem)item;
-            var asset = FlaxEngine.Content.Load<Shader>(assetItem.ID);
+            var asset = FlaxEngine.Content.LoadAsset<Shader>(assetItem.ObjectID);
             if (asset)
             {
                 var source = Editor.GetShaderSourceCode(asset);

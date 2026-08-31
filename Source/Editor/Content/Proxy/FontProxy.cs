@@ -39,7 +39,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
         {
-            var asset = FlaxEngine.Content.LoadAsync<FontAsset>(request.Item.ID);
+            var asset = FlaxEngine.Content.LoadAssetAsync<FontAsset>(request.Item.ObjectID);
             guiRoot.AddChild(new Label
             {
                 Text = asset.FamilyName,

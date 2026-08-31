@@ -203,7 +203,7 @@ namespace FlaxEditor.Windows
                     var childCM = contextMenu.GetOrAddChildMenu("Open Scene");
                     foreach (var sceneGuid in unloadedScenes)
                     {
-                        if (FlaxEngine.Content.GetAssetInfo(sceneGuid, out var unloadedScene))
+                        if (FlaxEngine.Content.GetRuntimeAssetInfo(sceneGuid, out var unloadedScene))
                         {
                             var splitPath = unloadedScene.Path.Split('/');
                             var sceneName = splitPath[^1];

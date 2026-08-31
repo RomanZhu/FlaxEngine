@@ -575,7 +575,7 @@ namespace FlaxEditor.Content
             {
                 if (_scriptType == null)
                 {
-                    var asset = FlaxEngine.Content.LoadAsync<VisualScript>(ID);
+                    var asset = FlaxEngine.Content.LoadAssetAsync<VisualScript>(ObjectID);
                     if (asset)
                         _scriptType = new VisualScriptType(asset);
                 }

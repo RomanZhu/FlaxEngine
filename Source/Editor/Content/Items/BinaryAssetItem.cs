@@ -39,11 +39,11 @@ namespace FlaxEditor.Content
         /// <returns>True if fails, otherwise false.</returns>
         public bool GetImportPath(out string importPath)
         {
-            importPath = AssetDatabaseFacade.GetCanonicalSourcePath(ID);
+            importPath = AssetPipelineService.GetCanonicalSourcePath(ID);
             if (!string.IsNullOrEmpty(importPath))
                 return false;
 
-            var asset = FlaxEngine.Content.Load<BinaryAsset>(ID, 100);
+            var asset = FlaxEngine.Content.LoadAsset<BinaryAsset>(ObjectID, 100);
             if (asset && asset.IsLoaded)
             {
                 // Get meta from loaded asset
@@ -88,7 +88,7 @@ namespace FlaxEditor.Content
         {
             base.OnBuildTooltipText(sb);
 
-            var asset = FlaxEngine.Content.GetAsset(ID) as TextureBase;
+            var asset = FlaxEngine.Content.GetAsset(ObjectID) as TextureBase;
             if (asset && asset.IsLoaded)
             {
                 sb.Append("Format: ").Append(asset.Format).AppendLine();
@@ -122,7 +122,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Actor OnEditorDrop(object context)
         {
-            return new StaticModel { Model = FlaxEngine.Content.LoadAsync<Model>(ID) };
+            return new StaticModel { Model = FlaxEngine.Content.LoadAssetAsync<Model>(ObjectID) };
         }
 
         /// <inheritdoc />
@@ -130,7 +130,7 @@ namespace FlaxEditor.Content
         {
             base.OnBuildTooltipText(sb);
 
-            var asset = FlaxEngine.Content.GetAsset(ID) as Model;
+            var asset = FlaxEngine.Content.GetAsset(ObjectID) as Model;
             if (asset && asset.IsLoaded)
             {
                 var lods = asset.LODs;
@@ -173,7 +173,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Actor OnEditorDrop(object context)
         {
-            return new AnimatedModel { SkinnedModel = FlaxEngine.Content.LoadAsync<SkinnedModel>(ID) };
+            return new AnimatedModel { SkinnedModel = FlaxEngine.Content.LoadAssetAsync<SkinnedModel>(ObjectID) };
         }
 
         /// <inheritdoc />
@@ -181,7 +181,7 @@ namespace FlaxEditor.Content
         {
             base.OnBuildTooltipText(sb);
 
-            var asset = FlaxEngine.Content.GetAsset(ID) as SkinnedModel;
+            var asset = FlaxEngine.Content.GetAsset(ObjectID) as SkinnedModel;
             if (asset && asset.IsLoaded)
             {
                 var lods = asset.LODs;

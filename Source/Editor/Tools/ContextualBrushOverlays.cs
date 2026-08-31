@@ -443,7 +443,7 @@ namespace FlaxEditor.Tools
             var foliage = _tab.SelectedFoliage;
             if (!foliage || item == null)
                 return;
-            var model = FlaxEngine.Content.LoadAsync<Model>(item.ID);
+            var model = FlaxEngine.Content.LoadAssetAsync<Model>(item.ObjectID);
             var action = new FlaxEditor.Tools.Foliage.Undo.EditFoliageAction(foliage);
             foliage.AddFoliageType(model);
             Editor.Instance.Scene.MarkSceneEdited(foliage.Scene);

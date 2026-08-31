@@ -322,7 +322,7 @@ namespace FlaxEditor.Surface.Archetypes
             {
                 types = null;
                 names = null;
-                var function = FlaxEngine.Content.Load<ParticleEmitterFunction>(id);
+                var function = FlaxEngine.Content.LoadRuntimeObject<ParticleEmitterFunction>(id);
                 if (function)
                     function.GetSignature(out types, out names);
                 return function;

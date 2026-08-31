@@ -357,7 +357,7 @@ namespace FlaxEditor.Surface.Archetypes
             {
                 types = null;
                 names = null;
-                var function = FlaxEngine.Content.Load<AnimationGraphFunction>(id);
+                var function = FlaxEngine.Content.LoadRuntimeObject<AnimationGraphFunction>(id);
                 if (function)
                     function.GetSignature(out types, out names);
                 return function;

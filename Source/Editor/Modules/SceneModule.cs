@@ -953,7 +953,7 @@ namespace FlaxEditor.Modules
                 return;
             }
 
-            var asset = FlaxEngine.Content.GetAsset(sceneId);
+            var asset = FlaxEngine.Content.GetRuntimeObject(sceneId);
             if (asset != null && (asset.IsLoaded || asset.LastLoadFailed))
                 asset.Reload();
 

@@ -123,7 +123,7 @@ namespace FlaxEditor.Viewport
             {
                 GetHitLocation(ref location, out var hit, out var hitLocation, out _);
                 ClearDragEffects();
-                var material = FlaxEngine.Content.LoadAsync<MaterialBase>(_dragAssets.Objects[0].ID);
+                var material = FlaxEngine.Content.LoadAssetAsync<MaterialBase>(_dragAssets.Objects[0].ObjectID);
                 if (material.IsDecal)
                     return;
 
@@ -301,7 +301,7 @@ namespace FlaxEditor.Viewport
         {
             if (item.IsOfType<MaterialBase>())
             {
-                var material = FlaxEngine.Content.LoadAsync<MaterialBase>(item.ID);
+                var material = FlaxEngine.Content.LoadAssetAsync<MaterialBase>(item.ObjectID);
                 var brushSurfaceNode = ResolveBrushSurface(hit, ref location, hitLocation);
                 if (material && !material.WaitForLoaded(500) && material.IsDecal)
                 {

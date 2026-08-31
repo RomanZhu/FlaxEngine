@@ -95,14 +95,14 @@ namespace FlaxEditor.Content
         private static void OnParticleSystemCreated(ContentItem item, BinaryAssetItem particleItem)
         {
             var assetItem = (AssetItem)item;
-            var particleSystem = FlaxEngine.Content.LoadAsync<ParticleSystem>(assetItem.ID);
+            var particleSystem = FlaxEngine.Content.LoadAssetAsync<ParticleSystem>(assetItem.ObjectID);
             if (particleSystem == null || particleSystem.WaitForLoaded())
             {
                 Editor.LogError("Failed to load created particle system.");
                 return;
             }
 
-            ParticleEmitter emitter = FlaxEngine.Content.LoadAsync<ParticleEmitter>(particleItem.ID);
+            ParticleEmitter emitter = FlaxEngine.Content.LoadAssetAsync<ParticleEmitter>(particleItem.ObjectID);
             if (emitter == null || emitter.WaitForLoaded())
             {
                 Editor.LogError("Failed to load base particle emitter.");

@@ -721,7 +721,7 @@ namespace FlaxEditor.Windows.Assets
             {
                 if (Window.Item.IsCanonicalSource)
                 {
-                    if (AssetDatabaseFacade.ApplyModelMetadata(Window.ImportSourcePath, ImportSettings.Settings))
+                    if (AssetPipelineService.ApplyModelMetadata(Window.ImportSourcePath, ImportSettings.Settings))
                         FlaxEditor.Editor.LogError("Cannot apply canonical model import settings.");
                 }
                 else
@@ -805,7 +805,7 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override TAsset LoadAsset()
         {
-            return _item.IsCanonicalSource ? FlaxEngine.Content.LoadAsync<TAsset>(_item.ID) : base.LoadAsset();
+            return _item.IsCanonicalSource ? FlaxEngine.Content.LoadAssetAsync<TAsset>(_item.ObjectID) : base.LoadAsset();
         }
 
         /// <summary>
@@ -843,7 +843,7 @@ namespace FlaxEditor.Windows.Assets
             _refreshOnLODsLoaded = true;
             if (Item.IsCanonicalSource)
             {
-                if (AssetDatabaseFacade.LoadModelMetadata(ImportSourcePath, out _importSettings.Settings))
+                if (AssetPipelineService.LoadModelMetadata(ImportSourcePath, out _importSettings.Settings))
                     Editor.LogError("Cannot load canonical model import settings.");
             }
             else

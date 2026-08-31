@@ -23,7 +23,7 @@ namespace FlaxEditor.Content
 
         private sealed class PrefabVariantCreateInfo
         {
-            public Guid PrefabId;
+            public AssetObjectId PrefabObjectId;
         }
 
         private static bool CanCreatePrefabAssets()
@@ -90,7 +90,7 @@ namespace FlaxEditor.Content
             if (item is not PrefabItem prefabItem)
                 return base.CanReimport(item);
 
-            var prefab = FlaxEngine.Content.Load<Prefab>(prefabItem.ID);
+            var prefab = FlaxEngine.Content.LoadAsset<Prefab>(prefabItem.ObjectID);
             return prefab.GetDefaultInstance().GetScript<ModelPrefab>() != null;
         }
 
@@ -119,7 +119,7 @@ namespace FlaxEditor.Content
                 return;
 
             var proxy = Editor.Instance.ContentDatabase.GetProxy<Prefab>();
-            Editor.Instance.Windows.ContentWin.NewItem(proxy, new PrefabVariantCreateInfo { PrefabId = prefabItem.ID }, null, prefabItem.ShortName + " Variant");
+            Editor.Instance.Windows.ContentWin.NewItem(proxy, new PrefabVariantCreateInfo { PrefabObjectId = prefabItem.ObjectID }, null, prefabItem.ShortName + " Variant");
         }
 
         /// <inheritdoc />
@@ -127,7 +127,7 @@ namespace FlaxEditor.Content
         {
             if (arg is PrefabVariantCreateInfo variant)
             {
-                var prefab = FlaxEngine.Content.LoadAsync<Prefab>(variant.PrefabId);
+                var prefab = FlaxEngine.Content.LoadAssetAsync<Prefab>(variant.PrefabObjectId);
                 var variantActor = PrefabManager.SpawnPrefab(prefab, null);
                 if (!variantActor)
                 {
@@ -145,7 +145,7 @@ namespace FlaxEditor.Content
                 {
                     FlaxEngine.Object.Destroy(variantActor, 20.0f);
                 }
-                if (AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath) == Guid.Empty)
+                if (AssetPipelineService.CreateJsonDocumentMetadata(outputPath) == Guid.Empty)
                     throw new InvalidOperationException("Failed to register the prefab variant source in the asset database.");
                 return;
             }
@@ -170,7 +170,7 @@ namespace FlaxEditor.Content
                 actor.LocalTransform = transform;
             if (createFailed)
                 throw new InvalidOperationException("Failed to create the prefab source.");
-            if (AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath) == Guid.Empty)
+            if (AssetPipelineService.CreateJsonDocumentMetadata(outputPath) == Guid.Empty)
                 throw new InvalidOperationException("Failed to register the prefab source in the asset database.");
         }
 

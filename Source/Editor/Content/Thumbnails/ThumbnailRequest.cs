@@ -101,10 +101,10 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
             {
-                Asset = AssetDatabaseFacade.LoadTextureThumbnail(Item.ID);
+                Asset = AssetPipelineService.LoadTextureThumbnail(Item.ID);
                 if (Asset)
                 {
-                    CacheVersion = AssetDatabaseFacade.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
+                    CacheVersion = AssetPipelineService.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
                     Proxy.OnThumbnailDrawPrepare(this);
                     State = States.Prepared;
                 }
@@ -129,18 +129,18 @@ namespace FlaxEditor.Content.Thumbnails
                 throw new InvalidOperationException();
             if (Item.IsCanonicalSource && !Item.IsCanonicalSubAsset && Proxy is TextureProxy)
             {
-                Asset = AssetDatabaseFacade.LoadTextureThumbnail(Item.ID);
+                Asset = AssetPipelineService.LoadTextureThumbnail(Item.ID);
                 if (!Asset)
                 {
                     _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
                     State = States.Waiting;
                     return;
                 }
-                CacheVersion = AssetDatabaseFacade.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
+                CacheVersion = AssetPipelineService.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
             }
             else if (Item.IsCanonicalSource)
             {
-                Asset = AssetDatabaseFacade.LoadAssetPreview(Item.ID);
+                Asset = AssetPipelineService.LoadAssetPreview(Item.ObjectID);
                 if (!Asset)
                 {
                     State = States.Failed;
@@ -149,7 +149,7 @@ namespace FlaxEditor.Content.Thumbnails
             }
             else
             {
-                Asset = FlaxEngine.Content.LoadAsync<Asset>(Item.ID);
+                Asset = FlaxEngine.Content.LoadAssetAsync<Asset>(Item.ObjectID);
             }
             Proxy.OnThumbnailDrawPrepare(this);
             State = States.Prepared;

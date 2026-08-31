@@ -725,7 +725,7 @@ namespace FlaxEditor.Surface.Archetypes
                 {
                     var animId = (Guid)Values[5 + i * 2];
                     var path = string.Empty;
-                    if (FlaxEngine.Content.GetAssetInfo(animId, out var assetInfo))
+                    if (FlaxEngine.Content.GetRuntimeAssetInfo(animId, out var assetInfo))
                         path = Path.GetFileNameWithoutExtension(assetInfo.Path);
                     items.Add(string.Format("[{0}] {1}", i, path));
                 }
@@ -870,7 +870,7 @@ namespace FlaxEditor.Surface.Archetypes
                     _animationSpeed.Value = data0.W;
 
                     var path = string.Empty;
-                    if (FlaxEngine.Content.GetAssetInfo(data1, out var assetInfo))
+                    if (FlaxEngine.Content.GetRuntimeAssetInfo(data1, out var assetInfo))
                         path = Path.GetFileNameWithoutExtension(assetInfo.Path);
                     _selectedAnimation.Items[selectedIndex] = string.Format("[{0}] {1}", selectedIndex, path);
                 }

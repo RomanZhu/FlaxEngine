@@ -101,7 +101,7 @@ namespace FlaxEditor.Windows.Assets
                 if (surfaceParam != null)
                 {
                     if (surfaceParam.Value is Guid asGuid)
-                        BaseModel = FlaxEngine.Content.LoadAsync<SkinnedModel>(asGuid);
+                        BaseModel = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(asGuid);
                     else if (surfaceParam.Value is SkinnedModel asModel)
                         BaseModel = asModel;
                     else

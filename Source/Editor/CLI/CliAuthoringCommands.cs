@@ -90,7 +90,7 @@ namespace FlaxEditor
                         if (_sceneIndex >= 0)
                         {
                             var completedScene = _scenes[_sceneIndex];
-                            FlaxEngine.Content.GetAssetInfo(completedScene.ID, out var info);
+                            FlaxEngine.Content.GetRuntimeAssetInfo(completedScene.ID, out var info);
                             _descriptions.Add(new
                             {
                                 id = completedScene.ID,
@@ -481,7 +481,7 @@ namespace FlaxEditor
                 for (var sceneIndex = 0; sceneIndex < scenes.Length; sceneIndex++)
                 {
                     var scene = scenes[sceneIndex];
-                    FlaxEngine.Content.GetAssetInfo(scene.ID, out var info);
+                    FlaxEngine.Content.GetRuntimeAssetInfo(scene.ID, out var info);
                     var description = new SceneTreeDescription
                     {
                         Scene = new SceneDescription
@@ -1577,7 +1577,7 @@ namespace FlaxEditor
         public static object CreatePrefabVariant([CliOption("prefab", Required = true)] string prefab, [CliOption("path", Required = true)] string path)
         {
             var prefabId = ResolveAssetId(prefab, ".prefab");
-            var asset = FlaxEngine.Content.Load<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
+            var asset = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
             if (asset.WaitForLoaded())
                 throw new InvalidOperationException($"Failed to load Prefab '{prefab}'.");
             var outputPath = ResolveAuthoringPath(path, ".prefab", true);
@@ -1602,7 +1602,7 @@ namespace FlaxEditor
         public static object InstantiatePrefab([CliOption("prefab", Required = true)] string prefab, [CliOption("parent")] Guid? parent = null, [CliOption("position")] Vector3? position = null)
         {
             var prefabId = ResolveAssetId(prefab, ".prefab");
-            var asset = FlaxEngine.Content.Load<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
+            var asset = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
             if (asset.WaitForLoaded())
                 throw new InvalidOperationException($"Failed to load Prefab '{prefab}'.");
             var instance = PrefabManager.SpawnPrefab(asset, null) ?? throw new InvalidOperationException("Failed to instantiate the Prefab.");
@@ -1633,7 +1633,7 @@ namespace FlaxEditor
             if (!value.HasPrefabLink)
                 throw new InvalidOperationException("The Actor is not linked to a Prefab.");
             var prefabId = value.PrefabID;
-            var asset = FlaxEngine.Content.Load<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefabId}'.");
+            var asset = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefabId}'.");
             if (asset.WaitForLoaded())
                 throw new InvalidOperationException($"Failed to load Prefab '{prefabId}'.");
 
@@ -1898,7 +1898,7 @@ namespace FlaxEditor
                 JsonAsset asset;
                 if (Guid.TryParse(reference, out var id))
                 {
-                    asset = FlaxEngine.Content.LoadAsync<JsonAsset>(id);
+                    asset = FlaxEngine.Content.LoadRuntimeObjectAsync<JsonAsset>(id);
                 }
                 else
                 {
@@ -1909,7 +1909,7 @@ namespace FlaxEditor
                         id = info.ID;
                     else
                         throw new KeyNotFoundException($"Asset reference '{reference}' was not found in the Content database.");
-                    asset = FlaxEngine.Content.LoadAsync<JsonAsset>(id);
+                    asset = FlaxEngine.Content.LoadRuntimeObjectAsync<JsonAsset>(id);
                 }
                 if (!asset || asset.WaitForLoaded())
                     throw new InvalidOperationException($"Json asset reference '{reference}' failed to load.");
@@ -1928,7 +1928,7 @@ namespace FlaxEditor
                 if (Guid.TryParse(reference, out var id))
                 {
                     result = typeof(Asset).IsAssignableFrom(type)
-                        ? FlaxEngine.Content.LoadAsync(id, type)
+                        ? FlaxEngine.Content.LoadRuntimeObjectAsync(id, type)
                         : Object.Find(ref id, type, true);
                 }
                 else if (typeof(Asset).IsAssignableFrom(type))
@@ -1946,7 +1946,7 @@ namespace FlaxEditor
                     {
                         throw new KeyNotFoundException($"Asset reference '{reference}' was not found in the Content database.");
                     }
-                    result = FlaxEngine.Content.LoadAsync(id, type);
+                    result = FlaxEngine.Content.LoadRuntimeObjectAsync(id, type);
                 }
                 else
                 {
@@ -2036,7 +2036,7 @@ namespace FlaxEditor
 
         private static void CreateCanonicalJsonMetadata(string path)
         {
-            if (AssetDatabaseFacade.CreateExistingJsonMetadata(path) == Guid.Empty)
+            if (AssetPipelineService.CreateJsonDocumentMetadata(path) == Guid.Empty)
                 throw new IOException($"Failed to create canonical metadata for '{path}'.");
         }
 
@@ -2079,7 +2079,7 @@ namespace FlaxEditor
         {
             if (Guid.TryParse(value, out var id))
             {
-                if (FlaxEngine.Content.GetAssetInfo(id, out var idInfo) && string.Equals(Path.GetExtension(idInfo.Path), extension, StringComparison.OrdinalIgnoreCase))
+                if (FlaxEngine.Content.GetRuntimeAssetInfo(id, out var idInfo) && string.Equals(Path.GetExtension(idInfo.Path), extension, StringComparison.OrdinalIgnoreCase))
                     return id;
                 throw new FileNotFoundException($"Asset '{value}' was not found or is not a '{extension}' asset.");
             }
@@ -2116,7 +2116,7 @@ namespace FlaxEditor
 
         private static object DescribeScene(Scene scene)
         {
-            FlaxEngine.Content.GetAssetInfo(scene.ID, out var info);
+            FlaxEngine.Content.GetRuntimeAssetInfo(scene.ID, out var info);
             return new { id = scene.ID, name = scene.Name, path = info.Path, dirty = Editor.Instance.Scene.IsEdited(scene), actorCount = EnumerateActors(scene).Count() - 1 };
         }
 
@@ -2147,8 +2147,8 @@ namespace FlaxEditor
 
         private static object DescribeBuildScene(AssetObjectId id, int index, bool startup)
         {
-            var backing = AssetDatabaseFacade.GetBackingAssetID(id);
-            FlaxEngine.Content.GetAssetInfo(backing, out var info);
+            var backing = AssetPipelineService.GetBackingAssetID(id);
+            FlaxEngine.Content.GetRuntimeAssetInfo(backing, out var info);
             return new { index, id, path = info.Path, name = Path.GetFileNameWithoutExtension(info.Path), startup, valid = info.ID != Guid.Empty };
         }
 

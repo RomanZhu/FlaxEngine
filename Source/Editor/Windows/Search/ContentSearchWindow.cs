@@ -499,14 +499,14 @@ namespace FlaxEngine.Windows.Search
             {
                 var id = assets[i];
                 _progress = ((float)i / assets.Length) * 100.0f;
-                if (!Content.GetAssetInfo(id, out var assetInfo))
+                if (!Content.GetRuntimeAssetInfo(id, out var assetInfo))
                     continue;
                 if (!validTypeNames.Contains(assetInfo.TypeName))
                     continue;
                 if (assetInfo.Path.StartsWith(tempFolder))
                     continue;
                 // TODO: implement assets indexing or other caching for faster searching
-                var asset = Content.LoadAsync(id);
+                var asset = Content.LoadRuntimeObjectAsync(id);
                 if (asset == null)
                     continue;
 
@@ -694,8 +694,8 @@ namespace FlaxEngine.Windows.Search
                 // Special case for assets (and Guid converted into asset) to search in asset name path
                 if (value is Guid asGuid)
                 {
-                    if (Content.GetAssetInfo(asGuid, out _))
-                        value = Content.LoadAsync<Asset>(asGuid);
+                    if (Content.GetRuntimeAssetInfo(asGuid, out _))
+                        value = Content.LoadRuntimeObjectAsync<Asset>(asGuid);
                     else
                         text = Json.JsonSerializer.GetStringID(asGuid);
                 }

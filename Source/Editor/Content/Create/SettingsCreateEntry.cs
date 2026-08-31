@@ -78,7 +78,7 @@ namespace FlaxEditor.Content.Create
                 }
                 else
                 {
-                    var gameSettingsAsset = FlaxEngine.Content.LoadAsync<JsonAsset>(gameSettingsItem.ID);
+                    var gameSettingsAsset = FlaxEngine.Content.LoadAssetAsync<JsonAsset>(gameSettingsItem.ObjectID);
                     if (gameSettingsAsset && !gameSettingsAsset.WaitForLoaded())
                     {
                         if (gameSettingsAsset.CreateInstance() is GameSettings settings)

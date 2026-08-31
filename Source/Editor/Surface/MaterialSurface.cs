@@ -72,7 +72,7 @@ namespace FlaxEditor.Surface
                 {
                     // Check if it's a normal map
                     bool isNormalMap = false;
-                    var obj = FlaxEngine.Content.LoadAsync<Texture>(assetItem.ID);
+                    var obj = FlaxEngine.Content.LoadAssetAsync<Texture>(assetItem.ObjectID);
                     if (obj)
                     {
                         Thread.Sleep(50);

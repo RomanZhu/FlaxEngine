@@ -154,19 +154,19 @@ namespace FlaxEditor.GUI.Timeline
             {
                 if (typeof(MaterialBase).IsAssignableFrom(binaryAssetItem.Type))
                 {
-                    var material = FlaxEngine.Content.LoadAsync<MaterialBase>(binaryAssetItem.ID);
+                    var material = FlaxEngine.Content.LoadAssetAsync<MaterialBase>(binaryAssetItem.ObjectID);
                     if (material && !material.WaitForLoaded() && material.IsPostFx)
                         return true;
                 }
                 else if (typeof(SceneAnimation).IsAssignableFrom(binaryAssetItem.Type))
                 {
-                    var sceneAnimation = FlaxEngine.Content.LoadAsync<SceneAnimation>(binaryAssetItem.ID);
+                    var sceneAnimation = FlaxEngine.Content.LoadAssetAsync<SceneAnimation>(binaryAssetItem.ObjectID);
                     if (sceneAnimation)
                         return true;
                 }
                 else if (typeof(AudioClip).IsAssignableFrom(binaryAssetItem.Type))
                 {
-                    var audioClip = FlaxEngine.Content.LoadAsync<AudioClip>(binaryAssetItem.ID);
+                    var audioClip = FlaxEngine.Content.LoadAssetAsync<AudioClip>(binaryAssetItem.ObjectID);
                     if (audioClip)
                         return true;
                 }
@@ -183,7 +183,7 @@ namespace FlaxEditor.GUI.Timeline
                 {
                     if (typeof(MaterialBase).IsAssignableFrom(binaryAssetItem.Type))
                     {
-                        var material = FlaxEngine.Content.LoadAsync<MaterialBase>(binaryAssetItem.ID);
+                        var material = FlaxEngine.Content.LoadAssetAsync<MaterialBase>(binaryAssetItem.ObjectID);
                         if (material && !material.WaitForLoaded() && material.IsPostFx)
                         {
                             var track = (PostProcessMaterialTrack)timeline.NewTrack(PostProcessMaterialTrack.GetArchetype());
@@ -194,7 +194,7 @@ namespace FlaxEditor.GUI.Timeline
                     }
                     else if (typeof(SceneAnimation).IsAssignableFrom(binaryAssetItem.Type))
                     {
-                        var sceneAnimation = FlaxEngine.Content.LoadAsync<SceneAnimation>(binaryAssetItem.ID);
+                        var sceneAnimation = FlaxEngine.Content.LoadAssetAsync<SceneAnimation>(binaryAssetItem.ObjectID);
                         if (!sceneAnimation || sceneAnimation.WaitForLoaded())
                             continue;
                         var track = (NestedSceneAnimationTrack)timeline.NewTrack(NestedSceneAnimationTrack.GetArchetype());
@@ -205,7 +205,7 @@ namespace FlaxEditor.GUI.Timeline
                     }
                     else if (typeof(AudioClip).IsAssignableFrom(binaryAssetItem.Type))
                     {
-                        var audioClip = FlaxEngine.Content.LoadAsync<AudioClip>(binaryAssetItem.ID);
+                        var audioClip = FlaxEngine.Content.LoadAssetAsync<AudioClip>(binaryAssetItem.ObjectID);
                         if (!audioClip || audioClip.WaitForLoaded())
                             continue;
                         var track = (AudioTrack)timeline.NewTrack(AudioTrack.GetArchetype());

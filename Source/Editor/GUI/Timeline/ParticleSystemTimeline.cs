@@ -73,7 +73,7 @@ namespace FlaxEditor.GUI.Timeline
             {
                 if (typeof(ParticleEmitter).IsAssignableFrom(binaryAssetItem.Type))
                 {
-                    var emitter = FlaxEngine.Content.LoadAsync<ParticleEmitter>(binaryAssetItem.ID);
+                    var emitter = FlaxEngine.Content.LoadAssetAsync<ParticleEmitter>(binaryAssetItem.ObjectID);
                     if (emitter)
                         return true;
                 }
@@ -90,7 +90,7 @@ namespace FlaxEditor.GUI.Timeline
                 {
                     if (typeof(ParticleEmitter).IsAssignableFrom(binaryAssetItem.Type))
                     {
-                        var emitter = FlaxEngine.Content.LoadAsync<ParticleEmitter>(binaryAssetItem.ID);
+                        var emitter = FlaxEngine.Content.LoadAssetAsync<ParticleEmitter>(binaryAssetItem.ObjectID);
                         if (emitter)
                         {
                             var track = (ParticleEmitterTrack)timeline.NewTrack(ParticleEmitterTrack.GetArchetype());
@@ -161,10 +161,10 @@ namespace FlaxEditor.GUI.Timeline
         public void Save(ParticleSystem asset)
         {
             var data = Save();
-            var sourcePath = AssetDatabaseFacade.GetCanonicalSourcePath(asset.ID);
+            var sourcePath = AssetPipelineService.GetCanonicalSourcePath(asset.ID);
             var extension = Path.GetExtension(string.IsNullOrEmpty(sourcePath) ? asset.Path : sourcePath);
             var failed = extension.Equals(".particlesystem", StringComparison.OrdinalIgnoreCase)
-                ? Editor.Instance.ContentDatabase.SaveAsset(sourcePath, () => AssetDatabaseFacade.SaveParticleSystemTimeline(sourcePath, data))
+                ? Editor.Instance.ContentDatabase.SaveAsset(sourcePath, () => AssetPipelineService.SaveParticleSystemTimeline(sourcePath, data))
                 : asset.SaveTimeline(data);
             if (failed)
             {

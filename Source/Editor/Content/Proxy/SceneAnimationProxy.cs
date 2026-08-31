@@ -28,7 +28,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Actor OnEditorDrop(object context)
         {
-            return new SceneAnimationPlayer { Animation = FlaxEngine.Content.LoadAsync<SceneAnimation>(ID) };
+            return new SceneAnimationPlayer { Animation = FlaxEngine.Content.LoadAssetAsync<SceneAnimation>(ObjectID) };
         }
     }
 
@@ -81,7 +81,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(SceneAnimation).FullName) == Guid.Empty)
+            if (AssetPipelineService.CreateAuthoredDocument(outputPath, typeof(SceneAnimation).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
     }

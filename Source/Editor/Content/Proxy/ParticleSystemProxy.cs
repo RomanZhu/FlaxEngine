@@ -31,7 +31,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Actor OnEditorDrop(object context)
         {
-            return new ParticleEffect { ParticleSystem = FlaxEngine.Content.LoadAsync<ParticleSystem>(ID) };
+            return new ParticleEffect { ParticleSystem = FlaxEngine.Content.LoadAssetAsync<ParticleSystem>(ObjectID) };
         }
     }
 
@@ -87,7 +87,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(ParticleSystem).FullName) == Guid.Empty)
+            if (AssetPipelineService.CreateAuthoredDocument(outputPath, typeof(ParticleSystem).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
 

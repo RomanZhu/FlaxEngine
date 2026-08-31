@@ -139,7 +139,7 @@ namespace FlaxEditor.Windows
 
                     if (item is AssetItem assetItem)
                     {
-                        var asset = FlaxEngine.Content.GetAsset(assetItem.ID);
+                        var asset = FlaxEngine.Content.GetAsset(assetItem.ObjectID);
                         if (asset != null && (asset.IsLoaded || asset.LastLoadFailed))
                             cm.AddButton("Reload", assetItem.Reload);
                         cm.AddButton("Copy asset ID", () => Clipboard.Text = JsonSerializer.GetStringID(assetItem.ID));
@@ -399,7 +399,7 @@ namespace FlaxEditor.Windows
                     Editor.ContentImporting.Reimport(binaryAssetItem);
                 else if (selection[i] is PrefabItem prefabItem)
                 {
-                    var prefab = FlaxEngine.Content.Load<Prefab>(prefabItem.ID);
+                    var prefab = FlaxEngine.Content.LoadAsset<Prefab>(prefabItem.ObjectID);
                     var modelPrefab = prefab.GetDefaultInstance().GetScript<ModelPrefab>();
                     if (!modelPrefab)
                         continue;

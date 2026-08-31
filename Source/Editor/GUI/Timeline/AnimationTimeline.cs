@@ -188,7 +188,7 @@ namespace FlaxEditor.GUI.Timeline
             {
                 if (typeof(Animation).IsAssignableFrom(binaryAssetItem.Type))
                 {
-                    var sceneAnimation = FlaxEngine.Content.LoadAsync<Animation>(binaryAssetItem.ID);
+                    var sceneAnimation = FlaxEngine.Content.LoadAssetAsync<Animation>(binaryAssetItem.ObjectID);
                     if (sceneAnimation)
                         return true;
                 }
@@ -204,7 +204,7 @@ namespace FlaxEditor.GUI.Timeline
                 {
                     if (typeof(Animation).IsAssignableFrom(binaryAssetItem.Type))
                     {
-                        var animation = FlaxEngine.Content.LoadAsync<Animation>(binaryAssetItem.ID);
+                        var animation = FlaxEngine.Content.LoadAssetAsync<Animation>(binaryAssetItem.ObjectID);
                         if (!animation || animation.WaitForLoaded())
                             continue;
                         var track = (NestedAnimationTrack)timeline.NewTrack(NestedAnimationTrack.GetArchetype());

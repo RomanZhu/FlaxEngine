@@ -44,7 +44,7 @@ namespace FlaxEditor.Windows
                     Parent = this,
                 };
                 // TODO: display some asset info like disk size, memory usage, etc.
-                var asset = FlaxEngine.Content.LoadAsync<Asset>(AssetId);
+                var asset = FlaxEngine.Content.LoadRuntimeObjectAsync<Asset>(AssetId);
                 if (asset != null)
                 {
                     var path = asset.Path;
@@ -224,7 +224,7 @@ namespace FlaxEditor.Windows
         private unsafe void SearchRefs(Guid assetId)
         {
             // Skip assets that never contain references to prevent loading them
-            if (FlaxEngine.Content.GetAssetInfo(assetId, out var assetInfo) &&
+            if (FlaxEngine.Content.GetRuntimeAssetInfo(assetId, out var assetInfo) &&
                 (assetInfo.TypeName == "FlaxEngine.Texture" ||
                  assetInfo.TypeName == "FlaxEngine.CubeTexture" ||
                  assetInfo.TypeName == "FlaxEngine.Shader"))
@@ -236,7 +236,7 @@ namespace FlaxEditor.Windows
 
             // Try to load cached references form previous run
             var cachePath = Path.Combine(_cacheFolder, $"{FlaxEngine.Json.JsonSerializer.GetStringID(assetId)}.1.cache");
-            var hasInfo = FlaxEngine.Content.GetAssetInfo(assetId, out var info);
+            var hasInfo = FlaxEngine.Content.GetRuntimeAssetInfo(assetId, out var info);
             if (hasInfo && File.Exists(cachePath) && File.GetLastWriteTime(cachePath) > File.GetLastWriteTime(info.Path))
             {
                 byte[] rawData = File.ReadAllBytes(cachePath);
@@ -261,7 +261,7 @@ namespace FlaxEditor.Windows
             }
             var asset = obj as Asset;
             if (!asset)
-                asset = FlaxEngine.Content.LoadAsync<Asset>(assetId);
+                asset = FlaxEngine.Content.LoadRuntimeObjectAsync<Asset>(assetId);
             if (CheckSkipAsset(asset))
                 return;
             while (asset && !asset.IsLoaded && !asset.LastLoadFailed)
@@ -325,7 +325,7 @@ namespace FlaxEditor.Windows
                 var obj = FlaxEngine.Object.TryFind<FlaxEngine.Object>(ref assetRef);
                 if (!(obj is Asset) && !(obj is Scene))
                 {
-                    var asset = FlaxEngine.Content.LoadAsync<Asset>(assetRef);
+                    var asset = FlaxEngine.Content.LoadRuntimeObjectAsync<Asset>(assetRef);
                     if (CheckSkipAsset(asset))
                         continue;
                 }

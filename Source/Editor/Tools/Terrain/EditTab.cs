@@ -277,7 +277,7 @@ namespace FlaxEditor.Tools.Terrain
                     return;
                 }
 
-                terrain.SetChunkOverrideMaterial(ref _patchCoord, ref _chunkCoord, FlaxEngine.Content.LoadAsync<MaterialBase>(id));
+                terrain.SetChunkOverrideMaterial(ref _patchCoord, ref _chunkCoord, FlaxEngine.Content.LoadRuntimeObjectAsync<MaterialBase>(id));
 
                 Editor.Instance.Scene.MarkSceneEdited(terrain.Scene);
             }

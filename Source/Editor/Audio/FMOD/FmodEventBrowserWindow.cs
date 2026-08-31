@@ -619,7 +619,7 @@ namespace FlaxEditor.FMOD
                 var databaseItem = Editor.ContentDatabase.Find(item.AssetFile) as FlaxEditor.Content.AssetItem;
                 if (databaseItem == null)
                     continue;
-                var asset = FlaxEngine.Content.LoadAsync<JsonAsset>(databaseItem.ID);
+                var asset = FlaxEngine.Content.LoadAssetAsync<JsonAsset>(databaseItem.ObjectID);
                 var bank = asset?.GetInstance<AudioBank>();
                 if (bank != null && !AudioEventSystem.IsBankLoaded(item.NativeBackendId))
                     AudioEventSystem.LoadBank(item.NativeBackendId, bank.Path, bank.NonBlocking);

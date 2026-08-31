@@ -243,12 +243,12 @@ namespace FlaxEditor.Windows.Assets
                         var retargetSetups = proxy.Asset.SkeletonRetargets;
                         foreach (var retargetSetup in retargetSetups)
                         {
-                            var sourceAsset = FlaxEngine.Content.LoadAsync(retargetSetup.SourceAsset);
+                            var sourceAsset = FlaxEngine.Content.LoadRuntimeObjectAsync(retargetSetup.SourceAsset);
                             if (sourceAsset)
                             {
                                 proxy.Setups.Add(sourceAsset, new SetupProxy
                                 {
-                                    Skeleton = FlaxEngine.Content.LoadAsync<SkinnedModel>(retargetSetup.SkeletonAsset),
+                                    Skeleton = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(retargetSetup.SkeletonAsset),
                                     NodesMapping = retargetSetup.NodesMapping,
                                 });
                             }
@@ -700,7 +700,7 @@ namespace FlaxEditor.Windows.Assets
 
             if (Item.IsCanonicalSource)
             {
-                if (AssetDatabaseFacade.ApplyModelMetadata(ImportSourcePath, _importSettings.Settings))
+                if (AssetPipelineService.ApplyModelMetadata(ImportSourcePath, _importSettings.Settings))
                 {
                     Editor.LogError("Cannot apply canonical model settings.");
                     return;

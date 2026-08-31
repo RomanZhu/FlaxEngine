@@ -667,7 +667,7 @@ namespace FlaxEditor.Windows.Assets
         /// <summary>
         /// Gets the original asset. Note: <see cref="AssetEditorWindowBase{T}.Asset"/> is the cloned asset for local editing. Use <see cref="SaveToOriginal"/> to apply changes to the original asset.
         /// </summary>
-        public T OriginalAsset => (T)FlaxEngine.Content.Load(_item.ID);
+        public T OriginalAsset => (T)FlaxEngine.Content.LoadAsset(_item.ObjectID);
 
         /// <inheritdoc />
         protected ClonedAssetEditorWindowBase(Editor editor, AssetItem item)
@@ -696,7 +696,7 @@ namespace FlaxEditor.Windows.Assets
             var destinationPath = _item.Path;
 
             // Check if original asset is loaded
-            var originalAsset = (T)FlaxEngine.Content.GetAsset(id);
+            var originalAsset = (T)FlaxEngine.Content.GetRuntimeObject(id);
             if (originalAsset)
             {
                 // Wait for loaded to prevent any issues

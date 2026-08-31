@@ -255,7 +255,7 @@ namespace FlaxEditor.Windows.Assets
                     return false;
                 }
 
-                model = FlaxEngine.Content.LoadAsync<ModelBase>(modelId);
+                model = FlaxEngine.Content.LoadRuntimeObjectAsync<ModelBase>(modelId);
                 if (!model)
                 {
                     FlaxEditor.Editor.LogWarning("Cannot cook collision data. Failed to load source model.");
@@ -342,7 +342,7 @@ namespace FlaxEditor.Windows.Assets
                 if (FlaxEditor.Editor.GetCollisionDataOptions(window.Item.Path, out var type, out var model, out var modelLodIndex, out var materialSlotsMask, out var convexFlags, out var convexVertexLimit))
                 {
                     Type = type;
-                    Model = FlaxEngine.Content.LoadAsync<ModelBase>(model);
+                    Model = FlaxEngine.Content.LoadRuntimeObjectAsync<ModelBase>(model);
                     ModelLodIndex = modelLodIndex;
                     MaterialSlotsMask = (MaterialSlotsMask)materialSlotsMask;
                     ConvexFlags = convexFlags;
@@ -352,7 +352,7 @@ namespace FlaxEditor.Windows.Assets
                 {
                     var options = Asset.Options;
                     Type = options.Type;
-                    Model = FlaxEngine.Content.LoadAsync<ModelBase>(options.Model);
+                    Model = FlaxEngine.Content.LoadRuntimeObjectAsync<ModelBase>(options.Model);
                     ModelLodIndex = options.ModelLodIndex;
                     MaterialSlotsMask = (MaterialSlotsMask)options.MaterialSlotsMask;
                     ConvexFlags = options.ConvexFlags;
@@ -390,7 +390,7 @@ namespace FlaxEditor.Windows.Assets
             public void ApplyState(CollisionDataOptionsState state)
             {
                 Type = state.Type;
-                Model = state.ModelId != Guid.Empty ? FlaxEngine.Content.LoadAsync<ModelBase>(state.ModelId) : null;
+                Model = state.ModelId != Guid.Empty ? FlaxEngine.Content.LoadRuntimeObjectAsync<ModelBase>(state.ModelId) : null;
                 ModelLodIndex = state.ModelLodIndex;
                 MaterialSlotsMask = (CollisionDataWindow.MaterialSlotsMask)state.MaterialSlotsMaskValue;
                 ConvexFlags = state.ConvexFlags;

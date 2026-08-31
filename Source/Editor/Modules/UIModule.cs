@@ -1648,7 +1648,7 @@ namespace FlaxEditor.Modules
 
         private void SetTheCurrentSceneViewAsDefault()
         {
-            if (!FlaxEngine.Content.GetAssetInfo(Level.Scenes[0].ID, out var sceneInfo) || !sceneInfo.ObjectID.IsValid)
+            if (!FlaxEngine.Content.GetRuntimeAssetInfo(Level.Scenes[0].ID, out var sceneInfo) || !sceneInfo.ObjectID.IsValid)
             {
                 Editor.LogError("Cannot set the default scene because its persistent asset object identifier is unavailable.");
                 return;

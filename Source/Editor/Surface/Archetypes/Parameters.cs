@@ -357,7 +357,7 @@ namespace FlaxEditor.Surface.Archetypes
                         {
                             var asset = selected.Value as Texture;
                             if (asset == null && selected.Value is Guid id)
-                                asset = FlaxEngine.Content.Load<Texture>(id);
+                                asset = FlaxEngine.Content.LoadRuntimeObject<Texture>(id);
                             if (asset != null && !asset.WaitForLoaded() && asset.IsNormalMap)
                                 elements = _normalMapParameterElements;
                         }

@@ -51,7 +51,7 @@ namespace FlaxEditor.Surface.Elements
 
             // Get the skeleton
             var surfaceParam = Surface.GetParameter(Windows.Assets.AnimationGraphWindow.BaseModelId);
-            var skeleton = surfaceParam != null ? FlaxEngine.Content.LoadAsync<SkinnedModel>((Guid)surfaceParam.Value) : null;
+            var skeleton = surfaceParam != null ? FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>((Guid)surfaceParam.Value) : null;
             if (skeleton == null || skeleton.WaitForLoaded())
             {
                 SelectedIndex = -1;
