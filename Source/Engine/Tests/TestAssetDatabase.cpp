@@ -1,7 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/AssetDatabaseFacade.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseScanner.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Assets/Texture.h"
@@ -219,7 +219,7 @@ TEST_CASE("Default canonical metadata supports text sources")
     Array<String> stagingPaths;
     stagingPaths.Add(staging);
 
-    const Array<Guid> ids = AssetDatabaseFacade::StageDefaultCanonicalMetadataBatch(sources, stagingPaths);
+    const Array<Guid> ids = AssetOperationService::StageDefaultMetadataBatch(sources, stagingPaths);
     REQUIRE(ids.Count() == 1);
     REQUIRE(ids[0].IsValid());
     AssetMeta meta;
@@ -229,39 +229,6 @@ TEST_CASE("Default canonical metadata supports text sources")
     CHECK(meta.AssetType == RawDataAsset::TypeName);
     CHECK(meta.SourceKind == AssetSourceKind::TextDocument);
     CHECK(meta.Processor.ID == TEXT("Flax.Text"));
-}
-
-TEST_CASE("Asset database scan registers legacy binary assets for mixed-mode loading and migration")
-{
-    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseLegacyScan-") + Guid::New().ToString(Guid::FormatType::N));
-    const String content = root / TEXT("Content");
-    const String library = root / TEXT("Library");
-    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
-    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
-    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
-
-    const Guid id(45, 46, 47, 48);
-    const String path = content / TEXT("Legacy.flax");
-    byte value = 1;
-    FlaxChunk chunk;
-    chunk.Data.Copy(&value, 1);
-    AssetInitData data;
-    data.Header.ID = id;
-    data.Header.TypeName = Texture::TypeName;
-    data.SerializedVersion = 1;
-    data.Header.Chunks[0] = &chunk;
-    REQUIRE_FALSE(FlaxStorage::Create(path, data));
-
-    AssetDatabase database;
-    AssetDatabaseScanOptions options;
-    options.StrictMetadata = true;
-    AssetDatabaseScanResult scan;
-    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
-    AssetRecord record;
-    REQUIRE(database.TryGetRecord(id, record));
-    CHECK(record.SourceKind == AssetSourceKind::LegacyBinary);
-    CHECK(record.SourcePath.Get() == path);
-    CHECK(record.MetaPath.Get().IsEmpty());
 }
 
 TEST_CASE("Asset database snapshot is disposable checksummed and project scoped")
@@ -370,7 +337,7 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     SCOPE_EXIT
     {
         FileSystem::DeleteDirectory(folder, true);
-        AssetDatabaseFacade::RefreshSources(cleanup);
+        AssetPipelineService::RefreshSources(cleanup);
     };
 
     const Guid firstId = Guid::New();
@@ -384,14 +351,14 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     Array<String> refresh;
     refresh.Add(first);
     const uint64 revisionBeforeAdd = AssetDatabase::Get().GetRevision();
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(refresh));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
     CHECK(AssetDatabase::Get().GetRevision() == revisionBeforeAdd + 1);
     AssetRecord found;
     REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK(FileSystem::AreFilePathsEquivalent(found.SourcePath.Get(), first));
     const uint64 firstRecordRevision = found.DatabaseRevision;
-    CHECK(AssetDatabaseFacade::GetLastChange().Added.Contains(firstId));
-    CHECK(AssetDatabaseFacade::GetLastChange().Added.Count() == 1);
+    CHECK(AssetDatabaseQueryService::GetLastChange().Added.Contains(firstId));
+    CHECK(AssetDatabaseQueryService::GetLastChange().Added.Count() == 1);
 
     Array<String> subset;
     subset.Add(first);
@@ -407,7 +374,7 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
 
     REQUIRE_FALSE(File::WriteAllText(first, TEXT("overwrite"), Encoding::ANSI));
     const uint64 revisionBeforeOverwrite = AssetDatabase::Get().GetRevision();
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(refresh));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
     CHECK(AssetDatabase::Get().GetRevision() == revisionBeforeOverwrite);
     REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK(found.DatabaseRevision == firstRecordRevision);
@@ -416,9 +383,9 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     REQUIRE_FALSE(AssetMeta::SaveAtomic(second + TEXT(".meta"), MakeDatabaseMeta(secondId), diagnostic));
     refresh.Clear();
     refresh.Add(second);
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(refresh));
-    CHECK(AssetDatabaseFacade::GetLastChange().Added.Contains(secondId));
-    CHECK(AssetDatabaseFacade::GetLastChange().Added.Count() == 1);
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
+    CHECK(AssetDatabaseQueryService::GetLastChange().Added.Contains(secondId));
+    CHECK(AssetDatabaseQueryService::GetLastChange().Added.Count() == 1);
     REQUIRE(AssetDatabase::Get().TryGetRecord(secondId, found));
 
     AssetMeta meta;
@@ -430,10 +397,10 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     refresh.Clear();
     refresh.Add(first);
     const uint64 revisionBeforeMeta = AssetDatabase::Get().GetRevision();
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(refresh));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
     CHECK(AssetDatabase::Get().GetRevision() == revisionBeforeMeta + 1);
-    CHECK(AssetDatabaseFacade::GetLastChange().Changed.Contains(firstId));
-    CHECK(AssetDatabaseFacade::GetLastChange().Changed.Count() == 1);
+    CHECK(AssetDatabaseQueryService::GetLastChange().Changed.Contains(firstId));
+    CHECK(AssetDatabaseQueryService::GetLastChange().Changed.Count() == 1);
     REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK(found.MetaSemanticHash != previousHash);
     CHECK(found.DatabaseRevision != firstRecordRevision);
@@ -442,7 +409,7 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     FileSystem::DeleteFile(first + TEXT(".meta"));
     FileSystem::DeleteFile(second);
     FileSystem::DeleteFile(second + TEXT(".meta"));
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(cleanup));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(secondId, found));
 }
@@ -456,7 +423,7 @@ TEST_CASE("Asset database RefreshSources reports missing sidecars and keeps unaf
     SCOPE_EXIT
     {
         FileSystem::DeleteDirectory(folder, true);
-        AssetDatabaseFacade::RefreshSources(cleanup);
+        AssetPipelineService::RefreshSources(cleanup);
     };
 
     const String orphan = folder / TEXT("Orphan.png");
@@ -467,21 +434,21 @@ TEST_CASE("Asset database RefreshSources reports missing sidecars and keeps unaf
     REQUIRE_FALSE(AssetMeta::SaveAtomic(tracked + TEXT(".meta"), MakeDatabaseMeta(Guid::New()), diagnostic));
 
     // A source dropped in without a sidecar has to be reported, exactly as a full scan would.
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
-    CHECK(ContainsDiagnostic(AssetDatabaseFacade::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(cleanup));
+    CHECK(ContainsDiagnostic(AssetDatabaseQueryService::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
 
     // Refreshing one source must not discard what is already known about every other source.
     Array<String> trackedOnly;
     trackedOnly.Add(tracked);
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(trackedOnly));
-    CHECK(ContainsDiagnostic(AssetDatabaseFacade::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(trackedOnly));
+    CHECK(ContainsDiagnostic(AssetDatabaseQueryService::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
 
     // Once the sidecar exists the diagnostic for that source must not survive.
     REQUIRE_FALSE(AssetMeta::SaveAtomic(orphan + TEXT(".meta"), MakeDatabaseMeta(Guid::New()), diagnostic));
     Array<String> orphanOnly;
     orphanOnly.Add(orphan);
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(orphanOnly));
-    CHECK_FALSE(ContainsDiagnostic(AssetDatabaseFacade::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(orphanOnly));
+    CHECK_FALSE(ContainsDiagnostic(AssetDatabaseQueryService::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
 }
 
 TEST_CASE("Asset database clears a path collision once the conflict is resolved")
@@ -530,7 +497,7 @@ TEST_CASE("Asset database RefreshSources prunes persisted file states under a de
     SCOPE_EXIT
     {
         FileSystem::DeleteDirectory(folder, true);
-        AssetDatabaseFacade::RefreshSources(cleanup);
+        AssetPipelineService::RefreshSources(cleanup);
     };
 
     const Guid trackedId = Guid::New();
@@ -538,14 +505,14 @@ TEST_CASE("Asset database RefreshSources prunes persisted file states under a de
     REQUIRE_FALSE(File::WriteAllText(tracked, TEXT("tracked"), Encoding::ANSI));
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(AssetMeta::SaveAtomic(tracked + TEXT(".meta"), MakeDatabaseMeta(trackedId), diagnostic));
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(cleanup));
 
     AssetRecord found;
     REQUIRE(AssetDatabase::Get().TryGetRecord(trackedId, found));
     CHECK(PersistedFileStateCount(folder) > 0);
 
     REQUIRE_FALSE(FileSystem::DeleteDirectory(folder, true));
-    REQUIRE_FALSE(AssetDatabaseFacade::RefreshSources(cleanup));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(cleanup));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(trackedId, found));
     CHECK(PersistedFileStateCount(folder) == 0);
 }

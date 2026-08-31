@@ -7,31 +7,33 @@
 
 namespace
 {
-    int32 CompareGuid(const Guid& a, const Guid& b)
+    int32 CompareObjectId(const AssetObjectId& a, const AssetObjectId& b)
     {
+        const Guid& aGuid = a.Asset.Value;
+        const Guid& bGuid = b.Asset.Value;
         for (int32 i = 0; i < 4; i++)
         {
-            if (a.Values[i] < b.Values[i])
+            if (aGuid.Values[i] < bGuid.Values[i])
                 return -1;
-            if (a.Values[i] > b.Values[i])
+            if (aGuid.Values[i] > bGuid.Values[i])
                 return 1;
         }
-        return 0;
+        return a.LocalId < b.LocalId ? -1 : a.LocalId > b.LocalId ? 1 : 0;
     }
 
     struct GuidIndexGreater
     {
-        const Array<Guid>* Nodes = nullptr;
+        const Array<AssetObjectId>* Nodes = nullptr;
 
         bool operator()(int32 a, int32 b) const
         {
-            return CompareGuid((*Nodes)[a], (*Nodes)[b]) > 0;
+            return CompareObjectId((*Nodes)[a], (*Nodes)[b]) > 0;
         }
     };
 
-    String DescribeOrigin(const Guid& owner, const AssetBuildGraphEdge& edge)
+    String DescribeOrigin(const AssetObjectId& owner, const AssetBuildGraphEdge& edge)
     {
-        String result = owner.ToString(Guid::FormatType::N) + TEXT(" -> ") + edge.Dependency.ToString(Guid::FormatType::N);
+        String result = owner.ToString() + TEXT(" -> ") + edge.Dependency.ToString();
         if (!edge.Origin.Path.IsEmpty())
             result += TEXT(" at ") + edge.Origin.Path;
         if (!edge.Origin.GraphNode.IsEmpty())
@@ -59,19 +61,19 @@ bool AssetBuildGraph::Build(const Array<PreparedAsset>& assets, uint64 databaseR
     _nodes.EnsureCapacity(assets.Count());
     for (const PreparedAsset& asset : assets)
     {
-        if (!asset.AssetID.IsValid() || asset.DatabaseRevision != databaseRevision || _nodeIndices.ContainsKey(asset.AssetID))
+        if (!asset.ObjectID.IsValid() || asset.DatabaseRevision != databaseRevision || _nodeIndices.ContainsKey(asset.ObjectID))
         {
             diagnostic.Code = asset.DatabaseRevision != databaseRevision ? AssetPipelineDiagnosticCode::PrepareInvalidated : AssetPipelineDiagnosticCode::InvalidMeta;
             diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-            diagnostic.AssetGuid = asset.AssetID;
+            diagnostic.AssetGuid = asset.ObjectID.Asset.Value;
             diagnostic.Message = asset.DatabaseRevision != databaseRevision
                 ? TEXT("Prepared asset revision does not match the graph revision.")
                 : TEXT("Build graph contains an invalid or duplicate asset identity.");
             Clear();
             return true;
         }
-        _nodeIndices.Add(asset.AssetID, _nodes.Count());
-        _nodes.Add(asset.AssetID);
+        _nodeIndices.Add(asset.ObjectID, _nodes.Count());
+        _nodes.Add(asset.ObjectID);
     }
     _inputs.Resize(_nodes.Count());
     Array<Array<int32>> dependants;
@@ -87,11 +89,11 @@ bool AssetBuildGraph::Build(const Array<PreparedAsset>& assets, uint64 databaseR
         {
             if (dependency.Kind != AssetDependencyKind::BuildInput)
                 continue;
-            const int32* dependencyIndex = _nodeIndices.TryGet(dependency.AssetID);
+            const int32* dependencyIndex = _nodeIndices.TryGet(dependency.ObjectID);
             if (!dependencyIndex)
                 continue;
             AssetBuildGraphEdge edge;
-            edge.Dependency = dependency.AssetID;
+            edge.Dependency = dependency.ObjectID;
             edge.Origin = dependency.Origin;
             _inputs[ownerIndex].Add(MoveTemp(edge));
             dependants[*dependencyIndex].Add(ownerIndex);
@@ -102,7 +104,7 @@ bool AssetBuildGraph::Build(const Array<PreparedAsset>& assets, uint64 databaseR
     {
         std::sort(inputs.Get(), inputs.Get() + inputs.Count(), [](const AssetBuildGraphEdge& a, const AssetBuildGraphEdge& b)
         {
-            return CompareGuid(a.Dependency, b.Dependency) < 0;
+            return CompareObjectId(a.Dependency, b.Dependency) < 0;
         });
         for (int32 i = 1; i < inputs.Count(); i++)
         {
@@ -121,7 +123,7 @@ bool AssetBuildGraph::Build(const Array<PreparedAsset>& assets, uint64 databaseR
     {
         std::sort(entries.Get(), entries.Get() + entries.Count(), [this](int32 a, int32 b)
         {
-            return CompareGuid(_nodes[a], _nodes[b]) < 0;
+            return CompareObjectId(_nodes[a], _nodes[b]) < 0;
         });
     }
 
@@ -191,7 +193,7 @@ bool AssetBuildGraph::FindCycle(AssetPipelineDiagnostic& diagnostic) const
                 diagnostic = AssetPipelineDiagnostic();
                 diagnostic.Code = AssetPipelineDiagnosticCode::BuildCycle;
                 diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-                diagnostic.AssetGuid = _nodes[*dependencyIndex];
+                diagnostic.AssetGuid = _nodes[*dependencyIndex].Asset.Value;
                 diagnostic.SourcePath = edge.Origin.Path;
                 diagnostic.Location.File = edge.Origin.Path;
                 diagnostic.Location.Line = edge.Origin.Line;
@@ -203,11 +205,11 @@ bool AssetBuildGraph::FindCycle(AssetPipelineDiagnostic& diagnostic) const
                 {
                     if (i != cycleStart)
                         diagnostic.Message += TEXT(" -> ");
-                    diagnostic.Message += _nodes[nodeStack[i]].ToString(Guid::FormatType::N);
+                    diagnostic.Message += _nodes[nodeStack[i]].ToString();
                     if (i > cycleStart)
                         diagnostic.Related.Add(DescribeOrigin(_nodes[nodeStack[i - 1]], *edgeStack[i - 1]));
                 }
-                diagnostic.Message += TEXT(" -> ") + _nodes[*dependencyIndex].ToString(Guid::FormatType::N);
+                diagnostic.Message += TEXT(" -> ") + _nodes[*dependencyIndex].ToString();
                 diagnostic.Related.Add(DescribeOrigin(_nodes[nodeIndex], edge));
                 return true;
             }
@@ -223,7 +225,7 @@ bool AssetBuildGraph::FindCycle(AssetPipelineDiagnostic& diagnostic) const
         orderedIndices[i] = i;
     std::sort(orderedIndices.Get(), orderedIndices.Get() + orderedIndices.Count(), [this](int32 a, int32 b)
     {
-        return CompareGuid(_nodes[a], _nodes[b]) < 0;
+        return CompareObjectId(_nodes[a], _nodes[b]) < 0;
     });
     for (const int32 index : orderedIndices)
     {
@@ -233,7 +235,7 @@ bool AssetBuildGraph::FindCycle(AssetPipelineDiagnostic& diagnostic) const
     return false;
 }
 
-bool AssetBuildGraph::TryGetBuildInputs(const Guid& assetId, Array<AssetBuildGraphEdge>& result) const
+bool AssetBuildGraph::TryGetBuildInputs(const AssetObjectId& assetId, Array<AssetBuildGraphEdge>& result) const
 {
     const int32* index = _nodeIndices.TryGet(assetId);
     if (!index)

@@ -29,21 +29,6 @@ TEST_CASE("Asset semantic path policy")
     CHECK(String(AssetPathPolicy::GetDebugLabel(AssetPathKind::ArtifactStorage)) == TEXT("artifact-storage"));
 }
 
-TEST_CASE("Legacy AssetRecord adapter preserves identity")
-{
-    const AssetInfo info(Guid::New(), TEXT("FlaxEngine.Texture"), Globals::ProjectContentFolder / TEXT("Legacy.flax"));
-    const AssetRecord record = AssetRecord::FromLegacy(info);
-    CHECK(record.ID == info.ID);
-    CHECK(record.SourceAssetID == info.ID);
-    CHECK(record.SourceKind == AssetSourceKind::LegacyBinary);
-    CHECK(record.IsMainAsset());
-
-    const AssetInfo adapted = record.ToAssetInfo();
-    CHECK(adapted.ID == info.ID);
-    CHECK(adapted.TypeName == info.TypeName);
-    CHECK(adapted.Path == info.Path);
-}
-
 TEST_CASE("Project asset paths normalize portably and reject escapes")
 {
     AssetPathPolicy::ProjectPath normalized;

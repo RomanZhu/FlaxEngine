@@ -70,9 +70,9 @@ namespace
         origin.Path = source;
         if (context.ReadSourceFile(source, data, hash, origin, diagnostic))
             return true;
-        if (runtimeReference.IsValid() && context.DeclareRuntimeReference(TEXT("runtime-reference"), runtimeReference, origin, diagnostic))
+        if (runtimeReference.IsValid() && context.DeclareRuntimeReference(TEXT("runtime-reference"), AssetObjectId::Main(AssetGuid(runtimeReference)), origin, diagnostic))
             return true;
-        if (!buildInterface.Hash.IsZero() && context.DeclareBuildInput(TEXT("build-interface"), Guid(5, 6, 7, 8), ArtifactKey(), buildInterface, origin, diagnostic))
+        if (!buildInterface.Hash.IsZero() && context.DeclareBuildInput(TEXT("build-interface"), AssetObjectId::Main(AssetGuid(Guid(5, 6, 7, 8))), ArtifactKey(), buildInterface, origin, diagnostic))
             return true;
         if (context.DeclareOutput(StringAnsiView("runtime"), Guid::Empty, diagnostic))
             return true;

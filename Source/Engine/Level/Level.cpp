@@ -551,7 +551,7 @@ namespace
         writtenFiles.Add(path);
         if (WriteExternalActorBytesIfChanged(path, sourceBuffer.GetString(), static_cast<int32>(sourceBuffer.GetSize())))
             return true;
-        const Guid partitionGuid = AssetPipelineService::CreateJsonDocumentMetadata(path);
+        const Guid partitionGuid = AuthoredAssetDocumentService::CreateMetadata(path);
         if (!partitionGuid.IsValid())
             return true;
         ExternalActorPartition partition;

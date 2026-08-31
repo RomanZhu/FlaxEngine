@@ -57,22 +57,21 @@ bool CollectAssetsStep::Perform(CookingData& data)
         RuntimeObjectDependencyRecord dependencyRecord;
         dependencyRecord.Object = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
         HashSet<AssetObjectId> uniqueDependencies;
-        for (const Guid& runtimeReference : record.RuntimeReferences)
+        for (const AssetObjectId& runtimeReference : record.RuntimeReferences)
         {
-            const AssetObjectId* dependency = objectsByRuntimeId.TryGet(runtimeReference);
-            if (!dependency)
+            if (!recordsByObject.ContainsKey(runtimeReference) && !data.BuiltinRootAssets.Contains(runtimeReference))
             {
                 data.Error(String::Format(TEXT("Recorded runtime reference {0} from {1} does not resolve in database revision {2}."),
                     runtimeReference, dependencyRecord.Object.ToString(), snapshot.Revision));
                 return true;
             }
-            if (*dependency == dependencyRecord.Object || !uniqueDependencies.Add(*dependency))
+            if (runtimeReference == dependencyRecord.Object || !uniqueDependencies.Add(runtimeReference))
             {
                 data.Error(String::Format(TEXT("Recorded runtime references for {0} contain a self or duplicate edge."),
                     dependencyRecord.Object.ToString()));
                 return true;
             }
-            dependencyRecord.Dependencies.Add(*dependency);
+            dependencyRecord.Dependencies.Add(runtimeReference);
         }
         dependencyRecords.Add(MoveTemp(dependencyRecord));
     }

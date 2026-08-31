@@ -416,14 +416,9 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         ArtifactManifestDependency dependency;
         dependency.Kind = source.Kind;
         dependency.Identity = source.StableIdentity;
-        dependency.AssetID = source.AssetID;
+        dependency.ObjectID = source.ObjectID;
         if (source.Kind == AssetDependencyKind::BuildInput || source.Kind == AssetDependencyKind::RuntimeReference)
         {
-            AssetRecord dependencyRecord;
-            if (AssetDatabase::Get().TryGetRecord(source.AssetID, dependencyRecord))
-                dependency.ObjectID = AssetObjectId(AssetGuid(dependencyRecord.SourceAssetID), dependencyRecord.LocalId);
-            else
-                dependency.ObjectID = AssetObjectId::Main(AssetGuid(source.AssetID));
             dependency.AssetID = dependency.ObjectID.ToRuntimeObjectGuid();
         }
         dependency.Hash = source.Content;

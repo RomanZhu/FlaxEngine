@@ -10,11 +10,9 @@
 /// <summary>Kind of canonical input represented by an asset record.</summary>
 API_ENUM() enum class AssetSourceKind : byte
 {
-    ImportedSource,
-    TextDocument,
-    ExistingJson,
-    LegacyBinary,
-    Folder,
+    ImportedSource = 0,
+    TextDocument = 1,
+    Folder = 4,
 };
 
 /// <summary>Current registration/build state of an asset record.</summary>
@@ -55,11 +53,10 @@ struct FLAXENGINE_API AssetRecord
     Array<String> Labels;
     Array<AssetObjectId> BuildInputDependencies;
     Array<AssetObjectId> RuntimeReferences;
-    AssetSourceKind SourceKind = AssetSourceKind::LegacyBinary;
+    AssetSourceKind SourceKind = AssetSourceKind::ImportedSource;
     AssetRecordStatus Status = AssetRecordStatus::Ready;
     uint64 DatabaseRevision = 0;
 
-    static AssetRecord FromLegacy(const AssetInfo& info);
     AssetInfo ToAssetInfo() const;
     bool IsMainAsset() const;
     bool HasSameIdentityAndContent(const AssetRecord& other) const;

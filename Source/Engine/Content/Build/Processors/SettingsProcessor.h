@@ -23,7 +23,7 @@ public:
 class FLAXENGINE_API SettingsProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 1;
+    static constexpr uint32 ImplementationVersion = 2;
     static constexpr uint32 RuntimeFormatVersion = 1;
 
     static const String& ProcessorID();

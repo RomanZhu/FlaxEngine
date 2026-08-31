@@ -40,7 +40,7 @@ struct FLAXENGINE_API SourceAssetRow
     int64 SourceMtimeHint = 0;
     String ImporterId;
     String PortabilityKey;
-    AssetSourceKind SourceKind = AssetSourceKind::LegacyBinary;
+    AssetSourceKind SourceKind = AssetSourceKind::ImportedSource;
     uint32 ImporterSettingsVersion = 0;
     ContentHash ImporterSettingsHash;
     ContentHash ImporterCodeHash;

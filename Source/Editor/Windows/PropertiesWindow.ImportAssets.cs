@@ -611,7 +611,7 @@ namespace FlaxEditor.Windows
             {
                 var settings = new ModelImportSettings();
                 var restored = item.IsCanonicalSource
-                    ? !AssetPipelineService.LoadModelMetadata(item.SourcePath, out settings.Settings)
+                    ? !ModelImporterService.LoadMetadata(item.SourcePath, out settings.Settings)
                     : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
                 if (!restored)
                     return false;
@@ -648,7 +648,7 @@ namespace FlaxEditor.Windows
             {
                 var settings = new TextureImportSettings();
                 var restored = item.IsCanonicalSource
-                    ? !AssetPipelineService.LoadTextureMetadata(item.SourcePath, out settings.Settings)
+                    ? !TextureImporterService.LoadMetadata(item.SourcePath, out settings.Settings)
                     : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
                 if (!restored)
                     return false;
@@ -660,7 +660,7 @@ namespace FlaxEditor.Windows
             {
                 var settings = new AudioImportSettings();
                 var restored = item.IsCanonicalSource
-                    ? !AssetPipelineService.LoadAudioMetadata(item.SourcePath, out settings.Settings)
+                    ? !AudioImporterService.LoadMetadata(item.SourcePath, out settings.Settings)
                     : FlaxEditor.Editor.TryRestoreImportOptions(ref settings.Settings, item.Path);
                 if (!restored)
                     return false;

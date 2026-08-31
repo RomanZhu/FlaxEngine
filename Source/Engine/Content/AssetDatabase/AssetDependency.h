@@ -30,7 +30,7 @@ struct FLAXENGINE_API AssetDependency
 {
     AssetDependencyKind Kind = AssetDependencyKind::SourceFile;
     String StableIdentity;
-    Guid AssetID = Guid::Empty;
+    AssetObjectId ObjectID;
     ContentHash Content;
     ArtifactKey ExactArtifact;
     ContentHash SemanticInterface;

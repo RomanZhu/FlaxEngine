@@ -158,9 +158,11 @@ namespace FlaxEngine.TypeConverters
             if (value is string valueStr)
             {
                 var result = Activator.CreateInstance(destinationType);
-                Json.JsonSerializer.ParseID(valueStr, out var id);
-                var asset = Content.LoadAsync<JsonAsset>(id);
-                destinationType.GetField("Asset").SetValue(result, asset);
+                if (AssetObjectId.TryParse(valueStr, out var id))
+                {
+                    var asset = Content.LoadAssetAsync<JsonAsset>(id);
+                    destinationType.GetField("Asset").SetValue(result, asset);
+                }
                 return result;
             }
             return base.ConvertTo(context, culture, value, destinationType);

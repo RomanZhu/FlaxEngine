@@ -106,7 +106,7 @@ public class AssetPickerValidator : IContentItemOwner
                 SelectedItem = null;
                 return;
             }
-            SelectedItem = Editor.Instance.ContentDatabase.FindAsset(entry.RuntimeID);
+            SelectedItem = Editor.Instance.ContentDatabase.FindAsset(entry.ObjectID);
         }
     }
 

@@ -87,7 +87,7 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void Create(string outputPath, object arg)
         {
-            if (AssetPipelineService.CreateAuthoredDocument(outputPath, typeof(ParticleSystem).FullName) == Guid.Empty)
+            if (AuthoredAssetDocumentService.Create(outputPath, typeof(ParticleSystem).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
 

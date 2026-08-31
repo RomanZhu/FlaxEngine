@@ -1511,7 +1511,7 @@ bool FlaxStorage::CloseFileHandles()
         for (int32 i = 0; i < GetEntriesCount(); i++)
         {
             GetEntry(i, e);
-            Asset* asset = Content::GetAsset(e.ID);
+            Asset* asset = Content::GetRuntimeObject(e.ID);
             if (asset)
             {
                 LOG(Info, "Canceling streaming for asset {0}", asset->ToString());

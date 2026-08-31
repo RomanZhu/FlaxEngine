@@ -145,7 +145,7 @@ namespace FlaxEditor.Content
                 {
                     FlaxEngine.Object.Destroy(variantActor, 20.0f);
                 }
-                if (AssetPipelineService.CreateJsonDocumentMetadata(outputPath) == Guid.Empty)
+                if (AuthoredAssetDocumentService.CreateMetadata(outputPath) == Guid.Empty)
                     throw new InvalidOperationException("Failed to register the prefab variant source in the asset database.");
                 return;
             }
@@ -170,7 +170,7 @@ namespace FlaxEditor.Content
                 actor.LocalTransform = transform;
             if (createFailed)
                 throw new InvalidOperationException("Failed to create the prefab source.");
-            if (AssetPipelineService.CreateJsonDocumentMetadata(outputPath) == Guid.Empty)
+            if (AuthoredAssetDocumentService.CreateMetadata(outputPath) == Guid.Empty)
                 throw new InvalidOperationException("Failed to register the prefab source in the asset database.");
         }
 

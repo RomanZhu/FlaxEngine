@@ -9,6 +9,7 @@ namespace
     {
         PreparedAsset asset;
         asset.AssetID = id;
+        asset.ObjectID = AssetObjectId::Main(AssetGuid(id));
         asset.DatabaseRevision = revision;
         return asset;
     }
@@ -18,7 +19,7 @@ namespace
         AssetDependency dependency;
         dependency.Kind = kind;
         dependency.StableIdentity = dependencyId.ToString(Guid::FormatType::N);
-        dependency.AssetID = dependencyId;
+        dependency.ObjectID = AssetObjectId::Main(AssetGuid(dependencyId));
         dependency.ExactArtifact = ArtifactKey(ContentHash::Compute(&dependencyId, sizeof(dependencyId)));
         dependency.Origin.Path = origin;
         dependency.Origin.GraphNode = owner.AssetID.ToString(Guid::FormatType::N);
@@ -47,9 +48,9 @@ TEST_CASE("AssetBuildGraph orders build inputs deterministically and ignores run
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(graph.Build(assets, 11, diagnostic));
     REQUIRE(graph.GetBuildOrder().Count() == 3);
-    CHECK(graph.GetBuildOrder()[0] == c);
-    CHECK(graph.GetBuildOrder()[1] == b);
-    CHECK(graph.GetBuildOrder()[2] == a);
+    CHECK(graph.GetBuildOrder()[0] == AssetObjectId::Main(AssetGuid(c)));
+    CHECK(graph.GetBuildOrder()[1] == AssetObjectId::Main(AssetGuid(b)));
+    CHECK(graph.GetBuildOrder()[2] == AssetObjectId::Main(AssetGuid(a)));
     CHECK(graph.IsCurrent(11));
     CHECK_FALSE(graph.IsCurrent(12));
 
@@ -102,13 +103,13 @@ TEST_CASE("AssetBuildGraph handles deterministic hundred-thousand-edge fan-out")
     {
         PreparedAsset dependant = GraphAsset(Guid(1000 + i, 0, 0, 0));
         for (int32 dependency = 0; dependency < 100; dependency++)
-            AddGraphDependency(dependant, assets[dependency].AssetID, AssetDependencyKind::BuildInput, TEXT("synthetic-fan-out"));
+            AddGraphDependency(dependant, assets[dependency].ObjectID.Asset.Value, AssetDependencyKind::BuildInput, TEXT("synthetic-fan-out"));
         assets.Add(MoveTemp(dependant));
     }
     AssetBuildGraph graph;
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(graph.Build(assets, 11, diagnostic));
     REQUIRE(graph.GetBuildOrder().Count() == 1100);
-    CHECK(graph.GetBuildOrder()[0] == Guid(1, 0, 0, 0));
-    CHECK(graph.GetBuildOrder()[99] == Guid(100, 0, 0, 0));
+    CHECK(graph.GetBuildOrder()[0] == AssetObjectId::Main(AssetGuid(Guid(1, 0, 0, 0))));
+    CHECK(graph.GetBuildOrder()[99] == AssetObjectId::Main(AssetGuid(Guid(100, 0, 0, 0))));
 }

@@ -20,7 +20,7 @@ namespace
 
     bool SameDependencyValue(const AssetDependency& a, const AssetDependency& b)
     {
-        return a.Kind == b.Kind && a.StableIdentity == b.StableIdentity && a.AssetID == b.AssetID &&
+        return a.Kind == b.Kind && a.StableIdentity == b.StableIdentity && a.ObjectID == b.ObjectID &&
                a.Content == b.Content && a.ExactArtifact == b.ExactArtifact &&
                a.SemanticInterface == b.SemanticInterface && a.InterfaceVersion == b.InterfaceVersion;
     }
@@ -54,7 +54,7 @@ bool PrepareAssetContext::AddDependency(AssetDependency dependency, AssetPipelin
 {
     for (const AssetDependency& existing : _declaredDependencies)
     {
-        if (existing.Kind != dependency.Kind || existing.StableIdentity != dependency.StableIdentity || existing.AssetID != dependency.AssetID)
+        if (existing.Kind != dependency.Kind || existing.StableIdentity != dependency.StableIdentity || existing.ObjectID != dependency.ObjectID)
             continue;
         if (SameDependencyValue(existing, dependency))
             return false;
@@ -132,14 +132,14 @@ bool PrepareAssetContext::ReadSourceFile(const StringView& path, Array<byte>& da
     return false;
 }
 
-bool PrepareAssetContext::DeclareBuildInput(const StringView& stableIdentity, const Guid& id, const ArtifactKey& exactArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+bool PrepareAssetContext::DeclareBuildInput(const StringView& stableIdentity, const AssetObjectId& id, const ArtifactKey& exactArtifact, const AssetSemanticInterface& semanticInterface, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
 {
     if (CheckCancellation(diagnostic))
         return true;
     AssetDependency dependency;
     dependency.Kind = AssetDependencyKind::BuildInput;
     dependency.StableIdentity = stableIdentity;
-    dependency.AssetID = id;
+    dependency.ObjectID = id;
     dependency.ExactArtifact = exactArtifact;
     dependency.SemanticInterface = semanticInterface.Hash;
     dependency.InterfaceVersion = semanticInterface.Version;
@@ -147,14 +147,14 @@ bool PrepareAssetContext::DeclareBuildInput(const StringView& stableIdentity, co
     return AddDependency(MoveTemp(dependency), diagnostic);
 }
 
-bool PrepareAssetContext::DeclareRuntimeReference(const StringView& stableIdentity, const Guid& id, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
+bool PrepareAssetContext::DeclareRuntimeReference(const StringView& stableIdentity, const AssetObjectId& id, const AssetDependencyOrigin& origin, AssetPipelineDiagnostic& diagnostic)
 {
     if (CheckCancellation(diagnostic))
         return true;
     AssetDependency dependency;
     dependency.Kind = AssetDependencyKind::RuntimeReference;
     dependency.StableIdentity = stableIdentity;
-    dependency.AssetID = id;
+    dependency.ObjectID = id;
     dependency.Origin = origin;
     return AddDependency(MoveTemp(dependency), diagnostic);
 }

@@ -700,7 +700,7 @@ namespace FlaxEditor.Windows.Assets
 
             if (Item.IsCanonicalSource)
             {
-                if (AssetPipelineService.ApplyModelMetadata(ImportSourcePath, _importSettings.Settings))
+                if (ModelImporterService.ApplyMetadata(ImportSourcePath, _importSettings.Settings))
                 {
                     Editor.LogError("Cannot apply canonical model settings.");
                     return;

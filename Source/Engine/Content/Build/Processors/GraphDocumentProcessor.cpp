@@ -117,12 +117,12 @@ bool GraphDocumentProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
             AssetSemanticInterface semantic;
             semantic.Hash = dependency.SemanticInterface;
             semantic.Version = dependency.InterfaceVersion;
-            if (context.DeclareBuildInput(dependency.StableIdentity, dependency.AssetID, dependency.ExactArtifact, semantic, declared, diagnostic))
+            if (context.DeclareBuildInput(dependency.StableIdentity, dependency.ObjectID, dependency.ExactArtifact, semantic, declared, diagnostic))
                 return true;
         }
         else if (dependency.Kind == AssetDependencyKind::RuntimeReference)
         {
-            if (context.DeclareRuntimeReference(dependency.StableIdentity, dependency.AssetID, declared, diagnostic))
+            if (context.DeclareRuntimeReference(dependency.StableIdentity, dependency.ObjectID, declared, diagnostic))
                 return true;
         }
     }

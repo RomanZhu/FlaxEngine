@@ -14,6 +14,8 @@
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Serialization/Json.h"
+#include "Engine/Serialization/JsonWriters.h"
+#include "FlaxEngine.Gen.h"
 
 namespace
 {
@@ -33,21 +35,19 @@ namespace
         return true;
     }
 
-    bool ValidateEnvelope(const JsonDocument& json, const Guid& assetID, String& dataType)
+    const JsonValue* ValidateSourceDocument(const JsonDocument& json, String& dataType)
     {
         if (!json.IsObject())
-            return true;
-        const auto idMember = json.FindMember("ID");
-        const auto typeMember = json.FindMember("TypeName");
-        const auto dataMember = json.FindMember("Data");
-        Guid serializedID;
-        if (idMember == json.MemberEnd() || !idMember->value.IsString() ||
-            Guid::Parse(StringAnsiView(idMember->value.GetString(), idMember->value.GetStringLength()), serializedID) ||
-            serializedID != assetID || typeMember == json.MemberEnd() || !typeMember->value.IsString() ||
-            typeMember->value.GetStringLength() == 0 || dataMember == json.MemberEnd() || !dataMember->value.IsObject())
-            return true;
+            return nullptr;
+        const auto versionMember = json.FindMember("settingsVersion");
+        const auto typeMember = json.FindMember("type");
+        const auto dataMember = json.FindMember("data");
+        if (versionMember == json.MemberEnd() || !versionMember->value.IsUint() || versionMember->value.GetUint() != 1 ||
+            typeMember == json.MemberEnd() || !typeMember->value.IsString() || typeMember->value.GetStringLength() == 0 ||
+            dataMember == json.MemberEnd() || !dataMember->value.IsObject())
+            return nullptr;
         dataType = String(StringAnsiView(typeMember->value.GetString(), typeMember->value.GetStringLength()));
-        return false;
+        return &dataMember->value;
     }
 
     bool CollectReferences(const JsonValue& value, HashSet<AssetObjectId>& references)
@@ -66,11 +66,11 @@ namespace
 
         const auto guidMember = value.FindMember("guid");
         const auto fileIDMember = value.FindMember("fileId");
-        if (guidMember != value.MemberEnd() && fileIDMember != value.MemberEnd())
+        if (guidMember != value.MemberEnd() || fileIDMember != value.MemberEnd())
         {
             Guid guid;
             int64 fileID;
-            if (!guidMember->value.IsString() ||
+            if (guidMember == value.MemberEnd() || fileIDMember == value.MemberEnd() || !guidMember->value.IsString() ||
                 Guid::Parse(StringAnsiView(guidMember->value.GetString(), guidMember->value.GetStringLength()), guid) ||
                 !fileIDMember->value.IsInt64())
                 return true;
@@ -90,10 +90,33 @@ namespace
         return false;
     }
 
-    bool WriteFlax(const StringView& path, const Guid& id, const Array<byte>& json)
+    bool BuildRuntimeEnvelope(const JsonDocument& source, const Guid& id, StringAnsi& output)
+    {
+        String dataType;
+        const JsonValue* dataValue = ValidateSourceDocument(source, dataType);
+        if (!dataValue)
+            return true;
+        rapidjson_flax::StringBuffer buffer;
+        PrettyJsonWriter writer(buffer);
+        writer.StartObject();
+        writer.JKEY("ID");
+        writer.Guid(id);
+        writer.JKEY("TypeName");
+        const StringAnsi typeAnsi(dataType);
+        writer.String(typeAnsi.Get(), typeAnsi.Length());
+        writer.JKEY("EngineBuild");
+        writer.Int(FLAXENGINE_VERSION_BUILD);
+        writer.JKEY("Data");
+        dataValue->Accept(writer.GetWriter());
+        writer.EndObject();
+        output.Set(buffer.GetString(), (int32)buffer.GetSize());
+        return false;
+    }
+
+    bool WriteFlax(const StringView& path, const Guid& id, const StringAnsiView& json)
     {
         FlaxChunk chunk;
-        chunk.Data.Copy(json.Get(), json.Count());
+        chunk.Data.Copy(reinterpret_cast<const byte*>(json.Get()), json.Length());
         AssetInitData data;
         data.Header.ID = id;
         data.Header.TypeName = JsonAsset::TypeName;
@@ -130,7 +153,7 @@ AssetProcessorDescriptor SettingsProcessor::CreateDescriptor()
     runtime.Extension = ".flax";
     runtime.FormatVersion = RuntimeFormatVersion;
     runtime.TargetDimensions = ArtifactTargetDimension::None;
-    runtime.CompatibilityTag = "flax-settings-json-v1";
+    runtime.CompatibilityTag = "flax-settings-source-v2";
     runtime.IndependentlyReusable = true;
     descriptor.Outputs.Add(runtime);
     return descriptor;
@@ -153,23 +176,24 @@ bool SettingsProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pre
     JsonDocument json;
     json.Parse(reinterpret_cast<const char*>(bytes.Get()), bytes.Count());
     String dataType;
-    if (json.HasParseError() || ValidateEnvelope(json, record.ID, dataType))
+    const JsonValue* data = json.HasParseError() ? nullptr : ValidateSourceDocument(json, dataType);
+    if (!data)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
-            record.ID, record.SourcePath.Get(), TEXT("Settings source must contain a valid JsonAsset ID, TypeName, and object Data envelope."));
+            record.ID, record.SourcePath.Get(), TEXT("Settings source must contain settingsVersion, type, and object data fields."));
 
     HashSet<AssetObjectId> references;
-    if (CollectReferences(json["Data"], references))
+    if (CollectReferences(*data, references))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Settings source contains a malformed structured {guid,fileId} reference."));
     for (const auto& entry : references)
     {
         const AssetObjectId& reference = entry.Item;
         const String identity = TEXT("settings-reference:") + reference.ToString();
-        if (context.DeclareRuntimeReference(identity, reference.ToRuntimeObjectGuid(), origin, diagnostic))
+        if (context.DeclareRuntimeReference(identity, reference, origin, diagnostic))
             return true;
     }
 
-    static const char CompilerIdentity[] = "flax-settings-json-compiler-v1";
+    static const char CompilerIdentity[] = "flax-settings-source-compiler-v2";
     if (context.DeclareToolchain(TEXT("settings-compiler"), ContentHash::Compute(CompilerIdentity, ARRAY_COUNT(CompilerIdentity) - 1), origin, diagnostic) ||
         context.DeclareOutput(StringAnsiView("runtime"), record.ID, diagnostic))
         return true;
@@ -190,7 +214,7 @@ bool SettingsProcessor::BuildOutputKey(const PreparedAsset& prepared, const Arti
     if (!payload || outputKind != StringAnsiView("runtime"))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Prepare,
             prepared.AssetID, StringView::Empty, TEXT("Settings output key requires prepared state and the runtime output."));
-    ArtifactKeyBuilder builder(StringAnsiView("flax-settings-json-output-v1"));
+    ArtifactKeyBuilder builder(StringAnsiView("flax-settings-source-output-v2"));
     builder.AddGuid(StringAnsiView("effective-asset"), prepared.AssetID);
     builder.AddString(StringAnsiView("output-type"), prepared.OutputType);
     builder.AddHash(StringAnsiView("source"), payload->SourceHash);
@@ -227,7 +251,8 @@ bool SettingsProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagno
     JsonDocument json;
     json.Parse(reinterpret_cast<const char*>(sourceBytes.Get()), sourceBytes.Count());
     String dataType;
-    if (json.HasParseError() || ValidateEnvelope(json, prepared.AssetID, dataType))
+    StringAnsi runtimeJson;
+    if (json.HasParseError() || !ValidateSourceDocument(json, dataType) || BuildRuntimeEnvelope(json, prepared.AssetID, runtimeJson))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, AssetPipelineDiagnosticStage::Build,
             prepared.AssetID, sourceDependency->StableIdentity, TEXT("Settings source changed after preparation."));
 
@@ -239,7 +264,7 @@ bool SettingsProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagno
         ContentStorageManager::EnsureAccess(scratchPath);
         FileSystem::DeleteFile(scratchPath);
     };
-    if (WriteFlax(scratchPath, prepared.AssetID, sourceBytes))
+    if (WriteFlax(scratchPath, prepared.AssetID, runtimeJson))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
             prepared.AssetID, scratchPath, TEXT("Settings JsonAsset artifact could not be written."));
     Array<byte> artifact;

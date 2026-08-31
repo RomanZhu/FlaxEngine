@@ -172,9 +172,7 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata importer ID has an invalid shape."));
     if (result.FolderAsset)
         result.SourceKind = AssetSourceKind::Folder;
-    else if (result.Processor.ID == TEXT("Flax.ExistingJson"))
-        result.SourceKind = AssetSourceKind::ExistingJson;
-    else if (result.Processor.ID == TEXT("Flax.GraphDocument") || result.Processor.ID == TEXT("Flax.Text") ||
+    else if (result.Processor.ID == TEXT("Flax.GraphDocument") || result.Processor.ID == TEXT("Flax.JsonDocument") || result.Processor.ID == TEXT("Flax.SceneChunk") || result.Processor.ID == TEXT("Flax.Text") ||
              result.Processor.ID == TEXT("Flax.MaterialInstance") || result.Processor.ID == TEXT("Flax.SkeletonMask") ||
              result.Processor.ID == TEXT("Flax.SceneAnimation") || result.Processor.ID == TEXT("Flax.ParticleSystem") ||
              result.Processor.ID == TEXT("Flax.CollisionData") || result.Processor.ID == TEXT("Flax.Settings"))

@@ -8,7 +8,7 @@
 /// <summary>One internal build-input edge retained with its declaration origin.</summary>
 struct FLAXENGINE_API AssetBuildGraphEdge
 {
-    Guid Dependency = Guid::Empty;
+    AssetObjectId Dependency;
     AssetDependencyOrigin Origin;
 };
 
@@ -31,19 +31,19 @@ public:
         return _databaseRevision;
     }
 
-    const Array<Guid>& GetBuildOrder() const
+    const Array<AssetObjectId>& GetBuildOrder() const
     {
         return _buildOrder;
     }
 
-    bool TryGetBuildInputs(const Guid& assetId, Array<AssetBuildGraphEdge>& result) const;
+    bool TryGetBuildInputs(const AssetObjectId& assetId, Array<AssetBuildGraphEdge>& result) const;
 
 private:
     uint64 _databaseRevision = 0;
-    Array<Guid> _nodes;
-    Dictionary<Guid, int32> _nodeIndices;
+    Array<AssetObjectId> _nodes;
+    Dictionary<AssetObjectId, int32> _nodeIndices;
     Array<Array<AssetBuildGraphEdge>> _inputs;
-    Array<Guid> _buildOrder;
+    Array<AssetObjectId> _buildOrder;
 
     bool FindCycle(AssetPipelineDiagnostic& diagnostic) const;
 };

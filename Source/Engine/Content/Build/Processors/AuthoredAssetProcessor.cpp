@@ -136,7 +136,7 @@ namespace
 #if COMPILE_WITH_PHYSICS_COOKING
         if (recipe.Type != CollisionDataType::None)
         {
-            auto model = Content::LoadAssetAsync<ModelBase>(recipe.Model);
+            auto model = Content::LoadAssetAsync<ModelBase>(AssetObjectId::Main(AssetGuid(recipe.Model)));
             if (!model || model->WaitForLoaded())
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build, id, scratchPath, TEXT("Collision source model artifact could not be loaded."));
             CollisionCooking::Argument argument;

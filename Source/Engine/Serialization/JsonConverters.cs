@@ -83,7 +83,7 @@ namespace FlaxEngine.Json
             writer.WritePropertyName("fileId");
             writer.WriteValue(id.LocalId);
             writer.WritePropertyName("type");
-            writer.WriteValue("FlaxEngine.Scene");
+            writer.WriteValue("FlaxEngine.SceneAsset");
             writer.WriteEndObject();
         }
 
@@ -92,11 +92,7 @@ namespace FlaxEngine.Json
         {
             SceneReference result = new SceneReference();
 
-            if (reader.TokenType == JsonToken.String && AssetGuid.TryParse((string)reader.Value, out var legacyGuid))
-            {
-                result.ID = AssetObjectId.Main(legacyGuid);
-            }
-            else if (reader.TokenType == JsonToken.StartObject)
+            if (reader.TokenType == JsonToken.StartObject)
             {
                 var json = JObject.Load(reader);
                 if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
@@ -468,45 +464,31 @@ namespace FlaxEngine.Json
     internal sealed class JsonAssetReferenceConverter : JsonConverter
     {
         /// <inheritdoc />
-        public override unsafe void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
+        public override void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
             var asset = (JsonAsset)value.GetType().GetField("Asset").GetValue(value);
-            var id = asset?.ID ?? Guid.Empty;
-            writer.WriteValue(JsonSerializer.GetStringID(&id));
+            var id = asset?.PersistentObjectId ?? default;
+            writer.WriteStartObject();
+            writer.WritePropertyName("guid");
+            writer.WriteValue(id.Asset.ToString());
+            writer.WritePropertyName("fileId");
+            writer.WriteValue(id.LocalId);
+            writer.WritePropertyName("type");
+            writer.WriteValue(asset?.GetType().FullName ?? typeof(JsonAsset).FullName);
+            writer.WriteEndObject();
         }
 
         /// <inheritdoc />
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, Newtonsoft.Json.JsonSerializer serializer)
         {
             var result = existingValue ?? Activator.CreateInstance(objectType);
-            if (reader.TokenType == JsonToken.String)
+            if (reader.TokenType == JsonToken.StartObject)
             {
-                JsonSerializer.ParseID((string)reader.Value, out var id);
-                var asset = Content.LoadAsync<JsonAsset>(id);
-                objectType.GetField("Asset").SetValue(result, asset);
-            }
-            else if (reader.TokenType == JsonToken.StartObject)
-            {
-                // [Deprecated on 26.07.2024, expires on 26.07.2026]
-                while (reader.Read() && reader.TokenType != JsonToken.EndObject)
-                {
-                    switch (reader.TokenType)
-                    {
-                    case JsonToken.PropertyName:
-                    {
-                        var propertyName = (string)reader.Value;
-                        reader.Read();
-                        if (propertyName == "Asset" && reader.TokenType == JsonToken.String)
-                        {
-                            JsonSerializer.ParseID((string)reader.Value, out var id);
-                            var asset = Content.LoadAsync<JsonAsset>(id);
-                            objectType.GetField("Asset").SetValue(result, asset);
-                        }
-
-                        break;
-                    }
-                    }
-                }
+                var json = JObject.Load(reader);
+                if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
+                    json["fileId"]?.Type == JTokenType.Integer && (long)json["fileId"] != 0)
+                    objectType.GetField("Asset").SetValue(result,
+                        Content.LoadAssetAsync<JsonAsset>(new AssetObjectId(guid, (long)json["fileId"])));
             }
 
             return result;

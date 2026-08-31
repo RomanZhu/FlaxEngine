@@ -5,21 +5,23 @@
 
 namespace
 {
-    int32 CompareGuid(const Guid& a, const Guid& b)
+    int32 CompareObjectId(const AssetObjectId& a, const AssetObjectId& b)
     {
+        const Guid& aGuid = a.Asset.Value;
+        const Guid& bGuid = b.Asset.Value;
         for (int32 i = 0; i < 4; i++)
         {
-            if (a.Values[i] < b.Values[i])
+            if (aGuid.Values[i] < bGuid.Values[i])
                 return -1;
-            if (a.Values[i] > b.Values[i])
+            if (aGuid.Values[i] > bGuid.Values[i])
                 return 1;
         }
-        return 0;
+        return a.LocalId < b.LocalId ? -1 : a.LocalId > b.LocalId ? 1 : 0;
     }
 
     bool SameIdentity(const AssetDependency& a, const AssetDependency& b)
     {
-        return a.Kind == b.Kind && a.StableIdentity == b.StableIdentity && a.AssetID == b.AssetID;
+        return a.Kind == b.Kind && a.StableIdentity == b.StableIdentity && a.ObjectID == b.ObjectID;
     }
 }
 
@@ -35,8 +37,11 @@ void AssetDependency::AppendKeyComponents(ArtifactKeyBuilder& builder, int32 ind
     const StringAnsi prefix = StringAnsi::Format("dependency-{0}-", index);
     builder.AddUInt32(prefix + "kind", static_cast<uint32>(Kind));
     builder.AddString(prefix + "identity", StableIdentity);
-    if (AssetID.IsValid())
-        builder.AddGuid(prefix + "asset", AssetID);
+    if (ObjectID.IsValid())
+    {
+        builder.AddGuid(prefix + "asset-guid", ObjectID.Asset.Value);
+        builder.AddUInt64(prefix + "local-file-id", static_cast<uint64>(ObjectID.LocalId));
+    }
     switch (Kind)
     {
     case AssetDependencyKind::SourceFile:
@@ -66,7 +71,7 @@ bool AssetDependency::NormalizeAndSort(Array<AssetDependency>& dependencies, Ass
     {
         dependency.StableIdentity.Replace(TEXT('\\'), TEXT('/'));
         if (dependency.StableIdentity.IsEmpty() ||
-            ((dependency.Kind == AssetDependencyKind::BuildInput || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.AssetID.IsValid()) ||
+            ((dependency.Kind == AssetDependencyKind::BuildInput || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.ObjectID.IsValid()) ||
             ((dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::Toolchain) && dependency.Content.IsZero()) ||
             (dependency.Kind == AssetDependencyKind::BuildInput && dependency.ExactArtifact.IsZero() && dependency.SemanticInterface.IsZero()))
         {
@@ -83,7 +88,7 @@ bool AssetDependency::NormalizeAndSort(Array<AssetDependency>& dependencies, Ass
             return static_cast<byte>(a.Kind) < static_cast<byte>(b.Kind);
         if (a.StableIdentity != b.StableIdentity)
             return a.StableIdentity < b.StableIdentity;
-        return CompareGuid(a.AssetID, b.AssetID) < 0;
+        return CompareObjectId(a.ObjectID, b.ObjectID) < 0;
     });
     for (int32 i = 1; i < dependencies.Count(); i++)
     {

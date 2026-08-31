@@ -179,7 +179,7 @@ namespace FlaxEditor.Windows.Assets
                 // Try to restore target asset import options (useful for fast reimport)
                 if (window.Item.IsCanonicalSource && !window.Item.IsCanonicalSubAsset)
                 {
-                    if (AssetPipelineService.LoadModelMetadata(window.Item.Path, out ImportSettings.Settings))
+                    if (ModelImporterService.LoadMetadata(window.Item.Path, out ImportSettings.Settings))
                         Editor.LogError("Cannot load canonical model import settings.");
                 }
                 else if (!window.Item.IsCanonicalSubAsset)
@@ -201,7 +201,7 @@ namespace FlaxEditor.Windows.Assets
             {
                 if (Window.Item.IsCanonicalSource)
                 {
-                    if (AssetPipelineService.ApplyModelMetadata(Window.Item.Path, ImportSettings.Settings))
+                    if (ModelImporterService.ApplyMetadata(Window.Item.Path, ImportSettings.Settings))
                         Editor.LogError("Cannot apply canonical model import settings.");
                 }
                 else
