@@ -11,13 +11,16 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Content/Assets/SkinnedModel.h"
+#include "Engine/Content/Assets/Texture.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 
 #if COMPILE_WITH_ASSETS_IMPORTER
 #include "Engine/ContentImporters/CreateMaterial.h"
 #include "Engine/ContentImporters/ImportModel.h"
+#include "Engine/ContentImporters/ImportTexture.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Graphics/Textures/TextureData.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Core/ScopeExit.h"
 #endif
@@ -158,6 +161,8 @@ namespace
         bytes += data.Skeleton.GetMemoryUsage();
         for (const AnimationData& animation : data.Animations)
             bytes += animation.GetMemoryUsage();
+        for (const TextureEntry& texture : data.Textures)
+            bytes += texture.EmbeddedData.Count();
         return bytes;
     }
 
@@ -417,6 +422,7 @@ AssetProcessorDescriptor ModelProcessor::CreateDescriptor()
     addOutput("skeleton", ".bin", SkeletonFormatVersion, ArtifactTargetDimension::Architecture, "flax-model-skeleton-v1");
     addOutput("animation", ".flax", AnimationFormatVersion, ArtifactTargetDimension::Architecture, "flax-model-animation-v1");
     addOutput("material", ".flax", MaterialFormatVersion, runtimeDimensions, "flax-model-owned-material-v1");
+    addOutput("texture", ".flax", TextureFormatVersion, runtimeDimensions, "flax-model-owned-texture-v1");
     return descriptor;
 }
 
@@ -440,9 +446,22 @@ bool ModelProcessor::AnalyzeSource(const StringView& sourcePath, const ModelProc
         diagnostic.SourcePath = sourcePath;
         return true;
     }
+    if (!settings.Import.ImportTextures)
+    {
+        for (int32 i = analysis.SubAssets.Count() - 1; i >= 0; i--)
+        {
+            if (analysis.SubAssets[i].Kind == ModelSubAssetKind::Texture)
+                analysis.SubAssets.RemoveAtKeepOrder(i);
+        }
+        for (int32 i = analysis.Candidates.Count() - 1; i >= 0; i--)
+        {
+            if (analysis.Candidates[i].TypeName == Texture::TypeName)
+                analysis.Candidates.RemoveAtKeepOrder(i);
+        }
+    }
     for (const TextureEntry& texture : ownedData.Data.Textures)
     {
-        if (!texture.FilePath.IsEmpty())
+        if (settings.Import.ImportTextures && !texture.FilePath.IsEmpty() && texture.EmbeddedData.IsEmpty())
             analysis.ReferencedTexturePaths.Add(texture.FilePath);
     }
     analysis.SourceLodCount = ownedData.Data.LODs.Count();
@@ -558,8 +577,9 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
     const bool animationOutput = (selected && selected->Kind == ModelSubAssetKind::Animation) ||
         (!selected && context.GetRecord().TypeName == Animation::TypeName);
     const bool materialOutput = selected && selected->Kind == ModelSubAssetKind::Material;
+    const bool textureOutput = selected && selected->Kind == ModelSubAssetKind::Texture;
     const bool hasGeometry = analysis->SourceMeshCount > 0;
-    if (!animationOutput && !materialOutput)
+    if (!animationOutput && !materialOutput && !textureOutput)
     {
         if (hasGeometry)
         {
@@ -582,6 +602,11 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
     else if (materialOutput)
     {
         if (context.DeclareOutput(StringAnsiView("material"), context.GetRecord().ID, diagnostic))
+            return true;
+    }
+    else if (textureOutput)
+    {
+        if (context.DeclareOutput(StringAnsiView("texture"), context.GetRecord().ID, diagnostic))
             return true;
     }
 
@@ -693,7 +718,7 @@ bool ModelProcessor::BuildOutputKey(const PreparedAsset& prepared, const Artifac
         if (selected)
             builder.AddHash(StringAnsiView("selected-semantic"), selected->SemanticHash);
     }
-    if (outputKind == "runtime" && payload->AssignedIDs.Count() != 0)
+    if ((outputKind == "runtime" || outputKind == "material") && payload->AssignedIDs.Count() != 0)
     {
         Array<String> assignedKeys;
         assignedKeys.EnsureCapacity(payload->AssignedIDs.Count());
@@ -730,22 +755,68 @@ namespace
         return ImportModel::CreateCompatibility(context, *arguments->Data, *arguments->Options);
     }
 
-    void FillMaterialOptions(const MaterialSlotEntry& source, CreateMaterial::Options& destination)
+    struct ModelTextureArtifactArguments
+    {
+        TextureData* Data = nullptr;
+        TextureTool::Options* Options = nullptr;
+    };
+
+    CreateAssetResult CreateModelTextureArtifact(CreateAssetContext& context)
+    {
+        const auto* arguments = static_cast<const ModelTextureArtifactArguments*>(context.CustomArg);
+        if (!arguments || !arguments->Data || !arguments->Options)
+            return CreateAssetResult::Error;
+        return ImportTexture::CreateArtifact(context, *arguments->Data, *arguments->Options);
+    }
+
+    Guid GetTextureID(const Dictionary<int32, Guid>& assignedTextures, int32 index)
+    {
+        const Guid* id = assignedTextures.TryGet(index);
+        return id ? *id : Guid::Empty;
+    }
+
+    void FillMaterialOptions(const MaterialSlotEntry& source, const Dictionary<int32, Guid>& assignedTextures,
+        CreateMaterial::Options& destination)
     {
         destination.Diffuse.Color = source.Diffuse.Color;
+        destination.Diffuse.Texture = GetTextureID(assignedTextures, source.Diffuse.TextureIndex);
         destination.Diffuse.HasAlphaMask = source.Diffuse.HasAlphaMask;
         destination.Emissive.Color = source.Emissive.Color;
+        destination.Emissive.Texture = GetTextureID(assignedTextures, source.Emissive.TextureIndex);
         destination.Opacity.Value = source.Opacity.Value;
+        destination.Opacity.Texture = GetTextureID(assignedTextures, source.Opacity.TextureIndex);
         destination.Roughness.Value = source.Roughness.Value;
         destination.Roughness.Channel = source.Roughness.Channel;
+        destination.Roughness.Texture = GetTextureID(assignedTextures, source.Roughness.TextureIndex);
         destination.Metalness.Value = source.Metalness.Value;
         destination.Metalness.Channel = source.Metalness.Channel;
+        destination.Metalness.Texture = GetTextureID(assignedTextures, source.Metalness.TextureIndex);
+        destination.Normals.Texture = GetTextureID(assignedTextures, source.Normals.TextureIndex);
         if (source.TwoSided || source.Diffuse.HasAlphaMask)
             destination.Info.CullMode = CullMode::TwoSided;
         if (source.Wireframe)
             destination.Info.FeaturesFlags |= MaterialFeaturesFlags::Wireframe;
         if (!Math::IsOne(source.Opacity.Value) || source.Opacity.TextureIndex != -1)
             destination.Info.BlendMode = MaterialBlendMode::Transparent;
+    }
+
+    void FillTextureOptions(const TextureEntry& source, TextureTool::Options& destination)
+    {
+        destination.sRGB = source.sRGB;
+        switch (source.Type)
+        {
+        case TextureEntry::TypeHint::ColorRGB:
+            destination.Type = TextureFormatType::ColorRGB;
+            break;
+        case TextureEntry::TypeHint::ColorRGBA:
+            destination.Type = TextureFormatType::ColorRGBA;
+            break;
+        case TextureEntry::TypeHint::Normals:
+            destination.Type = TextureFormatType::NormalMap;
+            destination.sRGB = false;
+            break;
+        }
+        ImportTexture::NormalizeOptions(destination);
     }
 
     bool CopyMeshGroup(const ModelData& source, const StringView& name, const Dictionary<int32, Guid>& assignedMaterials, ModelData& destination)
@@ -828,6 +899,7 @@ namespace
         }
         return nullptr;
     }
+
 }
 #endif
 
@@ -875,11 +947,12 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     options.CollisionMeshesPostfix.Clear();
     if (selected && selected->Kind == ModelSubAssetKind::Animation)
         options.Type = ModelTool::ModelType::Animation;
-    else if (selected && selected->Kind == ModelSubAssetKind::Material)
+    else if (selected && (selected->Kind == ModelSubAssetKind::Material || selected->Kind == ModelSubAssetKind::Texture))
         options.Type = ModelTool::ModelType::Prefab;
     else
         options.Type = TypeFromName(selected ? selected->TypeName : prepared.OutputType);
-    if (selected && (selected->Kind == ModelSubAssetKind::Animation || selected->Kind == ModelSubAssetKind::Material))
+    if (selected && (selected->Kind == ModelSubAssetKind::Animation || selected->Kind == ModelSubAssetKind::Material ||
+        selected->Kind == ModelSubAssetKind::Texture))
     {
         options.GenerateLODs = false;
         options.GenerateSDF = false;
@@ -938,17 +1011,24 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
             prepared.AssetID, sourcePath, TEXT("Model build was cancelled after source processing."));
 
     Dictionary<int32, Guid> assignedMaterials;
+    Dictionary<int32, Guid> assignedTextures;
     for (const ModelSubAssetInfo& info : *builtInfos)
     {
-        if (info.Kind != ModelSubAssetKind::Material || info.SourceIndex < 0 || info.SourceIndex >= buildData->Materials.Count())
-            continue;
         const Guid* assigned = payload->AssignedIDs.TryGet(info.StableKey);
-        if (assigned)
+        if (!assigned)
+            continue;
+        if (info.Kind == ModelSubAssetKind::Material && info.SourceIndex >= 0 && info.SourceIndex < buildData->Materials.Count())
         {
             if (selected)
                 assignedMaterials[info.SourceIndex] = *assigned;
             else
                 ownedData.Data.Materials[info.SourceIndex].AssetID = *assigned;
+        }
+        else if (info.Kind == ModelSubAssetKind::Texture && info.SourceIndex >= 0 && info.SourceIndex < buildData->Textures.Count())
+        {
+            assignedTextures[info.SourceIndex] = *assigned;
+            if (!selected)
+                ownedData.Data.Textures[info.SourceIndex].AssetID = *assigned;
         }
     }
 
@@ -985,10 +1065,57 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Build,
                 prepared.AssetID, sourcePath, TEXT("Stable material selection became ambiguous after processing."));
         CreateMaterial::Options materialOptions;
-        FillMaterialOptions(buildData->Materials[rebuilt->SourceIndex], materialOptions);
+        FillMaterialOptions(buildData->Materials[rebuilt->SourceIndex], assignedTextures, materialOptions);
         CreateAssetContext importerContext(sourcePath, runtimeScratchPath, prepared.AssetID, &materialOptions, true, Material::TypeName);
         CreateAssetFunction callback = &CreateMaterial::Create;
         createResult = importerContext.Run(callback);
+    }
+    else if (selected && selected->Kind == ModelSubAssetKind::Texture)
+    {
+        const ModelSubAssetInfo* rebuilt = ResolveBuiltSelection(*builtInfos, *selected);
+        if (!rebuilt || rebuilt->SourceIndex < 0 || rebuilt->SourceIndex >= buildData->Textures.Count())
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, sourcePath, TEXT("Stable texture selection became ambiguous after processing."));
+        const TextureEntry& texture = buildData->Textures[rebuilt->SourceIndex];
+        String textureSourcePath;
+        bool ownsTextureSource = false;
+        if (texture.EmbeddedData.HasItems())
+        {
+            String extension = FileSystem::GetExtension(texture.FilePath);
+            extension = extension.IsEmpty() ? TEXT(".png") : TEXT(".") + extension;
+            if (context.CreateScratchFilePath(extension, textureSourcePath, diagnostic) ||
+                File::WriteAllBytes(textureSourcePath, texture.EmbeddedData.Get(), texture.EmbeddedData.Count()))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                    prepared.AssetID, texture.FilePath, TEXT("Embedded model texture could not be staged for decoding."));
+            ownsTextureSource = true;
+        }
+        else
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, texture.FilePath, TEXT("Model-owned texture has no embedded source payload."));
+        SCOPE_EXIT
+        {
+            if (ownsTextureSource)
+                FileSystem::DeleteFile(textureSourcePath);
+        };
+        TextureTool::Options textureOptions;
+        FillTextureOptions(texture, textureOptions);
+        TextureData sourceTextureData;
+        if (TextureTool::ImportTexture(textureSourcePath, sourceTextureData, false))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, texture.FilePath, TEXT("Model-owned texture source decode failed."));
+        textureOptions.GenerateMipMaps = textureOptions.GenerateMipMaps &&
+            Math::IsPowerOfTwo(sourceTextureData.Width) && Math::IsPowerOfTwo(sourceTextureData.Height);
+        TextureData textureData;
+        String textureError;
+        const bool decodeFailed = TextureTool::ImportTexture(textureSourcePath, textureData, textureOptions, textureError, false);
+        if (decodeFailed)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
+                prepared.AssetID, texture.FilePath, textureError.IsEmpty() ? TEXT("Model-owned texture decode failed.") : textureError);
+        ModelTextureArtifactArguments arguments;
+        arguments.Data = &textureData;
+        arguments.Options = &textureOptions;
+        CreateAssetContext importerContext(texture.FilePath, runtimeScratchPath, prepared.AssetID, &arguments, true, Texture::TypeName);
+        createResult = importerContext.Run(&CreateModelTextureArtifact);
     }
     else
     {
@@ -1015,6 +1142,8 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
 
     if (prepared.OutputType == Material::TypeName)
         return WriteOutput(context, StringAnsiView("material"), TEXT("material.flax"), runtimeBytes.Get(), runtimeBytes.Count(), diagnostic);
+    if (prepared.OutputType == Texture::TypeName)
+        return WriteOutput(context, StringAnsiView("texture"), TEXT("texture.flax"), runtimeBytes.Get(), runtimeBytes.Count(), diagnostic);
     if (prepared.OutputType == Animation::TypeName)
         return WriteOutput(context, StringAnsiView("animation"), TEXT("animation.flax"), runtimeBytes.Get(), runtimeBytes.Count(), diagnostic);
 

@@ -273,7 +273,7 @@ bool TextureTool::ImportTexture(const StringView& path, TextureData& textureData
 
     if (failed)
     {
-        LOG(Warning, "Importing texture failed.");
+        LOG(Warning, "Importing texture '{0}' failed.", path);
     }
     else
     {
@@ -326,7 +326,7 @@ bool TextureTool::ImportTexture(const StringView& path, TextureData& textureData
 
     if (failed)
     {
-        LOG(Warning, "Importing texture failed. {0}", errorMsg);
+        LOG(Warning, "Importing texture '{0}' failed. {1}", path, errorMsg);
     }
     else
     {

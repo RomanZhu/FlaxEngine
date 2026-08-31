@@ -274,6 +274,11 @@ struct FLAXENGINE_API TextureEntry
     String FilePath;
 
     /// <summary>
+    /// Compressed image bytes stored inside the model source. When present, FilePath is only the embedded image name.
+    /// </summary>
+    Array<byte> EmbeddedData;
+
+    /// <summary>
     /// The texture contents hint based on the usage/context.
     /// </summary>
     TypeHint Type;

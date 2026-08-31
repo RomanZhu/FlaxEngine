@@ -109,6 +109,7 @@ struct OpenFbxImporterData
     Array<FbxBone> Bones;
     Array<const ofbx::Material*> Materials;
     Array<MaterialSlotEntry> ImportedMaterials;
+    Dictionary<String, Array<byte>> EmbeddedTextures;
 
     Array<int> TriangulatedIndicesCache;
     Array<Int4> BlendIndicesCache;
@@ -208,6 +209,25 @@ struct OpenFbxImporterData
             char filenameData[OPEN_FBX_NAME_SIZE];
             aFilename.toString(filenameData);
             const String filename(filenameData);
+            const String embeddedKey = String(StringUtils::GetFileName(filename)).ToLower();
+            const Array<byte>* embedded = EmbeddedTextures.TryGet(embeddedKey);
+            if (embedded)
+            {
+                textureIndex = 0;
+                while (textureIndex < result.Textures.Count())
+                {
+                    if (result.Textures[textureIndex].FilePath.ToLower() == embeddedKey)
+                        return true;
+                    textureIndex++;
+                }
+                auto& texture = result.Textures.AddOne();
+                texture.FilePath = StringUtils::GetFileName(filename);
+                texture.EmbeddedData = *embedded;
+                texture.Type = type;
+                texture.sRGB = sRGB;
+                texture.AssetID = Guid::Empty;
+                return true;
+            }
             String path;
             if (ModelTool::FindTexture(Path, filename, path))
                 return true;
@@ -315,8 +335,9 @@ struct OpenFbxImporterData
 
                     if (material.Diffuse.TextureIndex != -1)
                     {
-                        // Detect using alpha mask in diffuse texture
-                        material.Diffuse.HasAlphaMask = TextureTool::HasAlpha(result.Textures[material.Diffuse.TextureIndex].FilePath);
+                        const auto& diffuseTexture = result.Textures[material.Diffuse.TextureIndex];
+                        if (diffuseTexture.EmbeddedData.IsEmpty())
+                            material.Diffuse.HasAlphaMask = TextureTool::HasAlpha(diffuseTexture.FilePath);
                         if (material.Diffuse.HasAlphaMask)
                             result.Textures[material.Diffuse.TextureIndex].Type = TextureEntry::TypeHint::ColorRGBA;
                     }
@@ -1337,28 +1358,22 @@ bool ModelTool::ImportDataOpenFBX(const String& path, ModelData& data, Options& 
     // Extract embedded textures
     if (EnumHasAnyFlags(options.ImportTypes, ImportDataTypes::Textures))
     {
-        String outputPath;
         for (int i = 0, c = scene->getEmbeddedDataCount(); i < c; i++)
         {
             const ofbx::DataView aEmbedded = scene->getEmbeddedData(i);
             ofbx::DataView aFilename = scene->getEmbeddedFilename(i);
             char filenameData[OPEN_FBX_NAME_SIZE];
             aFilename.toString(filenameData);
-            if (outputPath.IsEmpty())
-            {
-                String pathStr(path);
-                outputPath = String(StringUtils::GetDirectoryName(pathStr)) / TEXT("textures");
-                FileSystem::CreateDirectory(outputPath);
-            }
             const String filenameStr(filenameData);
-            String embeddedPath = outputPath / StringUtils::GetFileName(filenameStr);
-            if (FileSystem::FileExists(embeddedPath))
+            const String embeddedKey = String(StringUtils::GetFileName(filenameStr)).ToLower();
+            if (context.EmbeddedTextures.ContainsKey(embeddedKey))
                 continue;
-            LOG(Info, "Extracing embedded resource to {0}", embeddedPath);
-            if (File::WriteAllBytes(embeddedPath, aEmbedded.begin + 4, (int32)(aEmbedded.end - aEmbedded.begin - 4)))
-            {
-                LOG(Error, "Failed to write data to file");
-            }
+            const int32 dataLength = (int32)(aEmbedded.end - aEmbedded.begin);
+            if (dataLength <= 4)
+                continue;
+            Array<byte> bytes;
+            bytes.Set(aEmbedded.begin + 4, dataLength - 4);
+            context.EmbeddedTextures.Add(embeddedKey, MoveTemp(bytes));
         }
     }
 

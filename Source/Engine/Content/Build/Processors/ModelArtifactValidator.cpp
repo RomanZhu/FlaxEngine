@@ -9,6 +9,7 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Content/Assets/SkinnedModel.h"
+#include "Engine/Content/Assets/Texture.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Platform/FileSystem.h"
 
@@ -42,7 +43,8 @@ namespace
         const int32 expectedVersion = expectedType == Model::TypeName ? Model::SerializedVersion :
             expectedType == SkinnedModel::TypeName ? SkinnedModel::SerializedVersion :
             expectedType == Animation::TypeName ? Animation::SerializedVersion :
-            expectedType == Material::TypeName ? Material::SerializedVersion : -1;
+            expectedType == Material::TypeName ? Material::SerializedVersion :
+            expectedType == Texture::TypeName ? Texture::SerializedVersion : -1;
         if (expectedVersion < 0 || data.SerializedVersion != expectedVersion)
             return Invalid(diagnostic, TEXT("Model runtime artifact serialized version is incompatible."));
 #if USE_EDITOR

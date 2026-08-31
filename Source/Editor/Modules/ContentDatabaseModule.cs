@@ -230,8 +230,22 @@ namespace FlaxEditor.Modules
             {
                 for (int i = 0; i < paths.Length; i++)
                 {
-                    if (!string.IsNullOrEmpty(paths[i]))
-                        _pendingSourceRefresh.Add(ContentMutationPathUtils.Normalize(paths[i]));
+                    if (string.IsNullOrEmpty(paths[i]))
+                        continue;
+                    var path = GetCanonicalSourcePathForDiskEvent(paths[i]);
+                    if (string.IsNullOrEmpty(path))
+                        continue;
+
+                    // A recursive folder refresh includes every descendant. File watchers emit a
+                    // notification for the copied folder and for each item below it, so retaining
+                    // all of them turns a large folder copy into repeated recursive scans on the
+                    // editor thread. Keep only the highest changed roots in each quiet-period batch.
+                    if (_pendingSourceRefresh.Any(root => ContentMutationPathUtils.IsWithinRoot(path, root)))
+                        continue;
+                    var nested = _pendingSourceRefresh.Where(candidate => ContentMutationPathUtils.IsWithinRoot(candidate, path, false)).ToArray();
+                    for (int j = 0; j < nested.Length; j++)
+                        _pendingSourceRefresh.Remove(nested[j]);
+                    _pendingSourceRefresh.Add(path);
                 }
             }
         }

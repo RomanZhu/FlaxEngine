@@ -1356,7 +1356,8 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
         auto& texture = data.Textures[i];
 
         // Auto-import textures
-        if (autoImportOutput.IsEmpty() || EnumHasNoneFlags(options.ImportTypes, ImportDataTypes::Textures) || texture.FilePath.IsEmpty() || options.CreateEmptyMaterialSlots)
+        if (autoImportOutput.IsEmpty() || EnumHasNoneFlags(options.ImportTypes, ImportDataTypes::Textures) || texture.FilePath.IsEmpty() ||
+            texture.EmbeddedData.HasItems() || options.CreateEmptyMaterialSlots)
             continue;
         String assetPath = GetAdditionalImportPath(autoImportOutput, importedFileNames, StringUtils::GetFileNameWithoutExtension(texture.FilePath));
 #if COMPILE_WITH_ASSETS_IMPORTER

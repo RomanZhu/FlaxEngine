@@ -6,8 +6,6 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Math/Matrix.h"
 #include "Engine/Core/Collections/Dictionary.h"
-#include "Engine/Platform/FileSystem.h"
-#include "Engine/Platform/File.h"
 #include "Engine/Tools/TextureTool/TextureTool.h"
 #include "Engine/Utilities/AnsiPathTempFile.h"
 
@@ -18,6 +16,7 @@
 #include <ThirdParty/assimp/types.h>
 #include <ThirdParty/assimp/config.h>
 #include <ThirdParty/assimp/scene.h>
+#include <ThirdParty/assimp/GltfMaterial.h>
 #include <ThirdParty/assimp/version.h>
 #include <ThirdParty/assimp/postprocess.h>
 #include <ThirdParty/assimp/DefaultLogger.hpp>
@@ -522,9 +521,22 @@ bool ImportMaterialTexture(ModelData& result, AssimpImporterData& data, const ai
                 aTex = data.Scene->mTextures[texIndex];
             if (aTex && aTex->mHeight == 0 && aTex->mWidth > 0)
             {
-                // Export embedded texture to temporary file
+                // Preserve compressed embedded texture data as model-owned input. Do not mutate the source folder.
                 filename = String::Format(TEXT("{0}_tex_{1}.{2}"), StringUtils::GetFileNameWithoutExtension(data.Path), texIndexName, String(aTex->achFormatHint));
-                File::WriteAllBytes(String(StringUtils::GetDirectoryName(data.Path)) / filename, (const byte*)aTex->pcData, (int32)aTex->mWidth);
+                textureIndex = 0;
+                while (textureIndex < result.Textures.Count())
+                {
+                    if (result.Textures[textureIndex].FilePath == filename)
+                        return true;
+                    textureIndex++;
+                }
+                auto& texture = result.Textures.AddOne();
+                texture.FilePath = filename;
+                texture.EmbeddedData.Set((const byte*)aTex->pcData, (int32)aTex->mWidth);
+                texture.Type = type;
+                texture.sRGB = sRGB;
+                texture.AssetID = Guid::Empty;
+                return true;
             }
         }
 
@@ -609,8 +621,18 @@ bool ImportMaterials(ModelData& result, AssimpImporterData& data, String& errorM
 
                 if (materialSlot.Diffuse.TextureIndex != -1)
                 {
-                    // Detect using alpha mask in diffuse texture
-                    materialSlot.Diffuse.HasAlphaMask = TextureTool::HasAlpha(result.Textures[materialSlot.Diffuse.TextureIndex].FilePath);
+                    const auto& diffuseTexture = result.Textures[materialSlot.Diffuse.TextureIndex];
+                    aiString alphaMode;
+                    if ((data.Path.EndsWith(TEXT(".gltf")) || data.Path.EndsWith(TEXT(".glb"))) &&
+                        aMaterial->Get(AI_MATKEY_GLTF_ALPHAMODE, alphaMode) == AI_SUCCESS)
+                    {
+                        materialSlot.Diffuse.HasAlphaMask = String(alphaMode.C_Str()) != TEXT("OPAQUE");
+                    }
+                    else if (diffuseTexture.EmbeddedData.IsEmpty())
+                    {
+                        // Embedded textures have no standalone path to probe. glTF declares alpha usage in the material.
+                        materialSlot.Diffuse.HasAlphaMask = TextureTool::HasAlpha(diffuseTexture.FilePath);
+                    }
                     if (materialSlot.Diffuse.HasAlphaMask)
                         result.Textures[materialSlot.Diffuse.TextureIndex].Type = TextureEntry::TypeHint::ColorRGBA;
                 }
