@@ -119,12 +119,21 @@ uint64 AssetImporterRegistry::GetGeneration() const
 
 bool AssetImporterRegistry::Validate(AssetImporterDescriptor& descriptor, AssetPipelineDiagnostic& diagnostic) const
 {
-    if (!StableToken(descriptor.ID) || descriptor.ImporterVersion == 0 || descriptor.ImplementationHash.IsZero())
+    if (!StableToken(descriptor.ID) || descriptor.ImporterVersion == 0 || descriptor.SettingsSchemaVersion == 0 || descriptor.ImplementationHash.IsZero())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer identity or version is invalid."));
+    if (descriptor.ProviderID.IsEmpty())
+        descriptor.ProviderID = descriptor.ID;
+    if (!StableToken(descriptor.ProviderID))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer provider identity is invalid."));
     if (descriptor.Extensions.IsEmpty() && descriptor.Fallback == AssetImporterFallback::None)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer must claim an extension or a fallback role."));
     if (!descriptor.Import.IsBinded() && (!descriptor.Processor.Prepare.IsBinded() || !descriptor.Processor.Build.IsBinded()))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer has no import callback or processor implementation."));
+    if (descriptor.RequiresMainThread && descriptor.SupportsParallelImport)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Main-thread importers cannot claim parallel execution."));
+    if (descriptor.ProcessSafe && (descriptor.MaximumMemoryBytes == 0 ||
+        descriptor.MaximumOutputBytes == 0 || descriptor.MaximumOutputFiles < 1 || descriptor.ImportTimeoutMilliseconds == 0))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Process-safe importer resource limits are invalid."));
     for (String& extension : descriptor.Extensions)
     {
         extension = extension.ToLower();
@@ -139,6 +148,110 @@ bool AssetImporterRegistry::Validate(AssetImporterDescriptor& descriptor, AssetP
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer repeats an extension claim."));
         }
     }
+    return false;
+}
+
+bool AssetImporterRegistry::ReplaceProviderSet(const StringView& providerID, Array<AssetImporterDescriptor> descriptors,
+                                               Array<String>& changedImporterIDs, AssetPipelineDiagnostic& diagnostic)
+{
+    changedImporterIDs.Clear();
+    const String provider(providerID);
+    if (!StableToken(provider))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, provider, TEXT("Importer provider identity is invalid."));
+    if (descriptors.Count() > 1)
+    {
+        std::sort(descriptors.Get(), descriptors.Get() + descriptors.Count(), [](const AssetImporterDescriptor& a, const AssetImporterDescriptor& b)
+        {
+            return a.ID < b.ID;
+        });
+    }
+
+    ScopeLock lock(_locker);
+    auto markChanged = [&changedImporterIDs](const String& id)
+    {
+        if (!changedImporterIDs.Contains(id))
+            changedImporterIDs.Add(id);
+    };
+    for (int32 i = 0; i < descriptors.Count(); i++)
+    {
+        AssetImporterDescriptor& descriptor = descriptors[i];
+        descriptor.ProviderID = provider;
+        if (Validate(descriptor, diagnostic))
+            return true;
+        if (i > 0 && descriptors[i - 1].ID == descriptor.ID)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Reloadable importer provider repeats an importer ID."));
+        for (int32 j = 0; j < i; j++)
+        {
+            if (descriptor.Fallback != AssetImporterFallback::None && descriptors[j].Fallback == descriptor.Fallback)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Reloadable importer provider repeats a fallback role."));
+        }
+        for (const auto& entry : _providers)
+        {
+            const AssetImporterDescriptor& existing = entry.Value->Descriptor;
+            if (existing.ProviderID == provider || entry.Value->Revoking)
+                continue;
+            if (existing.ID == descriptor.ID)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer ID is owned by another provider."));
+            if (descriptor.Fallback != AssetImporterFallback::None && existing.Fallback == descriptor.Fallback)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, descriptor.ID, TEXT("Importer fallback role is owned by another provider."));
+        }
+    }
+
+    Array<std::shared_ptr<ProviderState>> previous;
+    for (const auto& entry : _providers)
+    {
+        if (entry.Value->Descriptor.ProviderID == provider)
+        {
+            entry.Value->Revoking = true;
+            previous.Add(entry.Value);
+        }
+    }
+    for (const std::shared_ptr<ProviderState>& state : previous)
+    {
+        while (state->ActiveLeases != 0)
+            _quiesced.Wait(_locker);
+    }
+
+    for (const std::shared_ptr<ProviderState>& oldState : previous)
+    {
+        const AssetImporterDescriptor* replacement = nullptr;
+        for (const AssetImporterDescriptor& descriptor : descriptors)
+        {
+            if (descriptor.ID == oldState->Descriptor.ID)
+            {
+                replacement = &descriptor;
+                break;
+            }
+        }
+        if (!replacement || replacement->ImporterVersion != oldState->Descriptor.ImporterVersion ||
+            replacement->SettingsSchemaVersion != oldState->Descriptor.SettingsSchemaVersion ||
+            replacement->ImplementationHash != oldState->Descriptor.ImplementationHash)
+            markChanged(oldState->Descriptor.ID);
+        _providers.Remove(oldState->Descriptor.ID);
+    }
+    for (AssetImporterDescriptor& descriptor : descriptors)
+    {
+        bool existedUnchanged = false;
+        for (const std::shared_ptr<ProviderState>& oldState : previous)
+        {
+            if (oldState->Descriptor.ID == descriptor.ID && oldState->Descriptor.ImporterVersion == descriptor.ImporterVersion &&
+                oldState->Descriptor.SettingsSchemaVersion == descriptor.SettingsSchemaVersion &&
+                oldState->Descriptor.ImplementationHash == descriptor.ImplementationHash)
+            {
+                existedUnchanged = true;
+                break;
+            }
+        }
+        if (!existedUnchanged)
+            markChanged(descriptor.ID);
+        auto state = std::make_shared<ProviderState>();
+        state->Descriptor = MoveTemp(descriptor);
+        state->ProviderGeneration = _nextProviderGeneration++;
+        _providers.Add(state->Descriptor.ID, state);
+    }
+    if (previous.HasItems() || descriptors.HasItems())
+        _generation++;
+    diagnostic = AssetPipelineDiagnostic();
     return false;
 }
 

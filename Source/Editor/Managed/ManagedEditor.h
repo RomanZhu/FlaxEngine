@@ -57,6 +57,12 @@ public:
     ~ManagedEditor();
 
 public:
+    /// <summary>Returns true for the restricted scripted-importer child process.</summary>
+    static bool IsAssetImportWorker();
+
+    /// <summary>Loads project scripts and executes one isolated scripted-importer request.</summary>
+    bool RunAssetImportWorker();
+
     /// <summary>
     /// Initializes managed editor.
     /// </summary>

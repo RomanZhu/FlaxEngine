@@ -83,6 +83,7 @@ bool AssetImportPlanner::Build(const Array<AssetImportPlanRequest>& requests, Ar
         builder.AddUInt32("artifact-schema", request.ArtifactSchemaVersion);
         builder.AddString("importer", descriptor.ID);
         builder.AddUInt32("importer-version", descriptor.ImporterVersion);
+        builder.AddUInt32("settings-schema", descriptor.SettingsSchemaVersion);
         builder.AddHash("implementation", descriptor.ImplementationHash);
         builder.AddTarget(request.Target, ArtifactTargetDimension::All);
 

@@ -40,6 +40,7 @@
 #include "Engine/Threading/Threading.h"
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Content/Importing/AssetImportService.h"
+#include "Engine/Content/Importing/CallbackImporterPipelineService.h"
 #if COMPILE_WITH_MATERIAL_GRAPH
 #include "Engine/Tools/MaterialGenerator/Types.h"
 #endif
@@ -620,6 +621,32 @@ namespace
         return true;
     }
 
+    bool TryResolveCallbackImporter(const StringView& sourcePath, AssetImporterDescriptor& descriptor)
+    {
+        AssetPipelineDiagnostic ignored;
+        if (AssetImportService::EnsureInitialized(ignored))
+            return false;
+        AssetImporterRegistry* registry = AssetImportService::GetImporterRegistry();
+        if (!registry)
+            return false;
+        AssetImporterSelectionRequest selection;
+        selection.SourcePath = sourcePath;
+        AssetImporterLease lease;
+        if (registry->Resolve(selection, lease, ignored) || lease.Get().ProviderKind != AssetProcessorProviderKind::Managed)
+            return false;
+        descriptor = lease.Get();
+        return true;
+    }
+
+    void ConfigureCallbackMetadata(AssetMeta& meta, const AssetImporterDescriptor& descriptor)
+    {
+        meta.AssetType = RawDataAsset::TypeName;
+        meta.SourceKind = AssetSourceKind::ImportedSource;
+        meta.Processor.ID = descriptor.ID;
+        meta.Processor.SettingsVersion = descriptor.SettingsSchemaVersion;
+        meta.Processor.SettingsJson = "{}\n";
+    }
+
     bool PrepareDefaultCanonicalMetadata(CanonicalBatchWork& work)
     {
         if (!FileSystem::FileExists(work.SourcePath))
@@ -631,6 +658,14 @@ namespace
         AssetMeta& meta = work.Meta;
         meta.ID = Guid::New();
         meta.SourceKind = AssetSourceKind::ImportedSource;
+
+        AssetImporterDescriptor callbackImporter;
+        if (TryResolveCallbackImporter(work.SourcePath, callbackImporter))
+        {
+            ConfigureCallbackMetadata(meta, callbackImporter);
+            work.BuildKind = CanonicalBatchBuildKind::Imported;
+            return false;
+        }
 
 #if COMPILE_WITH_TEXTURE_TOOL
         const bool isTexture = extension == TEXT("png") || extension == TEXT("tga") || extension == TEXT("exr") ||
@@ -813,6 +848,12 @@ namespace
             AssetMeta metadata;
             if (AssetMeta::Load(metaPath, metadata, diagnostic))
                 return true;
+            AssetImporterDescriptor callbackImporter;
+            if (metadata.Processor.ID == TEXT("Flax.Binary") && TryResolveCallbackImporter(sourcePath, callbackImporter))
+            {
+                ConfigureCallbackMetadata(metadata, callbackImporter);
+                return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+            }
             const bool isSettings = extension == TEXT("settings");
             const bool isJsonDocument = !isSettings && JsonStorageProxy::IsValidExtension(extension);
             if ((isSettings || isJsonDocument) && ValidateSettingsIdentity(sourcePath, metadata.ID, diagnostic))
@@ -872,6 +913,12 @@ namespace
                 metadata.Processor.SettingsVersion = 1;
                 metadata.Processor.SettingsJson = "{}\n";
             }
+            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+        }
+        AssetImporterDescriptor callbackImporter;
+        if (TryResolveCallbackImporter(sourcePath, callbackImporter))
+        {
+            ConfigureCallbackMetadata(metadata, callbackImporter);
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
         }
         if (!HasDefaultCanonicalImporter(sourcePath))
@@ -999,6 +1046,13 @@ namespace
                 : GraphPipelineService::RequestBuild(record.ID, force, diagnostic);
             return failed ? GenericBuildRequestResult::Failed : GenericBuildRequestResult::Queued;
         }
+        if (CallbackImporterPipelineService::OwnsProcessor(record.ProcessorID))
+        {
+            const bool failed = synchronous
+                ? CallbackImporterPipelineService::RequestBuildAndWait(record.ID, force, diagnostic)
+                : CallbackImporterPipelineService::RequestBuild(record.ID, force, diagnostic);
+            return failed ? GenericBuildRequestResult::Failed : GenericBuildRequestResult::Queued;
+        }
         diagnostic = AssetPipelineDiagnostic();
         return GenericBuildRequestResult::Unsupported;
     }
@@ -1013,7 +1067,8 @@ namespace
         if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
             return true;
 #endif
-        return GraphPipelineService::OwnsProcessor(record.ProcessorID);
+        return GraphPipelineService::OwnsProcessor(record.ProcessorID) ||
+            CallbackImporterPipelineService::OwnsProcessor(record.ProcessorID);
     }
 
     bool RunGenericBuildRefresh(const Array<AssetRecord>& selected, bool force, bool synchronous,

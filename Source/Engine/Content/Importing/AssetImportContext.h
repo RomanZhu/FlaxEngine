@@ -6,6 +6,7 @@
 #include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Engine/Content/AssetPipeline/AssetPipelineDiagnostics.h"
 #include "Engine/Core/Delegate.h"
+#include "Engine/Core/Types/Span.h"
 
 enum class AssetImportDependencyKind : byte
 {
@@ -45,6 +46,7 @@ struct FLAXENGINE_API AssetImportOutputDeclaration
     String Name;
     StringAnsi Kind;
     StringAnsi Extension;
+    Array<byte> Data;
 };
 
 struct FLAXENGINE_API AssetImportContextResult
@@ -92,6 +94,7 @@ public:
 
     int32 AddObjectToAsset(const StringView& stableIdentifier, const StringView& typeName, const StringView& displayName = StringView::Empty);
     int32 CreateOutput(const StringView& name, const StringAnsiView& kind, const StringAnsiView& extension);
+    bool WriteOutput(int32 outputIndex, const Span<byte>& data, AssetPipelineDiagnostic& diagnostic);
     bool SetMainObject(int32 objectIndex, AssetPipelineDiagnostic& diagnostic);
     void AddDiagnostic(const AssetPipelineDiagnostic& diagnostic);
     bool Complete(bool requireMainObject, AssetImportContextResult& result, AssetPipelineDiagnostic& diagnostic);

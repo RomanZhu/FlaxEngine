@@ -1348,6 +1348,7 @@ namespace FlaxEditor.Modules
         public override void OnInit()
         {
             ImportFileEntry.RegisterDefaultTypes();
+            ScriptedImporterRegistry.Initialize();
             ScriptsBuilder.ScriptsReloadBegin += OnScriptsReloadBegin;
         }
 
@@ -1422,6 +1423,7 @@ namespace FlaxEditor.Modules
         public override void OnExit()
         {
             ScriptsBuilder.ScriptsReloadBegin -= OnScriptsReloadBegin;
+            ScriptedImporterRegistry.Shutdown();
             EndWorker();
         }
     }

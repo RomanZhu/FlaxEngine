@@ -699,6 +699,11 @@ bool Editor::Init()
     Engine::Update.Bind(&EditorImpl::OnUpdate);
     Managed = New<ManagedEditor>();
 
+    // Scripted importers run in a dedicated child that loads project assemblies but never creates
+    // editor modules, the canonical database, or publication services.
+    if (ManagedEditor::IsAssetImportWorker())
+        return Managed->RunAssetImportWorker();
+
     // Show splash screen
     if (!CommandLine::Options.Headless.IsTrue())
     {

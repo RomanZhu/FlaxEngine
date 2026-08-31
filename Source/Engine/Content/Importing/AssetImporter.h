@@ -19,20 +19,29 @@ using AssetImporterCallback = Function<bool(AssetImportContext&, AssetPipelineDi
 struct FLAXENGINE_API AssetImporterDescriptor
 {
     String ID;
+    String ProviderID;
     uint32 ImporterVersion = 1;
+    uint32 SettingsSchemaVersion = 1;
     ContentHash ImplementationHash;
+    AssetProcessorProviderKind ProviderKind = AssetProcessorProviderKind::Native;
     Array<String> Extensions;
     int32 Priority = 0;
     bool SupportsOverride = true;
     bool ProducesMainObject = true;
     bool ProducesSubObjects = false;
     bool SupportsParallelImport = true;
+    bool ProcessSafe = false;
     bool RequiresMainThread = false;
     bool PathSensitive = true;
+    uint64 MaximumMemoryBytes = 1024ull * 1024ull * 1024ull;
+    uint64 MaximumOutputBytes = 4ull * 1024ull * 1024ull * 1024ull;
+    int32 MaximumOutputFiles = 4096;
+    uint32 ImportTimeoutMilliseconds = 300000;
     AssetImporterFallback Fallback = AssetImporterFallback::None;
     AssetImporterSourcePredicate MatchesSource;
     AssetImporterCallback Import;
     AssetProcessorDescriptor Processor;
 
-    static AssetImporterDescriptor FromProcessor(const AssetProcessorDescriptor& processor, int32 priority = 0);
+    /// <summary>Creates the public importer contract for one private build-stage implementation.</summary>
+    static AssetImporterDescriptor FromBuildImplementation(const AssetProcessorDescriptor& processor, int32 priority = 0);
 };

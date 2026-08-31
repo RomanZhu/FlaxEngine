@@ -171,6 +171,18 @@ int32 AssetImportContext::CreateOutput(const StringView& name, const StringAnsiV
     return _result.Outputs.Count() - 1;
 }
 
+bool AssetImportContext::WriteOutput(int32 outputIndex, const Span<byte>& data, AssetPipelineDiagnostic& diagnostic)
+{
+    if (_completed || outputIndex < 0 || outputIndex >= _result.Outputs.Count())
+        return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer wrote to an undeclared output."));
+    AssetImportOutputDeclaration& output = _result.Outputs[outputIndex];
+    if (output.Data.HasItems())
+        return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer output was completed more than once."));
+    output.Data.Add(data.Get(), data.Length());
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
 bool AssetImportContext::SetMainObject(int32 objectIndex, AssetPipelineDiagnostic& diagnostic)
 {
     if (_completed || objectIndex < 0 || objectIndex >= _result.Objects.Count())

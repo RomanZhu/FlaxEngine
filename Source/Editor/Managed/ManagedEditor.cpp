@@ -17,6 +17,8 @@
 #include "Engine/Level/Actor.h"
 #include "Engine/CSG/CSGBuilder.h"
 #include "Engine/Engine/CommandLine.h"
+#include "Engine/Engine/Engine.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Renderer/ProbesRenderer.h"
 #include "Engine/Animations/Graph/AnimGraph.h"
 #include "Engine/Core/ObjectsRemovalService.h"
@@ -33,6 +35,44 @@ MMethod* Internal_CanReloadScripts = nullptr;
 MMethod* Internal_CanAutoBuildCSG = nullptr;
 MMethod* Internal_CanAutoBuildNavMesh = nullptr;
 MMethod* Internal_FocusGameViewport = nullptr;
+
+bool ManagedEditor::IsAssetImportWorker()
+{
+    String value;
+    return !Platform::GetEnvironmentVariable(TEXT("FLAX_ASSET_IMPORT_WORKER"), value) && value == TEXT("1");
+}
+
+bool ManagedEditor::RunAssetImportWorker()
+{
+    if (!IsAssetImportWorker())
+        return true;
+    if (Scripting::Load())
+    {
+        LOG(Error, "Failed to load project scripts for the isolated importer worker.");
+        Engine::RequestExit(1);
+        return true;
+    }
+    MClass* workerClass = Scripting::FindClass("FlaxEditor.Content.Import.ScriptedImporterWorker");
+    MMethod* runMethod = workerClass ? workerClass->GetMethod("Run", 0) : nullptr;
+    if (!runMethod)
+    {
+        LOG(Error, "Missing managed isolated importer worker entry point.");
+        Engine::RequestExit(1);
+        return true;
+    }
+    MObject* exception = nullptr;
+    MObject* value = runMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+    {
+        MException ex(exception);
+        ex.Log(LogType::Error, TEXT("ScriptedImporterWorker.Run"));
+        Engine::RequestExit(1);
+        return true;
+    }
+    const int32 exitCode = value ? MUtils::Unbox<int32>(value) : 1;
+    Engine::RequestExit(exitCode);
+    return exitCode != 0;
+}
 MMethod* Internal_HasGameViewportFocus = nullptr;
 MMethod* Internal_ScreenToGameViewport = nullptr;
 MMethod* Internal_GameViewportToScreen = nullptr;

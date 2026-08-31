@@ -75,6 +75,9 @@ class FLAXENGINE_API AssetImporterRegistry : public NonCopyable
 public:
     uint64 GetGeneration() const;
     bool Register(AssetImporterDescriptor descriptor, AssetImporterRegistration& registration, AssetPipelineDiagnostic& diagnostic);
+    /// <summary>Atomically replaces every importer from one reloadable provider.</summary>
+    bool ReplaceProviderSet(const StringView& providerID, Array<AssetImporterDescriptor> descriptors,
+                            Array<String>& changedImporterIDs, AssetPipelineDiagnostic& diagnostic);
     bool Unregister(const StringView& id, uint64 providerGeneration, bool waitForLeases, AssetPipelineDiagnostic& diagnostic);
     bool Resolve(const AssetImporterSelectionRequest& request, AssetImporterLease& lease, AssetPipelineDiagnostic& diagnostic);
     bool TryAcquire(const StringView& id, AssetImporterLease& lease, AssetPipelineDiagnostic& diagnostic);
