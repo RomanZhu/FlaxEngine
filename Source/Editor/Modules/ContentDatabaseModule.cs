@@ -517,6 +517,9 @@ namespace FlaxEditor.Modules
 
         private void ApplyAssetDatabaseChanged(ulong revision)
         {
+            if (revision <= _assetDatabaseRevision)
+                return;
+
             var change = AssetDatabaseFacade.GetLastChange();
 
             // Native keeps only the most recent batch, so a publish from a build worker can overwrite
@@ -2950,6 +2953,11 @@ MoveCompleted:
             return IsTextureRecord(record) || IsModelRecord(record) || IsDocumentOrImportedSourceRecord(record);
         }
 
+        private static bool CanonicalSourcePairExists(AssetDatabaseRecordInfo record)
+        {
+            return (File.Exists(record.SourcePath) || Directory.Exists(record.SourcePath)) && File.Exists(record.MetaPath);
+        }
+
         private void QueueAssetDiskChange(string path, bool renameOnly)
         {
             if (string.IsNullOrEmpty(path))
@@ -3003,7 +3011,8 @@ MoveCompleted:
 
             foreach (var id in ids)
             {
-                if (!_assetRecordsById.TryGetValue(id, out var record) || !CanBuildCanonicalRecord(record) || record.Status != AssetRecordStatus.Ready)
+                if (!_assetRecordsById.TryGetValue(id, out var record) || !CanBuildCanonicalRecord(record) ||
+                    record.Status != AssetRecordStatus.Ready || !CanonicalSourcePairExists(record))
                     continue;
                 if (renameOnlyIds.Contains(id) && previousRecords.TryGetValue(id, out var previous) && previous.MetaSemanticHash == record.MetaSemanticHash)
                     continue;
@@ -3052,7 +3061,8 @@ MoveCompleted:
                 return;
             var id = _pendingCanonicalBuilds.Dequeue();
             _pendingCanonicalBuildIds.Remove(id);
-            if (!_assetRecordsById.TryGetValue(id, out var record) || record.Status != AssetRecordStatus.Ready || !CanBuildCanonicalRecord(record))
+            if (!_assetRecordsById.TryGetValue(id, out var record) || record.Status != AssetRecordStatus.Ready ||
+                !CanBuildCanonicalRecord(record) || !CanonicalSourcePairExists(record))
                 return;
             var failed = IsTextureRecord(record)
                 ? AssetDatabaseFacade.BuildTexture(record.ID)
@@ -3341,6 +3351,10 @@ MoveCompleted:
                 var sourcePath = GetCanonicalSourcePathForDiskEvent(readyPaths[i]);
                 if (_sourceAssetRecords.TryGetValue(sourcePath, out var record))
                 {
+                    // A removed canonical source is reconciled by the database refresh below. Reloading
+                    // its stale live object first only starts dependency and GPU work that must be canceled.
+                    if (!CanonicalSourcePairExists(record))
+                        continue;
                     // The native content registry answers loaded-state checks in O(1). Only walk
                     // the editor tree for the small subset that actually needs hot reload.
                     asset = FlaxEngine.Content.GetAsset(record.ID);
@@ -3522,6 +3536,9 @@ MoveCompleted:
                     return;
                 }
 
+                // Refresh the managed snapshot now so deleted records cannot be scheduled or reloaded
+                // while the queued native change notification is waiting for a later update.
+                ApplyAssetDatabaseChanged(AssetDatabaseFacade.Revision);
                 if (rebuildAll)
                     ScheduleAllCanonicalBuilds();
                 else
