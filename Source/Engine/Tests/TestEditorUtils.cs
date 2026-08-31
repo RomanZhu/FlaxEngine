@@ -268,10 +268,11 @@ namespace FlaxEngine.Tests
             var proxy = new GenericJsonAssetProxy();
             var newItem = new NewItem(Path.Combine(folder.Path, "Json Asset.json"), proxy, null);
             var fileItem = new FileItem(Path.Combine(folder.Path, "Notes.txt"));
+            var database = new AssetWorkspaceModule(null);
 
-            Assert.IsFalse(AssetWorkspaceModule.ShouldRemoveMissingContentItem(newItem));
-            Assert.IsTrue(AssetWorkspaceModule.ShouldRemoveMissingContentItem(fileItem));
-            Assert.IsFalse(AssetWorkspaceModule.ShouldRemoveMissingContentItem(null));
+            Assert.IsFalse(database.ShouldRemoveMissingContentItem(newItem));
+            Assert.IsTrue(database.ShouldRemoveMissingContentItem(fileItem));
+            Assert.IsFalse(database.ShouldRemoveMissingContentItem(null));
         }
 
         [Test]

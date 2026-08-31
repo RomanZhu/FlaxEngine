@@ -59,11 +59,11 @@ TEST_CASE("Runtime references do not invalidate build keys")
     AssetDependency runtime;
     runtime.Kind = AssetDependencyKind::RuntimeReference;
     runtime.StableIdentity = TEXT("runtime-a");
-    runtime.AssetID = Guid(1, 2, 3, 4);
+    runtime.ObjectID = AssetObjectId::Main(AssetGuid(Guid(1, 2, 3, 4)));
     dependencies.Add(runtime);
     CHECK(BuildDependencyKey(dependencies) == withoutRuntime);
     dependencies.Last().StableIdentity = TEXT("runtime-b");
-    dependencies.Last().AssetID = Guid(5, 6, 7, 8);
+    dependencies.Last().ObjectID = AssetObjectId::Main(AssetGuid(Guid(5, 6, 7, 8)));
     CHECK(BuildDependencyKey(dependencies) == withoutRuntime);
 }
 
@@ -72,7 +72,7 @@ TEST_CASE("Semantic interface versions participate in dependant keys")
     AssetDependency input;
     input.Kind = AssetDependencyKind::BuildInput;
     input.StableIdentity = TEXT("material-interface");
-    input.AssetID = Guid(10, 11, 12, 13);
+    input.ObjectID = AssetObjectId::Main(AssetGuid(Guid(10, 11, 12, 13)));
     input.InterfaceVersion = 1;
     input.SemanticInterface = ContentHash::Compute("surface", 7);
     Array<AssetDependency> dependencies;
@@ -88,8 +88,8 @@ TEST_CASE("Semantic interface versions participate in dependant keys")
 TEST_CASE("Asset database indexes build and runtime reverse edges independently")
 {
     const Guid owner(20, 21, 22, 23);
-    const Guid buildInput(30, 31, 32, 33);
-    const Guid runtimeReference(40, 41, 42, 43);
+    const AssetObjectId buildInput = AssetObjectId::Main(AssetGuid(Guid(30, 31, 32, 33)));
+    const AssetObjectId runtimeReference = AssetObjectId::Main(AssetGuid(Guid(40, 41, 42, 43)));
     AssetRecord record;
     record.ID = owner;
     record.SourceAssetID = owner;

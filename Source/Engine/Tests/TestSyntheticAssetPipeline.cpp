@@ -328,8 +328,8 @@ namespace
             record.ProcessorID = TEXT("tests.synthetic-pipeline");
             record.SourceKind = AssetSourceKind::ImportedSource;
             record.Status = AssetRecordStatus::Ready;
-            record.BuildInputDependencies.Add(BuildDependencyID);
-            record.RuntimeReferences.Add(RuntimeReferenceID);
+            record.BuildInputDependencies.Add(AssetObjectId::Main(AssetGuid(BuildDependencyID)));
+            record.RuntimeReferences.Add(AssetObjectId::Main(AssetGuid(RuntimeReferenceID)));
             return record;
         }
 

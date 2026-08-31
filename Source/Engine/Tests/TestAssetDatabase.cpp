@@ -30,7 +30,7 @@ namespace
         result.SubAsset = SubAssetKey(key);
         result.ProcessorID = TEXT("Flax.Test");
         result.PortabilityKey = String(path).ToLower();
-        result.BuildInputDependencies.Add(Guid(91, 92, 93, 94));
+        result.BuildInputDependencies.Add(AssetObjectId::Main(AssetGuid(Guid(91, 92, 93, 94))));
         return result;
     }
 
