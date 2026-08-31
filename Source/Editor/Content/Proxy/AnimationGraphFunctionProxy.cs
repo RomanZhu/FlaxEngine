@@ -18,7 +18,7 @@ namespace FlaxEditor.Content
         public override string Name => "Animation Graph Function";
 
         /// <inheritdoc />
-        public override string FileExtension => CanonicalGraphDocuments.UseTextGraphAssets ? "animgraphfunction" : Extension;
+        public override string FileExtension => "animgraphfunction";
 
         /// <inheritdoc />
         public override bool AcceptsAsset(string typeName, string path)
@@ -52,13 +52,7 @@ namespace FlaxEditor.Content
         public override void Create(string outputPath, object arg)
         {
             CanonicalGraphDocuments.EnsureCanAuthor(typeof(AnimationGraphFunction).FullName, outputPath);
-            if (CanonicalGraphDocuments.UseTextGraphAssets)
-            {
-                if (AssetDatabaseFacade.CreateGraphDocument(outputPath, typeof(AnimationGraphFunction).FullName) == Guid.Empty)
-                    throw new Exception("Failed to create new asset.");
-                return;
-            }
-            if (Editor.CreateAsset("AnimationGraphFunction", outputPath))
+            if (AssetDatabaseFacade.CreateGraphDocument(outputPath, typeof(AnimationGraphFunction).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
     }

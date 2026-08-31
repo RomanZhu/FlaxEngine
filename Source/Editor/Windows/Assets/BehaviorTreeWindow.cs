@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.GUI;
@@ -91,6 +92,7 @@ namespace FlaxEditor.Windows.Assets
     /// <seealso cref="BehaviorTreeSurface" />
     public sealed class BehaviorTreeWindow : AssetEditorWindowBase<BehaviorTree>, IVisjectSurfaceWindow, IPresenterOwner
     {
+        private AssetDocumentSession _documentSession;
         private readonly SplitPanel _split1;
         private readonly SplitPanel _split2;
         private CustomEditorPresenter _nodePropertiesEditor;
@@ -323,6 +325,16 @@ namespace FlaxEditor.Windows.Assets
                 Editor.LogError("Legacy .flax saving is disabled for converted asset types. Migrate the asset before editing it.");
                 return;
             }
+            if (_documentSession != null)
+            {
+                if (_surface.IsEdited && SaveSurface())
+                    return;
+                if (CanonicalGraphDocuments.SaveSurface(_item, _documentSession))
+                    return;
+                ClearEditedFlag();
+                OnSurfaceEditedChanged();
+                return;
+            }
             using var saveScope = Editor.ContentDatabase.TrackAssetSave(_item.Path);
 
             // Check if surface has been edited
@@ -388,25 +400,20 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         protected override BehaviorTree LoadAsset()
         {
-            if (_item != null && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return FlaxEngine.Content.LoadAsync<BehaviorTree>(_item.ID);
+            if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
+                return CanonicalGraphDocuments.Open<BehaviorTree>(_item, out _documentSession);
             return base.LoadAsset();
         }
 
         /// <inheritdoc />
         public byte[] SurfaceData
         {
-            get => _asset.LoadSurface();
+            get => _documentSession != null ? CanonicalGraphDocuments.GetSurface(_documentSession) : _asset.LoadSurface();
             set
             {
                 if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
                 {
-                    if (CanonicalGraphDocuments.SaveCloneSurface(_item, value))
-                    {
-                        _surface.MarkAsEdited();
-                        Editor.LogError("Failed to save surface data");
-                    }
-                    _asset.Reload();
+                    CanonicalGraphDocuments.SetSurface(_documentSession, value);
                     return;
                 }
 
@@ -432,12 +439,16 @@ namespace FlaxEditor.Windows.Assets
         public void OnSurfaceEditedChanged()
         {
             if (_surface.IsEdited)
+            {
+                _documentSession?.MarkDirty();
                 MarkAsEdited();
+            }
         }
 
         /// <inheritdoc />
         public void OnSurfaceGraphEdited()
         {
+            _documentSession?.MarkDirty();
         }
 
         /// <inheritdoc />
@@ -450,6 +461,7 @@ namespace FlaxEditor.Windows.Assets
         protected override void UnlinkItem()
         {
             _isWaitingForSurfaceLoad = false;
+            CanonicalGraphDocuments.Close(_item, ref _documentSession);
 
             base.UnlinkItem();
         }
@@ -521,7 +533,7 @@ namespace FlaxEditor.Windows.Assets
         public override void Update(float deltaTime)
         {
             // Wait for asset loaded
-            if (_isWaitingForSurfaceLoad && _asset.IsLoaded)
+            if (_isWaitingForSurfaceLoad && (_asset.IsLoaded || _documentSession?.Document != null))
             {
                 _isWaitingForSurfaceLoad = false;
                 if (LoadSurface())

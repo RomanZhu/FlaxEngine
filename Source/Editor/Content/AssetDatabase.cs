@@ -123,6 +123,13 @@ namespace FlaxEditor
             var item = Editor.Instance.ContentDatabase.Find(source);
             if (item == null)
                 return "Source asset does not exist in the Content database.";
+            if (!item.IsFolder && Editor.Instance.ContentDatabase.TryGetAssetDatabaseRecord(source, out var record) &&
+                record.IsMain && record.SourceKind != AssetSourceKind.LegacyBinary)
+            {
+                return AssetDatabaseFacade.MoveCanonicalAsset(source, destination)
+                    ? GetLastDiagnostic("Asset move transaction failed.")
+                    : string.Empty;
+            }
             if (!Editor.Instance.ContentDatabase.Move(item, destination))
                 return "Asset move transaction failed.";
             QueueImport(destination);
@@ -151,6 +158,9 @@ namespace FlaxEditor
             var item = Editor.Instance.ContentDatabase.Find(source);
             if (item == null)
                 return false;
+            if (!item.IsFolder && Editor.Instance.ContentDatabase.TryGetAssetDatabaseRecord(source, out var record) && record.IsMain &&
+                record.SourceKind != AssetSourceKind.LegacyBinary && record.SourceKind != AssetSourceKind.ExistingJson)
+                return !AssetDatabaseFacade.CopyCanonicalAsset(source, destination, out _);
             var result = Editor.Instance.ContentDatabase.Copy(item, destination);
             if (!result.Succeeded)
                 return false;
@@ -167,6 +177,9 @@ namespace FlaxEditor
             var item = Editor.Instance.ContentDatabase.Find(physicalPath);
             if (item == null)
                 return false;
+            if (!item.IsFolder && Editor.Instance.ContentDatabase.TryGetAssetDatabaseRecord(physicalPath, out var record) &&
+                record.IsMain && record.SourceKind != AssetSourceKind.LegacyBinary)
+                return !AssetDatabaseFacade.DeleteCanonicalAsset(physicalPath);
             Editor.Instance.ContentDatabase.Delete(item, true);
             return !File.Exists(physicalPath) && !Directory.Exists(physicalPath) && !File.Exists(physicalPath + ".meta");
         }
@@ -206,7 +219,10 @@ namespace FlaxEditor
         public static void StartAssetEditing()
         {
             if (_assetEditingDepth == 0)
+            {
                 Editor.Instance.ContentDatabase.SuspendAssetDatabaseAutoRefresh();
+                AssetDatabaseFacade.StartAssetEditing();
+            }
             _assetEditingDepth++;
         }
 
@@ -217,7 +233,10 @@ namespace FlaxEditor
                 throw new InvalidOperationException("StopAssetEditing called without a matching StartAssetEditing.");
             if (--_assetEditingDepth != 0)
                 return;
+            var failed = AssetDatabaseFacade.StopAssetEditing();
             Editor.Instance.ContentDatabase.ResumeAssetDatabaseAutoRefresh();
+            if (failed)
+                throw new InvalidOperationException(GetLastDiagnostic("Asset editing batch refresh failed."));
             FlushDeferredImports();
         }
 

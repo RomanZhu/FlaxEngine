@@ -10,6 +10,9 @@
 #include "Engine/Serialization/FileWriteStream.h"
 #include "Engine/Serialization/FileReadStream.h"
 #include "Engine/Content/Content.h"
+#if !USE_EDITOR
+#include "Engine/Content/Build/RuntimeAssetCatalog.h"
+#endif
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Engine/Globals.h"
 #include "FlaxEngine.Gen.h"
@@ -42,21 +45,57 @@ int32 AssetsCache::Size() const
 void AssetsCache::Init()
 {
     PROFILE_CPU();
+#if !USE_EDITOR
+    _path = Globals::ProjectContentFolder / TEXT("RuntimeAssetCatalog.bin");
+    LOG(Info, "Loading runtime asset catalog {0}...", _path);
+    RuntimeAssetCatalog catalog;
+    AssetPipelineDiagnostic diagnostic;
+    if (RuntimeAssetCatalog::Load(_path, catalog, diagnostic))
+    {
+        LOG(Error, "Cannot load runtime asset catalog: {0}", diagnostic.Message);
+        return;
+    }
+
+    Stopwatch runtimeStopwatch;
+    ASSETS_CACHE_LOCK();
+    _isDirty = false;
+    _registry.Clear();
+    _registry.EnsureCapacity(catalog.GetEntries().Count());
+    _pathsMapping.Clear();
+    _runtimePathAliases.Clear();
+    _runtimePathAliases.EnsureCapacity(catalog.GetAliases().Count());
+    int32 rejectedCount = 0;
+    for (const RuntimeAssetCatalogEntry& catalogEntry : catalog.GetEntries())
+    {
+        const Guid runtimeID = catalogEntry.Object.ToRuntimeObjectGuid();
+        Entry entry(runtimeID, catalogEntry.Object, String(catalogEntry.TypeName), Globals::ProjectContentFolder / String(catalogEntry.PackageName));
+        FileSystem::NormalizePath(entry.Info.Path);
+        if (FileSystem::FileExists(entry.Info.Path) && IsEntryValid(entry) != EntryValidation::Invalid)
+            _registry.Add(runtimeID, MoveTemp(entry));
+        else
+            rejectedCount++;
+    }
+    for (const RuntimeAssetCatalogAlias& alias : catalog.GetAliases())
+        _runtimePathAliases.Add(alias.PathHash, alias.Object.ToRuntimeObjectGuid());
+    runtimeStopwatch.Stop();
+    if (rejectedCount != 0)
+        LOG(Error, "Runtime asset catalog references {0} missing package objects.", rejectedCount);
+    LOG(Info, "Runtime asset catalog loaded {0} objects and {1} path aliases in {2}ms ({3} rejected)",
+        _registry.Count(), _runtimePathAliases.Count(), runtimeStopwatch.GetMilliseconds(), rejectedCount);
+    return;
+#endif
+
     Entry e;
     int32 count;
     Stopwatch stopwatch;
-#if USE_EDITOR
     _path = Globals::ProjectCacheFolder / TEXT("AssetsCache.dat");
-#else
-    _path = Globals::ProjectContentFolder / TEXT("AssetsCache.dat");
-#endif
     LOG(Info, "Loading Asset Cache {0}...", _path);
 
     // Check if assets registry exists
     if (!FileSystem::FileExists(_path))
     {
         _isDirty = true;
-        LOG(Warning, "Cannot find assets cache file");
+        LOG(Info, "Asset cache is not present; starting with an empty compatibility registry.");
         return;
     }
 
@@ -283,6 +322,18 @@ bool AssetsCache::FindAsset(const StringView& path, AssetInfo& info)
     bool result = false;
     const String formattedPath = NormalizeAssetPath(path);
     ASSETS_CACHE_LOCK();
+
+#if !USE_EDITOR
+    String aliasPath = formattedPath;
+    const String startupPath = NormalizeAssetPath(Globals::StartupFolder);
+    if (aliasPath.StartsWith(startupPath) && aliasPath.Length() > startupPath.Length() &&
+        aliasPath[startupPath.Length()] == '/')
+        aliasPath = aliasPath.Right(aliasPath.Length() - startupPath.Length() - 1);
+    ContentHash aliasHash;
+    Guid aliasID;
+    if (!RuntimeAssetCatalog::HashPathAlias(aliasPath, aliasHash) && _runtimePathAliases.TryGet(aliasHash, aliasID))
+        return FindAsset(aliasID, info);
+#endif
 
     // Check if asset has direct mapping to id (used for some cooked assets)
     Guid id;

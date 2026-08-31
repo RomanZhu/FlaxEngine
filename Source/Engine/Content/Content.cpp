@@ -966,11 +966,17 @@ bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 
 bool Content::GetAssetInfo(const AssetObjectId& id, AssetInfo& info)
 {
+    if (id.IsNull())
+        return false;
+#if USE_EDITOR
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(id, record))
         return false;
     info = record.ToAssetInfo();
     return true;
+#else
+    return Cache.FindAsset(id.ToRuntimeObjectGuid(), info);
+#endif
 }
 
 bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
@@ -1191,10 +1197,18 @@ Asset* Content::LoadAssetAsync(const AssetObjectId& objectId, const ScriptingTyp
 {
     if (objectId.IsNull())
         return nullptr;
+#if USE_EDITOR
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(objectId, record))
         return nullptr;
     return LoadAsync(record.ID, type);
+#else
+    const Guid runtimeID = objectId.ToRuntimeObjectGuid();
+    AssetInfo info;
+    if (!Cache.FindAsset(runtimeID, info))
+        return nullptr;
+    return LoadAsync(runtimeID, type);
+#endif
 }
 
 Asset* Content::LoadMainAssetAsync(const AssetGuid& asset, const MClass* type)

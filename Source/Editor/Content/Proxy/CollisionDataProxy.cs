@@ -48,7 +48,7 @@ namespace FlaxEditor.Content
         public override string Name => "Collision Data";
 
         /// <inheritdoc />
-        public override string FileExtension => CanonicalGraphDocuments.UseTextGraphAssets ? "collisiondata" : Extension;
+        public override string FileExtension => "collisiondata";
 
         /// <inheritdoc />
         public override bool AcceptsAsset(string typeName, string path)
@@ -96,13 +96,7 @@ namespace FlaxEditor.Content
         public override void Create(string outputPath, object arg)
         {
             CanonicalGraphDocuments.EnsureCanAuthor(typeof(CollisionData).FullName, outputPath);
-            if (CanonicalGraphDocuments.UseTextGraphAssets)
-            {
-                if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(CollisionData).FullName) == Guid.Empty)
-                    throw new Exception("Failed to create new asset.");
-                return;
-            }
-            if (Editor.CreateAsset("CollisionData", outputPath))
+            if (AssetDatabaseFacade.CreateAuthoredDocument(outputPath, typeof(CollisionData).FullName) == Guid.Empty)
                 throw new Exception("Failed to create new asset.");
         }
 

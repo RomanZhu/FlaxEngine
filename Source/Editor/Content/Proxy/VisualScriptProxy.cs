@@ -28,7 +28,7 @@ namespace FlaxEditor.Content
         public override string Name => "Visual Script";
 
         /// <inheritdoc />
-        public override string FileExtension => CanonicalGraphDocuments.UseTextGraphAssets ? "visualscript" : Extension;
+        public override string FileExtension => "visualscript";
 
         /// <inheritdoc />
         public override bool AcceptsAsset(string typeName, string path)

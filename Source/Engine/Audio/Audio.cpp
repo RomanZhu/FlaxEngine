@@ -270,7 +270,7 @@ bool AudioService::Init()
         enableNativeClips = !eventBackendRequested;
 
     if (settings->OutputOwner == AudioOutputOwner::EventBackend && !eventBackendRequested && !muteAll)
-        LOG(Warning, "Audio output owner is set to Event Backend, but the selected event backend is unavailable. Falling back to the native clip backend when enabled.");
+        LOG(Info, "Audio event backend is unavailable; using the native clip backend when enabled.");
     if (eventBackendRequested && enableNativeClips && settings->OutputOwner != AudioOutputOwner::EventBackend)
         LOG(Warning, "Native clips and the FMOD event backend are both enabled with native output ownership. This migration mode opens two mixer/device paths.");
 

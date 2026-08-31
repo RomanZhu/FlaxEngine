@@ -327,7 +327,7 @@ namespace
         {
             const uint32 arraySize = ReadU32LE(data.Get() + 140);
             const bool cube = (ReadU32LE(data.Get() + 136) & 0x4) != 0;
-            if (arraySize == 0 || arraySize > MAX_int32 / (cube ? 6 : 1))
+            if (arraySize == 0 || arraySize > static_cast<uint32>(MAX_int32 / (cube ? 6 : 1)))
                 return true;
             result.ArraySize = static_cast<int32>(arraySize) * (cube ? 6 : 1);
         }

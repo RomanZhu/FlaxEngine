@@ -13,6 +13,7 @@ namespace
     constexpr uint32 CatalogMagic = 0x54414346; // FCAT
     constexpr int32 HeaderSize = 4 + 4 + 4 + 32;
     constexpr uint32 MaximumEntries = 10000000;
+    constexpr uint32 MaximumAliases = 10000000;
     constexpr uint32 MaximumStringBytes = 1024 * 1024;
     constexpr uint32 MaximumDependenciesPerEntry = 1000000;
 
@@ -29,6 +30,16 @@ namespace
         if (left.D != right.D)
             return left.D < right.D;
         return a.LocalId < b.LocalId;
+    }
+
+    bool LessHash(const ContentHash& a, const ContentHash& b)
+    {
+        for (int32 i = 0; i < ARRAY_COUNT(a.Bytes); i++)
+        {
+            if (a.Bytes[i] != b.Bytes[i])
+                return a.Bytes[i] < b.Bytes[i];
+        }
+        return false;
     }
 
     bool Fail(AssetPipelineDiagnostic& diagnostic, const StringView& path, const StringView& message)
@@ -195,6 +206,25 @@ namespace
     }
 }
 
+bool RuntimeAssetCatalog::HashPathAlias(const StringView& path, ContentHash& result)
+{
+    result = ContentHash();
+    String normalized(path);
+    normalized.Replace('\\', '/');
+    while (normalized.StartsWith(TEXT("./")))
+        normalized = normalized.Right(normalized.Length() - 2);
+    const String lower = normalized.ToLower();
+    if (lower.IsEmpty() || lower.StartsWith(TEXT("/")) || lower.Contains(TEXT(":")) ||
+        lower.Contains(TEXT("//")) || lower == TEXT(".") || lower == TEXT("..") ||
+        lower.StartsWith(TEXT("../")) || lower.Contains(TEXT("/../")) || lower.EndsWith(TEXT("/..")) ||
+        lower == TEXT("library") || lower.StartsWith(TEXT("library/")) || lower.Contains(TEXT("/library/")) ||
+        lower == TEXT("canonicalsources") || lower.StartsWith(TEXT("canonicalsources/")) || lower.Contains(TEXT("/canonicalsources/")))
+        return true;
+    const StringAnsi portable(lower);
+    result = ContentHash::Compute(portable.Get(), portable.Length());
+    return result.IsZero();
+}
+
 bool RuntimeAssetCatalog::IsPackageNameValid(const StringAnsiView& value)
 {
     if (!IsTextValid(value) || value[0] == '/' || value.Contains("\\") || value.Contains(":") ||
@@ -214,9 +244,17 @@ bool RuntimeAssetCatalog::IsPackageNameValid(const StringAnsiView& value)
 bool RuntimeAssetCatalog::Set(const StringAnsiView& buildID, const ContentHash& targetHash, const Array<RuntimeAssetCatalogEntry>& entries,
     AssetPipelineDiagnostic& diagnostic)
 {
+    Array<RuntimeAssetCatalogAlias> aliases;
+    return Set(buildID, targetHash, entries, aliases, diagnostic);
+}
+
+bool RuntimeAssetCatalog::Set(const StringAnsiView& buildID, const ContentHash& targetHash, const Array<RuntimeAssetCatalogEntry>& entries,
+    const Array<RuntimeAssetCatalogAlias>& aliases, AssetPipelineDiagnostic& diagnostic)
+{
     _buildID = StringAnsi(buildID);
     _targetHash = targetHash;
     _entries = entries;
+    _aliases = aliases;
     if (_entries.Count() > 1)
     {
         std::sort(_entries.Get(), _entries.Get() + _entries.Count(), [](const RuntimeAssetCatalogEntry& a, const RuntimeAssetCatalogEntry& b)
@@ -229,21 +267,31 @@ bool RuntimeAssetCatalog::Set(const StringAnsiView& buildID, const ContentHash& 
         if (entry.Dependencies.Count() > 1)
             std::sort(entry.Dependencies.Get(), entry.Dependencies.Get() + entry.Dependencies.Count(), Less);
     }
+    if (_aliases.Count() > 1)
+    {
+        std::sort(_aliases.Get(), _aliases.Get() + _aliases.Count(), [](const RuntimeAssetCatalogAlias& a, const RuntimeAssetCatalogAlias& b)
+        {
+            return LessHash(a.PathHash, b.PathHash);
+        });
+    }
     return ValidateCanonical(diagnostic);
 }
 
 bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic) const
 {
-    if (!IsTextValid(_buildID) || _targetHash.IsZero() || _entries.IsEmpty() || _entries.Count() > MaximumEntries)
+    if (!IsTextValid(_buildID) || _targetHash.IsZero() || _entries.IsEmpty() || _entries.Count() > MaximumEntries ||
+        _aliases.Count() > MaximumAliases)
         return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog requires a build ID, target hash, and bounded object entries."));
 
     HashSet<AssetObjectId> objects;
+    HashSet<Guid> runtimeObjects;
     for (int32 i = 0; i < _entries.Count(); i++)
     {
         const RuntimeAssetCatalogEntry& entry = _entries[i];
         if (!entry.Object.IsValid() || !IsTextValid(entry.TypeName) || !IsPackageNameValid(entry.PackageName) || entry.Size == 0 ||
             entry.Offset > MAX_uint64 - entry.Size || entry.Content.IsZero() || entry.Compression > RuntimeAssetCompression::Zstd ||
-            entry.Dependencies.Count() > MaximumDependenciesPerEntry || !objects.Add(entry.Object))
+            entry.Dependencies.Count() > MaximumDependenciesPerEntry || !objects.Add(entry.Object) ||
+            !runtimeObjects.Add(entry.Object.ToRuntimeObjectGuid()))
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid or duplicate object entry."));
         if (i != 0 && !Less(_entries[i - 1].Object, entry.Object))
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog object entries are not in canonical order."));
@@ -262,6 +310,13 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
             if (!objects.Contains(dependency))
                 return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog dependency is absent from the object-level catalog."));
         }
+    }
+    for (int32 i = 0; i < _aliases.Count(); i++)
+    {
+        const RuntimeAssetCatalogAlias& alias = _aliases[i];
+        if (alias.PathHash.IsZero() || !objects.Contains(alias.Object) ||
+            (i != 0 && !LessHash(_aliases[i - 1].PathHash, alias.PathHash)))
+            return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid, duplicate, or unresolved path alias."));
     }
     diagnostic = AssetPipelineDiagnostic();
     return false;
@@ -288,6 +343,28 @@ bool RuntimeAssetCatalog::TryGet(const AssetObjectId& object, RuntimeAssetCatalo
     return false;
 }
 
+bool RuntimeAssetCatalog::TryGetByPathHash(const ContentHash& pathHash, AssetObjectId& result) const
+{
+    int32 left = 0;
+    int32 right = _aliases.Count() - 1;
+    while (left <= right)
+    {
+        const int32 middle = left + (right - left) / 2;
+        const RuntimeAssetCatalogAlias& alias = _aliases[middle];
+        if (alias.PathHash == pathHash)
+        {
+            result = alias.Object;
+            return true;
+        }
+        if (LessHash(alias.PathHash, pathHash))
+            left = middle + 1;
+        else
+            right = middle - 1;
+    }
+    result = AssetObjectId();
+    return false;
+}
+
 bool RuntimeAssetCatalog::ToBytes(Array<byte>& output, AssetPipelineDiagnostic& diagnostic) const
 {
     output.Clear();
@@ -310,6 +387,12 @@ bool RuntimeAssetCatalog::ToBytes(Array<byte>& output, AssetPipelineDiagnostic& 
         payload.WriteUInt32(entry.Dependencies.Count());
         for (const AssetObjectId& dependency : entry.Dependencies)
             payload.WriteObject(dependency);
+    }
+    payload.WriteUInt32(_aliases.Count());
+    for (const RuntimeAssetCatalogAlias& alias : _aliases)
+    {
+        payload.WriteHash(alias.PathHash);
+        payload.WriteObject(alias.Object);
     }
     CatalogWriter catalog;
     catalog.WriteUInt32(CatalogMagic);
@@ -365,6 +448,15 @@ bool RuntimeAssetCatalog::FromBytes(const Span<byte>& input, RuntimeAssetCatalog
             if (payload.ReadObject(dependency))
                 return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains a truncated object dependency."));
         }
+    }
+    uint32 aliasCount;
+    if (payload.ReadUInt32(aliasCount) || aliasCount > MaximumAliases)
+        return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid path alias count."));
+    result._aliases.Resize(aliasCount, false);
+    for (RuntimeAssetCatalogAlias& alias : result._aliases)
+    {
+        if (payload.ReadHash(alias.PathHash) || payload.ReadObject(alias.Object))
+            return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains a truncated path alias."));
     }
     if (!payload.AtEnd())
         return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains unexpected trailing data."));

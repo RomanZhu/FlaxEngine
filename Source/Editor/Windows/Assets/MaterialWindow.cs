@@ -355,9 +355,14 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override byte[] SurfaceData
         {
-            get => _asset.LoadSurface(true);
+            get => IsCanonicalDocument ? CanonicalSurfaceData : _asset.LoadSurface(true);
             set
             {
+                if (IsCanonicalDocument)
+                {
+                    CanonicalSurfaceData = value;
+                    return;
+                }
                 FillMaterialInfo(out var info);
                 if (_asset.SaveSurface(value, info))
                 {
@@ -409,7 +414,7 @@ namespace FlaxEditor.Windows.Assets
             if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
             {
                 FillMaterialInfo(out var info);
-                return CanonicalGraphDocuments.SaveCloneSurface(_item, _asset.LoadSurface(true), CanonicalGraphDocuments.MaterialProperties(info));
+                return CanonicalGraphDocuments.SaveSurface(_item, _documentSession, CanonicalGraphDocuments.MaterialProperties(info));
             }
 
             // Copy shader cache from the temporary Particle Emitter (will skip compilation on Reload - faster)

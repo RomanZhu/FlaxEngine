@@ -84,6 +84,12 @@ public:
     /// <summary>Consumes generated artifact notifications for the managed editor update loop.</summary>
     API_FUNCTION() static Array<Guid> DrainArtifactPublications();
 
+    /// <summary>Forwards queued database events outside database and refresh locks.</summary>
+    API_FUNCTION() static void PumpDatabaseEvents();
+
+    /// <summary>Consumes exact paths written by controlled asset operations.</summary>
+    API_FUNCTION() static Array<String> DrainOperationSelfWrites();
+
     API_PROPERTY() static uint64 GetRevision();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
@@ -141,6 +147,24 @@ public:
     /// <summary>Reconciles all mounted sources and queues their supported current builds.</summary>
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool Refresh(ImportAssetOptions options = ImportAssetOptions::Default);
+
+    /// <summary>Moves one canonical source-plus-sidecar pair while preserving its file GUID.</summary>
+    API_FUNCTION() static bool MoveCanonicalAsset(const StringView& sourcePath, const StringView& destinationPath);
+
+    /// <summary>Copies one canonical source-plus-sidecar pair with a new file GUID.</summary>
+    API_FUNCTION() static bool CopyCanonicalAsset(const StringView& sourcePath, const StringView& destinationPath, API_PARAM(Out) Guid& copiedGuid);
+
+    /// <summary>Moves one canonical source-plus-sidecar pair into recoverable Library trash.</summary>
+    API_FUNCTION() static bool DeleteCanonicalAsset(const StringView& sourcePath);
+
+    /// <summary>Begins a nested controlled-operation batch.</summary>
+    API_FUNCTION() static void StartAssetEditing();
+
+    /// <summary>Publishes a balanced controlled-operation batch.</summary>
+    API_FUNCTION() static bool StopAssetEditing();
+
+    /// <summary>Queues one canonical asset through the generic importer refresh path.</summary>
+    API_FUNCTION() static bool BuildAsset(const Guid& assetID, bool force = false, bool synchronous = false);
 
     /// <summary>Returns true when the canonical asset and its owned subassets have exact host artifacts.</summary>
     API_FUNCTION() static bool IsCanonicalArtifactCurrent(const Guid& assetID);

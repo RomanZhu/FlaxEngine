@@ -274,7 +274,7 @@ bool MaterialInstanceDocument::DecodeLegacy(const Span<byte>& chunk, rapidjson_f
     document.AddMember("type", JsonValue("FlaxEngine.MaterialInstance", allocator), allocator);
     document.AddMember("baseMaterial", GuidReference(baseMaterial, "AssetReference", allocator), allocator);
     JsonValue overrides(rapidjson::kObjectType);
-    if (stream.GetPosition() < chunk.Length())
+    if (stream.GetPosition() < static_cast<uint32>(chunk.Length()))
     {
         uint16 version;
         uint16 count;

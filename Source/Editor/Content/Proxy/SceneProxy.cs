@@ -47,8 +47,7 @@ namespace FlaxEditor.Content
         public override void Create(string outputPath, object arg)
         {
             Editor.Instance.Scene.CreateSceneFile(outputPath);
-            if (CanonicalGraphDocuments.UseNewAssetDatabase)
-                AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath);
+            AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath);
         }
 
         /// <inheritdoc />

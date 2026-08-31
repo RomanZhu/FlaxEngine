@@ -77,7 +77,7 @@ public:
     /// <returns>True if found any asset, otherwise false.</returns>
     API_FUNCTION() static bool GetAssetInfo(const Guid& id, API_PARAM(Out) AssetInfo& info);
 
-    /// <summary>Finds asset information by persistent source and local file identity.</summary>
+    /// <summary>Finds asset information by persistent source and local file identity. Cooked builds resolve through the runtime catalog registry.</summary>
     API_FUNCTION() static bool GetAssetInfo(const AssetObjectId& id, API_PARAM(Out) AssetInfo& info);
 
     /// <summary>
@@ -183,10 +183,10 @@ public:
     /// <returns>Loaded asset or null if cannot</returns>
     static Asset* LoadAsync(const Guid& id, const ScriptingTypeHandle& type);
 
-    /// <summary>Loads one persistent imported object without collapsing its local file identity.</summary>
+    /// <summary>Loads one persistent imported object without collapsing its local file identity. Cooked builds require an exact runtime catalog entry.</summary>
     API_FUNCTION() static Asset* LoadAssetAsync(const AssetObjectId& objectId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
 
-    /// <summary>Loads one persistent imported object without collapsing its local file identity.</summary>
+    /// <summary>Loads one persistent imported object without collapsing its local file identity. Cooked builds require an exact runtime catalog entry.</summary>
     static Asset* LoadAssetAsync(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
 
     /// <summary>Loads the explicit main object for a source asset.</summary>

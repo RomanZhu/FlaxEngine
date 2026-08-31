@@ -40,17 +40,40 @@ TEST_CASE("Runtime asset catalog is deterministic object-level binary data")
     Array<RuntimeAssetCatalogEntry> ordered;
     ordered.Add(modelEntry);
     ordered.Add(textureEntry);
+    RuntimeAssetCatalogAlias modelAlias;
+    REQUIRE_FALSE(RuntimeAssetCatalog::HashPathAlias(TEXT("Content/Models/Hero.flax"), modelAlias.PathHash));
+    modelAlias.Object = model;
+    RuntimeAssetCatalogAlias textureAlias;
+    REQUIRE_FALSE(RuntimeAssetCatalog::HashPathAlias(TEXT("Content/Textures/Hero.png"), textureAlias.PathHash));
+    textureAlias.Object = texture;
+    Array<RuntimeAssetCatalogAlias> unorderedAliases;
+    unorderedAliases.Add(textureAlias);
+    unorderedAliases.Add(modelAlias);
+    Array<RuntimeAssetCatalogAlias> orderedAliases;
+    orderedAliases.Add(modelAlias);
+    orderedAliases.Add(textureAlias);
 
     AssetPipelineDiagnostic diagnostic;
     RuntimeAssetCatalog first;
     RuntimeAssetCatalog second;
-    REQUIRE_FALSE(first.Set(StringAnsiView("win64-development-1"), TestHash("target"), unordered, diagnostic));
-    REQUIRE_FALSE(second.Set(StringAnsiView("win64-development-1"), TestHash("target"), ordered, diagnostic));
+    REQUIRE_FALSE(first.Set(StringAnsiView("win64-development-1"), TestHash("target"), unordered, unorderedAliases, diagnostic));
+    REQUIRE_FALSE(second.Set(StringAnsiView("win64-development-1"), TestHash("target"), ordered, orderedAliases, diagnostic));
     Array<byte> firstBytes;
     Array<byte> secondBytes;
     REQUIRE_FALSE(first.ToBytes(firstBytes, diagnostic));
     REQUIRE_FALSE(second.ToBytes(secondBytes, diagnostic));
     CHECK(firstBytes == secondBytes);
+    const char* sourcePath = "content/models/hero.flax";
+    bool containsSourcePath = false;
+    for (int32 i = 0; i + StringUtils::Length(sourcePath) <= firstBytes.Count(); i++)
+    {
+        if (Platform::MemoryCompare(firstBytes.Get() + i, sourcePath, StringUtils::Length(sourcePath)) == 0)
+        {
+            containsSourcePath = true;
+            break;
+        }
+    }
+    CHECK_FALSE(containsSourcePath);
 
     RuntimeAssetCatalog loaded;
     REQUIRE_FALSE(RuntimeAssetCatalog::FromBytes(Span<byte>(firstBytes.Get(), firstBytes.Count()), loaded, diagnostic));
@@ -61,6 +84,10 @@ TEST_CASE("Runtime asset catalog is deterministic object-level binary data")
     CHECK(found.Dependencies[0] == texture);
     CHECK(loaded.TryGet(texture, found));
     CHECK_FALSE(loaded.TryGet(AssetObjectId(AssetGuid(Guid(9, 0, 0, 0)), 1), found));
+    AssetObjectId aliasObject;
+    REQUIRE(loaded.TryGetByPathHash(modelAlias.PathHash, aliasObject));
+    CHECK(aliasObject == model);
+    CHECK_FALSE(loaded.TryGetByPathHash(TestHash("missing-path"), aliasObject));
 
     firstBytes[firstBytes.Count() - 1] ^= 1;
     CHECK(RuntimeAssetCatalog::FromBytes(Span<byte>(firstBytes.Get(), firstBytes.Count()), loaded, diagnostic));
@@ -80,8 +107,22 @@ TEST_CASE("Runtime asset catalog rejects source and Library paths")
     CHECK_FALSE(RuntimeAssetCatalog::IsPackageNameValid(StringAnsiView("Library/Artifacts/texture.flax")));
     CHECK_FALSE(RuntimeAssetCatalog::IsPackageNameValid(StringAnsiView("C:/Project/output.pak")));
     CHECK(RuntimeAssetCatalog::IsPackageNameValid(StringAnsiView("base/objects.pak")));
+    ContentHash firstAlias;
+    ContentHash secondAlias;
+    CHECK_FALSE(RuntimeAssetCatalog::HashPathAlias(TEXT("Content/Models/Hero.flax"), firstAlias));
+    CHECK_FALSE(RuntimeAssetCatalog::HashPathAlias(TEXT("content\\models\\hero.flax"), secondAlias));
+    CHECK(firstAlias == secondAlias);
+    CHECK(RuntimeAssetCatalog::HashPathAlias(TEXT("Library/Artifacts/hero.flax"), firstAlias));
+    CHECK(RuntimeAssetCatalog::HashPathAlias(TEXT("C:/Project/Content/Hero.flax"), firstAlias));
 
     entries[0].PackageName = "packages/Library/texture.pak";
+    CHECK(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
+
+    const AssetObjectId subAsset(AssetGuid(Guid(5, 0, 0, 0)), 2);
+    const AssetObjectId collidingMain = AssetObjectId::Main(AssetGuid(subAsset.ToRuntimeObjectGuid()));
+    entries.Clear();
+    entries.Add(CatalogEntry(subAsset, "FlaxEngine.Texture", "base/objects.pak", "sub"));
+    entries.Add(CatalogEntry(collidingMain, "FlaxEngine.Texture", "base/objects.pak", "main"));
     CHECK(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
 }
 

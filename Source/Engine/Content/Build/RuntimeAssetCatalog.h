@@ -28,11 +28,18 @@ struct FLAXENGINE_API RuntimeAssetCatalogEntry
     Array<AssetObjectId> Dependencies;
 };
 
+/// <summary>Opaque compatibility mapping from a normalized runtime path hash to an exact asset object.</summary>
+struct FLAXENGINE_API RuntimeAssetCatalogAlias
+{
+    ContentHash PathHash;
+    AssetObjectId Object;
+};
+
 /// <summary>Deterministic binary runtime catalog independent of source metadata and the editor database.</summary>
 class FLAXENGINE_API RuntimeAssetCatalog
 {
 public:
-    static constexpr uint32 FormatVersion = 1;
+    static constexpr uint32 FormatVersion = 2;
 
     const StringAnsi& GetBuildID() const
     {
@@ -46,14 +53,28 @@ public:
     {
         return _entries;
     }
+    const Array<RuntimeAssetCatalogAlias>& GetAliases() const
+    {
+        return _aliases;
+    }
 
     /// <summary>Replaces catalog contents, sorts them canonically, and validates all object references.</summary>
     /// <returns>True on failure.</returns>
     bool Set(const StringAnsiView& buildID, const ContentHash& targetHash, const Array<RuntimeAssetCatalogEntry>& entries,
         AssetPipelineDiagnostic& diagnostic);
 
+    /// <summary>Replaces catalog entries and opaque legacy path aliases.</summary>
+    bool Set(const StringAnsiView& buildID, const ContentHash& targetHash, const Array<RuntimeAssetCatalogEntry>& entries,
+        const Array<RuntimeAssetCatalogAlias>& aliases, AssetPipelineDiagnostic& diagnostic);
+
     /// <summary>Finds an exact GUID/local-file-ID entry without loading an asset.</summary>
     bool TryGet(const AssetObjectId& object, RuntimeAssetCatalogEntry& result) const;
+
+    /// <summary>Finds an exact object by a normalized runtime path hash.</summary>
+    bool TryGetByPathHash(const ContentHash& pathHash, AssetObjectId& result) const;
+
+    /// <summary>Hashes a portable logical runtime path without retaining its source string. Returns true on failure.</summary>
+    static bool HashPathAlias(const StringView& path, ContentHash& result);
 
     /// <summary>Serializes canonical little-endian bytes with a SHA-256 payload checksum.</summary>
     /// <returns>True on failure.</returns>
@@ -78,6 +99,7 @@ private:
     StringAnsi _buildID;
     ContentHash _targetHash;
     Array<RuntimeAssetCatalogEntry> _entries;
+    Array<RuntimeAssetCatalogAlias> _aliases;
 
     bool ValidateCanonical(AssetPipelineDiagnostic& diagnostic) const;
 };

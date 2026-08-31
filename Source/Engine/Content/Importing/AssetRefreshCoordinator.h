@@ -64,5 +64,5 @@ public:
     bool IsRunning() const;
 
 private:
-    void EndRun();
+    void EndRun(uint32 retryReasons = 0);
 };

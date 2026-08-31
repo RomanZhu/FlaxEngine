@@ -39,9 +39,14 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public override byte[] SurfaceData
         {
-            get => _asset.LoadSurface();
+            get => IsCanonicalDocument ? CanonicalSurfaceData : _asset.LoadSurface();
             set
             {
+                if (IsCanonicalDocument)
+                {
+                    CanonicalSurfaceData = value;
+                    return;
+                }
                 if (_asset.SaveSurface(value))
                 {
                     _surface.MarkAsEdited();

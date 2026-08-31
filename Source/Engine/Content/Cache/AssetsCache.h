@@ -11,6 +11,9 @@
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Platform/CriticalSection.h"
+#if !USE_EDITOR
+#include "Engine/Content/Artifacts/ArtifactKey.h"
+#endif
 
 struct AssetHeader;
 struct FlaxStorageReference;
@@ -76,6 +79,14 @@ public:
 #endif
         {
         }
+
+        Entry(const Guid& id, const AssetObjectId& objectId, const StringView& typeName, const StringView& path)
+            : Info(id, objectId, typeName, path)
+#if ENABLE_ASSETS_DISCOVERY
+            , FileModified(DateTime::NowUTC())
+#endif
+        {
+        }
     };
 
     /// <summary>
@@ -109,6 +120,9 @@ private:
 #endif
     Registry _registry;
     PathsMapping _pathsMapping;
+#if !USE_EDITOR
+    Dictionary<ContentHash, Guid> _runtimePathAliases;
+#endif
 #if !USE_EDITOR && !BUILD_RELEASE
     Dictionary<Guid, StringView> _pathsMappingInv;
 #endif

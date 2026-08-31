@@ -367,8 +367,8 @@ void AssetOperations::ReleasePaths(const Array<String>& acquired)
 
 bool AssetOperations::PublishCommit(AssetOperationCommit& commit, AssetPipelineDiagnostic& diagnostic)
 {
+    Array<AssetOperationCommit> commits;
     _stateLocker.Lock();
-    _selfWrites.Add(commit.SelfWrites);
     if (_editingDepth > 0)
     {
         _pendingCommits.Add(commit);
@@ -376,10 +376,25 @@ bool AssetOperations::PublishCommit(AssetOperationCommit& commit, AssetPipelineD
         diagnostic = AssetPipelineDiagnostic();
         return false;
     }
-    _stateLocker.Unlock();
-    Array<AssetOperationCommit> commits;
+    commits = MoveTemp(_pendingCommits);
+    _pendingCommits.Clear();
     commits.Add(commit);
-    return _databaseCallbacks.RefreshCommitted(commits, diagnostic);
+    _stateLocker.Unlock();
+    if (!_databaseCallbacks.RefreshCommitted(commits, diagnostic))
+    {
+        _stateLocker.Lock();
+        for (const AssetOperationCommit& published : commits)
+            _selfWrites.Add(published.SelfWrites);
+        _stateLocker.Unlock();
+        return false;
+    }
+
+    _stateLocker.Lock();
+    Array<AssetOperationCommit> pending = MoveTemp(_pendingCommits);
+    _pendingCommits = MoveTemp(commits);
+    _pendingCommits.Add(pending);
+    _stateLocker.Unlock();
+    return true;
 }
 
 bool AssetOperations::CreateFromBytes(AssetOperationKind kind, const StringView& destination, const Span<byte>& sourceData,
@@ -569,8 +584,11 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
     commit.AssetGuid = currentMeta.ID;
     commit.SourcePath = source.AbsolutePath;
     commit.DestinationPath = destinationAbsolute;
-    AddSelfWrite(commit, destinationAbsolute);
-    AddSelfWrite(commit, destinationMeta);
+    if (kind != AssetOperationKind::Trash && kind != AssetOperationKind::Delete)
+    {
+        AddSelfWrite(commit, destinationAbsolute);
+        AddSelfWrite(commit, destinationMeta);
+    }
     if (trash)
     {
         trash->TransactionId = journal.TransactionId;
@@ -837,7 +855,23 @@ bool AssetOperations::StopAssetEditing(AssetPipelineDiagnostic& diagnostic)
         diagnostic = AssetPipelineDiagnostic();
         return false;
     }
-    return _databaseCallbacks.RefreshCommitted(commits, diagnostic);
+    if (!_databaseCallbacks.RefreshCommitted(commits, diagnostic))
+    {
+        _stateLocker.Lock();
+        for (const AssetOperationCommit& published : commits)
+            _selfWrites.Add(published.SelfWrites);
+        _stateLocker.Unlock();
+        return false;
+    }
+
+    // Publishing is the boundary that makes a committed filesystem batch visible. Keep a failed
+    // batch pending so a later editing scope or explicit retry cannot silently lose it.
+    _stateLocker.Lock();
+    Array<AssetOperationCommit> pending = MoveTemp(_pendingCommits);
+    _pendingCommits = MoveTemp(commits);
+    _pendingCommits.Add(pending);
+    _stateLocker.Unlock();
+    return true;
 }
 
 void AssetOperations::DrainSelfWrites(Array<AssetOperationSelfWrite>& result)

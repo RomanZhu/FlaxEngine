@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Xml;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.CustomEditors;
 using FlaxEditor.CustomEditors.Elements;
 using FlaxEditor.CustomEditors.GUI;
@@ -982,6 +983,19 @@ namespace FlaxEditor.Surface
         /// </summary>
         protected FlaxEditor.Undo _undo;
 
+        /// <summary>The authoritative source-document session, if this is a canonical asset.</summary>
+        protected AssetDocumentSession _documentSession;
+
+        /// <summary>Gets whether this window edits a canonical source document.</summary>
+        protected bool IsCanonicalDocument => _documentSession != null;
+
+        /// <summary>Gets or replaces the editable canonical graph model.</summary>
+        protected byte[] CanonicalSurfaceData
+        {
+            get => CanonicalGraphDocuments.GetSurface(_documentSession);
+            set => CanonicalGraphDocuments.SetSurface(_documentSession, value);
+        }
+
         /// <summary>
         /// Gets the Visject Surface.
         /// </summary>
@@ -1135,7 +1149,7 @@ namespace FlaxEditor.Surface
         protected override TAsset LoadAsset()
         {
             if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return CanonicalGraphDocuments.LoadClone<TAsset>(_item);
+                return CanonicalGraphDocuments.Open<TAsset>(_item, out _documentSession);
             return base.LoadAsset();
         }
 
@@ -1143,18 +1157,7 @@ namespace FlaxEditor.Surface
         protected override bool SaveToOriginal()
         {
             if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-            {
-                byte[] surface = null;
-                if (_asset is AnimationGraph animationGraph)
-                    surface = animationGraph.LoadSurface();
-                else if (_asset is MaterialFunction materialFunction)
-                    surface = materialFunction.LoadSurface();
-                else if (_asset is AnimationGraphFunction animationGraphFunction)
-                    surface = animationGraphFunction.LoadSurface();
-                else if (_asset is Material material)
-                    surface = material.LoadSurface(true);
-                return CanonicalGraphDocuments.SaveCloneSurface(_item, surface);
-            }
+                return CanonicalGraphDocuments.SaveSurface(_item, _documentSession);
             return base.SaveToOriginal();
         }
 
@@ -1172,6 +1175,7 @@ namespace FlaxEditor.Surface
         protected override void UnlinkItem()
         {
             _isWaitingForSurfaceLoad = false;
+            CanonicalGraphDocuments.Close(_item, ref _documentSession);
 
             base.UnlinkItem();
         }
@@ -1206,13 +1210,17 @@ namespace FlaxEditor.Surface
         public void OnSurfaceEditedChanged()
         {
             if (_surface.IsEdited)
+            {
+                _documentSession?.MarkDirty();
                 MarkAsEdited();
+            }
         }
 
         /// <inheritdoc />
         public void OnSurfaceGraphEdited()
         {
             // Mark as dirty
+            _documentSession?.MarkDirty();
             _tmpAssetIsDirty = true;
         }
 
@@ -1261,7 +1269,7 @@ namespace FlaxEditor.Surface
                 RefreshTempAsset();
             }
 
-            if (_isWaitingForSurfaceLoad && (_asset.IsLoaded || (CanEditSurfaceOnAssetLoadError && _asset.LastLoadFailed)))
+            if (_isWaitingForSurfaceLoad && (_asset.IsLoaded || _documentSession?.Document != null || (CanEditSurfaceOnAssetLoadError && _asset.LastLoadFailed)))
             {
                 _isWaitingForSurfaceLoad = false;
                 if (!_asset.IsLoaded)

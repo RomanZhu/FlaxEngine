@@ -474,7 +474,7 @@ namespace FlaxEditor.Windows.Assets
         protected override ParticleSystem LoadAsset()
         {
             if (_item != null && _item.IsCanonicalSource && CanonicalGraphDocuments.IsGraphDocumentPath(_item.Path))
-                return CanonicalGraphDocuments.LoadClone<ParticleSystem>(_item);
+                return CanonicalGraphDocuments.LoadWorkingArtifact<ParticleSystem>(_item);
             return base.LoadAsset();
         }
 

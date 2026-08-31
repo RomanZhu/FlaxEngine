@@ -215,7 +215,7 @@ bool ShaderCacheManagerService::Init()
         || cacheVersion.ShaderProfile != shaderProfile
     )
     {
-        LOG(Warning, "Shaders cache database is invalid. Performing reset.");
+        LOG(Info, "Shaders cache database is unavailable or stale. Performing reset.");
 
         if (FileSystem::DirectoryExists(rootDir) && FileSystem::DeleteDirectory(rootDir))
         {

@@ -58,8 +58,19 @@ namespace
             }
             if (exists)
                 continue;
+            AssetImporterDescriptor descriptor = AssetImporterDescriptor::FromProcessor(processor);
+            if (descriptor.Extensions.IsEmpty())
+            {
+                // The generic binary processor is the one intentional extension-less fallback.
+                // Other empty descriptors represent features compiled out of this editor and must
+                // not block synchronization or claim arbitrary sources.
+                if (processor.ID == TEXT("Flax.Binary"))
+                    descriptor.Fallback = AssetImporterFallback::Binary;
+                else
+                    continue;
+            }
             AssetImporterRegistration registration;
-            if (state.Importers->Register(AssetImporterDescriptor::FromProcessor(processor), registration, diagnostic))
+            if (state.Importers->Register(MoveTemp(descriptor), registration, diagnostic))
                 return true;
             state.ProcessorBridges.Add(MoveTemp(registration));
         }

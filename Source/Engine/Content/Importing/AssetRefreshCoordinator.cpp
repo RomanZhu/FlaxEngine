@@ -31,9 +31,10 @@ bool AssetRefreshCoordinator::IsRunning() const
     return _running;
 }
 
-void AssetRefreshCoordinator::EndRun()
+void AssetRefreshCoordinator::EndRun(uint32 retryReasons)
 {
     ScopeLock lock(_locker);
+    _pendingReasons |= retryReasons;
     _running = false;
 }
 
@@ -78,7 +79,7 @@ bool AssetRefreshCoordinator::Refresh(AssetRefreshReason reason, const AssetRefr
         Array<AssetImportPlanRequest> requests;
         if (callbacks.Reconcile(context, requests, sourceChanged, diagnostic))
         {
-            EndRun();
+            EndRun(reasons);
             return true;
         }
         const ContentHash effectivePostprocessors = _postprocessors.GetVersionKey().Digest;
@@ -90,14 +91,14 @@ bool AssetRefreshCoordinator::Refresh(AssetRefreshReason reason, const AssetRefr
         Array<AssetImportPlan> plans;
         if (_planner.Build(requests, plans, diagnostic))
         {
-            EndRun();
+            EndRun(reasons);
             return true;
         }
         for (const AssetImportPlan& plan : plans)
         {
             if (_postprocessors.RunPreprocess(plan, sourceChanged, diagnostic))
             {
-                EndRun();
+                EndRun(reasons);
                 return true;
             }
         }
@@ -114,12 +115,12 @@ bool AssetRefreshCoordinator::Refresh(AssetRefreshReason reason, const AssetRefr
         Array<AssetImportCompletion> completed;
         if (callbacks.Execute(context, plans, completed, sourceChanged, diagnostic))
         {
-            EndRun();
+            EndRun(reasons);
             return true;
         }
         if (_postprocessors.RunBatch(completed, sourceChanged, diagnostic))
         {
-            EndRun();
+            EndRun(reasons);
             return true;
         }
         result.Completed = MoveTemp(completed);
@@ -143,7 +144,7 @@ bool AssetRefreshCoordinator::Refresh(AssetRefreshReason reason, const AssetRefr
         }
     }
 
-    EndRun();
+    EndRun(reasons);
     diagnostic = AssetPipelineDiagnostic();
     diagnostic.Code = AssetPipelineDiagnosticCode::BuildCycle;
     diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;

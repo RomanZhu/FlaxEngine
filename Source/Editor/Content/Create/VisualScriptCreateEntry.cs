@@ -51,12 +51,8 @@ namespace FlaxEditor.Content.Create
         public override bool Create()
         {
             CanonicalGraphDocuments.EnsureCanAuthor(typeof(VisualScript).FullName, ResultUrl);
-            if (CanonicalGraphDocuments.UseTextGraphAssets)
-            {
-                var properties = CanonicalGraphDocuments.VisualScriptProperties(_options.BaseClass?.FullName, 0);
-                return AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(VisualScript).FullName, properties) == Guid.Empty;
-            }
-            return Editor.CreateVisualScript(ResultUrl, _options.BaseClass?.FullName);
+            var properties = CanonicalGraphDocuments.VisualScriptProperties(_options.BaseClass?.FullName, 0);
+            return AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(VisualScript).FullName, properties) == Guid.Empty;
         }
     }
 }

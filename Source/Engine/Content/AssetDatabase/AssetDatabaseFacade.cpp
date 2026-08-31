@@ -3,6 +3,7 @@
 #include "AssetDatabaseFacade.h"
 #include "AssetSourceRoots.h"
 #include "AssetMeta.h"
+#include "AssetOperations.h"
 #include "MigrationInventory.h"
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
@@ -37,6 +38,7 @@
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Threading/Threading.h"
 #include "Engine/Core/Collections/HashSet.h"
+#include "Engine/Content/Importing/AssetImportService.h"
 #if COMPILE_WITH_MATERIAL_GRAPH
 #include "Engine/Tools/MaterialGenerator/Types.h"
 #endif
@@ -77,7 +79,9 @@
 #endif
 #include <algorithm>
 #include <future>
+#include <memory>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 Delegate<uint64> AssetDatabaseFacade::DatabaseChanged;
@@ -86,6 +90,10 @@ namespace
 {
     std::mutex ArtifactPublicationLocker;
     HashSet<Guid> PendingArtifactPublications;
+    std::mutex DatabaseEventLocker;
+    Array<uint64> PendingDatabaseEvents;
+    std::mutex OperationWriteDrainLocker;
+    Array<AssetOperationSelfWrite> PendingOperationSelfWrites;
 }
 
 void AssetDatabaseFacade::NotifyArtifactPublished(const Guid& assetID)
@@ -105,6 +113,18 @@ Array<Guid> AssetDatabaseFacade::DrainArtifactPublications()
     return result;
 }
 
+void AssetDatabaseFacade::PumpDatabaseEvents()
+{
+    Array<uint64> revisions;
+    {
+        std::lock_guard<std::mutex> lock(DatabaseEventLocker);
+        revisions = MoveTemp(PendingDatabaseEvents);
+        PendingDatabaseEvents.Clear();
+    }
+    for (const uint64 revision : revisions)
+        DatabaseChanged(revision);
+}
+
 namespace
 {
     CriticalSection StateLocker;
@@ -114,9 +134,111 @@ namespace
     SourceHashCache HashCache;
     bool IsBound = false;
 
+    class FacadeModificationProcessor final : public IAssetModificationProcessor
+    {
+    public:
+        bool ValidateOperation(AssetOperationKind kind, const AssetOperationTarget& target,
+            const StringView& destination, AssetPipelineDiagnostic& diagnostic) override
+        {
+            AssetModificationProcessorRegistry* registry = AssetImportService::GetModificationProcessorRegistry();
+            if (!registry)
+            {
+                diagnostic = AssetPipelineDiagnostic();
+                return false;
+            }
+            AssetModificationRequest request;
+            request.Path = target.SourcePath;
+            request.DestinationPath = destination;
+            switch (kind)
+            {
+            case AssetOperationKind::Move:
+            case AssetOperationKind::Rename:
+            case AssetOperationKind::Restore:
+                request.Kind = AssetModificationKind::Move;
+                break;
+            case AssetOperationKind::Trash:
+            case AssetOperationKind::Delete:
+                request.Kind = AssetModificationKind::Delete;
+                break;
+            default:
+                request.Kind = AssetModificationKind::Create;
+                break;
+            }
+            AssetModificationDecision decision;
+            if (registry->Process(request, decision, diagnostic))
+                return true;
+            if (decision.Allowed && !decision.Handled)
+                return false;
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            {
+                diagnostic.Code = AssetPipelineDiagnosticCode::PrepareInvalidated;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+                diagnostic.SourcePath = target.SourcePath;
+                diagnostic.Message = decision.Message.HasChars() ? decision.Message :
+                    TEXT("Asset modification was denied or handled by a registered processor.");
+            }
+            return true;
+        }
+    };
+
+    class FacadeOperationDatabaseCallbacks final : public IAssetOperationDatabaseCallbacks
+    {
+    public:
+        bool ClearCopiedState(const Guid&, const Guid&, AssetPipelineDiagnostic& diagnostic) override
+        {
+            // Copy metadata always receives fresh source and object GUIDs, so no durable rows can
+            // legitimately belong to the destination before its first refresh.
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+
+        bool RefreshCommitted(const Array<AssetOperationCommit>& commits,
+            AssetPipelineDiagnostic& diagnostic) override
+        {
+            Array<String> paths;
+            const String engineRoot = AssetSourceRoots::GetEngineRoot();
+            const auto addSourcePath = [&paths, &engineRoot](const StringView& path)
+            {
+                if (!path.IsEmpty() && (AssetPathPolicy::IsSameOrChild(path, Globals::ProjectContentFolder) ||
+                    (engineRoot.HasChars() && AssetPathPolicy::IsSameOrChild(path, engineRoot))))
+                    paths.Add(String(path));
+            };
+            for (const AssetOperationCommit& commit : commits)
+            {
+                addSourcePath(commit.SourcePath);
+                addSourcePath(commit.DestinationPath);
+            }
+            if (AssetDatabaseFacade::RefreshSources(paths))
+            {
+                const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseFacade::GetDiagnostics();
+                diagnostic = diagnostics.HasItems() ? diagnostics[0] : AssetPipelineDiagnostic();
+                return true;
+            }
+            for (const AssetOperationCommit& commit : commits)
+            {
+                if ((commit.Kind == AssetOperationKind::Trash || commit.Kind == AssetOperationKind::Delete) ||
+                    !commit.AssetGuid.IsValid())
+                    continue;
+                if (AssetDatabaseFacade::BuildAsset(commit.AssetGuid, false, false))
+                {
+                    const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseFacade::GetDiagnostics();
+                    diagnostic = diagnostics.HasItems() ? diagnostics[0] : AssetPipelineDiagnostic();
+                    return true;
+                }
+            }
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+    };
+
+    std::unique_ptr<FacadeModificationProcessor> OperationModificationProcessor;
+    std::unique_ptr<FacadeOperationDatabaseCallbacks> OperationDatabaseCallbacks;
+    std::unique_ptr<AssetOperations> Operations;
+
     void OnDatabaseChanged(const AssetDatabaseChangeBatch& change)
     {
-        AssetDatabaseFacade::DatabaseChanged(change.Revision);
+        std::lock_guard<std::mutex> lock(DatabaseEventLocker);
+        PendingDatabaseEvents.Add(change.Revision);
     }
 
     void EnsureBound()
@@ -182,6 +304,35 @@ namespace
     {
         ScopeLock lock(StateLocker);
         LastDiagnostics = diagnostics;
+    }
+
+    bool EnsureOperations(AssetPipelineDiagnostic& diagnostic)
+    {
+        if (Operations)
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+        if (AssetImportService::EnsureInitialized(diagnostic))
+            return true;
+        auto modificationProcessor = std::make_unique<FacadeModificationProcessor>();
+        auto databaseCallbacks = std::make_unique<FacadeOperationDatabaseCallbacks>();
+        auto operations = std::make_unique<AssetOperations>(Globals::ProjectFolder, Globals::ProjectContentFolder,
+            Globals::ProjectLibraryFolder, *modificationProcessor, *databaseCallbacks);
+        if (operations->Initialize(diagnostic))
+            return true;
+        Array<AssetPipelineDiagnostic> recoveryDiagnostics;
+        if (operations->RecoverIncompleteTransactions(recoveryDiagnostics))
+        {
+            diagnostic = recoveryDiagnostics.HasItems() ? recoveryDiagnostics[0] : AssetPipelineDiagnostic();
+            SetDiagnostics(recoveryDiagnostics);
+            return true;
+        }
+        OperationModificationProcessor = std::move(modificationProcessor);
+        OperationDatabaseCallbacks = std::move(databaseCallbacks);
+        Operations = std::move(operations);
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
     }
 
     String NormalizeAbsolutePath(const StringView& path)
@@ -752,6 +903,130 @@ namespace
         diagnostic = AssetPipelineDiagnostic();
         return GenericBuildRequestResult::Unsupported;
     }
+
+    bool SupportsGenericBuild(const AssetRecord& record)
+    {
+#if COMPILE_WITH_TEXTURE_TOOL
+        if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+            return true;
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+        if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
+            return true;
+#endif
+        return GraphPipelineService::OwnsProcessor(record.ProcessorID);
+    }
+
+    bool RunGenericBuildRefresh(const Array<AssetRecord>& selected, bool force, bool synchronous,
+        AssetRefreshReason reason, AssetPipelineDiagnostic& diagnostic)
+    {
+        if (selected.IsEmpty())
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+        if (AssetImportService::SynchronizeProcessorDescriptors(diagnostic))
+            return true;
+        AssetRefreshCoordinator* coordinator = AssetImportService::GetRefreshCoordinator();
+        if (!coordinator)
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Configuration;
+            diagnostic.Message = TEXT("Asset refresh coordinator is unavailable.");
+            return true;
+        }
+
+        Array<Guid> selectedIds;
+        Array<AssetRecord> bootstrap;
+        Array<AssetImporterDescriptor> importerDescriptors;
+        AssetImportService::GetImporterRegistry()->GetDescriptors(importerDescriptors);
+        selectedIds.EnsureCapacity(selected.Count());
+        for (const AssetRecord& record : selected)
+        {
+            if (!record.IsMainAsset() || record.Status != AssetRecordStatus::Ready || !SupportsGenericBuild(record))
+                continue;
+            bool importerAvailable = false;
+            for (const AssetImporterDescriptor& descriptor : importerDescriptors)
+            {
+                if (descriptor.ID == record.ProcessorID)
+                {
+                    importerAvailable = true;
+                    break;
+                }
+            }
+            if (importerAvailable)
+                selectedIds.Add(record.ID);
+            else
+                bootstrap.Add(record);
+        }
+
+        AssetRefreshCallbacks callbacks;
+        callbacks.Reconcile = [selectedIds, force](const AssetRefreshIterationContext& context,
+            Array<AssetImportPlanRequest>& requests, bool&, AssetPipelineDiagnostic& localDiagnostic)
+        {
+            requests.Clear();
+            for (const Guid& id : selectedIds)
+            {
+                AssetRecord record;
+                if (!AssetDatabase::Get().TryGetRecord(id, record) || record.Status != AssetRecordStatus::Ready ||
+                    !record.IsMainAsset() || !FileSystem::FileExists(record.SourcePath.Get()))
+                    continue;
+                ContentHash sourceHash;
+                SourceHashFileState fileState;
+                if (HashCache.HashFile(record.SourcePath.Get(), sourceHash, fileState, localDiagnostic))
+                    return true;
+                AssetImportPlanRequest request;
+                request.Asset = AssetGuid(record.ID);
+                request.SourcePath = record.SourcePath.Get();
+                request.ExplicitImporterID = record.ProcessorID;
+                request.Reason = context.Reasons == AssetRefreshReason::Filesystem ? TEXT("filesystem-refresh") : TEXT("explicit-refresh");
+                if (ArtifactResolver::Get().IsConfigured())
+                    request.Target = ArtifactResolver::Get().GetDefaultTarget();
+                request.SourceRevision = record.DatabaseRevision;
+                request.SourceHash = sourceHash;
+                request.MetadataHash = ContentHash::Compute(&record.MetaSemanticHash, sizeof(record.MetaSemanticHash));
+                request.Force = force;
+                requests.Add(MoveTemp(request));
+            }
+            localDiagnostic = AssetPipelineDiagnostic();
+            return false;
+        };
+        callbacks.Execute = [force, synchronous](const AssetRefreshIterationContext&, const Array<AssetImportPlan>& plans,
+            Array<AssetImportCompletion>& completed, bool&, AssetPipelineDiagnostic& localDiagnostic)
+        {
+            for (const AssetImportPlan& plan : plans)
+            {
+                AssetRecord record;
+                if (!AssetDatabase::Get().TryGetRecord(plan.Request.Asset.Value, record))
+                    continue;
+                const GenericBuildRequestResult request = RequestGenericBuild(record, force, synchronous, localDiagnostic);
+                if (request == GenericBuildRequestResult::Failed)
+                    return true;
+                if (synchronous && request == GenericBuildRequestResult::Queued)
+                {
+                    AssetImportCompletion completion;
+                    completion.Asset = plan.Request.Asset;
+                    completion.SourcePath = plan.Request.SourcePath;
+                    completion.Artifact = plan.StaticFingerprint;
+                    completion.Succeeded = true;
+                    completed.Add(MoveTemp(completion));
+                }
+            }
+            localDiagnostic = AssetPipelineDiagnostic();
+            return false;
+        };
+        AssetRefreshResult result;
+        if (selectedIds.HasItems() && coordinator->Refresh(reason, callbacks, result, diagnostic))
+            return true;
+        for (const AssetRecord& record : bootstrap)
+        {
+            if (RequestGenericBuild(record, force, synchronous, diagnostic) == GenericBuildRequestResult::Failed)
+                return true;
+        }
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
 #endif
 
     bool StageImportedFiles(const StringView& legacyPath, const StringView& extractedPath, const StringView& destinationPath,
@@ -810,11 +1085,25 @@ bool AssetDatabaseFacade::Initialize()
 #if USE_EDITOR
     EnsureBound();
     if (AssetDatabase::Get().IsOpen())
+    {
+        AssetPipelineDiagnostic diagnostic;
+        if (EnsureOperations(diagnostic))
+        {
+            SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+            return true;
+        }
         return false;
+    }
     AssetPipelineDiagnostic diagnostic;
     if (AssetDatabase::Get().Open(Globals::ProjectLibraryFolder, CurrentProjectId(), diagnostic))
     {
         SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    if (EnsureOperations(diagnostic))
+    {
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        AssetDatabase::Get().Close();
         return true;
     }
     Array<AssetPipelineDiagnostic> diagnostics;
@@ -836,11 +1125,43 @@ bool AssetDatabaseFacade::Initialize()
 
 bool AssetDatabaseFacade::Shutdown()
 {
+    Operations.reset();
+    OperationDatabaseCallbacks.reset();
+    OperationModificationProcessor.reset();
+    {
+        std::lock_guard<std::mutex> lock(DatabaseEventLocker);
+        PendingDatabaseEvents.Clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(OperationWriteDrainLocker);
+        PendingOperationSelfWrites.Clear();
+    }
     AssetPipelineDiagnostic diagnostic;
     const bool failed = AssetDatabase::Get().Close(&diagnostic);
     if (failed)
         SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
     return failed;
+}
+
+Array<String> AssetDatabaseFacade::DrainOperationSelfWrites()
+{
+    Array<String> result;
+    if (!Operations)
+        return result;
+    Array<AssetOperationSelfWrite> writes;
+    Operations->DrainSelfWrites(writes);
+    std::lock_guard<std::mutex> lock(OperationWriteDrainLocker);
+    PendingOperationSelfWrites.Add(writes);
+    constexpr int32 MaxWritesPerDrain = 16;
+    result.EnsureCapacity(MaxWritesPerDrain);
+    while (result.Count() < MaxWritesPerDrain && PendingOperationSelfWrites.HasItems())
+    {
+        AssetOperationSelfWrite write = MoveTemp(PendingOperationSelfWrites.Last());
+        PendingOperationSelfWrites.RemoveLast();
+        if (IsFacadeAssetPath(write.Path))
+            result.Add(MoveTemp(write.Path));
+    }
+    return result;
 }
 
 Array<AssetDatabaseRecordInfo> AssetDatabaseFacade::GetRecords()
@@ -1219,6 +1540,10 @@ bool AssetDatabaseFacade::RefreshSources(const Array<String>& paths)
     }
     nextStates.Add(result.FileStates);
     LastFileStates = MoveTemp(nextStates);
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (AssetRefreshCoordinator* coordinator = AssetImportService::GetRefreshCoordinator())
+        coordinator->RequestRefresh(AssetRefreshReason::Filesystem);
+#endif
     return false;
 #else
     return true;
@@ -1309,7 +1634,7 @@ bool AssetDatabaseFacade::ImportAsset(const StringView& path, ImportAssetOptions
         EnumHasAnyFlags(options, ImportAssetOptions::ForceUncompressedImport);
     const bool synchronous = EnumHasAnyFlags(options, ImportAssetOptions::ForceSynchronousImport);
     bool matched = false;
-    Array<AssetPipelineDiagnostic> buildDiagnostics;
+    Array<AssetRecord> selected;
     const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
     for (const AssetRecord& record : snapshot.Records)
     {
@@ -1321,23 +1646,24 @@ bool AssetDatabaseFacade::ImportAsset(const StringView& path, ImportAssetOptions
         if (!pathMatches)
             continue;
         matched = true;
-        AssetPipelineDiagnostic diagnostic;
-        const GenericBuildRequestResult request = RequestGenericBuild(record, force, synchronous, diagnostic);
-        if (request == GenericBuildRequestResult::Failed)
-            buildDiagnostics.Add(MoveTemp(diagnostic));
-        else if (request == GenericBuildRequestResult::Unsupported && record.Status == AssetRecordStatus::UnsupportedProcessor)
+        if (record.Status == AssetRecordStatus::UnsupportedProcessor)
         {
+            AssetPipelineDiagnostic diagnostic;
             diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
             diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
             diagnostic.AssetGuid = record.ID;
             diagnostic.SourcePath = record.SourcePath.Get();
             diagnostic.Message = TEXT("Imported source has no registered asset processor.");
-            buildDiagnostics.Add(MoveTemp(diagnostic));
+            SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+            return true;
         }
+        if (SupportsGenericBuild(record))
+            selected.Add(record);
     }
-    if (buildDiagnostics.HasItems())
+    AssetPipelineDiagnostic buildDiagnostic;
+    if (RunGenericBuildRefresh(selected, force, synchronous, AssetRefreshReason::Explicit, buildDiagnostic))
     {
-        SetDiagnostics(buildDiagnostics);
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ buildDiagnostic }));
         return true;
     }
     if (!matched && FileSystem::FileExists(resolved))
@@ -1347,8 +1673,7 @@ bool AssetDatabaseFacade::ImportAsset(const StringView& path, ImportAssetOptions
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
         diagnostic.SourcePath = resolved;
         diagnostic.Message = TEXT("Imported source has no registered asset processor.");
-        buildDiagnostics.Add(MoveTemp(diagnostic));
-        SetDiagnostics(buildDiagnostics);
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
         return true;
     }
 #endif
@@ -1385,23 +1710,186 @@ bool AssetDatabaseFacade::Refresh(ImportAssetOptions options)
     const bool force = EnumHasAnyFlags(options, ImportAssetOptions::ForceUpdate) ||
         EnumHasAnyFlags(options, ImportAssetOptions::ForceUncompressedImport);
     const bool synchronous = EnumHasAnyFlags(options, ImportAssetOptions::ForceSynchronousImport);
-    Array<AssetPipelineDiagnostic> buildDiagnostics;
+    Array<AssetRecord> selected;
     const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
     for (const AssetRecord& record : snapshot.Records)
     {
-        if (!record.IsMainAsset())
-            continue;
-        AssetPipelineDiagnostic diagnostic;
-        if (RequestGenericBuild(record, force, synchronous, diagnostic) == GenericBuildRequestResult::Failed)
-            buildDiagnostics.Add(MoveTemp(diagnostic));
+        if (record.IsMainAsset() && SupportsGenericBuild(record))
+            selected.Add(record);
     }
-    if (buildDiagnostics.HasItems())
+    AssetPipelineDiagnostic buildDiagnostic;
+    if (RunGenericBuildRefresh(selected, force, synchronous, AssetRefreshReason::Explicit, buildDiagnostic))
     {
-        SetDiagnostics(buildDiagnostics);
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ buildDiagnostic }));
         return true;
     }
 #endif
     return false;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::MoveCanonicalAsset(const StringView& sourcePath, const StringView& destinationPath)
+{
+#if USE_EDITOR
+    if (Initialize() || !Operations)
+        return true;
+    const String resolved = ResolveFacadeAssetPath(sourcePath);
+    AssetOperationTarget target;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.IsMainAsset() && FileSystem::AreFilePathsEqual(record.SourcePath.Get(), resolved))
+        {
+            target.SourcePath = record.SourcePath.Get();
+            target.ExpectedGuid = record.SourceAssetID;
+            break;
+        }
+    }
+    AssetPipelineDiagnostic diagnostic;
+    if (!target.ExpectedGuid.IsValid())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Canonical move source is not registered as a main source asset.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    const bool failed = Operations->MoveAsset(target, ResolveFacadeAssetPath(destinationPath), diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::CopyCanonicalAsset(const StringView& sourcePath, const StringView& destinationPath, Guid& copiedGuid)
+{
+    copiedGuid = Guid::Empty;
+#if USE_EDITOR
+    if (Initialize() || !Operations)
+        return true;
+    const String resolved = ResolveFacadeAssetPath(sourcePath);
+    AssetOperationTarget target;
+    bool embeddedIdentity = false;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.IsMainAsset() && FileSystem::AreFilePathsEqual(record.SourcePath.Get(), resolved))
+        {
+            target.SourcePath = record.SourcePath.Get();
+            target.ExpectedGuid = record.SourceAssetID;
+            embeddedIdentity = record.SourceKind == AssetSourceKind::ExistingJson;
+            break;
+        }
+    }
+    AssetPipelineDiagnostic diagnostic;
+    if (embeddedIdentity)
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Canonical JSON copy requires document-aware identity rewriting.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    if (!target.ExpectedGuid.IsValid())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Canonical copy source is not registered as a main source asset.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    const bool failed = Operations->CopyAsset(target, ResolveFacadeAssetPath(destinationPath), copiedGuid, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::DeleteCanonicalAsset(const StringView& sourcePath)
+{
+#if USE_EDITOR
+    if (Initialize() || !Operations)
+        return true;
+    const String resolved = ResolveFacadeAssetPath(sourcePath);
+    AssetOperationTarget target;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.IsMainAsset() && FileSystem::AreFilePathsEqual(record.SourcePath.Get(), resolved))
+        {
+            target.SourcePath = record.SourcePath.Get();
+            target.ExpectedGuid = record.SourceAssetID;
+            break;
+        }
+    }
+    AssetPipelineDiagnostic diagnostic;
+    if (!target.ExpectedGuid.IsValid())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Canonical delete source is not registered as a main source asset.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    AssetTrashRecord trash;
+    const bool failed = Operations->DeleteAsset(target, trash, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+void AssetDatabaseFacade::StartAssetEditing()
+{
+#if USE_EDITOR
+    if (!Initialize() && Operations)
+        Operations->StartAssetEditing();
+#endif
+}
+
+bool AssetDatabaseFacade::StopAssetEditing()
+{
+#if USE_EDITOR
+    if (!Operations)
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = Operations->StopAssetEditing(diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetDatabaseFacade::BuildAsset(const Guid& assetID, bool force, bool synchronous)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
+    if (Initialize())
+        return true;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(assetID, record) || !record.IsMainAsset() || !SupportsGenericBuild(record))
+        return false;
+    Array<AssetRecord> selected;
+    selected.Add(record);
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = RunGenericBuildRefresh(selected, force, synchronous, AssetRefreshReason::Explicit, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
 #else
     return true;
 #endif

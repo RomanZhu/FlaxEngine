@@ -28,7 +28,7 @@ namespace FlaxEditor.Content
         public override string Name => "Particle Emitter";
 
         /// <inheritdoc />
-        public override string FileExtension => CanonicalGraphDocuments.UseTextGraphAssets ? "particleemitter" : Extension;
+        public override string FileExtension => "particleemitter";
 
         /// <inheritdoc />
         public override bool AcceptsAsset(string typeName, string path)

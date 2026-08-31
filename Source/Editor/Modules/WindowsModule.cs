@@ -426,7 +426,7 @@ namespace FlaxEditor.Modules
 
             if (!File.Exists(path))
             {
-                Editor.LogWarning("Cannot load windows layout. File is missing.");
+                Editor.Log("Cannot load windows layout because it has not been created yet.");
                 return false;
             }
 

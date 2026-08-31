@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using FlaxEditor.Content.Documents;
 using FlaxEngine;
 
 namespace FlaxEditor.Content
@@ -11,10 +12,6 @@ namespace FlaxEditor.Content
     /// </summary>
     internal static class CanonicalGraphDocuments
     {
-        public static bool UseTextGraphAssets => true;
-
-        public static bool UseNewAssetDatabase => true;
-
         public static void EnsureCanAuthor(string typeName, string outputPath)
         {
             if (!ConvertedTypePolicy.AllowsLegacyBinaryAuthoring(typeName, outputPath))
@@ -86,34 +83,71 @@ namespace FlaxEditor.Content
                    ",\n  \"shadingModel\": " + (int)info.ShadingModel + "\n}\n";
         }
 
-        public static T LoadClone<T>(AssetItem item) where T : Asset
+        public static T Open<T>(AssetItem item, out AssetDocumentSession session) where T : Asset
         {
-            var original = FlaxEngine.Content.LoadAsync<T>(item.ID);
+            if (item == null)
+                throw new ArgumentNullException(nameof(item));
+            session = AssetDocumentRegistry.Open(item.ObjectID, AssetDatabaseFacade.LoadGraphSurface);
+            return FlaxEngine.Content.LoadAssetAsync<T>(item.ObjectID);
+        }
+
+        public static T LoadWorkingArtifact<T>(AssetItem item) where T : Asset
+        {
+            var original = FlaxEngine.Content.LoadAssetAsync<T>(item.ObjectID);
             if (original == null || original.WaitForLoaded())
                 return null;
             var storagePath = (original as BinaryAsset)?.StoragePath;
-            if (string.IsNullOrEmpty(storagePath) || Editor.Instance.ContentEditing.FastTempAssetClone(storagePath, out var clonePath))
+            if (string.IsNullOrEmpty(storagePath) || Editor.Instance.ContentEditing.FastTempAssetClone(storagePath, out var copyPath))
                 return null;
-            var clone = FlaxEngine.Content.LoadAsync<T>(clonePath);
-            if (clone == null)
-                return null;
-            if (clone.ID == item.ID)
-                throw new InvalidOperationException("Cloned asset has the same IDs.");
-            return clone;
+            return FlaxEngine.Content.LoadAsync<T>(copyPath);
         }
 
-        public static bool SaveCloneSurface(AssetItem item, byte[] surface, string propertiesJson = null)
+        public static byte[] GetSurface(AssetDocumentSession session)
         {
-            using var save = Editor.Instance.ContentDatabase.TrackAssetSave(item.Path);
-            var failed = string.IsNullOrEmpty(propertiesJson)
-                ? AssetDatabaseFacade.SaveGraphSurface(item.Path, surface)
-                : AssetDatabaseFacade.SaveGraphSurface(item.Path, surface, false, propertiesJson);
-            save.Complete(!failed);
-            if (failed)
-                Editor.LogError("Cannot save canonical graph document " + item.Path);
+            if (session == null)
+                throw new ArgumentNullException(nameof(session));
+            return session.GetDocument<byte[]>();
+        }
+
+        public static void SetSurface(AssetDocumentSession session, byte[] surface)
+        {
+            if (session == null)
+                throw new ArgumentNullException(nameof(session));
+            session.SetDocument(surface);
+        }
+
+        public static bool SaveSurface(AssetItem item, AssetDocumentSession session, string propertiesJson = null, bool allowOverwriteConflict = false)
+        {
+            if (item == null)
+                throw new ArgumentNullException(nameof(item));
+            if (session == null || session.ObjectID != item.ObjectID)
+                throw new ArgumentException("The document session does not own this asset item.", nameof(session));
+
+            using var save = Editor.Instance.ContentDatabase.TrackAssetSave(session.SourcePath);
+            var saved = session.Save(value => !AssetDatabaseFacade.SaveGraphSurface(
+                value.SourcePath,
+                value.GetDocument<byte[]>(),
+                allowOverwriteConflict,
+                propertiesJson), allowOverwriteConflict, false);
+            save.Complete(saved);
+            if (!saved)
+            {
+                if (session.HasExternalConflict)
+                    Editor.LogError("Cannot save canonical graph document because the source changed externally: " + session.SourcePath);
+                else
+                    Editor.LogError("Cannot save canonical graph document " + session.SourcePath);
+            }
             else
                 item.RefreshThumbnail();
-            return failed;
+            return !saved;
+        }
+
+        public static void Close(AssetItem item, ref AssetDocumentSession session)
+        {
+            if (session == null)
+                return;
+            AssetDocumentRegistry.Close(session.ObjectID);
+            session = null;
         }
     }
 }

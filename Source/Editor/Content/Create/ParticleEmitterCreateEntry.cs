@@ -104,7 +104,7 @@ namespace FlaxEditor.Content.Create
                 break;
             default: throw new ArgumentOutOfRangeException();
             }
-            if (CanonicalGraphDocuments.UseTextGraphAssets && Path.GetExtension(ResultUrl).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetExtension(ResultUrl).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
             {
                 if (templateName == null)
                     return AssetDatabaseFacade.CreateGraphDocument(ResultUrl, typeof(ParticleEmitter).FullName) == Guid.Empty;

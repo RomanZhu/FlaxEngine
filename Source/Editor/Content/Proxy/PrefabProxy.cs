@@ -144,8 +144,7 @@ namespace FlaxEditor.Content
                 {
                     FlaxEngine.Object.Destroy(variantActor, 20.0f);
                 }
-                if (CanonicalGraphDocuments.UseNewAssetDatabase)
-                    AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath);
+                AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath);
                 return;
             }
 
@@ -167,8 +166,7 @@ namespace FlaxEditor.Content
             PrefabManager.CreatePrefab(actor, outputPath, true);
             if (resetTransform)
                 actor.LocalTransform = transform;
-            if (CanonicalGraphDocuments.UseNewAssetDatabase)
-                AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath);
+            AssetDatabaseFacade.CreateExistingJsonMetadata(outputPath);
         }
 
         /// <inheritdoc />

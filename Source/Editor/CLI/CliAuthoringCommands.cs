@@ -2036,7 +2036,7 @@ namespace FlaxEditor
 
         private static void CreateCanonicalJsonMetadata(string path)
         {
-            if (CanonicalGraphDocuments.UseNewAssetDatabase && AssetDatabaseFacade.CreateExistingJsonMetadata(path) == Guid.Empty)
+            if (AssetDatabaseFacade.CreateExistingJsonMetadata(path) == Guid.Empty)
                 throw new IOException($"Failed to create canonical metadata for '{path}'.");
         }
 
