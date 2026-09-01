@@ -1155,7 +1155,7 @@ namespace
             ? String(StringAnsiView(type->value.GetString(), type->value.GetStringLength()))
             : String::Empty;
         if (type == json.MemberEnd() || !type->value.IsString() ||
-            declaredType.Compare(expectedType, StringSearchCase::CaseSensitive) != 0)
+            StringView(declaredType).Compare(expectedType, StringSearchCase::CaseSensitive) != 0)
         {
             diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
             diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
