@@ -969,13 +969,7 @@ Asset* Content::LoadAssetAsync(const Guid& objectId, const MClass* type)
 
 Asset* Content::LoadAssetAsync(const Guid& objectId, const ScriptingTypeHandle& type)
 {
-    AssetObjectId internalId = AssetObjectId::Main(AssetGuid(objectId));
-#if USE_EDITOR
-    AssetRecord record;
-    if (AssetDatabase::Get().TryGetRecord(objectId, record))
-        internalId = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
-#endif
-    return LoadAssetObjectAsyncInternal(internalId, type);
+    return LoadAssetObjectAsyncInternal(objectId, type);
 }
 
 Asset* Content::LoadMainAssetAsync(const AssetGuid& asset, const MClass* type)
@@ -2047,18 +2041,13 @@ Asset* Content::LoadAsyncPreview(const Guid& objectId, const ScriptingTypeHandle
     return result;
 }
 
-Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+Asset* Content::LoadAssetObjectAsyncInternal(const Guid& objectId, const ScriptingTypeHandle& type)
 {
     if (!objectId.IsValid())
         return nullptr;
     PROFILE_MEM(Content);
     const bool passiveLoad = IsPassiveLoad();
-    Guid persistentObjectId = objectId.Asset.Value;
-#if USE_EDITOR
-    AssetRecord persistentRecord;
-    if (AssetDatabase::Get().TryGetRecord(objectId, persistentRecord))
-        persistentObjectId = persistentRecord.ID;
-#endif
+    const Guid persistentObjectId = objectId;
 
     // Check if asset has been already loaded
     Asset* result = nullptr;
@@ -2115,14 +2104,17 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
     AssetLoadLocation loadLocation;
     bool hasDirectPackageLocation = false;
 #if USE_EDITOR
-    if (BuiltinAssetCatalog::Get().TryGet(objectId.Asset.Value, assetInfo))
+    if (BuiltinAssetCatalog::Get().TryGet(objectId, assetInfo))
     {
         loadLocation = AssetLoadLocation::Package(assetInfo);
         hasDirectPackageLocation = true;
     }
     AssetRecord canonicalRecord;
     const bool isCanonicalProjectObject = AssetDatabase::Get().TryGetRecord(objectId, canonicalRecord);
-    if (!hasDirectPackageLocation && !isCanonicalProjectObject && ObjectRegistry.FindObject(objectId.Asset.Value, assetInfo))
+    const String transientPath = ObjectRegistry.GetEditorObjectPath(objectId);
+    if (!hasDirectPackageLocation && !isCanonicalProjectObject &&
+        AssetPathPolicy::IsSameOrChild(transientPath, Globals::ProjectCacheFolder) &&
+        ObjectRegistry.FindObject(objectId, assetInfo))
     {
         loadLocation = AssetLoadLocation::Package(assetInfo);
         hasDirectPackageLocation = true;
@@ -2173,7 +2165,6 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
         LOAD_FAILED();
     }
     result->_persistentObjectId = assetInfo.ObjectID;
-    result->_internalObjectId = objectId;
     result->_isPassiveLoad = passiveLoad;
     ASSERT(result->GetID() == assetInfo.ID);
     ASSERT(result->GetPersistentObjectId() == assetInfo.ObjectID);

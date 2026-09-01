@@ -162,7 +162,7 @@ public:
     /// <summary>Loads one persistent asset object by GUID.</summary>
     API_FUNCTION() static Asset* LoadAssetAsync(const Guid& objectId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
 
-    /// <summary>Loads one persistent imported object without collapsing its local file identity. Cooked builds require an exact runtime catalog entry.</summary>
+    /// <summary>Loads one asset by its exact persistent object GUID. Cooked builds require an exact runtime catalog entry.</summary>
     static Asset* LoadAssetAsync(const Guid& objectId, const ScriptingTypeHandle& type);
 
     /// <summary>Loads the explicit main object for a source asset.</summary>
@@ -171,7 +171,7 @@ public:
     /// <summary>Loads the explicit main object for a source asset.</summary>
     static Asset* LoadMainAssetAsync(const AssetGuid& asset, const ScriptingTypeHandle& type);
 
-    /// <summary>Loads one persistent imported object without collapsing its local file identity.</summary>
+    /// <summary>Loads one asset by its exact persistent object GUID.</summary>
     template<typename T>
     FORCE_INLINE static T* LoadAssetAsync(const Guid& objectId)
     {
@@ -297,7 +297,7 @@ public:
     static bool IsAssetTypeIdInvalid(const ScriptingTypeHandle& type, const ScriptingTypeHandle& assetType);
 
 private:
-    static Asset* LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
+    static Asset* LoadAssetObjectAsyncInternal(const Guid& objectId, const ScriptingTypeHandle& type);
     static void BeginPassiveLoad();
     static void EndPassiveLoad();
     static bool IsPassiveLoad();

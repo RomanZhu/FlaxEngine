@@ -45,7 +45,7 @@ bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const Guid& object
 
     const AssetObjectId storageObject(AssetGuid(record.SourceAssetID), record.LocalId);
     ArtifactRequest request;
-    request.Object = storageObject;
+    request.Object = AssetObjectId::Main(AssetGuid(record.ID));
     request.Target = ArtifactResolver::Get().GetDefaultTarget();
     request.OutputKind = "runtime";
     request.Policy = ArtifactResolvePolicy::Exact;
