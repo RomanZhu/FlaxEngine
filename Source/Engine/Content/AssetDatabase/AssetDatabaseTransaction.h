@@ -45,6 +45,7 @@ struct AssetDatabaseUndoEntry
     AssetDatabaseMutationKind Kind = AssetDatabaseMutationKind::UpsertSource;
     Guid Key = Guid::Empty;
     int64 LocalFileId = 0;
+    bool AllLocalFileIds = false;
     uint64 Value = 0;
     String TargetId;
     ArtifactKey Artifact;
@@ -68,7 +69,7 @@ private:
     AssetDatabaseTransaction(SourceAssetDatabase* owner, SourceAssetDatabaseState&& state);
     AssetDatabaseUndoEntry& CaptureUndo(AssetDatabaseMutationKind kind, const Guid& key = Guid::Empty,
         int64 localFileId = 0, const StringView& targetId = StringView::Empty,
-        const ArtifactKey& artifact = ArtifactKey());
+        const ArtifactKey& artifact = ArtifactKey(), bool allLocalFileIds = false);
     void RestoreUndo();
 
 public:

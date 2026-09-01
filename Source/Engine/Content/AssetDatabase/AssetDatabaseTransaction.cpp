@@ -40,12 +40,13 @@ AssetDatabaseTransaction::AssetDatabaseTransaction(SourceAssetDatabase* owner, S
 }
 
 AssetDatabaseUndoEntry& AssetDatabaseTransaction::CaptureUndo(AssetDatabaseMutationKind kind, const Guid& key,
-    int64 localFileId, const StringView& targetId, const ArtifactKey& artifact)
+    int64 localFileId, const StringView& targetId, const ArtifactKey& artifact, bool allLocalFileIds)
 {
     AssetDatabaseUndoEntry entry;
     entry.Kind = kind;
     entry.Key = key;
     entry.LocalFileId = localFileId;
+    entry.AllLocalFileIds = allLocalFileIds;
     entry.TargetId = targetId;
     entry.Artifact = artifact;
     _undo.Add(MoveTemp(entry));
@@ -102,7 +103,7 @@ void AssetDatabaseTransaction::RestoreUndo()
             RemoveRows(_state.Dependencies, [&](const SourceAssetDependencyRow& row)
             {
                 return row.OwnerAssetGuid == undo.Key && row.TargetId == undo.TargetId &&
-                    (undo.LocalFileId == 0 || row.OwnerLocalFileId == undo.LocalFileId);
+                    (undo.AllLocalFileIds || row.OwnerLocalFileId == undo.LocalFileId);
             });
             _state.Dependencies.Add(before.Dependencies);
             break;
@@ -365,7 +366,8 @@ void AssetDatabaseTransaction::ReplaceObjects(const Guid& assetGuid, const Array
 void AssetDatabaseTransaction::ReplaceDependencies(const Guid& assetGuid, const StringView& targetId, const Array<SourceAssetDependencyRow>& dependencies)
 {
     ASSERT(!_completed);
-    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::ReplaceDependencies, assetGuid, 0, targetId);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::ReplaceDependencies, assetGuid, 0, targetId,
+        ArtifactKey(), true);
     for (const SourceAssetDependencyRow& row : _state.Dependencies)
         if (row.OwnerAssetGuid == assetGuid && row.TargetId == targetId)
             undo.Before.Dependencies.Add(row);
