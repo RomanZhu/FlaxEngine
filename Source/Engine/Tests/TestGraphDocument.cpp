@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/Documents/GraphDocument.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Assets/MaterialFunction.h"
 #include "Engine/Content/Assets/VisualScript.h"
@@ -168,6 +169,65 @@ TEST_CASE("Graph documents decode asset references as assets")
     REQUIRE(snapshot.Document.Parameters.Count() == 1);
     CHECK(snapshot.Document.Parameters[0].Default.Type.Type == VariantType::Asset);
     CHECK(snapshot.Document.Parameters[0].Default.AsAsset == referencedAsset);
+}
+
+TEST_CASE("Graph dependencies retain persistent object GUIDs across source object remaps")
+{
+    AssetDatabase& database = AssetDatabase::Get();
+    const AssetDatabaseSnapshot savedDatabase = database.GetSnapshot();
+    AssetPipelineDiagnostic diagnostic;
+    SCOPE_EXIT { database.PublishFullSnapshot(savedDatabase.Records, diagnostic); };
+
+    const Guid persistentId(10, 20, 30, 40);
+    const Guid firstSourceId(11, 21, 31, 41);
+    AssetRecord mainRecord;
+    mainRecord.ID = firstSourceId;
+    mainRecord.SourceAssetID = firstSourceId;
+    mainRecord.LocalId = 1;
+    mainRecord.TypeName = TEXT("FlaxEngine.Model");
+    mainRecord.CanonicalPath = CanonicalAssetPath(TEXT("Content/Character.gltf"));
+    mainRecord.SourcePath = SourceFilePath(TEXT("Content/Character.gltf"));
+    mainRecord.ProcessorID = TEXT("Flax.Model");
+    mainRecord.SourceKind = AssetSourceKind::ImportedSource;
+    AssetRecord record;
+    record.ID = persistentId;
+    record.SourceAssetID = firstSourceId;
+    record.LocalId = 2;
+    record.TypeName = TEXT("FlaxEngine.SkinnedModel");
+    record.CanonicalPath = CanonicalAssetPath(TEXT("Content/Character.gltf"));
+    record.SourcePath = SourceFilePath(TEXT("Content/Character.gltf"));
+    record.SubAsset = SubAssetKey(TEXT("skinned-model"));
+    record.ProcessorID = TEXT("Flax.Model");
+    record.SourceKind = AssetSourceKind::ImportedSource;
+    Array<AssetRecord> records;
+    records.Add(mainRecord);
+    records.Add(record);
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+
+    GraphDocument document;
+    GraphDocumentParameter parameter;
+    parameter.ID = Guid(1, 2, 3, 4);
+    parameter.Name = TEXT("SkinnedModel");
+    parameter.Type = VariantType::Guid;
+    parameter.Default = Variant(persistentId);
+    document.Parameters.Add(MoveTemp(parameter));
+    Array<AssetDependency> dependencies;
+    ContentHash interfaceHash;
+    REQUIRE_FALSE(GraphDependencyExtractor::Extract(document, dependencies, interfaceHash, diagnostic));
+    REQUIRE(dependencies.Count() == 1);
+    const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(persistentId));
+    CHECK(dependencies[0].ObjectID == persistentObject);
+    CHECK(dependencies[0].StableIdentity == persistentObject.ToString());
+
+    const Guid secondSourceId(12, 22, 32, 42);
+    records[0].ID = secondSourceId;
+    records[0].SourceAssetID = secondSourceId;
+    records[1].SourceAssetID = secondSourceId;
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+    AssetRecord resolved;
+    CHECK(database.TryGetRecord(dependencies[0].ObjectID, resolved));
+    CHECK(resolved.ID == persistentId);
+    CHECK_FALSE(database.TryGetRecord(AssetObjectId(AssetGuid(firstSourceId), 2), resolved));
 }
 
 TEST_CASE("Graph validation reports dangling connections and unique identities")
