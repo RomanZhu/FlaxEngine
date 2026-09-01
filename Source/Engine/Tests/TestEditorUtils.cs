@@ -426,7 +426,7 @@ namespace FlaxEngine.Tests
                 Assert.IsTrue(File.Exists(destinationAssetPath + ".meta"));
                 Assert.IsTrue(File.Exists(Path.Combine(destinationFolderPath, "Plain.txt")));
                 Assert.IsTrue(File.Exists(Path.Combine(destinationFolderPath, "Nested", "Nested.txt")));
-                var destinationRecords = AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery
+                var destinationRecords = AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery
                 {
                     PathPrefix = destinationFolderPath,
                     MainAssetsOnly = true,
