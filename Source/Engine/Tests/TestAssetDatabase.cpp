@@ -157,7 +157,7 @@ TEST_CASE("Asset database mutates affected index rows and bounds query copies")
     CHECK(unchanged.DatabaseRevision == unchangedRevision);
     Array<AssetRecord> indexed;
     database.GetByProcessor(TEXT("Flax.Test"), indexed);
-    CHECK(indexed.Count() == 4);
+    CHECK(indexed.Count() == 5);
     database.GetByProcessor(TEXT("Flax.Changed"), indexed);
     REQUIRE(indexed.Count() == 1);
     CHECK(indexed[0].ID == changedId);
