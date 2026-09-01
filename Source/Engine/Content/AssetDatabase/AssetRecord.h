@@ -50,6 +50,7 @@ struct FLAXENGINE_API AssetRecord
     String ProcessorID;
     String PortabilityKey;
     uint64 MetaSemanticHash = 0;
+    uint32 ImporterSettingsVersion = 0;
     Array<String> Labels;
     Array<AssetObjectId> BuildInputDependencies;
     Array<AssetObjectId> RuntimeReferences;

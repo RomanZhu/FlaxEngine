@@ -2,13 +2,11 @@
 
 #include "FileChangeJournal.h"
 #include "AssetDatabaseBinary.h"
+#include "DurableAssetFileSystem.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Utilities/Crc.h"
-#if PLATFORM_WINDOWS
-#include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
-#endif
 
 namespace
 {
@@ -49,22 +47,12 @@ namespace
         return true;
     }
 
-    bool AtomicReplace(const StringView& destination, const StringView& staging)
-    {
-#if PLATFORM_WINDOWS
-        const String destinationPath(destination);
-        const String stagingPath(staging);
-        return MoveFileExW(*stagingPath, *destinationPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0;
-#else
-        return FileSystem::MoveFile(destination, staging, true);
-#endif
-    }
-
     bool WriteAtomic(const StringView& path, const byte* data, uint32 length)
     {
         const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
-        SCOPE_EXIT { FileSystem::DeleteFile(staging); };
-        return File::WriteAllBytes(staging, data, length) || AtomicReplace(path, staging);
+        SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
+        return DurableAssetFileSystem::WriteFile(staging, data, length) ||
+               DurableAssetFileSystem::Replace(path, staging);
     }
 
     bool ParseJournal(const Array<byte>& data, uint64& baseRevision, uint64& lastRevision, uint32& validLength,
@@ -220,7 +208,7 @@ bool FileChangeJournal::Append(const AssetChangeSet& changeSet, AssetPipelineDia
     file->SetPosition(file->GetSize());
     const bool failed = file->Write(&frame, sizeof(frame)) || (payload.HasItems() && file->Write(payload.Get(), payload.Count()));
     Delete(file);
-    if (failed)
+    if (failed || DurableAssetFileSystem::FlushFile(_path))
         return Fail(diagnostic, _path, TEXT("Cannot append the source asset change journal."));
     _lastRevision = changeSet.Revision;
     if (_lastRevision - _baseRevision > MaximumRetainedRevisions &&

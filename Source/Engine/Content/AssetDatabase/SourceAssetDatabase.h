@@ -10,6 +10,14 @@
 #include "Engine/Platform/CriticalSection.h"
 #include <memory>
 
+/// <summary>Commit-sampled automatic normalized-database checkpoint thresholds. A zero value disables that trigger.</summary>
+struct FLAXENGINE_API SourceAssetDatabaseCheckpointPolicy
+{
+    uint64 MaximumWalBytes = 64ull * 1024ull * 1024ull;
+    uint32 MaximumTransactions = 256;
+    double MaximumElapsedSeconds = 300.0;
+};
+
 /// <summary>Durable transactional authority for normalized source asset state under Library.</summary>
 class FLAXENGINE_API SourceAssetDatabase
 {
@@ -28,11 +36,18 @@ private:
     uint64 _checkpointGeneration = 0;
     uint64 _walBaseRevision = 0;
     uint64 _walLastRevision = 0;
+    SourceAssetDatabaseCheckpointPolicy _checkpointPolicy;
+    uint32 _transactionsSinceCheckpoint = 0;
+    double _lastCheckpointTime = 0.0;
+    uint64 _checkpointRetryRevision = 0;
+    double _checkpointRetryTime = 0.0;
     bool _open = false;
     bool _lastShutdownWasClean = true;
     bool _recoveryRequired = false;
 
     bool Commit(AssetDatabaseTransaction& transaction, AssetPipelineDiagnostic& diagnostic);
+    bool CheckpointLocked(const SourceAssetDatabaseState& state, AssetPipelineDiagnostic& diagnostic);
+    bool ShouldCheckpointLocked() const;
 
 public:
     Delegate<const AssetChangeSet&> Changed;
@@ -48,6 +63,12 @@ public:
     bool WasLastShutdownClean() const;
     uint64 GetRevision() const;
     const String& GetDirectory() const;
+
+    void SetCheckpointPolicy(const SourceAssetDatabaseCheckpointPolicy& policy);
+    SourceAssetDatabaseCheckpointPolicy GetCheckpointPolicy() const;
+
+    /// <summary>Durably checkpoints current rows and truncates the WAL only after publication succeeds.</summary>
+    bool Checkpoint(AssetPipelineDiagnostic& diagnostic);
 
     AssetDatabaseReadSnapshot Read() const;
     std::unique_ptr<AssetDatabaseTransaction> BeginTransaction();

@@ -86,6 +86,7 @@ namespace
         result.ProcessorID = meta.Processor.ID;
         result.PortabilityKey = normalizedPath.PortabilityKey;
         result.MetaSemanticHash = semanticHash;
+        result.ImporterSettingsVersion = static_cast<uint32>(meta.Processor.SettingsVersion);
         result.Labels = meta.Labels;
         result.SourceKind = meta.SourceKind;
         result.Status = status;
@@ -110,6 +111,7 @@ namespace
             subAsset.ProcessorID = meta.Processor.ID;
             subAsset.PortabilityKey = normalizedPath.PortabilityKey;
             subAsset.MetaSemanticHash = semanticHash;
+            subAsset.ImporterSettingsVersion = static_cast<uint32>(meta.Processor.SettingsVersion);
             subAsset.SourceKind = meta.SourceKind;
             subAsset.Status = entry.Value.Removed ? AssetRecordStatus::MissingSource : status;
             records.Add(MoveTemp(subAsset));

@@ -72,6 +72,9 @@ public:
     bool Open(const StringView& libraryPath, const Guid& projectId, AssetPipelineDiagnostic& diagnostic);
     bool Close(AssetPipelineDiagnostic* diagnostic = nullptr);
     bool IsOpen() const;
+    void SetCheckpointPolicy(const SourceAssetDatabaseCheckpointPolicy& policy);
+    SourceAssetDatabaseCheckpointPolicy GetCheckpointPolicy() const;
+    bool Checkpoint(AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Returns true when this database owns the given Library root.</summary>
     bool IsUsingLibrary(const StringView& libraryPath) const;

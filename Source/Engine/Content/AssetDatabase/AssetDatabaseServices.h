@@ -141,6 +141,20 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseChangeInfo
     API_FIELD() Array<Guid> StatusChanged;
 };
 
+/// <summary>Importer settings bound to one exact durable source and metadata revision.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetImporterSettingsSnapshot
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetImporterSettingsSnapshot);
+
+    API_FIELD() Guid SourceAssetID;
+    API_FIELD() uint64 SourceRevision = 0;
+    API_FIELD() uint64 MetaSemanticHash = 0;
+    API_FIELD() String ImporterID;
+    API_FIELD() int32 StoredSettingsVersion = 0;
+    API_FIELD() int32 SettingsSchemaVersion = 0;
+    API_FIELD() String SettingsJson;
+};
+
 /// <summary>Read-only source database queries and ordered change delivery.</summary>
 API_CLASS(Static) class FLAXENGINE_API AssetDatabaseQueryService
 {
@@ -191,6 +205,7 @@ public:
     API_FUNCTION() static bool RegisterCustomDependency(const StringView& name, const StringView& contentHash, const StringView& provider = StringView::Empty);
     API_FUNCTION() static bool UnregisterCustomDependency(const StringView& name);
     API_FUNCTION() static String GetCustomDependencyHash(const StringView& name);
+    API_FUNCTION() static bool CheckpointDatabase();
     API_FUNCTION() static bool CleanLibrary();
     API_FUNCTION() static bool CleanUnusedArtifacts(API_PARAM(Out) AssetArtifactCleanupInfo& result);
 };
@@ -205,6 +220,9 @@ public:
     API_FUNCTION() static bool MoveAsset(const StringView& sourcePath, const StringView& destinationPath);
     API_FUNCTION() static bool CopyAsset(const StringView& sourcePath, const StringView& destinationPath, API_PARAM(Out) Guid& copiedGuid);
     API_FUNCTION() static bool DeleteAsset(const StringView& sourcePath);
+    API_FUNCTION() static bool GetImporterSettings(const Guid& sourceAssetID, API_PARAM(Out) AssetImporterSettingsSnapshot& result);
+    API_FUNCTION() static bool SaveImporterSettingsAndReimport(const AssetImporterSettingsSnapshot& expected, const StringView& settingsJson,
+        API_PARAM(Out) AssetImporterSettingsSnapshot& current);
     API_FUNCTION() static void StartEditing();
     API_FUNCTION() static bool StopEditing();
     API_FUNCTION() static bool CloneMetadata(const StringView& sourceMetaPath, const StringView& destinationMetaPath);

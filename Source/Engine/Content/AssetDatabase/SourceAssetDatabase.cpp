@@ -1,15 +1,16 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "SourceAssetDatabase.h"
+#include "DurableAssetFileSystem.h"
 #include "NormalizedAssetDatabaseStore.h"
+#include "Engine/Core/Log.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Utilities/Crc.h"
-#if PLATFORM_WINDOWS
-#include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
-#endif
+#include <cmath>
 
 namespace
 {
@@ -48,22 +49,12 @@ namespace
         return true;
     }
 
-    bool AtomicReplace(const StringView& destination, const StringView& staging)
-    {
-#if PLATFORM_WINDOWS
-        const String destinationPath(destination);
-        const String stagingPath(staging);
-        return MoveFileExW(*stagingPath, *destinationPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0;
-#else
-        return FileSystem::MoveFile(destination, staging, true);
-#endif
-    }
-
     bool WriteAtomic(const StringView& path, const void* data, uint32 length)
     {
         const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
-        SCOPE_EXIT { FileSystem::DeleteFile(staging); };
-        return File::WriteAllBytes(staging, data, length) || AtomicReplace(path, staging);
+        SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
+        return DurableAssetFileSystem::WriteFile(staging, data, length) ||
+               DurableAssetFileSystem::Replace(path, staging);
     }
 
     bool LoadSnapshot(const StringView& path, SourceAssetDatabaseState& state, AssetPipelineDiagnostic& diagnostic)
@@ -107,6 +98,36 @@ SourceAssetDatabase::~SourceAssetDatabase()
     Close();
 }
 
+bool SourceAssetDatabase::CheckpointLocked(const SourceAssetDatabaseState& state, AssetPipelineDiagnostic& diagnostic)
+{
+    if (NormalizedAssetDatabaseStore::SaveCheckpoint(_directory, state, _checkpointGeneration, diagnostic) ||
+        NormalizedAssetDatabaseStore::ResetWal(_walPath, state.Database.ProjectId,
+            state.Database.CurrentRevision, diagnostic))
+        return true;
+    _walBaseRevision = state.Database.CurrentRevision;
+    _walLastRevision = state.Database.CurrentRevision;
+    _transactionsSinceCheckpoint = 0;
+    _lastCheckpointTime = Platform::GetTimeSeconds();
+    _checkpointRetryRevision = 0;
+    _checkpointRetryTime = 0.0;
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool SourceAssetDatabase::ShouldCheckpointLocked() const
+{
+    const double now = Platform::GetTimeSeconds();
+    if (_state && _state->Database.CurrentRevision < _checkpointRetryRevision && now < _checkpointRetryTime)
+        return false;
+    if (_checkpointPolicy.MaximumTransactions &&
+        _transactionsSinceCheckpoint >= _checkpointPolicy.MaximumTransactions)
+        return true;
+    if (_checkpointPolicy.MaximumWalBytes && FileSystem::GetFileSize(_walPath) >= _checkpointPolicy.MaximumWalBytes)
+        return true;
+    return _checkpointPolicy.MaximumElapsedSeconds > 0.0 && _lastCheckpointTime > 0.0 &&
+           now - _lastCheckpointTime >= _checkpointPolicy.MaximumElapsedSeconds;
+}
+
 bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projectId, AssetPipelineDiagnostic& diagnostic)
 {
     if (!projectId.IsValid())
@@ -117,7 +138,7 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
     _walPath = NormalizedAssetDatabaseStore::GetWalPath(_directory);
     _journalPath = _directory / TEXT("source-changes.log");
     _sessionMarkerPath = _directory / TEXT("unclean-session.marker");
-    if ((!FileSystem::DirectoryExists(_directory) && FileSystem::CreateDirectory(_directory)) || FileSystem::FileExists(_directory))
+    if (DurableAssetFileSystem::EnsureDirectory(_directory) || FileSystem::FileExists(_directory))
         return Fail(diagnostic, _directory, TEXT("Cannot create the source asset database directory."), AssetPipelineDiagnosticCode::LibraryCreationFailed);
 
     const String writerLockPath = _directory / TEXT("writer.lock");
@@ -282,6 +303,10 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
     if (WriteAtomic(_sessionMarkerPath, &marker, sizeof(marker)))
         return Fail(diagnostic, _sessionMarkerPath, TEXT("Cannot persist the source asset database session marker."));
     _state = std::make_shared<const SourceAssetDatabaseState>(MoveTemp(state));
+    _transactionsSinceCheckpoint = walRecords.Count();
+    _lastCheckpointTime = Platform::GetTimeSeconds();
+    _checkpointRetryRevision = 0;
+    _checkpointRetryTime = 0.0;
     _open = true;
     _recoveryRequired = false;
     opened = true;
@@ -298,12 +323,9 @@ bool SourceAssetDatabase::Close(AssetPipelineDiagnostic* diagnostic)
     {
         SourceAssetDatabaseState state = *_state;
         state.Database.CleanShutdown = true;
-        failed = NormalizedAssetDatabaseStore::SaveCheckpoint(_directory, state, _checkpointGeneration, localDiagnostic);
-        if (!failed)
-            failed = NormalizedAssetDatabaseStore::ResetWal(_walPath, state.Database.ProjectId,
-                state.Database.CurrentRevision, localDiagnostic);
-        if (!failed)
-            FileSystem::DeleteFile(_sessionMarkerPath);
+        failed = CheckpointLocked(state, localDiagnostic);
+        if (!failed && DurableAssetFileSystem::DeleteFile(_sessionMarkerPath))
+            failed = Fail(localDiagnostic, _sessionMarkerPath, TEXT("Cannot durably clear the source asset database session marker."));
     }
     _state.reset();
     _journal.Close();
@@ -320,6 +342,10 @@ bool SourceAssetDatabase::Close(AssetPipelineDiagnostic* diagnostic)
     _checkpointGeneration = 0;
     _walBaseRevision = 0;
     _walLastRevision = 0;
+    _transactionsSinceCheckpoint = 0;
+    _lastCheckpointTime = 0.0;
+    _checkpointRetryRevision = 0;
+    _checkpointRetryTime = 0.0;
     _locker.Unlock();
     if (diagnostic)
         *diagnostic = localDiagnostic;
@@ -347,6 +373,28 @@ uint64 SourceAssetDatabase::GetRevision() const
 const String& SourceAssetDatabase::GetDirectory() const
 {
     return _directory;
+}
+
+void SourceAssetDatabase::SetCheckpointPolicy(const SourceAssetDatabaseCheckpointPolicy& policy)
+{
+    ScopeLock lock(_locker);
+    _checkpointPolicy = policy;
+    if (!std::isfinite(_checkpointPolicy.MaximumElapsedSeconds) || _checkpointPolicy.MaximumElapsedSeconds < 0.0)
+        _checkpointPolicy.MaximumElapsedSeconds = 0.0;
+}
+
+SourceAssetDatabaseCheckpointPolicy SourceAssetDatabase::GetCheckpointPolicy() const
+{
+    ScopeLock lock(_locker);
+    return _checkpointPolicy;
+}
+
+bool SourceAssetDatabase::Checkpoint(AssetPipelineDiagnostic& diagnostic)
+{
+    ScopeLock lock(_locker);
+    if (!_open || !_state || _recoveryRequired)
+        return Fail(diagnostic, _manifestPath, TEXT("Source asset database is unavailable for checkpointing."));
+    return CheckpointLocked(*_state, diagnostic);
 }
 
 AssetDatabaseReadSnapshot SourceAssetDatabase::Read() const
@@ -404,6 +452,17 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
         return true;
     }
     _state = std::make_shared<const SourceAssetDatabaseState>(transaction._state);
+    _transactionsSinceCheckpoint++;
+    if (ShouldCheckpointLocked())
+    {
+        AssetPipelineDiagnostic checkpointDiagnostic;
+        if (CheckpointLocked(*_state, checkpointDiagnostic))
+        {
+            _checkpointRetryRevision = _state->Database.CurrentRevision + 64;
+            _checkpointRetryTime = Platform::GetTimeSeconds() + 60.0;
+            LOG(Error, "Automatic source asset database checkpoint failed. {0}", checkpointDiagnostic.Message);
+        }
+    }
     const AssetChangeSet changes = transaction._changes;
     _locker.Unlock();
     Changed(changes);

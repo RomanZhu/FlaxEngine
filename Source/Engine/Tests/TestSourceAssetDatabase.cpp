@@ -92,6 +92,96 @@ TEST_CASE("Source asset database commits durable coherent revisions")
     CHECK(changes[0].Added.Count() == 1);
 }
 
+TEST_CASE("Source asset database checkpoints bounded WAL transactions")
+{
+    const String library = Globals::TemporaryFolder / (TEXT("SourceAssetDatabaseCheckpoint-") + Guid::New().ToString(Guid::FormatType::N));
+    const String recoveryLibrary = library + TEXT("-Recovery");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(recoveryLibrary));
+    SCOPE_EXIT
+    {
+        FileSystem::DeleteDirectory(library, true);
+        FileSystem::DeleteDirectory(recoveryLibrary, true);
+    };
+
+    AssetPipelineDiagnostic diagnostic;
+    SourceAssetDatabase database;
+    const Guid projectId = Guid::New();
+    SourceAssetDatabaseCheckpointPolicy policy;
+    policy.MaximumWalBytes = 0;
+    policy.MaximumTransactions = 2;
+    policy.MaximumElapsedSeconds = 0.0;
+    database.SetCheckpointPolicy(policy);
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+
+    const String databaseDirectory = database.GetDirectory();
+    const String walPath = databaseDirectory / TEXT("normalized-store.wal");
+    const uint64 emptyWalSize = FileSystem::GetFileSize(walPath);
+    const auto commitSource = [&](const Guid& id, const Char* path)
+    {
+        std::unique_ptr<AssetDatabaseTransaction> transaction = database.BeginTransaction();
+        if (!transaction)
+            return true;
+        transaction->UpsertSource(MakeSource(id, path));
+        return transaction->Commit(diagnostic);
+    };
+
+    REQUIRE_FALSE(commitSource(Guid(101, 102, 103, 104), TEXT("Assets/A.png")));
+    CHECK(FileSystem::GetFileSize(walPath) > emptyWalSize);
+    REQUIRE_FALSE(commitSource(Guid(111, 112, 113, 114), TEXT("Assets/B.png")));
+    CHECK(database.GetRevision() == 2);
+    CHECK(FileSystem::GetFileSize(walPath) == emptyWalSize);
+
+    Array<AssetChangeSet> changes;
+    bool requiresSnapshot = false;
+    REQUIRE_FALSE(database.ReadChangesAfter(0, changes, requiresSnapshot, diagnostic));
+    CHECK_FALSE(requiresSnapshot);
+    CHECK(changes.Count() == 2);
+
+    const String recoveryDatabaseDirectory = recoveryLibrary / TEXT("AssetDatabase");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(recoveryDatabaseDirectory));
+    Array<String> checkpointFiles;
+    REQUIRE_FALSE(FileSystem::DirectoryGetFiles(checkpointFiles, databaseDirectory));
+    for (const String& file : checkpointFiles)
+    {
+        if (file.EndsWith(TEXT("writer.lock")))
+            continue;
+        REQUIRE_FALSE(FileSystem::CopyFile(recoveryDatabaseDirectory / StringUtils::GetFileName(file), file));
+    }
+    SourceAssetDatabase recovered;
+    REQUIRE_FALSE(recovered.Open(recoveryLibrary, projectId, diagnostic));
+    CHECK_FALSE(recovered.WasLastShutdownClean());
+    CHECK(recovered.GetRevision() == 2);
+    changes.Clear();
+    REQUIRE_FALSE(recovered.ReadChangesAfter(0, changes, requiresSnapshot, diagnostic));
+    CHECK_FALSE(requiresSnapshot);
+    CHECK(changes.Count() == 2);
+    REQUIRE_FALSE(recovered.Close(&diagnostic));
+
+    policy.MaximumTransactions = 0;
+    policy.MaximumWalBytes = emptyWalSize + 1;
+    database.SetCheckpointPolicy(policy);
+    REQUIRE_FALSE(commitSource(Guid(121, 122, 123, 124), TEXT("Assets/C.png")));
+    CHECK(FileSystem::GetFileSize(walPath) == emptyWalSize);
+
+    policy.MaximumWalBytes = 0;
+    database.SetCheckpointPolicy(policy);
+    REQUIRE_FALSE(commitSource(Guid(131, 132, 133, 134), TEXT("Assets/D.png")));
+    CHECK(FileSystem::GetFileSize(walPath) > emptyWalSize);
+    REQUIRE_FALSE(database.Checkpoint(diagnostic));
+    CHECK(FileSystem::GetFileSize(walPath) == emptyWalSize);
+    REQUIRE_FALSE(database.Close(&diagnostic));
+
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    CHECK(database.WasLastShutdownClean());
+    CHECK(database.GetRevision() == 4);
+    changes.Clear();
+    REQUIRE_FALSE(database.ReadChangesAfter(0, changes, requiresSnapshot, diagnostic));
+    CHECK_FALSE(requiresSnapshot);
+    CHECK(changes.Count() == 4);
+    REQUIRE_FALSE(database.Close(&diagnostic));
+}
+
 TEST_CASE("Source asset database rejects stale writers and recovers a torn journal tail")
 {
     const String library = Globals::TemporaryFolder / (TEXT("SourceAssetDatabaseRecovery-") + Guid::New().ToString(Guid::FormatType::N));

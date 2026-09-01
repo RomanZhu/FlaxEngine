@@ -73,6 +73,7 @@ namespace
         WriteString(stream, record.ProcessorID);
         WriteString(stream, record.PortabilityKey);
         stream.WriteUint64(record.MetaSemanticHash);
+        stream.WriteUint32(record.ImporterSettingsVersion);
         stream.WriteUint8((uint8)record.SourceKind);
         stream.WriteUint8((uint8)record.Status);
         WriteStringArray(stream, record.Labels);
@@ -161,7 +162,7 @@ namespace
         if (reader.Read(record.ID) || reader.Read(record.SourceAssetID) || reader.Read(record.LocalId) || reader.ReadString(record.TypeName) ||
             reader.ReadString(canonicalPath) || reader.ReadString(sourcePath) || reader.ReadString(metaPath) ||
             reader.ReadString(subAsset) || reader.ReadString(record.DisplayName) || reader.ReadString(record.ProcessorID) || reader.ReadString(record.PortabilityKey) ||
-            reader.Read(record.MetaSemanticHash) || reader.Read(sourceKind) || reader.Read(status) ||
+            reader.Read(record.MetaSemanticHash) || reader.Read(record.ImporterSettingsVersion) || reader.Read(sourceKind) || reader.Read(status) ||
             reader.ReadStringArray(record.Labels) || reader.ReadObjectIdArray(record.BuildInputDependencies) ||
             reader.ReadObjectIdArray(record.RuntimeReferences))
             return true;

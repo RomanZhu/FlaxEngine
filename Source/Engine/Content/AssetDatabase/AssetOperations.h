@@ -22,6 +22,7 @@ enum class AssetOperationKind : byte
     Trash,
     Delete,
     Restore,
+    ImporterSettings,
 };
 
 /// <summary>Existing source selected by both canonical path and durable GUID.</summary>
@@ -29,6 +30,15 @@ struct FLAXENGINE_API AssetOperationTarget
 {
     String SourcePath;
     Guid ExpectedGuid;
+};
+
+/// <summary>Exact durable metadata state captured by an importer settings editor.</summary>
+struct FLAXENGINE_API AssetImporterSettingsRevision
+{
+    uint64 SourceRevision = 0;
+    uint64 MetaSemanticHash = 0;
+    String ImporterID;
+    int32 StoredSettingsVersion = 0;
 };
 
 /// <summary>Exact hashes written by one controlled transaction for watcher suppression.</summary>
@@ -82,6 +92,10 @@ public:
     /// <summary>Clears copied diagnostics and artifact publications before independent import.</summary>
     virtual bool ClearCopiedState(const Guid& sourceGuid, const Guid& copiedGuid,
         AssetPipelineDiagnostic& diagnostic) = 0;
+
+    /// <summary>Rejects importer settings writes against a stale durable source row.</summary>
+    virtual bool ValidateImporterSettingsRevision(const AssetOperationTarget& target,
+        const AssetImporterSettingsRevision& expected, AssetPipelineDiagnostic& diagnostic) = 0;
 
     /// <summary>Refreshes committed operations. Start/StopAssetEditing batches calls here.</summary>
     virtual bool RefreshCommitted(const Array<AssetOperationCommit>& commits,
@@ -139,12 +153,16 @@ public:
         AssetPipelineDiagnostic& diagnostic);
     bool CopyAsset(const AssetOperationTarget& target, const StringView& destination, Guid& copiedGuid,
         AssetPipelineDiagnostic& diagnostic);
+    bool WriteImporterSettings(const AssetOperationTarget& target, const AssetImporterSettingsRevision& expected,
+        int32 settingsVersion, const StringAnsiView& settingsJson, AssetPipelineDiagnostic& diagnostic,
+        AssetMetaWriteFailurePoint failurePoint = AssetMetaWriteFailurePoint::None);
     bool TrashAsset(const AssetOperationTarget& target, AssetTrashRecord& trash,
         AssetPipelineDiagnostic& diagnostic);
     bool DeleteAsset(const AssetOperationTarget& target, AssetTrashRecord& trash,
         AssetPipelineDiagnostic& diagnostic);
     bool RestoreAsset(const AssetTrashRecord& trash, AssetPipelineDiagnostic& diagnostic);
 
+    bool IsAssetEditing() const;
     void StartAssetEditing();
     bool StopAssetEditing(AssetPipelineDiagnostic& diagnostic);
     void DrainSelfWrites(Array<AssetOperationSelfWrite>& result);

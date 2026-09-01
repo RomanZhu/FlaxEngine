@@ -12,6 +12,7 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 #if USE_EDITOR
@@ -326,6 +327,7 @@ TEST_CASE("Asset database snapshot is disposable checksummed and project scoped"
     Array<AssetRecord> records;
     const Guid id(51, 52, 53, 54);
     records.Add(MakeDatabaseRecord(id, id, content / TEXT("Warm.png")));
+    records[0].ImporterSettingsVersion = 7;
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(source.PublishFullSnapshot(records, diagnostic));
     Array<AssetDatabaseFileState> states;
@@ -348,6 +350,7 @@ TEST_CASE("Asset database snapshot is disposable checksummed and project scoped"
     REQUIRE_FALSE(AssetDatabaseSnapshotStore::Load(path, root, content, loaded, loadedStates, diagnostic));
     AssetRecord found;
     CHECK(loaded.TryGetRecord(id, found));
+    CHECK(found.ImporterSettingsVersion == 7);
     REQUIRE(loadedStates.Count() == 1);
     CHECK(loadedStates[0].CachedContentHash == state.CachedContentHash);
     CHECK(loadedStates[0].CacheChecksum == 789);
@@ -494,6 +497,117 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     REQUIRE_FALSE(AssetPipelineService::RefreshSources(cleanup));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(secondId, found));
+}
+
+TEST_CASE("Asset importer settings facade preserves conflicts and no-op revisions")
+{
+    const String folder = Globals::ProjectContentFolder / (TEXT("__ImporterSettings_") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(folder));
+    Array<String> refresh;
+    refresh.Add(folder);
+    SCOPE_EXIT
+    {
+        FileSystem::DeleteDirectory(folder, true);
+        AssetPipelineService::RefreshSources(refresh);
+    };
+
+    const Guid id = Guid::New();
+    const String source = folder / TEXT("Payload.bin");
+    const byte sourceBytes[] = { 4, 8, 15, 16, 23, 42 };
+    REQUIRE_FALSE(File::WriteAllBytes(source, sourceBytes, ARRAY_COUNT(sourceBytes)));
+    AssetMeta meta;
+    meta.ID = id;
+    meta.AssetType = RawDataAsset::TypeName;
+    meta.SourceKind = AssetSourceKind::ImportedSource;
+    meta.Processor.ID = TEXT("Flax.Binary");
+    meta.Processor.SettingsVersion = 1;
+    meta.Processor.SettingsJson = "{}";
+    meta.Labels.Add(TEXT("facade-test"));
+    meta.UserDataJson = "{\"preserved\":true}";
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), meta, diagnostic));
+    const Guid textID = Guid::New();
+    const String textSource = folder / TEXT("Notes.txt");
+    REQUIRE_FALSE(File::WriteAllText(textSource, TEXT("not generic importer settings"), Encoding::ANSI));
+    AssetMeta textMeta;
+    textMeta.ID = textID;
+    textMeta.AssetType = RawDataAsset::TypeName;
+    textMeta.SourceKind = AssetSourceKind::TextDocument;
+    textMeta.Processor.ID = TEXT("Flax.Text");
+    textMeta.Processor.SettingsVersion = 1;
+    textMeta.Processor.SettingsJson = "{}";
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(textSource + TEXT(".meta"), textMeta, diagnostic));
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
+    AssetMeta persistedMeta;
+    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), persistedMeta, diagnostic));
+
+    AssetImporterSettingsSnapshot ineligible;
+    CHECK(AssetOperationService::GetImporterSettings(textID, ineligible));
+    CHECK(ineligible.SourceAssetID == Guid::Empty);
+    const Array<AssetPipelineDiagnostic> ineligibleDiagnostics = AssetDatabaseQueryService::GetDiagnostics();
+    REQUIRE(ineligibleDiagnostics.HasItems());
+    CHECK(ineligibleDiagnostics[0].Code == AssetPipelineDiagnosticCode::SourceMissing);
+    AssetImporterSettingsSnapshot captured;
+    REQUIRE_FALSE(AssetOperationService::GetImporterSettings(id, captured));
+    CHECK(captured.SourceAssetID == id);
+    CHECK(captured.SourceRevision != 0);
+    CHECK(captured.ImporterID == TEXT("Flax.Binary"));
+    CHECK(captured.StoredSettingsVersion == 1);
+    CHECK(captured.SettingsSchemaVersion == 1);
+    CHECK(captured.SettingsJson == TEXT("{}\n"));
+
+    AssetOperationService::StartEditing();
+    AssetImporterSettingsSnapshot blocked;
+    CHECK(AssetOperationService::SaveImporterSettingsAndReimport(captured,
+        TEXT("{\"marker\":0}"), blocked));
+    REQUIRE_FALSE(AssetOperationService::StopEditing());
+    AssetMeta unchanged;
+    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), unchanged, diagnostic));
+    CHECK(unchanged.Processor.SettingsJson == "{}\n");
+
+    AssetImporterSettingsSnapshot current;
+    REQUIRE_FALSE(AssetOperationService::SaveImporterSettingsAndReimport(captured,
+        TEXT(" { \"marker\" : 1 } "), current));
+    CHECK(current.SourceAssetID == id);
+    CHECK(current.SourceRevision > captured.SourceRevision);
+    CHECK(current.MetaSemanticHash != captured.MetaSemanticHash);
+    CHECK(current.SettingsJson == TEXT("{\n  \"marker\": 1\n}\n"));
+    AssetMeta updated;
+    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), updated, diagnostic));
+    CHECK(updated.Labels == persistedMeta.Labels);
+    CHECK(updated.UserDataJson == persistedMeta.UserDataJson);
+
+    String status;
+    for (int32 i = 0; i < 10000; i++)
+    {
+        status = AssetPipelineService::GetBuildStatus(id);
+        if (status == TEXT("ReadyExact") || status == TEXT("Failed") || status == TEXT("Cancelled"))
+            break;
+        Platform::Sleep(1);
+    }
+    CHECK(status == TEXT("ReadyExact"));
+
+    BytesContainer beforeNoOp;
+    REQUIRE_FALSE(File::ReadAllBytes(source + TEXT(".meta"), beforeNoOp));
+    const uint64 beforeNoOpRevision = current.SourceRevision;
+    AssetImporterSettingsSnapshot afterNoOp;
+    REQUIRE_FALSE(AssetOperationService::SaveImporterSettingsAndReimport(current,
+        TEXT("{\"marker\":1}"), afterNoOp));
+    CHECK(afterNoOp.SourceRevision == beforeNoOpRevision);
+    BytesContainer afterNoOpBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(source + TEXT(".meta"), afterNoOpBytes));
+    REQUIRE(afterNoOpBytes.Length() == beforeNoOp.Length());
+    CHECK(Platform::MemoryCompare(afterNoOpBytes.Get(), beforeNoOp.Get(), beforeNoOp.Length()) == 0);
+
+    AssetImporterSettingsSnapshot conflictCurrent;
+    CHECK(AssetOperationService::SaveImporterSettingsAndReimport(captured,
+        TEXT("{\"marker\":2}"), conflictCurrent));
+    CHECK(conflictCurrent.SourceRevision == current.SourceRevision);
+    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), updated, diagnostic));
+    CHECK(updated.Processor.SettingsJson == "{\n  \"marker\": 1\n}\n");
+    const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
+    REQUIRE(diagnostics.HasItems());
+    CHECK(diagnostics[0].Code == AssetPipelineDiagnosticCode::PrepareInvalidated);
 }
 
 TEST_CASE("Asset database RefreshSources creates canonical sidecars and keeps unaffected records")

@@ -6,6 +6,7 @@
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/StringUtils.h"
 #include "Engine/Utilities/Crc.h"
 #if PLATFORM_WINDOWS
 #include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
@@ -322,8 +323,12 @@ bool NormalizedAssetDatabaseStore::SaveCheckpoint(const StringView& directory, c
 {
     if (state.Validate(diagnostic))
         return true;
-    const uint64 previousGeneration = generation;
+    if (generation == MAX_uint64)
+        return Fail(diagnostic, directory, TEXT("Normalized source database checkpoint generation is exhausted."));
     const uint64 nextGeneration = generation + 1;
+    // Reserve the generation before any publication attempt. A rename can succeed but its directory flush can
+    // report failure, so retrying the same generation could otherwise rewrite tables already named by a manifest.
+    generation = nextGeneration;
     for (uint32 i = 0; i < (uint32)TableId::Count; i++)
     {
         const TableId table = (TableId)i;
@@ -357,14 +362,32 @@ bool NormalizedAssetDatabaseStore::SaveCheckpoint(const StringView& directory, c
     const String manifestPath = GetManifestPath(directory);
     if (WriteAtomic(manifestPath, &manifest, sizeof(manifest)))
         return Fail(diagnostic, manifestPath, TEXT("Cannot publish normalized source database checkpoint manifest."));
-    generation = nextGeneration;
-    if (previousGeneration)
+
+    // Old and abandoned generations are inert after manifest publication. Cleanup is retryable maintenance and
+    // must not turn an already authoritative checkpoint into a failed commit that retriggers on every transaction.
+    Array<String> checkpointTables;
+    if (!FileSystem::DirectoryGetFiles(checkpointTables, directory, TEXT("*.table")))
     {
         bool removedOldTable = false;
-        for (uint32 i = 0; i < (uint32)TableId::Count; i++)
-            removedOldTable |= !FileSystem::DeleteFile(TablePath(directory, (TableId)i, previousGeneration));
-        if (removedOldTable && DurableAssetFileSystem::FlushDirectory(directory))
-            return Fail(diagnostic, directory, TEXT("Cannot durably remove prior normalized source database checkpoints."));
+        const String activeSuffix = String::Format(TEXT("-{0}.table"), nextGeneration);
+        for (const String& oldTablePath : checkpointTables)
+        {
+            const String fileName = StringUtils::GetFileName(oldTablePath);
+            bool recognized = false;
+            for (uint32 i = 0; i < (uint32)TableId::Count; i++)
+            {
+                if (fileName.StartsWith(String(TableName((TableId)i)) + TEXT("-")))
+                {
+                    recognized = true;
+                    break;
+                }
+            }
+            if (!recognized || fileName.EndsWith(activeSuffix))
+                continue;
+            removedOldTable |= !FileSystem::DeleteFile(oldTablePath);
+        }
+        if (removedOldTable)
+            DurableAssetFileSystem::FlushDirectory(directory);
     }
     diagnostic = AssetPipelineDiagnostic();
     return false;

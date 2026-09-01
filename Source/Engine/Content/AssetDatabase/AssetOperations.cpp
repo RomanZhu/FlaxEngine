@@ -2,12 +2,14 @@
 
 #include "AssetOperations.h"
 #include "DurableAssetFileSystem.h"
+#include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
+#include "Engine/Utilities/Crc.h"
 #include <algorithm>
 
 namespace
@@ -251,6 +253,15 @@ namespace
         return false;
     }
 
+    bool GetMetaSemanticHash(const AssetMeta& meta, uint64& hash, AssetPipelineDiagnostic& diagnostic)
+    {
+        StringAnsi canonical;
+        if (meta.ToJson(canonical, diagnostic))
+            return true;
+        hash = Crc::MemCrc32(canonical.Get(), canonical.Length());
+        return false;
+    }
+
     bool IsCreateKind(AssetOperationKind kind)
     {
         return kind == AssetOperationKind::Create || kind == AssetOperationKind::Import || kind == AssetOperationKind::Copy;
@@ -303,6 +314,14 @@ namespace
         write.Path = path;
         if (!HashFile(path, write.Content))
             commit.SelfWrites.Add(MoveTemp(write));
+    }
+
+    bool RestoreFileAtomic(const StringView& path, const BytesContainer& bytes)
+    {
+        const String staging = String(path) + TEXT(".rollback-") + Guid::New().ToString(Guid::FormatType::N);
+        SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
+        return DurableAssetFileSystem::WriteFile(staging, bytes.Get(), bytes.Length()) ||
+               DurableAssetFileSystem::Replace(path, staging);
     }
 }
 
@@ -404,6 +423,13 @@ bool AssetOperations::PublishCommit(AssetOperationCommit& commit, AssetPipelineD
 {
     Array<AssetOperationCommit> commits;
     _stateLocker.Lock();
+    if (commit.Kind == AssetOperationKind::ImporterSettings &&
+        (_editingDepth > 0 || _pendingCommits.HasItems()))
+    {
+        _stateLocker.Unlock();
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, commit.SourcePath,
+            TEXT("Importer settings cannot be published while another asset operation batch is pending."));
+    }
     if (_editingDepth > 0)
     {
         _pendingCommits.Add(commit);
@@ -424,11 +450,14 @@ bool AssetOperations::PublishCommit(AssetOperationCommit& commit, AssetPipelineD
         return false;
     }
 
-    _stateLocker.Lock();
-    Array<AssetOperationCommit> pending = MoveTemp(_pendingCommits);
-    _pendingCommits = MoveTemp(commits);
-    _pendingCommits.Add(pending);
-    _stateLocker.Unlock();
+    if (commit.Kind != AssetOperationKind::ImporterSettings)
+    {
+        _stateLocker.Lock();
+        Array<AssetOperationCommit> pending = MoveTemp(_pendingCommits);
+        _pendingCommits = MoveTemp(commits);
+        _pendingCommits.Add(pending);
+        _stateLocker.Unlock();
+    }
     return true;
 }
 
@@ -806,6 +835,114 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
     return PublishCommit(commit, diagnostic);
 }
 
+bool AssetOperations::WriteImporterSettings(const AssetOperationTarget& target,
+    const AssetImporterSettingsRevision& expected, int32 settingsVersion, const StringAnsiView& settingsJson,
+    AssetPipelineDiagnostic& diagnostic, AssetMetaWriteFailurePoint failurePoint)
+{
+    if (expected.SourceRevision == 0 || expected.ImporterID.IsEmpty() ||
+        expected.StoredSettingsVersion < 1 || settingsVersion < 1)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, target.SourcePath,
+            TEXT("Importer settings revision is invalid."));
+    if (IsAssetEditing())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, target.SourcePath,
+            TEXT("Importer settings cannot be saved inside an asset editing batch."));
+
+    AssetPathPolicy::ProjectPath source;
+    if (NormalizeSource(target.SourcePath, source, diagnostic))
+        return true;
+    const String metaPath = MetaPath(source.AbsolutePath);
+    Array<String> lockPaths;
+    lockPaths.Add(source.AbsolutePath);
+    lockPaths.Add(metaPath);
+    Array<String> acquired;
+    AcquirePaths(lockPaths, acquired, diagnostic);
+    SCOPE_EXIT { ReleasePaths(acquired); };
+
+    AssetMeta current;
+    AssetPathPolicy::ProjectPath currentSource;
+    if (ValidateExisting(target, currentSource, current, diagnostic) ||
+        _databaseCallbacks.ValidateImporterSettingsRevision(target, expected, diagnostic))
+        return true;
+    uint64 currentSemanticHash;
+    if (GetMetaSemanticHash(current, currentSemanticHash, diagnostic))
+        return true;
+    if (currentSemanticHash != expected.MetaSemanticHash || current.Processor.ID != expected.ImporterID ||
+        current.Processor.SettingsVersion != expected.StoredSettingsVersion)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, source.AbsolutePath,
+            TEXT("Importer settings metadata changed after the editor revision was captured."));
+
+    StringAnsi canonicalSettings;
+    CanonicalJsonError jsonError;
+    if (CanonicalJsonWriter::Canonicalize(settingsJson, canonicalSettings, jsonError))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, source.AbsolutePath, jsonError.Message);
+    rapidjson_flax::Document settingsDocument;
+    settingsDocument.Parse(canonicalSettings.Get(), canonicalSettings.Length());
+    if (settingsDocument.HasParseError() || !settingsDocument.IsObject())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, source.AbsolutePath,
+            TEXT("Importer settings must be a JSON object."));
+    if (current.Processor.SettingsVersion == settingsVersion && current.Processor.SettingsJson == canonicalSettings)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+
+    ReleasePaths(acquired);
+    acquired.Clear();
+    if (_modificationProcessor.ValidateOperation(AssetOperationKind::ImporterSettings, target,
+        StringView::Empty, diagnostic))
+        return true;
+    AcquirePaths(lockPaths, acquired, diagnostic);
+    AssetMeta authorizedCurrent;
+    if (ValidateExisting(target, currentSource, authorizedCurrent, diagnostic) ||
+        _databaseCallbacks.ValidateImporterSettingsRevision(target, expected, diagnostic))
+        return true;
+    if (GetMetaSemanticHash(authorizedCurrent, currentSemanticHash, diagnostic))
+        return true;
+    if (currentSemanticHash != expected.MetaSemanticHash || authorizedCurrent.Processor.ID != expected.ImporterID ||
+        authorizedCurrent.Processor.SettingsVersion != expected.StoredSettingsVersion)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, source.AbsolutePath,
+            TEXT("Importer settings metadata changed while the save was authorized."));
+    current = MoveTemp(authorizedCurrent);
+
+    AssetMeta updated = current;
+    updated.Processor.SettingsVersion = settingsVersion;
+    updated.Processor.SettingsJson = MoveTemp(canonicalSettings);
+    BytesContainer previousMeta;
+    if (File::ReadAllBytes(metaPath, previousMeta))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, metaPath,
+            TEXT("Cannot capture importer metadata before atomic replacement."));
+    if (AssetMeta::SaveAtomic(metaPath, updated, diagnostic, nullptr, failurePoint))
+        return true;
+
+    AssetOperationCommit commit;
+    commit.TransactionId = Guid::New();
+    commit.Kind = AssetOperationKind::ImporterSettings;
+    commit.AssetGuid = current.ID;
+    commit.SourceAssetGuid = current.ID;
+    commit.SourcePath = source.AbsolutePath;
+    AddSelfWrite(commit, metaPath);
+    if (!PublishCommit(commit, diagnostic))
+        return false;
+
+    const AssetPipelineDiagnostic publicationDiagnostic = diagnostic;
+    if (RestoreFileAtomic(metaPath, previousMeta))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = metaPath;
+        diagnostic.Message = String::Format(TEXT("Importer settings database publication failed and the prior metadata could not be restored. {0}"), publicationDiagnostic.Message);
+        return true;
+    }
+    AssetOperationCommit rollback;
+    rollback.TransactionId = commit.TransactionId;
+    AddSelfWrite(rollback, metaPath);
+    _stateLocker.Lock();
+    _selfWrites.Add(rollback.SelfWrites);
+    _stateLocker.Unlock();
+    diagnostic = publicationDiagnostic;
+    return true;
+}
+
 bool AssetOperations::TrashAsset(const AssetOperationTarget& target, AssetTrashRecord& trash,
     AssetPipelineDiagnostic& diagnostic)
 {
@@ -931,6 +1068,14 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
     AddSelfWrite(commit, trash.OriginalSourcePath);
     AddSelfWrite(commit, trash.OriginalMetaPath);
     return PublishCommit(commit, diagnostic);
+}
+
+bool AssetOperations::IsAssetEditing() const
+{
+    _stateLocker.Lock();
+    const bool result = _editingDepth > 0;
+    _stateLocker.Unlock();
+    return result;
 }
 
 void AssetOperations::StartAssetEditing()

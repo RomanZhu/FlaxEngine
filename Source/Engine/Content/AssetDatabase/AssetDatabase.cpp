@@ -224,6 +224,7 @@ namespace
             record.ProcessorID = (*source)->ImporterId;
             record.PortabilityKey = (*source)->PortabilityKey;
             record.MetaSemanticHash = (*source)->MetaSemanticHash;
+            record.ImporterSettingsVersion = (*source)->ImporterSettingsVersion;
             const Array<String>* sourceLabels = labels.TryGet(object.AssetGuid);
             if (sourceLabels)
                 record.Labels = *sourceLabels;
@@ -311,6 +312,22 @@ bool AssetDatabase::Close(AssetPipelineDiagnostic* diagnostic)
 bool AssetDatabase::IsOpen() const
 {
     return _sourceDatabase.IsOpen();
+}
+
+void AssetDatabase::SetCheckpointPolicy(const SourceAssetDatabaseCheckpointPolicy& policy)
+{
+    _sourceDatabase.SetCheckpointPolicy(policy);
+}
+
+SourceAssetDatabaseCheckpointPolicy AssetDatabase::GetCheckpointPolicy() const
+{
+    return _sourceDatabase.GetCheckpointPolicy();
+}
+
+bool AssetDatabase::Checkpoint(AssetPipelineDiagnostic& diagnostic)
+{
+    ScopeLock writeLock(_writeLocker);
+    return _sourceDatabase.Checkpoint(diagnostic);
 }
 
 bool AssetDatabase::IsUsingLibrary(const StringView& libraryPath) const
@@ -903,6 +920,7 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         source.MetaHash = SemanticHash(sourceRecord->MetaSemanticHash);
         source.MetaSemanticHash = sourceRecord->MetaSemanticHash;
         source.ImporterId = sourceRecord->ProcessorID;
+        source.ImporterSettingsVersion = sourceRecord->ImporterSettingsVersion;
         source.PortabilityKey = sourceRecord->PortabilityKey;
         source.SourceKind = sourceRecord->SourceKind;
         source.Status = sourceRecord->Status;

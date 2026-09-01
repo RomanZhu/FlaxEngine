@@ -38,6 +38,7 @@
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Threading/Threading.h"
+#include "Engine/Utilities/Crc.h"
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Content/Importing/AssetImportService.h"
 #include "Engine/Content/Importing/CallbackImporterPipelineService.h"
@@ -154,6 +155,9 @@ namespace
             case AssetOperationKind::Delete:
                 request.Kind = AssetModificationKind::Delete;
                 break;
+            case AssetOperationKind::ImporterSettings:
+                request.Kind = AssetModificationKind::Save;
+                break;
             default:
                 request.Kind = AssetModificationKind::Create;
                 break;
@@ -186,16 +190,54 @@ namespace
             return false;
         }
 
+        bool ValidateImporterSettingsRevision(const AssetOperationTarget& target,
+            const AssetImporterSettingsRevision& expected, AssetPipelineDiagnostic& diagnostic) override
+        {
+            const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+            SourceAssetRow source;
+            if (!snapshot.IsValid() || !snapshot.TryGetSource(target.ExpectedGuid, source))
+            {
+                diagnostic = AssetPipelineDiagnostic();
+                diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+                diagnostic.AssetGuid = target.ExpectedGuid;
+                diagnostic.SourcePath = target.SourcePath;
+                diagnostic.Message = TEXT("Importer settings source is no longer registered.");
+                return true;
+            }
+            if (!FileSystem::AreFilePathsEquivalent(source.Path, target.SourcePath) ||
+                source.LastModifiedRevision != expected.SourceRevision ||
+                source.MetaSemanticHash != expected.MetaSemanticHash || source.ImporterId != expected.ImporterID ||
+                source.ImporterSettingsVersion != static_cast<uint32>(expected.StoredSettingsVersion))
+            {
+                diagnostic = AssetPipelineDiagnostic();
+                diagnostic.Code = AssetPipelineDiagnosticCode::PrepareInvalidated;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+                diagnostic.AssetGuid = target.ExpectedGuid;
+                diagnostic.SourcePath = source.Path;
+                diagnostic.ProcessorId = source.ImporterId;
+                diagnostic.Message = TEXT("Importer settings write conflicts with a newer source metadata revision.");
+                return true;
+            }
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+
         bool RefreshCommitted(const Array<AssetOperationCommit>& commits,
             AssetPipelineDiagnostic& diagnostic) override
         {
             Array<String> paths;
-            const String engineRoot = AssetSourceRoots::GetEngineRoot();
-            const auto addSourcePath = [&paths, &engineRoot](const StringView& path)
+            String projectRoot = Globals::ProjectContentFolder;
+            String engineRoot = AssetSourceRoots::GetEngineRoot();
+            projectRoot.Replace('\\', '/');
+            engineRoot.Replace('\\', '/');
+            const auto addSourcePath = [&paths, &projectRoot, &engineRoot](const StringView& path)
             {
-                if (!path.IsEmpty() && (AssetPathPolicy::IsSameOrChild(path, Globals::ProjectContentFolder) ||
-                    (engineRoot.HasChars() && AssetPathPolicy::IsSameOrChild(path, engineRoot))))
-                    paths.Add(String(path));
+                String normalized(path);
+                normalized.Replace('\\', '/');
+                if (normalized.HasChars() && (AssetPathPolicy::IsSameOrChild(normalized, projectRoot) ||
+                    (engineRoot.HasChars() && AssetPathPolicy::IsSameOrChild(normalized, engineRoot))))
+                    paths.Add(MoveTemp(normalized));
             };
             for (const AssetOperationCommit& commit : commits)
             {
@@ -210,10 +252,12 @@ namespace
             }
             for (const AssetOperationCommit& commit : commits)
             {
-                if ((commit.Kind == AssetOperationKind::Trash || commit.Kind == AssetOperationKind::Delete) ||
+                if ((commit.Kind == AssetOperationKind::Trash || commit.Kind == AssetOperationKind::Delete ||
+                    commit.Kind == AssetOperationKind::ImporterSettings) ||
                     !commit.AssetGuid.IsValid())
                     continue;
-                if (AssetPipelineService::BuildAsset(commit.AssetGuid, false, false))
+                if (AssetPipelineService::BuildAsset(commit.AssetGuid,
+                    commit.Kind == AssetOperationKind::ImporterSettings, false))
                 {
                     const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
                     diagnostic = diagnostics.HasItems() ? diagnostics[0] : AssetPipelineDiagnostic();
@@ -342,6 +386,80 @@ namespace
     {
         ScopeLock lock(StateLocker);
         LastDiagnostics = diagnostics;
+    }
+
+    bool ReadImporterSettingsSnapshot(const Guid& sourceID, AssetImporterSettingsSnapshot& result,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        result = AssetImporterSettingsSnapshot();
+        const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+        SourceAssetRow source;
+        if (!sourceID.IsValid() || !snapshot.IsValid() || !snapshot.TryGetSource(sourceID, source) ||
+            source.IsFolder || source.SourceKind != AssetSourceKind::ImportedSource)
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.AssetGuid = sourceID;
+            diagnostic.Message = TEXT("Importer settings source is not registered as an imported asset.");
+            return true;
+        }
+        AssetMeta meta;
+        if (AssetMeta::Load(source.MetaPath, meta, diagnostic))
+            return true;
+        StringAnsi canonicalMeta;
+        if (meta.ToJson(canonicalMeta, diagnostic))
+            return true;
+        const uint64 semanticHash = Crc::MemCrc32(canonicalMeta.Get(), canonicalMeta.Length());
+        if (source.ImporterSettingsVersion > MAX_int32 || meta.ID != sourceID ||
+            meta.Processor.ID != source.ImporterId || meta.Processor.SettingsVersion < 1 ||
+            static_cast<uint32>(meta.Processor.SettingsVersion) != source.ImporterSettingsVersion ||
+            semanticHash != source.MetaSemanticHash)
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::PrepareInvalidated;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.AssetGuid = sourceID;
+            diagnostic.SourcePath = source.Path;
+            diagnostic.ProcessorId = source.ImporterId;
+            diagnostic.Message = TEXT("Importer settings metadata is newer than the durable source database revision.");
+            return true;
+        }
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+        AssetImporterRegistry* registry = AssetImportService::GetImporterRegistry();
+        AssetImporterLease importer;
+        if (!registry || registry->TryAcquire(source.ImporterId, importer, diagnostic))
+            return true;
+        if (importer.Get().SettingsSchemaVersion > MAX_int32)
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.AssetGuid = sourceID;
+            diagnostic.SourcePath = source.Path;
+            diagnostic.ProcessorId = source.ImporterId;
+            diagnostic.Message = TEXT("Importer settings schema version exceeds the supported editor range.");
+            return true;
+        }
+        result.SourceAssetID = sourceID;
+        result.SourceRevision = source.LastModifiedRevision;
+        result.MetaSemanticHash = source.MetaSemanticHash;
+        result.ImporterID = source.ImporterId;
+        result.StoredSettingsVersion = static_cast<int32>(source.ImporterSettingsVersion);
+        result.SettingsSchemaVersion = static_cast<int32>(importer.Get().SettingsSchemaVersion);
+        result.SettingsJson = String(meta.Processor.SettingsJson);
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+#else
+        diagnostic = AssetPipelineDiagnostic();
+        diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = sourceID;
+        diagnostic.SourcePath = source.Path;
+        diagnostic.ProcessorId = source.ImporterId;
+        diagnostic.Message = TEXT("Importer settings are unavailable without the editor importer registry.");
+        return true;
+#endif
     }
 
     bool EnsureOperations(AssetPipelineDiagnostic& diagnostic)
@@ -2171,6 +2289,152 @@ bool AssetOperationService::DeleteAsset(const StringView& sourcePath)
 #endif
 }
 
+bool AssetOperationService::GetImporterSettings(const Guid& sourceAssetID, AssetImporterSettingsSnapshot& result)
+{
+    result = AssetImporterSettingsSnapshot();
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    if (AssetPipelineService::Initialize())
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = ReadImporterSettingsSnapshot(sourceAssetID, result, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    AssetPipelineDiagnostic diagnostic;
+    diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+    diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+    diagnostic.AssetGuid = sourceAssetID;
+    diagnostic.Message = TEXT("Importer settings are unavailable without the editor importer registry.");
+    SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return true;
+#endif
+}
+
+bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterSettingsSnapshot& expected,
+    const StringView& settingsJson, AssetImporterSettingsSnapshot& current)
+{
+    current = AssetImporterSettingsSnapshot();
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    if (AssetPipelineService::Initialize() || !Operations)
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    if (Operations->IsAssetEditing())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::PrepareInvalidated;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = expected.SourceAssetID;
+        diagnostic.Message = TEXT("Importer settings cannot be saved inside an asset editing batch.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+    SourceAssetRow source;
+    if (!snapshot.IsValid() || !snapshot.TryGetSource(expected.SourceAssetID, source) || source.IsFolder ||
+        source.SourceKind != AssetSourceKind::ImportedSource)
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = expected.SourceAssetID;
+        diagnostic.Message = TEXT("Importer settings source is no longer registered as an imported asset.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    if (expected.SourceRevision == 0 || expected.ImporterID.IsEmpty() || expected.StoredSettingsVersion < 1 ||
+        expected.SettingsSchemaVersion < 1)
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = expected.SourceAssetID;
+        diagnostic.SourcePath = source.Path;
+        diagnostic.Message = TEXT("Importer settings revision is invalid.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    if (source.LastModifiedRevision != expected.SourceRevision || source.MetaSemanticHash != expected.MetaSemanticHash ||
+        source.ImporterId != expected.ImporterID ||
+        source.ImporterSettingsVersion != static_cast<uint32>(expected.StoredSettingsVersion))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::PrepareInvalidated;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = expected.SourceAssetID;
+        diagnostic.SourcePath = source.Path;
+        diagnostic.ProcessorId = source.ImporterId;
+        diagnostic.Message = TEXT("Importer settings write conflicts with a newer source metadata revision.");
+        AssetPipelineDiagnostic ignored;
+        ReadImporterSettingsSnapshot(expected.SourceAssetID, current, ignored);
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+
+    AssetImporterRegistry* registry = AssetImportService::GetImporterRegistry();
+    AssetImporterLease importer;
+    if (!registry || registry->TryAcquire(expected.ImporterID, importer, diagnostic))
+    {
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.AssetGuid = expected.SourceAssetID;
+            diagnostic.SourcePath = source.Path;
+            diagnostic.ProcessorId = expected.ImporterID;
+            diagnostic.Message = TEXT("Importer settings processor is not registered.");
+        }
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    if (importer.Get().SettingsSchemaVersion > MAX_int32 ||
+        expected.SettingsSchemaVersion != static_cast<int32>(importer.Get().SettingsSchemaVersion))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::PrepareInvalidated;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = expected.SourceAssetID;
+        diagnostic.SourcePath = source.Path;
+        diagnostic.ProcessorId = expected.ImporterID;
+        diagnostic.Message = TEXT("Importer settings schema changed after the editor revision was captured.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+
+    AssetOperationTarget target;
+    target.SourcePath = source.Path;
+    target.ExpectedGuid = expected.SourceAssetID;
+    AssetImporterSettingsRevision revision;
+    revision.SourceRevision = expected.SourceRevision;
+    revision.MetaSemanticHash = expected.MetaSemanticHash;
+    revision.ImporterID = expected.ImporterID;
+    revision.StoredSettingsVersion = expected.StoredSettingsVersion;
+    const StringAnsi settings(settingsJson);
+    const bool failed = Operations->WriteImporterSettings(target, revision, expected.SettingsSchemaVersion,
+        StringAnsiView(settings), diagnostic);
+    importer.Reset();
+    if (failed)
+    {
+        AssetPipelineDiagnostic ignored;
+        ReadImporterSettingsSnapshot(expected.SourceAssetID, current, ignored);
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    if (ReadImporterSettingsSnapshot(expected.SourceAssetID, current, diagnostic))
+    {
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    if ((current.SourceRevision != expected.SourceRevision || current.MetaSemanticHash != expected.MetaSemanticHash) &&
+        AssetPipelineService::BuildAsset(expected.SourceAssetID, true, false))
+        return true;
+    return false;
+#else
+    AssetPipelineDiagnostic diagnostic;
+    diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+    diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+    diagnostic.AssetGuid = expected.SourceAssetID;
+    diagnostic.Message = TEXT("Importer settings are unavailable without the editor importer registry.");
+    SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return true;
+#endif
+}
+
 void AssetOperationService::StartEditing()
 {
 #if USE_EDITOR
@@ -2319,6 +2583,21 @@ bool AssetPipelineService::CleanLibrary()
     if (diagnostic.Code != AssetPipelineDiagnosticCode::None)
         diagnostics.Add(diagnostic);
     SetDiagnostics(diagnostics);
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetPipelineService::CheckpointDatabase()
+{
+#if USE_EDITOR
+    if (Initialize())
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = AssetDatabase::Get().Checkpoint(diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
     return failed;
 #else
     return true;
