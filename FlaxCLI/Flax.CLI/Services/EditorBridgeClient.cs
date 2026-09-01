@@ -16,6 +16,9 @@ internal sealed class EditorBridgeClient(AppPaths paths)
 {
     private const int ProtocolVersion = 1;
     private const int MaxResponseCharacters = 4 * 1024 * 1024;
+    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultAssetImportTimeout = TimeSpan.FromHours(1);
+    private static readonly TimeSpan ResponseTimeoutGrace = TimeSpan.FromSeconds(5);
 
     public IReadOnlyList<EditorInstanceManifest> Discover()
     {
@@ -97,6 +100,7 @@ internal sealed class EditorBridgeClient(AppPaths paths)
         }
 
         var requestId = Guid.NewGuid().ToString("N");
+        var requestTimeout = ResolveRequestTimeout(action, name, arguments, context.Options.Timeout);
         var request = new EditorBridgeRequest
         {
             RequestId = requestId,
@@ -105,12 +109,12 @@ internal sealed class EditorBridgeClient(AppPaths paths)
             Name = name,
             Arguments = arguments ?? new JsonObject(),
             Confirm = confirm,
-            TimeoutSeconds = Math.Max(1, Math.Min(3600, context.Options.Timeout?.TotalSeconds ?? 30)),
+            TimeoutSeconds = Math.Max(1, Math.Min(3600, requestTimeout.TotalSeconds)),
         };
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
         try
         {
-            timeout.CancelAfter(context.Options.Timeout ?? TimeSpan.FromSeconds(35));
+            timeout.CancelAfter(context.Options.Timeout ?? requestTimeout + ResponseTimeoutGrace);
             await using var stream = await ConnectAsync(instance, timeout.Token);
             using var reader = new StreamReader(stream, new UTF8Encoding(false), false, 8192, true);
             await using var writer = new StreamWriter(stream, new UTF8Encoding(false), 8192, true) { AutoFlush = true };
@@ -149,6 +153,33 @@ internal sealed class EditorBridgeClient(AppPaths paths)
         {
             throw new CliException(ExitCode.OperationFailed, "FLX-BRIDGE-CONNECT-0006", "The running Editor bridge disconnected or could not be reached.", new { exception = ex.Message });
         }
+    }
+
+    internal static TimeSpan ResolveRequestTimeout(string action, string? name, JsonObject? arguments, TimeSpan? configuredTimeout)
+    {
+        if (configuredTimeout.HasValue)
+            return configuredTimeout.Value;
+        return IsAssetImportInvocation(action, name, arguments) ? DefaultAssetImportTimeout : DefaultRequestTimeout;
+    }
+
+    private static bool IsAssetImportInvocation(string action, string? name, JsonObject? arguments)
+    {
+        if (!string.Equals(action, "command.invoke", StringComparison.OrdinalIgnoreCase) || arguments == null)
+            return false;
+        if (string.Equals(name, "assets.execute", StringComparison.OrdinalIgnoreCase))
+            return IsImportOperation(arguments["operation"]);
+        if (!string.Equals(name, "assets.batch", StringComparison.OrdinalIgnoreCase) || arguments["operations"] is not JsonArray operations)
+            return false;
+        return operations.Any(IsImportOperation);
+    }
+
+    private static bool IsImportOperation(JsonNode? node)
+    {
+        if (node is not JsonObject operationObject)
+            return false;
+        var operation = operationObject["action"]?.GetValue<string>();
+        return string.Equals(operation, "import", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(operation, "reimport", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryGetProperty(JsonElement value, string name, out JsonElement property)

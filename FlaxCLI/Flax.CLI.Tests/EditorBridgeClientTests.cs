@@ -2,6 +2,7 @@
 
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Flax.CLI.Core;
 using Flax.CLI.Protocol;
 using Flax.CLI.Services;
@@ -145,5 +146,53 @@ public sealed class EditorBridgeClientTests
         var error = Assert.ThrowsAsync<CliException>(() => new EditorBridgeClient(_paths).InvokeAsync(manifest, action, null, null, false, context));
 
         Assert.That(error!.Code, Is.EqualTo("FLX-BRIDGE-CAPABILITY-0004"));
+    }
+
+    [TestCase("import")]
+    [TestCase("reimport")]
+    public void AssetImportInvocationUsesLongDefaultTimeout(string operation)
+    {
+        var arguments = new JsonObject
+        {
+            ["operation"] = new JsonObject { ["action"] = operation },
+        };
+
+        var timeout = EditorBridgeClient.ResolveRequestTimeout("command.invoke", "assets.execute", arguments, null);
+
+        Assert.That(timeout, Is.EqualTo(TimeSpan.FromHours(1)));
+    }
+
+    [Test]
+    public void AssetBatchWithImportUsesLongDefaultTimeout()
+    {
+        var arguments = new JsonObject
+        {
+            ["operations"] = new JsonArray
+            {
+                new JsonObject { ["action"] = "create" },
+                new JsonObject { ["action"] = "import" },
+            },
+        };
+
+        var timeout = EditorBridgeClient.ResolveRequestTimeout("command.invoke", "assets.batch", arguments, null);
+
+        Assert.That(timeout, Is.EqualTo(TimeSpan.FromHours(1)));
+    }
+
+    [Test]
+    public void OtherInvocationsKeepShortDefaultAndConfiguredTimeoutWins()
+    {
+        var createArguments = new JsonObject
+        {
+            ["operation"] = new JsonObject { ["action"] = "create" },
+        };
+        var importArguments = new JsonObject
+        {
+            ["operation"] = new JsonObject { ["action"] = "import" },
+        };
+
+        Assert.That(EditorBridgeClient.ResolveRequestTimeout("command.invoke", "assets.execute", createArguments, null), Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(EditorBridgeClient.ResolveRequestTimeout("editor.status", null, null, null), Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(EditorBridgeClient.ResolveRequestTimeout("command.invoke", "assets.execute", importArguments, TimeSpan.FromSeconds(12)), Is.EqualTo(TimeSpan.FromSeconds(12)));
     }
 }
