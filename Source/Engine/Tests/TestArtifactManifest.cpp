@@ -95,7 +95,7 @@ TEST_CASE("ArtifactManifest rejects traversal duplicates and missing fields")
     ArtifactManifest parsed;
     CHECK(ArtifactManifest::Parse(missing, TEXT("missing.json"), parsed, diagnostic));
     CHECK(diagnostic.Message.Contains(TEXT("Rebuild derived Library artifacts")));
-    const StringAnsi future = "{\"manifestVersion\":3}";
+    const StringAnsi future = "{\"manifestVersion\":4}";
     CHECK(ArtifactManifest::Parse(future, TEXT("future.json"), parsed, diagnostic));
     CHECK(diagnostic.Message.Contains(TEXT("Rebuild derived Library artifacts")));
     const StringAnsi duplicate = "{\"manifestVersion\":1,\"manifestVersion\":1}";
