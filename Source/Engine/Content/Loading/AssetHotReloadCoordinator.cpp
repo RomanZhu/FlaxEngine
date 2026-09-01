@@ -203,7 +203,7 @@ bool AssetHotReloadCoordinator::ReloadInventory(const AssetObjectInventoryChange
         change.PreviousMainObject != change.MainObject;
     for (const auto& bucket : previousObjects)
     {
-        const Guid& object = bucket.Key;
+        const Guid& object = bucket.Item;
         if (!objects.Contains(object))
         {
             inventoryChanged = true;
