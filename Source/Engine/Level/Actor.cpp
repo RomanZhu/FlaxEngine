@@ -1825,14 +1825,22 @@ bool Actor::ToBytes(const Array<Actor*>& actors, MemoryWriteStream& output)
             continue;
         if (!sourceAssetId.IsValid())
             sourceAssetId = actor->_persistentSourceAsset.Value;
+        if (!sourceAssetId.IsValid() || actor->_persistentSourceAsset.Value != sourceAssetId || actor->GetLocalFileId() == 0)
+            return true;
         ids.Add(actor->GetLocalFileId());
         for (int32 j = 0; j < actor->Scripts.Count(); j++)
         {
             const auto script = actor->Scripts[j];
             if (script)
+            {
+                if (script->_persistentSourceAsset.Value != sourceAssetId || script->GetLocalFileId() == 0)
+                    return true;
                 ids.Add(script->GetLocalFileId());
+            }
         }
     }
+    if (ids.IsEmpty())
+        return true;
 
     // Header
     output.WriteInt32(FLAXENGINE_VERSION_BUILD);

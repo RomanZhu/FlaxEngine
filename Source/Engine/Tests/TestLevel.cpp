@@ -1526,9 +1526,12 @@ TEST_CASE("ExternalActorsSceneStorage Operations")
 
 TEST_CASE("ActorClipboardPayloadValidation")
 {
-    const Guid actorId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1");
+    const Guid sourceAssetId = ParseGuid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1");
+    constexpr int64 actorFileId = 2;
+    const Guid actorId = SceneObject::MakeRuntimeObjectId(sourceAssetId, actorFileId);
     EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
     REQUIRE(actor);
+    actor->SetPersistentDocumentIdentity(AssetGuid(sourceAssetId), actorFileId);
     actor->SetName(TEXT("Clipboard Actor"));
 
     Array<Actor*> source;
@@ -1554,7 +1557,8 @@ TEST_CASE("ActorClipboardPayloadValidation")
     {
         Array<byte> malformed = valid;
         const int32 oversizedCount = MAX_int32;
-        Platform::MemoryCopy(malformed.Get() + sizeof(int32), &oversizedCount, sizeof(oversizedCount));
+        const int32 objectsCountOffset = sizeof(int32) + sizeof(Guid);
+        Platform::MemoryCopy(malformed.Get() + objectsCountOffset, &oversizedCount, sizeof(oversizedCount));
         CHECK(Actor::TryGetSerializedObjectsIds(Span<byte>(malformed.Get(), malformed.Count())).IsEmpty());
         CHECK(Actor::FromBytes(Span<byte>(malformed.Get(), malformed.Count())).IsEmpty());
         CHECK(Scripting::TryFindObject<Actor>(actorId) == nullptr);
@@ -1564,7 +1568,7 @@ TEST_CASE("ActorClipboardPayloadValidation")
     {
         Array<byte> malformed = valid;
         const int32 oversizedJson = MAX_int32;
-        const int32 jsonSizeOffset = sizeof(int32) * 2 + sizeof(Guid);
+        const int32 jsonSizeOffset = sizeof(int32) * 2 + sizeof(Guid) + sizeof(int64);
         Platform::MemoryCopy(malformed.Get() + jsonSizeOffset, &oversizedJson, sizeof(oversizedJson));
         CHECK(Actor::FromBytes(Span<byte>(malformed.Get(), malformed.Count())).IsEmpty());
         CHECK(Scripting::TryFindObject<Actor>(actorId) == nullptr);
@@ -1574,21 +1578,29 @@ TEST_CASE("ActorClipboardPayloadValidation")
     {
         auto restored = Actor::FromBytes(Span<byte>(valid.Get(), valid.Count()));
         REQUIRE(restored.Count() == 1);
-        CHECK(restored[0]->GetID() == actorId);
+        CHECK(restored[0]->GetID().IsValid());
+        CHECK(restored[0]->GetID() != actorId);
+        CHECK(restored[0]->GetName() == TEXT("Clipboard Actor"));
         restored[0]->DeleteObject();
         ObjectsRemovalService::Flush();
     }
 
     SECTION("External parent references can be redirected during construction")
     {
-        const Guid sourceParentId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2");
-        const Guid sourceChildId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3");
-        const Guid destinationParentId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb4");
+        constexpr int64 sourceParentFileId = 3;
+        constexpr int64 sourceChildFileId = 4;
+        const Guid sourceParentId = SceneObject::MakeRuntimeObjectId(sourceAssetId, sourceParentFileId);
+        const Guid sourceChildId = SceneObject::MakeRuntimeObjectId(sourceAssetId, sourceChildFileId);
+        const Guid destinationAssetId = ParseGuid("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2");
+        constexpr int64 destinationParentFileId = 2;
+        const Guid destinationParentId = SceneObject::MakeRuntimeObjectId(destinationAssetId, destinationParentFileId);
         const Guid restoredChildId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb5");
         EmptyActor* sourceParent = EmptyActor::Spawn(ScriptingObject::SpawnParams(sourceParentId, EmptyActor::TypeInitializer));
         EmptyActor* sourceChild = EmptyActor::Spawn(ScriptingObject::SpawnParams(sourceChildId, EmptyActor::TypeInitializer));
         REQUIRE(sourceParent);
         REQUIRE(sourceChild);
+        sourceParent->SetPersistentDocumentIdentity(AssetGuid(sourceAssetId), sourceParentFileId);
+        sourceChild->SetPersistentDocumentIdentity(AssetGuid(sourceAssetId), sourceChildFileId);
         sourceChild->SetParent(sourceParent);
 
         Array<Actor*> childSource;
@@ -1601,6 +1613,7 @@ TEST_CASE("ActorClipboardPayloadValidation")
 
         EmptyActor* destinationParent = EmptyActor::Spawn(ScriptingObject::SpawnParams(destinationParentId, EmptyActor::TypeInitializer));
         REQUIRE(destinationParent);
+        destinationParent->SetPersistentDocumentIdentity(AssetGuid(destinationAssetId), destinationParentFileId);
         destinationParent->RegisterObject();
         Dictionary<Guid, Guid> idsMapping;
         idsMapping.Add(sourceChildId, restoredChildId);
