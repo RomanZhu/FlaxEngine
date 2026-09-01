@@ -201,8 +201,9 @@ bool AssetHotReloadCoordinator::ReloadInventory(const AssetObjectInventoryChange
     Array<Guid> removed;
     bool inventoryChanged = previousObjects.Count() != objects.Count() ||
         change.PreviousMainObject != change.MainObject;
-    for (const Guid& object : previousObjects)
+    for (const auto& bucket : previousObjects)
     {
+        const Guid& object = bucket.Key;
         if (!objects.Contains(object))
         {
             inventoryChanged = true;
