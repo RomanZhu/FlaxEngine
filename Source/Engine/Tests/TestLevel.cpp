@@ -983,6 +983,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         {
             scene->DeleteObject();
         };
+        CHECK_FALSE(scene->UseExternalActors);
         EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
         REQUIRE(actor);
         actor->SetName(TEXT("Actor"));
@@ -991,6 +992,14 @@ TEST_CASE("ExternalActorsSceneStorage")
         REQUIRE(!Level::ConvertSceneToExternalActors(scene));
         CHECK(scene->UseExternalActors);
         CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+        CHECK(actor->GetGlobalObjectId().SourceAsset == sceneId);
+        CHECK(actor->GetGlobalObjectId().LocalFileId == actor->GetLocalFileId());
+
+        rapidjson_flax::Document externalizedDocument;
+        ParseJsonFile(externalizedDocument, scenePath);
+        CHECK(JsonTools::GetInt(externalizedDocument, "sceneVersion", 0) == 4);
+        CHECK(JsonTools::GetBool(externalizedDocument, "externalActors", false));
+        CHECK(GetDataArray(externalizedDocument).Size() == 1);
 
         Array<String> backups;
         const String backupPattern = String(StringUtils::GetFileName(scenePath)) + TEXT(".*.bak");
@@ -1031,6 +1040,36 @@ TEST_CASE("ExternalActorsSceneStorage")
         ReadFileBytes(scenePath, after);
         CHECK(AreBytesEqual(before, after));
         CHECK_FALSE(FileSystem::FileExists(SceneFragmentStore::GetIndexPath(sceneId)));
+    }
+
+    SECTION("Storage transition rejects an unsupported authored scene version")
+    {
+        const Guid sceneId = ParseGuid("74747474747474747474747474747471");
+        const String scenePath = GetTestScenePath(TEXT("UnsupportedTransition"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, false);
+        const char unsupported[] = R"({"sceneVersion":3,"objects":[{"fileId":1,"type":"FlaxEngine.Scene"}]})";
+        REQUIRE(!File::WriteAllBytes(scenePath, unsupported, ARRAY_COUNT(unsupported) - 1));
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            scene->DeleteObject();
+        };
+        BytesContainer before;
+        BytesContainer after;
+        ReadFileBytes(scenePath, before);
+
+        REQUIRE(Level::ConvertSceneToExternalActors(scene));
+        CHECK_FALSE(scene->UseExternalActors);
+        CHECK_FALSE(FileSystem::DirectoryExists(SceneFragmentStore::GetScenePath(sceneId)));
+        ReadFileBytes(scenePath, after);
+        CHECK(AreBytesEqual(before, after));
     }
 
     SECTION("Convert external actors scene to internal actors")
@@ -1080,6 +1119,52 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(ContainsObject(savedData, actorId));
         CHECK(ContainsObject(savedData, childId));
         CHECK(!ContainsObject(savedData, staleId));
+    }
+
+    SECTION("Failed internalization preserves the external source and fragment store")
+    {
+        const Guid sceneId = ParseGuid("73737373737373737373737373737371");
+        const Guid actorId = ParseGuid("73737373737373737373737373737372");
+        const String scenePath = GetTestScenePath(TEXT("InternalizeFailure"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+        WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
+        const String orphanPath = SceneFragmentStore::GetScenePath(sceneId) / TEXT("orphan.sceneactor");
+        const char orphan[] = "{}";
+        REQUIRE(!File::WriteAllBytes(orphanPath, orphan, ARRAY_COUNT(orphan) - 1));
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            scene->DeleteObject();
+        };
+        scene->UseExternalActors = true;
+        EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
+        REQUIRE(actor);
+        actor->SetParent(scene);
+
+        BytesContainer sourceBefore;
+        BytesContainer indexBefore;
+        BytesContainer fragmentBefore;
+        ReadFileBytes(scenePath, sourceBefore);
+        ReadFileBytes(SceneFragmentStore::GetIndexPath(sceneId), indexBefore);
+        ReadFileBytes(GetExternalActorPath(scenePath, actorId), fragmentBefore);
+
+        REQUIRE(Level::ConvertSceneToInternalActors(scene));
+        CHECK(scene->UseExternalActors);
+        CHECK(FileSystem::FileExists(orphanPath));
+        BytesContainer after;
+        ReadFileBytes(scenePath, after);
+        CHECK(AreBytesEqual(sourceBefore, after));
+        ReadFileBytes(SceneFragmentStore::GetIndexPath(sceneId), after);
+        CHECK(AreBytesEqual(indexBefore, after));
+        ReadFileBytes(GetExternalActorPath(scenePath, actorId), after);
+        CHECK(AreBytesEqual(fragmentBefore, after));
     }
 
     SECTION("Recompose writes parents before children")

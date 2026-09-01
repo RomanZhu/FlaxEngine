@@ -105,8 +105,7 @@ namespace FlaxEditor.SceneGraph.Actors
 
         private void OnConvertActorsStorage()
         {
-            if (Scene.UseExternalActors ? !Level.ConvertSceneToInternalActors(Scene) : !Level.ConvertSceneToExternalActors(Scene))
-                IsEdited = false;
+            Editor.Instance.Scene.ConvertSceneActorsStorage(this);
         }
 
         private void OnUnload()

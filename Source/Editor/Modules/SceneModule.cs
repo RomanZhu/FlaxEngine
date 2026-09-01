@@ -352,6 +352,29 @@ namespace FlaxEditor.Modules
         }
 
         /// <summary>
+        /// Changes the actor storage mode and records the synchronous publication as the current scene save point.
+        /// </summary>
+        /// <param name="scene">Scene node to transition.</param>
+        /// <returns>True when the transition was published successfully.</returns>
+        internal bool ConvertSceneActorsStorage(SceneNode scene)
+        {
+            if (Editor.MultiplayerPlayMode.IsReplica || Editor.IsPlayMode || scene == null ||
+                string.IsNullOrEmpty(scene.Scene.Path) || !File.Exists(scene.Scene.Path))
+            {
+                return false;
+            }
+
+            var wasEdited = scene.IsEdited;
+            QueueSaveCompletion(scene);
+            var failed = scene.Scene.UseExternalActors
+                ? Level.ConvertSceneToInternalActors(scene.Scene)
+                : Level.ConvertSceneToExternalActors(scene.Scene);
+            if (failed)
+                scene.IsEdited = wasEdited;
+            return !failed;
+        }
+
+        /// <summary>
         /// Saves all open scenes (async).
         /// </summary>
         public void SaveScenes()

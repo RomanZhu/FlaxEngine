@@ -158,6 +158,52 @@ namespace
         return diagnostics.HasItems();
     }
 
+    bool ValidateSceneStorageTransitionSource(const StringView& path, bool expectedExternalActors, String& error)
+    {
+        BytesContainer bytes;
+        rapidjson_flax::Document document;
+        if (File::ReadAllBytes(path, bytes))
+        {
+            error = TEXT("Cannot read the scene source before changing actor storage.");
+            return true;
+        }
+        document.Parse(bytes.Get<char>(), bytes.Length());
+        if (document.HasParseError() || !document.IsObject())
+        {
+            error = TEXT("Unsupported authored scene format. Run the separate offline migrator from the old branch before changing actor storage.");
+            return true;
+        }
+        const auto version = document.FindMember("sceneVersion");
+        const auto objects = document.FindMember(SourceObjectsKey);
+        const auto externalActors = document.FindMember("externalActors");
+        const bool mixedVersionMarkers = document.HasMember("documentVersion") ||
+            document.HasMember("settingsVersion") || document.HasMember("prefabVersion");
+        const bool authoredExternalActors = externalActors != document.MemberEnd() &&
+            externalActors->value.IsBool() && externalActors->value.GetBool();
+        if (mixedVersionMarkers || version == document.MemberEnd() || !version->value.IsUint() || version->value.GetUint() != 4 ||
+            objects == document.MemberEnd() || !objects->value.IsArray() ||
+            (externalActors != document.MemberEnd() && !externalActors->value.IsBool()) ||
+            authoredExternalActors != expectedExternalActors ||
+            ScenePrefabDocument::ValidateObjects(objects->value, true, error))
+        {
+            if (error.IsEmpty())
+            {
+                error = TEXT("Unsupported authored scene format. Run the separate offline migrator from the old branch before changing actor storage.");
+            }
+            return true;
+        }
+        const auto rootExternalActors = objects->value[0].FindMember("useExternalActors");
+        const bool authoredRootExternalActors = rootExternalActors != objects->value[0].MemberEnd() &&
+            rootExternalActors->value.IsBool() && rootExternalActors->value.GetBool();
+        if ((rootExternalActors != objects->value[0].MemberEnd() && !rootExternalActors->value.IsBool()) ||
+            authoredRootExternalActors != expectedExternalActors)
+        {
+            error = TEXT("Scene root actor storage mode does not match the authored scene header.");
+            return true;
+        }
+        return false;
+    }
+
     struct ExternalActorFileInfo
     {
         String File;
@@ -2607,6 +2653,15 @@ bool Level::ConvertSceneToExternalActors(Scene* scene)
         return true;
     }
 
+    ScopeLock lock(_sceneActionsLocker);
+    String validationError;
+    if (ValidateSceneStorageTransitionSource(path, scene->UseExternalActors, validationError))
+    {
+        LOG(Error, "Cannot change actor storage for scene '{0}': {1}", scene->GetID(), validationError);
+        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, scene->GetID());
+        return true;
+    }
+
     if (scene->UseExternalActors)
         return saveScene(scene);
 
@@ -2636,6 +2691,15 @@ bool Level::ConvertSceneToInternalActors(Scene* scene)
     if (path.IsEmpty() || !FileSystem::FileExists(path))
     {
         LOG(Error, "Missing scene path.");
+        return true;
+    }
+
+    ScopeLock lock(_sceneActionsLocker);
+    String validationError;
+    if (ValidateSceneStorageTransitionSource(path, scene->UseExternalActors, validationError))
+    {
+        LOG(Error, "Cannot change actor storage for scene '{0}': {1}", scene->GetID(), validationError);
+        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, scene->GetID());
         return true;
     }
 

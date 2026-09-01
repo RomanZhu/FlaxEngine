@@ -355,7 +355,7 @@ public:
 #if USE_EDITOR
 
     /// <summary>
-    /// Converts loaded scene to external actors format and stores a backup of the original scene file.
+    /// Converts and saves a loaded scene to external actors storage.
     /// </summary>
     /// <param name="scene">Scene to convert.</param>
     /// <returns>True if failed, otherwise false.</returns>
