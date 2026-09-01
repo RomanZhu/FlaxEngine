@@ -4,6 +4,7 @@
 #include "Engine/Content/AssetDatabase/AssetSourceRootRegistry.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Platform/FileSystem.h"
 #include <ThirdParty/catch2/catch.hpp>
 
@@ -18,6 +19,24 @@ namespace
         }
         return nullptr;
     }
+}
+
+TEST_CASE("Scene fragment paths use the canonical ExternalActors root")
+{
+    const String projectRoot = Globals::TemporaryFolder / (TEXT("SceneFragmentPaths-") + Guid::New().ToString(Guid::FormatType::N));
+    const Guid sceneId = Guid::New();
+    const String expectedRoot = projectRoot / TEXT("ExternalActors");
+    const String expectedScene = expectedRoot / sceneId.ToString(Guid::FormatType::N).ToLower();
+
+    CHECK(FileSystem::AreFilePathsEqual(SceneFragmentStore::GetRootPath(projectRoot), expectedRoot));
+    CHECK(FileSystem::AreFilePathsEqual(SceneFragmentStore::GetScenePath(projectRoot, sceneId), expectedScene));
+
+    AssetPipelineDiagnostic diagnostic;
+    AssetSourceRootRegistry registry(projectRoot, projectRoot / TEXT("Library"));
+    REQUIRE_FALSE(registry.RegisterProjectRoots(projectRoot / TEXT("Content"), diagnostic));
+    const AssetSourceRoot* fragmentsRoot = FindRoot(registry, AssetSourceRootKind::SceneFragments);
+    REQUIRE(fragmentsRoot);
+    CHECK(FileSystem::AreFilePathsEqual(fragmentsRoot->PhysicalPath, expectedRoot));
 }
 
 TEST_CASE("Asset source root registry owns permissions visibility and logical paths")
