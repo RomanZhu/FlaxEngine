@@ -258,7 +258,10 @@ Asset::LoadResult JsonAssetBase::loadAsset()
         if (!storage)
             return LoadResult::CannotLoadStorage;
         AssetInitData initData;
-        if (storage->LoadAssetHeader(GetID(), initData))
+        const bool headerLoadFailed = storage->UsesAssetObjectIds()
+            ? storage->LoadAssetHeader(GetPersistentObjectId(), initData)
+            : storage->LoadAssetHeader(GetID(), initData);
+        if (headerLoadFailed)
             return LoadResult::CannotLoadInitData;
         auto chunk = initData.Header.Chunks[0];
         if (chunk == nullptr)
@@ -284,7 +287,10 @@ Asset::LoadResult JsonAssetBase::loadAsset()
 
     // Load header
     AssetInitData initData;
-    if (storage->LoadAssetHeader(GetID(), initData))
+    const bool headerLoadFailed = storage->UsesAssetObjectIds()
+        ? storage->LoadAssetHeader(GetPersistentObjectId(), initData)
+        : storage->LoadAssetHeader(GetID(), initData);
+    if (headerLoadFailed)
         return LoadResult::CannotLoadInitData;
 
     // Load the actual data

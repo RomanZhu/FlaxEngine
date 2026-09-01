@@ -99,7 +99,37 @@ namespace
             const String sourcePath = location.StorageKind == AssetObjectStorageKind::RuntimePackage || !location.SourceName.HasChars()
                 ? storagePath
                 : location.SourceName;
-            AssetInfo info(location.InstanceID, location.Object, String(location.TypeName), sourcePath, location.Revision);
+            Guid instanceId = location.InstanceID;
+            if (location.StorageKind == AssetObjectStorageKind::RuntimePackage)
+            {
+                const FlaxStorageReference storage = ContentStorageManager::GetStorage(storagePath);
+                AssetInitData header;
+                if (!storage || !storage->UsesAssetObjectIds() || storage->LoadAssetHeader(location.Object, header) ||
+                    !header.Header.ID.IsValid() || header.Header.TypeName != String(location.TypeName))
+                {
+                    diagnostic = AssetPipelineDiagnostic();
+                    diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+                    diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+                    diagnostic.AssetGuid = location.Object.Asset.Value;
+                    diagnostic.SourcePath = storagePath;
+                    diagnostic.Message = TEXT("Runtime package has no matching exact composite object entry.");
+                    instance = nullptr;
+                    return true;
+                }
+                instanceId = header.Header.ID;
+            }
+            if (!instanceId.IsValid())
+            {
+                diagnostic = AssetPipelineDiagnostic();
+                diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+                diagnostic.AssetGuid = location.Object.Asset.Value;
+                diagnostic.SourcePath = storagePath;
+                diagnostic.Message = TEXT("Resolved object has no valid transient instance identifier.");
+                instance = nullptr;
+                return true;
+            }
+            AssetInfo info(instanceId, location.Object, String(location.TypeName), sourcePath, location.Revision);
             AssetLoadLocation contentLocation;
             contentLocation.Info = info;
             contentLocation.Artifact.AssetID = info.ID;
@@ -2333,9 +2363,7 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
         loadLocation = AssetLoadLocation::Package(assetInfo);
         hasLegacyLocation = true;
     }
-    AssetRecord canonicalRecord;
-    const bool isCanonicalProjectObject = AssetDatabase::Get().TryGetRecord(objectId, canonicalRecord);
-    if (!hasLegacyLocation && !isCanonicalProjectObject && ObjectRegistry.FindObject(objectId, assetInfo))
+    if (!hasLegacyLocation && ObjectRegistry.FindObject(objectId, assetInfo))
     {
         loadLocation = AssetLoadLocation::Package(assetInfo);
         hasLegacyLocation = true;

@@ -446,6 +446,55 @@ TEST_CASE("Content resolves an explicit distinct Library load location and still
     CHECK_FALSE(legacyAsset->IsUsingGeneratedArtifact());
 }
 
+TEST_CASE("Runtime packages persist and resolve exact composite object entries")
+{
+    const String path = Globals::ProjectLibraryFolder / TEXT("__CompositeRuntimePackage.flaxpac");
+    const AssetObjectId firstObject(AssetGuid(Guid::New()), 17);
+    const AssetObjectId secondObject(firstObject.Asset, 29);
+    const Guid firstInstance = Guid::New();
+    const Guid secondInstance = Guid::New();
+    const byte firstBytes[] = { 1, 2, 3 };
+    const byte secondBytes[] = { 4, 5, 6, 7 };
+    FlaxChunk firstChunk;
+    firstChunk.Data.Copy(firstBytes, ARRAY_COUNT(firstBytes));
+    FlaxChunk secondChunk;
+    secondChunk.Data.Copy(secondBytes, ARRAY_COUNT(secondBytes));
+    Array<AssetInitData> assets;
+    assets.Resize(2);
+    assets[0].Header.ID = firstInstance;
+    assets[0].Header.TypeName = RawDataAsset::TypeName;
+    assets[0].Header.Chunks[0] = &firstChunk;
+    assets[0].SerializedVersion = RawDataAsset::SerializedVersion;
+    assets[1].Header.ID = secondInstance;
+    assets[1].Header.TypeName = RawDataAsset::TypeName;
+    assets[1].Header.Chunks[0] = &secondChunk;
+    assets[1].SerializedVersion = RawDataAsset::SerializedVersion;
+    Array<AssetObjectId> objects;
+    objects.Add(firstObject);
+    objects.Add(secondObject);
+
+    FileSystem::DeleteFile(path);
+    REQUIRE_FALSE(FlaxStorage::CreateRuntimePackage(path, ToSpan(assets), ToSpan(objects), true));
+    FlaxStorageReference storage = ContentStorageManager::GetStorage(path);
+    REQUIRE(storage);
+    SCOPE_EXIT
+    {
+        storage = nullptr;
+        ContentStorageManager::EnsureAccess(path);
+        FileSystem::DeleteFile(path);
+    };
+    CHECK(storage->UsesAssetObjectIds());
+    CHECK_FALSE(storage->HasAsset(firstInstance));
+
+    AssetInitData firstData;
+    REQUIRE_FALSE(storage->LoadAssetHeader(firstObject, firstData));
+    CHECK(firstData.Header.ID == firstInstance);
+    CHECK(firstData.Header.TypeName == RawDataAsset::TypeName);
+    AssetInitData secondData;
+    REQUIRE_FALSE(storage->LoadAssetHeader(secondObject, secondData));
+    CHECK(secondData.Header.ID == secondInstance);
+}
+
 TEST_CASE("Binary asset upgrader chains preserve chunks")
 {
     CharacterizationUpgrader upgrader;

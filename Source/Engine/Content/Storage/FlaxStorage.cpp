@@ -6,6 +6,7 @@
 #include "ContentStorageManager.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/ScopeExit.h"
+#include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/Types/TimeSpan.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -139,6 +140,8 @@ struct SerializedEntryV9
     {
     }
 };
+
+constexpr int32 SerializedEntryV10Size = sizeof(Guid) + sizeof(int64) + sizeof(SerializedTypeNameV9) + sizeof(uint32);
 
 // [Deprecated on 4/17/2020, expires on 4/17/2022]
 struct OldSerializedEntryV7
@@ -330,6 +333,67 @@ bool FlaxStorage::Load()
     stream->ReadUint32(&version);
     switch (version)
     {
+    case 10:
+    {
+        if (!IsPackage())
+        {
+            LOG(Warning, "Exact object storage version is valid only for runtime packages: {0}", ToString());
+            return true;
+        }
+
+        CustomData customData;
+        stream->Read(customData);
+
+#if USE_EDITOR
+        if (customData.ContentKey != 0)
+#else
+        if (customData.ContentKey != Globals::ContentKey)
+#endif
+        {
+            LOG(Warning, "Invalid asset {0}.", ToString());
+            return true;
+        }
+
+        int32 assetsCount;
+        stream->ReadInt32(&assetsCount);
+        if (assetsCount <= 0)
+            return true;
+        HashSet<AssetObjectId> objects;
+        for (int32 i = 0; i < assetsCount; i++)
+        {
+            Guid assetGuid;
+            int64 localFileId;
+            SerializedTypeNameV9 typeName;
+            uint32 address;
+            stream->Read(assetGuid);
+            stream->ReadInt64(&localFileId);
+            stream->ReadBytes(typeName.Data, sizeof(typeName.Data));
+            stream->ReadUint32(&address);
+            const AssetObjectId objectId(AssetGuid(assetGuid), localFileId);
+            if (!objectId.IsValid() || !objects.Add(objectId) || typeName.Data[0] == 0 || address == 0)
+                return true;
+            Entry entry(objectId, typeName.Data, address);
+            AddEntry(entry);
+        }
+
+        int32 chunksCount;
+        stream->ReadInt32(&chunksCount);
+        for (int32 i = 0; i < chunksCount; i++)
+        {
+            FlaxChunk::Location entry;
+            stream->ReadBytes(&entry, sizeof(entry));
+            if (entry.Size == 0)
+            {
+                LOG(Warning, "Empty chunk found.");
+                return true;
+            }
+            auto chunk = New<FlaxChunk>();
+            chunk->LocationInFile = entry;
+            stream->ReadInt32(reinterpret_cast<int32*>(&chunk->Flags));
+            AddChunk(chunk);
+        }
+        break;
+    }
     case 9:
     {
         // Custom storage data
@@ -652,7 +716,35 @@ bool FlaxStorage::ReloadSilent()
     // Version
     uint32 version;
     stream->ReadUint32(&version);
-    if (version == 9)
+    if (version == 10)
+    {
+        _version = version;
+
+        CustomData customData;
+        stream->Read(customData);
+
+        int32 assetsCount;
+        stream->ReadInt32(&assetsCount);
+        if (assetsCount != GetEntriesCount())
+        {
+            LOG(Warning, "Incorrect amount of assets ({} instead of {}) saved in {}", assetsCount, GetEntriesCount(), ToString());
+            return true;
+        }
+        for (int32 i = 0; i < assetsCount; i++)
+        {
+            Guid assetGuid;
+            int64 localFileId;
+            SerializedTypeNameV9 typeName;
+            uint32 address;
+            stream->Read(assetGuid);
+            stream->ReadInt64(&localFileId);
+            stream->ReadBytes(typeName.Data, sizeof(typeName.Data));
+            stream->ReadUint32(&address);
+            Entry entry(AssetObjectId(AssetGuid(assetGuid), localFileId), typeName.Data, address);
+            SetEntry(i, entry);
+        }
+    }
+    else if (version == 9)
     {
         _version = version;
 
@@ -703,6 +795,24 @@ bool FlaxStorage::LoadAssetHeader(const Guid& id, AssetInitData& data)
     }
 
     return LoadAssetHeader(e, data);
+}
+
+bool FlaxStorage::LoadAssetHeader(const AssetObjectId& objectId, AssetInitData& data)
+{
+    ASSERT(IsLoaded());
+    if (_version != 10)
+    {
+        LOG(Error, "Storage '{0}' is not indexed by exact asset object identity.", ToString());
+        return true;
+    }
+
+    Entry entry;
+    if (GetEntry(objectId, entry))
+    {
+        LOG(Error, "Cannot find asset object '{0}' within {1}", objectId, ToString());
+        return true;
+    }
+    return LoadAssetHeader(entry, data);
 }
 
 bool FlaxStorage::LoadAssetChunk(FlaxChunk* chunk)
@@ -898,6 +1008,24 @@ FlaxChunk* FlaxStorage::AllocateChunk()
 
 bool FlaxStorage::Create(const StringView& path, Span<AssetInitData> assets, bool silentMode, const CustomData* customData)
 {
+    return CreateInternal(path, assets, Span<AssetObjectId>(), silentMode, customData);
+}
+
+bool FlaxStorage::CreateRuntimePackage(const StringView& path, Span<AssetInitData> assets, Span<AssetObjectId> objectIds,
+    bool silentMode, const CustomData* customData)
+{
+    if (!String(path).EndsWith(PACKAGE_FILES_EXTENSION_WITH_DOT, StringSearchCase::IgnoreCase) ||
+        assets.Length() != objectIds.Length() || objectIds.Length() <= 0)
+    {
+        LOG(Error, "Exact runtime package creation requires a package path and one object ID per asset header.");
+        return true;
+    }
+    return CreateInternal(path, assets, objectIds, silentMode, customData);
+}
+
+bool FlaxStorage::CreateInternal(const StringView& path, Span<AssetInitData> assets, Span<AssetObjectId> objectIds,
+    bool silentMode, const CustomData* customData)
+{
     PROFILE_CPU();
     String pathNorm(path);
     ContentStorageManager::FormatPath(pathNorm);
@@ -935,7 +1063,7 @@ bool FlaxStorage::Create(const StringView& path, Span<AssetInitData> assets, boo
         return true;
 
     // Create package
-    bool result = Create(stream, assets, customData);
+    bool result = Create(stream, assets, objectIds, customData);
 
     // Close file
     Delete(stream);
@@ -976,15 +1104,36 @@ bool FlaxStorage::Create(const StringView& path, Span<AssetInitData> assets, boo
 
 bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const CustomData* customData)
 {
+    return Create(stream, assets, Span<AssetObjectId>(), customData);
+}
+
+bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, Span<AssetObjectId> objectIds, const CustomData* customData)
+{
     if (assets.Get() == nullptr || assets.Length() <= 0)
     {
         LOG(Warning, "Cannot create new package. No assets to write.");
         return true;
     }
 
+    const bool exactObjectPackage = objectIds.Length() != 0;
+    if (exactObjectPackage && objectIds.Length() != assets.Length())
+        return true;
+    HashSet<AssetObjectId> uniqueObjects;
+    if (exactObjectPackage)
+    {
+        for (const AssetObjectId& objectId : objectIds)
+        {
+            if (!objectId.IsValid() || !uniqueObjects.Add(objectId))
+            {
+                LOG(Warning, "Cannot create an exact runtime package with invalid or duplicate object IDs.");
+                return true;
+            }
+        }
+    }
+
     // Prepare data
-    Array<SerializedEntryV9, InlinedAllocation<1>> entries;
-    entries.Resize(assets.Length());
+    Array<uint32, InlinedAllocation<1>> entryAddresses;
+    entryAddresses.Resize(assets.Length());
     Array<FlaxChunk*> chunks;
     for (const AssetInitData& asset : assets)
     {
@@ -1001,7 +1150,7 @@ bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const 
     // 0 -> Header -> Entries Count -> Entries -> Chunks Count -> Chunk Locations
     int32 currentAddress = sizeof(Header)
             + sizeof(int32)
-            + sizeof(SerializedEntryV9) * assets.Length()
+            + (exactObjectPackage ? SerializedEntryV10Size : static_cast<int32>(sizeof(SerializedEntryV9))) * assets.Length()
             + sizeof(int32)
             + (sizeof(FlaxChunk::Location) + sizeof(int32)) * chunksCount;
 
@@ -1009,7 +1158,7 @@ bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const 
     for (int32 i = 0; i < assets.Length(); i++)
     {
         const AssetInitData& asset = assets[i];
-        entries[i] = SerializedEntryV9(asset.Header.ID, asset.Header.TypeName, currentAddress);
+        entryAddresses[i] = currentAddress;
 
         // Move forward by asset header data size
         currentAddress += sizeof(Guid) // ID
@@ -1065,7 +1214,7 @@ bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const 
     // Write header
     Header mainHeader;
     mainHeader.MagicCode = MagicCode;
-    mainHeader.Version = 9;
+    mainHeader.Version = exactObjectPackage ? 10 : 9;
     if (customData)
         mainHeader.CustomData = *customData;
     else
@@ -1074,7 +1223,23 @@ bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const 
 
     // Write asset entries
     stream->WriteInt32(assets.Length());
-    stream->WriteBytes(entries.Get(), sizeof(SerializedEntryV9) * assets.Length());
+    for (int32 i = 0; i < assets.Length(); i++)
+    {
+        const AssetInitData& asset = assets[i];
+        if (exactObjectPackage)
+        {
+            stream->Write(objectIds[i].Asset.Value);
+            stream->WriteInt64(objectIds[i].LocalId);
+            const SerializedTypeNameV9 typeName(asset.Header.TypeName);
+            stream->WriteBytes(typeName.Data, sizeof(typeName.Data));
+            stream->WriteUint32(entryAddresses[i]);
+        }
+        else
+        {
+            const SerializedEntryV9 entry(asset.Header.ID, asset.Header.TypeName, entryAddresses[i]);
+            stream->WriteBytes(&entry, sizeof(entry));
+        }
+    }
 
     // Write chunk locations and meta
     stream->WriteInt32(chunksCount);
@@ -1088,7 +1253,7 @@ bool FlaxStorage::Create(WriteStream* stream, Span<AssetInitData> assets, const 
 
 #if ASSETS_LOADING_EXTRA_VERIFICATION
     // Check calculated position of first asset header
-    if (assets.Length() > 0 && stream->GetPosition() != entries[0].Address)
+    if (assets.Length() > 0 && stream->GetPosition() != entryAddresses[0])
     {
         LOG(Warning, "Error while asset header location computation.");
         return true;
@@ -1202,6 +1367,7 @@ bool FlaxStorage::LoadAssetHeader(const Entry& e, AssetInitData& data)
     // Switch version
     switch (_version)
     {
+    case 10:
     case 9:
     {
         // ID
@@ -1433,7 +1599,7 @@ bool FlaxStorage::LoadAssetHeader(const Entry& e, AssetInitData& data)
 
 #if ASSETS_LOADING_EXTRA_VERIFICATION
     // Validate loaded header (asset ID and type ID must be the same)
-    if (e.ID != data.Header.ID)
+    if (e.ID.IsValid() && e.ID != data.Header.ID)
     {
         LOG(Error, "Loading asset header data mismatch! Expected ID: {0}, loaded header: {1}.\nSource: {2}", e.ID, data.Header.ToString(), ToString());
     }
@@ -1679,6 +1845,12 @@ bool FlaxFile::GetEntry(const Guid& id, Entry& e)
     return id != _asset.ID;
 }
 
+bool FlaxFile::GetEntry(const AssetObjectId& objectId, Entry& e)
+{
+    e = Entry();
+    return true;
+}
+
 void FlaxFile::AddEntry(Entry& e)
 {
     ASSERT(_asset.ID.IsValid() == false);
@@ -1688,6 +1860,7 @@ void FlaxFile::AddEntry(Entry& e)
 FlaxPackage::FlaxPackage(const StringView& path)
     : FlaxStorage(path)
     , _entries(256)
+    , _objectEntries(256)
 {
 }
 
@@ -1714,18 +1887,31 @@ bool FlaxPackage::HasAsset(const Guid& id) const
 bool FlaxPackage::HasAsset(const AssetInfo& info) const
 {
     ASSERT(_path == info.Path);
+    if (_version == 10)
+    {
+        const Entry* entry = _objectEntries.TryGet(info.ObjectID);
+        return entry && entry->TypeName == info.TypeName;
+    }
     const Entry* e = _entries.TryGet(info.ID);
     return e && e->TypeName == info.TypeName;
 }
 
 int32 FlaxPackage::GetEntriesCount() const
 {
-    return _entries.Count();
+    return _entries.Count() + _objectEntries.Count();
 }
 
 void FlaxPackage::GetEntry(int32 index, Entry& value) const
 {
-    ASSERT(index >= 0 && index < _entries.Count());
+    ASSERT(index >= 0 && index < GetEntriesCount());
+    for (auto i = _objectEntries.Begin(); i.IsNotEnd(); ++i)
+    {
+        if (index-- <= 0)
+        {
+            value = i->Value;
+            return;
+        }
+    }
     for (auto i = _entries.Begin(); i.IsNotEnd(); ++i)
     {
         if (index-- <= 0)
@@ -1740,7 +1926,16 @@ void FlaxPackage::GetEntry(int32 index, Entry& value) const
 
 void FlaxPackage::SetEntry(int32 index, const Entry& value)
 {
-    ASSERT(index >= 0 && index < _entries.Count());
+    ASSERT(index >= 0 && index < GetEntriesCount());
+    for (auto i = _objectEntries.Begin(); i.IsNotEnd(); ++i)
+    {
+        if (index-- <= 0)
+        {
+            ASSERT(i->Key == value.ObjectID);
+            i->Value = value;
+            return;
+        }
+    }
     for (auto i = _entries.Begin(); i.IsNotEnd(); ++i)
     {
         if (index-- <= 0)
@@ -1755,6 +1950,7 @@ void FlaxPackage::SetEntry(int32 index, const Entry& value)
 
 void FlaxPackage::GetEntries(Array<Entry>& output) const
 {
+    _objectEntries.GetValues(output);
     _entries.GetValues(output);
 }
 
@@ -1763,6 +1959,7 @@ void FlaxPackage::Dispose()
     FlaxStorage::Dispose();
 
     _entries.Clear();
+    _objectEntries.Clear();
 }
 
 bool FlaxPackage::GetEntry(const Guid& id, Entry& e)
@@ -1770,8 +1967,21 @@ bool FlaxPackage::GetEntry(const Guid& id, Entry& e)
     return !_entries.TryGet(id, e);
 }
 
+bool FlaxPackage::GetEntry(const AssetObjectId& objectId, Entry& e)
+{
+    return !_objectEntries.TryGet(objectId, e);
+}
+
 void FlaxPackage::AddEntry(Entry& e)
 {
-    ASSERT(HasAsset(e.ID) == false);
-    _entries.Add(e.ID, e);
+    if (e.ObjectID.IsValid())
+    {
+        ASSERT(!_objectEntries.ContainsKey(e.ObjectID));
+        _objectEntries.Add(e.ObjectID, e);
+    }
+    else
+    {
+        ASSERT(HasAsset(e.ID) == false);
+        _entries.Add(e.ID, e);
+    }
 }

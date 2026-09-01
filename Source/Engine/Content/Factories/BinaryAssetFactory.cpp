@@ -20,7 +20,10 @@ bool BinaryAssetFactoryBase::Init(BinaryAsset* asset)
 
     // Load serialized asset data
     AssetInitData initData;
-    if (storage->LoadAssetHeader(asset->GetID(), initData))
+    const bool headerLoadFailed = storage->UsesAssetObjectIds()
+        ? storage->LoadAssetHeader(asset->GetPersistentObjectId(), initData)
+        : storage->LoadAssetHeader(asset->GetID(), initData);
+    if (headerLoadFailed)
     {
         LOG(Error, "Cannot load asset header.\nInfo: {0}", AssetInfo(asset->GetID(), asset->GetTypeName(), storage->GetPath()).ToString());
         return true;

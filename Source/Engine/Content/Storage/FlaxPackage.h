@@ -12,6 +12,7 @@ class FLAXENGINE_API FlaxPackage : public FlaxStorage
 {
 protected:
     Dictionary<Guid, Entry> _entries;
+    Dictionary<AssetObjectId, Entry> _objectEntries;
 
 public:
     /// <summary>
@@ -38,5 +39,6 @@ public:
 protected:
     // [FlaxStorage]
     bool GetEntry(const Guid& id, Entry& e) override;
+    bool GetEntry(const AssetObjectId& objectId, Entry& e) override;
     void AddEntry(Entry& e) override;
 };

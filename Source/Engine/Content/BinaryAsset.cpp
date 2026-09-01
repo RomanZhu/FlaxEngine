@@ -132,7 +132,10 @@ BinaryAssetStorageSwitchResult BinaryAsset::SwitchStorage(const ResolvedArtifact
         return BinaryAssetStorageSwitchResult::InvalidArtifact;
 
     AssetInitData newData;
-    if (newStorage->LoadAssetHeader(GetID(), newData))
+    const bool headerLoadFailed = newStorage->UsesAssetObjectIds()
+        ? newStorage->LoadAssetHeader(GetPersistentObjectId(), newData)
+        : newStorage->LoadAssetHeader(GetID(), newData);
+    if (headerLoadFailed)
         return BinaryAssetStorageSwitchResult::InvalidArtifact;
     if (newData.Header.ID != GetID() || newData.Header.TypeName != GetTypeName())
         return BinaryAssetStorageSwitchResult::IdentityMismatch;
@@ -534,7 +537,10 @@ void BinaryAsset::OnStorageReloaded(FlaxStorage* storage, bool failed)
 
     // Gather updated asset init data
     AssetInitData initData;
-    if (Storage->LoadAssetHeader(GetID(), initData))
+    const bool headerLoadFailed = Storage->UsesAssetObjectIds()
+        ? Storage->LoadAssetHeader(GetPersistentObjectId(), initData)
+        : Storage->LoadAssetHeader(GetID(), initData);
+    if (headerLoadFailed)
     {
         LOG(Error, "Asset header loading failed. Asset: \'{0}\'.", ToString());
         return;

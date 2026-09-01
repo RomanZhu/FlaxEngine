@@ -85,7 +85,6 @@ bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const AssetObjectId
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, object,
             TEXT("Runtime catalog has no exact entry for the requested asset object."));
     location.StorageKind = AssetObjectStorageKind::RuntimePackage;
-    location.InstanceID = object.ToRuntimeObjectGuid();
     location.TypeName = entry.TypeName;
     location.StorageName = String(entry.PackageName);
     location.SourceName = location.StorageName;
@@ -115,7 +114,8 @@ bool AssetObjectLoader::Resolve(const AssetObjectId& object, AssetObjectLoadLoca
     const bool storageInvalid = _mode == AssetObjectLoadMode::Cooked
         ? location.StorageKind != AssetObjectStorageKind::RuntimePackage
         : location.StorageKind != AssetObjectStorageKind::EditorArtifact || location.Artifact.IsZero();
-    if (location.Object != object || !location.InstanceID.IsValid() || location.Revision == 0 || location.TypeName.IsEmpty() || location.StorageName.IsEmpty() ||
+    const bool instanceInvalid = _mode == AssetObjectLoadMode::Editor && !location.InstanceID.IsValid();
+    if (location.Object != object || instanceInvalid || location.Revision == 0 || location.TypeName.IsEmpty() || location.StorageName.IsEmpty() ||
         location.Size == 0 || location.Content.IsZero() || storageInvalid)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
             TEXT("Resolved object location has mismatched identity or incomplete immutable storage data."));

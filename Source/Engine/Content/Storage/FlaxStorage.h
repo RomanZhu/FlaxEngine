@@ -48,7 +48,12 @@ public:
     struct Entry
     {
         /// <summary>
-        /// The asset identifier.
+        /// Persistent object identity used by exact runtime packages.
+        /// </summary>
+        AssetObjectId ObjectID;
+
+        /// <summary>
+        /// The transient storage identifier used by legacy asset files.
         /// </summary>
         Guid ID;
 
@@ -79,6 +84,14 @@ public:
         /// <param name="address">The address in the file.</param>
         Entry(const Guid& id, const StringView& typeName, uint32 address)
             : ID(id)
+            , TypeName(typeName)
+            , Address(address)
+        {
+        }
+
+        Entry(const AssetObjectId& objectId, const StringView& typeName, uint32 address)
+            : ObjectID(objectId)
+            , ID(Guid::Empty)
             , TypeName(typeName)
             , Address(address)
         {
@@ -390,6 +403,20 @@ public:
     bool LoadAssetHeader(const Guid& id, AssetInitData& data);
 
     /// <summary>
+    /// Loads an asset header from an exact runtime package object entry.
+    /// </summary>
+    /// <param name="objectId">The persistent asset object identifier.</param>
+    /// <param name="data">The data.</param>
+    /// <returns>True if the package has no matching exact object entry or the header cannot be loaded.</returns>
+    bool LoadAssetHeader(const AssetObjectId& objectId, AssetInitData& data);
+
+    /// <summary>Returns true when this storage is indexed exclusively by persistent object identity.</summary>
+    FORCE_INLINE bool UsesAssetObjectIds() const
+    {
+        return _version == 10;
+    }
+
+    /// <summary>
     /// Loads the asset chunk.
     /// </summary>
     /// <param name="chunk">The chunk.</param>
@@ -491,6 +518,12 @@ public:
     static bool Create(const StringView& path, Span<AssetInitData> assets, bool silentMode = false, const CustomData* customData = nullptr);
 
     /// <summary>
+    /// Creates a runtime package indexed exclusively by exact persistent object identities.
+    /// </summary>
+    static bool CreateRuntimePackage(const StringView& path, Span<AssetInitData> assets, Span<AssetObjectId> objectIds,
+        bool silentMode = false, const CustomData* customData = nullptr);
+
+    /// <summary>
     /// Creates new FlaxFile using specified assets data.
     /// </summary>
     /// <param name="stream">The output stream.</param>
@@ -506,5 +539,12 @@ protected:
     virtual void AddEntry(Entry& e) = 0;
     FileReadStream* OpenFile();
     virtual bool GetEntry(const Guid& id, Entry& e) = 0;
+    virtual bool GetEntry(const AssetObjectId& objectId, Entry& e) = 0;
     bool ReloadSilent();
+
+#if USE_EDITOR
+    static bool CreateInternal(const StringView& path, Span<AssetInitData> assets, Span<AssetObjectId> objectIds,
+        bool silentMode, const CustomData* customData);
+    static bool Create(WriteStream* stream, Span<AssetInitData> assets, Span<AssetObjectId> objectIds, const CustomData* customData);
+#endif
 };

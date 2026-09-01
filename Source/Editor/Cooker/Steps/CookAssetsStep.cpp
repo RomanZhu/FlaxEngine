@@ -1151,8 +1151,16 @@ public:
         // Get assets init data and load all chunks
         Array<AssetInitData> assetsData;
         assetsData.Resize(count);
+        Array<AssetObjectId> objectIds;
+        objectIds.Resize(count);
         for (int32 i = 0; i < count; i++)
         {
+            objectIds[i] = addedEntries[i]->Info.ObjectID;
+            if (!objectIds[i].IsValid())
+            {
+                data.Error(TEXT("Cannot package an asset without an exact persistent object identity."));
+                return true;
+            }
             if (files[i]->LoadAssetHeader(0, assetsData[i]))
             {
                 data.Error(TEXT("Failed to load asset header data."));
@@ -1176,7 +1184,7 @@ public:
         // Note: FlaxStorage::Create overrides chunks locations in file so don't use files anymore (only readonly)
         const String localPath = String::Format(TEXT("Content/Data_{0}.{1}"), _packageIndex, PACKAGE_FILES_EXTENSION);
         const String path = data.DataOutputPath / localPath;
-        if (FlaxStorage::Create(path, assetsData, false, &CustomData))
+        if (FlaxStorage::CreateRuntimePackage(path, ToSpan(assetsData), ToSpan(objectIds), false, &CustomData))
         {
             data.Error(TEXT("Failed to create assets package."));
             return true;

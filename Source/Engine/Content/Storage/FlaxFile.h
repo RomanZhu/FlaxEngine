@@ -37,5 +37,6 @@ public:
 protected:
     // [FlaxStorage]
     bool GetEntry(const Guid& id, Entry& e) override;
+    bool GetEntry(const AssetObjectId& objectId, Entry& e) override;
     void AddEntry(Entry& e) override;
 };
