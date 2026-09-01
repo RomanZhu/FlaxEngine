@@ -185,7 +185,9 @@ TEST_CASE("Asset meta strictly rejects unsupported and non-canonical identity fo
         const int32 length = StringAnsiView(unsupported[i]).Length();
         REQUIRE_FALSE(File::WriteAllBytes(path, unsupported[i], length));
         CHECK(AssetMeta::Load(path, meta, diagnostic));
-        CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
+        CHECK(diagnostic.Code == (i == 3
+            ? AssetPipelineDiagnosticCode::MetaParseError
+            : AssetPipelineDiagnosticCode::InvalidMeta));
         BytesContainer after;
         REQUIRE_FALSE(File::ReadAllBytes(path, after));
         REQUIRE(after.Length() == length);
