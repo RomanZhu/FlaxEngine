@@ -455,7 +455,7 @@ bool GPUDevice::LoadContent()
     _res->DefaultMaterial = Content::LoadAsyncInternal<Material>(TEXT("Engine/DefaultMaterial"));
     if (_res->DefaultMaterial == nullptr)
         return true;
-    _res->DefaultDeformableMaterial = AssetObjectId::Main(AssetGuid(Guid(0x639e12c0, 0x42d34bae, 0x89dd8b81, 0x7e1efc2d)));
+    _res->DefaultDeformableMaterial = Guid(0x639e12c0, 0x42d34bae, 0x89dd8b81, 0x7e1efc2d);
 
     // Load default normal map
     _res->DefaultNormalMap = Content::LoadAsyncInternal<Texture>(TEXT("Engine/Textures/NormalTexture"));

@@ -4,7 +4,7 @@
 
 #include "Settings.h"
 #include "Engine/Content/SceneReference.h"
-#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
+#include "Engine/Core/Types/Guid.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/Collections/Dictionary.h"
 
@@ -43,7 +43,7 @@ public:
     /// <summary>
     /// The default application icon.
     /// </summary>
-    AssetObjectId Icon;
+    Guid Icon;
 
     /// <summary>
     /// Reference to the first scene to load on a game startup.
@@ -58,41 +58,41 @@ public:
     /// <summary>
     /// Reference to the splash screen image to show on a game startup.
     /// </summary>
-    AssetObjectId SplashScreen;
+    Guid SplashScreen;
 
     /// <summary>
     /// The custom settings to use with a game. Can be specified by the user to define game-specific options and be used by the external plugins (used as key-value pair).
     /// </summary>
-    Dictionary<String, AssetObjectId> CustomSettings;
+    Dictionary<String, Guid> CustomSettings;
 
 public:
     // Settings containers
-    AssetObjectId Time;
-    AssetObjectId Audio;
-    AssetObjectId LayersAndTags;
-    AssetObjectId Physics;
-    AssetObjectId Input;
-    AssetObjectId Graphics;
-    AssetObjectId Network;
-    AssetObjectId Navigation;
-    AssetObjectId Localization;
-    AssetObjectId GameCooking;
-    AssetObjectId Streaming;
-    AssetObjectId AssetPipeline;
+    Guid Time;
+    Guid Audio;
+    Guid LayersAndTags;
+    Guid Physics;
+    Guid Input;
+    Guid Graphics;
+    Guid Network;
+    Guid Navigation;
+    Guid Localization;
+    Guid GameCooking;
+    Guid Streaming;
+    Guid AssetPipeline;
 
     // Per-platform settings containers
-    AssetObjectId WindowsPlatform;
-    AssetObjectId UWPPlatform;
-    AssetObjectId LinuxPlatform;
-    AssetObjectId PS4Platform;
-    AssetObjectId XboxOnePlatform;
-    AssetObjectId XboxScarlettPlatform;
-    AssetObjectId AndroidPlatform;
-    AssetObjectId SwitchPlatform;
-    AssetObjectId PS5Platform;
-    AssetObjectId MacPlatform;
-    AssetObjectId iOSPlatform;
-    AssetObjectId WebPlatform;
+    Guid WindowsPlatform;
+    Guid UWPPlatform;
+    Guid LinuxPlatform;
+    Guid PS4Platform;
+    Guid XboxOnePlatform;
+    Guid XboxScarlettPlatform;
+    Guid AndroidPlatform;
+    Guid SwitchPlatform;
+    Guid PS5Platform;
+    Guid MacPlatform;
+    Guid iOSPlatform;
+    Guid WebPlatform;
 
 public:
     /// <summary>

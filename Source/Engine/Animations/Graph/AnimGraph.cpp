@@ -255,7 +255,7 @@ bool AnimGraph::onParamCreated(Parameter* p)
         }
 
         // Peek the value
-        BaseModel = Content::ResolveRuntimeObjectId((Guid)p->Value);
+        BaseModel = (Guid)p->Value;
     }
 
     return Graph::onParamCreated(p);

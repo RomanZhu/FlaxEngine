@@ -4,7 +4,6 @@
 
 #include "Plugin.h"
 #include "Engine/Core/Collections/Array.h"
-#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 
 /// <summary>
 /// Base class for all plugins used at runtime in game.

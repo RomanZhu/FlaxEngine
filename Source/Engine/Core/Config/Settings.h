@@ -59,7 +59,7 @@ public:
         const auto gameSettings = GameSettings::Get(); \
         if (gameSettings) \
         { \
-            AssetObjectId assetId; \
+            Guid assetId; \
             gameSettings->CustomSettings.TryGet(TEXT(name), assetId); \
             const auto asset = Content::LoadAsset<JsonAsset>(assetId); \
             if (asset) \

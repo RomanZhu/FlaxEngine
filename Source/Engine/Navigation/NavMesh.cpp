@@ -72,7 +72,7 @@ void NavMesh::SaveNavMesh()
     }
 
     // Link the created asset
-    DataAsset = Content::ResolveRuntimeObjectId(assetId);
+    DataAsset = assetId;
 
 #endif
 }

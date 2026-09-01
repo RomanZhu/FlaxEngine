@@ -473,7 +473,7 @@ JsonAsset* Engine::GetCustomSettings(const StringView& key)
     const auto settings = GameSettings::Get();
     if (!settings)
         return nullptr;
-    AssetObjectId assetId;
+    Guid assetId;
     settings->CustomSettings.TryGet(key, assetId);
     return Content::LoadAssetAsync<JsonAsset>(assetId);
 }

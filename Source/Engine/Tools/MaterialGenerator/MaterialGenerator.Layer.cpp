@@ -51,7 +51,7 @@ MaterialLayer* MaterialGenerator::GetLayer(const Guid& id, Node* caller)
     }
 
     // Load asset
-    Asset* asset = Assets.Load<MaterialBase>(Content::ResolveRuntimeObjectId(id));
+    Asset* asset = Assets.Load<MaterialBase>(id);
     if (asset == nullptr)
     {
         OnError(caller, nullptr, TEXT("Failed to load material asset."));

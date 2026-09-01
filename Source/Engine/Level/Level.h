@@ -9,7 +9,6 @@
 #include "Engine/Platform/CriticalSection.h"
 #include "Engine/Scripting/ScriptingType.h"
 #include "Engine/Serialization/JsonFwd.h"
-#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Types.h"
 
 class JsonWriter;

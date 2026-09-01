@@ -268,7 +268,7 @@ Asset::LoadResult ParticleSystem::load()
                 stream.ReadInt32(&track.AsEmitter.Index);
                 stream.ReadInt32(&track.AsEmitter.StartFrame);
                 stream.ReadInt32(&track.AsEmitter.DurationFrames);
-                Emitters[track.AsEmitter.Index] = Content::ResolveRuntimeObjectId(id);
+                Emitters[track.AsEmitter.Index] = id;
                 break;
             case Track::Types::Folder:
                 break;

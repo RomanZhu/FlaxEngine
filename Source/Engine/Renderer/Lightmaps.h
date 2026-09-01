@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
+#include "Engine/Core/Types/Guid.h"
 #include "Engine/Core/Math/Rectangle.h"
 #include "Engine/Core/ISerializable.h"
 
@@ -21,17 +21,17 @@ struct SavedLightmapInfo
     /// <summary>
     /// Lightmap 0 texture ID
     /// </summary>
-    AssetObjectId Lightmap0;
+    Guid Lightmap0;
 
     /// <summary>
     /// Lightmap 1 texture ID
     /// </summary>
-    AssetObjectId Lightmap1;
+    Guid Lightmap1;
 
     /// <summary>
     /// Lightmap 2 texture ID
     /// </summary>
-    AssetObjectId Lightmap2;
+    Guid Lightmap2;
 };
 
 /// <summary>

@@ -299,7 +299,7 @@ void GameSettings::Deserialize(DeserializeStream& stream, ISerializeModifier* mo
         auto& items = customSettings->value;
         for (auto it = items.MemberBegin(); it != items.MemberEnd(); ++it)
         {
-            AssetObjectId value;
+            Guid value;
             Serialization::Deserialize(it->value, value, modifier);
             if (value.IsValid())
                 CustomSettings[it->name.GetText()] = value;
