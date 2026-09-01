@@ -394,22 +394,26 @@ namespace FlaxEngine.Tests
             var apiMovePath = Path.Combine(Globals.ProjectContentFolder, "__SinglePairApiMove_" + token + ".txt");
             ContentItemFilesystemAction deleteAction = null;
             int nativeProjectMoves = 0;
+            var lifecycleStage = "setup";
             try
             {
                 var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
                 var contentFolder = workspace.Find(Globals.ProjectContentFolder) as ContentFolder;
-                Assert.NotNull(contentFolder);
+                Assert.NotNull(contentFolder, "Project Content root was not indexed.");
                 var sourceItem = CreateCanonicalTextItem(sourcePath, contentFolder, out var sourceId);
 
+                lifecycleStage = "Project copy";
                 var copyResult = workspace.Copy(sourceItem, projectCopyPath);
                 Assert.IsTrue(copyResult.Succeeded, copyResult.Message);
-                Assert.IsTrue(File.Exists(projectCopyPath));
-                Assert.IsTrue(File.Exists(projectCopyPath + ".meta"));
-                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectCopyPath, out var projectCopyRecord));
+                Assert.IsTrue(File.Exists(projectCopyPath), "Project copy source output is missing.");
+                Assert.IsTrue(File.Exists(projectCopyPath + ".meta"), "Project copy metadata output is missing.");
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectCopyPath, out var projectCopyRecord),
+                    "Project copy was not published to the asset database.");
                 Assert.AreNotEqual(sourceId, projectCopyRecord.SourceAssetID);
 
+                lifecycleStage = "Project move";
                 var projectCopyItem = workspace.FindAsset(projectCopyRecord.SourceAssetID);
-                Assert.NotNull(projectCopyItem);
+                Assert.NotNull(projectCopyItem, "Project copy item was not presented in the workspace.");
                 AssetWorkspaceModule.CanonicalMoveObserver = (source, destination) =>
                 {
                     Assert.AreEqual(Path.GetFullPath(projectCopyPath), Path.GetFullPath(source));
@@ -418,48 +422,64 @@ namespace FlaxEngine.Tests
                 };
                 var moveResult = workspace.TryMove(new[] { (Item: (ContentItem)projectCopyItem, Destination: projectMovePath) });
                 Assert.IsTrue(moveResult.Succeeded, moveResult.Message);
-                Assert.AreEqual(1, nativeProjectMoves);
-                Assert.IsFalse(File.Exists(projectCopyPath));
-                Assert.IsFalse(File.Exists(projectCopyPath + ".meta"));
-                Assert.IsTrue(File.Exists(projectMovePath));
-                Assert.IsTrue(File.Exists(projectMovePath + ".meta"));
-                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var projectMoveRecord));
+                Assert.AreEqual(1, nativeProjectMoves, "Project move did not enter native authority exactly once.");
+                Assert.IsFalse(File.Exists(projectCopyPath), "Project move left its old source behind.");
+                Assert.IsFalse(File.Exists(projectCopyPath + ".meta"), "Project move left its old metadata behind.");
+                Assert.IsTrue(File.Exists(projectMovePath), "Project move source output is missing.");
+                Assert.IsTrue(File.Exists(projectMovePath + ".meta"), "Project move metadata output is missing.");
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var projectMoveRecord),
+                    "Project move was not published to the asset database.");
                 Assert.AreEqual(projectCopyRecord.SourceAssetID, projectMoveRecord.SourceAssetID);
 
+                lifecycleStage = "Project delete";
                 var projectMoveItem = workspace.FindAsset(projectMoveRecord.SourceAssetID);
-                Assert.NotNull(projectMoveItem);
+                Assert.NotNull(projectMoveItem, "Project move item was not presented in the workspace.");
                 deleteAction = ContentItemFilesystemAction.Delete(FlaxEditor.Editor.Instance,
                     new List<ContentItem> { projectMoveItem });
-                Assert.NotNull(deleteAction);
-                Assert.IsFalse(File.Exists(projectMovePath));
-                Assert.IsFalse(File.Exists(projectMovePath + ".meta"));
+                Assert.NotNull(deleteAction, "Project delete did not create recoverable undo state.");
+                Assert.IsFalse(File.Exists(projectMovePath), "Project delete left its source behind.");
+                Assert.IsFalse(File.Exists(projectMovePath + ".meta"), "Project delete left its metadata behind.");
+                lifecycleStage = "Project restore";
                 Assert.IsTrue(deleteAction.TryUndo(), "Project delete restore failed.");
-                Assert.IsTrue(File.Exists(projectMovePath));
-                Assert.IsTrue(File.Exists(projectMovePath + ".meta"));
-                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var restoredProjectRecord));
+                Assert.IsTrue(File.Exists(projectMovePath), "Project restore source output is missing.");
+                Assert.IsTrue(File.Exists(projectMovePath + ".meta"), "Project restore metadata output is missing.");
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var restoredProjectRecord),
+                    "Project restore was not published to the asset database.");
                 Assert.AreEqual(projectMoveRecord.SourceAssetID, restoredProjectRecord.SourceAssetID);
 
-                Assert.IsFalse(AssetOperationService.CopyAsset(sourcePath, apiCopyPath, out var apiCopyId));
+                lifecycleStage = "API copy";
+                Assert.IsFalse(AssetOperationService.CopyAsset(sourcePath, apiCopyPath, out var apiCopyId),
+                    string.Join(Environment.NewLine, AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
                 Assert.AreNotEqual(Guid.Empty, apiCopyId);
                 Assert.AreNotEqual(sourceId, apiCopyId);
                 Assert.IsTrue(File.Exists(apiCopyPath));
                 Assert.IsTrue(File.Exists(apiCopyPath + ".meta"));
-                Assert.IsFalse(AssetOperationService.MoveAsset(apiCopyPath, apiMovePath));
+                lifecycleStage = "API move";
+                Assert.IsFalse(AssetOperationService.MoveAsset(apiCopyPath, apiMovePath),
+                    string.Join(Environment.NewLine, AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
                 Assert.IsFalse(File.Exists(apiCopyPath));
                 Assert.IsFalse(File.Exists(apiCopyPath + ".meta"));
                 Assert.IsTrue(File.Exists(apiMovePath));
                 Assert.IsTrue(File.Exists(apiMovePath + ".meta"));
-                Assert.IsFalse(AssetOperationService.TrashAsset(apiMovePath, out var trash));
+                lifecycleStage = "API trash";
+                Assert.IsFalse(AssetOperationService.TrashAsset(apiMovePath, out var trash),
+                    string.Join(Environment.NewLine, AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
                 Assert.AreEqual(apiCopyId, trash.AssetGuid);
                 Assert.IsFalse(File.Exists(apiMovePath));
                 Assert.IsFalse(File.Exists(apiMovePath + ".meta"));
                 Assert.IsTrue(File.Exists(trash.TrashSourcePath));
                 Assert.IsTrue(File.Exists(trash.TrashMetaPath));
-                Assert.IsFalse(AssetOperationService.RestoreAsset(trash));
+                lifecycleStage = "API restore";
+                Assert.IsFalse(AssetOperationService.RestoreAsset(trash),
+                    string.Join(Environment.NewLine, AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
                 Assert.IsTrue(File.Exists(apiMovePath));
                 Assert.IsTrue(File.Exists(apiMovePath + ".meta"));
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(apiMovePath, out var apiRestoredRecord));
                 Assert.AreEqual(apiCopyId, apiRestoredRecord.SourceAssetID);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Single canonical pair mutation failed during " + lifecycleStage + ". " + ex, ex);
             }
             finally
             {
