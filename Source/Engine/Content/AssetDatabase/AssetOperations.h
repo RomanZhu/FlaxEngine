@@ -218,7 +218,8 @@ public:
         AssetPipelineDiagnostic& diagnostic);
     bool WriteImporterSettings(const AssetOperationTarget& target, const AssetImporterSettingsRevision& expected,
         int32 settingsVersion, const StringAnsiView& settingsJson, AssetPipelineDiagnostic& diagnostic,
-        AssetMetaWriteFailurePoint failurePoint = AssetMetaWriteFailurePoint::None);
+        AssetMetaWriteFailurePoint failurePoint = AssetMetaWriteFailurePoint::None, bool* wasChanged = nullptr,
+        bool* wasConflict = nullptr);
     bool TrashAsset(const AssetOperationTarget& target, AssetTrashRecord& trash,
         AssetPipelineDiagnostic& diagnostic);
     bool DeleteAsset(const AssetOperationTarget& target, AssetTrashRecord& trash,

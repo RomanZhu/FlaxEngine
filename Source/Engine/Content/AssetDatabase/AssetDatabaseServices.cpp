@@ -2446,13 +2446,31 @@ bool AssetOperationService::GetImporterSettings(const Guid& sourceAssetID, Asset
 #endif
 }
 
-bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterSettingsSnapshot& expected,
-    const StringView& settingsJson, AssetImporterSettingsSnapshot& current)
+AssetImporterSettingsSaveResult AssetOperationService::SaveImporterSettingsAndReimportDetailed(
+    const AssetImporterSettingsSnapshot& expected, const StringView& settingsJson)
 {
-    current = AssetImporterSettingsSnapshot();
+    AssetImporterSettingsSaveResult result;
+    auto fail = [&result](AssetImporterSettingsWriteOutcome outcome, const AssetPipelineDiagnostic& diagnostic)
+    {
+        result.WriteOutcome = outcome;
+        result.Diagnostic = diagnostic;
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return result;
+    };
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
     if (AssetPipelineService::Initialize() || !Operations)
-        return true;
+    {
+        const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
+        AssetPipelineDiagnostic diagnostic = diagnostics.HasItems() ? diagnostics.Last() : AssetPipelineDiagnostic();
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::SnapshotInvalid;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.AssetGuid = expected.SourceAssetID;
+            diagnostic.Message = TEXT("Asset operations are unavailable for importer settings.");
+        }
+        return fail(AssetImporterSettingsWriteOutcome::Failed, diagnostic);
+    }
     AssetPipelineDiagnostic diagnostic;
     if (Operations->IsAssetEditing())
     {
@@ -2460,8 +2478,7 @@ bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterS
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
         diagnostic.AssetGuid = expected.SourceAssetID;
         diagnostic.Message = TEXT("Importer settings cannot be saved inside an asset editing batch.");
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
+        return fail(AssetImporterSettingsWriteOutcome::Failed, diagnostic);
     }
     const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
     SourceAssetRow source;
@@ -2472,8 +2489,7 @@ bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterS
         diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
         diagnostic.AssetGuid = expected.SourceAssetID;
         diagnostic.Message = TEXT("Importer settings source is no longer registered as an imported asset.");
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
+        return fail(AssetImporterSettingsWriteOutcome::Failed, diagnostic);
     }
     if (expected.SourceRevision == 0 || expected.ImporterID.IsEmpty() || expected.StoredSettingsVersion < 1 ||
         expected.SettingsSchemaVersion < 1)
@@ -2483,8 +2499,7 @@ bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterS
         diagnostic.AssetGuid = expected.SourceAssetID;
         diagnostic.SourcePath = source.Path;
         diagnostic.Message = TEXT("Importer settings revision is invalid.");
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
+        return fail(AssetImporterSettingsWriteOutcome::Failed, diagnostic);
     }
     if (source.LastModifiedRevision != expected.SourceRevision || source.MetaSemanticHash != expected.MetaSemanticHash ||
         source.ImporterId != expected.ImporterID ||
@@ -2497,9 +2512,8 @@ bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterS
         diagnostic.ProcessorId = source.ImporterId;
         diagnostic.Message = TEXT("Importer settings write conflicts with a newer source metadata revision.");
         AssetPipelineDiagnostic ignored;
-        ReadImporterSettingsSnapshot(expected.SourceAssetID, current, ignored);
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
+        ReadImporterSettingsSnapshot(expected.SourceAssetID, result.Current, ignored);
+        return fail(AssetImporterSettingsWriteOutcome::Conflict, diagnostic);
     }
 
     AssetImporterRegistry* registry = AssetImportService::GetImporterRegistry();
@@ -2515,8 +2529,7 @@ bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterS
             diagnostic.ProcessorId = expected.ImporterID;
             diagnostic.Message = TEXT("Importer settings processor is not registered.");
         }
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
+        return fail(AssetImporterSettingsWriteOutcome::Failed, diagnostic);
     }
     if (importer.Get().SettingsSchemaVersion > MAX_int32 ||
         expected.SettingsSchemaVersion != static_cast<int32>(importer.Get().SettingsSchemaVersion))
@@ -2527,8 +2540,9 @@ bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterS
         diagnostic.SourcePath = source.Path;
         diagnostic.ProcessorId = expected.ImporterID;
         diagnostic.Message = TEXT("Importer settings schema changed after the editor revision was captured.");
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
+        AssetPipelineDiagnostic ignored;
+        ReadImporterSettingsSnapshot(expected.SourceAssetID, result.Current, ignored);
+        return fail(AssetImporterSettingsWriteOutcome::Conflict, diagnostic);
     }
 
     AssetOperationTarget target;
@@ -2540,34 +2554,76 @@ bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterS
     revision.ImporterID = expected.ImporterID;
     revision.StoredSettingsVersion = expected.StoredSettingsVersion;
     const StringAnsi settings(settingsJson);
+    bool wasChanged = false;
+    bool wasConflict = false;
     const bool failed = Operations->WriteImporterSettings(target, revision, expected.SettingsSchemaVersion,
-        StringAnsiView(settings), diagnostic);
+        StringAnsiView(settings), diagnostic, AssetMetaWriteFailurePoint::None, &wasChanged, &wasConflict);
     importer.Reset();
     if (failed)
     {
         AssetPipelineDiagnostic ignored;
-        ReadImporterSettingsSnapshot(expected.SourceAssetID, current, ignored);
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
+        ReadImporterSettingsSnapshot(expected.SourceAssetID, result.Current, ignored);
+        return fail(wasConflict ? AssetImporterSettingsWriteOutcome::Conflict : AssetImporterSettingsWriteOutcome::Failed,
+            diagnostic);
     }
-    if (ReadImporterSettingsSnapshot(expected.SourceAssetID, current, diagnostic))
+    if (ReadImporterSettingsSnapshot(expected.SourceAssetID, result.Current, diagnostic))
     {
-        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-        return true;
+        if (wasChanged)
+        {
+            result.WriteOutcome = AssetImporterSettingsWriteOutcome::Committed;
+            result.ReimportOutcome = AssetImporterSettingsReimportOutcome::Blocked;
+            result.Diagnostic = diagnostic;
+            SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+            return result;
+        }
+        return fail(AssetImporterSettingsWriteOutcome::Failed, diagnostic);
     }
-    if ((current.SourceRevision != expected.SourceRevision || current.MetaSemanticHash != expected.MetaSemanticHash) &&
-        AssetPipelineService::BuildAsset(expected.SourceAssetID, true, false))
-        return true;
-    return false;
+    result.WriteOutcome = wasChanged
+        ? AssetImporterSettingsWriteOutcome::Committed
+        : AssetImporterSettingsWriteOutcome::Unchanged;
+    if (!wasChanged)
+        return result;
+    if (AssetPipelineService::BuildAsset(expected.SourceAssetID, true, false))
+    {
+        result.ReimportOutcome = AssetImporterSettingsReimportOutcome::Failed;
+        result.Diagnostic = AssetPipelineService::GetBuildDiagnostic(expected.SourceAssetID);
+        if (result.Diagnostic.Code == AssetPipelineDiagnosticCode::None)
+        {
+            const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
+            if (diagnostics.HasItems())
+                result.Diagnostic = diagnostics.Last();
+        }
+        if (result.Diagnostic.Code == AssetPipelineDiagnosticCode::None)
+        {
+            result.Diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+            result.Diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+            result.Diagnostic.AssetGuid = expected.SourceAssetID;
+            result.Diagnostic.Message = TEXT("Importer settings were committed, but reimport could not be queued.");
+        }
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ result.Diagnostic }));
+        return result;
+    }
+    result.ReimportOutcome = AssetImporterSettingsReimportOutcome::Queued;
+    return result;
 #else
     AssetPipelineDiagnostic diagnostic;
     diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
     diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
     diagnostic.AssetGuid = expected.SourceAssetID;
     diagnostic.Message = TEXT("Importer settings are unavailable without the editor importer registry.");
-    SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
-    return true;
+    return fail(AssetImporterSettingsWriteOutcome::Failed, diagnostic);
 #endif
+}
+
+bool AssetOperationService::SaveImporterSettingsAndReimport(const AssetImporterSettingsSnapshot& expected,
+    const StringView& settingsJson, AssetImporterSettingsSnapshot& current)
+{
+    const AssetImporterSettingsSaveResult result = SaveImporterSettingsAndReimportDetailed(expected, settingsJson);
+    current = result.Current;
+    return (result.WriteOutcome != AssetImporterSettingsWriteOutcome::Committed &&
+            result.WriteOutcome != AssetImporterSettingsWriteOutcome::Unchanged) ||
+        result.ReimportOutcome == AssetImporterSettingsReimportOutcome::Failed ||
+        result.ReimportOutcome == AssetImporterSettingsReimportOutcome::Blocked;
 }
 
 void AssetOperationService::StartEditing()

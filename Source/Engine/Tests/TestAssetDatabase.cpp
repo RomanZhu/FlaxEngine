@@ -614,17 +614,27 @@ TEST_CASE("Asset importer settings facade preserves conflicts and no-op revision
     CHECK(captured.SettingsJson == TEXT("{}\n"));
 
     AssetOperationService::StartEditing();
-    AssetImporterSettingsSnapshot blocked;
-    CHECK(AssetOperationService::SaveImporterSettingsAndReimport(captured,
-        TEXT("{\"marker\":0}"), blocked));
+    const AssetImporterSettingsSaveResult blocked = AssetOperationService::SaveImporterSettingsAndReimportDetailed(
+        captured, TEXT("{\"marker\":0}"));
+    CHECK(blocked.WriteOutcome == AssetImporterSettingsWriteOutcome::Failed);
+    CHECK(blocked.ReimportOutcome == AssetImporterSettingsReimportOutcome::NotRequired);
+    CHECK(blocked.Diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated);
     REQUIRE_FALSE(AssetOperationService::StopEditing());
     AssetMeta unchanged;
     REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), unchanged, diagnostic));
     CHECK(unchanged.Processor.SettingsJson == "{}\n");
 
-    AssetImporterSettingsSnapshot current;
-    REQUIRE_FALSE(AssetOperationService::SaveImporterSettingsAndReimport(captured,
-        TEXT(" { \"marker\" : 1 } "), current));
+    const AssetImporterSettingsSaveResult invalid = AssetOperationService::SaveImporterSettingsAndReimportDetailed(
+        captured, TEXT("[1, 2]"));
+    CHECK(invalid.WriteOutcome == AssetImporterSettingsWriteOutcome::Failed);
+    CHECK(invalid.Diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
+
+    const AssetImporterSettingsSaveResult saved = AssetOperationService::SaveImporterSettingsAndReimportDetailed(
+        captured, TEXT(" { \"marker\" : 1 } "));
+    CHECK(saved.WriteOutcome == AssetImporterSettingsWriteOutcome::Committed);
+    CHECK(saved.ReimportOutcome == AssetImporterSettingsReimportOutcome::Queued);
+    CHECK(saved.Diagnostic.Code == AssetPipelineDiagnosticCode::None);
+    const AssetImporterSettingsSnapshot& current = saved.Current;
     CHECK(current.SourceAssetID == id);
     CHECK(current.SourceRevision > captured.SourceRevision);
     CHECK(current.MetaSemanticHash != captured.MetaSemanticHash);
@@ -647,24 +657,26 @@ TEST_CASE("Asset importer settings facade preserves conflicts and no-op revision
     BytesContainer beforeNoOp;
     REQUIRE_FALSE(File::ReadAllBytes(source + TEXT(".meta"), beforeNoOp));
     const uint64 beforeNoOpRevision = current.SourceRevision;
-    AssetImporterSettingsSnapshot afterNoOp;
-    REQUIRE_FALSE(AssetOperationService::SaveImporterSettingsAndReimport(current,
-        TEXT("{\"marker\":1}"), afterNoOp));
+    const AssetImporterSettingsSaveResult noOp = AssetOperationService::SaveImporterSettingsAndReimportDetailed(
+        current, TEXT("{\"marker\":1}"));
+    CHECK(noOp.WriteOutcome == AssetImporterSettingsWriteOutcome::Unchanged);
+    CHECK(noOp.ReimportOutcome == AssetImporterSettingsReimportOutcome::NotRequired);
+    const AssetImporterSettingsSnapshot& afterNoOp = noOp.Current;
     CHECK(afterNoOp.SourceRevision == beforeNoOpRevision);
     BytesContainer afterNoOpBytes;
     REQUIRE_FALSE(File::ReadAllBytes(source + TEXT(".meta"), afterNoOpBytes));
     REQUIRE(afterNoOpBytes.Length() == beforeNoOp.Length());
     CHECK(Platform::MemoryCompare(afterNoOpBytes.Get(), beforeNoOp.Get(), beforeNoOp.Length()) == 0);
 
-    AssetImporterSettingsSnapshot conflictCurrent;
-    CHECK(AssetOperationService::SaveImporterSettingsAndReimport(captured,
-        TEXT("{\"marker\":2}"), conflictCurrent));
+    const AssetImporterSettingsSaveResult conflict = AssetOperationService::SaveImporterSettingsAndReimportDetailed(
+        captured, TEXT("{\"marker\":2}"));
+    CHECK(conflict.WriteOutcome == AssetImporterSettingsWriteOutcome::Conflict);
+    CHECK(conflict.ReimportOutcome == AssetImporterSettingsReimportOutcome::NotRequired);
+    CHECK(conflict.Diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated);
+    const AssetImporterSettingsSnapshot& conflictCurrent = conflict.Current;
     CHECK(conflictCurrent.SourceRevision == current.SourceRevision);
     REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), updated, diagnostic));
     CHECK(updated.Processor.SettingsJson == "{\n  \"marker\": 1\n}\n");
-    const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
-    REQUIRE(diagnostics.HasItems());
-    CHECK(diagnostics[0].Code == AssetPipelineDiagnosticCode::PrepareInvalidated);
 }
 
 TEST_CASE("Asset database RefreshSources creates canonical sidecars and keeps unaffected records")

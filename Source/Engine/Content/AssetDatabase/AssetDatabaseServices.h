@@ -156,6 +156,36 @@ API_STRUCT() struct FLAXENGINE_API AssetImporterSettingsSnapshot
     API_FIELD() String SettingsJson;
 };
 
+/// <summary>Terminal metadata-write state for one revision-bound importer settings save.</summary>
+API_ENUM() enum class AssetImporterSettingsWriteOutcome : byte
+{
+    None,
+    Unchanged,
+    Committed,
+    Conflict,
+    Failed,
+};
+
+/// <summary>Terminal reimport state following an importer settings save.</summary>
+API_ENUM() enum class AssetImporterSettingsReimportOutcome : byte
+{
+    NotRequired,
+    Queued,
+    Failed,
+    Blocked,
+};
+
+/// <summary>Independent metadata-write and reimport outcomes for importer inspector saves.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetImporterSettingsSaveResult
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetImporterSettingsSaveResult);
+
+    API_FIELD() AssetImporterSettingsWriteOutcome WriteOutcome = AssetImporterSettingsWriteOutcome::None;
+    API_FIELD() AssetImporterSettingsReimportOutcome ReimportOutcome = AssetImporterSettingsReimportOutcome::NotRequired;
+    API_FIELD() AssetImporterSettingsSnapshot Current;
+    API_FIELD() AssetPipelineDiagnostic Diagnostic;
+};
+
 /// <summary>Read-only source database queries and ordered change delivery.</summary>
 API_CLASS(Static) class FLAXENGINE_API AssetDatabaseQueryService
 {
@@ -229,6 +259,8 @@ public:
     API_FUNCTION() static bool RestoreEntries(const AssetTrashBatch& trash);
     API_FUNCTION() static bool DiscardTrash(const AssetTrashBatch& trash);
     API_FUNCTION() static bool GetImporterSettings(const Guid& sourceAssetID, API_PARAM(Out) AssetImporterSettingsSnapshot& result);
+    API_FUNCTION() static AssetImporterSettingsSaveResult SaveImporterSettingsAndReimportDetailed(
+        const AssetImporterSettingsSnapshot& expected, const StringView& settingsJson);
     API_FUNCTION() static bool SaveImporterSettingsAndReimport(const AssetImporterSettingsSnapshot& expected, const StringView& settingsJson,
         API_PARAM(Out) AssetImporterSettingsSnapshot& current);
     API_FUNCTION() static void StartEditing();

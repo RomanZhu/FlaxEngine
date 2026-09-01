@@ -14,6 +14,7 @@ namespace FlaxEditor.Content.Import
 
         public AssetGuid Asset { get; }
         public object Settings { get; private set; }
+        public AssetImporterSettingsSaveResult LastSaveResult { get; private set; }
         protected virtual int SettingsVersion => 1;
 
         protected AssetImporterEditor(AssetGuid asset, Type settingsType)
@@ -49,9 +50,23 @@ namespace FlaxEditor.Content.Import
             if (SettingsVersion != _snapshot.SettingsSchemaVersion)
                 throw new InvalidOperationException("Importer settings schema changed. Revert before applying changes.");
             var settingsJson = JsonConvert.SerializeObject(Settings, Formatting.None);
-            if (AssetOperationService.SaveImporterSettingsAndReimport(_snapshot, settingsJson, out var current))
-                throw CreateOperationException("Failed to save importer settings.");
-            _snapshot = current;
+            LastSaveResult = AssetOperationService.SaveImporterSettingsAndReimportDetailed(_snapshot, settingsJson);
+            if (LastSaveResult.WriteOutcome != AssetImporterSettingsWriteOutcome.Committed &&
+                LastSaveResult.WriteOutcome != AssetImporterSettingsWriteOutcome.Unchanged)
+            {
+                var fallback = LastSaveResult.WriteOutcome == AssetImporterSettingsWriteOutcome.Conflict
+                    ? "Importer settings changed externally. Revert before applying changes."
+                    : "Failed to save importer settings.";
+                throw CreateOperationException(fallback, LastSaveResult.Diagnostic);
+            }
+            if (LastSaveResult.Current.SourceAssetID != Guid.Empty)
+                _snapshot = LastSaveResult.Current;
+            if (LastSaveResult.ReimportOutcome == AssetImporterSettingsReimportOutcome.Failed ||
+                LastSaveResult.ReimportOutcome == AssetImporterSettingsReimportOutcome.Blocked)
+            {
+                throw CreateOperationException("Importer settings were saved, but reimport did not start.",
+                    LastSaveResult.Diagnostic);
+            }
         }
 
         public void Revert()
@@ -81,6 +96,11 @@ namespace FlaxEditor.Content.Import
                     return new InvalidOperationException(diagnostics[i].Message);
             }
             return new InvalidOperationException(fallback);
+        }
+
+        private static InvalidOperationException CreateOperationException(string fallback, AssetPipelineDiagnostic diagnostic)
+        {
+            return new InvalidOperationException(string.IsNullOrEmpty(diagnostic.Message) ? fallback : diagnostic.Message);
         }
     }
 }

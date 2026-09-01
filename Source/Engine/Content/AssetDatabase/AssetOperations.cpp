@@ -1491,8 +1491,13 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
 
 bool AssetOperations::WriteImporterSettings(const AssetOperationTarget& target,
     const AssetImporterSettingsRevision& expected, int32 settingsVersion, const StringAnsiView& settingsJson,
-    AssetPipelineDiagnostic& diagnostic, AssetMetaWriteFailurePoint failurePoint)
+    AssetPipelineDiagnostic& diagnostic, AssetMetaWriteFailurePoint failurePoint, bool* wasChanged,
+    bool* wasConflict)
 {
+    if (wasChanged)
+        *wasChanged = false;
+    if (wasConflict)
+        *wasConflict = false;
     if (expected.SourceRevision == 0 || expected.ImporterID.IsEmpty() ||
         expected.StoredSettingsVersion < 1 || settingsVersion < 1)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, target.SourcePath,
@@ -1514,16 +1519,29 @@ bool AssetOperations::WriteImporterSettings(const AssetOperationTarget& target,
 
     AssetMeta current;
     AssetPathPolicy::ProjectPath currentSource;
-    if (ValidateExisting(target, currentSource, current, diagnostic) ||
-        _databaseCallbacks.ValidateImporterSettingsRevision(target, expected, diagnostic))
+    if (ValidateExisting(target, currentSource, current, diagnostic))
+    {
+        if (wasConflict && diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated)
+            *wasConflict = true;
         return true;
+    }
+    if (_databaseCallbacks.ValidateImporterSettingsRevision(target, expected, diagnostic))
+    {
+        if (wasConflict && diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated)
+            *wasConflict = true;
+        return true;
+    }
     uint64 currentSemanticHash;
     if (GetMetaSemanticHash(current, currentSemanticHash, diagnostic))
         return true;
     if (currentSemanticHash != expected.MetaSemanticHash || current.Processor.ID != expected.ImporterID ||
         current.Processor.SettingsVersion != expected.StoredSettingsVersion)
+    {
+        if (wasConflict)
+            *wasConflict = true;
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, source.AbsolutePath,
             TEXT("Importer settings metadata changed after the editor revision was captured."));
+    }
 
     StringAnsi canonicalSettings;
     CanonicalJsonError jsonError;
@@ -1547,15 +1565,28 @@ bool AssetOperations::WriteImporterSettings(const AssetOperationTarget& target,
         return true;
     AcquirePaths(lockPaths, acquired, diagnostic);
     AssetMeta authorizedCurrent;
-    if (ValidateExisting(target, currentSource, authorizedCurrent, diagnostic) ||
-        _databaseCallbacks.ValidateImporterSettingsRevision(target, expected, diagnostic))
+    if (ValidateExisting(target, currentSource, authorizedCurrent, diagnostic))
+    {
+        if (wasConflict && diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated)
+            *wasConflict = true;
         return true;
+    }
+    if (_databaseCallbacks.ValidateImporterSettingsRevision(target, expected, diagnostic))
+    {
+        if (wasConflict && diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated)
+            *wasConflict = true;
+        return true;
+    }
     if (GetMetaSemanticHash(authorizedCurrent, currentSemanticHash, diagnostic))
         return true;
     if (currentSemanticHash != expected.MetaSemanticHash || authorizedCurrent.Processor.ID != expected.ImporterID ||
         authorizedCurrent.Processor.SettingsVersion != expected.StoredSettingsVersion)
+    {
+        if (wasConflict)
+            *wasConflict = true;
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, source.AbsolutePath,
             TEXT("Importer settings metadata changed while the save was authorized."));
+    }
     current = MoveTemp(authorizedCurrent);
 
     AssetMeta updated = current;
@@ -1576,7 +1607,11 @@ bool AssetOperations::WriteImporterSettings(const AssetOperationTarget& target,
     commit.SourcePath = source.AbsolutePath;
     AddSelfWrite(commit, metaPath);
     if (!PublishCommit(commit, diagnostic))
+    {
+        if (wasChanged)
+            *wasChanged = true;
         return false;
+    }
 
     const AssetPipelineDiagnostic publicationDiagnostic = diagnostic;
     if (RestoreFileAtomic(metaPath, previousMeta))
