@@ -992,7 +992,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         REQUIRE(!Level::ConvertSceneToExternalActors(scene));
         CHECK(scene->UseExternalActors);
         CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
-        CHECK(actor->GetGlobalObjectId().SourceAsset == sceneId);
+        CHECK(actor->GetGlobalObjectId().SourceAsset.Value == sceneId);
         CHECK(actor->GetGlobalObjectId().LocalFileId == actor->GetLocalFileId());
 
         rapidjson_flax::Document externalizedDocument;
