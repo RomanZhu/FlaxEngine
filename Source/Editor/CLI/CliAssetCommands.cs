@@ -19,6 +19,14 @@ using FlaxJsonSerializer = FlaxEngine.Json.JsonSerializer;
 
 namespace FlaxEditor
 {
+    internal enum CliAssetVerificationStep
+    {
+        RequestBuild,
+        WaitForBuild,
+        Load,
+        Fail,
+    }
+
     internal static class CliAssetPersistence
     {
         public static void PrepareForSave(Asset asset, string propertyPath)
@@ -174,6 +182,22 @@ namespace FlaxEditor
     /// </summary>
     public static class CliAssetCommands
     {
+        internal static CliAssetVerificationStep GetVerificationStep(bool requiresArtifactBuild, bool buildRequested, string buildStatus)
+        {
+            if (!requiresArtifactBuild || string.Equals(buildStatus, "ReadyExact", StringComparison.Ordinal))
+                return CliAssetVerificationStep.Load;
+            if (string.Equals(buildStatus, "Failed", StringComparison.Ordinal) ||
+                string.Equals(buildStatus, "Cancelled", StringComparison.Ordinal))
+                return CliAssetVerificationStep.Fail;
+            if (string.Equals(buildStatus, "NotBuilt", StringComparison.Ordinal))
+                return buildRequested ? CliAssetVerificationStep.WaitForBuild : CliAssetVerificationStep.RequestBuild;
+            if (string.Equals(buildStatus, "Queued", StringComparison.Ordinal) ||
+                string.Equals(buildStatus, "Building", StringComparison.Ordinal) ||
+                string.Equals(buildStatus, "Publishing", StringComparison.Ordinal))
+                return CliAssetVerificationStep.WaitForBuild;
+            return CliAssetVerificationStep.Fail;
+        }
+
         /// <summary>
         /// Executes one Editor-owned asset operation.
         /// </summary>
@@ -230,6 +254,7 @@ namespace FlaxEditor
             private AssetItem _pendingVerificationItem;
             private Asset _pendingVerificationAsset;
             private bool _pendingVerificationIsAction;
+            private bool _pendingVerificationBuildRequested;
 
             public AssetBatchOperation(CliCommandContext context, CliAssetOperationOptions[] operations, bool continueOnError, bool verifyReload, bool single)
             {
@@ -265,7 +290,7 @@ namespace FlaxEditor
                     return;
                 }
 
-                if (_pendingVerificationAsset != null)
+                if (_pendingVerification != null)
                 {
                     CompleteVerificationIfReady();
                     return;
@@ -292,9 +317,7 @@ namespace FlaxEditor
                     return;
                 _cancelled = true;
                 DetachImportEvents();
-                _pendingVerification = null;
-                _pendingVerificationItem = null;
-                _pendingVerificationAsset = null;
+                ClearPendingVerification();
             }
 
             private void ExecuteNext()
@@ -795,31 +818,49 @@ namespace FlaxEditor
                            ?? throw new InvalidOperationException($"Content item '{path}' is not an asset.");
                 if (!File.Exists(item.Path))
                     throw new FileNotFoundException($"Asset '{item.Path}' was not persisted.", item.Path);
-                item.Reload();
-                var asset = item.LoadAsync();
-                if (asset == null)
-                    throw new InvalidOperationException($"Asset '{item.Path}' failed to reload from disk.");
                 _pendingVerification = verification;
                 _pendingVerificationItem = item;
-                _pendingVerificationAsset = asset;
+                _pendingVerificationAsset = null;
                 _pendingVerificationIsAction = isAction;
+                _pendingVerificationBuildRequested = false;
             }
 
             private void CompleteVerificationIfReady()
             {
-                var asset = _pendingVerificationAsset;
-                if (!asset.IsLoaded && !asset.LastLoadFailed)
-                    return;
-
                 var verification = _pendingVerification;
                 var item = _pendingVerificationItem;
                 var isAction = _pendingVerificationIsAction;
-                _pendingVerification = null;
-                _pendingVerificationItem = null;
-                _pendingVerificationAsset = null;
-                _pendingVerificationIsAction = false;
                 try
                 {
+                    var asset = _pendingVerificationAsset;
+                    if (asset == null)
+                    {
+                        var hasRecord = AssetDatabaseQueryService.TryGetMainRecordAtPath(item.Path, out var record);
+                        if (item.IsCanonicalSource && !hasRecord)
+                            return;
+                        var requiresBuild = item.IsCanonicalSource && record.SourceKind != AssetSourceKind.Folder;
+                        var buildStatus = requiresBuild ? AssetPipelineService.GetBuildStatus(item.ID) : "ReadyExact";
+                        switch (GetVerificationStep(requiresBuild, _pendingVerificationBuildRequested, buildStatus))
+                        {
+                        case CliAssetVerificationStep.RequestBuild:
+                            if (AssetPipelineService.BuildAsset(item.ID))
+                                throw new InvalidOperationException($"Asset '{item.Path}' failed to request an asynchronous artifact build.");
+                            _pendingVerificationBuildRequested = true;
+                            return;
+                        case CliAssetVerificationStep.WaitForBuild:
+                            return;
+                        case CliAssetVerificationStep.Fail:
+                            throw new InvalidOperationException($"Asset '{item.Path}' artifact build ended with status '{buildStatus}'.");
+                        }
+
+                        item.Reload();
+                        asset = item.LoadAsync();
+                        if (asset == null)
+                            throw new InvalidOperationException($"Asset '{item.Path}' failed to reload from disk.");
+                        _pendingVerificationAsset = asset;
+                    }
+                    if (!asset.IsLoaded && !asset.LastLoadFailed)
+                        return;
                     if (asset.LastLoadFailed)
                         throw new InvalidOperationException($"Asset '{item.Path}' failed to reload from disk.");
                     if (verification.PropertyPath != null)
@@ -830,6 +871,7 @@ namespace FlaxEditor
                             throw new InvalidOperationException($"Asset property '{verification.PropertyPath}' did not persist. Expected {verification.ExpectedValue}, reloaded {actual}.");
                     }
                     var data = new { path = item.Path, id = item.ID, type = item.TypeName, persisted = true, reloaded = true };
+                    ClearPendingVerification();
                     if (isAction)
                     {
                         RecordSuccess("verify", data);
@@ -842,11 +884,21 @@ namespace FlaxEditor
                 }
                 catch (Exception ex)
                 {
+                    ClearPendingVerification();
                     if (isAction)
                         RecordFailure("verify", ex);
                     else
                         RecordVerificationFailure(verification, ex);
                 }
+            }
+
+            private void ClearPendingVerification()
+            {
+                _pendingVerification = null;
+                _pendingVerificationItem = null;
+                _pendingVerificationAsset = null;
+                _pendingVerificationIsAction = false;
+                _pendingVerificationBuildRequested = false;
             }
 
             private void RecordVerificationFailure(AssetVerification verification, Exception exception)
