@@ -32,6 +32,17 @@ namespace FlaxEditor.Content.Import
             public string TypeName;
         }
 
+        private sealed class PostprocessorEntry
+        {
+            public Type Type;
+            public AssetPostprocessor Instance;
+            public string ID;
+            public int Version;
+            public int Order;
+            public string[] RunBefore;
+            public string[] RunAfter;
+        }
+
         private static readonly InvokeImporterDelegate InvokeCallback = InvokeImporter;
         private static IReadOnlyDictionary<string, ActiveEntry> _entries = new Dictionary<string, ActiveEntry>(StringComparer.Ordinal);
         private static bool _initialized;
@@ -210,33 +221,144 @@ namespace FlaxEditor.Content.Import
         private static byte[] HashPostprocessors(IEnumerable<Type> types, Dictionary<Assembly, byte[]> assemblyHashes)
         {
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var entries = types.Select(type => (Type: type, Instance: (AssetPostprocessor)Activator.CreateInstance(type)))
-                .OrderBy(x => x.Instance.Order)
-                .ThenBy(x => x.Type.FullName, StringComparer.Ordinal)
-                .ToArray();
+            var entries = ResolvePostprocessors(types);
             foreach (var entry in entries)
             {
                 var type = entry.Type;
                 hash.AppendData(GetAssemblyHash(type.Assembly, assemblyHashes));
-                hash.AppendData(Encoding.UTF8.GetBytes(type.AssemblyQualifiedName));
-                hash.AppendData(BitConverter.GetBytes(entry.Instance.Version));
-                hash.AppendData(BitConverter.GetBytes(entry.Instance.Order));
+                AppendHashString(hash, type.AssemblyQualifiedName);
+                AppendHashString(hash, entry.ID);
+                hash.AppendData(BitConverter.GetBytes(entry.Version));
+                hash.AppendData(BitConverter.GetBytes(entry.Order));
+                var runBefore = entry.RunBefore.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+                hash.AppendData(BitConverter.GetBytes(runBefore.Length));
+                for (var i = 0; i < runBefore.Length; i++)
+                    AppendHashString(hash, runBefore[i]);
+                var runAfter = entry.RunAfter.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+                hash.AppendData(BitConverter.GetBytes(runAfter.Length));
+                for (var i = 0; i < runAfter.Length; i++)
+                    AppendHashString(hash, runAfter[i]);
             }
             return hash.GetHashAndReset();
         }
 
+        private static void AppendHashString(IncrementalHash hash, string value)
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            hash.AppendData(BitConverter.GetBytes(bytes.Length));
+            hash.AppendData(bytes);
+        }
+
+        private static PostprocessorEntry[] ResolvePostprocessors(IEnumerable<Type> types)
+        {
+            var entries = types
+                .Select(type => new PostprocessorEntry
+                {
+                    Type = type,
+                    Instance = (AssetPostprocessor)Activator.CreateInstance(type),
+                })
+                .ToArray();
+            for (var i = 0; i < entries.Length; i++)
+            {
+                var entry = entries[i];
+                entry.ID = entry.Instance.Id;
+                entry.Version = entry.Instance.Version;
+                entry.Order = entry.Instance.Order;
+                var runBefore = entry.Instance.RunBefore;
+                var runAfter = entry.Instance.RunAfter;
+                if (string.IsNullOrWhiteSpace(entry.ID))
+                    throw new InvalidOperationException($"Asset postprocessor '{entry.Type.FullName}' has an empty stable ID.");
+                if (entry.Version < 1)
+                    throw new InvalidOperationException($"Asset postprocessor '{entry.ID}' has an invalid version.");
+                if (runBefore == null || runAfter == null)
+                    throw new InvalidOperationException($"Asset postprocessor '{entry.ID}' returned a null ordering constraint list.");
+                entry.RunBefore = runBefore.ToArray();
+                entry.RunAfter = runAfter.ToArray();
+            }
+            Array.Sort(entries, (a, b) =>
+            {
+                var id = string.CompareOrdinal(a.ID, b.ID);
+                return id != 0 ? id : string.CompareOrdinal(a.Type.AssemblyQualifiedName, b.Type.AssemblyQualifiedName);
+            });
+            var indices = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (var i = 0; i < entries.Length; i++)
+            {
+                if (!indices.TryAdd(entries[i].ID, i))
+                    throw new InvalidOperationException($"Asset postprocessor ID '{entries[i].ID}' is declared by multiple types.");
+            }
+
+            var edges = new List<int>[entries.Length];
+            var indegrees = new int[entries.Length];
+            for (var i = 0; i < edges.Length; i++)
+                edges[i] = new List<int>();
+            for (var i = 0; i < entries.Length; i++)
+            {
+                AddOrderingConstraints(entries, indices, i, entries[i].RunBefore, true, edges, indegrees);
+                AddOrderingConstraints(entries, indices, i, entries[i].RunAfter, false, edges, indegrees);
+            }
+
+            var emitted = new bool[entries.Length];
+            var ordered = new PostprocessorEntry[entries.Length];
+            for (var outputIndex = 0; outputIndex < ordered.Length; outputIndex++)
+            {
+                var next = -1;
+                for (var i = 0; i < entries.Length; i++)
+                {
+                    if (emitted[i] || indegrees[i] != 0)
+                        continue;
+                    if (next == -1 || entries[i].Order < entries[next].Order ||
+                        (entries[i].Order == entries[next].Order && string.CompareOrdinal(entries[i].ID, entries[next].ID) < 0))
+                        next = i;
+                }
+                if (next == -1)
+                {
+                    var unresolved = entries.Where((_, index) => !emitted[index])
+                        .Select(x => $"'{x.ID}'")
+                        .OrderBy(x => x, StringComparer.Ordinal);
+                    throw new InvalidOperationException($"Asset postprocessor ordering cycle involves {string.Join(", ", unresolved)}. Check RunBefore and RunAfter constraints.");
+                }
+                emitted[next] = true;
+                ordered[outputIndex] = entries[next];
+                for (var i = 0; i < edges[next].Count; i++)
+                    indegrees[edges[next][i]]--;
+            }
+            return ordered;
+        }
+
+        private static void AddOrderingConstraints(PostprocessorEntry[] entries, Dictionary<string, int> indices,
+            int ownerIndex, IReadOnlyList<string> constraints, bool runBefore, List<int>[] edges, int[] indegrees)
+        {
+            var owner = entries[ownerIndex];
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var constraintName = runBefore ? nameof(AssetPostprocessor.RunBefore) : nameof(AssetPostprocessor.RunAfter);
+            for (var i = 0; i < constraints.Count; i++)
+            {
+                var targetID = constraints[i];
+                if (!seen.Add(targetID))
+                    throw new InvalidOperationException($"Asset postprocessor '{owner.ID}' contains duplicate {constraintName} constraint '{targetID}'.");
+                if (string.Equals(owner.ID, targetID, StringComparison.Ordinal))
+                    throw new InvalidOperationException($"Asset postprocessor '{owner.ID}' cannot declare itself in {constraintName}.");
+                if (targetID == null || !indices.TryGetValue(targetID, out var targetIndex))
+                    throw new InvalidOperationException($"Asset postprocessor '{owner.ID}' {constraintName} references unknown postprocessor '{targetID}'.");
+                var predecessor = runBefore ? ownerIndex : targetIndex;
+                var successor = runBefore ? targetIndex : ownerIndex;
+                if (!edges[predecessor].Contains(successor))
+                {
+                    edges[predecessor].Add(successor);
+                    indegrees[successor]++;
+                }
+            }
+        }
+
         private static AssetPostprocessor[] CreatePostprocessors()
         {
-            return Utils.GetAssemblies()
+            var types = Utils.GetAssemblies()
                 .Where(x => !x.IsDynamic)
                 .OrderBy(x => x.FullName, StringComparer.Ordinal)
                 .SelectMany(GetTypesOrThrow)
                 .Where(x => x != null && !x.IsAbstract && typeof(AssetPostprocessor).IsAssignableFrom(x))
-                .Select(x => (Type: x, Instance: (AssetPostprocessor)Activator.CreateInstance(x)))
-                .OrderBy(x => x.Instance.Order)
-                .ThenBy(x => x.Type.FullName, StringComparer.Ordinal)
-                .Select(x => x.Instance)
                 .ToArray();
+            return ResolvePostprocessors(types).Select(x => x.Instance).ToArray();
         }
 
         /// <summary>Runs the all-assets callback in the parent editor for one committed publication batch.</summary>

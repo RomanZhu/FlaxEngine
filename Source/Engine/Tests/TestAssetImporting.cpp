@@ -367,3 +367,130 @@ TEST_CASE("Postprocessor batches and custom dependencies are deterministic")
     REQUIRE(names.Count() == 1);
     CHECK(names[0] == TEXT("render-pipeline"));
 }
+
+TEST_CASE("Postprocessor ordering constraints are deterministic and fingerprinted")
+{
+    AssetPostprocessorRegistry postprocessors;
+    AssetPostprocessorRegistration forcedLastRegistration;
+    AssetPostprocessorRegistration betaRegistration;
+    AssetPostprocessorRegistration forcedFirstRegistration;
+    AssetPostprocessorRegistration alphaRegistration;
+    AssetPipelineDiagnostic diagnostic;
+    String order;
+
+    auto makeDescriptor = [&order](const StringView& id, int32 numericOrder, const StringView& marker)
+    {
+        AssetPostprocessorDescriptor descriptor;
+        descriptor.ID = id;
+        descriptor.Order = numericOrder;
+        const StringAnsi implementation(id);
+        descriptor.ImplementationHash = ContentHash::Compute(implementation.Get(), implementation.Length());
+        const String markerCopy(marker);
+        descriptor.ProcessBatch = [&order, markerCopy](const Array<AssetImportCompletion>&, bool&, AssetPipelineDiagnostic&)
+        {
+            order += markerCopy;
+            return false;
+        };
+        return descriptor;
+    };
+
+    AssetPostprocessorDescriptor forcedLast = makeDescriptor(TEXT("Tests.ForcedLast"), -100, TEXT("L"));
+    AssetPostprocessorDescriptor beta = makeDescriptor(TEXT("Tests.Beta"), 0, TEXT("b"));
+    AssetPostprocessorDescriptor forcedFirst = makeDescriptor(TEXT("Tests.ForcedFirst"), 100, TEXT("F"));
+    forcedFirst.RunBefore.Add(TEXT("Tests.ForcedLast"));
+    AssetPostprocessorDescriptor alpha = makeDescriptor(TEXT("Tests.Alpha"), 0, TEXT("a"));
+    REQUIRE_FALSE(postprocessors.Register(forcedLast, forcedLastRegistration, diagnostic));
+    REQUIRE_FALSE(postprocessors.Register(beta, betaRegistration, diagnostic));
+    REQUIRE_FALSE(postprocessors.Register(forcedFirst, forcedFirstRegistration, diagnostic));
+    REQUIRE_FALSE(postprocessors.Register(alpha, alphaRegistration, diagnostic));
+
+    Array<AssetImportCompletion> completed;
+    bool changed = false;
+    REQUIRE_FALSE(postprocessors.RunBatch(completed, changed, diagnostic));
+    CHECK(order == TEXT("abFL"));
+
+    AssetPostprocessorRegistry baselineRegistry;
+    AssetPostprocessorRegistry constrainedRegistry;
+    AssetPostprocessorRegistration baselineARegistration;
+    AssetPostprocessorRegistration baselineBRegistration;
+    AssetPostprocessorRegistration constrainedARegistration;
+    AssetPostprocessorRegistration constrainedBRegistration;
+    AssetPostprocessorDescriptor baselineA = makeDescriptor(TEXT("Tests.HashA"), 0, TEXT(""));
+    AssetPostprocessorDescriptor baselineB = makeDescriptor(TEXT("Tests.HashB"), 0, TEXT(""));
+    AssetPostprocessorDescriptor constrainedA = baselineA;
+    constrainedA.RunBefore.Add(TEXT("Tests.HashB"));
+    REQUIRE_FALSE(baselineRegistry.Register(baselineA, baselineARegistration, diagnostic));
+    REQUIRE_FALSE(baselineRegistry.Register(baselineB, baselineBRegistration, diagnostic));
+    REQUIRE_FALSE(constrainedRegistry.Register(constrainedA, constrainedARegistration, diagnostic));
+    REQUIRE_FALSE(constrainedRegistry.Register(baselineB, constrainedBRegistration, diagnostic));
+    CHECK(baselineRegistry.GetVersionKey() != constrainedRegistry.GetVersionKey());
+}
+
+TEST_CASE("Postprocessor ordering diagnostics reject invalid graphs before callbacks")
+{
+    AssetPipelineDiagnostic diagnostic;
+    Array<AssetImportCompletion> completed;
+    bool changed = false;
+    int32 calls = 0;
+
+    auto makeDescriptor = [&calls](const StringView& id)
+    {
+        AssetPostprocessorDescriptor descriptor;
+        descriptor.ID = id;
+        const StringAnsi implementation(id);
+        descriptor.ImplementationHash = ContentHash::Compute(implementation.Get(), implementation.Length());
+        descriptor.ProcessBatch = [&calls](const Array<AssetImportCompletion>&, bool&, AssetPipelineDiagnostic&)
+        {
+            calls++;
+            return false;
+        };
+        return descriptor;
+    };
+
+    SECTION("unknown postprocessor")
+    {
+        AssetPostprocessorRegistry registry;
+        AssetPostprocessorRegistration registration;
+        AssetPostprocessorDescriptor descriptor = makeDescriptor(TEXT("Tests.UnknownOwner"));
+        descriptor.RunBefore.Add(TEXT("Tests.Missing"));
+        REQUIRE_FALSE(registry.Register(descriptor, registration, diagnostic));
+        CHECK(registry.RunBatch(completed, changed, diagnostic));
+        CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidSettingsCombination);
+        CHECK(diagnostic.Message.Contains(TEXT("Tests.UnknownOwner")));
+        CHECK(diagnostic.Message.Contains(TEXT("Tests.Missing")));
+        CHECK(calls == 0);
+    }
+
+    SECTION("self reference")
+    {
+        AssetPostprocessorRegistry registry;
+        AssetPostprocessorRegistration registration;
+        AssetPostprocessorDescriptor descriptor = makeDescriptor(TEXT("Tests.Self"));
+        descriptor.RunAfter.Add(TEXT("Tests.Self"));
+        REQUIRE_FALSE(registry.Register(descriptor, registration, diagnostic));
+        CHECK(registry.RunBatch(completed, changed, diagnostic));
+        CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidSettingsCombination);
+        CHECK(diagnostic.Message.Contains(TEXT("Tests.Self")));
+        CHECK(diagnostic.Message.Contains(TEXT("itself")));
+        CHECK(calls == 0);
+    }
+
+    SECTION("cycle")
+    {
+        AssetPostprocessorRegistry registry;
+        AssetPostprocessorRegistration aRegistration;
+        AssetPostprocessorRegistration bRegistration;
+        AssetPostprocessorDescriptor a = makeDescriptor(TEXT("Tests.CycleA"));
+        AssetPostprocessorDescriptor b = makeDescriptor(TEXT("Tests.CycleB"));
+        a.RunBefore.Add(TEXT("Tests.CycleB"));
+        b.RunBefore.Add(TEXT("Tests.CycleA"));
+        REQUIRE_FALSE(registry.Register(a, aRegistration, diagnostic));
+        REQUIRE_FALSE(registry.Register(b, bRegistration, diagnostic));
+        CHECK(registry.RunBatch(completed, changed, diagnostic));
+        CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidSettingsCombination);
+        CHECK(diagnostic.Message.Contains(TEXT("cycle")));
+        CHECK(diagnostic.Message.Contains(TEXT("Tests.CycleA")));
+        CHECK(diagnostic.Message.Contains(TEXT("Tests.CycleB")));
+        CHECK(calls == 0);
+    }
+}

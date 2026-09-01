@@ -26,6 +26,10 @@ struct FLAXENGINE_API AssetPostprocessorDescriptor
     uint32 Version = 1;
     ContentHash ImplementationHash;
     int32 Order = 0;
+    /// <summary>Postprocessor IDs that must execute after this postprocessor.</summary>
+    Array<String> RunBefore;
+    /// <summary>Postprocessor IDs that must execute before this postprocessor.</summary>
+    Array<String> RunAfter;
     AssetPreprocessCallback Preprocess;
     AssetPostprocessBatchCallback ProcessBatch;
 };

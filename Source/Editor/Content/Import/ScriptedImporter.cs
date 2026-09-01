@@ -136,8 +136,14 @@ namespace FlaxEditor.Content.Import
     /// <summary>Deterministically ordered managed import callback set.</summary>
     public abstract class AssetPostprocessor
     {
+        /// <summary>Identity used by explicit ordering constraints.</summary>
+        public virtual string Id => GetType().FullName;
         public virtual int Version => 1;
         public virtual int Order => 0;
+        /// <summary>Postprocessor IDs that must execute after this postprocessor.</summary>
+        public virtual IReadOnlyList<string> RunBefore => Array.Empty<string>();
+        /// <summary>Postprocessor IDs that must execute before this postprocessor.</summary>
+        public virtual IReadOnlyList<string> RunAfter => Array.Empty<string>();
         public virtual void OnPreprocessAsset(AssetImportContext context) { }
         public virtual void OnPostprocessAsset(AssetImportContext context) { }
         public virtual void OnPostprocessAllAssets(IReadOnlyList<AssetGuid> importedAssets) { }
