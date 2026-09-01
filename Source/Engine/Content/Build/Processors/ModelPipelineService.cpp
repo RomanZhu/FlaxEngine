@@ -89,9 +89,10 @@ namespace
                 return true;
         }
         if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
-            [](const Guid& id, bool force, const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& localDiagnostic)
+            [](const Guid& id, bool force, AssetBuildJobPriority priority, const Guid& refreshId, uint32 pass,
+                AssetPipelineDiagnostic& localDiagnostic)
             {
-                return ModelPipelineService::RequestBuild(id, force, localDiagnostic, refreshId, pass);
+                return ModelPipelineService::RequestBuild(id, force, localDiagnostic, refreshId, pass, priority);
             },
             [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
             {
@@ -363,7 +364,7 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
 }
 
 bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
-                                        const Guid& refreshId, uint32 pass)
+                                        const Guid& refreshId, uint32 pass, AssetBuildJobPriority priority)
 {
     if (EnsureModelPipelineInitialized(diagnostic))
         return true;
@@ -423,6 +424,7 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
         ArtifactResolutionPlan plan;
         if (CreatePlan(current, request, plan, diagnostic))
             return true;
+        plan.BuildRequest.Priority = priority;
         if (force)
         {
             ArtifactKeyBuilder builder(StringAnsiView("flax-model-forced-build-v1"));

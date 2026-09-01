@@ -70,7 +70,7 @@ bool AssetImportService::AttachBuildService(AssetBuildService& builds, AssetPipe
 }
 
 bool AssetImportService::RegisterBuiltIn(const AssetProcessorDescriptor& implementation, AssetPipelineDiagnostic& diagnostic,
-    AssetImporterBuildRequest requestBuild, AssetImporterBuildStatus getBuildStatus, int32 priority)
+    AssetImporterPriorityBuildRequest requestBuild, AssetImporterBuildStatus getBuildStatus, int32 priority)
 {
     AssetImportServiceState& state = State();
     std::lock_guard<std::mutex> lock(state.Locker);
@@ -86,9 +86,14 @@ bool AssetImportService::RegisterBuiltIn(const AssetProcessorDescriptor& impleme
         }
     }
     AssetImporterDescriptor descriptor = AssetImporterDescriptor::FromBuildImplementation(implementation, priority);
-    descriptor.RequestBuild = MoveTemp(requestBuild);
+    descriptor.RequestBuild = [requestBuild](const Guid& assetID, bool force, const Guid& refreshId, uint32 pass,
+        AssetPipelineDiagnostic& localDiagnostic) mutable
+    {
+        return requestBuild(assetID, force, AssetBuildJobPriority::Normal, refreshId, pass, localDiagnostic);
+    };
+    descriptor.RequestBuildWithPriority = MoveTemp(requestBuild);
     descriptor.GetBuildStatus = MoveTemp(getBuildStatus);
-    if (!descriptor.RequestBuild.IsBinded() || !descriptor.GetBuildStatus.IsBinded())
+    if (!descriptor.RequestBuild.IsBinded() || !descriptor.RequestBuildWithPriority.IsBinded() || !descriptor.GetBuildStatus.IsBinded())
     {
         diagnostic = AssetPipelineDiagnostic();
         diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;

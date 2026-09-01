@@ -15,7 +15,8 @@ public:
     static bool EnsureInitialized(AssetPipelineDiagnostic& diagnostic);
 
     static bool RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
-                             const Guid& refreshId = Guid::Empty, uint32 pass = 0);
+                             const Guid& refreshId = Guid::Empty, uint32 pass = 0,
+                             AssetBuildJobPriority priority = AssetBuildJobPriority::Normal);
     static AssetBuildJobStatus GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic);
     static bool CreatePlan(const AssetRecord& record, const ArtifactRequest& request, ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& diagnostic);
 

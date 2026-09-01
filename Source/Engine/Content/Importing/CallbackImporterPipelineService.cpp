@@ -223,7 +223,8 @@ bool CallbackImporterPipelineService::OwnsProcessor(const StringView& processorI
 
 bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
                                                     AssetBuildRequestHandle* resultHandle,
-                                                    const Guid& refreshId, uint32 pass)
+                                                    const Guid& refreshId, uint32 pass,
+                                                    AssetBuildJobPriority priority)
 {
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(assetID, record) || !record.IsMainAsset())
@@ -461,7 +462,7 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ProcessorMissing, AssetPipelineDiagnosticStage::Configuration,
             assetID, record.ProcessorID, workerExecutable, TEXT("The isolated importer worker executable does not exist."));
     const AssetBuildRequestHandle handle = scheduler->ScheduleIsolated(execution->Plan, workerExecutable,
-        execution->Request, MoveTemp(publish), diagnostic);
+        execution->Request, MoveTemp(publish), diagnostic, priority);
     if (!handle.IsValid())
         return diagnostic.Code != AssetPipelineDiagnosticCode::None ||
             Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,

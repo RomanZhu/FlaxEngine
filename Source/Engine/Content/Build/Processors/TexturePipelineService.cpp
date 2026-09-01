@@ -95,9 +95,10 @@ namespace
         if (AssetImportService::EnsureInitialized(diagnostic))
             return true;
         if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
-            [](const Guid& id, bool force, const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& localDiagnostic)
+            [](const Guid& id, bool force, AssetBuildJobPriority priority, const Guid& refreshId, uint32 pass,
+                AssetPipelineDiagnostic& localDiagnostic)
             {
-                return TexturePipelineService::RequestBuild(id, force, localDiagnostic, refreshId, pass);
+                return TexturePipelineService::RequestBuild(id, force, localDiagnostic, refreshId, pass, priority);
             },
             [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
             {
@@ -452,7 +453,7 @@ int32 TexturePipelineService::CalculateWorkerCount(uint32 processorCoreCount)
 }
 
 bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
-                                          const Guid& refreshId, uint32 pass)
+                                          const Guid& refreshId, uint32 pass, AssetBuildJobPriority priority)
 {
     AssetBuildService* builds = GetBuildService(diagnostic);
     if (!builds)
@@ -473,6 +474,7 @@ bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, Asset
     ArtifactResolutionPlan plan;
     if (CreatePlan(record, request, plan, diagnostic))
         return true;
+    plan.BuildRequest.Priority = priority;
     if (force)
     {
         TexturePipelineState& state = State();

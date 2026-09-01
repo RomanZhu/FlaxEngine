@@ -188,9 +188,10 @@ bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic
             return true;
     }
     if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
-        [](const Guid& id, bool force, const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& localDiagnostic)
+        [](const Guid& id, bool force, AssetBuildJobPriority priority, const Guid& refreshId, uint32 pass,
+            AssetPipelineDiagnostic& localDiagnostic)
         {
-            return GraphPipelineService::RequestBuild(id, force, localDiagnostic, nullptr, refreshId, pass);
+            return GraphPipelineService::RequestBuild(id, force, localDiagnostic, nullptr, refreshId, pass, priority);
         },
         [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
         {
@@ -244,9 +245,10 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
         if (AssetProcessorRegistry::Get().Register(descriptor, registration, diagnostic))
             return true;
         if (AssetImportService::RegisterBuiltIn(descriptor, diagnostic,
-            [](const Guid& assetID, bool force, const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& localDiagnostic)
+            [](const Guid& assetID, bool force, AssetBuildJobPriority priority, const Guid& refreshId, uint32 pass,
+                AssetPipelineDiagnostic& localDiagnostic)
             {
-                return GraphPipelineService::RequestBuild(assetID, force, localDiagnostic, nullptr, refreshId, pass);
+                return GraphPipelineService::RequestBuild(assetID, force, localDiagnostic, nullptr, refreshId, pass, priority);
             },
             [](const Guid& assetID, AssetPipelineDiagnostic& localDiagnostic)
             {
@@ -457,7 +459,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
 }
 
 bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
-                                        AssetBuildRequestHandle* resultHandle, const Guid& refreshId, uint32 pass)
+                                        AssetBuildRequestHandle* resultHandle, const Guid& refreshId, uint32 pass,
+                                        AssetBuildJobPriority priority)
 {
     if (EnsureInitialized(diagnostic))
         return true;
@@ -483,6 +486,7 @@ bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     ArtifactResolutionPlan plan;
     if (CreatePlan(record, request, plan, diagnostic))
         return true;
+    plan.BuildRequest.Priority = priority;
     if (force)
     {
         uint64 generation;

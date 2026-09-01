@@ -15,7 +15,7 @@ public:
     static bool AttachBuildService(AssetBuildService& builds, AssetPipelineDiagnostic& diagnostic);
     /// <summary>Registers a built-in importer and its private build-stage implementation explicitly.</summary>
     static bool RegisterBuiltIn(const AssetProcessorDescriptor& implementation, AssetPipelineDiagnostic& diagnostic,
-        AssetImporterBuildRequest requestBuild, AssetImporterBuildStatus getBuildStatus, int32 priority = 0);
+        AssetImporterPriorityBuildRequest requestBuild, AssetImporterBuildStatus getBuildStatus, int32 priority = 0);
     static bool IsInitialized();
 
     static AssetImporterRegistry* GetImporterRegistry();

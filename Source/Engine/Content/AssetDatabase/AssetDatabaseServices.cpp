@@ -1269,19 +1269,27 @@ namespace
     }
 
     GenericBuildRequestResult RequestGenericBuild(const AssetRecord& record, bool force, bool synchronous,
-        const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& diagnostic)
+        const Guid& refreshId, uint32 pass, AssetBuildJobPriority priority, AssetPipelineDiagnostic& diagnostic)
     {
         AssetImporterRegistry* registry = AssetImportService::GetImporterRegistry();
         AssetImporterLease importer;
         if (!registry || registry->TryAcquire(record.ProcessorID, importer, diagnostic))
             return GenericBuildRequestResult::Unsupported;
         const AssetImporterDescriptor& descriptor = importer.Get();
-        if (!descriptor.RequestBuild.IsBinded() || !descriptor.GetBuildStatus.IsBinded())
+        if ((!descriptor.RequestBuild.IsBinded() && !descriptor.RequestBuildWithPriority.IsBinded()) ||
+            !descriptor.GetBuildStatus.IsBinded())
         {
             diagnostic = AssetPipelineDiagnostic();
             return GenericBuildRequestResult::Unsupported;
         }
-        if (descriptor.RequestBuild(record.ID, force, refreshId, pass, diagnostic) ||
+        bool failed;
+        if (descriptor.RequestBuildWithPriority.IsBinded())
+            failed = descriptor.RequestBuildWithPriority(record.ID, force, priority, refreshId, pass, diagnostic);
+        else if (priority != AssetBuildJobPriority::Normal && CallbackImporterPipelineService::OwnsProcessor(record.ProcessorID))
+            failed = CallbackImporterPipelineService::RequestBuild(record.ID, force, diagnostic, nullptr, refreshId, pass, priority);
+        else
+            failed = descriptor.RequestBuild(record.ID, force, refreshId, pass, diagnostic);
+        if (failed ||
             (synchronous && WaitForGenericBuild(record.ID, descriptor.GetBuildStatus, diagnostic)))
             return GenericBuildRequestResult::Failed;
         return GenericBuildRequestResult::Queued;
@@ -1293,12 +1301,14 @@ namespace
         AssetImporterLease importer;
         AssetPipelineDiagnostic diagnostic;
         return registry && !registry->TryAcquire(record.ProcessorID, importer, diagnostic) &&
-            importer.Get().RequestBuild.IsBinded() && importer.Get().GetBuildStatus.IsBinded();
+            (importer.Get().RequestBuild.IsBinded() || importer.Get().RequestBuildWithPriority.IsBinded()) &&
+            importer.Get().GetBuildStatus.IsBinded();
     }
 
     bool RunGenericBuildRefresh(const Array<AssetRecord>& selected, bool force, bool synchronous,
         AssetRefreshReason reason, AssetPipelineDiagnostic& diagnostic,
-        GenericRefreshScanMode scanMode = GenericRefreshScanMode::None, bool strictMetadata = false)
+        GenericRefreshScanMode scanMode = GenericRefreshScanMode::None, bool strictMetadata = false,
+        AssetBuildJobPriority priority = AssetBuildJobPriority::Normal)
     {
         if (selected.IsEmpty() && scanMode == GenericRefreshScanMode::None)
         {
@@ -1328,7 +1338,8 @@ namespace
             bool importerAvailable = false;
             for (const AssetImporterDescriptor& descriptor : importerDescriptors)
             {
-                if (descriptor.ID == record.ProcessorID && descriptor.RequestBuild.IsBinded() &&
+                if (descriptor.ID == record.ProcessorID &&
+                    (descriptor.RequestBuild.IsBinded() || descriptor.RequestBuildWithPriority.IsBinded()) &&
                     descriptor.GetBuildStatus.IsBinded())
                 {
                     importerAvailable = true;
@@ -1391,7 +1402,8 @@ namespace
                             continue;
                         for (const AssetImporterDescriptor& descriptor : importerDescriptors)
                         {
-                            if (descriptor.ID == record.ProcessorID && descriptor.RequestBuild.IsBinded() &&
+                            if (descriptor.ID == record.ProcessorID &&
+                                (descriptor.RequestBuild.IsBinded() || descriptor.RequestBuildWithPriority.IsBinded()) &&
                                 descriptor.GetBuildStatus.IsBinded())
                             {
                                 selectedIds.Add(record.ID);
@@ -1428,7 +1440,7 @@ namespace
             localDiagnostic = AssetPipelineDiagnostic();
             return false;
         };
-        callbacks.Execute = [force, synchronous](const AssetRefreshIterationContext&, const Array<AssetImportPlan>& plans,
+        callbacks.Execute = [force, synchronous, priority](const AssetRefreshIterationContext&, const Array<AssetImportPlan>& plans,
             Array<AssetImportCompletion>& completed, bool&, AssetPipelineDiagnostic& localDiagnostic)
         {
             for (const AssetImportPlan& plan : plans)
@@ -1437,7 +1449,7 @@ namespace
                 if (!AssetDatabase::Get().TryGetRecord(plan.Request.Asset.Value, record))
                     continue;
                 const GenericBuildRequestResult request = RequestGenericBuild(record, force, synchronous,
-                    plan.Request.RefreshId, plan.Request.Pass, localDiagnostic);
+                    plan.Request.RefreshId, plan.Request.Pass, priority, localDiagnostic);
                 if (request == GenericBuildRequestResult::Failed)
                     return true;
                 if (synchronous && request == GenericBuildRequestResult::Queued)
@@ -2816,6 +2828,27 @@ bool AssetPipelineService::BuildAsset(const Guid& assetID, bool force, bool sync
     selected.Add(record);
     AssetPipelineDiagnostic diagnostic;
     const bool failed = RunGenericBuildRefresh(selected, force, synchronous, AssetRefreshReason::Explicit, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetPipelineService::BuildAssetForeground(const Guid& assetID)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
+    if (Initialize())
+        return true;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(assetID, record) || !record.IsMainAsset())
+        return false;
+    AssetPipelineDiagnostic diagnostic;
+    const GenericBuildRequestResult request = RequestGenericBuild(record, false, false, Guid::Empty, 0,
+        AssetBuildJobPriority::Foreground, diagnostic);
+    const bool failed = request == GenericBuildRequestResult::Failed;
     if (failed)
         SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
     return failed;

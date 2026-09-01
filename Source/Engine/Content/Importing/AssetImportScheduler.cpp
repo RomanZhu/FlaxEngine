@@ -3,7 +3,8 @@
 #include "AssetImportScheduler.h"
 #include <memory>
 
-AssetBuildRequestHandle AssetImportScheduler::Schedule(const AssetImportPlan& plan, AssetImportJobAction action)
+AssetBuildRequestHandle AssetImportScheduler::Schedule(const AssetImportPlan& plan, AssetImportJobAction action,
+                                                       AssetBuildJobPriority priority)
 {
     // A process-safe registration is an isolation requirement, not an optimization hint.
     if (plan.Importer.ProcessSafe)
@@ -21,6 +22,7 @@ AssetBuildRequestHandle AssetImportScheduler::Schedule(const AssetImportPlan& pl
     request.MemoryBytes = plan.Importer.Processor.MemoryEstimate;
     request.ExternalToolSlots = plan.Importer.Processor.UsesExternalProcess ? 1 : 0;
     request.ProcessorConcurrencyLimit = plan.Importer.SupportsParallelImport ? MAX_int32 : 1;
+    request.Priority = priority;
     request.AllowTerminalDeduplication = !plan.Request.Force;
     for (const AssetProcessorOutputDescriptor& output : plan.Importer.Processor.Outputs)
         request.OutputKinds.Add(output.Kind);
@@ -44,7 +46,8 @@ AssetBuildRequestHandle AssetImportScheduler::Schedule(const AssetImportPlan& pl
 
 AssetBuildRequestHandle AssetImportScheduler::ScheduleIsolated(const AssetImportPlan& plan, const StringView& workerExecutable,
                                                                AssetImportJobRequest workerRequest, AssetImportWorkerPublishAction publish,
-                                                               AssetPipelineDiagnostic& diagnostic)
+                                                               AssetPipelineDiagnostic& diagnostic,
+                                                               AssetBuildJobPriority priority)
 {
     if (!plan.Importer.ProcessSafe || !publish.IsBinded())
     {
@@ -106,6 +109,7 @@ AssetBuildRequestHandle AssetImportScheduler::ScheduleIsolated(const AssetImport
     request.RebuildReason = plan.Request.Reason;
     request.MemoryBytes = plan.Importer.MaximumMemoryBytes;
     request.ProcessorConcurrencyLimit = plan.Importer.SupportsParallelImport ? MAX_int32 : 1;
+    request.Priority = priority;
     request.AllowTerminalDeduplication = !plan.Request.Force;
     for (const AssetProcessorOutputDescriptor& output : plan.Importer.Processor.Outputs)
         request.OutputKinds.Add(output.Kind);

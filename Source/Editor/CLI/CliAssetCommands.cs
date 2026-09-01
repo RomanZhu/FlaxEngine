@@ -182,20 +182,29 @@ namespace FlaxEditor
     /// </summary>
     public static class CliAssetCommands
     {
-        internal static CliAssetVerificationStep GetVerificationStep(bool requiresArtifactBuild, bool buildRequested, string buildStatus)
+        internal static CliAssetVerificationStep GetVerificationStep(bool requiresArtifactBuild, bool buildRequested, bool artifactCurrent, string buildStatus)
         {
-            if (!requiresArtifactBuild || string.Equals(buildStatus, "ReadyExact", StringComparison.Ordinal))
+            if (!requiresArtifactBuild || artifactCurrent)
                 return CliAssetVerificationStep.Load;
             if (string.Equals(buildStatus, "Failed", StringComparison.Ordinal) ||
                 string.Equals(buildStatus, "Cancelled", StringComparison.Ordinal))
                 return CliAssetVerificationStep.Fail;
-            if (string.Equals(buildStatus, "NotBuilt", StringComparison.Ordinal))
-                return buildRequested ? CliAssetVerificationStep.WaitForBuild : CliAssetVerificationStep.RequestBuild;
-            if (string.Equals(buildStatus, "Queued", StringComparison.Ordinal) ||
+            if (!buildRequested)
+                return CliAssetVerificationStep.RequestBuild;
+            if (string.Equals(buildStatus, "NotBuilt", StringComparison.Ordinal) ||
+                string.Equals(buildStatus, "Queued", StringComparison.Ordinal) ||
                 string.Equals(buildStatus, "Building", StringComparison.Ordinal) ||
-                string.Equals(buildStatus, "Publishing", StringComparison.Ordinal))
+                string.Equals(buildStatus, "Publishing", StringComparison.Ordinal) ||
+                string.Equals(buildStatus, "ReadyExact", StringComparison.Ordinal))
                 return CliAssetVerificationStep.WaitForBuild;
             return CliAssetVerificationStep.Fail;
+        }
+
+        internal static bool ShouldForceVerificationReload(bool requiresArtifactBuild)
+        {
+            // Canonical publication already hot-swaps loaded assets. Reloading the same generated
+            // storage again can race that swap and does not add persistence coverage.
+            return !requiresArtifactBuild;
         }
 
         /// <summary>
@@ -839,11 +848,12 @@ namespace FlaxEditor
                         if (item.IsCanonicalSource && !hasRecord)
                             return;
                         var requiresBuild = item.IsCanonicalSource && record.SourceKind != AssetSourceKind.Folder;
+                        var artifactCurrent = !requiresBuild || AssetPipelineService.IsArtifactCurrent(item.ID);
                         var buildStatus = requiresBuild ? AssetPipelineService.GetBuildStatus(item.ID) : "ReadyExact";
-                        switch (GetVerificationStep(requiresBuild, _pendingVerificationBuildRequested, buildStatus))
+                        switch (GetVerificationStep(requiresBuild, _pendingVerificationBuildRequested, artifactCurrent, buildStatus))
                         {
                         case CliAssetVerificationStep.RequestBuild:
-                            if (AssetPipelineService.BuildAsset(item.ID))
+                            if (AssetPipelineService.BuildAssetForeground(item.ID))
                                 throw new InvalidOperationException($"Asset '{item.Path}' failed to request an asynchronous artifact build.");
                             _pendingVerificationBuildRequested = true;
                             return;
@@ -853,7 +863,8 @@ namespace FlaxEditor
                             throw new InvalidOperationException($"Asset '{item.Path}' artifact build ended with status '{buildStatus}'.");
                         }
 
-                        item.Reload();
+                        if (ShouldForceVerificationReload(requiresBuild))
+                            item.Reload();
                         asset = item.LoadAsync();
                         if (asset == null)
                             throw new InvalidOperationException($"Asset '{item.Path}' failed to reload from disk.");

@@ -12,7 +12,8 @@ class FLAXENGINE_API TexturePipelineService
 public:
     /// <summary>Queues an exact host-editor texture build. Returns true on failure.</summary>
     static bool RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
-                             const Guid& refreshId = Guid::Empty, uint32 pass = 0);
+                             const Guid& refreshId = Guid::Empty, uint32 pass = 0,
+                             AssetBuildJobPriority priority = AssetBuildJobPriority::Normal);
 
     /// <summary>Returns the latest queued build state for an asset.</summary>
     static AssetBuildJobStatus GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic);

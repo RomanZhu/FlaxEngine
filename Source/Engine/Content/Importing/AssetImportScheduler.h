@@ -21,9 +21,11 @@ public:
     {
     }
 
-    AssetBuildRequestHandle Schedule(const AssetImportPlan& plan, AssetImportJobAction action);
+    AssetBuildRequestHandle Schedule(const AssetImportPlan& plan, AssetImportJobAction action,
+                                     AssetBuildJobPriority priority = AssetBuildJobPriority::Normal);
     AssetBuildRequestHandle ScheduleIsolated(const AssetImportPlan& plan, const StringView& workerExecutable,
                                              AssetImportJobRequest request, AssetImportWorkerPublishAction publish,
-                                             AssetPipelineDiagnostic& diagnostic);
+                                             AssetPipelineDiagnostic& diagnostic,
+                                             AssetBuildJobPriority priority = AssetBuildJobPriority::Normal);
     void Cancel(const AssetBuildRequestHandle& handle);
 };
