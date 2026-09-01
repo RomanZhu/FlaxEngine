@@ -48,6 +48,7 @@ struct FLAXENGINE_API AssetImportOutputDeclaration
     StringAnsi Extension;
     ArtifactTargetDimension TargetDimensions = ArtifactTargetDimension::All;
     Array<byte> Data;
+    bool Completed = false;
 };
 
 struct FLAXENGINE_API AssetImportContextResult
@@ -97,6 +98,7 @@ public:
     int32 CreateOutput(const StringView& name, const StringAnsiView& kind, const StringAnsiView& extension,
                        ArtifactTargetDimension targetDimensions = ArtifactTargetDimension::All);
     bool WriteOutput(int32 outputIndex, const Span<byte>& data, AssetPipelineDiagnostic& diagnostic);
+    bool CompleteOutput(int32 outputIndex, AssetPipelineDiagnostic& diagnostic);
     bool SetMainObject(int32 objectIndex, AssetPipelineDiagnostic& diagnostic);
     void AddDiagnostic(const AssetPipelineDiagnostic& diagnostic);
     bool Complete(bool requireMainObject, AssetImportContextResult& result, AssetPipelineDiagnostic& diagnostic);

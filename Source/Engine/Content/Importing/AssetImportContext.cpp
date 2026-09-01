@@ -179,9 +179,21 @@ bool AssetImportContext::WriteOutput(int32 outputIndex, const Span<byte>& data, 
     if (_completed || outputIndex < 0 || outputIndex >= _result.Outputs.Count())
         return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer wrote to an undeclared output."));
     AssetImportOutputDeclaration& output = _result.Outputs[outputIndex];
-    if (output.Data.HasItems())
-        return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer output was completed more than once."));
+    if (output.Completed)
+        return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer wrote to a completed output."));
     output.Data.Add(data.Get(), data.Length());
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool AssetImportContext::CompleteOutput(int32 outputIndex, AssetPipelineDiagnostic& diagnostic)
+{
+    if (_completed || outputIndex < 0 || outputIndex >= _result.Outputs.Count())
+        return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer completed an undeclared output."));
+    AssetImportOutputDeclaration& output = _result.Outputs[outputIndex];
+    if (output.Completed)
+        return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer output was completed more than once."));
+    output.Completed = true;
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
@@ -208,6 +220,11 @@ bool AssetImportContext::Complete(bool requireMainObject, AssetImportContextResu
         return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer context was completed more than once."));
     if (requireMainObject && _result.MainObject < 0)
         return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer did not declare its main object."));
+    for (const AssetImportOutputDeclaration& output : _result.Outputs)
+    {
+        if (!output.Completed)
+            return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer did not complete a declared output."));
+    }
     std::sort(_result.Dependencies.Get(), _result.Dependencies.Get() + _result.Dependencies.Count(), DependencyLess);
     for (int32 i = _result.Dependencies.Count() - 1; i > 0; i--)
     {

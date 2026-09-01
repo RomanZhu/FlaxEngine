@@ -78,6 +78,11 @@ TEST_CASE("AssetImportContext records controlled reads dependencies and declared
     context.DependsOnArtifact(exactArtifact);
     const int32 output = context.CreateOutput(TEXT("runtime"), "runtime", ".bin", ArtifactTargetDimension::Platform);
     REQUIRE(output >= 0);
+    const byte firstOutputChunk[] = { 1, 2 };
+    const byte secondOutputChunk[] = { 3 };
+    REQUIRE_FALSE(context.WriteOutput(output, Span<byte>(firstOutputChunk, ARRAY_COUNT(firstOutputChunk)), diagnostic));
+    REQUIRE_FALSE(context.WriteOutput(output, Span<byte>(secondOutputChunk, ARRAY_COUNT(secondOutputChunk)), diagnostic));
+    REQUIRE_FALSE(context.CompleteOutput(output, diagnostic));
     AssetImportContextResult result;
     REQUIRE_FALSE(context.Complete(true, result, diagnostic));
     CHECK(result.MainObject == object);
@@ -85,6 +90,7 @@ TEST_CASE("AssetImportContext records controlled reads dependencies and declared
     CHECK(result.Dependencies.Count() == 3);
     REQUIRE(result.Outputs.Count() == 1);
     CHECK(result.Outputs[0].TargetDimensions == ArtifactTargetDimension::Platform);
+    CHECK(result.Outputs[0].Data.Count() == 3);
 }
 
 TEST_CASE("Process-safe native callback importers require an external worker")

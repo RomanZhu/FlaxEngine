@@ -633,8 +633,25 @@ DEFINE_INTERNAL_CALL(bool) ScriptedImporterContextInternal_WriteOutput(int32 out
     if (CurrentContext->WriteOutput(outputIndex, Span<byte>(data.Get(), data.Count()), diagnostic))
     {
         CurrentContext->AddDiagnostic(diagnostic);
+        SetError(diagnostic.Message);
         return true;
     }
+    SetError(StringView::Empty);
+    return false;
+}
+
+DEFINE_INTERNAL_CALL(bool) ScriptedImporterContextInternal_CompleteOutput(int32 outputIndex)
+{
+    AssetPipelineDiagnostic diagnostic;
+    if (!RequireContext(&diagnostic))
+        return true;
+    if (CurrentContext->CompleteOutput(outputIndex, diagnostic))
+    {
+        CurrentContext->AddDiagnostic(diagnostic);
+        SetError(diagnostic.Message);
+        return true;
+    }
+    SetError(StringView::Empty);
     return false;
 }
 

@@ -231,19 +231,58 @@ namespace FlaxEditor.Content.Import
     }
 
     /// <summary>Write-only staging capability for one declared artifact output.</summary>
-    public sealed class ArtifactOutputWriter : MemoryStream
+    public sealed class ArtifactOutputWriter : Stream
     {
         private readonly int _outputIndex;
         private bool _committed;
+        private long _length;
 
         internal ArtifactOutputWriter(int outputIndex) => _outputIndex = outputIndex;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => !_committed;
+        public override long Length => _length;
+        public override long Position
+        {
+            get => _length;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            if (_committed)
+                throw new ObjectDisposedException(nameof(ArtifactOutputWriter));
+            ArgumentNullException.ThrowIfNull(buffer);
+            if ((uint)offset > buffer.Length || (uint)count > buffer.Length - offset)
+                throw new ArgumentOutOfRangeException();
+            if (count == 0)
+                return;
+            var chunk = buffer;
+            if (offset != 0 || count != buffer.Length)
+            {
+                chunk = new byte[count];
+                Buffer.BlockCopy(buffer, offset, chunk, 0, count);
+            }
+            if (ScriptedImporterInterop.WriteOutput(_outputIndex, chunk))
+                throw new IOException(ScriptedImporterInterop.GetLastError());
+            _length += count;
+        }
 
         internal void Commit()
         {
             if (_committed)
                 return;
             _committed = true;
-            if (ScriptedImporterInterop.WriteOutput(_outputIndex, ToArray()))
+            if (ScriptedImporterInterop.CompleteOutput(_outputIndex))
                 throw new InvalidOperationException(ScriptedImporterInterop.GetLastError());
         }
 
@@ -435,6 +474,10 @@ namespace FlaxEditor.Content.Import
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_WriteOutput")]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static partial bool WriteOutput(int outputIndex, [In, MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>))] byte[] data);
+
+        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_CompleteOutput")]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static partial bool CompleteOutput(int outputIndex);
 
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_LogDiagnostic", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         internal static partial void LogDiagnostic(int severity, string message, string file, int line, int column);
