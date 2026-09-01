@@ -486,7 +486,8 @@ namespace
         }
     }
 
-    bool GetCachedBuildData(const StringAnsi& key, const StringView& sourcePath, const ModelData& parsedSource, ModelTool::Options options,
+    bool GetCachedBuildData(const StringAnsi& key, const StringView& sourcePath, const ModelData& parsedSource,
+        ModelTool::Options options, const Dictionary<String, Guid>& assignedIDs,
         std::shared_ptr<const ModelBuildData>& data, AssetPipelineDiagnostic& diagnostic)
     {
         ModelProcessorCache& cache = Cache();
@@ -530,6 +531,16 @@ namespace
                 result->Failed = ModelSubAssetKeys::Enumerate(value->Data, value->SubAssets, candidates, result->Diagnostic);
                 if (!result->Failed)
                 {
+                    for (const ModelSubAssetInfo& info : value->SubAssets)
+                    {
+                        const Guid* assigned = assignedIDs.TryGet(info.StableKey);
+                        if (!assigned)
+                            continue;
+                        if (info.Kind == ModelSubAssetKind::Material && info.SourceIndex >= 0 && info.SourceIndex < value->Data.Materials.Count())
+                            value->Data.Materials[info.SourceIndex].AssetID = *assigned;
+                        else if (info.Kind == ModelSubAssetKind::Texture && info.SourceIndex >= 0 && info.SourceIndex < value->Data.Textures.Count())
+                            value->Data.Textures[info.SourceIndex].AssetID = *assigned;
+                    }
                     value->MemoryBytes = EstimateData(value->Data);
                     result->Value = MoveTemp(value);
                 }
@@ -723,6 +734,12 @@ void ModelProcessor::ClearCaches()
     cache.BuildOrder.Clear();
     cache.BuildBytes = 0;
 #endif
+}
+
+bool ModelProcessor::RequiresSourceTransform(ModelSubAssetKind kind, bool importMaterials, bool importTextures)
+{
+    return (kind != ModelSubAssetKind::Material || !importMaterials) &&
+        (kind != ModelSubAssetKind::Texture || !importTextures);
 }
 
 bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
@@ -963,7 +980,8 @@ bool ModelProcessor::BuildOutputKey(const PreparedAsset& prepared, const Artifac
         assignedKeys.EnsureCapacity(payload->AssignedIDs.Count());
         for (const auto& assigned : payload->AssignedIDs)
             assignedKeys.Add(assigned.Key);
-        std::sort(assignedKeys.Get(), assignedKeys.Get() + assignedKeys.Count());
+        if (assignedKeys.Count() > 1)
+            std::sort(assignedKeys.Get(), assignedKeys.Get() + assignedKeys.Count());
         for (int32 i = 0; i < assignedKeys.Count(); i++)
         {
             builder.AddString(StringAnsi::Format("owned-{0}-key", i), assignedKeys[i]);
@@ -1220,18 +1238,20 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     if (selected && selected->Kind == ModelSubAssetKind::Mesh)
         options.MergeMeshes = false;
 
-    ScopedModelData ownedData;
     ScopedModelData selectedData;
     std::shared_ptr<const ModelBuildData> sharedData;
     const ModelData* buildData = nullptr;
     const Array<ModelSubAssetInfo>* builtInfos = nullptr;
-    Array<ModelSubAssetInfo> ownedInfos;
-    if (selected)
+    const bool requiresTransform = !selected || RequiresSourceTransform(selected->Kind,
+        options.ImportMaterials, options.ImportTextures);
+    if (requiresTransform)
     {
-        ArtifactKeyBuilder sharedKeyBuilder(StringAnsiView("flax-model-shared-build-data-v1"));
+        ArtifactKeyBuilder sharedKeyBuilder(StringAnsiView("flax-model-shared-build-data-v2"));
         sharedKeyBuilder.AddHash(StringAnsiView("settings"), prepared.SettingsHash);
         sharedKeyBuilder.AddUInt32(StringAnsiView("type"), static_cast<uint32>(options.Type));
-        sharedKeyBuilder.AddUInt32(StringAnsiView("kind"), static_cast<uint32>(selected->Kind));
+        sharedKeyBuilder.AddBool(StringAnsiView("merge-meshes"), options.MergeMeshes);
+        sharedKeyBuilder.AddBool(StringAnsiView("generate-lods"), options.GenerateLODs);
+        sharedKeyBuilder.AddBool(StringAnsiView("generate-sdf"), options.GenerateSDF);
         int32 dependencyIndex = 0;
         for (const AssetDependency& dependency : prepared.Dependencies)
         {
@@ -1241,7 +1261,19 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
             sharedKeyBuilder.AddString(prefix + "identity", dependency.StableIdentity);
             sharedKeyBuilder.AddHash(prefix + "content", dependency.Content);
         }
-        if (GetCachedBuildData(sharedKeyBuilder.Finalize().ToString(), sourcePath, *parsedSource, options, sharedData, diagnostic))
+        Array<String> assignedKeys;
+        assignedKeys.EnsureCapacity(payload->AssignedIDs.Count());
+        for (const auto& assigned : payload->AssignedIDs)
+            assignedKeys.Add(assigned.Key);
+        if (assignedKeys.Count() > 1)
+            std::sort(assignedKeys.Get(), assignedKeys.Get() + assignedKeys.Count());
+        for (int32 i = 0; i < assignedKeys.Count(); i++)
+        {
+            sharedKeyBuilder.AddString(StringAnsi::Format("assigned-{0}-key", i), assignedKeys[i]);
+            sharedKeyBuilder.AddGuid(StringAnsi::Format("assigned-{0}-guid", i), payload->AssignedIDs[assignedKeys[i]]);
+        }
+        if (GetCachedBuildData(sharedKeyBuilder.Finalize().ToString(), sourcePath, *parsedSource, options,
+            payload->AssignedIDs, sharedData, diagnostic))
         {
             diagnostic.AssetGuid = prepared.AssetID;
             return true;
@@ -1252,21 +1284,8 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
     }
     else
     {
-        String importError;
-        options.ParsedSource = parsedSource.get();
-        if (ModelTool::ImportModel(sourcePath, ownedData.Data, options, importError, String::Empty))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
-                prepared.AssetID, sourcePath, importError.IsEmpty() ? TEXT("Model compatibility importer rejected the verified source.") : importError);
-        options.ParsedSource = nullptr;
-        // Canonical artifacts cannot consult mutable editor Build Settings during serialization.
-        // Resolve Automatic to the stable full-precision representation for every build target.
-        if (ownedData.Data.PositionFormat == ModelData::PositionFormats::Automatic)
-            ownedData.Data.PositionFormat = ModelData::PositionFormats::Float32;
-        Array<SubAssetCandidate> builtCandidates;
-        if (ModelSubAssetKeys::Enumerate(ownedData.Data, ownedInfos, builtCandidates, diagnostic))
-            return true;
-        buildData = &ownedData.Data;
-        builtInfos = &ownedInfos;
+        buildData = parsedSource.get();
+        builtInfos = &payload->SubAssets;
     }
     if (context.GetCancellation().IsCancellationRequested())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, AssetPipelineDiagnosticStage::Build,
@@ -1280,18 +1299,9 @@ bool ModelProcessor::Build(ArtifactBuildContext& context, AssetPipelineDiagnosti
         if (!assigned)
             continue;
         if (info.Kind == ModelSubAssetKind::Material && info.SourceIndex >= 0 && info.SourceIndex < buildData->Materials.Count())
-        {
-            if (selected)
-                assignedMaterials[info.SourceIndex] = *assigned;
-            else
-                ownedData.Data.Materials[info.SourceIndex].AssetID = *assigned;
-        }
+            assignedMaterials[info.SourceIndex] = *assigned;
         else if (info.Kind == ModelSubAssetKind::Texture && info.SourceIndex >= 0 && info.SourceIndex < buildData->Textures.Count())
-        {
             assignedTextures[info.SourceIndex] = *assigned;
-            if (!selected)
-                ownedData.Data.Textures[info.SourceIndex].AssetID = *assigned;
-        }
     }
 
     if (selected && selected->Kind == ModelSubAssetKind::Mesh)

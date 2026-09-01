@@ -40,6 +40,13 @@ enum class AssetBuildJobStatus : byte
     Cancelled,
 };
 
+enum class AssetBuildJobPriority : byte
+{
+    Background,
+    Normal,
+    Foreground,
+};
+
 struct FLAXENGINE_API AssetBuildServiceLimits
 {
     int32 MaximumWorkers = 1;
@@ -59,6 +66,8 @@ struct FLAXENGINE_API AssetBuildJobRequest
     uint32 Pass = 0;
     String ProcessorClass;
     String ProcessorID;
+    /// <summary>Optional stable resource identity whose jobs must never execute concurrently.</summary>
+    String SerialGroup;
     String Target;
     Array<StringAnsi> OutputKinds;
     Array<ArtifactKeyComponent> KeyComponents;
@@ -66,6 +75,7 @@ struct FLAXENGINE_API AssetBuildJobRequest
     uint64 MemoryBytes = 0;
     int32 ExternalToolSlots = 0;
     int32 ProcessorConcurrencyLimit = MAX_int32;
+    AssetBuildJobPriority Priority = AssetBuildJobPriority::Normal;
     // Disable when a repeated exact plan must run publication again because its mutable manifest may now point at another plan.
     bool AllowTerminalDeduplication = true;
     Array<AssetBuildJobKey> Dependencies;

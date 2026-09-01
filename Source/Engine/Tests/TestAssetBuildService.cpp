@@ -3,6 +3,7 @@
 #if COMPILE_WITH_TESTS
 
 #include "Engine/Content/Build/AssetBuildService.h"
+#include "Engine/Content/Build/Processors/TexturePipelineService.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/Importing/AssetImportScheduler.h"
 #include "Engine/Core/ScopeExit.h"
@@ -55,6 +56,17 @@ namespace
         return request;
     }
 }
+
+#if COMPILE_WITH_TEXTURE_TOOL && COMPILE_WITH_ASSETS_IMPORTER
+TEST_CASE("Asset pipeline worker count scales conservatively with physical cores")
+{
+    CHECK(TexturePipelineService::CalculateWorkerCount(1) == 1);
+    CHECK(TexturePipelineService::CalculateWorkerCount(2) == 1);
+    CHECK(TexturePipelineService::CalculateWorkerCount(4) == 2);
+    CHECK(TexturePipelineService::CalculateWorkerCount(8) == 4);
+    CHECK(TexturePipelineService::CalculateWorkerCount(64) == 4);
+}
+#endif
 
 TEST_CASE("AssetBuildService deduplicates exact work without coupling requester cancellation")
 {
@@ -210,6 +222,66 @@ TEST_CASE("AssetBuildService replays terminal publication when requested")
     CHECK(service.GetMetrics().DeduplicationHits == 0);
 }
 
+TEST_CASE("AssetBuildService promotes foreground requests ahead of queued bulk work")
+{
+    const String library = BuildServiceLibrary(TEXT("AssetBuildServicePriority"));
+    const String root = StringUtils::GetDirectoryName(library);
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    AssetBuildService service;
+    AssetBuildServiceLimits limits;
+    limits.MaximumWorkers = 1;
+    limits.MaximumMemoryBytes = 64;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
+
+    std::atomic<bool> blockerStarted { false };
+    std::atomic<bool> releaseBlocker { false };
+    AssetBuildJobRequest blocker = BasicRequest(JobKey("priority-blocker"), Guid::New());
+    blocker.Build = [&](const AssetCancellationToken& token, AssetPipelineDiagnostic&)
+    {
+        blockerStarted.store(true);
+        while (!releaseBlocker.load() && !token.IsCancellationRequested())
+            Platform::Sleep(1);
+        return false;
+    };
+    const AssetBuildRequestHandle blockerHandle = service.Request(blocker);
+    REQUIRE(WaitUntil([&]() { return blockerStarted.load(); }));
+
+    std::mutex orderMutex;
+    Array<int32> order;
+    AssetBuildJobRequest bulk = BasicRequest(JobKey("priority-bulk"), Guid::New());
+    bulk.Priority = AssetBuildJobPriority::Background;
+    bulk.Build = [&](const AssetCancellationToken&, AssetPipelineDiagnostic&)
+    {
+        std::lock_guard<std::mutex> lock(orderMutex);
+        order.Add(1);
+        return false;
+    };
+    const AssetBuildRequestHandle bulkHandle = service.Request(bulk);
+
+    AssetBuildJobRequest selected = BasicRequest(JobKey("priority-selected"), Guid::New());
+    selected.Priority = AssetBuildJobPriority::Background;
+    selected.Build = [&](const AssetCancellationToken&, AssetPipelineDiagnostic&)
+    {
+        std::lock_guard<std::mutex> lock(orderMutex);
+        order.Add(2);
+        return false;
+    };
+    const AssetBuildRequestHandle selectedBulkHandle = service.Request(selected);
+    selected.Priority = AssetBuildJobPriority::Foreground;
+    const AssetBuildRequestHandle selectedForegroundHandle = service.Request(selected);
+
+    releaseBlocker.store(true);
+    REQUIRE(blockerHandle.Wait(5000));
+    REQUIRE(selectedForegroundHandle.Wait(5000));
+    REQUIRE(selectedBulkHandle.Wait(5000));
+    REQUIRE(bulkHandle.Wait(5000));
+    REQUIRE(order.Count() == 2);
+    CHECK(order[0] == 2);
+    CHECK(order[1] == 1);
+    CHECK(service.GetMetrics().DeduplicationHits == 1);
+}
+
 TEST_CASE("AssetBuildService schedules dependencies and bounds independent fanout")
 {
     const String library = BuildServiceLibrary(TEXT("AssetBuildServiceLimits"));
@@ -256,6 +328,45 @@ TEST_CASE("AssetBuildService schedules dependencies and bounds independent fanou
         CHECK(handle.GetStatus() == AssetBuildJobStatus::Succeeded);
     }
     CHECK(maximumActive.load() == 2);
+
+    std::atomic<int32> serialActiveA { 0 };
+    std::atomic<int32> serialActiveB { 0 };
+    std::atomic<int32> serialTotal { 0 };
+    std::atomic<int32> serialMaximum { 0 };
+    std::atomic<bool> serialViolation { false };
+    std::atomic<bool> releaseSerial { false };
+    Array<AssetBuildRequestHandle> serialHandles;
+    for (int32 i = 0; i < 4; i++)
+    {
+        AssetBuildJobRequest request = BasicRequest(JobKey(i == 0 ? "serial-a1" : i == 1 ? "serial-a2" : i == 2 ? "serial-b1" : "serial-b2"), Guid::New());
+        const bool groupA = i < 2;
+        request.SerialGroup = groupA ? TEXT("source-a") : TEXT("source-b");
+        std::atomic<int32>* groupActive = groupA ? &serialActiveA : &serialActiveB;
+        request.Build = [&, groupActive](const AssetCancellationToken& token, AssetPipelineDiagnostic&)
+        {
+            if (++(*groupActive) != 1)
+                serialViolation.store(true);
+            const int32 current = ++serialTotal;
+            int32 observed = serialMaximum.load();
+            while (current > observed && !serialMaximum.compare_exchange_weak(observed, current))
+            {
+            }
+            while (!releaseSerial.load() && !token.IsCancellationRequested())
+                Platform::Sleep(1);
+            serialTotal--;
+            (*groupActive)--;
+            return false;
+        };
+        serialHandles.Add(service.Request(request));
+    }
+    REQUIRE(WaitUntil([&]() { return serialMaximum.load() == 2; }));
+    CHECK(serialActiveA.load() == 1);
+    CHECK(serialActiveB.load() == 1);
+    releaseSerial.store(true);
+    for (const AssetBuildRequestHandle& handle : serialHandles)
+        REQUIRE(handle.Wait(5000));
+    CHECK(serialMaximum.load() == 2);
+    CHECK_FALSE(serialViolation.load());
 
     std::mutex orderMutex;
     Array<int32> order;

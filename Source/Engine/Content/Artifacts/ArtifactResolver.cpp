@@ -235,6 +235,9 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
             return false;
         }
 
+        // A caller is about to wait for this exact object. Let it pass queued bulk refresh work,
+        // while an interactive last-good refresh above remains normal background work.
+        plan.BuildRequest.Priority = AssetBuildJobPriority::Foreground;
         const AssetBuildRequestHandle handle = _buildService->Request(plan.BuildRequest);
         if (!handle.IsValid())
             return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Exact artifact build could not be awaited."));

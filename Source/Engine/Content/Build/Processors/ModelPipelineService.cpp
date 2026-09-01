@@ -20,6 +20,8 @@
 #include "Engine/Content/Build/PrepareAssetContext.h"
 #include "Engine/Content/Importing/AssetImportService.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/CPUInfo.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Scripting/Scripting.h"
 #include <algorithm>
@@ -303,9 +305,11 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     plan.BuildRequest.Pass = request.Pass;
     plan.BuildRequest.ProcessorClass = TEXT("model");
     plan.BuildRequest.ProcessorID = record.ProcessorID;
+    plan.BuildRequest.SerialGroup = record.SourceAssetID.ToString(Guid::FormatType::N);
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     plan.BuildRequest.MemoryBytes = Math::Max<uint64>(1, prepared.MemoryEstimate);
-    plan.BuildRequest.ProcessorConcurrencyLimit = 2;
+    plan.BuildRequest.ProcessorConcurrencyLimit = TexturePipelineService::CalculateWorkerCount(
+        Platform::GetCPUInfo().ProcessorCoreCount);
     plan.BuildRequest.AllowTerminalDeduplication = false;
     plan.BuildRequest.RebuildReason = TEXT("Model canonical inputs, stable mappings, or target outputs changed.");
     for (const DeclaredArtifactOutput& output : prepared.Outputs)

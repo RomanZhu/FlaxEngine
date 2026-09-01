@@ -32,6 +32,25 @@ TEST_CASE("ModelTool")
 
 #if COMPILE_WITH_ASSETS_IMPORTER && COMPILE_WITH_MODEL_TOOL && USE_EDITOR
 
+TEST_CASE("Model processor reuses parsed source data for owned material and texture artifacts")
+{
+    const ModelSubAssetKind psxFamily[] = {
+        ModelSubAssetKind::Mesh,
+        ModelSubAssetKind::Material,
+        ModelSubAssetKind::Texture,
+    };
+    int32 transformPasses = 1; // Root model.
+    for (const ModelSubAssetKind kind : psxFamily)
+        transformPasses += ModelProcessor::RequiresSourceTransform(kind, true, true) ? 1 : 0;
+
+    CHECK(transformPasses == 2);
+    CHECK(ModelProcessor::RequiresSourceTransform(ModelSubAssetKind::Animation, true, true));
+    CHECK_FALSE(ModelProcessor::RequiresSourceTransform(ModelSubAssetKind::Material, true, true));
+    CHECK_FALSE(ModelProcessor::RequiresSourceTransform(ModelSubAssetKind::Texture, true, true));
+    CHECK(ModelProcessor::RequiresSourceTransform(ModelSubAssetKind::Material, false, true));
+    CHECK(ModelProcessor::RequiresSourceTransform(ModelSubAssetKind::Texture, true, false));
+}
+
 TEST_CASE("Model processor analyzes one source into deterministic family records")
 {
     const String root = Globals::TemporaryFolder / (TEXT("ModelSourceAnalysis-") + Guid::New().ToString(Guid::FormatType::N));

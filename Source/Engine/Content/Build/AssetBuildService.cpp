@@ -5,6 +5,7 @@
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -33,6 +34,16 @@ namespace
         case AssetBuildJobStatus::Failed: return "failed";
         case AssetBuildJobStatus::Cancelled: return "cancelled";
         default: return "invalid";
+        }
+    }
+
+    const char* PriorityName(AssetBuildJobPriority priority)
+    {
+        switch (priority)
+        {
+        case AssetBuildJobPriority::Background: return "background";
+        case AssetBuildJobPriority::Foreground: return "foreground";
+        default: return "normal";
         }
     }
 
@@ -99,6 +110,7 @@ public:
     std::deque<std::shared_ptr<AssetBuildSharedState>> Queue;
     std::vector<std::thread> Workers;
     std::unordered_map<std::string, int32> ActiveProcessorClasses;
+    std::unordered_set<std::string> ActiveSerialGroups;
     AssetBuildServiceLimits Limits;
     String LibraryRoot;
     uint64 NextRequester = 1;
@@ -111,6 +123,7 @@ public:
 
     void Worker();
     void FinishLocked(const std::shared_ptr<AssetBuildSharedState>& job, AssetBuildJobStatus status, const AssetPipelineDiagnostic& diagnostic);
+    void EnqueueLocked(const std::shared_ptr<AssetBuildSharedState>& job);
     void WriteLogLocked(const std::shared_ptr<AssetBuildSharedState>& job, AssetBuildJobStatus status);
     bool CanRunLocked(const std::shared_ptr<AssetBuildSharedState>& job, AssetPipelineDiagnostic& dependencyFailure) const;
     void PruneLogsLocked();
@@ -228,7 +241,7 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
             TEXT("Asset build refresh context must provide both a refresh ID and a non-zero pass, or neither."));
     if (!request.Key.IsValid() || !request.AssetID.IsValid() || request.ProcessorClass.IsEmpty() || !request.Build.IsBinded() ||
         request.MemoryBytes > _impl->Limits.MaximumMemoryBytes || request.ExternalToolSlots < 0 || request.ExternalToolSlots > _impl->Limits.MaximumExternalTools ||
-        request.ProcessorConcurrencyLimit < 1)
+        request.ProcessorConcurrencyLimit < 1 || request.Priority > AssetBuildJobPriority::Foreground)
         return fail(AssetPipelineDiagnosticCode::ResourceLimitExceeded, TEXT("Asset build request identity, callback, or resource declaration is invalid."));
 
     auto existing = _impl->Jobs.find(request.Key);
@@ -238,7 +251,7 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
         bool samePlan = state->Request.AssetID == request.AssetID && state->Request.ProcessorClass == request.ProcessorClass &&
             state->Request.MemoryBytes == request.MemoryBytes && state->Request.ExternalToolSlots == request.ExternalToolSlots &&
             state->Request.Dependencies.Count() == request.Dependencies.Count() && state->Request.ProcessorID == request.ProcessorID &&
-            state->Request.Target == request.Target && state->Request.OutputKinds == request.OutputKinds &&
+            state->Request.SerialGroup == request.SerialGroup && state->Request.Target == request.Target && state->Request.OutputKinds == request.OutputKinds &&
             state->Request.KeyComponents.Count() == request.KeyComponents.Count();
         for (int32 i = 0; samePlan && i < request.Dependencies.Count(); i++)
             samePlan = state->Request.Dependencies[i] == request.Dependencies[i];
@@ -255,6 +268,18 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
         {
             _impl->Metrics.DeduplicationHits++;
             state->Requesters.insert(requester);
+            if (state->Status.load(std::memory_order_acquire) == AssetBuildJobStatus::Queued && request.Priority > state->Request.Priority)
+            {
+                const auto queued = std::find(_impl->Queue.begin(), _impl->Queue.end(), state);
+                ASSERT(queued != _impl->Queue.end());
+                if (queued != _impl->Queue.end())
+                {
+                    _impl->Queue.erase(queued);
+                    state->Request.Priority = request.Priority;
+                    _impl->EnqueueLocked(state);
+                    _impl->Changed.notify_all();
+                }
+            }
             return AssetBuildRequestHandle(state, requester);
         }
     }
@@ -283,7 +308,7 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
     if (!ArtifactStore::TryGetJobLogPath(_impl->LibraryRoot, jobId, logPath, ignored))
         state->LogPath = logPath.Get();
     _impl->Jobs.emplace(request.Key, state);
-    _impl->Queue.push_back(state);
+    _impl->EnqueueLocked(state);
     _impl->WriteLogLocked(state, AssetBuildJobStatus::Queued);
     _impl->Changed.notify_all();
     return AssetBuildRequestHandle(state, requester);
@@ -301,6 +326,15 @@ void AssetBuildService::CancelRequester(const AssetBuildRequestHandle& handle)
     if (handle._state->Requesters.empty() && !IsTerminal(handle._state->Status.load(std::memory_order_acquire)))
         handle._state->Cancellation.Cancel();
     _impl->Changed.notify_all();
+}
+
+void AssetBuildService::Impl::EnqueueLocked(const std::shared_ptr<AssetBuildSharedState>& job)
+{
+    const auto position = std::find_if(Queue.begin(), Queue.end(), [&job](const std::shared_ptr<AssetBuildSharedState>& queued)
+    {
+        return queued->Request.Priority < job->Request.Priority;
+    });
+    Queue.insert(position, job);
 }
 
 void AssetBuildService::Impl::WriteLogLocked(const std::shared_ptr<AssetBuildSharedState>& job, AssetBuildJobStatus status)
@@ -323,6 +357,8 @@ void AssetBuildService::Impl::WriteLogLocked(const std::shared_ptr<AssetBuildSha
     AppendJsonEscaped(line, job->Request.Target);
     line += "\",\"stage\":\"";
     line += StatusName(status);
+    line += "\",\"priority\":\"";
+    line += PriorityName(job->Request.Priority);
     line += "\",\"rebuildReason\":\"";
     AppendJsonEscaped(line, job->Request.RebuildReason);
     line += "\",\"outputKinds\":[";
@@ -423,6 +459,8 @@ bool AssetBuildService::Impl::CanRunLocked(const std::shared_ptr<AssetBuildShare
     if (ActiveMemory + job->Request.MemoryBytes > Limits.MaximumMemoryBytes ||
         ActiveExternalTools + job->Request.ExternalToolSlots > Limits.MaximumExternalTools)
         return false;
+    if (job->Request.SerialGroup.HasChars() && ActiveSerialGroups.find(ProcessorKey(job->Request.SerialGroup)) != ActiveSerialGroups.end())
+        return false;
     const std::string processor = ProcessorKey(job->Request.ProcessorClass);
     const auto active = ActiveProcessorClasses.find(processor);
     return active == ActiveProcessorClasses.end() || active->second < job->Request.ProcessorConcurrencyLimit;
@@ -478,6 +516,8 @@ void AssetBuildService::GetJobs(Array<AssetBuildJobSummary>& jobs) const
 
 void AssetBuildService::Impl::Worker()
 {
+    // Use otherwise-idle CPU capacity without competing with the Editor interaction threads.
+    Platform::SetThreadPriority(ThreadPriority::BelowNormal);
     for (;;)
     {
         std::shared_ptr<AssetBuildSharedState> job;
@@ -515,6 +555,8 @@ void AssetBuildService::Impl::Worker()
             ActiveExternalTools += job->Request.ExternalToolSlots;
             ActiveWorkers++;
             ActiveProcessorClasses[ProcessorKey(job->Request.ProcessorClass)]++;
+            if (job->Request.SerialGroup.HasChars())
+                ActiveSerialGroups.insert(ProcessorKey(job->Request.SerialGroup));
             job->BuildStartedAt = std::chrono::steady_clock::now();
             Metrics.QueueWaitMilliseconds += std::chrono::duration_cast<std::chrono::milliseconds>(job->BuildStartedAt - job->QueuedAt).count();
             Metrics.BuildsStarted++;
@@ -541,6 +583,8 @@ void AssetBuildService::Impl::Worker()
             ASSERT(active != ActiveProcessorClasses.end() && active->second > 0);
             if (--active->second == 0)
                 ActiveProcessorClasses.erase(active);
+            if (job->Request.SerialGroup.HasChars())
+                ActiveSerialGroups.erase(ProcessorKey(job->Request.SerialGroup));
         };
 
         if (failed || cancelledAfterBuild)

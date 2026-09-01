@@ -23,6 +23,9 @@ public:
     static const ArtifactTarget& GetHostTarget();
     static AssetBuildService* GetBuildService(AssetPipelineDiagnostic& diagnostic);
 
+    /// <summary>Chooses a responsive shared build-worker count from physical CPU cores.</summary>
+    static int32 CalculateWorkerCount(uint32 processorCoreCount);
+
     /// <summary>Stops texture workers and releases the processor registration before engine teardown.</summary>
     static void Shutdown();
 };

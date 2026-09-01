@@ -27,6 +27,8 @@
 #include "Engine/Content/Importing/AssetImportService.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/CPUInfo.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Scripting/Scripting.h"
 #include <memory>
 #include <mutex>
@@ -105,7 +107,7 @@ namespace
 
         state.Builds = std::make_unique<AssetBuildService>();
         AssetBuildServiceLimits limits;
-        limits.MaximumWorkers = 2;
+        limits.MaximumWorkers = TexturePipelineService::CalculateWorkerCount(Platform::GetCPUInfo().ProcessorCoreCount);
         limits.MaximumMemoryBytes = 4ull * 1024ull * 1024ull * 1024ull;
         limits.MaximumExternalTools = 1;
         if (state.Builds->Initialize(Globals::ProjectLibraryFolder, limits, diagnostic))
@@ -442,6 +444,11 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     };
     diagnostic = AssetPipelineDiagnostic();
     return false;
+}
+
+int32 TexturePipelineService::CalculateWorkerCount(uint32 processorCoreCount)
+{
+    return Math::Clamp<int32>(static_cast<int32>(processorCoreCount / 2), 1, 4);
 }
 
 bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,

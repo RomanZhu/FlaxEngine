@@ -54,7 +54,7 @@ public:
 class FLAXENGINE_API ModelProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 13;
+    static constexpr uint32 ImplementationVersion = 14;
     static constexpr uint32 RuntimeFormatVersion = 1;
     static constexpr uint32 GeometryFormatVersion = 1;
     static constexpr uint32 LodFormatVersion = 1;
@@ -71,6 +71,7 @@ public:
     static bool Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic);
     static bool BuildOutputKey(const PreparedAsset& prepared, const ArtifactTarget& target, const StringAnsiView& outputKind,
         ArtifactKey& key, Array<ArtifactKeyComponent>& components, AssetPipelineDiagnostic& diagnostic);
+    static bool RequiresSourceTransform(ModelSubAssetKind kind, bool importMaterials, bool importTextures);
     static void ClearCaches();
 
 private:
