@@ -108,7 +108,7 @@ public:
 private:
     StringAnsi _buildID;
     ContentHash _targetHash;
-    Guid _gameSettingsObject;
+    Guid _gameSettingsObject = Guid::Empty;
     Array<RuntimeAssetCatalogEntry> _entries;
     Array<RuntimeAssetCatalogAlias> _aliases;
 
