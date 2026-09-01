@@ -144,15 +144,31 @@ namespace
     class TestReloadListener : public IAssetObjectReloadListener
     {
     public:
+        LoadedAssetRegistry* Registry = nullptr;
         Array<Guid> Objects;
         Array<uint64> PreviousRevisions;
         Array<uint64> Revisions;
+        Array<StringAnsi> PreviousTypeNames;
+        Array<StringAnsi> TypeNames;
+        Array<ContentHash> PreviousContents;
+        Array<ContentHash> Contents;
+        Array<LoadedAssetRecord> PublishedRecords;
 
-        void OnAssetObjectReplaced(const Guid& object, uint64 previousRevision, uint64 revision) override
+        void OnAssetObjectReplaced(const LoadedAssetSwap& swap) override
         {
-            Objects.Add(object);
-            PreviousRevisions.Add(previousRevision);
-            Revisions.Add(revision);
+            Objects.Add(swap.Object);
+            PreviousRevisions.Add(swap.PreviousRevision);
+            Revisions.Add(swap.Revision);
+            PreviousTypeNames.Add(swap.PreviousTypeName);
+            TypeNames.Add(swap.TypeName);
+            PreviousContents.Add(swap.PreviousContent);
+            Contents.Add(swap.Content);
+            if (Registry)
+            {
+                LoadedAssetRecord record;
+                REQUIRE(Registry->TryGet(swap.Object, record));
+                PublishedRecords.Add(MoveTemp(record));
+            }
         }
     };
 }
@@ -323,6 +339,7 @@ TEST_CASE("Hot reload publishes atomically and notifies dependencies first")
     changes.Add({dependency, 2});
     TestMainThreadDispatcher dispatcher;
     TestReloadListener listener;
+    listener.Registry = &registry;
     AssetHotReloadCoordinator coordinator(registry, loader, dispatcher, listener);
     REQUIRE_FALSE(coordinator.Reload(changes, diagnostic));
     REQUIRE(listener.Objects.Count() == 2);
@@ -345,4 +362,52 @@ TEST_CASE("Hot reload publishes atomically and notifies dependencies first")
     CHECK(record.Revision == 2);
     CHECK(listener.Objects.Count() == 2);
     CHECK(factory.Destroys.load() == 4);
+}
+
+TEST_CASE("Hot reload replaces payload and concrete type under the persistent GUID")
+{
+    const Guid object(108, 0, 0, 0);
+    LoadedAssetRegistry registry;
+    TestObjectResolver resolver;
+    AssetObjectLoadLocation location = TestLocation(object, 1);
+    const ContentHash previousContent = location.Content;
+    resolver.Set(location);
+    TestObjectFactory factory;
+    AssetObjectLoader loader(registry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    AssetPipelineDiagnostic diagnostic;
+    AssetObjectLoadResult loaded;
+    REQUIRE_FALSE(loader.Load(object, loaded, diagnostic));
+    void* previousInstance = loaded.Instance;
+
+    location.Revision = 2;
+    location.TypeName = "FlaxEngine.Material";
+    location.Content = LoadingTestHash("changed-object-content");
+    resolver.Set(location);
+    Array<AssetObjectRevision> changes;
+    changes.Add({object, 2});
+    TestMainThreadDispatcher dispatcher;
+    TestReloadListener listener;
+    listener.Registry = &registry;
+    AssetHotReloadCoordinator coordinator(registry, loader, dispatcher, listener);
+    REQUIRE_FALSE(coordinator.Reload(changes, diagnostic));
+
+    LoadedAssetRecord record;
+    REQUIRE(registry.TryGet(object, record));
+    CHECK(record.Object == object);
+    CHECK(record.Instance != previousInstance);
+    CHECK(record.TypeName == location.TypeName);
+    CHECK(record.Content == location.Content);
+    CHECK(record.Revision == 2);
+    REQUIRE(listener.Objects.Count() == 1);
+    CHECK(listener.Objects[0] == object);
+    CHECK(listener.PreviousTypeNames[0] == "FlaxEngine.Texture");
+    CHECK(listener.TypeNames[0] == "FlaxEngine.Material");
+    CHECK(listener.PreviousContents[0] == previousContent);
+    CHECK(listener.Contents[0] == location.Content);
+    REQUIRE(listener.PublishedRecords.Count() == 1);
+    CHECK(listener.PublishedRecords[0].Instance == record.Instance);
+    CHECK(listener.PublishedRecords[0].TypeName == location.TypeName);
+    CHECK(listener.PublishedRecords[0].Content == location.Content);
+    CHECK(factory.Destroys.load() == 1);
+    CHECK(dispatcher.Calls == 1);
 }

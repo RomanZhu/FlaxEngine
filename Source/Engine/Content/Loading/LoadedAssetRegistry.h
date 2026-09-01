@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "Engine/Content/Artifacts/ArtifactKey.h"
 #include "Engine/Core/Types/Guid.h"
 #include "Engine/Content/AssetPipeline/AssetPipelineDiagnostics.h"
 #include "Engine/Core/Collections/Dictionary.h"
@@ -22,6 +23,8 @@ struct FLAXENGINE_API LoadedAssetRecord
     Guid Object = Guid::Empty;
     LoadedAssetState State = LoadedAssetState::Unresolved;
     void* Instance = nullptr;
+    StringAnsi TypeName;
+    ContentHash Content;
     uint64 Revision = 0;
     Array<Guid> Dependencies;
     AssetPipelineDiagnostic Diagnostic;
@@ -47,6 +50,8 @@ struct FLAXENGINE_API LoadedAssetReplacement
 {
     Guid Object = Guid::Empty;
     void* Instance = nullptr;
+    StringAnsi TypeName;
+    ContentHash Content;
     uint64 Revision = 0;
     Array<Guid> Dependencies;
 };
@@ -56,8 +61,12 @@ struct FLAXENGINE_API LoadedAssetSwap
 {
     Guid Object = Guid::Empty;
     void* PreviousInstance = nullptr;
+    StringAnsi PreviousTypeName;
+    ContentHash PreviousContent;
     uint64 PreviousRevision = 0;
     void* Instance = nullptr;
+    StringAnsi TypeName;
+    ContentHash Content;
     uint64 Revision = 0;
 };
 
@@ -81,7 +90,8 @@ public:
 
     /// <summary>Publishes the result of a claimed load attempt.</summary>
     /// <returns>True if the ticket is stale or invalid.</returns>
-    bool CompleteLoad(const LoadedAssetLoadTicket& ticket, void* instance, uint64 revision,
+    bool CompleteLoad(const LoadedAssetLoadTicket& ticket, void* instance, const StringAnsiView& typeName,
+        const ContentHash& content, uint64 revision,
         const Array<Guid>& dependencies, const AssetPipelineDiagnostic& loadDiagnostic,
         LoadedAssetRecord& record, AssetPipelineDiagnostic& diagnostic);
 

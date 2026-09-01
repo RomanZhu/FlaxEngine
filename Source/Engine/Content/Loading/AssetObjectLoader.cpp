@@ -185,7 +185,10 @@ bool AssetObjectLoader::Load(const Guid& object, AssetObjectLoadResult& result,
     if (instance)
         dependencies = location.Dependencies;
     AssetPipelineDiagnostic completionDiagnostic;
-    if (_registry.CompleteLoad(ticket, instance, revision, dependencies, loadDiagnostic, record, completionDiagnostic))
+    const StringAnsiView typeName = instance ? StringAnsiView(location.TypeName) : StringAnsiView();
+    const ContentHash content = instance ? location.Content : ContentHash();
+    if (_registry.CompleteLoad(ticket, instance, typeName, content, revision, dependencies, loadDiagnostic, record,
+        completionDiagnostic))
     {
         if (instance)
             _factory.DestroyObject(instance);
@@ -220,6 +223,8 @@ bool AssetObjectLoader::PrepareReplacement(const Guid& object, uint64 expectedRe
         return true;
     }
     replacement.Revision = location.Revision;
+    replacement.TypeName = location.TypeName;
+    replacement.Content = location.Content;
     replacement.Dependencies = location.Dependencies;
     diagnostic = AssetPipelineDiagnostic();
     return false;

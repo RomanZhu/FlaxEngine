@@ -146,7 +146,7 @@ bool AssetHotReloadCoordinator::Reload(const Array<AssetObjectRevision>& changes
                 }
             }
             ASSERT(swap);
-            _listener.OnAssetObjectReplaced(swap->Object, swap->PreviousRevision, swap->Revision);
+            _listener.OnAssetObjectReplaced(*swap);
         }
         for (const LoadedAssetSwap& swap : swaps)
             _loader.DiscardInstance(swap.PreviousInstance);

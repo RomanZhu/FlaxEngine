@@ -82,7 +82,8 @@ LoadedAssetAcquireResult LoadedAssetRegistry::AcquireLoad(const Guid& object, Lo
     return LoadedAssetAcquireResult::Owner;
 }
 
-bool LoadedAssetRegistry::CompleteLoad(const LoadedAssetLoadTicket& ticket, void* instance, uint64 revision,
+bool LoadedAssetRegistry::CompleteLoad(const LoadedAssetLoadTicket& ticket, void* instance, const StringAnsiView& typeName,
+    const ContentHash& content, uint64 revision,
     const Array<Guid>& dependencies, const AssetPipelineDiagnostic& loadDiagnostic,
     LoadedAssetRecord& record, AssetPipelineDiagnostic& diagnostic)
 {
@@ -95,10 +96,12 @@ bool LoadedAssetRegistry::CompleteLoad(const LoadedAssetLoadTicket& ticket, void
             TEXT("Asset load completion no longer owns the current registry attempt."));
     }
     Entry* entry = *entryPtr;
-    if (instance && revision != 0)
+    if (instance && !typeName.IsEmpty() && !content.IsZero() && revision != 0)
     {
         entry->Record.State = LoadedAssetState::Loaded;
         entry->Record.Instance = instance;
+        entry->Record.TypeName = typeName;
+        entry->Record.Content = content;
         entry->Record.Revision = revision;
         entry->Record.Dependencies = dependencies;
         entry->Record.Diagnostic = AssetPipelineDiagnostic();
@@ -107,6 +110,8 @@ bool LoadedAssetRegistry::CompleteLoad(const LoadedAssetLoadTicket& ticket, void
     {
         entry->Record.State = LoadedAssetState::Unresolved;
         entry->Record.Instance = nullptr;
+        entry->Record.TypeName.Clear();
+        entry->Record.Content = ContentHash();
         entry->Record.Revision = 0;
         entry->Record.Dependencies.Clear();
         entry->Record.Diagnostic = loadDiagnostic;
@@ -152,7 +157,8 @@ bool LoadedAssetRegistry::ReplaceBatch(const Array<LoadedAssetReplacement>& repl
     for (const LoadedAssetReplacement& replacement : replacements)
     {
         Entry** entry = _entries.TryGet(replacement.Object);
-        if (!replacement.Object.IsValid() || !replacement.Instance || replacement.Revision == 0 ||
+        if (!replacement.Object.IsValid() || !replacement.Instance || replacement.TypeName.IsEmpty() ||
+            replacement.Content.IsZero() || replacement.Revision == 0 ||
             !objects.Add(replacement.Object) || !entry || (*entry)->Record.State != LoadedAssetState::Loaded)
         {
             _locker.Unlock();
@@ -174,11 +180,17 @@ bool LoadedAssetRegistry::ReplaceBatch(const Array<LoadedAssetReplacement>& repl
         LoadedAssetSwap swap;
         swap.Object = replacement.Object;
         swap.PreviousInstance = entry->Record.Instance;
+        swap.PreviousTypeName = entry->Record.TypeName;
+        swap.PreviousContent = entry->Record.Content;
         swap.PreviousRevision = entry->Record.Revision;
         swap.Instance = replacement.Instance;
+        swap.TypeName = replacement.TypeName;
+        swap.Content = replacement.Content;
         swap.Revision = replacement.Revision;
         swaps.Add(swap);
         entry->Record.Instance = replacement.Instance;
+        entry->Record.TypeName = replacement.TypeName;
+        entry->Record.Content = replacement.Content;
         entry->Record.Revision = replacement.Revision;
         entry->Record.Dependencies = replacement.Dependencies;
         entry->Record.Diagnostic = AssetPipelineDiagnostic();

@@ -27,7 +27,7 @@ class FLAXENGINE_API IAssetObjectReloadListener
 {
 public:
     virtual ~IAssetObjectReloadListener() = default;
-    virtual void OnAssetObjectReplaced(const Guid& object, uint64 previousRevision, uint64 revision) = 0;
+    virtual void OnAssetObjectReplaced(const LoadedAssetSwap& swap) = 0;
 };
 
 /// <summary>Prepares replacements off-thread and commits them atomically with dependency-first notifications.</summary>
