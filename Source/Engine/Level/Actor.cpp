@@ -236,21 +236,22 @@ void Actor::OnDeleteObject()
     // Fire event
     Deleted(this);
 
-    // Delete children
-#if BUILD_DEBUG
-    int32 callsCheck = Children.Count();
-#endif
-    for (int32 i = 0; i < Children.Count(); i++)
-    {
-        auto e = Children.Get()[i];
-        ASSERT(e->_parent == this);
-        e->_parent = nullptr;
-        e->DeleteObject();
-    }
-#if BUILD_DEBUG
-    ASSERT(callsCheck == Children.Count());
-#endif
+    // Delete children. Detach the list first because child destruction can be queued
+    // independently and hierarchy callbacks can modify parent links during teardown.
+    Array<Actor*> children = Children;
     Children.Clear();
+    _isHierarchyDirty = true;
+    for (Actor* child : children)
+    {
+        if (child->_parent != this)
+        {
+            const String parentName = child->_parent ? child->_parent->ToString() : TEXT("<none>");
+            LOG(Error, "Discarding stale child reference while deleting '{0}'. Child '{1}' belongs to '{2}'.", ToString(), child->ToString(), parentName);
+            continue;
+        }
+        child->_parent = nullptr;
+        child->DeleteObject();
+    }
 
     // Delete scripts
 #if BUILD_DEBUG
@@ -348,7 +349,7 @@ void Actor::SetParent(Actor* value, bool worldPositionsStays, bool canBreakPrefa
     // Link to the new one
     if (_parent)
     {
-        _parent->Children.Add(this);
+        _parent->Children.AddUnique(this);
         _parent->_isHierarchyDirty = true;
     }
 
@@ -1224,7 +1225,7 @@ void Actor::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier)
                         _parent->Children.RemoveKeepOrder(this);
                     _parent = parent;
                     if (_parent)
-                        _parent->Children.Add(this);
+                        _parent->Children.AddUnique(this);
                     OnParentChanged();
                 }
             }

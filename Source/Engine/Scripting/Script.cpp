@@ -108,7 +108,7 @@ void Script::SetParent(Actor* value, bool canBreakPrefabLink)
     // Link to the new one
     if (_parent)
     {
-        _parent->Scripts.Add(this);
+        _parent->Scripts.AddUnique(this);
     }
 
     // Break prefab link for prefab instance objects
@@ -360,7 +360,7 @@ void Script::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier
                         _parent->Scripts.RemoveKeepOrder(this);
                     _parent = parent;
                     if (_parent)
-                        _parent->Scripts.Add(this);
+                        _parent->Scripts.AddUnique(this);
                 }
             }
             else if (!parent && parentId.IsValid())

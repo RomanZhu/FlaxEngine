@@ -25,6 +25,7 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Utilities/StringConverter.h"
 #include "Engine/Platform/BatteryInfo.h"
+#include <cstdlib>
 #include <iostream>
 
 // Check types sizes
@@ -461,11 +462,10 @@ RETRY:
     else
         Error(msg);
 
-    // Only main thread can call exit directly
-    if (IsInMainThread())
-    {
-        Engine::Exit(Engine::ExitCode, error);
-    }
+    // Crash reporting and the dump are complete. Do not run normal engine teardown here:
+    // fatal errors often originate from teardown itself, where re-entering OnExit can hang.
+    // _Exit is safe from any thread and guarantees the failed process cannot remain alive.
+    std::_Exit(Engine::ExitCode);
 }
 
 void PlatformBase::Error(const StringView& msg)
