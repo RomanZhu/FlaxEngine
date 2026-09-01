@@ -73,8 +73,8 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseQuery
     API_FIELD() AssetRecordStatus Status = AssetRecordStatus::Ready;
     API_FIELD() bool HasStatus = false;
     API_FIELD() bool MainAssetsOnly = false;
-    API_FIELD() Guid ReferencedAsset;
-    API_FIELD() Guid UsedByAsset;
+    API_FIELD() Guid ReferencedAsset = Guid::Empty;
+    API_FIELD() Guid UsedByAsset = Guid::Empty;
 };
 
 /// <summary>Managed-safe normalized asset dependency projection.</summary>
