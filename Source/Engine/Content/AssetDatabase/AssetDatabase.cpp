@@ -103,6 +103,88 @@ namespace
             left.ObjectMetadata == right.ObjectMetadata;
     }
 
+    bool HasSameSourceContent(const SourceAssetRow& left, const SourceAssetRow& right)
+    {
+        return left.AssetGuid == right.AssetGuid && left.Path == right.Path &&
+            left.CanonicalPath == right.CanonicalPath && left.MetaPath == right.MetaPath &&
+            left.CanonicalMetaPath == right.CanonicalMetaPath && left.IsFolder == right.IsFolder &&
+            left.SourceHash == right.SourceHash && left.MetaHash == right.MetaHash &&
+            left.MetaSemanticHash == right.MetaSemanticHash && left.SourceSize == right.SourceSize &&
+            left.SourceMtimeHint == right.SourceMtimeHint && left.ImporterId == right.ImporterId &&
+            left.PortabilityKey == right.PortabilityKey && left.SourceKind == right.SourceKind &&
+            left.ImporterSettingsVersion == right.ImporterSettingsVersion &&
+            left.ImporterSettingsHash == right.ImporterSettingsHash && left.ImporterCodeHash == right.ImporterCodeHash &&
+            left.Status == right.Status;
+    }
+
+    bool HasSameDependencyContent(const SourceAssetDependencyRow& left, const SourceAssetDependencyRow& right)
+    {
+        return left.OwnerAssetGuid == right.OwnerAssetGuid && left.OwnerLocalFileId == right.OwnerLocalFileId &&
+            left.TargetId == right.TargetId && left.Kind == right.Kind && left.TargetAssetGuid == right.TargetAssetGuid &&
+            left.TargetLocalFileId == right.TargetLocalFileId && left.SourcePath == right.SourcePath &&
+            left.ExactArtifact == right.ExactArtifact && left.CustomDependency == right.CustomDependency &&
+            left.Content == right.Content && left.Flags == right.Flags && left.OriginImporter == right.OriginImporter &&
+            left.OriginDescription == right.OriginDescription && left.OriginPath == right.OriginPath &&
+            left.OriginLine == right.OriginLine && left.OriginColumn == right.OriginColumn;
+    }
+
+    bool HasSameDiagnosticContent(const AssetPipelineDiagnostic& left, const AssetPipelineDiagnostic& right)
+    {
+        return left.SchemaVersion == right.SchemaVersion && left.Code == right.Code && left.Severity == right.Severity &&
+            left.Stage == right.Stage && left.AssetGuid == right.AssetGuid && left.SourcePath == right.SourcePath &&
+            left.ProcessorId == right.ProcessorId && left.Target == right.Target && left.OutputKind == right.OutputKind &&
+            left.Location.File == right.Location.File && left.Location.Line == right.Location.Line &&
+            left.Location.Column == right.Location.Column && left.Location.GraphNode == right.Location.GraphNode &&
+            left.Location.GraphPin == right.Location.GraphPin && left.Message == right.Message &&
+            left.Remediation == right.Remediation && left.Related == right.Related;
+    }
+
+    bool HasSameDiagnosticContent(const SourceAssetDiagnosticRow& left, const SourceAssetDiagnosticRow& right)
+    {
+        return left.AssetGuid == right.AssetGuid && left.LocalFileId == right.LocalFileId &&
+            left.AttemptId == right.AttemptId && left.IsActive == right.IsActive &&
+            HasSameDiagnosticContent(left.Diagnostic, right.Diagnostic);
+    }
+
+    template<typename T, typename Equals>
+    bool HaveSameRows(const Array<T>& left, const Array<T>& right, Equals equals)
+    {
+        if (left.Count() != right.Count())
+            return false;
+        Array<byte> matched;
+        matched.Resize(right.Count());
+        for (byte& value : matched)
+            value = 0;
+        for (const T& leftRow : left)
+        {
+            bool found = false;
+            for (int32 i = 0; i < right.Count(); i++)
+            {
+                if (!matched[i] && equals(leftRow, right[i]))
+                {
+                    matched[i] = 1;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                return false;
+        }
+        return true;
+    }
+
+    template<typename T>
+    void AddRowBySource(Dictionary<Guid, Array<T>>& rows, const Guid& sourceId, const T& row)
+    {
+        Array<T>* sourceRows = rows.TryGet(sourceId);
+        if (!sourceRows)
+        {
+            rows.Add(sourceId, Array<T>());
+            sourceRows = rows.TryGet(sourceId);
+        }
+        sourceRows->Add(row);
+    }
+
     void DurableStateToRecords(const SourceAssetDatabaseState& state, Array<AssetRecord>& records)
     {
         records.Clear();
@@ -772,35 +854,19 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
     }
 
     const SourceAssetDatabaseState& current = transaction->GetState();
-    const uint64 revision = transaction->GetBaseRevision() + 1;
     SourceAssetDatabaseState next = current;
     next.Sources.Clear();
     next.Objects.Clear();
     next.Dependencies.Clear();
     next.Diagnostics.Clear();
     next.Labels.Clear();
-    AssetChangeSet durableChanges;
 
     Dictionary<Guid, const SourceAssetRow*> previousSources;
     Dictionary<AssetObjectId, const SourceAssetObjectRow*> previousObjects;
-    Dictionary<Guid, int32> previousObjectCounts;
     for (const SourceAssetRow& source : current.Sources)
-    {
         previousSources.Add(source.AssetGuid, &source);
-        if (!incomingSources.Contains(source.AssetGuid))
-        {
-            durableChanges.Removed.Add({ source.AssetGuid, source.Path });
-        }
-    }
     for (const SourceAssetObjectRow& object : current.Objects)
-    {
         previousObjects.Add(AssetObjectId(AssetGuid(object.AssetGuid), object.LocalFileId), &object);
-        int32* count = previousObjectCounts.TryGet(object.AssetGuid);
-        if (count)
-            (*count)++;
-        else
-            previousObjectCounts.Add(object.AssetGuid, 1);
-    }
 
     for (auto sourceIt = incomingSources.Begin(); sourceIt.IsNotEnd(); ++sourceIt)
     {
@@ -808,7 +874,10 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         const AssetRecord* const* mainPtr = mainBySource.TryGet(sourceId);
         const AssetRecord* const* firstPtr = firstBySource.TryGet(sourceId);
         const AssetRecord* sourceRecord = mainPtr ? *mainPtr : *firstPtr;
+        const SourceAssetRow* const* previousPtr = previousSources.TryGet(sourceId);
         SourceAssetRow source;
+        if (previousPtr)
+            source = **previousPtr;
         source.AssetGuid = sourceId;
         source.Path = sourceRecord->SourcePath.Get();
         source.CanonicalPath = sourceRecord->CanonicalPath.Get();
@@ -823,54 +892,19 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         source.PortabilityKey = sourceRecord->PortabilityKey;
         source.SourceKind = sourceRecord->SourceKind;
         source.Status = sourceRecord->Status;
-        const SourceAssetRow* const* previousPtr = previousSources.TryGet(sourceId);
-        if (previousPtr)
-        {
-            const SourceAssetRow& previous = **previousPtr;
-            source.FirstSeenRevision = previous.FirstSeenRevision;
-            source.LastSeenRevision = revision;
-            const bool sourceChanged = previous.SourceHash != source.SourceHash;
-            const bool metadataChanged = previous.MetaHash != source.MetaHash;
-            const bool moved = previous.CanonicalPath != source.CanonicalPath;
-            const bool statusChanged = previous.Status != source.Status;
-            source.LastModifiedRevision = sourceChanged || metadataChanged || moved ? revision : previous.LastModifiedRevision;
-            if (sourceChanged)
-                durableChanges.SourceChanged.Add({ sourceId, previous.SourceHash, source.SourceHash });
-            if (metadataChanged)
-                durableChanges.MetadataChanged.Add({ sourceId, previous.MetaHash, source.MetaHash });
-            if (moved)
-                durableChanges.Moved.Add({ sourceId, previous.Path, source.Path });
-            if (statusChanged)
-                durableChanges.StatusChanged.Add({ sourceId, previous.Status, source.Status });
-        }
-        else
-        {
-            source.FirstSeenRevision = revision;
-            source.LastSeenRevision = revision;
-            source.LastModifiedRevision = revision;
-            durableChanges.Added.Add({ sourceId, source.Path });
-        }
         next.Sources.Add(MoveTemp(source));
         for (const String& label : sourceRecord->Labels)
             next.Labels.Add({ sourceId, label });
     }
 
-    Dictionary<Guid, AssetObjectsChangedChange> objectChanges;
-    HashSet<Guid> changedObjectSources;
     Array<SourceAssetDependencyRow> defaultDependencies;
     for (const AssetRecord& record : records)
     {
-        AssetObjectsChangedChange* objectChange = objectChanges.TryGet(record.SourceAssetID);
-        if (!objectChange)
-        {
-            AssetObjectsChangedChange value;
-            value.AssetGuid = record.SourceAssetID;
-            objectChanges.Add(record.SourceAssetID, MoveTemp(value));
-            objectChange = objectChanges.TryGet(record.SourceAssetID);
-        }
-        objectChange->LocalFileIds.Add(record.LocalId);
-
+        const SourceAssetObjectRow* const* previousObjectPtr = previousObjects.TryGet(
+            AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId));
         SourceAssetObjectRow object;
+        if (previousObjectPtr)
+            object = **previousObjectPtr;
         object.AssetGuid = record.SourceAssetID;
         object.ObjectGuid = record.ID;
         object.LocalFileId = record.LocalId;
@@ -881,25 +915,8 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         object.DisplayName = record.DisplayName.HasChars() ? record.DisplayName : String(StringUtils::GetFileNameWithoutExtension(record.SourcePath.Get()));
         object.TypeName = record.TypeName;
         object.IsMain = record.IsMainAsset();
+        object.IsRemoved = false;
         object.Status = record.Status;
-        const SourceAssetObjectRow* const* previousObjectPtr = previousObjects.TryGet(
-            AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId));
-        const SourceAssetObjectRow* previousObject = previousObjectPtr ? *previousObjectPtr : nullptr;
-        if (previousObject)
-        {
-            object.FirstSeenRevision = previousObject->FirstSeenRevision;
-            const bool changed = !HasSameObjectContent(*previousObject, object);
-            object.LastModifiedRevision = changed ? revision : previousObject->LastModifiedRevision;
-            if (changed)
-                changedObjectSources.Add(record.SourceAssetID);
-        }
-        else
-        {
-            object.FirstSeenRevision = revision;
-            object.LastModifiedRevision = revision;
-            changedObjectSources.Add(record.SourceAssetID);
-        }
-        object.LastSeenRevision = revision;
         next.Objects.Add(MoveTemp(object));
 
         for (const AssetObjectId& dependencyId : record.BuildInputDependencies)
@@ -945,36 +962,6 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
             continue;
         next.Dependencies.Add(dependency);
     }
-    for (auto sourceIt = incomingSources.Begin(); sourceIt.IsNotEnd(); ++sourceIt)
-    {
-        const Guid& sourceId = sourceIt->Item;
-        const int32* previous = previousObjectCounts.TryGet(sourceId);
-        AssetObjectsChangedChange* change = objectChanges.TryGet(sourceId);
-        const int32 previousCount = previous ? *previous : 0;
-        const int32 nextCount = change ? change->LocalFileIds.Count() : 0;
-        if (previousCount != nextCount)
-            changedObjectSources.Add(sourceId);
-        if (changedObjectSources.Contains(sourceId))
-        {
-            if (change)
-                durableChanges.ObjectsChanged.Add(*change);
-            else
-                durableChanges.ObjectsChanged.Add({ sourceId, Array<int64>() });
-        }
-    }
-
-    next.Publications.Clear();
-    for (const SourceAssetPublicationRow& value : current.Publications)
-        if (incomingObjects.Contains(AssetObjectId(AssetGuid(value.AssetGuid), value.LocalFileId)))
-            next.Publications.Add(value);
-    next.ArtifactObjects.Clear();
-    for (const SourceArtifactObjectRow& value : current.ArtifactObjects)
-        if (incomingObjects.Contains(AssetObjectId(AssetGuid(value.AssetGuid), value.LocalFileId)))
-            next.ArtifactObjects.Add(value);
-    next.ImportAttempts.Clear();
-    for (const SourceImportAttemptRow& value : current.ImportAttempts)
-        if (!value.AssetGuid.IsValid() || incomingSources.Contains(value.AssetGuid))
-            next.ImportAttempts.Add(value);
 
     Dictionary<Guid, Array<SourceAssetDiagnosticRow>> diagnosticsBySource;
     Array<SourceAssetDiagnosticRow> unattributedDiagnostics;
@@ -1003,9 +990,6 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         }
         rows->Add(MoveTemp(row));
     }
-    uint64 nextDiagnosticId = 1;
-    for (const SourceAssetDiagnosticRow& value : current.Diagnostics)
-        nextDiagnosticId = Math::Max(nextDiagnosticId, value.DiagnosticId + 1);
     for (const SourceAssetDiagnosticRow& value : current.Diagnostics)
     {
         if (value.IsActive || (value.AssetGuid.IsValid() && !incomingSources.Contains(value.AssetGuid)))
@@ -1014,19 +998,12 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
     }
     auto appendDiagnostics = [&](const Guid& sourceId, const Array<SourceAssetDiagnosticRow>& rows)
     {
-        uint32 activeCount = 0;
         for (SourceAssetDiagnosticRow value : rows)
         {
             value.AssetGuid = sourceId;
             value.Diagnostic.AssetGuid = sourceId;
-            if (value.DiagnosticId == 0)
-                value.DiagnosticId = nextDiagnosticId++;
-            if (value.CreatedRevision == 0)
-                value.CreatedRevision = revision;
-            activeCount += value.IsActive ? 1 : 0;
             next.Diagnostics.Add(MoveTemp(value));
         }
-        durableChanges.DiagnosticsChanged.Add({ sourceId, activeCount });
     };
     for (auto sourceIt = incomingSources.Begin(); sourceIt.IsNotEnd(); ++sourceIt)
     {
@@ -1036,7 +1013,126 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         appendDiagnostics(sourceId, rows ? *rows : empty);
     }
     appendDiagnostics(Guid::Empty, unattributedDiagnostics);
-    transaction->ReplaceSnapshot(MoveTemp(next), MoveTemp(durableChanges));
+
+    Array<Guid> sourcesToRemove;
+    Array<SourceAssetRow> sourcesToUpsert;
+    Array<Guid> objectSourcesToReplace;
+    Array<Guid> dependencySourcesToReplace;
+    Array<Guid> labelSourcesToSet;
+    Array<Guid> diagnosticSourcesToReplace;
+    Dictionary<Guid, Array<SourceAssetObjectRow>> currentObjectsBySource;
+    Dictionary<Guid, Array<SourceAssetObjectRow>> nextObjectsBySource;
+    Dictionary<Guid, Array<SourceAssetDependencyRow>> currentDefaultDependenciesBySource;
+    Dictionary<Guid, Array<SourceAssetDependencyRow>> nextDefaultDependenciesBySource;
+    Dictionary<Guid, Array<String>> currentLabelsBySource;
+    Dictionary<Guid, Array<String>> nextLabelsBySource;
+    Dictionary<Guid, Array<SourceAssetDiagnosticRow>> currentDiagnosticsBySource;
+    Dictionary<Guid, Array<SourceAssetDiagnosticRow>> nextDiagnosticsBySource;
+    Dictionary<Guid, Array<SourceAssetDiagnosticRow>> nextAllDiagnosticsBySource;
+    for (const SourceAssetObjectRow& value : current.Objects)
+        AddRowBySource(currentObjectsBySource, value.AssetGuid, value);
+    for (const SourceAssetObjectRow& value : next.Objects)
+        AddRowBySource(nextObjectsBySource, value.AssetGuid, value);
+    for (const SourceAssetDependencyRow& value : current.Dependencies)
+        if (value.TargetId == TEXT("default"))
+            AddRowBySource(currentDefaultDependenciesBySource, value.OwnerAssetGuid, value);
+    for (const SourceAssetDependencyRow& value : next.Dependencies)
+        if (value.TargetId == TEXT("default"))
+            AddRowBySource(nextDefaultDependenciesBySource, value.OwnerAssetGuid, value);
+    for (const SourceAssetLabelRow& value : current.Labels)
+        AddRowBySource(currentLabelsBySource, value.AssetGuid, value.Label);
+    for (const SourceAssetLabelRow& value : next.Labels)
+        AddRowBySource(nextLabelsBySource, value.AssetGuid, value.Label);
+    for (const SourceAssetDiagnosticRow& value : current.Diagnostics)
+        if (value.IsActive)
+            AddRowBySource(currentDiagnosticsBySource, value.AssetGuid, value);
+    for (const SourceAssetDiagnosticRow& value : next.Diagnostics)
+    {
+        AddRowBySource(nextAllDiagnosticsBySource, value.AssetGuid, value);
+        if (value.IsActive)
+            AddRowBySource(nextDiagnosticsBySource, value.AssetGuid, value);
+    }
+    const Array<SourceAssetObjectRow> noObjects;
+    const Array<SourceAssetDependencyRow> noDependencies;
+    const Array<String> noLabels;
+    const Array<SourceAssetDiagnosticRow> noDiagnostics;
+    for (const SourceAssetRow& source : current.Sources)
+        if (!incomingSources.Contains(source.AssetGuid))
+            sourcesToRemove.Add(source.AssetGuid);
+    for (const SourceAssetRow& source : next.Sources)
+    {
+        const SourceAssetRow* const* previous = previousSources.TryGet(source.AssetGuid);
+        if (!previous || !HasSameSourceContent(**previous, source))
+            sourcesToUpsert.Add(source);
+
+        const Array<SourceAssetObjectRow>* previousObjectsForSource = currentObjectsBySource.TryGet(source.AssetGuid);
+        const Array<SourceAssetObjectRow>* objectsForSource = nextObjectsBySource.TryGet(source.AssetGuid);
+        if (!HaveSameRows(previousObjectsForSource ? *previousObjectsForSource : noObjects,
+            objectsForSource ? *objectsForSource : noObjects,
+            [](const SourceAssetObjectRow& left, const SourceAssetObjectRow& right) { return HasSameObjectContent(left, right); }))
+            objectSourcesToReplace.Add(source.AssetGuid);
+
+        const Array<SourceAssetDependencyRow>* previousDependencies = currentDefaultDependenciesBySource.TryGet(source.AssetGuid);
+        const Array<SourceAssetDependencyRow>* sourceDependencies = nextDefaultDependenciesBySource.TryGet(source.AssetGuid);
+        if (!HaveSameRows(previousDependencies ? *previousDependencies : noDependencies,
+            sourceDependencies ? *sourceDependencies : noDependencies,
+            [](const SourceAssetDependencyRow& left, const SourceAssetDependencyRow& right) { return HasSameDependencyContent(left, right); }))
+            dependencySourcesToReplace.Add(source.AssetGuid);
+
+        const Array<String>* previousLabels = currentLabelsBySource.TryGet(source.AssetGuid);
+        const Array<String>* sourceLabels = nextLabelsBySource.TryGet(source.AssetGuid);
+        if (!HaveSameRows(previousLabels ? *previousLabels : noLabels, sourceLabels ? *sourceLabels : noLabels,
+            [](const String& left, const String& right) { return left == right; }))
+            labelSourcesToSet.Add(source.AssetGuid);
+    }
+
+    Array<Guid> diagnosticSources;
+    for (auto sourceIt = incomingSources.Begin(); sourceIt.IsNotEnd(); ++sourceIt)
+        diagnosticSources.Add(sourceIt->Item);
+    diagnosticSources.Add(Guid::Empty);
+    for (const Guid& sourceId : diagnosticSources)
+    {
+        const Array<SourceAssetDiagnosticRow>* previousDiagnostics = currentDiagnosticsBySource.TryGet(sourceId);
+        const Array<SourceAssetDiagnosticRow>* sourceDiagnostics = nextDiagnosticsBySource.TryGet(sourceId);
+        if (!HaveSameRows(previousDiagnostics ? *previousDiagnostics : noDiagnostics,
+            sourceDiagnostics ? *sourceDiagnostics : noDiagnostics,
+            [](const SourceAssetDiagnosticRow& left, const SourceAssetDiagnosticRow& right) { return HasSameDiagnosticContent(left, right); }))
+            diagnosticSourcesToReplace.Add(sourceId);
+    }
+
+    const bool hasMutations = sourcesToRemove.HasItems() || sourcesToUpsert.HasItems() ||
+        objectSourcesToReplace.HasItems() || dependencySourcesToReplace.HasItems() ||
+        labelSourcesToSet.HasItems() || diagnosticSourcesToReplace.HasItems();
+    if (!hasMutations)
+    {
+        transaction->Rollback();
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+    for (const Guid& sourceId : sourcesToRemove)
+        transaction->RemoveSource(sourceId);
+    for (const SourceAssetRow& source : sourcesToUpsert)
+        transaction->UpsertSource(source);
+    for (const Guid& sourceId : objectSourcesToReplace)
+    {
+        const Array<SourceAssetObjectRow>* objects = nextObjectsBySource.TryGet(sourceId);
+        transaction->ReplaceObjects(sourceId, objects ? *objects : noObjects);
+    }
+    for (const Guid& sourceId : dependencySourcesToReplace)
+    {
+        const Array<SourceAssetDependencyRow>* dependenciesForSource = nextDefaultDependenciesBySource.TryGet(sourceId);
+        transaction->ReplaceDependencies(sourceId, TEXT("default"), dependenciesForSource ? *dependenciesForSource : noDependencies);
+    }
+    for (const Guid& sourceId : labelSourcesToSet)
+    {
+        const Array<String>* labels = nextLabelsBySource.TryGet(sourceId);
+        transaction->SetLabels(sourceId, labels ? *labels : noLabels);
+    }
+    for (const Guid& sourceId : diagnosticSourcesToReplace)
+    {
+        const Array<SourceAssetDiagnosticRow>* sourceDiagnostics = nextAllDiagnosticsBySource.TryGet(sourceId);
+        transaction->ReplaceDiagnostics(sourceId, sourceDiagnostics ? *sourceDiagnostics : noDiagnostics);
+    }
     if (transaction->Commit(diagnostic))
         return true;
 

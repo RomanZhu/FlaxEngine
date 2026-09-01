@@ -5,6 +5,7 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/StringUtils.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 namespace
@@ -18,6 +19,18 @@ namespace
         result.MetaPath = String(path) + TEXT(".meta");
         result.CanonicalMetaPath = result.MetaPath.ToLower();
         result.ImporterId = TEXT("Flax.Test");
+        return result;
+    }
+
+    SourceAssetObjectRow MakeObject(const Guid& assetGuid, const Guid& objectGuid, int64 localFileId, const StringView& stableIdentifier)
+    {
+        SourceAssetObjectRow result;
+        result.AssetGuid = assetGuid;
+        result.ObjectGuid = objectGuid;
+        result.LocalFileId = localFileId;
+        result.StableIdentifier = stableIdentifier;
+        result.TypeName = TEXT("FlaxEngine.Model");
+        result.IsMain = localFileId == 1;
         return result;
     }
 }
@@ -113,4 +126,119 @@ TEST_CASE("Source asset database rejects stale writers and recovers a torn journ
     REQUIRE_FALSE(database.ReadChangesAfter(0, changes, requiresSnapshot, diagnostic));
     REQUIRE(changes.Count() == 1);
     CHECK(changes[0].Revision == 1);
+}
+
+TEST_CASE("Source asset database object replacement prunes related rows and replays incrementally")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("SourceAssetDatabaseObjectPrune-") + Guid::New().ToString(Guid::FormatType::N));
+    const String library = root / TEXT("Library");
+    const String recoveryLibrary = root / TEXT("RecoveryLibrary");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(recoveryLibrary));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid projectId = Guid::New();
+    const Guid assetId = Guid::New();
+    const Guid subObjectId = Guid::New();
+    const ArtifactKey mainArtifact(ContentHash::Compute("main-artifact", 13));
+    const ArtifactKey subArtifact(ContentHash::Compute("sub-artifact", 12));
+    AssetPipelineDiagnostic diagnostic;
+    SourceAssetDatabase database;
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+
+    std::unique_ptr<AssetDatabaseTransaction> seed = database.BeginTransaction();
+    REQUIRE(seed);
+    seed->UpsertSource(MakeSource(assetId, TEXT("Assets/Body.fbx")));
+    Array<SourceAssetObjectRow> objects;
+    objects.Add(MakeObject(assetId, assetId, 1, TEXT("main")));
+    objects.Add(MakeObject(assetId, subObjectId, 2, TEXT("mesh:/Body")));
+    seed->ReplaceObjects(assetId, objects);
+    SourceAssetDependencyRow dependency;
+    dependency.OwnerAssetGuid = assetId;
+    dependency.OwnerLocalFileId = 1;
+    dependency.TargetId = TEXT("Windows-x64");
+    dependency.Kind = AssetDependencyKind::RuntimeReference;
+    dependency.TargetAssetGuid = assetId;
+    dependency.TargetLocalFileId = 2;
+    dependency.CustomDependency = AssetObjectId(AssetGuid(assetId), 2).ToString();
+    Array<SourceAssetDependencyRow> dependencies;
+    dependencies.Add(dependency);
+    seed->ReplaceDependencies(assetId, 1, dependency.TargetId, dependencies);
+    SourceAssetPublicationRow publication;
+    publication.AssetGuid = assetId;
+    publication.LocalFileId = 1;
+    publication.TargetId = dependency.TargetId;
+    publication.Artifact = mainArtifact;
+    publication.IsLastKnownGood = true;
+    seed->UpsertPublication(publication);
+    publication.LocalFileId = 2;
+    publication.Artifact = subArtifact;
+    seed->UpsertPublication(publication);
+    SourceArtifactObjectRow artifactObject;
+    artifactObject.AssetGuid = assetId;
+    artifactObject.LocalFileId = 1;
+    artifactObject.TypeName = TEXT("FlaxEngine.Model");
+    artifactObject.ObjectBlobId = ContentHash::Compute("main-blob", 9);
+    Array<SourceArtifactObjectRow> artifactObjects;
+    artifactObjects.Add(artifactObject);
+    seed->ReplaceArtifactObjects(mainArtifact, artifactObjects);
+    artifactObject.LocalFileId = 2;
+    artifactObject.ObjectBlobId = ContentHash::Compute("sub-blob", 8);
+    artifactObjects[0] = artifactObject;
+    seed->ReplaceArtifactObjects(subArtifact, artifactObjects);
+    SourceImportAttemptRow attempt;
+    attempt.AttemptId = Guid::New();
+    attempt.AssetGuid = assetId;
+    attempt.TargetId = dependency.TargetId;
+    attempt.Status = TEXT("Succeeded");
+    seed->UpsertImportAttempt(attempt);
+    REQUIRE_FALSE(seed->Commit(diagnostic));
+
+    std::unique_ptr<AssetDatabaseTransaction> unrelated = database.BeginTransaction();
+    REQUIRE(unrelated);
+    Array<String> labels;
+    labels.Add(TEXT("Character"));
+    unrelated->SetLabels(assetId, labels);
+    REQUIRE_FALSE(unrelated->Commit(diagnostic));
+    AssetDatabaseReadSnapshot retained = database.Read();
+    CHECK(retained.GetState().Publications.Count() == 2);
+    CHECK(retained.GetState().ArtifactObjects.Count() == 2);
+    CHECK(retained.GetState().ImportAttempts.Count() == 1);
+    CHECK(retained.GetState().Dependencies.Count() == 1);
+
+    std::unique_ptr<AssetDatabaseTransaction> prune = database.BeginTransaction();
+    REQUIRE(prune);
+    objects.RemoveAt(1);
+    prune->ReplaceObjects(assetId, objects);
+    REQUIRE_FALSE(prune->Commit(diagnostic));
+    retained = database.Read();
+    REQUIRE(retained.GetState().Publications.Count() == 1);
+    CHECK(retained.GetState().Publications[0].LocalFileId == 1);
+    REQUIRE(retained.GetState().ArtifactObjects.Count() == 1);
+    CHECK(retained.GetState().ArtifactObjects[0].LocalFileId == 1);
+    CHECK(retained.GetState().ImportAttempts.Count() == 1);
+    CHECK(retained.GetState().Dependencies.IsEmpty());
+
+    const String sourceDirectory = library / TEXT("AssetDatabase");
+    const String recoveryDirectory = recoveryLibrary / TEXT("AssetDatabase");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(recoveryDirectory));
+    Array<String> files;
+    FileSystem::DirectoryGetFiles(files, sourceDirectory);
+    for (const String& file : files)
+    {
+        if (file.EndsWith(TEXT("writer.lock")) || file.EndsWith(TEXT("source-changes.log")))
+            continue;
+        REQUIRE_FALSE(FileSystem::CopyFile(recoveryDirectory / StringUtils::GetFileName(file), file));
+    }
+    SourceAssetDatabase recovered;
+    REQUIRE_FALSE(recovered.Open(recoveryLibrary, projectId, diagnostic));
+    CHECK(recovered.GetRevision() == database.GetRevision());
+    const AssetDatabaseReadSnapshot replayed = recovered.Read();
+    CHECK(replayed.GetState().Objects.Count() == 1);
+    CHECK(replayed.GetState().Publications.Count() == 1);
+    CHECK(replayed.GetState().ArtifactObjects.Count() == 1);
+    CHECK(replayed.GetState().ImportAttempts.Count() == 1);
+    CHECK(replayed.GetState().Dependencies.IsEmpty());
+    REQUIRE_FALSE(recovered.Close(&diagnostic));
+    REQUIRE_FALSE(database.Close(&diagnostic));
 }

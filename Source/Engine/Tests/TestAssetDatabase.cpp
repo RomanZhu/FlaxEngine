@@ -126,7 +126,7 @@ TEST_CASE("Asset database publishes coherent indexed immutable snapshots")
     const uint64 rootRecordRevision = found.DatabaseRevision;
     const uint64 unchangedSnapshotRevision = database.GetRevision();
     REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
-    CHECK(database.GetRevision() == unchangedSnapshotRevision + 1);
+    CHECK(database.GetRevision() == unchangedSnapshotRevision);
     REQUIRE(database.TryGetRecord(rootId, found));
     CHECK(found.DatabaseRevision == rootRecordRevision);
 
@@ -138,6 +138,115 @@ TEST_CASE("Asset database publishes coherent indexed immutable snapshots")
     CHECK(database.GetRevision() == oldRevision + 1);
     CHECK(snapshot.Records.Count() == 2);
     CHECK(snapshot.Records[0].DatabaseRevision == rootRecordRevision);
+}
+
+TEST_CASE("Asset database durable republish is a no-op and preserves publications")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseIncrementalPublish-") + Guid::New().ToString(Guid::FormatType::N));
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid projectId = Guid::New();
+    const Guid sourceId = Guid::New();
+    const Guid subObjectId = Guid::New();
+    AssetDatabase database;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    Array<AssetRecord> records;
+    records.Add(MakeDatabaseRecord(sourceId, sourceId, root / TEXT("Body.fbx")));
+    records.Add(MakeDatabaseRecord(subObjectId, sourceId, root / TEXT("Body.fbx"), TEXT("mesh:/Body")));
+    Array<AssetPipelineDiagnostic> diagnostics;
+    AssetPipelineDiagnostic scanDiagnostic;
+    scanDiagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+    scanDiagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+    scanDiagnostic.AssetGuid = sourceId;
+    scanDiagnostic.SourcePath = root / TEXT("Body.fbx");
+    scanDiagnostic.Message = TEXT("Stable test diagnostic.");
+    diagnostics.Add(scanDiagnostic);
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostics, diagnostic));
+
+    const uint64 stableRevision = database.GetRevision();
+    const String walPath = library / TEXT("AssetDatabase/normalized-store.wal");
+    const uint64 stableWalSize = FileSystem::GetFileSize(walPath);
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostics, diagnostic));
+    CHECK(database.GetRevision() == stableRevision);
+    CHECK(FileSystem::GetFileSize(walPath) == stableWalSize);
+    Array<AssetChangeSet> changes;
+    bool requiresSnapshot = false;
+    REQUIRE_FALSE(database.ReadChangesAfter(stableRevision, changes, requiresSnapshot, diagnostic));
+    CHECK_FALSE(requiresSnapshot);
+    CHECK(changes.IsEmpty());
+
+    SourceAssetPublicationRow mainPublication;
+    mainPublication.AssetGuid = sourceId;
+    mainPublication.LocalFileId = 1;
+    mainPublication.TargetId = TEXT("Windows-x64");
+    mainPublication.Artifact = ArtifactKey(ContentHash::Compute("main-publication", 16));
+    mainPublication.IsLastKnownGood = true;
+    SourceAssetDependencyRow dependency;
+    dependency.OwnerAssetGuid = sourceId;
+    dependency.OwnerLocalFileId = 1;
+    dependency.TargetId = mainPublication.TargetId;
+    dependency.Kind = AssetDependencyKind::RuntimeReference;
+    dependency.TargetAssetGuid = sourceId;
+    dependency.TargetLocalFileId = 2;
+    dependency.CustomDependency = AssetObjectId(AssetGuid(sourceId), 2).ToString();
+    Array<SourceAssetDependencyRow> publicationDependencies;
+    publicationDependencies.Add(dependency);
+    REQUIRE_FALSE(database.RecordPublication(mainPublication, publicationDependencies, diagnostic));
+    SourceAssetPublicationRow subPublication = mainPublication;
+    subPublication.LocalFileId = 2;
+    subPublication.Artifact = ArtifactKey(ContentHash::Compute("sub-publication", 15));
+    Array<SourceAssetDependencyRow> noDependencies;
+    REQUIRE_FALSE(database.RecordPublication(subPublication, noDependencies, diagnostic));
+
+    const uint64 publicationRevision = database.GetRevision();
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostics, diagnostic));
+    CHECK(database.GetRevision() == publicationRevision);
+    CHECK(database.GetDurableSnapshot().GetState().Publications.Count() == 2);
+
+    records.RemoveAt(1);
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostics, diagnostic));
+    const AssetDatabaseReadSnapshot durableSnapshot = database.GetDurableSnapshot();
+    const SourceAssetDatabaseState& state = durableSnapshot.GetState();
+    REQUIRE(state.Publications.Count() == 1);
+    CHECK(state.Publications[0].LocalFileId == 1);
+    CHECK(state.Dependencies.IsEmpty());
+    changes.Clear();
+    REQUIRE_FALSE(database.ReadChangesAfter(publicationRevision, changes, requiresSnapshot, diagnostic));
+    REQUIRE(changes.Count() == 1);
+    CHECK(changes[0].ObjectsChanged.Count() == 1);
+    CHECK(changes[0].DiagnosticsChanged.IsEmpty());
+    REQUIRE_FALSE(database.Close(&diagnostic));
+}
+
+TEST_CASE("Asset database incremental publication keeps WAL growth bounded")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseBoundedWal-") + Guid::New().ToString(Guid::FormatType::N));
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    AssetDatabase database;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(database.Open(library, Guid::New(), diagnostic));
+    const String walPath = library / TEXT("AssetDatabase/normalized-store.wal");
+    const uint64 emptyWalSize = FileSystem::GetFileSize(walPath);
+    Array<AssetRecord> records;
+    for (int32 i = 0; i < 80; i++)
+    {
+        const Guid id(i + 1, i + 101, i + 201, i + 301);
+        records.Add(MakeDatabaseRecord(id, id, root / (StringUtils::ToString(i) + TEXT(".png"))));
+    }
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+    const uint64 fullGrowth = FileSystem::GetFileSize(walPath) - emptyWalSize;
+    records[0].Labels.Add(TEXT("Changed"));
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+    const uint64 incrementalGrowth = FileSystem::GetFileSize(walPath) - emptyWalSize - fullGrowth;
+    CHECK(incrementalGrowth < 4096);
+    CHECK(incrementalGrowth * 8 < fullGrowth);
+    REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
 TEST_CASE("Asset database detects portable main path collisions")

@@ -188,6 +188,26 @@ void AssetDatabaseTransaction::ReplaceObjects(const Guid& assetGuid, const Array
         _state.Objects.Add(value);
         change.LocalFileIds.Add(value.LocalFileId);
     }
+    const auto hasObject = [&](int64 localFileId)
+    {
+        for (const SourceAssetObjectRow& value : _state.Objects)
+            if (value.AssetGuid == assetGuid && value.LocalFileId == localFileId)
+                return true;
+        return false;
+    };
+    RemoveRows(_state.Dependencies, [&](const SourceAssetDependencyRow& value)
+    {
+        return (value.OwnerAssetGuid == assetGuid && !hasObject(value.OwnerLocalFileId)) ||
+            (value.TargetAssetGuid == assetGuid && value.TargetLocalFileId != 0 && !hasObject(value.TargetLocalFileId));
+    });
+    RemoveRows(_state.Publications, [&](const SourceAssetPublicationRow& value)
+    {
+        return value.AssetGuid == assetGuid && !hasObject(value.LocalFileId);
+    });
+    RemoveRows(_state.ArtifactObjects, [&](const SourceArtifactObjectRow& value)
+    {
+        return value.AssetGuid == assetGuid && !hasObject(value.LocalFileId);
+    });
     if (changed)
         _changes.ObjectsChanged.Add(MoveTemp(change));
     SourceAssetDatabaseState payload;
