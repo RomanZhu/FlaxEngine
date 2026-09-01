@@ -19,7 +19,62 @@ namespace FlaxEditor.Modules
     /// <seealso cref="FlaxEditor.Modules.EditorModule" />
     public sealed class ContentImportingModule : EditorModule
     {
+        internal const int MaxConcurrentCanonicalImports = 2;
         internal static ThreadPriority WorkerThreadPriority => ThreadPriority.BelowNormal;
+
+        internal static bool CanExecuteCanonicalImportsConcurrently(IFileEntryAction first, IFileEntryAction second)
+        {
+            if (!IsConcurrentCanonicalImport(first) || !IsConcurrentCanonicalImport(second))
+                return false;
+            var firstSource = ContentMutationPathUtils.Normalize(first.SourceUrl);
+            var firstResult = ContentMutationPathUtils.Normalize(first.ResultUrl);
+            var secondSource = ContentMutationPathUtils.Normalize(second.SourceUrl);
+            var secondResult = ContentMutationPathUtils.Normalize(second.ResultUrl);
+            return !ContentMutationPathUtils.AreEquivalent(firstSource, secondSource) &&
+                   !ContentMutationPathUtils.AreEquivalent(firstSource, secondResult) &&
+                   !ContentMutationPathUtils.AreEquivalent(firstResult, secondSource) &&
+                   !ContentMutationPathUtils.AreEquivalent(firstResult, secondResult);
+        }
+
+        private static bool IsConcurrentCanonicalImport(IFileEntryAction entry)
+        {
+            if (entry is not ImportFileEntry { IsCanonicalSource: true, AllowReplace: false })
+                return false;
+            var type = entry.GetType();
+            return type == typeof(ImportFileEntry) || type == typeof(TextureImportEntry) ||
+                   type == typeof(ModelImportEntry) || type == typeof(AudioImportEntry);
+        }
+
+        internal static void ExecuteCanonicalImportPair(Action<int> execute)
+        {
+            Exception helperError = null;
+            var helper = new Thread(() =>
+            {
+                try
+                {
+                    execute(1);
+                }
+                catch (Exception ex)
+                {
+                    helperError = ex;
+                }
+            })
+            {
+                Name = "Content Importer 2",
+                Priority = WorkerThreadPriority,
+            };
+            helper.Start();
+            try
+            {
+                execute(0);
+            }
+            finally
+            {
+                helper.Join();
+            }
+            if (helperError != null)
+                throw helperError;
+        }
 
         private sealed class InPlaceCanonicalImportEntry : IFileEntryAction
         {
@@ -758,6 +813,59 @@ namespace FlaxEditor.Modules
             }
         }
 
+        private void ProcessConcurrentCanonicalImports(IFileEntryAction first, IFileEntryAction second)
+        {
+            var entries = new IFileEntryAction[MaxConcurrentCanonicalImports] { first, second };
+            var failed = new bool[MaxConcurrentCanonicalImports] { true, true };
+            var active = new bool[MaxConcurrentCanonicalImports] { true, true };
+            var trackedWritePaths = new string[MaxConcurrentCanonicalImports];
+            var errors = new Exception[MaxConcurrentCanonicalImports];
+
+            for (int i = 0; i < entries.Length; i++)
+            {
+                trackedWritePaths[i] = entries[i].ResultUrl;
+                Editor.ContentDatabase.BeginAssetSave(trackedWritePaths[i]);
+                try
+                {
+                    // UI-facing callbacks remain serialized and preserve request order.
+                    ImportFileBegin?.Invoke(entries[i]);
+                }
+                catch (Exception ex)
+                {
+                    active[i] = false;
+                    errors[i] = ex;
+                }
+            }
+
+            ExecuteCanonicalImportPair(index =>
+            {
+                if (!active[index])
+                    return;
+                try
+                {
+                    failed[index] = ExecuteImportTransaction(entries[index]);
+                }
+                catch (Exception ex)
+                {
+                    errors[index] = ex;
+                }
+            });
+
+            for (int i = 0; i < entries.Length; i++)
+            {
+                Editor.ContentDatabase.EndAssetSave(trackedWritePaths[i], !failed[i]);
+                if (errors[i] != null)
+                    Editor.LogWarning(errors[i]);
+                if (failed[i])
+                    Editor.LogWarning("Failed to import " + entries[i].SourceUrl + " to " + entries[i].ResultUrl);
+                lock (_requests)
+                    _importBatchDone++;
+                Profiler.BeginEvent("ImportFileEnd");
+                ImportFileEnd?.Invoke(entries[i], failed[i]);
+                Profiler.EndEvent();
+            }
+        }
+
         private void WorkerMain()
         {
             IFileEntryAction entry;
@@ -796,6 +904,22 @@ namespace FlaxEditor.Modules
                                 canonicalBatch.Add((InPlaceCanonicalImportEntry)_importingQueue.Dequeue());
                         }
                         ProcessInPlaceCanonicalBatch(canonicalBatch, pendingCanonicalBuilds);
+                        wasLastTickWorking = true;
+                        continue;
+                    }
+
+                    IFileEntryAction concurrentEntry = null;
+                    lock (_requests)
+                    {
+                        if (_importingQueue.Count != 0 &&
+                            CanExecuteCanonicalImportsConcurrently(entry, _importingQueue.Peek()))
+                        {
+                            concurrentEntry = _importingQueue.Dequeue();
+                        }
+                    }
+                    if (concurrentEntry != null)
+                    {
+                        ProcessConcurrentCanonicalImports(entry, concurrentEntry);
                         wasLastTickWorking = true;
                         continue;
                     }

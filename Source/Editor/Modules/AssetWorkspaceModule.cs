@@ -1417,48 +1417,30 @@ namespace FlaxEditor.Modules
                 }
             }
 
-            if (requests.Count > 1)
+            if (TryBuildNativeCopyBatch(requests, out var nativeEntries, out var nativeCompletedPaths, out var nativePreflight))
             {
-                var nativeEntries = new AssetCopyEntryRequest[requests.Count];
-                var useNativeBatch = true;
-                for (int i = 0; i < requests.Count; i++)
-                {
-                    var item = requests[i].Item;
-                    var targetPath = ContentMutationPathUtils.Normalize(requests[i].Destination);
-                    if (item == null || !item.Exists || !CanUseNativeAssetTransaction(item, item.Path, targetPath))
-                    {
-                        useNativeBatch = false;
-                        break;
-                    }
-                    var preflight = PreflightCopy(item, targetPath);
-                    if (!preflight.Succeeded)
-                        return preflight;
-                    nativeEntries[i] = new AssetCopyEntryRequest
-                    {
-                        SourcePath = item.Path,
-                        DestinationPath = targetPath,
-                        ExpectedAssetGuid = ((AssetItem)item).ID,
-                    };
-                }
-                if (useNativeBatch)
-                {
-                    ContentMutationDiagnostics.Log("mutation.copy.begin", $"items={requests.Count}; nativeBatch=true");
+                if (!nativePreflight.Succeeded)
+                    return nativePreflight;
+                ContentMutationDiagnostics.Log("mutation.copy.begin", $"items={requests.Count}; entries={nativeEntries.Length}; nativeBatch=true");
 #if FLAX_TESTS
-                    for (int i = 0; i < nativeEntries.Length; i++)
+                NativeCopyBatchObserver?.Invoke(nativeEntries);
+                for (int i = 0; i < nativeEntries.Length; i++)
+                {
+                    if (nativeEntries[i].Kind == AssetCopyEntryKind.CanonicalAsset)
                         CanonicalCopyObserver?.Invoke(nativeEntries[i].SourcePath, nativeEntries[i].DestinationPath);
-#endif
-                    if (AssetOperationService.CopyAssets(nativeEntries, out var copiedGuids) ||
-                        copiedGuids == null || copiedGuids.Length != nativeEntries.Length)
-                    {
-                        ContentMutationDiagnostics.Log("mutation.copy.failed", $"items={requests.Count}; nativeBatch=true");
-                        return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed,
-                            nativeEntries[0].SourcePath, nativeEntries[0].DestinationPath,
-                            "The native asset copy batch failed.");
-                    }
-                    ContentMutationDiagnostics.Log("mutation.copy.committed", $"items={requests.Count}; nativeBatch=true");
-                    return ContentMutationResult.Success(nativeEntries[0].SourcePath,
-                        nativeEntries[0].DestinationPath, completedPaths: nativeEntries.Select(x => x.DestinationPath).ToArray());
                 }
+#endif
+                if (AssetOperationService.CopyAssets(nativeEntries, out var copiedGuids) ||
+                    copiedGuids == null || copiedGuids.Length != nativeEntries.Length)
+                {
+                    ContentMutationDiagnostics.Log("mutation.copy.failed", $"items={requests.Count}; entries={nativeEntries.Length}; nativeBatch=true");
+                    return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed,
+                        nativeEntries[0].SourcePath, nativeEntries[0].DestinationPath,
+                        "The native asset copy batch failed.");
+                }
+                ContentMutationDiagnostics.Log("mutation.copy.committed", $"items={requests.Count}; entries={nativeEntries.Length}; nativeBatch=true");
+                return ContentMutationResult.Success(nativeEntries[0].SourcePath,
+                    nativeEntries[0].DestinationPath, completedPaths: nativeCompletedPaths);
             }
 
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
@@ -1508,6 +1490,152 @@ namespace FlaxEditor.Modules
             else
                 ContentMutationDiagnostics.Log("mutation.copy.failed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
             return result;
+        }
+
+        private bool TryBuildNativeCopyBatch(IReadOnlyList<(ContentItem Item, string Destination)> requests,
+            out AssetCopyEntryRequest[] entries, out string[] completedPaths, out ContentMutationResult preflight)
+        {
+            var nativeEntries = new List<AssetCopyEntryRequest>();
+            var plannedPaths = new HashSet<string>(ContentMutationPathUtils.Comparer);
+            var plannedDirectories = new HashSet<string>(ContentMutationPathUtils.Comparer);
+            completedPaths = new string[requests.Count];
+            preflight = ContentMutationResult.Prepared(null, null);
+            for (int i = 0; i < requests.Count; i++)
+            {
+                var item = requests[i].Item;
+                var destination = ContentMutationPathUtils.Normalize(requests[i].Destination);
+                if (item == null || !item.Exists)
+                {
+                    preflight = ContentMutationResult.Fail(ContentMutationFailure.InvalidSource,
+                        item?.Path, destination, "The source item is missing.");
+                    entries = Array.Empty<AssetCopyEntryRequest>();
+                    return true;
+                }
+                if (item is AssetItem { IsCanonicalSubAsset: true })
+                {
+                    preflight = ContentMutationResult.Fail(ContentMutationFailure.InvalidSource,
+                        item.Path, destination, "Canonical subassets cannot be copied independently of their source asset.");
+                    entries = Array.Empty<AssetCopyEntryRequest>();
+                    return true;
+                }
+                if (!ContentMutationPathUtils.IsWithinRoot(item.Path, Globals.ProjectContentFolder, false) ||
+                    !ContentMutationPathUtils.IsWithinRoot(destination, Globals.ProjectContentFolder, false))
+                {
+                    entries = Array.Empty<AssetCopyEntryRequest>();
+                    return false;
+                }
+                var itemPreflight = PreflightCopy(item, destination);
+                if (!itemPreflight.Succeeded)
+                {
+                    preflight = itemPreflight;
+                    entries = Array.Empty<AssetCopyEntryRequest>();
+                    return true;
+                }
+                if (!TryAddNativeCopyEntries(item, destination, nativeEntries, plannedPaths, plannedDirectories,
+                    ref preflight))
+                {
+                    entries = Array.Empty<AssetCopyEntryRequest>();
+                    return !preflight.Succeeded;
+                }
+                completedPaths[i] = destination;
+            }
+            entries = nativeEntries.ToArray();
+            return entries.Length != 0;
+        }
+
+        private static bool TryAddNativeCopyEntries(ContentItem item, string destination,
+            List<AssetCopyEntryRequest> entries, HashSet<string> plannedPaths, HashSet<string> plannedDirectories,
+            ref ContentMutationResult preflight)
+        {
+            if (item is AssetItem { IsCanonicalSubAsset: true })
+                return true;
+            var source = ContentMutationPathUtils.Normalize(item.Path);
+            destination = ContentMutationPathUtils.Normalize(destination);
+            if (!ContentMutationPathUtils.IsWithinRoot(source, Globals.ProjectContentFolder, false) ||
+                !ContentMutationPathUtils.IsWithinRoot(destination, Globals.ProjectContentFolder, false))
+                return false;
+            var parent = ContentMutationPathUtils.Normalize(Path.GetDirectoryName(destination));
+            if (!Directory.Exists(parent) && !plannedDirectories.Contains(parent))
+            {
+                preflight = ContentMutationResult.Fail(ContentMutationFailure.InvalidDestination, source, destination,
+                    "A native copy destination parent is missing or not planned before its child.");
+                return false;
+            }
+            if (!ReserveNativeCopyDestination(item, destination, plannedPaths, ref preflight))
+                return false;
+
+            if (item is ContentFolder folder)
+            {
+                entries.Add(new AssetCopyEntryRequest
+                {
+                    SourcePath = source,
+                    DestinationPath = destination,
+                    Kind = AssetCopyEntryKind.Directory,
+                });
+                plannedDirectories.Add(destination);
+                var sourceMetadata = source + ".meta";
+                if (File.Exists(sourceMetadata))
+                {
+                    var destinationMetadata = destination + ".meta";
+                    if (!ReserveNativeCopyDestination(item, destinationMetadata, plannedPaths, ref preflight))
+                        return false;
+                    entries.Add(new AssetCopyEntryRequest
+                    {
+                        SourcePath = sourceMetadata,
+                        DestinationPath = destinationMetadata,
+                        Kind = AssetCopyEntryKind.MetadataSidecar,
+                    });
+                }
+                var children = folder.Children
+                    .Where(x => x is not AssetItem { IsCanonicalSubAsset: true })
+                    .OrderBy(x => ContentMutationPathUtils.Normalize(x.Path), ContentMutationPathUtils.Comparer)
+                    .ToArray();
+                for (int i = 0; i < children.Length; i++)
+                {
+                    var child = children[i];
+                    if (!TryAddNativeCopyEntries(child, Path.Combine(destination, child.FileName), entries,
+                        plannedPaths, plannedDirectories, ref preflight))
+                        return false;
+                }
+                return true;
+            }
+            if (item is AssetItem { IsCanonicalSource: true } assetItem)
+            {
+                if (!CanUseNativeAssetTransaction(item, source, destination))
+                    return false;
+                var destinationMetadata = destination + ".meta";
+                if (!ReserveNativeCopyDestination(item, destinationMetadata, plannedPaths, ref preflight))
+                    return false;
+                entries.Add(new AssetCopyEntryRequest
+                {
+                    SourcePath = source,
+                    DestinationPath = destination,
+                    ExpectedAssetGuid = assetItem.ID,
+                    Kind = AssetCopyEntryKind.CanonicalAsset,
+                });
+                return true;
+            }
+            if (UseContentBackendForCopy(item))
+                return false;
+            entries.Add(new AssetCopyEntryRequest
+            {
+                SourcePath = source,
+                DestinationPath = destination,
+                Kind = AssetCopyEntryKind.File,
+            });
+            return true;
+        }
+
+        private static bool ReserveNativeCopyDestination(ContentItem item, string destination,
+            HashSet<string> plannedPaths, ref ContentMutationResult preflight)
+        {
+            if (!plannedPaths.Add(destination) || ContentMutationPathUtils.Exists(destination))
+            {
+                preflight = ContentMutationResult.Fail(ContentMutationFailure.DestinationCollision,
+                    item.Path, destination, "A copy destination is duplicated or already exists.");
+                return false;
+            }
+            return true;
         }
 
         internal ContentMutationResult PreflightCopy(ContentItem item, string targetPath)
@@ -1759,6 +1887,7 @@ namespace FlaxEditor.Modules
 #if FLAX_TESTS
         internal static Action<string, string> CanonicalCopyObserver;
         internal static Action<string> CanonicalDeleteObserver;
+        internal static Action<AssetCopyEntryRequest[]> NativeCopyBatchObserver;
 #endif
 
         private static bool CopyCanonicalAsset(string sourcePath, string targetPath)

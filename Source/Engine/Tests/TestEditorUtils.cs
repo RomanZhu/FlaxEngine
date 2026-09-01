@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Import;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Modules;
 using FlaxEditor.Windows;
@@ -112,6 +113,61 @@ namespace FlaxEngine.Tests
         public void TestContentImporterCoordinatorDoesNotPreemptEditorWork()
         {
             Assert.AreEqual(ThreadPriority.BelowNormal, ContentImportingModule.WorkerThreadPriority);
+        }
+
+        [Test]
+        public void TestContentImporterOnlyOverlapsIndependentCanonicalSources()
+        {
+            Assert.AreEqual(2, ContentImportingModule.MaxConcurrentCanonicalImports);
+            var firstRequest = new Request
+            {
+                InputPath = "C:/External/First.glb",
+                OutputPath = "C:/Project/Content/First.glb",
+                UseCanonicalSource = true,
+            };
+            var secondRequest = new Request
+            {
+                InputPath = "C:/External/Second.glb",
+                OutputPath = "C:/Project/Content/Second.glb",
+                UseCanonicalSource = true,
+            };
+            var first = new ModelImportEntry(ref firstRequest);
+            var second = new ModelImportEntry(ref secondRequest);
+
+            Assert.IsTrue(ContentImportingModule.CanExecuteCanonicalImportsConcurrently(first, second));
+
+            secondRequest.InputPath = firstRequest.InputPath;
+            second = new ModelImportEntry(ref secondRequest);
+            Assert.IsFalse(ContentImportingModule.CanExecuteCanonicalImportsConcurrently(first, second));
+
+            secondRequest.InputPath = "C:/External/Second.glb";
+            secondRequest.AllowReplace = true;
+            second = new ModelImportEntry(ref secondRequest);
+            Assert.IsFalse(ContentImportingModule.CanExecuteCanonicalImportsConcurrently(first, second));
+        }
+
+        [Test]
+        public void TestContentImporterExecutesCanonicalPairConcurrentlyAtLowPriority()
+        {
+            using var entered = new CountdownEvent(ContentImportingModule.MaxConcurrentCanonicalImports);
+            var priorities = new ThreadPriority[ContentImportingModule.MaxConcurrentCanonicalImports];
+
+            ContentImportingModule.ExecuteCanonicalImportPair(index =>
+            {
+                priorities[index] = Thread.CurrentThread.Priority;
+                entered.Signal();
+                Assert.IsTrue(entered.Wait(TimeSpan.FromSeconds(5)), "Canonical import work did not overlap.");
+            });
+
+            Assert.AreEqual(ThreadPriority.BelowNormal, priorities[1]);
+        }
+
+        public static int RunConcurrentCanonicalImportCoordinatorTests()
+        {
+            var tests = new TestEditorUtils();
+            tests.TestContentImporterOnlyOverlapsIndependentCanonicalSources();
+            tests.TestContentImporterExecutesCanonicalPairConcurrentlyAtLowPriority();
+            return 0;
         }
 
         [Test]
@@ -307,6 +363,84 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestMixedFolderCopyUsesOneOrderedNativeBatch()
+        {
+            var root = Path.Combine(Globals.ProjectContentFolder, "__MixedFolderCopy_" + Guid.NewGuid().ToString("N"));
+            var sourceFolderPath = Path.Combine(root, "Source");
+            var destinationFolderPath = Path.Combine(root, "Destination");
+            var nestedFolderPath = Path.Combine(sourceFolderPath, "Nested");
+            var sourceAssetPath = Path.Combine(sourceFolderPath, "Canonical.txt");
+            var destinationAssetPath = Path.Combine(destinationFolderPath, "Canonical.txt");
+            AssetCopyEntryRequest[] observedEntries = null;
+            try
+            {
+                Directory.CreateDirectory(nestedFolderPath);
+                var sourceFolder = new ContentFolder(ContentFolderType.Content, sourceFolderPath, null);
+                CreateCanonicalTextItem(sourceAssetPath, sourceFolder, out var sourceAssetId);
+                var plainPath = Path.Combine(sourceFolderPath, "Plain.txt");
+                File.WriteAllText(plainPath, "plain");
+                new FileItem(plainPath) { ParentFolder = sourceFolder };
+                var nestedFolder = new ContentFolder(ContentFolderType.Content, nestedFolderPath, null);
+                sourceFolder.Children.Add(nestedFolder);
+                var nestedPath = Path.Combine(nestedFolderPath, "Nested.txt");
+                File.WriteAllText(nestedPath, "nested");
+                new FileItem(nestedPath) { ParentFolder = nestedFolder };
+                AssetWorkspaceModule.NativeCopyBatchObserver = entries => observedEntries = entries.ToArray();
+
+                var result = new AssetWorkspaceModule(null).Copy(sourceFolder, destinationFolderPath);
+
+                Assert.IsTrue(result.Succeeded, result.Message);
+                Assert.NotNull(observedEntries);
+                CollectionAssert.AreEqual(new[]
+                {
+                    AssetCopyEntryKind.Directory,
+                    AssetCopyEntryKind.CanonicalAsset,
+                    AssetCopyEntryKind.Directory,
+                    AssetCopyEntryKind.File,
+                    AssetCopyEntryKind.File,
+                }, observedEntries.Select(x => x.Kind).ToArray());
+                Assert.AreEqual(Path.GetFullPath(destinationFolderPath), Path.GetFullPath(observedEntries[0].DestinationPath));
+                Assert.AreEqual(Path.GetFullPath(Path.Combine(destinationFolderPath, "Nested")), Path.GetFullPath(observedEntries[2].DestinationPath));
+                Assert.AreEqual(Path.GetFullPath(Path.Combine(destinationFolderPath, "Nested", "Nested.txt")), Path.GetFullPath(observedEntries[3].DestinationPath));
+                Assert.AreEqual(1, result.CompletedPaths.Length);
+                Assert.IsTrue(File.Exists(Path.Combine(destinationFolderPath, "Plain.txt")));
+                Assert.IsTrue(File.Exists(Path.Combine(destinationFolderPath, "Nested", "Nested.txt")));
+                var destinationRecords = AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery
+                {
+                    PathPrefix = destinationFolderPath,
+                    MainAssetsOnly = true,
+                });
+                var copiedRecord = destinationRecords.FirstOrDefault(x =>
+                    ContentMutationPathUtils.Comparer.Equals(ContentMutationPathUtils.Normalize(x.SourcePath),
+                        ContentMutationPathUtils.Normalize(destinationAssetPath)));
+                Assert.AreNotEqual(Guid.Empty, copiedRecord.SourceAssetID);
+                Assert.AreNotEqual(sourceAssetId, copiedRecord.SourceAssetID);
+            }
+            finally
+            {
+                AssetWorkspaceModule.NativeCopyBatchObserver = null;
+                CleanupCanonicalCopyAsset(destinationAssetPath);
+                CleanupCanonicalCopyAsset(sourceAssetPath);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+                AssetPipelineService.RefreshSources(new[] { root });
+            }
+        }
+
+        public static int RunMixedFolderCopyUsesOneOrderedNativeBatch()
+        {
+            try
+            {
+                new TestEditorUtils().TestMixedFolderCopyUsesOneOrderedNativeBatch();
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(ex.ToString(), ex);
+            }
+            return 0;
+        }
+
+        [Test]
         public void TestFolderCopyRoutesCanonicalChildrenThroughNativeAuthority()
         {
             var root = Path.Combine(Globals.ProjectContentFolder, "__CanonicalFolderCopy_" + Guid.NewGuid().ToString("N"));
@@ -347,7 +481,7 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
-        public void TestFolderCopyRollbackDeletesCanonicalChildrenThroughNativeAuthority()
+        public void TestFolderCopyBypassesManagedRollbackForNativeBatch()
         {
             var root = Path.Combine(Globals.ProjectContentFolder, "__CanonicalFolderRollback_" + Guid.NewGuid().ToString("N"));
             var sourceFolderPath = Path.Combine(root, "Source");
@@ -367,17 +501,17 @@ namespace FlaxEngine.Tests
                     nativeDeletes++;
                 };
                 ContentMutationTransaction.FaultInjector = point =>
-                    point == "after-copy" ? new IOException("Injected canonical folder copy rollback") : null;
+                    point == "after-copy" ? new IOException("Managed copy path should not execute") : null;
 
                 var result = new AssetWorkspaceModule(null).Copy(sourceFolder, destinationFolderPath);
 
-                Assert.IsFalse(result.Succeeded);
-                Assert.IsFalse(result.RequiresRecovery);
+                Assert.IsTrue(result.Succeeded, result.Message);
                 Assert.AreEqual(1, nativeCopies);
-                Assert.AreEqual(1, nativeDeletes);
+                Assert.AreEqual(0, nativeDeletes);
                 Assert.IsTrue(File.Exists(sourceAssetPath));
                 Assert.IsTrue(File.Exists(sourceAssetPath + ".meta"));
-                Assert.IsFalse(Directory.Exists(destinationFolderPath));
+                Assert.IsTrue(Directory.Exists(destinationFolderPath));
+                Assert.IsTrue(File.Exists(destinationAssetPath));
             }
             finally
             {
