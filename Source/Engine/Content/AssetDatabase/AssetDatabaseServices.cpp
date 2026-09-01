@@ -1140,6 +1140,15 @@ namespace
                 const bool exactMetadata = metadata.AssetType == authoredType &&
                     metadata.SourceKind == AssetSourceKind::TextDocument && metadata.Processor.ID == authoredProcessor &&
                     metadata.Processor.SettingsVersion == 1 && metadata.Processor.SettingsJson == StringAnsiView("{}\n");
+                const bool regressionDamagedMetadata = metadata.AssetType == RawDataAsset::TypeName &&
+                    metadata.SourceKind == AssetSourceKind::ImportedSource &&
+                    metadata.Processor.ID == TEXT("Flax.Binary") && metadata.Processor.SettingsVersion == 1 &&
+                    metadata.Processor.SettingsJson == StringAnsiView("{}\n");
+                if (regressionDamagedMetadata)
+                {
+                    ConfigureTypedAuthoredDocumentMetadata(metadata, authoredType, authoredProcessor);
+                    return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+                }
                 if (!exactMetadata)
                 {
                     diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
