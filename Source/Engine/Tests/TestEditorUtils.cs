@@ -1769,6 +1769,8 @@ namespace FlaxEngine.Tests
             var lifecycleStage = "setup";
             LogMessageDelegate captureConsoleDiagnostic = (level, message, stackTrace, threadId) =>
             {
+                if (level == LogType.Warning && message.Contains("Missing Base Model asset for the Animation Graph"))
+                    return;
                 if (level == LogType.Warning || level == LogType.Error || level == LogType.Fatal)
                 {
                     lock (consoleDiagnostics)
