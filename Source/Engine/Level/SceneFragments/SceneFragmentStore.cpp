@@ -144,11 +144,14 @@ namespace
         }
         if (version->value.GetUint() > SceneFragmentStore::FragmentFormatVersion)
             return Fail(error, TEXT("Scene fragment uses a future format version."));
-        if (version->value.GetUint() != SceneFragmentStore::FragmentFormatVersion || ownerGuid != expectedOwner ||
-            root->value.GetInt64() != entry.RootActorLocalId || serializer->value.GetUint() != entry.SerializerVersion)
-        {
-            return Fail(error, TEXT("Scene fragment header does not match its owner index."));
-        }
+        if (version->value.GetUint() != SceneFragmentStore::FragmentFormatVersion)
+            return Fail(error, TEXT("Scene fragment format version is invalid."));
+        if (ownerGuid != expectedOwner)
+            return Fail(error, TEXT("Scene fragment belongs to the wrong scene owner."));
+        if (root->value.GetInt64() != entry.RootActorLocalId)
+            return Fail(error, TEXT("Scene fragment root identity is misplaced for its owner index."));
+        if (serializer->value.GetUint() != entry.SerializerVersion)
+            return Fail(error, TEXT("Scene fragment serializer version does not match its owner index."));
         HashSet<int64> localIds;
         for (const rapidjson_flax::Value& value : contained->value.GetArray())
         {
@@ -293,11 +296,12 @@ bool ReadIndexAt(const Guid& sceneGuid, const StringView& path, SceneFragmentInd
         entry.Size = size->value.GetUint64();
         entry.SerializerVersion = serializer->value.GetUint();
         if (ContentHash::Parse(StringAnsiView(hash->value.GetString(), hash->value.GetStringLength()), entry.Content) ||
-            entry.Content.IsZero() || entry.RelativePhysicalPath != SceneFragmentStore::GetRelativeFragmentPath(entry.RootActorLocalId) ||
-            !roots.Add(entry.RootActorLocalId) || !paths.Add(entry.RelativePhysicalPath))
-        {
-            return Fail(error, TEXT("Scene fragment index contains invalid, duplicate, or misplaced entries."));
-        }
+            entry.Content.IsZero())
+            return Fail(error, TEXT("Scene fragment index entry content hash is malformed."));
+        if (entry.RelativePhysicalPath != SceneFragmentStore::GetRelativeFragmentPath(entry.RootActorLocalId))
+            return Fail(error, TEXT("Scene fragment index contains a misplaced fragment entry."));
+        if (!roots.Add(entry.RootActorLocalId) || !paths.Add(entry.RelativePhysicalPath))
+            return Fail(error, TEXT("Scene fragment index contains a duplicate fragment entry."));
         index.Fragments.Add(MoveTemp(entry));
     }
     Sorting::QuickSort(index.Fragments.Get(), index.Fragments.Count(), CompareEntries);

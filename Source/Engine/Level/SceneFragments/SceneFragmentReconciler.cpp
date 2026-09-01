@@ -33,7 +33,11 @@ void SceneFragmentReconciler::Reconcile(const Guid& sceneGuid, Array<SceneFragme
                                                            ? SceneFragmentDiagnosticCode::FutureVersion
                                                            : error.Contains(TEXT("ownership"), StringSearchCase::IgnoreCase)
                                                                  ? SceneFragmentDiagnosticCode::OwnerMismatch
-                                                                 : SceneFragmentDiagnosticCode::Malformed;
+                                                                 : error.Contains(TEXT("duplicate"), StringSearchCase::IgnoreCase)
+                                                                       ? SceneFragmentDiagnosticCode::DuplicateLocalId
+                                                                       : error.Contains(TEXT("misplaced"), StringSearchCase::IgnoreCase)
+                                                                             ? SceneFragmentDiagnosticCode::MisplacedFragment
+                                                                             : SceneFragmentDiagnosticCode::Malformed;
         AddDiagnostic(diagnostics, code, sceneGuid, 0, SceneFragmentStore::GetIndexPath(sceneGuid), error);
         return;
     }
@@ -48,7 +52,13 @@ void SceneFragmentReconciler::Reconcile(const Guid& sceneGuid, Array<SceneFragme
                                                      ? SceneFragmentDiagnosticCode::MissingFragment
                                                      : error.Contains(TEXT("hash"), StringSearchCase::IgnoreCase)
                                                            ? SceneFragmentDiagnosticCode::ContentMismatch
-                                                           : SceneFragmentDiagnosticCode::Malformed;
+                                                           : error.Contains(TEXT("owner"), StringSearchCase::IgnoreCase)
+                                                                 ? SceneFragmentDiagnosticCode::OwnerMismatch
+                                                                 : error.Contains(TEXT("duplicate"), StringSearchCase::IgnoreCase)
+                                                                       ? SceneFragmentDiagnosticCode::DuplicateLocalId
+                                                                       : error.Contains(TEXT("misplaced"), StringSearchCase::IgnoreCase)
+                                                                             ? SceneFragmentDiagnosticCode::MisplacedFragment
+                                                                             : SceneFragmentDiagnosticCode::Malformed;
         AddDiagnostic(diagnostics, code, sceneGuid, 0, scenePath, error);
     }
 

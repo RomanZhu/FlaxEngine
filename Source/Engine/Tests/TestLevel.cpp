@@ -914,7 +914,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(AreBytesEqual(beforeSave, afterSave));
     }
 
-    SECTION("Save repairs externally modified indexed fragments")
+    SECTION("Save rejects externally modified indexed fragments without mutation")
     {
         const Guid sceneId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1");
         const Guid actorId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2");
@@ -956,10 +956,13 @@ TEST_CASE("ExternalActorsSceneStorage")
         actorDocument.Accept(oneUlpWriter.GetWriter());
         REQUIRE(!File::WriteAllBytes(actorPath, oneUlpBuffer.GetString(), static_cast<int32>(oneUlpBuffer.GetSize())));
 
-        BytesContainer repairedBytes;
-        REQUIRE(!Level::SaveScene(scene));
-        ReadFileBytes(actorPath, repairedBytes);
-        CHECK(AreBytesEqual(originalBytes, repairedBytes));
+        BytesContainer externallyModifiedBytes;
+        BytesContainer afterRejectedSave;
+        ReadFileBytes(actorPath, externallyModifiedBytes);
+        REQUIRE(Level::SaveScene(scene));
+        ReadFileBytes(actorPath, afterRejectedSave);
+        CHECK(AreBytesEqual(externallyModifiedBytes, afterRejectedSave));
+        CHECK_FALSE(AreBytesEqual(originalBytes, afterRejectedSave));
     }
 
     SECTION("Convert internal actors scene without adjacent backup files")

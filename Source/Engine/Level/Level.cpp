@@ -8,6 +8,7 @@
 #include "FlaxEngine.Gen.h"
 #include "Scene/Scene.h"
 #include "ScenePrefabDocument.h"
+#include "SceneFragments/SceneFragmentReconciler.h"
 #include "SceneFragments/SceneFragmentStore.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Deprecated.h"
@@ -127,6 +128,35 @@ namespace
     constexpr const char* SourceParentFileIdKey = "parentFileId";
     constexpr const char* OrderInParentKey = "OrderInParent";
     constexpr const char* SiblingOrderKeyKey = "SiblingOrderKey";
+
+    const Char* GetExternalActorDiagnosticName(SceneFragmentDiagnosticCode code)
+    {
+        switch (code)
+        {
+        case SceneFragmentDiagnosticCode::IndexMissing: return TEXT("missing index");
+        case SceneFragmentDiagnosticCode::Malformed: return TEXT("malformed data");
+        case SceneFragmentDiagnosticCode::FutureVersion: return TEXT("unsupported version");
+        case SceneFragmentDiagnosticCode::OwnerMismatch: return TEXT("wrong scene owner");
+        case SceneFragmentDiagnosticCode::MissingFragment: return TEXT("missing fragment");
+        case SceneFragmentDiagnosticCode::DuplicateLocalId: return TEXT("duplicate identity");
+        case SceneFragmentDiagnosticCode::MisplacedFragment: return TEXT("misplaced fragment");
+        case SceneFragmentDiagnosticCode::OrphanFragment: return TEXT("orphaned fragment");
+        case SceneFragmentDiagnosticCode::ContentMismatch: return TEXT("content mismatch");
+        default: return TEXT("unknown error");
+        }
+    }
+
+    bool ValidateExternalActorFragments(const Guid& sceneGuid)
+    {
+        Array<SceneFragmentDiagnostic> diagnostics;
+        SceneFragmentReconciler::Reconcile(sceneGuid, diagnostics);
+        for (const SceneFragmentDiagnostic& diagnostic : diagnostics)
+        {
+            LOG(Error, "ExternalActor storage for scene '{0}' is invalid ({1}) at '{2}': {3}",
+                sceneGuid, GetExternalActorDiagnosticName(diagnostic.Code), diagnostic.Path, diagnostic.Message);
+        }
+        return diagnostics.HasItems();
+    }
 
     struct ExternalActorFileInfo
     {
@@ -446,6 +476,8 @@ namespace
 
         const Guid sceneGuid = sceneAsset->GetID();
         const String actorsFolder = SceneFragmentStore::GetScenePath(sceneGuid);
+        if (ValidateExternalActorFragments(sceneGuid))
+            return true;
         auto& allocator = document.GetAllocator();
         document.SetObject();
         CopyDocumentMember(document, sceneAsset->Document, IDKey);
@@ -490,13 +522,13 @@ namespace
                 return true;
             if (info.ActorId == 0)
             {
-                LOG(Error, "Ignoring external actor '{0}' because its ID is invalid.", actorFile);
-                continue;
+                LOG(Error, "Cannot load ExternalActor fragment '{0}' because its actor identity is invalid.", actorFile);
+                return true;
             }
             if (!actorIds.Add(info.ActorId))
             {
-                LOG(Error, "Ignoring duplicate external actor '{0}' ({1}).", actorFile, info.ActorId);
-                continue;
+                LOG(Error, "Cannot load duplicate ExternalActor identity '{0}' from '{1}'.", info.ActorId, actorFile);
+                return true;
             }
             actorInfos.Add(MoveTemp(info));
         }
@@ -523,7 +555,11 @@ namespace
         for (const ExternalActorFileInfo& info : actorInfos)
         {
             if (!info.IsValid)
-                LOG(Error, "Ignoring external actor '{0}' ({1}) because its ParentID '{2}' is missing or ignored.", info.File, info.ActorId, info.ParentId);
+            {
+                LOG(Error, "Cannot load ExternalActor fragment '{0}' ({1}) because parent identity '{2}' is missing or invalid.",
+                    info.File, info.ActorId, info.ParentId);
+                return true;
+            }
         }
 
         Sorting::QuickSort(actorInfos.Get(), actorInfos.Count(), SortExternalActorFileInfo);
@@ -2192,6 +2228,15 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
     CallSceneEvent(SceneEventType::OnSceneSaving, scene, sceneId);
 
 #if USE_EDITOR
+    if (useExternalActorsStorage && scene->UseExternalActors)
+    {
+        const String fragmentPath = SceneFragmentStore::GetScenePath(sceneId);
+        if ((FileSystem::DirectoryExists(fragmentPath) || FileSystem::FileExists(SceneFragmentStore::GetIndexPath(sceneId))) &&
+            ValidateExternalActorFragments(sceneId))
+        {
+            return true;
+        }
+    }
     if (scene->UseExternalActors)
         EnsureExternalSiblingOrderKeys(scene);
 
@@ -2270,6 +2315,12 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
         if (!fragmentPlan)
         {
             LOG(Error, "Scene serialization requires a fragment save plan.");
+            return true;
+        }
+        const String fragmentPath = SceneFragmentStore::GetScenePath(sceneId);
+        if ((FileSystem::DirectoryExists(fragmentPath) || FileSystem::FileExists(SceneFragmentStore::GetIndexPath(sceneId))) &&
+            ValidateExternalActorFragments(sceneId))
+        {
             return true;
         }
         String fragmentError;

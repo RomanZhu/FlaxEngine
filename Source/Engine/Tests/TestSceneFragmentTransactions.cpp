@@ -5,11 +5,13 @@
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Level/SceneFragments/SceneFragmentReconciler.h"
 #include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Level/ScenePartitionDocument.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/Platform.h"
+#include "Engine/Serialization/JsonWriters.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 namespace
@@ -36,6 +38,24 @@ namespace
                (a.Length() == 0 || Platform::MemoryCompare(a.Get(), b.Get(), a.Length()) == 0);
     }
 
+    void WriteDocument(const StringView& path, const rapidjson_flax::Document& document)
+    {
+        rapidjson_flax::StringBuffer buffer;
+        PrettyJsonWriter writer(buffer);
+        document.Accept(writer.GetWriter());
+        REQUIRE_FALSE(File::WriteAllBytes(path, buffer.GetString(), static_cast<int32>(buffer.GetSize())));
+    }
+
+    bool HasDiagnostic(const Array<SceneFragmentDiagnostic>& diagnostics, SceneFragmentDiagnosticCode code)
+    {
+        for (const SceneFragmentDiagnostic& diagnostic : diagnostics)
+        {
+            if (diagnostic.Code == code && diagnostic.Message.HasChars() && diagnostic.Path.HasChars())
+                return true;
+        }
+        return false;
+    }
+
     void PrepareSceneSave(const Guid& sceneGuid, const StringView& scenePath, const char* fragmentName,
         const char* sceneData, PreparedSceneSave& save)
     {
@@ -48,6 +68,111 @@ namespace
             writes.Add(MakeFragmentWrite(fragmentName));
         REQUIRE(!SceneFragmentStore::PrepareSave(sceneGuid, writes, save.FragmentPlan, error));
         save.SourceData.Set(reinterpret_cast<const byte*>(sceneData), StringAnsiView(sceneData).Length());
+    }
+}
+
+TEST_CASE("ExternalActors integrity diagnostics classify invalid storage")
+{
+    const Guid sceneGuid = Guid::New();
+    const String directory = SceneFragmentStore::GetScenePath(sceneGuid);
+    const String indexPath = SceneFragmentStore::GetIndexPath(sceneGuid);
+    const String fragmentPath = directory / SceneFragmentStore::GetRelativeFragmentPath(2);
+    FileSystem::DeleteDirectory(directory, true);
+    SCOPE_EXIT { FileSystem::DeleteDirectory(directory, true); };
+
+    String error;
+    Array<SceneFragmentWrite> writes;
+    writes.Add(MakeFragmentWrite("actor"));
+    REQUIRE_FALSE(SceneFragmentStore::Save(sceneGuid, writes, error));
+
+    Array<SceneFragmentDiagnostic> diagnostics;
+    SECTION("Missing indexed fragment")
+    {
+        REQUIRE_FALSE(FileSystem::DeleteFile(fragmentPath));
+        SceneFragmentReconciler::Reconcile(sceneGuid, diagnostics);
+        CHECK(HasDiagnostic(diagnostics, SceneFragmentDiagnosticCode::MissingFragment));
+    }
+
+    SECTION("Orphaned physical fragment")
+    {
+        const String orphanPath = directory / TEXT("orphan.sceneactor");
+        const char orphan[] = "{}";
+        REQUIRE_FALSE(File::WriteAllBytes(orphanPath, orphan, ARRAY_COUNT(orphan) - 1));
+        SceneFragmentReconciler::Reconcile(sceneGuid, diagnostics);
+        CHECK(HasDiagnostic(diagnostics, SceneFragmentDiagnosticCode::OrphanFragment));
+    }
+
+    SECTION("Malformed index")
+    {
+        const char malformed[] = "{";
+        REQUIRE_FALSE(File::WriteAllBytes(indexPath, malformed, ARRAY_COUNT(malformed) - 1));
+        SceneFragmentReconciler::Reconcile(sceneGuid, diagnostics);
+        CHECK(HasDiagnostic(diagnostics, SceneFragmentDiagnosticCode::Malformed));
+    }
+
+    SECTION("Malformed fragment")
+    {
+        BytesContainer fragmentBytes;
+        ReadBytes(fragmentPath, fragmentBytes);
+        rapidjson_flax::Document fragment;
+        fragment.Parse(fragmentBytes.Get<char>(), fragmentBytes.Length());
+        REQUIRE_FALSE(fragment.HasParseError());
+        REQUIRE(fragment.RemoveMember("payload"));
+        WriteDocument(fragmentPath, fragment);
+
+        ReadBytes(fragmentPath, fragmentBytes);
+        BytesContainer indexBytes;
+        ReadBytes(indexPath, indexBytes);
+        rapidjson_flax::Document index;
+        index.Parse(indexBytes.Get<char>(), indexBytes.Length());
+        REQUIRE_FALSE(index.HasParseError());
+        auto fragments = index.FindMember("fragments");
+        REQUIRE(fragments != index.MemberEnd());
+        REQUIRE(fragments->value.Size() == 1);
+        auto& entry = fragments->value[0];
+        const StringAnsi contentHash = ContentHash::Compute(fragmentBytes.Get(), fragmentBytes.Length()).ToString();
+        entry["contentHash"].SetString(contentHash.Get(), contentHash.Length(), index.GetAllocator());
+        entry["size"].SetUint64(fragmentBytes.Length());
+        WriteDocument(indexPath, index);
+
+        SceneFragmentReconciler::Reconcile(sceneGuid, diagnostics);
+        CHECK(HasDiagnostic(diagnostics, SceneFragmentDiagnosticCode::Malformed));
+    }
+
+    SECTION("Duplicate index identity")
+    {
+        BytesContainer bytes;
+        ReadBytes(indexPath, bytes);
+        rapidjson_flax::Document index;
+        index.Parse(bytes.Get<char>(), bytes.Length());
+        REQUIRE_FALSE(index.HasParseError());
+        auto fragments = index.FindMember("fragments");
+        REQUIRE(fragments != index.MemberEnd());
+        REQUIRE(fragments->value.Size() == 1);
+        rapidjson_flax::Value duplicate;
+        duplicate.CopyFrom(fragments->value[0], index.GetAllocator());
+        fragments->value.PushBack(duplicate, index.GetAllocator());
+        WriteDocument(indexPath, index);
+
+        SceneFragmentReconciler::Reconcile(sceneGuid, diagnostics);
+        CHECK(HasDiagnostic(diagnostics, SceneFragmentDiagnosticCode::DuplicateLocalId));
+    }
+
+    SECTION("Wrong scene owner")
+    {
+        BytesContainer bytes;
+        ReadBytes(indexPath, bytes);
+        rapidjson_flax::Document index;
+        index.Parse(bytes.Get<char>(), bytes.Length());
+        REQUIRE_FALSE(index.HasParseError());
+        auto owner = index.FindMember("ownerSceneGuid");
+        REQUIRE(owner != index.MemberEnd());
+        const StringAnsi wrongOwner(Guid::New().ToString(Guid::FormatType::N).ToLower());
+        owner->value.SetString(wrongOwner.Get(), wrongOwner.Length(), index.GetAllocator());
+        WriteDocument(indexPath, index);
+
+        SceneFragmentReconciler::Reconcile(sceneGuid, diagnostics);
+        CHECK(HasDiagnostic(diagnostics, SceneFragmentDiagnosticCode::OwnerMismatch));
     }
 }
 
