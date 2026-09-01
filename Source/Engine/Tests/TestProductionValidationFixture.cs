@@ -45,6 +45,12 @@ namespace FlaxEngine.Tests
             Assert.IsFalse(Directory.Exists(root));
             Assert.IsFalse(Directory.Exists(externalActors));
         }
+
+        public static int RunStagesReducedCanonicalSourceCohortWithoutImporting()
+        {
+            new TestProductionValidationFixture().TestStagesReducedCanonicalSourceCohortWithoutImporting();
+            return 0;
+        }
     }
 }
 #endif
