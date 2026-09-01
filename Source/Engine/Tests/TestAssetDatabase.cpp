@@ -518,6 +518,7 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     AssetDatabase database;
     REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
     REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
     REQUIRE(database.TryGetRecord(body.ID, record));
     REQUIRE(database.TryGetRecord(head.ID, record));
@@ -529,6 +530,7 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     sourceMeta.SubAssets.Add(TEXT("mesh:/Body"), body);
     REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), sourceMeta, diagnostic));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
     REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
     REQUIRE(database.TryGetRecord(body.ID, record));
     REQUIRE(database.TryGetRecord(head.ID, record));
@@ -537,6 +539,7 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     REQUIRE_FALSE(FileSystem::MoveFile(moved, source));
     REQUIRE_FALSE(FileSystem::MoveFile(moved + TEXT(".meta"), source + TEXT(".meta")));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
     REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
     CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), moved));
     REQUIRE(database.TryGetRecord(body.ID, record));
@@ -546,12 +549,15 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     REQUIRE_FALSE(File::WriteAllText(copied, TEXT("model-v2"), Encoding::ANSI));
     REQUIRE_FALSE(AssetMeta::SaveAtomic(copied + TEXT(".meta"), copiedMeta, diagnostic));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
     CHECK(copiedMeta.ID != sourceMeta.ID);
     CHECK(copiedMeta.SubAssets[TEXT("mesh:/Body")].ID != body.ID);
     CHECK(copiedMeta.SubAssets[TEXT("mesh:/Head")].ID != head.ID);
     REQUIRE(database.TryGetRecord(copiedMeta.ID, record));
     REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Body")].ID, record));
     REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Head")].ID, record));
+
+    const AssetDatabaseSnapshot beforeRestart = database.GetSnapshot();
 
     REQUIRE_FALSE(database.Close(&diagnostic));
     REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
@@ -566,12 +572,17 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     REQUIRE_FALSE(FileSystem::CreateDirectory(library));
     REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
     REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
     REQUIRE(database.TryGetRecord(body.ID, record));
     REQUIRE(database.TryGetRecord(head.ID, record));
     REQUIRE(database.TryGetRecord(copiedMeta.ID, record));
     REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Body")].ID, record));
     REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Head")].ID, record));
+    const AssetDatabaseSnapshot reconstructed = database.GetSnapshot();
+    REQUIRE(reconstructed.Records.Count() == beforeRestart.Records.Count());
+    for (int32 i = 0; i < beforeRestart.Records.Count(); i++)
+        CHECK(reconstructed.Records[i].HasSameIdentityAndContent(beforeRestart.Records[i]));
     REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
@@ -1117,6 +1128,7 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     CHECK(AssetDatabaseQueryService::GetLastChange().Added.Contains(secondId));
     CHECK(AssetDatabaseQueryService::GetLastChange().Added.Count() == 1);
     REQUIRE(AssetDatabase::Get().TryGetRecord(secondId, found));
+    const uint64 secondRecordRevision = found.DatabaseRevision;
 
     AssetMeta meta;
     REQUIRE_FALSE(AssetMeta::Load(first + TEXT(".meta"), meta, diagnostic));
@@ -1135,12 +1147,21 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     CHECK(found.MetaSemanticHash != previousHash);
     CHECK(found.DatabaseRevision != firstRecordRevision);
 
+    // An external removal is reflected by refreshing only that path, without perturbing unrelated rows.
     FileSystem::DeleteFile(first);
     FileSystem::DeleteFile(first + TEXT(".meta"));
+    refresh.Clear();
+    refresh.Add(first);
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
+    CHECK(AssetDatabaseQueryService::GetLastChange().Removed.Count() == 1);
+    CHECK(AssetDatabaseQueryService::GetLastChange().Removed.Contains(firstId));
+    CHECK_FALSE(AssetDatabase::Get().TryGetRecord(firstId, found));
+    REQUIRE(AssetDatabase::Get().TryGetRecord(secondId, found));
+    CHECK(found.DatabaseRevision == secondRecordRevision);
+
     FileSystem::DeleteFile(second);
     FileSystem::DeleteFile(second + TEXT(".meta"));
     REQUIRE_FALSE(AssetPipelineService::RefreshSources(cleanup));
-    CHECK_FALSE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(secondId, found));
 }
 
