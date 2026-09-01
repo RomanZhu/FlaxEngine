@@ -618,7 +618,7 @@ namespace FlaxEditor.Modules
         {
             var id = record.ID;
             var itemType = GetCanonicalItemType(record);
-            var authoredSource = record.SourceKind == AssetSourceKind.TextDocument;
+            var authoredSource = record.SourceKind == AssetSourceKind.TextDocument && IsTypedAuthoredDocumentProcessor(record.ProcessorID);
             var proxy = GetAssetProxy(itemType, path, !authoredSource);
             var item = proxy?.ConstructItem(path, itemType, ref id);
             if (item == null && !authoredSource)
@@ -631,6 +631,13 @@ namespace FlaxEditor.Modules
                 Editor.LogWarning($"Missing type-specific authored asset proxy for '{path}' ({itemType}).");
             item?.SetAssetDatabaseRecord(record);
             return item;
+        }
+
+        internal static bool IsTypedAuthoredDocumentProcessor(string processor)
+        {
+            return processor is "Flax.GraphDocument" or "Flax.MaterialInstance" or "Flax.SkeletonMask" or
+                   "Flax.SceneAnimation" or "Flax.ParticleSystem" or "Flax.CollisionData" or
+                   "Flax.JsonDocument" or "Flax.Settings";
         }
 
         private AssetItem ConstructCanonicalSubAssetItem(AssetDatabaseRecordInfo record)

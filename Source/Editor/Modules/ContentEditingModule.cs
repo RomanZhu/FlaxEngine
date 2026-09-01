@@ -62,7 +62,7 @@ namespace FlaxEditor.Modules
                 return null;
             }
             if (item is AssetItem { IsCanonicalSubAsset: false } authoredItem &&
-                IsAuthoredDocumentProcessor(authoredItem.ProcessorID) && proxy is AssetProxy assetProxy &&
+                AssetWorkspaceModule.IsTypedAuthoredDocumentProcessor(authoredItem.ProcessorID) && proxy is AssetProxy assetProxy &&
                 !assetProxy.AcceptsAsset(authoredItem.TypeName, authoredItem.Path))
             {
                 Editor.LogWarning($"Refusing to open authored document '{authoredItem.Path}' through mismatched proxy {proxy.GetType().FullName}.");
@@ -84,13 +84,6 @@ namespace FlaxEditor.Modules
             }
 
             return window;
-        }
-
-        private static bool IsAuthoredDocumentProcessor(string processor)
-        {
-            return processor is "Flax.GraphDocument" or "Flax.MaterialInstance" or "Flax.SkeletonMask" or
-                   "Flax.SceneAnimation" or "Flax.ParticleSystem" or "Flax.CollisionData" or
-                   "Flax.JsonDocument" or "Flax.Settings";
         }
 
         /// <summary>
