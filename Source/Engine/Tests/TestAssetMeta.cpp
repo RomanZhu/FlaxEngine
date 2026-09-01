@@ -166,10 +166,12 @@ TEST_CASE("Asset meta atomic write preserves old complete sidecar on failures")
 
 TEST_CASE("Asset meta strictly rejects unsupported and non-canonical identity formats")
 {
-    const String path = Globals::ProjectLibraryFolder / TEXT("Tests/old.meta");
+    const String root = Globals::TemporaryFolder / (TEXT("AssetMetaLegacy-") + Guid::New().ToString(Guid::FormatType::N));
+    const String path = root / TEXT("old.meta");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
     const StringAnsi oldJson = "{\"fileFormatVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}";
     REQUIRE_FALSE(File::WriteAllBytes(path, oldJson.Get(), oldJson.Length()));
-    SCOPE_EXIT { FileSystem::DeleteFile(path); };
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
     BytesContainer before;
     REQUIRE_FALSE(File::ReadAllBytes(path, before));
     AssetMeta meta;
