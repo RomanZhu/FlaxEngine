@@ -100,8 +100,9 @@ namespace DurableAssetFileSystem
 #endif
         const String destinationParent = StringUtils::GetDirectoryName(destination);
         const String sourceParent = StringUtils::GetDirectoryName(source);
-        return FlushDirectory(destinationParent) ||
-               (sourceParent != destinationParent && FlushDirectory(sourceParent));
+        const bool destinationFlushFailed = FlushDirectory(destinationParent);
+        const bool sourceFlushFailed = sourceParent != destinationParent && FlushDirectory(sourceParent);
+        return destinationFlushFailed || sourceFlushFailed;
     }
 
     bool DeleteFile(const StringView& path)

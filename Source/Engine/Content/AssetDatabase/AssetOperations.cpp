@@ -550,8 +550,9 @@ namespace
                 DurableMove(destination, source, false));
         if (failed)
             return true;
-        return DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(source)) ||
-            DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(destination));
+        const bool sourceFlushFailed = DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(source));
+        const bool destinationFlushFailed = DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(destination));
+        return sourceFlushFailed || destinationFlushFailed;
 #else
         return DurableMove(destination, source, false);
 #endif
