@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using FlaxEngine;
 
@@ -24,6 +25,38 @@ namespace FlaxEditor.Content
     /// <summary>Database-backed asset workspace queries. No filesystem enumeration is performed.</summary>
     public static class AssetWorkspaceQuery
     {
+        internal const int PageSize = 256;
+
+        /// <summary>Copies one bounded, stable-path-ordered database page.</summary>
+        public static AssetDatabaseRecordInfo[] QueryPage(AssetDatabaseQuery query, int offset, int limit = PageSize)
+        {
+            query.Offset = Math.Max(offset, 0);
+            query.Limit = Math.Clamp(limit, 1, 4096);
+            return AssetDatabaseQueryService.QueryRecords(query);
+        }
+
+        /// <summary>Enumerates all matching rows through bounded native copies and retries a changing revision.</summary>
+        internal static AssetDatabaseRecordInfo[] QueryAllRecords(AssetDatabaseQuery query)
+        {
+            AssetDatabaseRecordInfo[] result = Array.Empty<AssetDatabaseRecordInfo>();
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                var revision = AssetDatabaseQueryService.Revision;
+                var records = new List<AssetDatabaseRecordInfo>();
+                for (int offset = 0; ; offset += PageSize)
+                {
+                    var page = QueryPage(query, offset);
+                    records.AddRange(page);
+                    if (page.Length < PageSize)
+                        break;
+                }
+                result = records.ToArray();
+                if (AssetDatabaseQueryService.Revision == revision)
+                    break;
+            }
+            return result;
+        }
+
         public static AssetWorkspaceEntry[] Query(string pathPrefix = null, string typeName = null, AssetRecordStatus? status = null,
             string name = null, string importerId = null, string label = null, Guid referencedAsset = default,
             Guid usedByAsset = default, bool mainAssetsOnly = false)
@@ -34,7 +67,7 @@ namespace FlaxEditor.Content
                 if (!Path.IsPathRooted(pathPrefix))
                     pathPrefix = Path.GetFullPath(Path.Combine(Globals.ProjectFolder, pathPrefix));
             }
-            var records = AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery
+            var records = QueryAllRecords(new AssetDatabaseQuery
             {
                 PathPrefix = pathPrefix,
                 TypeName = typeName,

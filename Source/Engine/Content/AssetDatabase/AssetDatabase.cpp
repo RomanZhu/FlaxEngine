@@ -596,10 +596,18 @@ void AssetDatabase::QueryRecords(const AssetRecordQuery& query, Array<AssetRecor
     const int32 limit = query.Limit > 0 ? Math::Min(query.Limit, 4096) : 256;
     result.EnsureCapacity(limit);
     int32 skipped = 0;
-    // The path index is already sorted, so only the requested page of records is copied.
-    for (const Guid& id : _recordsBySortedPath)
+    HashSet<Guid> candidateSet;
+    const bool pathCandidatesAreSmallest = candidates == &pathCandidates;
+    if (constrained && !pathCandidatesAreSmallest)
     {
-        if (constrained && !candidates->Contains(id))
+        for (const Guid& id : *candidates)
+            candidateSet.Add(id);
+    }
+    // The path index is already sorted, so only the requested page of records is copied.
+    const Array<Guid>& orderedCandidates = pathCandidatesAreSmallest ? pathCandidates : _recordsBySortedPath;
+    for (const Guid& id : orderedCandidates)
+    {
+        if (constrained && !pathCandidatesAreSmallest && !candidateSet.Contains(id))
             continue;
         const AssetRecord* record = _records.TryGet(id);
         if (!record || !matches(*record))

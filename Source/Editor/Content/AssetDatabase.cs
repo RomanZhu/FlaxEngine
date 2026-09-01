@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using FlaxEngine;
+using FlaxEditor.Content;
 
 namespace FlaxEditor
 {
@@ -73,7 +74,7 @@ namespace FlaxEditor
         public static Asset[] LoadAllAssetsAtPath(string path)
         {
             var physicalPath = ResolvePhysicalPath(path);
-            var records = AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = physicalPath });
+            var records = AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery { PathPrefix = physicalPath });
             var result = new List<Asset>();
             for (var i = 0; i < records.Length; i++)
             {

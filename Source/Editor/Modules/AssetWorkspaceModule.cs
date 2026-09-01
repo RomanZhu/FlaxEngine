@@ -223,7 +223,7 @@ namespace FlaxEditor.Modules
         private static AssetDatabaseRecordInfo[] QueryDirectFolderRecords(string folderPath, bool mainAssets)
         {
             folderPath = ContentMutationPathUtils.Normalize(folderPath);
-            return AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = folderPath })
+            return AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery { PathPrefix = folderPath })
                 .Where(record => record.IsMain == mainAssets &&
                                  record.Status != AssetRecordStatus.MissingSource &&
                                  record.SourceKind != AssetSourceKind.Folder &&
@@ -236,7 +236,7 @@ namespace FlaxEditor.Modules
             folderPath = ContentMutationPathUtils.Normalize(folderPath).TrimEnd('/', '\\');
             var prefix = folderPath + "/";
             var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var record in AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = folderPath }))
+            foreach (var record in AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery { PathPrefix = folderPath }))
             {
                 if (record.Status == AssetRecordStatus.MissingSource)
                     continue;
@@ -256,7 +256,7 @@ namespace FlaxEditor.Modules
 
         private static bool HasDatabaseContent(string path)
         {
-            return AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = ContentMutationPathUtils.Normalize(path) }).Length != 0;
+            return AssetWorkspaceQuery.QueryPage(new AssetDatabaseQuery { PathPrefix = ContentMutationPathUtils.Normalize(path) }, 0, 1).Length != 0;
         }
 
         private static bool HasDatabaseDescendants(string path)
@@ -265,7 +265,7 @@ namespace FlaxEditor.Modules
             if (path == null)
                 return false;
             var prefix = path + "/";
-            return AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { PathPrefix = path })
+            return AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery { PathPrefix = path })
                 .Any(record => record.Status != AssetRecordStatus.MissingSource &&
                                ContentMutationPathUtils.Normalize(record.SourcePath)?.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == true);
         }
@@ -2956,7 +2956,7 @@ namespace FlaxEditor.Modules
                     .Where(path => !string.IsNullOrEmpty(path))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                foreach (var record in AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { MainAssetsOnly = true }))
+                foreach (var record in AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery { MainAssetsOnly = true }))
                 {
                     if (!CanBuildCanonicalRecord(record))
                         continue;
@@ -2977,7 +2977,7 @@ namespace FlaxEditor.Modules
         {
             lock (_assetDiskChangesLock)
             {
-                foreach (var record in AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { MainAssetsOnly = true }))
+                foreach (var record in AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery { MainAssetsOnly = true }))
                 {
                     if (record.Status == AssetRecordStatus.Ready && CanBuildCanonicalRecord(record))
                         _pendingCanonicalStartupChecks.Add(record.ID);

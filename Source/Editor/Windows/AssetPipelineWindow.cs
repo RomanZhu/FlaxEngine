@@ -120,14 +120,13 @@ namespace FlaxEditor.Windows
 
         private void RefreshView()
         {
-            var records = AssetDatabaseQueryService.QueryRecords(default);
+            var records = AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery { Limit = 200 });
             var diagnostics = AssetDatabaseQueryService.GetDiagnostics();
-            _summary.Text = "Revision " + AssetDatabaseQueryService.Revision + " · " + records.Length + " records · " + diagnostics.Length + " diagnostics";
+            _summary.Text = "Revision " + AssetDatabaseQueryService.Revision + " · showing " + records.Length + " records · " + diagnostics.Length + " diagnostics";
 
             var recordsText = new StringBuilder();
             recordsText.AppendLine("Records");
-            var limit = records.Length < 200 ? records.Length : 200;
-            for (int i = 0; i < limit; i++)
+            for (int i = 0; i < records.Length; i++)
             {
                 var record = records[i];
                 recordsText.Append(record.Status).Append("  ")
@@ -136,8 +135,6 @@ namespace FlaxEditor.Windows
                     .Append(record.ProcessorID).Append("  ")
                     .AppendLine(record.CanonicalPath);
             }
-            if (records.Length > limit)
-                recordsText.Append("… ").Append(records.Length - limit).AppendLine(" more");
             _records.Text = recordsText.ToString();
 
             var diagnosticsText = new StringBuilder();
