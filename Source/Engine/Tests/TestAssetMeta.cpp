@@ -72,8 +72,14 @@ TEST_CASE("Asset meta parses canonicalizes and preserves unknown fields")
     CHECK(first.Contains("\"newRoot\""));
     CHECK(first.Find("\"id\"") < first.Find("\"version\""));
     CHECK(first.Find("\"version\"") < first.Find("\"settings\""));
-    CHECK(first.Find("\"guid\": \"53ac120a49ed4beebf9c810cc48f2ea7\"") < first.Find("\"fileId\": 9007199254740993"));
-    CHECK(first.Find("\"fileId\": 9007199254740993") < first.Find("\"type\": \"FlaxEngine.Model\""));
+    const int32 subAssetGuid = first.Find("\"guid\": \"53ac120a49ed4beebf9c810cc48f2ea7\"");
+    const int32 subAssetFileId = first.Find("\"fileId\": 9007199254740993");
+    const int32 subAssetType = first.FindLast("\"type\": \"FlaxEngine.Model\"");
+    REQUIRE(subAssetGuid != -1);
+    REQUIRE(subAssetFileId != -1);
+    REQUIRE(subAssetType != -1);
+    CHECK(subAssetGuid < subAssetFileId);
+    CHECK(subAssetFileId < subAssetType);
     CHECK(first.Contains("\"pluginProcessor\""));
     CHECK(first.Contains("\"pluginSub\""));
     CHECK(first.StartsWith("{\n  \"fileFormatVersion\":"));
