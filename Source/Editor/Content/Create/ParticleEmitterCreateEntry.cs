@@ -113,10 +113,12 @@ namespace FlaxEditor.Content.Create
 
             var sourcePath = Path.Combine(Globals.EngineContentFolder, "Editor/Particles", templateName + ".particleemitter");
             var surface = AssetDocumentService.LoadGraphSource(sourcePath);
-            if (surface == null || surface.Length == 0 || AssetDocumentService.SaveGraphSource(ResultUrl, surface, string.Empty, null))
+            if (surface == null || surface.Length == 0)
                 return true;
-            AssetDatabase.ImportAsset(ResultUrl, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
-            return false;
+            var result = AssetDocumentService.SaveGraphSourceDetailed(
+                ResultUrl, surface, string.Empty, null, true, true);
+            return (!result.SourceCommitted && !result.SourceUnchanged) || result.RefreshFailed ||
+                   result.ImportFailed || result.ImportBlocked;
         }
     }
 }

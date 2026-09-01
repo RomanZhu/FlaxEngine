@@ -339,44 +339,24 @@ namespace FlaxEditor
             {
                 if (!AssetDocumentRegistry.IsGraphSourcePath(Path))
                     throw new IOException($"Graph asset '{Path}' is not an authored source document.");
-                var backupPath = System.IO.Path.Combine(Globals.TemporaryFolder, Guid.NewGuid().ToString("N") + System.IO.Path.GetExtension(Path));
                 var sourceBytes = File.ReadAllBytes(Path);
-                File.Copy(Path, backupPath, true);
                 using var algorithm = SHA256.Create();
                 var expectedHash = BitConverter.ToString(algorithm.ComputeHash(sourceBytes)).Replace("-", string.Empty);
                 using var saveScope = Editor.Instance.ContentDatabase.TrackAssetSave(Path);
-                try
-                {
-                    var properties = Material != null ? AssetDocumentRegistry.MaterialProperties(Material.Info) : null;
-                    if (AssetDocumentService.SaveGraphSource(Path, SurfaceData, expectedHash, properties))
-                        throw new IOException("Graph source document save failed.");
-                    AssetDatabase.ImportAsset(Path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
-                    VerifyPersistedAsset();
-                    saveScope.Complete(true);
-                }
-                catch (Exception ex)
-                {
-                    var rollbackFailed = false;
-                    try
-                    {
-                        File.Copy(backupPath, Path, true);
-                        AssetDatabase.ImportAsset(Path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
-                    }
-                    catch
-                    {
-                        rollbackFailed = true;
-                    }
-                    Item.Reload();
-                    var rollbackAsset = Item.LoadAsync();
-                    var rollbackLoadFailed = rollbackAsset == null || rollbackAsset.WaitForLoaded();
-                    if (rollbackFailed || rollbackLoadFailed)
-                        throw new IOException($"Graph save failed and the rollback copy could not be restored for '{Path}'.", ex);
-                    throw new IOException($"Graph save failed persistence validation; the original asset was restored for '{Path}'.", ex);
-                }
-                finally
-                {
-                    File.Delete(backupPath);
-                }
+                var properties = Material != null ? AssetDocumentRegistry.MaterialProperties(Material.Info) : null;
+                var result = AssetDocumentService.SaveGraphSourceDetailed(
+                    Path, SurfaceData, expectedHash, properties, true, true);
+                var committed = result.SourceCommitted || result.SourceUnchanged;
+                saveScope.Complete(committed);
+                if (!committed)
+                    throw new IOException(string.IsNullOrEmpty(result.Diagnostic)
+                        ? "Graph source document save failed."
+                        : result.Diagnostic);
+                if (result.RefreshFailed || result.ImportFailed || result.ImportBlocked)
+                    throw new IOException(string.IsNullOrEmpty(result.Diagnostic)
+                        ? "Graph source was saved, but refresh or import did not complete."
+                        : result.Diagnostic);
+                VerifyPersistedAsset();
             }
 
             private void VerifyPersistedAsset()

@@ -94,7 +94,7 @@ namespace FlaxEditor.Content.Documents
             SetDocument(surface);
         }
 
-        /// <summary>Atomically saves an edited graph source and reimports it through the generic asset pipeline.</summary>
+        /// <summary>Atomically saves an edited graph source and reimports it through the common save pipeline.</summary>
         /// <returns>True on failure.</returns>
         public bool SaveGraph(AssetItem item, string propertiesJson = null, bool allowOverwriteConflict = false)
         {
@@ -104,12 +104,32 @@ namespace FlaxEditor.Content.Documents
                 throw new ArgumentException("The document session does not own this asset item.", nameof(item));
 
             using var save = Editor.Instance.ContentDatabase.TrackAssetSave(SourcePath);
-            var committed = Save(value => !AssetDocumentService.SaveGraphSource(
-                value.SourcePath,
-                value.GetGraphSurface(),
-                allowOverwriteConflict ? string.Empty : value.BaseSourceHash,
-                propertiesJson), allowOverwriteConflict);
+            AssetDocumentSaveResult result = default;
+            var committed = Save(value =>
+            {
+                result = AssetDocumentService.SaveGraphSourceDetailed(
+                    value.SourcePath,
+                    value.GetGraphSurface(),
+                    allowOverwriteConflict ? string.Empty : value.BaseSourceHash,
+                    propertiesJson,
+                    true,
+                    true);
+                return result.SourceCommitted || result.SourceUnchanged;
+            }, allowOverwriteConflict, false);
             save.Complete(committed);
+            if (!committed && result.Conflict)
+            {
+                IsStale = true;
+                HasExternalConflict = true;
+                Changed?.Invoke(this);
+            }
+            if (committed && (result.RefreshFailed || result.ImportFailed || result.ImportBlocked))
+            {
+                LastImportError = string.IsNullOrEmpty(result.Diagnostic)
+                    ? "The source was saved, but its refresh or import did not complete."
+                    : result.Diagnostic;
+                Changed?.Invoke(this);
+            }
             if (!committed && HasExternalConflict)
                 Editor.LogError("Cannot save graph source because it changed externally: " + SourcePath);
             return !committed;

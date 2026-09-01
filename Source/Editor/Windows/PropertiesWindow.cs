@@ -2037,11 +2037,16 @@ namespace FlaxEditor.Windows
                             return;
                         }
                         var sourcePath = entry.SourcePath;
-                        var failed = Editor.Instance.ContentDatabase.SaveAsset(sourcePath,
-                            () => AssetDocumentService.SaveGraphSource(sourcePath, value, string.Empty, null));
-                        if (failed)
+                        using var save = Editor.Instance.ContentDatabase.TrackAssetSave(sourcePath);
+                        var result = AssetDocumentService.SaveGraphSourceDetailed(
+                            sourcePath, value, string.Empty, null, true, true);
+                        var committed = result.SourceCommitted || result.SourceUnchanged;
+                        save.Complete(committed);
+                        if (!committed || result.RefreshFailed || result.ImportFailed || result.ImportBlocked)
                         {
-                            Editor.LogError("Failed to save Particle Emitter surface.");
+                            Editor.LogError(string.IsNullOrEmpty(result.Diagnostic)
+                                ? "Failed to save Particle Emitter surface."
+                                : result.Diagnostic);
                             return;
                         }
                         _asset.Reload();

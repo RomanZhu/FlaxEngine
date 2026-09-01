@@ -2469,74 +2469,44 @@ namespace
 {
     bool SaveCanonicalSource(const StringView& path, const StringAnsiView& canonicalText,
         SourceSaveRegistrationMode captureMode, SourceSaveConflictPolicy conflictPolicy,
-        AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash)
+        AssetSaveRefreshMode refreshMode, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash)
     {
-        SourceSaveTransaction transaction;
-        SourceSaveRevision expected;
-        if (transaction.Capture(path, captureMode, expected, diagnostic, conflictPolicy))
-            return true;
-        if (captureMode == SourceSaveRegistrationMode::AllowUnregistered &&
-            !expected.IsTracked && expected.Exists)
-        {
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-                TEXT("Existing authored source is not registered in the durable database."));
-        }
-        if (previousHash && !previousHash->IsZero())
-            expected.SourceHash = *previousHash;
-        SourceSaveRequest request;
-        request.RegistrationMode = captureMode == SourceSaveRegistrationMode::UntrackedLocal
-            ? SourceSaveRegistrationMode::UntrackedLocal
-            : expected.IsTracked
-                ? SourceSaveRegistrationMode::RequireTracked
-                : SourceSaveRegistrationMode::AllowUnregistered;
-        request.Expected = MoveTemp(expected);
+        AssetSaveRequest request;
+        request.SourcePath = path;
+        request.CanonicalBytes = canonicalText;
+        request.RegistrationMode = captureMode;
         request.ConflictPolicy = conflictPolicy;
-        request.CanonicalBytes = StringAnsi(canonicalText);
-        SourceSaveResult result;
-        const bool commitFailed = transaction.Commit(request, result, diagnostic);
-        const bool adoptedUnchanged = result.Outcome == SourceSaveOutcome::Unchanged &&
-            conflictPolicy == SourceSaveConflictPolicy::AdoptCurrent && result.Current.IsTracked &&
-            result.Current.SourceHash != result.Current.DurableSourceHash;
-        const bool activatedTracked = result.Current.IsTracked &&
-            (result.Outcome == SourceSaveOutcome::Committed ||
-                result.Outcome == SourceSaveOutcome::ActivatedDurabilityUncertain);
-        if (activatedTracked || adoptedUnchanged)
-        {
-            const String& refreshPath = activatedTracked
-                ? result.SelfWrite.Path
-                : result.Current.SourcePath;
-            const ContentHash& refreshContent = activatedTracked
-                ? result.SelfWrite.Content
-                : result.Current.SourceHash;
-            Array<String> refreshPaths;
-            refreshPaths.Add(refreshPath);
-            if (!AssetPipelineService::RefreshSources(refreshPaths))
-                AssetOperationService::RegisterSelfWrite(refreshPath, refreshContent);
-        }
-        return commitFailed;
+        request.RefreshMode = refreshMode;
+        request.HasExpectedSourceHash = previousHash && !previousHash->IsZero();
+        if (request.HasExpectedSourceHash)
+            request.ExpectedSourceHash = *previousHash;
+        AssetSaveResult result;
+        return AssetSaveService::Get().Save(request, result, diagnostic);
     }
 }
 
 bool GraphDocumentCodec::SaveAtomic(const StringView& path, const StringAnsiView& canonicalText,
-    AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash, SourceSaveConflictPolicy conflictPolicy)
+    AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash, SourceSaveConflictPolicy conflictPolicy,
+    AssetSaveRefreshMode refreshMode)
 {
     GraphDocumentCodec codec;
     GraphDocumentSnapshot reparsed;
     if (codec.DecodeGraph(canonicalText, reparsed, diagnostic))
         return true;
     return SaveCanonicalSource(path, reparsed.CanonicalText, SourceSaveRegistrationMode::AllowUnregistered, conflictPolicy,
-        diagnostic, previousHash);
+        refreshMode, diagnostic, previousHash);
 }
 
 bool GraphDocumentCodec::SaveJsonAtomic(const StringView& path, const StringAnsiView& canonicalText,
-    AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash, SourceSaveConflictPolicy conflictPolicy)
+    AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash, SourceSaveConflictPolicy conflictPolicy,
+    AssetSaveRefreshMode refreshMode)
 {
     StringAnsi reparsed;
     CanonicalJsonError jsonError;
     if (CanonicalJsonWriter::Canonicalize(canonicalText, reparsed, jsonError))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Authored document is not valid JSON."));
     return SaveCanonicalSource(path, reparsed, SourceSaveRegistrationMode::AllowUnregistered, conflictPolicy,
-        diagnostic, previousHash);
+        refreshMode, diagnostic, previousHash);
 }
 
 bool GraphDocumentCodec::SaveLocalJsonAtomic(const StringView& path, const StringAnsiView& canonicalText,
@@ -2547,7 +2517,7 @@ bool GraphDocumentCodec::SaveLocalJsonAtomic(const StringView& path, const Strin
     if (CanonicalJsonWriter::Canonicalize(canonicalText, reparsed, jsonError))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Local document is not valid JSON."));
     return SaveCanonicalSource(path, reparsed, SourceSaveRegistrationMode::UntrackedLocal, SourceSaveConflictPolicy::Strict,
-        diagnostic, previousHash);
+        AssetSaveRefreshMode::None, diagnostic, previousHash);
 }
 
 bool GraphDocumentValidator::Validate(const AssetDocumentSnapshot& snapshot, AssetPipelineDiagnostic& diagnostic) const
@@ -2607,24 +2577,38 @@ BytesContainer AssetDocumentService::LoadGraphSource(const StringView& path)
 bool AssetDocumentService::SaveGraphSource(const StringView& path, const BytesContainer& surface,
     const StringView& expectedSourceHash, const StringView& propertiesJson)
 {
+    const AssetDocumentSaveResult result = SaveGraphSourceDetailed(path, surface, expectedSourceHash,
+        propertiesJson, false, false);
+    const bool failed = (!result.SourceCommitted && !result.SourceUnchanged) ||
+        result.SourceDurabilityUncertain || result.RefreshFailed;
+    if (failed)
+        LOG(Error, "Cannot save graph source '{0}': {1}", path, result.Diagnostic);
+    return failed;
+}
+
+AssetDocumentSaveResult AssetDocumentService::SaveGraphSourceDetailed(const StringView& path,
+    const BytesContainer& surface, const StringView& expectedSourceHash,
+    const StringView& propertiesJson, bool importAfterSave, bool forceImport)
+{
+    AssetDocumentSaveResult result;
     AssetPipelineDiagnostic diagnostic;
     String typeName;
     if (GraphDocumentCodec::TypeForExtension(FileSystem::GetExtension(path), typeName))
     {
-        LOG(Error, "Cannot save graph source '{0}': unsupported source extension.", path);
-        return true;
+        result.Diagnostic = TEXT("Unsupported graph source extension.");
+        return result;
     }
     GraphDocument document;
     if (GraphDocumentCodec::FromSurface(typeName, surface, document, diagnostic))
     {
-        LOG(Error, "Cannot serialize graph source '{0}': {1}", path, diagnostic.Message);
-        return true;
+        result.Diagnostic = diagnostic.Message;
+        return result;
     }
     GraphDocumentSession current;
     if (current.Open(path, diagnostic))
     {
-        LOG(Error, "Cannot open graph source before save '{0}': {1}", path, diagnostic.Message);
-        return true;
+        result.Diagnostic = diagnostic.Message;
+        return result;
     }
     if (propertiesJson.HasChars())
         document.PropertiesJson = StringAnsi(String(propertiesJson));
@@ -2634,18 +2618,43 @@ bool AssetDocumentService::SaveGraphSource(const StringView& path, const BytesCo
     ContentHash expected;
     if (expectedSourceHash.HasChars() && ContentHash::Parse(expectedSourceHash, expected))
     {
-        LOG(Error, "Cannot save graph source '{0}': invalid expected source hash.", path);
-        return true;
+        result.Diagnostic = TEXT("Invalid expected graph source hash.");
+        return result;
     }
     StringAnsi json;
-    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) ||
-        GraphDocumentCodec::SaveAtomic(path, json, diagnostic, expectedSourceHash.HasChars() ? &expected : nullptr,
-            expectedSourceHash.HasChars() ? SourceSaveConflictPolicy::Strict : SourceSaveConflictPolicy::AdoptCurrent))
+    if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic))
     {
-        LOG(Error, "Cannot save graph source '{0}': {1}", path, diagnostic.Message);
-        return true;
+        result.Diagnostic = diagnostic.Message;
+        return result;
     }
-    return false;
+
+    AssetSaveRequest request;
+    request.SourcePath = path;
+    request.CanonicalBytes = json;
+    request.RegistrationMode = SourceSaveRegistrationMode::AllowUnregistered;
+    request.ConflictPolicy = expectedSourceHash.HasChars()
+        ? SourceSaveConflictPolicy::Strict
+        : SourceSaveConflictPolicy::AdoptCurrent;
+    request.HasExpectedSourceHash = expectedSourceHash.HasChars();
+    request.ExpectedSourceHash = expected;
+    request.ImportMode = importAfterSave ? AssetSaveImportMode::Synchronous : AssetSaveImportMode::None;
+    request.ForceImport = forceImport;
+    AssetSaveResult saveResult;
+    AssetSaveService::Get().Save(request, saveResult, diagnostic);
+
+    result.SourceCommitted = saveResult.Source.Outcome == SourceSaveOutcome::Committed;
+    result.SourceUnchanged = saveResult.Source.Outcome == SourceSaveOutcome::Unchanged;
+    result.SourceDurabilityUncertain = saveResult.Source.Outcome == SourceSaveOutcome::ActivatedDurabilityUncertain;
+    result.Conflict = saveResult.Source.Outcome == SourceSaveOutcome::Conflict;
+    result.RefreshFailed = saveResult.Refresh == AssetSaveRefreshOutcome::Failed;
+    result.ImportRequested = importAfterSave;
+    result.ImportSucceeded = saveResult.Import == AssetSaveImportOutcome::Succeeded;
+    result.ImportFailed = saveResult.Import == AssetSaveImportOutcome::Failed;
+    result.ImportBlocked = saveResult.Import == AssetSaveImportOutcome::Blocked;
+    if (!saveResult.Source.Current.SourceHash.IsZero())
+        result.SourceHash = String(saveResult.Source.Current.SourceHash.ToString());
+    result.Diagnostic = diagnostic.Message;
+    return result;
 }
 
 Guid AssetDocumentService::CreateGraphSource(const StringView& path, const StringView& typeName,
@@ -2693,6 +2702,7 @@ Guid AssetDocumentService::CreateGraphSource(const StringView& path, const Strin
 bool GraphDocumentSession::Open(const StringView& path, AssetPipelineDiagnostic& diagnostic)
 {
     Path = path;
+    EditRevision = 0;
     Array<byte> bytes;
     if (File::ReadAllBytes(path, bytes))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph document is missing."));
@@ -2717,18 +2727,43 @@ bool GraphDocumentSession::HasExternalChange(AssetPipelineDiagnostic& diagnostic
     return ContentHash::Compute(bytes.Get(), bytes.Count()) != LoadedHash;
 }
 
+void GraphDocumentSession::MarkDirty(int64 localID, const StringView& reason)
+{
+    Dirty = true;
+    EditRevision = DirtySourceRegistry::Get().MarkDirty(Path, LoadedHash, localID, reason);
+}
+
 bool GraphDocumentSession::Save(bool allowOverwriteConflict, AssetPipelineDiagnostic& diagnostic)
 {
     StringAnsi json;
     if (GraphDocumentCodec::ToCanonicalJson(Document, json, diagnostic))
         return true;
-    ContentHash* expected = allowOverwriteConflict ? nullptr : &LoadedHash;
-    if (GraphDocumentCodec::SaveAtomic(Path, json, diagnostic, expected,
-        allowOverwriteConflict ? SourceSaveConflictPolicy::AdoptCurrent : SourceSaveConflictPolicy::Strict))
-        return true;
-    LoadedHash = HashText(json);
-    Dirty = false;
-    return false;
+    if (Dirty && EditRevision == 0)
+        MarkDirty();
+    const uint64 savingRevision = EditRevision;
+
+    AssetSaveRequest request;
+    request.SourcePath = Path;
+    request.CanonicalBytes = json;
+    request.RegistrationMode = SourceSaveRegistrationMode::AllowUnregistered;
+    request.ConflictPolicy = allowOverwriteConflict
+        ? SourceSaveConflictPolicy::AdoptCurrent
+        : SourceSaveConflictPolicy::Strict;
+    request.HasExpectedSourceHash = !allowOverwriteConflict;
+    request.ExpectedSourceHash = LoadedHash;
+    request.EditRevision = savingRevision;
+    AssetSaveResult result;
+    const bool failed = AssetSaveService::Get().Save(request, result, diagnostic);
+    if (result.IsSourceCommitted())
+    {
+        LoadedHash = HashText(json);
+        if (savingRevision == 0 || (result.DirtyCleared && EditRevision == savingRevision))
+        {
+            Dirty = false;
+            EditRevision = 0;
+        }
+    }
+    return failed;
 }
 
 #if USE_EDITOR

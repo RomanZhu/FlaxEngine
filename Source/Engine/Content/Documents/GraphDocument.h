@@ -3,7 +3,7 @@
 #pragma once
 
 #include "AssetDocument.h"
-#include "SourceSaveTransaction.h"
+#include "AssetSaveService.h"
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Core/Types/Span.h"
@@ -104,12 +104,14 @@ public:
     /// <summary>Writes canonical JSON through sibling staging, reparse, and atomic replace.</summary>
     static bool SaveAtomic(const StringView& path, const StringAnsiView& canonicalText,
         AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr,
-        SourceSaveConflictPolicy conflictPolicy = SourceSaveConflictPolicy::Strict);
+        SourceSaveConflictPolicy conflictPolicy = SourceSaveConflictPolicy::Strict,
+        AssetSaveRefreshMode refreshMode = AssetSaveRefreshMode::TrackedSource);
 
     /// <summary>Writes a non-graph canonical JSON document through sibling staging and atomic replace.</summary>
     static bool SaveJsonAtomic(const StringView& path, const StringAnsiView& canonicalText,
         AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr,
-        SourceSaveConflictPolicy conflictPolicy = SourceSaveConflictPolicy::Strict);
+        SourceSaveConflictPolicy conflictPolicy = SourceSaveConflictPolicy::Strict,
+        AssetSaveRefreshMode refreshMode = AssetSaveRefreshMode::TrackedSource);
 
     /// <summary>Writes editor-local canonical JSON without consulting project asset registration.</summary>
     static bool SaveLocalJsonAtomic(const StringView& path, const StringAnsiView& canonicalText,
@@ -163,6 +165,24 @@ public:
     static bool Extract(const GraphDocument& document, Array<AssetDependency>& dependencies, ContentHash& functionInterfaceHash, AssetPipelineDiagnostic& diagnostic);
 };
 
+/// <summary>Independent source, refresh, and import outcomes for an editor graph save.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetDocumentSaveResult
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDocumentSaveResult);
+
+    API_FIELD() bool SourceCommitted = false;
+    API_FIELD() bool SourceUnchanged = false;
+    API_FIELD() bool SourceDurabilityUncertain = false;
+    API_FIELD() bool Conflict = false;
+    API_FIELD() bool RefreshFailed = false;
+    API_FIELD() bool ImportRequested = false;
+    API_FIELD() bool ImportSucceeded = false;
+    API_FIELD() bool ImportFailed = false;
+    API_FIELD() bool ImportBlocked = false;
+    API_FIELD() String SourceHash;
+    API_FIELD() String Diagnostic;
+};
+
 /// <summary>Direct source-document operations used by editor document sessions.</summary>
 API_CLASS(Static) class FLAXENGINE_API AssetDocumentService
 {
@@ -176,6 +196,12 @@ public:
     /// <returns>True on failure.</returns>
     API_FUNCTION() static bool SaveGraphSource(const StringView& path, const BytesContainer& surface,
         const StringView& expectedSourceHash, const StringView& propertiesJson = StringView::Empty);
+
+    /// <summary>Atomically writes an edited graph and reports source, refresh, and import separately.</summary>
+    API_FUNCTION() static AssetDocumentSaveResult SaveGraphSourceDetailed(const StringView& path,
+        const BytesContainer& surface, const StringView& expectedSourceHash,
+        const StringView& propertiesJson = StringView::Empty, bool importAfterSave = true,
+        bool forceImport = true);
 
     /// <summary>Creates a starter graph source and metadata without creating a runtime binary asset.</summary>
     /// <returns>The source GUID, or an invalid GUID on failure.</returns>
@@ -192,9 +218,11 @@ public:
     ContentHash LoadedHash;
     GraphDocument Document;
     bool Dirty = false;
+    uint64 EditRevision = 0;
 
     /// <returns>True on failure.</returns>
     bool Open(const StringView& path, AssetPipelineDiagnostic& diagnostic);
+    void MarkDirty(int64 localID = 0, const StringView& reason = TEXT("Graph document edited"));
     bool Save(bool allowOverwriteConflict, AssetPipelineDiagnostic& diagnostic);
     bool HasExternalChange(AssetPipelineDiagnostic& diagnostic) const;
 };
