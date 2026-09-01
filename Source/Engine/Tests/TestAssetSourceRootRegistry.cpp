@@ -30,6 +30,7 @@ TEST_CASE("Scene fragment paths use the canonical ExternalActors root")
 
     CHECK(FileSystem::AreFilePathsEqual(SceneFragmentStore::GetRootPath(projectRoot), expectedRoot));
     CHECK(FileSystem::AreFilePathsEqual(SceneFragmentStore::GetScenePath(projectRoot, sceneId), expectedScene));
+    CHECK(SceneFragmentStore::GetRootPath(projectRoot).Find(TEXT("SceneActors")) == -1);
 
     AssetPipelineDiagnostic diagnostic;
     AssetSourceRootRegistry registry(projectRoot, projectRoot / TEXT("Library"));
@@ -104,7 +105,9 @@ TEST_CASE("Asset source root registry owns permissions visibility and logical pa
     ResolvedAssetSourcePath resolved;
     REQUIRE_FALSE(registry.Resolve(externalActors / TEXT("scene/actor.sceneactor"), resolved, diagnostic));
     CHECK(resolved.Root.Kind == AssetSourceRootKind::SceneFragments);
+    CHECK(registry.Resolve(root / TEXT("SceneActors/scene/actor.actor"), resolved, diagnostic));
     CHECK(registry.Resolve(TEXT("ExternalActors/scene/actor.sceneactor"), resolved, diagnostic));
+    CHECK(registry.Resolve(TEXT("SceneActors/scene/actor.actor"), resolved, diagnostic));
     CHECK(registry.ResolveForGenericMutation(externalActors / TEXT("scene/actor.sceneactor"), writable, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
     CHECK(registry.ResolveForScan(externalActors / TEXT("scene/actor.sceneactor"), resolved, diagnostic));

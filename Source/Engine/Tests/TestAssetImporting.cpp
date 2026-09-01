@@ -29,7 +29,7 @@ namespace
     {
         AssetImportPlanRequest request;
         request.Asset = asset;
-        request.SourcePath = TEXT("Assets/model.foo");
+        request.SourcePath = TEXT("Content/model.foo");
         request.SourceRevision = revision;
         request.SourceHash = ContentHash::Compute("source", 6);
         request.MetadataHash = ContentHash::Compute("metadata", 8);
@@ -77,7 +77,7 @@ TEST_CASE("AssetImporterRegistry selection is deterministic and supports explici
     REQUIRE_FALSE(registry.Register(MakeImporter(TEXT("Tests.Higher"), TEXT(".foo"), 20), higher, diagnostic));
 
     AssetImporterSelectionRequest request;
-    request.SourcePath = TEXT("Assets/file.FOO");
+    request.SourcePath = TEXT("Content/file.FOO");
     AssetImporterLease selected;
     REQUIRE_FALSE(registry.Resolve(request, selected, diagnostic));
     CHECK(selected.Get().ID == TEXT("Tests.Higher"));
@@ -93,7 +93,7 @@ TEST_CASE("AssetImportContext records controlled reads dependencies and declared
 {
     const AssetGuid asset(Guid::New());
     ArtifactTarget target;
-    AssetImportContext context(asset, TEXT("Assets/model.foo"), target, "{}", [](const StringView& path, Array<byte>& bytes, ContentHash& hash, AssetPipelineDiagnostic&)
+    AssetImportContext context(asset, TEXT("Content/model.foo"), target, "{}", [](const StringView& path, Array<byte>& bytes, ContentHash& hash, AssetPipelineDiagnostic&)
     {
         bytes.Add(42);
         const StringAnsi narrow(path);
@@ -240,17 +240,17 @@ TEST_CASE("AssetImportPlanner fingerprints source basename but not parent path")
     Array<AssetImportPlanRequest> requests;
     Array<AssetImportPlan> plans;
 
-    request.SourcePath = TEXT("Assets/First/model.foo");
+    request.SourcePath = TEXT("Content/First/model.foo");
     requests.Add(request);
     REQUIRE_FALSE(planner.Build(requests, plans, diagnostic));
     const ArtifactKey original = plans[0].StaticFingerprint;
 
-    requests[0].SourcePath = TEXT("Assets/Second/model.foo");
+    requests[0].SourcePath = TEXT("Content/Second/model.foo");
     plans.Clear();
     REQUIRE_FALSE(planner.Build(requests, plans, diagnostic));
     CHECK(plans[0].StaticFingerprint == original);
 
-    requests[0].SourcePath = TEXT("Assets/Second/renamed.foo");
+    requests[0].SourcePath = TEXT("Content/Second/renamed.foo");
     plans.Clear();
     REQUIRE_FALSE(planner.Build(requests, plans, diagnostic));
     CHECK(plans[0].StaticFingerprint != original);
