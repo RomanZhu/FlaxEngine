@@ -53,10 +53,10 @@ public:
     static int32 LastProjectOpenedEngineBuild;
 
     /// <summary>
-    /// Checks if the project upgrade is required and may perform it. Will update IsOldProjectOpened flag.
+    /// Checks the last-used engine version and may offer a project backup. Will update IsOldProjectOpened flag.
     /// </summary>
     /// <returns>True if engine should exit, otherwise false.</returns>
-    static bool CheckProjectUpgrade();
+    static bool CheckProjectVersionCompatibility();
 
     /// <summary>
     /// Backups the whole project (all files) to the separate directory.

@@ -137,7 +137,7 @@ int32 Engine::OnInit(const Char* cmdLine)
     EngineImpl::InitLog();
 
 #if USE_EDITOR
-    if (Editor::CheckProjectUpgrade())
+    if (Editor::CheckProjectVersionCompatibility())
     {
         LOG(Warning, "Loading project cancelled. Closing...");
 #if LOG_ENABLE

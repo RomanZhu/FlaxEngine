@@ -29,7 +29,6 @@
 
 namespace EditorImpl
 {
-    bool IsOldProjectXmlFormat = false;
     bool HasFocus = false;
     SplashScreen* Splash = nullptr;
 
@@ -85,7 +84,7 @@ void Editor::CloseSplashScreen()
     SAFE_DELETE(EditorImpl::Splash);
 }
 
-bool Editor::CheckProjectUpgrade()
+bool Editor::CheckProjectVersionCompatibility()
 {
     PROFILE_MEM(Editor);
     const auto versionFilePath = Globals::ProjectCacheFolder / TEXT("version");
@@ -123,183 +122,8 @@ bool Editor::CheckProjectUpgrade()
         }
     }
 
-    // Check if project is in the old, deprecated layout
-    if (EditorImpl::IsOldProjectXmlFormat)
-    {
-        // [Deprecated: 16.04.2020, expires 16.04.2021]
-        LOG(Warning, "The project is in an old format and will be upgraded.");
-        const auto result = MessageBox::Show(TEXT("The Flax project is in an old format and will be upgraded. Loading it may modify existing data so older editor version won't open it. Do you want to perform a backup before or cancel operation?"), TEXT("Project upgrade"), MessageBoxButtons::YesNoCancel, MessageBoxIcon::Question);
-        if (result == DialogResult::Yes)
-        {
-            if (BackupProject())
-            {
-                LOG(Warning, "Backup failed");
-                return true;
-            }
-        }
-        else if (result == DialogResult::No)
-        {
-            // Don't backup, just load
-        }
-        else
-        {
-            // Cancel
-            return true;
-        }
-
-        const String& root = Globals::ProjectFolder;
-        const String& name = Project->Name;
-        String codeName;
-        for (int32 i = 0; i < name.Length(); i++)
-        {
-            Char c = name[i];
-            if (StringUtils::IsAlnum(c) && c != ' ' && c != '.')
-                codeName += c;
-        }
-        const String& sourceFolder = Globals::ProjectSourceFolder;
-        const String gameModuleFolder = sourceFolder / codeName;
-        const String gameEditorModuleFolder = sourceFolder / codeName + TEXT("Editor");
-        const String tempSourceSetup = Globals::ProjectCacheFolder / TEXT("UpgradeSource");
-        const String tempSourceSetupGame = tempSourceSetup / codeName;
-        const String tempSourceSetupGameEditor = tempSourceSetup / codeName + TEXT("Editor");
-
-        // Remove old project files
-        FileSystem::DeleteFile(root / name + TEXT(".sln"));
-        FileSystem::DeleteFile(root / name + TEXT(".csproj"));
-        FileSystem::DeleteFile(root / name + TEXT(".csproj.user"));
-        FileSystem::DeleteFile(root / name + TEXT(".Editor.csproj"));
-        FileSystem::DeleteFile(root / name + TEXT(".Editor.csproj.user"));
-
-        // Remove old cache files
-        FileSystem::DeleteDirectory(root / TEXT("Cache/Assemblies"));
-        FileSystem::DeleteDirectory(root / TEXT("Cache/bin"));
-        FileSystem::DeleteDirectory(root / TEXT("Cache/obj"));
-        FileSystem::DeleteDirectory(root / TEXT("Cache/Shaders"));
-
-        // Move C# files to new locations
-        FileSystem::DeleteDirectory(tempSourceSetup);
-        FileSystem::CreateDirectory(tempSourceSetup);
-        Array<String> files;
-        FileSystem::DirectoryGetFiles(files, sourceFolder);
-        bool useEditorModule = false;
-        for (auto& file : files)
-        {
-            String tempSourceFile;
-            if (file.Contains(TEXT("/Editor/")))
-            {
-                useEditorModule = true;
-                tempSourceFile = tempSourceSetupGameEditor / StringUtils::GetFileName(file);
-            }
-            else
-            {
-                tempSourceFile = tempSourceSetupGame / FileSystem::ConvertAbsolutePathToRelative(sourceFolder, file);
-            }
-            FileSystem::CreateDirectory(StringUtils::GetDirectoryName(tempSourceFile));
-            FileSystem::CopyFile(tempSourceFile, file);
-        }
-        FileSystem::DeleteDirectory(sourceFolder);
-        FileSystem::CopyDirectory(sourceFolder, tempSourceSetup);
-        FileSystem::DeleteDirectory(tempSourceSetup);
-
-        // Generate module files
-        File::WriteAllText(gameModuleFolder / String::Format(TEXT("{0}.Build.cs"), codeName), String::Format(TEXT(
-                               "using Flax.Build;\n"
-                               "using Flax.Build.NativeCpp;\n"
-                               "\n"
-                               "public class {0} : GameModule\n"
-                               "{{\n"
-                               "    /// <inheritdoc />\n"
-                               "    public override void Setup(BuildOptions options)\n"
-                               "    {{\n"
-                               "        base.Setup(options);\n"
-                               "\n"
-                               "        // Ignore compilation warnings due to missing code documentation comments\n"
-                               "        options.ScriptingAPI.IgnoreMissingDocumentationWarnings = true;\n"
-                               "\n"
-                               "        // Here you can modify the build options for your game module\n"
-                               "        // To reference another module use: options.PublicDependencies.Add(\"Audio\");\n"
-                               "        // To add C++ define use: options.PublicDefinitions.Add(\"COMPILE_WITH_FLAX\");\n"
-                               "        // To learn more see scripting documentation.\n"
-                               "        BuildNativeCode = false;\n"
-                               "    }}\n"
-                               "}}\n"
-                           ), codeName), Encoding::UTF8);
-        if (useEditorModule)
-        {
-            File::WriteAllText(gameEditorModuleFolder / String::Format(TEXT("{0}Editor.Build.cs"), codeName), String::Format(TEXT(
-                                   "using Flax.Build;\n"
-                                   "using Flax.Build.NativeCpp;\n"
-                                   "\n"
-                                   "public class {0}Editor : GameEditorModule\n"
-                                   "{{\n"
-                                   "    /// <inheritdoc />\n"
-                                   "    public override void Setup(BuildOptions options)\n"
-                                   "    {{\n"
-                                   "        base.Setup(options);\n"
-                                   "\n"
-                                   "        // Reference game source module to access game code types\n"
-                                   "        options.PublicDependencies.Add(\"{0}\");\n"
-                                   "\n"
-                                   "        // Ignore compilation warnings due to missing code documentation comments\n"
-                                   "        options.ScriptingAPI.IgnoreMissingDocumentationWarnings = true;\n"
-                                   "\n"
-                                   "        // Here you can modify the build options for your game editor module\n"
-                                   "        // To reference another module use: options.PublicDependencies.Add(\"Audio\");\n"
-                                   "        // To add C++ define use: options.PublicDefinitions.Add(\"COMPILE_WITH_FLAX\");\n"
-                                   "        // To learn more see scripting documentation.\n"
-                                   "        BuildNativeCode = false;\n"
-                                   "    }}\n"
-                                   "}}\n"
-                               ), codeName), Encoding::UTF8);
-        }
-
-        // Generate target files
-        File::WriteAllText(sourceFolder / String::Format(TEXT("{0}Target.Build.cs"), codeName), String::Format(TEXT(
-                               "using Flax.Build;\n"
-                               "\n"
-                               "public class {0}Target : GameProjectTarget\n"
-                               "{{\n"
-                               "    /// <inheritdoc />\n"
-                               "    public override void Init()\n"
-                               "    {{\n"
-                               "        base.Init();\n"
-                               "\n"
-                               "        // Reference the modules for game\n"
-                               "        Modules.Add(nameof({0}));\n"
-                               "    }}\n"
-                               "}}\n"
-                           ), codeName), Encoding::UTF8);
-        const String editorTargetGameEditorModule = useEditorModule ? String::Format(TEXT("        Modules.Add(\"{0}Editor\");\n"), codeName) : String::Empty;
-        File::WriteAllText(sourceFolder / String::Format(TEXT("{0}EditorTarget.Build.cs"), codeName), String::Format(TEXT(
-                               "using Flax.Build;\n"
-                               "\n"
-                               "public class {0}EditorTarget : GameProjectEditorTarget\n"
-                               "{{\n"
-                               "    /// <inheritdoc />\n"
-                               "    public override void Init()\n"
-                               "    {{\n"
-                               "        base.Init();\n"
-                               "\n"
-                               "        // Reference the modules for editor\n"
-                               "        Modules.Add(nameof({0}));\n"
-                               "{1}"
-                               "    }}\n"
-                               "}}\n"
-                           ), codeName, editorTargetGameEditorModule), Encoding::UTF8);
-
-        // Generate new project file
-        Project->ProjectPath = root / String::Format(TEXT("{0}.flaxproj"), codeName);
-        Project->GameTarget = codeName + TEXT("Target");
-        Project->EditorTarget = codeName + TEXT("EditorTarget");
-        Project->SaveProject();
-
-        // Remove old project file
-        FileSystem::DeleteFile(root / TEXT("Project.xml"));
-
-        LOG(Warning, "Project layout upgraded!");
-    }
     // Check if last version was the same
-    else if (lastVersion.Major == FLAXENGINE_VERSION_MAJOR && lastVersion.Minor == FLAXENGINE_VERSION_MINOR)
+    if (lastVersion.Major == FLAXENGINE_VERSION_MAJOR && lastVersion.Minor == FLAXENGINE_VERSION_MINOR)
     {
         // Do nothing
         IsOldProjectOpened = false;
@@ -308,7 +132,7 @@ bool Editor::CheckProjectUpgrade()
     else if (lastVersion.Major < FLAXENGINE_VERSION_MAJOR || (lastVersion.Major == FLAXENGINE_VERSION_MAJOR && lastVersion.Minor < FLAXENGINE_VERSION_MINOR))
     {
         LOG(Warning, "The project was last opened with an older editor version");
-        const auto result = MessageBox::Show(TEXT("The project was last opened with an older editor version.\nLoading it may modify existing data, which can result in older editor versions being unable to open it.\n\nDo you want to perform a backup before or cancel the operation?"), TEXT("Project upgrade"), MessageBoxButtons::YesNoCancel, MessageBoxIcon::Question);
+        const auto result = MessageBox::Show(TEXT("The project was last opened with an older editor version.\nLoading it may modify existing data, which can result in older editor versions being unable to open it.\n\nDo you want to perform a backup before or cancel the operation?"), TEXT("Project version"), MessageBoxButtons::YesNoCancel, MessageBoxIcon::Question);
         if (result == DialogResult::Yes)
         {
             if (BackupProject())
@@ -331,7 +155,7 @@ bool Editor::CheckProjectUpgrade()
     else if (lastVersion.Major > FLAXENGINE_VERSION_MAJOR || (lastVersion.Major == FLAXENGINE_VERSION_MAJOR && lastVersion.Minor > FLAXENGINE_VERSION_MINOR))
     {
         LOG(Warning, "The project was last opened with a newer editor version");
-        const auto result = MessageBox::Show(TEXT("The project was last opened with a newer editor version.\nLoading it may fail and corrupt existing data.\n\nDo you want to perform a backup before loading or cancel the operation?"), TEXT("Project upgrade"), MessageBoxButtons::YesNoCancel, MessageBoxIcon::Warning);
+        const auto result = MessageBox::Show(TEXT("The project was last opened with a newer editor version.\nLoading it may fail and corrupt existing data.\n\nDo you want to perform a backup before loading or cancel the operation?"), TEXT("Project version"), MessageBoxButtons::YesNoCancel, MessageBoxIcon::Warning);
         if (result == DialogResult::Yes)
         {
             if (BackupProject())
@@ -357,16 +181,6 @@ bool Editor::CheckProjectUpgrade()
         LOG(Info, "Cleaning cache files from different engine version");
         FileSystem::DeleteDirectory(Globals::ProjectFolder / TEXT("Cache/Cooker"));
         FileSystem::DeleteDirectory(Globals::ProjectFolder / TEXT("Cache/Intermediate"));
-    }
-
-    // Upgrade old 0.7 projects
-    // [Deprecated: 01.11.2020, expires 01.11.2021]
-    if (lastVersion.Major == 0 && lastVersion.Minor == 7 && lastVersion.Build <= 6197)
-    {
-        Array<String> files;
-        FileSystem::DirectoryGetFiles(files, Globals::ProjectSourceFolder, TEXT("*.Gen.cs"));
-        for (auto& file : files)
-            FileSystem::DeleteFile(file);
     }
 
     // Update version the cache file
