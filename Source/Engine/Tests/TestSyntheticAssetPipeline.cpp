@@ -226,6 +226,8 @@ namespace
         String LibraryRoot;
         String SourcePath;
         String BuildInputPath;
+        String BuildDependencySourcePath;
+        String RuntimeReferenceSourcePath;
         Guid AssetID = Guid::New();
         Guid BuildDependencyID = Guid::New();
         Guid RuntimeReferenceID = Guid::New();
@@ -253,6 +255,8 @@ namespace
             LibraryRoot = Root / TEXT("Library");
             SourcePath = ContentRoot / TEXT("fixture.syntheticpipeline");
             BuildInputPath = LibraryRoot / TEXT("Seed/upstream.bin");
+            BuildDependencySourcePath = ContentRoot / TEXT("upstream.syntheticdependency");
+            RuntimeReferenceSourcePath = ContentRoot / TEXT("runtime.syntheticdependency");
             Target.Platform = "Windows";
             Target.Architecture = "x64";
             Target.Configuration = "Development";
@@ -263,7 +267,10 @@ namespace
         bool Initialize(AssetPipelineDiagnostic& diagnostic)
         {
             if (FileSystem::CreateDirectory(ContentRoot) || FileSystem::CreateDirectory(LibraryRoot) || EnsureBuildInput() ||
-                File::WriteAllText(SourcePath, TEXT("synthetic-source-one"), Encoding::ANSI) || ArtifactStore::EnsureLayout(LibraryRoot, diagnostic))
+                File::WriteAllText(SourcePath, TEXT("synthetic-source-one"), Encoding::ANSI) ||
+                File::WriteAllText(BuildDependencySourcePath, TEXT("synthetic-upstream-source"), Encoding::ANSI) ||
+                File::WriteAllText(RuntimeReferenceSourcePath, TEXT("synthetic-runtime-source"), Encoding::ANSI) ||
+                ArtifactStore::EnsureLayout(LibraryRoot, diagnostic))
                 return true;
 
             AssetProcessorDescriptor descriptor;
@@ -331,6 +338,21 @@ namespace
             record.Status = AssetRecordStatus::Ready;
             record.BuildInputDependencies.Add(AssetObjectId::Main(AssetGuid(BuildDependencyID)));
             record.RuntimeReferences.Add(AssetObjectId::Main(AssetGuid(RuntimeReferenceID)));
+            return record;
+        }
+
+        AssetRecord MakeDependencyRecord(const Guid& id, const StringView& path) const
+        {
+            AssetRecord record;
+            record.ID = id;
+            record.SourceAssetID = id;
+            record.LocalId = 1;
+            record.TypeName = RawDataAsset::TypeName;
+            record.CanonicalPath = CanonicalAssetPath(path);
+            record.SourcePath = SourceFilePath(path);
+            record.ProcessorID = TEXT("tests.synthetic-dependency");
+            record.SourceKind = AssetSourceKind::ImportedSource;
+            record.Status = AssetRecordStatus::Ready;
             return record;
         }
 
@@ -552,6 +574,8 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
 
     Array<AssetRecord> records;
     records.Add(fixture.MakeRecord());
+    records.Add(fixture.MakeDependencyRecord(fixture.BuildDependencyID, fixture.BuildDependencySourcePath));
+    records.Add(fixture.MakeDependencyRecord(fixture.RuntimeReferenceID, fixture.RuntimeReferenceSourcePath));
     REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
     AssetRecord record;
     REQUIRE(database.TryGetRecord(fixture.AssetID, record));
@@ -751,8 +775,10 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
     CHECK(loadedAsset->GetStoragePath() != fixture.SourcePath);
     Array<String> contentFiles;
     REQUIRE_FALSE(FileSystem::DirectoryGetFiles(contentFiles, fixture.ContentRoot, TEXT("*"), DirectorySearchOption::AllDirectories));
-    REQUIRE(contentFiles.Count() == 1);
-    CHECK(contentFiles[0] == fixture.SourcePath);
+    REQUIRE(contentFiles.Count() == 3);
+    CHECK(contentFiles.Contains(fixture.SourcePath));
+    CHECK(contentFiles.Contains(fixture.BuildDependencySourcePath));
+    CHECK(contentFiles.Contains(fixture.RuntimeReferenceSourcePath));
 }
 
 #endif
