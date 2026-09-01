@@ -3818,7 +3818,7 @@ bool AuthoredAssetDocumentService::Save(BinaryAsset* asset, const Guid& canonica
             auto& allocator = sourceJson.GetAllocator();
             sourceJson.AddMember("documentVersion", 1, allocator);
             sourceJson.AddMember("type", rapidjson_flax::Value("FlaxEngine.SkeletonMask", allocator), allocator);
-            const StringAnsi skeletonText = StringAnsi(typed->Skeleton.GetID().Asset.Value.ToString(Guid::FormatType::N)).ToLower();
+            const StringAnsi skeletonText = StringAnsi(typed->Skeleton.GetID().ToString(Guid::FormatType::N)).ToLower();
             sourceJson.AddMember("skeleton", rapidjson_flax::Value(skeletonText.Get(), skeletonText.Length(), allocator), allocator);
             rapidjson_flax::Value nodes(rapidjson::kArrayType);
             for (const String& name : typed->GetMaskedNodes())
