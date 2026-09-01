@@ -1330,6 +1330,7 @@ bool AssetDatabase::RecordPublication(const SourceAssetPublicationRow& publicati
     if (!transaction)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, StringView::Empty, TEXT("Cannot begin a publication transaction."));
     SourceAssetPublicationRow persistedPublication = publication;
+    persistedPublication.ImporterRegistryGeneration = transaction->GetState().Database.ImporterRegistryGeneration;
     Array<SourceAssetDependencyRow> persistedDependencies(dependencies);
     for (const SourceAssetObjectRow& object : transaction->GetState().Objects)
     {

@@ -149,7 +149,6 @@ namespace
         publication.Artifact = primaryOutput->Key;
         publication.InputFingerprint = manifest.InputFingerprint;
         publication.SourceRevision = manifest.DatabaseRevision;
-        publication.ImporterRegistryGeneration = database.GetDurableSnapshot().GetState().Database.ImporterRegistryGeneration;
         publication.PublishedUtcTicks = DateTime::NowUTC().Ticks;
         publication.IsLastKnownGood = true;
 

@@ -271,6 +271,7 @@ TEST_CASE("Asset database durable republish is a no-op and preserves publication
     mainPublication.LocalFileId = 1;
     mainPublication.TargetId = TEXT("Windows-x64");
     mainPublication.Artifact = ArtifactKey(ContentHash::Compute("main-publication", 16));
+    mainPublication.ImporterRegistryGeneration = 991;
     mainPublication.IsLastKnownGood = true;
     SourceAssetDependencyRow dependency;
     dependency.OwnerAssetGuid = sourceId;
@@ -292,6 +293,10 @@ TEST_CASE("Asset database durable republish is a no-op and preserves publication
     Array<SourceAssetDependencyRow> noDependencies;
     REQUIRE_FALSE(database.RecordPublication(subPublication, noDependencies, diagnostic,
         publicationRefreshId, publicationPass));
+    const AssetDatabaseReadSnapshot publicationSnapshot = database.GetDurableSnapshot();
+    REQUIRE(publicationSnapshot.GetState().Publications.Count() == 2);
+    CHECK(publicationSnapshot.GetState().Publications[0].ImporterRegistryGeneration == 0);
+    CHECK(publicationSnapshot.GetState().Publications[1].ImporterRegistryGeneration == 0);
 
     const uint64 publicationRevision = database.GetRevision();
     REQUIRE_FALSE(database.ReadChangesAfter(stableRevision, changes, requiresSnapshot, diagnostic));
