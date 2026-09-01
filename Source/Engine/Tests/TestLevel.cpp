@@ -105,7 +105,11 @@ namespace
     {
         Array<String> refresh;
         refresh.Add(scenePath);
-        REQUIRE(!AssetPipelineService::RefreshSources(refresh));
+        AssetPipelineDiagnostic diagnostic;
+        const bool failed = AssetPipelineService::RefreshSources(refresh, true, diagnostic);
+        if (failed)
+            LOG(Error, "Test scene refresh failed: {0}", diagnostic.Message);
+        REQUIRE(!failed);
     }
 
     void WriteTestSceneAsset(const String& scenePath, const Guid& sceneId, bool externalActors)
