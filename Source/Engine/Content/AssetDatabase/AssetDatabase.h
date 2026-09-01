@@ -73,6 +73,9 @@ public:
     bool Close(AssetPipelineDiagnostic* diagnostic = nullptr);
     bool IsOpen() const;
 
+    /// <summary>Returns true when this database owns the given Library root.</summary>
+    bool IsUsingLibrary(const StringView& libraryPath) const;
+
     uint64 GetRevision() const;
     AssetDatabaseSnapshot GetSnapshot() const;
     bool TryGetRecord(const Guid& id, AssetRecord& result) const;

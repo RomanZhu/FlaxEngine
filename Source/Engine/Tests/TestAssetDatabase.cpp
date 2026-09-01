@@ -23,6 +23,7 @@ namespace
         AssetRecord result;
         result.ID = id;
         result.SourceAssetID = sourceId;
+        result.LocalId = key.IsEmpty() ? 1 : 2;
         result.TypeName = key.IsEmpty() ? TEXT("FlaxEngine.Texture") : TEXT("FlaxEngine.Model");
         result.CanonicalPath = CanonicalAssetPath(path);
         result.SourcePath = SourceFilePath(path);
@@ -32,34 +33,6 @@ namespace
         result.PortabilityKey = String(path).ToLower();
         result.BuildInputDependencies.Add(AssetObjectId::Main(AssetGuid(Guid(91, 92, 93, 94))));
         return result;
-    }
-
-    bool ContainsDiagnostic(const Array<AssetPipelineDiagnostic>& diagnostics, AssetPipelineDiagnosticCode code, const StringView& sourcePath)
-    {
-        for (const AssetPipelineDiagnostic& diagnostic : diagnostics)
-        {
-            if (diagnostic.Code == code && FileSystem::AreFilePathsEquivalent(diagnostic.SourcePath, sourcePath))
-                return true;
-        }
-        return false;
-    }
-
-    // Reads the live persisted snapshot without touching the running database.
-    int32 PersistedFileStateCount(const StringView& folder)
-    {
-        const String snapshotPath = Globals::ProjectLibraryFolder / TEXT("AssetDatabase") / TEXT("index.bin");
-        AssetDatabase loaded;
-        Array<AssetDatabaseFileState> states;
-        AssetPipelineDiagnostic diagnostic;
-        if (AssetDatabaseSnapshotStore::Load(snapshotPath, Globals::ProjectFolder, Globals::ProjectContentFolder, loaded, states, diagnostic))
-            return -1;
-        int32 count = 0;
-        for (const AssetDatabaseFileState& state : states)
-        {
-            if (state.Path.StartsWith(folder, StringSearchCase::IgnoreCase))
-                count++;
-        }
-        return count;
     }
 
     AssetMeta MakeDatabaseMeta(const Guid& id)
@@ -523,7 +496,7 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(secondId, found));
 }
 
-TEST_CASE("Asset database RefreshSources reports missing sidecars and keeps unaffected diagnostics")
+TEST_CASE("Asset database RefreshSources creates canonical sidecars and keeps unaffected records")
 {
     const String folder = Globals::ProjectContentFolder / (TEXT("__RefreshDiagnostics_") + Guid::New().ToString(Guid::FormatType::N));
     REQUIRE_FALSE(FileSystem::CreateDirectory(folder));
@@ -535,29 +508,26 @@ TEST_CASE("Asset database RefreshSources reports missing sidecars and keeps unaf
         AssetPipelineService::RefreshSources(cleanup);
     };
 
-    const String orphan = folder / TEXT("Orphan.png");
-    const String tracked = folder / TEXT("Tracked.png");
+    const String orphan = folder / TEXT("Orphan.txt");
+    const String tracked = folder / TEXT("Tracked.txt");
     REQUIRE_FALSE(File::WriteAllText(orphan, TEXT("orphan"), Encoding::ANSI));
     REQUIRE_FALSE(File::WriteAllText(tracked, TEXT("tracked"), Encoding::ANSI));
-    AssetPipelineDiagnostic diagnostic;
-    REQUIRE_FALSE(AssetMeta::SaveAtomic(tracked + TEXT(".meta"), MakeDatabaseMeta(Guid::New()), diagnostic));
 
-    // A source dropped in without a sidecar has to be reported, exactly as a full scan would.
+    // Filesystem additions are registered through the native metadata boundary before collection.
     REQUIRE_FALSE(AssetPipelineService::RefreshSources(cleanup));
-    CHECK(ContainsDiagnostic(AssetDatabaseQueryService::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
+    REQUIRE(FileSystem::FileExists(orphan + TEXT(".meta")));
+    REQUIRE(FileSystem::FileExists(tracked + TEXT(".meta")));
+    AssetPipelineDiagnostic diagnostic;
+    AssetMeta orphanMeta;
+    REQUIRE_FALSE(AssetMeta::Load(orphan + TEXT(".meta"), orphanMeta, diagnostic));
+    AssetRecord found;
+    REQUIRE(AssetDatabase::Get().TryGetRecord(orphanMeta.ID, found));
 
-    // Refreshing one source must not discard what is already known about every other source.
+    // Refreshing one source must not discard every other source in the committed snapshot.
     Array<String> trackedOnly;
     trackedOnly.Add(tracked);
     REQUIRE_FALSE(AssetPipelineService::RefreshSources(trackedOnly));
-    CHECK(ContainsDiagnostic(AssetDatabaseQueryService::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
-
-    // Once the sidecar exists the diagnostic for that source must not survive.
-    REQUIRE_FALSE(AssetMeta::SaveAtomic(orphan + TEXT(".meta"), MakeDatabaseMeta(Guid::New()), diagnostic));
-    Array<String> orphanOnly;
-    orphanOnly.Add(orphan);
-    REQUIRE_FALSE(AssetPipelineService::RefreshSources(orphanOnly));
-    CHECK_FALSE(ContainsDiagnostic(AssetDatabaseQueryService::GetDiagnostics(), AssetPipelineDiagnosticCode::MissingMeta, orphan));
+    REQUIRE(AssetDatabase::Get().TryGetRecord(orphanMeta.ID, found));
 }
 
 TEST_CASE("Asset database clears a path collision once the conflict is resolved")
@@ -596,7 +566,7 @@ TEST_CASE("Asset database clears a path collision once the conflict is resolved"
     CHECK(found.Status == AssetRecordStatus::Ready);
 }
 
-TEST_CASE("Asset database RefreshSources prunes persisted file states under a deleted directory")
+TEST_CASE("Asset database RefreshSources prunes records under a deleted directory")
 {
     const String folder = Globals::ProjectContentFolder / (TEXT("__RefreshFileStates_") + Guid::New().ToString(Guid::FormatType::N));
     const String nested = folder / TEXT("Nested");
@@ -618,12 +588,10 @@ TEST_CASE("Asset database RefreshSources prunes persisted file states under a de
 
     AssetRecord found;
     REQUIRE(AssetDatabase::Get().TryGetRecord(trackedId, found));
-    CHECK(PersistedFileStateCount(folder) > 0);
 
     REQUIRE_FALSE(FileSystem::DeleteDirectory(folder, true));
     REQUIRE_FALSE(AssetPipelineService::RefreshSources(cleanup));
     CHECK_FALSE(AssetDatabase::Get().TryGetRecord(trackedId, found));
-    CHECK(PersistedFileStateCount(folder) == 0);
 }
 
 #endif

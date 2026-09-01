@@ -475,6 +475,9 @@ bool AssetOperations::CreateFromBytes(AssetOperationKind kind, const StringView&
 bool AssetOperations::CreateAsset(const StringView& destination, const Span<byte>& sourceData, const AssetMeta& meta,
     AssetPipelineDiagnostic& diagnostic)
 {
+    AssetPathPolicy::ProjectPath normalized;
+    if (NormalizeSource(destination, normalized, diagnostic))
+        return true;
     AssetOperationTarget target;
     target.SourcePath = destination;
     target.ExpectedGuid = meta.ID;
@@ -488,6 +491,9 @@ bool AssetOperations::CreateAsset(const StringView& destination, const Span<byte
 bool AssetOperations::ImportAsset(const StringView& externalSource, const StringView& destination, const AssetMeta& meta,
     AssetPipelineDiagnostic& diagnostic)
 {
+    AssetPathPolicy::ProjectPath normalized;
+    if (NormalizeSource(destination, normalized, diagnostic))
+        return true;
     BytesContainer bytes;
     if (!FileSystem::FileExists(externalSource) || File::ReadAllBytes(externalSource, bytes) || bytes.Length() > MAX_int32)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, externalSource,
@@ -612,9 +618,11 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
 bool AssetOperations::MoveAsset(const AssetOperationTarget& target, const StringView& destination,
     AssetPipelineDiagnostic& diagnostic)
 {
-    AssetPathPolicy::ProjectPath normalized;
+    AssetPathPolicy::ProjectPath normalizedSource;
+    AssetPathPolicy::ProjectPath normalizedDestination;
     AssetMeta meta;
-    if (ValidateExisting(target, normalized, meta, diagnostic) ||
+    if (ValidateExisting(target, normalizedSource, meta, diagnostic) ||
+        NormalizeSource(destination, normalizedDestination, diagnostic) ||
         _modificationProcessor.ValidateOperation(AssetOperationKind::Move, target, destination, diagnostic))
         return true;
     return MoveExact(AssetOperationKind::Move, target, destination, nullptr, diagnostic);
@@ -758,6 +766,9 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
     if (AssetMeta::Load(trash.TrashMetaPath, meta, diagnostic) || meta.ID != trash.AssetGuid)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, trash.TrashMetaPath,
             TEXT("Asset trash metadata no longer matches the exact restore target."));
+    AssetPathPolicy::ProjectPath normalizedDestination;
+    if (NormalizeSource(trash.OriginalSourcePath, normalizedDestination, diagnostic))
+        return true;
     AssetOperationTarget callbackTarget;
     callbackTarget.SourcePath = trash.OriginalSourcePath;
     callbackTarget.ExpectedGuid = trash.AssetGuid;

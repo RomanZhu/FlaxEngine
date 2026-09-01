@@ -104,11 +104,11 @@ namespace
         return false;
     }
 
-    bool PersistPublication(const ArtifactManifest& manifest, const StringAnsiView& manifestJson,
+    bool PersistPublication(const StringView& libraryRoot, const ArtifactManifest& manifest, const StringAnsiView& manifestJson,
         AssetPipelineDiagnostic& diagnostic)
     {
         AssetDatabase& database = AssetDatabase::Get();
-        if (!database.IsOpen())
+        if (!database.IsUsingLibrary(libraryRoot))
             return false;
 
         const String targetId(manifest.Target.BuildKey(ArtifactTargetDimension::All).ToString());
@@ -534,7 +534,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         return true;
     if (AtomicReplace(manifestPath.Get(), stagingManifest))
         return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, manifestPath.Get(), TEXT("Cannot atomically replace current artifact manifest."));
-    if (PersistPublication(manifest, manifestJson, diagnostic))
+    if (PersistPublication(libraryRoot, manifest, manifestJson, diagnostic))
         return true;
     result.Manifest = manifest;
     if (Inject(request.FailurePoint, ArtifactPublicationFailurePoint::AfterAtomicReplaceBeforeNotification, prepared, diagnostic))

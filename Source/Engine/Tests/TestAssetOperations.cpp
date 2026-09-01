@@ -111,8 +111,10 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     CHECK(database.ClearedCopy == copiedGuid);
     AssetMeta copiedMeta;
     REQUIRE_FALSE(AssetMeta::Load(copied + TEXT(".meta"), copiedMeta, diagnostic));
+    AssetMeta persistedSourceMeta;
+    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), persistedSourceMeta, diagnostic));
     CHECK(copiedMeta.ID == copiedGuid);
-    CHECK(copiedMeta.Processor.SettingsJson == sourceMeta.Processor.SettingsJson);
+    CHECK(copiedMeta.Processor.SettingsJson == persistedSourceMeta.Processor.SettingsJson);
     REQUIRE(copiedMeta.SubAssets.ContainsKey(TEXT("mesh:Body")));
     CHECK(copiedMeta.SubAssets[TEXT("mesh:Body")].LocalId == 771);
 
@@ -163,7 +165,7 @@ TEST_CASE("Asset operations reject private and unregistered source roots")
     const String root = Globals::TemporaryFolder / (TEXT("AssetOperationRoots-") + Guid::New().ToString(Guid::FormatType::N));
     const String content = root / TEXT("Content");
     const String library = root / TEXT("Library");
-    const String externalActors = library / TEXT("ExternalActors");
+    const String externalActors = root / TEXT("ExternalActors");
     const String readOnly = root / TEXT("SharedContent");
     REQUIRE_FALSE(FileSystem::CreateDirectory(content));
     REQUIRE_FALSE(FileSystem::CreateDirectory(externalActors));

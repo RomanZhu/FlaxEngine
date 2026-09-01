@@ -3,6 +3,7 @@
 #include "AssetDatabase.h"
 #include "Identity/AssetObjectId.h"
 #include "Engine/Core/Collections/HashSet.h"
+#include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
 #include "Engine/Threading/Threading.h"
 #include <algorithm>
@@ -310,6 +311,12 @@ bool AssetDatabase::Close(AssetPipelineDiagnostic* diagnostic)
 bool AssetDatabase::IsOpen() const
 {
     return _sourceDatabase.IsOpen();
+}
+
+bool AssetDatabase::IsUsingLibrary(const StringView& libraryPath) const
+{
+    return _sourceDatabase.IsOpen() && FileSystem::AreFilePathsEquivalent(
+        _sourceDatabase.GetDirectory(), String(libraryPath) / TEXT("AssetDatabase"));
 }
 
 uint64 AssetDatabase::GetRevision() const
@@ -816,9 +823,16 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
     ScopeLock writeLock(_writeLocker);
     if (!_sourceDatabase.IsOpen())
     {
+        const uint64 previousRevision = GetRevision();
         AssetDatabaseChangeBatch changes;
-        if (PublishCache(records, GetRevision() + 1, changes, diagnostic))
+        if (PublishCache(records, previousRevision + 1, changes, diagnostic))
             return true;
+        if (changes.Added.IsEmpty() && changes.Removed.IsEmpty() && changes.Changed.IsEmpty() && changes.StatusChanged.IsEmpty())
+        {
+            ScopeLock lock(_locker);
+            _revision = previousRevision;
+            return false;
+        }
         Changed(changes);
         return false;
     }
