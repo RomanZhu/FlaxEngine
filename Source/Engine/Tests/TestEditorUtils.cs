@@ -2158,7 +2158,7 @@ namespace FlaxEngine.Tests
                 Assert.NotNull(item);
                 var contentWindow = FlaxEditor.Editor.Instance.Windows.ContentWin;
                 contentWindow.Select(item, true);
-                Assert.AreEqual(ids[0], contentWindow.Selection.Single().ID);
+                Assert.AreSame(item, contentWindow.Selection.Single());
                 contentWindow.ClearSelection(false);
                 Assert.Less(selectionLatency.ElapsedMilliseconds, 1000, "Project selection stalled while import results were presented.");
 
