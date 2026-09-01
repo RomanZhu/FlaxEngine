@@ -3,6 +3,7 @@
 #include "CookAssetsStep.h"
 #include "Editor/Cooker/PlatformTools.h"
 #include "Engine/Core/DeleteMe.h"
+#include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Utilities.h"
 #include "Engine/Core/Collections/Sorting.h"
 #include "Engine/Platform/FileSystem.h"
@@ -15,6 +16,7 @@
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/Build/AssetBuildSnapshot.h"
+#include "Engine/Content/Build/CookedContentGeneration.h"
 #include "Engine/Content/Build/RuntimeAssetCatalog.h"
 #include "Engine/Content/Build/RuntimeDependencyClosure.h"
 #include "Engine/Content/Assets/Material.h"
@@ -1206,6 +1208,24 @@ public:
 
 bool CookAssetsStep::Perform(CookingData& data)
 {
+    const String publishedDataOutputPath = data.DataOutputPath;
+    const String publishedContentRoot = publishedDataOutputPath / TEXT("Content");
+    String stagingDataOutputPath;
+    AssetPipelineDiagnostic publicationDiagnostic;
+    if (CookedContentGeneration::CreateStaging(publishedContentRoot, Guid::New(), stagingDataOutputPath, publicationDiagnostic))
+    {
+        data.Error(String::Format(TEXT("Failed to stage cooked content. {0}"), publicationDiagnostic.Message));
+        return true;
+    }
+    data.DataOutputPath = stagingDataOutputPath;
+    bool retainStagingForFinalization = false;
+    SCOPE_EXIT
+    {
+        data.DataOutputPath = publishedDataOutputPath;
+        if (!retainStagingForFinalization && FileSystem::DirectoryExists(stagingDataOutputPath))
+            FileSystem::DeleteDirectory(stagingDataOutputPath, true);
+    };
+
     float Step1ProgressStart = 0.1f;
     float Step1ProgressEnd = 0.6f;
     String Step1Info = TEXT("Cooking assets");
@@ -1335,6 +1355,10 @@ bool CookAssetsStep::Perform(CookingData& data)
             request.Target = cookArtifactTarget;
             request.OutputKind = "runtime";
             request.Policy = ArtifactResolvePolicy::Exact;
+            request.IsCancellationRequested = []
+            {
+                return GameCooker::IsCancelRequested();
+            };
             ResolvedArtifact artifact;
             AssetPipelineDiagnostic diagnostic;
             const bool resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
@@ -1445,7 +1469,9 @@ bool CookAssetsStep::Perform(CookingData& data)
             cookedPath /= String(TEXT("Content")) / StringUtils::GetFileName(filePath);
 
         // Copy file
-        if (!FileSystem::FileExists(cookedPath) || FileSystem::GetFileLastEditTime(cookedPath) >= FileSystem::GetFileLastEditTime(filePath))
+        const bool cookedExists = FileSystem::FileExists(cookedPath);
+        if (CookedContentGeneration::ShouldCopyStreamingFile(cookedExists, FileSystem::GetFileLastEditTime(filePath),
+            cookedExists ? FileSystem::GetFileLastEditTime(cookedPath) : DateTime::MinValue()))
         {
             const String cookedFolder = StringUtils::GetDirectoryName(cookedPath);
             if (FileSystem::CreateDirectory(cookedFolder))
@@ -1782,6 +1808,11 @@ bool CookAssetsStep::Perform(CookingData& data)
         return true;
     }
     data.Stats.ContentSize += FileSystem::GetFileSize(runtimeCatalogPath);
+
+    BUILD_STEP_CANCEL_CHECK;
+    data.CookedContentRoot = publishedContentRoot;
+    data.CookedContentStagingPath = stagingDataOutputPath;
+    retainStagingForFinalization = true;
     // Print stats
     LOG(Info, "Cooked {0} assets, total assets: {1}, total content packages size: {2} MB", data.Stats.CookedAssets, AssetsRegistry.Count(), (int32)(data.Stats.ContentSize / (1024 * 1024)));
     {

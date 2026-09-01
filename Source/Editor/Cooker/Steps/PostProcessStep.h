@@ -14,4 +14,5 @@ public:
 
     // [BuildStep]
     bool Perform(CookingData& data) override;
+    void OnBuildEnded(CookingData& data, bool failed) override;
 };

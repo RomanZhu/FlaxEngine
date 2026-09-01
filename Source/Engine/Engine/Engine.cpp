@@ -22,6 +22,7 @@
 #include "Engine/Graphics/GPUDevice.h"
 #include "Engine/Scripting/ScriptingType.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/Build/CookedContentGeneration.h"
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/Artifacts/ProjectLibrary.h"
 #include "Engine/Core/Config/GameSettings.h"
@@ -653,8 +654,8 @@ void EngineImpl::InitPaths()
     Globals::MonoPath = Globals::StartupFolder / TEXT("Mono");
 #endif
 #endif
-    Globals::ProjectContentFolder = Globals::ProjectFolder / TEXT("Content");
 #if USE_EDITOR
+    Globals::ProjectContentFolder = Globals::ProjectFolder / TEXT("Content");
     Globals::ProjectSourceFolder = Globals::ProjectFolder / TEXT("Source");
     Globals::ProjectCacheFolder = Globals::ProjectFolder / TEXT("Cache");
     Globals::ProjectLibraryFolder = Globals::ProjectFolder / TEXT("Library");
@@ -696,6 +697,15 @@ void EngineImpl::InitPaths()
     if (ProjectLibrary::EnsureRoot(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, projectLibraryFolder, libraryDiagnostic))
         Platform::Fatal(String::Format(TEXT("{0}: {1}"), GetAssetPipelineDiagnosticCodeName(libraryDiagnostic.Code), libraryDiagnostic.Message));
     Globals::ProjectLibraryFolder = projectLibraryFolder;
+#else
+    if (Globals::ProjectContentFolder.IsEmpty())
+    {
+        ContentHash cookedGeneration;
+        AssetPipelineDiagnostic generationDiagnostic;
+        if (CookedContentGeneration::Resolve(Globals::ProjectFolder / TEXT("Content"), Globals::ProjectContentFolder,
+            cookedGeneration, generationDiagnostic))
+            Platform::Fatal(String::Format(TEXT("Cannot resolve cooked content generation. {0}"), generationDiagnostic.Message));
+    }
 #endif
 
     // Setup current working directory to the project root

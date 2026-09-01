@@ -315,4 +315,77 @@ TEST_CASE("ArtifactResolver isolates composite objects with colliding derived ru
     CHECK(firstArtifact.StoragePath.Get() != secondArtifact.StoragePath.Get());
 }
 
+TEST_CASE("ArtifactResolver exact wait observes caller cancellation")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("ArtifactResolverCancellation-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    const String sourcePath = content / TEXT("cancel.source");
+    REQUIRE_FALSE(File::WriteAllText(sourcePath, TEXT("source"), Encoding::ANSI));
+
+    AssetRecord input;
+    input.ID = Guid::New();
+    input.SourceAssetID = input.ID;
+    input.TypeName = TEXT("FlaxEngine.RawDataAsset");
+    input.CanonicalPath = CanonicalAssetPath(sourcePath);
+    input.SourcePath = SourceFilePath(sourcePath);
+    input.ProcessorID = TEXT("test.resolver.cancel");
+    input.SourceKind = AssetSourceKind::ImportedSource;
+    input.Status = AssetRecordStatus::Ready;
+    AssetPipelineDiagnostic diagnostic;
+    AssetDatabase database;
+    Array<AssetRecord> records;
+    records.Add(input);
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+
+    AssetBuildService service;
+    AssetBuildServiceLimits limits;
+    limits.MaximumWorkers = 1;
+    limits.MaximumMemoryBytes = 64;
+    limits.MaximumExternalTools = 1;
+    REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
+    std::atomic<bool> buildStarted { false };
+    std::atomic<bool> buildCancelled { false };
+    const ArtifactKey fingerprint = ResolverKey("cancel-input");
+    ArtifactResolutionPlanProvider provider = [&](const AssetRecord& record, const ArtifactRequest&,
+        ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& planDiagnostic)
+    {
+        plan.CurrentInputFingerprint = fingerprint;
+        plan.BuildRequest.Key.ExactPlan = ResolverKey("cancel-job");
+        plan.BuildRequest.AssetID = record.ID;
+        plan.BuildRequest.ProcessorClass = TEXT("resolver-cancel-test");
+        plan.BuildRequest.MemoryBytes = 1;
+        plan.BuildRequest.Build = [&](const AssetCancellationToken& token, AssetPipelineDiagnostic& buildDiagnostic)
+        {
+            buildStarted.store(true);
+            while (!token.IsCancellationRequested())
+                Platform::Sleep(1);
+            buildCancelled.store(true);
+            buildDiagnostic.Code = AssetPipelineDiagnosticCode::BuildCancelled;
+            return true;
+        };
+        plan.BuildRequest.Publish = [](const AssetCancellationToken&, AssetPipelineDiagnostic&) { return false; };
+        planDiagnostic = AssetPipelineDiagnostic();
+        return false;
+    };
+    ArtifactResolver resolver;
+    const ArtifactTarget target = ResolverTarget();
+    resolver.Configure(database, service, library, target, provider);
+    ArtifactRequest request;
+    request.Object = AssetObjectId::Main(AssetGuid(input.SourceAssetID));
+    request.Target = target;
+    request.OutputKind = "Runtime";
+    request.Policy = ArtifactResolvePolicy::Exact;
+    request.IsCancellationRequested = [&] { return buildStarted.load(); };
+    ResolvedArtifact artifact;
+    CHECK(resolver.Resolve(request, artifact, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::BuildCancelled);
+    for (int32 i = 0; i < 5000 && !buildCancelled.load(); i++)
+        Platform::Sleep(1);
+    CHECK(buildCancelled.load());
+}
+
 #endif

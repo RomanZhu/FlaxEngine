@@ -12,6 +12,7 @@
 #include "Engine/Level/Level.h"
 #include "Engine/Core/Config/GameSettings.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/Build/CookedContentGeneration.h"
 #include "Engine/Content/Assets/Texture.h"
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/AssetReference.h"
@@ -49,6 +50,14 @@ int32 GameBase::LoadProduct()
 {
     // Startup and project root paths are the same in build game
     Globals::ProjectFolder = Globals::StartupFolder;
+    ContentHash cookedGeneration;
+    AssetPipelineDiagnostic generationDiagnostic;
+    if (CookedContentGeneration::Resolve(Globals::ProjectFolder / TEXT("Content"), Globals::ProjectContentFolder,
+        cookedGeneration, generationDiagnostic))
+    {
+        Platform::Fatal(String::Format(TEXT("Cannot load cooked content generation. {0}"), generationDiagnostic.Message));
+        return -3;
+    }
 
     // Load build game header file
     {
@@ -58,7 +67,7 @@ int32 GameBase::LoadProduct()
 
 #if 1
         // Open file
-        stream = FileReadStream::Open(Globals::ProjectFolder / TEXT("Content/head"));
+        stream = FileReadStream::Open(Globals::ProjectContentFolder / TEXT("head"));
         if (stream == nullptr)
             goto LOAD_GAME_HEAD_FAILED;
 

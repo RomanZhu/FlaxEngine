@@ -268,6 +268,10 @@ public:
     /// </summary>
     API_FIELD(ReadOnly) String ManagedCodeOutputPath;
 
+    // Isolated cooked-content generation awaiting final activation after every build step succeeds.
+    String CookedContentStagingPath;
+    String CookedContentRoot;
+
     /// <summary>
     /// The platform tools.
     /// </summary>

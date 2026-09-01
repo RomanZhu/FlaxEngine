@@ -22,6 +22,8 @@ struct FLAXENGINE_API ArtifactRequest
     StringAnsi OutputKind;
     StringAnsi RequiredCompatibility;
     ArtifactResolvePolicy Policy = ArtifactResolvePolicy::Interactive;
+    /// <summary>Optional caller cancellation queried while waiting for an exact build.</summary>
+    Function<bool()> IsCancellationRequested;
 };
 
 struct FLAXENGINE_API ArtifactResolutionPlan

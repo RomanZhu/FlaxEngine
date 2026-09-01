@@ -35,6 +35,11 @@ namespace
         return status == AssetRecordStatus::Ready || status == AssetRecordStatus::Stale || status == AssetRecordStatus::Building || status == AssetRecordStatus::Failed;
     }
 
+    bool IsCancelled(const ArtifactRequest& request)
+    {
+        return request.IsCancellationRequested.IsBinded() && request.IsCancellationRequested();
+    }
+
     AssetPipelineDiagnosticCode StatusCode(AssetRecordStatus status)
     {
         if (status == AssetRecordStatus::MissingSource || status == AssetRecordStatus::OrphanMeta)
@@ -149,123 +154,138 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
     constexpr int32 MaxExactResolveAttempts = 8;
     for (int32 resolveAttempt = 0; resolveAttempt < MaxExactResolveAttempts; resolveAttempt++)
     {
-    AssetRecord record;
-    if (!_database->TryGetRecord(request.Object, record))
-        return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Asset database contains no record for the requested object."));
-    ArtifactInspection inspection;
-    Inspect(_libraryRoot, record, request, inspection);
-    if (request.Policy == ArtifactResolvePolicy::PublishedOnly)
-    {
-        if (inspection.HasOutput && inspection.IsCompatible)
+        if (IsCancelled(request))
+            return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, request, StringView::Empty, TEXT("Exact artifact resolution was cancelled."));
+        AssetRecord record;
+        if (!_database->TryGetRecord(request.Object, record))
+            return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Asset database contains no record for the requested object."));
+        ArtifactInspection inspection;
+        Inspect(_libraryRoot, record, request, inspection);
+        if (request.Policy == ArtifactResolvePolicy::PublishedOnly)
         {
-            result = inspection.Artifact;
-            result.IsExact = false;
-            result.IsLastGood = true;
-            return false;
+            if (inspection.HasOutput && inspection.IsCompatible)
+            {
+                result = inspection.Artifact;
+                result.IsExact = false;
+                result.IsLastGood = true;
+                return false;
+            }
+            if (inspection.InvalidDiagnostic.Code != AssetPipelineDiagnosticCode::None)
+            {
+                diagnostic = inspection.InvalidDiagnostic;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+                return true;
+            }
+            const AssetPipelineDiagnosticCode code = inspection.HasOutput
+                ? AssetPipelineDiagnosticCode::ArtifactIncompatible
+                : AssetPipelineDiagnosticCode::ArtifactMissing;
+            return ResolveFail(diagnostic, code, request, record.SourcePath.Get(), TEXT("No compatible published artifact is available."));
         }
-        if (inspection.InvalidDiagnostic.Code != AssetPipelineDiagnosticCode::None)
+        if (!IsBuildableStatus(record.Status))
         {
-            diagnostic = inspection.InvalidDiagnostic;
-            diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+            if (request.Policy == ArtifactResolvePolicy::Interactive && inspection.HasOutput && inspection.IsCompatible)
+            {
+                result = inspection.Artifact;
+                result.IsExact = false;
+                result.IsLastGood = true;
+                return false;
+            }
+            return ResolveFail(diagnostic, StatusCode(record.Status), request, record.SourcePath.Get(), TEXT("Asset database state blocks an exact artifact build."));
+        }
+
+        ArtifactResolutionPlan plan;
+        if (_planProvider(record, request, plan, diagnostic) || plan.CurrentInputFingerprint.IsZero() || !plan.BuildRequest.Key.IsValid())
+        {
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated && resolveAttempt + 1 < MaxExactResolveAttempts)
+                continue;
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+                ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Artifact resolution plan is incomplete."));
             return true;
         }
-        const AssetPipelineDiagnosticCode code = inspection.HasOutput
-            ? AssetPipelineDiagnosticCode::ArtifactIncompatible
-            : AssetPipelineDiagnosticCode::ArtifactMissing;
-        return ResolveFail(diagnostic, code, request, record.SourcePath.Get(), TEXT("No compatible published artifact is available."));
-    }
-    if (!IsBuildableStatus(record.Status))
-    {
+        const bool compatibilityMatches = request.RequiredCompatibility.IsEmpty() || inspection.IsCompatible;
+        const bool hasExact = inspection.HasOutput && compatibilityMatches && inspection.Manifest.InputFingerprint == plan.CurrentInputFingerprint;
+        if (hasExact)
+        {
+            result = inspection.Artifact;
+            result.IsExact = true;
+            result.IsLastGood = false;
+            return false;
+        }
+        if (request.Policy == ArtifactResolvePolicy::NoBuild)
+        {
+            if (inspection.InvalidDiagnostic.Code != AssetPipelineDiagnosticCode::None)
+            {
+                diagnostic = inspection.InvalidDiagnostic;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+                return true;
+            }
+            const AssetPipelineDiagnosticCode code = inspection.HasOutput && !compatibilityMatches
+                ? AssetPipelineDiagnosticCode::ArtifactIncompatible
+                : AssetPipelineDiagnosticCode::ArtifactRebuildRequired;
+            return ResolveFail(diagnostic, code, request, record.SourcePath.Get(), TEXT("No exact artifact is available and NoBuild policy forbids scheduling work."));
+        }
         if (request.Policy == ArtifactResolvePolicy::Interactive && inspection.HasOutput && inspection.IsCompatible)
         {
             result = inspection.Artifact;
             result.IsExact = false;
             result.IsLastGood = true;
+            _buildService->Request(plan.BuildRequest);
             return false;
         }
-        return ResolveFail(diagnostic, StatusCode(record.Status), request, record.SourcePath.Get(), TEXT("Asset database state blocks an exact artifact build."));
-    }
 
-    ArtifactResolutionPlan plan;
-    if (_planProvider(record, request, plan, diagnostic) || plan.CurrentInputFingerprint.IsZero() || !plan.BuildRequest.Key.IsValid())
-    {
-        if (diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated && resolveAttempt + 1 < MaxExactResolveAttempts)
-            continue;
-        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
-            ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Artifact resolution plan is incomplete."));
-        return true;
-    }
-    const bool compatibilityMatches = request.RequiredCompatibility.IsEmpty() || inspection.IsCompatible;
-    const bool hasExact = inspection.HasOutput && compatibilityMatches && inspection.Manifest.InputFingerprint == plan.CurrentInputFingerprint;
-    if (hasExact)
-    {
-        result = inspection.Artifact;
-        result.IsExact = true;
-        result.IsLastGood = false;
-        return false;
-    }
-    if (request.Policy == ArtifactResolvePolicy::NoBuild)
-    {
-        if (inspection.InvalidDiagnostic.Code != AssetPipelineDiagnosticCode::None)
+        const AssetBuildRequestHandle handle = _buildService->Request(plan.BuildRequest);
+        if (!handle.IsValid())
+            return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Exact artifact build could not be awaited."));
+        while (!handle.Wait(50))
         {
-            diagnostic = inspection.InvalidDiagnostic;
+            if (IsCancelled(request))
+            {
+                _buildService->CancelRequester(handle);
+                return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, request, record.SourcePath.Get(), TEXT("Exact artifact build wait was cancelled."));
+            }
+        }
+        if (IsCancelled(request))
+        {
+            _buildService->CancelRequester(handle);
+            return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, request, record.SourcePath.Get(), TEXT("Exact artifact build wait was cancelled."));
+        }
+        AssetBuildJobResult buildResult;
+        if (!handle.TryGetResult(buildResult) || buildResult.Status != AssetBuildJobStatus::Succeeded)
+        {
+            diagnostic = buildResult.Diagnostic;
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated && resolveAttempt + 1 < MaxExactResolveAttempts)
+                continue;
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+                ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Exact artifact build failed."));
             diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
             return true;
         }
-        const AssetPipelineDiagnosticCode code = inspection.HasOutput && !compatibilityMatches
-            ? AssetPipelineDiagnosticCode::ArtifactIncompatible
-            : AssetPipelineDiagnosticCode::ArtifactRebuildRequired;
-        return ResolveFail(diagnostic, code, request, record.SourcePath.Get(), TEXT("No exact artifact is available and NoBuild policy forbids scheduling work."));
-    }
-    if (request.Policy == ArtifactResolvePolicy::Interactive && inspection.HasOutput && inspection.IsCompatible)
-    {
-        result = inspection.Artifact;
-        result.IsExact = false;
-        result.IsLastGood = true;
-        _buildService->Request(plan.BuildRequest);
+        AssetRecord currentRecord;
+        if (!_database->TryGetRecord(request.Object, currentRecord))
+            return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, record.SourcePath.Get(), TEXT("Asset database lost the requested record while waiting for the exact build."));
+        if (currentRecord.DatabaseRevision != record.DatabaseRevision)
+        {
+            if (resolveAttempt + 1 < MaxExactResolveAttempts)
+                continue;
+            return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, request, record.SourcePath.Get(), TEXT("Asset database changed while waiting for the exact build."));
+        }
+        ArtifactInspection built;
+        Inspect(_libraryRoot, currentRecord, request, built);
+        const bool builtCompatibilityMatches = request.RequiredCompatibility.IsEmpty() || built.IsCompatible;
+        if (!built.HasOutput || !builtCompatibilityMatches || built.Manifest.InputFingerprint != plan.CurrentInputFingerprint)
+        {
+            if (built.InvalidDiagnostic.Code != AssetPipelineDiagnosticCode::None)
+                diagnostic = built.InvalidDiagnostic;
+            else
+                ResolveFail(diagnostic, built.HasOutput && !builtCompatibilityMatches ? AssetPipelineDiagnosticCode::ArtifactIncompatible : AssetPipelineDiagnosticCode::ArtifactMissing,
+                    request, currentRecord.SourcePath.Get(), TEXT("Build completed without publishing the required exact compatible output."));
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+            return true;
+        }
+        result = built.Artifact;
+        result.IsExact = true;
+        result.IsLastGood = false;
         return false;
-    }
-
-    const AssetBuildRequestHandle handle = _buildService->Request(plan.BuildRequest);
-    if (!handle.IsValid() || !handle.Wait())
-        return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Exact artifact build could not be awaited."));
-    AssetBuildJobResult buildResult;
-    if (!handle.TryGetResult(buildResult) || buildResult.Status != AssetBuildJobStatus::Succeeded)
-    {
-        diagnostic = buildResult.Diagnostic;
-        if (diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated && resolveAttempt + 1 < MaxExactResolveAttempts)
-            continue;
-        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
-            ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Exact artifact build failed."));
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        return true;
-    }
-    AssetRecord currentRecord;
-    if (!_database->TryGetRecord(request.Object, currentRecord))
-        return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, record.SourcePath.Get(), TEXT("Asset database lost the requested record while waiting for the exact build."));
-    if (currentRecord.DatabaseRevision != record.DatabaseRevision)
-    {
-        if (resolveAttempt + 1 < MaxExactResolveAttempts)
-            continue;
-        return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, request, record.SourcePath.Get(), TEXT("Asset database changed while waiting for the exact build."));
-    }
-    ArtifactInspection built;
-    Inspect(_libraryRoot, currentRecord, request, built);
-    const bool builtCompatibilityMatches = request.RequiredCompatibility.IsEmpty() || built.IsCompatible;
-    if (!built.HasOutput || !builtCompatibilityMatches || built.Manifest.InputFingerprint != plan.CurrentInputFingerprint)
-    {
-        if (built.InvalidDiagnostic.Code != AssetPipelineDiagnosticCode::None)
-            diagnostic = built.InvalidDiagnostic;
-        else
-            ResolveFail(diagnostic, built.HasOutput && !builtCompatibilityMatches ? AssetPipelineDiagnosticCode::ArtifactIncompatible : AssetPipelineDiagnosticCode::ArtifactMissing,
-                request, currentRecord.SourcePath.Get(), TEXT("Build completed without publishing the required exact compatible output."));
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        return true;
-    }
-    result = built.Artifact;
-    result.IsExact = true;
-    result.IsLastGood = false;
-    return false;
     }
     return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, request, StringView::Empty, TEXT("Asset database did not stabilize while resolving the exact artifact."));
 }

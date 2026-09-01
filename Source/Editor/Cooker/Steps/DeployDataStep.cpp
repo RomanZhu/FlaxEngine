@@ -7,6 +7,7 @@
 #include "Engine/Core/Config/BuildSettings.h"
 #include "Engine/Core/Config/GameSettings.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
+#include "Engine/Content/Build/CookedContentGeneration.h"
 #include "Engine/Renderer/ReflectionsPass.h"
 #include "Engine/Renderer/AntiAliasing/SMAA.h"
 #include "Engine/Engine/Globals.h"
@@ -27,15 +28,18 @@ bool DeployDataStep::Perform(CookingData& data)
 
     // Setup output folders and copy required data
     const auto contentDir = data.DataOutputPath / TEXT("Content");
-    if (FileSystem::DirectoryExists(contentDir))
+    const String currentGeneration = CookedContentGeneration::GetCurrentGenerationPath(contentDir);
+    if (FileSystem::DirectoryExists(contentDir) && !FileSystem::FileExists(currentGeneration) &&
+        FileSystem::DeleteDirectory(contentDir, true))
     {
-        // Remove old content files
-        FileSystem::DeleteDirectory(contentDir, true);
-
-        // Give some time for Explorer (if location was viewed)
-        Platform::Sleep(10);
+        data.Error(TEXT("Failed to clear the legacy cooked content output directory."));
+        return true;
     }
-    FileSystem::CreateDirectory(contentDir);
+    if (!FileSystem::DirectoryExists(contentDir) && FileSystem::CreateDirectory(contentDir))
+    {
+        data.Error(TEXT("Failed to create the cooked content output directory."));
+        return true;
+    }
     const String dstMono = data.DataOutputPath / TEXT("Mono");
 #if USE_NETCORE
     {
