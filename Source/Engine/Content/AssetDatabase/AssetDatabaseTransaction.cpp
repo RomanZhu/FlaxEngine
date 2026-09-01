@@ -32,11 +32,16 @@ namespace
     }
 }
 
-AssetDatabaseTransaction::AssetDatabaseTransaction(SourceAssetDatabase* owner, const SourceAssetDatabaseState& state)
+AssetDatabaseTransaction::AssetDatabaseTransaction(SourceAssetDatabase* owner, SourceAssetDatabaseState&& state)
     : _owner(owner)
     , _baseRevision(state.Database.CurrentRevision)
-    , _state(state)
+    , _state(MoveTemp(state))
 {
+}
+
+AssetDatabaseTransaction::~AssetDatabaseTransaction()
+{
+    Rollback();
 }
 
 uint64 AssetDatabaseTransaction::GetBaseRevision() const
@@ -504,6 +509,8 @@ bool AssetDatabaseTransaction::Commit(AssetPipelineDiagnostic& diagnostic)
 
 void AssetDatabaseTransaction::Rollback()
 {
+    if (_owner && !_completed)
+        _owner->Rollback(*this);
     _completed = true;
     _owner = nullptr;
 }

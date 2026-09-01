@@ -114,6 +114,67 @@ TEST_CASE("Asset database publishes coherent indexed immutable snapshots")
     CHECK(snapshot.Records[0].DatabaseRevision == rootRecordRevision);
 }
 
+TEST_CASE("Asset database mutates affected index rows and bounds query copies")
+{
+    AssetDatabase database;
+    Array<AssetRecord> records;
+    for (int32 i = 0; i < 6; i++)
+    {
+        const Guid id(100 + i, 200 + i, 300 + i, 400 + i);
+        records.Add(MakeDatabaseRecord(id, id,
+            Globals::ProjectContentFolder / String::Format(TEXT("Database/Page{0}.png"), i)));
+    }
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+    AssetRecord unchanged;
+    REQUIRE(database.TryGetRecord(records[4].ID, unchanged));
+    const uint64 unchangedRevision = unchanged.DatabaseRevision;
+
+    AssetDatabaseChangeBatch lastChange;
+    database.Changed.Bind([&](const AssetDatabaseChangeBatch& change)
+    {
+        lastChange = change;
+    });
+    const Guid removedId = records[1].ID;
+    const Guid changedId = records[2].ID;
+    records[2].ProcessorID = TEXT("Flax.Changed");
+    records[2].Status = AssetRecordStatus::Building;
+    records.RemoveAt(1);
+    const Guid addedId(900, 901, 902, 903);
+    records.Add(MakeDatabaseRecord(addedId, addedId,
+        Globals::ProjectContentFolder / TEXT("Database/Page6.png")));
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+
+    REQUIRE(lastChange.Added.Count() == 1);
+    CHECK(lastChange.Added[0] == addedId);
+    REQUIRE(lastChange.Removed.Count() == 1);
+    CHECK(lastChange.Removed[0] == removedId);
+    REQUIRE(lastChange.Changed.Count() == 1);
+    CHECK(lastChange.Changed[0] == changedId);
+    REQUIRE(lastChange.StatusChanged.Count() == 1);
+    CHECK(lastChange.StatusChanged[0] == changedId);
+    REQUIRE(database.TryGetRecord(records[3].ID, unchanged));
+    CHECK(unchanged.DatabaseRevision == unchangedRevision);
+    Array<AssetRecord> indexed;
+    database.GetByProcessor(TEXT("Flax.Test"), indexed);
+    CHECK(indexed.Count() == 4);
+    database.GetByProcessor(TEXT("Flax.Changed"), indexed);
+    REQUIRE(indexed.Count() == 1);
+    CHECK(indexed[0].ID == changedId);
+    database.GetByStatus(AssetRecordStatus::Building, indexed);
+    REQUIRE(indexed.Count() == 1);
+    CHECK(indexed[0].ID == changedId);
+
+    AssetRecordQuery page;
+    page.PathPrefix = Globals::ProjectContentFolder / TEXT("Database");
+    page.Offset = 1;
+    page.Limit = 2;
+    database.QueryRecords(page, indexed);
+    REQUIRE(indexed.Count() == 2);
+    CHECK(indexed[0].SourcePath.Get().EndsWith(TEXT("Page2.png")));
+    CHECK(indexed[1].SourcePath.Get().EndsWith(TEXT("Page3.png")));
+}
+
 TEST_CASE("Asset database publishes initial and targeted source file hashes durably")
 {
     const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseSourceHash-") +

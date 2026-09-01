@@ -117,7 +117,7 @@ bool SourceAssetDatabase::CheckpointLocked(const SourceAssetDatabaseState& state
 bool SourceAssetDatabase::ShouldCheckpointLocked() const
 {
     const double now = Platform::GetTimeSeconds();
-    if (_state && _state->Database.CurrentRevision < _checkpointRetryRevision && now < _checkpointRetryTime)
+    if (_open && _revision < _checkpointRetryRevision && now < _checkpointRetryTime)
         return false;
     if (_checkpointPolicy.MaximumTransactions &&
         _transactionsSinceCheckpoint >= _checkpointPolicy.MaximumTransactions)
@@ -218,7 +218,7 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
     {
         if (record.BaseRevision != state.Database.CurrentRevision)
             return Fail(diagnostic, _walPath, TEXT("Normalized source database WAL transaction conflicts with its checkpoint."));
-        AssetDatabaseTransaction replay(this, state);
+        AssetDatabaseTransaction replay(this, MoveTemp(state));
         for (const AssetDatabaseMutation& mutation : record.Mutations)
         {
             SourceAssetDatabaseState payload;
@@ -319,7 +319,9 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
     const byte marker = 1;
     if (WriteAtomic(_sessionMarkerPath, &marker, sizeof(marker)))
         return Fail(diagnostic, _sessionMarkerPath, TEXT("Cannot persist the source asset database session marker."));
-    _state = std::make_shared<const SourceAssetDatabaseState>(MoveTemp(state));
+    _state = MoveTemp(state);
+    _revision = _state.Database.CurrentRevision;
+    _transactionActive = false;
     _transactionsSinceCheckpoint = walRecords.Count();
     _lastCheckpointTime = Platform::GetTimeSeconds();
     _checkpointRetryRevision = 0;
@@ -336,15 +338,17 @@ bool SourceAssetDatabase::Close(AssetPipelineDiagnostic* diagnostic)
     AssetPipelineDiagnostic localDiagnostic;
     _locker.Lock();
     bool failed = false;
-    if (_open && _state && !_recoveryRequired)
+    if (_open && !_transactionActive && !_recoveryRequired)
     {
-        SourceAssetDatabaseState state = *_state;
+        SourceAssetDatabaseState state = _state;
         state.Database.CleanShutdown = true;
         failed = CheckpointLocked(state, localDiagnostic);
         if (!failed && DurableAssetFileSystem::DeleteFile(_sessionMarkerPath))
             failed = Fail(localDiagnostic, _sessionMarkerPath, TEXT("Cannot durably clear the source asset database session marker."));
     }
-    _state.reset();
+    _state = SourceAssetDatabaseState();
+    _revision = 0;
+    _transactionActive = false;
     _journal.Close();
     if (_writerLock)
         Delete(_writerLock);
@@ -384,7 +388,7 @@ bool SourceAssetDatabase::WasLastShutdownClean() const
 uint64 SourceAssetDatabase::GetRevision() const
 {
     ScopeLock lock(_locker);
-    return _state ? _state->Database.CurrentRevision : 0;
+    return _open ? _revision : 0;
 }
 
 const String& SourceAssetDatabase::GetDirectory() const
@@ -409,23 +413,26 @@ SourceAssetDatabaseCheckpointPolicy SourceAssetDatabase::GetCheckpointPolicy() c
 bool SourceAssetDatabase::Checkpoint(AssetPipelineDiagnostic& diagnostic)
 {
     ScopeLock lock(_locker);
-    if (!_open || !_state || _recoveryRequired)
+    if (!_open || _transactionActive || _recoveryRequired)
         return Fail(diagnostic, _manifestPath, TEXT("Source asset database is unavailable for checkpointing."));
-    return CheckpointLocked(*_state, diagnostic);
+    return CheckpointLocked(_state, diagnostic);
 }
 
 AssetDatabaseReadSnapshot SourceAssetDatabase::Read() const
 {
     ScopeLock lock(_locker);
-    return AssetDatabaseReadSnapshot(_state);
+    return !_open || _transactionActive
+        ? AssetDatabaseReadSnapshot()
+        : AssetDatabaseReadSnapshot(std::make_shared<const SourceAssetDatabaseState>(_state));
 }
 
 std::unique_ptr<AssetDatabaseTransaction> SourceAssetDatabase::BeginTransaction()
 {
     ScopeLock lock(_locker);
-    if (!_open || !_state || _recoveryRequired)
+    if (!_open || _transactionActive || _recoveryRequired)
         return nullptr;
-    return std::unique_ptr<AssetDatabaseTransaction>(new AssetDatabaseTransaction(this, *_state));
+    _transactionActive = true;
+    return std::unique_ptr<AssetDatabaseTransaction>(new AssetDatabaseTransaction(this, MoveTemp(_state)));
 }
 
 bool SourceAssetDatabase::ReadChangesAfter(uint64 revision, Array<AssetChangeSet>& result, bool& requiresSnapshot, AssetPipelineDiagnostic& diagnostic) const
@@ -437,7 +444,7 @@ bool SourceAssetDatabase::ReadChangesAfter(uint64 revision, Array<AssetChangeSet
 bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPipelineDiagnostic& diagnostic)
 {
     _locker.Lock();
-    if (!_open || !_state || _recoveryRequired || transaction._owner != this || transaction._baseRevision != _state->Database.CurrentRevision)
+    if (!_open || !_transactionActive || _recoveryRequired || transaction._owner != this || transaction._baseRevision != _revision)
     {
         _locker.Unlock();
         return Fail(diagnostic, _manifestPath, TEXT("Source asset database transaction conflicts with a newer revision."));
@@ -447,6 +454,9 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
     transaction._state.Database.CleanShutdown = false;
     if (transaction._state.Validate(diagnostic))
     {
+        _state = MoveTemp(transaction._state);
+        _transactionActive = false;
+        transaction._owner = nullptr;
         _locker.Unlock();
         return true;
     }
@@ -459,23 +469,32 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
         _walLastRevision, record, diagnostic))
     {
         _recoveryRequired = true;
+        _state = MoveTemp(transaction._state);
+        _transactionActive = false;
+        transaction._owner = nullptr;
         _locker.Unlock();
         return true;
     }
     if (_journal.Append(transaction._changes, diagnostic))
     {
         _recoveryRequired = true;
+        _state = MoveTemp(transaction._state);
+        _transactionActive = false;
+        transaction._owner = nullptr;
         _locker.Unlock();
         return true;
     }
-    _state = std::make_shared<const SourceAssetDatabaseState>(transaction._state);
+    _state = MoveTemp(transaction._state);
+    _revision = _state.Database.CurrentRevision;
+    _transactionActive = false;
+    transaction._owner = nullptr;
     _transactionsSinceCheckpoint++;
     if (ShouldCheckpointLocked())
     {
         AssetPipelineDiagnostic checkpointDiagnostic;
-        if (CheckpointLocked(*_state, checkpointDiagnostic))
+        if (CheckpointLocked(_state, checkpointDiagnostic))
         {
-            _checkpointRetryRevision = _state->Database.CurrentRevision + 64;
+            _checkpointRetryRevision = _state.Database.CurrentRevision + 64;
             _checkpointRetryTime = Platform::GetTimeSeconds() + 60.0;
             LOG(Error, "Automatic source asset database checkpoint failed. {0}", checkpointDiagnostic.Message);
         }
@@ -484,4 +503,15 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
     _locker.Unlock();
     Changed(changes);
     return false;
+}
+
+void SourceAssetDatabase::Rollback(AssetDatabaseTransaction& transaction)
+{
+    ScopeLock lock(_locker);
+    if (_transactionActive && transaction._owner == this)
+    {
+        _state = MoveTemp(transaction._state);
+        _transactionActive = false;
+    }
+    transaction._owner = nullptr;
 }

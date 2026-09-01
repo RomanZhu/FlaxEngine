@@ -75,6 +75,8 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseQuery
     API_FIELD() bool MainAssetsOnly = false;
     API_FIELD() Guid ReferencedAsset = Guid::Empty;
     API_FIELD() Guid UsedByAsset = Guid::Empty;
+    API_FIELD() int32 Offset = 0;
+    API_FIELD() int32 Limit = 256;
 };
 
 /// <summary>Managed-safe normalized asset dependency projection.</summary>

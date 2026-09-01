@@ -39,6 +39,8 @@ struct FLAXENGINE_API AssetRecordQuery
     bool MainAssetsOnly = false;
     Guid ReferencedAsset = Guid::Empty;
     Guid UsedByAsset = Guid::Empty;
+    int32 Offset = 0;
+    int32 Limit = 256;
 };
 
 /// <summary>Thread-safe canonical source/metadata registry.</summary>

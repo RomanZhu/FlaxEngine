@@ -1914,6 +1914,8 @@ Array<AssetDatabaseRecordInfo> AssetDatabaseQueryService::QueryRecords(const Ass
     nativeQuery.MainAssetsOnly = query.MainAssetsOnly;
     nativeQuery.ReferencedAsset = query.ReferencedAsset;
     nativeQuery.UsedByAsset = query.UsedByAsset;
+    nativeQuery.Offset = query.Offset;
+    nativeQuery.Limit = query.Limit;
     Array<AssetRecord> records;
     AssetDatabase::Get().QueryRecords(nativeQuery, records);
     result.EnsureCapacity(records.Count());

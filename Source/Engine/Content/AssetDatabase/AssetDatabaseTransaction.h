@@ -52,10 +52,11 @@ private:
     Array<AssetDatabaseMutation> _mutations;
     bool _completed = false;
 
-    AssetDatabaseTransaction(SourceAssetDatabase* owner, const SourceAssetDatabaseState& state);
+    AssetDatabaseTransaction(SourceAssetDatabase* owner, SourceAssetDatabaseState&& state);
 
 public:
     AssetDatabaseTransaction() = default;
+    ~AssetDatabaseTransaction();
 
     uint64 GetBaseRevision() const;
     const SourceAssetDatabaseState& GetState() const;

@@ -30,7 +30,9 @@ private:
     String _walPath;
     String _journalPath;
     String _sessionMarkerPath;
-    std::shared_ptr<const SourceAssetDatabaseState> _state;
+    SourceAssetDatabaseState _state;
+    uint64 _revision = 0;
+    bool _transactionActive = false;
     FileChangeJournal _journal;
     File* _writerLock = nullptr;
     uint64 _checkpointGeneration = 0;
@@ -46,6 +48,7 @@ private:
     bool _recoveryRequired = false;
 
     bool Commit(AssetDatabaseTransaction& transaction, AssetPipelineDiagnostic& diagnostic);
+    void Rollback(AssetDatabaseTransaction& transaction);
     bool CheckpointLocked(const SourceAssetDatabaseState& state, AssetPipelineDiagnostic& diagnostic);
     bool ShouldCheckpointLocked() const;
 

@@ -23,6 +23,17 @@ namespace
         values->Add(id);
     }
 
+    template<typename Key>
+    void RemoveFromIndex(Dictionary<Key, Array<Guid>>& index, const Key& key, const Guid& id)
+    {
+        Array<Guid>* values = index.TryGet(key);
+        if (!values)
+            return;
+        values->Remove(id);
+        if (values->IsEmpty())
+            index.Remove(key);
+    }
+
     String NormalizeIndexKey(const StringView& value)
     {
         String result(value);
@@ -60,6 +71,21 @@ namespace
                 }
                 if (!values->Contains(record.ID))
                     values->Add(record.ID);
+            }
+        }
+    }
+
+    void RemoveSearchGrams(Dictionary<String, Array<Guid>>& index, const AssetRecord& record)
+    {
+        const String text = GetSearchText(record);
+        HashSet<String> removed;
+        for (int32 length = 1; length <= 3; length++)
+        {
+            for (int32 i = 0; i + length <= text.Length(); i++)
+            {
+                const String gram(text.Get() + i, length);
+                if (removed.Add(gram))
+                    RemoveFromIndex(index, gram, record.ID);
             }
         }
     }
@@ -562,32 +588,25 @@ void AssetDatabase::QueryRecords(const AssetRecordQuery& query, Array<AssetRecor
         return true;
     };
 
-    if (constrained)
+    if (constrained && !candidates)
+        return;
+    const int32 offset = Math::Max(query.Offset, 0);
+    const int32 limit = Math::Clamp(query.Limit, 1, 4096);
+    result.EnsureCapacity(limit);
+    int32 skipped = 0;
+    // The path index is already sorted, so only the requested page of records is copied.
+    for (const Guid& id : _recordsBySortedPath)
     {
-        if (!candidates)
-            return;
-        result.EnsureCapacity(candidates->Count());
-        for (const Guid& id : *candidates)
-        {
-            const AssetRecord* record = _records.TryGet(id);
-            if (record && matches(*record))
-                result.Add(*record);
-        }
-    }
-    else
-    {
-        result.EnsureCapacity(_records.Count());
-        for (const auto& entry : _records)
-            if (matches(entry.Value))
-                result.Add(entry.Value);
-    }
-    if (result.Count() > 1)
-    {
-        std::sort(result.Get(), result.Get() + result.Count(), [](const AssetRecord& a, const AssetRecord& b)
-        {
-            const int32 path = StringUtils::CompareIgnoreCase(a.SourcePath.Get().Get(), b.SourcePath.Get().Get());
-            return path != 0 ? path < 0 : a.LocalId < b.LocalId;
-        });
+        if (constrained && !candidates->Contains(id))
+            continue;
+        const AssetRecord* record = _records.TryGet(id);
+        if (!record || !matches(*record))
+            continue;
+        if (skipped++ < offset)
+            continue;
+        result.Add(*record);
+        if (result.Count() == limit)
+            break;
     }
 }
 
@@ -705,21 +724,10 @@ bool AssetDatabase::TryGetCustomDependencyHash(const StringView& name, ContentHa
 bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revision, AssetDatabaseChangeBatch& changes, AssetPipelineDiagnostic& diagnostic)
 {
     diagnostic = AssetPipelineDiagnostic();
-    Dictionary<Guid, AssetRecord> nextRecords;
-    Dictionary<AssetObjectId, Guid> nextRecordByObject;
+    ScopeLock lock(_locker);
+    HashSet<Guid> nextRecordIds;
     HashSet<AssetObjectId> nextObjectIds;
-    Dictionary<String, Guid> nextMainByPath;
-    Dictionary<Guid, Array<Guid>> nextSubAssetsBySource;
-    Dictionary<String, Array<Guid>> nextRecordsByProcessor;
-    Dictionary<String, Array<Guid>> nextRecordsByType;
-    Dictionary<String, Array<Guid>> nextRecordsByLabel;
-    Array<Guid> nextRecordsBySortedPath;
-    Dictionary<String, Array<Guid>> nextRecordsBySearchGram;
-    Dictionary<AssetRecordStatus, Array<Guid>> nextRecordsByStatus;
-    Dictionary<AssetObjectId, Array<Guid>> nextDependantsByBuildInput;
-    Dictionary<AssetObjectId, Array<Guid>> nextReferencersByRuntimeReference;
-
-    nextRecords.EnsureCapacity(records.Count());
+    Dictionary<String, int32> mainPathCounts;
     for (const AssetRecord& input : records)
     {
         if (!input.ID.IsValid() || !input.SourceAssetID.IsValid() || input.LocalId <= 0)
@@ -729,113 +737,155 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
         const AssetObjectId objectId(AssetGuid(input.SourceAssetID), input.LocalId);
         if (!nextObjectIds.Add(objectId))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, input.SourcePath.Get(), TEXT("Asset database input repeats a GUID/local file ID identity."));
-        if (nextRecords.ContainsKey(input.ID))
+        if (!nextRecordIds.Add(input.ID))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::DuplicateGuid, input.SourcePath.Get(), TEXT("Asset database input contains a duplicate GUID."));
-        AssetRecord record = input;
-        // The collision pass below is authoritative over the whole set being published, so a status
-        // carried in from an earlier publish has to be dropped or a resolved collision never clears.
-        if (record.Status == AssetRecordStatus::PathCollision)
-            record.Status = AssetRecordStatus::Ready;
-        if (record.PortabilityKey.IsEmpty())
-            record.PortabilityKey = record.CanonicalPath.Get().ToLower();
-        else
-            record.PortabilityKey = record.PortabilityKey.ToLower();
-        record.PortabilityKey.Replace(TEXT('\\'), TEXT('/'));
-        if (record.IsMainAsset())
+        if (input.IsMainAsset())
         {
-            const Guid* existing = nextMainByPath.TryGet(record.PortabilityKey);
-            if (existing)
-            {
-                record.Status = AssetRecordStatus::PathCollision;
-                AssetRecord* other = nextRecords.TryGet(*existing);
-                if (other)
-                    other->Status = AssetRecordStatus::PathCollision;
-            }
+            String key = input.PortabilityKey;
+            if (key.IsEmpty())
+                key = input.CanonicalPath.Get();
+            key = NormalizeIndexKey(key);
+            int32* count = mainPathCounts.TryGet(key);
+            if (count)
+                (*count)++;
             else
-            {
-                nextMainByPath.Add(record.PortabilityKey, record.ID);
-            }
+                mainPathCounts.Add(key, 1);
         }
-        else
-        {
-            AddToIndex(nextSubAssetsBySource, record.SourceAssetID, record.ID);
-        }
-        nextRecordByObject.Add(objectId, record.ID);
-        const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(record.ID));
-        if (persistentObject != objectId)
-            nextRecordByObject.Add(persistentObject, record.ID);
-        nextRecords.Add(record.ID, MoveTemp(record));
-    }
-    for (const auto& entry : nextRecords)
-    {
-        AddToIndex(nextRecordsByProcessor, NormalizeIndexKey(entry.Value.ProcessorID), entry.Key);
-        const String normalizedType = NormalizeIndexKey(entry.Value.TypeName);
-        AddToIndex(nextRecordsByType, normalizedType, entry.Key);
-        const int32 typeSeparator = normalizedType.FindLast('.');
-        if (typeSeparator != -1 && typeSeparator + 1 < normalizedType.Length())
-            AddToIndex(nextRecordsByType, normalizedType.Substring(typeSeparator + 1), entry.Key);
-        for (const String& label : entry.Value.Labels)
-            AddToIndex(nextRecordsByLabel, NormalizeIndexKey(label), entry.Key);
-        nextRecordsBySortedPath.Add(entry.Key);
-        AddSearchGrams(nextRecordsBySearchGram, entry.Value);
-        AddToIndex(nextRecordsByStatus, entry.Value.Status, entry.Key);
-        for (const AssetObjectId& dependency : entry.Value.BuildInputDependencies)
-            AddToIndex(nextDependantsByBuildInput, dependency, entry.Key);
-        for (const AssetObjectId& reference : entry.Value.RuntimeReferences)
-            AddToIndex(nextReferencersByRuntimeReference, reference, entry.Key);
-    }
-    if (nextRecordsBySortedPath.Count() > 1)
-    {
-        std::sort(nextRecordsBySortedPath.Get(), nextRecordsBySortedPath.Get() + nextRecordsBySortedPath.Count(), [&nextRecords](const Guid& a, const Guid& b)
-        {
-            const AssetRecord* left = nextRecords.TryGet(a);
-            const AssetRecord* right = nextRecords.TryGet(b);
-            return left && right && NormalizeIndexKey(left->SourcePath.Get()) < NormalizeIndexKey(right->SourcePath.Get());
-        });
     }
 
     changes = AssetDatabaseChangeBatch();
+    changes.Revision = revision;
+    Array<Guid> removals;
+    for (const auto& entry : _records)
+        if (!nextRecordIds.Contains(entry.Key))
+            removals.Add(entry.Key);
+
+    Array<AssetRecord> upserts;
+    for (const AssetRecord& input : records)
     {
-        ScopeLock lock(_locker);
-        changes.Revision = revision;
-        for (auto& entry : nextRecords)
+        AssetRecord record = input;
+        if (record.PortabilityKey.IsEmpty())
+            record.PortabilityKey = record.CanonicalPath.Get();
+        record.PortabilityKey = NormalizeIndexKey(record.PortabilityKey);
+        if (record.Status == AssetRecordStatus::PathCollision)
+            record.Status = AssetRecordStatus::Ready;
+        const int32* pathCount = record.IsMainAsset() ? mainPathCounts.TryGet(record.PortabilityKey) : nullptr;
+        if (pathCount && *pathCount > 1)
+            record.Status = AssetRecordStatus::PathCollision;
+        const AssetRecord* previous = _records.TryGet(record.ID);
+        if (!previous)
         {
-            const AssetRecord* previous = _records.TryGet(entry.Key);
-            if (!previous)
-            {
-                entry.Value.DatabaseRevision = changes.Revision;
-                changes.Added.Add(entry.Key);
-            }
-            else
-            {
-                const bool contentChanged = !previous->HasSameIdentityAndContent(entry.Value);
-                const bool statusChanged = previous->Status != entry.Value.Status;
-                entry.Value.DatabaseRevision = contentChanged || statusChanged ? changes.Revision : previous->DatabaseRevision;
-                if (contentChanged)
-                    changes.Changed.Add(entry.Key);
-                if (statusChanged)
-                    changes.StatusChanged.Add(entry.Key);
-            }
+            record.DatabaseRevision = revision;
+            changes.Added.Add(record.ID);
+            upserts.Add(MoveTemp(record));
+            continue;
         }
-        for (const auto& entry : _records)
-        {
-            if (!nextRecords.ContainsKey(entry.Key))
-                changes.Removed.Add(entry.Key);
-        }
-        _records = MoveTemp(nextRecords);
-        _recordByObject = MoveTemp(nextRecordByObject);
-        _mainByPath = MoveTemp(nextMainByPath);
-        _subAssetsBySource = MoveTemp(nextSubAssetsBySource);
-        _recordsByProcessor = MoveTemp(nextRecordsByProcessor);
-        _recordsByType = MoveTemp(nextRecordsByType);
-        _recordsByLabel = MoveTemp(nextRecordsByLabel);
-        _recordsBySortedPath = MoveTemp(nextRecordsBySortedPath);
-        _recordsBySearchGram = MoveTemp(nextRecordsBySearchGram);
-        _recordsByStatus = MoveTemp(nextRecordsByStatus);
-        _dependantsByBuildInput = MoveTemp(nextDependantsByBuildInput);
-        _referencersByRuntimeReference = MoveTemp(nextReferencersByRuntimeReference);
-        _revision = changes.Revision;
+        const bool contentChanged = !previous->HasSameIdentityAndContent(record);
+        const bool statusChanged = previous->Status != record.Status;
+        if (!contentChanged && !statusChanged)
+            continue;
+        record.DatabaseRevision = revision;
+        if (contentChanged)
+            changes.Changed.Add(record.ID);
+        if (statusChanged)
+            changes.StatusChanged.Add(record.ID);
+        upserts.Add(MoveTemp(record));
     }
+
+    const auto removeIndexes = [this](const AssetRecord& record)
+    {
+        const AssetObjectId objectId(AssetGuid(record.SourceAssetID), record.LocalId);
+        _recordByObject.Remove(objectId);
+        const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(record.ID));
+        if (persistentObject != objectId)
+            _recordByObject.Remove(persistentObject);
+        if (record.IsMainAsset())
+        {
+            const Guid* mapped = _mainByPath.TryGet(record.PortabilityKey);
+            if (mapped && *mapped == record.ID)
+                _mainByPath.Remove(record.PortabilityKey);
+        }
+        else
+            RemoveFromIndex(_subAssetsBySource, record.SourceAssetID, record.ID);
+        RemoveFromIndex(_recordsByProcessor, NormalizeIndexKey(record.ProcessorID), record.ID);
+        const String normalizedType = NormalizeIndexKey(record.TypeName);
+        RemoveFromIndex(_recordsByType, normalizedType, record.ID);
+        const int32 typeSeparator = normalizedType.FindLast('.');
+        if (typeSeparator != -1 && typeSeparator + 1 < normalizedType.Length())
+            RemoveFromIndex(_recordsByType, normalizedType.Substring(typeSeparator + 1), record.ID);
+        for (const String& label : record.Labels)
+            RemoveFromIndex(_recordsByLabel, NormalizeIndexKey(label), record.ID);
+        _recordsBySortedPath.Remove(record.ID);
+        RemoveSearchGrams(_recordsBySearchGram, record);
+        RemoveFromIndex(_recordsByStatus, record.Status, record.ID);
+        for (const AssetObjectId& dependency : record.BuildInputDependencies)
+            RemoveFromIndex(_dependantsByBuildInput, dependency, record.ID);
+        for (const AssetObjectId& reference : record.RuntimeReferences)
+            RemoveFromIndex(_referencersByRuntimeReference, reference, record.ID);
+    };
+    const auto addIndexes = [this](const AssetRecord& record)
+    {
+        const AssetObjectId objectId(AssetGuid(record.SourceAssetID), record.LocalId);
+        _recordByObject.Add(objectId, record.ID);
+        const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(record.ID));
+        if (persistentObject != objectId)
+            _recordByObject.Add(persistentObject, record.ID);
+        if (record.IsMainAsset())
+        {
+            if (!_mainByPath.ContainsKey(record.PortabilityKey))
+                _mainByPath.Add(record.PortabilityKey, record.ID);
+        }
+        else
+            AddToIndex(_subAssetsBySource, record.SourceAssetID, record.ID);
+        AddToIndex(_recordsByProcessor, NormalizeIndexKey(record.ProcessorID), record.ID);
+        const String normalizedType = NormalizeIndexKey(record.TypeName);
+        AddToIndex(_recordsByType, normalizedType, record.ID);
+        const int32 typeSeparator = normalizedType.FindLast('.');
+        if (typeSeparator != -1 && typeSeparator + 1 < normalizedType.Length())
+            AddToIndex(_recordsByType, normalizedType.Substring(typeSeparator + 1), record.ID);
+        for (const String& label : record.Labels)
+            AddToIndex(_recordsByLabel, NormalizeIndexKey(label), record.ID);
+        _recordsBySortedPath.Add(record.ID);
+        AddSearchGrams(_recordsBySearchGram, record);
+        AddToIndex(_recordsByStatus, record.Status, record.ID);
+        for (const AssetObjectId& dependency : record.BuildInputDependencies)
+            AddToIndex(_dependantsByBuildInput, dependency, record.ID);
+        for (const AssetObjectId& reference : record.RuntimeReferences)
+            AddToIndex(_referencersByRuntimeReference, reference, record.ID);
+    };
+
+    for (const Guid& id : removals)
+    {
+        const AssetRecord* current = _records.TryGet(id);
+        if (!current)
+            continue;
+        const AssetRecord removed = *current;
+        removeIndexes(removed);
+        _records.Remove(id);
+        changes.Removed.Add(id);
+    }
+    for (AssetRecord& record : upserts)
+    {
+        const AssetRecord* current = _records.TryGet(record.ID);
+        if (current)
+        {
+            const AssetRecord removed = *current;
+            removeIndexes(removed);
+            _records.Remove(record.ID);
+        }
+        const Guid id = record.ID;
+        _records.Add(id, MoveTemp(record));
+        addIndexes(*_records.TryGet(id));
+    }
+    if (_recordsBySortedPath.Count() > 1)
+        std::sort(_recordsBySortedPath.Get(), _recordsBySortedPath.Get() + _recordsBySortedPath.Count(), [this](const Guid& a, const Guid& b)
+        {
+            const AssetRecord* left = _records.TryGet(a);
+            const AssetRecord* right = _records.TryGet(b);
+            const int32 path = left && right ? StringUtils::CompareIgnoreCase(left->SourcePath.Get().Get(), right->SourcePath.Get().Get()) : 0;
+            return path != 0 ? path < 0 : left && right && left->LocalId < right->LocalId;
+        });
+    _revision = revision;
     return false;
 }
 
@@ -924,12 +974,8 @@ bool AssetDatabase::ReconcileScanRowsInternal(const Array<AssetRecord>& records,
     }
 
     const SourceAssetDatabaseState& current = transaction->GetState();
-    SourceAssetDatabaseState next = current;
-    next.Sources.Clear();
-    next.Objects.Clear();
-    next.Dependencies.Clear();
-    next.Diagnostics.Clear();
-    next.Labels.Clear();
+    SourceAssetDatabaseState next;
+    next.Database = current.Database;
 
     Dictionary<Guid, const SourceAssetRow*> previousSources;
     Dictionary<AssetObjectId, const SourceAssetObjectRow*> previousObjects;

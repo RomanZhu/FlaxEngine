@@ -410,7 +410,7 @@ TEST_CASE("Source asset database checkpoints bounded WAL transactions")
     REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
-TEST_CASE("Source asset database rejects stale writers and recovers a torn journal tail")
+TEST_CASE("Source asset database admits one writer and recovers a torn journal tail")
 {
     const String library = Globals::TemporaryFolder / (TEXT("SourceAssetDatabaseRecovery-") + Guid::New().ToString(Guid::FormatType::N));
     REQUIRE_FALSE(FileSystem::CreateDirectory(library));
@@ -420,13 +420,13 @@ TEST_CASE("Source asset database rejects stale writers and recovers a torn journ
     SourceAssetDatabase database;
     REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
     std::unique_ptr<AssetDatabaseTransaction> first = database.BeginTransaction();
-    std::unique_ptr<AssetDatabaseTransaction> stale = database.BeginTransaction();
     REQUIRE(first);
-    REQUIRE(stale);
+    CHECK(database.BeginTransaction() == nullptr);
     first->UpsertSource(MakeSource(Guid(21, 22, 23, 24), TEXT("Content/A.png")));
     REQUIRE_FALSE(first->Commit(diagnostic));
-    stale->UpsertSource(MakeSource(Guid(31, 32, 33, 34), TEXT("Content/B.png")));
-    CHECK(stale->Commit(diagnostic));
+    std::unique_ptr<AssetDatabaseTransaction> second = database.BeginTransaction();
+    REQUIRE(second);
+    second->Rollback();
     CHECK(database.GetRevision() == 1);
     REQUIRE_FALSE(database.Close(&diagnostic));
 
