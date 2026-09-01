@@ -2949,8 +2949,25 @@ namespace FlaxEditor.Modules
             }
         }
 
+        private bool AreBackgroundCanonicalBuildsEnabled()
+        {
+#if FLAX_TESTS
+            // The test runner performs explicit database/build operations against temporary snapshots.
+            return false;
+#else
+            // These are opportunistic Project-panel jobs, not headless/CLI build requests.
+            return !Editor.IsHeadlessMode;
+#endif
+        }
+
         private void SchedulePendingTextureBuilds(IReadOnlyList<string> refreshedPaths)
         {
+            if (!AreBackgroundCanonicalBuildsEnabled())
+            {
+                lock (_assetDiskChangesLock)
+                    _pendingTextureBuildSources.Clear();
+                return;
+            }
             string[] pendingSources;
             lock (_assetDiskChangesLock)
             {
@@ -2989,9 +3006,7 @@ namespace FlaxEditor.Modules
 
         private void QueueCanonicalStartupChecks()
         {
-            // These are opportunistic Project-panel background checks. Headless callers perform
-            // explicit refresh/build work and must not race their database transactions with UI work.
-            if (Editor.IsHeadlessMode)
+            if (!AreBackgroundCanonicalBuildsEnabled())
                 return;
             lock (_assetDiskChangesLock)
             {
@@ -3005,7 +3020,7 @@ namespace FlaxEditor.Modules
 
         private void ProcessPendingCanonicalStartupChecks()
         {
-            if (Editor.IsHeadlessMode)
+            if (!AreBackgroundCanonicalBuildsEnabled())
                 return;
             Guid[] ids;
             lock (_assetDiskChangesLock)
@@ -3025,6 +3040,8 @@ namespace FlaxEditor.Modules
 
         private void ProcessPendingCanonicalBuilds()
         {
+            if (!AreBackgroundCanonicalBuildsEnabled())
+                return;
             if (_canonicalBuildTask != null)
                 return;
             Guid[] ids;
