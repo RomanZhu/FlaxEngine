@@ -1140,8 +1140,8 @@ namespace
                 const bool exactMetadata = metadata.AssetType == authoredType &&
                     metadata.SourceKind == AssetSourceKind::TextDocument && metadata.Processor.ID == authoredProcessor &&
                     metadata.Processor.SettingsVersion == 1 && metadata.Processor.SettingsJson == StringAnsiView("{}\n");
-                const bool regressionDamagedMetadata = !metadata.MetaUpgradeRequired &&
-                    metadata.AssetType == RawDataAsset::TypeName && metadata.SourceKind == AssetSourceKind::ImportedSource &&
+                const bool regressionDamagedMetadata = metadata.AssetType == RawDataAsset::TypeName &&
+                    metadata.SourceKind == AssetSourceKind::ImportedSource &&
                     metadata.Processor.ID == TEXT("Flax.Binary") && metadata.Processor.SettingsVersion == 1 &&
                     metadata.Processor.SettingsJson == StringAnsiView("{}\n");
                 if (regressionDamagedMetadata)
@@ -1158,8 +1158,7 @@ namespace
                     diagnostic.Message = TEXT("Typed authored metadata does not match its extension and declared source type.");
                     return true;
                 }
-                if (!metadata.MetaUpgradeRequired)
-                    return false;
+                return false;
             }
             AssetImporterDescriptor callbackImporter;
             if (metadata.Processor.ID == TEXT("Flax.Binary") && TryResolveCallbackImporter(sourcePath, callbackImporter))
