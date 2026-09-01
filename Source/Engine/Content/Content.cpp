@@ -17,6 +17,7 @@
 #include "Loading/LoadingThread.h"
 #include "Loading/ContentLoadTask.h"
 #include "Loading/AssetObjectLoader.h"
+#include "Loading/LoadedAssetRuntimeIdIndex.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/LogContext.h"
 #include "Engine/Core/Collections/HashSet.h"
@@ -76,7 +77,7 @@ namespace
     // Assets
     CriticalSection AssetsLocker;
     Dictionary<AssetObjectId, Asset*> Assets;
-    Dictionary<Guid, AssetObjectId> RuntimeAssetIndex;
+    LoadedAssetRuntimeIdIndex RuntimeAssetIndex;
     CriticalSection LoadedAssetsToInvokeLocker;
     Array<Asset*> LoadedAssetsToInvoke;
     Array<Asset*> ToUnload;
@@ -1123,12 +1124,14 @@ Asset* Content::GetRuntimeObject(const Guid& runtimeId)
         return nullptr;
     {
         ScopeLock lock(AssetsLocker);
-        const AssetObjectId* objectId = RuntimeAssetIndex.TryGet(runtimeId);
+        AssetObjectId objectId;
         Asset* result = nullptr;
-        if (objectId)
-            Assets.TryGet(*objectId, result);
+        if (RuntimeAssetIndex.TryGetUnique(runtimeId, objectId))
+            Assets.TryGet(objectId, result);
         if (result)
             return result;
+        if (RuntimeAssetIndex.Contains(runtimeId))
+            return nullptr;
     }
     return GetAsset(ResolveRuntimeObjectId(runtimeId));
 }
@@ -1998,9 +2001,7 @@ void Content::onAssetUnload(Asset* asset)
     LoadedObjects.Remove(asset->GetPersistentObjectId(), asset);
     ScopeLock locker(AssetsLocker);
     Assets.Remove(asset->GetPersistentObjectId());
-    const AssetObjectId* indexedObject = RuntimeAssetIndex.TryGet(asset->GetID());
-    if (indexedObject && *indexedObject == asset->GetPersistentObjectId())
-        RuntimeAssetIndex.Remove(asset->GetID());
+    RuntimeAssetIndex.Remove(asset->GetID(), asset->GetPersistentObjectId());
     UnloadQueue.Remove(asset);
     LoadedAssetsToInvoke.Remove(asset);
 #if USE_EDITOR
@@ -2014,7 +2015,7 @@ void Content::onAssetChangeId(Asset* asset, const Guid& oldId, const Guid& newId
     ScopeLock locker(AssetsLocker);
     const AssetObjectId oldObjectId = asset->_persistentObjectId;
     Assets.Remove(oldObjectId);
-    RuntimeAssetIndex.Remove(oldId);
+    RuntimeAssetIndex.Remove(oldId, oldObjectId);
     asset->_persistentObjectId = AssetObjectId::Main(AssetGuid(newId));
     Assets.Add(asset->_persistentObjectId, asset);
     RuntimeAssetIndex.Add(newId, asset->_persistentObjectId);
@@ -2109,6 +2110,12 @@ Asset* Content::LoadAsyncPreview(const AssetObjectId& objectId, const ScriptingT
 Asset* Content::LoadRuntimeObjectAsync(const Guid& runtimeId, const ScriptingTypeHandle& type)
 {
     Asset* loaded = GetRuntimeObject(runtimeId);
+    if (!loaded)
+    {
+        ScopeLock lock(AssetsLocker);
+        if (RuntimeAssetIndex.Contains(runtimeId))
+            return nullptr;
+    }
     const AssetObjectId objectId = loaded ? loaded->GetPersistentObjectId() : ResolveRuntimeObjectId(runtimeId);
     return LoadAssetObjectAsyncInternal(objectId, type);
 }

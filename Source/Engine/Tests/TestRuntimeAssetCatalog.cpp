@@ -3,6 +3,7 @@
 #include "Engine/Content/Build/AssetBuildSnapshot.h"
 #include "Engine/Content/Build/RuntimeAssetCatalog.h"
 #include "Engine/Content/Build/RuntimeDependencyClosure.h"
+#include "Engine/Content/Loading/LoadedAssetRuntimeIdIndex.h"
 #include <ThirdParty/catch2/catch.hpp>
 #include <utility>
 
@@ -124,6 +125,65 @@ TEST_CASE("Runtime asset catalog rejects source and Library paths")
     entries.Add(CatalogEntry(subAsset, "FlaxEngine.Texture", "base/objects.pak", "sub"));
     entries.Add(CatalogEntry(collidingMain, "FlaxEngine.Texture", "base/objects.pak", "main"));
     CHECK_FALSE(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
+
+    RuntimeAssetCatalogEntry exactEntry;
+    CHECK(catalog.TryGet(subAsset, exactEntry));
+    CHECK(exactEntry.Object == subAsset);
+    CHECK(catalog.TryGet(collidingMain, exactEntry));
+    CHECK(exactEntry.Object == collidingMain);
+
+    AssetObjectId compatibilityObject;
+    CHECK_FALSE(catalog.TryGetByLegacyRuntimeGuid(subAsset.ToRuntimeObjectGuid(), compatibilityObject));
+    CHECK_FALSE(compatibilityObject.IsValid());
+}
+
+TEST_CASE("Runtime asset catalog resolves only unique legacy runtime GUIDs")
+{
+    const AssetObjectId object(AssetGuid(Guid(6, 0, 0, 0)), 9);
+    Array<RuntimeAssetCatalogEntry> entries;
+    entries.Add(CatalogEntry(object, "FlaxEngine.Texture", "base/objects.pak", "object"));
+    AssetPipelineDiagnostic diagnostic;
+    RuntimeAssetCatalog catalog;
+    REQUIRE_FALSE(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
+
+    AssetObjectId compatibilityObject;
+    CHECK(catalog.TryGetByLegacyRuntimeGuid(object.ToRuntimeObjectGuid(), compatibilityObject));
+    CHECK(compatibilityObject == object);
+    CHECK_FALSE(catalog.TryGetByLegacyRuntimeGuid(Guid(99, 98, 97, 96), compatibilityObject));
+    CHECK_FALSE(compatibilityObject.IsValid());
+    CHECK_FALSE(catalog.TryGetByLegacyRuntimeGuid(Guid::Empty, compatibilityObject));
+}
+
+TEST_CASE("Loaded runtime GUID index rejects collisions and recovers uniqueness")
+{
+    const AssetObjectId subAsset(AssetGuid(Guid(7, 0, 0, 0)), 2);
+    const AssetObjectId collidingMain = AssetObjectId::Main(AssetGuid(subAsset.ToRuntimeObjectGuid()));
+    const Guid runtimeId = subAsset.ToRuntimeObjectGuid();
+    LoadedAssetRuntimeIdIndex index;
+    index.EnsureCapacity(2);
+
+    AssetObjectId found;
+    index.Add(runtimeId, subAsset);
+    REQUIRE(index.TryGetUnique(runtimeId, found));
+    CHECK(found == subAsset);
+
+    index.Add(runtimeId, subAsset);
+    REQUIRE(index.TryGetUnique(runtimeId, found));
+    CHECK(found == subAsset);
+
+    index.Add(runtimeId, collidingMain);
+    CHECK(index.Contains(runtimeId));
+    CHECK_FALSE(index.TryGetUnique(runtimeId, found));
+    CHECK_FALSE(found.IsValid());
+
+    index.Remove(runtimeId, subAsset);
+    REQUIRE(index.TryGetUnique(runtimeId, found));
+    CHECK(found == collidingMain);
+
+    index.Remove(runtimeId, collidingMain);
+    CHECK_FALSE(index.Contains(runtimeId));
+    CHECK_FALSE(index.TryGetUnique(runtimeId, found));
+    CHECK_FALSE(found.IsValid());
 }
 
 TEST_CASE("Runtime dependency closure follows recorded object edges without asset loading")

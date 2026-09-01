@@ -80,6 +80,12 @@ public:
     /// <summary>Finds an exact GUID/local-file-ID entry without loading an asset.</summary>
     bool TryGet(const AssetObjectId& object, RuntimeAssetCatalogEntry& result) const;
 
+    /// <summary>
+    /// Finds an object through the legacy derived runtime GUID only when the mapping is unique.
+    /// This compatibility lookup must not be used as persistent object identity.
+    /// </summary>
+    bool TryGetByLegacyRuntimeGuid(const Guid& runtimeId, AssetObjectId& result) const;
+
     /// <summary>Finds an exact object by a normalized runtime path hash.</summary>
     bool TryGetByPathHash(const ContentHash& pathHash, AssetObjectId& result) const;
 

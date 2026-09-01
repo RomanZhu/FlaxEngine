@@ -343,6 +343,25 @@ bool RuntimeAssetCatalog::TryGet(const AssetObjectId& object, RuntimeAssetCatalo
     return false;
 }
 
+bool RuntimeAssetCatalog::TryGetByLegacyRuntimeGuid(const Guid& runtimeId, AssetObjectId& result) const
+{
+    result = AssetObjectId();
+    if (!runtimeId.IsValid())
+        return false;
+    for (const RuntimeAssetCatalogEntry& entry : _entries)
+    {
+        if (entry.Object.ToRuntimeObjectGuid() != runtimeId)
+            continue;
+        if (result.IsValid())
+        {
+            result = AssetObjectId();
+            return false;
+        }
+        result = entry.Object;
+    }
+    return result.IsValid();
+}
+
 bool RuntimeAssetCatalog::TryGetByPathHash(const ContentHash& pathHash, AssetObjectId& result) const
 {
     int32 left = 0;

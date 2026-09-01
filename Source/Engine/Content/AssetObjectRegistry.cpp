@@ -119,12 +119,8 @@ bool AssetObjectRegistry::FindRuntimeObject(const Guid& runtimeId, AssetInfo& in
     }
     return FindObject(objectId, info);
 #else
-    for (const RuntimeAssetCatalogEntry& entry : _runtimeCatalog.GetEntries())
-    {
-        if (entry.Object.ToRuntimeObjectGuid() == runtimeId)
-            return FindObject(entry.Object, info);
-    }
-    return false;
+    AssetObjectId objectId;
+    return _runtimeCatalog.TryGetByLegacyRuntimeGuid(runtimeId, objectId) && FindObject(objectId, info);
 #endif
 }
 
